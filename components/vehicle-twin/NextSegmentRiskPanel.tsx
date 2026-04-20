@@ -105,7 +105,7 @@ export function NextSegmentRiskPanel({ stability, currentLat, currentLon }: Prop
             color={ECS.muted}
           />
           <Text style={s.noRouteText}>
-            No active route — prediction unavailable.
+            No route staged — prediction unavailable.
           </Text>
         </View>
       )}

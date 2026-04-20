@@ -8,6 +8,7 @@
  * Includes presets by vehicle make/model for quick population.
  */
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
@@ -68,30 +69,48 @@ export const VEHICLE_SPEC_PRESETS: Record<string, VehicleSpecPreset[]> = {
   truck: [
     { label: 'Toyota Tacoma TRD Pro', make: 'Toyota', model: 'Tacoma', gvwr_lb: 5600, base_weight_lb: 4480, fuel_tank_capacity_gal: 21.1, fuel_type: 'gas' },
     { label: 'Toyota Tacoma SR5', make: 'Toyota', model: 'Tacoma', gvwr_lb: 5600, base_weight_lb: 4250, fuel_tank_capacity_gal: 21.1, fuel_type: 'gas' },
+    { label: 'Toyota Tacoma Trailhunter', make: 'Toyota', model: 'Tacoma', gvwr_lb: 6205, base_weight_lb: 5000, fuel_tank_capacity_gal: 18.2, fuel_type: 'gas' },
+    { label: 'Toyota Tundra Trailhunter', make: 'Toyota', model: 'Tundra', gvwr_lb: 7400, base_weight_lb: 5980, fuel_tank_capacity_gal: 32.2, fuel_type: 'gas' },
     { label: 'Toyota Tundra TRD Pro', make: 'Toyota', model: 'Tundra', gvwr_lb: 7175, base_weight_lb: 5680, fuel_tank_capacity_gal: 32.2, fuel_type: 'gas' },
+    { label: 'Ford F-150 Tremor', make: 'Ford', model: 'F-150', gvwr_lb: 7050, base_weight_lb: 5370, fuel_tank_capacity_gal: 36.0, fuel_type: 'gas' },
     { label: 'Ford Ranger Tremor', make: 'Ford', model: 'Ranger', gvwr_lb: 6050, base_weight_lb: 4640, fuel_tank_capacity_gal: 21.0, fuel_type: 'gas' },
+    { label: 'Ford Ranger Raptor', make: 'Ford', model: 'Ranger', gvwr_lb: 6790, base_weight_lb: 5415, fuel_tank_capacity_gal: 20.3, fuel_type: 'gas' },
     { label: 'Ford F-150 Raptor', make: 'Ford', model: 'F-150', gvwr_lb: 7050, base_weight_lb: 5700, fuel_tank_capacity_gal: 36.0, fuel_type: 'gas' },
     { label: 'Ford F-250 Super Duty (Diesel)', make: 'Ford', model: 'F-250', gvwr_lb: 10000, base_weight_lb: 6600, fuel_tank_capacity_gal: 34.0, fuel_type: 'diesel' },
     { label: 'Ford F-250 Super Duty (Gas)', make: 'Ford', model: 'F-250', gvwr_lb: 10000, base_weight_lb: 6400, fuel_tank_capacity_gal: 34.0, fuel_type: 'gas' },
+    { label: 'RAM 1500 Rebel', make: 'RAM', model: '1500', gvwr_lb: 6900, base_weight_lb: 5380, fuel_tank_capacity_gal: 26.0, fuel_type: 'gas' },
     { label: 'RAM 1500 TRX', make: 'RAM', model: '1500', gvwr_lb: 7100, base_weight_lb: 6350, fuel_tank_capacity_gal: 33.0, fuel_type: 'gas' },
     { label: 'RAM 2500 Power Wagon', make: 'RAM', model: '2500', gvwr_lb: 8510, base_weight_lb: 6900, fuel_tank_capacity_gal: 32.0, fuel_type: 'gas' },
     { label: 'RAM 2500 Cummins', make: 'RAM', model: '2500', gvwr_lb: 10000, base_weight_lb: 7200, fuel_tank_capacity_gal: 32.0, fuel_type: 'diesel' },
     { label: 'RAM 3500 Cummins', make: 'RAM', model: '3500', gvwr_lb: 14000, base_weight_lb: 7700, fuel_tank_capacity_gal: 32.0, fuel_type: 'diesel' },
     { label: 'Chevy Colorado ZR2', make: 'Chevrolet', model: 'Colorado', gvwr_lb: 6100, base_weight_lb: 4700, fuel_tank_capacity_gal: 21.0, fuel_type: 'gas' },
+    { label: 'Chevy Colorado Trail Boss', make: 'Chevrolet', model: 'Colorado', gvwr_lb: 6250, base_weight_lb: 4520, fuel_tank_capacity_gal: 21.4, fuel_type: 'gas' },
+    { label: 'Chevy Silverado 1500 ZR2', make: 'Chevrolet', model: 'Silverado', gvwr_lb: 7100, base_weight_lb: 5800, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
     { label: 'Chevy Silverado 1500 Trail Boss', make: 'Chevrolet', model: 'Silverado', gvwr_lb: 7200, base_weight_lb: 5150, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
     { label: 'Nissan Frontier PRO-4X', make: 'Nissan', model: 'Frontier', gvwr_lb: 5940, base_weight_lb: 4540, fuel_tank_capacity_gal: 21.1, fuel_type: 'gas' },
+    { label: 'GMC Sierra 1500 AT4X', make: 'GMC', model: 'Sierra', gvwr_lb: 7100, base_weight_lb: 5930, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
     { label: 'GMC Canyon AT4X', make: 'GMC', model: 'Canyon', gvwr_lb: 6100, base_weight_lb: 4750, fuel_tank_capacity_gal: 21.0, fuel_type: 'gas' },
     { label: 'Rivian R1T', make: 'Rivian', model: 'R1T', gvwr_lb: 8532, base_weight_lb: 7148, fuel_tank_capacity_gal: 0, fuel_type: 'gas' },
   ],
   suv_van: [
     { label: 'Toyota 4Runner TRD Pro', make: 'Toyota', model: '4Runner', gvwr_lb: 5750, base_weight_lb: 4675, fuel_tank_capacity_gal: 23.0, fuel_type: 'gas' },
+    { label: 'Toyota 4Runner Trailhunter', make: 'Toyota', model: '4Runner', gvwr_lb: 6300, base_weight_lb: 5150, fuel_tank_capacity_gal: 19.0, fuel_type: 'gas' },
+    { label: 'Toyota Sequoia TRD Pro', make: 'Toyota', model: 'Sequoia', gvwr_lb: 7615, base_weight_lb: 6150, fuel_tank_capacity_gal: 22.5, fuel_type: 'gas' },
     { label: 'Toyota Land Cruiser', make: 'Toyota', model: 'Land Cruiser', gvwr_lb: 6800, base_weight_lb: 5615, fuel_tank_capacity_gal: 22.5, fuel_type: 'gas' },
+    { label: 'Lexus GX 460 Premium', make: 'Lexus', model: 'GX', gvwr_lb: 6600, base_weight_lb: 5130, fuel_tank_capacity_gal: 23.0, fuel_type: 'gas' },
     { label: 'Lexus GX 550', make: 'Lexus', model: 'GX', gvwr_lb: 6834, base_weight_lb: 5465, fuel_tank_capacity_gal: 21.7, fuel_type: 'gas' },
+    { label: 'Lexus LX 600 Overtrail', make: 'Lexus', model: 'LX', gvwr_lb: 7380, base_weight_lb: 5950, fuel_tank_capacity_gal: 21.1, fuel_type: 'gas' },
     { label: 'Ford Bronco Badlands', make: 'Ford', model: 'Bronco', gvwr_lb: 5700, base_weight_lb: 4700, fuel_tank_capacity_gal: 20.8, fuel_type: 'gas' },
     { label: 'Ford Expedition', make: 'Ford', model: 'Expedition', gvwr_lb: 7500, base_weight_lb: 5800, fuel_tank_capacity_gal: 28.0, fuel_type: 'gas' },
     { label: 'Chevy Tahoe Z71', make: 'Chevrolet', model: 'Tahoe', gvwr_lb: 7300, base_weight_lb: 5680, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
-    { label: 'Mercedes Sprinter 4x4 (Diesel)', make: 'Mercedes', model: 'Sprinter', gvwr_lb: 8550, base_weight_lb: 6100, fuel_tank_capacity_gal: 24.5, fuel_type: 'diesel' },
+    { label: 'Chevy Suburban Z71', make: 'Chevrolet', model: 'Suburban', gvwr_lb: 7700, base_weight_lb: 5900, fuel_tank_capacity_gal: 28.0, fuel_type: 'gas' },
+    { label: 'GMC Yukon AT4', make: 'GMC', model: 'Yukon', gvwr_lb: 7600, base_weight_lb: 5900, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
+    { label: 'Nissan Armada PRO-4X', make: 'Nissan', model: 'Armada', gvwr_lb: 7600, base_weight_lb: 6180, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
+    { label: 'INEOS Grenadier Station Wagon', make: 'INEOS', model: 'Grenadier', gvwr_lb: 7716, base_weight_lb: 5675, fuel_tank_capacity_gal: 23.8, fuel_type: 'gas' },
+    { label: 'Mercedes Sprinter AWD (Diesel)', make: 'Mercedes', model: 'Sprinter', gvwr_lb: 8550, base_weight_lb: 6100, fuel_tank_capacity_gal: 24.5, fuel_type: 'diesel' },
+    { label: 'Mercedes Sprinter 170 AWD (Diesel)', make: 'Mercedes', model: 'Sprinter 170', gvwr_lb: 9050, base_weight_lb: 6600, fuel_tank_capacity_gal: 24.5, fuel_type: 'diesel' },
     { label: 'Ford Transit AWD', make: 'Ford', model: 'Transit', gvwr_lb: 9500, base_weight_lb: 6300, fuel_tank_capacity_gal: 25.0, fuel_type: 'gas' },
+    { label: 'Ford Transit Trail AWD', make: 'Ford', model: 'Transit', gvwr_lb: 9500, base_weight_lb: 6450, fuel_tank_capacity_gal: 31.0, fuel_type: 'gas' },
     { label: 'RAM ProMaster', make: 'RAM', model: 'ProMaster', gvwr_lb: 9350, base_weight_lb: 5900, fuel_tank_capacity_gal: 24.0, fuel_type: 'gas' },
     { label: 'Rivian R1S', make: 'Rivian', model: 'R1S', gvwr_lb: 8532, base_weight_lb: 7200, fuel_tank_capacity_gal: 0, fuel_type: 'gas' },
   ],
@@ -104,6 +123,7 @@ export const VEHICLE_SPEC_PRESETS: Record<string, VehicleSpecPreset[]> = {
     { label: 'Jeep Grand Cherokee Trailhawk', make: 'Jeep', model: 'Grand Cherokee', gvwr_lb: 6500, base_weight_lb: 5050, fuel_tank_capacity_gal: 24.6, fuel_type: 'gas' },
   ],
   car_crossover: [
+    { label: 'Subaru Forester Wilderness', make: 'Subaru', model: 'Forester', gvwr_lb: 4891, base_weight_lb: 3650, fuel_tank_capacity_gal: 16.6, fuel_type: 'gas' },
     { label: 'Subaru Outback Wilderness', make: 'Subaru', model: 'Outback', gvwr_lb: 5050, base_weight_lb: 3900, fuel_tank_capacity_gal: 18.5, fuel_type: 'gas' },
     { label: 'Subaru Crosstrek', make: 'Subaru', model: 'Crosstrek', gvwr_lb: 4630, base_weight_lb: 3500, fuel_tank_capacity_gal: 16.6, fuel_type: 'gas' },
     { label: 'Toyota RAV4 TRD Off-Road', make: 'Toyota', model: 'RAV4', gvwr_lb: 5060, base_weight_lb: 3900, fuel_tank_capacity_gal: 14.5, fuel_type: 'gas' },
@@ -114,15 +134,16 @@ export const VEHICLE_SPEC_PRESETS: Record<string, VehicleSpecPreset[]> = {
 
 // ── Persistence ─────────────────────────────────────────
 const LS_KEY = 'ecs_vehicle_specs';
+const vehicleSpecPersistence = createPersistedKeyValueCache('ecs_vehicle_specs_store');
 
 function getAllSpecs(): Record<string, VehicleSpec> {
-  const raw = lsGet(LS_KEY);
+  const raw = vehicleSpecPersistence.get(LS_KEY);
   if (!raw) return {};
   try { return JSON.parse(raw) || {}; } catch { return {}; }
 }
 
 function saveAllSpecs(specs: Record<string, VehicleSpec>): void {
-  lsSet(LS_KEY, JSON.stringify(specs));
+  vehicleSpecPersistence.set(LS_KEY, JSON.stringify(specs));
 }
 
 // ── Migration: backfill fuel fields on existing specs ────
@@ -306,5 +327,9 @@ export const vehicleSpecStore = {
     }
     return migrated;
   },
+
+  waitForHydration: (): Promise<void> => vehicleSpecPersistence.waitForHydration(),
+
+  flush: (): Promise<void> => vehicleSpecPersistence.flush(),
 };
 

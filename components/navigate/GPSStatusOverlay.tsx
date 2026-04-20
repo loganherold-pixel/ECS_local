@@ -34,6 +34,9 @@ interface Props {
   onRetry: () => void;
   /** Whether the map has finished loading */
   mapReady: boolean;
+  topOffset?: number;
+  horizontalInset?: number;
+  maxWidth?: number;
 }
 
 export default function GPSStatusOverlay({
@@ -45,6 +48,9 @@ export default function GPSStatusOverlay({
   error,
   onRetry,
   mapReady,
+  topOffset = 8,
+  horizontalInset = 8,
+  maxWidth = 320,
 }: Props) {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
@@ -104,13 +110,13 @@ export default function GPSStatusOverlay({
             <Ionicons name="location-outline" size={28} color={TACTICAL.danger} />
             <View style={styles.deniedSlash} />
           </View>
-          <Text style={styles.deniedTitle}>LOCATION ACCESS REQUIRED</Text>
+          <Text style={styles.deniedTitle}>LOCATION NEEDED</Text>
           <Text style={styles.deniedBody}>
-            ECS Navigate requires GPS access to center the map on your position,
-            track trails, and provide real-time navigation features.
+            ECS Navigate needs location access to center the map, track trails,
+            and keep guidance current.
           </Text>
           <Text style={styles.deniedHint}>
-            Enable location access in your device settings to use navigation.
+            Enable location in your device settings to use Navigate.
           </Text>
           <View style={styles.deniedActions}>
             <TouchableOpacity
@@ -129,7 +135,7 @@ export default function GPSStatusOverlay({
             >
               <Ionicons name="settings-outline" size={14} color="#0B0F12" />
               <Text style={styles.deniedSettingsBtnText}>
-                {Platform.OS === 'web' ? 'RETRY PERMISSION' : 'OPEN SETTINGS'}
+                {Platform.OS === 'web' ? 'TRY AGAIN' : 'OPEN SETTINGS'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -137,7 +143,7 @@ export default function GPSStatusOverlay({
               onPress={() => setDismissed(true)}
               activeOpacity={0.8}
             >
-              <Text style={styles.deniedDismissBtnText}>CONTINUE WITHOUT GPS</Text>
+              <Text style={styles.deniedDismissBtnText}>CONTINUE WITH SAVED CONTEXT</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -149,15 +155,23 @@ export default function GPSStatusOverlay({
   if (!hasFix) {
     const isRetrying = gpsStatus === 'RETRYING';
     const statusLabel = isRetrying
-      ? `RETRYING${retryCount > 0 ? ` (${retryCount})` : ''}...`
-      : 'LOCATING...';
+      ? `REFRESHING LOCATION${retryCount > 0 ? ` (${retryCount})` : ''}`
+      : 'LOCATING POSITION';
 
     return (
       <Animated.View
-        style={[styles.acquiringOverlay, { opacity: fadeAnim }]}
+        style={[
+          styles.acquiringOverlay,
+          {
+            opacity: fadeAnim,
+            top: topOffset,
+            left: horizontalInset,
+            right: horizontalInset,
+          },
+        ]}
         pointerEvents="box-none"
       >
-        <View style={styles.acquiringBanner}>
+        <View style={[styles.acquiringBanner, { maxWidth }]}>
           {/* Animated pulse ring */}
           <Animated.View
             style={[
@@ -170,8 +184,8 @@ export default function GPSStatusOverlay({
             <Text style={styles.acquiringLabel}>{statusLabel}</Text>
             <Text style={styles.acquiringHint}>
               {isRetrying
-                ? 'GPS signal temporarily unavailable'
-                : 'Acquiring GPS signal for map centering'}
+                ? 'GPS signal is weak. ECS will keep trying.'
+                : 'Getting a position fix for Navigate.'}
             </Text>
           </View>
           {/* Fix quality indicator placeholder */}
@@ -188,14 +202,22 @@ export default function GPSStatusOverlay({
   // ── Fix Acquired — Fading Out ────────────────────────
   return (
     <Animated.View
-      style={[styles.acquiringOverlay, { opacity: fadeAnim }]}
+      style={[
+        styles.acquiringOverlay,
+        {
+          opacity: fadeAnim,
+          top: topOffset,
+          left: horizontalInset,
+          right: horizontalInset,
+        },
+      ]}
       pointerEvents="none"
     >
-      <View style={[styles.acquiringBanner, styles.acquiredBanner]}>
+      <View style={[styles.acquiringBanner, styles.acquiredBanner, { maxWidth }]}>
         <View style={styles.acquiredDot} />
         <View style={styles.acquiringContent}>
           <Text style={[styles.acquiringLabel, styles.acquiredLabel]}>
-            GPS LOCKED
+            LOCATION LIVE
           </Text>
           <Text style={styles.acquiringHint}>
             {fixQuality === 'HIGH'
@@ -322,9 +344,6 @@ const styles = StyleSheet.create({
   // ── Acquiring / Locating ──────────────────────────────
   acquiringOverlay: {
     position: 'absolute',
-    top: 8,
-    left: 8,
-    right: 8,
     zIndex: 40,
     alignItems: 'center',
   },
@@ -333,12 +352,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     backgroundColor: 'rgba(11,15,18,0.92)',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.35)',
-    maxWidth: 360,
     width: '100%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -355,9 +373,9 @@ const styles = StyleSheet.create({
   },
   acquiringLabel: {
     fontFamily: 'Courier',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 3,
+    letterSpacing: 2.4,
     color: TACTICAL.amber,
     textTransform: 'uppercase' as any,
   },
@@ -366,18 +384,18 @@ const styles = StyleSheet.create({
   },
   acquiringHint: {
     ...TYPO.B2,
-    fontSize: 10,
+    fontSize: 9,
     color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
+    letterSpacing: 0.35,
   },
 
   // ── Pulse Ring ────────────────────────────────────────
   pulseRing: {
     position: 'absolute',
-    left: 10,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    left: 8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
     borderColor: TACTICAL.amber,
     backgroundColor: 'transparent',

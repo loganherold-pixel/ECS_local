@@ -311,7 +311,7 @@ function LoadMapScreenInner() {
             <View style={styles.emptyIconWrap}>
               <Ionicons name="car-outline" size={40} color={TACTICAL.textMuted} />
             </View>
-            <Text style={styles.emptyTitle}>CONFIGURE VEHICLE FIRST</Text>
+            <Text style={styles.emptyTitle}>SET UP VEHICLE FIRST</Text>
             <Text style={styles.emptySubtext}>
               Set up your vehicle to see the load map.{'\n'}Works offline — no sign-in required.
             </Text>
@@ -321,7 +321,7 @@ function LoadMapScreenInner() {
               activeOpacity={0.8}
             >
               <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-              <Text style={styles.configureBtnText}>CONFIGURE VEHICLE</Text>
+              <Text style={styles.configureBtnText}>SET UP VEHICLE</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -418,7 +418,7 @@ function LoadMapScreenInner() {
                   onPress={() => router.push('/(tabs)/vehicle-config')}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.setupBtnText}>DEPLOY</Text>
+                  <Text style={styles.setupBtnText}>SET UP</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -429,9 +429,9 @@ function LoadMapScreenInner() {
               <View style={styles.notConfiguredIcon}>
                 <Ionicons name="construct-outline" size={32} color={TACTICAL.amber} />
               </View>
-              <Text style={styles.notConfiguredTitle}>DEPLOY CONFIGURATION</Text>
+              <Text style={styles.notConfiguredTitle}>VEHICLE SETUP REQUIRED</Text>
               <Text style={styles.notConfiguredText}>
-                Run the Vehicle Configuration Wizard to define your zones and loadout slots.
+                Open Vehicle Setup to define your zones and loadout slots.
               </Text>
               <TouchableOpacity
                 style={styles.configureBtn}
@@ -439,7 +439,7 @@ function LoadMapScreenInner() {
                 activeOpacity={0.8}
               >
                 <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-                <Text style={styles.configureBtnText}>DEPLOY</Text>
+                <Text style={styles.configureBtnText}>OPEN SETUP</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.editVehicleBtn}
@@ -459,7 +459,7 @@ function LoadMapScreenInner() {
                 }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.editVehicleText}>EDIT VEHICLE</Text>
+                <Text style={styles.editVehicleText}>EDIT SETUP</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -529,7 +529,7 @@ function LoadMapScreenInner() {
               <Ionicons name="grid-outline" size={32} color={TACTICAL.textMuted} />
               <Text style={styles.noZonesTitle}>NO ZONES FOUND</Text>
               <Text style={styles.noZonesText}>
-                Zones may not have been saved. Try reconfiguring.
+                Zones may not have been saved. Try updating vehicle setup.
               </Text>
               <TouchableOpacity
                 style={styles.configureBtn}
@@ -537,7 +537,7 @@ function LoadMapScreenInner() {
                 activeOpacity={0.8}
               >
                 <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-                <Text style={styles.configureBtnText}>RECONFIGURE</Text>
+                <Text style={styles.configureBtnText}>UPDATE SETUP</Text>
               </TouchableOpacity>
             </View>
           )}

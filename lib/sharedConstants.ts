@@ -36,6 +36,7 @@ export type WidgetType =
   | 'operational-readiness'
   | 'sustainability'
   | 'progress'
+  | 'navigate-surface'
   | 'remoteness'
   | 'expedition-channel'
   | 'trip-demand-analyzer'

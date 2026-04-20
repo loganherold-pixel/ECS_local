@@ -310,7 +310,7 @@ export function useDataBindingValidation(
   // Also log when mode changes
   useEffect(() => {
     logDataBindingValidation(activeWidgetIds, mode);
-  }, [mode]);
+  }, [activeWidgetIds, mode]);
 }
 
 

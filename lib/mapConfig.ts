@@ -28,8 +28,10 @@
  * Graceful degradation if token is missing.
  */
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { supabase } from './supabase';
 import type { RunPoint, RunHealthLevel } from './runStore';
+import { reportRecoverableFailure } from './ecsIssueIntelligence';
 
 // ── Map Styles ──────────────────────────────────────────────
 export type MapStyleKey = 'ecs' | 'tactical' | 'satellite';
@@ -49,7 +51,7 @@ export const MAP_STYLES: MapStyleDef[] = [
     key: 'ecs',
     label: 'Default Day',
     shortLabel: 'DAY',
-    url: 'mapbox://styles/expeditioncommand/cmn2jiff200ne01rn1o3shhna',
+    url: 'mapbox://styles/mapbox/streets-v12',
     icon: 'navigate-outline',
   },
   {
@@ -60,12 +62,12 @@ export const MAP_STYLES: MapStyleDef[] = [
     icon: 'moon-outline',
   },
   {
-  key: 'satellite',
-  label: 'Satellite',
-  shortLabel: 'SAT',
-  url: 'mapbox://styles/expeditioncommand/cmn2k6y89000e01r683ish0c7',
-  icon: 'earth-outline',
-},
+    key: 'satellite',
+    label: 'Satellite',
+    shortLabel: 'SAT',
+    url: 'mapbox://styles/mapbox/satellite-streets-v12',
+    icon: 'earth-outline',
+  },
 ];
 
 export function getMapStyleDef(key?: MapStyleKey | null): MapStyleDef {
@@ -86,6 +88,16 @@ export const HEALTH_COLORS: Record<RunHealthLevel, string> = {
 // ── Persistence Keys ────────────────────────────────────────
 const MAPBOX_TOKEN_STORAGE_KEY = 'ecs_mapbox_access_token';
 const SECURE_STORE_KEY = 'ecs_mapbox_token'; // shorter key for SecureStore (2048 char key limit)
+const SECURE_STORE_SAFE_VALUE_BYTES = 1900;
+const secureStoreSizeWarningKeys = new Set<string>();
+
+function estimateStorageBytes(value: string): number {
+  try {
+    return new TextEncoder().encode(value).length;
+  } catch {
+    return value.length * 2;
+  }
+}
 
 // ── SecureStore Lazy Loader ─────────────────────────────────
 let _secureStoreModule: typeof import('expo-secure-store') | null = null;
@@ -150,6 +162,19 @@ async function secureStoreSet(key: string, value: string): Promise<boolean> {
     await loadSecureStore();
   }
   if (!_secureStoreModule) return false;
+
+  const valueBytes = estimateStorageBytes(value);
+  if (valueBytes > SECURE_STORE_SAFE_VALUE_BYTES) {
+    if (!secureStoreSizeWarningKeys.has(key)) {
+      secureStoreSizeWarningKeys.add(key);
+      console.warn(
+        '[MapConfig] SecureStore write skipped: value exceeds safe size limit',
+        { key, bytes: valueBytes, limit: SECURE_STORE_SAFE_VALUE_BYTES },
+      );
+    }
+    return false;
+  }
+
   try {
     await _secureStoreModule.setItemAsync(key, value);
     console.log(
@@ -226,7 +251,7 @@ let tokenFetched = false;
 /**
  * Validate that a string looks like a valid Mapbox public token.
  */
-function isValidMapboxToken(token: string | undefined | null): token is string {
+function isValidMapboxToken(token: string | undefined | null): boolean {
   if (!token || typeof token !== 'string') return false;
   if (token.length < 10) return false;
   if (token === 'undefined' || token === 'null' || token === 'YOUR_TOKEN_HERE') return false;
@@ -242,7 +267,7 @@ function isValidMapboxToken(token: string | undefined | null): token is string {
  */
 function getEnvToken(): string {
   try {
-    const envToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
+    const envToken = String(process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '');
     if (isValidMapboxToken(envToken)) {
       console.log(
         '[MapConfig] Found valid EXPO_PUBLIC_MAPBOX_TOKEN from environment (length:',
@@ -271,8 +296,6 @@ function getEnvToken(): string {
  */
 function getConstantsToken(): string {
   try {
-    const Constants = require('expo-constants').default;
-
     const extra = Constants?.expoConfig?.extra;
     if (extra) {
       const candidates = [
@@ -353,12 +376,13 @@ function getWebPersistedToken(): string {
 async function getSecurePersistedTokenAsync(): Promise<string> {
   const stored = await secureStoreGet(SECURE_STORE_KEY);
   if (isValidMapboxToken(stored)) {
+    const storedToken = stored ?? '';
     console.log(
       '[MapConfig] Found SecureStore-persisted Mapbox token (encrypted keychain, length:',
-      stored.length,
+      storedToken.length,
       ')',
     );
-    return stored;
+    return storedToken;
   }
   return '';
 }
@@ -520,6 +544,16 @@ export async function getMapboxToken(): Promise<string> {
 
     if (error) {
       console.warn('[MapConfig] Edge function error:', error.message || error);
+      reportRecoverableFailure({
+        severity: 'high',
+        issueTitle: 'Map token resolution failed',
+        ecsArea: 'navigate',
+        message: typeof error?.message === 'string' ? error.message : 'Map token edge function error',
+        signature: `map_token_error:${typeof error?.message === 'string' ? error.message : 'edge_error'}`,
+        metadata: {
+          source: 'get-map-token',
+        },
+      });
     } else if (data?.token && isValidMapboxToken(data.token)) {
       console.log(
         '[MapConfig] Valid Mapbox token received from edge function (length:',
@@ -536,9 +570,27 @@ export async function getMapboxToken(): Promise<string> {
         data?.error ? `Reason: ${data.error}` : '',
         data?.diagnostics ? `Diagnostics: ${JSON.stringify(data.diagnostics)}` : '',
       );
+      reportRecoverableFailure({
+        severity: 'high',
+        issueTitle: 'Map token unavailable',
+        ecsArea: 'navigate',
+        message: typeof data?.error === 'string' ? data.error : 'Map token edge function returned no valid token',
+        signature: `map_token_missing:${typeof data?.error === 'string' ? data.error : 'invalid_token'}`,
+        metadata: {
+          diagnostics: data?.diagnostics ?? null,
+        },
+      });
     }
   } catch (err) {
     console.warn('[MapConfig] Failed to invoke get-map-token edge function:', err);
+    reportRecoverableFailure({
+      severity: 'high',
+      issueTitle: 'Map token invocation failed',
+      ecsArea: 'navigate',
+      error: err,
+      message: err instanceof Error ? err.message : 'Failed to invoke map token edge function',
+      signature: `map_token_exception:${err instanceof Error ? err.message : 'unknown'}`,
+    });
   }
 
   console.warn(
@@ -549,6 +601,13 @@ export async function getMapboxToken(): Promise<string> {
       '  3. Set MAPBOX_ACCESS_TOKEN in Supabase Edge Function Secrets\n' +
       '  4. Enter the token manually in the Navigate tab',
   );
+  reportRecoverableFailure({
+    severity: 'high',
+    issueTitle: 'Map token missing from all sources',
+    ecsArea: 'navigate',
+    message: 'No Mapbox token available from any configured source',
+    signature: 'map_token_missing_all_sources',
+  });
   tokenFetched = true;
   cachedToken = '';
   return '';
@@ -723,7 +782,7 @@ export function pointsToGeoJSON(points: RunPoint[]): any {
 }
 
 export function waypointsToGeoJSON(
-  waypoints: Array<{ lat: number; lon: number; name?: string }>,
+  waypoints: { lat: number; lon: number; name?: string }[],
 ): any {
   return {
     type: 'FeatureCollection',

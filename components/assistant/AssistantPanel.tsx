@@ -251,7 +251,7 @@ export default function AssistantPanel() {
     if (!expeditionSession || expeditionSession.lifecycle !== 'active') return;
     const timer = setInterval(() => setRev(r => r + 1), 15_000);
     return () => clearInterval(timer);
-  }, [expeditionSession?.lifecycle]);
+  }, [expeditionSession]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -295,7 +295,7 @@ export default function AssistantPanel() {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Ionicons name="shield-outline" size={18} color={ECS.accent} />
-          <Text style={styles.headerTitle}>AI EXPEDITION ASSISTANT</Text>
+          <Text style={styles.headerTitle}>ECS EXPEDITION ASSISTANT</Text>
         </View>
         <View style={styles.headerRight}>
           {/* Phase 7C: Guidance card count */}

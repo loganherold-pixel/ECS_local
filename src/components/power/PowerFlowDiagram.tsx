@@ -156,7 +156,7 @@ function AnimatedFlowArrow({
       a1.stop();
       a2.stop();
     };
-  }, [shouldAnimate, duration]);
+  }, [shouldAnimate, duration, pulse0, pulse1, pulse2]);
 
   const lineColor = active ? color + '50' : 'rgba(255,255,255,0.06)';
   const inactiveArrowColor = 'rgba(255,255,255,0.15)';

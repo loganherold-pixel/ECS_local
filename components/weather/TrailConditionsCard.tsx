@@ -1,9 +1,3 @@
-/**
- * Trail Conditions Card
- * 
- * Displays trail condition warnings based on recent weather patterns.
- * Shows overall status and individual factor assessments.
- */
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -13,11 +7,11 @@ import type { TrailConditions, TrailFactorStatus } from '../../lib/weatherTypes'
 import { getTrailStatusColor, getTrailOverallColor } from '../../lib/weatherTypes';
 
 interface Props {
-  conditions: TrailConditions;
+  conditions: TrailConditions | null | undefined;
 }
 
-function getFactorIcon(factor: string): string {
-  switch (factor.toLowerCase()) {
+function getFactorIcon(factor?: string | null): string {
+  switch ((factor ?? '').toLowerCase()) {
     case 'surface': return 'trail-sign-outline';
     case 'visibility': return 'eye-outline';
     case 'wind': return 'flag-outline';
@@ -27,7 +21,7 @@ function getFactorIcon(factor: string): string {
   }
 }
 
-function getStatusLabel(status: TrailFactorStatus): string {
+function getStatusLabel(status?: TrailFactorStatus | null): string {
   switch (status) {
     case 'good': return 'GOOD';
     case 'caution': return 'CAUTION';
@@ -37,7 +31,7 @@ function getStatusLabel(status: TrailFactorStatus): string {
   }
 }
 
-function getOverallLabel(overall: string): string {
+function getOverallLabel(overall?: string | null): string {
   switch (overall) {
     case 'good': return 'GOOD CONDITIONS';
     case 'fair': return 'FAIR — USE CAUTION';
@@ -47,8 +41,15 @@ function getOverallLabel(overall: string): string {
   }
 }
 
+function safeUpper(value?: string | null): string {
+  return (value ?? 'unknown').toUpperCase();
+}
+
 export default function TrailConditionsCard({ conditions }: Props) {
-  const overallColor = getTrailOverallColor(conditions.overall);
+  const overall = conditions?.overall ?? 'fair';
+  const factors = Array.isArray(conditions?.factors) ? conditions!.factors : [];
+
+  const overallColor = getTrailOverallColor(overall as any);
 
   return (
     <View style={styles.container}>
@@ -58,10 +59,18 @@ export default function TrailConditionsCard({ conditions }: Props) {
           <Ionicons name="trail-sign-outline" size={13} color={TACTICAL.amber} />
           <Text style={styles.headerTitle}>TRAIL CONDITIONS</Text>
         </View>
-        <View style={[styles.overallBadge, { backgroundColor: overallColor + '18', borderColor: overallColor + '40' }]}>
+        <View
+          style={[
+            styles.overallBadge,
+            {
+              backgroundColor: overallColor + '18',
+              borderColor: overallColor + '40',
+            },
+          ]}
+        >
           <View style={[styles.overallDot, { backgroundColor: overallColor }]} />
           <Text style={[styles.overallText, { color: overallColor }]}>
-            {conditions.overall.toUpperCase()}
+            {safeUpper(overall)}
           </Text>
         </View>
       </View>
@@ -69,44 +78,68 @@ export default function TrailConditionsCard({ conditions }: Props) {
       {/* Overall status bar */}
       <View style={[styles.overallBar, { borderColor: overallColor + '30' }]}>
         <Ionicons
-          name={conditions.overall === 'good' ? 'checkmark-circle-outline' :
-                conditions.overall === 'hazardous' ? 'alert-circle-outline' :
-                'information-circle-outline'}
+          name={
+            overall === 'good'
+              ? 'checkmark-circle-outline'
+              : overall === 'hazardous'
+                ? 'alert-circle-outline'
+                : 'information-circle-outline'
+          }
           size={16}
           color={overallColor}
         />
         <Text style={[styles.overallLabel, { color: overallColor }]}>
-          {getOverallLabel(conditions.overall)}
+          {getOverallLabel(overall)}
         </Text>
       </View>
 
       {/* Factor rows */}
-      {conditions.factors.map((factor, idx) => {
-        const color = getTrailStatusColor(factor.status);
-        const icon = getFactorIcon(factor.factor);
+      {factors.length > 0 ? (
+        factors.map((factor, idx) => {
+          const factorName = factor?.factor ?? 'Unknown Factor';
+          const factorStatus = factor?.status;
+          const factorDetail = factor?.detail ?? 'No detail available.';
+          const color = getTrailStatusColor((factorStatus ?? 'caution') as TrailFactorStatus);
+          const icon = getFactorIcon(factorName);
 
-        return (
-          <View
-            key={factor.factor}
-            style={[
-              styles.factorRow,
-              idx < conditions.factors.length - 1 && styles.factorRowBorder,
-            ]}
-          >
-            <View style={styles.factorHeader}>
-              <Ionicons name={icon as any} size={13} color={color} />
-              <Text style={styles.factorName}>{factor.factor}</Text>
-              <View style={[styles.statusPill, { backgroundColor: color + '15', borderColor: color + '35' }]}>
-                <View style={[styles.statusDot, { backgroundColor: color }]} />
-                <Text style={[styles.statusText, { color }]}>
-                  {getStatusLabel(factor.status)}
-                </Text>
+          return (
+            <View
+              key={`${factorName}_${idx}`}
+              style={[
+                styles.factorRow,
+                idx < factors.length - 1 && styles.factorRowBorder,
+              ]}
+            >
+              <View style={styles.factorHeader}>
+                <Ionicons name={icon as any} size={13} color={color} />
+                <Text style={styles.factorName}>{factorName}</Text>
+                <View
+                  style={[
+                    styles.statusPill,
+                    {
+                      backgroundColor: color + '15',
+                      borderColor: color + '35',
+                    },
+                  ]}
+                >
+                  <View style={[styles.statusDot, { backgroundColor: color }]} />
+                  <Text style={[styles.statusText, { color }]}>
+                    {getStatusLabel(factorStatus)}
+                  </Text>
+                </View>
               </View>
+              <Text style={styles.factorDetail}>{factorDetail}</Text>
             </View>
-            <Text style={styles.factorDetail}>{factor.detail}</Text>
-          </View>
-        );
-      })}
+          );
+        })
+      ) : (
+        <View style={styles.emptyRow}>
+          <Ionicons name="information-circle-outline" size={13} color={TACTICAL.textMuted} />
+          <Text style={styles.emptyText}>
+            Trail condition detail is not available for this weather source yet.
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -222,7 +255,17 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginLeft: 21,
   },
+  emptyRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  emptyText: {
+    flex: 1,
+    fontSize: 10,
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
+  },
 });
-
-
-

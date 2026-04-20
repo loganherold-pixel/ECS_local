@@ -26,39 +26,45 @@ import React, { useEffect, useRef, useCallback, useState } from 'react';
 import {
   Modal,
   Animated,
-  Easing,
   StyleSheet,
   TouchableWithoutFeedback,
   View,
   AccessibilityInfo,
   Platform,
 } from 'react-native';
+import {
+  isOverlayActive,
+  registerOverlay,
+  subscribeOverlayChanges,
+  type OverlayStackBehavior,
+} from '../lib/overlayCoordinator';
+import { EASING, MOTION } from '../lib/motion';
 
 // ── Motion Tier Configuration ──────────────────────────────
 const TIER_A = {
   // OPEN
   backdropOpacity: 0.35,
-  backdropDuration: 120,
-  panelDuration: 180,
+  backdropDuration: MOTION.stateTransition,
+  panelDuration: MOTION.modalSlide,
   panelTranslateY: 12,
   // CLOSE
-  closeBackdropDuration: 120,
-  closePanelDuration: 140,
+  closeBackdropDuration: MOTION.screenFadeOut,
+  closePanelDuration: MOTION.modalDismiss,
   closePanelTranslateY: 8,
   // REDUCED MOTION
-  reducedOpenDuration: 120,
-  reducedCloseDuration: 100,
+  reducedOpenDuration: MOTION.stateTransition,
+  reducedCloseDuration: MOTION.screenFadeOut,
 };
 
 const TIER_S = {
   // OPEN (FAST)
   backdropOpacity: 0.28,
   backdropDuration: 80,
-  panelDuration: 120,
+  panelDuration: 140,
   panelTranslateY: 8,
   // CLOSE (FAST)
   closeBackdropDuration: 90,
-  closePanelDuration: 100,
+  closePanelDuration: 110,
   closePanelTranslateY: 6,
   // REDUCED MOTION
   reducedOpenDuration: 90,
@@ -74,6 +80,8 @@ interface ECSModalProps {
   visible: boolean;
   onClose?: () => void;
   tier?: OverlayTier;
+  /** Major overlays replace one another; lightweight overlays may stack. */
+  stackBehavior?: OverlayStackBehavior;
   /** Whether tapping the backdrop closes the modal (default: true) */
   dismissOnBackdrop?: boolean;
   /** Custom backdrop opacity override */
@@ -88,6 +96,7 @@ export default function ECSModal({
   visible,
   onClose,
   tier = 'global',
+  stackBehavior = 'allow-stack',
   dismissOnBackdrop = true,
   backdropOpacity: customBackdropOpacity,
   onRequestClose,
@@ -103,6 +112,8 @@ export default function ECSModal({
 
   // Internal visibility state for delayed unmount
   const [modalVisible, setModalVisible] = useState(visible);
+  const overlayIdRef = useRef(`ecs-overlay-${Math.random().toString(36).slice(2)}`);
+  const [, setOverlayVersion] = useState(0);
 
   // ── Modal State Guards ──────────────────────────────────
   // Prevents double-close, re-open race conditions, and duplicate onClose calls.
@@ -123,6 +134,21 @@ export default function ECSModal({
       if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
     };
   }, []);
+
+  useEffect(() => subscribeOverlayChanges(() => {
+    setOverlayVersion((version) => version + 1);
+  }), []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+
+    const dismissHandler = onRequestClose ?? onClose;
+    return registerOverlay({
+      id: overlayIdRef.current,
+      stackBehavior,
+      onDismiss: dismissHandler,
+    });
+  }, [onClose, onRequestClose, stackBehavior, visible]);
 
   // Reduced motion detection
   const reducedMotion = useRef(false);
@@ -157,20 +183,20 @@ export default function ECSModal({
       Animated.timing(backdropAnim, {
         toValue: targetBackdropOpacity,
         duration: rm ? config.reducedOpenDuration : config.backdropDuration,
-        easing: Easing.out(Easing.cubic),
+        easing: EASING.decelerate,
         useNativeDriver: true,
       }),
       Animated.timing(panelOpacity, {
         toValue: 1,
         duration: rm ? config.reducedOpenDuration : config.panelDuration,
-        easing: Easing.out(Easing.cubic),
+        easing: EASING.decelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: 0,
           duration: config.panelDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
       ]),
@@ -180,7 +206,7 @@ export default function ECSModal({
         isOpeningRef.current = false;
       }
     });
-  }, [config, targetBackdropOpacity]);
+  }, [backdropAnim, config, panelOpacity, panelTranslateY, targetBackdropOpacity]);
 
   // ── CLOSE animation ─────────────────────────────────────
   const animateClose = useCallback((callback?: () => void) => {
@@ -197,21 +223,21 @@ export default function ECSModal({
       Animated.timing(panelOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closePanelDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: config.closePanelTranslateY,
           duration: config.closePanelDuration,
-          easing: Easing.in(Easing.cubic),
+          easing: EASING.accelerate,
           useNativeDriver: true,
         }),
       ]),
       Animated.timing(backdropAnim, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closeBackdropDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
     ]).start(() => {
@@ -231,7 +257,7 @@ export default function ECSModal({
         callback?.();
       }
     });
-  }, [config]);
+  }, [backdropAnim, config, panelOpacity, panelTranslateY]);
 
   // ── Visibility state management ─────────────────────────
   useEffect(() => {
@@ -257,7 +283,7 @@ export default function ECSModal({
     } else if (modalVisible) {
       animateClose();
     }
-  }, [visible]);
+  }, [visible, animateClose, animateOpen, modalVisible]);
 
   const handleRequestClose = useCallback(() => {
     // Guard: fire onClose/onRequestClose only once per cycle
@@ -281,7 +307,10 @@ export default function ECSModal({
     onClose();
   }, [dismissOnBackdrop, onClose]);
 
+  const overlayIsActive = isOverlayActive(overlayIdRef.current, stackBehavior);
+
   if (!modalVisible && !visible) return null;
+  if (visible && !overlayIsActive) return null;
 
   return (
     <Modal
@@ -380,26 +409,26 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
         Animated.timing(backdropOpacity, {
           toValue: config.backdropOpacity,
           duration: rm ? config.reducedOpenDuration : config.backdropDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
         Animated.timing(panelOpacity, {
           toValue: 1,
           duration: rm ? config.reducedOpenDuration : config.panelDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
         ...(rm ? [] : [
           Animated.timing(panelTranslateY, {
             toValue: 0,
             duration: config.panelDuration,
-            easing: Easing.out(Easing.cubic),
+            easing: EASING.decelerate,
             useNativeDriver: true,
           }),
         ]),
       ]).start();
     }
-  }, [visible]);
+  }, [backdropOpacity, config.backdropDuration, config.backdropOpacity, config.panelDuration, config.panelTranslateY, config.reducedOpenDuration, panelOpacity, panelTranslateY, visible]);
 
   const startClose = useCallback((callback?: () => void) => {
     // Guard: prevent double-close
@@ -413,21 +442,21 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
       Animated.timing(panelOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closePanelDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: config.closePanelTranslateY,
           duration: config.closePanelDuration,
-          easing: Easing.in(Easing.cubic),
+          easing: EASING.accelerate,
           useNativeDriver: true,
         }),
       ]),
       Animated.timing(backdropOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closeBackdropDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
     ]).start(() => {
@@ -442,7 +471,7 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
         }
       }
     });
-  }, [config, onCloseComplete]);
+  }, [backdropOpacity, config, onCloseComplete, panelOpacity, panelTranslateY]);
 
   return {
     backdropOpacity,

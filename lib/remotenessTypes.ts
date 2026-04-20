@@ -6,6 +6,9 @@
  * expedition intelligence integration.
  */
 
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import type { ECSPriorityResult } from './ai/priorityTypes';
+
 // ══════════════════════════════════════════════════════════
 // REMOTENESS LEVELS
 // ══════════════════════════════════════════════════════════
@@ -179,6 +182,12 @@ export interface RemotenessIndexOutput {
   reason: string;
   /** Detailed description of current conditions */
   description: string;
+  /** Shared ECS confidence result for the remoteness assessment */
+  confidence: ECSConfidenceResult;
+  /** Shared ECS priority result for operational escalation */
+  priority: ECSPriorityResult;
+  /** Shared operator-facing explanation */
+  explanation?: import('./ai/recommendationExplanationTypes').ECSExplanationResult | null;
 
   // ── Factor Breakdown ──
   /** Individual factor contributions */

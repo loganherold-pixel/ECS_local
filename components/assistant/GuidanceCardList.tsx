@@ -211,13 +211,13 @@ export default function GuidanceCardList({ cards, showResolved = true }: Guidanc
   const activeCards = cards.filter(c => !c.dismissed && !c.resolved);
   const resolvedCards = showResolved ? cards.filter(c => !c.dismissed && c.resolved) : [];
 
-  if (activeCards.length === 0 && resolvedCards.length === 0) {
-    return null; // Don't render anything if no cards
-  }
-
   const handleClearResolved = useCallback(() => {
     assistantStore.clearResolvedCards();
   }, []);
+
+  if (activeCards.length === 0 && resolvedCards.length === 0) {
+    return null; // Don't render anything if no cards
+  }
 
   return (
     <View style={styles.container}>

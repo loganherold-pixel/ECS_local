@@ -128,7 +128,7 @@ export default function RouteTileCacheCard({
     } else {
       setCardState('prompt');
     }
-  }, [run.id, run.points.length]);
+  }, [run]);
 
   // ── Progress animation ────────────────────────────────
   useEffect(() => {
@@ -139,7 +139,7 @@ export default function RouteTileCacheCard({
         useNativeDriver: false,
       }).start();
     }
-  }, [progress?.percent]);
+  }, [progress, progressAnim]);
 
   // Pulse animation during download
   useEffect(() => {
@@ -155,7 +155,7 @@ export default function RouteTileCacheCard({
     } else {
       pulseAnim.setValue(1);
     }
-  }, [cardState]);
+  }, [cardState, pulseAnim]);
 
   // ── Handlers ──────────────────────────────────────────
 

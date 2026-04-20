@@ -10,7 +10,7 @@
 //   complete — expedition just finished, summary available
 //
 // Triggers:
-//   Auto: geofence exit (400m default radius)
+//   Auto: geofence exit (200m default radius)
 //   Manual: "Begin Expedition" button on Fleet tab
 //
 // Pause/Resume:
@@ -33,6 +33,7 @@
 
 import { Platform } from 'react-native';
 import { supabase, isSupabaseConfigured } from './supabase';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 const TAG = '[EXPEDITION_STATE]';
 
@@ -100,14 +101,19 @@ export interface TimelineEvent {
 
 // ── Storage helpers ──────────────────────────────────────────
 const mem: Record<string, string> = {};
+const expeditionPersistence = createPersistedKeyValueCache('ecs_expedition_state');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
+    const value = expeditionPersistence.get(key);
+    return value != null ? value : mem[key] || null;
+  } catch {
+    const persistedValue = expeditionPersistence.get(key);
+    return persistedValue != null ? persistedValue : (mem[key] || null);
+  }
 }
 
 function sSet(key: string, value: string): void {
@@ -116,7 +122,15 @@ function sSet(key: string, value: string): void {
       localStorage.setItem(key, value);
     }
     mem[key] = value;
-  } catch { mem[key] = value; }
+    if (Platform.OS !== 'web') {
+      expeditionPersistence.set(key, value);
+    }
+  } catch {
+    mem[key] = value;
+    if (Platform.OS !== 'web') {
+      expeditionPersistence.set(key, value);
+    }
+  }
 }
 
 function uuid(): string {
@@ -138,7 +152,7 @@ const KEYS = {
 };
 
 // ── Default geofence radius (meters) ─────────────────────────
-const DEFAULT_GEOFENCE_RADIUS = 400;
+const DEFAULT_GEOFENCE_RADIUS = 200;
 
 // ── Listeners ────────────────────────────────────────────────
 type StateListener = (state: ExpeditionState, record: ExpeditionRecord | null) => void;
@@ -147,6 +161,20 @@ const listeners: Set<StateListener> = new Set();
 // ── Timeline Event Listeners ─────────────────────────────────
 type TimelineListener = (event: TimelineEvent) => void;
 const timelineListeners: Set<TimelineListener> = new Set();
+
+async function hydrateNativeState(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  await expeditionPersistence.waitForHydration();
+  const keys = Object.values(KEYS);
+  keys.forEach((key) => {
+    const value = expeditionPersistence.get(key);
+    if (value != null) {
+      mem[key] = value;
+    }
+  });
+}
+
+const expeditionStateHydration = hydrateNativeState();
 
 // ── Cloud Sync Helpers ───────────────────────────────────────
 
@@ -676,6 +704,10 @@ export const expeditionStateStore = {
     }
   },
 };
+
+export function waitForExpeditionStateHydration(): Promise<void> {
+  return expeditionStateHydration;
+}
 
 // ── Haversine distance (meters) ──────────────────────────────
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {

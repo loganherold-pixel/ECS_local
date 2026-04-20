@@ -192,7 +192,7 @@ export default function SyncStatusIndicator() {
         spinAnimRef.current = null;
       }
     };
-  }, [pushStatus]);
+  }, [pushStatus, spinAnim]);
 
   // ── Pulse animation for pending ───────────────────────────
   useEffect(() => {
@@ -229,7 +229,7 @@ export default function SyncStatusIndicator() {
         pulseAnimRef.current = null;
       }
     };
-  }, [pushStatus]);
+  }, [pushStatus, pulseAnim]);
 
   // ── Derive sync indicator state ───────────────────────────
   let state: SyncIndicatorState = 'local';

@@ -90,7 +90,7 @@ function AppliedIndicator({ visible }: { visible: boolean }) {
         Animated.timing(fadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, fadeAnim]);
 
   if (!visible) return null;
 
@@ -128,7 +128,7 @@ export default function ViewerSettingsPanel({ visible, onClose, onSettingsApplie
   if (settings.gridDensity === 'compact') summaryParts.push('Compact');
 
   return (
-    <ECSModal visible={visible} onClose={onClose} tier="global">
+    <ECSModal visible={visible} onClose={onClose} tier="global" stackBehavior="replace">
       <View style={styles.overlay}>
         <View style={[styles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}>
           <ScrollView showsVerticalScrollIndicator={false}>

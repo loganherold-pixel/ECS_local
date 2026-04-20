@@ -33,6 +33,8 @@ export interface AccelerometerOutput {
   rawRollDeg: number;
   /** Raw (unfiltered, uncalibrated) pitch */
   rawPitchDeg: number;
+  /** Timestamp of the most recent sensor sample */
+  lastSampleAtMs: number | null;
   /** Whether the accelerometer hardware is available */
   isAvailable: boolean;
   /** Whether the sensor is actively streaming data */
@@ -48,9 +50,12 @@ export interface AccelerometerOutput {
 }
 
 // ── Constants ──────────────────────────────────────────────
-const UPDATE_INTERVAL_MS = 16;       // ~60fps
+const UPDATE_INTERVAL_MS = 50;       // ~20fps sensor sampling is enough for ECS UI
 const FILTER_ALPHA = 0.12;           // Low-pass filter coefficient (lower = smoother, more lag)
 const RAD_TO_DEG = 180 / Math.PI;
+const SAMPLE_TIMESTAMP_EMIT_MS = 1000;
+const UI_EMIT_INTERVAL_MS = 75;      // Limit React updates under live sensor churn
+const UI_EMIT_DELTA_DEG = 1.0;       // Ignore sub-visual angle shifts between UI frames
 
 // ── Persistence key for calibration ────────────────────────
 const CAL_KEY = 'ecs_accel_calibration';
@@ -83,10 +88,13 @@ function clearPersistedCalibration(): void {
 
 // ── Hook ───────────────────────────────────────────────────
 export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
-  const [rollDeg, setRollDeg] = useState(0);
-  const [pitchDeg, setPitchDeg] = useState(0);
-  const [rawRollDeg, setRawRollDeg] = useState(0);
-  const [rawPitchDeg, setRawPitchDeg] = useState(0);
+  const [angles, setAngles] = useState({
+    rollDeg: 0,
+    pitchDeg: 0,
+    rawRollDeg: 0,
+    rawPitchDeg: 0,
+    lastSampleAtMs: null as number | null,
+  });
   const [isAvailable, setIsAvailable] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
@@ -97,14 +105,44 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
   const calibrationOffset = useRef({ roll: 0, pitch: 0 });
   const subscriptionRef = useRef<any>(null);
   const AccelerometerRef = useRef<any>(null);
+  const mountedRef = useRef(true);
+  const isAvailableRef = useRef(false);
+  const isActiveRef = useRef(false);
+  const lastEmittedRef = useRef({
+    rollDeg: 0,
+    pitchDeg: 0,
+    rawRollDeg: 0,
+    rawPitchDeg: 0,
+    lastSampleAtMs: null as number | null,
+  });
+  const lastUiEmitAtRef = useRef(0);
+
+  const setAvailableState = useCallback((next: boolean) => {
+    if (isAvailableRef.current === next) return;
+    isAvailableRef.current = next;
+    setIsAvailable(next);
+  }, []);
+
+  const setActiveState = useCallback((next: boolean) => {
+    if (isActiveRef.current === next) return;
+    isActiveRef.current = next;
+    setIsActive(next);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Load persisted calibration on mount
   useEffect(() => {
     const saved = getPersistedCalibration();
     if (saved) {
       calibrationOffset.current = { roll: saved.rollOffset, pitch: saved.pitchOffset };
-      setIsCalibrated(true);
-    }
+        setIsCalibrated(true);
+      }
   }, []);
 
   // ── Calibrate ────────────────────────────────────────────
@@ -117,8 +155,11 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
     // Reset filtered values to zero
     filteredRoll.current = 0;
     filteredPitch.current = 0;
-    setRollDeg(0);
-    setPitchDeg(0);
+    setAngles((prev) =>
+      prev.rollDeg === 0 && prev.pitchDeg === 0
+        ? prev
+        : { ...prev, rollDeg: 0, pitchDeg: 0 },
+    );
     setIsCalibrated(true);
     setPersistedCalibration(
       calibrationOffset.current.roll,
@@ -141,7 +182,7 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }
-      setIsActive(false);
+      setActiveState(false);
       return;
     }
 
@@ -156,21 +197,26 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
 
         // Check availability
         const available = await Accel.isAvailableAsync();
-        if (!mounted) return;
-        setIsAvailable(available);
+        if (!mounted || !mountedRef.current) return;
+        setAvailableState(available);
 
         if (!available) {
-          setIsActive(false);
+          setActiveState(false);
           return;
         }
 
         // Set update interval
         Accel.setUpdateInterval(UPDATE_INTERVAL_MS);
 
+        if (subscriptionRef.current) {
+          subscriptionRef.current.remove();
+          subscriptionRef.current = null;
+        }
+
         // Subscribe to accelerometer data
         subscriptionRef.current = Accel.addListener(
           (data: { x: number; y: number; z: number }) => {
-            if (!mounted) return;
+            if (!mounted || !mountedRef.current) return;
 
             // ── Compute raw angles from accelerometer data ──
             // expo-sensors returns values in Gs
@@ -214,20 +260,70 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
             // Round to 1 decimal to reduce unnecessary re-renders
             const newRoll = Math.round(filteredRoll.current * 10) / 10;
             const newPitch = Math.round(filteredPitch.current * 10) / 10;
+            const nextRawRoll = Math.round(rawRoll * 10) / 10;
+            const nextRawPitch = Math.round(rawPitch * 10) / 10;
+            const sampleNow = Date.now();
+            const nextAngles = {
+              rollDeg: newRoll,
+              pitchDeg: newPitch,
+              rawRollDeg: nextRawRoll,
+              rawPitchDeg: nextRawPitch,
+              lastSampleAtMs: sampleNow,
+            };
 
-            setRollDeg(newRoll);
-            setPitchDeg(newPitch);
-            setRawRollDeg(Math.round(rawRoll * 10) / 10);
-            setRawPitchDeg(Math.round(rawPitch * 10) / 10);
+            const previousAngles = lastEmittedRef.current;
+            const valuesUnchanged =
+              previousAngles.rollDeg === nextAngles.rollDeg &&
+              previousAngles.pitchDeg === nextAngles.pitchDeg &&
+              previousAngles.rawRollDeg === nextAngles.rawRollDeg &&
+              previousAngles.rawPitchDeg === nextAngles.rawPitchDeg;
+
+            if (valuesUnchanged) {
+              const previousSample = lastEmittedRef.current.lastSampleAtMs ?? 0;
+              if (sampleNow - previousSample >= SAMPLE_TIMESTAMP_EMIT_MS) {
+                lastEmittedRef.current.lastSampleAtMs = sampleNow;
+                setAngles((prev) => ({
+                  ...prev,
+                  lastSampleAtMs: sampleNow,
+                }));
+              }
+              return;
+            }
+
+            const rollDelta = Math.abs(previousAngles.rollDeg - nextAngles.rollDeg);
+            const pitchDelta = Math.abs(previousAngles.pitchDeg - nextAngles.pitchDeg);
+            const rawRollDelta = Math.abs(previousAngles.rawRollDeg - nextAngles.rawRollDeg);
+            const rawPitchDelta = Math.abs(previousAngles.rawPitchDeg - nextAngles.rawPitchDeg);
+            const shouldEmitImmediately =
+              rollDelta >= UI_EMIT_DELTA_DEG ||
+              pitchDelta >= UI_EMIT_DELTA_DEG ||
+              rawRollDelta >= UI_EMIT_DELTA_DEG ||
+              rawPitchDelta >= UI_EMIT_DELTA_DEG;
+            const enoughTimeElapsed = sampleNow - lastUiEmitAtRef.current >= UI_EMIT_INTERVAL_MS;
+
+            if (!enoughTimeElapsed && !shouldEmitImmediately) {
+              return;
+            }
+
+            lastEmittedRef.current = nextAngles;
+            lastUiEmitAtRef.current = sampleNow;
+            setAngles((prev) =>
+              prev.rollDeg === nextAngles.rollDeg &&
+              prev.pitchDeg === nextAngles.pitchDeg &&
+              prev.rawRollDeg === nextAngles.rawRollDeg &&
+              prev.rawPitchDeg === nextAngles.rawPitchDeg
+                ? prev
+                : nextAngles,
+            );
           },
         );
 
-        if (mounted) setIsActive(true);
+        if (mounted && mountedRef.current) setActiveState(true);
       } catch (err) {
         console.warn('[useAccelerometer] Failed to initialize:', err);
-        if (mounted) {
-          setIsAvailable(false);
-          setIsActive(false);
+        if (mounted && mountedRef.current) {
+          setAvailableState(false);
+          setActiveState(false);
         }
       }
     }
@@ -240,9 +336,8 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }
-      setIsActive(false);
     };
-  }, [enabled]);
+  }, [enabled, setActiveState, setAvailableState]);
 
   // ── Sensor status label ──────────────────────────────────
   const sensorStatus: AccelerometerOutput['sensorStatus'] = !isAvailable
@@ -254,10 +349,11 @@ export function useAccelerometer(enabled: boolean = true): AccelerometerOutput {
         : 'LIVE';
 
   return {
-    rollDeg,
-    pitchDeg,
-    rawRollDeg,
-    rawPitchDeg,
+    rollDeg: angles.rollDeg,
+    pitchDeg: angles.pitchDeg,
+    rawRollDeg: angles.rawRollDeg,
+    rawPitchDeg: angles.rawPitchDeg,
+    lastSampleAtMs: angles.lastSampleAtMs,
     isAvailable,
     isActive,
     isCalibrated,

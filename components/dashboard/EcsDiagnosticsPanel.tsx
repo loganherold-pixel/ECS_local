@@ -279,9 +279,6 @@ export default function EcsDiagnosticsPanel({ visible, onClose }: EcsDiagnostics
   const [refreshCount, setRefreshCount] = useState(0);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Developer Mode Gate
-  if (!ECS_DEV_MODE) return null;
-
   // Run diagnostics on mount and when refresh is triggered
   useEffect(() => {
     if (!visible) return;
@@ -336,6 +333,7 @@ export default function EcsDiagnosticsPanel({ visible, onClose }: EcsDiagnostics
     return groups;
   }, [report]);
 
+  if (!ECS_DEV_MODE) return null;
   if (!visible) return null;
 
   const overallColor = report ? STATUS_COLORS[report.overallStatus] : '#8A8A85';

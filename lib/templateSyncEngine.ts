@@ -10,7 +10,7 @@
 // ============================================================
 
 import { Platform } from 'react-native';
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isDeployedEdgeFunction, isSupabaseConfigured } from './supabase';
 import { connectivity } from './connectivity';
 import type { ExpeditionTemplate } from './templateStore';
 
@@ -232,6 +232,11 @@ class TemplateSyncEngine {
       return result;
     }
 
+    if (!isDeployedEdgeFunction('manage-templates')) {
+      result.errors.push('Template cloud sync is unavailable in this ECS backend');
+      return result;
+    }
+
     if (this._syncing) {
       result.errors.push('Sync already in progress');
       return result;
@@ -364,6 +369,10 @@ class TemplateSyncEngine {
   ): Promise<{ resolved: boolean; template?: ExpeditionTemplate; copy?: ExpeditionTemplate; error?: string }> {
     if (!userId || !isSupabaseConfigured) {
       return { resolved: false, error: 'Not authenticated' };
+    }
+
+    if (!isDeployedEdgeFunction('manage-templates')) {
+      return { resolved: false, error: 'Template cloud sync is unavailable in this ECS backend' };
     }
 
     const conflict = this._meta.conflicts.find(c => c.templateId === templateId);

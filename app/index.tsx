@@ -1,5 +1,10 @@
-import React from 'react';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, ActivityIndicator, Text, StyleSheet, useWindowDimensions } from 'react-native';
+import AdaptiveBackground from '../components/login/AdaptiveBackground';
+import AuthBrandLockup from '../components/login/AuthBrandLockup';
+import { AUTH_COPY } from '../lib/auth/authCopy';
+import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
+import { AUTH_VISUAL_SPEC } from '../lib/auth/authVisualSpec';
 import { TACTICAL } from '../lib/theme';
 
 /**
@@ -10,28 +15,49 @@ import { TACTICAL } from '../lib/theme';
  * fallback while the redirect fires.
  */
 export default function Index() {
+  const { width, height } = useWindowDimensions();
+  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, height), [width, height]);
+
   return (
-    <View style={styles.loading}>
-      <ActivityIndicator size="large" color={TACTICAL.accent} />
-      <Text style={styles.loadingText}>INITIALIZING SYSTEMS...</Text>
-    </View>
+    <AdaptiveBackground>
+      <View
+        style={[
+          styles.loading,
+          {
+            paddingHorizontal: layoutMetrics.horizontalPadding,
+            justifyContent: layoutMetrics.centerContent ? 'center' : 'flex-start',
+            paddingTop: layoutMetrics.topPadding,
+            paddingBottom: layoutMetrics.bottomPadding,
+          },
+        ]}
+      >
+        <AuthBrandLockup
+          title={AUTH_COPY.title}
+          variant="state"
+          containerStyle={[styles.brandBlock, { maxWidth: layoutMetrics.loadingMaxWidth }]}
+        />
+        <ActivityIndicator size="small" color={TACTICAL.amber} />
+        <Text style={styles.loadingText}>{AUTH_COPY.session.checking}</Text>
+      </View>
+    </AdaptiveBackground>
   );
 }
 
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: TACTICAL.bg,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
+  },
+  brandBlock: {
+    marginBottom: AUTH_VISUAL_SPEC.spacing.headerSupportingGap.state,
   },
   loadingText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: TACTICAL.textMuted,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    marginTop: AUTH_VISUAL_SPEC.spacing.brandGap.compactLandscape,
+    fontSize: AUTH_VISUAL_SPEC.typography.loadingText.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.loadingText.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.loadingText.fontWeight,
+    color: TACTICAL.text,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.loadingText.letterSpacing,
   },
 });
 

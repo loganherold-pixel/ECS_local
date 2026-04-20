@@ -463,13 +463,13 @@ class RealtimeSyncManager {
         }
 
         if (safeRemoteRows.length > 0) {
-          await store.bulkUpsert(safeRemoteRows);
+          await store.bulkUpsert(safeRemoteRows as any);
           this._totalRowsMerged++;
         }
         return;
       }
 
-      await store.bulkUpsert([remoteRow]);
+      await store.bulkUpsert([remoteRow] as any);
       this._totalRowsMerged++;
     } catch (err) {
       console.error(`[RealtimeSync] Error checking/merging ${table}:`, err);

@@ -105,7 +105,7 @@ export default function ExpeditionRouteMgrScreen() {
       console.warn('[ExpeditionRouteMgr] fetchData error:', err);
     }
     if (mountedRef.current) setLoading(false);
-  }, [user, expeditionId]);
+  }, [user, expeditionId, selectedRouteId]);
 
   useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
 
@@ -429,7 +429,7 @@ export default function ExpeditionRouteMgrScreen() {
                   {routeWaypoints.map((wp, idx) => {
                     const meta = WAYPOINT_KIND_META[wp.kind] || WAYPOINT_KIND_META.waypoint;
                     const isImported = wp.meta?.imported_from || wp.meta?.source_app;
-                    const wpImportSrc = detectImportSource(null, wp.meta);
+                    const wpImportSrc = detectImportSource(null, wp.meta ?? undefined);
                     return (
                       <TouchableOpacity
                         key={wp.id}

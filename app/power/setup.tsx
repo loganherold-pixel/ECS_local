@@ -35,6 +35,7 @@ import {
   type DeviceRole,
   type ManagedPowerDevice,
 } from '../../lib/powerSetupStore';
+import { bluStateStore, type BluProviderId } from '../../src/power';
 
 import ProviderSelectionStep from '../../components/power-setup/ProviderSelectionStep';
 import ConnectionStep, { type DiscoveredDevice } from '../../components/power-setup/ConnectionStep';
@@ -42,6 +43,17 @@ import DeviceConfigStep from '../../components/power-setup/DeviceConfigStep';
 import SetupCompleteStep from '../../components/power-setup/SetupCompleteStep';
 
 type WizardStep = 'provider' | 'connection' | 'config' | 'complete';
+
+const POWER_TO_BLU_PROVIDER: Partial<Record<PowerProviderId, BluProviderId>> = {
+  EcoFlow: 'ecoflow',
+  Bluetti: 'bluetti',
+  AnkerSolix: 'anker_solix',
+  Jackery: 'jackery',
+  GoalZero: 'goal_zero',
+  Renogy: 'renogy',
+  Redarc: 'redarc',
+  DakotaLithium: 'dakota_lithium',
+};
 
 // ── Progress bar ────────────────────────────────────────────────────────
 function ProgressBar({ step, palette }: { step: WizardStep; palette: any }) {
@@ -136,6 +148,13 @@ export default function PowerSetupScreen() {
       isPrimary: boolean;
     }) => {
       if (!selectedProvider || !discoveredDevice) return;
+      await powerSetupStore.waitForHydration();
+
+      const bluProvider = POWER_TO_BLU_PROVIDER[selectedProvider];
+      const liveTelemetry =
+        bluProvider != null
+          ? bluStateStore.getDeviceTelemetry(bluProvider, discoveredDevice.id) ?? null
+          : null;
 
       const device = await powerSetupStore.add({
         provider: selectedProvider,
@@ -147,9 +166,18 @@ export default function PowerSetupScreen() {
         vehicleId: config.vehicleId,
         isPrimary: config.isPrimary,
         connectionState: 'connected',
-        lastSocPct: Math.floor(Math.random() * 40 + 60),
-        lastWattsIn: null,
-        lastWattsOut: null,
+        lastSocPct:
+          typeof liveTelemetry?.battery_percent === 'number'
+            ? Math.round(liveTelemetry.battery_percent)
+            : null,
+        lastWattsIn:
+          typeof liveTelemetry?.input_watts === 'number'
+            ? Math.round(liveTelemetry.input_watts)
+            : null,
+        lastWattsOut:
+          typeof liveTelemetry?.output_watts === 'number'
+            ? Math.round(liveTelemetry.output_watts)
+            : null,
         signalStrength: discoveredDevice.signal,
       });
 

@@ -24,7 +24,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 
@@ -43,9 +45,13 @@ import TopoBackground from '../../components/TopoBackground';
 import EnvironmentalIntel from '../../components/intel/EnvironmentalIntel';
 import DocumentPreviewModal, { ECS_VERSION, ECS_PRODUCT } from '../../components/intel/DocumentPreviewModal';
 import IntelInsertTabs from '../../components/intel/IntelInsertTabs';
+import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
 
 // Export inner component for use in unified Alert tab
 export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
+  const insets = useSafeAreaInsets();
+  const headerTopPadding = getShellHeaderTopPadding(insets.top);
+  const contentBottomPadding = getShellBottomClearance(insets.bottom, 0);
 
 
   const router = useRouter();
@@ -73,11 +79,11 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
       setBuilderStateLocal(getBuilderState());
       setRoutes(routeStore.getAll());
       setExpeditions(getCachedExpeditions());
-    }, [])
+    }, [refreshActiveTrip])
   );
 
   // ── Computed Values ────────────────────────────────────────
-  const activeRoute = useMemo(() => routeStore.getActive(), [routes]);
+  const activeRoute = routeStore.getActive();
 
   const risk = useMemo(() => {
     if (riskScore) {
@@ -138,7 +144,7 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
             HEADER — Professional, restrained (hidden when embedded in Alert tab)
             ══════════════════════════════════════════════════ */}
         {!embedded && (
-          <View style={styles.header}>
+          <View style={[styles.header, { paddingTop: headerTopPadding }]}>
             <View style={styles.headerLeft}>
               <View style={styles.headerIconWrap}>
                 <Ionicons name="radio-outline" size={16} color={TACTICAL.amber} />
@@ -174,83 +180,83 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
             MAIN VIEW — Fixed panel, NO SCROLL (Safety tab model)
             ══════════════════════════════════════════════════ */}
         <View style={styles.content}>
-          {/* ── Section 1: Environmental Intelligence ──── */}
-          <View style={styles.contentPadded}>
-            <EnvironmentalIntel
-              activeRoute={activeRoute}
-              riskScore={riskScore ? risk.score : null}
-              riskLevel={risk.level}
-              riskColor={riskColor}
-            />
-          </View>
-
-          {/* ══════════════════════════════════════════════
-              OPERATOR & SETTINGS (Compact Footer — pinned bottom)
-              ══════════════════════════════════════════════ */}
-          <View style={styles.operatorFooter}>
-            <View style={styles.sectionDivider} />
-            {user ? (
-              <View style={styles.operatorCard}>
-                <View style={styles.operatorRow}>
-                  <Ionicons name="person-circle" size={24} color={TACTICAL.amber} />
-                  <View style={styles.operatorInfo}>
-                    <Text style={styles.operatorEmail} numberOfLines={2}>{user.email}</Text>
-
-                    <View style={styles.operatorBadges}>
-                      {operatorInfo?.role && (
-                        <View style={[styles.badge, {
-                          borderColor: operatorInfo.role === 'admin' ? TACTICAL.amber : '#4CAF50',
-                        }]}>
-                          <Text style={[styles.badgeText, {
-                            color: operatorInfo.role === 'admin' ? TACTICAL.amber : '#4CAF50',
-                          }]}>
-                            {operatorInfo.role.toUpperCase()}
-                          </Text>
-                        </View>
-                      )}
-                      <View style={[styles.badge, { borderColor: '#4CAF50' }]}>
-                        <View style={styles.statusDot} />
-                        <Text style={[styles.badgeText, { color: '#4CAF50' }]}>
-                          {operatorInfo?.status?.toUpperCase() || 'ACTIVE'}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.signOutBtn}
-                    onPress={async () => {
-                      await signOut();
-                      showToast('Session terminated');
-                      router.replace('/login');
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="log-out-outline" size={14} color={TACTICAL.danger} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={styles.signInCard}
-                onPress={() => router.push('/login')}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="log-in-outline" size={16} color={TACTICAL.amber} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.signInTitle}>SIGN IN</Text>
-                  <Text style={styles.signInDesc}>Sign in to sync data and access cloud features</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
-              </TouchableOpacity>
-            )}
-
-            {/* ── System Footer (compact) ─────────────── */}
-            <View style={styles.systemFooter}>
-              <Text style={styles.footerProduct}>{ECS_PRODUCT}</Text>
-              <Text style={styles.footerVersion}>{ECS_VERSION}</Text>
+          <ScrollView
+            style={styles.scrollArea}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: contentBottomPadding + 18 }]}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            <View style={styles.contentPadded}>
+              <EnvironmentalIntel
+                activeRoute={activeRoute}
+                riskScore={riskScore ? risk.score : null}
+                riskLevel={risk.level}
+                riskColor={riskColor}
+              />
             </View>
 
-          </View>
+            <View style={styles.operatorFooter}>
+              <View style={styles.sectionDivider} />
+              {user ? (
+                <View style={styles.operatorCard}>
+                  <View style={styles.operatorRow}>
+                    <Ionicons name="person-circle" size={24} color={TACTICAL.amber} />
+                    <View style={styles.operatorInfo}>
+                      <Text style={styles.operatorEmail} numberOfLines={2}>{user.email}</Text>
+
+                      <View style={styles.operatorBadges}>
+                        {operatorInfo?.role && (
+                          <View style={[styles.badge, {
+                            borderColor: operatorInfo.is_admin ? TACTICAL.amber : '#4CAF50',
+                          }]}>
+                            <Text style={[styles.badgeText, {
+                              color: operatorInfo.is_admin ? TACTICAL.amber : '#4CAF50',
+                            }]}>
+                              {operatorInfo.role.toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        <View style={[styles.badge, { borderColor: '#4CAF50' }]}>
+                          <View style={styles.statusDot} />
+                          <Text style={[styles.badgeText, { color: '#4CAF50' }]}>
+                            {operatorInfo?.status?.toUpperCase() || 'ACTIVE'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.signOutBtn}
+                      onPress={async () => {
+                        await signOut();
+                        showToast('Session terminated');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="log-out-outline" size={14} color={TACTICAL.danger} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.signInCard}
+                  onPress={() => router.push('/login')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="log-in-outline" size={16} color={TACTICAL.amber} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.signInTitle}>SIGN IN</Text>
+                    <Text style={styles.signInDesc}>Sign in to sync data and access cloud features</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.systemFooter}>
+                <Text style={styles.footerProduct}>{ECS_PRODUCT}</Text>
+                <Text style={styles.footerVersion}>{ECS_VERSION}</Text>
+              </View>
+            </View>
+          </ScrollView>
         </View>
 
         {/* ══════════════════════════════════════════════════
@@ -290,7 +296,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'web' ? 16 : 54,
     paddingBottom: 12,
     borderBottomWidth: GOLD_RAIL.sectionWidth,
     borderBottomColor: GOLD_RAIL.section,
@@ -338,26 +343,33 @@ const styles = StyleSheet.create({
   // Content — FIXED, NO SCROLL (matches Safety tab model)
   content: {
     flex: 1,
-    paddingBottom: Platform.OS === 'web' ? 80 : 100,
+  },
+  scrollArea: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
 
   contentPadded: {
-    flex: 1,
-    padding: 16,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
 
   // Section Divider — gold subsection rail
   sectionDivider: {
     height: GOLD_RAIL.subsectionWidth,
     backgroundColor: GOLD_RAIL.subsection,
-    marginBottom: 10,
+    marginBottom: 8,
   },
 
 
   // Operator Footer — pinned at bottom of content area
   operatorFooter: {
-    paddingHorizontal: 16,
-    paddingBottom: 4,
+    paddingHorizontal: 14,
+    paddingBottom: 2,
+    marginTop: 2,
   },
 
   // Operator Section
@@ -441,8 +453,8 @@ const styles = StyleSheet.create({
   // System Footer (compact)
   systemFooter: {
     alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 4,
+    paddingTop: 8,
+    paddingBottom: 2,
   },
   footerOrg: {
     fontSize: 7,

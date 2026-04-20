@@ -36,7 +36,15 @@ function getPersistedAdv(): boolean {
   try { if (typeof localStorage !== 'undefined') return localStorage.getItem(ADV_KEY) === 'true'; } catch {} return false;
 }
 function setPersistedAdv(v: boolean): void {
-  try { if (typeof localStorage !== 'undefined') { v ? localStorage.setItem(ADV_KEY, 'true') : localStorage.removeItem(ADV_KEY); } } catch {}
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (v) {
+        localStorage.setItem(ADV_KEY, 'true');
+      } else {
+        localStorage.removeItem(ADV_KEY);
+      }
+    }
+  } catch {}
 }
 
 type TabKey = 'expedition' | 'vehicle' | 'emergency';
@@ -108,7 +116,13 @@ export default function ExpeditionDetailScreen() {
         .eq('owner_user_id', user?.id || '')
         .order('sort_order');
       if (!mountedRef.current) return;
-      const loadoutItems = (items || []) as Array<{ name: string; category: string; quantity: number; weight_lbs: number | null; storage_location: string | null; }>;
+      const loadoutItems = (items || []) as {
+        name: string;
+        category: string;
+        quantity: number;
+        weight_lbs: number | null;
+        storage_location: string | null;
+      }[];
 
       const zoneData: ZoneWeightData[] = zones.map((zone: VehicleZone) => {
         const zoneName = (zone as any).name || '';
@@ -366,6 +380,7 @@ export default function ExpeditionDetailScreen() {
                   rollAngleDeg={accel.rollDeg}
                   pitchAngleDeg={accel.pitchDeg}
                   sensorStatus={accel.sensorStatus}
+                  sampleTimestampMs={accel.lastSampleAtMs}
                   isCalibrated={accel.isCalibrated}
                   onCalibrate={accel.calibrate}
                   onResetCalibration={accel.resetCalibration}

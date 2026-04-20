@@ -229,7 +229,7 @@ export default function RouteIntelligenceTab({
          ══════════════════════════════════════════════════════ */}
       <View style={s.sectionHeader}>
         <Ionicons name="map-outline" size={16} color={TACTICAL.amber} />
-        <Text style={s.sectionTitle}>ROUTE & MAP INTELLIGENCE</Text>
+        <Text style={s.sectionTitle}>ECS ROUTE INTELLIGENCE</Text>
       </View>
 
       {/* ══════════════════════════════════════════════════════
@@ -283,18 +283,18 @@ export default function RouteIntelligenceTab({
         <View style={s.amberNote}>
           <Ionicons name="alert-circle-outline" size={14} color={TACTICAL.amber} />
           <Text style={s.amberNoteText}>
-            Some waypoints missing coordinates — route distance may be incomplete.
+            Some route points are missing coordinates — route totals may be incomplete.
           </Text>
         </View>
       )}
 
       {/* ══════════════════════════════════════════════════════
-          ROUTE TOTALS BAR
+          ROUTE COMMAND TOTALS BAR
          ══════════════════════════════════════════════════════ */}
       <View style={s.totalsBar}>
         <View style={s.totalsHeader}>
           <Ionicons name="analytics-outline" size={14} color={TACTICAL.amber} />
-          <Text style={s.totalsHeaderText}>ROUTE TOTALS</Text>
+          <Text style={s.totalsHeaderText}>ROUTE COMMAND TOTALS</Text>
         </View>
 
         <View style={s.totalsGrid}>
@@ -358,18 +358,18 @@ export default function RouteIntelligenceTab({
         {fuelAlert === 'ok' && (
           <View style={s.alertOk}>
             <Ionicons name="checkmark-circle-outline" size={14} color="#4CAF50" />
-            <Text style={s.alertOkText}>FUEL RANGE SUFFICIENT</Text>
+            <Text style={s.alertOkText}>RANGE POSTURE NOMINAL</Text>
           </View>
         )}
       </View>
 
       {/* ══════════════════════════════════════════════════════
-          B) WAYPOINT SEGMENT LIST (with SET START)
+          B) WAYPOINT SEGMENT LIST (with MARK START)
          ══════════════════════════════════════════════════════ */}
       <View style={s.segmentSection}>
         <View style={s.segmentHeader}>
           <Ionicons name="git-merge-outline" size={14} color={TACTICAL.amber} />
-          <Text style={s.segmentHeaderText}>WAYPOINT SEGMENTS</Text>
+          <Text style={s.segmentHeaderText}>WAYPOINT EXECUTION</Text>
           <Text style={s.segmentCount}>{waypoints.length} WP</Text>
         </View>
 
@@ -390,7 +390,7 @@ export default function RouteIntelligenceTab({
         {waypoints.length === 0 ? (
           <View style={s.emptySegments}>
             <Ionicons name="navigate-outline" size={28} color={TACTICAL.textMuted} />
-            <Text style={s.emptySegText}>No waypoints defined</Text>
+            <Text style={s.emptySegText}>No route points defined</Text>
           </View>
         ) : (
           waypoints.map((wp, idx) => {
@@ -454,7 +454,7 @@ export default function RouteIntelligenceTab({
                       </View>
                     )}
 
-                    {/* SET START button */}
+                    {/* MARK START button */}
                     {!isStart && (
                       <TouchableOpacity
                         style={s.setStartBtn}
@@ -467,7 +467,7 @@ export default function RouteIntelligenceTab({
                         ) : (
                           <>
                             <Ionicons name="flag-outline" size={11} color={TACTICAL.textMuted} />
-                            <Text style={s.setStartBtnText}>SET START</Text>
+                            <Text style={s.setStartBtnText}>MARK START</Text>
                           </>
                         )}
                       </TouchableOpacity>
@@ -855,7 +855,7 @@ const s = StyleSheet.create({
     letterSpacing: 1.5,
   },
 
-  // SET START button
+  // MARK START button
   setStartBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -167,14 +167,14 @@ export default function OBD2ScannerModal({
         scanner.stopScan();
       }
     };
-  }, [visible]);
+  }, [visible, scanner]);
 
   // Notify parent on connection success
   useEffect(() => {
     if (scanner.connectionJustSucceeded && scanner.connectedDeviceId && scanner.connectedDeviceName) {
       onConnected?.(scanner.connectedDeviceId, scanner.connectedDeviceName);
     }
-  }, [scanner.connectionJustSucceeded]);
+  }, [onConnected, scanner.connectionJustSucceeded, scanner.connectedDeviceId, scanner.connectedDeviceName]);
 
   const handleSelectDevice = useCallback(async (device: OBD2DiscoveredDevice) => {
     // Stop scan before connecting

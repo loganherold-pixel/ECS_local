@@ -7,14 +7,12 @@
 // and RIG UPGRADE SUGGESTIONS when compatibility < 85%.
 // ============================================================
 
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
-  Modal,
   Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -41,6 +39,8 @@ import {
   UPGRADE_THRESHOLD,
   type UpgradeSuggestion,
 } from '../../lib/rigUpgradeEngine';
+import TacticalPopupShell from '../TacticalPopupShell';
+import { ECSOverlayFooter } from '../ECSModalShell';
 
 interface ExpeditionAnalysisModalProps {
   visible: boolean;
@@ -49,6 +49,7 @@ interface ExpeditionAnalysisModalProps {
   vehicleProfile: VehicleProfile | null;
   hasVehicle: boolean;
   onClose: () => void;
+  onNavigate?: () => void;
 }
 
 // ── Factor Bar ──────────────────────────────────────────────
@@ -198,6 +199,7 @@ export default function ExpeditionAnalysisModal({
   vehicleProfile,
   hasVehicle,
   onClose,
+  onNavigate,
 }: ExpeditionAnalysisModalProps) {
   if (!opportunity) return null;
 
@@ -214,41 +216,45 @@ export default function ExpeditionAnalysisModal({
   const matchColor = matchScore != null ? getMatchScoreColor(matchScore) : TACTICAL.amber;
   const matchLabel = matchScore != null ? getMatchScoreLabel(matchScore) : null;
 
-
-  // Generate upgrade suggestions
-  const upgradeSuggestions = useMemo<UpgradeSuggestion[]>(() => {
-    if (!vehicleProfile || !compatResult) return [];
-    return generateUpgradeSuggestions(vehicleProfile, opportunity, compatResult);
-  }, [vehicleProfile, compatResult, opportunity]);
+  const upgradeSuggestions: UpgradeSuggestion[] =
+    !vehicleProfile || !compatResult
+      ? []
+      : generateUpgradeSuggestions(vehicleProfile, opportunity, compatResult);
 
   return (
-    <Modal
+    <TacticalPopupShell
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      transparent={false}
-      onRequestClose={onClose}
-    >
-      <View style={s.modalContainer}>
-        {/* Header */}
-        <View style={s.modalHeader}>
-          <View style={s.modalHeaderLeft}>
-            <Text style={s.modalHeaderLabel}>EXPEDITION ANALYSIS</Text>
-            <Text style={s.modalHeaderName}>{opportunity.name}</Text>
-          </View>
-          <TouchableOpacity style={s.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Ionicons name="close" size={18} color={ECS.text} />
+      onClose={onClose}
+      title="Expedition Analysis"
+      subtitle={opportunity.name}
+      eyebrow={opportunity.region.toUpperCase()}
+      icon="compass-outline"
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={0.86}
+      minHeightFraction={0.7}
+      footer={(
+        <ECSOverlayFooter>
+          <TouchableOpacity style={s.footerSecondaryBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={s.footerSecondaryText}>CLOSE</Text>
           </TouchableOpacity>
-        </View>
-
-        {/* Gold rail */}
-        <View style={s.goldRail} />
-
-        <ScrollView
-          style={s.scrollArea}
-          contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
+          {onNavigate ? (
+            <TouchableOpacity
+              style={s.footerPrimaryBtn}
+              activeOpacity={0.84}
+              onPress={() => {
+                hapticMicro();
+                onNavigate();
+              }}
+            >
+              <Ionicons name="navigate-outline" size={14} color={TACTICAL.amber} />
+              <Text style={s.footerPrimaryText}>NAVIGATE</Text>
+            </TouchableOpacity>
+          ) : null}
+        </ECSOverlayFooter>
+      )}
+    >
+      <View style={s.scrollContent}>
           {/* Region + Description + Distance */}
 
           <View style={s.section}>
@@ -480,10 +486,9 @@ export default function ExpeditionAnalysisModal({
             </View>
           )}
 
-          <View style={{ height: 30 }} />
-        </ScrollView>
+          <View style={{ height: 12 }} />
       </View>
-    </Modal>
+    </TacticalPopupShell>
   );
 }
 
@@ -542,6 +547,54 @@ const s = StyleSheet.create({
   // ── Scroll ────────────────────────────────────────────
   scrollArea: { flex: 1 },
   scrollContent: { padding: 16 },
+  footerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 14,
+    borderTopWidth: 1,
+    borderTopColor: ECS.stroke,
+    backgroundColor: ECS.bgPrimary,
+  },
+  footerSecondaryBtn: {
+    minWidth: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  footerSecondaryText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.8,
+  },
+  footerPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minWidth: 128,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+  },
+  footerPrimaryText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.8,
+  },
 
   // ── Section ───────────────────────────────────────────
   section: {

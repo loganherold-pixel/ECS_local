@@ -1,17 +1,9 @@
-// Full optimized MapRenderer v2
-// Performance-first WebView Mapbox renderer with incremental updates,
-// offline tile bridge hooks, road classification polling, terrain toggles,
-// tilt alerts, campsite markers, bailout viewport culling, and LOD trail rendering.
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Platform,
   ActivityIndicator,
-  TouchableOpacity,
-  type LayoutChangeEvent,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -22,11 +14,22 @@ import {
   HEALTH_COLORS,
   computeBounds,
   boundsToZoom,
-  simplifyPoints,
   DEFAULT_CENTER,
   DEFAULT_ZOOM,
 } from '../../lib/mapConfig';
-import { TACTICAL, TYPO } from '../../lib/theme';
+import { TACTICAL } from '../../lib/theme';
+import type { CampIntelMarkerPayload, CampIntelTone } from '../../lib/campIntel/campIntelTypes';
+
+const WEBVIEW_ORIGIN_WHITELIST = ['*'];
+const WEBVIEW_FAILSAFE_TIMEOUT_MS = 15000;
+const WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS = 20000;
+const WEBVIEW_AUTO_RECOVERY_LIMIT = 1;
+const CAMERA_EPSILON = 0.00005;
+const DEBUG_MAP_RENDERER = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
+const MAP_STYLE_FALLBACK_CHAIN = [
+  'mapbox://styles/mapbox/streets-v12',
+  'mapbox://styles/mapbox/dark-v11',
+];
 
 type LatLng = {
   latitude?: number;
@@ -53,7 +56,7 @@ type Waypoint = {
 
 type SegmentFeature = {
   id?: string | number;
-  coordinates?: Array<[number, number]> | Array<{ latitude: number; longitude: number }>;
+  coordinates?: [number, number][] | { latitude: number; longitude: number }[];
   color?: string;
   health?: string;
   risk?: string;
@@ -69,11 +72,16 @@ type MarkerLike = {
   subtitle?: string;
   type?: string;
   color?: string;
+  category?: string;
+  confidence?: string;
+  confidenceScore?: number;
+  selected?: boolean;
+  badges?: { label: string; tone: CampIntelTone }[];
 };
 
 type TrailSegment = {
   id?: string | number;
-  coordinates?: Array<[number, number]> | Array<{ latitude: number; longitude: number }>;
+  coordinates?: [number, number][] | { latitude: number; longitude: number }[];
   color?: string;
 };
 
@@ -86,7 +94,7 @@ type ReplayMarker = {
 
 type SpeedSegment = {
   id?: string | number;
-  coordinates?: Array<[number, number]> | Array<{ latitude: number; longitude: number }>;
+  coordinates?: [number, number][] | { latitude: number; longitude: number }[];
   color?: string;
 };
 
@@ -113,10 +121,32 @@ type RoadClassificationReply = {
   source?: string;
 };
 
+export type CameraMode = 'follow_user' | 'free_pan' | 'route_overview' | 'replay' | 'pin_focus';
+
+export type CameraCommand = {
+  mode?: CameraMode;
+  center?: { latitude: number; longitude: number } | null;
+  zoom?: number | null;
+  fitBounds?: {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+    padding?: number;
+    maxZoom?: number;
+  } | null;
+  durationMs?: number;
+  animate?: boolean;
+  reason?: string;
+};
+
 export type MapRendererProps = {
   points?: RoutePoint[];
+  progressPoints?: RoutePoint[];
   waypoints?: Waypoint[];
   healthLevel?: 'green' | 'yellow' | 'red' | string;
+  routeColor?: string;
+  progressColor?: string;
   mapStyle?: MapStyleKey;
   mapboxToken: string;
   showUserLocation?: boolean;
@@ -147,16 +177,41 @@ export type MapRendererProps = {
   isLoading?: boolean;
   hasToken?: boolean;
   onRetry?: () => void | Promise<void>;
+  onReadyStateChange?: (ready: boolean) => void;
   campsites?: MarkerLike[];
   tiltAlerts?: MarkerLike[];
   campsiteMarkers?: MarkerLike[];
+  campIntelMarkers?: CampIntelMarkerPayload[];
+  onCampIntelTap?: (camp: any) => void;
   tiltAlertMarkers?: MarkerLike[];
+  cameraMode?: CameraMode;
+  cameraCommand?: CameraCommand | null;
+  cameraCommandTrigger?: number;
   style?: any;
 };
 
+export type PinMarker = {
+  id?: string | number;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
+  title?: string;
+  subtitle?: string;
+  type?: string;
+  color?: string;
+  category?: string;
+  mapIcon?: string;
+};
+
+export type TrailSegmentData = TrailSegment;
+export type SpeedSegmentData = SpeedSegment;
+
 type WebMapPayload = {
   routeCoords: [number, number][];
+  progressRouteCoords: [number, number][];
   routeColor: string;
+  progressColor: string;
   bounds: {
     minLng: number;
     minLat: number;
@@ -165,25 +220,25 @@ type WebMapPayload = {
   } | null;
   zoom: number;
   center: [number, number];
-  segments: Array<{
+  segments: {
     id: string;
     coordinates: [number, number][];
     color: string;
-  }>;
-  waypoints: Array<{
+  }[];
+  waypoints: {
     id: string;
     latitude: number;
     longitude: number;
     title: string;
-  }>;
-  bailouts: Array<{
+  }[];
+  bailouts: {
     id: string;
     latitude: number;
     longitude: number;
     title: string;
     type: string;
-  }>;
-  pins: Array<{
+  }[];
+  pins: {
     id: string;
     latitude: number;
     longitude: number;
@@ -191,44 +246,55 @@ type WebMapPayload = {
     subtitle?: string;
     type?: string;
     color?: string;
-  }>;
-  trailSegments: Array<{
+  }[];
+  trailSegments: {
     id: string;
     coordinates: [number, number][];
     color: string;
-  }>;
-  speedSegments: Array<{
+  }[];
+  speedSegments: {
     id: string;
     coordinates: [number, number][];
     color: string;
-  }>;
+  }[];
   trailStyle: string;
   trailActive: boolean;
   replayMarker: { latitude: number; longitude: number } | null;
-  followReplay: boolean;
   userLocation: { latitude: number; longitude: number } | null;
   showUserLocation: boolean;
-  followUser: boolean;
   vehicleHeading: number | null;
   showCrosshair: boolean;
   interactive: boolean;
   styleUrl: string;
-  campsites: Array<{
+  cameraMode: CameraMode | null;
+  campsites: {
     id: string;
     latitude: number;
     longitude: number;
     title: string;
-  }>;
-  tiltAlerts: Array<{
+    subtitle?: string;
+    category?: string;
+    confidence?: string;
+    confidenceScore?: number;
+    selected?: boolean;
+    badges?: { label: string; tone: CampIntelTone }[];
+  }[];
+  tiltAlerts: {
     id: string;
     latitude: number;
     longitude: number;
     title: string;
     type: string;
-  }>;
+  }[];
 };
 
-const WEBVIEW_ORIGIN_WHITELIST = ['*'];
+type WebMapDynamicPayload = {
+  replayMarker: { latitude: number; longitude: number } | null;
+  userLocation: { latitude: number; longitude: number } | null;
+  showUserLocation: boolean;
+  vehicleHeading: number | null;
+  cameraMode: CameraMode | null;
+};
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -284,7 +350,7 @@ function toLngLatPair(
 }
 
 function normalizeLineCoordinates(
-  input?: Array<[number, number]> | Array<{ latitude: number; longitude: number }>,
+  input?: [number, number][] | { latitude: number; longitude: number }[],
 ): [number, number][] {
   if (!input?.length) return [];
   const out: [number, number][] = [];
@@ -342,22 +408,75 @@ function stableStringify(value: unknown) {
   }
 }
 
+function debugLog(...args: unknown[]) {
+  if (DEBUG_MAP_RENDERER) {
+    console.log(...args);
+  }
+}
+
 function toMarkerId(prefix: string, value: string | number | undefined, index: number) {
   return `${prefix}-${String(value ?? index)}`;
 }
 
+function roundForHash(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(5));
+}
+
+function buildCameraCommandHash(command?: CameraCommand | null, trigger?: number) {
+  return stableStringify({
+    trigger: typeof trigger === 'number' ? trigger : null,
+    mode: command?.mode ?? null,
+    center: command?.center
+      ? {
+          latitude: roundForHash(command.center.latitude),
+          longitude: roundForHash(command.center.longitude),
+        }
+      : null,
+    zoom: roundForHash(command?.zoom ?? null),
+    fitBounds: command?.fitBounds
+      ? {
+          north: roundForHash(command.fitBounds.north),
+          south: roundForHash(command.fitBounds.south),
+          east: roundForHash(command.fitBounds.east),
+          west: roundForHash(command.fitBounds.west),
+          padding: command.fitBounds.padding ?? null,
+          maxZoom: command.fitBounds.maxZoom ?? null,
+        }
+      : null,
+    durationMs: command?.durationMs ?? null,
+    animate: command?.animate ?? null,
+    reason: command?.reason ?? null,
+  });
+}
+
 function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const routeCoordsRaw = normalizePointList(props.points);
+  const progressCoordsRaw = normalizePointList(props.progressPoints);
   const routeCoords =
     routeCoordsRaw.length > 600
-      ? simplifyPoints(routeCoordsRaw as any, 0.00003)
+      ? routeCoordsRaw.filter(
+          (_, index) =>
+            index === 0 ||
+            index === routeCoordsRaw.length - 1 ||
+            index % Math.ceil(routeCoordsRaw.length / 600) === 0,
+        )
       : routeCoordsRaw;
+  const progressRouteCoords =
+    progressCoordsRaw.length > 600
+      ? progressCoordsRaw.filter(
+          (_, index) =>
+            index === 0 ||
+            index === progressCoordsRaw.length - 1 ||
+            index % Math.ceil(progressCoordsRaw.length / 600) === 0,
+        )
+      : progressCoordsRaw;
+
+  const routePointsForBounds = routeCoords.map(([lng, lat]) => ({ lat, lng }));
 
   const bounds =
-    routeCoords.length > 1
-      ? computeBounds(
-          routeCoords.map(([longitude, latitude]) => ({ latitude, longitude })) as any,
-        )
+    routePointsForBounds.length > 1
+      ? computeBounds(routePointsForBounds as any)
       : null;
 
   const userLat =
@@ -379,17 +498,19 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
       ? routeCoords[Math.floor(routeCoords.length / 2)]
       : isValidCoord(userLat, userLng)
         ? [userLng as number, userLat as number]
-        : [DEFAULT_CENTER.longitude, DEFAULT_CENTER.latitude];
+        : [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat];
 
   const zoom = bounds
-    ? clamp(boundsToZoom(bounds), 3, 17)
+    ? clamp(boundsToZoom(bounds, 1024, 768), 3, 17)
     : isValidCoord(userLat, userLng)
       ? 14
       : DEFAULT_ZOOM;
 
-  const campsiteInput = props.campsites?.length
-    ? props.campsites
-    : props.campsiteMarkers || [];
+  const campsiteInput = props.campIntelMarkers?.length
+    ? props.campIntelMarkers
+    : props.campsites?.length
+      ? props.campsites
+      : props.campsiteMarkers || [];
 
   const tiltAlertInput = props.tiltAlerts?.length
     ? props.tiltAlerts
@@ -397,7 +518,9 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
 
   return {
     routeCoords,
-    routeColor: pickRouteColor(props.healthLevel),
+    progressRouteCoords,
+    routeColor: props.routeColor || pickRouteColor(props.healthLevel),
+    progressColor: props.progressColor || '#F2C24D',
     bounds,
     zoom,
     center,
@@ -521,7 +644,6 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
               (props.replayMarker as any).longitude ?? (props.replayMarker as any).lng,
           }
         : null,
-    followReplay: !!props.followReplay,
     userLocation: isValidCoord(userLat, userLng)
       ? {
           latitude: userLat as number,
@@ -529,7 +651,6 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
         }
       : null,
     showUserLocation: !!props.showUserLocation,
-    followUser: !!props.followUser,
     vehicleHeading:
       typeof props.vehicleHeading === 'number' && Number.isFinite(props.vehicleHeading)
         ? props.vehicleHeading
@@ -537,6 +658,7 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
     showCrosshair: !!props.showCrosshair,
     interactive: props.interactive !== false,
     styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE),
+    cameraMode: props.cameraMode ?? null,
     campsites: campsiteInput
       .filter((m) => {
         const lat =
@@ -571,6 +693,26 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
           latitude: lat,
           longitude: lng,
           title: m.title || `Campsite ${index + 1}`,
+          subtitle: typeof (m as any).subtitle === 'string' ? (m as any).subtitle : undefined,
+          category: typeof (m as any).category === 'string' ? (m as any).category : undefined,
+          confidence: typeof (m as any).confidence === 'string' ? (m as any).confidence : undefined,
+          confidenceScore:
+            typeof (m as any).confidenceScore === 'number' && Number.isFinite((m as any).confidenceScore)
+              ? Number((m as any).confidenceScore)
+              : undefined,
+          selected: !!(m as any).selected,
+          badges: Array.isArray((m as any).badges)
+            ? (m as any).badges
+                .filter((badge: any) => badge && typeof badge.label === 'string')
+                .slice(0, 2)
+                .map((badge: any) => ({
+                  label: String(badge.label),
+                  tone:
+                    typeof badge.tone === 'string'
+                      ? badge.tone
+                      : 'neutral',
+                }))
+            : [],
         };
       }),
     tiltAlerts: tiltAlertInput
@@ -613,9 +755,35 @@ function buildWebPayload(props: MapRendererProps): WebMapPayload {
   };
 }
 
-function makeMapHtml(token: string, initialStyleUrl: string) {
+function buildDynamicPayload(props: Pick<
+  MapRendererProps,
+  'replayMarker' | 'userLocation' | 'showUserLocation' | 'vehicleHeading' | 'cameraMode'
+>): WebMapDynamicPayload {
+  const replay = normalizeLatLng(props.replayMarker as LatLng | null);
+  const user = normalizeLatLng(props.userLocation ?? null);
+
+  return {
+    replayMarker: replay,
+    userLocation: user,
+    showUserLocation: !!props.showUserLocation,
+    vehicleHeading:
+      typeof props.vehicleHeading === 'number' && Number.isFinite(props.vehicleHeading)
+        ? props.vehicleHeading
+        : null,
+    cameraMode: props.cameraMode ?? null,
+  };
+}
+
+function makeMapHtml(
+  token: string,
+  initialStyleUrl: string,
+  fallbackStyleUrls: string[],
+  instanceKey: number,
+) {
   const escapedToken = JSON.stringify(token);
   const escapedInitialStyleUrl = JSON.stringify(initialStyleUrl);
+  const escapedFallbackStyleUrls = JSON.stringify(fallbackStyleUrls || []);
+  const escapedInstanceKey = JSON.stringify(instanceKey);
 
   return `<!DOCTYPE html>
 <html>
@@ -680,16 +848,139 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
     }
     .marker-waypoint { background: #FFD700; }
     .marker-bailout { background: #E14B4B; }
-    .marker-camp { background: #57D98D; }
+    .marker-camp {
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 999px;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.34);
+      background: transparent;
+    }
+    .camp-intel-marker {
+      position: relative;
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .camp-intel-ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      border: 2px solid rgba(255, 193, 72, 0.55);
+      background: rgba(10, 13, 18, 0.18);
+      box-shadow: 0 0 0 1px rgba(8, 11, 14, 0.65) inset;
+    }
+    .camp-intel-core {
+      position: absolute;
+      inset: 4px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.16);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #091014;
+      font-weight: 900;
+      font-size: 10px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }
+    .camp-intel-selected .camp-intel-ring {
+      transform: scale(1.08);
+      border-color: rgba(255, 248, 220, 0.95);
+      box-shadow:
+        0 0 0 2px rgba(8, 11, 14, 0.78) inset,
+        0 0 14px rgba(255, 215, 107, 0.4);
+    }
+    .camp-intel-conf-high .camp-intel-ring { border-color: rgba(102, 187, 106, 0.78); }
+    .camp-intel-conf-medium .camp-intel-ring { border-color: rgba(255, 179, 0, 0.82); }
+    .camp-intel-conf-low .camp-intel-ring { border-color: rgba(239, 83, 80, 0.82); }
+    .camp-intel-cat-suggested .camp-intel-core { background: #65C97A; }
+    .camp-intel-cat-backup .camp-intel-core { background: #D4A017; }
+    .camp-intel-cat-emergency .camp-intel-core { background: #FF8A50; }
+    .camp-intel-cat-saved .camp-intel-core { background: #5EA1FF; color: #0B1116; }
+    .camp-intel-cat-previously_used .camp-intel-core { background: #9EC2B1; color: #0B1116; }
+    .camp-intel-cat-caution .camp-intel-core { background: #C86E68; }
+    .camp-intel-badges {
+      position: absolute;
+      right: -8px;
+      top: -8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      pointer-events: none;
+    }
+    .camp-intel-badge {
+      min-width: 18px;
+      height: 12px;
+      padding: 0 3px;
+      border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(8, 11, 14, 0.94);
+      color: #F5F7F8;
+      font-size: 7px;
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-transform: uppercase;
+    }
+    .camp-intel-badge-positive { color: #86D39A; }
+    .camp-intel-badge-caution { color: #FFCA5A; }
+    .camp-intel-badge-warning { color: #FF8D7C; }
+    .camp-intel-badge-info { color: #86B8FF; }
+    .camp-intel-badge-neutral { color: #D9DEDF; }
     .marker-tilt { background: #FF9F43; }
     .marker-pin { background: #6EA8FF; }
     .marker-user {
-      width: 18px;
-      height: 18px;
+      width: 34px;
+      height: 34px;
+      background: transparent;
+    }
+    .marker-user-shell {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .marker-user-pulse {
+      position: absolute;
+      inset: 6px;
+      border-radius: 999px;
+      background: rgba(77,163,255,0.16);
+      border: 1px solid rgba(255,215,107,0.16);
+      box-shadow: 0 0 12px rgba(77,163,255,0.28);
+    }
+    .marker-user-rotor {
+      position: relative;
+      width: 28px;
+      height: 28px;
+      transform-origin: center center;
+    }
+    .marker-user-heading {
+      position: absolute;
+      top: 1px;
+      left: 50%;
+      margin-left: -5px;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 11px solid #F7C85C;
+      filter: drop-shadow(0 0 4px rgba(247,200,92,0.5));
+    }
+    .marker-user-core {
+      position: absolute;
+      inset: 11px;
       border-radius: 999px;
       background: #4DA3FF;
-      border: 3px solid rgba(255,255,255,0.95);
-      box-shadow: 0 0 14px rgba(77,163,255,0.8);
+      border: 2px solid rgba(255,255,255,0.95);
+      box-shadow: 0 0 10px rgba(77,163,255,0.45);
     }
     .marker-replay {
       width: 16px;
@@ -709,13 +1000,16 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
   <script>
     (function() {
       var RNW = window.ReactNativeWebView;
-      var ECS_STYLE = 'mapbox://styles/expeditioncommand/cmn20yf1k00n101rngruce5tb';
-      var TACTICAL_STYLE = 'mapbox://styles/mapbox/dark-v11';
-      var hasFallenBackFromBrokenStyle = false;
+      var mapInstanceKey = ${escapedInstanceKey};
+
       function send(type, payload) {
         try {
           if (RNW && RNW.postMessage) {
-            RNW.postMessage(JSON.stringify({ type: type, payload: payload || null }));
+            RNW.postMessage(JSON.stringify({
+              type: type,
+              payload: payload || null,
+              instanceKey: mapInstanceKey
+            }));
           }
         } catch (e) {}
       }
@@ -724,34 +1018,131 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         send('log', msg);
       }
 
+      function nearlyEqual(a, b) {
+        if (typeof a !== 'number' || typeof b !== 'number') return false;
+        return Math.abs(a - b) <= ${CAMERA_EPSILON};
+      }
+
+      function sameCenter(a, b) {
+        if (!a || !b) return false;
+        return nearlyEqual(a.latitude, b.latitude) && nearlyEqual(a.longitude, b.longitude);
+      }
+
+      function normalizeCameraCommand(command) {
+        if (!command) return null;
+        return {
+          mode: command.mode || null,
+          center: command.center ? {
+            latitude: Number(command.center.latitude),
+            longitude: Number(command.center.longitude)
+          } : null,
+          zoom: typeof command.zoom === 'number' ? Number(command.zoom) : null,
+          fitBounds: command.fitBounds ? {
+            north: Number(command.fitBounds.north),
+            south: Number(command.fitBounds.south),
+            east: Number(command.fitBounds.east),
+            west: Number(command.fitBounds.west),
+            padding: typeof command.fitBounds.padding === 'number' ? command.fitBounds.padding : 48,
+            maxZoom: typeof command.fitBounds.maxZoom === 'number' ? command.fitBounds.maxZoom : 15,
+          } : null,
+          durationMs: typeof command.durationMs === 'number' ? command.durationMs : 500,
+          animate: command.animate !== false,
+          reason: command.reason || null,
+        };
+      }
+
+      function buildCameraKey(command) {
+        if (!command) return '';
+        return JSON.stringify({
+          mode: command.mode || null,
+          center: command.center ? {
+            latitude: Number((command.center.latitude || 0).toFixed(5)),
+            longitude: Number((command.center.longitude || 0).toFixed(5)),
+          } : null,
+          zoom: typeof command.zoom === 'number' ? Number(command.zoom.toFixed(3)) : null,
+          fitBounds: command.fitBounds ? {
+            north: Number(command.fitBounds.north.toFixed(5)),
+            south: Number(command.fitBounds.south.toFixed(5)),
+            east: Number(command.fitBounds.east.toFixed(5)),
+            west: Number(command.fitBounds.west.toFixed(5)),
+            padding: command.fitBounds.padding || 48,
+            maxZoom: command.fitBounds.maxZoom || 15,
+          } : null,
+          durationMs: command.durationMs || 500,
+          animate: command.animate !== false,
+          reason: command.reason || null,
+        });
+      }
+
       sendLog('HTML SCRIPT STARTED');
 
       if (typeof mapboxgl === 'undefined') {
-        sendLog('❌ mapboxgl NOT LOADED');
+        sendLog('mapboxgl NOT LOADED');
+        send('mapReady', { ok: false, reason: 'mapboxgl_missing' });
         return;
-      } else {
-        sendLog('✅ mapboxgl loaded');
       }
 
       mapboxgl.accessToken = ${escapedToken};
-      sendLog('TOKEN LENGTH: ' + (${escapedToken} ? ${escapedToken}.length : 0));
 
       var map = null;
       var initialized = false;
       var bootstrapDone = false;
-      var routeFitDone = false;
-      var userMarker = null;
-      var replayMarker = null;
-      var waypointMarkers = [];
-      var bailoutMarkers = [];
-      var pinMarkers = [];
-      var campsiteMarkers = [];
-      var tiltMarkers = [];
-      var roadClassTimer = null;
       var pendingPayload = null;
-      var dragTimeout = null;
-      var crosshairEl = document.getElementById('crosshair');
-      var currentStyleUrl = ${escapedInitialStyleUrl};
+      var bootstrapReadyTimer = null;
+      var requestedStyleUrl = ${escapedInitialStyleUrl};
+      var fallbackStyleUrls = ${escapedFallbackStyleUrls};
+      var activeStyleUrl = ${escapedInitialStyleUrl};
+      var attemptedStyles = Object.create(null);
+      attemptedStyles[activeStyleUrl] = true;
+      var lastAppliedStyleUrl = activeStyleUrl;
+      var activeCameraMode = null;
+      var lastCameraCommandKey = '';
+
+      function getNextFallbackStyle(failedStyleUrl) {
+        var candidates = [requestedStyleUrl].concat(fallbackStyleUrls || []);
+        for (var i = 0; i < candidates.length; i++) {
+          var candidate = candidates[i];
+          if (!candidate) continue;
+          if (candidate === failedStyleUrl) continue;
+          if (attemptedStyles[candidate]) continue;
+          return candidate;
+        }
+        return null;
+      }
+
+      function applyFallbackStyle(failedStyleUrl) {
+        var nextStyle = getNextFallbackStyle(failedStyleUrl);
+        if (!nextStyle || !map) {
+          send('styleFallbackExhausted', { failedStyleUrl: failedStyleUrl || null });
+          return false;
+        }
+
+        attemptedStyles[nextStyle] = true;
+        activeStyleUrl = nextStyle;
+        lastAppliedStyleUrl = nextStyle;
+        sendLog('style fallback → ' + nextStyle);
+
+        try {
+          map.setStyle(nextStyle);
+          return true;
+        } catch (e) {
+          sendLog('style fallback setStyle failed: ' + String(e && e.message ? e.message : e));
+          return false;
+        }
+      }
+
+      function featureCollection(features) {
+        return { type: 'FeatureCollection', features: features || [] };
+      }
+
+      function lineFeature(id, coordinates, props) {
+        return {
+          type: 'Feature',
+          id: id,
+          properties: props || {},
+          geometry: { type: 'LineString', coordinates: coordinates || [] }
+        };
+      }
 
       function safeRemoveMarkers(list) {
         try {
@@ -761,11 +1152,48 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         } catch (e) {}
       }
 
+      var waypointMarkers = [];
+      var bailoutMarkers = [];
+      var pinMarkers = [];
+      var campsiteMarkers = [];
+      var tiltMarkers = [];
+      var userMarker = null;
+      var replayMarker = null;
+      var roadClassTimer = null;
+      var dragTimeout = null;
+      var crosshairEl = document.getElementById('crosshair');
+
       function mkMarker(className, lng, lat, clickPayload, rotation) {
         var el = document.createElement('div');
         el.className = className;
 
-        if (typeof rotation === 'number') {
+        if (className === 'marker-user') {
+          var shell = document.createElement('div');
+          shell.className = 'marker-user-shell';
+
+          var pulse = document.createElement('div');
+          pulse.className = 'marker-user-pulse';
+          shell.appendChild(pulse);
+
+          var rotor = document.createElement('div');
+          rotor.className = 'marker-user-rotor';
+
+          var headingChevron = document.createElement('div');
+          headingChevron.className = 'marker-user-heading';
+          rotor.appendChild(headingChevron);
+
+          var core = document.createElement('div');
+          core.className = 'marker-user-core';
+
+          shell.appendChild(rotor);
+          shell.appendChild(core);
+          el.appendChild(shell);
+
+          if (typeof rotation === 'number') {
+            rotor.style.transform = 'rotate(' + rotation + 'deg)';
+            rotor.style.transformOrigin = 'center center';
+          }
+        } else if (typeof rotation === 'number') {
           el.style.transform = 'rotate(' + rotation + 'deg)';
           el.style.transformOrigin = 'center center';
         }
@@ -779,8 +1207,7 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
           });
         }
 
-        return new mapboxgl.Marker({ element: el, anchor: 'center' })
-          .setLngLat([lng, lat]);
+        return new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([lng, lat]);
       }
 
       function ensureSource(id, source) {
@@ -817,32 +1244,32 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         if (src && src.setData) src.setData(data);
       }
 
-      function featureCollection(features) {
-        return {
-          type: 'FeatureCollection',
-          features: features || []
-        };
-      }
+      function reinitializeStyleArtifacts() {
+        ensureSource('route-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource('route-progress-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource('segment-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource('trail-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource('speed-source', { type: 'geojson', data: featureCollection([]) });
 
-      function lineFeature(id, coordinates, props) {
-        return {
-          type: 'Feature',
-          id: id,
-          properties: props || {},
-          geometry: {
-            type: 'LineString',
-            coordinates: coordinates || []
-          }
-        };
+        ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
+        ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
+        ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
+        ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
+        ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
       }
 
       function updateRoute(coords, color) {
         var fc = featureCollection(
-          coords && coords.length > 1
-            ? [lineFeature('route', coords, { color: color || '#2ECC71' })]
-            : []
+          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71' })] : []
         );
         setGeoJson('route-source', fc);
+      }
+
+      function updateRouteProgress(coords, color) {
+        var fc = featureCollection(
+          coords && coords.length > 1 ? [lineFeature('route-progress', coords, { color: color || '#F2C24D' })] : []
+        );
+        setGeoJson('route-progress-source', fc);
       }
 
       function updateSegments(segments) {
@@ -856,16 +1283,12 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         setGeoJson('segment-source', fc);
       }
 
-      function updateTrail(segments, active, trailStyle) {
+      function updateTrail(segments) {
         var fc = featureCollection(
           (segments || [])
             .filter(function(seg) { return seg.coordinates && seg.coordinates.length > 1; })
             .map(function(seg) {
-              return lineFeature(seg.id, seg.coordinates, {
-                color: seg.color || '#5FD1FF',
-                active: !!active,
-                trailStyle: trailStyle || 'normal'
-              });
+              return lineFeature(seg.id, seg.coordinates, { color: seg.color || '#5FD1FF' });
             })
         );
         setGeoJson('trail-source', fc);
@@ -882,90 +1305,101 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         setGeoJson('speed-source', fc);
       }
 
-      function replaceWaypointMarkers(items) {
-        safeRemoveMarkers(waypointMarkers);
-        waypointMarkers = [];
+      function replaceMarkers(list, items, className, kind) {
+        safeRemoveMarkers(list);
+        list.length = 0;
+
         (items || []).forEach(function(item) {
-          var marker = mkMarker(
-            'marker-dot marker-waypoint',
-            item.longitude,
-            item.latitude,
-            { kind: 'waypoint', ...item }
-          );
+          var marker = mkMarker(className, item.longitude, item.latitude, Object.assign({ kind: kind }, item));
           marker.addTo(map);
-          waypointMarkers.push(marker);
+          list.push(marker);
         });
       }
 
-      function replaceBailoutMarkers(items) {
-        safeRemoveMarkers(bailoutMarkers);
-        bailoutMarkers = [];
-        (items || []).forEach(function(item) {
-          var marker = mkMarker(
-            'marker-dot marker-bailout',
-            item.longitude,
-            item.latitude,
-            { kind: 'bailout', ...item }
-          );
-          marker.addTo(map);
-          bailoutMarkers.push(marker);
-        });
+      function getCampCategoryClass(category) {
+        return 'camp-intel-cat-' + String(category || 'backup');
       }
 
-      function replacePinMarkers(items) {
-        safeRemoveMarkers(pinMarkers);
-        pinMarkers = [];
-        (items || []).forEach(function(item) {
-          var el = document.createElement('div');
-          el.className = 'marker-dot marker-pin';
-          if (item.color) el.style.background = item.color;
+      function getCampConfidenceClass(confidence) {
+        var normalized = String(confidence || 'medium').toLowerCase();
+        if (normalized !== 'high' && normalized !== 'low') normalized = 'medium';
+        return 'camp-intel-conf-' + normalized;
+      }
 
+      function campGlyph(category) {
+        switch (String(category || 'backup')) {
+          case 'suggested':
+            return 'S';
+          case 'emergency':
+            return 'E';
+          case 'saved':
+            return 'SV';
+          case 'previously_used':
+            return 'U';
+          case 'caution':
+            return '!';
+          case 'backup':
+          default:
+            return 'B';
+        }
+      }
+
+      function createCampIntelMarkerElement(item) {
+        var root = document.createElement('div');
+        root.className =
+          'camp-intel-marker ' +
+          getCampCategoryClass(item.category) + ' ' +
+          getCampConfidenceClass(item.confidence) +
+          (item.selected ? ' camp-intel-selected' : '');
+
+        var ring = document.createElement('div');
+        ring.className = 'camp-intel-ring';
+
+        var core = document.createElement('div');
+        core.className = 'camp-intel-core';
+        core.textContent = campGlyph(item.category);
+
+        root.appendChild(ring);
+        root.appendChild(core);
+
+        if (Array.isArray(item.badges) && item.badges.length > 0) {
+          var badgeWrap = document.createElement('div');
+          badgeWrap.className = 'camp-intel-badges';
+          item.badges.slice(0, 2).forEach(function(badge) {
+            var badgeEl = document.createElement('div');
+            var tone = typeof badge.tone === 'string' ? badge.tone : 'neutral';
+            badgeEl.className = 'camp-intel-badge camp-intel-badge-' + tone;
+            badgeEl.textContent = String(badge.label || '').slice(0, 4);
+            badgeWrap.appendChild(badgeEl);
+          });
+          root.appendChild(badgeWrap);
+        }
+
+        return root;
+      }
+
+      function replaceCampIntelMarkers(list, items) {
+        safeRemoveMarkers(list);
+        list.length = 0;
+
+        (items || []).forEach(function(item) {
+          var el = createCampIntelMarkerElement(item);
           el.addEventListener('click', function(ev) {
             try {
               if (ev && ev.stopPropagation) ev.stopPropagation();
             } catch (e) {}
-            send('pinTap', { kind: 'pin', ...item });
+            send('pinTap', Object.assign({ kind: 'campIntel' }, item));
           });
 
           var marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
             .setLngLat([item.longitude, item.latitude])
             .addTo(map);
 
-          pinMarkers.push(marker);
+          list.push(marker);
         });
       }
 
-      function replaceCampsites(items) {
-        safeRemoveMarkers(campsiteMarkers);
-        campsiteMarkers = [];
-        (items || []).forEach(function(item) {
-          var marker = mkMarker(
-            'marker-dot marker-camp',
-            item.longitude,
-            item.latitude,
-            { kind: 'campsite', ...item }
-          );
-          marker.addTo(map);
-          campsiteMarkers.push(marker);
-        });
-      }
-
-      function replaceTiltMarkers(items) {
-        safeRemoveMarkers(tiltMarkers);
-        tiltMarkers = [];
-        (items || []).forEach(function(item) {
-          var marker = mkMarker(
-            'marker-dot marker-tilt',
-            item.longitude,
-            item.latitude,
-            { kind: 'tiltAlert', ...item }
-          );
-          marker.addTo(map);
-          tiltMarkers.push(marker);
-        });
-      }
-
-      function setUserLocation(loc, show, follow, heading) {
+      function setUserLocation(loc, show, heading) {
         if (!show || !loc) {
           if (userMarker) {
             try { userMarker.remove(); } catch (e) {}
@@ -981,23 +1415,16 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
           userMarker.setLngLat([loc.longitude, loc.latitude]);
           try {
             var el = userMarker.getElement();
-            if (el && typeof heading === 'number') {
-              el.style.transform = 'rotate(' + heading + 'deg)';
-              el.style.transformOrigin = 'center center';
+            var rotor = el ? el.querySelector('.marker-user-rotor') : null;
+            if (rotor && typeof heading === 'number') {
+              rotor.style.transform = 'rotate(' + heading + 'deg)';
+              rotor.style.transformOrigin = 'center center';
             }
           } catch (e) {}
         }
-
-        if (follow) {
-          map.easeTo({
-            center: [loc.longitude, loc.latitude],
-            duration: 500,
-            essential: true
-          });
-        }
       }
 
-      function setReplayMarker(loc, follow) {
+      function setReplayMarker(loc) {
         if (!loc) {
           if (replayMarker) {
             try { replayMarker.remove(); } catch (e) {}
@@ -1012,18 +1439,109 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
         } else {
           replayMarker.setLngLat([loc.longitude, loc.latitude]);
         }
+      }
 
-        if (follow) {
-          map.easeTo({
-            center: [loc.longitude, loc.latitude],
-            duration: 450,
-            essential: true
+      function issueCameraCommand(command) {
+        if (!map || !command) return;
+
+        var normalized = normalizeCameraCommand(command);
+        if (!normalized) return;
+
+        var cameraKey = buildCameraKey(normalized);
+        if (cameraKey && cameraKey === lastCameraCommandKey) return;
+        lastCameraCommandKey = cameraKey;
+        activeCameraMode = normalized.mode || activeCameraMode;
+
+        try {
+          if (normalized.fitBounds) {
+            var bounds = new mapboxgl.LngLatBounds(
+              [normalized.fitBounds.west, normalized.fitBounds.south],
+              [normalized.fitBounds.east, normalized.fitBounds.north]
+            );
+
+            map.fitBounds(bounds, {
+              padding: normalized.fitBounds.padding,
+              maxZoom: normalized.fitBounds.maxZoom,
+              duration: normalized.animate === false ? 0 : normalized.durationMs,
+              essential: true,
+            });
+            return;
+          }
+
+          if (normalized.center) {
+            var nextCenter = [normalized.center.longitude, normalized.center.latitude];
+            var currentCenter = map.getCenter();
+            var sameAsCurrent = sameCenter(
+              { latitude: currentCenter.lat, longitude: currentCenter.lng },
+              normalized.center
+            );
+            var sameZoom =
+              typeof normalized.zoom !== 'number' || Math.abs(map.getZoom() - normalized.zoom) <= 0.01;
+
+            if (sameAsCurrent && sameZoom) return;
+
+            var cameraOptions = { center: nextCenter, essential: true };
+            if (typeof normalized.zoom === 'number') {
+              cameraOptions.zoom = normalized.zoom;
+            }
+
+            if (normalized.animate === false) {
+              map.jumpTo(cameraOptions);
+            } else {
+              cameraOptions.duration = normalized.durationMs;
+              map.easeTo(cameraOptions);
+            }
+            return;
+          }
+
+          if (typeof normalized.zoom === 'number') {
+            if (Math.abs(map.getZoom() - normalized.zoom) <= 0.01) return;
+            if (normalized.animate === false) {
+              map.jumpTo({ zoom: normalized.zoom, essential: true });
+            } else {
+              map.easeTo({ zoom: normalized.zoom, duration: normalized.durationMs, essential: true });
+            }
+          }
+        } catch (e) {
+          sendLog('camera command failed: ' + String(e && e.message ? e.message : e));
+        }
+      }
+
+      function maybeApplyLegacyFallbackCamera(payload) {
+        if (!map || !payload) return;
+
+        if (payload.cameraMode === 'replay' && payload.replayMarker) {
+          issueCameraCommand({
+            mode: 'replay',
+            center: payload.replayMarker,
+            durationMs: 450,
+            animate: true,
+            reason: 'legacy_replay_follow'
+          });
+          return;
+        }
+
+        if (payload.cameraMode === 'follow_user' && payload.userLocation) {
+          issueCameraCommand({
+            mode: 'follow_user',
+            center: payload.userLocation,
+            durationMs: 500,
+            animate: true,
+            reason: 'legacy_follow_user'
           });
         }
       }
 
-      function fitToBoundsOnce(payload) {
-        if (!payload || routeFitDone) return;
+      function applyDynamicState(payload) {
+        if (!map || !payload) return;
+
+        setUserLocation(payload.userLocation || null, !!payload.showUserLocation, payload.vehicleHeading);
+        setReplayMarker(payload.replayMarker || null);
+        activeCameraMode = payload.cameraMode || activeCameraMode;
+      }
+
+      function fitInitialPayload(payload) {
+        if (!payload || bootstrapDone) return;
 
         if (payload.bounds) {
           map.fitBounds(
@@ -1033,13 +1551,19 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
             ],
             { padding: 48, duration: 0, maxZoom: 15 }
           );
-          routeFitDone = true;
+          bootstrapDone = true;
+          return;
+        }
+
+        if (payload.userLocation) {
+          map.jumpTo({ center: [payload.userLocation.longitude, payload.userLocation.latitude], zoom: 14 });
+          bootstrapDone = true;
           return;
         }
 
         if (payload.center) {
           map.jumpTo({ center: payload.center, zoom: payload.zoom || 12 });
-          routeFitDone = true;
+          bootstrapDone = true;
         }
       }
 
@@ -1073,126 +1597,79 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
       }
 
       function reportRoadClass() {
-        try {
-          var style = map.getStyle && map.getStyle();
-          var layerIds = ((style && style.layers) || [])
-            .map(function(layer) { return layer.id; })
-            .filter(function(id) {
-              return typeof id === 'string' && id.toLowerCase().indexOf('road') !== -1;
-            });
-
-          if (!layerIds.length) {
-            send('roadClassification', {
-              classification: 'unknown',
-              source: 'no-road-layers-in-style'
-            });
-            return;
-          }
-
-          var center = map.getCenter();
-          var p = map.project(center);
-          var features = map.queryRenderedFeatures([p.x, p.y], {
-            layers: layerIds
-          });
-
-          var classification = 'unknown';
-          if (features && features.length) {
-            var props = features[0].properties || {};
-            classification =
-              props.class ||
-              props.type ||
-              props.structure ||
-              props.name ||
-              'road';
-          }
-
-          send('roadClassification', {
-            classification: classification,
-            source: 'mapbox-rendered-center-sample'
-          });
-        } catch (e) {
-          sendLog('road classification skipped: ' + String(e && e.message ? e.message : e));
-        }
-      }
-
-      function reinitializeStyleArtifacts() {
-        ensureSource('route-source', {
-          type: 'geojson',
-          data: featureCollection([])
+        send('roadClassification', {
+          classification: 'unknown',
+          source: 'fallback'
         });
-        ensureSource('segment-source', {
-          type: 'geojson',
-          data: featureCollection([])
-        });
-        ensureSource('trail-source', {
-          type: 'geojson',
-          data: featureCollection([])
-        });
-        ensureSource('speed-source', {
-          type: 'geojson',
-          data: featureCollection([])
-        });
-
-        ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
-        ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
-        ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
-        ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
-      }
-
-      function applyStyleIfNeeded(styleUrl) {
-        if (!map || !styleUrl || styleUrl === currentStyleUrl) return;
-        sendLog('Style change detected; React will remount WebView for clean reload');
-        currentStyleUrl = styleUrl;
       }
 
       function applyPayload(payload) {
-        if (!map || !payload) return;
+        if (!map || !payload || !map.isStyleLoaded()) return;
 
-        applyStyleIfNeeded(payload.styleUrl);
-
-        if (!map.isStyleLoaded()) {
+        if (payload.styleUrl && payload.styleUrl !== requestedStyleUrl) {
+          requestedStyleUrl = payload.styleUrl;
+          activeStyleUrl = payload.styleUrl;
+          lastAppliedStyleUrl = payload.styleUrl;
+          attemptedStyles = Object.create(null);
+          attemptedStyles[payload.styleUrl] = true;
+          map.setStyle(payload.styleUrl);
           return;
         }
 
         reinitializeStyleArtifacts();
-
         updateRoute(payload.routeCoords || [], payload.routeColor);
+        updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
         updateSegments(payload.segments || []);
-        updateTrail(payload.trailSegments || [], payload.trailActive, payload.trailStyle);
+        updateTrail(payload.trailSegments || []);
         updateSpeedTrail(payload.speedSegments || []);
-        replaceWaypointMarkers(payload.waypoints || []);
-        replaceBailoutMarkers(payload.bailouts || []);
-        replacePinMarkers(payload.pins || []);
-        replaceCampsites(payload.campsites || []);
-        replaceTiltMarkers(payload.tiltAlerts || []);
-        setUserLocation(
-          payload.userLocation || null,
-          !!payload.showUserLocation,
-          !!payload.followUser,
-          payload.vehicleHeading
-        );
-        setReplayMarker(payload.replayMarker || null, !!payload.followReplay);
+
+        replaceMarkers(waypointMarkers, payload.waypoints || [], 'marker-dot marker-waypoint', 'waypoint');
+        replaceMarkers(bailoutMarkers, payload.bailouts || [], 'marker-dot marker-bailout', 'bailout');
+        replaceCampIntelMarkers(campsiteMarkers, payload.campsites || []);
+        replaceMarkers(tiltMarkers, payload.tiltAlerts || [], 'marker-dot marker-tilt', 'tiltAlert');
+
+        safeRemoveMarkers(pinMarkers);
+        pinMarkers = [];
+        (payload.pins || []).forEach(function(item) {
+          var el = document.createElement('div');
+          el.className = 'marker-dot marker-pin';
+          if (item.color) el.style.background = item.color;
+
+          el.addEventListener('click', function(ev) {
+            try {
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+            } catch (e) {}
+            send('pinTap', Object.assign({ kind: 'pin' }, item));
+          });
+
+          var marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([item.longitude, item.latitude])
+            .addTo(map);
+
+          pinMarkers.push(marker);
+        });
+
+        applyDynamicState(payload);
 
         if (crosshairEl) {
           crosshairEl.style.opacity = payload.showCrosshair ? '1' : '0';
         }
 
         if (!bootstrapDone) {
-          fitToBoundsOnce(payload);
-          bootstrapDone = true;
+          fitInitialPayload(payload);
         }
+
+        maybeApplyLegacyFallbackCamera(payload);
       }
 
       function init() {
         if (initialized) return;
         initialized = true;
 
-        sendLog('Creating map...');
-
         try {
           map = new mapboxgl.Map({
             container: 'map',
-            style: ${escapedInitialStyleUrl},
+            style: activeStyleUrl,
             center: [-121.0, 38.5],
             zoom: 7,
             attributionControl: false,
@@ -1200,69 +1677,63 @@ function makeMapHtml(token: string, initialStyleUrl: string) {
             touchZoomRotate: true,
             doubleClickZoom: true
           });
-
-          sendLog('✅ Map object created');
         } catch (err) {
-          sendLog('❌ Map constructor failed: ' + String(err && err.message ? err.message : err));
+          sendLog('Map constructor failed: ' + String(err && err.message ? err.message : err));
+          send('mapReady', { ok: false, reason: 'constructor_failed' });
           return;
         }
 
-        currentStyleUrl = ${escapedInitialStyleUrl};
+        bootstrapReadyTimer = setTimeout(function() {
+          send('mapReady', { ok: true, reason: 'bootstrap_timeout' });
+        }, 1200);
 
         map.on('load', function() {
-          sendLog('✅ map load event fired');
+          sendLog('map load event fired');
           reinitializeStyleArtifacts();
 
           if (pendingPayload) {
             applyPayload(pendingPayload);
           }
 
+          if (bootstrapReadyTimer) {
+            clearTimeout(bootstrapReadyTimer);
+            bootstrapReadyTimer = null;
+          }
+
           send('mapReady', { ok: true });
-          sendLog('✅ mapReady sent');
           reportRoadClass();
         });
 
-map.on('style.load', function() {
-  sendLog('✅ style.load fired');
-  reinitializeStyleArtifacts();
-  if (pendingPayload) {
-    applyPayload(pendingPayload);
-  }
-});
+        map.on('style.load', function() {
+          reinitializeStyleArtifacts();
+          if (pendingPayload) {
+            applyPayload(pendingPayload);
+          }
+        });
 
         map.on('error', function(e) {
-  try {
-    var msg =
-      e && e.error && e.error.message
-        ? e.error.message
-        : JSON.stringify(e);
+          var msg = '';
+          try {
+            msg = e && e.error && e.error.message ? e.error.message : JSON.stringify(e);
+            sendLog('map error: ' + msg);
+          } catch (err) {
+            sendLog('map error (unserializable)');
+          }
 
-    sendLog('❌ map error: ' + msg);
+          var failedStyleUrl = activeStyleUrl || requestedStyleUrl || null;
+          var looksLikeStyleFetchFailure =
+            typeof msg === 'string' &&
+            (msg.indexOf('Failed to fetch https://api.mapbox.com/styles/v1/') >= 0 ||
+             msg.indexOf('style') >= 0);
 
-    var looksLikeBrokenStyle =
-      typeof msg === 'string' &&
-      (
-        msg.indexOf('Bare objects invalid') !== -1 ||
-        msg.indexOf('Secondary image variant is not a string') !== -1
-      );
-
-    if (
-  looksLikeBrokenStyle &&
-  currentStyleUrl === ECS_STYLE &&
-  !hasFallenBackFromBrokenStyle
-) {
-  hasFallenBackFromBrokenStyle = true;
-  sendLog('⚠️ ECS style is broken, falling back to Tactical');
-  currentStyleUrl = TACTICAL_STYLE;
-  map.setStyle(TACTICAL_STYLE);
-}
-  } catch (err) {
-    sendLog('❌ map error (unserializable)');
-  }
-});
+          if (looksLikeStyleFetchFailure) {
+            applyFallbackStyle(failedStyleUrl);
+          }
+        });
 
         map.on('dragstart', function() {
-          send('userDrag', { ok: true });
+          activeCameraMode = 'free_pan';
+          send('userDrag', { ok: true, mode: activeCameraMode });
         });
 
         map.on('moveend', function() {
@@ -1312,6 +1783,16 @@ map.on('style.load', function() {
           return;
         }
 
+        if (msg.type === 'cameraCommand') {
+          issueCameraCommand(msg.payload || null);
+          return;
+        }
+
+        if (msg.type === 'dynamicState') {
+          applyDynamicState(msg.payload || null);
+          return;
+        }
+
         if (msg.type === 'requestCenter') {
           sendCenter();
           return;
@@ -1330,10 +1811,40 @@ map.on('style.load', function() {
 </html>`;
 }
 
-export default function MapRenderer({
+function normalizeLatLng(value?: LatLng | null) {
+  if (!value) return null;
+  const latitude =
+    typeof value.latitude === 'number'
+      ? value.latitude
+      : typeof value.lat === 'number'
+        ? value.lat
+        : null;
+  const longitude =
+    typeof value.longitude === 'number'
+      ? value.longitude
+      : typeof value.lng === 'number'
+        ? value.lng
+        : null;
+
+  if (!isValidCoord(latitude ?? undefined, longitude ?? undefined)) return null;
+  return { latitude: latitude as number, longitude: longitude as number };
+}
+
+function sameLatLng(a?: { latitude: number; longitude: number } | null, b?: { latitude: number; longitude: number } | null) {
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.latitude - b.latitude) <= CAMERA_EPSILON &&
+    Math.abs(a.longitude - b.longitude) <= CAMERA_EPSILON
+  );
+}
+
+const MapRenderer = React.memo(function MapRenderer({
   points = [],
+  progressPoints = [],
   waypoints = [],
   healthLevel = 'green',
+  routeColor,
+  progressColor,
   mapStyle = DEFAULT_MAP_STYLE,
   mapboxToken,
   showUserLocation = false,
@@ -1364,43 +1875,130 @@ export default function MapRenderer({
   isLoading = false,
   hasToken = true,
   onRetry,
+  onReadyStateChange,
   campsites = [],
   tiltAlerts = [],
   campsiteMarkers = [],
+  campIntelMarkers = [],
+  onCampIntelTap,
   tiltAlertMarkers = [],
+  cameraMode,
+  cameraCommand = null,
+  cameraCommandTrigger,
   style,
 }: MapRendererProps) {
   const webViewRef = useRef<WebView>(null);
   const [webReady, setWebReady] = useState(false);
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [webBootTimedOut, setWebBootTimedOut] = useState(false);
+  const [webViewInstanceKey, setWebViewInstanceKey] = useState(0);
   const bootstrapSentRef = useRef(false);
   const lastPayloadHashRef = useRef('');
-  const htmlRef = useRef<string>('');
-  const hasHandledInitialCenterTriggerRef = useRef(false);
-  const hasHandledInitialBoundsTriggerRef = useRef(false);
+  const lastDynamicPayloadHashRef = useRef('');
+  const failSafeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCameraCommandHashRef = useRef('');
+  const lastLegacyFollowHashRef = useRef('');
+  const previousHtmlHashRef = useRef<string>('');
+  const autoRecoveryCountRef = useRef(0);
+  const activeWebViewInstanceKeyRef = useRef(0);
+  const activeFailSafeInstanceKeyRef = useRef<number | null>(null);
+  const failSafeArmedInstanceKeyRef = useRef<number | null>(null);
+  const bootstrapAcknowledgedInstanceKeyRef = useRef<number | null>(null);
+  const loadStartedInstanceKeyRef = useRef<number | null>(null);
+  const startupSettledRef = useRef(false);
+  const definitiveReadyInstanceKeyRef = useRef<number | null>(null);
 
-  const shouldLoadMap = !!hasToken && !isLoading && !!mapboxToken;
+  const shouldLoadMap = !!hasToken && !!mapboxToken;
+
+  useEffect(() => {
+    onReadyStateChange?.(shouldLoadMap && webReady);
+  }, [onReadyStateChange, shouldLoadMap, webReady]);
 
   const initialStyleUrl = useMemo(
     () => getMapStyleUrl(mapStyle || DEFAULT_MAP_STYLE),
     [mapStyle],
   );
+  const latchedInitialStyleRef = useRef({
+    instanceKey: 0,
+    styleUrl: initialStyleUrl,
+  });
+  if (latchedInitialStyleRef.current.instanceKey !== webViewInstanceKey) {
+    latchedInitialStyleRef.current = {
+      instanceKey: webViewInstanceKey,
+      styleUrl: initialStyleUrl,
+    };
+  }
+  const bootStyleUrl = latchedInitialStyleRef.current.styleUrl;
 
-  const webViewKey = useMemo(
-    () => `map-${mapStyle || DEFAULT_MAP_STYLE}-${mapboxToken ? 'ready' : 'empty'}`,
-    [mapStyle, mapboxToken],
+  const html = useMemo(
+    () =>
+      shouldLoadMap
+        ? makeMapHtml(mapboxToken, bootStyleUrl, MAP_STYLE_FALLBACK_CHAIN, webViewInstanceKey)
+        : '',
+    [shouldLoadMap, mapboxToken, bootStyleUrl, webViewInstanceKey],
   );
+  const htmlHash = useMemo(() => stableStringify({
+    shouldLoadMap,
+    instanceKey: webViewInstanceKey,
+    tokenPrefix: mapboxToken ? mapboxToken.slice(0, 8) : '',
+    initialStyleUrl: bootStyleUrl,
+  }), [shouldLoadMap, webViewInstanceKey, mapboxToken, bootStyleUrl]);
+
+  const webViewKey = `ecs-map-webview-${webViewInstanceKey}`;
+  const webViewSource = useMemo(() => ({ html }), [html]);
+  const hasHandledInitialCenterTriggerRef = useRef(false);
+  const hasHandledInitialBoundsTriggerRef = useRef(false);
+
+  const clearFailSafeTimer = useCallback(() => {
+    if (failSafeTimerRef.current) {
+      clearTimeout(failSafeTimerRef.current);
+      failSafeTimerRef.current = null;
+    }
+    activeFailSafeInstanceKeyRef.current = null;
+  }, []);
+
+  const resetRuntimeState = useCallback((options?: { clearRecoveryCount?: boolean }) => {
+    setWebReady(false);
+    setWebBootTimedOut(false);
+    bootstrapSentRef.current = false;
+    lastPayloadHashRef.current = '';
+    lastDynamicPayloadHashRef.current = '';
+    lastCameraCommandHashRef.current = '';
+    lastLegacyFollowHashRef.current = '';
+    hasHandledInitialCenterTriggerRef.current = false;
+    hasHandledInitialBoundsTriggerRef.current = false;
+    loadStartedInstanceKeyRef.current = null;
+    failSafeArmedInstanceKeyRef.current = null;
+    bootstrapAcknowledgedInstanceKeyRef.current = null;
+    startupSettledRef.current = false;
+    definitiveReadyInstanceKeyRef.current = null;
+    if (options?.clearRecoveryCount) {
+      autoRecoveryCountRef.current = 0;
+    }
+    clearFailSafeTimer();
+  }, [clearFailSafeTimer]);
+
+  const remountWebView = useCallback((reason: string) => {
+    debugLog('[MapRenderer] Remounting WebView', {
+      reason,
+      instanceKey: activeWebViewInstanceKeyRef.current,
+      recoveryCount: autoRecoveryCountRef.current,
+    });
+    resetRuntimeState();
+    setWebViewInstanceKey((value) => value + 1);
+  }, [resetRuntimeState]);
 
   const payload = useMemo<WebMapPayload>(
     () =>
       buildWebPayload({
         points,
+        progressPoints,
         waypoints,
         healthLevel,
+        routeColor,
+        progressColor,
         mapStyle,
         mapboxToken,
         showUserLocation,
-        followUser,
         userLocation,
         interactive,
         segments,
@@ -1409,24 +2007,24 @@ export default function MapRenderer({
         showCrosshair,
         trailSegments,
         trailActive,
-        replayMarker,
-        followReplay,
         speedSegments,
         trailStyle,
-        vehicleHeading,
         campsites,
         tiltAlerts,
         campsiteMarkers,
+        campIntelMarkers,
         tiltAlertMarkers,
       }),
     [
       points,
+      progressPoints,
       waypoints,
       healthLevel,
+      routeColor,
+      progressColor,
       mapStyle,
       mapboxToken,
       showUserLocation,
-      followUser,
       userLocation,
       interactive,
       segments,
@@ -1435,65 +2033,257 @@ export default function MapRenderer({
       showCrosshair,
       trailSegments,
       trailActive,
-      replayMarker,
-      followReplay,
       speedSegments,
       trailStyle,
-      vehicleHeading,
       campsites,
       tiltAlerts,
       campsiteMarkers,
+      campIntelMarkers,
       tiltAlertMarkers,
     ],
   );
 
+  const dynamicPayload = useMemo(
+    () =>
+      buildDynamicPayload({
+        replayMarker,
+        userLocation,
+        showUserLocation,
+        vehicleHeading,
+        cameraMode,
+      }),
+    [replayMarker, userLocation, showUserLocation, vehicleHeading, cameraMode],
+  );
+
   const payloadHash = useMemo(() => stableStringify(payload), [payload]);
-
-  useEffect(() => {
-    if (shouldLoadMap) {
-      htmlRef.current = makeMapHtml(mapboxToken, initialStyleUrl);
-    } else {
-      htmlRef.current = '';
-    }
-  }, [shouldLoadMap, mapboxToken, initialStyleUrl]);
-
-  useEffect(() => {
-    setWebReady(false);
-    bootstrapSentRef.current = false;
-    lastPayloadHashRef.current = '';
-    hasHandledInitialCenterTriggerRef.current = false;
-    hasHandledInitialBoundsTriggerRef.current = false;
-  }, [initialStyleUrl]);
+  const dynamicPayloadHash = useMemo(() => stableStringify(dynamicPayload), [dynamicPayload]);
 
   useEffect(() => {
     if (!shouldLoadMap) {
-      setWebReady(false);
-      bootstrapSentRef.current = false;
-      lastPayloadHashRef.current = '';
-      hasHandledInitialCenterTriggerRef.current = false;
-      hasHandledInitialBoundsTriggerRef.current = false;
+      resetRuntimeState({ clearRecoveryCount: true });
     }
-  }, [shouldLoadMap]);
+  }, [resetRuntimeState, shouldLoadMap]);
+
+  useEffect(() => {
+    activeWebViewInstanceKeyRef.current = webViewInstanceKey;
+    loadStartedInstanceKeyRef.current = null;
+    failSafeArmedInstanceKeyRef.current = null;
+    bootstrapAcknowledgedInstanceKeyRef.current = null;
+    startupSettledRef.current = false;
+    definitiveReadyInstanceKeyRef.current = null;
+  }, [webViewInstanceKey]);
+
+  useEffect(() => {
+    debugLog('[MapRenderer] mounted');
+    return () => {
+      debugLog('[MapRenderer] unmounted');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (previousHtmlHashRef.current && previousHtmlHashRef.current !== htmlHash) {
+      debugLog('[MapRenderer] html source changed', {
+        prev: previousHtmlHashRef.current,
+        next: htmlHash,
+      });
+    }
+    previousHtmlHashRef.current = htmlHash;
+  }, [htmlHash]);
+
+  useEffect(() => {
+    debugLog('[MapRenderer] render state', {
+      shouldLoadMap,
+      webReady,
+      webBootTimedOut,
+      webViewInstanceKey,
+      mapStyle,
+      hasToken,
+      isLoading,
+      points: points.length,
+      waypoints: waypoints.length,
+      segments: segments.length,
+      pins: pinMarkers.length,
+      trailSegments: trailSegments.length,
+    });
+  }, [
+    shouldLoadMap,
+    webReady,
+    webBootTimedOut,
+    webViewInstanceKey,
+    mapStyle,
+    hasToken,
+    isLoading,
+    points.length,
+    waypoints.length,
+    segments.length,
+    pinMarkers.length,
+    trailSegments.length,
+  ]);
+
+  useEffect(() => {
+    if (!shouldLoadMap) return;
+    if (!webBootTimedOut) return;
+    if (webReady) return;
+    if (startupSettledRef.current) return;
+    if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) return;
+    if (autoRecoveryCountRef.current >= WEBVIEW_AUTO_RECOVERY_LIMIT) return;
+
+    autoRecoveryCountRef.current += 1;
+    debugLog(
+      `[MapRenderer] Auto-recovery remount after cold-start timeout (${autoRecoveryCountRef.current}/${WEBVIEW_AUTO_RECOVERY_LIMIT})`,
+    );
+    remountWebView('cold_start_timeout');
+  }, [remountWebView, shouldLoadMap, webBootTimedOut, webReady, webViewInstanceKey]);
+
+  const safeInject = useCallback((message: unknown) => {
+    try {
+      if (!webViewRef.current) return;
+
+      const json = JSON.stringify(message);
+      const escaped = json
+        .replace(/\\/g, '\\\\')
+        .replace(/`/g, '\\`')
+        .replace(/\$/g, '\\$');
+
+      webViewRef.current.injectJavaScript(`
+        try {
+          window.dispatchEvent(new MessageEvent('message', { data: \`${escaped}\` }));
+        } catch (e) {}
+        true;
+      `);
+    } catch (e) {
+      console.warn('[MapRenderer] inject fail', e);
+    }
+  }, []);
 
   const postToMap = useCallback((message: unknown) => {
-    const json = JSON.stringify(message);
-    const escaped = json.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-    webViewRef.current?.injectJavaScript(`
-      window.dispatchEvent(new MessageEvent('message', { data: \`${escaped}\` }));
-      true;
-    `);
-  }, []);
+    safeInject(message);
+  }, [safeInject]);
+
+  const armFailSafeTimer = useCallback(
+    (instanceKeyAtSchedule: number, timeoutMs: number, phase: 'initial' | 'bootstrap_progress') => {
+      clearFailSafeTimer();
+      failSafeArmedInstanceKeyRef.current = instanceKeyAtSchedule;
+      activeFailSafeInstanceKeyRef.current = instanceKeyAtSchedule;
+
+      failSafeTimerRef.current = setTimeout(() => {
+        const isCurrentInstance =
+          activeWebViewInstanceKeyRef.current === instanceKeyAtSchedule &&
+          activeFailSafeInstanceKeyRef.current === instanceKeyAtSchedule &&
+          failSafeArmedInstanceKeyRef.current === instanceKeyAtSchedule &&
+          !startupSettledRef.current;
+
+        if (!isCurrentInstance) {
+          debugLog('[MapRenderer] Ignoring stale failsafe timer', {
+            scheduledFor: instanceKeyAtSchedule,
+            current: activeWebViewInstanceKeyRef.current,
+            phase,
+          });
+          return;
+        }
+
+        debugLog('[MapRenderer] FAILSAFE TRIGGERED', {
+          instanceKey: instanceKeyAtSchedule,
+          phase,
+        });
+        setWebBootTimedOut(true);
+      }, timeoutMs);
+    },
+    [clearFailSafeTimer],
+  );
+
+  useEffect(() => {
+    if (!shouldLoadMap) return;
+    if (startupSettledRef.current) return;
+    if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) return;
+    if (failSafeArmedInstanceKeyRef.current === webViewInstanceKey) return;
+
+    setWebBootTimedOut(false);
+    const instanceKeyAtSchedule = webViewInstanceKey;
+    armFailSafeTimer(instanceKeyAtSchedule, WEBVIEW_FAILSAFE_TIMEOUT_MS, 'initial');
+
+    return () => {
+      if (failSafeArmedInstanceKeyRef.current === instanceKeyAtSchedule) {
+        failSafeArmedInstanceKeyRef.current = null;
+      }
+      if (activeFailSafeInstanceKeyRef.current === instanceKeyAtSchedule) {
+        activeFailSafeInstanceKeyRef.current = null;
+      }
+      clearFailSafeTimer();
+    };
+  }, [armFailSafeTimer, clearFailSafeTimer, shouldLoadMap, webViewInstanceKey]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
 
     const type = bootstrapSentRef.current ? 'update' : 'bootstrap';
-    if (type === 'update' && payloadHash === lastPayloadHashRef.current) return;
 
-    postToMap({ type, payload });
+    if (type === 'update' && payloadHash === lastPayloadHashRef.current) {
+      return;
+    }
+
+    postToMap({ type, payload: { ...payload, ...dynamicPayload } });
+
     bootstrapSentRef.current = true;
     lastPayloadHashRef.current = payloadHash;
-  }, [shouldLoadMap, webReady, payload, payloadHash, postToMap]);
+    lastDynamicPayloadHashRef.current = dynamicPayloadHash;
+  }, [shouldLoadMap, webReady, payload, dynamicPayload, payloadHash, dynamicPayloadHash, postToMap]);
+
+  useEffect(() => {
+    if (!shouldLoadMap || !webReady) return;
+    if (!bootstrapSentRef.current) return;
+    if (dynamicPayloadHash === lastDynamicPayloadHashRef.current) return;
+
+    postToMap({ type: 'dynamicState', payload: dynamicPayload });
+    lastDynamicPayloadHashRef.current = dynamicPayloadHash;
+  }, [shouldLoadMap, webReady, dynamicPayload, dynamicPayloadHash, postToMap]);
+
+  useEffect(() => {
+    if (!shouldLoadMap || !webReady) return;
+    if (!cameraCommand) return;
+
+    const commandHash = buildCameraCommandHash(cameraCommand, cameraCommandTrigger);
+    if (!commandHash || commandHash === lastCameraCommandHashRef.current) return;
+
+    postToMap({ type: 'cameraCommand', payload: cameraCommand });
+    lastCameraCommandHashRef.current = commandHash;
+  }, [shouldLoadMap, webReady, cameraCommand, cameraCommandTrigger, postToMap]);
+
+  useEffect(() => {
+    if (!shouldLoadMap || !webReady) return;
+    if (cameraCommand) return;
+
+    const user = normalizeLatLng(userLocation);
+    const replay = normalizeLatLng(replayMarker as any);
+
+    let fallbackCommand: CameraCommand | null = null;
+
+    if (followReplay && replay) {
+      fallbackCommand = {
+        mode: 'replay',
+        center: replay,
+        durationMs: 450,
+        animate: true,
+        reason: 'legacy_follow_replay',
+      };
+    } else if (followUser && user) {
+      fallbackCommand = {
+        mode: 'follow_user',
+        center: user,
+        durationMs: 500,
+        animate: true,
+        reason: 'legacy_follow_user',
+      };
+    }
+
+    if (!fallbackCommand) return;
+
+    const fallbackHash = buildCameraCommandHash(fallbackCommand, undefined);
+    if (fallbackHash === lastLegacyFollowHashRef.current) return;
+
+    postToMap({ type: 'cameraCommand', payload: fallbackCommand });
+    lastLegacyFollowHashRef.current = fallbackHash;
+  }, [shouldLoadMap, webReady, cameraCommand, followReplay, replayMarker, followUser, userLocation, postToMap]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
@@ -1519,215 +2309,274 @@ export default function MapRenderer({
     postToMap({ type: 'requestBounds' });
   }, [requestBoundsTrigger, shouldLoadMap, webReady, postToMap]);
 
-  const handleMessage = useCallback(
-    (event: any) => {
-      let message: any;
-      try {
-        message = JSON.parse(event.nativeEvent.data);
-      } catch {
+  const handleMessage = useCallback((event: any) => {
+    let message: any;
+
+    try {
+      message = JSON.parse(event?.nativeEvent?.data || '{}');
+    } catch {
+      debugLog('[MapRenderer] message parse fail');
+      return;
+    }
+
+    const { type, payload } = message || {};
+    const messageInstanceKey =
+      typeof message?.instanceKey === 'number' ? message.instanceKey : null;
+
+    if (
+      messageInstanceKey !== null &&
+      messageInstanceKey !== activeWebViewInstanceKeyRef.current
+    ) {
+      debugLog('[MapRenderer] Ignoring stale WebView message', {
+        type,
+        from: messageInstanceKey,
+        current: activeWebViewInstanceKeyRef.current,
+      });
+      return;
+    }
+
+    switch (type) {
+      case 'log':
+        debugLog('[WEBVIEW]', payload);
         return;
-      }
 
-      const { type, payload } = message || {};
-
-      switch (type) {
-        case 'log':
-          console.log('[WEBVIEW]', payload);
-          return;
-
-        case 'mapReady':
-          setWebReady(true);
-          return;
-
-        case 'longPress':
-          if (payload && onLongPress) {
-            onLongPress({
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-            });
-          }
-          return;
-
-        case 'mapTap':
-          if (
-            payload &&
-            typeof payload.latitude === 'number' &&
-            typeof payload.longitude === 'number'
-          ) {
-            onMapTap?.({
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-            });
-          }
-          return;
-
-        case 'pinTap':
-          if (payload?.kind === 'tiltAlert') {
-            onTiltAlertTap?.(payload);
+      case 'mapReady':
+        debugLog('[MapRenderer] mapReady received', payload);
+        if (payload?.ok === false) {
+          if (definitiveReadyInstanceKeyRef.current === activeWebViewInstanceKeyRef.current) {
+            debugLog('[MapRenderer] Ignoring late mapReady failure after definitive ready', payload);
             return;
           }
-          onPinTap?.(payload);
-          return;
 
-        case 'mapCenterReply':
-          onMapCenterReply?.(payload);
+          clearFailSafeTimer();
+          failSafeArmedInstanceKeyRef.current = null;
+          startupSettledRef.current = true;
+          setWebReady(false);
+          setWebBootTimedOut(true);
           return;
+        }
 
-        case 'mapBoundsReply':
-          onMapBoundsReply?.(payload);
+        if (payload?.reason === 'bootstrap_timeout') {
+          debugLog('[MapRenderer] Provisional bootstrap timeout received; extending startup window');
+          if (
+            bootstrapAcknowledgedInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current &&
+            definitiveReadyInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current
+          ) {
+            bootstrapAcknowledgedInstanceKeyRef.current = activeWebViewInstanceKeyRef.current;
+            setWebBootTimedOut(false);
+            armFailSafeTimer(
+              activeWebViewInstanceKeyRef.current,
+              WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS,
+              'bootstrap_progress',
+            );
+          }
           return;
+        }
 
-        case 'userDrag':
-          onUserDrag?.();
+        clearFailSafeTimer();
+        failSafeArmedInstanceKeyRef.current = null;
+        startupSettledRef.current = true;
+        definitiveReadyInstanceKeyRef.current = activeWebViewInstanceKeyRef.current;
+        setWebBootTimedOut(false);
+        setWebReady(true);
+        return;
+
+      case 'longPress':
+        onLongPress?.(payload);
+        return;
+
+      case 'mapTap':
+        onMapTap?.(payload);
+        return;
+
+      case 'pinTap':
+        if (payload?.kind === 'tiltAlert') {
+          onTiltAlertTap?.(payload);
           return;
-
-        case 'roadClassification':
-          onRoadClassification?.(payload);
+        }
+        if (payload?.kind === 'campIntel') {
+          onCampIntelTap?.(payload);
           return;
+        }
+        onPinTap?.(payload);
+        return;
 
-        default:
-          return;
-      }
-    },
-    [
-      onLongPress,
-      onMapTap,
-      onPinTap,
-      onMapCenterReply,
-      onMapBoundsReply,
-      onTiltAlertTap,
-      onUserDrag,
-      onRoadClassification,
-    ],
-  );
+      case 'mapCenterReply':
+        onMapCenterReply?.(payload);
+        return;
 
-  const handleLayout = useCallback((event: LayoutChangeEvent) => {
-    const { width, height } = event.nativeEvent.layout;
-    setContainerSize({ width, height });
-  }, []);
+      case 'mapBoundsReply':
+        onMapBoundsReply?.(payload);
+        return;
+
+      case 'userDrag':
+        onUserDrag?.();
+        return;
+
+      case 'roadClassification':
+        onRoadClassification?.(payload);
+        return;
+
+      case 'styleFallbackExhausted':
+        debugLog('[MapRenderer] style fallback exhausted', payload);
+        return;
+
+      default:
+        return;
+    }
+  }, [
+    armFailSafeTimer,
+    clearFailSafeTimer,
+    onLongPress,
+    onMapTap,
+    onPinTap,
+    onMapCenterReply,
+    onMapBoundsReply,
+    onTiltAlertTap,
+    onCampIntelTap,
+    onUserDrag,
+    onRoadClassification,
+  ]);
 
   return (
-    <View style={[styles.container, style]} onLayout={handleLayout}>
+    <View style={[styles.container, style]}>
       {shouldLoadMap ? (
         <WebView
           key={webViewKey}
           ref={webViewRef}
-          source={{ html: htmlRef.current || makeMapHtml(mapboxToken, initialStyleUrl) }}
+          source={webViewSource}
           originWhitelist={WEBVIEW_ORIGIN_WHITELIST}
           onMessage={handleMessage}
           javaScriptEnabled
           domStorageEnabled
-          allowFileAccess
-          allowingReadAccessToURL="*"
-          mixedContentMode="always"
-          allowsInlineMediaPlayback
-          mediaPlaybackRequiresUserAction={false}
           scrollEnabled={false}
           overScrollMode="never"
           bounces={false}
-          showsHorizontalScrollIndicator={false}
-          showsVerticalScrollIndicator={false}
           androidLayerType="hardware"
           cacheEnabled
-          incognito={false}
-          style={styles.webview}
           onLoadStart={() => {
-            console.log('[MapRenderer] WebView onLoadStart');
-          }}
-          onLoad={() => {
-            console.log('[MapRenderer] WebView onLoad');
+            const isFirstLoadForInstance = loadStartedInstanceKeyRef.current !== webViewInstanceKey;
+            const isDefinitivelyReady =
+              definitiveReadyInstanceKeyRef.current === webViewInstanceKey;
+            debugLog('[MapRenderer] WebView load start', {
+              key: webViewKey,
+              recoveryCount: autoRecoveryCountRef.current,
+              firstLoadForInstance: isFirstLoadForInstance,
+              startupSettled: startupSettledRef.current,
+              definitivelyReady: isDefinitivelyReady,
+            });
+            loadStartedInstanceKeyRef.current = webViewInstanceKey;
+            if (!startupSettledRef.current && !isDefinitivelyReady && isFirstLoadForInstance) {
+              setWebReady(false);
+              setWebBootTimedOut(false);
+            }
+            activeFailSafeInstanceKeyRef.current = webViewInstanceKey;
           }}
           onLoadEnd={() => {
-            console.log('[MapRenderer] WebView onLoadEnd');
+            debugLog('[MapRenderer] WebView load end');
           }}
-          onError={(e) => {
-            console.log('[MapRenderer] WebView onError', e.nativeEvent);
+          onError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) {
+              console.warn('[MapRenderer] Ignoring WebView error after definitive ready', nativeEvent);
+              return;
+            }
+            console.warn('[MapRenderer] WebView error', nativeEvent);
+            clearFailSafeTimer();
+            failSafeArmedInstanceKeyRef.current = null;
+            startupSettledRef.current = true;
+            setWebReady(false);
+            setWebBootTimedOut(true);
           }}
-          onHttpError={(e) => {
-            console.log('[MapRenderer] WebView onHttpError', e.nativeEvent);
+          onRenderProcessGone={() => {
+            console.warn('[MapRenderer] WebView crashed → remount');
+            remountWebView('render_process_gone');
           }}
-          renderError={(name) => {
-            console.log('[MapRenderer] WebView renderError', name);
-            return null;
+          onContentProcessDidTerminate={() => {
+            console.warn('[MapRenderer] iOS WebView terminated → remount');
+            remountWebView('content_process_terminated');
           }}
-          {...(Platform.OS === 'android'
-            ? {
-                setSupportMultipleWindows: false,
-              }
-            : {})}
+          style={styles.webview}
         />
       ) : (
         <View style={styles.placeholder}>
           <Text style={styles.placeholderTitle}>Map unavailable</Text>
           <Text style={styles.placeholderText}>
             {!hasToken || !mapboxToken
-              ? 'Map token not ready.'
+              ? 'Map token unavailable. Cloud-backed map rendering is not ready in this session.'
               : 'Map is still loading.'}
           </Text>
-        </View>
-      )}
-
-      {(!hasToken || isLoading || !mapboxToken) && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={TACTICAL?.accent || '#FFD700'} />
-          <Text style={styles.loadingTitle}>
-            {!hasToken || !mapboxToken ? 'Fetching map token…' : 'Loading map…'}
-          </Text>
-          <Text style={styles.loadingSubtitle}>
-            Persistent renderer stays mounted while services initialize.
-          </Text>
-
-          {!!onRetry && !isLoading && (
-            <TouchableOpacity style={styles.retryButton} onPress={() => void onRetry()}>
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
+          {!!onRetry && (
+            <Text style={styles.placeholderHint}>Use your existing retry control to reinitialize the map surface.</Text>
           )}
         </View>
       )}
 
-      {shouldLoadMap && !webReady && (
+      {!webReady && shouldLoadMap && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={TACTICAL?.accent || '#FFD700'} />
-          <Text style={styles.loadingTitle}>Initializing tactical surface…</Text>
-          <Text style={styles.loadingSubtitle}>
-            {containerSize.width > 0 && containerSize.height > 0
-              ? `${Math.round(containerSize.width)} × ${Math.round(containerSize.height)}`
-              : 'Preparing WebView map renderer'}
-          </Text>
+          {!webBootTimedOut ? (
+            <>
+              <ActivityIndicator size="large" color="#FFD700" />
+              <Text style={styles.loadingTitle}>Initializing tactical surface…</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.loadingTitle}>Map initialization delayed</Text>
+              <Text style={styles.loadingSubtitle}>
+                Tactical surface is taking longer than expected to boot.
+              </Text>
+              {!!onRetry && (
+                <Text style={styles.loadingHint}>
+                  Use your existing retry control to reinitialize the map surface.
+                </Text>
+              )}
+            </>
+          )}
         </View>
       )}
     </View>
   );
-}
+});
+
+MapRenderer.displayName = 'MapRenderer';
+
+export default MapRenderer;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0D12',
-    overflow: 'hidden',
+    backgroundColor: TACTICAL.bg,
   },
   webview: {
     flex: 1,
-    backgroundColor: '#0A0D12',
+    backgroundColor: 'transparent',
   },
   placeholder: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
-    backgroundColor: '#0A0D12',
+    backgroundColor: TACTICAL.bg,
   },
   placeholderTitle: {
-    color: '#F3F6FA',
+    color: TACTICAL.text,
     fontSize: 16,
-    fontFamily: TYPO?.semiBold || undefined,
-    marginBottom: 8,
+    fontWeight: '800',
+    marginBottom: 6,
   },
   placeholderText: {
-    color: 'rgba(243,246,250,0.72)',
-    fontSize: 13,
+    color: TACTICAL.textMuted,
+    fontSize: 12,
     textAlign: 'center',
-    fontFamily: TYPO?.body || undefined,
+    lineHeight: 18,
+  },
+  placeholderHint: {
+    marginTop: 10,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
+    opacity: 0.88,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1737,28 +2586,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   loadingTitle: {
-    marginTop: 14,
-    color: '#F3F6FA',
-    fontSize: 16,
-    fontFamily: TYPO?.semiBold || undefined,
+    marginTop: 12,
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   loadingSubtitle: {
-    marginTop: 6,
-    color: 'rgba(243,246,250,0.72)',
+    marginTop: 8,
+    color: TACTICAL.textMuted,
     fontSize: 12,
+    fontWeight: '600',
     textAlign: 'center',
-    fontFamily: TYPO?.body || undefined,
+    lineHeight: 18,
   },
-  retryButton: {
-    marginTop: 18,
-    backgroundColor: TACTICAL?.accent || '#FFD700',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  retryButtonText: {
-    color: '#111',
-    fontSize: 13,
-    fontFamily: TYPO?.semiBold || undefined,
+  loadingHint: {
+    marginTop: 8,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
+    opacity: 0.9,
   },
 });

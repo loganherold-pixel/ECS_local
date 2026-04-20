@@ -3,18 +3,19 @@
  * Full-screen overlay opened by long-pressing the dashboard widget area.
  * Contains: Expedition Control, Widget Management, Dashboard Preferences.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView,
-  Animated, Alert, Platform,
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
-import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
-
 import { useTheme } from '../../context/ThemeContext';
-
 import ExpeditionControlPanel from './ExpeditionControlPanel';
+import TacticalPopupShell from '../TacticalPopupShell';
 
 interface Props {
   visible: boolean;
@@ -24,7 +25,8 @@ interface Props {
   onOpenWidgetLibrary?: () => void;
   onRestoreDefaults?: () => void;
   onOpenPresets?: () => void;
-  activeTab: 'expedition' | 'highway';
+  onOpenPowerConnections?: () => void;
+  activeTab: 'expedition' | 'highway' | 'brief';
 }
 
 const C = {
@@ -32,7 +34,6 @@ const C = {
   panel: '#161B22',
   border: '#1E232B',
   gold: '#D4A017',
-  goldSoft: 'rgba(212,160,23,0.10)',
   goldBorder: 'rgba(212,160,23,0.25)',
   text: '#E6EDF3',
   textMuted: '#8B949E',
@@ -40,204 +41,170 @@ const C = {
 };
 
 export default function DashboardManagerOverlay({
-  visible, onClose, onExpeditionStarted, onExpeditionEnded,
-  onOpenWidgetLibrary, onRestoreDefaults, onOpenPresets, activeTab,
+  visible,
+  onClose,
+  onExpeditionStarted,
+  onExpeditionEnded,
+  onOpenWidgetLibrary,
+  onRestoreDefaults,
+  onOpenPresets,
+  onOpenPowerConnections,
+  activeTab,
 }: Props) {
-  const { palette } = useTheme();
-  const slideAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (visible) {
-      Animated.timing(slideAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    } else {
-      slideAnim.setValue(0);
-    }
-  }, [visible]);
+  useTheme();
 
   if (!visible) return null;
 
-  const translateY = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [60, 0] });
-  const opacity = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <Animated.View style={[styles.backdrop, { opacity }]}>
-        <Animated.View style={[styles.overlay, { transform: [{ translateY }] }]}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <Ionicons name="grid-outline" size={16} color={C.gold} />
-              <Text style={styles.headerTitle}>Dashboard Manager</Text>
-            </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-              <Ionicons name="close" size={20} color={C.textMuted} />
-            </TouchableOpacity>
+    <TacticalPopupShell
+      visible={visible}
+      onClose={onClose}
+      title="Dashboard Manager"
+      subtitle={`Controls for the ${activeTab} dashboard surface.`}
+      eyebrow="ECS DASHBOARD"
+      icon="grid-outline"
+      overlayClass="workflow"
+      maxWidth={880}
+      maxHeightFraction={0.9}
+      minHeightFraction={0.68}
+      scrollable
+    >
+      <View style={styles.sectionHeader}>
+        <Ionicons name="navigate-circle-outline" size={14} color={C.gold} />
+        <Text style={styles.sectionTitle}>EXPEDITION CONTROL</Text>
+      </View>
+      <View style={styles.sectionCard}>
+        <ExpeditionControlPanel
+          onExpeditionStarted={onExpeditionStarted}
+          onExpeditionEnded={onExpeditionEnded}
+        />
+      </View>
+
+      <View style={styles.sectionHeader}>
+        <Ionicons name="apps-outline" size={14} color={C.gold} />
+        <Text style={styles.sectionTitle}>WIDGET MANAGEMENT</Text>
+      </View>
+      <View style={styles.sectionCard}>
+        <TouchableOpacity
+          style={styles.actionRow}
+          onPress={() => {
+            onClose();
+            onOpenWidgetLibrary?.();
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="add-circle-outline" size={16} color={C.gold} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Widget Library</Text>
+            <Text style={styles.actionHint}>
+              Add or swap widgets on the {activeTab} dashboard
+            </Text>
           </View>
+          <Ionicons name="chevron-forward" size={14} color={C.textDim} />
+        </TouchableOpacity>
 
-          <View style={styles.headerRule} />
+        <View style={styles.actionDivider} />
 
-          <ScrollView style={styles.scrollBody} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <TouchableOpacity
+          style={styles.actionRow}
+          onPress={() => {
+            onClose();
+            onOpenPresets?.();
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="copy-outline" size={16} color={C.gold} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Layout Presets</Text>
+            <Text style={styles.actionHint}>Apply a preset layout configuration</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={14} color={C.textDim} />
+        </TouchableOpacity>
 
-            {/* ── Section A: Expedition Control ── */}
-            <View style={styles.sectionHeader}>
-              <Ionicons name="navigate-circle-outline" size={14} color={C.gold} />
-              <Text style={styles.sectionTitle}>EXPEDITION CONTROL</Text>
-            </View>
-            <View style={styles.sectionCard}>
-              <ExpeditionControlPanel
-                onExpeditionStarted={onExpeditionStarted}
-                onExpeditionEnded={onExpeditionEnded}
-              />
-            </View>
+        <View style={styles.actionDivider} />
 
-            {/* ── Section B: Widget Management ── */}
-            <View style={styles.sectionHeader}>
-              <Ionicons name="apps-outline" size={14} color={C.gold} />
-              <Text style={styles.sectionTitle}>WIDGET MANAGEMENT</Text>
-            </View>
-            <View style={styles.sectionCard}>
-              <TouchableOpacity
-                style={styles.actionRow}
-                onPress={() => { onClose(); onOpenWidgetLibrary?.(); }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="add-circle-outline" size={16} color={C.gold} />
-                <View style={styles.actionTextWrap}>
-                  <Text style={styles.actionLabel}>Widget Library</Text>
-                  <Text style={styles.actionHint}>Add or swap widgets on the {activeTab} dashboard</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={C.textDim} />
-              </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.actionRow}
+          onPress={() => {
+            onClose();
+            onOpenPowerConnections?.();
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="battery-charging-outline" size={16} color={C.gold} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Power</Text>
+            <Text style={styles.actionHint}>
+              Open BLU and EcoFlow connection management for testing and live power status
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={14} color={C.textDim} />
+        </TouchableOpacity>
+      </View>
 
-              <View style={styles.actionDivider} />
+      <View style={styles.sectionHeader}>
+        <Ionicons name="settings-outline" size={14} color={C.gold} />
+        <Text style={styles.sectionTitle}>DASHBOARD PREFERENCES</Text>
+      </View>
+      <View style={styles.sectionCard}>
+        <View style={styles.actionRow}>
+          <Ionicons name="speedometer-outline" size={16} color={C.textMuted} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Mode Settings</Text>
+            <Text style={styles.actionHint}>
+              Auto-switching between Highway and Expedition is managed by the mode engine
+              based on road type, speed, and remoteness.
+            </Text>
+          </View>
+        </View>
 
-              <TouchableOpacity
-                style={styles.actionRow}
-                onPress={() => { onClose(); onOpenPresets?.(); }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="copy-outline" size={16} color={C.gold} />
-                <View style={styles.actionTextWrap}>
-                  <Text style={styles.actionLabel}>Layout Presets</Text>
-                  <Text style={styles.actionHint}>Apply a preset layout configuration</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={C.textDim} />
-              </TouchableOpacity>
+        <View style={styles.actionDivider} />
 
-              <View style={styles.actionDivider} />
+        <View style={styles.actionRow}>
+          <Ionicons name="contract-outline" size={16} color={C.textMuted} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Auto-Collapse</Text>
+            <Text style={styles.actionHint}>
+              Widgets collapse after 20s stationary. Enter Customize Mode to toggle.
+            </Text>
+          </View>
+        </View>
 
-              <TouchableOpacity
-                style={styles.actionRow}
-                onPress={() => {
-                  Alert.alert(
-                    'Restore Defaults?',
-                    'Reset the dashboard to the default widget layout.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Restore', onPress: () => { onClose(); onRestoreDefaults?.(); } },
-                    ]
-                  );
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="refresh-outline" size={16} color={C.textMuted} />
-                <View style={styles.actionTextWrap}>
-                  <Text style={styles.actionLabel}>Restore Default Layout</Text>
-                  <Text style={styles.actionHint}>Reset to the default 2-widget stack</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={C.textDim} />
-              </TouchableOpacity>
-            </View>
+        <View style={styles.actionDivider} />
 
-            {/* ── Section C: Dashboard Preferences ── */}
-            <View style={styles.sectionHeader}>
-              <Ionicons name="settings-outline" size={14} color={C.gold} />
-              <Text style={styles.sectionTitle}>DASHBOARD PREFERENCES</Text>
-            </View>
-            <View style={styles.sectionCard}>
-              <View style={styles.actionRow}>
-                <Ionicons name="speedometer-outline" size={16} color={C.textMuted} />
-                <View style={styles.actionTextWrap}>
-                  <Text style={styles.actionLabel}>Mode Settings</Text>
-                  <Text style={styles.actionHint}>Auto-switching between Highway and Expedition is managed by the mode engine based on road type, speed, and remoteness.</Text>
-                </View>
-              </View>
-
-              <View style={styles.actionDivider} />
-
-              <View style={styles.actionRow}>
-                <Ionicons name="contract-outline" size={16} color={C.textMuted} />
-                <View style={styles.actionTextWrap}>
-                  <Text style={styles.actionLabel}>Auto-Collapse</Text>
-                  <Text style={styles.actionHint}>Widgets collapse after 20s stationary. Enter Customize Mode to toggle.</Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={{ height: 40 }} />
-          </ScrollView>
-        </Animated.View>
-      </Animated.View>
-    </Modal>
+        <TouchableOpacity
+          style={styles.actionRow}
+          onPress={() => {
+            Alert.alert(
+              'Restore Defaults?',
+              'Reset the dashboard to the default widget layout.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Restore',
+                  onPress: () => {
+                    onClose();
+                    onRestoreDefaults?.();
+                  },
+                },
+              ]
+            );
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="refresh-outline" size={16} color={C.textMuted} />
+          <View style={styles.actionTextWrap}>
+            <Text style={styles.actionLabel}>Restore Default Layout</Text>
+            <Text style={styles.actionHint}>Reset to the curated Expedition or Highway default layout</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={14} color={C.textDim} />
+        </TouchableOpacity>
+      </View>
+    </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    justifyContent: 'flex-end',
-  },
-  overlay: {
-    backgroundColor: C.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    maxHeight: '92%',
-    minHeight: '70%',
-    borderTopWidth: 1,
-    borderColor: C.goldBorder,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 10,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: C.text,
-    letterSpacing: 1.5,
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerRule: {
-    height: 1,
-    backgroundColor: C.goldBorder,
-    marginHorizontal: 16,
-  },
-  scrollBody: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -286,7 +253,3 @@ const styles = StyleSheet.create({
     marginLeft: 40,
   },
 });
-
-
-
-

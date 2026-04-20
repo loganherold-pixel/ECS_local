@@ -23,7 +23,7 @@ export interface Trip {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface RiskScore {
@@ -38,7 +38,7 @@ export interface RiskScore {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface LoadItem {
@@ -56,7 +56,7 @@ export interface LoadItem {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface LoadMapSlot {
@@ -69,7 +69,7 @@ export interface LoadMapSlot {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface FuelWaterLog {
@@ -83,7 +83,7 @@ export interface FuelWaterLog {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 
@@ -104,7 +104,7 @@ export interface Waypoint {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface UserSettings {
@@ -166,6 +166,7 @@ export interface Vehicle {
   water_capacity_gal: number | null;
   current_water_gal: number | null;
   water_updated_at: string | null;
+  battery_usable_wh?: number | null;
   created_at: string;
   updated_at: string;
 }

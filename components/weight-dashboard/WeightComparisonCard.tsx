@@ -30,7 +30,7 @@ function DeltaIndicator({ value, unit, label, invert }: {
 
   // For some metrics, positive is bad (weight, stability index)
   // For others, positive might be neutral (axle balance)
-  let color = TACTICAL.textMuted;
+  let color: string = TACTICAL.textMuted;
   let icon: string = 'remove-outline';
 
   if (!isNeutral) {

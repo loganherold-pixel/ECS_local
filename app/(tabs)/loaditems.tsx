@@ -24,7 +24,7 @@ function LoadItemsScreenInner() {
   const [showActiveOnly, setShowActiveOnly] = useState(true); // DEFAULT: Active items only
   const [quickName, setQuickName] = useState('');
 
-  useFocusEffect(useCallback(() => { refreshActiveTrip(); }, []));
+  useFocusEffect(useCallback(() => { refreshActiveTrip(); }, [refreshActiveTrip]));
 
   const activeMode = activeTrip?.active_mode || 'Trip';
 

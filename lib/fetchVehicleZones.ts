@@ -1,6 +1,5 @@
 import { Platform } from 'react-native';
-import { supabase } from './supabase';
-import { unpackZonesRpcResult } from './supabase';
+import { isDeployedEdgeFunction, supabase, unpackZonesRpcResult } from './supabase';
 
 /**
  * Normalizes the server payload (zone_name, etc.) into the UI-friendly shape
@@ -138,28 +137,31 @@ function getLocalVehicleZones(vehicleId: string): { tree: any[]; flat: any[] } |
 
 export async function fetchVehicleZones(vehicleId: string) {
   // Try cloud first
-  try {
-    const { data, error } = await supabase.functions.invoke('get-vehicle-zones', {
-      body: { vehicle_id: vehicleId },
-    });
+  if (isDeployedEdgeFunction('get-vehicle-zones')) {
+    try {
+      const { data, error } = await supabase.functions.invoke('get-vehicle-zones', {
+        body: { vehicle_id: vehicleId },
+      });
 
-    if (!error && data) {
-      const result = unpackZonesRpcResult(data);
-      if (result) {
-        const rawTree = Array.isArray(result.tree_json) ? result.tree_json : [];
-        const rawFlat = Array.isArray(result.zones_flat) ? result.zones_flat : [];
+      if (!error && data) {
+        const result = unpackZonesRpcResult(data);
+        if (result) {
+          const rawTree = Array.isArray(result.tree_json) ? result.tree_json : [];
+          const rawFlat = Array.isArray(result.zones_flat) ? result.zones_flat : [];
 
-        const tree = rawTree.map(normalizeTreeNode);
-        const flat = rawFlat.map(normalizeFlatZone);
+          const tree = rawTree.map(normalizeTreeNode);
+          const flat = rawFlat.map(normalizeFlatZone);
 
-        // Cache for offline use
-        cacheZones(vehicleId, { tree, flat });
+          cacheZones(vehicleId, { tree, flat });
 
-        return { tree, flat };
+          return { tree, flat };
+        }
       }
+    } catch (err) {
+      console.warn('[VehicleZones] Cloud fetch failed, checking local cache:', err);
     }
-  } catch (err) {
-    console.warn('[VehicleZones] Cloud fetch failed, checking local cache:', err);
+  } else {
+    console.warn('[VehicleZones] Cloud zone fetch unavailable in current ECS backend; using cached/local data');
   }
 
   // Try cached zones

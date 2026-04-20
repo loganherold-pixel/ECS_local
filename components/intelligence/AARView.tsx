@@ -331,7 +331,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
             <Ionicons name="bulb-outline" size={14} color="#66BB6A" />
           </View>
           <Text style={s.cardTitle}>RECOMMENDATIONS</Text>
-          <Text style={s.cardCount}>{recs.length}{aiRecCount > 0 ? ` + ${aiRecCount} AI` : ''}</Text>
+        <Text style={s.cardCount}>{recs.length}{aiRecCount > 0 ? ` + ${aiRecCount} ECS` : ''}</Text>
         </View>
         {recs.slice(0, 2).map((rec, idx) => (
           <View key={`rule-${idx}`} style={s.recRow}>
@@ -342,7 +342,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
         {aiAnalysis && aiAnalysis.critical_insights && aiAnalysis.critical_insights.length > 0 && (
           <View style={s.recRow}>
             <View style={s.aiBadgeInline}>
-              <Text style={s.aiBadgeInlineText}>AI</Text>
+              <Text style={s.aiBadgeInlineText}>ECS</Text>
             </View>
             <Text style={[s.recText, { color: '#B388FF' }]} numberOfLines={1}>
               {aiAnalysis.critical_insights[0]}
@@ -353,7 +353,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
           <Text style={s.recMore}>
             {recs.length > 2 ? `+${recs.length - 2} more` : ''}
             {recs.length > 2 && aiRecCount > 0 ? ' · ' : ''}
-            {aiRecCount > 0 ? `${aiRecCount} AI insights` : ''}
+            {aiRecCount > 0 ? `${aiRecCount} ECS insights` : ''}
           </Text>
         )}
       </TouchableOpacity>
@@ -377,7 +377,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
               <View style={s.aiIconWrap}>
                 <Ionicons name="sparkles" size={14} color="#B388FF" />
               </View>
-              <Text style={s.aiGenerateBtnText}>GENERATE AI ANALYSIS</Text>
+              <Text style={s.aiGenerateBtnText}>GENERATE ECS ANALYSIS</Text>
               <Ionicons name="chevron-forward" size={12} color="rgba(179,136,255,0.4)" />
             </>
           )}
@@ -392,7 +392,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
             <View style={s.aiIconWrap}>
               <Ionicons name="sparkles" size={12} color="#B388FF" />
             </View>
-            <Text style={s.aiSummaryTitle}>AI ANALYSIS</Text>
+            <Text style={s.aiSummaryTitle}>ECS ANALYSIS</Text>
             <View style={s.aiScoreBadge}>
               <Text style={s.aiScoreText}>
                 {aiAnalysis.overall_risk_score}/10
@@ -456,7 +456,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
               <Text style={s.modalTitle}>
                 {detailModal === 'perf' ? 'PERFORMANCE DETAILS' :
                  detailModal === 'risk' ? 'RISK & INCIDENT DETAILS' :
-                 detailModal === 'ai' ? 'AI EXPEDITION ANALYSIS' :
+                 detailModal === 'ai' ? 'ECS EXPEDITION ANALYSIS' :
                  'ALL RECOMMENDATIONS'}
               </Text>
               <TouchableOpacity onPress={() => setDetailModal(null)} style={s.modalClose}>
@@ -550,7 +550,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                     <View style={s.modalDivider} />
                     <View style={s.aiModalSectionHeader}>
                       <Ionicons name="sparkles" size={10} color="#B388FF" />
-                      <Text style={[s.modalSectionTitle, { color: '#B388FF', marginTop: 0 }]}>AI RISK TRENDS</Text>
+                  <Text style={[s.modalSectionTitle, { color: '#B388FF', marginTop: 0 }]}>ECS RISK TRENDS</Text>
                     </View>
                     {aiAnalysis.risk_trends.map((trend, i) => (
                       <View key={`trend-${i}`} style={s.aiTrendRow}>
@@ -596,7 +596,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                     <View style={[s.modalDivider, { marginVertical: 12 }]} />
                     <View style={s.aiModalSectionHeader}>
                       <Ionicons name="sparkles" size={10} color="#B388FF" />
-                      <Text style={[s.modalSectionTitle, { color: '#B388FF', marginTop: 0 }]}>AI-POWERED INSIGHTS</Text>
+                  <Text style={[s.modalSectionTitle, { color: '#B388FF', marginTop: 0 }]}>ECS-POWERED INSIGHTS</Text>
                     </View>
 
                     {/* Critical Insights */}
@@ -606,7 +606,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                         {aiAnalysis.critical_insights.map((insight, i) => (
                           <View key={`ci-${i}`} style={s.aiRecRow}>
                             <View style={s.aiBadgeMini}>
-                              <Text style={s.aiBadgeMiniText}>AI</Text>
+                      <Text style={s.aiBadgeMiniText}>ECS</Text>
                             </View>
                             <Text style={s.aiRecText}>{insight}</Text>
                           </View>
@@ -622,7 +622,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                           <View key={`pa-${i}`} style={s.aiDetailCard}>
                             <View style={s.aiDetailHeader}>
                               <View style={s.aiBadgeMini}>
-                                <Text style={s.aiBadgeMiniText}>AI</Text>
+                      <Text style={s.aiBadgeMiniText}>ECS</Text>
                               </View>
                               <Text style={s.aiDetailTitle}>{p.title}</Text>
                               <View style={[s.severityDot, {
@@ -645,7 +645,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                           <View key={`ro-${i}`} style={s.aiDetailCard}>
                             <View style={s.aiDetailHeader}>
                               <View style={s.aiBadgeMini}>
-                                <Text style={s.aiBadgeMiniText}>AI</Text>
+                      <Text style={s.aiBadgeMiniText}>ECS</Text>
                               </View>
                               <Text style={s.aiDetailTitle}>{r.title}</Text>
                             </View>
@@ -663,7 +663,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                           <View key={`ri-${i}`} style={s.aiDetailCard}>
                             <View style={s.aiDetailHeader}>
                               <View style={s.aiBadgeMini}>
-                                <Text style={s.aiBadgeMiniText}>AI</Text>
+                      <Text style={s.aiBadgeMiniText}>ECS</Text>
                               </View>
                               <Text style={s.aiDetailTitle}>{r.title}</Text>
                             </View>
@@ -723,7 +723,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                       <View key={`pa-${i}`} style={s.aiDetailCard}>
                         <View style={s.aiDetailHeader}>
                           <View style={s.aiBadgeMini}>
-                            <Text style={s.aiBadgeMiniText}>AI</Text>
+                    <Text style={s.aiBadgeMiniText}>ECS</Text>
                           </View>
                           <Text style={s.aiDetailTitle}>{p.title}</Text>
                           <View style={[s.severityPill, {
@@ -794,7 +794,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                       <View key={`ro-${i}`} style={s.aiDetailCard}>
                         <View style={s.aiDetailHeader}>
                           <View style={s.aiBadgeMini}>
-                            <Text style={s.aiBadgeMiniText}>AI</Text>
+                    <Text style={s.aiBadgeMiniText}>ECS</Text>
                           </View>
                           <Text style={s.aiDetailTitle}>{r.title}</Text>
                         </View>
@@ -815,7 +815,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                       <View key={`ri-${i}`} style={s.aiDetailCard}>
                         <View style={s.aiDetailHeader}>
                           <View style={s.aiBadgeMini}>
-                            <Text style={s.aiBadgeMiniText}>AI</Text>
+                    <Text style={s.aiBadgeMiniText}>ECS</Text>
                           </View>
                           <Text style={s.aiDetailTitle}>{r.title}</Text>
                         </View>
@@ -835,7 +835,7 @@ export default function AARView({ expedition, showToast }: AARViewProps) {
                     {aiAnalysis.critical_insights.map((insight, i) => (
                       <View key={`ci-${i}`} style={s.aiInsightRow}>
                         <View style={s.aiBadgeMini}>
-                          <Text style={s.aiBadgeMiniText}>AI</Text>
+                    <Text style={s.aiBadgeMiniText}>ECS</Text>
                         </View>
                         <Text style={s.aiInsightText}>{insight}</Text>
                       </View>

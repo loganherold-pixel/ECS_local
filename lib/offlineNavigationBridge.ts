@@ -337,14 +337,15 @@ export const offlineNavigationBridge = {
           skippedEntries++;
           continue;
         }
+        const category = entry.category as DatasetCategory;
 
-        if (!byCategory[entry.category]) {
-          byCategory[entry.category] = [];
+        if (!byCategory[category]) {
+          byCategory[category] = [];
         }
 
         // Limit markers per category to prevent clutter
-        if (byCategory[entry.category]!.length < MAX_MARKERS_PER_CATEGORY) {
-          byCategory[entry.category]!.push(marker);
+        if (byCategory[category]!.length < MAX_MARKERS_PER_CATEGORY) {
+          byCategory[category]!.push(marker);
           allMarkers.push(marker);
         }
       }
@@ -410,8 +411,8 @@ export const offlineNavigationBridge = {
 
       // Phase 6D: Filter out invalid entries
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }
@@ -439,8 +440,8 @@ export const offlineNavigationBridge = {
       });
 
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }
@@ -468,8 +469,8 @@ export const offlineNavigationBridge = {
       });
 
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }

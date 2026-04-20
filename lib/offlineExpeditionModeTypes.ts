@@ -1,3 +1,5 @@
+import { ECS_READINESS_COPY } from './ecsStateCopy';
+
 /**
  * ═══════════════════════════════════════════════════════════
  * ECS OFFLINE EXPEDITION MODE — Type Definitions
@@ -57,35 +59,35 @@ export const CONNECTIVITY_STATE_DISPLAY: Record<OfflineConnectivityState, {
   bannerVisible: boolean;
 }> = {
   online: {
-    label: 'Online',
-    shortLabel: 'ONLINE',
+    label: ECS_READINESS_COPY.shell.online.statusLabel,
+    shortLabel: ECS_READINESS_COPY.labels.online,
     color: '#4CAF50',
     icon: 'wifi-outline',
     description: 'Full connectivity — all services available',
     bannerVisible: false,
   },
   limited: {
-    label: 'Limited Connectivity',
-    shortLabel: 'LIMITED',
+    label: 'Limited Live Support',
+    shortLabel: ECS_READINESS_COPY.labels.limitedLive,
     color: '#FFB300',
     icon: 'cellular-outline',
-    description: 'Degraded signal — using cached data as fallback',
+    description: 'Signal is reduced — ECS is leaning on saved context while live services recover.',
     bannerVisible: true,
   },
   offline: {
-    label: 'Offline Mode',
-    shortLabel: 'OFFLINE',
+    label: ECS_READINESS_COPY.shell.offlineSupport.statusLabel,
+    shortLabel: ECS_READINESS_COPY.labels.offlineSupport,
     color: '#78909C',
     icon: 'cloud-offline-outline',
-    description: 'No connectivity — using saved expedition data',
+    description: 'Live connectivity is down — saved expedition data remains available.',
     bannerVisible: true,
   },
   reconnecting: {
-    label: 'Reconnecting',
-    shortLabel: 'SYNC',
+    label: ECS_READINESS_COPY.shell.reconnecting.statusLabel,
+    shortLabel: ECS_READINESS_COPY.labels.syncing,
     color: '#42A5F5',
     icon: 'sync-outline',
-    description: 'Restoring connectivity — syncing data',
+    description: 'Signal is recovering — saved context remains available while ECS reconnects.',
     bannerVisible: true,
   },
 };
@@ -502,4 +504,3 @@ export function createDefaultSyncState(): SyncState {
     sync_complete: false,
   };
 }
-

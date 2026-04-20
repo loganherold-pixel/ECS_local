@@ -31,7 +31,7 @@ export type PowerSample = {
 const DEFAULT_MAX_SAMPLES = 600;
 
 export class PowerSampleBuffer {
-  private readonly buf: Array<PowerSample | undefined>;
+  private readonly buf: (PowerSample | undefined)[];
   private head = 0; // next write position
   private count = 0;
   readonly maxSamples: number;

@@ -1,961 +1,954 @@
-/**
- * ECS Login Screen — Enterprise Refinement V5 (Cross-Platform Video Background)
- *
- * Layer stack (managed by AdaptiveBackground):
- *   z-0  Full-screen looping video (Intro_Login_Video.mp4)
- *        — Web: HTML5 <video> element
- *        — Native: expo-av Video component
- *        — Fallback: branded cinematic landscape image
- *   z-1  Dark tactical overlay (gradient)
- *   z-2  Subtle topographic ambient animation
- *   z-3  Login UI (this component — glass card with backdrop blur)
- *
- * Visual hierarchy (compact, no-scroll):
- *   [small top spacer]
- *   [ECS Badge Logo (image)]
- *   [Status row]
- *   [Glass card: Login form / Forgot Password]
- *   [Divider]
- *   [Continue offline]
- *   [Footer + version]
- *
- * Features:
- *   - Cinematic background video on ALL platforms (web + native)
- *   - Branded fallback image when video is loading or fails
- *   - Glass-morphism login card (backdrop-filter blur)
- *   - ECS badge logo with breathing + sweep animation
- *   - Forgot Password flow with email input + reset link
- *   - Adaptive dawn/night dynamic background
- *   - Premium motion throughout
- */
-
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  Animated,
   ActivityIndicator,
-  TextInput,
+  AccessibilityInfo,
+  Animated,
   Dimensions,
+  Image,
+  Keyboard,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
-
-import { TACTICAL } from '../lib/theme';
-import { useApp } from '../context/AppContext';
-import AdaptiveBackground from '../components/login/AdaptiveBackground';
-import AnimatedShield from '../components/login/AnimatedShield';
+import LoginHeroBackground from '../components/login/LoginHeroBackground';
+import AuthStatusBanner from '../components/login/AuthStatusBanner';
+import PasswordVisibilityToggle from '../components/login/PasswordVisibilityToggle';
+import { AUTH_COPY } from '../lib/auth/authCopy';
+import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
 import { exportLocalData } from '../lib/localDataExport';
+import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
+import { sessionStore } from '../lib/sessionStore';
+import { setupStore } from '../lib/setupStore';
+import { vehicleSetupStore } from '../lib/vehicleSetupStore';
+import { useReducedMotion } from '../lib/ecsAnimations';
+import { ECS, TACTICAL } from '../lib/theme';
+import { EASING, MOTION, PRESS } from '../lib/motion';
+import { useApp } from '../context/AppContext';
 
-const APP_VERSION = '2.4.0';
-const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
-
-// ── Minimal top spacer — push form content up as high as possible ──
-const TOP_SPACER = 0;
-
-// ── Badge sizing — 25% larger for authoritative dominance ──
-const BADGE_WIDTH = Math.min(SCREEN_W * 0.875, 388);
-
-
-
+const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
 
 type ScreenMode = 'login' | 'forgot';
+type MessageTone = 'neutral' | 'error' | 'success';
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function normalizeLoginError(rawError: string | undefined, isOnline: boolean) {
+  const normalized = (rawError || '').trim().toLowerCase();
+  if (!isOnline || normalized.includes('offline') || normalized.includes('network')) return AUTH_COPY.login.offline;
+  if (
+    normalized.includes('invalid login credentials') ||
+    normalized.includes('email and password') ||
+    normalized.includes('password not recognized') ||
+    normalized.includes('no account found')
+  ) return AUTH_COPY.login.invalidCredentials;
+  if (normalized.includes('too many requests') || normalized.includes('rate limit') || normalized.includes('too many attempts')) {
+    return AUTH_COPY.login.rateLimited;
+  }
+  return AUTH_COPY.login.genericFailure;
+}
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const router = useRouter();
-  const { signIn, isOnline, connectivityStatus, enterOfflineMode, sendPasswordReset } = useApp();
-  let insets = { top: 0, bottom: 0 };
-  try {
-    insets = useSafeAreaInsets();
-  } catch {}
+  const params = useLocalSearchParams<{ reason?: string; mode?: string; email?: string }>();
+  const {
+    signIn,
+    sendPasswordReset,
+    isOnline,
+    authPhase,
+    authNotice,
+    consumeAuthNotice,
+    enterOfflineMode,
+    showToast,
+  } = useApp();
+  const reducedMotion = useReducedMotion();
+  const stableScreenHeight = useRef(Dimensions.get('screen').height).current;
+  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, stableScreenHeight), [stableScreenHeight, width]);
+
+  const passwordRef = useRef<TextInput>(null);
+  const primaryPressScale = useRef(new Animated.Value(1)).current;
 
   const [mode, setMode] = useState<ScreenMode>('login');
   const [email, setEmail] = useState('');
-
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [keepSignedIn, setKeepSignedIn] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [isSuspended, setIsSuspended] = useState(false);
-
-
-  // Forgot password state
   const [resetEmail, setResetEmail] = useState('');
+  const [keepSignedIn, setKeepSignedIn] = useState(() => {
+    const prefs = sessionStore.getPreferences();
+    return prefs.lastUserId ? prefs.keepSignedIn : true;
+  });
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
-  const [resetError, setResetError] = useState('');
-  const [resetSent, setResetSent] = useState(false);
+  const [exportingLocalData, setExportingLocalData] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
+  const loginCtaRenderedRef = useRef(false);
 
-  const passwordRef = useRef<TextInput>(null);
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const trimmedEmail = email.trim();
+  const trimmedResetEmail = resetEmail.trim();
+  const emailError = trimmedEmail && !isValidEmail(trimmedEmail) ? AUTH_COPY.login.invalidEmail : '';
+  const passwordError = password ? '' : '';
+  const resetEmailError = trimmedResetEmail && !isValidEmail(trimmedResetEmail) ? AUTH_COPY.login.invalidEmail : '';
 
-  // ── Fade-in entrance ────────────────────────────────────────
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(14)).current;
+  const loginGuardState = useMemo(() => {
+    const hasEmail = trimmedEmail.length > 0;
+    const emailValid = hasEmail && isValidEmail(trimmedEmail);
+    const hasPassword = password.trim().length > 0;
+    return {
+      loading,
+      isOnline,
+      hasEmail,
+      emailValid,
+      hasPassword,
+      disabled: loading,
+    };
+  }, [isOnline, loading, password, trimmedEmail]);
+  const loginDisabled = loginGuardState.disabled;
+  const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
+  const utilityBusy = loading || resetLoading || exportingLocalData;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fadeAnim, slideAnim]);
+    const notice = consumeAuthNotice();
+    if (notice) {
+      setStatusMessage(notice);
+      setStatusTone('neutral');
+      return;
+    }
+    if (params.reason === 'password-updated') {
+      setStatusMessage('Your password has been updated successfully.');
+      setStatusTone('success');
+      return;
+    }
+    if (params.reason === 'access-ready') {
+      setStatusMessage(AUTH_COPY.activation.successLine);
+      setStatusTone('success');
+      return;
+    }
+    if (params.reason === 'signed-out') {
+      setStatusMessage('Please sign in again to continue.');
+      setStatusTone('neutral');
+    }
+  }, [authNotice, consumeAuthNotice, params.reason]);
 
-  const triggerShake = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 8, duration: 40, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 40, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 6, duration: 40, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -6, duration: 40, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 40, useNativeDriver: true }),
-    ]).start();
-  }, [shakeAnim]);
+  useEffect(() => {
+    if (params.mode === 'forgot') {
+      setMode('forgot');
+      const seededEmail = typeof params.email === 'string' ? params.email.trim() : '';
+      if (seededEmail) setResetEmail(seededEmail);
+    }
+  }, [params.email, params.mode]);
 
-  const isFormValid = email.trim().length > 0 && password.trim().length > 0;
+  useEffect(() => {
+    if (!statusMessage || Platform.OS === 'web') return;
+    AccessibilityInfo.announceForAccessibility?.(statusMessage);
+  }, [statusMessage]);
 
-  const handleLogin = async () => {
-    setError('');
-    setIsSuspended(false);
+  useEffect(() => {
+    if (loginCtaRenderedRef.current) return;
+    loginCtaRenderedRef.current = true;
+    console.log('[Auth] SignIn CTA rendered');
+  }, []);
 
-    if (!email.trim() || !password.trim()) {
-      setError('Please enter your email and password.');
-      triggerShake();
+  const handlePrimaryPressIn = useCallback(() => {
+    if (reducedMotion) {
+      primaryPressScale.setValue(PRESS.scaleDown);
+      return;
+    }
+    Animated.timing(primaryPressScale, {
+      toValue: PRESS.scaleDown,
+      duration: MOTION.buttonPressIn,
+      easing: EASING.press,
+      useNativeDriver: true,
+    }).start();
+  }, [primaryPressScale, reducedMotion]);
+
+  const handlePrimaryPressOut = useCallback(() => {
+    if (reducedMotion) {
+      primaryPressScale.setValue(PRESS.scaleUp);
+      return;
+    }
+    Animated.timing(primaryPressScale, {
+      toValue: PRESS.scaleUp,
+      duration: MOTION.buttonPressOut,
+      easing: EASING.press,
+      useNativeDriver: true,
+    }).start();
+  }, [primaryPressScale, reducedMotion]);
+
+  const clearStatus = useCallback(() => {
+    setStatusMessage('');
+    setStatusTone('neutral');
+  }, []);
+
+  const handleCreateAccount = useCallback(() => {
+    Keyboard.dismiss();
+    setShowPassword(false);
+    setPassword('');
+    router.push('/initialize');
+  }, [router]);
+
+  const handleContinueFree = useCallback(() => {
+    Keyboard.dismiss();
+    setShowPassword(false);
+    setPassword('');
+    clearStatus();
+    const { hasConfiguredVehicle, localVehicleCount, activeVehicleId, setupVehicleId } =
+      resolveConfiguredVehiclePresence();
+    const setupComplete = setupStore.isComplete();
+    const needsFreshGuestSetup = !hasConfiguredVehicle;
+
+    if (needsFreshGuestSetup) {
+      setupStore.reset();
+      vehicleSetupStore.clearActiveVehicleId();
+    }
+
+    const destination =
+      hasConfiguredVehicle && setupComplete
+        ? '/(tabs)/dashboard'
+        : { pathname: '/setup', params: { mode: 'guest-entry' } };
+    console.log('[Auth] Free entry route decision', {
+      destination,
+      hasConfiguredVehicle,
+      localVehicleCount,
+      activeVehicleId,
+      setupVehicleId,
+      setupComplete,
+      needsFreshGuestSetup,
+    });
+    enterOfflineMode();
+    router.replace(destination as any);
+  }, [clearStatus, enterOfflineMode, router]);
+
+  const handleViewPro = useCallback(() => {
+    Keyboard.dismiss();
+    console.log('[Auth] Pro entry route decision', { destination: '/pro' });
+    router.push('/pro');
+  }, [router]);
+
+  const handleExport = useCallback(async () => {
+    Keyboard.dismiss();
+    setExportingLocalData(true);
+    const result = await exportLocalData();
+    setExportingLocalData(false);
+    if (result.success) {
+      showToast(result.totalItems > 0 ? `Exported ${result.totalItems} local items` : 'Local export created');
+      return;
+    }
+    setStatusMessage(result.error || 'Unable to export local data right now.');
+    setStatusTone('error');
+  }, [showToast]);
+
+  const handleOpenAuthInfo = useCallback((sheet: 'terms' | 'privacy' | 'support') => {
+    Keyboard.dismiss();
+    console.log('[Auth] Legal/support route open', { sheet });
+    router.push({ pathname: '/auth-info', params: { sheet } });
+  }, [router]);
+
+  const handleLogin = useCallback(async (source: 'cta_press' | 'password_submit' | 'accessibility_activate') => {
+    clearStatus();
+
+    console.log('[Auth] SignIn validation start', {
+      source,
+      ...loginGuardState,
+      emailLength: trimmedEmail.length,
+      passwordLength: password.length,
+    });
+
+    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
+      console.log('[Auth] SignIn validation failed', {
+        source,
+        reason: !trimmedEmail ? 'missing_email' : 'invalid_email',
+      });
+      setStatusMessage(AUTH_COPY.login.invalidEmail);
+      setStatusTone('error');
+      return;
+    }
+    if (!password.trim()) {
+      console.log('[Auth] SignIn validation failed', {
+        source,
+        reason: 'missing_password',
+      });
+      setStatusMessage(AUTH_COPY.login.missingPassword);
+      setStatusTone('error');
+      return;
+    }
+    if (!isOnline) {
+      console.log('[Auth] SignIn validation failed', {
+        source,
+        reason: 'offline',
+      });
+      setStatusMessage(AUTH_COPY.login.offline);
+      setStatusTone('neutral');
       return;
     }
 
+    console.log('[Auth] SignIn validation passed', {
+      source,
+      email: trimmedEmail.toLowerCase(),
+    });
+    Keyboard.dismiss();
     setLoading(true);
-    const result = await signIn(email.trim(), password, keepSignedIn);
-    setLoading(false);
+    const loginEmail = trimmedEmail.toLowerCase();
+    console.log('[Auth] Login attempt start', {
+      source,
+      email: loginEmail,
+      keepSignedIn,
+      isOnline,
+    });
+    const result = await signIn(trimmedEmail, password, keepSignedIn);
+    console.log('[Auth] Auth request response', {
+      source,
+      email: loginEmail,
+      ok: !result.error,
+      error: result.error ?? null,
+      suspended: !!result.suspended,
+    });
 
     if (result.error) {
-      setError(result.error);
-      if (result.suspended) setIsSuspended(true);
-      triggerShake();
-    } else {
-      router.replace('/(tabs)/dashboard');
-    }
-  };
-
-
-  const handleForgotPassword = async () => {
-    const trimmed = resetEmail.trim();
-    if (!trimmed) {
-      setResetError('Please enter your email address.');
-      triggerShake();
+      setLoading(false);
+      console.log('[Auth] Login attempt failure', {
+        email: loginEmail,
+        suspended: !!result.suspended,
+        reason: result.error,
+      });
+      setShowPassword(false);
+      setStatusMessage(normalizeLoginError(result.error, isOnline));
+      setStatusTone('error');
       return;
     }
 
-    // Basic email validation
-    if (!trimmed.includes('@') || !trimmed.includes('.')) {
-      setResetError('Please enter a valid email address.');
-      triggerShake();
+    console.log('[Auth] Login attempt success', {
+      source,
+      email: loginEmail,
+      keepSignedIn,
+    });
+    setShowPassword(false);
+    setPassword('');
+  }, [clearStatus, isOnline, keepSignedIn, loginGuardState, password, signIn, trimmedEmail]);
+
+  const handleLoginSubmit = useCallback((source: 'cta_press' | 'password_submit' | 'accessibility_activate') => {
+    console.log('[Auth] SignIn CTA press received', {
+      source,
+      ...loginGuardState,
+      emailLength: trimmedEmail.length,
+      passwordLength: password.length,
+    });
+    if (loading) {
+      console.log('[Auth] SignIn CTA blocked by disabled state', {
+        source,
+        reason: 'loading',
+      });
+      return;
+    }
+    void handleLogin(source);
+  }, [handleLogin, loading, loginGuardState, password.length, trimmedEmail.length]);
+
+  const handleForgotPassword = useCallback(async () => {
+    clearStatus();
+    if (!trimmedResetEmail || !isValidEmail(trimmedResetEmail)) {
+      setStatusMessage(AUTH_COPY.login.invalidEmail);
+      setStatusTone('error');
+      return;
+    }
+    if (!isOnline) {
+      setStatusMessage(AUTH_COPY.login.offline);
+      setStatusTone('neutral');
       return;
     }
 
     setResetLoading(true);
-    setResetError('');
-
-    const result = await sendPasswordReset(trimmed);
+    const result = await sendPasswordReset(trimmedResetEmail);
     setResetLoading(false);
-
     if (result.error) {
-      setResetError(result.error);
-      triggerShake();
-    } else {
-      setResetSent(true);
+      setStatusMessage(AUTH_COPY.login.genericFailure);
+      setStatusTone('error');
+      return;
     }
-  };
 
-  const handleBackToLogin = () => {
-    setMode('login');
-    setResetEmail('');
-    setResetError('');
-    setResetSent(false);
-  };
+    setStatusMessage(AUTH_COPY.forgotPassword.success);
+    setStatusTone('success');
+  }, [clearStatus, isOnline, sendPasswordReset, trimmedResetEmail]);
 
-  const handleGoToForgot = () => {
-    setMode('forgot');
-    setError('');
-    // Pre-fill with login email if available
-    if (email.trim()) setResetEmail(email.trim());
-  };
+  const handleTogglePassword = useCallback(() => {
+    setShowPassword((current) => !current);
+    requestAnimationFrame(() => passwordRef.current?.focus());
+  }, []);
 
-  const handleOfflineAccess = () => {
-    enterOfflineMode();
-    router.replace('/(tabs)/dashboard');
-  };
-
-  const handleSetup = () => {
-    router.push('/initialize');
-  };
-
-  // ── Status config ───────────────────────────────────────────
-  const getStatusConfig = () => {
-    if (isOnline) {
-      return { icon: 'wifi' as const, color: '#4CAF50', label: 'Online' };
+  useEffect(() => {
+    if (authPhase === 'signed_out' && loading) {
+      setLoading(false);
     }
-    if (connectivityStatus === 'reconnecting') {
-      return { icon: 'wifi-outline' as const, color: TACTICAL.amber, label: 'Connecting...' };
-    }
-    return { icon: 'cloud-offline-outline' as const, color: TACTICAL.textMuted, label: 'Offline' };
-  };
+  }, [authPhase, loading]);
 
-  const status = getStatusConfig();
-
-  // ── Glass card style (web gets real backdrop-filter) ─────────
-  const glassStyle = Platform.OS === 'web'
-    ? {
-        // @ts-ignore — web-only CSS property
-        backdropFilter: 'blur(6px)',
-        // @ts-ignore
-        WebkitBackdropFilter: 'blur(6px)',
-      }
-    : {};
+  const renderMessage = statusMessage ? <AuthStatusBanner text={statusMessage} tone={statusTone} /> : !isOnline ? <AuthStatusBanner text={AUTH_COPY.login.offline} tone="neutral" /> : null;
+  const footerMarginTop = layoutMetrics.compact ? 4 : Math.max(6, layoutMetrics.footerGap - 12);
 
   return (
-    <AdaptiveBackground>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.flex}
-        keyboardVerticalOffset={0}
-      >
-        <Animated.View
+    <View style={styles.heroScreen}>
+      <LoginHeroBackground />
+      <StatusBar style="light" />
+      <View style={styles.heroContentLayer}>
+        <View
           style={[
-            styles.content,
+            styles.screenShell,
             {
-              transform: [
-                { translateX: shakeAnim },
-                { translateY: slideAnim },
-              ],
-              opacity: fadeAnim,
-              paddingTop: Math.max(insets.top, Platform.OS === 'web' ? 4 : 8),
-
+              paddingTop: insets.top + layoutMetrics.topPadding,
+              paddingBottom: insets.bottom + layoutMetrics.bottomPadding,
+              paddingHorizontal: layoutMetrics.horizontalPadding,
             },
           ]}
         >
-          {/* ── Top spacer ───────────────────────────────── */}
-          <View style={{ height: TOP_SPACER }} />
-
-          {/* ── ECS Badge Logo ────────────────────────────── */}
-          <View style={styles.badgeContainer}>
-            <AnimatedShield badgeWidth={BADGE_WIDTH} />
+          <View style={styles.screenTopRegion}>
+            <View style={[styles.contentShell, { maxWidth: layoutMetrics.columnMaxWidth }]}>
+              <LoginHeaderBlock isOnline={isOnline} compact={layoutMetrics.compact} />
+              {mode === 'login' ? (
+                <LoginCard
+                  email={email}
+                  emailError={emailError}
+                  password={password}
+                  passwordError={passwordError}
+                  showPassword={showPassword}
+                  keepSignedIn={keepSignedIn}
+                  loading={loading}
+                  utilityBusy={utilityBusy}
+                  loginDisabled={loginDisabled}
+                  renderMessage={renderMessage}
+                  hasMessage={!!renderMessage}
+                  primaryPressScale={primaryPressScale}
+                  passwordRef={passwordRef}
+                  onClearStatus={clearStatus}
+                  onSetEmail={setEmail}
+                  onSetPassword={setPassword}
+                  onSetKeepSignedIn={setKeepSignedIn}
+                  onSetMode={setMode}
+                  onTogglePassword={handleTogglePassword}
+                  onPrimaryPressIn={handlePrimaryPressIn}
+                  onPrimaryPressOut={handlePrimaryPressOut}
+                  onLoginSubmit={handleLoginSubmit}
+                  onContinueFree={handleContinueFree}
+                  onViewPro={handleViewPro}
+                  onExport={handleExport}
+                  exportingLocalData={exportingLocalData}
+                  footerMaxWidth={layoutMetrics.footerMaxWidth}
+                  onOpenAuthInfo={handleOpenAuthInfo}
+                  onCreateAccount={handleCreateAccount}
+                />
+              ) : (
+                <ForgotPasswordCard
+                  resetEmail={resetEmail}
+                  resetEmailError={resetEmailError}
+                  resetLoading={resetLoading}
+                  forgotDisabled={forgotDisabled}
+                  renderMessage={renderMessage}
+                  hasMessage={!!renderMessage}
+                  primaryPressScale={primaryPressScale}
+                  onClearStatus={clearStatus}
+                  onSetResetEmail={setResetEmail}
+                  onPrimaryPressIn={handlePrimaryPressIn}
+                  onPrimaryPressOut={handlePrimaryPressOut}
+                  onForgotPassword={handleForgotPassword}
+                  onBackToLogin={() => setMode('login')}
+                  onCreateAccount={handleCreateAccount}
+                />
+              )}
+              {mode !== 'login' ? (
+                <LoginFooterBlock
+                  footerMaxWidth={layoutMetrics.footerMaxWidth}
+                  marginTop={footerMarginTop}
+                  onOpenAuthInfo={handleOpenAuthInfo}
+                  onCreateAccount={handleCreateAccount}
+                />
+              ) : null}
+            </View>
           </View>
-
-          {/* ── Status Row ───────────────────────────────── */}
-          <View style={styles.statusRow}>
-            <Ionicons name={status.icon} size={11} color={status.color} />
-            <Text style={[styles.statusText, { color: status.color }]}>
-              {status.label}
-            </Text>
-            {connectivityStatus === 'reconnecting' && (
-              <ActivityIndicator size="small" color={TACTICAL.amber} style={{ marginLeft: 2 }} />
-            )}
-          </View>
-
-          {/* ═══════════════════════════════════════════════ */}
-          {/* GLASS CARD — Login / Forgot Password           */}
-          {/* ═══════════════════════════════════════════════ */}
-          <View style={[styles.glassCard, glassStyle]}>
-
-            {/* ── Subtle top accent line ──────────────────── */}
-            <View style={styles.glassAccentLine} />
-
-            {/* ═══════════════════════════════════════════════ */}
-            {/* LOGIN MODE                                     */}
-            {/* ═══════════════════════════════════════════════ */}
-            {mode === 'login' && (
-              <>
-                {/* ── Error Message ────────────────────────── */}
-                {error ? (
-                  <View style={[styles.errorRow, isSuspended && styles.errorRowSuspended]}>
-                    <Ionicons
-                      name={isSuspended ? 'lock-closed-outline' : 'alert-circle-outline'}
-                      size={14}
-                      color={isSuspended ? TACTICAL.amber : '#E57373'}
-                    />
-                    <Text style={[styles.errorText, isSuspended && styles.errorTextSuspended]}>
-                      {error}
-                    </Text>
-                  </View>
-                ) : null}
-
-                {/* ── Form ─────────────────────────────────── */}
-                <View style={styles.form}>
-                  {/* Email */}
-                  <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Email</Text>
-                    <View style={styles.inputRow}>
-                      <Ionicons name="mail-outline" size={15} color={TACTICAL.textMuted} style={styles.inputIcon} />
-                      <TextInput
-                        style={styles.input}
-                        value={email}
-                        onChangeText={(val) => { setEmail(val); setError(''); }}
-                        placeholder="you@example.com"
-                        placeholderTextColor="rgba(138,138,133,0.40)"
-                        keyboardType="email-address"
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        autoComplete="email"
-                        returnKeyType="next"
-                        onSubmitEditing={() => passwordRef.current?.focus()}
-                        editable={!loading}
-                      />
-                    </View>
-                  </View>
-
-                  {/* Password */}
-                  <View style={styles.fieldGroup}>
-                    <View style={styles.fieldLabelRow}>
-                      <Text style={styles.fieldLabel}>Password</Text>
-                      <TouchableOpacity
-                        onPress={handleGoToForgot}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        activeOpacity={0.6}
-                      >
-                        <Text style={styles.forgotLink}>Forgot password?</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <View style={styles.inputRow}>
-                      <Ionicons name="lock-closed-outline" size={15} color={TACTICAL.textMuted} style={styles.inputIcon} />
-                      <TextInput
-                        ref={passwordRef}
-                        style={styles.input}
-                        value={password}
-                        onChangeText={(val) => { setPassword(val); setError(''); }}
-                        placeholder="Enter your password"
-                        placeholderTextColor="rgba(138,138,133,0.40)"
-                        secureTextEntry={!showPassword}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        autoComplete="password"
-                        returnKeyType="go"
-                        onSubmitEditing={handleLogin}
-                        editable={!loading}
-                      />
-                      <TouchableOpacity
-                        onPress={() => setShowPassword(!showPassword)}
-                        style={styles.eyeBtn}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      >
-                        <Ionicons
-                          name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                          size={17}
-                          color={TACTICAL.textMuted}
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-
-                  {/* ── Keep me signed in checkbox ──────────── */}
-                  <TouchableOpacity
-                    style={styles.keepSignedInRow}
-                    onPress={() => setKeepSignedIn(!keepSignedIn)}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                  >
-                    <View style={[styles.checkbox, keepSignedIn && styles.checkboxChecked]}>
-                      {keepSignedIn && (
-                        <Ionicons name="checkmark" size={12} color="#0B0F12" />
-                      )}
-                    </View>
-                    <Text style={styles.keepSignedInText}>Keep me signed in for 30 days</Text>
-                  </TouchableOpacity>
-
-
-                  {/* Sign In Button */}
-                  <TouchableOpacity
-                    style={[
-                      styles.signInBtn,
-                      (!isFormValid || loading) && styles.signInBtnDisabled,
-                    ]}
-                    onPress={handleLogin}
-                    disabled={!isFormValid || loading}
-                    activeOpacity={0.8}
-                  >
-                    {loading ? (
-                      <View style={styles.btnRow}>
-                        <ActivityIndicator size="small" color="#0B0F12" />
-                        <Text style={styles.signInText}>Signing in...</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.signInText}>Sign in</Text>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* Offline note */}
-                  {!isOnline && isFormValid && (
-                    <Text style={styles.offlineNote}>
-                      An internet connection is required to sign in.
-                    </Text>
-                  )}
-                </View>
-              </>
-            )}
-
-            {/* ═══════════════════════════════════════════════ */}
-            {/* FORGOT PASSWORD MODE                           */}
-            {/* ═══════════════════════════════════════════════ */}
-            {mode === 'forgot' && (
-              <>
-                {!resetSent ? (
-                  <>
-                    {/* Header */}
-                    <View style={styles.forgotHeader}>
-                      <Text style={styles.forgotTitle}>Reset Password</Text>
-                      <Text style={styles.forgotSubtitle}>
-                        Enter your email address and we'll send you a link to reset your password.
-                      </Text>
-                    </View>
-
-                    {/* Error */}
-                    {resetError ? (
-                      <View style={styles.errorRow}>
-                        <Ionicons name="alert-circle-outline" size={14} color="#E57373" />
-                        <Text style={styles.errorText}>{resetError}</Text>
-                      </View>
-                    ) : null}
-
-                    {/* Email Input */}
-                    <View style={styles.form}>
-                      <View style={styles.fieldGroup}>
-                        <Text style={styles.fieldLabel}>Email</Text>
-                        <View style={styles.inputRow}>
-                          <Ionicons name="mail-outline" size={15} color={TACTICAL.textMuted} style={styles.inputIcon} />
-                          <TextInput
-                            style={styles.input}
-                            value={resetEmail}
-                            onChangeText={(val) => { setResetEmail(val); setResetError(''); }}
-                            placeholder="you@example.com"
-                            placeholderTextColor="rgba(138,138,133,0.40)"
-                            keyboardType="email-address"
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            autoComplete="email"
-                            returnKeyType="go"
-                            onSubmitEditing={handleForgotPassword}
-                            editable={!resetLoading}
-                            autoFocus
-                          />
-                        </View>
-                      </View>
-
-                      {/* Send Reset Link Button */}
-                      <TouchableOpacity
-                        style={[
-                          styles.signInBtn,
-                          (!resetEmail.trim() || resetLoading) && styles.signInBtnDisabled,
-                        ]}
-                        onPress={handleForgotPassword}
-                        disabled={!resetEmail.trim() || resetLoading}
-                        activeOpacity={0.8}
-                      >
-                        {resetLoading ? (
-                          <View style={styles.btnRow}>
-                            <ActivityIndicator size="small" color="#0B0F12" />
-                            <Text style={styles.signInText}>Sending...</Text>
-                          </View>
-                        ) : (
-                          <Text style={styles.signInText}>Send Reset Link</Text>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* Back to Sign In */}
-                    <TouchableOpacity
-                      style={styles.backToLoginBtn}
-                      onPress={handleBackToLogin}
-                      activeOpacity={0.6}
-                    >
-                      <Ionicons name="arrow-back" size={14} color={TACTICAL.amber} />
-                      <Text style={styles.backToLoginText}>Back to sign in</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    {/* ── Success State ────────────────────── */}
-                    <View style={styles.resetSuccessContainer}>
-                      <View style={styles.resetSuccessIcon}>
-                        <Ionicons name="checkmark-circle" size={40} color="#4CAF50" />
-                      </View>
-                      <Text style={styles.resetSuccessTitle}>Check Your Email</Text>
-                      <Text style={styles.resetSuccessMsg}>
-                        We sent a password reset link to{'\n'}
-                        <Text style={styles.resetSuccessEmail}>{resetEmail}</Text>
-                      </Text>
-                      <Text style={styles.resetSuccessHint}>
-                        If you don't see the email, check your spam folder. The link will expire in 24 hours.
-                      </Text>
-
-                      <TouchableOpacity
-                        style={styles.returnBtn}
-                        onPress={handleBackToLogin}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.signInText}>Return to Sign In</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
-              </>
-            )}
-          </View>
-
-          {/* ── Divider ──────────────────────────────────── */}
-          {mode === 'login' && (
-            <>
-              <View style={styles.divider}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>or</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              {/* ── Continue Offline ──────────────────────── */}
-              <TouchableOpacity
-                style={styles.offlineBtn}
-                onPress={handleOfflineAccess}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
-                <Text style={styles.offlineBtnText}>Continue offline</Text>
-              </TouchableOpacity>
-              <Text style={styles.offlineHint}>
-                {isOnline
-                  ? 'Use the app with local data. Sign in later to sync.'
-                  : "Offline \u2014 you can still use the app locally."}
-              </Text>
-
-              {/* ── Export Local Data ─────────────────────── */}
-              <TouchableOpacity
-                style={{
-                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                  gap: 7, height: 38, marginTop: 10,
-                  borderWidth: 1, borderColor: 'rgba(138,138,133,0.20)',
-                  backgroundColor: 'rgba(138,138,133,0.04)', borderRadius: 10,
-                }}
-                onPress={async () => {
-                  const result = await exportLocalData();
-                  if (result.success) {
-                    // silent success — file download triggers automatically on web
-                  }
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="download-outline" size={14} color={TACTICAL.textMuted} />
-                <Text style={{ fontSize: 12, fontWeight: '600', color: TACTICAL.textMuted, letterSpacing: 0.3 }}>
-                  Export local data
-                </Text>
-              </TouchableOpacity>
-              <Text style={{ fontSize: 9.5, color: TACTICAL.textMuted, textAlign: 'center', marginTop: 4, opacity: 0.40, lineHeight: 13 }}>
-                Save your offline data as JSON before signing in.
-              </Text>
-            </>
-          )}
-
-
-          {/* ── Spacer ───────────────────────────────────── */}
-          <View style={styles.spacer} />
-
-          {/* ── Footer ───────────────────────────────────── */}
-          <View style={styles.footer}>
-            <TouchableOpacity onPress={handleSetup} activeOpacity={0.6}>
-              <Text style={styles.footerLink}>First time here? Set up account</Text>
-            </TouchableOpacity>
-            <Text style={styles.versionText}>v{APP_VERSION}</Text>
-          </View>
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </AdaptiveBackground>
+        </View>
+      </View>
+    </View>
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 32,
-    justifyContent: 'flex-start',
-  },
-
-   // ── Badge ───────────────────────────────────────────────────
-  badgeContainer: {
+  flex: { flex: 1 },
+  heroScreen: { flex: 1, backgroundColor: '#040608' },
+  heroContentLayer: { ...StyleSheet.absoluteFillObject },
+  screenShell: { flex: 1, justifyContent: 'space-between' },
+  screenTopRegion: { flex: 1, justifyContent: 'center' },
+  contentShell: { width: '100%', alignSelf: 'center', alignItems: 'center', justifyContent: 'center' },
+  logoFrame: {
+    width: '100%',
+    minHeight: 172,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 0,
   },
-
-  // ── Status ──────────────────────────────────────────────────
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    marginBottom: 8,
-    paddingVertical: 0,
+  logoFrameCompact: {
+    minHeight: 154,
   },
-
-  statusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.5,
+  logoImage: {
+    width: 228,
+    height: 182,
+    transform: [{ translateY: -16 }, { scale: 1.78 }],
   },
-
-  // ── Glass Card ──────────────────────────────────────────────
-  glassCard: {
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 18,
-    overflow: 'hidden',
+  logoImageCompact: {
+    width: 212,
+    height: 170,
+    transform: [{ translateY: -12 }, { scale: 1.58 }],
   },
-  glassAccentLine: {
-    position: 'absolute',
-    top: 0,
-    left: 24,
-    right: 24,
-    height: 1,
-    backgroundColor: 'rgba(196, 138, 44, 0.20)',
-    borderRadius: 1,
-  },
-
-  // ── Error ───────────────────────────────────────────────────
-  errorRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 7,
-    backgroundColor: 'rgba(229, 115, 115, 0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(229, 115, 115, 0.18)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    marginBottom: 8,
-    marginTop: 8,
-  },
-  errorRowSuspended: {
-    backgroundColor: 'rgba(196, 138, 44, 0.07)',
-    borderColor: 'rgba(196, 138, 44, 0.18)',
-  },
-  errorText: {
-    flex: 1,
-    fontSize: 12.5,
-    fontWeight: '500',
-    color: '#E57373',
-    lineHeight: 17,
-  },
-  errorTextSuspended: {
-    color: TACTICAL.amber,
-  },
-
-  // ── Form ────────────────────────────────────────────────────
-  form: {
-    gap: 0,
-    marginTop: 6,
-  },
-  fieldGroup: {
-    marginBottom: 10,
-  },
-
-  fieldLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-
-  fieldLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    marginBottom: 4,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-
-  forgotLink: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: TACTICAL.amber,
-    opacity: 0.85,
-    marginBottom: 6,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.35)',
-    borderRadius: 10,
-    paddingHorizontal: 13,
-    height: 46,
-  },
-  inputIcon: {
-    marginRight: 9,
-    opacity: 0.55,
-  },
-  input: {
-    flex: 1,
-    fontSize: 15,
-    color: TACTICAL.text,
-    fontWeight: '400',
-    paddingVertical: 0,
-  },
-  eyeBtn: {
-    padding: 6,
-    marginLeft: 4,
-  },
-
-  // ── Keep Signed In ──────────────────────────────────────────
-  keepSignedInRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    marginBottom: 10,
-    paddingVertical: 1,
-  },
-  checkbox: {
-
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: 'rgba(138,138,133,0.35)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: TACTICAL.amber,
-    borderColor: TACTICAL.amber,
-  },
-  keepSignedInText: {
-    fontSize: 12.5,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-  },
-
-
-  // ── Sign In Button ──────────────────────────────────────────
-  signInBtn: {
-    backgroundColor: TACTICAL.amber,
-    borderRadius: 10,
-    height: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
+  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, marginBottom: 6 },
+  onlineText: { color: '#5BCB79', fontSize: 12, lineHeight: 15, fontWeight: '700' },
+  offlineText: { color: 'rgba(230,237,243,0.62)' },
+  card: {
+    width: '100%', paddingHorizontal: 12, paddingTop: 8, paddingBottom: 7, borderRadius: 20,
+    backgroundColor: 'rgba(6,9,12,0.62)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.32, shadowRadius: 22, elevation: 7,
     marginTop: 2,
-    shadowColor: '#C48A2C',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  signInBtnDisabled: {
-    opacity: 0.40,
-    shadowOpacity: 0,
+  fieldBlock: { marginBottom: 6 },
+  fieldLabel: { marginBottom: 4, fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(230,237,243,0.9)', letterSpacing: 1.6 },
+  passwordLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  inlineUtilityHit: { minHeight: 24, justifyContent: 'center' },
+  inlineUtilityText: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: TACTICAL.amber },
+  inputShell: {
+    minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(12,16,21,0.66)', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8,
   },
-  signInText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0B0F12',
-    letterSpacing: 0.5,
+  input: { flex: 1, fontSize: 15, lineHeight: 20, color: 'rgba(236,239,242,0.95)', paddingVertical: 9, minHeight: 38 },
+  inlineError: { marginTop: 5, paddingLeft: 2, fontSize: 11, lineHeight: 14, fontWeight: '600', color: '#E2A29A' },
+  rememberRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 28, marginTop: -3, marginBottom: 3 },
+  checkbox: { width: 18, height: 18, borderRadius: 5, borderWidth: 1, borderColor: 'rgba(212,160,23,0.78)', backgroundColor: 'rgba(255,255,255,0.04)', alignItems: 'center', justifyContent: 'center' },
+  checkboxChecked: { backgroundColor: TACTICAL.amber, borderColor: TACTICAL.amber },
+  rememberText: { flex: 1, fontSize: 13, lineHeight: 17, color: 'rgba(230,237,243,0.82)', fontWeight: '600' },
+  primaryButton: { minHeight: 42, marginTop: 1, borderRadius: 12, backgroundColor: TACTICAL.amber, alignItems: 'center', justifyContent: 'center' },
+  primaryButtonDisabled: { opacity: 0.46 },
+  primaryButtonPressed: { opacity: 0.94, backgroundColor: TACTICAL.amberDark },
+  primaryButtonContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  primaryButtonText: { fontSize: 16, lineHeight: 20, fontWeight: '800', color: ECS.bgPrimary, letterSpacing: 0.3 },
+  messageRow: { marginTop: 6 },
+  messageSlot: { marginTop: 5, minHeight: 28, justifyContent: 'center' },
+  messageSlotCollapsed: { marginTop: 2, minHeight: 8 },
+  orRow: { marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  orRule: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
+  orText: { color: 'rgba(230,237,243,0.42)', fontSize: 11, lineHeight: 14, fontWeight: '700' },
+  actionRow: { marginTop: 5, flexDirection: 'row', gap: 8 },
+  secondaryButton: {
+    flex: 1, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(6,8,10,0.28)',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 10,
   },
-  btnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  secondaryButtonTextPrimary: { color: TACTICAL.amber, fontSize: 14, lineHeight: 18, fontWeight: '800' },
+  secondaryButtonText: { color: 'rgba(236,239,242,0.9)', fontSize: 14, lineHeight: 18, fontWeight: '800' },
+  exportButton: {
+    marginTop: 5, minHeight: 34, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.025)',
   },
-  offlineNote: {
-    fontSize: 11,
-    color: TACTICAL.amber,
-    textAlign: 'center',
-    marginTop: 6,
-    fontWeight: '500',
-    opacity: 0.8,
-  },
-
-  // ── Divider ─────────────────────────────────────────────────
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-
-  dividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(138,138,133,0.15)',
-  },
-  dividerText: {
-    color: TACTICAL.textMuted,
-    paddingHorizontal: 14,
-    fontSize: 11,
-    fontWeight: '500',
-    opacity: 0.5,
-  },
-
-  // ── Offline Button ──────────────────────────────────────────
-  offlineBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    height: 42,
-    borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.20)',
-    backgroundColor: 'rgba(196, 138, 44, 0.04)',
-    borderRadius: 10,
-  },
-  offlineBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.3,
-  },
-  offlineHint: {
-    fontSize: 10.5,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    marginTop: 6,
-    opacity: 0.50,
-    lineHeight: 14,
-  },
-
-  // ── Forgot Password ─────────────────────────────────────────
-  forgotHeader: {
-    alignItems: 'center',
-    marginBottom: 16,
-    marginTop: 10,
-  },
-  forgotTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: TACTICAL.text,
-    letterSpacing: 1.5,
-    marginBottom: 8,
-  },
-  forgotSubtitle: {
-    fontSize: 13,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 18,
-    paddingHorizontal: 8,
-  },
-  backToLoginBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    marginTop: 16,
-    paddingVertical: 10,
-  },
-  backToLoginText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.3,
-  },
-
-  // ── Reset Success ───────────────────────────────────────────
-  resetSuccessContainer: {
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 10,
-  },
-  resetSuccessIcon: {
-    marginBottom: 12,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(76, 175, 80, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(76, 175, 80, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resetSuccessTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: TACTICAL.text,
-    letterSpacing: 1,
-    marginBottom: 10,
-  },
-  resetSuccessMsg: {
-    fontSize: 13,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 6,
-  },
-  resetSuccessEmail: {
-    color: TACTICAL.text,
-    fontWeight: '600',
-  },
-  resetSuccessHint: {
-    fontSize: 11,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 16,
-    opacity: 0.6,
-    marginBottom: 20,
-    paddingHorizontal: 12,
-  },
-  returnBtn: {
-    backgroundColor: TACTICAL.amber,
-    borderRadius: 10,
-    height: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'stretch',
-    shadowColor: '#C48A2C',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-
-  // ── Spacer ──────────────────────────────────────────────────
-  spacer: {
-    flex: 1,
-    minHeight: 4,
-  },
-
-  // ── Footer ──────────────────────────────────────────────────
-  footer: {
-    alignItems: 'center',
-    gap: 6,
-    paddingBottom: 2,
-  },
-  footerLink: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: TACTICAL.amber,
-    opacity: 0.70,
-  },
-  versionText: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-    opacity: 0.30,
-    letterSpacing: 0.8,
-  },
+  exportButtonText: { fontSize: 13, lineHeight: 17, fontWeight: '700', color: 'rgba(230,237,243,0.82)' },
+  exportHint: { marginTop: 3, textAlign: 'center', fontSize: 10, lineHeight: 13, color: 'rgba(230,237,243,0.48)' },
+  recoveryTitle: { fontSize: 20, lineHeight: 24, fontWeight: '800', color: TACTICAL.text },
+  recoverySupporting: { marginTop: 4, marginBottom: 10, fontSize: 13, lineHeight: 18, color: TACTICAL.textMuted },
+  linkRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
+  bottomLinkHit: { minHeight: 30, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, justifyContent: 'center' },
+  bottomLinkText: { fontSize: 13, lineHeight: 17, fontWeight: '700', color: TACTICAL.textMuted },
+  footerBlock: { alignSelf: 'center', alignItems: 'center', width: '100%' },
+  footerLinkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', rowGap: 8, columnGap: 10 },
+  footerPill: { minHeight: 28, minWidth: 72, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.045)', backgroundColor: 'rgba(255,255,255,0.016)' },
+  footerPillText: { fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(212,160,23,0.9)', letterSpacing: 0.5, textAlign: 'center' },
+  createAccountHit: { marginTop: 10, minHeight: 28, justifyContent: 'center' },
+  createAccountText: { fontSize: 14, lineHeight: 18, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
+  utilityPressed: { opacity: 0.72 },
+  disabledUtility: { opacity: 0.52 },
 });
 
+const LoginHeaderBlock = memo(function LoginHeaderBlock({
+  isOnline,
+  compact,
+}: {
+  isOnline: boolean;
+  compact: boolean;
+}) {
+  return (
+    <>
+      <View style={[styles.logoFrame, compact ? styles.logoFrameCompact : null]}>
+        <Image
+          source={LOGIN_LOGO}
+          resizeMode="contain"
+          style={[styles.logoImage, compact ? styles.logoImageCompact : null]}
+        />
+      </View>
+      <View style={styles.onlineRow}>
+        <Ionicons
+          name={isOnline ? 'wifi' : 'cloud-offline-outline'}
+          size={12}
+          color={isOnline ? '#5BCB79' : 'rgba(230,237,243,0.62)'}
+        />
+        <Text style={[styles.onlineText, !isOnline ? styles.offlineText : null]}>
+          {isOnline ? 'Online' : 'Offline'}
+        </Text>
+      </View>
+    </>
+  );
+});
 
+const LoginFooterBlock = memo(function LoginFooterBlock({
+  footerMaxWidth,
+  marginTop,
+  onOpenAuthInfo,
+  onCreateAccount,
+}: {
+  footerMaxWidth: number;
+  marginTop: number;
+  onOpenAuthInfo: (sheet: 'terms' | 'privacy' | 'support') => void;
+  onCreateAccount: () => void;
+}) {
+  return (
+    <View style={[styles.footerBlock, { marginTop, maxWidth: footerMaxWidth }]}>
+      <View style={styles.footerLinkRow}>
+        <Pressable
+          style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
+          onPress={() => onOpenAuthInfo('privacy')}
+        >
+          <Text style={styles.footerPillText}>Policy</Text>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
+          onPress={() => onOpenAuthInfo('terms')}
+        >
+          <Text style={styles.footerPillText}>Site Use</Text>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
+          onPress={() => onOpenAuthInfo('support')}
+        >
+          <Text style={styles.footerPillText}>Support</Text>
+        </Pressable>
+      </View>
+      <Pressable
+        style={({ pressed }) => [styles.createAccountHit, pressed ? styles.utilityPressed : null]}
+        onPress={onCreateAccount}
+      >
+        <Text style={styles.createAccountText}>{AUTH_COPY.login.createAccount}</Text>
+      </Pressable>
+    </View>
+  );
+});
 
+type LoginCardProps = {
+  email: string;
+  emailError: string;
+  password: string;
+  passwordError: string;
+  showPassword: boolean;
+  keepSignedIn: boolean;
+  loading: boolean;
+  utilityBusy: boolean;
+  loginDisabled: boolean;
+  renderMessage: React.ReactNode;
+  hasMessage: boolean;
+  primaryPressScale: Animated.Value;
+  passwordRef: React.RefObject<TextInput | null>;
+  exportingLocalData: boolean;
+  footerMaxWidth: number;
+  onClearStatus: () => void;
+  onSetEmail: React.Dispatch<React.SetStateAction<string>>;
+  onSetPassword: React.Dispatch<React.SetStateAction<string>>;
+  onSetKeepSignedIn: React.Dispatch<React.SetStateAction<boolean>>;
+  onSetMode: React.Dispatch<React.SetStateAction<ScreenMode>>;
+  onTogglePassword: () => void;
+  onPrimaryPressIn: () => void;
+  onPrimaryPressOut: () => void;
+  onLoginSubmit: (source: 'cta_press' | 'password_submit' | 'accessibility_activate') => void;
+  onContinueFree: () => void;
+  onViewPro: () => void;
+  onExport: () => Promise<void>;
+  onOpenAuthInfo: (sheet: 'terms' | 'privacy' | 'support') => void;
+  onCreateAccount: () => void;
+};
 
+const LoginCard = memo(function LoginCard({
+  email,
+  emailError,
+  password,
+  passwordError,
+  showPassword,
+  keepSignedIn,
+  loading,
+  utilityBusy,
+  loginDisabled,
+  renderMessage,
+  hasMessage,
+  primaryPressScale,
+  passwordRef,
+  exportingLocalData,
+  footerMaxWidth,
+  onClearStatus,
+  onSetEmail,
+  onSetPassword,
+  onSetKeepSignedIn,
+  onSetMode,
+  onTogglePassword,
+  onPrimaryPressIn,
+  onPrimaryPressOut,
+  onLoginSubmit,
+  onContinueFree,
+  onViewPro,
+  onExport,
+  onOpenAuthInfo,
+  onCreateAccount,
+}: LoginCardProps) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>EMAIL</Text>
+        <View style={styles.inputShell}>
+          <Ionicons name="mail-outline" size={16} color="rgba(230,237,243,0.38)" />
+          <TextInput
+            value={email}
+            onChangeText={(text) => {
+              onSetEmail(text);
+              onClearStatus();
+            }}
+            placeholder={AUTH_COPY.login.emailPlaceholder}
+            placeholderTextColor="rgba(139,148,158,0.74)"
+            style={styles.input}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            keyboardType="email-address"
+            autoComplete="email"
+            textContentType="username"
+            keyboardAppearance="dark"
+            returnKeyType="next"
+            testID="auth-email-input"
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            editable={!loading}
+            selectionColor={TACTICAL.amber}
+            cursorColor={TACTICAL.amber}
+          />
+        </View>
+        {!!emailError && <Text style={styles.inlineError}>{emailError}</Text>}
+      </View>
+
+      <View style={styles.fieldBlock}>
+        <View style={styles.passwordLabelRow}>
+          <Text style={styles.fieldLabel}>PASSWORD</Text>
+          <Pressable onPress={() => onSetMode('forgot')} style={({ pressed }) => [styles.inlineUtilityHit, pressed ? styles.utilityPressed : null]}>
+            <Text style={styles.inlineUtilityText}>{AUTH_COPY.login.forgotPassword}</Text>
+          </Pressable>
+        </View>
+        <View style={styles.inputShell}>
+          <Ionicons name="lock-closed-outline" size={16} color="rgba(230,237,243,0.38)" />
+          <TextInput
+            ref={passwordRef}
+            value={password}
+            onChangeText={(text) => {
+              onSetPassword(text);
+              onClearStatus();
+            }}
+            placeholder={AUTH_COPY.login.passwordPlaceholder}
+            placeholderTextColor="rgba(139,148,158,0.74)"
+            style={styles.input}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            autoComplete="current-password"
+            textContentType="password"
+            secureTextEntry={!showPassword}
+            keyboardAppearance="dark"
+            returnKeyType="go"
+            blurOnSubmit={false}
+            testID="auth-password-input"
+            onSubmitEditing={() => onLoginSubmit('password_submit')}
+            editable={!loading}
+            selectionColor={TACTICAL.amber}
+            cursorColor={TACTICAL.amber}
+          />
+          <PasswordVisibilityToggle visible={showPassword} onPress={onTogglePassword} />
+        </View>
+        {!!passwordError && <Text style={styles.inlineError}>{passwordError}</Text>}
+      </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.rememberRow, pressed ? styles.utilityPressed : null]}
+        onPress={() => onSetKeepSignedIn((current) => !current)}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: keepSignedIn }}
+      >
+        <View style={[styles.checkbox, keepSignedIn ? styles.checkboxChecked : null]}>
+          {keepSignedIn ? <Ionicons name="checkmark" size={14} color={ECS.bgPrimary} /> : null}
+        </View>
+        <Text style={styles.rememberText}>Keep me signed in for 30 days</Text>
+      </Pressable>
+
+      <Animated.View style={{ width: '100%', transform: [{ scale: primaryPressScale }] }}>
+        <Pressable
+          style={({ pressed }) => [styles.primaryButton, loginDisabled ? styles.primaryButtonDisabled : null, pressed && !loginDisabled ? styles.primaryButtonPressed : null]}
+          disabled={loginDisabled}
+          onPressIn={loginDisabled ? undefined : onPrimaryPressIn}
+          onPressOut={loginDisabled ? undefined : onPrimaryPressOut}
+          onPress={() => onLoginSubmit('cta_press')}
+          onAccessibilityTap={() => onLoginSubmit('accessibility_activate')}
+          onAccessibilityAction={({ nativeEvent }) => {
+            if (nativeEvent.actionName === 'activate') {
+              onLoginSubmit('accessibility_activate');
+            }
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Sign In"
+          accessibilityHint="Sign in with your ECS email and password"
+          accessible
+          focusable
+          accessibilityActions={[{ name: 'activate', label: 'Sign In' }]}
+          accessibilityState={{ disabled: loginDisabled, busy: loading }}
+          testID="auth-sign-in-button"
+          hitSlop={8}
+        >
+          {loading ? (
+            <View style={styles.primaryButtonContent}>
+              <ActivityIndicator size="small" color={ECS.bgPrimary} />
+              <Text style={styles.primaryButtonText}>{AUTH_COPY.login.primaryLoading}</Text>
+            </View>
+          ) : (
+            <Text style={styles.primaryButtonText}>{AUTH_COPY.login.primary}</Text>
+          )}
+        </Pressable>
+      </Animated.View>
+
+      <View style={[styles.messageSlot, !hasMessage ? styles.messageSlotCollapsed : null]}>{renderMessage}</View>
+
+      <View style={styles.orRow}>
+        <View style={styles.orRule} />
+        <Text style={styles.orText}>or</Text>
+        <View style={styles.orRule} />
+      </View>
+
+      <View style={styles.actionRow}>
+        <Pressable style={({ pressed }) => [styles.secondaryButton, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={onContinueFree}>
+          <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
+          <Text style={styles.secondaryButtonTextPrimary}>Continue with Free</Text>
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.secondaryButton, pressed ? styles.utilityPressed : null]} onPress={onViewPro}>
+          <Ionicons name="diamond-outline" size={14} color="rgba(236,239,242,0.9)" />
+          <Text style={styles.secondaryButtonText}>View Pro</Text>
+        </Pressable>
+      </View>
+
+      <Pressable style={({ pressed }) => [styles.exportButton, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onExport()}>
+        {exportingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="download-outline" size={15} color="rgba(230,237,243,0.82)" />}
+        <Text style={styles.exportButtonText}>Export local data</Text>
+      </Pressable>
+      <Text style={styles.exportHint}>Save your offline data as JSON before signing in or switching devices.</Text>
+      <LoginFooterBlock
+        footerMaxWidth={footerMaxWidth}
+        marginTop={12}
+        onOpenAuthInfo={onOpenAuthInfo}
+        onCreateAccount={onCreateAccount}
+      />
+    </View>
+  );
+});
+
+type ForgotPasswordCardProps = {
+  resetEmail: string;
+  resetEmailError: string;
+  resetLoading: boolean;
+  forgotDisabled: boolean;
+  renderMessage: React.ReactNode;
+  hasMessage: boolean;
+  primaryPressScale: Animated.Value;
+  onClearStatus: () => void;
+  onSetResetEmail: React.Dispatch<React.SetStateAction<string>>;
+  onPrimaryPressIn: () => void;
+  onPrimaryPressOut: () => void;
+  onForgotPassword: () => Promise<void>;
+  onBackToLogin: () => void;
+  onCreateAccount: () => void;
+};
+
+const ForgotPasswordCard = memo(function ForgotPasswordCard({
+  resetEmail,
+  resetEmailError,
+  resetLoading,
+  forgotDisabled,
+  renderMessage,
+  hasMessage,
+  primaryPressScale,
+  onClearStatus,
+  onSetResetEmail,
+  onPrimaryPressIn,
+  onPrimaryPressOut,
+  onForgotPassword,
+  onBackToLogin,
+  onCreateAccount,
+}: ForgotPasswordCardProps) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.recoveryTitle}>{AUTH_COPY.forgotPassword.title}</Text>
+      <Text style={styles.recoverySupporting}>{AUTH_COPY.forgotPassword.supporting}</Text>
+      <View style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>EMAIL</Text>
+        <View style={styles.inputShell}>
+          <Ionicons name="mail-outline" size={16} color="rgba(230,237,243,0.38)" />
+          <TextInput
+            value={resetEmail}
+            onChangeText={(text) => {
+              onSetResetEmail(text);
+              onClearStatus();
+            }}
+            placeholder={AUTH_COPY.login.emailPlaceholder}
+            placeholderTextColor="rgba(139,148,158,0.74)"
+            style={styles.input}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            keyboardType="email-address"
+            autoComplete="email"
+            keyboardAppearance="dark"
+            returnKeyType="send"
+            onSubmitEditing={() => { if (!forgotDisabled) void onForgotPassword(); }}
+            editable={!resetLoading}
+            selectionColor={TACTICAL.amber}
+            cursorColor={TACTICAL.amber}
+          />
+        </View>
+        {!!resetEmailError && <Text style={styles.inlineError}>{resetEmailError}</Text>}
+      </View>
+      <Animated.View style={{ width: '100%', transform: [{ scale: primaryPressScale }] }}>
+        <Pressable
+          style={({ pressed }) => [styles.primaryButton, forgotDisabled ? styles.primaryButtonDisabled : null, pressed && !forgotDisabled ? styles.primaryButtonPressed : null]}
+          disabled={forgotDisabled}
+          onPressIn={forgotDisabled ? undefined : onPrimaryPressIn}
+          onPressOut={forgotDisabled ? undefined : onPrimaryPressOut}
+          onPress={() => void onForgotPassword()}
+        >
+          {resetLoading ? (
+            <View style={styles.primaryButtonContent}>
+              <ActivityIndicator size="small" color={ECS.bgPrimary} />
+              <Text style={styles.primaryButtonText}>{AUTH_COPY.forgotPassword.primaryLoading}</Text>
+            </View>
+          ) : (
+            <Text style={styles.primaryButtonText}>{AUTH_COPY.forgotPassword.primary}</Text>
+          )}
+        </Pressable>
+      </Animated.View>
+      <View style={styles.linkRow}>
+        <Pressable style={({ pressed }) => [styles.bottomLinkHit, pressed ? styles.utilityPressed : null]} onPress={onBackToLogin}>
+          <Text style={styles.bottomLinkText}>{AUTH_COPY.forgotPassword.back}</Text>
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.bottomLinkHit, pressed ? styles.utilityPressed : null]} onPress={onCreateAccount}>
+          <Text style={styles.bottomLinkText}>{AUTH_COPY.login.createAccount}</Text>
+        </Pressable>
+      </View>
+      <View style={[styles.messageSlot, !hasMessage ? styles.messageSlotCollapsed : null]}>{renderMessage}</View>
+    </View>
+  );
+});

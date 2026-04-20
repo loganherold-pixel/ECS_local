@@ -2,7 +2,7 @@
  * AppearanceSettingsModal — Full Display settings panel
  *
  * Sections:
- * - Theme: Auto / Dark / Light / Driving (Hi-Vis)
+ * - Theme: Dynamic / Dark / Light / Driving (Hi-Vis)
  * - Toggle: Auto-enable Driving Mode when moving
  * - Toggle: Professional ECS Animations (smooth value transitions, widget glow, compass smoothing)
  * - Preview: shows current palette colors
@@ -13,17 +13,15 @@ import {
   View,
   Text,
   TouchableOpacity,
-  ScrollView,
   Switch,
   StyleSheet,
-  Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from './SafeIcon';
 
 import { useTheme } from '../context/ThemeContext';
 import type { AppearanceMode } from '../lib/appearanceStore';
 import { ecsAnimationSettings, type AnimationSettings } from '../lib/ecsAnimations';
-import ECSModal from './ECSModal';
+import TacticalPopupShell from './TacticalPopupShell';
 
 
 interface AppearanceSettingsModalProps {
@@ -32,7 +30,7 @@ interface AppearanceSettingsModalProps {
 }
 
 const MODES: { key: AppearanceMode; label: string; desc: string; icon: keyof typeof Ionicons.glyphMap; color: string }[] = [
-  { key: 'auto', label: 'Auto', desc: 'Follow device theme', icon: 'contrast-outline', color: '#80C0FF' },
+  { key: 'auto', label: 'Dynamic', desc: 'Adaptive app surfaces', icon: 'contrast-outline', color: '#80C0FF' },
   { key: 'dark', label: 'Dark', desc: 'Night / low-light', icon: 'moon-outline', color: '#8A8AFF' },
   { key: 'light', label: 'Light', desc: 'Daylight readability', icon: 'sunny-outline', color: '#FFB800' },
   { key: 'driving', label: 'Driving (Hi-Vis)', desc: 'Max contrast, solid surfaces', icon: 'car-sport-outline', color: '#E0A030' },
@@ -71,23 +69,19 @@ export default function AppearanceSettingsModal({ visible, onClose }: Appearance
   };
 
   return (
-
-    <ECSModal visible={visible} onClose={onClose} tier="global">
-      <View style={styles.overlay}>
-
-        <View style={[styles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {/* Header */}
-            <View style={styles.header}>
-              <View style={styles.headerLeft}>
-                <Ionicons name="color-palette-outline" size={18} color={palette.amber} />
-                <Text style={[styles.headerTitle, { color: palette.amber }]}>DISPLAY</Text>
-              </View>
-              <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Ionicons name="close" size={22} color={palette.textMuted} />
-              </TouchableOpacity>
-            </View>
-
+    <TacticalPopupShell
+      visible={visible}
+      onClose={onClose}
+      title="Display"
+      subtitle="Theme, tactical motion, and visibility preferences."
+      eyebrow="ECS APPEARANCE"
+      icon="color-palette-outline"
+      overlayClass="workflow"
+      maxWidth={860}
+      maxHeightFraction={0.84}
+      minHeightFraction={0.7}
+    >
+      <View style={[styles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}>
             {/* Current Theme Indicator */}
             <View style={[styles.currentTheme, { backgroundColor: palette.bg, borderColor: palette.border }]}>
               <Text style={[styles.currentLabel, { color: palette.textMuted }]}>ACTIVE THEME</Text>
@@ -294,44 +288,14 @@ export default function AppearanceSettingsModal({ visible, onClose }: Appearance
             </View>
 
             <View style={{ height: 40 }} />
-          </ScrollView>
-        </View>
       </View>
-    </ECSModal>
+    </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'flex-end',
-  },
   container: {
-
-    maxHeight: '92%',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderTopWidth: 2,
-    paddingBottom: Platform.OS === 'web' ? 20 : 40,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 4,
+    paddingBottom: 8,
   },
   currentTheme: {
     marginHorizontal: 16,

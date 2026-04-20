@@ -28,7 +28,6 @@
 import { Platform, NativeModules } from 'react-native';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
-import { vehicleDisplayFallback } from './vehicleDisplayFallback';
 import { breadcrumbTracker } from './breadcrumbTracker';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleCompanionManager } from './vehicleCompanionManager';
@@ -157,7 +156,7 @@ async function _pushData(): Promise<void> {
 
     // Push system health
     try {
-      const healthPayload = vehicleDisplayFallback.buildNativeHealthPayload();
+      const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
       await native.pushSystemHealth(JSON.stringify(healthPayload));
     } catch {}
 

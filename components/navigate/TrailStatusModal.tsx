@@ -41,9 +41,6 @@ export default function TrailStatusModal({
   onExportFromHistory,
   showToast,
 }: Props) {
-
-  if (!visible) return null;
-
   const [confirmStop, setConfirmStop] = useState(false);
   const [historyTrails, setHistoryTrails] = useState<TrailHistorySummary[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -68,21 +65,21 @@ export default function TrailStatusModal({
     trailStore.start(activeExpeditionId);
     onStatusChange();
     showToast('TRAIL RECORDING STARTED');
-  }, [activeExpeditionId]);
+  }, [activeExpeditionId, onStatusChange, showToast]);
 
   const handlePause = useCallback(() => {
     hapticMicro();
     trailStore.pause();
     onStatusChange();
     showToast('TRAIL RECORDING PAUSED');
-  }, []);
+  }, [onStatusChange, showToast]);
 
   const handleResume = useCallback(() => {
     hapticCommand();
     trailStore.resume();
     onStatusChange();
     showToast('TRAIL RECORDING RESUMED');
-  }, []);
+  }, [onStatusChange, showToast]);
 
   const handleStop = useCallback(() => {
     hapticCommand();
@@ -90,7 +87,7 @@ export default function TrailStatusModal({
     setConfirmStop(false);
     onStatusChange();
     showToast('TRAIL SAVED');
-  }, []);
+  }, [activeExpeditionName, onStatusChange, showToast]);
 
   const statusColor =
     isRecording ? '#EF5350' :
@@ -102,6 +99,8 @@ export default function TrailStatusModal({
     isPaused ? 'PAUSED' :
     status === 'stopped' ? 'SAVED' :
     'IDLE';
+
+  if (!visible) return null;
 
   return (
     <View style={styles.sheet}>

@@ -18,6 +18,7 @@ import {
   Platform,
 } from 'react-native';
 import ECSModal from './ECSModal';
+import { SafeIcon as Ionicons } from './SafeIcon';
 
 import { COLORS, SPACING, RADIUS } from '../lib/theme';
 
@@ -333,8 +334,8 @@ export default function DatePickerField({ label, value, onChange, placeholder }:
                       key={idx}
                       style={[
                         styles.dayCell,
-                        day && isSelected(day) && styles.dayCellSelected,
-                        day && isToday(day) && !isSelected(day) && styles.dayCellToday,
+                        day != null ? (isSelected(day) ? styles.dayCellSelected : null) : null,
+                        day != null ? (isToday(day) && !isSelected(day) ? styles.dayCellToday : null) : null,
                       ]}
                       onPress={() => day && selectDay(day)}
                       disabled={!day}

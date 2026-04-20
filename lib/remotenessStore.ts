@@ -42,6 +42,9 @@ import { routeStore } from './routeStore';
 import { connectivity } from './connectivity';
 import type { RemotenessIndexOutput } from './remotenessTypes';
 import { computeFullRemoteness, scoreToLevel } from './remotenessEngine';
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import type { ECSPriorityResult } from './ai/priorityTypes';
+import { createPriorityResult } from './ai/priorityEngine';
 
 
 // ── Tier definitions ────────────────────────────────────
@@ -58,6 +61,8 @@ export interface RemotenessOutput {
   tier: RemotenessTier;
   reason: string;           // single supporting line
   tierColor: string;
+  confidence: ECSConfidenceResult;
+  priority: ECSPriorityResult;
   /** Individual signal contributions for detail modal */
   signals: {
     elevationScore: number;
@@ -197,6 +202,30 @@ const TIER_FORCE_DELTA = 8;
 
 // ── Recomputation interval ──────────────────────────────
 const RECOMPUTE_INTERVAL_MS = 12_000;
+
+const UNKNOWN_CONFIDENCE: ECSConfidenceResult = {
+  level: 'unknown',
+  score: 0,
+  label: 'Confidence unavailable',
+  shortReason: 'Awaiting stronger signal',
+  reasons: ['awaiting_signal'],
+  sourceSummary: {
+    live: 0,
+    manual: 0,
+    inferred: 0,
+    stale: 0,
+    missing: 0,
+  },
+};
+
+const UNKNOWN_PRIORITY: ECSPriorityResult = createPriorityResult({
+  level: 'informational',
+  domain: 'remoteness',
+  title: 'Remoteness assessing',
+  shortReason: 'Awaiting stronger signal',
+  reasons: ['missing_signal'],
+  sourceKey: 'remoteness',
+});
 
 
 // ══════════════════════════════════════════════════════════
@@ -652,6 +681,9 @@ function _recomputeIndex(signals: GatheredSignals): void {
     levelColor: color,
     reason: result.reason,
     description: result.description,
+    confidence: result.confidence,
+    priority: result.priority,
+    explanation: result.explanation ?? null,
     factors: result.factors,
     availableFactorCount: result.factors.filter(f => f.available).length,
     totalFactorCount: result.factors.length,
@@ -737,6 +769,8 @@ function _recomputeWithIndex() {
     tier: _currentTier,
     reason: _currentReason,
     tierColor: _currentTierColor,
+    confidence: _cachedIndexOutput?.confidence ?? UNKNOWN_CONFIDENCE,
+    priority: _cachedIndexOutput?.priority ?? UNKNOWN_PRIORITY,
     signals: {
       elevationScore: _elevationScore,
       connectivityScore: _connectivityScore,
@@ -786,6 +820,8 @@ export const remotenessStore = {
       tier: 'NEAR CIVILIZATION',
       reason: 'Assessing environment\u2026',
       tierColor: '#4CAF50',
+      confidence: UNKNOWN_CONFIDENCE,
+      priority: UNKNOWN_PRIORITY,
       signals: {
         elevationScore: 0,
         connectivityScore: 0,

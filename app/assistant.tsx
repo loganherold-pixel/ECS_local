@@ -19,6 +19,7 @@ import { ECS } from '../lib/theme';
 
 import Header from '../components/Header';
 import AssistantPanel from '../components/assistant/AssistantPanel';
+import PremiumAccessGate from '../components/premium/PremiumAccessGate';
 import { assistantStore } from '../lib/assistantStore';
 
 export default function AssistantScreen() {
@@ -32,7 +33,9 @@ export default function AssistantScreen() {
   return (
     <View style={styles.container}>
       <Header />
-      <AssistantPanel />
+      <PremiumAccessGate featureLabel="ECS expedition assistant">
+        <AssistantPanel />
+      </PremiumAccessGate>
       {/* Bottom padding for CommandDock */}
       <View style={styles.dockSpacer} />
     </View>

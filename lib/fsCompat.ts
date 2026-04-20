@@ -34,6 +34,8 @@ let _modernFS: any = null;
 let _modernLoaded = false;
 
 let _documentDir: string | null = null;
+const SHOULD_DEBUG_DOCUMENT_DIR =
+  typeof __DEV__ !== 'undefined' && __DEV__ && Platform.OS === 'android';
 
 // ── Lazy loaders ─────────────────────────────────────────────
 
@@ -41,7 +43,8 @@ async function getLegacy(): Promise<any> {
   if (_legacyLoaded) return _legacyFS;
   _legacyLoaded = true;
   try {
-    _legacyFS = await import('expo-file-system/legacy' as any);
+    const mod = await import('expo-file-system/legacy' as any);
+    _legacyFS = (mod as any)?.default ?? mod;
   } catch {
     _legacyFS = null;
   }
@@ -52,11 +55,21 @@ async function getModern(): Promise<any> {
   if (_modernLoaded) return _modernFS;
   _modernLoaded = true;
   try {
-    _modernFS = await import('expo-file-system');
+    const mod = await import('expo-file-system');
+    _modernFS = (mod as any)?.default ?? mod;
   } catch {
     _modernFS = null;
   }
   return _modernFS;
+}
+
+function debugDocumentDir(message: string, metadata?: Record<string, unknown>) {
+  if (!SHOULD_DEBUG_DOCUMENT_DIR) return;
+  if (metadata) {
+    console.log(`[fsCompat] ${message}`, metadata);
+    return;
+  }
+  console.log(`[fsCompat] ${message}`);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -70,37 +83,50 @@ async function getModern(): Promise<any> {
 export async function getDocumentDirectory(): Promise<string> {
   if (_documentDir) return _documentDir;
 
-  // Layer 1: new Paths API
-  try {
-    const mod = await getModern();
-    if (mod?.Paths?.document?.uri) {
-      _documentDir = mod.Paths.document.uri;
-      // Ensure trailing slash for path concatenation
-      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
-      return _documentDir;
-    }
-  } catch {}
-
-  // Layer 2: legacy shim
+  // Layer 1: legacy shim
+  // ECS already has native persisted state written at this location.
+  // Prefer it first so startup/session/setup caches rehydrate from the
+  // same durable path across updates and dev-client reloads.
   try {
     const legacy = await getLegacy();
+    debugDocumentDir('legacy documentDirectory probe', {
+      value: legacy?.documentDirectory ?? null,
+    });
     if (legacy?.documentDirectory) {
       _documentDir = legacy.documentDirectory;
-      return _documentDir;
+      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
+      return _documentDir ?? '';
     }
   } catch {}
 
-  // Layer 3: classic module
+  // Layer 2: classic module
   try {
     const mod = await getModern();
+    debugDocumentDir('classic documentDirectory probe', {
+      value: mod?.documentDirectory ?? null,
+    });
     if (mod?.documentDirectory) {
       _documentDir = mod.documentDirectory;
-      return _documentDir;
+      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
+      return _documentDir ?? '';
     }
   } catch {}
 
-  _documentDir = '';
-  return _documentDir;
+  // Layer 3: new Paths API
+  try {
+    const mod = await getModern();
+    debugDocumentDir('Paths.document probe', {
+      value: mod?.Paths?.document?.uri ?? null,
+    });
+    if (mod?.Paths?.document?.uri) {
+      _documentDir = mod.Paths.document.uri;
+      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
+      return _documentDir ?? '';
+    }
+  } catch {}
+
+  debugDocumentDir('documentDirectory unresolved');
+  return '';
 }
 
 // ═══════════════════════════════════════════════════════════════

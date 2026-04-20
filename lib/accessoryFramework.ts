@@ -401,7 +401,7 @@ export function buildAccessoryFramework(
     }
   }
 
-  return framework as AccessoryFramework;
+  return framework as unknown as AccessoryFramework;
 }
 
 /**

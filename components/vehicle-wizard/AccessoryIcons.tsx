@@ -18,6 +18,7 @@ import { SafeIcon } from '../SafeIcon';
 let MCIComponent: any = null;
 
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const mod = require('@expo/vector-icons');
   if (mod && mod.MaterialCommunityIcons) {
     MCIComponent = mod.MaterialCommunityIcons;
@@ -28,6 +29,7 @@ try {
 
 if (!MCIComponent) {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@expo/vector-icons/MaterialCommunityIcons');
     if (mod && (mod.default || mod)) {
       MCIComponent = mod.default || mod;

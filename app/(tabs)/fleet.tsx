@@ -12,16 +12,11 @@
 //   - Vehicle name
 //   - Stat chips (fuel, water capacity)
 //   - Accessories summary
-//   - Buttons: Select, Edit, Duplicate, Delete
+//   - Buttons: Make Active/Active, Reconfigure, Loadout, Copy, Delete
 //
 // IMPORTANT: Vehicle creation and editing is handled EXCLUSIVELY
 // by the Vehicle Configuration Wizard at /(tabs)/vehicle-config.
 // This screen is the vehicle LIST only — no inline wizard.
-//
-// Expedition state integration:
-//   - "Begin Expedition" button when standby + activeVehicleId
-//   - Gold underline on header when expedition active
-//   - Summary sheet on expedition complete
 //
 // Sync Status Integration:
 //   - FleetSyncStatusIndicator in header shows synced/pending/conflict state
@@ -31,9 +26,10 @@
 
 import React, { useState, useCallback, useEffect, useMemo, useRef, Component, type ReactNode } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Platform, Alert, ScrollView, Animated,
+  View, Text, TouchableOpacity, StyleSheet,
+  ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -41,6 +37,13 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
 import TopoBackground from '../../components/TopoBackground';
+import { ECSInlineHelper, ECSStateMessage } from '../../components/ECSStateMessage';
+import { ECSButton } from '../../components/ECSButton';
+import ECSActionRow from '../../components/ECSActionRow';
+import { ECSCard, ECSCardFooter, ECSPanel } from '../../components/ECSSurface';
+import { ECSBadge } from '../../components/ECSStatus';
+import { ECSResultsMetaRow } from '../../components/ECSResults';
+import { ECSLoadingCard, ECSTransientNotice } from '../../components/ECSLoading';
 import { vehicleStore } from '../../lib/vehicleStore';
 
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
@@ -48,37 +51,154 @@ import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { getZoneSummaryPills } from '../../lib/vehicleSystemsIntegration';
 import { computeFullBuildWeightBreakdown, type BuildWeightBreakdown } from '../../lib/weightEngine';
-import type { AccessoryFramework } from '../../lib/accessoryFramework';
-import type { ContainerZone } from '../../lib/accessoryFramework';
-import { frameworkToSelections } from '../../lib/accessoryFramework';
+import { frameworkToSelections, type AccessoryFramework, type ContainerZone } from '../../lib/accessoryFramework';
+import { isLoadoutReadyForBuild } from '../../lib/loadoutStore';
+import useECSAIHook from '../../lib/ai/useECSAI';
+import { selectFleetCommandState, type FleetCommandState, type FleetCommandBadgeTone } from '../../lib/fleet/fleetCommandSelectors';
 
 
 
 import { getVehicleIcon } from '../../lib/vehicleIcons';
 import type { Vehicle } from '../../lib/types';
+import { getVehicleResourceProfile } from '../../lib/vehicleResourceProfile';
 import {
   getConfigSummary,
 } from '../../components/vehicle-wizard/WizardData';
-import { expeditionStateStore, type ExpeditionState, type ExpeditionRecord } from '../../lib/expeditionStateStore';
 import { hapticMicro } from '../../lib/haptics';
 // ExpeditionSummarySheet removed from fleet.tsx — dashboard.tsx is the single
 // source of truth for the completion modal to prevent duplicate popups.
-import SetupTakeover from '../../components/dashboard/SetupTakeover';
 import FleetLoadoutModal from '../../components/fleet/FleetLoadoutModal';
 
 import VehicleLoadoutSummary from '../../components/fleet/VehicleLoadoutSummary';
 import FleetSyncStatusIndicator from '../../components/fleet/FleetSyncStatusIndicator';
 import FleetSyncModal from '../../components/fleet/FleetSyncModal';
-import TiresLiftModal from '../../components/fleet/TiresLiftModal';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
+import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
+import { showEcsConfirmDialog } from '../../lib/ecsConfirmDialog';
+import { consumeNavigationFlow, stageNavigationFlow } from '../../lib/ecsNavigationFlow';
+import { ECS_CONFIRM_COPY, ECS_STATE_COPY, ECS_TOAST_COPY } from '../../lib/ecsStateCopy';
+import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
+import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 
 
 
 
 const TAG = '[FLEET]';
-const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
-// CommandDock height (68px) + safe breathing room
-const DOCK_CLEARANCE = 76;
+
+function formatPowerStorage(valueWh: number | null): string | null {
+  if (valueWh == null || valueWh <= 0) return null;
+  if (valueWh >= 1000) return `${(valueWh / 1000).toFixed(1)} kWh`;
+  return `${Math.round(valueWh)} Wh`;
+}
+
+function formatFleetMetric(
+  value: number | null | undefined,
+  unit: string,
+  decimals = 0,
+): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return '--';
+  if (decimals > 0) return `${value.toFixed(decimals)} ${unit}`;
+  return `${Math.round(value)} ${unit}`;
+}
+
+function fleetBadgeTone(tone: FleetCommandBadgeTone): 'ready' | 'warning' | 'info' {
+  switch (tone) {
+    case 'primary':
+      return 'ready';
+    case 'warning':
+      return 'warning';
+    case 'muted':
+    default:
+      return 'info';
+  }
+}
+
+function fleetCommandAccent(state: FleetCommandState): string {
+  switch (state.readiness) {
+    case 'vehicle_ready':
+      return '#4CAF50';
+    case 'ready_for_staging':
+      return TACTICAL.amber;
+    case 'ready_with_limitations':
+    case 'partially_configured':
+      return '#FFB300';
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function FleetCommandSurface({ state }: { state: FleetCommandState }) {
+  const accent = fleetCommandAccent(state);
+  const secondaryLabels = [
+    ...state.missingCritical.map((item) => `Missing ${item}`),
+    ...state.secondary.map((candidate) => candidate.title),
+    ...state.limitations,
+  ].filter(Boolean).slice(0, 3);
+
+  return (
+    <View style={s.commandWrap}>
+      <ECSPanel
+        variant="secondary"
+        style={[
+          s.commandPanel,
+          {
+            borderColor: `${accent}2E`,
+            backgroundColor: `${accent}12`,
+          },
+        ]}
+      >
+        <View style={s.commandTopRow}>
+          <View style={s.commandTitleWrap}>
+            <Text style={s.commandEyebrow}>READINESS COMMAND</Text>
+            <Text style={s.commandTitle}>{state.title}</Text>
+          </View>
+          <ECSBadge
+            label={state.readiness.replace(/_/g, ' ').toUpperCase()}
+            tone={fleetBadgeTone(
+              state.readiness === 'vehicle_ready' || state.readiness === 'ready_for_staging'
+                ? 'primary'
+                : state.readiness === 'ready_with_limitations' || state.readiness === 'partially_configured'
+                  ? 'warning'
+                  : 'muted',
+            )}
+            compact
+          />
+        </View>
+
+        <Text style={s.commandSummary}>{state.summary}</Text>
+        {state.detail ? (
+          <Text style={s.commandDetail}>{state.detail}</Text>
+        ) : null}
+
+        <View style={s.commandBadgeRow}>
+          {state.badges.map((badge) => (
+            <ECSBadge
+              key={badge.id}
+              label={badge.label}
+              tone={fleetBadgeTone(badge.tone)}
+              compact
+            />
+          ))}
+          {state.phaseLabel ? (
+            <ECSBadge label={state.phaseLabel.toUpperCase()} tone="info" compact />
+          ) : null}
+        </View>
+
+        {secondaryLabels.length > 0 ? (
+          <View style={s.commandSecondaryRow}>
+            {secondaryLabels.map((label) => (
+              <View key={label} style={s.commandSecondaryPill}>
+                <Text style={s.commandSecondaryText} numberOfLines={1}>
+                  {label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </ECSPanel>
+    </View>
+  );
+}
 
 
 // ============================================================
@@ -97,10 +217,11 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
         <TopoBackground>
           <View style={s.center}>
             <Ionicons name="alert-circle-outline" size={48} color={TACTICAL.danger} />
-            <Text style={s.errorTitle}>FLEET ERROR</Text>
-            <Text style={s.errorSub}>{this.state.error?.message || 'Unexpected error'}</Text>
+            <Text style={s.errorTitle}>{ECS_STATE_COPY.recovery.fleetLoadFailure.title}</Text>
+            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.fleetLoadFailure.message}</Text>
+            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.fleetLoadFailure.helper}</Text>
             <TouchableOpacity style={s.retryBtn} onPress={() => this.setState({ hasError: false, error: null })}>
-              <Text style={s.retryBtnText}>RETRY</Text>
+              <Text style={s.retryBtnText}>{ECS_STATE_COPY.recovery.fleetLoadFailure.ctaLabel.toUpperCase()}</Text>
             </TouchableOpacity>
           </View>
         </TopoBackground>
@@ -115,7 +236,11 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
 // ============================================================
 function FleetScreenInner() {
   const router = useRouter();
-  const { user, authLoading, isOnline, showToast } = useApp();
+  const { user, authLoading, showToast, activeTrip, userSettings, isOnline } = useApp();
+  const insets = useSafeAreaInsets();
+  const adaptive = useAdaptiveLayout();
+  const headerTopPadding = useMemo(() => getShellHeaderTopPadding(insets.top), [insets.top]);
+  const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
 
   // ── State ─────────────────────────────────────────────
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -127,7 +252,6 @@ function FleetScreenInner() {
   // ── Setup Takeover State ──────────────────────────────
   // When no vehicles exist, show the System Configuration Required
   // intercept (SetupTakeover) instead of the empty "No Vehicles" card.
-  const [showSetupTakeover, setShowSetupTakeover] = useState(false);
 
   // ── Fleet Loadout Modal State ─────────────────────────
   // Allows editing a vehicle's loadout from the Fleet tab (post-setup).
@@ -141,25 +265,7 @@ function FleetScreenInner() {
   // ── Fleet Sync Modal State ────────────────────────────
   // Controls visibility of the full sync queue management modal.
   const [syncModalVisible, setSyncModalVisible] = useState(false);
-
-  // ── Tires / Lift Modal State ──────────────────────────
-  // Allows configuring tire size and suspension lift per vehicle.
-  const [tiresLiftModalVisible, setTiresLiftModalVisible] = useState(false);
-  const [tiresLiftModalVehicle, setTiresLiftModalVehicle] = useState<Vehicle | null>(null);
-  // Refresh key to trigger re-render of tires/lift summary chips after save.
-  const [tiresLiftRefreshKey, setTiresLiftRefreshKey] = useState(0);
-
-  // ── Vehicle Rename State ──────────────────────────────
-  // Tracks which vehicle is being renamed and the draft name value.
-  const [renamingVehicleId, setRenamingVehicleId] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState('');
-
-  // Expedition state
-  const [expState, setExpState] = useState<ExpeditionState>(expeditionStateStore.getState());
-  const [expRecord, setExpRecord] = useState<ExpeditionRecord | null>(expeditionStateStore.getCurrentExpedition());
-  // summaryVisible removed — completion modal is now handled exclusively by dashboard.tsx
-  const goldUnderlineAnim = useRef(new Animated.Value(expState === 'active' ? 1 : 0)).current;
-
+  const [supportDataRevision, setSupportDataRevision] = useState(0);
 
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
@@ -167,38 +273,24 @@ function FleetScreenInner() {
   // ── Track last-fetched vehicleStore revision to avoid redundant fetches ──
   const lastFetchRevisionRef = useRef(0);
 
-  // Subscribe to expedition state changes
-  useEffect(() => {
-    const unsub = expeditionStateStore.subscribe((state, record) => {
-      if (!mountedRef.current) return;
-      setExpState(state);
-      setExpRecord(record);
-      if (state === 'active') {
-        Animated.timing(goldUnderlineAnim, { toValue: 1, duration: 150, useNativeDriver: false }).start();
-      } else {
-        Animated.timing(goldUnderlineAnim, { toValue: 0, duration: 220, useNativeDriver: false }).start();
-      }
-      // Completion modal removed — handled exclusively by dashboard.tsx
-    });
-    return unsub;
-  }, [goldUnderlineAnim]);
-
 
 
   // ── Fetch vehicles ────────────────────────────────────
   const fetchVehicles = useCallback(async () => {
     setLoading(true);
     try {
+      await Promise.all([
+        vehicleStore.waitForHydration(),
+        vehicleSetupStore.waitForHydration(),
+        vehicleSpecStore.waitForHydration(),
+        tiresLiftStore.waitForHydration(),
+        consumablesStore.waitForHydration(),
+      ]);
       const result = await vehicleStore.getAll(user?.id || null);
       if (mountedRef.current) {
         setVehicles(result.vehicles);
+        setActiveVehicleId(vehicleSetupStore.getActiveVehicleId());
         lastFetchRevisionRef.current = vehicleStore.getRevision();
-        // Show SetupTakeover when no vehicles exist
-        if (result.vehicles.length === 0) {
-          setShowSetupTakeover(true);
-        } else {
-          setShowSetupTakeover(false);
-        }
       }
     } catch (err: any) {
       console.error(TAG, 'fetch error:', err);
@@ -207,6 +299,45 @@ function FleetScreenInner() {
   }, [user?.id]);
 
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
+
+  useEffect(() => {
+    const unsub = vehicleSetupStore.subscribe(() => {
+      if (!mountedRef.current) return;
+      setActiveVehicleId(vehicleSetupStore.getActiveVehicleId());
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const bumpSupportRevision = () => {
+      if (!mountedRef.current) return;
+      setSupportDataRevision((prev) => prev + 1);
+    };
+
+    void Promise.all([
+      vehicleSpecStore.waitForHydration(),
+      tiresLiftStore.waitForHydration(),
+      consumablesStore.waitForHydration(),
+    ]).then(() => {
+      bumpSupportRevision();
+    });
+
+    const unsubSpec = vehicleSpecStore.subscribe(() => {
+      bumpSupportRevision();
+    });
+    const unsubTires = tiresLiftStore.subscribe(() => {
+      bumpSupportRevision();
+    });
+    const unsubConsumables = consumablesStore.subscribe(() => {
+      bumpSupportRevision();
+    });
+
+    return () => {
+      unsubSpec();
+      unsubTires();
+      unsubConsumables();
+    };
+  }, []);
 
   // ── Subscribe to vehicleStore changes ─────────────────
   useEffect(() => {
@@ -230,21 +361,18 @@ function FleetScreenInner() {
     } else {
       fetchVehicles();
     }
-  }, [fetchVehicles]));
+    void (async () => {
+      const flow = await consumeNavigationFlow('fleet');
+      if (!flow) return;
+      if (flow.intent === 'quick_action' && flow.message) {
+        showToast(flow.message);
+      }
+    })();
+  }, [fetchVehicles, showToast]));
 
 
 
   // ── Setup completion handler ──────────────────────────
-  const handleSetupComplete = useCallback((vehicleId: string) => {
-    setShowSetupTakeover(false);
-    setActiveVehicleId(vehicleId);
-    vehicleSetupStore.setActiveVehicleId(vehicleId);
-    fetchVehicles();
-    hapticMicro();
-    showToast('Vehicle configured');
-  }, [fetchVehicles, showToast]);
-
-
   // ── Dynamic header title ──────────────────────────────
   const headerTitle = useMemo(() => {
     if (vehicles.length === 0) return 'FLEET';
@@ -254,9 +382,17 @@ function FleetScreenInner() {
 
   // ── Vehicle list actions ──────────────────────────────
   const handleSelectVehicle = useCallback((id: string) => {
-    setActiveVehicleId(id);
+    hapticMicro();
     vehicleSetupStore.setActiveVehicleId(id);
-    showToast('Vehicle selected');
+    void stageNavigationFlow({
+      source: 'fleet',
+      target: 'dashboard',
+      intent: 'vehicle_context_updated',
+      label: 'Active Rig Updated',
+      message: 'Dashboard will use the selected vehicle context on the next return.',
+      context: { vehicleId: id },
+    });
+    showToast(ECS_TOAST_COPY.vehicleSetActive);
   }, [showToast]);
 
   // ── ADD VEHICLE → Navigate to full Setup Wizard (fleet-add mode) ──
@@ -270,72 +406,10 @@ function FleetScreenInner() {
   const handleReconfigureVehicle = useCallback((v: Vehicle) => {
     hapticMicro();
     router.push({
-      pathname: '/(tabs)/vehicle-config',
-      params: { vehicleId: v.id, referrer: 'fleet' },
+      pathname: '/setup',
+      params: { mode: 'fleet-edit', vehicleId: v.id },
     } as any);
   }, [router]);
-
-  // ── EDIT ACCESSORIES ──
-  const handleEditAccessories = useCallback((v: Vehicle) => {
-    hapticMicro();
-    router.push({
-      pathname: '/(tabs)/vehicle-config',
-      params: { vehicleId: v.id, startAtStep: 'accessoryConfiguration', referrer: 'fleet' },
-    } as any);
-  }, [router]);
-
-
-  // ── RENAME VEHICLE ────────────────────────────────────
-  // Start inline rename: populate draft with current name.
-  const handleStartRename = useCallback((v: Vehicle) => {
-    hapticMicro();
-    setRenamingVehicleId(v.id);
-    setRenameDraft(v.name);
-  }, []);
-
-  // Save the renamed vehicle. Trims whitespace, validates non-empty,
-  // persists via vehicleStore.update, and refreshes the list.
-  const handleSaveRename = useCallback(async (vehicleId: string) => {
-    const trimmed = renameDraft.trim();
-    if (!trimmed) {
-      // Revert — don't save empty names
-      setRenamingVehicleId(null);
-      setRenameDraft('');
-      return;
-    }
-
-    // Check if name actually changed
-    const existing = vehicles.find(v => v.id === vehicleId);
-    if (existing && existing.name === trimmed) {
-      setRenamingVehicleId(null);
-      setRenameDraft('');
-      return;
-    }
-
-    try {
-      await vehicleStore.update(vehicleId, { name: trimmed }, user?.id || null);
-      // Optimistically update local state for instant feedback
-      setVehicles(prev => prev.map(v =>
-        v.id === vehicleId ? { ...v, name: trimmed } : v
-      ));
-      showToast(`Renamed to "${trimmed}"`);
-      console.log(TAG, `Renamed vehicle ${vehicleId} → "${trimmed}"`);
-    } catch (err: any) {
-      console.error(TAG, 'Rename error:', err);
-      showToast('Failed to rename vehicle');
-    }
-
-    setRenamingVehicleId(null);
-    setRenameDraft('');
-  }, [renameDraft, vehicles, user?.id, showToast]);
-
-  // Cancel rename without saving
-  const handleCancelRename = useCallback(() => {
-    setRenamingVehicleId(null);
-    setRenameDraft('');
-  }, []);
-
-
   // ── Duplicate Vehicle ──────────────────────────────────
   const handleDuplicateVehicle = useCallback(async (v: Vehicle) => {
     try {
@@ -352,11 +426,17 @@ function FleetScreenInner() {
       }
 
       const newId = result.vehicle.id;
+      const sourceResources = getVehicleResourceProfile(v as any);
 
-      if (v.water_capacity_gal || v.fuel_tank_capacity_gal) {
+      if (
+        sourceResources.waterCapacityGal != null ||
+        sourceResources.batteryUsableWh != null ||
+        v.fuel_tank_capacity_gal != null
+      ) {
         await vehicleStore.update(newId, {
-          water_capacity_gal: v.water_capacity_gal,
+          water_capacity_gal: sourceResources.waterCapacityGal,
           fuel_tank_capacity_gal: v.fuel_tank_capacity_gal,
+          battery_usable_wh: sourceResources.batteryUsableWh,
         }, user?.id || null);
       }
 
@@ -393,7 +473,7 @@ function FleetScreenInner() {
       }
 
       await fetchVehicles();
-      showToast(`"${v.name}" duplicated`);
+      showToast(ECS_TOAST_COPY.vehicleCopied);
       console.log(TAG, `Duplicated vehicle ${v.id} → ${newId}`);
     } catch (err: any) {
       console.error(TAG, 'Duplicate error:', err);
@@ -427,7 +507,6 @@ function FleetScreenInner() {
         setVehicles(prev => prev.filter(veh => veh.id !== v.id));
 
         if (isActiveVehicle) {
-          setActiveVehicleId(null);
           vehicleSetupStore.clearActiveVehicleId();
         }
 
@@ -440,7 +519,7 @@ function FleetScreenInner() {
 
         const result = await vehicleStore.delete(v.id, user?.id || null);
         if (result.success) {
-          showToast(`Vehicle "${v.name}" deleted`);
+          showToast(ECS_TOAST_COPY.vehicleDeleted);
           console.log(TAG, `Deleted vehicle ${v.id} (from: ${result.deletedFrom})`);
         } else {
           console.error(TAG, 'Delete failed:', result.error);
@@ -454,21 +533,15 @@ function FleetScreenInner() {
       }
     };
 
-    if (Platform.OS === 'web') {
-      const confirmed = typeof window !== 'undefined'
-        ? window.confirm(warningMessage)
-        : true;
-      if (confirmed) doDelete();
-    } else {
-      Alert.alert(
-        'DELETE VEHICLE',
-        warningMessage,
-        [
-          { text: 'CANCEL', style: 'cancel' },
-          { text: 'DELETE', style: 'destructive', onPress: doDelete },
-        ]
-      );
-    }
+    const dialogCopy = ECS_CONFIRM_COPY.deleteVehicle(v.name, isActiveVehicle);
+    showEcsConfirmDialog({
+      title: dialogCopy.title,
+      message: warningMessage,
+      confirmLabel: dialogCopy.confirmLabel,
+      cancelLabel: dialogCopy.cancelLabel,
+      destructive: true,
+      onConfirm: doDelete,
+    });
   }, [user?.id, activeVehicleId, fetchVehicles, showToast]);
 
 
@@ -491,32 +564,271 @@ function FleetScreenInner() {
     setLoadoutRefreshKey(prev => prev + 1);
   }, [fetchVehicles]);
 
+  const handleConfirmVehicleReady = useCallback(() => {
+    if (vehicles.length === 1 && !activeVehicleId) {
+      const onlyVehicle = vehicles[0];
+      if (!onlyVehicle) return;
+      vehicleSetupStore.setActiveVehicleId(onlyVehicle.id);
+      void stageNavigationFlow({
+        source: 'fleet',
+        target: 'dashboard',
+        intent: 'vehicle_ready_confirmed',
+        label: 'Vehicle Ready',
+        message: 'Dashboard will reflect the active rig on the next return.',
+        context: { vehicleId: onlyVehicle.id },
+      });
+      hapticMicro();
+      showToast(ECS_TOAST_COPY.vehicleSetActive);
+      return;
+    }
 
+    if (!activeVehicleId) {
+      showToast(ECS_STATE_COPY.fleet.selectActiveHelper);
+      return;
+    }
 
-
-  // ── Begin Expedition handler ───────────────────────────
-  const handleBeginExpedition = useCallback(() => {
-    if (!activeVehicleId) return;
-    const av = vehicles.find(v => v.id === activeVehicleId);
-    if (!av) return;
-    expeditionStateStore.beginExpedition({
-      activeVehicleId,
-      vehicleName: av.name || 'Vehicle',
-      startFuelLevel: av.fuel_tank_capacity_gal ?? null,
-      startWaterLevel: av.water_capacity_gal ?? null,
+    const activeVehicle = vehicles.find(v => v.id === activeVehicleId);
+    void stageNavigationFlow({
+      source: 'fleet',
+      target: 'dashboard',
+      intent: 'vehicle_ready_confirmed',
+      label: 'Vehicle Ready',
+      message: 'Dashboard will reflect the active rig on the next return.',
+      context: { vehicleId: activeVehicle?.id ?? activeVehicleId },
     });
     hapticMicro();
-    showToast('Expedition started.');
-  }, [activeVehicleId, vehicles, showToast]);
+    showToast(ECS_TOAST_COPY.vehicleReady);
+  }, [vehicles, activeVehicleId, showToast]);
+
+  const activeVehicle = useMemo(
+    () => vehicles.find(v => v.id === activeVehicleId) || null,
+    [vehicles, activeVehicleId],
+  );
+  const selectedPreviewVehicle = useMemo(
+    () => activeVehicle ?? vehicles[0] ?? null,
+    [activeVehicle, vehicles],
+  );
+  const fleetFrameStyle = useMemo(
+    () => ({
+      alignSelf: 'center' as const,
+      width: '100%' as const,
+      maxWidth: adaptive.contentMaxWidth,
+      paddingHorizontal: adaptive.horizontalPadding,
+    }),
+    [adaptive.contentMaxWidth, adaptive.horizontalPadding],
+  );
+  const showFleetPreviewPane = adaptive.fleet.multiPane && vehicles.length > 0;
+  const listSummaryMetricStyle = showFleetPreviewPane ? s.summaryMetricWide : null;
+  const previewSummaryMetricStyle = showFleetPreviewPane ? s.summaryMetricPreviewWide : null;
+  const previewVehicleData = useMemo(() => {
+    const hydrationTick = supportDataRevision;
+    void hydrationTick;
+    if (!selectedPreviewVehicle) return null;
+    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any);
+    const powerSummary = formatPowerStorage(resourceProfile.batteryUsableWh);
+    const tlProfile = tiresLiftStore.get(selectedPreviewVehicle.id);
+    const tlSummary = tiresLiftStore.getSummary(selectedPreviewVehicle.id);
+    const vehicleAny = selectedPreviewVehicle as any;
+    const framework: AccessoryFramework | null = vehicleAny.accessoryFramework || null;
+    const containerZones: ContainerZone[] | null = vehicleAny.containerZones || null;
+    const zonePills = getZoneSummaryPills(framework, containerZones, 8);
+    const wc = vehicleAny.wizard_config || {};
+    const accessorySummary = zonePills.length > 0
+      ? []
+      : (() => {
+          try {
+            return getConfigSummary(wc)
+              .filter(c => c.value !== 'Not Selected' && c.label !== 'VEHICLE TYPE')
+              .map(c => c.value)
+              .slice(0, 4);
+          } catch {
+            return [];
+          }
+        })();
+    const descriptor = [selectedPreviewVehicle.year, selectedPreviewVehicle.make, selectedPreviewVehicle.model]
+      .filter(Boolean)
+      .join(' ')
+      || (typeof wc.vehicle_type === 'string'
+        ? wc.vehicle_type.replace(/_/g, ' ').toUpperCase()
+        : 'Vehicle profile');
+
+    return {
+      descriptor,
+      tlSummary,
+      zonePills,
+      accessorySummary,
+      summaryMetrics: [
+        { label: 'Fuel', value: formatFleetMetric(spec?.fuel_tank_capacity_gal || selectedPreviewVehicle.fuel_tank_capacity_gal, 'gal') },
+        { label: 'Water', value: formatFleetMetric(resourceProfile.waterCapacityGal, 'gal') },
+        { label: 'Power', value: powerSummary || '--' },
+        { label: 'Lift', value: formatFleetMetric(tlProfile?.suspensionLiftInches, 'in') },
+        { label: 'Tires', value: formatFleetMetric(tlProfile?.tireSizeInches, 'in') },
+      ],
+    };
+  }, [selectedPreviewVehicle, supportDataRevision]);
+  const selectedVehicleBaseline = useMemo(() => {
+    if (!selectedPreviewVehicle) {
+      return {
+        hasSelectedVehicle: false,
+        hasVehicleProfile: false,
+        hasConfiguredIdentity: false,
+        hasFuelCapacity: false,
+        hasWaterCapacity: false,
+        hasPowerStorage: false,
+        hasTireSize: false,
+        hasLiftProfile: false,
+        hasAccessoriesConfigured: false,
+        hasLoadout: false,
+        hasLiveTelemetry: false,
+      };
+    }
+
+    const selectedAny = selectedPreviewVehicle as any;
+    const wizardConfig = selectedAny.wizard_config ?? null;
+    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any);
+    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
+    const framework: AccessoryFramework | null = selectedAny.accessoryFramework || null;
+    const containerZones: ContainerZone[] | null = selectedAny.containerZones || null;
+    const zonePills = getZoneSummaryPills(framework, containerZones, 6);
+    const accessoryCount = zonePills.length;
+    const loadoutReady = isLoadoutReadyForBuild(selectedPreviewVehicle.id, null);
+    const activeTripAny = activeTrip as any;
+    const selectedVehicleIsActive = !activeVehicleId || activeVehicleId === selectedPreviewVehicle.id;
+    const hasLiveTelemetry = Boolean(
+      selectedVehicleIsActive &&
+      activeTripAny &&
+      (
+        activeTripAny.fuelPercent != null ||
+        activeTripAny.batteryPercent != null ||
+        activeTripAny.gpsStatus === 'live' ||
+        activeTripAny.gpsHasFix === true
+      ),
+    );
+
+    return {
+      hasSelectedVehicle: true,
+      hasVehicleProfile:
+        Boolean(wizardConfig) ||
+        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+          .filter(Boolean)
+          .length >= 2,
+      hasConfiguredIdentity:
+        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+          .filter(Boolean)
+          .length >= 2 ||
+        typeof wizardConfig?.vehicle_type === 'string',
+      hasFuelCapacity: Number(spec?.fuel_tank_capacity_gal ?? selectedPreviewVehicle.fuel_tank_capacity_gal ?? 0) > 0,
+      hasWaterCapacity: resourceProfile.waterCapacityGal != null && resourceProfile.waterCapacityGal >= 0,
+      hasPowerStorage: resourceProfile.batteryUsableWh != null && resourceProfile.batteryUsableWh >= 0,
+      hasTireSize: Number(tiresLift?.tireSizeInches ?? 0) > 0,
+      hasLiftProfile: tiresLift?.suspensionLiftInches != null,
+      hasAccessoriesConfigured: accessoryCount > 0,
+      hasLoadout: loadoutReady,
+      hasLiveTelemetry,
+    };
+  }, [selectedPreviewVehicle, activeTrip, activeVehicleId]);
+
+  const fleetAIResources = useMemo(() => {
+    if (!selectedPreviewVehicle) return null;
+    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any);
+    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
+    return {
+      fuelTankCapacityGal: resourceProfile.fuelTankCapacityGal,
+      waterCapacityGal: resourceProfile.waterCapacityGal,
+      batteryCapacityWh: resourceProfile.batteryUsableWh,
+      tireSizeInches: tiresLift?.tireSizeInches ?? null,
+      suspensionLiftInches: tiresLift?.suspensionLiftInches ?? null,
+      loadoutItemCount: selectedVehicleBaseline.hasLoadout ? 1 : 0,
+      accessoryInstalledCount: selectedVehicleBaseline.hasAccessoriesConfigured ? 1 : 0,
+      connectivityLevel: isOnline ? 'live' : 'offline',
+    };
+  }, [selectedPreviewVehicle, selectedVehicleBaseline.hasAccessoriesConfigured, selectedVehicleBaseline.hasLoadout, isOnline]);
+
+  const fleetAITelemetry = useMemo(() => {
+    const activeTripAny = activeTrip as any;
+    return {
+      fuelPercent: activeTripAny?.fuelPercent ?? null,
+      batteryPercent: activeTripAny?.batteryPercent ?? null,
+      gpsStatus: activeTripAny?.gpsStatus ?? null,
+      gpsHasFix: activeTripAny?.gpsHasFix ?? null,
+    };
+  }, [activeTrip]);
+
+  const { aiState, fleetView } = useECSAIHook({
+    activeRun: activeTrip,
+    vehicleConfig: selectedPreviewVehicle,
+    telemetry: fleetAITelemetry,
+    resources: fleetAIResources,
+    userPreferences: userSettings,
+    enabled: vehicles.length > 0,
+    options: {
+      enableWhenIdle: true,
+      emitBriefWhenNoSignals: true,
+    },
+  });
+
+  const fleetCommandState = useMemo(() => (
+    selectFleetCommandState({
+      fleetView,
+      expeditionPhase: aiState?.expeditionPhase,
+      expeditionPhaseLabel: aiState?.expeditionPhaseLabel,
+      operationalState: aiState?.operationalState,
+      operationalSummary: aiState?.operationalSummary,
+      liveStatus: aiState?.liveStatus ?? null,
+      isOnline,
+      vehicleCount: vehicles.length,
+      hasActiveVehicle: Boolean(activeVehicle),
+      hasSelectedVehicle: selectedVehicleBaseline.hasSelectedVehicle,
+      hasVehicleProfile: selectedVehicleBaseline.hasVehicleProfile,
+      hasConfiguredIdentity: selectedVehicleBaseline.hasConfiguredIdentity,
+      hasFuelCapacity: selectedVehicleBaseline.hasFuelCapacity,
+      hasWaterCapacity: selectedVehicleBaseline.hasWaterCapacity,
+      hasPowerStorage: selectedVehicleBaseline.hasPowerStorage,
+      hasTireSize: selectedVehicleBaseline.hasTireSize,
+      hasLiftProfile: selectedVehicleBaseline.hasLiftProfile,
+      hasAccessoriesConfigured: selectedVehicleBaseline.hasAccessoriesConfigured,
+      hasLoadout: selectedVehicleBaseline.hasLoadout,
+      hasLiveTelemetry: selectedVehicleBaseline.hasLiveTelemetry,
+    })
+  ), [
+    activeVehicle,
+    aiState?.expeditionPhase,
+    aiState?.expeditionPhaseLabel,
+    aiState?.liveStatus,
+    aiState?.operationalState,
+    aiState?.operationalSummary,
+    fleetView,
+    isOnline,
+    selectedVehicleBaseline,
+    vehicles.length,
+  ]);
+
+  useEffect(() => {
+    if (loading || authLoading) return;
+    if (activeVehicleId && !activeVehicle) {
+      console.log(TAG, 'Clearing stale active vehicle context after fleet load', {
+        activeVehicleId,
+        vehicleCount: vehicles.length,
+      });
+      vehicleSetupStore.clearActiveVehicleId();
+    }
+  }, [activeVehicle, activeVehicleId, authLoading, loading, vehicles.length]);
 
   // ── Auth loading ──────────────────────────────────────
   if (authLoading) {
     return (
       <TopoBackground>
-        <View style={s.safeContainer}>
-          <View style={s.center}>
-            <ActivityIndicator size="large" color={TACTICAL.accent} />
-            <Text style={s.loadingText}>INITIALIZING...</Text>
+        <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
+          <View style={s.loadingShell}>
+            <ECSTransientNotice
+              kind="loading"
+              label="Loading Fleet Data..."
+              message="Preparing vehicle context, sync state, and active-rig readiness."
+            />
+            <ECSLoadingCard title="Fleet" message="Hydrating vehicle profiles and saved setup." />
+            <ECSLoadingCard title="Active Rig" message="Restoring your current vehicle selection." />
           </View>
         </View>
       </TopoBackground>
@@ -527,14 +839,19 @@ function FleetScreenInner() {
   if (loading) {
     return (
       <TopoBackground>
-        <View style={s.safeContainer}>
-          <View style={s.header}>
+        <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
+          <View style={[s.header, { paddingTop: headerTopPadding }]}>
             <Text style={s.headerBrand}>ECS FLEET MANAGEMENT</Text>
-            <Text style={s.headerTitle}>LOADING...</Text>
+            <Text style={s.headerTitle}>FLEET</Text>
           </View>
-          <View style={s.center}>
-            <ActivityIndicator size="large" color={TACTICAL.accent} />
-            <Text style={s.loadingText}>LOADING VEHICLES...</Text>
+          <View style={s.loadingShell}>
+            <ECSTransientNotice
+              kind="syncing"
+              label="Loading Vehicle Data..."
+              message="Building Fleet summaries and restoring the active rig."
+            />
+            <ECSLoadingCard title="Vehicle Profile" message="Loading saved capacities, loadout, and mounted systems." />
+            <ECSLoadingCard title="Vehicle Profile" message="Preparing readiness and active-state actions." />
           </View>
         </View>
       </TopoBackground>
@@ -546,64 +863,73 @@ function FleetScreenInner() {
   // so "Configure Now" routes to the full 4-step /setup wizard,
   // identical to the "+ Add Vehicle" button experience.
   // ============================================================
-  if (vehicles.length === 0 && showSetupTakeover) {
-    return (
-      <TopoBackground>
-        <View style={s.safeContainer}>
-          <SetupTakeover onComplete={handleSetupComplete} onConfigureNow={handleAddVehicle} />
-        </View>
-      </TopoBackground>
-    );
-  }
-
-
-  // ============================================================
-  // VEHICLE LIST (only view — wizard is at vehicle-config tab)
-  // ============================================================
-  const activeVehicle = vehicles.find(v => v.id === activeVehicleId);
-
-
   return (
     <TopoBackground>
-      <View style={s.safeContainer}>
+      <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
         {/* Header */}
-        <View style={s.listHeader}>
+        <View style={[s.listHeader, fleetFrameStyle, { paddingTop: headerTopPadding }]}>
           <View>
             <Text style={s.headerBrand}>ECS FLEET MANAGEMENT</Text>
             <Text style={s.headerTitle}>{headerTitle}</Text>
           </View>
           <View style={s.headerRight}>
-            {expState === 'active' && (
-              <View style={s.expActiveBadge}>
-                <View style={s.expActiveDot} />
-                <Text style={s.expActiveText}>EXPEDITION ACTIVE</Text>
-              </View>
-            )}
             {/* Sync Status Indicator — replaces plain online/offline dot */}
             <FleetSyncStatusIndicator onPress={() => setSyncModalVisible(true)} />
           </View>
         </View>
 
-
-        {/* Gold underline — 150ms fade-in when expedition active */}
-        <Animated.View style={[s.goldUnderline, {
-          opacity: goldUnderlineAnim,
-          height: goldUnderlineAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 2] }),
-        }]} />
-
         {/* Scrollable vehicle list — flex: 1 fills space between header and bottom actions */}
+        <View style={fleetFrameStyle}>
+          <FleetCommandSurface state={fleetCommandState} />
+        </View>
+        <View
+          style={[
+            s.contentRow,
+            showFleetPreviewPane && s.contentRowExpanded,
+            showFleetPreviewPane && { gap: adaptive.panelGap + 2 },
+            fleetFrameStyle,
+          ]}
+        >
         <ScrollView
-          style={s.scrollArea}
-          contentContainerStyle={s.scrollContent}
+          style={[s.scrollArea, showFleetPreviewPane && s.scrollAreaExpanded]}
+          contentContainerStyle={[
+            s.scrollContent,
+            showFleetPreviewPane && s.scrollContentExpanded,
+          ]}
           showsVerticalScrollIndicator={false}
         >
-          {/* Vehicle cards */}
-          {vehicles.map((v) => {
+          {vehicles.length === 0 ? (
+            <View style={s.emptyStateShell}>
+              <ECSStateMessage
+                title={ECS_STATE_COPY.fleet.noVehiclesConfigured.title}
+                message={ECS_STATE_COPY.fleet.noVehiclesConfigured.message}
+                helper={ECS_STATE_COPY.fleet.noVehiclesConfigured.helper}
+                actionLabel={ECS_STATE_COPY.fleet.noVehiclesConfigured.ctaLabel}
+                onAction={handleAddVehicle}
+                iconAsset={require('../../assets/ecs/nav/fleet-badge.png')}
+              />
+            </View>
+          ) : (
+            <>
+              <ECSResultsMetaRow
+                chips={[
+                  { label: `${vehicles.length} ${vehicles.length === 1 ? 'Rig' : 'Rigs'}`, selected: true },
+                  { label: activeVehicle ? `Active ${activeVehicle.name}` : 'No Active Rig' },
+                  { label: fleetCommandState.title },
+                  { label: fleetCommandState.confidence.label },
+                ]}
+                style={s.vehicleResultsMeta}
+              />
+
+              {vehicles.map((v) => {
             const isActive = v.id === activeVehicleId;
-            const isRenaming = renamingVehicleId === v.id;
             const hasConfig = !!(v as any).wizard_config;
             const vIcon = getVehicleIcon(v);
             const spec = vehicleSpecStore.get(v.id);
+            const resourceProfile = getVehicleResourceProfile(v as any);
+            const powerSummary = formatPowerStorage(resourceProfile.batteryUsableWh);
+            const tlProfile = tiresLiftStore.get(v.id);
+            const tlSummary = tiresLiftStore.getSummary(v.id);
 
             // Phase 4: Zone summary pills from accessory framework
             const vAny = v as any;
@@ -625,217 +951,348 @@ function FleetScreenInner() {
               } catch {}
             }
 
+            const vehicleDescriptor = [v.year, v.make, v.model].filter(Boolean).join(' ')
+              || (typeof wc.vehicle_type === 'string'
+                ? wc.vehicle_type.replace(/_/g, ' ').toUpperCase()
+                : 'Vehicle profile');
+
+            const summaryMetrics = [
+              { label: 'Fuel', value: formatFleetMetric(spec?.fuel_tank_capacity_gal || v.fuel_tank_capacity_gal, 'gal') },
+              { label: 'Water', value: formatFleetMetric(resourceProfile.waterCapacityGal, 'gal') },
+              { label: 'Power', value: powerSummary || '--' },
+              { label: 'Lift', value: formatFleetMetric(tlProfile?.suspensionLiftInches, 'in') },
+              { label: 'Tires', value: formatFleetMetric(tlProfile?.tireSizeInches, 'in') },
+            ];
+
             return (
-              <View key={v.id} style={[s.vehicleCard, isActive && s.vehicleCardActive]}>
+              <ECSCard key={v.id} variant="primary" selected={isActive} style={s.vehicleCard}>
                 <View style={s.vehicleCardTop}>
-                  <View style={[s.vehicleIcon, isActive && { backgroundColor: 'rgba(196, 138, 44, 0.2)' }]}>
-                    <Ionicons name={vIcon as any} size={20} color={isActive ? TACTICAL.amber : TACTICAL.textMuted} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    {/* ── Editable Vehicle Name ── */}
-                    {isRenaming ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <TextInput
-                          style={{
-                            flex: 1, fontSize: 14, fontWeight: '800', color: TACTICAL.text,
-                            letterSpacing: 0.3, borderBottomWidth: 1.5,
-                            borderBottomColor: TACTICAL.amber, paddingVertical: 2, paddingHorizontal: 0,
-                          }}
-                          value={renameDraft}
-                          onChangeText={setRenameDraft}
-                          onSubmitEditing={() => handleSaveRename(v.id)}
-                          onBlur={() => handleSaveRename(v.id)}
-                          autoFocus
-                          selectTextOnFocus
-                          returnKeyType="done"
-                          maxLength={60}
-                          placeholderTextColor={TACTICAL.textMuted + '50'}
-                          placeholder="Vehicle name"
+                  <View style={s.vehicleIdentity}>
+                    <View style={[s.vehicleIcon, isActive && { backgroundColor: 'rgba(196, 138, 44, 0.2)' }]}>
+                      <Ionicons name={vIcon as any} size={22} color={isActive ? TACTICAL.amber : TACTICAL.textMuted} />
+                    </View>
+                    <View style={s.vehicleIdentityText}>
+                      <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
+                      <Text style={s.vehicleMeta} numberOfLines={1}>{vehicleDescriptor}</Text>
+                      <View style={s.vehicleTagRow}>
+                        <ECSBadge
+                          label={hasConfig ? 'Configured' : 'Setup Incomplete'}
+                          icon={hasConfig ? 'shield-checkmark-outline' : 'construct-outline'}
+                          tone={hasConfig ? 'ready' : 'warning'}
+                          compact
                         />
-                        <TouchableOpacity onPress={() => handleSaveRename(v.id)} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                          <Ionicons name="checkmark-circle" size={18} color={TACTICAL.amber} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={handleCancelRename} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                          <Ionicons name="close-circle" size={18} color={TACTICAL.textMuted} />
-                        </TouchableOpacity>
                       </View>
-                    ) : (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
-                        <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
-
-                        <TouchableOpacity onPress={() => handleStartRename(v)} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                          <Ionicons name="pencil-outline" size={13} color={TACTICAL.textMuted} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    <Text style={s.vehicleMeta}>
-                      {[v.year, v.make, v.model].filter(Boolean).join(' ') || 'No details'}
-                    </Text>
+                    </View>
                   </View>
-                  {isActive && (
-                    <View style={s.activeBadge}>
-                      <Ionicons name="checkmark-circle" size={12} color={TACTICAL.amber} />
-                      <Text style={s.activeBadgeText}>ACTIVE</Text>
-                    </View>
+                  {isActive ? (
+                    <ECSButton
+                      label="Active"
+                      icon="checkmark-circle"
+                      variant="active"
+                      size="medium"
+                      disabled
+                      style={s.activeVehicleButton}
+                    />
+                  ) : (
+                    <ECSButton
+                      label="Make Active"
+                      icon="radio-button-off-outline"
+                      variant="primary"
+                      size="medium"
+                      onPress={() => handleSelectVehicle(v.id)}
+                      style={s.activeVehicleButton}
+                    />
                   )}
                 </View>
 
-                {/* Stats chips */}
-                <View style={s.statsRow}>
-                  {spec?.base_weight_lb ? (
-                    <View style={s.statChip}>
-                      <Ionicons name="scale-outline" size={10} color={TACTICAL.textMuted} />
-                      <Text style={s.statChipText}>{spec.base_weight_lb.toLocaleString()} lbs</Text>
-                    </View>
-                  ) : null}
-                  {v.water_capacity_gal ? (
-                    <View style={s.statChip}>
-                      <Ionicons name="water-outline" size={10} color={TACTICAL.textMuted} />
-                      <Text style={s.statChipText}>{v.water_capacity_gal} gal</Text>
-                    </View>
-                  ) : null}
-                  {(spec?.fuel_tank_capacity_gal || v.fuel_tank_capacity_gal) ? (
-                    <View style={s.statChip}>
-                      <Ionicons name="flame-outline" size={10} color={TACTICAL.textMuted} />
-                      <Text style={s.statChipText}>{spec?.fuel_tank_capacity_gal || v.fuel_tank_capacity_gal} gal</Text>
-                    </View>
-                  ) : null}
-                  {hasConfig && (
-                    <View style={s.statChip}>
-                      <Ionicons name="construct-outline" size={10} color="#66BB6A" />
-                      <Text style={[s.statChipText, { color: '#66BB6A' }]}>CONFIGURED</Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Tires / Lift Summary — shows after tires/lift config is saved */}
-                {(() => {
-                  const tlSummary = tiresLiftStore.getSummary(v.id);
-                  if (!tlSummary) return null;
-                  return (
-                    <View style={s.statsRow}>
-                      {tlSummary.tires && (
-                        <View style={s.tiresLiftChip}>
-                          <Ionicons name="ellipse-outline" size={10} color="#81C784" />
-                          <Text style={s.tiresLiftChipText}>{tlSummary.tires} Tires</Text>
-                        </View>
-                      )}
-                      {tlSummary.suspension && (
-                        <View style={s.tiresLiftChip}>
-                          <Ionicons name="resize-outline" size={10} color="#81C784" />
-                          <Text style={s.tiresLiftChipText}>{tlSummary.suspension}</Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                })()}
-
-
-                {/* Phase 4: Container Zone Summary Pills */}
-                {hasZones && (
-                  <View style={s.zonePillsRow}>
-                    <Ionicons name="grid-outline" size={10} color={TACTICAL.amber} />
-                    {zonePills.map((pill) => (
-                      <View
-                        key={pill.id}
-                        style={[s.zonePill, { borderColor: pill.color + '55', backgroundColor: pill.color + '14' }]}
-                      >
-                        <Ionicons name={pill.icon as any} size={8} color={pill.color} />
-                        <Text style={[s.zonePillText, { color: pill.color }]}>{pill.label}</Text>
+                <ECSPanel variant="secondary" style={s.summaryPanel}>
+                  <Text style={s.summaryLabel}>SETUP SUMMARY</Text>
+                  <View style={s.summaryGrid}>
+                    {summaryMetrics.map((metric) => (
+                      <View key={metric.label} style={[s.summaryMetric, listSummaryMetricStyle]}>
+                        <Text style={s.summaryMetricLabel}>{metric.label}</Text>
+                        <Text style={s.summaryMetricValue} numberOfLines={1}>{metric.value}</Text>
                       </View>
                     ))}
-                    {containerZones && containerZones.length > 6 && (
-                      <View style={s.zonePillMore}>
-                        <Text style={s.zonePillMoreText}>+{containerZones.length - 6}</Text>
-                      </View>
-                    )}
+                  </View>
+                </ECSPanel>
+
+                {tlSummary && (
+                  <View style={s.supportPanel}>
+                    <Text style={s.supportPanelLabel}>MECHANICAL PROFILE</Text>
+                    <View style={s.supportChipRow}>
+                      {tlSummary.tires && (
+                        <ECSBadge
+                          label={`${tlSummary.tires} Tires`}
+                          icon="ellipse-outline"
+                          tone="category"
+                          compact
+                          colorOverride="#81C784"
+                        />
+                      )}
+                      {tlSummary.suspension && (
+                        <ECSBadge
+                          label={tlSummary.suspension}
+                          icon="resize-outline"
+                          tone="category"
+                          compact
+                          colorOverride="#81C784"
+                        />
+                      )}
+                    </View>
                   </View>
                 )}
 
-
-                {/* Linked Loadout Summary */}
-                <VehicleLoadoutSummary
-                  vehicleId={v.id}
-                  userId={user?.id || null}
-                  onOpenLoadout={() => handleOpenLoadoutModal(v)}
-                  refreshKey={loadoutRefreshKey}
-                />
-
-                {/* SELECT button — full-width, only when not active */}
-                {!isActive && (
-                  <TouchableOpacity style={s.selectBtn} onPress={() => handleSelectVehicle(v.id)} activeOpacity={0.8}>
-                    <Ionicons name="radio-button-off-outline" size={14} color="#0B0F12" />
-                    <Text style={s.selectBtnText}>SELECT</Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Action buttons — Row 1: Accessories / Loadout / Tires & Lift */}
-                <View style={s.actionGrid}>
-                  <TouchableOpacity style={s.gridBtnBlue} onPress={() => handleEditAccessories(v)} activeOpacity={0.8}>
-                    <Ionicons name="layers-outline" size={12} color="#4FC3F7" />
-                    <Text style={s.gridBtnBlueText}>ACCESSORIES</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.gridBtnAmber} onPress={() => handleOpenLoadoutModal(v)} activeOpacity={0.8}>
-                    <Ionicons name="cube-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={s.gridBtnAmberText}>LOADOUT</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.gridBtnGreen} onPress={() => { hapticMicro(); setTiresLiftModalVehicle(v); setTiresLiftModalVisible(true); }} activeOpacity={0.8}>
-                    <Ionicons name="speedometer-outline" size={12} color="#81C784" />
-                    <Text style={s.gridBtnGreenText}>TIRES / LIFT</Text>
-                  </TouchableOpacity>
+                <View style={s.supportPanel}>
+                  <Text style={s.supportPanelLabel}>ACCESSORY SYSTEMS</Text>
+                  {hasZones ? (
+                    <View style={s.zonePillsRow}>
+                      <Ionicons name="grid-outline" size={10} color={TACTICAL.amber} />
+                      {zonePills.map((pill) => (
+                        <ECSBadge
+                          key={pill.id}
+                          label={pill.label}
+                          icon={pill.icon as any}
+                          tone="category"
+                          compact
+                          colorOverride={pill.color}
+                          style={s.zoneBadge}
+                        />
+                      ))}
+                      {containerZones && containerZones.length > 6 && (
+                        <View style={s.zonePillMore}>
+                          <Text style={s.zonePillMoreText}>+{containerZones.length - 6}</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : accessorySummary.length > 0 ? (
+                    <View style={s.accessorySummaryRow}>
+                      <Ionicons name="layers-outline" size={10} color={TACTICAL.textMuted} />
+                      <Text style={s.accessorySummaryText}>
+                        {accessorySummary.join(' · ')}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={s.accessorySummaryRow}>
+                      <Ionicons name="layers-outline" size={10} color={TACTICAL.textMuted} />
+                      <Text style={s.accessorySummaryText}>No accessories configured yet</Text>
+                    </View>
+                  )}
                 </View>
 
-                {/* Action buttons — Row 2: Reconfigure / Copy / Delete */}
-                <View style={s.actionGrid2}>
-                  <TouchableOpacity style={s.gridBtnMuted} onPress={() => handleReconfigureVehicle(v)} activeOpacity={0.8}>
-                    <Ionicons name="construct-outline" size={12} color={TACTICAL.textMuted} />
-                    <Text style={s.gridBtnMutedText}>RECONFIGURE</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.gridBtnMuted} onPress={() => handleDuplicateVehicle(v)} activeOpacity={0.8}>
-                    <Ionicons name="copy-outline" size={12} color={TACTICAL.textMuted} />
-                    <Text style={s.gridBtnMutedText}>COPY</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.gridBtnDanger} onPress={() => handleDeleteVehicle(v)} activeOpacity={0.8}>
-                    <Ionicons name="trash-outline" size={12} color={TACTICAL.danger} />
-                    <Text style={s.gridBtnDangerText}>DELETE</Text>
-                  </TouchableOpacity>
+                <View style={s.supportPanel}>
+                  <Text style={s.supportPanelLabel}>LOADOUT</Text>
+                  <VehicleLoadoutSummary
+                    vehicleId={v.id}
+                    userId={user?.id || null}
+                    onOpenLoadout={() => handleOpenLoadoutModal(v)}
+                    refreshKey={loadoutRefreshKey}
+                  />
                 </View>
 
+                {/* Action buttons */}
+                <ECSCardFooter style={s.actionSection}>
+                  <ECSActionRow compact>
+                    <ECSButton
+                      label="Edit Setup"
+                      icon="construct-outline"
+                      variant="secondary"
+                      size="medium"
+                      onPress={() => handleReconfigureVehicle(v)}
+                      grow
+                    />
+                    <ECSButton
+                      label="Loadout"
+                      icon="cube-outline"
+                      variant="secondary"
+                      size="medium"
+                      onPress={() => handleOpenLoadoutModal(v)}
+                      grow
+                    />
+                  </ECSActionRow>
 
-
-              </View>
+                  <ECSActionRow compact style={s.actionRow}>
+                    <ECSButton
+                      label="Copy"
+                      icon="copy-outline"
+                      variant="tertiary"
+                      size="medium"
+                      onPress={() => handleDuplicateVehicle(v)}
+                      grow
+                    />
+                    <ECSButton
+                      label="Delete"
+                      icon="trash-outline"
+                      variant="destructive"
+                      size="medium"
+                      onPress={() => handleDeleteVehicle(v)}
+                      grow
+                    />
+                  </ECSActionRow>
+                </ECSCardFooter>
+              </ECSCard>
             );
           })}
+            </>
+          )}
 
           {/* Add Vehicle Button */}
           {vehicles.length > 0 && (
-            <TouchableOpacity style={s.addBtnOutline} onPress={handleAddVehicle} activeOpacity={0.8}>
-              <Ionicons name="add" size={18} color={TACTICAL.amber} />
-              <Text style={s.addBtnOutlineText}>ADD VEHICLE</Text>
-            </TouchableOpacity>
+            <ECSButton
+              label="Add Vehicle"
+              icon="add"
+              variant="secondary"
+              size="large"
+              onPress={handleAddVehicle}
+              style={s.addVehicleButton}
+            />
           )}
 
 
           {/* Bottom breathing room so last item isn't flush against bottom actions */}
-          <View style={{ height: 12 }} />
+          <View style={{ height: 8 }} />
         </ScrollView>
+        {showFleetPreviewPane && selectedPreviewVehicle && previewVehicleData ? (
+          <View
+            style={[
+              s.previewRail,
+              {
+                minWidth: adaptive.fleet.previewMinWidth,
+                maxWidth: adaptive.fleet.previewMaxWidth,
+              },
+            ]}
+          >
+            <ECSPanel variant="secondary" style={s.previewPanel}>
+              <View style={s.previewHeader}>
+                <View style={s.previewTitleWrap}>
+                  <Text style={s.previewEyebrow}>ACTIVE RIG SUMMARY</Text>
+                  <Text style={s.previewTitle}>{selectedPreviewVehicle.name}</Text>
+                  <Text style={s.previewSubtitle}>{previewVehicleData.descriptor}</Text>
+                </View>
+                <ECSBadge
+                  label={selectedPreviewVehicle.id === activeVehicleId ? 'ACTIVE' : 'STANDBY'}
+                  icon={selectedPreviewVehicle.id === activeVehicleId ? 'checkmark-circle-outline' : 'radio-button-off-outline'}
+                  tone={selectedPreviewVehicle.id === activeVehicleId ? 'ready' : 'warning'}
+                  compact
+                />
+              </View>
 
-        {/* ── Fixed Bottom Actions — always visible above CommandDock ── */}
-        <View style={s.bottomActions}>
-          {/* Begin Expedition — only when standby + activeVehicleId */}
-          {expState === 'standby' && activeVehicleId && (
-            <TouchableOpacity style={s.beginExpBtn} onPress={handleBeginExpedition} activeOpacity={0.8}>
-              <Ionicons name="flag-outline" size={16} color="#0B0F12" />
-              <Text style={s.beginExpBtnText}>BEGIN EXPEDITION</Text>
-            </TouchableOpacity>
-          )}
+              <View style={s.summaryGrid}>
+                {previewVehicleData.summaryMetrics.map((metric) => (
+                  <View key={`preview-${metric.label}`} style={[s.summaryMetric, previewSummaryMetricStyle]}>
+                    <Text style={s.summaryMetricLabel}>{metric.label}</Text>
+                    <Text style={s.summaryMetricValue} numberOfLines={1}>{metric.value}</Text>
+                  </View>
+                ))}
+              </View>
+
+              {previewVehicleData.tlSummary ? (
+                <View style={s.supportPanel}>
+                  <Text style={s.supportPanelLabel}>MECHANICAL PROFILE</Text>
+                  <View style={s.supportChipRow}>
+                    {previewVehicleData.tlSummary.tires ? (
+                      <ECSBadge label={`${previewVehicleData.tlSummary.tires} Tires`} icon="ellipse-outline" tone="category" compact colorOverride="#81C784" />
+                    ) : null}
+                    {previewVehicleData.tlSummary.suspension ? (
+                      <ECSBadge label={previewVehicleData.tlSummary.suspension} icon="resize-outline" tone="category" compact colorOverride="#81C784" />
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={s.supportPanel}>
+                <Text style={s.supportPanelLabel}>ACCESSORY SYSTEMS</Text>
+                {previewVehicleData.zonePills.length > 0 ? (
+                  <View style={s.zonePillsRow}>
+                    {previewVehicleData.zonePills.map((pill) => (
+                      <ECSBadge
+                        key={`preview-zone-${pill.id}`}
+                        label={pill.label}
+                        icon={pill.icon as any}
+                        tone="category"
+                        compact
+                        colorOverride={pill.color}
+                        style={s.zoneBadge}
+                      />
+                    ))}
+                  </View>
+                ) : (
+                  <View style={s.accessorySummaryRow}>
+                    <Ionicons name="layers-outline" size={10} color={TACTICAL.textMuted} />
+                    <Text style={s.accessorySummaryText}>
+                      {previewVehicleData.accessorySummary.length > 0
+                        ? previewVehicleData.accessorySummary.join(' · ')
+                        : 'No accessory systems configured yet'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={s.supportPanel}>
+                <Text style={s.supportPanelLabel}>LOADOUT</Text>
+                <VehicleLoadoutSummary
+                  vehicleId={selectedPreviewVehicle.id}
+                  userId={user?.id || null}
+                  onOpenLoadout={() => handleOpenLoadoutModal(selectedPreviewVehicle)}
+                  refreshKey={loadoutRefreshKey}
+                />
+              </View>
+
+              <ECSActionRow compact style={s.previewActionRow}>
+                {selectedPreviewVehicle.id !== activeVehicleId ? (
+                  <ECSButton
+                    label="Make Active"
+                    icon="radio-button-off-outline"
+                    variant="primary"
+                    size="medium"
+                    onPress={() => handleSelectVehicle(selectedPreviewVehicle.id)}
+                    grow
+                  />
+                ) : null}
+                <ECSButton
+                  label="Edit Setup"
+                  icon="construct-outline"
+                  variant="secondary"
+                  size="medium"
+                  onPress={() => handleReconfigureVehicle(selectedPreviewVehicle)}
+                  grow
+                />
+              </ECSActionRow>
+            </ECSPanel>
+          </View>
+        ) : null}
         </View>
 
+        {/* ── Fixed Bottom Actions — visible only once vehicles exist ── */}
+        {vehicles.length > 0 && (
+          <View style={[s.bottomActions, fleetFrameStyle]}>
+            <View style={s.bottomHelperRow}>
+              <ECSInlineHelper
+                text={fleetCommandState.helperText}
+                variant={fleetCommandState.canConfirmVehicleReady ? 'partial_data' : 'selection_required'}
+              />
+              {!!fleetCommandState.subhelperText && (
+                <Text style={s.bottomSubhelperText}>{fleetCommandState.subhelperText}</Text>
+              )}
+            </View>
+            <ECSButton
+              label="Vehicle Ready"
+              icon="checkmark-circle-outline"
+              variant="primary"
+              size="large"
+              onPress={handleConfirmVehicleReady}
+              disabled={!fleetCommandState.canConfirmVehicleReady}
+              style={s.bottomReadyButton}
+            />
+          </View>
+        )}
 
         {/* Footer info line */}
-        <View style={s.footer}>
+        <View style={[s.footer, fleetFrameStyle]}>
           <Text style={s.footerText}>
-            ECS FLEET  //  {vehicles.length} VEHICLE{vehicles.length !== 1 ? 'S' : ''}  //  {activeVehicle ? activeVehicle.name : 'NONE SELECTED'}
+            {vehicles.length === 0
+              ? 'ECS FLEET | NO VEHICLES STAGED'
+              : `ECS FLEET | ${vehicles.length} VEHICLE${vehicles.length !== 1 ? 'S' : ''} | ${activeVehicle ? activeVehicle.name : 'NONE SELECTED'}`}
           </Text>
         </View>
       </View>
@@ -857,16 +1314,6 @@ function FleetScreenInner() {
         visible={syncModalVisible}
         onClose={() => setSyncModalVisible(false)}
       />
-
-      {/* Tires / Lift Modal — tire size and suspension configuration per vehicle */}
-      <TiresLiftModal
-        visible={tiresLiftModalVisible}
-        vehicle={tiresLiftModalVehicle}
-        onClose={() => { setTiresLiftModalVisible(false); setTiresLiftModalVehicle(null); }}
-        onSaved={() => setTiresLiftRefreshKey(prev => prev + 1)}
-        showToast={showToast}
-      />
-
     </TopoBackground>
   );
 }
@@ -894,26 +1341,89 @@ const s = StyleSheet.create({
   safeContainer: {
     flex: 1,
     backgroundColor: 'transparent',
-    // Push all content above the CommandDock (68px bar + 8px breathing room)
-    paddingBottom: DOCK_CLEARANCE,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
 
   // Header
-  header: { paddingHorizontal: 16, paddingTop: TOP_PAD, paddingBottom: 12 },
+  header: { paddingHorizontal: 16, paddingBottom: 12 },
   listHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingTop: TOP_PAD, paddingBottom: 12,
+    paddingHorizontal: 16, paddingBottom: 12,
     borderBottomWidth: GOLD_RAIL.sectionWidth, borderBottomColor: GOLD_RAIL.section,
   },
   headerBrand: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, letterSpacing: 2 },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 1.5 },
+  headerTitle: { ...ECS_TEXT.screenTitle },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   onlineText: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  commandWrap: {
+    paddingTop: 12,
+    paddingBottom: 6,
+  },
+  commandPanel: {
+    gap: 10,
+  },
+  commandTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  commandTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  commandEyebrow: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.amber,
+    marginBottom: 6,
+  },
+  commandTitle: {
+    ...ECS_TEXT.cardTitle,
+  },
+  commandSummary: {
+    ...ECS_TEXT.body,
+    color: TACTICAL.text,
+    lineHeight: 18,
+  },
+  commandDetail: {
+    ...ECS_TEXT.helper,
+    color: 'rgba(183, 191, 199, 0.84)',
+    lineHeight: 17,
+    marginTop: -2,
+  },
+  commandBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  commandSecondaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  commandSecondaryPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.18)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    maxWidth: '100%',
+  },
+  commandSecondaryText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.textSecondary,
+  },
 
   // Loading
   loadingText: { fontSize: 12, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1.5 },
+  loadingShell: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 18,
+  },
 
   // Error
   errorTitle: { fontSize: 16, fontWeight: '900', color: TACTICAL.danger, letterSpacing: 1.5, textAlign: 'center' },
@@ -945,65 +1455,274 @@ const s = StyleSheet.create({
   scrollArea: {
     flex: 1,
   },
+  scrollAreaExpanded: {
+    flex: 1.12,
+    minWidth: 0,
+  },
   scrollContent: {
-    padding: 16,
+    paddingVertical: 16,
     // flexGrow ensures content fills available space when few items
     flexGrow: 1,
+  },
+  scrollContentExpanded: {
+    paddingRight: 12,
+  },
+  contentRow: {
+    flex: 1,
+    width: '100%',
+    minHeight: 0,
+  },
+  contentRowExpanded: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 16,
+  },
+  previewRail: {
+    flex: 0.88,
+    minWidth: 340,
+    maxWidth: 460,
+    paddingVertical: 16,
+  },
+  previewPanel: {
+    flex: 1,
+    gap: 12,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  previewTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  previewEyebrow: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.amber,
+    marginBottom: 6,
+  },
+  previewTitle: {
+    ...ECS_TEXT.cardTitle,
+  },
+  previewSubtitle: {
+    ...ECS_TEXT.cardSubtitle,
+    marginTop: 4,
+  },
+  previewActionRow: {
+    marginTop: 'auto',
+    paddingTop: 10,
+  },
+  vehicleResultsMeta: {
+    marginBottom: 12,
+  },
+  emptyStateShell: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  emptyStateCard: {
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 28,
+    backgroundColor: 'rgba(17, 22, 26, 0.94)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.18)',
+  },
+  emptyStateIconWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(196, 138, 44, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.22)',
+  },
+  emptyStateTitle: {
+    ...ECS_TEXT.dialogTitle,
+    textAlign: 'center',
+  },
+  emptyStateCopy: {
+    ...ECS_TEXT.dialogBody,
+    lineHeight: 18,
+    textAlign: 'center',
+    maxWidth: 320,
+    marginTop: ECS_TEXT_SPACING.emptyTitleToBody - 2,
+  },
+  emptyStateHelper: {
+    ...ECS_TEXT.helper,
+    color: 'rgba(183, 191, 199, 0.76)',
+    textAlign: 'center',
+    marginTop: -2,
+  },
+  emptyStateCta: {
+    minWidth: 196,
+    height: 48,
+    marginTop: 2,
+    borderRadius: 14,
+    backgroundColor: TACTICAL.amber,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  emptyStateCtaText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 1.1,
   },
 
   // Vehicle Card
   vehicleCard: {
-    backgroundColor: TACTICAL.panel, borderRadius: 12, borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.3)', padding: 14, marginBottom: 10,
+    marginBottom: 12,
   },
-  vehicleCardActive: { borderColor: 'rgba(196, 138, 44, 0.4)', backgroundColor: 'rgba(196, 138, 44, 0.04)' },
-  vehicleCardTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  vehicleCardTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  vehicleIdentity: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  vehicleIdentityText: { flex: 1, minWidth: 0 },
   vehicleIcon: {
-    width: 42, height: 42, borderRadius: 12, backgroundColor: 'rgba(62, 79, 60, 0.2)',
+    width: 48, height: 48, borderRadius: 15, backgroundColor: 'rgba(62, 79, 60, 0.16)',
+    borderWidth: 1, borderColor: 'rgba(62, 79, 60, 0.26)',
     alignItems: 'center', justifyContent: 'center',
   },
-  vehicleName: { fontSize: 14, fontWeight: '800', color: TACTICAL.text, letterSpacing: 0.3 },
-  vehicleMeta: { fontSize: 11, color: TACTICAL.textMuted, marginTop: 2 },
-  activeBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3,
-    backgroundColor: 'rgba(196, 138, 44, 0.12)', borderRadius: 6,
+  vehicleName: { ...ECS_TEXT.cardTitle, lineHeight: 20 },
+  vehicleMeta: { ...ECS_TEXT.cardSubtitle, marginTop: ECS_TEXT_SPACING.titleToSubtitle - 1, lineHeight: 15 },
+  vehicleTagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  readyBadge: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(196, 138, 44, 0.12)',
+    borderColor: 'rgba(196, 138, 44, 0.24)',
   },
-  activeBadgeText: { fontSize: 8, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 1 },
+  readyBadgeText: { fontSize: 8, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 0.9 },
+  pendingBadge: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(62, 79, 60, 0.12)',
+    borderColor: 'rgba(62, 79, 60, 0.24)',
+  },
+  pendingBadgeText: { fontSize: 8, fontWeight: '800', color: TACTICAL.textMuted, letterSpacing: 0.9 },
+  activeVehicleButton: {
+    minWidth: 122,
+  },
+  cardSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(62, 79, 60, 0.18)',
+  },
+  cardSectionLabel: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.textMuted,
+    marginBottom: 8,
+  },
+  summaryPanel: {
+    marginTop: 14,
+  },
+  summaryLabel: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.textMuted,
+    marginBottom: 10,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 10,
+  },
+  summaryMetric: {
+    width: '33.33%',
+    minWidth: 86,
+    paddingRight: 8,
+  },
+  summaryMetricWide: {
+    width: '20%',
+    minWidth: 96,
+  },
+  summaryMetricPreviewWide: {
+    width: '50%',
+    minWidth: 112,
+  },
+  summaryMetricLabel: {
+    ...ECS_TEXT.statLabel,
+    marginBottom: 3,
+  },
+  summaryMetricValue: {
+    ...ECS_TEXT.statValue,
+  },
+  supportPanel: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(62, 79, 60, 0.18)',
+  },
+  supportPanelLabel: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.textMuted,
+    marginBottom: 8,
+  },
+  supportChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  supportChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 5,
+    backgroundColor: 'rgba(102, 187, 106, 0.12)', borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(102, 187, 106, 0.22)',
+  },
+  supportChipText: { fontSize: 9, fontWeight: '700', color: '#81C784', letterSpacing: 0.3 },
+  actionSection: {
+    marginTop: 12,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
 
   // Stats
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   statChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4,
-    backgroundColor: 'rgba(62, 79, 60, 0.15)', borderRadius: 6,
+    backgroundColor: 'rgba(62, 79, 60, 0.12)', borderRadius: 7, borderWidth: 1,
+    borderColor: 'rgba(62, 79, 60, 0.18)',
   },
-  statChipText: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.5 },
+  statChipText: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.3 },
+  statusChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: 'rgba(196, 138, 44, 0.1)', borderRadius: 7, borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.22)',
+  },
+  statusChipText: { fontSize: 9, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 0.5 },
 
   // Accessories summary
   accessorySummaryRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8,
-    paddingHorizontal: 8, paddingVertical: 5,
-    backgroundColor: 'rgba(62, 79, 60, 0.08)', borderRadius: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 8,
+    backgroundColor: 'rgba(62, 79, 60, 0.08)', borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(62, 79, 60, 0.16)',
   },
-  accessorySummaryText: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, letterSpacing: 0.3, flex: 1 },
+  accessorySummaryText: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, letterSpacing: 0.2, flex: 1, lineHeight: 13 },
 
   // Vehicle actions — legacy (kept for reference, replaced by actionGrid)
   vehicleActions: { flexDirection: 'row', gap: 6, marginTop: 10 },
   vehicleActionsSecondary: { flexDirection: 'row', gap: 6, marginTop: 5 },
 
-  // SELECT button — full-width amber, above the action grid
-  selectBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 10, borderRadius: 8, backgroundColor: TACTICAL.amber,
-    marginTop: 10,
-  },
-  selectBtnText: { fontSize: 10, fontWeight: '900', color: '#0B0F12', letterSpacing: 1 },
-
   // ── Action Grid — 2 rows × 3 columns ──────────────────
-  // Row 1: Accessories (blue) / Loadout (amber) / Tires & Lift (green)
+  // Row 1: Reconfigure (blue) / Loadout (amber) / Make Active (green)
   actionGrid: {
     flexDirection: 'row', gap: 5, marginTop: 8,
   },
-  // Row 2: Reconfigure / Copy / Delete
+  // Row 2: Copy / Delete
   actionGrid2: {
     flexDirection: 'row', gap: 5, marginTop: 5,
   },
@@ -1012,31 +1731,38 @@ const s = StyleSheet.create({
   // Shared layout: flex: 1 ensures equal width, centered icon+label
   gridBtnBlue: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 9, borderRadius: 8, borderWidth: 1,
-    borderColor: 'rgba(79, 195, 247, 0.5)',
-    backgroundColor: 'rgba(79, 195, 247, 0.08)',
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
+    borderColor: 'rgba(79, 195, 247, 0.24)',
+    backgroundColor: 'rgba(79, 195, 247, 0.05)',
   },
-  gridBtnBlueText: { fontSize: 8, fontWeight: '800', color: '#4FC3F7', letterSpacing: 0.5 },
+  gridBtnBlueText: { fontSize: 8, fontWeight: '800', color: TACTICAL.text, letterSpacing: 0.5 },
 
   gridBtnAmber: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 9, borderRadius: 8, borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.5)',
-    backgroundColor: 'rgba(196, 138, 44, 0.08)',
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.28)',
+    backgroundColor: 'rgba(196, 138, 44, 0.06)',
   },
-  gridBtnAmberText: { fontSize: 8, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 0.5 },
+  gridBtnAmberText: { fontSize: 8, fontWeight: '800', color: TACTICAL.text, letterSpacing: 0.5 },
 
   gridBtnGreen: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 9, borderRadius: 8, borderWidth: 1,
-    borderColor: 'rgba(102, 187, 106, 0.5)',
-    backgroundColor: 'rgba(102, 187, 106, 0.08)',
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
+    borderColor: 'rgba(102, 187, 106, 0.24)',
+    backgroundColor: 'rgba(102, 187, 106, 0.05)',
   },
-  gridBtnGreenText: { fontSize: 8, fontWeight: '800', color: '#81C784', letterSpacing: 0.5 },
+  gridBtnGreenText: { fontSize: 8, fontWeight: '800', color: TACTICAL.text, letterSpacing: 0.5 },
+  gridBtnGreenActive: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.35)',
+    backgroundColor: 'rgba(196, 138, 44, 0.1)',
+  },
+  gridBtnGreenActiveText: { fontSize: 8, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 0.5 },
 
   gridBtnMuted: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 9, borderRadius: 8, borderWidth: 1,
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
     borderColor: 'rgba(62, 79, 60, 0.4)',
     backgroundColor: 'rgba(62, 79, 60, 0.1)',
   },
@@ -1044,9 +1770,9 @@ const s = StyleSheet.create({
 
   gridBtnDanger: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 9, borderRadius: 8, borderWidth: 1,
-    borderColor: 'rgba(192, 57, 43, 0.3)',
-    backgroundColor: 'rgba(192, 57, 43, 0.06)',
+    paddingVertical: 10, borderRadius: 9, borderWidth: 1,
+    borderColor: 'rgba(192, 57, 43, 0.24)',
+    backgroundColor: 'rgba(192, 57, 43, 0.04)',
   },
   gridBtnDangerText: { fontSize: 8, fontWeight: '800', color: TACTICAL.danger, letterSpacing: 0.5 },
 
@@ -1078,19 +1804,15 @@ const s = StyleSheet.create({
 
 
   // Add button
-  addBtnOutline: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    paddingVertical: 14, marginTop: 4, borderRadius: 10, borderWidth: 1.5,
-    borderColor: TACTICAL.amber, borderStyle: 'dashed', backgroundColor: 'rgba(196, 138, 44, 0.04)',
+  addVehicleButton: {
+    marginTop: 4,
   },
-  addBtnOutlineText: { fontSize: 12, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 1.2 },
 
   // ── Fixed Bottom Actions — pinned above CommandDock ──
   bottomActions: {
-    flexDirection: 'row',
-    gap: 10,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingTop: 8,
+    paddingBottom: 10,
     borderTopWidth: GOLD_RAIL.sectionWidth,
     borderTopColor: GOLD_RAIL.section,
     backgroundColor: 'rgba(11, 15, 18, 0.98)',
@@ -1101,28 +1823,27 @@ const s = StyleSheet.create({
     borderColor: 'rgba(196, 138, 44, 0.5)', backgroundColor: 'rgba(196, 138, 44, 0.08)',
   },
   bottomBtnText: { fontSize: 10, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 1 },
-
-  // Begin Expedition button
-  beginExpBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 12, borderRadius: 10, backgroundColor: TACTICAL.amber,
+  bottomReadyButton: {
+    width: '100%',
   },
-  beginExpBtnText: { fontSize: 10, fontWeight: '900', color: '#0B0F12', letterSpacing: 1 },
-
-  // Expedition Active badge
-  expActiveBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3,
-    backgroundColor: 'rgba(212,160,23,0.12)', borderRadius: 6, borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.25)', marginRight: 6,
+  bottomHelperRow: {
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
-  expActiveDot: {
-    width: 5, height: 5, borderRadius: 2.5, backgroundColor: TACTICAL.amber,
+  bottomHelperText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.3,
+    textAlign: 'center',
   },
-  expActiveText: { fontSize: 7, fontWeight: '900', color: TACTICAL.amber, letterSpacing: 1 },
-
-  // Gold underline (expedition active indicator)
-  goldUnderline: {
-    backgroundColor: TACTICAL.amber, width: '100%',
+  bottomSubhelperText: {
+    ...ECS_TEXT.helper,
+    color: 'rgba(183, 191, 199, 0.72)',
+    textAlign: 'center',
+    marginTop: 4,
   },
 
   // Footer info line
@@ -1133,12 +1854,15 @@ const s = StyleSheet.create({
     borderTopColor: GOLD_RAIL.subsection,
     backgroundColor: 'rgba(11, 15, 18, 0.98)',
   },
-  footerText: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, letterSpacing: 1.5, textAlign: 'center' },
+  footerText: { ...ECS_TEXT.sectionTitle, color: TACTICAL.textMuted, textAlign: 'center' },
 
   // Phase 4: Zone Summary Pills
   zonePillsRow: {
-    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginTop: 8,
-    paddingHorizontal: 4, paddingVertical: 4,
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4,
+    paddingHorizontal: 4, paddingVertical: 2,
+  },
+  zoneBadge: {
+    maxWidth: '100%',
   },
   zonePill: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
@@ -1165,14 +1889,6 @@ const s = StyleSheet.create({
   },
   tiresLiftChipText: { fontSize: 9, fontWeight: '700', color: '#81C784', letterSpacing: 0.3 },
 
-  // Tires / Lift action button (green-accented, distinct from accessories/loadout)
-  tiresLiftBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 8, borderWidth: 1,
-    borderColor: 'rgba(102, 187, 106, 0.5)',
-    backgroundColor: 'rgba(102, 187, 106, 0.08)',
-  },
-  tiresLiftBtnText: { fontSize: 9, fontWeight: '800', color: '#81C784', letterSpacing: 0.8 },
 });
 
 

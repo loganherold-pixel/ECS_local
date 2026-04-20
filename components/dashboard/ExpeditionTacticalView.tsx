@@ -27,10 +27,9 @@ import {
   LayoutChangeEvent,
   TouchableOpacity,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import { TACTICAL, TYPO } from '../../lib/theme';
-import { GOLD_RAIL } from '../../lib/theme';
+import { GOLD_RAIL, TACTICAL, TYPO } from '../../lib/theme';
 
 import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -42,6 +41,7 @@ import { telemetryConfigStore, computeTelemetryReadout } from '../../lib/telemet
 import { bailoutStore, type BailoutPoint } from '../../lib/bailoutStore';
 import { haversineDistanceMiles, type GPSPosition } from '../../lib/useGPSLocation';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
+import type { AccelerometerOutput } from '../../lib/useAccelerometer';
 
 import type { Vehicle, Trip, LoadItem, Waypoint } from '../../lib/types';
 
@@ -382,8 +382,8 @@ function TileAttitudeMonitor({
     // Track peaks
     const absRoll = Math.abs(rollDeg);
     const absPitch = Math.abs(pitchDeg);
-    if (absRoll > peakRoll) setPeakRoll(absRoll);
-    if (absPitch > peakPitch) setPeakPitch(absPitch);
+    setPeakRoll(prev => (absRoll > prev ? absRoll : prev));
+    setPeakPitch(prev => (absPitch > prev ? absPitch : prev));
   }, [rollDeg, pitchDeg]);
 
   // ── Thresholds ───────────────────────────────────────
@@ -947,11 +947,12 @@ export default function ExpeditionTacticalView({
 }: ExpeditionTacticalViewProps) {
   const { activeTrip, loadItems, waypoints, syncStatus, user } = useApp();
   const { palette } = useTheme();
+  const isFocused = useIsFocused();
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [containerH, setContainerH] = useState(0);
   // ── Throttled GPS tracking (Phase 3A: max 1 UI update/sec) ──
   // Raw GPS still available internally via gps.rawGPS for distance tracking
-  const gps = useThrottledGPS({ enabled: true, highAccuracy: true });
+  const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: isFocused });
 
 
   // ── Active route from route store ────────────────────

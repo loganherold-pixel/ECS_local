@@ -56,13 +56,22 @@ import {
 } from './ecsStabilityGuards';
 
 const TAG = '[DiscoverEngine]';
+const DEBUG_DISCOVER_ENGINE =
+  __DEV__ &&
+  ((globalThis as typeof globalThis & { __ECS_DEBUG_DISCOVER__?: boolean })
+    .__ECS_DEBUG_DISCOVER__ === true);
+
+function debugDiscoverEngine(message: string): void {
+  if (!DEBUG_DISCOVER_ENGINE) return;
+  console.log(TAG, message);
+}
 
 
 
 // ── Distance Radius Presets ──────────────────────────────────
-export const DISTANCE_RADIUS_OPTIONS = [50, 100, 200, 500] as const;
+export const DISTANCE_RADIUS_OPTIONS = [25, 50, 100, 250, 500] as const;
 export type DistanceRadius = typeof DISTANCE_RADIUS_OPTIONS[number];
-export const DEFAULT_DISTANCE_RADIUS: DistanceRadius = 200;
+export const DEFAULT_DISTANCE_RADIUS: DistanceRadius = 100;
 
 // ── Hard distance cap ────────────────────────────────────────
 // Trails beyond this distance NEVER appear in default Discovery results.
@@ -894,6 +903,14 @@ export function loadOpportunitiesWithCompatibility(
     : buildProfileFromSpecs();
 
   if (!profile) {
+    debugDiscoverEngine('No vehicle profile; returning distance-sorted opportunities without compatibility');
+    raw = enrichWithMatchScores(raw, new Map());
+    raw = sortByMatchScore(raw);
+    return {
+      opportunities: raw,
+      results: new Map(),
+      profile: null,
+    };
     console.log(TAG, 'No vehicle profile — returning distance-sorted opportunities without compatibility');
     // Enrich with match scores (no compat data)
     raw = enrichWithMatchScores(raw, new Map());
@@ -905,16 +922,16 @@ export function loadOpportunitiesWithCompatibility(
       profile: null,
     };
   }
-
+  debugDiscoverEngine(`Scoring ${raw.length} opportunities against "${profile.vehicleName}"`);
   console.log(TAG, `Scoring ${raw.length} opportunities against "${profile.vehicleName}"`);
   const { opportunities: scored, results } = scoreAndSortOpportunities(profile, raw);
 
   // Re-enrich scored results with distance (scoring may have stripped it)
-  let enriched = scored.map(op => {
+  let enriched: ExpeditionOpportunity[] = scored.map((op): ExpeditionOpportunity => {
     const existing = raw.find(r => r.id === op.id);
     return {
       ...op,
-      distanceFromUserMiles: op.distanceFromUserMiles ?? existing?.distanceFromUserMiles,
+      distanceFromUserMiles: op.distanceFromUserMiles ?? existing?.distanceFromUserMiles ?? undefined,
     };
   });
 

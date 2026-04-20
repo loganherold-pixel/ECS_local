@@ -57,6 +57,24 @@ const MPS_TO_MPH = 2.23694;
 const DISTANCE_INTERVAL_M = 1;
 const TIME_INTERVAL_MS = 1000;
 
+function positionsEquivalent(a: GPSPosition | null, b: GPSPosition | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+
+  const roundNullable = (value: number | null, precision = 1) =>
+    value == null ? null : Number(value.toFixed(precision));
+
+  return (
+    Number(a.latitude.toFixed(6)) === Number(b.latitude.toFixed(6)) &&
+    Number(a.longitude.toFixed(6)) === Number(b.longitude.toFixed(6)) &&
+    roundNullable(a.altitudeFt, 1) === roundNullable(b.altitudeFt, 1) &&
+    roundNullable(a.speedMph, 1) === roundNullable(b.speedMph, 1) &&
+    roundNullable(a.headingDeg, 1) === roundNullable(b.headingDeg, 1) &&
+    roundNullable(a.accuracyM, 1) === roundNullable(b.accuracyM, 1) &&
+    a.timestamp === b.timestamp
+  );
+}
+
 export function haversineDistanceMiles(
   lat1: number,
   lon1: number,
@@ -97,6 +115,8 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
   const mountedRef = useRef(true);
   const retryTimerRef = useRef<any>(null);
   const retryCountRef = useRef(0);
+  const positionRef = useRef<GPSPosition | null>(null);
+  const lastLoggedPositionKeyRef = useRef<string | null>(null);
 
   const parseCoords = useCallback((coords: any, timestamp?: number): GPSPosition => {
     return {
@@ -108,6 +128,36 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
       accuracyM: coords.accuracy != null ? coords.accuracy : null,
       timestamp: timestamp || Date.now(),
     };
+  }, []);
+
+  const setPositionIfChanged = useCallback((next: GPSPosition) => {
+    if (positionsEquivalent(positionRef.current, next)) {
+      return false;
+    }
+    positionRef.current = next;
+    setPosition(next);
+    return true;
+  }, []);
+
+  const logPositionDebug = useCallback((label: string, next: GPSPosition) => {
+    if (!__DEV__) return;
+    const key = [
+      next.timestamp,
+      next.latitude.toFixed(6),
+      next.longitude.toFixed(6),
+      next.speedMph?.toFixed(1) ?? 'null',
+      next.headingDeg?.toFixed(1) ?? 'null',
+    ].join(':');
+    if (lastLoggedPositionKeyRef.current === key) return;
+    lastLoggedPositionKeyRef.current = key;
+    console.log(`[GPS HOOK] ${label}`, {
+      lat: next.latitude,
+      lon: next.longitude,
+      accuracy: next.accuracyM,
+      heading: next.headingDeg,
+      speed: next.speedMph,
+      timestamp: next.timestamp,
+    });
   }, []);
 
   const clearRetryTimer = useCallback(() => {
@@ -130,7 +180,8 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         (pos) => {
           if (!mountedRef.current) return;
 
-          setPosition(parseCoords(pos.coords, pos.timestamp));
+          const nextPosition = parseCoords(pos.coords, pos.timestamp);
+          setPositionIfChanged(nextPosition);
           setError(null);
           setIsRetrying(false);
           retryCountRef.current = 0;
@@ -179,7 +230,8 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
 
           setPermissionStatus('granted');
           setIsAvailable(true);
-          setPosition(parseCoords(loc.coords, loc.timestamp));
+          const nextPosition = parseCoords(loc.coords, loc.timestamp);
+          setPositionIfChanged(nextPosition);
           setError(null);
           setIsRetrying(false);
           retryCountRef.current = 0;
@@ -190,14 +242,16 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         }
       })();
     }
-  }, [parseCoords, highAccuracy]);
+  }, [parseCoords, highAccuracy, setPositionIfChanged]);
 
   useEffect(() => {
     retryCountRef.current = 0;
 
     if (!enabled) {
       if (subscriptionRef.current) {
-        console.log('[GPS HOOK] Removing watchPositionAsync subscription (disabled)');
+        if (__DEV__) {
+          console.log('[GPS HOOK] Removing watchPositionAsync subscription (disabled)');
+        }
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }
@@ -238,7 +292,9 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
 
     async function startNativeTracking() {
       try {
-        console.log('[GPS HOOK] startNativeTracking');
+        if (__DEV__) {
+          console.log('[GPS HOOK] startNativeTracking');
+        }
 
         const Location = await import('expo-location');
         if (cancelled || !mountedRef.current) return;
@@ -274,16 +330,9 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
             });
 
             if (!cancelled && mountedRef.current) {
-              console.log('[GPS HOOK] Initial native fix', {
-                lat: initial.coords.latitude,
-                lon: initial.coords.longitude,
-                accuracy: initial.coords.accuracy,
-                heading: initial.coords.heading,
-                speed: initial.coords.speed,
-                timestamp: initial.timestamp,
-              });
-
-              setPosition(parseCoords(initial.coords, initial.timestamp));
+              const nextPosition = parseCoords(initial.coords, initial.timestamp);
+              logPositionDebug('Initial native fix', nextPosition);
+              setPositionIfChanged(nextPosition);
               setError(null);
               setIsRetrying(false);
               retryCountRef.current = 0;
@@ -302,12 +351,16 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         if (cancelled || !mountedRef.current) return;
 
         if (subscriptionRef.current) {
-          console.log('[GPS HOOK] Removing previous watchPositionAsync subscription');
+          if (__DEV__) {
+            console.log('[GPS HOOK] Removing previous watchPositionAsync subscription');
+          }
           subscriptionRef.current.remove();
           subscriptionRef.current = null;
         }
 
-        console.log('[GPS HOOK] Starting watchPositionAsync');
+        if (__DEV__) {
+          console.log('[GPS HOOK] Starting watchPositionAsync');
+        }
 
         subscriptionRef.current = await Location.watchPositionAsync(
           {
@@ -321,16 +374,9 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
           (loc) => {
             if (cancelled || !mountedRef.current) return;
 
-            console.log('[GPS HOOK] Position update', {
-              lat: loc.coords.latitude,
-              lon: loc.coords.longitude,
-              accuracy: loc.coords.accuracy,
-              heading: loc.coords.heading,
-              speed: loc.coords.speed,
-              timestamp: loc.timestamp,
-            });
-
-            setPosition(parseCoords(loc.coords, loc.timestamp));
+            const nextPosition = parseCoords(loc.coords, loc.timestamp);
+            logPositionDebug('Position update', nextPosition);
+            setPositionIfChanged(nextPosition);
             setError(null);
             setIsRetrying(false);
             retryCountRef.current = 0;
@@ -343,7 +389,9 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         }
       } catch (e: any) {
         if (!cancelled && mountedRef.current) {
-          console.log('[GPS HOOK] Native tracking failed', e?.message || e);
+          if (__DEV__) {
+            console.log('[GPS HOOK] Native tracking failed', e?.message || e);
+          }
           setIsAvailable(false);
           setError('Native GPS unavailable');
         }
@@ -364,7 +412,8 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
           (pos) => {
             if (cancelled || !mountedRef.current) return;
 
-            setPosition(parseCoords(pos.coords, pos.timestamp));
+            const nextPosition = parseCoords(pos.coords, pos.timestamp);
+            setPositionIfChanged(nextPosition);
             setPermissionStatus('granted');
             setError(null);
             setIsRetrying(false);
@@ -396,7 +445,8 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         (pos) => {
           if (cancelled || !mountedRef.current) return;
 
-          setPosition(parseCoords(pos.coords, pos.timestamp));
+          const nextPosition = parseCoords(pos.coords, pos.timestamp);
+          setPositionIfChanged(nextPosition);
           setPermissionStatus('granted');
           setError(null);
           setIsRetrying(false);
@@ -430,10 +480,14 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
     return () => {
       cancelled = true;
 
-      console.log('[GPS HOOK] Cleaning up GPS watcher');
+      if (__DEV__) {
+        console.log('[GPS HOOK] Cleaning up GPS watcher');
+      }
 
       if (subscriptionRef.current) {
-        console.log('[GPS HOOK] Removing watchPositionAsync subscription');
+        if (__DEV__) {
+          console.log('[GPS HOOK] Removing watchPositionAsync subscription');
+        }
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }
@@ -448,7 +502,16 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
       clearRetryTimer();
       setIsWatching(false);
     };
-  }, [enabled, parseCoords, highAccuracy, maxRetries, retryIntervalMs, clearRetryTimer]);
+  }, [
+    enabled,
+    parseCoords,
+    highAccuracy,
+    maxRetries,
+    retryIntervalMs,
+    clearRetryTimer,
+    logPositionDebug,
+    setPositionIfChanged,
+  ]);
 
   const hasFix = position != null;
 

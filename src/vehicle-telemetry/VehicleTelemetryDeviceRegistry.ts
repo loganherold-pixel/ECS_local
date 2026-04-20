@@ -70,7 +70,7 @@ function sRemove(key: string): void {
 class VehicleTelemetryDeviceRegistry {
   private devices: VehicleTelemetryDevice[] = [];
   private primaryDeviceId: string | null = null;
-  private listeners: Array<() => void> = [];
+  private listeners: (() => void)[] = [];
 
   constructor() {
     this.restore();

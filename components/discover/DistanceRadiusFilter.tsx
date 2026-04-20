@@ -5,25 +5,27 @@
 // distance from the user. ECS tactical styling with gold
 // accents and dark panel background.
 //
-// Phase 4.5: Updated options (50|100|200|500), default 200mi,
+// Phase 4.5: Updated options (25|50|100|250|500), default 100mi,
 // added loading indicator and GPS accuracy hint.
 //
-// Options: 50 mi | 100 mi | 200 mi | 500 mi
+// Options: 25 mi | 50 mi | 100 mi | 250 mi | 500 mi
 // ============================================================
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import { TACTICAL, GOLD_RAIL, ECS } from '../../lib/theme';
+import { TACTICAL, ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
+import { ECSBadge } from '../ECSStatus';
+import { ECSSliderField } from '../ECSForm';
 import {
   DISTANCE_RADIUS_OPTIONS,
   type DistanceRadius,
 } from '../../lib/discoverEngine';
 
 interface DistanceRadiusFilterProps {
-  selectedRadius: DistanceRadius;
-  onChangeRadius: (radius: DistanceRadius) => void;
+  selectedRadius: DistanceRadius | null;
+  onChangeRadius: (radius: DistanceRadius | null) => void;
   /** Whether user has a real GPS fix (affects label) */
   hasGPSFix: boolean;
   /** Total opportunities before filtering */
@@ -42,40 +44,50 @@ export default function DistanceRadiusFilter({
   filteredCount,
   isLoading = false,
 }: DistanceRadiusFilterProps) {
+  const { width } = useWindowDimensions();
+  const compact = width < 380;
+
   return (
-    <View style={s.container}>
+    <ECSSliderField
+      label={compact ? 'Radius' : 'Distance Radius'}
+      helper={
+        filteredCount < totalCount
+          ? selectedRadius == null
+            ? `Showing ${filteredCount} of ${totalCount} trails across the current range`
+            : `Showing ${filteredCount} of ${totalCount} trails within ${selectedRadius} mi`
+          : hasGPSFix
+            ? 'Using your live location for radius matching.'
+            : 'Using approximate location until GPS improves.'
+      }
+      valueLabel={selectedRadius == null ? 'ALL RANGE' : `${selectedRadius} MI`}
+      style={s.container}
+    >
       {/* Header row */}
-      <View style={s.headerRow}>
+      <View style={[s.headerRow, compact && s.headerRowCompact]}>
         <View style={s.headerLeft}>
           <Ionicons name="locate-outline" size={11} color={TACTICAL.amber} />
-          <Text style={s.headerLabel}>DISTANCE RADIUS</Text>
           {isLoading && (
             <ActivityIndicator size="small" color={TACTICAL.amber} style={{ marginLeft: 6 }} />
           )}
         </View>
-        <View style={s.headerRight}>
+        <View style={[s.headerRight, compact && s.headerRightCompact]}>
           {!hasGPSFix && (
-            <View style={s.gpsHint}>
-              <Ionicons name="navigate-outline" size={8} color={TACTICAL.textMuted} />
-              <Text style={s.gpsHintText}>APPROX. LOCATION</Text>
-            </View>
+            <ECSBadge
+              label={compact ? 'Approx' : 'Approx. Location'}
+              icon="navigate-outline"
+              tone="warning"
+              compact
+            />
           )}
           {hasGPSFix && (
-            <View style={s.gpsActive}>
-              <View style={s.gpsDot} />
-              <Text style={s.gpsActiveText}>GPS</Text>
-            </View>
+            <ECSBadge label="GPS" tone="live" compact />
           )}
-          <View style={s.countBadge}>
-            <Text style={s.countText}>
-              {filteredCount}/{totalCount}
-            </Text>
-          </View>
+          <ECSBadge label={`${filteredCount}/${totalCount}`} tone="selected" compact />
         </View>
       </View>
 
       {/* Segmented control */}
-      <View style={s.segmentedRow}>
+      <View style={[s.segmentedRow, compact && s.segmentedRowCompact]}>
         {DISTANCE_RADIUS_OPTIONS.map((radius) => {
           const isActive = radius === selectedRadius;
           return (
@@ -83,12 +95,13 @@ export default function DistanceRadiusFilter({
               key={radius}
               style={[
                 s.segment,
+                compact && s.segmentCompact,
                 isActive && s.segmentActive,
               ]}
               activeOpacity={0.75}
               onPress={() => {
                 hapticMicro();
-                onChangeRadius(radius);
+                onChangeRadius(isActive ? null : radius);
               }}
             >
               <Text
@@ -112,16 +125,7 @@ export default function DistanceRadiusFilter({
         })}
       </View>
 
-      {/* Filter status line */}
-      {filteredCount < totalCount && (
-        <View style={s.filterStatus}>
-          <Ionicons name="funnel-outline" size={9} color={TACTICAL.textMuted} />
-          <Text style={s.filterStatusText}>
-            Showing {filteredCount} of {totalCount} trails within {selectedRadius} mi
-          </Text>
-        </View>
-      )}
-    </View>
+    </ECSSliderField>
   );
 }
 
@@ -134,9 +138,10 @@ const s = StyleSheet.create({
     borderRadius: ECS.radius,
     borderWidth: 1,
     borderColor: ECS.stroke,
-    padding: 12,
-    marginBottom: 14,
-    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginBottom: 10,
+    gap: 8,
   },
 
   // ── Header ────────────────────────────────────────────
@@ -145,27 +150,33 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  headerRowCompact: {
+    alignItems: 'flex-start',
+  },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   headerLabel: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '800',
     color: TACTICAL.amber,
-    letterSpacing: 2.5,
+    letterSpacing: 1.8,
   },
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+  },
+  headerRightCompact: {
+    gap: 4,
   },
   gpsHint: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 2,
     borderRadius: 4,
     backgroundColor: 'rgba(138,148,158,0.08)',
@@ -180,7 +191,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 2,
     borderRadius: 4,
     backgroundColor: 'rgba(102,187,106,0.08)',
@@ -194,21 +205,21 @@ const s = StyleSheet.create({
     backgroundColor: '#66BB6A',
   },
   gpsActiveText: {
-    fontSize: 7,
+    fontSize: 6,
     fontWeight: '800',
     color: '#66BB6A',
-    letterSpacing: 1.5,
+    letterSpacing: 1.1,
   },
   countBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: 5,
     borderWidth: 1,
     borderColor: TACTICAL.amber + '30',
     backgroundColor: TACTICAL.amber + '0A',
   },
   countText: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '800',
     fontFamily: 'Courier',
     color: TACTICAL.amber,
@@ -218,26 +229,34 @@ const s = StyleSheet.create({
   // ── Segmented Control ─────────────────────────────────
   segmentedRow: {
     flexDirection: 'row',
-    gap: 6,
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  segmentedRowCompact: {
+    gap: 4,
   },
   segment: {
-    flex: 1,
+    minWidth: '18%',
+    flexGrow: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    paddingVertical: 9,
-    borderRadius: 8,
+    paddingVertical: 7,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
+  },
+  segmentCompact: {
+    paddingVertical: 6,
   },
   segmentActive: {
     borderColor: TACTICAL.amber + '50',
     backgroundColor: TACTICAL.amber + '14',
   },
   segmentText: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '800',
     fontFamily: 'Courier',
     color: TACTICAL.textMuted,
@@ -247,7 +266,7 @@ const s = StyleSheet.create({
     color: TACTICAL.amber,
   },
   segmentUnit: {
-    fontSize: 7,
+    fontSize: 6,
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,
@@ -263,13 +282,13 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingTop: 2,
+    paddingTop: 1,
   },
   filterStatusText: {
-    fontSize: 9,
-    fontWeight: '500',
+    fontSize: 7,
+    fontWeight: '600',
     color: TACTICAL.textMuted,
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 });
 

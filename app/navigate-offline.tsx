@@ -84,6 +84,7 @@ export default function OfflinePacksScreen() {
 
   const progressRef = useRef(activeProgress);
   progressRef.current = activeProgress;
+  const startDownloadRef = useRef<(regionId: string) => Promise<void> | void>(() => {});
 
   // ── Connectivity monitoring ────────────────────────────
   useEffect(() => {
@@ -123,7 +124,7 @@ export default function OfflinePacksScreen() {
   // ── Create region from route corridor ──────────────────
   const handleCreateFromRoute = useCallback((
     name: string,
-    points: Array<{ lat: number; lng: number }>,
+    points: { lat: number; lng: number }[],
     corridorMiles: number,
     zoomMin: number,
     zoomMax: number,
@@ -131,18 +132,18 @@ export default function OfflinePacksScreen() {
   ) => {
     const region = tileCacheStore.createFromRoute(name, points, corridorMiles, zoomMin, zoomMax, styleKey);
     if (!region) {
-      showToast('FAILED TO CREATE REGION \u2014 NO VALID POINTS');
+      showToast('Region could not be created because no valid route points were found.');
       return;
     }
 
     setShowCreate(false);
     refreshData();
-    showToast(`REGION CREATED: ${region.tileCount.toLocaleString()} TILES`);
+    showToast(`Region saved. ${region.tileCount.toLocaleString()} tiles are ready to download.`);
 
     if (isOnline) {
-      startDownload(region.id);
+      void startDownloadRef.current(region.id);
     } else {
-      showToast('OFFLINE \u2014 DOWNLOAD WILL START WHEN CONNECTED');
+      showToast('Download is queued and can start when a connection returns.');
     }
   }, [showToast, refreshData, isOnline]);
 
@@ -158,19 +159,19 @@ export default function OfflinePacksScreen() {
 
     setShowCreate(false);
     refreshData();
-    showToast(`REGION CREATED: ${region.tileCount.toLocaleString()} TILES`);
+    showToast(`Region saved. ${region.tileCount.toLocaleString()} tiles are ready to download.`);
 
     if (isOnline) {
-      startDownload(region.id);
+      void startDownloadRef.current(region.id);
     } else {
-      showToast('OFFLINE \u2014 DOWNLOAD WILL START WHEN CONNECTED');
+      showToast('Download is queued and can start when a connection returns.');
     }
   }, [showToast, refreshData, isOnline]);
 
   // ── Download management ────────────────────────────────
   const startDownload = useCallback(async (regionId: string) => {
     if (!isOnline) {
-      showToast('CANNOT DOWNLOAD \u2014 NO NETWORK CONNECTION');
+      showToast('Downloads need a network connection. Saved regions remain available offline.');
       return;
     }
 
@@ -186,7 +187,7 @@ export default function OfflinePacksScreen() {
       }
     };
 
-    showToast('DOWNLOAD STARTED');
+    showToast('Download started.');
     const success = await tileCacheStore.startDownload(regionId, onProgress);
 
     setTimeout(() => {
@@ -199,11 +200,12 @@ export default function OfflinePacksScreen() {
     }, 2000);
 
     if (success) {
-      showToast('DOWNLOAD COMPLETE');
+      showToast('Download complete. Region is ready for offline use.');
     } else {
-      showToast('DOWNLOAD FAILED \u2014 SOME TILES COULD NOT BE CACHED');
+      showToast('Download finished with gaps. Some tiles could not be saved.');
     }
   }, [showToast, refreshData, isOnline]);
+  startDownloadRef.current = startDownload;
 
   const handleResume = useCallback((regionId: string) => {
     startDownload(regionId);
@@ -211,7 +213,7 @@ export default function OfflinePacksScreen() {
 
   const handleCancel = useCallback((regionId: string) => {
     tileCacheStore.cancelDownload(regionId);
-    showToast('DOWNLOAD CANCELLED');
+    showToast('Download paused.');
     refreshData();
   }, [showToast, refreshData]);
 
@@ -222,7 +224,7 @@ export default function OfflinePacksScreen() {
   const handleDelete = useCallback((regionId: string) => {
     const doDelete = async () => {
       await tileCacheStore.deleteRegion(regionId);
-      showToast('REGION DELETED');
+      showToast('Saved region removed.');
       refreshData();
     };
 
@@ -246,7 +248,7 @@ export default function OfflinePacksScreen() {
     const doClear = () => {
       tileCacheStore.clearAll();
       setActiveProgress(new Map());
-      showToast('ALL CACHED TILES CLEARED');
+      showToast('All saved map regions were removed.');
       refreshData();
     };
 
@@ -269,7 +271,7 @@ export default function OfflinePacksScreen() {
   // ── Freshness check for individual regions ─────────────
   const handleCheckFreshness = useCallback(async (regionId: string) => {
     if (!isOnline) {
-      showToast('CANNOT CHECK FRESHNESS \u2014 NO NETWORK');
+      showToast('Freshness checks need a network connection.');
       return;
     }
 
@@ -277,9 +279,9 @@ export default function OfflinePacksScreen() {
 
     try {
       const result = await tileCacheStore.checkRegionFreshness(regionId);
-      showToast(result.message.toUpperCase());
+      showToast(result.message);
     } catch (e: any) {
-      showToast('FRESHNESS CHECK FAILED');
+      showToast('Freshness check could not be completed.');
     } finally {
       setCheckingRegionIds(prev => {
         const next = new Set(prev);
@@ -293,7 +295,7 @@ export default function OfflinePacksScreen() {
   // ── Refresh (re-download) individual region ────────────
   const handleRefreshRegion = useCallback(async (regionId: string) => {
     if (!isOnline) {
-      showToast('CANNOT REFRESH \u2014 NO NETWORK');
+      showToast('Refreshing saved coverage needs a network connection.');
       return;
     }
 
@@ -308,16 +310,16 @@ export default function OfflinePacksScreen() {
     };
 
     try {
-      showToast('REFRESHING REGION...');
+      showToast('Refreshing saved region...');
       const success = await tileCacheStore.refreshRegion(regionId, onProgress);
 
       if (success) {
-        showToast('REGION REFRESHED SUCCESSFULLY');
+        showToast('Saved region refreshed.');
       } else {
-        showToast('REFRESH FAILED \u2014 SOME TILES COULD NOT BE UPDATED');
+        showToast('Refresh finished with gaps. Some tiles could not be updated.');
       }
     } catch (e: any) {
-      showToast('REFRESH FAILED');
+      showToast('Refresh could not be completed.');
     } finally {
       setRefreshingRegionIds(prev => {
         const next = new Set(prev);
@@ -355,6 +357,19 @@ export default function OfflinePacksScreen() {
   const pendingCount = regions.filter(r => r.status === 'pending' || r.status === 'cancelled').length;
   const updateAvailableCount = regions.filter(r => r.freshnessStatus === 'update-available').length;
   const isNative = Platform.OS !== 'web';
+  const offlineReady = stats.totalRegions > 0 || stats.totalTiles > 0;
+  const connectionLabel = isOnline ? 'ONLINE' : offlineReady ? 'OFFLINE READY' : 'OFFLINE';
+  const connectionTone = isOnline ? '#66BB6A' : offlineReady ? TACTICAL.amber : '#EF5350';
+  const connectionSummary = isOnline
+    ? 'Connected now. You can download new regions, refresh saved coverage, and verify freshness.'
+    : offlineReady
+      ? 'You are offline. Saved regions stay available, and queued downloads can resume when signal returns.'
+      : 'You are offline. Review saved status here, then reconnect before downloading new coverage.';
+  const connectionIcon = isOnline
+    ? 'wifi-outline'
+    : offlineReady
+      ? 'cloud-done-outline'
+      : 'cloud-offline-outline';
 
   return (
     <View style={styles.container}>
@@ -368,7 +383,7 @@ export default function OfflinePacksScreen() {
           {downloadingCount > 0 && (
             <View style={styles.downloadingBadge}>
               <View style={styles.downloadingDot} />
-              <Text style={styles.downloadingText}>{downloadingCount} ACTIVE</Text>
+              <Text style={styles.downloadingText}>{downloadingCount} DOWNLOADING</Text>
             </View>
           )}
           {updateAvailableCount > 0 && (
@@ -378,9 +393,17 @@ export default function OfflinePacksScreen() {
             </View>
           )}
           {!isOnline && (
-            <View style={styles.offlineBadge}>
-              <Ionicons name="cloud-offline-outline" size={10} color="#EF5350" />
-              <Text style={styles.offlineText}>OFFLINE</Text>
+            <View
+              style={[
+                styles.offlineBadge,
+                {
+                  borderColor: `${connectionTone}30`,
+                  backgroundColor: `${connectionTone}12`,
+                },
+              ]}
+            >
+              <Ionicons name="cloud-offline-outline" size={10} color={connectionTone} />
+              <Text style={[styles.offlineText, { color: connectionTone }]}>{connectionLabel}</Text>
             </View>
           )}
         </View>
@@ -446,13 +469,8 @@ export default function OfflinePacksScreen() {
 
         {/* Info banner */}
         <View style={styles.infoBanner}>
-          <Ionicons name="information-circle-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.infoText}>
-            {isNative
-              ? 'Cache map tiles to device storage for offline use during expeditions without cellular coverage. Tiles persist across app restarts.'
-              : 'Cache map tiles for offline use during expeditions without cellular coverage. Select a route corridor or draw a bounding box, choose zoom levels, and download tiles.'
-            }
-          </Text>
+          <Ionicons name={connectionIcon as any} size={14} color={connectionTone} />
+          <Text style={styles.infoText}>{connectionSummary}</Text>
         </View>
 
         {/* Pending downloads notice */}
@@ -460,7 +478,7 @@ export default function OfflinePacksScreen() {
           <View style={styles.pendingBanner}>
             <Ionicons name="hourglass-outline" size={13} color="#FFB300" />
             <Text style={styles.pendingText}>
-              {pendingCount} region{pendingCount > 1 ? 's' : ''} pending download. Connect to a network to start.
+              {pendingCount} saved region{pendingCount > 1 ? 's are' : ' is'} waiting to download when signal returns.
             </Text>
           </View>
         )}
@@ -520,21 +538,21 @@ export default function OfflinePacksScreen() {
                 </View>
                 <Text style={styles.emptyTitle}>NO CACHED REGIONS</Text>
                 <Text style={styles.emptyBody}>
-                  Download map tiles for your expedition routes to navigate without cellular coverage.
-                  Select a route corridor or define a bounding box to get started.
+                  Save map coverage for the areas you expect to cross, then keep it available offline
+                  when service drops. Start with a route corridor or create a region around a key area.
                 </Text>
                 <View style={styles.emptyFeatures}>
                   <View style={styles.emptyFeatureRow}>
                     <Ionicons name="navigate-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={styles.emptyFeatureText}>Cache tiles along your planned route</Text>
+                    <Text style={styles.emptyFeatureText}>Save coverage along your planned route</Text>
                   </View>
                   <View style={styles.emptyFeatureRow}>
                     <Ionicons name="crop-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={styles.emptyFeatureText}>Draw a bounding box for custom areas</Text>
+                    <Text style={styles.emptyFeatureText}>Mark custom areas that need offline coverage</Text>
                   </View>
                   <View style={styles.emptyFeatureRow}>
                     <Ionicons name="search-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={styles.emptyFeatureText}>Choose zoom levels for detail control</Text>
+                    <Text style={styles.emptyFeatureText}>Choose the detail level you want to keep</Text>
                   </View>
                   <View style={styles.emptyFeatureRow}>
                     <Ionicons
@@ -544,14 +562,14 @@ export default function OfflinePacksScreen() {
                     />
                     <Text style={styles.emptyFeatureText}>
                       {isNative
-                        ? 'Stored on device via expo-file-system for persistent offline access'
-                        : 'Stored in IndexedDB for persistent offline access'
+                        ? 'Saved on this device for repeat offline use'
+                        : 'Saved in local browser storage for repeat offline use'
                       }
                     </Text>
                   </View>
                   <View style={styles.emptyFeatureRow}>
                     <Ionicons name="time-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={styles.emptyFeatureText}>Freshness tracking shows when tiles were last updated</Text>
+                    <Text style={styles.emptyFeatureText}>Freshness checks show when saved coverage should be refreshed</Text>
                   </View>
                 </View>
                 <TouchableOpacity
@@ -595,46 +613,32 @@ export default function OfflinePacksScreen() {
           />
         )}
 
-        {/* Technical info footer */}
+        {/* Offline support footer */}
         <View style={styles.techFooter}>
-          <Text style={styles.techTitle}>CACHE ARCHITECTURE</Text>
+          <Text style={styles.techTitle}>OFFLINE FIELD NOTES</Text>
           <View style={styles.techRow}>
             <Ionicons name="cube-outline" size={10} color={TACTICAL.textMuted} />
             <Text style={styles.techText}>
-              Tile metadata: {isNative ? 'JSON file (documentDirectory)' : 'localStorage (fast reads)'}
+              Saved regions stay available offline across app restarts.
             </Text>
           </View>
           <View style={styles.techRow}>
             <Ionicons name="server-outline" size={10} color={TACTICAL.textMuted} />
             <Text style={styles.techText}>
-              Tile data: {isNative ? 'expo-file-system (persistent device storage)' : 'IndexedDB (large binary storage)'}
+              New downloads and freshness checks resume when a connection is available.
             </Text>
-          </View>
-          <View style={styles.techRow}>
-            <Ionicons name="download-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>
-              Concurrent downloads: {isNative ? '4 tiles (fs.downloadAsync)' : '4 tiles (fetch + IDB)'}
-            </Text>
-          </View>
-          <View style={styles.techRow}>
-            <Ionicons name="map-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>Tile sources: OSM, OpenTopoMap, ESRI Satellite</Text>
-          </View>
-          <View style={styles.techRow}>
-            <Ionicons name="shield-checkmark-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>Max region: 100,000 tiles per download</Text>
           </View>
           <View style={styles.techRow}>
             <Ionicons name="time-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>Freshness: green (&lt;7d), amber (&lt;30d), red (&gt;30d)</Text>
-          </View>
-          <View style={styles.techRow}>
-            <Ionicons name="git-merge-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>Merge: deduplicates shared tiles across overlapping regions</Text>
+            <Text style={styles.techText}>
+              Older regions can still be used, but they are worth refreshing before remote travel.
+            </Text>
           </View>
           <View style={styles.techRow}>
             <Ionicons name="analytics-outline" size={10} color={TACTICAL.textMuted} />
-            <Text style={styles.techText}>Cleanup: protects active expedition + recent route regions</Text>
+            <Text style={styles.techText}>
+              Cleanup protects current and recently used coverage before removing older regions.
+            </Text>
           </View>
         </View>
 

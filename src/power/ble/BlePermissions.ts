@@ -72,6 +72,7 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
   if (Platform.OS === "android") {
     try {
       // Dynamic import so the module is never resolved on web/iOS bundles.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
 
       const apiLevel = getAndroidApiLevel();
@@ -146,6 +147,7 @@ export async function checkBlePermissions(): Promise<BlePermissionResult> {
 
   if (Platform.OS === "android") {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
 
       const apiLevel = getAndroidApiLevel();

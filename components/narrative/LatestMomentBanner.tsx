@@ -57,7 +57,7 @@ export default function LatestMomentBanner({ expeditionId }: Props) {
     // Subscribe to changes
     const unsub = narrativeEngine.subscribe(update);
     return unsub;
-  }, [expeditionId]);
+  }, [expeditionId, fadeAnim]);
 
   if (!latest) return null;
 

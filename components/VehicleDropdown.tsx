@@ -101,8 +101,8 @@ export default function VehicleDropdown({ value, onChange, onNavigateToConfig }:
         >
           <Ionicons name="car-sport-outline" size={16} color={COLORS.gold} />
           <View style={styles.configBtnTextWrap}>
-            <Text style={styles.configBtnTitle}>No Vehicles Configured</Text>
-            <Text style={styles.configBtnSubtext}>Tap to set up a vehicle</Text>
+            <Text style={styles.configBtnTitle}>No Vehicles Staged</Text>
+            <Text style={styles.configBtnSubtext}>Tap to set up your first rig</Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={COLORS.textMuted} />
         </TouchableOpacity>
@@ -250,7 +250,7 @@ export default function VehicleDropdown({ value, onChange, onNavigateToConfig }:
                 activeOpacity={0.7}
               >
                 <Ionicons name="add-circle-outline" size={16} color={COLORS.gold} />
-                <Text style={styles.addVehicleBtnText}>Add New Vehicle</Text>
+                <Text style={styles.addVehicleBtnText}>Add Vehicle</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>

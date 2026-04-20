@@ -612,11 +612,32 @@ export const connectivityIntelStore = {
         restoredSummary = _migrateSummaryV3toV4(restoredSummary);
       }
 
-      // Phase 3D: Restore as last-known (not live), mark freshness as stale
+      const restoredOfflineCacheReady = restoredSummary.offline_cache_ready ?? false;
+      const restoredCachedRegionAvailable = restoredSummary.cached_region_available ?? false;
+      const restoredCachedRouteAvailable = restoredSummary.cached_route_available ?? false;
+      const restoredTransportNone = restoredSummary.network_type === 'none';
+      const restoredCacheUseful =
+        restoredOfflineCacheReady &&
+        (restoredCachedRegionAvailable || restoredCachedRouteAvailable);
+
+      // Phase 4: Restore persisted cache awareness and last-online context, but
+      // never restore a prior session as the current authoritative connectivity
+      // state. Launch must wait for fresh transport + reachability reconciliation.
       _summary = {
         ...restoredSummary,
+        connectivity_state: restoredTransportNone ? 'offline' : 'unknown',
+        internet_reachable: false,
+        active_source: null,
+        active_provider_count: 0,
         is_live: false,
-        freshness: 'stale',
+        signal_quality: restoredTransportNone ? 'none' : 'unknown',
+        network_type: restoredTransportNone ? 'none' : 'unknown',
+        quality: restoredTransportNone ? 'unavailable' : 'unknown',
+        latency_ms: null,
+        operational_readiness: restoredTransportNone
+          ? (restoredCacheUseful ? 'offline_ready' : 'offline_unprepared')
+          : (restoredCacheUseful ? 'degraded_ready' : 'offline_unprepared'),
+        freshness: restoredTransportNone ? 'offline' : 'stale',
         updated_at: session.persisted_at,
       };
       _cachedSummary = { ..._summary };

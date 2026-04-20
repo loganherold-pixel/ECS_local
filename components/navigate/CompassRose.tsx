@@ -55,23 +55,11 @@ function getAccuracyColor(accuracy: HeadingAccuracy): string {
   }
 }
 
-function getSourceLabel(source: 'compass' | 'gps' | 'none', isStationaryLocked: boolean): string {
-  if (isStationaryLocked) return 'LOCK';
-  switch (source) {
-    case 'compass':
-      return 'MAG';
-    case 'gps':
-      return 'GPS';
-    default:
-      return 'HDG';
-  }
-}
 
 // ── Props ────────────────────────────────────────────────────
 interface CompassRoseProps {
   heading?: number | null;
   followUser?: boolean;
-  userLocation?: { lat: number; lng: number } | null;
   visible?: boolean;
   onPress?: () => void;
   accuracy?: HeadingAccuracy;
@@ -79,22 +67,21 @@ interface CompassRoseProps {
   isStationaryLocked?: boolean;
   source?: 'compass' | 'gps' | 'none';
   containerStyle?: StyleProp<ViewStyle>;
+  paused?: boolean;
 }
 
-export default function CompassRose({
+const CompassRose = React.memo(function CompassRose({
   heading: externalHeading,
   followUser = false,
-  userLocation,
   visible = true,
   onPress,
   accuracy = 'medium',
   needsRecalibration = false,
   isStationaryLocked = false,
-  source = 'none',
   containerStyle,
+  paused = false,
 }: CompassRoseProps) {
   const [internalHeading, setInternalHeading] = useState<number | null>(null);
-  const [internalSource, setInternalSource] = useState<'MAG' | 'GPS' | 'NONE'>('NONE');
 
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -165,7 +152,6 @@ export default function CompassRose({
           heading = ((heading % 360) + 360) % 360;
 
           setInternalHeading(Math.round(heading));
-          setInternalSource('MAG');
         });
       } catch {
         // ignore
@@ -194,7 +180,6 @@ export default function CompassRose({
         const { heading: gpsHeading } = pos.coords;
         if (gpsHeading != null && gpsHeading >= 0) {
           setInternalHeading(Math.round(gpsHeading));
-          setInternalSource('GPS');
         }
       },
       () => {},
@@ -242,25 +227,23 @@ export default function CompassRose({
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
 
-  const effectiveSource =
-    externalHeading != null
-      ? source
-      : internalSource === 'MAG'
-        ? 'compass'
-        : internalSource === 'GPS'
-          ? 'gps'
-          : 'none';
-
-  const sourceLabel = getSourceLabel(effectiveSource as any, isStationaryLocked);
   const accuracyColor = getAccuracyColor(accuracy);
-  const sourceBadgeColor = isStationaryLocked ? '#4A90D9' : accuracyColor;
 
   const Wrapper = onPress ? TouchableOpacity : View;
-  const wrapperProps = onPress ? { onPress, activeOpacity: 0.85 } : {};
+  const wrapperProps = onPress
+    ? {
+        onPress,
+        activeOpacity: 0.85,
+        hitSlop: { top: 10, bottom: 10, left: 10, right: 10 },
+      }
+    : {};
 
   return (
     <Animated.View style={[styles.container, containerStyle, { opacity: fadeAnim }]}>
-      <Wrapper style={styles.compassOuter} {...(wrapperProps as any)}>
+      <Wrapper
+        style={[styles.compassOuter, paused && styles.compassOuterPaused]}
+        {...(wrapperProps as any)}
+      >
         <View style={styles.outerGlow} />
 
         {needsRecalibration && (
@@ -321,7 +304,7 @@ export default function CompassRose({
           </View>
         </Animated.View>
 
-        <View style={styles.centerHub}>
+        <View style={[styles.centerHub, paused && styles.centerHubPaused]}>
           <Text style={styles.headingDegrees}>
             {displayDeg != null ? `${displayDeg}°` : '—'}
           </Text>
@@ -333,19 +316,23 @@ export default function CompassRose({
           <View style={styles.headingDot} />
         </View>
 
-        <View style={[styles.sourceBadge, { borderColor: sourceBadgeColor + '60' }]}>
-          <Text style={[styles.sourceText, { color: sourceBadgeColor }]}>
-            {sourceLabel}
+        <View style={styles.recenterHint}>
+          <Text style={styles.recenterHintText}>
+            {paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER'}
           </Text>
         </View>
 
-        {hasHeading && (
-          <View style={[styles.accuracyDot, { backgroundColor: accuracyColor }]} />
-        )}
+        {hasHeading && !paused ? (
+          <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
+        ) : null}
       </Wrapper>
     </Animated.View>
   );
-}
+});
+
+CompassRose.displayName = 'CompassRose';
+
+export default CompassRose;
 
 const styles = StyleSheet.create({
   container: {
@@ -369,6 +356,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 6,
     elevation: 8,
+  },
+  compassOuterPaused: {
+    borderColor: 'rgba(196,138,44,0.2)',
+    backgroundColor: 'rgba(11,15,18,0.82)',
   },
 
   outerGlow: {
@@ -508,22 +499,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 5,
   },
+  centerHubPaused: {
+    borderColor: 'rgba(196,138,44,0.2)',
+    backgroundColor: 'rgba(11,15,18,0.88)',
+  },
 
   headingDegrees: {
     fontFamily: 'Courier',
-    fontSize: 10,
+    marginTop: 1,
+    fontSize: 7,
     fontWeight: '800',
-    color: TACTICAL.text,
-    letterSpacing: 0.3,
-    lineHeight: 12,
+    color: 'rgba(230,230,225,0.68)',
+    letterSpacing: 0.8,
+    lineHeight: 9,
   },
 
   headingCardinal: {
-    fontSize: 6,
-    fontWeight: '700',
-    color: TACTICAL.amber,
-    letterSpacing: 2,
-    lineHeight: 8,
+    fontSize: 11,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 1.2,
+    lineHeight: 12,
     textTransform: 'uppercase',
   },
 
@@ -551,32 +547,33 @@ const styles = StyleSheet.create({
     marginTop: -1,
   },
 
-  sourceBadge: {
+  recenterHint: {
     position: 'absolute',
-    bottom: -2,
-    left: COMPASS_SIZE / 2 - 12,
-    width: 24,
-    height: 10,
-    borderRadius: 3,
-    backgroundColor: 'rgba(11,15,18,0.95)',
-    borderWidth: 0.5,
-    borderColor: 'rgba(62,79,60,0.4)',
+    top: -18,
+    alignSelf: 'center',
+    minWidth: 58,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(11,15,18,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 6,
   },
 
-  sourceText: {
-    fontSize: 5,
+  recenterHintText: {
+    fontSize: 5.5,
     fontWeight: '800',
-    color: 'rgba(138,138,133,0.5)',
-    letterSpacing: 1.5,
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
   },
 
-  accuracyDot: {
+  headingQualityAccent: {
     position: 'absolute',
-    top: 2,
-    left: 2,
+    top: 6,
+    right: 6,
     width: 5,
     height: 5,
     borderRadius: 3,

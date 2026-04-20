@@ -16,7 +16,7 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL } from '../../lib/theme';
 import type { VehicleZoneTreeNode, VehicleZone } from '../../lib/types';
-import { supabase } from '../../lib/supabase';
+import { isDeployedEdgeFunction, supabase } from '../../lib/supabase';
 
 // ============================================================
 // ZONE TYPE CONFIG
@@ -39,7 +39,6 @@ function getZoneTypeConfig(zoneType: string) {
 function confirmDialog(title: string, message: string): Promise<boolean> {
   return new Promise((resolve) => {
     if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
       resolve(confirm(`${title}\n\n${message}`));
     } else {
       Alert.alert(title, message, [
@@ -234,6 +233,14 @@ export default function VehicleZonesCard({
 
   async function saveEdits() {
     if (!selectedZoneId) return;
+
+    if (!isDeployedEdgeFunction('update-vehicle-zone')) {
+      Alert.alert(
+        'Zone Editing Unavailable',
+        'This ECS build does not include cloud zone editing. Vehicle zones remain viewable, but edits cannot be synced from this screen.'
+      );
+      return;
+    }
 
     const trimmedName = zoneName.trim();
     if (!trimmedName) {

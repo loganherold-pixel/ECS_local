@@ -41,6 +41,8 @@ export interface ContainerCardProps {
   itemCount: number;
   /** Called when the card is tapped */
   onPress: () => void;
+  /** Compact mode for dense overview grids */
+  compact?: boolean;
 }
 
 export default function ContainerCard({
@@ -52,6 +54,7 @@ export default function ContainerCard({
   weightLbs,
   itemCount,
   onPress,
+  compact = false,
 }: ContainerCardProps) {
   const hasItems = itemCount > 0;
   const hasWeight = weightLbs > 0;
@@ -68,6 +71,7 @@ export default function ContainerCard({
     <TouchableOpacity
       style={[
         styles.card,
+        compact && styles.cardCompact,
         isEnabled && styles.cardEnabled,
         hasItems && { borderColor: `${color}50` },
       ]}
@@ -78,6 +82,7 @@ export default function ContainerCard({
       <View
         style={[
           styles.iconWrap,
+          compact && styles.iconWrapCompact,
           isEnabled && {
             backgroundColor: `${color}18`,
             borderColor: `${color}40`,
@@ -86,7 +91,7 @@ export default function ContainerCard({
       >
         <AccessoryIcon
           categoryId={containerKey}
-          size={14}
+          size={compact ? 12 : 14}
           color={isEnabled ? color : TACTICAL.textMuted}
         />
       </View>
@@ -95,9 +100,10 @@ export default function ContainerCard({
       <Text
         style={[
           styles.label,
+          compact && styles.labelCompact,
           isEnabled && styles.labelEnabled,
         ]}
-        numberOfLines={1}
+        numberOfLines={2}
       >
         {label}
       </Text>
@@ -107,14 +113,15 @@ export default function ContainerCard({
         <Text
           style={[
             styles.weightText,
+            compact && styles.weightTextCompact,
             hasWeight && { color: TACTICAL.text },
           ]}
         >
           {formatWeight(weightLbs)}
         </Text>
         {itemCount > 0 && (
-          <View style={[styles.itemCountBadge, { backgroundColor: `${color}20`, borderColor: `${color}40` }]}>
-            <Text style={[styles.itemCountText, { color }]}>{itemCount}</Text>
+          <View style={[styles.itemCountBadge, compact && styles.itemCountBadgeCompact, { backgroundColor: `${color}20`, borderColor: `${color}40` }]}>
+            <Text style={[styles.itemCountText, compact && styles.itemCountTextCompact, { color }]}>{itemCount}</Text>
           </View>
         )}
       </View>
@@ -123,19 +130,21 @@ export default function ContainerCard({
       <View style={styles.statusRow}>
         <Ionicons
           name={hasItems ? 'checkmark-circle' : 'ellipse-outline'}
-          size={12}
+          size={compact ? 11 : 12}
           color={hasItems ? '#66BB6A' : 'rgba(138,138,133,0.25)'}
         />
         {isEnabled && (
           <View
             style={[
               styles.statusChip,
+              compact && styles.statusChipCompact,
               hasItems && styles.statusChipActive,
             ]}
           >
             <Text
               style={[
                 styles.statusText,
+                compact && styles.statusTextCompact,
                 hasItems && styles.statusTextActive,
               ]}
             >
@@ -155,12 +164,20 @@ export default function ContainerCard({
 const styles = StyleSheet.create({
   card: {
     flex: 1,
+    minHeight: 96,
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: 'rgba(62, 79, 60, 0.25)',
     backgroundColor: TACTICAL.panel,
+    gap: 4,
+    justifyContent: 'space-between',
+  },
+  cardCompact: {
+    minHeight: 74,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
     gap: 3,
   },
   cardEnabled: {
@@ -179,6 +196,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconWrapCompact: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+  },
 
   // ── Label ─────────────────────────────────────────────────
   label: {
@@ -187,6 +209,13 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     letterSpacing: 0.4,
     marginTop: 1,
+    lineHeight: 12,
+    minHeight: 24,
+  },
+  labelCompact: {
+    fontSize: 9,
+    lineHeight: 11,
+    minHeight: 22,
   },
   labelEnabled: {
     color: TACTICAL.text,
@@ -206,6 +235,9 @@ const styles = StyleSheet.create({
     color: 'rgba(138,138,133,0.4)',
     letterSpacing: 0.5,
   },
+  weightTextCompact: {
+    fontSize: 11,
+  },
   itemCountBadge: {
     minWidth: 18,
     height: 18,
@@ -215,10 +247,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 4,
   },
+  itemCountBadgeCompact: {
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+  },
   itemCountText: {
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 0.5,
+  },
+  itemCountTextCompact: {
+    fontSize: 7,
   },
 
   // ── Status Row ────────────────────────────────────────────
@@ -237,6 +278,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(138,138,133,0.2)',
   },
+  statusChipCompact: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
   statusChipActive: {
     backgroundColor: 'rgba(102, 187, 106, 0.12)',
     borderColor: 'rgba(102, 187, 106, 0.3)',
@@ -246,6 +291,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: 'rgba(138,138,133,0.5)',
     letterSpacing: 0.8,
+  },
+  statusTextCompact: {
+    fontSize: 5.5,
+    letterSpacing: 0.6,
   },
   statusTextActive: {
     color: '#66BB6A',

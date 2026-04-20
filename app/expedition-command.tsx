@@ -21,21 +21,17 @@ import {
   waypointCommandStore,
 } from '../lib/expeditionCommandStore';
 
-import type {
-  EcsExpedition,
-  EcsChecklistItem,
-  EcsFieldLog,
-  EcsRoute,
-  EcsWaypoint,
-} from '../lib/expeditionTypes';
-
-import type {
+import {
+  type EcsChecklistItem,
+  type EcsExpedition,
+  type EcsFieldLog,
+  type EcsFieldLogType,
+  type EcsRoute,
+  type EcsWaypoint,
   TERRAIN_OPTIONS,
   FIELD_LOG_TYPE_META,
   computeReadiness,
 } from '../lib/expeditionTypes';
-
-import type { EcsFieldLogType } from '../lib/expeditionTypes';
 
 import ExportDataModal from '../components/expedition/ExportDataModal';
 
@@ -479,7 +475,7 @@ export default function ExpeditionCommandScreen() {
         'Please check your connection and try again.'
       );
     }
-  }, [expedition, user, expeditionId, checklist, fieldLogs, routes, waypoints, readiness, showToast, showErrorModal, handleUndoExpire, undoProgressAnim]);
+  }, [expedition, user, expeditionId, checklist, fieldLogs, routes, waypoints, showToast, showErrorModal, handleUndoExpire, undoProgressAnim]);
 
   // ── Confirmation modal derived data ───────────────────
   const confirmationStats = useMemo(() => {

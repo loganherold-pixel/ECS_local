@@ -123,7 +123,7 @@ function StepCompleteTick({ visible }: { visible: boolean }) {
       opacity.setValue(0);
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [visible]);
+  }, [visible, opacity]);
 
   return (
     <Animated.View style={[styles.tickContainer, { opacity }]} pointerEvents="none">
@@ -216,7 +216,7 @@ export default function WizardStepView({
         Animated.timing(contentOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
       }
     }
-  }, [step.id]);
+  }, [step.id, contentOpacity, contentTranslateY]);
 
   // ── Step complete detection + haptic ──────────────────
   useEffect(() => {

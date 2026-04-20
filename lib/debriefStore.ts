@@ -12,8 +12,7 @@
  * Aggregates analytics across all completed expeditions.
  */
 
-
-import { supabase } from './supabase';
+import { isDeployedEdgeFunction, supabase } from './supabase';
 import { Platform } from 'react-native';
 
 // ── Types ────────────────────────────────────────────────────
@@ -196,6 +195,9 @@ class DebriefStore {
   }
 
   async loadDebrief(expeditionId: string): Promise<DebriefData | null> {
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      return this.debriefs[expeditionId] || null;
+    }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
         body: { action: 'get_debrief', expedition_id: expeditionId },
@@ -222,6 +224,11 @@ class DebriefStore {
     this.debriefs[debrief.expedition_id] = debrief;
     this.persistDebriefs();
     this.notify();
+
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      if (onFail) onFail('Debrief saved locally. Cloud sync unavailable in this ECS backend.');
+      return { success: false };
+    }
 
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
@@ -259,6 +266,9 @@ class DebriefStore {
   }
 
   async loadAAR(expeditionId: string): Promise<AARReport | null> {
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      return this.aars[expeditionId] || null;
+    }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
         body: { action: 'get_aar', expedition_id: expeditionId },
@@ -287,6 +297,10 @@ class DebriefStore {
     expeditionId: string,
     onFail?: (msg: string) => void,
   ): Promise<AARReport | null> {
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      if (onFail) onFail('AAR generation unavailable in this ECS backend.');
+      return this.aars[expeditionId] || null;
+    }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
         body: { action: 'generate_aar', expedition_id: expeditionId },
@@ -396,6 +410,10 @@ class DebriefStore {
     onProgress?: (msg: string) => void,
     onFail?: (msg: string) => void,
   ): Promise<AIAnalysis | null> {
+    if (!isDeployedEdgeFunction('analyze-expedition')) {
+      if (onFail) onFail('ECS analysis unavailable in this backend.');
+      return this.aiAnalyses[expeditionId] || null;
+    }
     try {
       if (onProgress) onProgress('Analyzing expedition data...');
 
@@ -404,7 +422,7 @@ class DebriefStore {
       });
 
       if (error) {
-        throw new Error(error?.message || 'AI analysis request failed');
+        throw new Error(error?.message || 'ECS analysis request failed');
       }
 
       // Handle both direct analysis and fallback
@@ -430,8 +448,8 @@ class DebriefStore {
       this.notify();
       return analysis;
     } catch (err: any) {
-      console.warn('[DebriefStore] AI analysis failed:', err.message);
-      if (onFail) onFail(`AI analysis failed: ${err.message}`);
+      console.warn('[DebriefStore] ECS analysis failed:', err.message);
+      if (onFail) onFail(`ECS analysis failed: ${err.message}`);
       return null;
     }
   }
@@ -621,6 +639,10 @@ class TrendsStore {
     includeAI: boolean = false,
     onFail?: (msg: string) => void,
   ): Promise<{ trends: CrossExpeditionTrends | null; ai_insights: CrossExpeditionAIInsights | null }> {
+    if (!isDeployedEdgeFunction('cross-expedition-trends')) {
+      if (onFail) onFail('Cross-expedition trends unavailable in this ECS backend.');
+      return { trends: this.trends, ai_insights: this.aiInsights };
+    }
     try {
       const { data, error } = await supabase.functions.invoke('cross-expedition-trends', {
         body: { action: 'aggregate', include_ai: includeAI },
@@ -652,13 +674,17 @@ class TrendsStore {
   async generateAIInsights(
     onFail?: (msg: string) => void,
   ): Promise<CrossExpeditionAIInsights | null> {
+    if (!isDeployedEdgeFunction('cross-expedition-trends')) {
+      if (onFail) onFail('ECS trend analysis unavailable in this backend.');
+      return this.aiInsights;
+    }
     try {
       const { data, error } = await supabase.functions.invoke('cross-expedition-trends', {
         body: { action: 'aggregate', include_ai: true },
       });
 
       if (error) {
-        throw new Error(error?.message || 'AI trends analysis failed');
+        throw new Error(error?.message || 'ECS trend analysis failed');
       }
 
       if (data?.trends) {
@@ -674,8 +700,8 @@ class TrendsStore {
       this.notify();
       return this.aiInsights;
     } catch (err: any) {
-      console.warn('[TrendsStore] AI insights failed:', err.message);
-      if (onFail) onFail(`AI analysis failed: ${err.message}`);
+      console.warn('[TrendsStore] ECS trend analysis failed:', err.message);
+      if (onFail) onFail(`ECS analysis failed: ${err.message}`);
       return null;
     }
   }

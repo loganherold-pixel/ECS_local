@@ -15,6 +15,7 @@
  *   - Terrain risk engine (ground clearance vs obstacle height)
  */
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
@@ -86,15 +87,16 @@ export const SUSPENSION_OPTIONS: { label: string; value: number; isLeveled?: boo
 
 // ── Persistence ─────────────────────────────────────────
 const LS_KEY = 'ecs_tires_lift';
+const tiresLiftPersistence = createPersistedKeyValueCache('ecs_tires_lift_store');
 
 function getAllConfigs(): Record<string, TiresLiftConfig> {
-  const raw = lsGet(LS_KEY);
+  const raw = tiresLiftPersistence.get(LS_KEY);
   if (!raw) return {};
   try { return JSON.parse(raw) || {}; } catch { return {}; }
 }
 
 function saveAllConfigs(configs: Record<string, TiresLiftConfig>): void {
-  lsSet(LS_KEY, JSON.stringify(configs));
+  tiresLiftPersistence.set(LS_KEY, JSON.stringify(configs));
 }
 
 // ── Change listeners ────────────────────────────────────
@@ -187,7 +189,9 @@ export const tiresLiftStore = {
 
     const tires = hasTires ? `${config.tireSizeInches}"` : null;
     let suspension: string | null = null;
-    if (hasLift) {
+    if (hasLift && hasLeveled) {
+      suspension = `${config.suspensionLiftInches}" Level`;
+    } else if (hasLift) {
       suspension = `${config.suspensionLiftInches}" Lift`;
     } else if (hasLeveled) {
       suspension = 'Leveled';
@@ -228,5 +232,9 @@ export const tiresLiftStore = {
     if (total >= 1 || config.isLeveled) return 'mild';
     return 'stock';
   },
+
+  waitForHydration: (): Promise<void> => tiresLiftPersistence.waitForHydration(),
+
+  flush: (): Promise<void> => tiresLiftPersistence.flush(),
 };
 

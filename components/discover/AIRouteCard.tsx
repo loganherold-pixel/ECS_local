@@ -11,7 +11,7 @@
 //   - Action buttons: Preview, Save, Build Expedition
 // ============================================================
 
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS } from '../../lib/theme';
@@ -31,27 +31,29 @@ import {
   type EnrichedDiscoveryRoute,
   type RouteLabel,
   getRouteLabelConfig,
-  toggleSaveRoute,
-  isRouteSaved,
 } from '../../lib/discoveryIntelligenceEngine';
+import { formatConfidenceCompactLine } from '../../lib/ai/confidenceEngine';
+import { formatTrustCompactLine } from '../../lib/ai/trustContract';
 
 interface AIRouteCardProps {
   route: AIGeneratedRoute;
   enrichedRoute?: EnrichedDiscoveryRoute | null;
+  isFavorited?: boolean;
   onPreview: () => void;
-  onSave?: () => void;
+  onNavigate?: () => void;
+  onToggleFavorite?: () => void;
   onBuildExpedition?: () => void;
 }
 
 export default function AIRouteCard({
   route,
   enrichedRoute,
+  isFavorited = false,
   onPreview,
-  onSave,
+  onNavigate,
+  onToggleFavorite,
   onBuildExpedition,
 }: AIRouteCardProps) {
-  const [isSaved, setIsSaved] = useState(() => isRouteSaved(route.id));
-
   const terrainColor = getTerrainColor(route.terrainType);
   const remotenessColor = getRemotenessColor(route.remotenessScore);
   const remotenessLabel = getRemotenessLabel(route.remotenessScore);
@@ -60,13 +62,17 @@ export default function AIRouteCard({
   const confidenceIcon = getConfidenceIcon(route.confidence);
 
   // Use enriched route label or fallback to AI label
-  const routeLabel: RouteLabel = enrichedRoute?.routeLabel ?? 'AI Suggested';
+  const routeLabel: RouteLabel = enrichedRoute?.routeLabel ?? 'ECS Suggested';
   const labelConfig = getRouteLabelConfig(routeLabel);
 
   // Risk preview from enriched route
   const riskPreview = enrichedRoute?.riskPreview;
   const vehicleMatch = enrichedRoute?.vehicleMatch;
   const isGem = enrichedRoute?.gemScore?.isGem ?? false;
+  const confidenceLine =
+    formatTrustCompactLine(enrichedRoute?.trust ?? null) ||
+    formatConfidenceCompactLine(enrichedRoute?.recommendationConfidence);
+  const explanationLine = enrichedRoute?.explanation?.text ?? null;
 
   const getDiffLabel = (d: number): string => {
     if (d <= 2) return 'EASY';
@@ -86,13 +92,6 @@ export default function AIRouteCard({
   const diffLabel = getDiffLabel(route.terrainDifficulty ?? 5);
   const diffColor = getDiffColor(route.terrainDifficulty ?? 5);
 
-  const handleSave = () => {
-    hapticMicro();
-    const nowSaved = toggleSaveRoute(route.id);
-    setIsSaved(nowSaved);
-    onSave?.();
-  };
-
   return (
     <TouchableOpacity
       style={s.card}
@@ -107,25 +106,48 @@ export default function AIRouteCard({
 
       <View style={s.cardBody}>
         {/* Badge Row */}
-        <View style={s.badgeRow}>
-          <View style={[s.routeLabelBadge, { borderColor: labelConfig.color + '50', backgroundColor: labelConfig.color + '14' }]}>
-            <Ionicons name={labelConfig.icon as any} size={9} color={labelConfig.color} />
-            <Text style={[s.routeLabelText, { color: labelConfig.color }]}>{routeLabel.toUpperCase()}</Text>
-          </View>
-          <View style={[s.confidenceBadge, { borderColor: confidenceColor + '40', backgroundColor: confidenceColor + '0C' }]}>
-            <Ionicons name={confidenceIcon as any} size={8} color={confidenceColor} />
-            <Text style={[s.confidenceText, { color: confidenceColor }]}>{confidenceLabel}</Text>
-          </View>
-          {isGem && (
-            <View style={s.gemBadge}>
-              <Ionicons name="diamond-outline" size={8} color="#E67E22" />
+        <View style={s.badgeRowWrap}>
+          <View style={s.badgeRow}>
+            <View style={[s.routeLabelBadge, { borderColor: labelConfig.color + '50', backgroundColor: labelConfig.color + '14' }]}>
+              <Ionicons name={labelConfig.icon as any} size={9} color={labelConfig.color} />
+              <Text style={[s.routeLabelText, { color: labelConfig.color }]}>{routeLabel.toUpperCase()}</Text>
             </View>
-          )}
+            <View style={[s.confidenceBadge, { borderColor: confidenceColor + '40', backgroundColor: confidenceColor + '0C' }]}>
+              <Ionicons name={confidenceIcon as any} size={8} color={confidenceColor} />
+              <Text style={[s.confidenceText, { color: confidenceColor }]}>{confidenceLabel}</Text>
+            </View>
+            {isGem && (
+              <View style={s.gemBadge}>
+                <Ionicons name="diamond-outline" size={8} color="#E67E22" />
+              </View>
+            )}
+          </View>
+
+          {onToggleFavorite ? (
+            <TouchableOpacity
+              style={[s.favoriteToggle, isFavorited && s.favoriteToggleActive]}
+              activeOpacity={0.72}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                hapticMicro();
+                onToggleFavorite();
+              }}
+            >
+              <Ionicons
+                name={isFavorited ? 'star' : 'star-outline'}
+                size={12}
+                color={isFavorited ? TACTICAL.amber : TACTICAL.textMuted}
+              />
+              <Text style={[s.favoriteToggleText, isFavorited && s.favoriteToggleTextActive]}>
+                {isFavorited ? 'SAVED' : 'SAVE'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* Name + Region */}
         <View style={s.nameBlock}>
-          <Text style={s.cardName} numberOfLines={1}>{route.name}</Text>
+          <Text style={s.cardName} numberOfLines={2}>{route.name}</Text>
           <Text style={s.cardRegion}>{route.region}</Text>
         </View>
 
@@ -159,6 +181,16 @@ export default function AIRouteCard({
 
         {/* Description */}
         <Text style={s.description} numberOfLines={2}>{route.description}</Text>
+        {confidenceLine ? (
+          <Text style={s.confidenceLine} numberOfLines={1}>
+            {confidenceLine}
+          </Text>
+        ) : null}
+        {explanationLine ? (
+          <Text style={s.explanationLine} numberOfLines={2}>
+            {explanationLine}
+          </Text>
+        ) : null}
 
         {/* Chip Row */}
         <View style={s.chipRow}>
@@ -184,15 +216,28 @@ export default function AIRouteCard({
 
         {/* Action Row */}
         <View style={s.actionRow}>
-          <TouchableOpacity style={s.actionBtn} activeOpacity={0.7} onPress={() => { hapticMicro(); onPreview(); }}>
-            <Ionicons name="eye-outline" size={11} color={TACTICAL.amber} />
-            <Text style={s.actionBtnText}>PREVIEW</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.actionBtn, isSaved && s.actionBtnActive]} activeOpacity={0.7} onPress={handleSave}>
-            <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={11} color={isSaved ? TACTICAL.amber : TACTICAL.textMuted} />
-            <Text style={[s.actionBtnText, isSaved && { color: TACTICAL.amber }]}>{isSaved ? 'SAVED' : 'SAVE'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.actionBtn} activeOpacity={0.7} onPress={() => { hapticMicro(); onBuildExpedition?.(); }}>
+          {onNavigate ? (
+            <TouchableOpacity
+              style={s.actionBtn}
+              activeOpacity={0.7}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                onNavigate();
+              }}
+            >
+              <Ionicons name="navigate-outline" size={11} color={TACTICAL.amber} />
+              <Text style={[s.actionBtnText, { color: TACTICAL.amber }]}>NAVIGATE</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={s.actionBtn}
+            activeOpacity={0.7}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              hapticMicro();
+              onBuildExpedition?.();
+            }}
+          >
             <Ionicons name="compass-outline" size={11} color={TACTICAL.textMuted} />
             <Text style={s.actionBtnText}>BUILD</Text>
           </TouchableOpacity>
@@ -219,7 +264,8 @@ const s = StyleSheet.create({
   accentBot: { flex: 1 },
   cardBody: { flex: 1, padding: 14, gap: 8 },
 
-  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  badgeRowWrap: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  badgeRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   routeLabelBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1,
@@ -234,6 +280,30 @@ const s = StyleSheet.create({
     width: 18, height: 18, borderRadius: 9,
     backgroundColor: '#E67E220C', borderWidth: 1, borderColor: '#E67E2240',
     alignItems: 'center', justifyContent: 'center',
+  },
+  favoriteToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  favoriteToggleActive: {
+    borderColor: TACTICAL.amber + '40',
+    backgroundColor: TACTICAL.amber + '0C',
+  },
+  favoriteToggleText: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    color: TACTICAL.textMuted,
+  },
+  favoriteToggleTextActive: {
+    color: TACTICAL.amber,
   },
 
   nameBlock: { gap: 2 },
@@ -250,6 +320,19 @@ const s = StyleSheet.create({
   statUnit: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1 },
 
   description: { fontSize: 11, fontWeight: '500', color: TACTICAL.textMuted, lineHeight: 16, letterSpacing: 0.2 },
+  confidenceLine: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  explanationLine: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '500',
+    color: TACTICAL.textMuted,
+  },
 
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
   chip: {

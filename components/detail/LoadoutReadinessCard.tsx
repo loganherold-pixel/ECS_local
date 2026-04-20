@@ -200,7 +200,7 @@ export default function LoadoutReadinessCard({
   const warningBorderColor = isWarning ? TACTICAL.danger : TACTICAL.accent;
 
   // ═══════════════════════════════════════════════════════════
-  // RENDER: No loadout assigned
+  // RENDER: No loadout linked
   // ═══════════════════════════════════════════════════════════
   if (!loadoutId) {
     return (
@@ -209,21 +209,21 @@ export default function LoadoutReadinessCard({
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <Ionicons name="cube-outline" size={16} color={TACTICAL.amber} />
-            <Text style={styles.cardTitle}>LOADOUT</Text>
+            <Text style={styles.cardTitle}>LOADOUT STATUS</Text>
           </View>
         </View>
 
         {/* Empty state */}
         <View style={styles.emptyBody}>
           <Ionicons name="cube-outline" size={28} color={TACTICAL.textMuted} />
-          <Text style={styles.emptyText}>No loadout assigned</Text>
+          <Text style={styles.emptyText}>No loadout linked</Text>
         </View>
 
         {/* Assign button or picker */}
         {!showPicker ? (
           <TouchableOpacity style={styles.assignBtn} onPress={handleOpenPicker}>
             <Ionicons name="link-outline" size={16} color={TACTICAL.text} />
-            <Text style={styles.assignBtnText}>ASSIGN LOADOUT</Text>
+            <Text style={styles.assignBtnText}>LINK LOADOUT</Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.pickerContainer}>
@@ -244,7 +244,7 @@ export default function LoadoutReadinessCard({
               </View>
             ) : (
               <>
-                <Text style={styles.pickerLabel}>SELECT LOADOUT</Text>
+                <Text style={styles.pickerLabel}>SELECT ECS LOADOUT</Text>
                 <ScrollView
                   style={styles.pickerScroll}
                   nestedScrollEnabled
@@ -317,7 +317,7 @@ export default function LoadoutReadinessCard({
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <Ionicons name="cube-outline" size={16} color={TACTICAL.amber} />
-            <Text style={styles.cardTitle}>LOADOUT</Text>
+            <Text style={styles.cardTitle}>LOADOUT STATUS</Text>
           </View>
         </View>
         <View style={styles.loadingBody}>
@@ -343,7 +343,7 @@ export default function LoadoutReadinessCard({
             size={16}
             color={isWarning ? TACTICAL.danger : TACTICAL.amber}
           />
-          <Text style={styles.cardTitle}>LOADOUT</Text>
+          <Text style={styles.cardTitle}>LOADOUT STATUS</Text>
         </View>
         {loadoutName && (
           <Text style={styles.loadoutNameLabel} numberOfLines={1}>
@@ -358,7 +358,7 @@ export default function LoadoutReadinessCard({
           <Ionicons name="alert-circle" size={14} color={TACTICAL.danger} />
           <Text style={styles.warningText}>
             {readiness.readiness_percent < 60
-              ? 'LOW READINESS'
+              ? 'READINESS BELOW TARGET'
               : 'CRITICAL ITEMS INCOMPLETE'}
           </Text>
         </View>
@@ -368,7 +368,7 @@ export default function LoadoutReadinessCard({
       <View style={styles.metricsRow}>
         {/* Readiness */}
         <View style={styles.metricBlock}>
-          <Text style={styles.metricLabel}>LOADOUT READINESS</Text>
+          <Text style={styles.metricLabel}>READINESS</Text>
           <View style={styles.metricValueRow}>
             <Text style={[styles.metricValueLarge, { color: readinessColor }]}>
               {readiness.readiness_percent}%
@@ -422,7 +422,7 @@ export default function LoadoutReadinessCard({
       {/* Action button */}
       <TouchableOpacity style={styles.openBtn} onPress={handleOpenLoadout}>
         <Ionicons name="open-outline" size={15} color={TACTICAL.text} />
-        <Text style={styles.openBtnText}>OPEN LOADOUT</Text>
+        <Text style={styles.openBtnText}>OPEN IN FLEET</Text>
       </TouchableOpacity>
     </View>
   );
@@ -434,11 +434,11 @@ export default function LoadoutReadinessCard({
 const styles = StyleSheet.create({
   card: {
     backgroundColor: TACTICAL.panel,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(62, 79, 60, 0.35)',
-    borderTopWidth: 3,
-    borderTopColor: TACTICAL.accent,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196,138,44,0.18)',
     marginBottom: 14,
     overflow: 'hidden',
   },
@@ -458,13 +458,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardTitle: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 2,
   },
   loadoutNameLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: TACTICAL.textMuted,
     maxWidth: 160,
@@ -557,7 +557,7 @@ const styles = StyleSheet.create({
     borderColor: TACTICAL.borderFocus,
   },
   openBtnText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '900',
     color: TACTICAL.text,
     letterSpacing: 1.5,
@@ -699,7 +699,7 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   pickerLoadingText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,

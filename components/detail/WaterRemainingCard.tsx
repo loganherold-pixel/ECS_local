@@ -112,7 +112,7 @@ export default function WaterRemainingCard({
         })
         .eq('id', vehicleId);
       if (error) {
-        setSaveMsg('UPDATE FAILED');
+        setSaveMsg('SAVE FAILED');
       } else {
         setSaveMsg(`WATER UPDATED: ${clamped} GAL`);
         setWaterInput(String(clamped));
@@ -151,7 +151,7 @@ export default function WaterRemainingCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="water-outline" size={16} color={TACTICAL.textMuted} />
-          <Text style={s.cardTitle}>WATER REMAINING</Text>
+          <Text style={s.cardTitle}>WATER STATUS</Text>
         </View>
         <View style={s.noDataBox}>
           <Ionicons name="car-outline" size={24} color={TACTICAL.textMuted} />
@@ -168,7 +168,7 @@ export default function WaterRemainingCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="water-outline" size={16} color={TACTICAL.textMuted} />
-          <Text style={s.cardTitle}>WATER REMAINING</Text>
+          <Text style={s.cardTitle}>WATER STATUS</Text>
         </View>
         <View style={[s.disabledOverlay]}>
           <Ionicons name="water-outline" size={28} color={TACTICAL.textMuted} />
@@ -193,7 +193,7 @@ export default function WaterRemainingCard({
       {isCritical && (
         <View style={s.criticalBanner}>
           <Ionicons name="warning" size={14} color={TACTICAL.danger} />
-          <Text style={s.criticalText}>LOW WATER WARNING</Text>
+          <Text style={s.criticalText}>WATER RESERVE CRITICAL</Text>
           <Ionicons name="warning" size={14} color={TACTICAL.danger} />
         </View>
       )}
@@ -201,7 +201,7 @@ export default function WaterRemainingCard({
       {/* Header */}
       <View style={s.cardHeader}>
         <Ionicons name={icon as any} size={16} color={color} />
-        <Text style={s.cardTitle}>WATER REMAINING</Text>
+        <Text style={s.cardTitle}>WATER STATUS</Text>
         <View style={[s.statusChip, { borderColor: color }]}>
           <Text style={[s.statusChipText, { color }]}>{status}</Text>
         </View>
@@ -275,7 +275,7 @@ export default function WaterRemainingCard({
           color={TACTICAL.amber}
         />
         <Text style={s.updateToggleText}>
-          {showUpdate ? 'HIDE WATER UPDATE' : 'UPDATE WATER LEVEL'}
+          {showUpdate ? 'HIDE WATER ADJUSTMENT' : 'ADJUST WATER LEVEL'}
         </Text>
       </TouchableOpacity>
 
@@ -410,7 +410,7 @@ export default function WaterRemainingCard({
 const s = StyleSheet.create({
   card: {
     backgroundColor: TACTICAL.panel,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: TACTICAL.border,
     overflow: 'hidden',
@@ -519,7 +519,7 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   projectedValue: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0.5,
     fontFamily: 'Courier',

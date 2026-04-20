@@ -22,37 +22,37 @@
 // ── Constants ──────────────────────────────────────────────
 
 /** Minimum angle change (degrees) to trigger a full animation update */
-const DEAD_ZONE_DEG = 0.2;
+const DEAD_ZONE_DEG = ATTITUDE_MONITOR_TUNING.motion.deadZoneDeg;
 
 /** Rolling average buffer size (number of samples to average) */
-const ROLLING_AVG_WINDOW = 4;
+const ROLLING_AVG_WINDOW = ATTITUDE_MONITOR_TUNING.motion.rollingAverageWindow;
 
 /**
  * Low-pass filter coefficient for the motion engine layer.
  * Lower = smoother but more lag. Higher = more responsive but jittery.
  * This is applied ON TOP of useAccelerometer's own 0.12 filter.
  */
-const MOTION_FILTER_ALPHA = 0.35;
+const MOTION_FILTER_ALPHA = ATTITUDE_MONITOR_TUNING.motion.filterAlpha;
 
 /** Minimum animation duration (ms) — for very small angle changes */
-const MIN_DURATION_MS = 200;
+const MIN_DURATION_MS = ATTITUDE_MONITOR_TUNING.motion.animation.minDurationMs;
 
 /** Maximum animation duration (ms) — for large angle changes */
-const MAX_DURATION_MS = 350;
+const MAX_DURATION_MS = ATTITUDE_MONITOR_TUNING.motion.animation.maxDurationMs;
 
 /**
  * Angle delta (degrees) at which duration reaches MAX_DURATION_MS.
  * Deltas beyond this still use MAX_DURATION_MS (clamped).
  */
-const FULL_SCALE_DELTA_DEG = 15;
+const FULL_SCALE_DELTA_DEG = ATTITUDE_MONITOR_TUNING.motion.animation.fullScaleDeltaDeg;
 
 /**
  * Demo mode duration range — longer for smooth scenario transitions.
  * These override the normal duration when demo mode is active.
  */
-const DEMO_MIN_DURATION_MS = 900;
-const DEMO_MAX_DURATION_MS = 1400;
-const DEMO_FULL_SCALE_DELTA_DEG = 25;
+const DEMO_MIN_DURATION_MS = ATTITUDE_MONITOR_TUNING.motion.animation.demoMinDurationMs;
+const DEMO_MAX_DURATION_MS = ATTITUDE_MONITOR_TUNING.motion.animation.demoMaxDurationMs;
+const DEMO_FULL_SCALE_DELTA_DEG = ATTITUDE_MONITOR_TUNING.motion.animation.demoFullScaleDeltaDeg;
 
 
 // ── Types ──────────────────────────────────────────────────
@@ -253,3 +253,4 @@ export const INSTRUMENT_EASING = {
   p2y: 1.0,
 } as const;
 
+import { ATTITUDE_MONITOR_TUNING } from './attitudeMonitorTuning';

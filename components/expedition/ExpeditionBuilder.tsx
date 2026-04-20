@@ -420,7 +420,7 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
       // Auto-collapse builder when all steps complete
       setExpanded(false);
     }
-  }, [isAllComplete]);
+  }, [expanded, isAllComplete]);
 
 
   // Save template eligibility: all 4 steps complete + at least 1 loadout item

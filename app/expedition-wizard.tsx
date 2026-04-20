@@ -160,7 +160,7 @@ export default function ExpeditionWizardScreen() {
   // Save draft whenever step changes
   useEffect(() => {
     saveDraft();
-  }, [step]);
+  }, [step, saveDraft]);
 
   // ── Load vehicles ──────────────────────────────────────────
   useEffect(() => {

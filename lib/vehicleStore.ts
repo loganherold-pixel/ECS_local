@@ -20,7 +20,11 @@
  * saved vehicle/container state is available.
  */
 import { Platform } from 'react-native';
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isDeployedEdgeFunction, isSupabaseConfigured } from './supabase';
+import { consumablesStore } from './consumablesStore';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
+import { tiresLiftStore } from './tiresLiftStore';
+import { vehicleSetupStore } from './vehicleSetupStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
 import type { Vehicle } from './types';
 
@@ -43,20 +47,20 @@ const BUILDER_STATE_KEY = 'ecs_exp_builder_state';
 
 // ── localStorage helpers ─────────────────────────────────
 
-const memoryStore: Record<string, string> = {};
+const localVehicleCache = createPersistedKeyValueCache('ecs_vehicle_store');
 
 function lsGet(key: string): string | null {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
     return localStorage.getItem(key);
   }
-  return memoryStore[key] || null;
+  return localVehicleCache.get(key);
 }
 
 function lsSet(key: string, value: string): void {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
     localStorage.setItem(key, value);
   }
-  memoryStore[key] = value;
+  localVehicleCache.set(key, value);
 }
 
 function lsRemove(key: string): void {
@@ -65,7 +69,7 @@ function lsRemove(key: string): void {
       localStorage.removeItem(key);
     }
   } catch {}
-  delete memoryStore[key];
+  localVehicleCache.delete(key);
 }
 
 function generateId(): string {
@@ -120,6 +124,14 @@ function saveLocalVehicles(vehicles: Vehicle[]): void {
   lsSet(LS_KEY, JSON.stringify(vehicles));
 }
 
+async function ensureVehicleStorageHydrated(): Promise<void> {
+  await localVehicleCache.waitForHydration();
+}
+
+async function flushVehicleStorage(): Promise<void> {
+  await localVehicleCache.flush();
+}
+
 /**
  * Remove all cached data related to a specific vehicle.
  * Called internally by vehicleStore.delete.
@@ -131,6 +143,20 @@ function cleanupRelatedData(vehicleId: string): void {
     console.log(TAG, `Removed specs for vehicle ${vehicleId}`);
   } catch (e) {
     console.warn(TAG, 'Failed to remove vehicle specs:', e);
+  }
+
+  try {
+    consumablesStore.remove(vehicleId);
+    console.log(TAG, `Removed consumables for vehicle ${vehicleId}`);
+  } catch (e) {
+    console.warn(TAG, 'Failed to remove vehicle consumables:', e);
+  }
+
+  try {
+    tiresLiftStore.remove(vehicleId);
+    console.log(TAG, `Removed tires/lift config for vehicle ${vehicleId}`);
+  } catch (e) {
+    console.warn(TAG, 'Failed to remove tires/lift config:', e);
   }
 
   // 2. Remove fetchVehicleZones.ts zone cache
@@ -180,9 +206,57 @@ function cleanupRelatedData(vehicleId: string): void {
 }
 
 // ── Updatable vehicle fields (excludes id, owner_user_id, created_at) ──
-export type VehicleUpdateData = Partial<Omit<Vehicle, 'id' | 'owner_user_id' | 'created_at' | 'updated_at'>>;
+type VehicleLocalExtensions = {
+  wizard_config?: Record<string, any>;
+  zones?: any[];
+  accessoryFramework?: any;
+  containerZones?: any[];
+};
+
+export type VehicleUpdateData =
+  Partial<Omit<Vehicle, 'id' | 'owner_user_id' | 'created_at' | 'updated_at'>>
+  & VehicleLocalExtensions;
+
+const LOCAL_ONLY_UPDATE_KEYS = new Set([
+  'battery_usable_wh',
+  'wizard_config',
+  'zones',
+  'accessoryFramework',
+  'containerZones',
+]);
+
+function buildCloudPayload(data: VehicleUpdateData, now: string): Record<string, any> {
+  const payload: Record<string, any> = { updated_at: now };
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined && !LOCAL_ONLY_UPDATE_KEYS.has(key)) {
+      payload[key] = value;
+    }
+  }
+  return payload;
+}
+
+function mergeWizardConfig(existing: any, incoming: any): any {
+  if (!incoming || typeof incoming !== 'object') {
+    return existing;
+  }
+  if (!existing || typeof existing !== 'object') {
+    return incoming;
+  }
+  return {
+    ...existing,
+    ...incoming,
+    _resources: incoming._resources ?? existing._resources,
+  };
+}
 
 export const vehicleStore = {
+  waitForHydration: async (): Promise<void> => {
+    await ensureVehicleStorageHydrated();
+  },
+
+  flush: async (): Promise<void> => {
+    await flushVehicleStorage();
+  },
 
   // ── Change Subscription ───────────────────────────────
   /**
@@ -212,6 +286,13 @@ export const vehicleStore = {
     return locals.find(v => v.id === vehicleId) || null;
   },
 
+  /**
+   * Get the current local vehicle snapshot synchronously.
+   * Useful for first-run and local-only UI flows that need to reason
+   * about vehicle count without starting an async fetch.
+   */
+  getLocalSnapshot: (): Vehicle[] => getLocalVehicles(),
+
 
 
   /**
@@ -219,10 +300,11 @@ export const vehicleStore = {
    * Otherwise returns local vehicles.
    */
   getAll: async (userId?: string | null): Promise<{ vehicles: Vehicle[]; source: 'cloud' | 'local' | 'merged' }> => {
+    await ensureVehicleStorageHydrated();
     const localVehicles = getLocalVehicles();
 
     // If we have a valid (non-'local') user and Supabase is configured, try cloud fetch
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('setup-vehicle-zones')) {
 
       try {
         const { data, error } = await supabase
@@ -253,19 +335,32 @@ export const vehicleStore = {
                 merged.containerZones = (localVersion as any).containerZones;
               }
               if ((localVersion as any).wizard_config) {
-                merged.wizard_config = (localVersion as any).wizard_config;
+                const localWizardConfig = (localVersion as any).wizard_config;
+                merged.wizard_config = {
+                  ...((cloudVehicle as any).wizard_config || {}),
+                  ...localWizardConfig,
+                  _resources: localWizardConfig?._resources ?? (cloudVehicle as any)?.wizard_config?._resources,
+                };
               }
               if ((localVersion as any).zones) {
                 merged.zones = (localVersion as any).zones;
+              }
+              if ((localVersion as any).battery_usable_wh !== undefined) {
+                merged.battery_usable_wh = (localVersion as any).battery_usable_wh;
               }
               return merged as Vehicle;
             }
             return cloudVehicle;
           });
 
-          // Also include any local-only vehicles not yet synced
+          // Also include any locally persisted vehicles not yet present in cloud.
+          // This covers both true local/offline vehicles and signed-in fallback
+          // writes that were durably saved before cloud creation/sync completed.
           const cloudIds = new Set(data.map((v: Vehicle) => v.id));
-          const localOnly = localVehicles.filter(v => !cloudIds.has(v.id) && v.owner_user_id === 'local');
+          const localOnly = localVehicles.filter((v) => {
+            if (cloudIds.has(v.id)) return false;
+            return v.owner_user_id === 'local' || v.owner_user_id === userId;
+          });
 
           if (localOnly.length > 0) {
             return { vehicles: [...mergedCloudVehicles, ...localOnly], source: 'merged' };
@@ -289,6 +384,7 @@ export const vehicleStore = {
     data: { name: string; make?: string; model?: string; year?: number | null },
     userId?: string | null
   ): Promise<{ vehicle: Vehicle | null; error?: string; source: 'cloud' | 'local' }> => {
+    await ensureVehicleStorageHydrated();
     const now = new Date().toISOString();
     const localId = generateId();
 
@@ -322,6 +418,7 @@ export const vehicleStore = {
             if (!alreadyLocal) {
               locals.push(cloudData);
               saveLocalVehicles(locals);
+              await flushVehicleStorage();
               console.log(TAG, 'Cloud-created vehicle also saved to local storage:', cloudData.id);
             }
           } catch (e) {
@@ -343,7 +440,10 @@ export const vehicleStore = {
     // Create locally
     const vehicle: Vehicle = {
       id: localId,
-      owner_user_id: userId || 'local',
+      // Local fallback records should remain explicitly local until they are
+      // confirmed in cloud so restart/recovery never depends on optimistic
+      // ownership assumptions.
+      owner_user_id: 'local',
       name: data.name,
       type: 'vehicle',
       make: data.make || null,
@@ -356,6 +456,7 @@ export const vehicleStore = {
       water_capacity_gal: null,
       current_water_gal: 0,
       water_updated_at: null,
+      battery_usable_wh: null,
       created_at: now,
       updated_at: now,
     };
@@ -363,6 +464,7 @@ export const vehicleStore = {
     const locals = getLocalVehicles();
     locals.push(vehicle);
     saveLocalVehicles(locals);
+    await flushVehicleStorage();
 
     // Notify listeners that a vehicle was created (local path)
     notifyChange('create', vehicle.id);
@@ -388,6 +490,7 @@ export const vehicleStore = {
     data: VehicleUpdateData,
     userId?: string | null
   ): Promise<{ vehicle: Vehicle | null; updatedIn: 'cloud' | 'local' | 'both'; error?: string }> => {
+    await ensureVehicleStorageHydrated();
     const now = new Date().toISOString();
     let updatedCloud = false;
     let updatedLocal = false;
@@ -400,25 +503,29 @@ export const vehicleStore = {
         payload[key] = value;
       }
     }
+    const cloudPayload = buildCloudPayload(data, now);
 
     // ── 1. Cloud update (if authenticated with real UUID + Supabase configured) ──
     if (isSyncableUserId(userId) && isSupabaseConfigured) {
 
       try {
-        const { data: cloudData, error } = await supabase
-          .from('vehicles')
-          .update(payload)
-          .eq('id', vehicleId)
-          .select('*')
-          .single();
+        if (Object.keys(cloudPayload).length > 1) {
+          const { data: cloudData, error } = await supabase
+            .from('vehicles')
+            .update(cloudPayload)
+            .eq('id', vehicleId)
+            .eq('owner_user_id', userId)
+            .select('*')
+            .single();
 
-        if (!error && cloudData) {
-          updatedCloud = true;
-          updatedVehicle = cloudData as Vehicle;
-          console.log(TAG, `Updated vehicle ${vehicleId} in cloud`);
-        } else {
-          console.warn(TAG, `Cloud update failed for ${vehicleId}:`, error?.message);
-          // Fall through to local update
+          if (!error && cloudData) {
+            updatedCloud = true;
+            updatedVehicle = cloudData as Vehicle;
+            console.log(TAG, `Updated vehicle ${vehicleId} in cloud`);
+          } else {
+            console.warn(TAG, `Cloud update failed for ${vehicleId}:`, error?.message);
+            // Fall through to local update
+          }
         }
       } catch (err: any) {
         console.warn(TAG, `Cloud update error for ${vehicleId}:`, err);
@@ -438,15 +545,25 @@ export const vehicleStore = {
 
         // Preserve wizard_config and zones if they exist on the local record
         // (these are non-typed extensions stored locally)
-        if ((existing as any).wizard_config && !(payload as any).wizard_config) {
-          (merged as any).wizard_config = (existing as any).wizard_config;
+        if ((existing as any).wizard_config || (payload as any).wizard_config) {
+          (merged as any).wizard_config = mergeWizardConfig(
+            (existing as any).wizard_config,
+            (payload as any).wizard_config,
+          );
         }
         if ((existing as any).zones && !(payload as any).zones) {
           (merged as any).zones = (existing as any).zones;
         }
+        if ((existing as any).accessoryFramework && !(payload as any).accessoryFramework) {
+          (merged as any).accessoryFramework = (existing as any).accessoryFramework;
+        }
+        if ((existing as any).containerZones && !(payload as any).containerZones) {
+          (merged as any).containerZones = (existing as any).containerZones;
+        }
 
         localVehicles[idx] = merged;
         saveLocalVehicles(localVehicles);
+        await flushVehicleStorage();
         updatedLocal = true;
         // Use cloud version if available (it has server-generated fields),
         // otherwise use the locally merged version
@@ -458,6 +575,7 @@ export const vehicleStore = {
         // Vehicle exists in cloud but not locally — add it to local cache
         localVehicles.push(updatedVehicle);
         saveLocalVehicles(localVehicles);
+        await flushVehicleStorage();
         updatedLocal = true;
         console.log(TAG, `Vehicle ${vehicleId} not in local storage — added cloud version locally`);
       } else {
@@ -512,6 +630,7 @@ export const vehicleStore = {
     vehicleId: string,
     userId?: string | null
   ): Promise<{ success: boolean; deletedFrom: 'cloud' | 'local' | 'both'; error?: string }> => {
+    await ensureVehicleStorageHydrated();
     let deletedCloud = false;
     let deletedLocal = false;
 
@@ -523,7 +642,8 @@ export const vehicleStore = {
         const { error } = await supabase
           .from('vehicles')
           .delete()
-          .eq('id', vehicleId);
+          .eq('id', vehicleId)
+          .eq('owner_user_id', userId);
 
         if (!error) {
           deletedCloud = true;
@@ -558,6 +678,7 @@ export const vehicleStore = {
 
       if (filtered.length < originalCount) {
         saveLocalVehicles(filtered);
+        await flushVehicleStorage();
         deletedLocal = true;
         console.log(TAG, `Removed vehicle ${vehicleId} from local storage (${originalCount} → ${filtered.length})`);
       } else {
@@ -574,6 +695,11 @@ export const vehicleStore = {
 
     // ── 3. Clean up all related data ────────────────────────────
     cleanupRelatedData(vehicleId);
+
+    if (vehicleSetupStore.getActiveVehicleId() === vehicleId) {
+      vehicleSetupStore.clearActiveVehicleId();
+      console.log(TAG, `Cleared active vehicle context for deleted vehicle ${vehicleId}`);
+    }
 
     // ── Result ──────────────────────────────────────────────────
     const success = deletedCloud || deletedLocal;
@@ -597,17 +723,38 @@ export const vehicleStore = {
    * Guard: userId must be a real UUID, not the 'local' sentinel.
    */
   syncToCloud: async (userId: string): Promise<{ synced: number; errors: number }> => {
+    await ensureVehicleStorageHydrated();
 
     if (!isSupabaseConfigured) return { synced: 0, errors: 0 };
     // Guard: userId must be a real UUID, not the 'local' sentinel
     if (!isSyncableUserId(userId)) {
-      console.warn(TAG, 'syncToCloud called with non-syncable userId:', userId?.slice(0, 12));
+      console.warn(TAG, 'syncToCloud called with non-syncable userId:', String(userId).slice(0, 12));
       return { synced: 0, errors: 0 };
     }
 
 
     const localVehicles = getLocalVehicles();
-    const unsynced = localVehicles.filter(v => v.owner_user_id === 'local');
+    let cloudIds = new Set<string>();
+    try {
+      const { data } = await supabase
+        .from('vehicles')
+        .select('id')
+        .eq('owner_user_id', userId);
+      if (Array.isArray(data)) {
+        cloudIds = new Set(
+          data
+            .map((row: any) => (typeof row?.id === 'string' ? row.id : null))
+            .filter((id: string | null): id is string => !!id),
+        );
+      }
+    } catch (error) {
+      console.warn(TAG, 'Unable to fetch cloud vehicle ids before sync; falling back to local ownership check:', error);
+    }
+
+    const unsynced = localVehicles.filter((v) => {
+      if (cloudIds.has(v.id)) return false;
+      return v.owner_user_id === 'local' || v.owner_user_id === userId;
+    });
 
     if (unsynced.length === 0) return { synced: 0, errors: 0 };
 
@@ -625,8 +772,12 @@ export const vehicleStore = {
             make: vehicle.make,
             model: vehicle.model,
             year: vehicle.year,
+            fuel_tank_capacity_gal: vehicle.fuel_tank_capacity_gal,
+            avg_mpg: vehicle.avg_mpg,
             current_fuel_percent: vehicle.current_fuel_percent,
+            water_capacity_gal: vehicle.water_capacity_gal,
             current_water_gal: vehicle.current_water_gal,
+            water_updated_at: vehicle.water_updated_at,
             created_at: vehicle.created_at,
             updated_at: new Date().toISOString(),
           })
@@ -637,7 +788,22 @@ export const vehicleStore = {
           // Replace local vehicle with cloud version
           const idx = localVehicles.findIndex(v => v.id === vehicle.id);
           if (idx !== -1) {
-            localVehicles[idx] = data;
+            localVehicles[idx] = {
+              ...data,
+              battery_usable_wh: vehicle.battery_usable_wh ?? null,
+            } as Vehicle;
+            if ((vehicle as any).wizard_config) {
+              (localVehicles[idx] as any).wizard_config = (vehicle as any).wizard_config;
+            }
+            if ((vehicle as any).zones) {
+              (localVehicles[idx] as any).zones = (vehicle as any).zones;
+            }
+            if ((vehicle as any).accessoryFramework) {
+              (localVehicles[idx] as any).accessoryFramework = (vehicle as any).accessoryFramework;
+            }
+            if ((vehicle as any).containerZones) {
+              (localVehicles[idx] as any).containerZones = (vehicle as any).containerZones;
+            }
           }
           synced++;
         } else {
@@ -649,6 +815,7 @@ export const vehicleStore = {
     }
 
     saveLocalVehicles(localVehicles);
+    await flushVehicleStorage();
     return { synced, errors };
   },
 
@@ -658,10 +825,18 @@ export const vehicleStore = {
   finalizeConfig: async (
     vehicleId: string,
     zones: any[],
-    selections: Record<string, string>,
+    selections: Record<string, any>,
     userId?: string | null,
     accessoryData?: { accessoryFramework?: any; containerZones?: any[] }
   ): Promise<{ success: boolean; totalSlots?: number; error?: string }> => {
+    await ensureVehicleStorageHydrated();
+    const existingVehicle = getLocalVehicles().find(v => v.id === vehicleId) as (Vehicle & { wizard_config?: Record<string, any> }) | undefined;
+    const mergedSelections = {
+      ...((existingVehicle as any)?.wizard_config || {}),
+      ...selections,
+      _resources: selections._resources ?? (existingVehicle as any)?.wizard_config?._resources,
+    };
+
     // If authenticated with real UUID, try cloud edge function
     if (isSyncableUserId(userId) && isSupabaseConfigured) {
 
@@ -670,8 +845,8 @@ export const vehicleStore = {
           body: {
             vehicle_id: vehicleId,
             zones,
-            wizard_config: selections,
-            vehicle_type: selections.vehicle_type || 'vehicle',
+            wizard_config: mergedSelections,
+            vehicle_type: mergedSelections.vehicle_type || 'vehicle',
             accessory_framework: accessoryData?.accessoryFramework || null,
             container_zones: accessoryData?.containerZones || null,
           },
@@ -689,10 +864,11 @@ export const vehicleStore = {
               if (accessoryData?.containerZones) {
                 (localVehicles[idx] as any).containerZones = accessoryData.containerZones;
               }
-              (localVehicles[idx] as any).wizard_config = selections;
+              (localVehicles[idx] as any).wizard_config = mergedSelections;
               (localVehicles[idx] as any).zones = zones;
               localVehicles[idx].updated_at = new Date().toISOString();
               saveLocalVehicles(localVehicles);
+              await flushVehicleStorage();
             }
           } catch (e) {
             console.warn(TAG, 'Failed to cache accessory data locally after cloud save:', e);
@@ -714,7 +890,7 @@ export const vehicleStore = {
       const localVehicles = getLocalVehicles();
       const idx = localVehicles.findIndex(v => v.id === vehicleId);
       if (idx !== -1) {
-        (localVehicles[idx] as any).wizard_config = selections;
+        (localVehicles[idx] as any).wizard_config = mergedSelections;
         (localVehicles[idx] as any).zones = zones;
         // PHASE 2: Persist accessoryFramework + containerZones
         if (accessoryData?.accessoryFramework) {
@@ -725,6 +901,7 @@ export const vehicleStore = {
         }
         localVehicles[idx].updated_at = new Date().toISOString();
         saveLocalVehicles(localVehicles);
+        await flushVehicleStorage();
       }
 
       // Also store in a separate key for pending sync
@@ -733,13 +910,14 @@ export const vehicleStore = {
       pending.push({
         vehicle_id: vehicleId,
         zones,
-        wizard_config: selections,
-        vehicle_type: selections.vehicle_type || 'vehicle',
+        wizard_config: mergedSelections,
+        vehicle_type: mergedSelections.vehicle_type || 'vehicle',
         accessory_framework: accessoryData?.accessoryFramework || null,
         container_zones: accessoryData?.containerZones || null,
         created_at: new Date().toISOString(),
       });
       lsSet(PENDING_CONFIGS_KEY, JSON.stringify(pending));
+      await flushVehicleStorage();
       const totalSlots = zones.reduce((sum: number, z: any) => sum + (z.slotCount || 0), 0);
       // Notify listeners that vehicle config was finalized (local/offline path)
       notifyChange('finalize', vehicleId);
@@ -755,7 +933,8 @@ export const vehicleStore = {
    * Sync pending vehicle configurations to cloud
    */
   syncPendingConfigs: async (userId: string): Promise<number> => {
-    if (!isSupabaseConfigured) return 0;
+    await ensureVehicleStorageHydrated();
+    if (!isSupabaseConfigured || !isDeployedEdgeFunction('setup-vehicle-zones')) return 0;
 
     const pendingRaw = lsGet(PENDING_CONFIGS_KEY);
     if (!pendingRaw) return 0;
@@ -789,6 +968,7 @@ export const vehicleStore = {
     }
 
     lsSet(PENDING_CONFIGS_KEY, JSON.stringify(remaining));
+    await flushVehicleStorage();
     return synced;
   },
 };

@@ -224,7 +224,7 @@ export function computeRunHealth(run: ECSRun): RunHealthResult {
         message: `Route uses ${Math.round(ratio * 100)}% of range`,
       };
       warnings.push(`RANGE CAUTION: ${Math.round(ratio * 100)}% of estimated range`);
-      if (overall !== 'red') overall = 'yellow';
+      overall = 'yellow';
     } else {
       range = { level: 'green', message: `${Math.round(ratio * 100)}% of range` };
     }

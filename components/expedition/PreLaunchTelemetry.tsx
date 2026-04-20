@@ -95,7 +95,7 @@ export default function PreLaunchTelemetry({
     );
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [scanAnim]);
 
   const scanTranslate = scanAnim.interpolate({
     inputRange: [0, 1],

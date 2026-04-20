@@ -11,6 +11,7 @@ import type { Loadout } from '../../lib/types';
 
 // Legacy category type for expedition-level loadout attachment
 type LegacyLoadoutCategory = 'general' | 'camping' | 'recovery' | 'cooking' | 'medical' | 'comms';
+type LoadoutWithLegacyCategory = Loadout & { category?: LegacyLoadoutCategory | null };
 
 const CATEGORIES: { value: LegacyLoadoutCategory; label: string; icon: string; color: string }[] = [
   { value: 'general', label: 'GENERAL', icon: 'cube-outline', color: '#5B8DEF' },
@@ -208,7 +209,7 @@ export default function LoadoutTab({ expeditionId, userId, currentLoadoutId }: P
         </View>
       ) : (
         loadouts.map(lo => {
-          const cfg = getCatConfig(lo.category);
+          const cfg = getCatConfig((lo as LoadoutWithLegacyCategory).category ?? 'general');
           const isAttached = attachedId === lo.id;
           return (
             <View key={lo.id} style={[s.loCard, isAttached && s.loCardAttached]}>

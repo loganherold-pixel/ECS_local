@@ -82,7 +82,7 @@ function AlertRow({
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [opacityAnim, slideAnim]);
 
   const colors = ALERT_COLORS[alert.type][alert.severity];
   const iconName = ALERT_ICONS[alert.type];
@@ -196,13 +196,7 @@ export default function ResourceAlertBanner({
         }
       }
     }
-  }, [
-    vehicle?.id,
-    vehicle?.water_capacity_gal,
-    vehicle?.current_water_gal,
-    vehicle?.current_fuel_percent,
-    enableSound,
-  ]);
+  }, [vehicle, enableSound]);
 
   const handleDismiss = useCallback((alertType: ResourceAlertType) => {
     if (alertState.vehicleId) {

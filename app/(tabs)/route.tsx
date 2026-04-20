@@ -45,9 +45,14 @@ import { calculateRouteStats, calculateSegmentDistance, formatCoord, formatDurat
 import { routeStore, type ImportedRoute } from '../../lib/routeStore';
 import { generateGPX, generateGPXFilename, getExportSummary } from '../../lib/gpxExport';
 import { generateGeoJSON, generateGeoJSONFilename } from '../../lib/geojsonExport';
-import { generateKML, generateKMLFilename } from '../../lib/kmlExport';
-import { generateKMZ, generateKMZFilename, uint8ArrayToBase64 } from '../../lib/kmlExport';
-import { getDocumentDirectory, fsWriteString } from '../../lib/fsCompat';
+import {
+  generateKML,
+  generateKMLFilename,
+  generateKMZ,
+  generateKMZFilename,
+  uint8ArrayToBase64,
+} from '../../lib/kmlExport';
+import { getDocumentDirectory, fsReadFileFromPickerUri, fsWriteString } from '../../lib/fsCompat';
 
 
 import Header from '../../components/Header';
@@ -57,7 +62,6 @@ import KPICard from '../../components/KPICard';
 import RouteMapPreview from '../../components/route/RouteMapPreview';
 import FuelRangeCalculator from '../../components/route/FuelRangeCalculator';
 import WaypointEditor from '../../components/route/WaypointEditor';
-import { fsReadFileFromPickerUri } from '../../lib/fsCompat';
 
 
 // ── Export format type ──────────────────────────────────
@@ -317,7 +321,7 @@ function RouteScreenInner() {
 
       if (Platform.OS === 'web') {
         // Web: trigger binary file download via Blob + anchor
-        const blob = new Blob([kmzBytes], { type: 'application/vnd.google-earth.kmz' });
+        const blob = new Blob([new Uint8Array(Array.from(kmzBytes))], { type: 'application/vnd.google-earth.kmz' });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = url;
@@ -746,9 +750,9 @@ function RouteScreenInner() {
             <View style={styles.noRouteIcon}>
               <RouteGlyph size={36} color={TACTICAL.textMuted} />
             </View>
-            <Text style={styles.noRouteTitle}>NO ACTIVE ROUTE</Text>
+            <Text style={styles.noRouteTitle}>No route staged</Text>
             <Text style={styles.noRouteBody}>
-              Import a route (GPX/KML/GeoJSON) from OnX, Garmin, Gaia, Google Earth, Mapbox, QGIS, or similar tools to enable expedition tracking.
+              Import a route file or reopen a saved route to bring expedition tracking and route tools online.
             </Text>
 
 
@@ -1664,7 +1668,7 @@ const styles = StyleSheet.create({
   formatOptionTitle: {
     fontSize: 13,
     fontWeight: '700' as const,
-    color: TACTICAL.textSecondary,
+    color: TACTICAL.text,
   },
   formatOptionTitleActive: {
     color: TACTICAL.amber,

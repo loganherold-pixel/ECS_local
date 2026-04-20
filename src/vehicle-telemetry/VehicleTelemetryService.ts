@@ -1,811 +1,761 @@
 /**
  * ═══════════════════════════════════════════════════════════
- * ECS VEHICLE TELEMETRY SERVICE — Phase 2D
+ * ECS VEHICLE TELEMETRY SERVICE — Live Connection Pass
  * ═══════════════════════════════════════════════════════════
  *
- * Unified vehicle data ingestion layer for ECS.
+ * Purpose:
+ *   - Owns adapter/session lifecycle for the active telemetry device
+ *   - Normalizes raw readings into NormalizedVehicleTelemetry
+ *   - Emits lifecycle + telemetry events for the store/UI
+ *   - Bridges registry state with reconnect/backoff behavior
  *
- * This service:
- *   - Manages telemetry provider connections
- *   - Routes incoming data to the telemetry store
- *   - Handles primary device switching
- *   - Persists session state across app restarts
- *   - Operates independently from BLU power telemetry
- *   - Integrates with OBD-II adapter for Bluetooth connections
- *   - Bridges VT summary to vehicle display for AA/CP
+ * Designed to work with:
+ *   - VehicleTelemetryStore.attachToService(service)
+ *   - vehicleTelemetryDeviceRegistry
+ *   - Existing adapter/provider stack where possible
  *
- * Phase 2D adds:
- *   - Enhanced session persistence with device registry snapshot
- *   - Session restore with device validation
- *   - Stale session detection for OBD-II connections
- *   - Automatic reconnection orchestration
- *   - Device switching that immediately reroutes polling
- *   - Reconnecting state propagation to store
- *   - Freshness label computation
- *   - Recovery logging
- *   - Offline/BLE-unavailable safety
+ * Notes:
+ *   - This file is intentionally defensive and shape-tolerant.
+ *   - It supports adapters exposing subscribe/on/addListener patterns.
+ *   - It avoids hard-coding one provider implementation.
  */
 
-import { Platform, AppState } from 'react-native';
-import type { AppStateStatus } from 'react-native';
 import type {
-  VehicleTelemetryProviderId,
-  VehicleTelemetryDevice,
   NormalizedVehicleTelemetry,
-  VehicleTelemetryConnectionState,
   VehicleTelemetryCapabilities,
-  TelemetryFreshnessLabel,
-  SessionRecoveryStatus,
+  VehicleTelemetryConnectionState,
+  VehicleTelemetryProviderId,
 } from './VehicleTelemetryTypes';
-import { VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
+import { EMPTY_TELEMETRY } from './VehicleTelemetryTypes';
 import { vehicleTelemetryDeviceRegistry } from './VehicleTelemetryDeviceRegistry';
 import { vehicleTelemetryStore } from './VehicleTelemetryStore';
-import { OBD2PIDPoller } from './OBD2PIDPoller';
+
+// ── Phase 15: Stability Guards ──────────────────────────────
+import {
+  calculateBackoff,
+  MAX_TELEMETRY_RETRIES,
+  RETRY_COOLDOWN_MS,
+  stabilityLog,
+} from '../../lib/ecsStabilityGuards';
 
 const TAG = '[VT-Service]';
+const HEARTBEAT_STALE_MS = 30_000;
 
-// ── Storage helpers ──────────────────────────────────────
-const mem: Record<string, string> = {};
+type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';
 
-function sGet(key: string): string | null {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(key);
-    }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
-}
+type VTEventName =
+  | 'telemetry'
+  | 'data'
+  | 'connected'
+  | 'connect'
+  | 'disconnected'
+  | 'disconnect'
+  | 'reconnecting'
+  | 'reconnect_start'
+  | 'reconnected'
+  | 'reconnect_success'
+  | 'reconnect_failed'
+  | 'state'
+  | 'error';
 
-function sSet(key: string, value: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.setItem(key, value);
-    }
-    mem[key] = value;
-  } catch { mem[key] = value; }
-}
+type VTListener = (payload?: any) => void;
 
-function sRemove(key: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.removeItem(key);
-    }
-    delete mem[key];
-  } catch { delete mem[key]; }
-}
+type Unsubscribe = () => void;
 
-// ═══════════════════════════════════════════════════════════
-// BLE CHARACTERISTIC HELPERS
-// ═══════════════════════════════════════════════════════════
-
-const ELM327_SERVICE_UUID = 'ffe0';
-const ELM327_CHAR_UUID = 'ffe1';
-
-async function sendBleCommand(device: any, command: string): Promise<string> {
-  if (!device) throw new Error('No BLE device connected');
-
-  try {
-    const encoder = new TextEncoder();
-    const bytes = encoder.encode(command);
-    const base64 = btoa(String.fromCharCode(...bytes));
-
-    await device.writeCharacteristicWithResponseForService(
-      ELM327_SERVICE_UUID,
-      ELM327_CHAR_UUID,
-      base64,
-    );
-
-    return await new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        resolve('');
-      }, 2000);
-
-      let responseBuffer = '';
-
-      const subscription = device.monitorCharacteristicForService(
-        ELM327_SERVICE_UUID,
-        ELM327_CHAR_UUID,
-        (error: any, characteristic: any) => {
-          if (error) {
-            clearTimeout(timeout);
-            subscription?.remove?.();
-            reject(error);
-            return;
-          }
-
-          if (characteristic?.value) {
-            try {
-              const decoded = atob(characteristic.value);
-              responseBuffer += decoded;
-
-              if (responseBuffer.includes('>')) {
-                clearTimeout(timeout);
-                subscription?.remove?.();
-                resolve(responseBuffer);
-              }
-            } catch {
-              // Ignore decode errors
-            }
-          }
-        },
-      );
-
-      setTimeout(() => {
-        if (responseBuffer.length > 0) {
-          clearTimeout(timeout);
-          subscription?.remove?.();
-          resolve(responseBuffer);
-        }
-      }, 1500);
-    });
-  } catch (err: any) {
-    console.warn(TAG, 'BLE command failed:', err?.message);
-    return '';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// SESSION STATE
-// ═══════════════════════════════════════════════════════════
-
-interface VTSessionState {
-  activeProvider: VehicleTelemetryProviderId | null;
-  primaryDeviceId: string | null;
-  wasPolling: boolean;
-  obd2WasConnected: boolean;
-  savedAt: string;
-  /** Phase 2D: Device registry snapshot for validation */
-  deviceCount: number;
-  /** Phase 2D: Session version for compatibility */
-  version: number;
-}
-
-const EMPTY_SESSION: VTSessionState = {
-  activeProvider: null,
-  primaryDeviceId: null,
-  wasPolling: false,
-  obd2WasConnected: false,
-  savedAt: '',
-  deviceCount: 0,
-  version: 2,
+type AdapterLike = {
+  connect?: () => Promise<void> | void;
+  disconnect?: () => Promise<void> | void;
+  destroy?: () => Promise<void> | void;
+  subscribe?: (event: string, cb: (...args: any[]) => void) => Unsubscribe | void;
+  on?: (event: string, cb: (...args: any[]) => void) => Unsubscribe | void;
+  addListener?: (event: string, cb: (...args: any[]) => void) => { remove?: () => void } | Unsubscribe | void;
+  removeListener?: (event: string, cb: (...args: any[]) => void) => void;
+  off?: (event: string, cb: (...args: any[]) => void) => void;
+  getLatestReading?: () => any;
+  isConnected?: () => boolean;
+  [key: string]: any;
 };
 
-const SESSION_VERSION = 2;
+type DeviceLike = {
+  device_id: string;
+  device_name?: string | null;
+  provider?: string | null;
+  connection_state?: string | null;
+  [key: string]: any;
+};
 
-// ═══════════════════════════════════════════════════════════
-// VEHICLE TELEMETRY SERVICE
-// ═══════════════════════════════════════════════════════════
+
+
+type VehicleTelemetryPollerStatus = {
+  enabled: boolean;
+  running: boolean;
+  intervalMs: number;
+  lastPollAt: number | null;
+  lastSuccessAt: number | null;
+  lastErrorAt: number | null;
+  lastErrorMessage: string | null;
+};
+function toNumber(v: any): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTelemetry(raw: any, device?: DeviceLike | null): NormalizedVehicleTelemetry {
+  const timestamp = toNumber(raw?.timestamp) ?? Date.now();
+
+  return {
+    ...EMPTY_TELEMETRY,
+    ...raw,
+    timestamp,
+    device_id:
+      raw?.device_id ||
+      raw?.deviceId ||
+      device?.device_id ||
+      'unknown-device',
+    vehicle_speed:
+      toNumber(raw?.vehicle_speed) ??
+      toNumber(raw?.vehicleSpeed) ??
+      toNumber(raw?.speed_mph) ??
+      toNumber(raw?.speed) ??
+      null,
+    engine_rpm:
+      toNumber(raw?.engine_rpm) ??
+      toNumber(raw?.engineRpm) ??
+      toNumber(raw?.rpm) ??
+      null,
+    battery_voltage:
+      toNumber(raw?.battery_voltage) ??
+      toNumber(raw?.batteryVoltage) ??
+      toNumber(raw?.voltage) ??
+      null,
+    fuel_level:
+      toNumber(raw?.fuel_level) ??
+      toNumber(raw?.fuelLevel) ??
+      null,
+    coolant_temp:
+      toNumber(raw?.coolant_temp) ??
+      toNumber(raw?.coolantTemp) ??
+      toNumber(raw?.engine_temp) ??
+      null,
+    engine_load:
+      toNumber(raw?.engine_load) ??
+      toNumber(raw?.engineLoad) ??
+      null,
+  } as NormalizedVehicleTelemetry;
+}
 
 class VehicleTelemetryService {
+  private listeners = new Map<VTEventName, Set<VTListener>>();
+  private adapter: AdapterLike | null = null;
+  private adapterUnsubs: Unsubscribe[] = [];
+  private currentDevice: DeviceLike | null = null;
+  private latestTelemetry: NormalizedVehicleTelemetry = { ...EMPTY_TELEMETRY };
+  private connectionState: ConnectionState = 'idle';
   private activeProvider: VehicleTelemetryProviderId | null = null;
-  private isPolling = false;
-  private pollIntervalId: ReturnType<typeof setInterval> | null = null;
-  private listeners: Array<() => void> = [];
-  private vehicleDisplayBridgeTimer: ReturnType<typeof setInterval> | null = null;
-  private obd2WasConnected = false;
+  private retryCount = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastRetryAt = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastTelemetryAt = 0;
+  private started = false;
 
-  /** Phase 2C: OBD-II PID Poller instance */
-  private pidPoller: OBD2PIDPoller | null = null;
+  private pollerEnabled = false;
+  private pollerRunning = false;
+  private pollIntervalMs = 15_000;
+  private lastPollAt: number | null = null;
+  private lastSuccessAt: number | null = null;
+  private lastErrorAt: number | null = null;
+  private lastErrorMessage: string | null = null;
 
-  /** Phase 2C: BLE device reference for PID communication */
-  private bleDeviceRef: any = null;
+  // ── Event Emitter ───────────────────────────────────────
 
-  /** Phase 2C: App state listener for polling pause/resume */
-  private appStateSubscription: any = null;
-
-  /** Phase 2D: Session recovery status */
-  private recoveryStatus: SessionRecoveryStatus = 'idle';
-
-  /** Phase 2D: Whether a reconnect has been attempted this session */
-  private reconnectAttempted = false;
-
-  constructor() {
-    this.restoreSession();
-  }
-
-  // ── Session Persistence ────────────────────────────────
-
-  private saveSession(): void {
-    try {
-      const session: VTSessionState = {
-        activeProvider: this.activeProvider,
-        primaryDeviceId: vehicleTelemetryDeviceRegistry.getPrimaryId(),
-        wasPolling: this.isPolling,
-        obd2WasConnected: this.obd2WasConnected,
-        savedAt: new Date().toISOString(),
-        deviceCount: vehicleTelemetryDeviceRegistry.getCount(),
-        version: SESSION_VERSION,
-      };
-      sSet(VT_STORAGE_KEYS.SESSION, JSON.stringify(session));
-    } catch (e) {
-      console.warn(TAG, 'Failed to save session:', e);
-    }
-  }
-
-  private restoreSession(): void {
-    this.recoveryStatus = 'restoring';
-    try {
-      const raw = sGet(VT_STORAGE_KEYS.SESSION);
-      if (!raw) {
-        this.recoveryStatus = 'no_session';
-        console.log(TAG, 'No previous session to restore');
-        return;
-      }
-
-      const session: VTSessionState = JSON.parse(raw);
-
-      // Phase 2D: Check session version compatibility
-      if (session.version && session.version > SESSION_VERSION) {
-        console.warn(TAG, 'Session version mismatch — discarding');
-        this.recoveryStatus = 'failed';
-        return;
-      }
-
-      if (session.activeProvider) {
-        this.activeProvider = session.activeProvider;
-        console.log(TAG, `Restored active provider: ${session.activeProvider}`);
-      }
-
-      this.obd2WasConnected = session.obd2WasConnected || false;
-
-      // Phase 2D: Restore primary device with validation
-      const restoredPrimary = vehicleTelemetryDeviceRegistry.restorePrimary();
-
-      if (restoredPrimary) {
-        console.log(TAG, `Session restored — primary: ${restoredPrimary.device_name}`);
-      } else if (session.primaryDeviceId) {
-        // Previous primary no longer exists — fallback was found (or no devices)
-        console.log(TAG, `Previous primary ${session.primaryDeviceId} unavailable — fallback assigned`);
-      }
-
-      // Phase 2D: If OBD-II was previously connected, signal for auto-reconnect
-      if (this.obd2WasConnected && session.activeProvider === 'obd2') {
-        console.log(TAG, 'OBD-II was connected in previous session — auto-reconnect will be attempted by adapter');
-      }
-
-      this.recoveryStatus = 'restored';
-      console.log(TAG, 'Session restored successfully');
-    } catch (e) {
-      console.warn(TAG, 'Failed to restore session:', e);
-      this.recoveryStatus = 'failed';
-    }
-  }
-
-  // ── Notifications ──────────────────────────────────────
-
-  private notify(): void {
-    this.listeners.forEach(fn => { try { fn(); } catch {} });
-  }
-
-  subscribe(fn: () => void): () => void {
-    this.listeners.push(fn);
+  on(event: VTEventName, cb: VTListener): Unsubscribe {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(cb);
     return () => {
-      this.listeners = this.listeners.filter(l => l !== fn);
+      this.listeners.get(event)?.delete(cb);
     };
   }
 
-  // ── Provider Management ────────────────────────────────
-
-  getActiveProvider(): VehicleTelemetryProviderId | null {
-    return this.activeProvider;
+  subscribe(event: VTEventName, cb: VTListener): Unsubscribe {
+    return this.on(event, cb);
   }
 
-  setActiveProvider(provider: VehicleTelemetryProviderId): void {
+  addListener(event: VTEventName, cb: VTListener): { remove: () => void } {
+    const unsub = this.on(event, cb);
+    return { remove: unsub };
+  }
+
+  private emit(event: VTEventName, payload?: any): void {
+    const set = this.listeners.get(event);
+    if (!set?.size) return;
+    set.forEach(fn => {
+      try {
+        fn(payload);
+      } catch (error) {
+        stabilityLog('Telemetry', 'error', `${TAG} listener failure on ${event}`, error);
+      }
+    });
+  }
+
+  // ── Public Read API ────────────────────────────────────
+
+  getState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  getLatestTelemetry(): NormalizedVehicleTelemetry {
+    return { ...this.latestTelemetry };
+  }
+
+  getCurrentDevice(): DeviceLike | null {
+    return this.currentDevice ? { ...this.currentDevice } : null;
+  }
+
+  isConnected(): boolean {
+    return this.connectionState === 'connected';
+  }
+
+  getSnapshot() {
+    return this.getServiceStateSnapshot();
+  }
+
+  getPollerStatus(): VehicleTelemetryPollerStatus {
+    return {
+      enabled: this.pollerEnabled,
+      running: this.pollerRunning,
+      intervalMs: this.pollIntervalMs,
+      lastPollAt: this.lastPollAt,
+      lastSuccessAt: this.lastSuccessAt,
+      lastErrorAt: this.lastErrorAt,
+      lastErrorMessage: this.lastErrorMessage,
+    };
+  }
+
+  changePrimaryDevice(deviceId: string): boolean {
+    const device = vehicleTelemetryDeviceRegistry.getById(deviceId);
+    if (!device) return false;
+
+    const changed = vehicleTelemetryDeviceRegistry.setPrimary(deviceId);
+    this.setPrimaryDevice(device);
+    return changed;
+  }
+
+  stopPolling(): void {
+    if (!this.pollerEnabled && !this.pollerRunning) return;
+    this.pollerEnabled = false;
+    this.pollerRunning = false;
+    this.emit('state', this.getServiceStateSnapshot());
+  }
+
+  setActiveProvider(provider: VehicleTelemetryProviderId | null): void {
+    if (this.activeProvider === provider) return;
     this.activeProvider = provider;
-    console.log(TAG, `Active provider set: ${provider}`);
-
-    if (provider === 'obd2') {
-      this.obd2WasConnected = true;
-    }
-
-    this.saveSession();
-    this.notify();
+    this.emit('state', this.getServiceStateSnapshot());
   }
 
   clearActiveProvider(): void {
-    if (this.isPolling) {
-      this.stopPolling();
-    }
-    this.activeProvider = null;
-    this.obd2WasConnected = false;
-    console.log(TAG, 'Active provider cleared');
-    this.saveSession();
-    this.notify();
+    this.setActiveProvider(null);
   }
-
-  // ── Device Registration ────────────────────────────────
 
   registerDevice(
     provider: VehicleTelemetryProviderId,
     deviceId: string,
     deviceName: string,
-    capabilities?: Partial<VehicleTelemetryCapabilities>,
-    options?: { firmware_version?: string; protocol?: string },
-  ): VehicleTelemetryDevice {
+    capabilities: VehicleTelemetryCapabilities,
+    extras?: { firmware_version?: string; protocol?: string },
+  ) {
     const device = vehicleTelemetryDeviceRegistry.registerDevice({
       provider,
       device_id: deviceId,
       device_name: deviceName,
-      connection_state: 'disconnected',
+      connection_state: 'connecting',
       last_seen: null,
-      capabilities: {
-        hasSpeed: false,
-        hasRpm: false,
-        hasEngineLoad: false,
-        hasCoolantTemp: false,
-        hasIntakeTemp: false,
-        hasBatteryVoltage: false,
-        hasFuelLevel: false,
-        hasFuelRate: false,
-        hasEngineRuntime: false,
-        hasTirePressure: false,
-        hasDTCs: false,
-        ...capabilities,
-      },
-      firmware_version: options?.firmware_version,
-      protocol: options?.protocol,
+      capabilities,
+      firmware_version: extras?.firmware_version,
+      protocol: extras?.protocol,
     });
 
-    this.saveSession();
+    this.activeProvider = provider;
+    if (device.is_primary || this.currentDevice?.device_id === deviceId) {
+      this.setPrimaryDevice(device);
+    } else {
+      this.emit('state', this.getServiceStateSnapshot());
+    }
+
     return device;
+  }
+
+  updateDeviceConnectionState(
+    deviceId: string,
+    state: VehicleTelemetryConnectionState,
+  ): void {
+    const existing = vehicleTelemetryDeviceRegistry.getById(deviceId);
+    if (!existing) return;
+
+    const updated = vehicleTelemetryDeviceRegistry.registerDevice({
+      provider: existing.provider,
+      device_id: existing.device_id,
+      device_name: existing.device_name,
+      connection_state: state,
+      last_seen: state === 'connected' ? new Date().toISOString() : existing.last_seen,
+      capabilities: existing.capabilities,
+      firmware_version: existing.firmware_version,
+      protocol: existing.protocol,
+    });
+
+    if (updated.is_primary || this.currentDevice?.device_id === deviceId) {
+      this.setPrimaryDevice(updated);
+    } else {
+      this.emit('state', this.getServiceStateSnapshot());
+    }
   }
 
   removeDevice(deviceId: string): void {
     vehicleTelemetryDeviceRegistry.removeDevice(deviceId);
+    if (this.currentDevice?.device_id === deviceId) {
+      this.setPrimaryDevice(vehicleTelemetryDeviceRegistry.getPrimary());
+    } else {
+      this.emit('state', this.getServiceStateSnapshot());
+    }
+  }
 
-    if (this.activeProvider) {
-      const remaining = vehicleTelemetryDeviceRegistry.getByProvider(this.activeProvider);
-      if (remaining.length === 0) {
-        this.clearActiveProvider();
-      }
+  signalReconnecting(reconnecting: boolean): void {
+    vehicleTelemetryStore.setReconnecting(reconnecting);
+    if (reconnecting) {
+      this.setConnectionState('reconnecting');
+      return;
+    }
+    if (this.connectionState === 'reconnecting') {
+      this.setConnectionState(this.currentDevice ? 'connected' : 'disconnected');
+    }
+  }
+
+  signalReconnected(deviceId?: string): void {
+    vehicleTelemetryStore.setReconnecting(false);
+    if (deviceId) {
+      this.updateDeviceConnectionState(deviceId, 'connected');
+    }
+    this.setConnectionState('connected');
+  }
+
+  signalReconnectFailed(deviceId?: string): void {
+    vehicleTelemetryStore.setReconnecting(false);
+    if (deviceId) {
+      this.updateDeviceConnectionState(deviceId, 'error');
+    }
+    this.setConnectionState('error');
+  }
+
+  // ── Lifecycle ──────────────────────────────────────────
+
+  async start(adapter?: AdapterLike | null): Promise<void> {
+    if (adapter) {
+      this.adapter = adapter;
     }
 
-    this.saveSession();
-    this.notify();
+    if (!this.adapter) {
+      throw new Error('VehicleTelemetryService.start requires an adapter');
+    }
+
+    this.started = true;
+    this.pollerEnabled = true;
+    this.pollerRunning = true;
+    this.lastErrorAt = null;
+    this.lastErrorMessage = null;
+    this.bindAdapter(this.adapter);
+    await this.connect();
+    this.startHeartbeat();
   }
 
-  // ── Primary Device Switching (Phase 2D Enhanced) ───────
+  async connect(): Promise<void> {
+    if (!this.adapter) throw new Error('No adapter attached');
 
-  /**
-   * Change the primary telemetry device.
-   * Phase 2D: Immediately reroutes telemetry summary AND polling to the new device.
-   */
-  changePrimaryDevice(deviceId: string): boolean {
-    const success = vehicleTelemetryDeviceRegistry.setPrimary(deviceId);
-    if (success) {
-      const newPrimary = vehicleTelemetryDeviceRegistry.getById(deviceId);
-      console.log(TAG, `Primary device changed to: ${deviceId} (${newPrimary?.device_name})`);
+    this.setConnectionState(this.retryCount > 0 ? 'reconnecting' : 'connecting');
+    if (this.retryCount > 0) {
+      this.emit('reconnecting');
+      this.emit('reconnect_start');
+    }
 
-      // Phase 2D: If polling, restart with new primary device
-      if (this.isPolling && this.pidPoller) {
-        console.log(TAG, 'Restarting polling for new primary device...');
-        this.stopPolling();
-        // Small delay to let cleanup complete
-        setTimeout(() => {
-          this.startPolling();
-        }, 500);
+    try {
+      this.lastPollAt = Date.now();
+      await this.adapter.connect?.();
+      this.retryCount = 0;
+      this.clearRetryTimer();
+      this.lastSuccessAt = Date.now();
+      this.lastErrorAt = null;
+      this.lastErrorMessage = null;
+
+      this.resolveCurrentDevice();
+      this.markRegistryState('connected');
+      this.setConnectionState('connected');
+      this.emit('connected', { device: this.currentDevice });
+      this.emit('connect', { device: this.currentDevice });
+
+      if (this.latestTelemetry.timestamp > 0) {
+        this.emit('reconnected', { device: this.currentDevice });
+        this.emit('reconnect_success', { device: this.currentDevice });
       }
 
-      // Force store to recompute summary with new primary
-      vehicleTelemetryStore.recompute();
-      this.saveSession();
-      this.notify();
+      const seed = this.adapter.getLatestReading?.();
+      if (seed) {
+        this.handleTelemetry(seed);
+      }
+    } catch (error) {
+      this.handleReconnectFailure(error);
+      throw error;
     }
-    return success;
   }
 
-  // ── Telemetry Ingestion ────────────────────────────────
+  async disconnect(): Promise<void> {
+    this.clearRetryTimer();
+    this.stopHeartbeat();
+    this.pollerRunning = false;
 
-  ingestTelemetry(telemetry: NormalizedVehicleTelemetry): void {
-    vehicleTelemetryStore.ingest(telemetry);
-    this.pushToVehicleDisplay();
+    try {
+      await this.adapter?.disconnect?.();
+    } catch (error) {
+      stabilityLog('Telemetry', 'warn', `${TAG} adapter disconnect failed`, error);
+    }
+
+    this.unbindAdapter();
+    this.markRegistryState('disconnected');
+    this.setConnectionState('disconnected');
+    this.emit('disconnected', { device: this.currentDevice });
+    this.emit('disconnect', { device: this.currentDevice });
   }
 
-  updateDeviceConnectionState(deviceId: string, state: VehicleTelemetryConnectionState): void {
-    vehicleTelemetryDeviceRegistry.updateConnectionState(deviceId, state);
-    vehicleTelemetryStore.recompute();
+  async stop(): Promise<void> {
+    this.started = false;
+    await this.disconnect();
 
-    const device = vehicleTelemetryDeviceRegistry.getById(deviceId);
-    if (device?.provider === 'obd2') {
-      this.obd2WasConnected = state === 'connected';
+    try {
+      await this.adapter?.destroy?.();
+    } catch (error) {
+      stabilityLog('Telemetry', 'warn', `${TAG} adapter destroy failed`, error);
+    }
 
-      // Phase 2D: Propagate reconnecting state to store
-      if (state === 'disconnected' || state === 'error') {
-        // Check if adapter is reconnecting
-        try {
-          const { obd2Adapter } = require('./OBD2Adapter');
-          const adapterState = obd2Adapter.getState();
-          if (adapterState === 'reconnecting') {
-            vehicleTelemetryStore.setReconnecting(true);
-            console.log(TAG, 'OBD-II disconnected — adapter is reconnecting');
-          } else {
-            vehicleTelemetryStore.setReconnecting(false);
-          }
-        } catch {
-          vehicleTelemetryStore.setReconnecting(false);
+    this.adapter = null;
+    this.currentDevice = null;
+    this.connectionState = 'idle';
+    this.pollerEnabled = false;
+    this.pollerRunning = false;
+  }
+
+  async reconnect(): Promise<void> {
+    if (!this.started || !this.adapter) return;
+
+    this.setConnectionState('reconnecting');
+    this.emit('reconnecting', { device: this.currentDevice });
+    this.emit('reconnect_start', { device: this.currentDevice });
+    await this.connect();
+  }
+
+  // ── External Integration Helpers ───────────────────────
+
+  attachAdapter(adapter: AdapterLike): void {
+    if (this.adapter === adapter) return;
+    this.unbindAdapter();
+    this.adapter = adapter;
+    this.bindAdapter(adapter);
+  }
+
+  setPrimaryDevice(device: DeviceLike | null): void {
+    this.currentDevice = device;
+    this.activeProvider = (device?.provider as VehicleTelemetryProviderId | null) ?? null;
+    if (device) {
+      try {
+        const registryAny = vehicleTelemetryDeviceRegistry as any;
+        if (typeof registryAny.setPrimary === 'function') {
+          registryAny.setPrimary(device.device_id);
         }
-      } else if (state === 'connected') {
-        vehicleTelemetryStore.setReconnecting(false);
+      } catch {}
+    }
+    this.emit('state', this.getServiceStateSnapshot());
+  }
+
+  ingestRawTelemetry(raw: any): void {
+    this.handleTelemetry(raw);
+  }
+
+  // ── Adapter Binding ────────────────────────────────────
+
+  private bindAdapter(adapter: AdapterLike): void {
+    this.unbindAdapter();
+
+    const bindOne = (event: string, handler: (...args: any[]) => void) => {
+      let unsub: Unsubscribe | null = null;
+
+      if (typeof adapter.subscribe === 'function') {
+        const maybe = adapter.subscribe(event, handler);
+        if (typeof maybe === 'function') unsub = maybe;
+      } else if (typeof adapter.on === 'function') {
+        const maybe = adapter.on(event, handler);
+        if (typeof maybe === 'function') unsub = maybe;
+      } else if (typeof adapter.addListener === 'function') {
+        const maybe = adapter.addListener(event, handler);
+        if (typeof maybe === 'function') {
+          unsub = maybe;
+        } else if (maybe && typeof maybe.remove === 'function') {
+          unsub = () => maybe.remove?.();
+        }
       }
 
-      this.saveSession();
-    }
-
-    this.notify();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // PHASE 2C/2D: OBD-II PID POLLING
-  // ═══════════════════════════════════════════════════════
-
-  setBleDeviceRef(device: any): void {
-    this.bleDeviceRef = device;
-    console.log(TAG, 'BLE device reference set for PID polling');
-  }
-
-  startPolling(intervalMs: number = 2500): void {
-    if (this.isPolling) {
-      console.log(TAG, 'Already polling — ignoring duplicate start');
-      return;
-    }
-    if (!this.activeProvider) {
-      console.warn(TAG, 'Cannot start polling — no active provider');
-      return;
-    }
-
-    const primary = vehicleTelemetryDeviceRegistry.getPrimary();
-    if (!primary) {
-      console.warn(TAG, 'Cannot start polling — no primary device');
-      return;
-    }
-
-    this.pidPoller = new OBD2PIDPoller(
-      primary.device_id,
-      {
-        onTelemetry: (telemetry) => {
-          this.ingestTelemetry(telemetry);
-        },
-        sendCommand: async (command) => {
-          return await sendBleCommand(this.bleDeviceRef, command);
-        },
-        onError: (error) => {
-          console.warn(TAG, 'PID poller error:', error);
-        },
-        onCapabilitiesDiscovered: (supported, unsupported) => {
-          if (primary) {
-            const PID_TO_CAPABILITY: Record<string, keyof VehicleTelemetryCapabilities> = {
-              '0C': 'hasRpm',
-              '0D': 'hasSpeed',
-              '04': 'hasEngineLoad',
-              '05': 'hasCoolantTemp',
-              '0F': 'hasIntakeTemp',
-              '2F': 'hasFuelLevel',
-              '5E': 'hasFuelRate',
-              '1F': 'hasEngineRuntime',
-            };
-
-            const caps: Partial<VehicleTelemetryCapabilities> = {
-              hasBatteryVoltage: true,
-            };
-
-            for (const pid of supported) {
-              const capKey = PID_TO_CAPABILITY[pid];
-              if (capKey) (caps as any)[capKey] = true;
-            }
-
-            for (const pid of unsupported) {
-              const capKey = PID_TO_CAPABILITY[pid];
-              if (capKey) (caps as any)[capKey] = false;
-            }
-
-            vehicleTelemetryDeviceRegistry.updateCapabilities(primary.device_id, caps);
-            console.log(TAG, `Capabilities updated for ${primary.device_name}`);
-          }
-        },
-      },
-      intervalMs,
-    );
-
-    this.pidPoller.start().then((success) => {
-      if (success) {
-        this.isPolling = true;
-        console.log(TAG, `PID polling started (${intervalMs}ms interval)`);
-        this.startVehicleDisplayBridge(intervalMs);
-        this.setupPollingAppStateListener();
-        this.saveSession();
-        this.notify();
-      } else {
-        console.warn(TAG, 'PID poller failed to start');
-        this.pidPoller?.destroy();
-        this.pidPoller = null;
-      }
-    }).catch((err) => {
-      console.warn(TAG, 'PID polling start error:', err);
-      this.pidPoller?.destroy();
-      this.pidPoller = null;
-    });
-  }
-
-  stopPolling(): void {
-    if (!this.isPolling && !this.pidPoller) return;
-
-    if (this.pidPoller) {
-      this.pidPoller.destroy();
-      this.pidPoller = null;
-    }
-
-    if (this.pollIntervalId) {
-      clearInterval(this.pollIntervalId);
-      this.pollIntervalId = null;
-    }
-
-    this.stopVehicleDisplayBridge();
-    this.removePollingAppStateListener();
-
-    this.isPolling = false;
-    console.log(TAG, 'Polling stopped');
-    this.saveSession();
-    this.notify();
-  }
-
-  pausePolling(): void {
-    if (this.pidPoller && this.isPolling) {
-      this.pidPoller.pause();
-      console.log(TAG, 'Polling paused (app backgrounded)');
-    }
-  }
-
-  resumePolling(): void {
-    if (this.pidPoller && this.isPolling) {
-      this.pidPoller.resume();
-      console.log(TAG, 'Polling resumed (app foregrounded)');
-    }
-  }
-
-  getIsPolling(): boolean {
-    return this.isPolling;
-  }
-
-  getPollerStatus(): any {
-    return this.pidPoller?.getStatus() ?? null;
-  }
-
-  // ── App State Listener for Polling ─────────────────────
-
-  private setupPollingAppStateListener(): void {
-    this.removePollingAppStateListener();
-    try {
-      this.appStateSubscription = AppState.addEventListener(
-        'change',
-        (nextState: AppStateStatus) => {
-          if (nextState === 'background' || nextState === 'inactive') {
-            this.pausePolling();
-          } else if (nextState === 'active') {
-            this.resumePolling();
-          }
-        },
-      );
-    } catch {
-      // AppState may not be available
-    }
-  }
-
-  private removePollingAppStateListener(): void {
-    if (this.appStateSubscription) {
-      try { this.appStateSubscription.remove(); } catch {}
-      this.appStateSubscription = null;
-    }
-  }
-
-  // ── Vehicle Display Bridge (AA/CP) ─────────────────────
-
-  private pushToVehicleDisplay(): void {
-    try {
-      const summary = vehicleTelemetryStore.getSummary();
-      if (!summary.has_data) return;
-
-      const { vehicleDisplayStore } = require('../../lib/vehicleDisplayStore');
-
-      const systems: Array<{
-        id: string;
-        label: string;
-        status: 'nominal' | 'warning' | 'critical' | 'offline';
-        value: string | null;
-      }> = [];
-
-      if (summary.engine_status !== 'unknown') {
-        systems.push({
-          id: 'vt_engine',
-          label: 'Engine',
-          status: summary.engine_status === 'running' ? 'nominal' :
-                  summary.engine_status === 'idle' ? 'nominal' :
-                  summary.engine_status === 'off' ? 'offline' : 'warning',
-          value: summary.engine_rpm != null ? `${Math.round(summary.engine_rpm)} RPM` : summary.engine_status.toUpperCase(),
-        });
+      if (!unsub) {
+        unsub = () => {
+          try { adapter.off?.(event, handler); } catch {}
+          try { adapter.removeListener?.(event, handler); } catch {}
+        };
       }
 
-      if (summary.battery_voltage != null) {
-        systems.push({
-          id: 'vt_battery',
-          label: 'Battery',
-          status: summary.battery_voltage >= 12.4 ? 'nominal' :
-                  summary.battery_voltage >= 11.8 ? 'warning' : 'critical',
-          value: `${summary.battery_voltage.toFixed(1)}V`,
-        });
-      }
-
-      if (summary.fuel_level != null) {
-        systems.push({
-          id: 'vt_fuel',
-          label: 'Fuel',
-          status: summary.fuel_level >= 25 ? 'nominal' :
-                  summary.fuel_level >= 10 ? 'warning' : 'critical',
-          value: `${Math.round(summary.fuel_level)}%`,
-        });
-      }
-
-      if (summary.coolant_temp != null) {
-        systems.push({
-          id: 'vt_coolant',
-          label: 'Coolant',
-          status: summary.coolant_temp <= 220 ? 'nominal' :
-                  summary.coolant_temp <= 240 ? 'warning' : 'critical',
-          value: `${Math.round(summary.coolant_temp)}°F`,
-        });
-      }
-
-      if (summary.vehicle_speed != null) {
-        systems.push({
-          id: 'vt_speed',
-          label: 'Speed',
-          status: 'nominal',
-          value: `${Math.round(summary.vehicle_speed)} mph`,
-        });
-      }
-
-      if (systems.length > 0) {
-        const currentStatus = vehicleDisplayStore.getStatusData();
-        const nonVtSystems = (currentStatus.vehicleSystemsSummary || [])
-          .filter((s: any) => !s.id.startsWith('vt_'));
-        vehicleDisplayStore.updateStatusData({
-          vehicleSystemsSummary: [...nonVtSystems, ...systems],
-        });
-      }
-    } catch {
-      // Vehicle display store may not be available
-    }
-  }
-
-  startVehicleDisplayBridge(intervalMs: number = 5000): void {
-    this.stopVehicleDisplayBridge();
-    this.vehicleDisplayBridgeTimer = setInterval(() => {
-      this.pushToVehicleDisplay();
-    }, intervalMs);
-    console.log(TAG, 'Vehicle display bridge started');
-  }
-
-  stopVehicleDisplayBridge(): void {
-    if (this.vehicleDisplayBridgeTimer) {
-      clearInterval(this.vehicleDisplayBridgeTimer);
-      this.vehicleDisplayBridgeTimer = null;
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // PHASE 2D: FRESHNESS LABEL
-  // ═══════════════════════════════════════════════════════
-
-  /**
-   * Get the current telemetry freshness label.
-   * Delegates to the store which has full context.
-   */
-  getFreshnessLabel(): TelemetryFreshnessLabel {
-    return vehicleTelemetryStore.getFreshnessLabel();
-  }
-
-  /**
-   * Get the session recovery status.
-   */
-  getRecoveryStatus(): SessionRecoveryStatus {
-    return this.recoveryStatus;
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // PHASE 2D: RECONNECT ORCHESTRATION
-  // ═══════════════════════════════════════════════════════
-
-  /**
-   * Signal that the OBD-II adapter is reconnecting.
-   * Updates the store's reconnecting state.
-   */
-  signalReconnecting(isReconnecting: boolean): void {
-    vehicleTelemetryStore.setReconnecting(isReconnecting);
-    console.log(TAG, `Reconnecting signal: ${isReconnecting}`);
-    this.notify();
-  }
-
-  /**
-   * Signal that a reconnection succeeded.
-   * Resumes polling if it was active before.
-   */
-  signalReconnected(deviceId: string): void {
-    vehicleTelemetryStore.setReconnecting(false);
-    this.updateDeviceConnectionState(deviceId, 'connected');
-    this.obd2WasConnected = true;
-    console.log(TAG, `Reconnection succeeded: ${deviceId}`);
-
-    // Resume polling if we were polling before
-    if (!this.isPolling && this.activeProvider === 'obd2') {
-      console.log(TAG, 'Resuming polling after reconnect...');
-      setTimeout(() => this.startPolling(), 1000);
-    }
-
-    this.saveSession();
-    this.notify();
-  }
-
-  /**
-   * Signal that a reconnection failed.
-   * Keeps last known data visible during grace window.
-   */
-  signalReconnectFailed(deviceId: string): void {
-    vehicleTelemetryStore.setReconnecting(false);
-    this.updateDeviceConnectionState(deviceId, 'disconnected');
-    console.log(TAG, `Reconnection failed: ${deviceId} — showing last known data`);
-    this.notify();
-  }
-
-  // ── State Queries ──────────────────────────────────────
-
-  getState(): {
-    activeProvider: VehicleTelemetryProviderId | null;
-    isPolling: boolean;
-    primaryDevice: VehicleTelemetryDevice | null;
-    deviceCount: number;
-    hasData: boolean;
-    obd2WasConnected: boolean;
-    freshnessLabel: TelemetryFreshnessLabel;
-    recoveryStatus: SessionRecoveryStatus;
-    isReconnecting: boolean;
-  } {
-    return {
-      activeProvider: this.activeProvider,
-      isPolling: this.isPolling,
-      primaryDevice: vehicleTelemetryDeviceRegistry.getPrimary(),
-      deviceCount: vehicleTelemetryDeviceRegistry.getCount(),
-      hasData: vehicleTelemetryStore.hasData(),
-      obd2WasConnected: this.obd2WasConnected,
-      freshnessLabel: this.getFreshnessLabel(),
-      recoveryStatus: this.recoveryStatus,
-      isReconnecting: vehicleTelemetryStore.getIsReconnecting(),
+      this.adapterUnsubs.push(unsub);
     };
+
+    bindOne('telemetry', this.handleTelemetry);
+    bindOne('data', this.handleTelemetry);
+    bindOne('connected', this.handleConnected);
+    bindOne('connect', this.handleConnected);
+    bindOne('disconnected', this.handleDisconnected);
+    bindOne('disconnect', this.handleDisconnected);
+    bindOne('reconnecting', this.handleReconnectStarted);
+    bindOne('reconnect_start', this.handleReconnectStarted);
+    bindOne('reconnected', this.handleReconnectSucceeded);
+    bindOne('reconnect_success', this.handleReconnectSucceeded);
+    bindOne('reconnect_failed', this.handleReconnectFailure);
+    bindOne('error', this.handleAdapterError);
   }
 
-  wasOBD2Connected(): boolean {
-    return this.obd2WasConnected;
+  private unbindAdapter(): void {
+    this.adapterUnsubs.forEach(fn => {
+      try { fn(); } catch {}
+    });
+    this.adapterUnsubs = [];
   }
 
-  /**
-   * Full reset — clear all state and devices.
-   */
-  reset(): void {
-    this.stopPolling();
-    this.stopVehicleDisplayBridge();
-    this.removePollingAppStateListener();
-    this.activeProvider = null;
-    this.obd2WasConnected = false;
-    this.bleDeviceRef = null;
-    this.reconnectAttempted = false;
-    this.recoveryStatus = 'idle';
-    vehicleTelemetryDeviceRegistry.clearAll();
-    vehicleTelemetryStore.clear();
-    sRemove(VT_STORAGE_KEYS.SESSION);
-    console.log(TAG, 'Service reset');
-    this.notify();
+  // ── Adapter Event Handlers ─────────────────────────────
+
+  private handleTelemetry = (raw: any): void => {
+    this.lastPollAt = Date.now();
+    const normalized = normalizeTelemetry(raw, this.currentDevice);
+    this.latestTelemetry = normalized;
+    this.lastTelemetryAt = normalized.timestamp || Date.now();
+    this.lastSuccessAt = Date.now();
+    this.lastErrorAt = null;
+    this.lastErrorMessage = null;
+    this.pollerRunning = true;
+
+    if (this.connectionState !== 'connected') {
+      this.setConnectionState('connected');
+      this.markRegistryState('connected');
+      if (this.retryCount > 0) {
+        this.retryCount = 0;
+        this.clearRetryTimer();
+        this.emit('reconnected', { device: this.currentDevice });
+        this.emit('reconnect_success', { device: this.currentDevice });
+      }
+    }
+
+    if (normalized.device_id) {
+      try {
+        vehicleTelemetryDeviceRegistry.touchDevice(normalized.device_id);
+      } catch {}
+    }
+
+    this.emit('telemetry', normalized);
+    this.emit('data', normalized);
+  };
+
+  private handleConnected = (_payload?: any): void => {
+    this.resolveCurrentDevice();
+    this.markRegistryState('connected');
+    this.setConnectionState('connected');
+    this.retryCount = 0;
+    this.clearRetryTimer();
+    this.emit('connected', { device: this.currentDevice });
+    this.emit('connect', { device: this.currentDevice });
+  };
+
+  private handleDisconnected = (_payload?: any): void => {
+    this.markRegistryState('disconnected');
+    this.setConnectionState('disconnected');
+    this.emit('disconnected', { device: this.currentDevice });
+    this.emit('disconnect', { device: this.currentDevice });
+
+    if (this.started) {
+      this.scheduleReconnect();
+    }
+  };
+
+  private handleReconnectStarted = (_payload?: any): void => {
+    this.markRegistryState('reconnecting');
+    this.setConnectionState('reconnecting');
+    this.emit('reconnecting', { device: this.currentDevice });
+    this.emit('reconnect_start', { device: this.currentDevice });
+  };
+
+  private handleReconnectSucceeded = (_payload?: any): void => {
+    this.resolveCurrentDevice();
+    this.markRegistryState('connected');
+    this.setConnectionState('connected');
+    this.retryCount = 0;
+    this.clearRetryTimer();
+    this.emit('reconnected', { device: this.currentDevice });
+    this.emit('reconnect_success', { device: this.currentDevice });
+    this.emit('connected', { device: this.currentDevice });
+  };
+
+  private handleReconnectFailure = (error?: any): void => {
+    this.lastErrorAt = Date.now();
+    this.lastErrorMessage = error instanceof Error ? error.message : String(error ?? 'Unknown telemetry poll error');
+    this.pollerRunning = false;
+    stabilityLog('Telemetry', 'warn', `${TAG} reconnect failed`, error);
+    this.markRegistryState('disconnected');
+    this.setConnectionState('error');
+    this.emit('reconnect_failed', { error, device: this.currentDevice });
+    this.emit('error', error);
+
+    if (this.started) {
+      this.scheduleReconnect();
+    }
+  };
+
+  private handleAdapterError = (error?: any): void => {
+    this.lastErrorAt = Date.now();
+    this.lastErrorMessage = error instanceof Error ? error.message : String(error ?? 'Unknown telemetry adapter error');
+    this.pollerRunning = false;
+    stabilityLog('Telemetry', 'warn', `${TAG} adapter error`, error);
+    this.emit('error', error);
+  };
+
+  // ── Reconnect / Health ─────────────────────────────────
+
+  private scheduleReconnect(): void {
+    if (!this.adapter) return;
+    if (this.retryCount >= MAX_TELEMETRY_RETRIES) {
+      stabilityLog('Telemetry', 'warn', `${TAG} max reconnect retries reached`);
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastRetryAt < RETRY_COOLDOWN_MS) {
+      stabilityLog('Telemetry', 'info', `${TAG} retry cooldown active`);
+      return;
+    }
+
+    this.setConnectionState('reconnecting');
+    this.emit('reconnecting', { device: this.currentDevice });
+    this.emit('reconnect_start', { device: this.currentDevice });
+
+    const delay = calculateBackoff(this.retryCount);
+    this.clearRetryTimer();
+    this.retryTimer = setTimeout(async () => {
+      this.lastRetryAt = Date.now();
+      this.retryCount += 1;
+      try {
+        await this.connect();
+      } catch {
+        // connect() already routes failure through handleReconnectFailure
+      }
+    }, delay);
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.started) return;
+      if (!this.adapter) return;
+
+      const adapterSaysConnected = this.adapter.isConnected?.();
+      const now = Date.now();
+      const telemetryAge = this.lastTelemetryAt ? now - this.lastTelemetryAt : Infinity;
+
+      if (adapterSaysConnected === false) {
+        this.handleDisconnected();
+        return;
+      }
+
+      if (this.connectionState === 'connected' && telemetryAge > HEARTBEAT_STALE_MS) {
+        stabilityLog('Telemetry', 'warn', `${TAG} heartbeat detected telemetry silence`);
+        this.handleReconnectStarted();
+        this.scheduleReconnect();
+      }
+    }, 5_000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  // ── Registry / State Helpers ───────────────────────────
+
+  private resolveCurrentDevice(): void {
+    if (this.currentDevice?.device_id) return;
+
+    try {
+      const primary = (vehicleTelemetryDeviceRegistry as any).getPrimary?.();
+      if (primary) {
+        this.currentDevice = primary;
+      }
+    } catch {}
+  }
+
+  private markRegistryState(state: string): void {
+    const deviceId = this.currentDevice?.device_id;
+    if (!deviceId) return;
+
+    try {
+      const registryAny = vehicleTelemetryDeviceRegistry as any;
+      if (typeof registryAny.updateDevice === 'function') {
+        registryAny.updateDevice(deviceId, { connection_state: state, last_seen: Date.now() });
+        return;
+      }
+      if (typeof registryAny.patchDevice === 'function') {
+        registryAny.patchDevice(deviceId, { connection_state: state, last_seen: Date.now() });
+        return;
+      }
+      if (typeof registryAny.touchDevice === 'function') {
+        registryAny.touchDevice(deviceId);
+      }
+    } catch (error) {
+      stabilityLog('Telemetry', 'warn', `${TAG} failed registry state update`, error);
+    }
+  }
+
+  private setConnectionState(next: ConnectionState): void {
+    if (this.connectionState === next) return;
+    this.connectionState = next;
+    this.emit('state', this.getServiceStateSnapshot());
+  }
+
+  private getServiceStateSnapshot() {
+    return {
+      connectionState: this.connectionState,
+      activeProvider: this.activeProvider,
+      latestTelemetry: { ...this.latestTelemetry },
+      currentDevice: this.currentDevice ? { ...this.currentDevice } : null,
+      retryCount: this.retryCount,
+      lastTelemetryAt: this.lastTelemetryAt,
+      started: this.started,
+      pollerStatus: this.getPollerStatus(),
+    };
   }
 }
 
-// ── Singleton export ─────────────────────────────────────
 export const vehicleTelemetryService = new VehicleTelemetryService();
-
-
+export default vehicleTelemetryService;
+export type {
+  AdapterLike as VehicleTelemetryAdapterLike,
+  DeviceLike as VehicleTelemetryDeviceLike,
+  VehicleTelemetryPollerStatus,
+};

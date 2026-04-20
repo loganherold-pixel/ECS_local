@@ -74,6 +74,8 @@ export interface WeatherAlert {
   title: string;
   description: string;
   type: string;
+  effective?: string | null;
+  expires?: string | null;
 }
 
 export interface WaypointWeather {

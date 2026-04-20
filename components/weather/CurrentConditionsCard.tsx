@@ -41,7 +41,7 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
 
   // Determine temperature color
   const temp = conditions.temp;
-  let tempColor = TACTICAL.text;
+  let tempColor: string = TACTICAL.text;
   if (temp != null) {
     if (units === 'imperial') {
       if (temp > 100) tempColor = '#EF5350';

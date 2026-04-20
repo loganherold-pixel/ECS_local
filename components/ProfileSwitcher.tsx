@@ -72,7 +72,7 @@ export default function ProfileSwitcher({ visible, onClose }: ProfileSwitcherPro
         Animated.timing(slideAnim, { toValue: 60, duration: 150, useNativeDriver: true }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, fadeAnim, slideAnim]);
 
   if (!visible) return null;
 
@@ -95,7 +95,6 @@ export default function ProfileSwitcher({ visible, onClose }: ProfileSwitcherPro
     onClose();
     await signOut();
     showToast('Session terminated');
-    router.replace('/login');
   };
 
   return (

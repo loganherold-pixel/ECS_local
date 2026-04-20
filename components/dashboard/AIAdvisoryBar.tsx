@@ -146,7 +146,7 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
         }).start();
       }
     }
-  }, [state.isVisible, state.current, reduceMotion, drivingOverrides.disableAnimations]);
+  }, [state, reduceMotion, drivingOverrides.disableAnimations, fadeAnim]);
 
   // ── Don't render if feature is disabled ────────────────
   if (!enabled || !state.enabled) {
@@ -213,7 +213,7 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
               color={MODE_COLORS.standby.icon}
             />
             <Text style={[styles.emptyText, { color: MODE_COLORS.standby.text }]}>
-              AI ADVISORY
+              ECS ADVISORY
             </Text>
           </View>
         )}

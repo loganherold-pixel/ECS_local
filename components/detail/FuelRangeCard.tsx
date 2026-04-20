@@ -89,7 +89,7 @@ export default function FuelRangeCard({
         .update({ current_fuel_percent: clamped })
         .eq('id', vehicleId);
       if (error) {
-        setSaveMsg('UPDATE FAILED');
+        setSaveMsg('SAVE FAILED');
       } else {
         setSaveMsg(`FUEL UPDATED: ${clamped}%`);
         setFuelInput(String(clamped));
@@ -122,7 +122,7 @@ export default function FuelRangeCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="speedometer-outline" size={16} color={TACTICAL.textMuted} />
-          <Text style={s.cardTitle}>FUEL RANGE ESTIMATE</Text>
+          <Text style={s.cardTitle}>FUEL STATUS</Text>
         </View>
         <View style={s.noDataBox}>
           <Ionicons name="car-outline" size={24} color={TACTICAL.textMuted} />
@@ -139,7 +139,7 @@ export default function FuelRangeCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="speedometer-outline" size={16} color={TACTICAL.textMuted} />
-          <Text style={s.cardTitle}>FUEL RANGE ESTIMATE</Text>
+          <Text style={s.cardTitle}>FUEL STATUS</Text>
         </View>
         <View style={s.noDataBox}>
           <Ionicons name="flask-outline" size={24} color={TACTICAL.amber} />
@@ -165,7 +165,7 @@ export default function FuelRangeCard({
       {isEmergency && (
         <View style={s.emergencyBanner}>
           <Ionicons name="warning" size={14} color={TACTICAL.danger} />
-          <Text style={s.emergencyText}>LOW FUEL WARNING</Text>
+          <Text style={s.emergencyText}>FUEL RESERVE CRITICAL</Text>
           <Ionicons name="warning" size={14} color={TACTICAL.danger} />
         </View>
       )}
@@ -173,7 +173,7 @@ export default function FuelRangeCard({
       {/* Header */}
       <View style={s.cardHeader}>
         <Ionicons name={rangeIcon as any} size={16} color={rangeColor} />
-        <Text style={s.cardTitle}>FUEL RANGE ESTIMATE</Text>
+        <Text style={s.cardTitle}>FUEL STATUS</Text>
         <View style={[s.statusChip, { borderColor: rangeColor }]}>
           <Text style={[s.statusChipText, { color: rangeColor }]}>{rangeStatus}</Text>
         </View>
@@ -229,7 +229,7 @@ export default function FuelRangeCard({
           color={TACTICAL.amber}
         />
         <Text style={s.updateToggleText}>
-          {showUpdate ? 'HIDE FUEL UPDATE' : 'UPDATE FUEL LEVEL'}
+          {showUpdate ? 'HIDE FUEL ADJUSTMENT' : 'ADJUST FUEL LEVEL'}
         </Text>
       </TouchableOpacity>
 
@@ -353,7 +353,7 @@ export default function FuelRangeCard({
 const s = StyleSheet.create({
   card: {
     backgroundColor: TACTICAL.panel,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: TACTICAL.border,
     overflow: 'hidden',

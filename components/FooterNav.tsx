@@ -15,7 +15,7 @@
  *
  * PRIMARY MODES:
  *   "next"     — Standard next step button (default)
- *   "deploy"   — Deploy Configuration (green accent)
+ *   "deploy"   — Save Setup (green accent)
  *   "complete"  — Complete / Finish (green accent)
  *
  * USAGE:
@@ -85,7 +85,7 @@ export default function FooterNav({
 }: FooterNavProps) {
   // ── Resolve labels and icons based on primaryMode ─────────
   const resolvedNextLabel = nextLabel ?? (
-    primaryMode === 'deploy' ? 'DEPLOY CONFIGURATION' :
+    primaryMode === 'deploy' ? 'SAVE SETUP' :
     primaryMode === 'complete' ? 'COMPLETE' :
     'NEXT'
   );

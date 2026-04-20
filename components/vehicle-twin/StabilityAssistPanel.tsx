@@ -233,26 +233,12 @@ interface StabilityAssistPanelProps {
 export function StabilityAssistPanel({ stability, twin }: StabilityAssistPanelProps) {
   const recommendations = useMemo(
     () => generateRecommendations({ stability, twin }),
-    [
-      stability?.status,
-      stability?.tiltMargin,
-      stability?.tiltAngle,
-      stability?.cgPenalty,
-      twin.hasVehicle,
-      twin.hasSpecs,
-      twin.frontAxlePercent,
-      twin.rearAxlePercent,
-      twin.roofWeightLbs,
-      twin.cabWeightLbs,
-      twin.bedWeightLbs,
-      twin.leftDrawerLbs,
-      twin.rightDrawerLbs,
-    ],
+    [stability, twin],
   );
 
   const summaryLine = useMemo(
     () => buildSummaryLine(stability, twin),
-    [stability?.tiltMargin, twin.frontAxlePercent, twin.roofWeightLbs],
+    [stability, twin],
   );
 
   const statusLabel = stability?.status ?? 'NO DATA';

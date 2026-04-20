@@ -28,6 +28,7 @@ import {
   Animated,
   Modal,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
@@ -58,21 +59,34 @@ import {
 import type { AccessoryFramework } from '../../lib/accessoryFramework';
 
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
+import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
+import { ECS_READINESS_COPY, ECS_STATE_COPY } from '../../lib/ecsStateCopy';
 import {
   generateContainerAllocations,
   allocationsToZonePayload,
   getTotalSlots,
   type ContainerAllocation,
 } from '../../lib/accessoryContainerMapping';
+import { EASING, MOTION } from '../../lib/motion';
 
 
 // ── View modes: list → vehicleSpec → accessories ────────
 type ViewMode = 'list' | 'vehicleSpec' | 'accessories';
 
+const REFERRER_ROUTES: Record<string, string> = {
+  fleet: '/(tabs)/fleet',
+  expeditions: '/(tabs)/expeditions',
+  loadmap: '/(tabs)/loadmap',
+  dashboard: '/(tabs)/dashboard',
+};
+
 export default function VehicleConfigScreen() {
   const router = useRouter();
   const { user, showToast, isOnline } = useApp();
   const { setConfigurationDeployed } = useWizardState();
+  const insets = useSafeAreaInsets();
+  const headerTopPadding = useMemo(() => getShellHeaderTopPadding(insets.top), [insets.top]);
+  const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
 
   // ── Deep-link params ──────────────────────────────────
   const searchParams = useLocalSearchParams<{ startAtStep?: string; vehicleId?: string; referrer?: string }>();
@@ -81,13 +95,6 @@ export default function VehicleConfigScreen() {
   // ── Edit Mode Tracking ────────────────────────────────
   const isEditModeRef = useRef(false);
   const referrerRouteRef = useRef<string | null>(null);
-
-  const REFERRER_ROUTES: Record<string, string> = {
-    fleet: '/(tabs)/fleet',
-    expeditions: '/(tabs)/expeditions',
-    loadmap: '/(tabs)/loadmap',
-    dashboard: '/(tabs)/dashboard',
-  };
 
   // ── Vehicle list state ────────────────────────────────
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -117,6 +124,27 @@ export default function VehicleConfigScreen() {
 
   // ── Animation ─────────────────────────────────────────
   const fadeAnim = useRef(new Animated.Value(1)).current;
+  const transitionCycleRef = useRef(0);
+  const animateTransition = useCallback((callback: () => void) => {
+    const transitionCycle = ++transitionCycleRef.current;
+    fadeAnim.stopAnimation();
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: MOTION.screenFadeOut,
+      easing: EASING.accelerate,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished || transitionCycle !== transitionCycleRef.current) return;
+      callback();
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: MOTION.screenFadeIn,
+        easing: EASING.decelerate,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, [fadeAnim]);
+  const startWizardRef = useRef<(vehicleId: string) => void>(() => {});
 
   // ── 2-Step Progress Computation ───────────────────────
   const wizardPhaseInfo = useMemo(() => {
@@ -182,7 +210,7 @@ export default function VehicleConfigScreen() {
     setPendingDraft(null);
 
     // Start the wizard for the target vehicle
-    startWizard(targetVehicleId);
+    startWizardRef.current(targetVehicleId);
 
     // If startAtStep is accessoryConfiguration, jump directly to Step 2
     if (startAtStep === 'accessoryConfiguration') {
@@ -190,7 +218,7 @@ export default function VehicleConfigScreen() {
         setViewMode('accessories');
       }, 50);
     }
-  }, [loading, vehicles, searchParams]);
+  }, [loading, searchParams, vehicles]);
 
 
   // ── Draft Saved Flash Animation ────────────────────────
@@ -221,7 +249,7 @@ export default function VehicleConfigScreen() {
     setShowResumePrompt(false);
     setPendingDraft(null);
     animateTransition(() => setViewMode('vehicleSpec'));
-  }, [pendingDraft]);
+  }, [animateTransition, pendingDraft]);
 
   const handleStartFresh = useCallback(() => {
     wizardDraftStore.clear();
@@ -288,7 +316,8 @@ export default function VehicleConfigScreen() {
     }
 
     animateTransition(() => setViewMode('vehicleSpec'));
-  }, [vehicles]);
+  }, [animateTransition, vehicles]);
+  startWizardRef.current = startWizard;
 
 
   // ── Add New Vehicle ────────────────────────────────────
@@ -318,28 +347,13 @@ export default function VehicleConfigScreen() {
       setViewMode('list');
       setSelections({});
     });
-  }, [selectedVehicleId, selectedVehicle?.name, viewMode, selections, showToast]);
+  }, [animateTransition, selectedVehicleId, selectedVehicle?.name, selections, showToast, viewMode]);
 
   // ── Animation helper ──────────────────────────────────
-  const animateTransition = (callback: () => void) => {
-    Animated.timing(fadeAnim, {
-      toValue: 0,
-      duration: 120,
-      useNativeDriver: true,
-    }).start(() => {
-      callback();
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }).start();
-    });
-  };
-
   // ── Step 1 → Step 2 ───────────────────────────────────
   const goToAccessories = useCallback(() => {
     animateTransition(() => setViewMode('accessories'));
-  }, []);
+  }, [animateTransition]);
 
   // ── Helper: Navigate back to referrer (edit mode exit) ──
   const exitToReferrer = () => {
@@ -472,18 +486,18 @@ export default function VehicleConfigScreen() {
         <View style={styles.offlineBanner}>
           <View style={styles.offlineBannerRow}>
             <Ionicons name="shield-checkmark-outline" size={16} color={TACTICAL.amber} />
-            <Text style={styles.offlineBannerTitle}>LOCAL MODE</Text>
+            <Text style={styles.offlineBannerTitle}>{ECS_READINESS_COPY.fleet.localModeTitle}</Text>
           </View>
-          <Text style={styles.offlineBannerText}>Vehicle configuration works offline. Sign in to sync vehicles to cloud.</Text>
+          <Text style={styles.offlineBannerText}>{ECS_READINESS_COPY.fleet.localModeMessage}</Text>
         </View>
       )}
       {user && dataSource === 'local' && (
         <View style={styles.offlineBanner}>
           <View style={styles.offlineBannerRow}>
             <Ionicons name="cloud-offline-outline" size={14} color={TACTICAL.amber} />
-            <Text style={styles.offlineBannerTitle}>OFFLINE DATA</Text>
+            <Text style={styles.offlineBannerTitle}>{ECS_READINESS_COPY.fleet.cachedVehiclesTitle}</Text>
           </View>
-          <Text style={styles.offlineBannerText}>Showing locally cached vehicles. Will sync when signal is available.</Text>
+          <Text style={styles.offlineBannerText}>{ECS_READINESS_COPY.fleet.cachedVehiclesMessage}</Text>
         </View>
       )}
       <View style={styles.sectionHeader}>
@@ -502,11 +516,11 @@ export default function VehicleConfigScreen() {
       {vehicles.length === 0 && !fetchError ? (
         <View style={styles.emptyCard}>
           <View style={styles.emptyIconWrap}><Ionicons name="car-outline" size={36} color={TACTICAL.textMuted} /></View>
-          <Text style={styles.emptyText}>NO VEHICLES FOUND</Text>
-          <Text style={styles.emptySubtext}>Create your first vehicle to begin configuring your expedition framework.</Text>
+          <Text style={styles.emptyText}>{ECS_STATE_COPY.recovery.vehicleLibraryEmpty.title}</Text>
+          <Text style={styles.emptySubtext}>{ECS_STATE_COPY.recovery.vehicleLibraryEmpty.message}</Text>
           <TouchableOpacity style={styles.addBtnPrimary} onPress={handleAddNewVehicle} activeOpacity={0.8}>
             <Ionicons name="add-circle-outline" size={18} color="#0B0F12" />
-            <Text style={styles.addBtnPrimaryText}>ADD VEHICLE</Text>
+            <Text style={styles.addBtnPrimaryText}>{ECS_STATE_COPY.recovery.vehicleLibraryEmpty.ctaLabel.toUpperCase()}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -654,9 +668,9 @@ export default function VehicleConfigScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: dockClearance }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: headerTopPadding }]}>
         <TouchableOpacity onPress={() => { if (viewMode === 'list') { router.back(); } else { goBack(); } }} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={22} color={TACTICAL.amber} />
           <Text style={styles.backText}>{getBackLabel()}</Text>
@@ -781,7 +795,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: TACTICAL.bg,
-    paddingBottom: 70,
   },
 
   header: {
@@ -789,7 +802,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'web' ? 16 : 54,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62, 79, 60, 0.3)',

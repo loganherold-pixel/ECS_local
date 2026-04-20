@@ -16,10 +16,7 @@ import {
   View,
   Text,
   TouchableOpacity,
-  ScrollView,
   StyleSheet,
-  Modal,
-  Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS } from '../../lib/theme';
@@ -42,6 +39,8 @@ import {
   toggleSaveRoute,
   isRouteSaved,
 } from '../../lib/discoveryIntelligenceEngine';
+import TacticalPopupShell from '../TacticalPopupShell';
+import { ECSOverlayFooter } from '../ECSModalShell';
 
 interface AIRoutePreviewModalProps {
   visible: boolean;
@@ -49,6 +48,7 @@ interface AIRoutePreviewModalProps {
   enrichedRoute?: EnrichedDiscoveryRoute | null;
   onClose: () => void;
   onBuildExpedition?: () => void;
+  onNavigate?: () => void;
 }
 
 export default function AIRoutePreviewModal({
@@ -57,6 +57,7 @@ export default function AIRoutePreviewModal({
   enrichedRoute,
   onClose,
   onBuildExpedition,
+  onNavigate,
 }: AIRoutePreviewModalProps) {
   if (!route) return null;
 
@@ -67,7 +68,7 @@ export default function AIRoutePreviewModal({
   const confidenceLabel = getConfidenceLabel(route.confidence);
   const confidenceIcon = getConfidenceIcon(route.confidence);
 
-  const routeLabel = enrichedRoute?.routeLabel ?? 'AI Suggested';
+  const routeLabel = enrichedRoute?.routeLabel ?? 'ECS Suggested';
   const labelConfig = getRouteLabelConfig(routeLabel);
   const riskPreview = enrichedRoute?.riskPreview;
   const vehicleMatch = enrichedRoute?.vehicleMatch;
@@ -94,25 +95,41 @@ export default function AIRoutePreviewModal({
   const saved = isRouteSaved(route.id);
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={s.container}>
-        {/* Header */}
-        <View style={s.header}>
-          <View style={s.headerLeft}>
-            <View style={[s.labelBadge, { borderColor: labelConfig.color + '50', backgroundColor: labelConfig.color + '14' }]}>
-              <Ionicons name={labelConfig.icon as any} size={10} color={labelConfig.color} />
-              <Text style={[s.labelBadgeText, { color: labelConfig.color }]}>{routeLabel.toUpperCase()}</Text>
-            </View>
-            <Text style={s.headerTitle}>ROUTE PREVIEW</Text>
-          </View>
-          <TouchableOpacity style={s.closeBtn} onPress={onClose} activeOpacity={0.7}>
-            <Ionicons name="close" size={20} color={TACTICAL.textMuted} />
+    <TacticalPopupShell
+      visible={visible}
+      onClose={onClose}
+      title="Route Preview"
+      subtitle={route.region}
+      eyebrow={routeLabel.toUpperCase()}
+      icon={labelConfig.icon as any}
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={0.86}
+      minHeightFraction={0.7}
+      footer={(
+        <ECSOverlayFooter>
+          <TouchableOpacity style={s.primaryAction} activeOpacity={0.8} onPress={() => { hapticMicro(); onBuildExpedition?.(); }}>
+            <Ionicons name="compass-outline" size={16} color={ECS.bgPrimary} />
+            <Text style={s.primaryActionText}>BUILD EXPEDITION</Text>
           </TouchableOpacity>
-        </View>
-
-        <View style={s.goldRail} />
-
-        <ScrollView style={s.scrollArea} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+          <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => { hapticMicro(); toggleSaveRoute(route.id); }}>
+            <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={14} color={saved ? TACTICAL.amber : TACTICAL.textMuted} />
+            <Text style={[s.secondaryActionText, saved && { color: TACTICAL.amber }]}>{saved ? 'SAVED' : 'SAVE ROUTE'}</Text>
+          </TouchableOpacity>
+          {onNavigate ? (
+            <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => { hapticMicro(); onNavigate(); }}>
+              <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
+              <Text style={s.secondaryActionText}>OPEN IN NAVIGATE</Text>
+            </TouchableOpacity>
+          ) : null}
+        </ECSOverlayFooter>
+      )}
+    >
+      <View style={s.scrollContent}>
+          <View style={[s.labelBadge, { borderColor: labelConfig.color + '50', backgroundColor: labelConfig.color + '14' }]}>
+            <Ionicons name={labelConfig.icon as any} size={10} color={labelConfig.color} />
+            <Text style={[s.labelBadgeText, { color: labelConfig.color }]}>{routeLabel.toUpperCase()}</Text>
+          </View>
           {/* Route Name */}
           <Text style={s.routeName}>{route.name}</Text>
           <Text style={s.routeRegion}>{route.region}</Text>
@@ -305,66 +322,29 @@ export default function AIRoutePreviewModal({
             </View>
           )}
 
-          {/* Action Buttons */}
-          <View style={s.actionSection}>
-            <TouchableOpacity style={s.primaryAction} activeOpacity={0.8} onPress={() => { hapticMicro(); onBuildExpedition?.(); }}>
-              <Ionicons name="compass-outline" size={16} color={ECS.bgPrimary} />
-              <Text style={s.primaryActionText}>BUILD EXPEDITION</Text>
-            </TouchableOpacity>
-            <View style={s.secondaryActions}>
-              <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => { hapticMicro(); toggleSaveRoute(route.id); }}>
-                <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={14} color={saved ? TACTICAL.amber : TACTICAL.textMuted} />
-                <Text style={[s.secondaryActionText, saved && { color: TACTICAL.amber }]}>{saved ? 'SAVED' : 'SAVE ROUTE'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => hapticMicro()}>
-                <Ionicons name="map-outline" size={14} color={TACTICAL.textMuted} />
-                <Text style={s.secondaryActionText}>VIEW ON MAP</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
           {/* AI Disclaimer */}
           <View style={s.disclaimer}>
             <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
             <Text style={s.disclaimerText}>
-              This route was generated by AI based on geographic data and terrain analysis. 
+              This route was generated by ECS based on geographic data and terrain analysis. 
               Verify road conditions, access permissions, and seasonal closures before departure. 
-              AI-suggested routes are expedition concepts, not verified navigable trails.
+              ECS-suggested routes are expedition concepts, not verified navigable trails.
             </Text>
           </View>
-
-          <View style={{ height: 40 }} />
-        </ScrollView>
+          <View style={{ height: 12 }} />
       </View>
-    </Modal>
+    </TacticalPopupShell>
   );
 }
 
-const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
-
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: ECS.bgPrimary },
-
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingTop: TOP_PAD, paddingBottom: 12,
-  },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { fontSize: 11, fontWeight: '800', color: TACTICAL.textMuted, letterSpacing: 3 },
-  closeBtn: {
-    width: 36, height: 36, borderRadius: 10, backgroundColor: ECS.bgElev,
-    borderWidth: 1, borderColor: ECS.stroke, alignItems: 'center', justifyContent: 'center',
-  },
   labelBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1,
+    alignSelf: 'flex-start',
   },
   labelBadgeText: { fontSize: 7, fontWeight: '900', letterSpacing: 1.5 },
-
-  goldRail: { height: GOLD_RAIL.sectionWidth, backgroundColor: GOLD_RAIL.section },
-
-  scrollArea: { flex: 1 },
-  scrollContent: { padding: 16, gap: 16 },
+  scrollContent: { gap: 16 },
 
   routeName: { fontSize: 22, fontWeight: '800', color: ECS.text, letterSpacing: 1 },
   routeRegion: { fontSize: 13, fontWeight: '500', color: TACTICAL.textMuted, letterSpacing: 0.5, marginTop: -8 },
@@ -457,16 +437,18 @@ const s = StyleSheet.create({
   distanceText: { fontSize: 12, fontWeight: '500', color: TACTICAL.textMuted, letterSpacing: 0.3 },
 
   // Actions
-  actionSection: { gap: 10 },
   primaryAction: {
+    flex: 1,
+    minHeight: 44,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 14, backgroundColor: TACTICAL.amber, borderRadius: 12,
+    paddingHorizontal: 12, backgroundColor: TACTICAL.amber, borderRadius: 12,
   },
   primaryActionText: { fontSize: 13, fontWeight: '800', color: ECS.bgPrimary, letterSpacing: 3 },
-  secondaryActions: { flexDirection: 'row', gap: 8 },
   secondaryAction: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: ECS.stroke, backgroundColor: ECS.bgPanel,
+    flex: 1,
+    minHeight: 44,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: ECS.stroke, backgroundColor: ECS.bgPanel,
   },
   secondaryActionText: { fontSize: 9, fontWeight: '800', color: TACTICAL.textMuted, letterSpacing: 2 },
 

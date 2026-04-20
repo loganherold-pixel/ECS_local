@@ -478,9 +478,7 @@ export default function WeightDashboardPanel({
       {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          ECS WEIGHT TRACKING // MODULES: {dashData.cgResult.modules.length} //
-          {dashData.stability.isAdvanced ? ' ADVANCED MODEL' : ' BASELINE MODEL'}
-          {resolvedContainerZones.length > 0 ? ` // SPATIAL BIAS: ${resolvedContainerZones.length} ZONES` : ''}
+          {`ECS WEIGHT TRACKING | MODULES: ${dashData.cgResult.modules.length} |${dashData.stability.isAdvanced ? ' ADVANCED MODEL' : ' BASELINE MODEL'}${resolvedContainerZones.length > 0 ? ` | SPATIAL BIAS: ${resolvedContainerZones.length} ZONES` : ''}`}
         </Text>
       </View>
     </ScrollView>

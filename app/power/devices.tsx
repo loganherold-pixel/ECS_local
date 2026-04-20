@@ -1,8 +1,8 @@
 /**
  * EcoFlow Device Picker — Power Center
  *
- * Fetches bound EcoFlow devices from the 'ecoflow' Supabase edge function
- * (action='devices'). Displays each device as a selectable card with:
+ * Fetches EcoFlow devices through the unified EcoFlowCloudProvider catalog path.
+ * Displays each device as a selectable card with:
  *   - Device name
  *   - Online / Offline status indicator
  *   - Device ID (monospace, long-press to copy)
@@ -29,10 +29,11 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 
 import { useTheme } from '../../context/ThemeContext';
 import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
-import { supabase } from '../../lib/supabase';
+import { EcoFlowCloudProvider, powerDeviceStore } from '../../src/power';
 import {
   getSelectedEcoFlowDevice,
   setSelectedEcoFlowDevice,
+  getSelectedEcoFlowDeviceName,
 } from '../../lib/useEcoFlowLive';
 
 // ── Clipboard helper (safe import) ──────────────────────────────────────
@@ -43,6 +44,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
       return true;
     }
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Clipboard = require('expo-clipboard');
       if (Clipboard?.setStringAsync) {
         await Clipboard.setStringAsync(text);
@@ -66,6 +68,40 @@ interface EcoFlowDevice {
   online: boolean;
   model?: string;
   productType?: string;
+}
+
+
+function normalizeCatalogDevice(input: any): EcoFlowDevice | null {
+  const id = String(input?.id || input?.deviceId || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    name: String(input?.name || input?.deviceName || id || 'Unknown Device'),
+    online: Boolean(input?.online ?? false),
+    model: input?.model || input?.productType || undefined,
+    productType: input?.productType || undefined,
+  };
+}
+
+function mergeUniqueDevices(devices: EcoFlowDevice[]): EcoFlowDevice[] {
+  const map = new Map<string, EcoFlowDevice>();
+  for (const device of devices) {
+    if (!device?.id) continue;
+    const existing = map.get(device.id);
+    if (!existing) {
+      map.set(device.id, device);
+      continue;
+    }
+    map.set(device.id, {
+      ...existing,
+      ...device,
+      name: device.name || existing.name,
+      model: device.model || existing.model,
+      productType: device.productType || existing.productType,
+      online: device.online || existing.online,
+    });
+  }
+  return Array.from(map.values());
 }
 
 // ── DeviceCard component ────────────────────────────────────────────────
@@ -350,52 +386,67 @@ export default function EcoFlowDevicePickerScreen() {
     return () => {
       mountedRef.current = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Fetch devices from edge function ────────────────────────────────
+  // ── Fetch devices from unified provider catalog ───────────────────────
   const fetchDevices = useCallback(async () => {
     setLoadState('loading');
     setErrorMsg(null);
 
     try {
-      const { data, error } = await supabase.functions.invoke('ecoflow', {
-        body: { action: 'devices' },
-      });
+      const provider = new EcoFlowCloudProvider();
+      const catalogDevices = await provider.listDevices();
+      const selectedDeviceIds = await powerDeviceStore.getSelected('EcoFlow');
+      const persistedSelection = getSelectedEcoFlowDevice();
 
       if (!mountedRef.current) return;
 
-      if (error || !data?.ok) {
-        const code = data?.code;
-        if (code === 'MISSING_ECOFLOW_CREDENTIALS') {
-        setErrorMsg('EcoFlow API keys not configured. Add ECOFLOW_ACCESS_KEY and ECOFLOW_SECRET_KEY to your Supabase secrets.');
-        setLoadState('error');
-        return;
-      }
-      if (code === 'ECOFLOW_AUTH_FAILED') {
-        setErrorMsg('EcoFlow developer authentication failed. Verify your ECOFLOW_ACCESS_KEY and ECOFLOW_SECRET_KEY are valid and approved for this API.');
-        setLoadState('error');
-        return;
-      }
-        setErrorMsg(data?.message || error?.message || 'Failed to fetch device list.');
-        setLoadState('error');
-        return;
+      const normalizedCatalog = catalogDevices
+        .map((device: any) => normalizeCatalogDevice(device))
+        .filter(Boolean) as EcoFlowDevice[];
+
+      const fallbackDevices: EcoFlowDevice[] = [];
+      for (const id of selectedDeviceIds) {
+        if (!id) continue;
+        fallbackDevices.push({
+          id,
+          name: id === persistedSelection ? 'Selected EcoFlow Device' : 'Configured EcoFlow Device',
+          online: false,
+          model: undefined,
+          productType: undefined,
+        });
       }
 
-      const rawDevices = data.devices || [];
-      const mapped: EcoFlowDevice[] = rawDevices.map((d: any) => ({
-        id: d.id || d.deviceId || '',
-        name: d.name || d.deviceName || d.id || 'Unknown Device',
-        online: d.online ?? false,
-        model: d.model || d.productType || undefined,
-        productType: d.productType || undefined,
-      }));
+      if (persistedSelection && !selectedDeviceIds.includes(persistedSelection)) {
+        const matchedCatalog = normalizedCatalog.find((device) => device.id === persistedSelection);
+        const persistedName = getSelectedEcoFlowDeviceName();
+        fallbackDevices.push({
+          id: persistedSelection,
+          name: matchedCatalog?.name || persistedName || 'Active EcoFlow Device',
+          online: matchedCatalog?.online ?? false,
+          model: matchedCatalog?.model,
+          productType: matchedCatalog?.productType,
+        });
+      }
 
-      setDevices(mapped);
+      const merged = mergeUniqueDevices([...normalizedCatalog, ...fallbackDevices]).sort((a, b) => {
+        if (a.id === persistedSelection) return -1;
+        if (b.id === persistedSelection) return 1;
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      setDevices(merged);
       setLoadState('loaded');
+
+      if (merged.length === 0) {
+        setErrorMsg(null);
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      setErrorMsg(msg);
+      setErrorMsg(msg || 'Failed to fetch EcoFlow device catalog.');
       setLoadState('error');
     }
   }, []);
@@ -409,10 +460,10 @@ export default function EcoFlowDevicePickerScreen() {
 
   // ── Select device ───────────────────────────────────────────────────
   const selectDevice = useCallback((deviceId: string) => {
-    const newId = selectedId === deviceId ? null : deviceId;
-    setSelectedId(newId);
-    setSelectedEcoFlowDevice(newId);
-  }, [selectedId]);
+    const selectedDevice = devices.find((device) => device.id === deviceId) ?? null;
+    setSelectedId(deviceId);
+    setSelectedEcoFlowDevice(deviceId, selectedDevice?.name ?? null);
+  }, [devices]);
 
   // ── Derived values ──────────────────────────────────────────────────
   const totalCount = devices.length;
@@ -488,7 +539,7 @@ export default function EcoFlowDevicePickerScreen() {
               <Text
                 style={[styles.providerDesc, { color: palette.textMuted }]}
               >
-                Select a device for live telemetry
+                Select a device from the unified cloud catalog for live telemetry
               </Text>
             </View>
             <View
@@ -555,7 +606,7 @@ export default function EcoFlowDevicePickerScreen() {
             <Text
               style={[styles.centerStateText, { color: palette.textMuted }]}
             >
-              Fetching EcoFlow devices...
+              Fetching EcoFlow device catalog...
             </Text>
           </View>
         )}
@@ -614,15 +665,13 @@ export default function EcoFlowDevicePickerScreen() {
               No Devices Found
             </Text>
             <Text style={[styles.messageDesc, { color: palette.textMuted }]}>
-              No EcoFlow devices were returned from the cloud API. Ensure your
-              devices are registered in the EcoFlow app and bound to your
-              developer account.
+              No EcoFlow devices were returned from the unified cloud catalog. Ensure your devices are registered in the EcoFlow app and visible to the developer account used by ECS.
             </Text>
             <View style={styles.messageHints}>
               {[
                 'Verify ECOFLOW_ACCESS_KEY and ECOFLOW_SECRET_KEY in Supabase secrets',
                 'Ensure devices are registered in the EcoFlow mobile app',
-                'Check that the ecoflow edge function is deployed',
+                'Check that the power-ecoflow-device-list edge function is deployed',
               ].map((hint, idx) => (
                 <View key={idx} style={styles.hintRow}>
                   <View
@@ -764,7 +813,7 @@ export default function EcoFlowDevicePickerScreen() {
                 ]}
                 onPress={() => {
                   setSelectedId(null);
-                  setSelectedEcoFlowDevice(null);
+                  setSelectedEcoFlowDevice(null, null);
                 }}
                 activeOpacity={0.7}
               >
@@ -844,20 +893,20 @@ export default function EcoFlowDevicePickerScreen() {
           {
             name: 'Goal Zero',
             icon: 'compass-outline',
-            status: 'Driver Ready',
-            active: false,
+            status: 'BLE Active',
+            active: true,
           },
           {
-            name: 'RedArc',
+            name: 'REDARC',
             icon: 'car-outline',
-            status: 'Driver Ready',
-            active: false,
+            status: 'BLE Active',
+            active: true,
           },
           {
             name: 'Dakota Lithium',
             icon: 'shield-outline',
-            status: 'Driver Ready',
-            active: false,
+            status: 'BLE Active',
+            active: true,
           },
         ].map((provider, idx) => (
           <View

@@ -42,12 +42,15 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   ReactNode,
 } from "react";
 
-import { Platform } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
+import * as Linking from "expo-linking";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import { AUTH_COPY } from "../lib/auth/authCopy";
 import type {
   Trip,
   SyncStatus,
@@ -89,7 +92,36 @@ import {
   logLogout,
   logLoginFailed,
   OperatorInfo,
+  rotateSharedAccountPassword as rotateSharedAccountPasswordRequest,
+  type SharedAccountPasswordRotationResult,
 } from "../lib/auth";
+import {
+  getCurrentAccessState,
+  restoreApplePurchase,
+  restoreGooglePurchase,
+  verifyApplePurchase,
+  verifyGooglePurchase,
+} from "../lib/entitlements";
+import {
+  finishEcsProNativePurchase,
+  loadEcsProStoreProduct,
+  restoreEcsProPurchase,
+  startEcsProMonthlyPurchase,
+  type EcsProStoreProduct,
+  type NativePurchaseProof,
+} from "../lib/ecsProPurchase";
+import { resolveEcsAccessState } from '../lib/auth/accessResolver';
+import {
+  consumeAuthTiming,
+  getAppLaunchDurationMs,
+  markAuthTimingStart,
+  recordAuthDiagnostic,
+} from '../lib/auth/authDiagnostics';
+import {
+  canReuseOperatorInfoSnapshot,
+  resolveCachedOperatorAccessSnapshot,
+} from '../lib/auth/offlineAccessPolicy';
+import type { ECSAccessResolution } from '../lib/auth/entitlementTypes';
 import { connectivity, type ConnectivityStatus } from "../lib/connectivity";
 import { offlineQueue } from "../lib/offlineQueue";
 import { dispatchQueue } from "../lib/dispatchQueueStore";
@@ -100,32 +132,36 @@ import { initializeSyncProcessors } from '../lib/syncProcessors';
 import { loadoutSyncQueue } from '../lib/loadoutSyncQueue';
 import { hydrateDashboardState, hydrateCustomPresets, flushDashboardWrites } from '../lib/dashboardStore';
 import { connectivityIntelService } from '../lib/connectivityIntelService';
+import { waitForExpeditionStateHydration } from '../lib/expeditionStateStore';
+import { createPersistedKeyValueCache } from '../lib/keyValuePersistence';
+import { setupStore } from '../lib/setupStore';
+import { vehicleStore } from '../lib/vehicleStore';
+import { vehicleSetupStore } from '../lib/vehicleSetupStore';
+import { loadoutStore } from '../lib/loadoutStore';
+import { vehicleSpecStore } from '../lib/vehicleSpecStore';
+import { tiresLiftStore } from '../lib/tiresLiftStore';
+import { consumablesStore } from '../lib/consumablesStore';
+import { powerSetupStore } from '../lib/powerSetupStore';
 
 
 
 
 // ── Offline mode persistence key ─────────────────────────────
 const OFFLINE_MODE_KEY = 'ecs_offline_mode';
+const SHELL_ROUTE_KEY = 'last_shell_route_v1';
+const offlineModeCache = createPersistedKeyValueCache('ecs_runtime_flags');
+const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
 
 function getPersistedOfflineMode(): boolean {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(OFFLINE_MODE_KEY) === 'true';
-    }
-  } catch {}
-  return false;
+  return offlineModeCache.get(OFFLINE_MODE_KEY) === 'true';
 }
 
 function setPersistedOfflineMode(value: boolean): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      if (value) {
-        localStorage.setItem(OFFLINE_MODE_KEY, 'true');
-      } else {
-        localStorage.removeItem(OFFLINE_MODE_KEY);
-      }
-    }
-  } catch {}
+  if (value) {
+    offlineModeCache.set(OFFLINE_MODE_KEY, 'true');
+  } else {
+    offlineModeCache.delete(OFFLINE_MODE_KEY);
+  }
 }
 
 async function ensureSlotsSeeded(tripId: string, userId: string | null) {
@@ -138,12 +174,109 @@ interface SessionInfo {
   sessionCreatedAt: string | null;
 }
 
-interface AppState {
+type BillingFlowState =
+  | 'idle'
+  | 'loading_product'
+  | 'purchasing'
+  | 'confirming_access'
+  | 'restore_in_progress'
+  | 'restore_success'
+  | 'restore_failed';
+
+type AuthPhase =
+  | 'restoring'
+  | 'signed_out'
+  | 'signing_in'
+  | 'signed_in_bootstrapping'
+  | 'ready';
+
+function buildDefaultOperatorInfo(email: string | null): OperatorInfo {
+  return {
+    role: 'user',
+    status: 'active',
+    display_name: null,
+    email,
+    exists: false,
+    access_level: 'standard',
+    account_kind: 'standard',
+    entitlement_status: 'free',
+    is_shared_internal: false,
+    is_shared_account: false,
+    internal_account_type: null,
+    is_admin: false,
+    has_full_app_access: false,
+    allow_password_rotation: false,
+    account_note: null,
+    internal_tag: null,
+    can_rotate_shared_password: false,
+    can_revoke_shared_sessions: false,
+    revoke_sessions_supported: false,
+    last_login_at: null,
+    last_seen_at: null,
+    last_seen_platform: null,
+    last_seen_device: null,
+    subscription_provider: null,
+    subscription_product_id: null,
+    subscription_environment: null,
+    current_period_end_at: null,
+    current_period_start_at: null,
+    grace_expires_at: null,
+    revoked_at: null,
+    last_verified_at: null,
+  };
+}
+
+function mapOperatorInfoFromBackend(data: Partial<OperatorInfo>, fallbackEmail: string | null): OperatorInfo {
+  const base = buildDefaultOperatorInfo(fallbackEmail);
+  return {
+    ...base,
+    role: data.role ?? base.role,
+    status: data.status ?? base.status,
+    display_name: data.display_name ?? base.display_name,
+    email: data.email ?? fallbackEmail ?? base.email,
+    exists: data.exists ?? true,
+    access_level: data.access_level ?? base.access_level,
+    account_kind: data.account_kind ?? base.account_kind,
+    entitlement_status: data.entitlement_status ?? base.entitlement_status,
+    is_shared_internal: data.is_shared_internal ?? base.is_shared_internal,
+    is_shared_account: data.is_shared_account ?? base.is_shared_account,
+    internal_account_type: data.internal_account_type ?? base.internal_account_type,
+    is_admin: data.is_admin ?? base.is_admin,
+    has_full_app_access: data.has_full_app_access ?? base.has_full_app_access,
+    allow_password_rotation: data.allow_password_rotation ?? base.allow_password_rotation,
+    account_note: data.account_note ?? base.account_note,
+    internal_tag: data.internal_tag ?? base.internal_tag,
+    can_rotate_shared_password: data.can_rotate_shared_password ?? base.can_rotate_shared_password,
+    can_revoke_shared_sessions: data.can_revoke_shared_sessions ?? base.can_revoke_shared_sessions,
+    revoke_sessions_supported: data.revoke_sessions_supported ?? base.revoke_sessions_supported,
+    last_login_at: data.last_login_at ?? base.last_login_at,
+    last_seen_at: data.last_seen_at ?? base.last_seen_at,
+    last_seen_platform: data.last_seen_platform ?? base.last_seen_platform,
+    last_seen_device: data.last_seen_device ?? base.last_seen_device,
+    subscription_provider: data.subscription_provider ?? base.subscription_provider,
+    subscription_product_id: data.subscription_product_id ?? base.subscription_product_id,
+    subscription_environment: data.subscription_environment ?? base.subscription_environment,
+    current_period_end_at: data.current_period_end_at ?? base.current_period_end_at,
+    current_period_start_at: data.current_period_start_at ?? base.current_period_start_at,
+    grace_expires_at: data.grace_expires_at ?? base.grace_expires_at,
+    revoked_at: data.revoked_at ?? base.revoked_at,
+    last_verified_at: data.last_verified_at ?? base.last_verified_at,
+  };
+}
+
+interface AppContextValue {
   // Auth
   user: any | null;
   authLoading: boolean;
+  authPhase: AuthPhase;
+  startupSessionRestored: boolean;
   operatorInfo: OperatorInfo | null;
+  accessState: ECSAccessResolution | null;
   sessionInfo: SessionInfo;
+  billingFlowState: BillingFlowState;
+  billingError: string | null;
+  ecsProProduct: EcsProStoreProduct | null;
+  authNotice: string | null;
 
   // Bootstrap
   bootstrapError: string | null;
@@ -174,7 +307,6 @@ interface AppState {
   // UI
   loading: boolean;
   dbReady: boolean;
-  toastMsg: string | null;
 
   // Actions
   refreshTrips: () => Promise<void>;
@@ -187,19 +319,33 @@ interface AppState {
   sendPasswordReset: (email: string) => Promise<{ error?: string }>;
   sendCredentialSetupLink: (email: string) => Promise<{ error?: string }>;
   updatePassword: (password: string) => Promise<{ error?: string }>;
+  rotateSharedAccountPassword: (password: string, revokeSessions: boolean) => Promise<SharedAccountPasswordRotationResult>;
+  refreshAccessState: () => Promise<OperatorInfo | null>;
+  loadEcsProProduct: () => Promise<EcsProStoreProduct | null>;
+  purchaseEcsProMonthly: () => Promise<{ success: boolean; cancelled?: boolean; pending?: boolean; error?: string }>;
+  restoreEcsProAccess: () => Promise<{ success: boolean; error?: string }>;
   enterOfflineMode: () => void;
   exitOfflineMode: () => void;
   showToast: (msg: string) => void;
+  consumeAuthNotice: () => string | null;
 }
 
-const AppContext = createContext<AppState>({} as AppState);
+const AppContext = createContext<AppContextValue>({} as AppContextValue);
+const ToastContext = createContext<string | null>(null);
 export const useApp = () => useContext(AppContext);
+export const useToastState = () => useContext(ToastContext);
 
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [signInPending, setSignInPending] = useState(false);
+  const [startupSessionRestored, setStartupSessionRestored] = useState(false);
   const [operatorInfo, setOperatorInfo] = useState<OperatorInfo | null>(null);
+  const [billingFlowState, setBillingFlowState] = useState<BillingFlowState>('idle');
+  const [billingError, setBillingError] = useState<string | null>(null);
+  const [ecsProProduct, setEcsProProduct] = useState<EcsProStoreProduct | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   // Bootstrap error state — non-blocking
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -226,21 +372,119 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [loading, setLoading] = useState(true);
   const [dbReady, setDbReady] = useState(false);
+  const [startupStateHydrated, setStartupStateHydrated] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userRef = useRef<any | null>(null);
+  const operatorInfoRef = useRef<OperatorInfo | null>(null);
+  const accessRefreshAtRef = useRef(0);
   const syncProcessorsInitRef = useRef(false);
+  const signOutIntentRef = useRef(false);
+  const sessionRestoreInFlightRef = useRef(false);
 
   // Keep userRef in sync
   useEffect(() => {
     userRef.current = user;
   }, [user]);
 
+  useEffect(() => {
+    operatorInfoRef.current = operatorInfo;
+  }, [operatorInfo]);
+
+  const consumeAuthNotice = useCallback(() => {
+    const next = authNotice;
+    setAuthNotice(null);
+    return next;
+  }, [authNotice]);
+
+  const accessState = useMemo(
+    () =>
+      user || operatorInfo
+        ? resolveEcsAccessState({
+            operatorInfo,
+            authenticated: !!user,
+            isOnline,
+          })
+        : null,
+    [isOnline, operatorInfo, user],
+  );
+
+  const authPhase = useMemo<AuthPhase>(() => {
+    if (authLoading || !startupStateHydrated) {
+      return 'restoring';
+    }
+
+    if (signInPending) {
+      return 'signing_in';
+    }
+
+    if (
+      user &&
+      (
+        loading ||
+        (!offlineMode && connectivity.isOnline() && accessState?.accessState === 'unknown')
+      )
+    ) {
+      return 'signed_in_bootstrapping';
+    }
+
+    if (user || offlineMode) {
+      return 'ready';
+    }
+
+    return 'signed_out';
+  }, [accessState?.accessState, authLoading, loading, offlineMode, signInPending, startupStateHydrated, user]);
+
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToastMsg(null), 3000);
+  }, []);
+
+  const clearAuthenticatedRuntimeState = useCallback((options?: {
+    clearSession?: boolean;
+    clearOfflineMode?: boolean;
+  }) => {
+    accessRefreshAtRef.current = 0;
+    sessionRestoreInFlightRef.current = false;
+    setSignInPending(false);
+
+    if (options?.clearSession !== false) {
+      sessionStore.clearSession();
+    }
+
+    shellRouteCache.delete(SHELL_ROUTE_KEY);
+    void shellRouteCache.flush();
+
+    cancelAutoSync();
+    realtimeSync.destroy();
+    syncActionQueue.stopAutoProcess();
+    loadoutSyncQueue.stopAutoProcess();
+
+    setUser(null);
+    setOperatorInfo(null);
+    setSyncStatus("offline");
+    setLastSyncAt(null);
+    setLastSyncResult(null);
+    setBootstrapError(null);
+    setBillingFlowState('idle');
+    setBillingError(null);
+    setEcsProProduct(null);
+    setActiveTrip(null);
+    setTrips([]);
+    setLoadItems([]);
+    setRiskScore(null);
+    setFuelWaterLogs([]);
+    setLoadMapSlots([]);
+    setWaypoints([]);
+    setUserSettings(null);
+    setDirtyCount(0);
+
+    if (options?.clearOfflineMode !== false) {
+      setOfflineMode(false);
+      setPersistedOfflineMode(false);
+    }
   }, []);
 
   // ── Offline mode actions ────────────────────────────────────
@@ -257,6 +501,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── Initialize IndexedDB + migrate from localStorage + hydrate dashboard ────
   useEffect(() => {
     (async () => {
+      try {
+        await Promise.all([
+          setupStore.waitForHydration(),
+          vehicleSetupStore.waitForHydration(),
+          sessionStore.waitForHydration(),
+          offlineModeCache.waitForHydration(),
+          vehicleStore.waitForHydration(),
+          loadoutStore.waitForHydration(),
+          vehicleSpecStore.waitForHydration(),
+          tiresLiftStore.waitForHydration(),
+          consumablesStore.waitForHydration(),
+          powerSetupStore.waitForHydration(),
+        ]);
+        if (__DEV__) {
+          console.log('[ECS] startup stores hydrated', {
+            persistedOfflineMode: getPersistedOfflineMode(),
+            setupComplete: setupStore.isComplete(),
+            sessionValidity: sessionStore.checkSessionValidity(),
+          });
+        }
+        setOfflineMode(getPersistedOfflineMode());
+      } catch (e) {
+        console.warn('[ECS] Startup state hydration failed (non-fatal):', e);
+      } finally {
+        setStartupStateHydrated(true);
+      }
+
       const ready = await isDBReady();
       setDbReady(ready);
 
@@ -274,6 +545,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await Promise.all([
           hydrateDashboardState(),
           hydrateCustomPresets(),
+          waitForExpeditionStateHydration(),
         ]);
         console.log('[ECS] Dashboard state hydrated from persistent storage');
       } catch (e) {
@@ -287,7 +559,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       setLoading(false);
     })();
-  }, []);
+  }, [clearAuthenticatedRuntimeState]);
 
 
   // ── Connectivity monitoring ─────────────────────────────────
@@ -570,22 +842,74 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // CRITICAL: Only check session. Never redirect based on data fetch failures.
   // NEW: Enforce 30-day session expiry and handle offline with stored session.
   useEffect(() => {
+    if (!startupStateHydrated) return;
+
     if (!isSupabaseConfigured) {
+      recordAuthDiagnostic('auth_session_restore_failed', {
+        entry_mode: 'cold_launch',
+        result: 'failure',
+        failure_category: 'provider_unavailable',
+        duration_ms: getAppLaunchDurationMs(),
+        network_state: connectivity.isOnline() ? 'online' : 'offline',
+        metadata: { phase: 'startup_auth_init', reason: 'supabase_not_configured' },
+      });
       setUser(null);
+      setSignInPending(false);
       setAuthLoading(false);
       return;
     }
 
+    sessionRestoreInFlightRef.current = true;
+    markAuthTimingStart('auth_session_restore');
+    recordAuthDiagnostic('auth_session_restore_started', {
+      entry_mode: 'cold_launch',
+      result: 'started',
+      network_state: connectivity.isOnline() ? 'online' : 'offline',
+      metadata: {
+        hasOfflineSession: sessionStore.checkSessionValidity() === 'valid',
+        keepSignedIn: sessionStore.getPreferences().keepSignedIn,
+      },
+    });
+
     // Step 0: Check session store validity BEFORE Supabase session check
     const sessionValidity = sessionStore.checkSessionValidity();
+    const hasPersistentSession = sessionValidity === 'valid';
+    const hasTransientRuntimeSession =
+      sessionValidity === 'no_preference' && sessionStore.hasTransientRuntimeSession();
     console.log('[Auth] Session store validity:', sessionValidity);
+    if (__DEV__) {
+      console.log('[Auth] startup auth init snapshot', {
+        isOnline: connectivity.isOnline(),
+        persistedOfflineMode: getPersistedOfflineMode(),
+        setupComplete: setupStore.isComplete(),
+        lastUserId: sessionStore.getPreferences().lastUserId,
+      });
+    }
 
     if (sessionValidity === 'expired') {
       // 30-day expiry has passed — force re-login
       console.log('[Auth] 30-day session expired — clearing session');
-      sessionStore.clearSession();
+      sessionRestoreInFlightRef.current = false;
+      recordAuthDiagnostic('auth_session_restore_failed', {
+        entry_mode: 'remembered_session',
+        result: 'failure',
+        failure_category: 'session_expired',
+        duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+        network_state: connectivity.isOnline() ? 'online' : 'offline',
+        metadata: { phase: 'startup_auth_init', sessionValidity },
+      });
+      recordAuthDiagnostic('auth_reauthentication_required', {
+        entry_mode: 'remembered_session',
+        result: 'failure',
+        failure_category: 'session_expired',
+        network_state: connectivity.isOnline() ? 'online' : 'offline',
+      });
+      setAuthNotice(
+        connectivity.isOnline() ? AUTH_COPY.session.expired : AUTH_COPY.session.reconnect
+      );
+      setStartupSessionRestored(false);
+      clearAuthenticatedRuntimeState();
       supabase.auth.signOut().catch(() => {});
-      setUser(null);
       setAuthLoading(false);
       return;
     }
@@ -595,36 +919,119 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const currentUser = session?.user || null;
 
       if (currentUser) {
-        // Valid Supabase session found — extend expiry if "keep signed in"
+        if (!hasPersistentSession && !hasTransientRuntimeSession) {
+          console.log('[Auth] Clearing non-persistent provider session on startup', {
+            sessionValidity,
+          });
+          sessionRestoreInFlightRef.current = false;
+          recordAuthDiagnostic('auth_session_restore_succeeded', {
+            entry_mode: 'cold_launch',
+            result: 'success',
+            duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+            network_state: connectivity.isOnline() ? 'online' : 'offline',
+            access_state: 'signed_out',
+            metadata: {
+              restoredUser: false,
+              clearedNonPersistentProviderSession: true,
+              sessionValidity,
+            },
+          });
+          setStartupSessionRestored(false);
+          clearAuthenticatedRuntimeState();
+          supabase.auth.signOut().catch(() => {});
+          setAuthLoading(false);
+          return;
+        }
+
+        // Valid Supabase session found — extend expiry if "keep signed in".
+        // We also honor a fresh non-persistent runtime session that was just
+        // created by a live sign-in so route remounts do not bounce back to login.
+        sessionRestoreInFlightRef.current = false;
+        markAuthTimingStart('auth_success_to_first_frame');
+        recordAuthDiagnostic('auth_session_restore_succeeded', {
+          entry_mode: hasPersistentSession ? 'remembered_session' : 'active_session',
+          result: 'success',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          access_state: 'authenticated',
+          metadata: {
+            restoredUser: true,
+            sessionValidity,
+            transientRuntimeSession: hasTransientRuntimeSession,
+          },
+        });
         sessionStore.extendExpiry();
+        setSignInPending(false);
+        setStartupSessionRestored(true);
+        if (!connectivity.isOnline()) {
+          setOfflineMode(true);
+          setPersistedOfflineMode(true);
+        }
         setUser(currentUser);
         setAuthLoading(false);
 
         // Step 2: Check operator status in background (non-blocking)
-        checkOperatorStatus(currentUser.id).then((info) => {
-          if (info.status === 'suspended') {
+        getCurrentAccessState().then((info) => {
+          if ('error' in info) {
+            return checkOperatorStatus(currentUser.id);
+          }
+          return info;
+        }).then((info) => {
+          const mapped = mapOperatorInfoFromBackend(info as Partial<OperatorInfo>, currentUser.email || null);
+          if (mapped.status === 'suspended') {
             supabase.auth.signOut();
-            sessionStore.clearSession();
-            setUser(null);
-            setOperatorInfo(null);
+            clearAuthenticatedRuntimeState();
           } else {
-            setOperatorInfo(info);
+            setOperatorInfo(mapped);
           }
         }).catch((err) => {
           // NEVER treat this as auth failure
           console.warn('[Auth] Operator status check failed (non-blocking):', err);
-          setOperatorInfo({ role: 'operator', status: 'active', display_name: null, email: currentUser.email || null, exists: false });
+          if (!connectivity.isOnline()) {
+            setOfflineMode(true);
+            setPersistedOfflineMode(true);
+          }
+          const cached = resolveCachedOperatorAccessSnapshot({
+            snapshot: operatorInfoRef.current,
+            currentUserEmail: currentUser.email || null,
+            isOnline: connectivity.isOnline(),
+          });
+          setOperatorInfo(
+            cached ?? (connectivity.isOnline() ? buildDefaultOperatorInfo(currentUser.email || null) : null)
+          );
         });
       } else {
         // No Supabase session — check if we have a stored offline session
-        if (!connectivity.isOnline() && sessionStore.hasOfflineSession()) {
+        if (!connectivity.isOnline() && hasPersistentSession) {
           // Offline with stored session — enter offline mode automatically
           console.log('[Auth] Offline with stored session — entering offline mode');
+          sessionRestoreInFlightRef.current = false;
+          recordAuthDiagnostic('auth_session_restore_succeeded', {
+            entry_mode: 'remembered_session',
+            result: 'success',
+            duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+            network_state: 'offline',
+            access_state: 'offline_mode',
+            metadata: { restoredOfflineSession: true },
+          });
+          setStartupSessionRestored(false);
+          setSignInPending(false);
           setOfflineMode(true);
           setPersistedOfflineMode(true);
           setUser(null);
           setAuthLoading(false);
         } else {
+          sessionRestoreInFlightRef.current = false;
+          recordAuthDiagnostic('auth_session_restore_succeeded', {
+            entry_mode: 'cold_launch',
+            result: 'success',
+            duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+            network_state: connectivity.isOnline() ? 'online' : 'offline',
+            access_state: 'signed_out',
+            metadata: { restoredUser: false },
+          });
+          setStartupSessionRestored(false);
+          setSignInPending(false);
           setUser(null);
           setAuthLoading(false);
         }
@@ -633,43 +1040,141 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Session check itself failed — check offline fallback
       console.warn('[Auth] Session check failed:', err);
 
-      if (!connectivity.isOnline() && sessionStore.hasOfflineSession()) {
+      if (!connectivity.isOnline() && hasPersistentSession) {
         // Network error but we have a stored session — allow offline access
         console.log('[Auth] Session check failed but offline session exists — entering offline mode');
         setOfflineMode(true);
         setPersistedOfflineMode(true);
+        recordAuthDiagnostic('auth_session_restore_succeeded', {
+          entry_mode: 'remembered_session',
+          result: 'success',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: 'offline',
+          access_state: 'offline_mode',
+          metadata: { restoredOfflineSession: true, recoveredFromRestoreFailure: true },
+        });
+        setStartupSessionRestored(false);
+      } else if (connectivity.isOnline()) {
+        recordAuthDiagnostic('auth_session_restore_failed', {
+          entry_mode: 'cold_launch',
+          result: 'failure',
+          failure_category: 'session_restore_failed',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: 'online',
+          metadata: { phase: 'session_check', error: err instanceof Error ? err.message : String(err ?? 'unknown') },
+        });
+        setAuthNotice('Unable to verify your session right now. Please try again.');
+      } else {
+        setAuthNotice(AUTH_COPY.session.reconnect);
       }
 
-      setUser(null);
+      sessionRestoreInFlightRef.current = false;
+      setStartupSessionRestored(false);
+      clearAuthenticatedRuntimeState({
+        clearSession: !(!connectivity.isOnline() && hasPersistentSession),
+        clearOfflineMode: connectivity.isOnline(),
+      });
       setAuthLoading(false);
     });
 
     // Step 3: Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       const currentUser = session?.user || null;
+      const runtimeSessionValidity = sessionStore.checkSessionValidity();
+      const hasTransientRuntimeSession =
+        runtimeSessionValidity === 'no_preference' && sessionStore.hasTransientRuntimeSession();
+
+      if (
+        event === 'INITIAL_SESSION' &&
+        currentUser &&
+        runtimeSessionValidity !== 'valid' &&
+        !hasTransientRuntimeSession
+      ) {
+        console.log('[Auth] Ignoring non-persistent initial provider session', {
+          sessionValidity: runtimeSessionValidity,
+        });
+        setStartupSessionRestored(false);
+        clearAuthenticatedRuntimeState();
+        supabase.auth.signOut().catch(() => {});
+        setAuthLoading(false);
+        return;
+      }
+
+      if (event === 'INITIAL_SESSION') {
+        setStartupSessionRestored(!!currentUser);
+      } else if (event === 'SIGNED_IN') {
+        setStartupSessionRestored(false);
+      } else if (event === 'SIGNED_OUT') {
+        setStartupSessionRestored(false);
+      }
+      setSignInPending(false);
       setUser(currentUser);
       setAuthLoading(false);
 
       if (currentUser) {
+        signOutIntentRef.current = false;
+        setAuthNotice(null);
+        if (!connectivity.isOnline()) {
+          setOfflineMode(true);
+          setPersistedOfflineMode(true);
+        }
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+          markAuthTimingStart('auth_success_to_first_frame');
+        }
         // Extend session on any auth state change (token refresh, etc.)
         sessionStore.extendExpiry();
 
         // Background operator check — non-blocking
-        checkOperatorStatus(currentUser.id).then((info) => {
-          setOperatorInfo(info);
+        getCurrentAccessState().then((info) => {
+          if ('error' in info) {
+            return checkOperatorStatus(currentUser.id);
+          }
+          return info;
+        }).then((info) => {
+          setOperatorInfo(mapOperatorInfoFromBackend(info as Partial<OperatorInfo>, currentUser.email || null));
         }).catch(() => {
           // Silently fail — never redirect
-          setOperatorInfo({ role: 'operator', status: 'active', display_name: null, email: currentUser.email || null, exists: false });
+          if (!connectivity.isOnline()) {
+            setOfflineMode(true);
+            setPersistedOfflineMode(true);
+          }
+          const cached = resolveCachedOperatorAccessSnapshot({
+            snapshot: operatorInfoRef.current,
+            currentUserEmail: currentUser.email || null,
+            isOnline: connectivity.isOnline(),
+          });
+          setOperatorInfo(
+            cached ?? (connectivity.isOnline() ? buildDefaultOperatorInfo(currentUser.email || null) : null)
+          );
         });
       } else {
-        setOperatorInfo(null);
+        if (event === 'SIGNED_OUT') {
+          if (signOutIntentRef.current) {
+            signOutIntentRef.current = false;
+          } else {
+            recordAuthDiagnostic('auth_reauthentication_required', {
+              entry_mode: 'app_resume',
+              result: 'failure',
+              failure_category: 'session_expired',
+              network_state: connectivity.isOnline() ? 'online' : 'offline',
+              metadata: { sourceEvent: event },
+            });
+            setAuthNotice(
+              connectivity.isOnline() ? AUTH_COPY.session.reauth : AUTH_COPY.session.reconnect
+            );
+          }
+        }
+        clearAuthenticatedRuntimeState({
+          clearSession: event === 'SIGNED_OUT',
+          clearOfflineMode: true,
+        });
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [clearAuthenticatedRuntimeState, startupStateHydrated]);
 
 
   // ── Set active trip ─────────────────────────────────────────
@@ -790,8 +1295,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if (user) {
-      // Clear offline mode when user logs in
-      if (offlineMode) {
+      // Clear offline mode once authenticated connectivity has returned.
+      if (offlineMode && connectivity.isOnline()) {
         setOfflineMode(false);
         setPersistedOfflineMode(false);
       }
@@ -844,12 +1349,135 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelAutoSync();
     };
-  }, [user, runBootstrap, refreshTrips, refreshActiveTrip, refreshDirtyCount]);
+  }, [offlineMode, refreshActiveTrip, refreshDirtyCount, refreshTrips, runBootstrap, user]);
 
 
   // ============================================================
   // AUTH ACTIONS
   // ============================================================
+
+  const refreshAccessState = useCallback(async (): Promise<OperatorInfo | null> => {
+    const currentUser = user;
+    if (!currentUser) {
+      setOperatorInfo(null);
+      return null;
+    }
+
+    try {
+      const accessState = await getCurrentAccessState();
+      if (!('error' in accessState)) {
+        const mapped = mapOperatorInfoFromBackend(accessState, currentUser.email || null);
+        setOperatorInfo(mapped);
+        return mapped;
+      }
+
+      const fallback = await checkOperatorStatus(currentUser.id);
+      if (fallback.exists === true) {
+        const mappedFallback = mapOperatorInfoFromBackend(fallback, currentUser.email || null);
+        setOperatorInfo(mappedFallback);
+        return mappedFallback;
+      }
+
+      if (canReuseOperatorInfoSnapshot({
+        snapshot: operatorInfoRef.current,
+        currentUserEmail: currentUser.email || null,
+        isOnline: connectivity.isOnline(),
+      })) {
+        const cached = resolveCachedOperatorAccessSnapshot({
+          snapshot: operatorInfoRef.current,
+          currentUserEmail: currentUser.email || null,
+          isOnline: connectivity.isOnline(),
+        });
+        if (cached) {
+          setOperatorInfo(cached);
+          return cached;
+        }
+      }
+
+      const safeDefault = buildDefaultOperatorInfo(currentUser.email || null);
+      setOperatorInfo(safeDefault);
+      return safeDefault;
+    } catch (err) {
+      console.warn('[Auth] Access state refresh failed (non-blocking):', err);
+      if (canReuseOperatorInfoSnapshot({
+        snapshot: operatorInfoRef.current,
+        currentUserEmail: currentUser.email || null,
+        isOnline: connectivity.isOnline(),
+      })) {
+        const cached = resolveCachedOperatorAccessSnapshot({
+          snapshot: operatorInfoRef.current,
+          currentUserEmail: currentUser.email || null,
+          isOnline: connectivity.isOnline(),
+        });
+        if (cached) {
+          setOperatorInfo(cached);
+          return cached;
+        }
+      }
+
+      const safeDefault = buildDefaultOperatorInfo(currentUser.email || null);
+      setOperatorInfo(safeDefault);
+      return safeDefault;
+    }
+  }, [user]);
+
+  const refreshAccessStateIfNeeded = useCallback(async (force = false): Promise<OperatorInfo | null> => {
+    const currentUser = userRef.current;
+    if (!currentUser || !connectivity.isOnline()) {
+      return operatorInfoRef.current;
+    }
+
+    const now = Date.now();
+    if (!force && now - accessRefreshAtRef.current < 15000) {
+      return operatorInfoRef.current;
+    }
+
+    accessRefreshAtRef.current = now;
+    return refreshAccessState();
+  }, [refreshAccessState]);
+
+  useEffect(() => {
+    if (!user || !isOnline) return;
+    refreshAccessStateIfNeeded().catch(() => {});
+  }, [isOnline, refreshAccessStateIfNeeded, user]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (nextState !== 'active') return;
+      refreshAccessStateIfNeeded(true).catch(() => {});
+    });
+
+    return () => subscription.remove();
+  }, [refreshAccessStateIfNeeded]);
+
+  const verifyPurchaseProofWithBackend = useCallback(async (proof: NativePurchaseProof, restore: boolean) => {
+    if (proof.platform === 'ios') {
+      if (!proof.receiptData) {
+        return { error: 'Purchase receipt is unavailable for verification.' } as const;
+      }
+      return restore
+        ? await restoreApplePurchase(proof.receiptData)
+        : await verifyApplePurchase(proof.receiptData);
+    }
+
+    if (!proof.purchaseToken) {
+      return { error: 'Purchase token is unavailable for verification.' } as const;
+    }
+
+    return restore
+      ? await restoreGooglePurchase({
+          purchaseToken: proof.purchaseToken,
+          packageName: proof.packageName ?? undefined,
+          productId: proof.productId,
+          subscriptionId: proof.subscriptionId ?? undefined,
+        })
+      : await verifyGooglePurchase({
+          purchaseToken: proof.purchaseToken,
+          packageName: proof.packageName ?? undefined,
+          productId: proof.productId,
+          subscriptionId: proof.subscriptionId ?? undefined,
+        });
+  }, []);
 
   /**
    * Sign in with email + password.
@@ -863,28 +1491,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (email: string, password: string, keepSignedIn: boolean = true): Promise<{ error?: string; suspended?: boolean }> => {
     // Check connectivity
     if (!connectivity.isOnline()) {
+      console.log('[Auth] Login attempt failure', {
+        email: email.trim().toLowerCase(),
+        keepSignedIn,
+        reason: 'offline',
+      });
       return { error: "You're offline. Check your connection and try again." };
     }
 
     try {
+      setSignInPending(true);
+      console.log('[Auth] Login attempt start', {
+        email: email.trim().toLowerCase(),
+        keepSignedIn,
+      });
       // Step 1: Authenticate with Supabase
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
         if (error.message === 'Supabase not configured') {
+          setSignInPending(false);
+          console.log('[Auth] Login attempt failure', {
+            email: email.trim().toLowerCase(),
+            keepSignedIn,
+            reason: 'supabase_not_configured',
+          });
           return { error: "Cloud services are initializing. Try again in a moment." };
         }
         // Fire-and-forget audit log
         logLoginFailed(email).catch(() => {});
+        setSignInPending(false);
+        console.log('[Auth] Login attempt failure', {
+          email: email.trim().toLowerCase(),
+          keepSignedIn,
+          reason: sanitizeAuthError(error.message),
+        });
         return { error: sanitizeAuthError(error.message) };
       }
 
       if (!data.user) {
+        setSignInPending(false);
+        console.log('[Auth] Login attempt failure', {
+          email: email.trim().toLowerCase(),
+          keepSignedIn,
+          reason: 'missing_user',
+        });
         return { error: "Couldn't sign in. Please try again." };
       }
 
       // Step 2: Save session preferences to session store
+      setStartupSessionRestored(false);
       sessionStore.saveLoginPreferences(keepSignedIn, data.user.id, email);
+      sessionStore.extendExpiry();
+      setAuthNotice(null);
       console.log('[Auth] Session preferences saved:', { keepSignedIn, userId: data.user.id });
 
       // Step 3: Post-login check (with timeout — NEVER blocks)
@@ -893,48 +1552,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (postResult.suspended) {
           await supabase.auth.signOut();
-          sessionStore.clearSession();
-          setUser(null);
-          setOperatorInfo(null);
+          clearAuthenticatedRuntimeState();
           return {
             error: "Your account has been suspended. Contact your administrator.",
             suspended: true,
           };
         }
 
-        setOperatorInfo({
-          role: postResult.role,
-          status: postResult.status,
-          display_name: null,
-          email,
-          exists: true,
-        });
+        setOperatorInfo(mapOperatorInfoFromBackend({ ...postResult, exists: true }, email));
       } catch (postErr) {
         // Post-login failed — that's OK, login still succeeds
         console.warn('[Auth] Post-login check failed (non-blocking):', postErr);
         setOperatorInfo({
-          role: 'operator',
-          status: 'active',
-          display_name: null,
-          email,
-          exists: false,
+          ...buildDefaultOperatorInfo(email),
         });
       }
 
-      // Step 4: Clear offline mode
+      // Step 4: Promote the authenticated session immediately so routing does not
+      // wait on a later provider callback before leaving the login surface.
+      setSignInPending(false);
+      setUser(data.user);
+      setAuthLoading(false);
+
+      // Step 5: Clear offline mode
       setOfflineMode(false);
       setPersistedOfflineMode(false);
 
-      // Step 5: Return success — navigation happens in the calling component
+      // Step 6: Return success — root auth navigation will take over.
+      console.log('[Auth] Login attempt success', {
+        email: email.trim().toLowerCase(),
+        keepSignedIn,
+        userId: data.user.id,
+      });
       return {};
     } catch (err: any) {
       const msg = err?.message || 'Unknown error';
+      setSignInPending(false);
       if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
+        console.log('[Auth] Login attempt failure', {
+          email: email.trim().toLowerCase(),
+          keepSignedIn,
+          reason: 'network_error',
+        });
         return { error: "Network error. Check your connection and try again." };
       }
+      console.log('[Auth] Login attempt failure', {
+        email: email.trim().toLowerCase(),
+        keepSignedIn,
+        reason: sanitizeAuthError(msg),
+      });
       return { error: sanitizeAuthError(msg) };
     }
-  }, []);
+  }, [clearAuthenticatedRuntimeState]);
 
 
 
@@ -960,6 +1629,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     const userId = user?.id;
+    signOutIntentRef.current = true;
+    setSignInPending(false);
+    setStartupSessionRestored(false);
+    setAuthNotice(null);
+    console.log('[Auth] Sign-out start', {
+      userId: userId ?? null,
+      isOnline: connectivity.isOnline(),
+    });
+    recordAuthDiagnostic('auth_logout_started', {
+      entry_mode: 'logout_return',
+      result: 'started',
+      network_state: connectivity.isOnline() ? 'online' : 'offline',
+      access_state: accessState?.accessState ?? (userId ? 'authenticated' : 'signed_out'),
+    });
 
     if (userId) {
       await logLogout(userId).catch(() => {});
@@ -980,33 +1663,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // be lost (acceptable since the user is explicitly signing out).
     }
 
-    // Clear session store (30-day expiry, keep-signed-in preference, etc.)
-    sessionStore.clearSession();
-
-    cancelAutoSync();
-
-    // Stop realtime sync on logout
-    realtimeSync.destroy();
-
-    // Stop sync action queue auto-processing on logout
-    // (keeps queued actions persisted for next login, but stops processing)
-    syncActionQueue.stopAutoProcess();
-
-    // Stop loadout reconciliation sync queue on logout
-    loadoutSyncQueue.stopAutoProcess();
-
-
     if (isSupabaseConfigured) await supabase.auth.signOut();
-    setUser(null);
-    setOperatorInfo(null);
-    setSyncStatus("offline");
-    setLastSyncResult(null);
-    setBootstrapError(null);
-
-    // Clear offline mode on logout
-    setOfflineMode(false);
-    setPersistedOfflineMode(false);
-  }, [user]);
+    clearAuthenticatedRuntimeState();
+    console.log('[Auth] Sign-out success', {
+      userId: userId ?? null,
+      isOnline: connectivity.isOnline(),
+    });
+    recordAuthDiagnostic('auth_logout_completed', {
+      entry_mode: 'logout_return',
+      result: 'completed',
+      network_state: connectivity.isOnline() ? 'online' : 'offline',
+      access_state: 'signed_out',
+    });
+  }, [accessState?.accessState, clearAuthenticatedRuntimeState, user]);
 
 
 
@@ -1020,7 +1689,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/create-access-key` : undefined,
+      redirectTo: Linking.createURL('/create-access-key', {
+        queryParams: { mode: 'reset' },
+      }),
     });
 
     if (error) return { error: sanitizeAuthError(error.message) };
@@ -1037,9 +1708,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { error: "You're offline. An internet connection is required." };
     }
 
-    const redirectTo = typeof window !== 'undefined'
-      ? `${window.location.origin}/create-access-key`
-      : undefined;
+    const redirectTo = Linking.createURL('/create-access-key', {
+      queryParams: { mode: 'activate' },
+    });
 
     const result = await sendSetupLink(email, redirectTo);
     return result;
@@ -1059,61 +1730,208 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     return {};
   }, [user]);
+
+  const rotateSharedAccountPassword = useCallback(async (
+    password: string,
+    revokeSessions: boolean,
+  ): Promise<SharedAccountPasswordRotationResult> => {
+    if (!isSupabaseConfigured) {
+      return {
+        success: false,
+        sessions_revoked: false,
+        revoke_supported: false,
+        error: 'Cloud services are not configured.',
+      };
+    }
+
+    if (!user) {
+      return {
+        success: false,
+        sessions_revoked: false,
+        revoke_supported: false,
+        error: 'Sign in to manage this account.',
+      };
+    }
+
+    const result = await rotateSharedAccountPasswordRequest(password, revokeSessions);
+    if (result.success && user.id) {
+      logPasswordUpdate(user.id).catch(() => {});
+    }
+    return result;
+  }, [user]);
+
+  const loadProduct = loadEcsProStoreProduct;
+
+  const loadEcsProProductForUser = useCallback(async (): Promise<EcsProStoreProduct | null> => {
+    setBillingError(null);
+    setBillingFlowState('loading_product');
+    try {
+      const product = await loadProduct();
+      setEcsProProduct(product);
+      setBillingFlowState('idle');
+      return product;
+    } catch (err: any) {
+      const message = err?.message || 'ECS Pro product details are unavailable right now.';
+      setBillingError(message);
+      setBillingFlowState('idle');
+      return null;
+    }
+  }, [loadProduct]);
+
+  const purchaseEcsProMonthly = useCallback(async (): Promise<{ success: boolean; cancelled?: boolean; pending?: boolean; error?: string }> => {
+    if (!user) {
+      return { success: false, error: 'Sign in to your ECS account before purchasing ECS Pro.' };
+    }
+
+    setBillingError(null);
+    setBillingFlowState('purchasing');
+
+    try {
+      const result = await startEcsProMonthlyPurchase();
+
+      if (result.state === 'cancelled') {
+        setBillingFlowState('idle');
+        return {
+          success: false,
+          cancelled: true,
+          error: result.message || 'Purchase cancelled.',
+        };
+      }
+
+      if (result.state === 'pending' || !result.proof) {
+        setBillingFlowState('idle');
+        return {
+          success: false,
+          pending: true,
+          error: result.message || 'Purchase is pending confirmation.',
+        };
+      }
+
+      setBillingFlowState('confirming_access');
+      const verification = await verifyPurchaseProofWithBackend(result.proof, false);
+      if ('error' in verification) {
+        const message = verification.error || 'Purchase verification failed.';
+        await refreshAccessState().catch(() => {});
+        setBillingError(message);
+        setBillingFlowState('idle');
+        return { success: false, error: message };
+      }
+
+      await finishEcsProNativePurchase(result.proof).catch(() => {});
+      await refreshAccessState();
+      setBillingFlowState('idle');
+      return { success: true };
+    } catch (err: any) {
+      const message = err?.message || 'Unable to start the ECS Pro purchase right now.';
+      setBillingError(message);
+      setBillingFlowState('idle');
+      return { success: false, error: message };
+    }
+  }, [refreshAccessState, user, verifyPurchaseProofWithBackend]);
+
+  const restoreEcsProAccess = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
+    if (!user) {
+      return { success: false, error: 'Sign in to the ECS account that should receive restored access before restoring purchases.' };
+    }
+
+    setBillingError(null);
+    setBillingFlowState('restore_in_progress');
+
+    try {
+      const restored = await restoreEcsProPurchase();
+      if (restored.state !== 'purchased' || !restored.proof) {
+        const message = restored.message || 'No ECS Pro purchase was available to restore.';
+        setBillingError(message);
+        setBillingFlowState('restore_failed');
+        return { success: false, error: message };
+      }
+
+      const verification = await verifyPurchaseProofWithBackend(restored.proof, true);
+      if ('error' in verification) {
+        const message = verification.error || 'Restore verification failed.';
+        await refreshAccessState().catch(() => {});
+        setBillingError(message);
+        setBillingFlowState('restore_failed');
+        return { success: false, error: message };
+      }
+
+      await refreshAccessState();
+      setBillingFlowState('restore_success');
+      return { success: true };
+    } catch (err: any) {
+      const message = err?.message || 'Unable to restore ECS Pro access right now.';
+      setBillingError(message);
+      setBillingFlowState('restore_failed');
+      return { success: false, error: message };
+    }
+  }, [refreshAccessState, user, verifyPurchaseProofWithBackend]);
   // ── Compute session info for UI ──────────────────────────────
-  const sessionInfo: SessionInfo = React.useMemo(() => {
-    const prefs = sessionStore.getPreferences();
-    return {
-      keepSignedIn: prefs.keepSignedIn,
-      expiryLabel: sessionStore.getRemainingTimeLabel(),
-      sessionCreatedAt: prefs.sessionCreatedAt,
-    };
-  }, [user]); // Recompute when user changes (login/logout)
+  const sessionPrefs = sessionStore.getPreferences();
+  const sessionInfo: SessionInfo = {
+    keepSignedIn: sessionPrefs.keepSignedIn,
+    expiryLabel: sessionStore.getRemainingTimeLabel(),
+    sessionCreatedAt: sessionPrefs.sessionCreatedAt,
+  };
 
   return (
-    <AppContext.Provider
-      value={{
-        user,
-        authLoading,
-        operatorInfo,
-        sessionInfo,
-        bootstrapError,
-        retryBootstrap,
-        isOnline,
-        connectivityStatus,
-        offlineMode,
-        queueSize,
-        syncStatus,
-        dirtyCount,
-        lastSyncAt,
-        lastSyncResult,
-        activeTrip,
-        trips,
-        loadItems,
-        riskScore,
-        fuelWaterLogs,
-        loadMapSlots,
-        waypoints,
-        userSettings,
-        loading,
-        dbReady,
-        toastMsg,
-        refreshTrips,
-        refreshActiveTrip,
-        setActiveTripId,
-        triggerSync,
-        signIn,
-        signUp,
-        signOut,
-        sendPasswordReset,
-        sendCredentialSetupLink,
-        updatePassword,
-        enterOfflineMode,
-        exitOfflineMode,
-        showToast,
-      }}
-    >
-      {children}
-    </AppContext.Provider>
+    <ToastContext.Provider value={toastMsg}>
+      <AppContext.Provider
+        value={{
+          user,
+          authLoading,
+          authPhase,
+          startupSessionRestored,
+          operatorInfo,
+          accessState,
+          sessionInfo,
+          billingFlowState,
+          billingError,
+          ecsProProduct,
+          authNotice,
+          bootstrapError,
+          retryBootstrap,
+          isOnline,
+          connectivityStatus,
+          offlineMode,
+          queueSize,
+          syncStatus,
+          dirtyCount,
+          lastSyncAt,
+          lastSyncResult,
+          activeTrip,
+          trips,
+          loadItems,
+          riskScore,
+          fuelWaterLogs,
+          loadMapSlots,
+          waypoints,
+          userSettings,
+          loading,
+          dbReady,
+          refreshTrips,
+          refreshActiveTrip,
+          setActiveTripId,
+          triggerSync,
+          signIn,
+          signUp,
+          signOut,
+          sendPasswordReset,
+          sendCredentialSetupLink,
+          updatePassword,
+          rotateSharedAccountPassword,
+          refreshAccessState,
+          loadEcsProProduct: loadEcsProProductForUser,
+          purchaseEcsProMonthly,
+          restoreEcsProAccess,
+          enterOfflineMode,
+          exitOfflineMode,
+          showToast,
+          consumeAuthNotice,
+        }}
+      >
+        {children}
+      </AppContext.Provider>
+    </ToastContext.Provider>
   );
 }
 

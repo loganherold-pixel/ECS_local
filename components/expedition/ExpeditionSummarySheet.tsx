@@ -69,7 +69,7 @@ export default function ExpeditionSummarySheet({ visible, record, onDismiss, onV
         Animated.timing(slideAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, fadeAnim, slideAnim]);
 
   const handleDismiss = useCallback(() => {
     // Guard: prevent double-dismiss (e.g., backdrop tap + button tap simultaneously)

@@ -36,6 +36,7 @@ import {
 import DebriefWizard from '../../components/intelligence/DebriefWizard';
 import AARView from '../../components/intelligence/AARView';
 import TrendsView from '../../components/intelligence/TrendsView';
+import PremiumAccessGate from '../../components/premium/PremiumAccessGate';
 
 
 
@@ -132,7 +133,7 @@ function IntelligenceInner() {
       setEvents(expeditionEventStore.getFilteredEvents(selectedExpId, filter));
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [selectedExpId]);
+  }, [selectedExpId, filter]);
 
   // ── Filter change ──────────────────────────────────────────
   useEffect(() => {
@@ -236,7 +237,7 @@ function IntelligenceInner() {
               selectedExp={selectedExp}
               isReadOnly={isReadOnly}
               expeditions={expeditions}
-              onPickExpedition={(id) => { setSelectedExpId(id); setPickerOpen(false); }}
+              onPickExpedition={(id: string | null) => { setSelectedExpId(id); setPickerOpen(false); }}
               pickerOpen={pickerOpen}
               setPickerOpen={setPickerOpen}
               selType={selType}
@@ -556,7 +557,9 @@ function ComingSoon({ title, icon, desc }: { title: string; icon: string; desc: 
 export default function IntelligenceScreen() {
   return (
     <TabErrorBoundary tabName="INTELLIGENCE">
-      <IntelligenceInner />
+      <PremiumAccessGate featureLabel="Expedition intelligence">
+        <IntelligenceInner />
+      </PremiumAccessGate>
     </TabErrorBoundary>
   );
 }

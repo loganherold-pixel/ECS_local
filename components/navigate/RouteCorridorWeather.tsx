@@ -17,6 +17,7 @@ import {
   Animated, Dimensions, ActivityIndicator,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
 import {
@@ -92,6 +93,13 @@ export interface RouteCorridorResult {
     active: boolean;
     point: RouteWeatherPoint | null;
     distanceAheadMi: number | null;
+  };
+  summary: {
+    activePoint: RouteWeatherPoint | null;
+    headline: string | null;
+    detail: string | null;
+    statusText: string | null;
+    severeLine: string | null;
   };
 }
 
@@ -219,6 +227,35 @@ function getHazardIcon(level: SegmentHazardLevel): string {
 function getConditionIcon(wp: WaypointWeather | null): string {
   if (!wp || !wp.current) return 'cloud-outline';
   return getWeatherIcon(wp.current.weather_main, wp.current.weather_id);
+}
+
+function formatRoutePointHeadline(point: RouteWeatherPoint | null): string | null {
+  const current = point?.weather?.current;
+  if (!current) return null;
+
+  const temp = current.temp != null ? `${Math.round(current.temp)}°` : '--';
+  const condition = current.weather_main ? current.weather_main.toUpperCase() : 'WEATHER';
+  const label = point?.label ? ` • ${point.label}` : '';
+  return `${temp} • ${condition}${label}`;
+}
+
+function formatRoutePointDetail(point: RouteWeatherPoint | null): string | null {
+  const current = point?.weather?.current;
+  if (!current) return null;
+
+  const windSpeed = current.wind_speed != null ? `${Math.round(current.wind_speed)} mph` : '--';
+  const windDir = current.wind_deg != null ? ` ${getWindDirection(current.wind_deg)}` : '';
+  const precipChance = point?.weather?.forecast?.[0]?.pop;
+  const precipType = (current.snow_1h ?? current.snow_3h ?? 0) > 0 ? 'Snow' : 'Rain';
+  const precip = precipChance != null ? `${precipType} ${Math.round(precipChance)}%` : null;
+  return `Wind ${windSpeed}${windDir}${precip ? ` • ${precip}` : ''}`;
+}
+
+function getRouteStatusText(source: RouteCorridorResult['source'], error: string | null, hasPoints: boolean): string | null {
+  if (source === 'cache_stale') return 'Offline • last known route weather';
+  if (source === 'fallback') return 'Route weather unavailable';
+  if (error && !hasPoints) return 'Route weather degraded';
+  return null;
 }
 
 // ── Route Sampling ───────────────────────────────────────────
@@ -392,8 +429,18 @@ export function useRouteCorridorWeather(
   // Sample route points when run changes
   const sampledCoords = useMemo(() => {
     if (!activeRun || activeRun.points.length < 2) return [];
-    return sampleRoutePoints(activeRun.points, activeRun.waypoints || [], MAX_SAMPLE_POINTS);
-  }, [activeRun?.id, activeRun?.points.length]);
+    return sampleRoutePoints(
+      activeRun.points,
+      (activeRun.waypoints || []).map((waypoint: any) => ({
+        lat: Number(waypoint?.lat ?? waypoint?.latitude ?? 0),
+        lon: Number(waypoint?.lon ?? waypoint?.lng ?? waypoint?.longitude ?? 0),
+        name: waypoint?.name ?? waypoint?.title ?? undefined,
+        ele: waypoint?.ele ?? null,
+        time: waypoint?.time ?? null,
+      })),
+      MAX_SAMPLE_POINTS,
+    );
+  }, [activeRun]);
 
   const fetchRouteWeather = useCallback(async () => {
     if (!enabled || sampledCoords.length < 2 || loading) return;
@@ -480,7 +527,7 @@ export function useRouteCorridorWeather(
     } else if (!lastFetchAt) {
       fetchRouteWeather();
     }
-  }, [enabled, activeRun?.id, sampledCoords.length]);
+  }, [enabled, activeRun?.id, fetchRouteWeather, lastFetchAt, sampledCoords.length]);
 
   // Periodic refresh
   useEffect(() => {
@@ -496,7 +543,7 @@ export function useRouteCorridorWeather(
     return () => {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     };
-  }, [enabled, sampledCoords.length]);
+  }, [enabled, fetchRouteWeather, sampledCoords.length]);
 
   // Compute approaching hazard
   const approachingHazard = useMemo(() => {
@@ -552,6 +599,51 @@ export function useRouteCorridorWeather(
   const totalDistanceMi = weatherPoints.length > 0
     ? weatherPoints[weatherPoints.length - 1].distanceMi : 0;
 
+  const activePoint = useMemo(() => {
+    if (weatherPoints.length === 0) return null;
+    if (!userLocation) return weatherPoints[0];
+
+    let closest = weatherPoints[0];
+    let minDist = Infinity;
+    for (const pt of weatherPoints) {
+      const d = haversineMeters(userLocation.lat, userLocation.lng, pt.lat, pt.lng);
+      if (d < minDist) {
+        minDist = d;
+        closest = pt;
+      }
+    }
+    return closest;
+  }, [userLocation, weatherPoints]);
+
+  const summary = useMemo(() => {
+    const headline = formatRoutePointHeadline(activePoint);
+    const detail = formatRoutePointDetail(activePoint);
+    const statusText = getRouteStatusText(source, error, weatherPoints.length > 0);
+
+    let severeLine: string | null = null;
+    if (approachingHazard.active && approachingHazard.point) {
+      const distance = approachingHazard.distanceAheadMi != null
+        ? `${approachingHazard.distanceAheadMi.toFixed(1)} mi ahead`
+        : 'Ahead on route';
+      const reason = approachingHazard.point.hazardReasons[0] ?? approachingHazard.point.weather?.alerts?.[0]?.title ?? 'Severe route weather';
+      severeLine = `${distance} • ${reason}`;
+    } else if (activePoint?.weather?.alerts?.length) {
+      severeLine = activePoint.weather.alerts[0].title;
+    } else if (activePoint?.hazardReasons?.length) {
+      severeLine = activePoint.hazardReasons[0];
+    } else {
+      severeLine = statusText;
+    }
+
+    return {
+      activePoint,
+      headline,
+      detail,
+      statusText,
+      severeLine,
+    };
+  }, [activePoint, approachingHazard, error, source, weatherPoints.length]);
+
   return {
     points: weatherPoints,
     totalDistanceMi,
@@ -568,6 +660,7 @@ export function useRouteCorridorWeather(
     lastFetchAt,
     hasRoute,
     approachingHazard,
+    summary,
   };
 }
 
@@ -586,8 +679,11 @@ interface TimelineProps {
   source: string | null;
   hasRoute: boolean;
   approachingHazard: RouteCorridorResult['approachingHazard'];
+  summary: RouteCorridorResult['summary'];
   onDetailPress: () => void;
   onRefresh: () => void;
+  topOffset?: number;
+  leftOffset?: number;
 }
 
 export function RouteWeatherTimeline({
@@ -601,8 +697,11 @@ export function RouteWeatherTimeline({
   source,
   hasRoute,
   approachingHazard,
+  summary,
   onDetailPress,
   onRefresh,
+  topOffset = 42,
+  leftOffset = 10,
 }: TimelineProps) {
   const [expanded, setExpanded] = useState(false);
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -627,9 +726,12 @@ export function RouteWeatherTimeline({
 
   const worstColor = getHazardColor(worstHazard);
   const hasSevere = hazardousCount > 0 || cautionCount > 0;
+  const badgeHeadline = summary.headline ?? (points.length > 0 ? 'Route weather online' : null);
+  const badgeDetail = summary.detail;
+  const badgeStatus = hasSevere ? summary.severeLine : summary.statusText;
 
   return (
-    <View style={tlStyles.container} pointerEvents="box-none">
+    <View style={[tlStyles.container, { top: topOffset, left: leftOffset }]} pointerEvents="box-none">
       {/* Approaching hazard warning banner */}
       {approachingHazard.active && approachingHazard.point && (
         <Animated.View style={[
@@ -699,34 +801,66 @@ export function RouteWeatherTimeline({
               color={hasSevere ? worstColor : TACTICAL.amber}
             />
           </View>
-          <View>
+          <View style={tlStyles.badgeTextStack}>
             {loading && points.length === 0 ? (
               <Text style={tlStyles.badgeLoadingText}>LOADING ROUTE WX...</Text>
             ) : points.length > 0 ? (
-              <View style={tlStyles.badgeInfoRow}>
-                <Text style={[tlStyles.badgeLabel, hasSevere && { color: worstColor }]}>
-                  RTE WX
-                </Text>
-                <Text style={tlStyles.badgeDistance}>
-                  {totalDistanceMi.toFixed(0)} MI
-                </Text>
-                {hazardousCount > 0 && (
-                  <View style={[tlStyles.hazardCountBadge, { backgroundColor: '#EF5350' + '20', borderColor: '#EF5350' + '40' }]}>
-                    <Text style={[tlStyles.hazardCountText, { color: '#EF5350' }]}>
-                      {hazardousCount}
-                    </Text>
-                  </View>
+              <>
+                <View style={tlStyles.badgeInfoRow}>
+                  <Text style={[tlStyles.badgeLabel, hasSevere && { color: worstColor }]}>
+                    RTE WX
+                  </Text>
+                  <Text style={tlStyles.badgeDistance}>
+                    {totalDistanceMi.toFixed(0)} MI
+                  </Text>
+                  {hazardousCount > 0 && (
+                    <View style={[tlStyles.hazardCountBadge, { backgroundColor: '#EF5350' + '20', borderColor: '#EF5350' + '40' }]}>
+                      <Text style={[tlStyles.hazardCountText, { color: '#EF5350' }]}>
+                        {hazardousCount}
+                      </Text>
+                    </View>
+                  )}
+                  {cautionCount > 0 && hazardousCount === 0 && (
+                    <View style={[tlStyles.hazardCountBadge, { backgroundColor: '#FFB300' + '20', borderColor: '#FFB300' + '40' }]}>
+                      <Text style={[tlStyles.hazardCountText, { color: '#FFB300' }]}>
+                        {cautionCount}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {badgeHeadline && (
+                  <Text
+                    style={[tlStyles.badgeHeadline, hasSevere && { color: worstColor }]}
+                    numberOfLines={1}
+                  >
+                    {badgeHeadline}
+                  </Text>
                 )}
-                {cautionCount > 0 && hazardousCount === 0 && (
-                  <View style={[tlStyles.hazardCountBadge, { backgroundColor: '#FFB300' + '20', borderColor: '#FFB300' + '40' }]}>
-                    <Text style={[tlStyles.hazardCountText, { color: '#FFB300' }]}>
-                      {cautionCount}
-                    </Text>
-                  </View>
+                {badgeDetail && (
+                  <Text style={tlStyles.badgeDetail} numberOfLines={1}>
+                    {badgeDetail}
+                  </Text>
                 )}
-              </View>
+                {badgeStatus && (
+                  <Text
+                    style={[tlStyles.badgeStatus, hasSevere && { color: worstColor }]}
+                    numberOfLines={1}
+                  >
+                    {badgeStatus}
+                  </Text>
+                )}
+              </>
             ) : (
-              <Text style={tlStyles.badgeLoadingText}>NO ROUTE DATA</Text>
+              <>
+                <Text style={tlStyles.badgeLoadingText}>NO ROUTE DATA</Text>
+                {source === 'cache_stale' || source === 'fallback' || source === 'live'
+                  ? (
+                    <Text style={tlStyles.badgeStatus} numberOfLines={1}>
+                      {getRouteStatusText(source, null, false) ?? 'Current-position weather remains active'}
+                    </Text>
+                  )
+                  : null}
+              </>
             )}
           </View>
         </View>
@@ -883,7 +1017,7 @@ export function RouteWeatherDetailModal({
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
+    <ECSModal visible={visible} onClose={onClose} dismissOnBackdrop={false} stackBehavior="replace">
       <View style={mdStyles.overlay}>
         <TouchableOpacity style={mdStyles.backdrop} onPress={onClose} activeOpacity={1} />
         <View style={mdStyles.sheet}>
@@ -1212,7 +1346,7 @@ export function RouteWeatherDetailModal({
           </View>
         </View>
       </View>
-    </Modal>
+    </ECSModal>
   );
 }
 
@@ -1306,6 +1440,11 @@ const tlStyles = StyleSheet.create({
     gap: 8,
     flex: 1,
   },
+  badgeTextStack: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
   badgeIcon: {
     width: 26,
     height: 26,
@@ -1335,6 +1474,26 @@ const tlStyles = StyleSheet.create({
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,
+  },
+  badgeHeadline: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    letterSpacing: 0.4,
+    fontFamily: 'Courier',
+  },
+  badgeDetail: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.3,
+    fontFamily: 'Courier',
+  },
+  badgeStatus: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.amber,
+    letterSpacing: 0.3,
   },
   hazardCountBadge: {
     paddingHorizontal: 5,

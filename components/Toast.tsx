@@ -1,10 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { COLORS, SPACING, RADIUS } from '../lib/theme';
-import { useApp } from '../context/AppContext';
+import { useToastState } from '../context/AppContext';
 
 export default function Toast() {
-  const { toastMsg } = useApp();
+  const toastMsg = useToastState();
   if (!toastMsg) return null;
 
   return (

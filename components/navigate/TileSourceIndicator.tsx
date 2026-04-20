@@ -78,6 +78,7 @@ export default function TileSourceIndicator({ top = 12, right = 12 }: Props) {
   const [isOnline, setIsOnline] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const hasCachedTiles = stats.total > 0;
   const expandAnim = useRef(new Animated.Value(0)).current;
 
   // ── Subscribe to tile source stats ────────────────────
@@ -100,7 +101,7 @@ export default function TileSourceIndicator({ top = 12, right = 12 }: Props) {
 
   // ── Pulse animation when serving from cache ───────────
   useEffect(() => {
-    if (stats.isOfflineServing && stats.total > 0) {
+    if (stats.isOfflineServing && hasCachedTiles) {
       const loop = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 0.5, duration: 1000, useNativeDriver: true }),
@@ -112,7 +113,7 @@ export default function TileSourceIndicator({ top = 12, right = 12 }: Props) {
     } else {
       pulseAnim.setValue(1);
     }
-  }, [stats.isOfflineServing, stats.total > 0]);
+  }, [hasCachedTiles, pulseAnim, stats.isOfflineServing]);
 
   // ── Expand/collapse animation ─────────────────────────
   const toggleExpand = useCallback(() => {

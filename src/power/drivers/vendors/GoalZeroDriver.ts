@@ -22,7 +22,7 @@ import {
   isGoalZeroDeviceName,
   lookupGoalZeroModel,
   extractGoalZeroModelFromName,
-} from "../../blu/GoalZeroConstants";
+} from "../../../../lib/GoalZeroConstants";
 
 const GOAL_ZERO_CAPABILITIES: PowerCapabilities = {
   hasSOC: true,
@@ -143,7 +143,6 @@ export class GoalZeroDriver implements IPowerDriver {
       },
       solar: solarWatts !== undefined ? {
         watts: solarWatts,
-        available: solarWatts > 0,
       } : undefined,
       flags: {
         charging: isCharging,
@@ -163,4 +162,3 @@ export class GoalZeroDriver implements IPowerDriver {
     return { ...GOAL_ZERO_CAPABILITIES };
   }
 }
-

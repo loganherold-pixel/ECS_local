@@ -29,7 +29,7 @@ import {
   computeLiquidWeight,
   computeItemTotal,
 } from '../../lib/loadout2Types';
-import type { LoadoutItem } from '../../lib/types';
+import type { LoadoutItem, LoadoutItemCategory, WeightSource } from '../../lib/types';
 
 // ── Props ───────────────────────────────────────────────────
 export interface AddItemModalProps {
@@ -55,6 +55,8 @@ export interface AddItemPayload {
   is_critical: boolean;
   notes: string | null;
   storage_location: string;
+  category?: LoadoutItemCategory;
+  weight_source?: WeightSource;
   /** Liquid metadata (encoded in notes for persistence) */
   _liquidMeta?: {
     type: 'water' | 'fuel' | 'other';
@@ -169,6 +171,8 @@ export default function AddItemModal({
         is_critical: isCritical,
         notes: liquidMeta,
         storage_location: containerKey,
+        category: 'water',
+        weight_source: 'estimate',
         _liquidMeta: { type: liquidType, amount, unit: liquidUnit },
       });
     } else {
@@ -183,6 +187,7 @@ export default function AddItemModal({
         is_critical: isCritical,
         notes: notes.trim() || null,
         storage_location: containerKey,
+        weight_source: weightLbs > 0 ? 'measured' : 'estimate',
       });
     }
   };

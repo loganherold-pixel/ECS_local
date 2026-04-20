@@ -27,8 +27,6 @@ import {
 // ── Colors ─────────────────────────────────────────────────────
 const WARN_COLOR = '#E67E22';
 const CRIT_COLOR = '#C0392B';
-const ACTIVE_BLUE = '#5B8DEF';
-const GREEN = '#4CAF50';
 
 interface Props {
   warningSoundId: AlertSoundId;
@@ -118,7 +116,7 @@ function TestButton({
         style={[
           sty.testBtn,
           {
-            borderColor: `${color}40`,
+            borderColor: `${color}32`,
             backgroundColor: playing ? `${color}15` : 'rgba(255,255,255,0.03)',
             transform: [{ scale: pulseAnim }],
           },
@@ -215,7 +213,7 @@ export default function SoundPicker({
           <View style={[sty.noteStem, { backgroundColor: TACTICAL.amber }]} />
           <View style={[sty.noteFlag, { backgroundColor: TACTICAL.amber }]} />
         </View>
-        <Text style={sty.headerTitle}>ALERT TONES</Text>
+        <Text style={sty.headerTitle}>ECS ALERT TONES</Text>
       </View>
 
       {/* Tab switcher: Warning / Critical */}
@@ -229,7 +227,7 @@ export default function SoundPicker({
           activeOpacity={0.7}>
           <View style={[sty.tabDot, { backgroundColor: WARN_COLOR, opacity: activeTab === 'warning' ? 1 : 0.35 }]} />
           <Text style={[sty.tabText, activeTab === 'warning' && sty.tabTextActiveWarn]}>
-            WARNING TONE
+            WARNING
           </Text>
           <Text style={[sty.tabSoundName, activeTab === 'warning' && { color: WARN_COLOR }]}>
             {ALERT_SOUNDS.find((s) => s.id === warningSoundId)?.shortName || 'TACTICAL'}
@@ -245,7 +243,7 @@ export default function SoundPicker({
           activeOpacity={0.7}>
           <View style={[sty.tabDot, { backgroundColor: CRIT_COLOR, opacity: activeTab === 'critical' ? 1 : 0.35 }]} />
           <Text style={[sty.tabText, activeTab === 'critical' && sty.tabTextActiveCrit]}>
-            CRITICAL TONE
+            CRITICAL
           </Text>
           <Text style={[sty.tabSoundName, activeTab === 'critical' && { color: CRIT_COLOR }]}>
             {ALERT_SOUNDS.find((s) => s.id === criticalSoundId)?.shortName || 'KLAXON'}
@@ -349,7 +347,7 @@ const sty = StyleSheet.create({
     paddingVertical: 7,
     paddingHorizontal: 6,
     borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    backgroundColor: 'rgba(10,14,18,0.92)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
@@ -580,6 +578,5 @@ const sty = StyleSheet.create({
     opacity: 0.7,
   },
 });
-
 
 

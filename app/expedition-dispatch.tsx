@@ -252,7 +252,7 @@ export default function ExpeditionDispatchScreen() {
     if (!loading) {
       fetchEvents(0);
     }
-  }, [sortOrder]);
+  }, [sortOrder, fetchEvents, loading]);
 
   // ── Compose submit (online or offline queue) ───────────────
   const handleComposeSubmit = async (form: ComposeEventForm) => {

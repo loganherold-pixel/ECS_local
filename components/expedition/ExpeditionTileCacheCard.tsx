@@ -48,7 +48,7 @@ const REGION_PREFIX = 'exp-route-';
 interface Props {
   expeditionId: string;
   expeditionTitle: string;
-  waypointCoords: Array<{ lat: number; lng: number; label?: string }>;
+  waypointCoords: { lat: number; lng: number; label?: string }[];
 }
 
 type CardState = 'estimate' | 'caching' | 'cached' | 'error';
@@ -83,7 +83,7 @@ export default function ExpeditionTileCacheCard({
 }: Props) {
   const [cardState, setCardState] = useState<CardState>('estimate');
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [existingRegion, setExistingRegion] = useState<TileCacheRegion | undefined>(undefined);
+  const [existingRegion, setExistingRegion] = useState<TileCacheRegion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
@@ -116,7 +116,7 @@ export default function ExpeditionTileCacheCard({
 
   useEffect(() => {
     const existing = findExistingRegion(expeditionId);
-    setExistingRegion(existing);
+    setExistingRegion(existing ?? null);
 
     if (existing) {
       if (existing.status === 'complete') {
@@ -137,7 +137,7 @@ export default function ExpeditionTileCacheCard({
     const unsub = tileCacheStore.subscribe(() => {
       if (!mountedRef.current) return;
       const updated = findExistingRegion(expeditionId);
-      setExistingRegion(updated);
+      setExistingRegion(updated ?? null);
       if (updated?.status === 'complete') setCardState('cached');
     });
 
@@ -154,7 +154,7 @@ export default function ExpeditionTileCacheCard({
         useNativeDriver: false,
       }).start();
     }
-  }, [progress?.percent]);
+  }, [progress, progressAnim]);
 
   useEffect(() => {
     if (cardState === 'caching') {
@@ -169,7 +169,7 @@ export default function ExpeditionTileCacheCard({
     } else {
       pulseAnim.setValue(1);
     }
-  }, [cardState]);
+  }, [cardState, pulseAnim]);
 
   // ── Handlers ──────────────────────────────────────────
 
@@ -182,7 +182,7 @@ export default function ExpeditionTileCacheCard({
     const regionName = `${REGION_PREFIX}${expeditionId}`;
 
     // Check if region already exists (pending/cancelled) — resume or recreate
-    let region = findExistingRegion(expeditionId);
+    let region: TileCacheRegion | null | undefined = findExistingRegion(expeditionId);
 
     if (!region || region.status === 'error' || region.status === 'cancelled') {
       // Delete old failed region if exists
@@ -221,7 +221,7 @@ export default function ExpeditionTileCacheCard({
 
         if (prog.status === 'complete') {
           setCardState('cached');
-          setExistingRegion(tileCacheStore.getRegion(region!.id));
+          setExistingRegion(tileCacheStore.getRegion(region!.id) ?? null);
         } else if (prog.status === 'error') {
           setCardState('error');
           setError(prog.message || 'Download failed');
@@ -252,7 +252,7 @@ export default function ExpeditionTileCacheCard({
         await tileCacheStore.deleteRegion(existingRegion.id);
       } catch {}
       if (!mountedRef.current) return;
-      setExistingRegion(undefined);
+      setExistingRegion(null);
       setCardState('estimate');
       setProgress(null);
     };

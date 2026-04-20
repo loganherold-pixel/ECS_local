@@ -152,7 +152,7 @@ const NativeVideo = memo(function NativeVideo({
   style={StyleSheet.absoluteFillObject}
   contentFit="cover"
   nativeControls={false}
-  fullscreenOptions={{ enabled: false }}
+  fullscreenOptions={{ enable: false }}
 />
   );
 });

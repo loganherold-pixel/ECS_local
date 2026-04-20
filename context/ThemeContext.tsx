@@ -39,7 +39,10 @@ import {
 } from '../lib/appearanceStore';
 
 // ── Palette type ────────────────────────────────────────────
-export type TacticalPalette = typeof TACTICAL;
+export type TacticalPalette =
+  | typeof TACTICAL
+  | typeof TACTICAL_LIGHT
+  | typeof TACTICAL_DRIVING;
 
 // ── COLORS variants for light and driving ───────────────────
 const COLORS_LIGHT = {
@@ -80,7 +83,7 @@ const COLORS_DRIVING = {
   borderLight: '#5A6A58',
 };
 
-export type ColorsType = typeof COLORS;
+export type ColorsType = typeof COLORS | typeof COLORS_LIGHT | typeof COLORS_DRIVING;
 
 // ── Driving mode overrides (extra style adjustments) ────────
 export interface DrivingOverrides {
@@ -117,6 +120,7 @@ interface ThemeContextType {
   effectiveTheme: EffectiveTheme;
   palette: TacticalPalette;
   colors: ColorsType;
+  themeReady: boolean;
   isDriving: boolean;
   isLight: boolean;
   isDark: boolean;
@@ -135,16 +139,17 @@ const ThemeContext = createContext<ThemeContextType>({
   effectiveTheme: 'dark',
   palette: TACTICAL,
   colors: COLORS,
+  themeReady: appearanceStore.isHydrated,
   isDriving: false,
   isLight: false,
   isDark: true,
-  appearanceMode: 'dark',
+  appearanceMode: 'auto',
   autoDrivingEnabled: false,
   isAutoDrivingActive: false,
   drivingOverrides: DEFAULT_OVERRIDES,
   setAppearanceMode: () => {},
   setAutoDrivingEnabled: () => {},
-  cycleMode: () => 'dark',
+  cycleMode: () => 'auto',
   feedSpeed: () => null,
   dismissAutoDriving: () => {},
 });
@@ -160,6 +165,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [autoDrivingEnabled, setAutoDrivingEnabledState] = useState<boolean>(
     appearanceStore.autoDrivingEnabled
   );
+  const [themeReady, setThemeReady] = useState<boolean>(appearanceStore.isHydrated);
   const [autoDrivingActive, setAutoDrivingActive] = useState<boolean>(
     appearanceStore.isAutoDrivingActive
   );
@@ -173,6 +179,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
 
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    appearanceStore.waitForHydration().then(() => {
+      if (!mounted) return;
+      setAppearanceModeState(appearanceStore.mode);
+      setAutoDrivingEnabledState(appearanceStore.autoDrivingEnabled);
+      setAutoDrivingActive(appearanceStore.isAutoDrivingActive);
+      setThemeReady(true);
+    });
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const setAppearanceMode = useCallback((mode: AppearanceMode) => {
@@ -250,6 +272,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       effectiveTheme,
       palette,
       colors,
+      themeReady,
       isDriving: effectiveTheme === 'driving',
       isLight: effectiveTheme === 'light',
       isDark: effectiveTheme === 'dark',
@@ -267,6 +290,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       effectiveTheme,
       palette,
       colors,
+      themeReady,
       appearanceMode,
       autoDrivingEnabled,
       autoDrivingActive,

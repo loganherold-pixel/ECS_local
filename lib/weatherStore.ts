@@ -3,97 +3,30 @@
  *
  * Manages weather data fetching, caching, and offline support.
  * Uses the get-weather Supabase Edge Function to fetch data from OpenWeather API.
- *
- * ── Edge Function Contract ────────────────────────────────────
- *
- * The get-weather edge function MUST:
- *   1. Read the API key via: Deno.env.get("OPENWEATHER_API_KEY")
- *      - Set via: supabase secrets set OPENWEATHER_API_KEY=<your-key>
- *      - NEVER hardcode the key in client code or the repo
- *
- *   2. Accept two input formats:
- *      Simple:  { lat: number, lon: number, units?: "imperial" | "metric" }
- *      Multi:   { coordinates: [{ lat, lng, label? }], units?: "imperial" | "metric" }
- *
- *   3. Set CORS headers:
- *      Access-Control-Allow-Origin: *
- *      Access-Control-Allow-Headers: authorization, x-client-info, apikey, content-type
- *      Handle OPTIONS requests by returning 200.
- *
- *   4. Return normalized JSON:
- *      {
- *        results: WaypointWeather[],
- *        fetched_at: ISO8601,
- *        units: "imperial" | "metric",
- *        // Simple format also includes:
- *        location?: { lat, lon },
- *        current?: { temp, feels_like, humidity, wind_speed, wind_deg, weather_main, weather_desc, icon },
- *        updated_at?: ISO8601
- *      }
- *
- *   5. Return errors:
- *      Missing OPENWEATHER_API_KEY → { error: "Missing OPENWEATHER_API_KEY" } with 500
- *      OpenWeather fetch failure   → { error: "Weather fetch failed", details } with 502
- *      Invalid input               → { error: "Invalid request body", details } with 400
- *
- * ── Client Invocation ─────────────────────────────────────────
- *
- *   supabase.functions.invoke("get-weather", {
- *     body: { lat, lon, units: "imperial" }
- *   })
- *
- *   supabase.functions.invoke("get-weather", {
- *     body: { coordinates: [...], units: "imperial" }
- *   })
- *
- * ── Offline Strategy ──────────────────────────────────────────
- *
- *   1. Always check cache first (fresh < 30 min)
- *   2. On fetch failure, return stale cache (any age) with staleness indicator
- *   3. If no cache exists at all, return synthetic fallback data marked as unavailable
- *   4. Cache is persisted to localStorage (web) AND in-memory (all platforms)
- *   5. Stale cache is never deleted — only overwritten by fresh data
- *
- * ── Cross-Platform Caching ────────────────────────────────────
- *
- *   - Web: localStorage (persists across reloads) + in-memory (fast access)
- *   - Native: in-memory only (survives for app session)
- *   - Both tiers are checked; in-memory is always populated from localStorage on read
- *
- * ── Retry Logic ───────────────────────────────────────────────
- *
- *   - Single retry with 2s delay on transient failures
- *   - No retry on auth errors (401), API key errors, or validation errors (400)
  */
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
-import * as rateLimitStore from './rateLimitStore';
 import { connectivity } from './connectivity';
+import { reportDegradedState, reportRecoverableFailure } from './ecsIssueIntelligence';
+import { setIssueRuntimeWeatherStatus } from './ecsIssueRuntime';
 import type {
-
   WeatherCoordinate,
   WeatherResponse,
   WaypointWeather,
   CachedWeather,
-  CurrentConditions,
-  DailyForecast,
-  TrailConditions,
+  TrailFactorStatus,
+  TrailOverall,
 } from './weatherTypes';
 
 // ── Cache Configuration ──────────────────────────────────────
 const CACHE_KEY_PREFIX = 'ecs_weather_';
-const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes = "fresh"
-const STALE_WARNING_MS = 2 * 60 * 60 * 1000; // 2 hours = "stale warning"
-const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours = max useful cache
-const RETRY_DELAY_MS = 2000; // 2 seconds between retries
+const CACHE_DURATION_MS = 30 * 60 * 1000;
+const STALE_WARNING_MS = 2 * 60 * 60 * 1000;
+const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
+const RETRY_DELAY_MS = 2000;
+const EDGE_FUNCTION_TIMEOUT_MS = 12000;
 
-// ── In-Memory Cache (cross-platform) ─────────────────────────
-// Always available on both web and native platforms.
-// On web, this is populated from localStorage on first read.
-// On native, this is the only cache tier.
 const memoryCache = new Map<string, CachedWeather>();
-
-// ── Helpers ──────────────────────────────────────────────────
 
 function coordKey(coords: WeatherCoordinate[]): string {
   return coords.map(c => `${c.lat.toFixed(3)}_${c.lng.toFixed(3)}`).join('|');
@@ -103,10 +36,6 @@ function singleCoordKey(lat: number, lon: number): string {
   return `${lat.toFixed(3)}_${lon.toFixed(3)}`;
 }
 
-/**
- * Determine if an error is related to the OPENWEATHER_API_KEY configuration.
- * These errors should NOT be retried — they require admin intervention.
- */
 function isApiKeyError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
@@ -118,9 +47,6 @@ function isApiKeyError(message: string): boolean {
   );
 }
 
-/**
- * Determine if an error is a validation/client error that should NOT be retried.
- */
 function isNonRetryableError(message: string): boolean {
   return (
     isApiKeyError(message) ||
@@ -130,9 +56,6 @@ function isNonRetryableError(message: string): boolean {
   );
 }
 
-/**
- * Read from localStorage (web only). Returns null on native or if not found.
- */
 function readLocalStorage(key: string): CachedWeather | null {
   try {
     if (Platform.OS !== 'web' || typeof localStorage === 'undefined') return null;
@@ -144,85 +67,48 @@ function readLocalStorage(key: string): CachedWeather | null {
   }
 }
 
-/**
- * Write to localStorage (web only). Silently fails on native.
- */
 function writeLocalStorage(key: string, cached: CachedWeather): void {
   try {
     if (Platform.OS !== 'web' || typeof localStorage === 'undefined') return;
     localStorage.setItem(CACHE_KEY_PREFIX + key, JSON.stringify(cached));
-  } catch {
-    // Storage full or unavailable — non-fatal
-  }
+  } catch {}
 }
 
-/**
- * Get cached weather data from both tiers.
- * @param key - coordinate key
- * @param ignoreExpiry - if true, returns cache regardless of age (for offline fallback)
- */
 function getCached(key: string, ignoreExpiry = false): CachedWeather | null {
-  // Tier 1: In-memory cache (fastest)
   let cached = memoryCache.get(key) || null;
 
-  // Tier 2: localStorage (web only, persists across reloads)
   if (!cached) {
     cached = readLocalStorage(key);
-    // Populate in-memory cache from localStorage
-    if (cached) {
-      memoryCache.set(key, cached);
-    }
+    if (cached) memoryCache.set(key, cached);
   }
 
   if (!cached) return null;
 
-  if (!ignoreExpiry) {
-    // Only return if within fresh window
-    if (Date.now() - cached.cachedAt > CACHE_DURATION_MS) {
-      return null; // Expired for "fresh" purposes, but don't delete
-    }
+  if (!ignoreExpiry && Date.now() - cached.cachedAt > CACHE_DURATION_MS) {
+    return null;
   }
 
   return cached;
 }
 
-/**
- * Get stale cached weather data — returns cache regardless of age.
- * Used as fallback when network is unavailable.
- */
 function getStaleCached(key: string): CachedWeather | null {
   return getCached(key, true);
 }
 
-/**
- * Write cache to both tiers.
- */
 function setCache(key: string, data: WeatherResponse): void {
   const cached: CachedWeather = {
     data,
     cachedAt: Date.now(),
     coordKey: key,
   };
-
-  // Tier 1: In-memory (always)
   memoryCache.set(key, cached);
-
-  // Tier 2: localStorage (web only)
   writeLocalStorage(key, cached);
 }
 
-// ── Cache Age Utilities ──────────────────────────────────────
-
-/**
- * Check if cached weather data is stale (older than fresh window).
- */
 export function isWeatherStale(cachedAt: number): boolean {
   return Date.now() - cachedAt > CACHE_DURATION_MS;
 }
 
-/**
- * Get human-readable age of cached data.
- */
 export function getWeatherAge(cachedAt: number): string {
   const ageMs = Date.now() - cachedAt;
   const mins = Math.floor(ageMs / 60000);
@@ -234,9 +120,6 @@ export function getWeatherAge(cachedAt: number): string {
   return `${days}d ${hours % 24}h ago`;
 }
 
-/**
- * Get staleness severity level for UI display.
- */
 export function getWeatherStaleness(cachedAt: number): 'fresh' | 'aging' | 'stale' | 'very_stale' {
   const ageMs = Date.now() - cachedAt;
   if (ageMs <= CACHE_DURATION_MS) return 'fresh';
@@ -245,13 +128,280 @@ export function getWeatherStaleness(cachedAt: number): 'fresh' | 'aging' | 'stal
   return 'very_stale';
 }
 
-// ── Fallback Data Generation ─────────────────────────────────
+function toNumber(value: any): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
-/**
- * Generate synthetic fallback weather data when no cache exists
- * and the network is unavailable. Marked clearly as unavailable
- * so the UI can display appropriate warnings.
- */
+function mapSeverity(raw: any): 'advisory' | 'warning' | 'extreme' {
+  const value = String(raw ?? '').toLowerCase();
+  if (value.includes('extreme')) return 'extreme';
+  if (value.includes('warning')) return 'warning';
+  return 'advisory';
+}
+
+function inferTrailConditionsFromCurrent(current: any) {
+  const wind = toNumber(current?.wind_speed);
+  const visibility = toNumber(current?.visibility);
+  const weatherMain = String(current?.weather_main ?? '').toLowerCase();
+  const temp = toNumber(current?.temp);
+
+  const factors: Array<{ factor: string; status: TrailFactorStatus; detail: string }> = [];
+
+  let overall: TrailOverall = 'good';
+
+  const bumpOverall = (next: TrailOverall) => {
+    const order: TrailOverall[] = ['good', 'fair', 'poor', 'hazardous'];
+    if (order.indexOf(next) > order.indexOf(overall)) overall = next;
+  };
+
+  if (wind != null) {
+    let status: TrailFactorStatus = 'good';
+    let detail = `Winds ${Math.round(wind)} mph are within normal trail travel range.`;
+
+    if (wind >= 40) {
+      status = 'danger';
+      detail = `Winds ${Math.round(wind)} mph may create hazardous control and exposure conditions.`;
+      bumpOverall('hazardous');
+    } else if (wind >= 25) {
+      status = 'warning';
+      detail = `Winds ${Math.round(wind)} mph may impact stability and visibility on exposed routes.`;
+      bumpOverall('poor');
+    } else if (wind >= 15) {
+      status = 'caution';
+      detail = `Winds ${Math.round(wind)} mph may affect comfort and dust conditions.`;
+      bumpOverall('fair');
+    }
+
+    factors.push({ factor: 'Wind', status, detail });
+  }
+
+  if (visibility != null) {
+    let status: TrailFactorStatus = 'good';
+    let detail = `Visibility is ${Math.round(visibility / 1000)} km and should support normal trail travel.`;
+
+    if (visibility <= 500) {
+      status = 'danger';
+      detail = `Visibility is critically low and may make route finding unsafe.`;
+      bumpOverall('hazardous');
+    } else if (visibility <= 1600) {
+      status = 'warning';
+      detail = `Visibility is reduced and may slow progress or conceal hazards.`;
+      bumpOverall('poor');
+    } else if (visibility <= 5000) {
+      status = 'caution';
+      detail = `Visibility is moderately reduced. Increase spacing and scan distance.`;
+      bumpOverall('fair');
+    }
+
+    factors.push({ factor: 'Visibility', status, detail });
+  }
+
+  if (weatherMain) {
+    let status: TrailFactorStatus = 'good';
+    let detail = `Surface conditions appear stable.`;
+
+    if (weatherMain.includes('snow') || weatherMain.includes('thunderstorm')) {
+      status = 'warning';
+      detail = `Current weather (${weatherMain}) may degrade traction and route safety.`;
+      bumpOverall('poor');
+    } else if (weatherMain.includes('rain') || weatherMain.includes('drizzle')) {
+      status = 'caution';
+      detail = `Current weather (${weatherMain}) may soften surfaces and increase slick sections.`;
+      bumpOverall('fair');
+    } else if (weatherMain.includes('fog') || weatherMain.includes('mist') || weatherMain.includes('haze')) {
+      status = 'warning';
+      detail = `Current weather (${weatherMain}) may conceal terrain changes and obstacles.`;
+      bumpOverall('poor');
+    }
+
+    factors.push({ factor: 'Surface', status, detail });
+  }
+
+  if (temp != null) {
+    let status: TrailFactorStatus = 'good';
+    let detail = `Ambient temperature is within a normal operating range.`;
+
+    if (temp >= 100 || temp <= 20) {
+      status = 'warning';
+      detail = `Temperature ${Math.round(temp)}° may stress crew, traction, or equipment performance.`;
+      bumpOverall('poor');
+    } else if (temp >= 90 || temp <= 32) {
+      status = 'caution';
+      detail = `Temperature ${Math.round(temp)}° may affect comfort, traction, or battery performance.`;
+      bumpOverall('fair');
+    }
+
+    factors.push({ factor: 'Temperature', status, detail });
+  }
+
+  if (factors.length === 0) {
+    factors.push({
+      factor: 'Data Availability',
+      status: 'caution',
+      detail: 'Limited live weather detail was available. Use visual assessment on scene.',
+    });
+    overall = 'fair';
+  }
+
+  return { overall, factors };
+}
+
+function normalizeForecastList(forecast: any[]): any[] {
+  if (!Array.isArray(forecast)) return [];
+
+  return forecast.map((f: any, idx: number) => {
+    const rawDate = typeof f?.date === 'string'
+      ? f.date
+      : typeof f?.dt_txt === 'string'
+        ? f.dt_txt.slice(0, 10)
+        : new Date(Date.now() + idx * 86400000).toISOString().slice(0, 10);
+
+    return {
+      date: rawDate,
+      temp_min: toNumber(f?.temp_min ?? f?.main?.temp_min ?? f?.temperature_min),
+      temp_max: toNumber(f?.temp_max ?? f?.main?.temp_max ?? f?.temperature_max),
+      humidity: toNumber(f?.humidity ?? f?.main?.humidity),
+      pressure: toNumber(f?.pressure ?? f?.main?.pressure),
+      wind_max: toNumber(f?.wind_max ?? f?.wind?.speed) ?? 0,
+      wind_gust_max: toNumber(f?.wind_gust_max ?? f?.wind?.gust) ?? 0,
+      pop: Math.round((toNumber(f?.pop) ?? 0) * ((toNumber(f?.pop) ?? 0) <= 1 ? 100 : 1)),
+      rain_total: toNumber(f?.rain_total ?? f?.rain?.['3h'] ?? f?.rain?.['1h']) ?? 0,
+      snow_total: toNumber(f?.snow_total ?? f?.snow?.['3h'] ?? f?.snow?.['1h']) ?? 0,
+      weather_id: toNumber(f?.weather_id ?? f?.weather?.[0]?.id),
+      weather_main: f?.weather_main ?? f?.weather?.[0]?.main ?? 'Unknown',
+      weather_description: f?.weather_description ?? f?.weather?.[0]?.description ?? 'Unavailable',
+      weather_icon: f?.weather_icon ?? f?.weather?.[0]?.icon ?? '01d',
+    };
+  });
+}
+
+function normalizeCurrent(current: any, label?: string | null) {
+  if (!current) {
+    return {
+      temp: null,
+      feels_like: null,
+      temp_min: null,
+      temp_max: null,
+      humidity: null,
+      pressure: null,
+      visibility: null,
+      wind_speed: null,
+      wind_deg: null,
+      wind_gust: null,
+      clouds: null,
+      weather_id: null,
+      weather_main: null,
+      weather_description: null,
+      weather_icon: null,
+      rain_1h: null,
+      rain_3h: null,
+      snow_1h: null,
+      snow_3h: null,
+      sunrise: null,
+      sunset: null,
+      location_name: label ?? null,
+      dt: null,
+    };
+  }
+
+  return {
+    temp: toNumber(current?.temp),
+    feels_like: toNumber(current?.feels_like),
+    temp_min: toNumber(current?.temp_min),
+    temp_max: toNumber(current?.temp_max),
+    humidity: toNumber(current?.humidity),
+    pressure: toNumber(current?.pressure),
+    visibility: toNumber(current?.visibility),
+    wind_speed: toNumber(current?.wind_speed),
+    wind_deg: toNumber(current?.wind_deg),
+    wind_gust: toNumber(current?.wind_gust),
+    clouds: toNumber(current?.clouds),
+    weather_id: toNumber(current?.weather_id),
+    weather_main: current?.weather_main ?? null,
+    weather_description: current?.weather_description ?? null,
+    weather_icon: current?.weather_icon ?? null,
+    rain_1h: toNumber(current?.rain_1h),
+    rain_3h: toNumber(current?.rain_3h),
+    snow_1h: toNumber(current?.snow_1h),
+    snow_3h: toNumber(current?.snow_3h),
+    sunrise: toNumber(current?.sunrise),
+    sunset: toNumber(current?.sunset),
+    location_name: current?.location_name ?? label ?? null,
+    dt: toNumber(current?.dt),
+  };
+}
+
+function normalizeResult(raw: any, fallbackLabel?: string | null): WaypointWeather {
+  const current = normalizeCurrent(raw?.current, raw?.label ?? fallbackLabel ?? null);
+  const forecast = normalizeForecastList(raw?.forecast ?? []);
+  const alerts = Array.isArray(raw?.alerts)
+    ? raw.alerts.map((a: any) => ({
+        severity: mapSeverity(a?.severity),
+        title: a?.title ?? 'Weather Notice',
+        description: a?.description ?? 'No description available.',
+        type: a?.type ?? 'general',
+        effective: typeof a?.effective === 'string' ? a.effective : null,
+        expires: typeof a?.expires === 'string' ? a.expires : null,
+      }))
+    : [];
+
+  const trailConditions = raw?.trail_conditions?.overall && Array.isArray(raw?.trail_conditions?.factors)
+    ? {
+        overall: raw.trail_conditions.overall,
+        factors: raw.trail_conditions.factors.map((f: any) => ({
+          factor: f?.factor ?? 'Unknown Factor',
+          status: (f?.status ?? 'caution') as TrailFactorStatus,
+          detail: f?.detail ?? 'No detail available.',
+        })),
+      }
+    : inferTrailConditionsFromCurrent(current);
+
+  return {
+    lat: toNumber(raw?.lat) ?? 0,
+    lng: toNumber(raw?.lng) ?? 0,
+    label: raw?.label ?? fallbackLabel ?? null,
+    error: raw?.error ?? null,
+    current,
+    forecast,
+    alerts,
+    trail_conditions: trailConditions,
+  };
+}
+
+async function invokeWeatherEdgeFunction(body: Record<string, unknown>): Promise<{ data: any; error: any }> {
+  return await Promise.race([
+    supabase.functions.invoke('get-weather', { body }),
+    new Promise<{ data: null; error: { message: string } }>(resolve => {
+      setTimeout(() => {
+        resolve({
+          data: null,
+          error: { message: 'Weather request timed out' },
+        });
+      }, EDGE_FUNCTION_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+function normalizeWeatherResponse(
+  data: any,
+  requestedCoordinates: WeatherCoordinate[],
+  units: 'imperial' | 'metric',
+): WeatherResponse {
+  const rawResults = Array.isArray(data?.results) ? data.results : [];
+
+  const results = requestedCoordinates.map((coord, idx) => {
+    const raw = rawResults[idx] ?? {};
+    return normalizeResult(raw, coord.label ?? null);
+  });
+
+  return {
+    results,
+    fetched_at: typeof data?.fetched_at === 'string' ? data.fetched_at : new Date().toISOString(),
+    units: data?.units === 'metric' ? 'metric' : units,
+  };
+}
+
 function generateFallbackWeather(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric',
@@ -289,11 +439,11 @@ function generateFallbackWeather(
     forecast: [],
     alerts: [],
     trail_conditions: {
-      overall: 'fair' as const,
+      overall: 'fair',
       factors: [
         {
           factor: 'Data Availability',
-          status: 'caution' as const,
+          status: 'caution',
           detail: 'Weather data unavailable. Unable to assess current trail conditions. Exercise caution and rely on visual assessment.',
         },
       ],
@@ -307,17 +457,6 @@ function generateFallbackWeather(
   };
 }
 
-// ── Edge Function Calls ──────────────────────────────────────
-
-/**
- * Call the get-weather edge function with the MULTI-coordinate format.
- * Sends: { coordinates: [{ lat, lng, label? }], units }
- * Returns the parsed WeatherResponse or throws on failure.
- *
- * Includes retry logic: 1 retry with 2s delay on transient failures.
- * Does NOT retry on API key errors (OPENWEATHER_API_KEY missing/invalid),
- * auth errors (401), or validation errors (400).
- */
 async function callWeatherEdgeFunction(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric',
@@ -328,26 +467,16 @@ async function callWeatherEdgeFunction(
   for (let attempt = 0; attempt <= retryCount; attempt++) {
     try {
       if (attempt > 0) {
-        // Wait before retry
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-        console.log(`[WeatherStore] Retry attempt ${attempt}/${retryCount}`);
       }
 
-      const { data, error } = await supabase.functions.invoke('get-weather', {
-        body: { coordinates, units },
-      });
+      const { data, error } = await invokeWeatherEdgeFunction({ coordinates, units });
 
       if (error) {
-        // Supabase client-level error (network, CORS, etc.)
         const errMsg = typeof error === 'string' ? error : error?.message || 'Edge function error';
-
-        // Don't retry on API key or validation errors
-        if (isNonRetryableError(errMsg)) {
-          throw new Error(errMsg);
-        }
-
+        if (isNonRetryableError(errMsg)) throw new Error(errMsg);
         lastError = new Error(errMsg);
-        continue; // Retry on transient errors
+        continue;
       }
 
       if (!data) {
@@ -355,49 +484,28 @@ async function callWeatherEdgeFunction(
         continue;
       }
 
-      // Handle edge function returning error in the response body
       if (data.error && !data.results) {
         const errMsg = data.error + (data.details ? `: ${data.details}` : '');
-
-        // Don't retry on API key or validation errors
-        if (isNonRetryableError(errMsg)) {
-          throw new Error(errMsg);
-        }
-
+        if (isNonRetryableError(errMsg)) throw new Error(errMsg);
         lastError = new Error(errMsg);
         continue;
       }
 
-      // Validate response has results array
-      if (!data.results || !Array.isArray(data.results)) {
+      if (!Array.isArray(data.results)) {
         lastError = new Error('Invalid response format from weather service');
         continue;
       }
 
-      return data as WeatherResponse;
+      return normalizeWeatherResponse(data, coordinates, units);
     } catch (err: any) {
       lastError = err instanceof Error ? err : new Error(err?.message || 'Unknown error');
-
-      // Don't retry on non-transient errors
-      if (isNonRetryableError(lastError.message)) {
-        throw lastError;
-      }
+      if (isNonRetryableError(lastError.message)) throw lastError;
     }
   }
 
   throw lastError || new Error('Failed to fetch weather after retries');
 }
 
-/**
- * Call the get-weather edge function with the SIMPLE single-coordinate format.
- * Sends: { lat, lon, units }
- * Returns the parsed WeatherResponse or throws on failure.
- *
- * This uses the simplified input format supported by the edge function.
- * The response includes both the `results` array AND flat `location`/`current`/`updated_at` fields.
- *
- * Includes retry logic: 1 retry with 2s delay on transient failures.
- */
 async function callSimpleWeatherEdgeFunction(
   lat: number,
   lon: number,
@@ -410,13 +518,9 @@ async function callSimpleWeatherEdgeFunction(
     try {
       if (attempt > 0) {
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-        console.log(`[WeatherStore] Simple retry attempt ${attempt}/${retryCount}`);
       }
 
-      // Use the simple { lat, lon, units } format
-      const { data, error } = await supabase.functions.invoke('get-weather', {
-        body: { lat, lon, units },
-      });
+      const { data, error } = await invokeWeatherEdgeFunction({ lat, lon, units });
 
       if (error) {
         const errMsg = typeof error === 'string' ? error : error?.message || 'Edge function error';
@@ -430,7 +534,6 @@ async function callSimpleWeatherEdgeFunction(
         continue;
       }
 
-      // Handle error in response body
       if (data.error && !data.results) {
         const errMsg = data.error + (data.details ? `: ${data.details}` : '');
         if (isNonRetryableError(errMsg)) throw new Error(errMsg);
@@ -438,13 +541,12 @@ async function callSimpleWeatherEdgeFunction(
         continue;
       }
 
-      // Validate response has results array
-      if (!data.results || !Array.isArray(data.results)) {
+      if (!Array.isArray(data.results)) {
         lastError = new Error('Invalid response format from weather service');
         continue;
       }
 
-      return data as WeatherResponse;
+      return normalizeWeatherResponse(data, [{ lat, lng: lon, label: undefined }], units);
     } catch (err: any) {
       lastError = err instanceof Error ? err : new Error(err?.message || 'Unknown error');
       if (isNonRetryableError(lastError.message)) throw lastError;
@@ -454,8 +556,6 @@ async function callSimpleWeatherEdgeFunction(
   throw lastError || new Error('Failed to fetch weather after retries');
 }
 
-// ── Main Fetch Function ──────────────────────────────────────
-
 export interface WeatherFetchResult {
   data: WeatherResponse;
   source: 'live' | 'cache_fresh' | 'cache_stale' | 'fallback';
@@ -463,20 +563,6 @@ export interface WeatherFetchResult {
   error: string | null;
 }
 
-/**
- * Fetch weather data with full offline support.
- *
- * Priority order:
- * 1. Fresh cache (< 30 min) — return immediately, no network call
- * 2. Live fetch from edge function — cache result, retry once on failure
- * 3. Stale cache (any age) — return with staleness indicator
- * 4. Synthetic fallback — return with "unavailable" indicator
- *
- * This function NEVER throws. It always returns a WeatherFetchResult
- * with a source indicator and optional error message.
- *
- * @returns WeatherFetchResult with source indicator and optional error
- */
 export async function fetchWeatherWithStatus(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric' = 'imperial',
@@ -493,10 +579,10 @@ export async function fetchWeatherWithStatus(
 
   const key = coordKey(coordinates);
 
-  // Step 1: Check fresh cache (unless force refresh)
   if (!forceRefresh) {
     const fresh = getCached(key, false);
     if (fresh) {
+      setIssueRuntimeWeatherStatus('live');
       return {
         data: fresh.data,
         source: 'cache_fresh',
@@ -506,23 +592,17 @@ export async function fetchWeatherWithStatus(
     }
   }
 
-  // Step 2: Try live fetch (with retry)
   try {
-    // Quick connectivity check — skip network call if definitely offline
     if (!connectivity.isOnline()) {
       throw new Error('Device is offline');
     }
 
     const response = await callWeatherEdgeFunction(coordinates, units);
-
-    // Cache the successful response
     setCache(key, response);
 
-    // Check if any individual waypoints had errors
-    const waypointErrors = response.results
-      .filter(r => r.error)
-      .map(r => r.error);
+    const waypointErrors = response.results.filter(r => r.error).map(r => r.error);
 
+    setIssueRuntimeWeatherStatus('live');
     return {
       data: response,
       source: 'live',
@@ -533,17 +613,23 @@ export async function fetchWeatherWithStatus(
     };
   } catch (fetchErr: any) {
     const errorMsg = fetchErr?.message || 'Failed to fetch weather';
-    console.warn('[WeatherStore] Live fetch failed:', errorMsg);
+    reportRecoverableFailure({
+      severity: errorMsg.toLowerCase().includes('offline') ? 'medium' : 'high',
+      issueTitle: 'Weather fetch degraded',
+      ecsArea: 'weather',
+      error: fetchErr,
+      message: errorMsg,
+      signature: `weather_fetch:${errorMsg}`,
+      metadata: { coordinateCount: coordinates.length, forceRefresh },
+    });
 
-    // Provide more specific error messages for API key issues
     const userFacingError = isApiKeyError(errorMsg)
       ? 'Weather service not configured — OPENWEATHER_API_KEY may be missing or invalid. Contact your administrator.'
       : errorMsg;
 
-    // Step 3: Try stale cache
     const stale = getStaleCached(key);
     if (stale) {
-      console.log('[WeatherStore] Returning stale cache from', getWeatherAge(stale.cachedAt));
+      setIssueRuntimeWeatherStatus('stale');
       return {
         data: stale.data,
         source: 'cache_stale',
@@ -552,8 +638,7 @@ export async function fetchWeatherWithStatus(
       };
     }
 
-    // Step 4: Generate fallback
-    console.log('[WeatherStore] No cache available — generating fallback data');
+    setIssueRuntimeWeatherStatus('unavailable');
     return {
       data: generateFallbackWeather(coordinates, units),
       source: 'fallback',
@@ -563,12 +648,6 @@ export async function fetchWeatherWithStatus(
   }
 }
 
-/**
- * Legacy fetch function — maintained for backward compatibility.
- *
- * Prefer fetchWeatherWithStatus() for new code — it never throws
- * and provides source/staleness metadata.
- */
 export async function fetchWeather(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric' = 'imperial',
@@ -578,25 +657,17 @@ export async function fetchWeather(
   return result.data;
 }
 
-/**
- * Simple single-coordinate fetch — convenience wrapper.
- *
- * Uses the simplified { lat, lon, units } format supported by the edge function:
- *   supabase.functions.invoke("get-weather", { body: { lat, lon, units: "imperial" } })
- *
- * Returns the full WeatherFetchResult with source metadata.
- * This function NEVER throws.
- */
 export async function fetchWeatherForLocation(
   lat: number,
   lon: number,
   units: 'imperial' | 'metric' = 'imperial',
+  forceRefresh = false,
 ): Promise<WeatherFetchResult> {
   const key = singleCoordKey(lat, lon);
 
-  // Step 1: Check fresh cache
-  const fresh = getCached(key, false);
+  const fresh = !forceRefresh ? getCached(key, false) : null;
   if (fresh) {
+    setIssueRuntimeWeatherStatus('live');
     return {
       data: fresh.data,
       source: 'cache_fresh',
@@ -605,40 +676,46 @@ export async function fetchWeatherForLocation(
     };
   }
 
-  // Step 2: Try live fetch using simple format
   try {
     if (!connectivity.isOnline()) {
       throw new Error('Device is offline');
     }
 
     const response = await callSimpleWeatherEdgeFunction(lat, lon, units);
-
-    // Cache the successful response
     setCache(key, response);
 
-    const waypointErrors = response.results
-      .filter(r => r.error)
-      .map(r => r.error);
+    const waypointErrors = response.results.filter(r => r.error).map(r => r.error);
 
+    setIssueRuntimeWeatherStatus('live');
     return {
       data: response,
       source: 'live',
       cachedAt: Date.now(),
-      error: waypointErrors.length > 0
-        ? `Weather data partially unavailable`
-        : null,
+      error: waypointErrors.length > 0 ? 'Weather data partially unavailable' : null,
     };
   } catch (fetchErr: any) {
     const errorMsg = fetchErr?.message || 'Failed to fetch weather';
-    console.warn('[WeatherStore] Simple fetch failed:', errorMsg);
+    reportDegradedState({
+      severity: errorMsg.toLowerCase().includes('offline') ? 'medium' : 'high',
+      issueTitle: 'Location weather unavailable',
+      ecsArea: 'weather',
+      error: fetchErr,
+      message: errorMsg,
+      signature: `weather_location:${errorMsg}`,
+      metadata: {
+        latitude: Number.isFinite(lat) ? Number(lat.toFixed(3)) : null,
+        longitude: Number.isFinite(lon) ? Number(lon.toFixed(3)) : null,
+        forceRefresh,
+      },
+    });
 
     const userFacingError = isApiKeyError(errorMsg)
       ? 'Weather service not configured — OPENWEATHER_API_KEY may be missing or invalid.'
       : errorMsg;
 
-    // Step 3: Try stale cache
     const stale = getStaleCached(key);
     if (stale) {
+      setIssueRuntimeWeatherStatus('stale');
       return {
         data: stale.data,
         source: 'cache_stale',
@@ -647,7 +724,7 @@ export async function fetchWeatherForLocation(
       };
     }
 
-    // Step 4: Generate fallback
+    setIssueRuntimeWeatherStatus('unavailable');
     return {
       data: generateFallbackWeather([{ lat, lng: lon, label: undefined }], units),
       source: 'fallback',
@@ -657,12 +734,6 @@ export async function fetchWeatherForLocation(
   }
 }
 
-// ── Cache Query Functions ────────────────────────────────────
-
-/**
- * Get cached weather data (fresh only) for given coordinates.
- * Returns null if no fresh cache exists.
- */
 export function getCachedWeather(coordinates: WeatherCoordinate[]): WeatherResponse | null {
   if (coordinates.length === 0) return null;
   const key = coordKey(coordinates);
@@ -670,11 +741,6 @@ export function getCachedWeather(coordinates: WeatherCoordinate[]): WeatherRespo
   return cached?.data || null;
 }
 
-/**
- * Get any cached weather data (including stale) for given coordinates.
- * Returns null only if no cache exists at all.
- * Includes cachedAt timestamp for staleness display.
- */
 export function getAnyCachedWeather(
   coordinates: WeatherCoordinate[],
 ): { data: WeatherResponse; cachedAt: number } | null {
@@ -685,14 +751,9 @@ export function getAnyCachedWeather(
   return { data: cached.data, cachedAt: cached.cachedAt };
 }
 
-/**
- * Clear all weather cache entries.
- */
 export function clearWeatherCache(): void {
-  // Clear in-memory cache
   memoryCache.clear();
 
-  // Clear localStorage cache (web only)
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       const keys: string[] = [];
@@ -705,9 +766,6 @@ export function clearWeatherCache(): void {
   } catch {}
 }
 
-/**
- * Get total number of cached weather entries and their combined size.
- */
 export function getWeatherCacheStats(): { count: number; sizeBytes: number; memoryEntries: number } {
   let lsCount = 0;
   let lsSizeBytes = 0;
@@ -719,7 +777,7 @@ export function getWeatherCacheStats(): { count: number; sizeBytes: number; memo
         if (k && k.startsWith(CACHE_KEY_PREFIX)) {
           lsCount++;
           const val = localStorage.getItem(k);
-          if (val) lsSizeBytes += val.length * 2; // UTF-16
+          if (val) lsSizeBytes += val.length * 2;
         }
       }
     }
@@ -731,4 +789,3 @@ export function getWeatherCacheStats(): { count: number; sizeBytes: number; memo
     memoryEntries: memoryCache.size,
   };
 }
-

@@ -1,9 +1,9 @@
 /**
  * Weather Intelligence Panel
- * 
+ *
  * Main weather panel component that orchestrates weather data fetching
  * and displays current conditions, forecast, alerts, and trail conditions.
- * 
+ *
  * Offline Support:
  * - Shows stale cached data with age indicator when offline
  * - Displays "unavailable" state gracefully with fallback data
@@ -13,7 +13,7 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
@@ -36,18 +36,37 @@ import TrailConditionsCard from './TrailConditionsCard';
 type WeatherTab = 'current' | 'forecast' | 'trail';
 
 interface Props {
-  /** Coordinates to fetch weather for (waypoints along route) */
   coordinates?: WeatherCoordinate[];
-  /** Single coordinate fallback (e.g., user location or expedition center) */
-  latitude?: number | null;
-  longitude?: number | null;
+  latitude?: number | null | undefined;
+  longitude?: number | null | undefined;
   locationLabel?: string;
-  /** Whether to auto-fetch on mount */
   autoFetch?: boolean;
-  /** Compact mode for inline display */
   compact?: boolean;
-  /** Units preference */
   units?: 'imperial' | 'metric';
+}
+
+function coordsChanged(
+  a: WeatherCoordinate[],
+  b: WeatherCoordinate[],
+): boolean {
+  if (a.length !== b.length) return true;
+
+  for (let i = 0; i < a.length; i += 1) {
+    const latA = Number(a[i].lat.toFixed(3));
+    const lngA = Number(a[i].lng.toFixed(3));
+    const latB = Number(b[i].lat.toFixed(3));
+    const lngB = Number(b[i].lng.toFixed(3));
+
+    if (
+      latA !== latB ||
+      lngA !== lngB ||
+      (a[i].label ?? '') !== (b[i].label ?? '')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export default function WeatherIntelPanel({
@@ -68,65 +87,96 @@ export default function WeatherIntelPanel({
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(!compact);
   const [selectedWaypointIdx, setSelectedWaypointIdx] = useState(0);
-
-  // Data source tracking for offline/stale indicators
   const [dataSource, setDataSource] = useState<'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null>(null);
   const [cachedAt, setCachedAt] = useState<number | null>(null);
 
   const mountedRef = useRef(true);
   const prevOnlineRef = useRef(isOnline);
+  const prevCoordsRef = useRef<WeatherCoordinate[]>([]);
+  const lastFetchKeyRef = useRef<string>('');
 
   useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Build coordinates array
   const effectiveCoords = useMemo<WeatherCoordinate[]>(() => {
-    if (coordinates && coordinates.length > 0) return coordinates;
-    if (latitude != null && longitude != null) {
-      return [{ lat: latitude, lng: longitude, label: locationLabel || 'Current Position' }];
+    if (Array.isArray(coordinates) && coordinates.length > 0) {
+      return coordinates.filter(c =>
+        c != null &&
+        Number.isFinite(c.lat) &&
+        Number.isFinite(c.lng),
+      );
     }
+
+    if (latitude != null && longitude != null && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      return [{
+        lat: latitude,
+        lng: longitude,
+        label: locationLabel || 'Current Position',
+      }];
+    }
+
     return [];
   }, [coordinates, latitude, longitude, locationLabel]);
 
-  // Load any cached data on mount (including stale)
-  useEffect(() => {
-    if (effectiveCoords.length === 0) return;
-    const cached = getAnyCachedWeather(effectiveCoords);
-    if (cached) {
-      setWeatherData(cached.data.results);
-      setFetchedAt(cached.data.fetched_at);
-      setCachedAt(cached.cachedAt);
-      // Determine if it's fresh or stale
-      const staleness = getWeatherStaleness(cached.cachedAt);
-      setDataSource(staleness === 'fresh' ? 'cache_fresh' : 'cache_stale');
-    }
-  }, [effectiveCoords]);
+  const effectiveCoordsKey = useMemo(
+  () => effectiveCoords.map(c => `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${c.label ?? ''}`).join('|'),
+  [effectiveCoords],
+);
 
-  // Auto-fetch on mount
-  useEffect(() => {
-    if (autoFetch && effectiveCoords.length > 0 && !weatherData) {
-      handleFetch();
-    }
-  }, [autoFetch, effectiveCoords.length]);
+  const selectedWeather = weatherData && weatherData.length > 0
+    ? weatherData[Math.min(selectedWaypointIdx, weatherData.length - 1)]
+    : null;
 
-  // Auto-refresh when coming back online
-  useEffect(() => {
-    if (isOnline && !prevOnlineRef.current && effectiveCoords.length > 0) {
-      // Just came back online — refresh weather data
-      console.log('[WeatherPanel] Connectivity restored — refreshing weather');
-      handleFetch(true);
+  const totalAlerts = weatherData
+    ? weatherData.reduce((sum, w) => sum + (w.alerts?.length || 0), 0)
+    : 0;
+
+  const hasAlerts = totalAlerts > 0;
+
+  const worstTrailStatus = useMemo(() => {
+    if (!weatherData || weatherData.length === 0) return null;
+    const order = ['good', 'fair', 'poor', 'hazardous'];
+    let worst = 0;
+
+    for (const w of weatherData) {
+      const overall = w?.trail_conditions?.overall;
+      if (!overall) continue;
+      const idx = order.indexOf(overall);
+      if (idx > worst) worst = idx;
     }
-    prevOnlineRef.current = isOnline;
-  }, [isOnline, effectiveCoords.length]);
+
+    return order[worst] as 'good' | 'fair' | 'poor' | 'hazardous';
+  }, [weatherData]);
+
+  const stalenessInfo = useMemo(() => {
+    if (!cachedAt) return null;
+    return {
+      age: getWeatherAge(cachedAt),
+      level: getWeatherStaleness(cachedAt),
+    };
+  }, [cachedAt]);
+
+  const isFallback = dataSource === 'fallback';
+  const isStale = dataSource === 'cache_stale';
+  const showOfflineBanner = !isOnline || isStale || isFallback;
 
   const handleFetch = useCallback(async (force = false) => {
     if (effectiveCoords.length === 0) {
       setError('No coordinates available for weather lookup');
       return;
     }
+
+    console.log('[WEATHER PANEL] Fetch triggered', {
+      force,
+      coords: effectiveCoords.length,
+      first: effectiveCoords[0],
+      units,
+    });
+
     setLoading(true);
     setError(null);
+
     try {
       const result: WeatherFetchResult = await fetchWeatherWithStatus(
         effectiveCoords,
@@ -140,58 +190,81 @@ export default function WeatherIntelPanel({
       setFetchedAt(result.data.fetched_at);
       setDataSource(result.source);
       setCachedAt(result.cachedAt);
+      setSelectedWaypointIdx(0);
 
-      // Show error only if we got degraded data
+      console.log('[WEATHER PANEL] Fetch completed', {
+        source: result.source,
+        results: result.data?.results?.length ?? 0,
+        cachedAt: result.cachedAt,
+        error: result.error,
+      });
+
       if (result.source === 'fallback') {
         setError(result.error || 'Weather data unavailable');
       } else if (result.source === 'cache_stale') {
         setError(result.error || 'Using cached data — unable to refresh');
       } else {
-        setError(null);
+        setError(result.error || null);
       }
     } catch (err: any) {
       if (!mountedRef.current) return;
+      console.warn('[WEATHER PANEL] Fetch failed', err?.message || err);
       setError(err?.message || 'Failed to fetch weather data');
+    } finally {
+      if (mountedRef.current) setLoading(false);
     }
-    if (mountedRef.current) setLoading(false);
   }, [effectiveCoords, units]);
 
-  const selectedWeather = weatherData && weatherData.length > 0
-    ? weatherData[Math.min(selectedWaypointIdx, weatherData.length - 1)]
-    : null;
+  useEffect(() => {
+    if (effectiveCoords.length === 0) return;
 
-  const totalAlerts = weatherData
-    ? weatherData.reduce((sum, w) => sum + (w.alerts?.length || 0), 0)
-    : 0;
+    const cached = getAnyCachedWeather(effectiveCoords);
+    if (cached) {
+      console.log('[WEATHER PANEL] Loaded cached weather', {
+        coords: effectiveCoords.length,
+        age: getWeatherAge(cached.cachedAt),
+      });
 
-  const hasAlerts = totalAlerts > 0;
+      setWeatherData(cached.data.results);
+      setFetchedAt(cached.data.fetched_at);
+      setCachedAt(cached.cachedAt);
+      setSelectedWaypointIdx(0);
 
-  // Determine worst trail condition across all waypoints
-  const worstTrailStatus = useMemo(() => {
-    if (!weatherData) return null;
-    const order = ['good', 'fair', 'poor', 'hazardous'];
-    let worst = 0;
-    for (const w of weatherData) {
-      if (w.trail_conditions) {
-        const idx = order.indexOf(w.trail_conditions.overall);
-        if (idx > worst) worst = idx;
-      }
+      const staleness = getWeatherStaleness(cached.cachedAt);
+      setDataSource(staleness === 'fresh' ? 'cache_fresh' : 'cache_stale');
     }
-    return order[worst] as any;
-  }, [weatherData]);
+  }, [effectiveCoords]);
 
-  // Staleness info for UI
-  const stalenessInfo = useMemo(() => {
-    if (!cachedAt) return null;
-    return {
-      age: getWeatherAge(cachedAt),
-      level: getWeatherStaleness(cachedAt),
-    };
-  }, [cachedAt]);
+  useEffect(() => {
+    if (!autoFetch) return;
+    if (effectiveCoords.length === 0) return;
 
-  const isFallback = dataSource === 'fallback';
-  const isStale = dataSource === 'cache_stale';
-  const showOfflineBanner = !isOnline || isStale || isFallback;
+    const coordsAreNew = coordsChanged(prevCoordsRef.current, effectiveCoords);
+    const fetchKey = `${effectiveCoordsKey}|${units}`;
+    const firstTimeForKey = lastFetchKeyRef.current !== fetchKey;
+
+    console.log('[WEATHER PANEL] Auto-fetch check', {
+      coordsAreNew,
+      firstTimeForKey,
+      coords: effectiveCoords.length,
+      fetchKey,
+      hasWeatherData: !!weatherData,
+    });
+
+    if (coordsAreNew || firstTimeForKey || !weatherData) {
+      prevCoordsRef.current = effectiveCoords;
+      lastFetchKeyRef.current = fetchKey;
+      handleFetch(false);
+    }
+  }, [autoFetch, effectiveCoords, effectiveCoordsKey, units, handleFetch, weatherData]);
+
+  useEffect(() => {
+    if (isOnline && !prevOnlineRef.current && effectiveCoords.length > 0) {
+      console.log('[WEATHER PANEL] Connectivity restored — refreshing weather');
+      handleFetch(true);
+    }
+    prevOnlineRef.current = isOnline;
+  }, [isOnline, effectiveCoords.length, handleFetch]);
 
   if (effectiveCoords.length === 0) {
     return (
@@ -209,7 +282,6 @@ export default function WeatherIntelPanel({
 
   return (
     <View style={styles.container}>
-      {/* Panel header */}
       <TouchableOpacity
         style={styles.panelHeader}
         onPress={() => setExpanded(!expanded)}
@@ -226,6 +298,7 @@ export default function WeatherIntelPanel({
               color={isFallback ? TACTICAL.textMuted : TACTICAL.amber}
             />
           </View>
+
           <View style={{ flex: 1 }}>
             <View style={styles.panelTitleRow}>
               <Text style={styles.panelTitle}>WEATHER INTELLIGENCE</Text>
@@ -236,30 +309,39 @@ export default function WeatherIntelPanel({
                 </View>
               )}
             </View>
+
             <View style={styles.panelSubRow}>
               {selectedWeather?.current?.temp != null ? (
                 <Text style={styles.panelTemp}>
-                  {Math.round(selectedWeather.current.temp)}°
-                  {' '}{selectedWeather.current.weather_main || ''}
+                  {Math.round(selectedWeather.current.temp)}° {selectedWeather.current.weather_main || ''}
                 </Text>
               ) : isFallback ? (
                 <Text style={[styles.panelTemp, { color: TACTICAL.textMuted }]}>
                   Data unavailable
                 </Text>
-              ) : null}
+              ) : (
+                <Text style={[styles.panelTemp, { color: TACTICAL.textMuted }]}>
+                  Awaiting conditions
+                </Text>
+              )}
+
               {worstTrailStatus && (
                 <View style={[
                   styles.trailMiniPill,
                   { backgroundColor: getTrailOverallColor(worstTrailStatus) + '18' },
                 ]}>
-                  <View style={[
-                    styles.trailMiniDot,
-                    { backgroundColor: getTrailOverallColor(worstTrailStatus) },
-                  ]} />
-                  <Text style={[
-                    styles.trailMiniText,
-                    { color: getTrailOverallColor(worstTrailStatus) },
-                  ]}>
+                  <View
+                    style={[
+                      styles.trailMiniDot,
+                      { backgroundColor: getTrailOverallColor(worstTrailStatus) },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.trailMiniText,
+                      { color: getTrailOverallColor(worstTrailStatus) },
+                    ]}
+                  >
                     {worstTrailStatus.toUpperCase()}
                   </Text>
                 </View>
@@ -267,6 +349,7 @@ export default function WeatherIntelPanel({
             </View>
           </View>
         </View>
+
         <View style={styles.panelHeaderRight}>
           {hasAlerts && (
             <View style={styles.alertBadge}>
@@ -285,22 +368,25 @@ export default function WeatherIntelPanel({
 
       {expanded && (
         <View style={styles.panelBody}>
-          {/* Offline / Stale data banner */}
           {showOfflineBanner && weatherData && (
-            <View style={[
-              styles.statusBanner,
-              isFallback ? styles.statusBannerError : styles.statusBannerWarn,
-            ]}>
+            <View
+              style={[
+                styles.statusBanner,
+                isFallback ? styles.statusBannerError : styles.statusBannerWarn,
+              ]}
+            >
               <Ionicons
                 name={isFallback ? 'cloud-offline-outline' : isStale ? 'time-outline' : 'wifi-outline'}
                 size={13}
                 color={isFallback ? '#EF5350' : '#FFB300'}
               />
               <View style={styles.statusBannerContent}>
-                <Text style={[
-                  styles.statusBannerTitle,
-                  { color: isFallback ? '#EF5350' : '#FFB300' },
-                ]}>
+                <Text
+                  style={[
+                    styles.statusBannerTitle,
+                    { color: isFallback ? '#EF5350' : '#FFB300' },
+                  ]}
+                >
                   {isFallback
                     ? 'WEATHER UNAVAILABLE'
                     : isStale
@@ -327,7 +413,6 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Tab bar */}
           <View style={styles.tabBar}>
             {([
               { key: 'current' as WeatherTab, label: 'CONDITIONS', icon: 'thermometer-outline' },
@@ -335,8 +420,8 @@ export default function WeatherIntelPanel({
               { key: 'trail' as WeatherTab, label: 'TRAIL', icon: 'trail-sign-outline' },
             ]).map(t => {
               const isActive = tab === t.key;
-              // Dim forecast tab if no forecast data (fallback)
               const isDisabled = t.key === 'forecast' && isFallback;
+
               return (
                 <TouchableOpacity
                   key={t.key}
@@ -351,13 +436,21 @@ export default function WeatherIntelPanel({
                   <Ionicons
                     name={t.icon as any}
                     size={12}
-                    color={isDisabled ? TACTICAL.textMuted + '50' : isActive ? TACTICAL.amber : TACTICAL.textMuted}
+                    color={
+                      isDisabled
+                        ? `${TACTICAL.textMuted}50`
+                        : isActive
+                          ? TACTICAL.amber
+                          : TACTICAL.textMuted
+                    }
                   />
-                  <Text style={[
-                    styles.tabLabel,
-                    isActive && styles.tabLabelActive,
-                    isDisabled && styles.tabLabelDisabled,
-                  ]}>
+                  <Text
+                    style={[
+                      styles.tabLabel,
+                      isActive && styles.tabLabelActive,
+                      isDisabled && styles.tabLabelDisabled,
+                    ]}
+                  >
                     {t.label}
                   </Text>
                 </TouchableOpacity>
@@ -365,12 +458,11 @@ export default function WeatherIntelPanel({
             })}
           </View>
 
-          {/* Waypoint selector (if multiple) */}
           {weatherData && weatherData.length > 1 && (
             <View style={styles.waypointSelector}>
               {weatherData.map((w, idx) => (
                 <TouchableOpacity
-                  key={idx}
+                  key={`${w.label ?? 'wp'}_${idx}`}
                   style={[
                     styles.waypointPill,
                     selectedWaypointIdx === idx && styles.waypointPillActive,
@@ -397,7 +489,6 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Error state (only when no data at all) */}
           {error && !weatherData && (
             <View style={styles.errorBox}>
               <Ionicons name="alert-circle-outline" size={16} color="#EF5350" />
@@ -412,7 +503,6 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Loading state (only when no data at all) */}
           {loading && !weatherData && (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={TACTICAL.amber} />
@@ -420,7 +510,6 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Fallback empty state — when we have fallback data but no real conditions */}
           {isFallback && selectedWeather && !selectedWeather.current?.temp && tab === 'current' && (
             <View style={styles.fallbackBox}>
               <Ionicons name="cloud-offline-outline" size={28} color={TACTICAL.textMuted} />
@@ -442,15 +531,12 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Content */}
           {selectedWeather && !isFallback && (
             <View style={styles.contentArea}>
-              {/* Alerts always visible at top if present */}
               {selectedWeather.alerts && selectedWeather.alerts.length > 0 && (
                 <WeatherAlerts alerts={selectedWeather.alerts} />
               )}
 
-              {/* Current conditions tab */}
               {tab === 'current' && selectedWeather.current && (
                 <CurrentConditionsCard
                   conditions={selectedWeather.current}
@@ -459,7 +545,6 @@ export default function WeatherIntelPanel({
                 />
               )}
 
-              {/* Forecast tab */}
               {tab === 'forecast' && selectedWeather.forecast && (
                 <ForecastTimeline
                   forecast={selectedWeather.forecast}
@@ -467,7 +552,6 @@ export default function WeatherIntelPanel({
                 />
               )}
 
-              {/* Trail conditions tab */}
               {tab === 'trail' && selectedWeather.trail_conditions && (
                 <TrailConditionsCard
                   conditions={selectedWeather.trail_conditions}
@@ -476,14 +560,12 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {/* Trail conditions for fallback — always show the caution message */}
           {isFallback && tab === 'trail' && selectedWeather?.trail_conditions && (
             <View style={styles.contentArea}>
               <TrailConditionsCard conditions={selectedWeather.trail_conditions} />
             </View>
           )}
 
-          {/* Footer with refresh */}
           <View style={styles.footer}>
             <View style={styles.footerLeft}>
               {fetchedAt && dataSource !== 'fallback' && (
@@ -493,25 +575,32 @@ export default function WeatherIntelPanel({
                     : `Updated ${new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                 </Text>
               )}
+
               {dataSource === 'fallback' && (
                 <Text style={[styles.footerTimestamp, { color: '#EF5350' }]}>
                   No data
                 </Text>
               )}
+
               {isStale && stalenessInfo && (
-                <View style={[
-                  styles.stalenessPill,
-                  stalenessInfo.level === 'very_stale' && styles.stalenessPillDanger,
-                ]}>
-                  <Text style={[
-                    styles.stalenessPillText,
-                    stalenessInfo.level === 'very_stale' && { color: '#EF5350' },
-                  ]}>
+                <View
+                  style={[
+                    styles.stalenessPill,
+                    stalenessInfo.level === 'very_stale' && styles.stalenessPillDanger,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stalenessPillText,
+                      stalenessInfo.level === 'very_stale' && { color: '#EF5350' },
+                    ]}
+                  >
                     {stalenessInfo.level === 'very_stale' ? 'VERY OLD' : 'STALE'}
                   </Text>
                 </View>
               )}
             </View>
+
             <TouchableOpacity
               style={[
                 styles.refreshBtn,
@@ -530,10 +619,12 @@ export default function WeatherIntelPanel({
                     size={12}
                     color={isOnline ? TACTICAL.amber : TACTICAL.textMuted}
                   />
-                  <Text style={[
-                    styles.refreshText,
-                    !isOnline && { color: TACTICAL.textMuted },
-                  ]}>
+                  <Text
+                    style={[
+                      styles.refreshText,
+                      !isOnline && { color: TACTICAL.textMuted },
+                    ]}
+                  >
                     {isOnline ? 'REFRESH' : 'OFFLINE'}
                   </Text>
                 </>
@@ -580,8 +671,6 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     lineHeight: 16,
   },
-
-  // Panel header
   panelHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -690,14 +779,10 @@ const styles = StyleSheet.create({
     color: '#EF5350',
     fontFamily: 'Courier',
   },
-
-  // Panel body
   panelBody: {
     borderTopWidth: 1,
     borderTopColor: 'rgba(62,79,60,0.20)',
   },
-
-  // Status banners (offline / stale)
   statusBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -741,8 +826,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.30)',
   },
-
-  // Tab bar
   tabBar: {
     flexDirection: 'row',
     gap: 6,
@@ -780,8 +863,6 @@ const styles = StyleSheet.create({
   tabLabelDisabled: {
     color: TACTICAL.textMuted,
   },
-
-  // Waypoint selector
   waypointSelector: {
     flexDirection: 'row',
     gap: 6,
@@ -814,8 +895,6 @@ const styles = StyleSheet.create({
   waypointPillTextActive: {
     color: TACTICAL.amber,
   },
-
-  // Error
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -844,8 +923,6 @@ const styles = StyleSheet.create({
     color: '#EF5350',
     letterSpacing: 1,
   },
-
-  // Loading
   loadingBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -859,8 +936,6 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     letterSpacing: 1.5,
   },
-
-  // Fallback empty state
   fallbackBox: {
     alignItems: 'center',
     gap: 8,
@@ -901,15 +976,11 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     letterSpacing: 1.5,
   },
-
-  // Content
   contentArea: {
     paddingHorizontal: 14,
     gap: 12,
     paddingBottom: 4,
   },
-
-  // Footer
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -970,8 +1041,3 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
 });
-
-
-
-
-

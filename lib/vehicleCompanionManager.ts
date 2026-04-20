@@ -30,7 +30,6 @@ import { Platform } from 'react-native';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
-import { vehicleDisplayFallback } from './vehicleDisplayFallback';
 import { breadcrumbTracker } from './breadcrumbTracker';
 import type {
   CompanionPlatform,
@@ -53,7 +52,6 @@ let _graceTimer: ReturnType<typeof setTimeout> | null = null;
 // Store subscriptions
 let _displayStoreUnsub: (() => void) | null = null;
 let _modeEngineUnsub: (() => void) | null = null;
-let _fallbackUnsub: (() => void) | null = null;
 let _breadcrumbUnsub: (() => void) | null = null;
 let _sessionStateUnsub: (() => void) | null = null;
 
@@ -158,7 +156,8 @@ function _syncRoute(): void {
 function _syncBreadcrumb(): void {
   try {
     const bcState = breadcrumbTracker.get();
-    const fallbackState = vehicleDisplayFallback.isBreadcrumbPausedByGps();
+    const { gpsUIState } = require('./gpsUIState');
+    const gps = gpsUIState.get();
 
     const trail: BreadcrumbTrailSync = {
       isRecording: bcState.isRecording,
@@ -170,7 +169,7 @@ function _syncBreadcrumb(): void {
       bearingToStartDeg: bcState.bearingToStartDeg,
       canReturnToStart: bcState.canReturnToStart,
       isReturningToStart: bcState.isReturningToStart,
-      isPausedByGps: fallbackState,
+      isPausedByGps: !gps?.hasFix && bcState.pointCount > 0,
       recordingStartedAt: bcState.recordingStartedAt,
     };
 
@@ -201,7 +200,7 @@ function _syncLocation(): void {
       vehicleSessionState.updateVehicleLocation(location);
     } else {
       // Use fallback last known position
-      const lastKnown = vehicleDisplayFallback.getLastKnownPosition();
+      const lastKnown = vehicleDisplayStore.getLastKnownPosition();
       if (lastKnown) {
         vehicleSessionState.updateVehicleLocation({
           latitude: lastKnown.lat,
@@ -247,15 +246,13 @@ function _syncConnectivity(): void {
  */
 function _syncWeather(): void {
   try {
-    const health = vehicleDisplayFallback.get();
-    if (health.weather.available) {
-      if (health.weather.isStale) {
-        vehicleSessionState.setWeatherStatus('stale');
-      } else {
-        vehicleSessionState.setWeatherStatus('available');
-      }
-    } else {
+    const weather = vehicleDisplayStore.getWeatherHazardData();
+    if (weather.status === 'unavailable') {
       vehicleSessionState.setWeatherStatus('unavailable');
+    } else if (weather.source === 'cached' || weather.status === 'fallback') {
+      vehicleSessionState.setWeatherStatus('stale');
+    } else {
+      vehicleSessionState.setWeatherStatus('available');
     }
   } catch {}
 }
@@ -656,12 +653,6 @@ function _onModeEngineChange(): void {
   _syncMode();
 }
 
-function _onFallbackChange(): void {
-  if (!_isRunning) return;
-  _syncWeather();
-  _syncConnectivity();
-}
-
 function _onBreadcrumbChange(): void {
   if (!_isRunning) return;
   _syncBreadcrumb();
@@ -711,7 +702,6 @@ export const vehicleCompanionManager = {
     // Subscribe to ECS stores for reactive updates
     _displayStoreUnsub = vehicleDisplayStore.subscribe(_onDisplayStoreChange);
     _modeEngineUnsub = vehicleDisplayModeEngine.subscribe(_onModeEngineChange);
-    _fallbackUnsub = vehicleDisplayFallback.subscribe(_onFallbackChange);
     _breadcrumbUnsub = breadcrumbTracker.subscribe(_onBreadcrumbChange);
 
     // Perform initial full sync
@@ -752,10 +742,6 @@ export const vehicleCompanionManager = {
     if (_modeEngineUnsub) {
       _modeEngineUnsub();
       _modeEngineUnsub = null;
-    }
-    if (_fallbackUnsub) {
-      _fallbackUnsub();
-      _fallbackUnsub = null;
     }
     if (_breadcrumbUnsub) {
       _breadcrumbUnsub();

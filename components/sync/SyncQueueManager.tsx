@@ -380,7 +380,7 @@ export default function SyncQueueManager() {
   useEffect(() => {
     loadDirtyRows();
     loadQueueItems();
-  }, [syncStatus, dirtyCount, queueSize]);
+  }, [syncStatus, dirtyCount, queueSize, loadDirtyRows, loadQueueItems]);
 
   // ── Listen for queue changes ────────────────────────────────
   useEffect(() => {
@@ -388,7 +388,7 @@ export default function SyncQueueManager() {
       loadQueueItems();
     });
     return unsub;
-  }, []);
+  }, [loadQueueItems]);
 
   // ── Sync Now handler ────────────────────────────────────────
   const handleSyncNow = useCallback(async () => {

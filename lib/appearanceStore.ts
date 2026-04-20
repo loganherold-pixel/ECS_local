@@ -13,12 +13,14 @@
  * - No rapid toggling (hysteresis + time thresholds)
  */
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 export type AppearanceMode = 'auto' | 'dark' | 'light' | 'driving';
 export type EffectiveTheme = 'dark' | 'light' | 'driving';
 
 const STORAGE_KEY_MODE = 'ecs_appearance_mode';
 const STORAGE_KEY_AUTO_DRIVING = 'ecs_auto_driving_enabled';
+const appearancePersistence = createPersistedKeyValueCache('ecs_appearance_preferences');
 
 // ── Auto-driving thresholds ─────────────────────────────────
 const DRIVING_ACTIVATE_SPEED_MPH = 8;
@@ -29,26 +31,33 @@ const COOLDOWN_MS = 15_000; // 15s cooldown after manual override
 
 // ── Persistence helpers ─────────────────────────────────────
 function getStored(key: string): string | null {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(key);
-    }
-  } catch {}
-  return null;
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(key);
+      }
+    } catch {}
+    return null;
+  }
+  return appearancePersistence.get(key);
 }
 
 function setStored(key: string, value: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.setItem(key, value);
-    }
-  } catch {}
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, value);
+      }
+    } catch {}
+    return;
+  }
+  appearancePersistence.set(key, value);
 }
 
 type AppearanceListener = (mode: AppearanceMode, autoDriving: boolean) => void;
 
 class AppearanceStore {
-  private _mode: AppearanceMode = 'dark';
+  private _mode: AppearanceMode = 'auto';
   private _autoDrivingEnabled: boolean = false;
   private _listeners: Set<AppearanceListener> = new Set();
 
@@ -57,9 +66,13 @@ class AppearanceStore {
   private _speedBelowThresholdSince: number | null = null;
   private _autoDrivingActive: boolean = false;
   private _lastManualOverrideAt: number = 0;
+  private _hydrated = Platform.OS === 'web';
 
   constructor() {
     this._load();
+    if (Platform.OS !== 'web') {
+      void this._hydrateNative();
+    }
   }
 
   private _load(): void {
@@ -71,10 +84,38 @@ class AppearanceStore {
     this._autoDrivingEnabled = storedAutoDriving === 'true';
   }
 
+  private async _hydrateNative(): Promise<void> {
+    await appearancePersistence.waitForHydration();
+
+    const storedMode = appearancePersistence.get(STORAGE_KEY_MODE);
+    const storedAutoDriving = appearancePersistence.get(STORAGE_KEY_AUTO_DRIVING);
+    let changed = false;
+
+    if (storedMode && ['auto', 'dark', 'light', 'driving'].includes(storedMode) && storedMode !== this._mode) {
+      this._mode = storedMode as AppearanceMode;
+      changed = true;
+    }
+
+    const nextAutoDriving = storedAutoDriving === 'true';
+    if (storedAutoDriving != null && nextAutoDriving !== this._autoDrivingEnabled) {
+      this._autoDrivingEnabled = nextAutoDriving;
+      if (!nextAutoDriving) {
+        this._autoDrivingActive = false;
+      }
+      changed = true;
+    }
+
+    this._hydrated = true;
+    if (changed) {
+      this._notify();
+    }
+  }
+
   // ── Getters ─────────────────────────────────────────────
   get mode(): AppearanceMode { return this._mode; }
   get autoDrivingEnabled(): boolean { return this._autoDrivingEnabled; }
   get isAutoDrivingActive(): boolean { return this._autoDrivingActive; }
+  get isHydrated(): boolean { return this._hydrated; }
 
   // ── Setters ─────────────────────────────────────────────
   setMode(mode: AppearanceMode): void {
@@ -202,6 +243,12 @@ class AppearanceStore {
   private _notify(): void {
     this._listeners.forEach(fn => {
       try { fn(this._mode, this._autoDrivingEnabled); } catch {}
+    });
+  }
+
+  waitForHydration(): Promise<void> {
+    return appearancePersistence.waitForHydration().then(() => {
+      this._hydrated = true;
     });
   }
 }

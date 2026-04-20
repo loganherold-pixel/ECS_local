@@ -104,7 +104,7 @@ export default function GridLayoutPicker({ currentLayout, onSelect, disabled }: 
       fadeAnim.setValue(0);
       scaleAnim.setValue(0.9);
     }
-  }, [pickerVisible]);
+  }, [pickerVisible, fadeAnim, scaleAnim]);
 
   const handleSelect = (layout: GridLayout) => {
     onSelect(layout);
@@ -133,7 +133,7 @@ export default function GridLayoutPicker({ currentLayout, onSelect, disabled }: 
       </TouchableOpacity>
 
       {/* Picker Modal */}
-      <ECSModal visible={pickerVisible} onClose={() => setPickerVisible(false)} tier="global">
+      <ECSModal visible={pickerVisible} onClose={() => setPickerVisible(false)} tier="global" stackBehavior="replace">
 
         <TouchableOpacity
           style={styles.backdrop}

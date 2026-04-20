@@ -38,7 +38,7 @@ export function validateRouteMetadata<T extends Record<string, any>>(
   route: T,
   routeId: string,
 ): T {
-  const safe = { ...route };
+  const safe: Record<string, any> = { ...route };
 
   // String fields — default to empty or descriptive placeholder
   if (!safe.name || typeof safe.name !== 'string') {
@@ -101,7 +101,7 @@ export function validateRouteMetadata<T extends Record<string, any>>(
   safe.remotenessScore = clampScore(safe.remotenessScore, 1, 10);
   safe.estimatedDays = Math.max(1, safe.estimatedDays);
 
-  return safe;
+  return safe as T;
 }
 
 // ══════════════════════════════════════════════════════════

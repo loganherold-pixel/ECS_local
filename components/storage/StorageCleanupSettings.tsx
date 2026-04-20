@@ -92,7 +92,16 @@ export default function StorageCleanupSettings({ onToast }: Props) {
 
   // ── Load data on mount ─────────────────────────────────
   useEffect(() => {
-    refreshData();
+    const cfg = tileCacheStore.getQuotaConfig();
+    setConfig(cfg);
+    setQuotaStatus(tileCacheStore.getQuotaStatus());
+    setHistory(getCleanupHistoryEntries());
+    setQuotaLimitMB(String(cfg.quotaLimitMB));
+    setStaleRegionDays(String(cfg.staleRegionDays));
+    setWarningThreshold(String(Math.round(cfg.warningThreshold * 100)));
+    setCriticalThreshold(String(Math.round(cfg.criticalThreshold * 100)));
+    setAutoCleanupEnabled(cfg.autoCleanupEnabled);
+    setHasChanges(false);
   }, []);
 
   const refreshData = useCallback(() => {

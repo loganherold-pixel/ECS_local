@@ -36,6 +36,7 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import type { TelemetryAvailability } from '../../lib/telemetryStateEngine';
+import { EASING, MOTION } from '../../lib/motion';
 
 // ── Props ────────────────────────────────────────────────────
 export interface TelemetryPlaceholderProps {
@@ -77,24 +78,24 @@ const STATE_CONFIG: Record<TelemetryAvailability, {
   awaiting_connection: {
     icon: 'bluetooth-outline',
     iconColor: 'rgba(212,175,55,0.5)',
-    primary: 'Awaiting Device Connection',
-    secondary: 'Connect a compatible power or telemetry source to activate live data.',
+    primary: 'Waiting for ECS live feed',
+    secondary: 'Open setup to connect a compatible power or telemetry source.',
     accentColor: 'rgba(212,175,55,0.6)',
     bgTint: 'rgba(212,175,55,0.03)',
   },
   unavailable: {
     icon: 'close-circle-outline',
     iconColor: 'rgba(255,255,255,0.25)',
-    primary: 'Telemetry Source Unavailable',
-    secondary: 'This source is not supported for the current configuration.',
+    primary: 'ECS source unavailable',
+    secondary: 'This widget is not receiving a supported live or saved source yet.',
     accentColor: 'rgba(255,255,255,0.3)',
     bgTint: 'rgba(255,255,255,0.02)',
   },
   error: {
     icon: 'alert-circle-outline',
     iconColor: 'rgba(239,83,80,0.5)',
-    primary: 'Live Data Temporarily Unavailable',
-    secondary: 'Telemetry will resume automatically when the connection is restored.',
+    primary: 'Live feed temporarily unavailable',
+    secondary: 'ECS will refresh this widget when the connection returns.',
     accentColor: 'rgba(239,83,80,0.5)',
     bgTint: 'rgba(239,83,80,0.03)',
   },
@@ -118,10 +119,11 @@ export default function TelemetryPlaceholder({
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 300,
+      duration: MOTION.stateTransition,
+      easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [fadeAnim]);
 
   // Resolve display values
   const displayIcon = iconName || config.icon;
@@ -140,9 +142,9 @@ export default function TelemetryPlaceholder({
       <Animated.View style={[styles.compactContainer, { opacity: fadeAnim }]}>
         <Ionicons name={displayIcon} size={12} color={displayAccent} />
         <Text style={[styles.compactText, { color: displayAccent }]} numberOfLines={1}>
-          {state === 'awaiting_connection' ? 'AWAITING' :
-           state === 'unavailable' ? 'N/A' :
-           state === 'error' ? 'ERROR' : 'OK'}
+          {state === 'awaiting_connection' ? 'WAITING' :
+           state === 'unavailable' ? 'UNAVAILABLE' :
+           state === 'error' ? 'PARTIAL' : 'LIVE'}
         </Text>
       </Animated.View>
     );
@@ -179,7 +181,7 @@ export default function TelemetryPlaceholder({
           activeOpacity={0.7}
         >
           <Ionicons name="link-outline" size={12} color={TACTICAL.amber} />
-          <Text style={styles.connectButtonText}>Connect Device</Text>
+          <Text style={styles.connectButtonText}>Open Setup</Text>
         </TouchableOpacity>
       )}
     </Animated.View>
@@ -204,10 +206,11 @@ export function TelemetryPanelPlaceholder({
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 400,
+      duration: MOTION.stateTransition,
+      easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [fadeAnim]);
 
   const shouldShowConnect = showConnectAction !== undefined
     ? showConnectAction
@@ -241,13 +244,13 @@ export function TelemetryPanelPlaceholder({
         {shouldShowConnect && onConnectDevice && (
           <TouchableOpacity
             style={panelStyles.connectButton}
-            onPress={onConnectDevice}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="link-outline" size={14} color={TACTICAL.amber} />
-            <Text style={panelStyles.connectButtonText}>Connect Device</Text>
-          </TouchableOpacity>
-        )}
+          onPress={onConnectDevice}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="link-outline" size={14} color={TACTICAL.amber} />
+          <Text style={panelStyles.connectButtonText}>Open Setup</Text>
+        </TouchableOpacity>
+      )}
       </View>
     </Animated.View>
   );

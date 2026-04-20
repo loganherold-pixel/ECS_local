@@ -38,7 +38,7 @@ const MODE_CONFIG: Record<AppearanceMode, {
   dark: { icon: 'moon-outline', label: 'DARK', color: '#8A8AFF' },
   light: { icon: 'sunny-outline', label: 'LIGHT', color: '#FFB800' },
   driving: { icon: 'car-sport-outline', label: 'HI-VIS', color: '#E0A030' },
-  auto: { icon: 'contrast-outline', label: 'AUTO', color: '#80C0FF' },
+  auto: { icon: 'contrast-outline', label: 'DYNAMIC', color: '#80C0FF' },
 };
 
 export default function ThemeToggle({ size = 28, onLongPress, showLabel = false, compact = false }: ThemeToggleProps) {

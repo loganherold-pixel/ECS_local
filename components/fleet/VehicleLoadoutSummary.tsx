@@ -201,7 +201,7 @@ export default function VehicleLoadoutSummary({
       });
     });
     return unsub;
-  }, [loadout?.id, fetchLoadout]);
+  }, [loadout, fetchLoadout]);
 
   // ── Handle retry tap on failed sync indicator ─────────────
   const handleRetrySync = useCallback(() => {
@@ -216,7 +216,7 @@ export default function VehicleLoadoutSummary({
       <View style={styles.container}>
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={TACTICAL.textMuted} />
-          <Text style={styles.loadingText}>Loading loadout...</Text>
+          <Text style={styles.loadingText}>Loading readiness...</Text>
         </View>
       </View>
     );
@@ -230,14 +230,14 @@ export default function VehicleLoadoutSummary({
           <View style={styles.emptyIconWrap}>
             <Ionicons name="cube-outline" size={12} color={TACTICAL.textMuted} />
           </View>
-          <Text style={styles.emptyText}>No loadout linked</Text>
+          <Text style={styles.emptyText}>No loadout staged</Text>
           <TouchableOpacity
             style={styles.addBtn}
             onPress={onOpenLoadout}
             activeOpacity={0.7}
           >
             <Ionicons name="add-circle-outline" size={12} color={ECS_GOLD} />
-            <Text style={styles.addBtnText}>ADD LOADOUT</Text>
+            <Text style={styles.addBtnText}>OPEN LOADOUT</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -324,10 +324,10 @@ export default function VehicleLoadoutSummary({
 const styles = StyleSheet.create({
   container: {
     marginTop: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.18)',
-    backgroundColor: 'rgba(196, 138, 44, 0.04)',
+    borderColor: 'rgba(196, 138, 44, 0.14)',
+    backgroundColor: 'rgba(255, 255, 255, 0.02)',
     overflow: 'hidden',
   },
 
@@ -336,14 +336,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   loadingText: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '600',
     color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
 
   // ── Empty State ───────────────────────────────────────────
@@ -351,8 +351,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   emptyIconWrap: {
     width: 22,
@@ -364,28 +364,27 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     flex: 1,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '600',
     color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
-    fontStyle: 'italic',
+    letterSpacing: 0.25,
   },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.35)',
-    backgroundColor: 'rgba(196, 138, 44, 0.08)',
+    borderColor: 'rgba(196, 138, 44, 0.24)',
+    backgroundColor: 'rgba(196, 138, 44, 0.06)',
   },
   addBtnText: {
-    fontSize: 8,
-    fontWeight: '900',
+    fontSize: 9,
+    fontWeight: '800',
     color: ECS_GOLD,
-    letterSpacing: 1,
+    letterSpacing: 0.7,
   },
 
   // ── Summary ───────────────────────────────────────────────
@@ -393,48 +392,48 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
   },
   summaryIconWrap: {
-    width: 26,
-    height: 26,
-    borderRadius: 7,
-    backgroundColor: 'rgba(196, 138, 44, 0.12)',
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(196, 138, 44, 0.09)',
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.25)',
+    borderColor: 'rgba(196, 138, 44, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   summaryInfo: {
     flex: 1,
-    gap: 3,
+    gap: 5,
   },
   summaryName: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
     color: TACTICAL.text,
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   summaryChips: {
     flexDirection: 'row',
-    gap: 5,
+    gap: 6,
     flexWrap: 'wrap',
   },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 5,
     backgroundColor: 'rgba(62, 79, 60, 0.12)',
   },
   chipText: {
     fontSize: 8,
     fontWeight: '700',
     color: TACTICAL.textMuted,
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   failedChipBorder: {
     borderWidth: 1,

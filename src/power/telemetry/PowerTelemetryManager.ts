@@ -50,14 +50,14 @@ const DEFAULT_CAPABILITIES: PowerCapabilities = {
  * the corresponding key in `base`. Returns a new object — neither
  * argument is mutated.
  */
-function mergeObject<T extends Record<string, unknown>>(
+function mergeObject<T extends object>(
   base: T | undefined,
   patch: T | undefined,
 ): T | undefined {
   if (!patch) return base;
   if (!base) return { ...patch };
-  const out = { ...base } as Record<string, unknown>;
-  for (const key of Object.keys(patch)) {
+  const out = { ...(base as object) } as Record<string, unknown>;
+  for (const key of Object.keys(patch as object)) {
     const val = (patch as Record<string, unknown>)[key];
     if (val !== undefined) {
       out[key] = val;

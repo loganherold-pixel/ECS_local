@@ -16,7 +16,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Dimensions,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
@@ -39,16 +38,18 @@ export interface ContainerGridProps {
   items: LoadoutItem[];
   /** Called when a container card is tapped */
   onContainerPress: (containerKey: string) => void;
+  /** Grid column count for compact overview layouts */
+  columns?: number;
 }
 
 // ── Grid Constants ──────────────────────────────────────────
 const GRID_GAP = 6;
-const GRID_PAD = 12;
 
 export default function ContainerGrid({
   containerZones,
   items,
   onContainerPress,
+  columns = 2,
 }: ContainerGridProps) {
   // ── Compute per-container stats ────────────────────────────
   const containerStats = useMemo(() => {
@@ -69,8 +70,8 @@ export default function ContainerGrid({
 
   // ── Build 2-column grid rows ──────────────────────────────
   const rows: ContainerZone[][] = [];
-  for (let i = 0; i < containerZones.length; i += 2) {
-    rows.push(containerZones.slice(i, i + 2));
+  for (let i = 0; i < containerZones.length; i += columns) {
+    rows.push(containerZones.slice(i, i + columns));
   }
 
   return (
@@ -91,11 +92,13 @@ export default function ContainerGrid({
                 weightLbs={stat.weight}
                 itemCount={stat.count}
                 onPress={() => onContainerPress(zone.id)}
+                compact={columns >= 3}
               />
             );
           })}
-          {/* Fill empty space if odd number of cards */}
-          {row.length === 1 && <View style={{ flex: 1 }} />}
+          {Array.from({ length: Math.max(0, columns - row.length) }).map((_, fillerIndex) => (
+            <View key={`filler-${rowIdx}-${fillerIndex}`} style={{ flex: 1 }} />
+          ))}
         </View>
       ))}
 
@@ -140,9 +143,9 @@ export default function ContainerGrid({
 // ═══════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: GRID_PAD,
-    paddingTop: 6,
-    paddingBottom: 4,
+    paddingHorizontal: 8,
+    paddingTop: 2,
+    paddingBottom: 2,
     gap: GRID_GAP,
   },
   gridRow: {
@@ -156,7 +159,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(138,138,133,0.15)',
@@ -198,7 +201,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 7,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(196, 138, 44, 0.25)',
@@ -227,7 +230,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
   },
   totalWeight: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '900',
     fontFamily: 'Courier',
     color: TACTICAL.text,

@@ -605,7 +605,13 @@ export default function NavigateRunDetail() {
                 <>
                   <MapRenderer
                     points={mapRunPoints}
-                    waypoints={run.waypoints || []}
+                    waypoints={(run.waypoints || []).map((waypoint: any, index: number) => ({
+                      id: waypoint?.id ?? `wp_${index}`,
+                      latitude: Number(waypoint?.latitude ?? waypoint?.lat ?? 0),
+                      longitude: Number(waypoint?.longitude ?? waypoint?.lng ?? 0),
+                      title: waypoint?.title ?? waypoint?.name,
+                      description: waypoint?.description,
+                    }))}
                     healthLevel={health?.overall || 'green'}
                     mapStyle={mapStyle}
                     mapboxToken={mapToken || ''}
@@ -616,7 +622,6 @@ export default function NavigateRunDetail() {
                     interactive
                     segments={segmentFeatures}
                     bailoutMarkers={bailoutMarkers}
-                    onSegmentTap={handleSegmentTap}
                     onUserDrag={() => setCameraMode('free')}
                   />
 

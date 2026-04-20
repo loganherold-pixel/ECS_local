@@ -8,11 +8,17 @@
  */
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, TextInput, StyleSheet, Platform, Alert,
+  View, Text, TouchableOpacity, StyleSheet, Platform, Alert,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import {
+  ECSResultsEmptyState,
+  ECSResultsMetaRow,
+  ECSSearchField,
+} from '../ECSResults';
 
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
+import { ECS_CTA_LABELS } from '../../lib/ecsStateCopy';
 import { pinStore } from '../../lib/pinStore';
 import {
   type ECSPin, type PinType, type PinSortMode,
@@ -82,6 +88,44 @@ export default function PinDrawer({
 
   // Compute active filter summary for header badge
   const filterCount = activePinTypeFilters.length;
+  const hasSearchQuery = search.trim().length > 0;
+  const hasLocalFilters =
+    activeTypeFilters.length > 0 ||
+    expeditionOnly ||
+    unresolvedOnly ||
+    !showWaypoints ||
+    !showIncidents;
+  const hasAnyActiveFilters = filterCount > 0 || hasSearchQuery || hasLocalFilters;
+
+  const handleResetListState = useCallback(() => {
+    setSearch('');
+    setActiveTypeFilters([]);
+    setShowWaypoints(true);
+    setShowIncidents(true);
+    setExpeditionOnly(false);
+    setUnresolvedOnly(false);
+    onPinTypeFilterReset();
+  }, [onPinTypeFilterReset]);
+
+  const pinResultSummary = useMemo(() => {
+    const summary: { label: string; selected?: boolean }[] = [
+      { label: `${filteredPins.length} Result${filteredPins.length === 1 ? '' : 's'}` },
+    ];
+    if (hasSearchQuery) summary.push({ label: `Search "${search.trim()}"`, selected: true });
+    if (filterCount > 0) summary.push({ label: `${filterCount} Categor${filterCount === 1 ? 'y' : 'ies'}`, selected: true });
+    if (activeTypeFilters.length > 0) summary.push({ label: `${activeTypeFilters.length} Type${activeTypeFilters.length === 1 ? '' : 's'}`, selected: true });
+    if (unresolvedOnly) summary.push({ label: 'Unresolved Only', selected: true });
+    if (expeditionOnly) summary.push({ label: 'Active Expedition', selected: true });
+    return summary;
+  }, [
+    activeTypeFilters.length,
+    expeditionOnly,
+    filterCount,
+    filteredPins.length,
+    hasSearchQuery,
+    search,
+    unresolvedOnly,
+  ]);
 
   return (
     <View style={styles.container}>
@@ -125,21 +169,13 @@ export default function PinDrawer({
 
           {/* Search */}
           <View style={styles.searchRow}>
-            <View style={styles.searchInput}>
-              <Ionicons name="search-outline" size={13} color={TACTICAL.textMuted} />
-              <TextInput
-                style={styles.searchText}
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search pins..."
-                placeholderTextColor={TACTICAL.textMuted + '60'}
-              />
-              {search.length > 0 && (
-                <TouchableOpacity onPress={() => setSearch('')}>
-                  <Ionicons name="close-circle" size={14} color={TACTICAL.textMuted} />
-                </TouchableOpacity>
-              )}
-            </View>
+            <ECSSearchField
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search Pins"
+              onClear={() => setSearch('')}
+              style={styles.searchField}
+            />
             <TouchableOpacity
               style={[styles.filterToggle, showFilters && styles.filterToggleActive]}
               onPress={() => setShowFilters(!showFilters)}
@@ -155,6 +191,11 @@ export default function PinDrawer({
               <Ionicons name="share-outline" size={14} color={TACTICAL.textMuted} />
             </TouchableOpacity>
           </View>
+
+          <ECSResultsMetaRow
+            chips={pinResultSummary}
+            style={styles.resultsMeta}
+          />
 
           {/* Filters */}
           {showFilters && (
@@ -247,22 +288,32 @@ export default function PinDrawer({
 
           {/* Pin List */}
           {filteredPins.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="pin-outline" size={20} color={TACTICAL.textMuted} />
-              <Text style={styles.emptyText}>
-                {filterCount > 0 ? 'No pins match selected categories' : 'No pins match filters'}
-              </Text>
-              {filterCount > 0 && (
-                <TouchableOpacity
-                  style={styles.resetFilterBtn}
-                  onPress={onPinTypeFilterReset}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="refresh-outline" size={12} color={TACTICAL.amber} />
-                  <Text style={styles.resetFilterText}>SHOW ALL PINS</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <ECSResultsEmptyState
+              title={hasSearchQuery ? 'No Matching Pins' : 'No Pins Available'}
+              message={
+                hasSearchQuery
+                  ? 'Clear the search or reset filters to reopen the full pin list.'
+                  : hasAnyActiveFilters
+                    ? 'Reset filters to reopen the full pin list.'
+                    : 'Pins will appear here as waypoints and incidents are added.'
+              }
+              icon="pin-outline"
+              actionLabel={
+                hasSearchQuery
+                  ? ECS_CTA_LABELS.clearSearch
+                  : hasAnyActiveFilters
+                    ? ECS_CTA_LABELS.resetFilters
+                    : undefined
+              }
+              onAction={
+                hasSearchQuery
+                  ? () => setSearch('')
+                  : hasAnyActiveFilters
+                    ? handleResetListState
+                    : undefined
+              }
+              style={styles.emptyState}
+            />
           ) : (
             filteredPins.map(pin => (
               <PinCard
@@ -391,13 +442,7 @@ const styles = StyleSheet.create({
   },
 
   searchRow: { flexDirection: 'row', gap: 6, padding: 10, paddingBottom: 6 },
-  searchInput: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(62,79,60,0.08)',
-    borderWidth: 1, borderColor: TACTICAL.border, borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 7,
-  },
-  searchText: { ...TYPO.B2, color: TACTICAL.text, flex: 1, fontSize: 12 },
+  searchField: { flex: 1 },
   filterToggle: {
     width: 36, height: 36, borderRadius: 8,
     alignItems: 'center', justifyContent: 'center',
@@ -431,16 +476,14 @@ const styles = StyleSheet.create({
   sortChipActive: { borderColor: TACTICAL.amber + '50', backgroundColor: 'rgba(196,138,44,0.08)' },
   sortChipText: { ...TYPO.U2, fontSize: 7, color: TACTICAL.textMuted, letterSpacing: 2 },
 
-  emptyState: { alignItems: 'center', padding: 20, gap: 6 },
-  emptyText: { ...TYPO.B2, color: TACTICAL.textMuted, fontSize: 11 },
-  resetFilterBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6,
-    borderWidth: 1, borderColor: TACTICAL.amber + '40',
-    backgroundColor: 'rgba(196,138,44,0.08)',
+  resultsMeta: {
+    marginHorizontal: 10,
+    marginBottom: 6,
+  },
+  emptyState: {
+    marginHorizontal: 10,
     marginTop: 4,
   },
-  resetFilterText: { ...TYPO.U2, fontSize: 8, color: TACTICAL.amber, letterSpacing: 2 },
 
   // Pin Card
   pinCard: {

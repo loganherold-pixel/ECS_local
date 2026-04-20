@@ -50,7 +50,7 @@ function ElevationMiniChart({
   width,
   height,
 }: {
-  profile: Array<{ distanceMi: number; elevationFt: number }>;
+  profile: { distanceMi: number; elevationFt: number }[];
   width: number;
   height: number;
 }) {

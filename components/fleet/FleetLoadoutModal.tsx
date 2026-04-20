@@ -19,14 +19,11 @@ import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
-  Modal,
-  Platform,
-  StatusBar,
 } from 'react-native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSModalShell from '../ECSModalShell';
 import { TACTICAL } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
 import type { Vehicle } from '../../lib/types';
@@ -38,8 +35,6 @@ import { vehicleStore } from '../../lib/vehicleStore';
 
 
 // ── ECS Gold Constants ──────────────────────────────────────
-const ECS_GOLD = '#C48A2C';
-const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
 const TAG = '[FleetLoadoutModal]';
 
 // ── Props ───────────────────────────────────────────────────
@@ -183,56 +178,43 @@ export default function FleetLoadoutModal({
   if (!resolvedVehicle) return null;
 
   return (
-    <Modal
+    <ECSModalShell
       visible={visible}
-      animationType="slide"
-      presentationStyle="fullScreen"
-      onRequestClose={handleClose}
-    >
-      <View style={styles.modalContainer}>
-        {/* ── Modal Header ──────────────────────────────────── */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View style={styles.headerIconWrap}>
-              <Ionicons name="cube-outline" size={16} color={ECS_GOLD} />
-            </View>
-            <View>
-              <Text style={styles.headerBrand}>ECS FLEET</Text>
-              <Text style={styles.headerTitle}>CONFIGURE LOADOUT</Text>
-            </View>
-          </View>
-          <View style={styles.headerRight}>
-            <View style={styles.vehicleBadge}>
-              <Ionicons name="car-outline" size={10} color={TACTICAL.amber} />
-              <Text style={styles.vehicleBadgeText} numberOfLines={1}>
-                {resolvedVehicle.name}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.headerCloseBtn}
-              onPress={handleClose}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="close" size={20} color={TACTICAL.textMuted} />
-            </TouchableOpacity>
-          </View>
+      onClose={handleClose}
+      title="Configure Loadout"
+      subtitle="Review storage zones, update carried gear, and save this rig back to Fleet."
+      icon="cube-outline"
+      eyebrow="FLEET LOADOUT"
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={0.95}
+      minHeightFraction={0.9}
+      scrollable={false}
+      dismissOnBackdrop={false}
+      allowSwipeDismiss={false}
+      headerRight={
+        <View style={styles.vehicleBadge}>
+          <Ionicons name="car-outline" size={10} color={TACTICAL.amber} />
+          <Text style={styles.vehicleBadgeText} numberOfLines={1}>
+            {resolvedVehicle.name}
+          </Text>
         </View>
-
-        {/* ── Loadout Step (fleet-edit mode) ─────────────────── */}
-        <LoadoutWizardStep
-          mode="fleet-edit"
-          prebuiltContainerZones={containerZones}
-          vehicleId={resolvedVehicle.id}
-          userId={userId}
-          onSave={handleSave}
-          onClose={handleClose}
-          saving={saving}
-          vehicleName={resolvedVehicle.name}
-          showToast={showToast}
-        />
-      </View>
-    </Modal>
+      }
+      bodyStyle={styles.modalContainer}
+      contentContainerStyle={styles.modalBody}
+    >
+      <LoadoutWizardStep
+        mode="fleet-edit"
+        prebuiltContainerZones={containerZones}
+        vehicleId={resolvedVehicle.id}
+        userId={userId}
+        onSave={handleSave}
+        onClose={handleClose}
+        saving={saving}
+        vehicleName={resolvedVehicle.name}
+        showToast={showToast}
+      />
+    </ECSModalShell>
   );
 }
 
@@ -244,51 +226,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0B0F12',
   },
-
-  // ── Header ────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: TOP_PAD,
-    paddingBottom: 10,
-    borderBottomWidth: 1.5,
-    borderBottomColor: 'rgba(196, 138, 44, 0.25)',
-    backgroundColor: 'rgba(11, 15, 18, 0.98)',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+  modalBody: {
     flex: 1,
-  },
-  headerIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(196, 138, 44, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerBrand: {
-    fontSize: 8,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    letterSpacing: 2,
-  },
-  headerTitle: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    letterSpacing: 1.5,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    minHeight: 0,
+    padding: 0,
   },
   vehicleBadge: {
     flexDirection: 'row',
@@ -307,16 +248,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: TACTICAL.amber,
     letterSpacing: 0.5,
-  },
-  headerCloseBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.3)',
-    backgroundColor: 'rgba(62, 79, 60, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });
 

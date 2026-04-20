@@ -39,10 +39,19 @@ let _supabase: any = null;
 async function getSupabase(): Promise<any> {
   if (_supabase) return _supabase;
   try {
-    const mod = await import("../../../../app/lib/supabase");
+    const mod = await import("../../../../lib/supabase");
     _supabase = mod.supabase;
+    if (__DEV__) {
+      console.log("[EcoFlowCloudProvider] Supabase client loaded from ../../../../lib/supabase");
+    }
     return _supabase;
-  } catch {
+  } catch (err) {
+    if (__DEV__) {
+      console.warn(
+        "[EcoFlowCloudProvider] Failed to import Supabase client from ../../../../lib/supabase:",
+        err instanceof Error ? err.message : err,
+      );
+    }
     return null;
   }
 }
@@ -53,8 +62,8 @@ async function getSupabase(): Promise<any> {
 const SIMULATE_TOKEN = "SIMULATE";
 
 /** Edge function names. */
-const POLL_FUNCTION = "power-ecoflow-poll";
-const DEVICE_LIST_FUNCTION = "power-ecoflow-device-list";
+const POLL_FUNCTION = "ecoflow";
+const DEVICE_LIST_FUNCTION = "ecoflow";
 
 // ── Polling mode ────────────────────────────────────────────────────────
 
@@ -204,12 +213,12 @@ type EdgePollResponse = EdgePollSuccess | EdgePollError;
 
 interface EdgeDeviceListSuccess {
   ok: true;
-  devices: Array<{
+  devices: {
     deviceId: string;
     deviceName: string;
     model: string;
     productType: string;
-  }>;
+  }[];
   deviceCount: number;
   fetchedAt: string;
 }
@@ -221,6 +230,47 @@ interface EdgeDeviceListError {
 }
 
 type EdgeDeviceListResponse = EdgeDeviceListSuccess | EdgeDeviceListError;
+
+// ── Legacy name normalization helpers ───────────────────────────────────
+
+function inferEcoFlowMetadata(
+  name: string,
+): { model: string; productType: string } {
+  const raw = String(name || '').trim();
+  const upper = raw.toUpperCase();
+
+  if (upper.includes('GLACIER')) {
+    return { model: 'GLACIER', productType: 'refrigerator' };
+  }
+  if (upper.includes('WAVE 2')) {
+    return { model: 'WAVE 2', productType: 'portable_ac' };
+  }
+  if (upper.includes('ALTERNATOR CHARGER')) {
+    return { model: 'Alternator Charger', productType: 'charger' };
+  }
+  if (upper.includes('DELTA 3 1500')) {
+    return { model: 'DELTA 3 1500', productType: 'power_station' };
+  }
+  if (upper.includes('DELTA MINI')) {
+    return { model: 'DELTA Mini', productType: 'power_station' };
+  }
+  if (upper.includes('DELTA 2 MAX')) {
+    return { model: 'DELTA 2 Max', productType: 'power_station' };
+  }
+  if (upper.includes('DELTA 2')) {
+    return { model: 'DELTA 2', productType: 'power_station' };
+  }
+  if (upper.includes('DELTA PRO')) {
+    return { model: 'DELTA Pro', productType: 'power_station' };
+  }
+  if (upper.includes('RIVER 2 PRO')) {
+    return { model: 'RIVER 2 Pro', productType: 'power_station' };
+  }
+  if (upper.includes('RIVER')) {
+    return { model: raw, productType: 'power_station' };
+  }
+  return { model: raw || 'EcoFlow Device', productType: 'unknown' };
+}
 
 // ── EcoFlowCloudProvider class ──────────────────────────────────────────
 
@@ -389,7 +439,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     try {
       const { data, error } = await supabase.functions.invoke(
         DEVICE_LIST_FUNCTION,
-        { body: { include_raw: false } },
+        { body: { action: 'devices' } },
       );
 
       // Handle invoke-level errors (includes 501)
@@ -412,6 +462,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       }
 
       const response = data as EdgeDeviceListResponse | null;
+
+      // Support both:
+      // 1. new split function shape: { ok: true, devices: [{ deviceId, deviceName, model, productType }], deviceCount }
+      // 2. legacy shared ecoflow shape: { ok: true, devices: [{ id, name, online }] }
       if (!response || !response.ok) {
         const errResp = response as EdgeDeviceListError | null;
         if (errResp?.code === "pending_approval") {
@@ -425,11 +479,42 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         return [];
       }
 
-      // Map edge devices to CatalogPowerDevice
-      const successResp = response as EdgeDeviceListSuccess;
+      const rawDevices = Array.isArray((response as any).devices) ? (response as any).devices : [];
+      const normalizedDevices = rawDevices
+        .map((d: any) => {
+          const deviceId = String(d?.deviceId ?? d?.id ?? d?.sn ?? '').trim();
+          const deviceName = String(d?.deviceName ?? d?.name ?? 'EcoFlow Device').trim();
+          const inferred = inferEcoFlowMetadata(deviceName);
+          const modelRaw = String(d?.model ?? '').trim();
+          const productTypeRaw = String(d?.productType ?? '').trim();
+
+          return {
+            deviceId,
+            deviceName,
+            model: modelRaw && modelRaw.toLowerCase() !== 'unknown' ? modelRaw : inferred.model,
+            productType:
+              productTypeRaw && productTypeRaw.toLowerCase() !== 'unknown'
+                ? productTypeRaw
+                : inferred.productType,
+            online: Boolean(d?.online ?? false),
+          };
+        })
+        .filter((d: any) => d.deviceId.length > 0);
+
+      if (__DEV__) {
+        console.log(
+          `[EcoFlowCloudProvider] listDevices(): received ${normalizedDevices.length} device(s) from ${DEVICE_LIST_FUNCTION}.`,
+        );
+        for (const device of normalizedDevices) {
+          console.log(
+            `[EcoFlowCloudProvider] device → id=${device.deviceId} | name=${device.deviceName} | model=${device.model} | productType=${device.productType}`,
+          );
+        }
+      }
+
       const now = Date.now();
-      return successResp.devices.map(
-        (d): CatalogPowerDevice => ({
+      return normalizedDevices.map(
+        (d: any): CatalogPowerDevice => ({
           provider: "EcoFlow",
           deviceId: d.deviceId,
           name: d.deviceName,
@@ -556,7 +641,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
    *
    * Consumed by the Power Center device contribution panel.
    */
-  getPerDeviceTelemetry(): Array<{
+  getPerDeviceTelemetry(): {
     deviceId: string;
     name?: string;
     model?: string;
@@ -568,8 +653,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     pendingApproval: boolean;
     error: string | null;
     polledAt: number;
-  }> {
-    const results: Array<{
+  }[] {
+    const results: {
       deviceId: string;
       name?: string;
       model?: string;
@@ -581,7 +666,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       pendingApproval: boolean;
       error: string | null;
       polledAt: number;
-    }> = [];
+    }[] = [];
 
     for (const [id, result] of this.perDeviceResults) {
       const bat = result.telemetry?.battery;
@@ -638,6 +723,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         );
       }
       const catalogDevices = await this.listDevices();
+      if (__DEV__) {
+        console.log(
+          `[EcoFlowCloudProvider] resolveActiveDevices(): catalog returned ${catalogDevices.length} device(s).`,
+        );
+      }
       if (catalogDevices.length > 0) {
         this.activeDeviceIds = catalogDevices.map((d) => d.deviceId);
         if (__DEV__) {
@@ -769,6 +859,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     try {
       const { data, error } = await supabase.functions.invoke(POLL_FUNCTION, {
         body: {
+          action: 'telemetry',
           deviceId,
           include_raw: __DEV__,
         },
@@ -1070,22 +1161,102 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     response: EdgePollSuccess,
   ): Partial<PowerTelemetry> {
     const now = Date.now();
-    const t = response.telemetry;
+    const raw = (response.telemetry && typeof response.telemetry === "object"
+      ? (response.telemetry as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
 
-    // Compute derived values
-    const netIn = (t.battery.wattsIn ?? 0) + (t.solar.watts ?? 0);
-    const netOut = t.battery.wattsOut ?? 0;
-    const isCharging = t.flags.charging ?? netIn > netOut;
+    const readNumber = (...keys: string[]): number | undefined => {
+      for (const key of keys) {
+        const value = raw[key];
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string" && value.trim()) {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+      }
+      return undefined;
+    };
 
-    // Estimate runtime if discharging
+    const glacierSoc =
+      readNumber("bms_bmsStatus.soc", "bms_bmsStatus.f32ShowSoc", "pd.batPct");
+
+    const batteryVoltsRaw =
+      readNumber("bms_bmsStatus.vol", "bms_emsStatus.chgVol", "pd.motorVol");
+
+    const outputWattsRaw =
+      readNumber("bms_bmsStatus.outWatts", "pd.motorWat");
+
+    const directInputWattsRaw =
+      readNumber("bms_bmsStatus.inWatts");
+
+    const tempCRaw =
+      readNumber("bms_bmsStatus.tmp", "bms_bmsStatus.maxCellTmp", "bms_bmsStatus.minCellTmp");
+
+    const chgState = readNumber("bms_emsStatus.chgState");
+    const chgCmd = readNumber("bms_emsStatus.chgCmd");
+    const chgAmpRaw = readNumber("bms_emsStatus.chgAmp", "bms_bmsStatus.tagChgAmp");
+
+    const volts =
+      batteryVoltsRaw !== undefined
+        ? (batteryVoltsRaw > 1000 ? batteryVoltsRaw / 1000 : batteryVoltsRaw)
+        : undefined;
+
+    let wattsIn =
+      directInputWattsRaw !== undefined ? directInputWattsRaw : undefined;
+
+    if ((wattsIn === undefined || wattsIn <= 0) && batteryVoltsRaw && chgAmpRaw) {
+      const derivedWattsIn = (batteryVoltsRaw / 1000) * (chgAmpRaw / 1000);
+      if (Number.isFinite(derivedWattsIn) && derivedWattsIn > 0) {
+        wattsIn = Math.round(derivedWattsIn);
+      }
+    }
+
+    const wattsOut =
+      outputWattsRaw !== undefined ? outputWattsRaw : undefined;
+
+    const solarWatts = 0;
+
+    const tempC =
+      tempCRaw !== undefined
+        ? (tempCRaw > 200 ? tempCRaw / 10 : tempCRaw)
+        : undefined;
+
+    const isCharging =
+      (typeof chgState === "number" && chgState > 0) ||
+      chgCmd === 1 ||
+      (typeof wattsIn === "number" && wattsIn > 0);
+
     let estRuntimeMin: number | undefined;
-    if (!isCharging && netOut > 0 && t.battery.socPct !== undefined) {
-      // Use profile capacity as rough estimate (real capacity unknown from quota)
-      const remainingWh = (t.battery.socPct / 100) * this.profile.capacityWh;
-      const netDraw = netOut - netIn;
+    if (!isCharging && typeof wattsOut === "number" && wattsOut > 0 && typeof glacierSoc === "number") {
+      const remainingWh = (glacierSoc / 100) * this.profile.capacityWh;
+      const netDraw = wattsOut - (wattsIn ?? 0);
       if (netDraw > 0) {
         estRuntimeMin = Math.round((remainingWh / netDraw) * 60);
       }
+    }
+
+    const model =
+      (typeof raw["device.model"] === "string" && String(raw["device.model"]).trim()) ||
+      (typeof raw["model"] === "string" && String(raw["model"]).trim()) ||
+      (typeof raw["productName"] === "string" && String(raw["productName"]).trim()) ||
+      (typeof raw["deviceName"] === "string" && String(raw["deviceName"]).trim()) ||
+      (this.deviceId?.startsWith("BX") ? "GLACIER" : this.profile.model);
+
+    if (__DEV__) {
+      console.log("[EcoFlowCloudProvider] mapped telemetry snapshot", {
+        deviceId: this.deviceId || "unknown",
+        model,
+        socPct: glacierSoc,
+        volts,
+        wattsIn,
+        wattsOut,
+        solarWatts,
+        tempC,
+        isCharging,
+        chgState,
+        chgCmd,
+        chgAmpRaw,
+      });
     }
 
     return {
@@ -1093,29 +1264,27 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       source: "cloud",
 
       device: {
-        id: t.device.id || this.deviceId || "unknown",
+        id: this.deviceId || "unknown",
         vendor: "EcoFlow",
-        model:
-          t.device.model !== "unknown" ? t.device.model : this.profile.model,
+        model,
       },
 
       battery: {
-        socPct: t.battery.socPct,
-        volts: t.battery.volts,
-        wattsIn: t.battery.wattsIn,
-        wattsOut: t.battery.wattsOut,
-        tempC: t.battery.tempC,
+        socPct: glacierSoc,
+        volts: volts !== undefined ? round(volts, 3) : undefined,
+        wattsIn: wattsIn !== undefined ? Math.round(wattsIn) : undefined,
+        wattsOut: wattsOut !== undefined ? Math.round(wattsOut) : undefined,
+        tempC: tempC !== undefined ? round(tempC, 1) : undefined,
         estRuntimeMin,
       },
 
       solar: {
-        watts: t.solar.watts,
+        watts: solarWatts,
       },
 
       flags: {
         charging: isCharging,
-        lowBattery:
-          t.battery.socPct !== undefined ? t.battery.socPct < 15 : undefined,
+        lowBattery: glacierSoc !== undefined ? glacierSoc < 15 : undefined,
         stale: false,
       },
     };

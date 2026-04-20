@@ -18,22 +18,22 @@ import type {
 } from "./types";
 
 // Extend types with dirty flag for local tracking
-export interface LocalTrip extends Trip {
+export interface LocalTrip extends Omit<Trip, 'dirty'> {
   dirty: number; // 0 or 1 for indexing
 }
-export interface LocalRiskScore extends RiskScore {
+export interface LocalRiskScore extends Omit<RiskScore, 'dirty'> {
   dirty: number;
 }
-export interface LocalLoadItem extends LoadItem {
+export interface LocalLoadItem extends Omit<LoadItem, 'dirty'> {
   dirty: number;
 }
-export interface LocalLoadMapSlot extends LoadMapSlot {
+export interface LocalLoadMapSlot extends Omit<LoadMapSlot, 'dirty'> {
   dirty: number;
 }
-export interface LocalFuelWaterLog extends FuelWaterLog {
+export interface LocalFuelWaterLog extends Omit<FuelWaterLog, 'dirty'> {
   dirty: number;
 }
-export interface LocalWaypoint extends Waypoint {
+export interface LocalWaypoint extends Omit<Waypoint, 'dirty'> {
   dirty: number;
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Platform, Alert, Switch } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Platform, Switch } from 'react-native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 
@@ -21,9 +21,26 @@ import SyncQueueManager from '../../components/sync/SyncQueueManager';
 import StorageCleanupSettings from '../../components/storage/StorageCleanupSettings';
 import OfflineExpeditionDataPanel from '../../components/offline-data/OfflineExpeditionDataPanel';
 import RateLimitCleanupPanel from '../../components/RateLimitCleanupPanel';
+import TacticalPopupShell from '../../components/TacticalPopupShell';
+import EcsIssueIntelligencePanel from '../../components/admin/EcsIssueIntelligencePanel';
+import FieldIssueReportModal from '../../components/feedback/FieldIssueReportModal';
 import type { AppearanceMode } from '../../lib/appearanceStore';
+import { openManageSubscription } from '../../lib/subscriptionAccess';
+import { resolveEcsAccessState } from '../../lib/auth/accessResolver';
+import { resolveRoleSurfaceScopes } from '../../lib/auth/roleScopeResolver';
+import { resolveAccountUx } from '../../lib/auth/accountUXResolver';
 
-type SubTab = 'risk' | 'logs' | 'manifest' | 'templates' | 'sync' | 'storage' | 'offline-data' | 'rate-limits' | 'settings';
+type SubTab =
+  | 'risk'
+  | 'logs'
+  | 'manifest'
+  | 'templates'
+  | 'sync'
+  | 'storage'
+  | 'offline-data'
+  | 'rate-limits'
+  | 'settings'
+  | 'stability';
 
 
 
@@ -36,8 +53,45 @@ const MODE_LABELS: Record<AppearanceMode, { label: string; icon: keyof typeof Io
   driving: { label: 'Driving (Hi-Vis)', icon: 'car-sport-outline', color: '#E0A030' },
 };
 
+function SubscriptionFactRow({
+  label,
+  value,
+  colors,
+}: {
+  label: string;
+  value: string;
+  colors: any;
+}) {
+  return (
+    <View style={styles.subscriptionFactRow}>
+      <Text style={[styles.subscriptionFactLabel, { color: colors.textMuted }]}>{label}</Text>
+      <Text style={[styles.subscriptionFactValue, { color: colors.textPrimary }]}>{value}</Text>
+    </View>
+  );
+}
+
 function MoreScreenInner() {
-  const { activeTrip, loadItems, riskScore, fuelWaterLogs, userSettings, refreshActiveTrip, showToast, user, operatorInfo, signOut } = useApp();
+  const {
+    activeTrip,
+    loadItems,
+    riskScore,
+    fuelWaterLogs,
+    userSettings,
+    refreshActiveTrip,
+    showToast,
+    user,
+    operatorInfo,
+    isOnline,
+    signOut,
+    rotateSharedAccountPassword,
+    refreshAccessState,
+    billingFlowState,
+    billingError,
+    ecsProProduct,
+    loadEcsProProduct,
+    purchaseEcsProMonthly,
+    restoreEcsProAccess,
+  } = useApp();
   const { palette, colors, appearanceMode, autoDrivingEnabled, effectiveTheme, isAutoDrivingActive, setAppearanceMode, setAutoDrivingEnabled } = useTheme();
   const router = useRouter();
 
@@ -45,6 +99,13 @@ function MoreScreenInner() {
   const [subTab, setSubTab] = useState<SubTab>('risk');
   const [manifestShowAll, setManifestShowAll] = useState(false);
   const [appearanceModalVisible, setAppearanceModalVisible] = useState(false);
+  const [sharedAccountModalVisible, setSharedAccountModalVisible] = useState(false);
+  const [fieldIssueModalVisible, setFieldIssueModalVisible] = useState(false);
+  const [sharedPassword, setSharedPassword] = useState('');
+  const [sharedPasswordConfirm, setSharedPasswordConfirm] = useState('');
+  const [revokeSharedSessions, setRevokeSharedSessions] = useState(false);
+  const [sharedAccountBusy, setSharedAccountBusy] = useState(false);
+  const [sharedAccountError, setSharedAccountError] = useState('');
 
 
   // Risk state
@@ -71,7 +132,7 @@ function MoreScreenInner() {
 
   useFocusEffect(useCallback(() => {
     refreshActiveTrip();
-  }, []));
+  }, [refreshActiveTrip]));
 
   // Update risk fields when riskScore changes
   React.useEffect(() => {
@@ -97,6 +158,130 @@ function MoreScreenInner() {
   }, [userSettings]);
 
   const risk = calculateRisk(riskFields as RiskScore);
+  const resolvedAccess = React.useMemo(
+    () =>
+      resolveEcsAccessState({
+        operatorInfo,
+        authenticated: !!user,
+        isOnline: true,
+      }),
+    [operatorInfo, user],
+  );
+  const roleScopes = React.useMemo(
+    () => resolveRoleSurfaceScopes(resolvedAccess),
+    [resolvedAccess],
+  );
+  const isFriendsAndFamilyAccess = resolvedAccess.role === 'friends_and_family';
+  const canManageFriendsAndFamilyAccess = resolvedAccess.canManageFriendsAndFamilyAccess;
+  const hasAdminAccess = roleScopes.showAdminTools;
+  const canPurchasePro =
+    !!user &&
+    roleScopes.showBillingActions &&
+    !resolvedAccess.hasFullAccess;
+  const accountUx = React.useMemo(
+    () =>
+      resolveAccountUx({
+        operatorInfo,
+        accessState: resolvedAccess,
+        authenticated: !!user,
+        isOnline,
+        billingFlowState,
+        productPriceLabel: ecsProProduct?.priceLabel ?? null,
+      }),
+    [billingFlowState, ecsProProduct?.priceLabel, isOnline, operatorInfo, resolvedAccess, user],
+  );
+  const purchaseStatusText = accountUx.billingFlowLabel;
+  const showBillingRestore = accountUx.availableActions.some((action) => action.id === 'restore_purchases');
+  const showManageSubscription = accountUx.availableActions.some((action) => action.id === 'manage_subscription');
+  const showRefreshAccess = accountUx.availableActions.some((action) => action.id === 'refresh_access');
+
+  React.useEffect(() => {
+    if (!canPurchasePro || subTab !== 'settings' || ecsProProduct || billingFlowState !== 'idle') return;
+    loadEcsProProduct().catch(() => {});
+  }, [billingFlowState, canPurchasePro, ecsProProduct, loadEcsProProduct, subTab]);
+
+  const resetSharedAccountForm = useCallback(() => {
+    setSharedPassword('');
+    setSharedPasswordConfirm('');
+    setRevokeSharedSessions(false);
+    setSharedAccountError('');
+    setSharedAccountBusy(false);
+  }, []);
+
+  const closeSharedAccountModal = useCallback(() => {
+    if (sharedAccountBusy) return;
+    setSharedAccountModalVisible(false);
+    resetSharedAccountForm();
+  }, [resetSharedAccountForm, sharedAccountBusy]);
+
+  React.useEffect(() => {
+    if (!operatorInfo?.revoke_sessions_supported) {
+      setRevokeSharedSessions(false);
+    }
+  }, [operatorInfo?.revoke_sessions_supported]);
+
+  const handleRotateSharedPassword = useCallback(async () => {
+    if (!canManageFriendsAndFamilyAccess) {
+      setSharedAccountError('This account is not authorized to manage shared access.');
+      return;
+    }
+
+    if (sharedPassword.length < 8) {
+      setSharedAccountError('Password must be at least 8 characters.');
+      return;
+    }
+
+    if (sharedPassword !== sharedPasswordConfirm) {
+      setSharedAccountError('Passwords do not match.');
+      return;
+    }
+
+    setSharedAccountBusy(true);
+    setSharedAccountError('');
+
+    const shouldRevokeSessions =
+      operatorInfo?.revoke_sessions_supported === true && revokeSharedSessions;
+    const result = await rotateSharedAccountPassword(sharedPassword, shouldRevokeSessions);
+
+    if (!result.success) {
+      setSharedAccountBusy(false);
+      setSharedAccountError(result.error || 'Unable to rotate the shared account password.');
+      return;
+    }
+
+    setSharedAccountBusy(false);
+    setSharedAccountModalVisible(false);
+    resetSharedAccountForm();
+
+    await refreshAccessState().catch(() => {});
+
+    if (shouldRevokeSessions && result.sessions_revoked) {
+      showToast('Shared password updated. Sign in again with the new password.');
+      try {
+        await signOut();
+      } catch {}
+      return;
+    }
+
+    if (shouldRevokeSessions && !result.revoke_supported) {
+      showToast('Shared password updated. Global session revocation is unavailable in this auth environment.');
+      return;
+    }
+
+    showToast('Shared password updated');
+  }, [
+    canManageFriendsAndFamilyAccess,
+    operatorInfo?.revoke_sessions_supported,
+    resetSharedAccountForm,
+    revokeSharedSessions,
+    rotateSharedAccountPassword,
+    router,
+    refreshAccessState,
+    sharedPassword,
+    sharedPasswordConfirm,
+    showToast,
+    signOut,
+  ]);
 
   const saveRisk = async () => {
     if (!activeTrip) return;
@@ -229,6 +414,9 @@ Expedition Command System
             { key: 'storage' as SubTab, label: 'Storage', icon: 'server-outline' as const },
             { key: 'offline-data' as SubTab, label: 'Offline Data', icon: 'cloud-download-outline' as const },
             { key: 'rate-limits' as SubTab, label: 'Rate Limits', icon: 'speedometer-outline' as const },
+            ...(hasAdminAccess
+              ? [{ key: 'stability' as SubTab, label: 'Stability', icon: 'pulse-outline' as const }]
+              : []),
             { key: 'settings' as SubTab, label: 'Settings', icon: 'settings-outline' as const },
           ]).map(tab => (
 
@@ -262,7 +450,9 @@ Expedition Command System
             <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Offline Expedition Data</Text>
             <OfflineExpeditionDataPanel onToast={showToast} />
           </>
-        ) : noTrip && subTab !== 'settings' && subTab !== 'rate-limits' ? (
+        ) : subTab === 'stability' && hasAdminAccess ? (
+          <EcsIssueIntelligencePanel colors={colors} onToast={showToast} />
+        ) : noTrip && subTab !== 'settings' ? (
           <View style={styles.emptyState}>
             <Ionicons name="alert-circle-outline" size={48} color={colors.textMuted} />
             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No Active Trip</Text>
@@ -594,7 +784,7 @@ Expedition Command System
             </TouchableOpacity>
 
             {/* ═══════════ AI EXPEDITION ASSISTANT SECTION ═══════════ */}
-            <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>AI ASSISTANT</Text>
+            <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>ECS ASSISTANT</Text>
             <TouchableOpacity
               style={[styles.powerCenterBtn, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}
               onPress={() => router.push('/assistant' as any)}
@@ -604,12 +794,207 @@ Expedition Command System
                 <Ionicons name="shield-outline" size={20} color={colors.gold} />
               </View>
               <View style={styles.powerCenterInfo}>
-                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>AI Expedition Assistant</Text>
+                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>ECS Expedition Assistant</Text>
                 <Text style={[styles.powerCenterDesc, { color: colors.textMuted }]}>Context-aware expedition guidance using ECS systems</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.gold} />
             </TouchableOpacity>
 
+            <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>ACCOUNT ACCESS</Text>
+            <View style={[styles.subscriptionCard, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}>
+              <View style={styles.subscriptionHeader}>
+                <View style={[styles.subscriptionIcon, { backgroundColor: colors.goldMuted }]}>
+                  <Ionicons name="diamond-outline" size={18} color={colors.gold} />
+                </View>
+                <View style={styles.subscriptionInfo}>
+                  <Text style={[styles.subscriptionTitle, { color: colors.textPrimary }]}>{accountUx.title}</Text>
+                  <Text style={[styles.subscriptionSubtitle, { color: colors.textMuted }]}>
+                    {accountUx.subtitle}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.subscriptionBadgeRow}>
+                <View
+                  style={[
+                    styles.opBadge,
+                    {
+                      borderColor:
+                        accountUx.tone === 'positive'
+                          ? colors.success
+                          : accountUx.tone === 'warning'
+                            ? colors.warning
+                            : accountUx.tone === 'danger'
+                              ? colors.danger
+                              : colors.goldBorder,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.opBadgeText,
+                      {
+                        color:
+                          accountUx.tone === 'positive'
+                            ? colors.success
+                            : accountUx.tone === 'warning'
+                              ? colors.warning
+                              : accountUx.tone === 'danger'
+                                ? colors.danger
+                                : colors.gold,
+                      },
+                    ]}
+                  >
+                    {accountUx.badgeLabel}
+                  </Text>
+                </View>
+                {operatorInfo?.is_shared_account ? (
+                  <View style={[styles.opBadge, { borderColor: colors.goldBorder }]}>
+                    <Text style={[styles.opBadgeText, { color: colors.gold }]}>FRIENDS & FAMILY</Text>
+                  </View>
+                ) : null}
+                {operatorInfo?.is_admin ? (
+                  <View style={[styles.opBadge, { borderColor: colors.warning }]}>
+                    <Text style={[styles.opBadgeText, { color: colors.warning }]}>ADMIN</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={[styles.subscriptionFacts, { borderColor: colors.border }]}>
+                <SubscriptionFactRow label="Account" value={accountUx.title} colors={colors} />
+                <SubscriptionFactRow label="Status" value={accountUx.stateLabel} colors={colors} />
+                <SubscriptionFactRow label="Access Source" value={resolvedAccess.sourceLabel} colors={colors} />
+                <SubscriptionFactRow label={accountUx.renewalLabel} value={accountUx.renewalValue} colors={colors} />
+                <SubscriptionFactRow label={accountUx.billingLabel} value={accountUx.billingValue} colors={colors} />
+                <SubscriptionFactRow label="Last Verified" value={accountUx.lastVerifiedLabel} colors={colors} />
+              </View>
+
+              {purchaseStatusText ? (
+                <Text style={[styles.subscriptionStatusText, { color: billingFlowState === 'restore_failed' ? colors.danger : colors.textSecondary }]}>
+                  {purchaseStatusText}
+                </Text>
+              ) : null}
+
+              {billingError ? (
+                <Text style={[styles.subscriptionErrorText, { color: colors.danger }]}>{billingError}</Text>
+              ) : null}
+
+              {!user ? (
+                <Text style={[styles.subscriptionNote, { color: colors.textMuted }]}>
+                  Sign in to verify, restore, or manage ECS access for this account.
+                </Text>
+              ) : canPurchasePro ? (
+                <View style={styles.subscriptionActionRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.subscriptionPrimaryBtn,
+                      { backgroundColor: billingFlowState === 'purchasing' || billingFlowState === 'confirming_access' ? colors.goldMuted : colors.gold },
+                    ]}
+                    onPress={async () => {
+                      const result = await purchaseEcsProMonthly();
+                      if (result.success) {
+                        showToast('ECS Pro access confirmed');
+                      } else if (result.cancelled) {
+                        showToast('Purchase cancelled');
+                      } else if (result.pending) {
+                        showToast(result.error || 'Purchase is pending confirmation');
+                      } else if (result.error) {
+                        showToast(result.error);
+                      }
+                    }}
+                    disabled={billingFlowState === 'purchasing' || billingFlowState === 'confirming_access' || billingFlowState === 'restore_in_progress'}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="card-outline" size={16} color="#000" />
+                    <Text style={styles.subscriptionPrimaryBtnText}>
+                      {ecsProProduct?.priceLabel ? `START PRO - ${ecsProProduct.priceLabel.toUpperCase()}` : 'START PRO'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {showBillingRestore ? (
+                    <TouchableOpacity
+                      style={[styles.subscriptionSecondaryBtn, { borderColor: colors.border, backgroundColor: colors.bgInput }]}
+                      onPress={async () => {
+                        const result = await restoreEcsProAccess();
+                        showToast(result.success ? 'Purchases restored' : (result.error || 'Restore failed'));
+                      }}
+                      disabled={billingFlowState === 'restore_in_progress' || billingFlowState === 'purchasing' || billingFlowState === 'confirming_access'}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="refresh-outline" size={16} color={colors.textPrimary} />
+                      <Text style={[styles.subscriptionSecondaryBtnText, { color: colors.textPrimary }]}>RESTORE PURCHASES</Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {showManageSubscription ? (
+                    <TouchableOpacity
+                      style={[styles.subscriptionSecondaryBtn, { borderColor: colors.border, backgroundColor: colors.bgInput }]}
+                      onPress={async () => {
+                        const ok = await openManageSubscription();
+                        if (!ok) showToast('Unable to open subscription management on this device.');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="open-outline" size={16} color={colors.textPrimary} />
+                      <Text style={[styles.subscriptionSecondaryBtnText, { color: colors.textPrimary }]}>MANAGE SUBSCRIPTION</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : showBillingRestore || showManageSubscription || showRefreshAccess ? (
+                <View style={styles.subscriptionActionRow}>
+                  {showRefreshAccess ? (
+                    <TouchableOpacity
+                      style={[styles.subscriptionPrimaryBtn, { backgroundColor: colors.gold }]}
+                      onPress={async () => {
+                        const refreshed = await refreshAccessState();
+                        showToast(refreshed ? 'Access refreshed' : 'Access refresh unavailable');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="sync-outline" size={16} color="#000" />
+                      <Text style={styles.subscriptionPrimaryBtnText}>REFRESH ACCESS</Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {showBillingRestore ? (
+                    <TouchableOpacity
+                      style={[styles.subscriptionSecondaryBtn, { borderColor: colors.border, backgroundColor: colors.bgInput }]}
+                      onPress={async () => {
+                        const result = await restoreEcsProAccess();
+                        showToast(result.success ? 'Purchases restored' : (result.error || 'Restore failed'));
+                      }}
+                      disabled={billingFlowState === 'restore_in_progress' || billingFlowState === 'purchasing' || billingFlowState === 'confirming_access'}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="refresh-outline" size={16} color={colors.textPrimary} />
+                      <Text style={[styles.subscriptionSecondaryBtnText, { color: colors.textPrimary }]}>RESTORE PURCHASES</Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {showManageSubscription ? (
+                    <TouchableOpacity
+                      style={[styles.subscriptionSecondaryBtn, { borderColor: colors.border, backgroundColor: colors.bgInput }]}
+                      onPress={async () => {
+                        const ok = await openManageSubscription();
+                        if (!ok) showToast('Unable to open subscription management on this device.');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="open-outline" size={16} color={colors.textPrimary} />
+                      <Text style={[styles.subscriptionSecondaryBtnText, { color: colors.textPrimary }]}>MANAGE SUBSCRIPTION</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : (
+                <Text style={[styles.subscriptionNote, { color: colors.textMuted }]}>
+                  {accountUx.detail}
+                </Text>
+              )}
+
+              <Text style={[styles.subscriptionNote, { color: colors.textMuted }]}>
+                {accountUx.footnote}
+              </Text>
+            </View>
 
             {/* Operator Status Card */}
 
@@ -623,8 +1008,8 @@ Expedition Command System
                       <Text style={[styles.operatorEmail, { color: colors.textPrimary }]}>{user.email}</Text>
                       <View style={styles.operatorBadges}>
                         {operatorInfo?.role && (
-                          <View style={[styles.opBadge, { borderColor: operatorInfo.role === 'admin' ? colors.warning : colors.success }]}>
-                            <Text style={[styles.opBadgeText, { color: operatorInfo.role === 'admin' ? colors.warning : colors.success }]}>
+                          <View style={[styles.opBadge, { borderColor: operatorInfo.is_admin ? colors.warning : colors.success }]}>
+                            <Text style={[styles.opBadgeText, { color: operatorInfo.is_admin ? colors.warning : colors.success }]}>
                               {operatorInfo.role.toUpperCase()}
                             </Text>
                           </View>
@@ -638,12 +1023,55 @@ Expedition Command System
                       </View>
                     </View>
                   </View>
+                  {isFriendsAndFamilyAccess ? (
+                    <View style={[styles.sharedAccountPanel, { backgroundColor: colors.bgInput, borderColor: colors.border }]}>
+                      <Text style={[styles.sharedAccountTitle, { color: colors.textPrimary }]}>Friends & Family Access</Text>
+                      <Text style={[styles.sharedAccountText, { color: colors.textMuted }]}>
+                        This account keeps the full ECS user experience through a granted access path. Admin utilities remain locked out.
+                      </Text>
+                      <View style={styles.sharedAccountBadgeRow}>
+                        <View style={[styles.opBadge, { borderColor: colors.success }]}>
+                          <Text style={[styles.opBadgeText, { color: colors.success }]}>FULL ACCESS</Text>
+                        </View>
+                        <View style={[styles.opBadge, { borderColor: colors.goldBorder }]}>
+                          <Text style={[styles.opBadgeText, { color: colors.gold }]}>SHARED INTERNAL ACCOUNT</Text>
+                        </View>
+                        <View style={[styles.opBadge, { borderColor: colors.goldBorder }]}>
+                          <Text style={[styles.opBadgeText, { color: colors.gold }]}>FRIENDS & FAMILY</Text>
+                        </View>
+                        <View style={[styles.opBadge, { borderColor: colors.warning }]}>
+                          <Text style={[styles.opBadgeText, { color: colors.warning }]}>NO ADMIN RIGHTS</Text>
+                        </View>
+                      </View>
+                      <View style={[styles.subscriptionFacts, { borderColor: colors.border, backgroundColor: colors.bgCard }]}>
+                        <SubscriptionFactRow label="Access" value="Full Access" colors={colors} />
+                        <SubscriptionFactRow label="Role" value={operatorInfo?.role === 'super_admin' ? 'Super Admin' : 'User'} colors={colors} />
+                        <SubscriptionFactRow label="Admin" value="No" colors={colors} />
+                      </View>
+                      {canManageFriendsAndFamilyAccess ? (
+                        <TouchableOpacity
+                          style={[styles.sharedAccountActionBtn, { backgroundColor: colors.goldMuted, borderColor: colors.goldBorder }]}
+                          onPress={() => {
+                            setSharedAccountError('');
+                            setSharedAccountModalVisible(true);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="key-outline" size={16} color={colors.gold} />
+                          <Text style={[styles.sharedAccountActionText, { color: colors.gold }]}>MANAGE FRIENDS & FAMILY ACCESS</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ) : null}
                   <TouchableOpacity
                     style={[styles.logoutBtn, { backgroundColor: colors.danger }]}
+                    testID="auth-sign-out-button"
+                    accessibilityRole="button"
+                    accessibilityLabel="Terminate Session"
+                    accessibilityHint="Signs out of the current ECS account and returns to login"
                     onPress={async () => {
                       await signOut();
                       showToast('Session terminated');
-                      router.replace('/login');
                     }}
                     activeOpacity={0.7}
                   >
@@ -689,6 +1117,29 @@ Expedition Command System
               <Ionicons name="save-outline" size={18} color="#000" />
               <Text style={styles.saveBtnText}>Save Settings</Text>
             </TouchableOpacity>
+
+            <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>FIELD FEEDBACK</Text>
+            <View style={[styles.feedbackCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
+              <View style={styles.feedbackHeader}>
+                <View style={[styles.feedbackIcon, { backgroundColor: colors.goldMuted }]}>
+                  <Ionicons name="bug-outline" size={18} color={colors.gold} />
+                </View>
+                <View style={styles.feedbackInfo}>
+                  <Text style={[styles.feedbackTitle, { color: colors.textPrimary }]}>Report Field Issue</Text>
+                  <Text style={[styles.feedbackText, { color: colors.textMuted }]}>
+                    Send a short structured report from the current ECS state so admin stability summaries can group real field failures.
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.feedbackAction, { borderColor: colors.goldBorder, backgroundColor: colors.goldMuted }]}
+                onPress={() => setFieldIssueModalVisible(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="send-outline" size={16} color={colors.gold} />
+                <Text style={[styles.feedbackActionText, { color: colors.gold }]}>SEND FIELD REPORT</Text>
+              </TouchableOpacity>
+            </View>
             <View style={[styles.aboutSection, { borderTopColor: colors.border }]}>
               <Text style={[styles.aboutBrand, { color: colors.textMuted }]}>EXPEDITION COMMAND SYSTEM</Text>
               <Text style={[styles.aboutProduct, { color: colors.gold }]}>Expedition Command System</Text>
@@ -708,6 +1159,131 @@ Expedition Command System
 
       <AuthModal visible={authVisible} onClose={() => setAuthVisible(false)} />
       <AppearanceSettingsModal visible={appearanceModalVisible} onClose={() => setAppearanceModalVisible(false)} />
+      <TacticalPopupShell
+        visible={sharedAccountModalVisible}
+        onClose={closeSharedAccountModal}
+        title="Friends & Family Access"
+        icon="key-outline"
+        eyebrow="GRANTED ACCESS"
+        maxWidth={540}
+        footer={(
+          <View style={styles.sharedAccountFooter}>
+            <TouchableOpacity
+              style={[styles.sharedAccountFooterBtn, styles.sharedAccountFooterSecondary, { borderColor: colors.border }]}
+              onPress={closeSharedAccountModal}
+              activeOpacity={0.7}
+              disabled={sharedAccountBusy}
+            >
+              <Text style={[styles.sharedAccountFooterSecondaryText, { color: colors.textSecondary }]}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.sharedAccountFooterBtn,
+                styles.sharedAccountFooterPrimary,
+                { backgroundColor: sharedAccountBusy ? colors.goldMuted : colors.gold },
+              ]}
+              onPress={handleRotateSharedPassword}
+              activeOpacity={0.7}
+              disabled={sharedAccountBusy}
+            >
+              <Ionicons name={sharedAccountBusy ? 'sync-outline' : 'refresh-outline'} size={16} color="#000" />
+              <Text style={styles.sharedAccountFooterPrimaryText}>
+                {sharedAccountBusy ? 'Updating...' : 'Rotate Password'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      >
+        <Text style={[styles.sharedAccountModalCopy, { color: colors.textSecondary }]}>
+          Rotate the password for the friends and family access account. Full ECS access stays active, and admin tools remain disabled.
+        </Text>
+
+        <View style={styles.sharedAccountBadgeRow}>
+          <View style={[styles.opBadge, { borderColor: colors.success }]}>
+            <Text style={[styles.opBadgeText, { color: colors.success }]}>FULL ACCESS</Text>
+          </View>
+          <View style={[styles.opBadge, { borderColor: colors.goldBorder }]}>
+            <Text style={[styles.opBadgeText, { color: colors.gold }]}>FRIENDS & FAMILY</Text>
+          </View>
+          <View style={[styles.opBadge, { borderColor: colors.warning }]}>
+            <Text style={[styles.opBadgeText, { color: colors.warning }]}>NO ADMIN RIGHTS</Text>
+          </View>
+        </View>
+
+        <View style={[styles.subscriptionFacts, { borderColor: colors.border, backgroundColor: colors.bgCard }]}>
+          <SubscriptionFactRow label="Access" value="Full Access" colors={colors} />
+          <SubscriptionFactRow label="Role" value={operatorInfo?.role === 'super_admin' ? 'Super Admin' : 'User'} colors={colors} />
+          <SubscriptionFactRow label="Admin" value="No" colors={colors} />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Account</Text>
+          <Text style={[styles.sharedAccountEmail, { color: colors.textPrimary }]}>ecs@friendsandfamily.com</Text>
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>New Password</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.bgInput, borderColor: colors.border, color: colors.textPrimary }]}
+            value={sharedPassword}
+            onChangeText={setSharedPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!sharedAccountBusy}
+            placeholder="Minimum 8 characters"
+            placeholderTextColor={colors.textMuted}
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Confirm Password</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.bgInput, borderColor: colors.border, color: colors.textPrimary }]}
+            value={sharedPasswordConfirm}
+            onChangeText={setSharedPasswordConfirm}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!sharedAccountBusy}
+            placeholder="Re-enter the new password"
+            placeholderTextColor={colors.textMuted}
+          />
+        </View>
+
+        {operatorInfo?.revoke_sessions_supported ? (
+          <View style={[styles.sharedAccountToggleRow, { borderColor: colors.border, backgroundColor: colors.bgInput }]}>
+            <View style={styles.sharedAccountToggleCopy}>
+              <Text style={[styles.sharedAccountToggleTitle, { color: colors.textPrimary }]}>Sign out existing sessions</Text>
+              <Text style={[styles.sharedAccountToggleText, { color: colors.textMuted }]}>
+                Revoke current sessions after the password change and require a fresh sign-in.
+              </Text>
+            </View>
+            <Switch
+              value={revokeSharedSessions}
+              onValueChange={setRevokeSharedSessions}
+              disabled={sharedAccountBusy}
+              trackColor={{ false: 'rgba(255,255,255,0.08)', true: colors.gold + '40' }}
+              thumbColor={revokeSharedSessions ? colors.gold : colors.textMuted}
+              style={{ transform: [{ scaleX: 0.82 }, { scaleY: 0.82 }] }}
+            />
+          </View>
+        ) : (
+          <Text style={[styles.sharedAccountNote, { color: colors.textMuted }]}>
+            Global session revocation is not available in this auth environment yet.
+          </Text>
+        )}
+
+        {sharedAccountError ? (
+          <Text style={[styles.sharedAccountError, { color: colors.danger }]}>{sharedAccountError}</Text>
+        ) : null}
+      </TacticalPopupShell>
+      <FieldIssueReportModal
+        visible={fieldIssueModalVisible}
+        onClose={() => setFieldIssueModalVisible(false)}
+        colors={colors}
+        onToast={showToast}
+      />
       <Toast />
     </View>
   );
@@ -821,6 +1397,25 @@ const styles = StyleSheet.create({
   autoActiveBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, padding: 8, borderRadius: 6, borderWidth: 1 },
   openFullBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1 },
   openFullBtnText: { fontSize: 10, fontWeight: '800', letterSpacing: 2 },
+  subscriptionCard: { borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, marginBottom: SPACING.lg, gap: 12 },
+  subscriptionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  subscriptionIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  subscriptionInfo: { flex: 1, gap: 4 },
+  subscriptionTitle: { fontSize: 14, fontWeight: '800', letterSpacing: 0.4 },
+  subscriptionSubtitle: { fontSize: 12, lineHeight: 18 },
+  subscriptionBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  subscriptionFacts: { borderWidth: 1, borderRadius: RADIUS.sm, padding: SPACING.sm, gap: 8 },
+  subscriptionFactRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  subscriptionFactLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase' },
+  subscriptionFactValue: { fontSize: 12, fontWeight: '700', textAlign: 'right', flexShrink: 1 },
+  subscriptionStatusText: { fontSize: 12, fontWeight: '600' },
+  subscriptionErrorText: { fontSize: 12, fontWeight: '700' },
+  subscriptionNote: { fontSize: 12, lineHeight: 18 },
+  subscriptionActionRow: { gap: 10 },
+  subscriptionPrimaryBtn: { minHeight: 44, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: SPACING.md },
+  subscriptionPrimaryBtnText: { color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 1.2 },
+  subscriptionSecondaryBtn: { minHeight: 42, borderRadius: RADIUS.sm, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: SPACING.md },
+  subscriptionSecondaryBtnText: { fontSize: 12, fontWeight: '800', letterSpacing: 1.1 },
   // Settings
   aboutSection: { marginTop: 32, alignItems: 'center', paddingVertical: SPACING.xl, borderTopWidth: 1 },
   aboutBrand: { fontSize: 10, letterSpacing: 2, fontWeight: '500' },
@@ -842,14 +1437,42 @@ const styles = StyleSheet.create({
   operatorBadges: { flexDirection: 'row', gap: 6, marginTop: 4 },
   opBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, backgroundColor: 'rgba(0,0,0,0.2)' },
   opBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  sharedAccountPanel: { borderRadius: RADIUS.sm, borderWidth: 1, padding: SPACING.md, marginBottom: SPACING.md, gap: 10 },
+  sharedAccountTitle: { fontSize: 13, fontWeight: '800', letterSpacing: 0.6 },
+  sharedAccountText: { fontSize: 12, lineHeight: 18 },
+  sharedAccountBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  sharedAccountActionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: RADIUS.sm, borderWidth: 1 },
+  sharedAccountActionText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: RADIUS.sm, paddingVertical: 10 },
   logoutBtnText: { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
+  sharedAccountModalCopy: { fontSize: 13, lineHeight: 19, marginBottom: SPACING.sm },
+  sharedAccountEmail: { fontSize: 14, fontWeight: '700' },
+  sharedAccountToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: RADIUS.sm, padding: SPACING.md, marginBottom: SPACING.md },
+  sharedAccountToggleCopy: { flex: 1, gap: 4 },
+  sharedAccountToggleTitle: { fontSize: 12, fontWeight: '700' },
+  sharedAccountToggleText: { fontSize: 11, lineHeight: 16 },
+  sharedAccountNote: { fontSize: 11, lineHeight: 16, marginTop: 2 },
+  sharedAccountError: { fontSize: 12, fontWeight: '700', marginTop: SPACING.sm },
+  sharedAccountFooter: { flexDirection: 'row', gap: 10 },
+  sharedAccountFooterBtn: { flex: 1, minHeight: 42, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  sharedAccountFooterSecondary: { borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.02)' },
+  sharedAccountFooterSecondaryText: { fontSize: 12, fontWeight: '700' },
+  sharedAccountFooterPrimary: {},
+  sharedAccountFooterPrimaryText: { color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
   // Power Center
   powerCenterBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: SPACING.md, borderRadius: RADIUS.md, borderWidth: 1, marginBottom: SPACING.lg },
   powerCenterIcon: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   powerCenterInfo: { flex: 1 },
   powerCenterTitle: { fontSize: 14, fontWeight: '700' },
   powerCenterDesc: { fontSize: 11, marginTop: 2 },
+  feedbackCard: { borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, marginBottom: SPACING.lg, gap: 12 },
+  feedbackHeader: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  feedbackIcon: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  feedbackInfo: { flex: 1, gap: 4 },
+  feedbackTitle: { fontSize: 14, fontWeight: '800' },
+  feedbackText: { fontSize: 12, lineHeight: 18 },
+  feedbackAction: { minHeight: 42, borderRadius: RADIUS.sm, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  feedbackActionText: { fontSize: 12, fontWeight: '800', letterSpacing: 1 },
 });
 
 

@@ -1,446 +1,631 @@
-/**
- * ECS Remoteness Index Widget — Enhanced Dashboard Views
- *
- * Three display modes:
- *   1. RemotenessIndexCompact — 3-cell compact for grid
- *   2. RemotenessIndexCard — Full card with score, factors, forecast
- *   3. RemotenessIndexDetailView — Expanded detail with all data
- *
- * Reads from remotenessStore.getIndex() for full multi-factor data.
- * Falls back to remotenessStore.get() for legacy tier display.
- */
-
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
+import { WidgetCompactRow } from './WidgetChrome';
 import { remotenessStore } from '../../lib/remotenessStore';
-import type { RemotenessIndexOutput, RemotenessFactor, ForwardForecastSegment, RemotenessAdvisory } from '../../lib/remotenessTypes';
+import type {
+  InfrastructureProximity,
+  ProximityEstimate,
+  RemotenessIndexOutput,
+} from '../../lib/remotenessTypes';
 
-// ══════════════════════════════════════════════════════════
-// HELPERS
-// ══════════════════════════════════════════════════════════
-
-function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={s.metricRow}>
-      <Text style={s.metricLabel}>{label}</Text>
-      <Text style={[s.metricValue, color ? { color } : null]}>{value}</Text>
-    </View>
-  );
-}
-
-function SectionHeader({ title, color }: { title: string; color?: string }) {
-  return <Text style={[s.sectionHeader, color ? { color } : null]}>{title}</Text>;
-}
+type RemotenessNavigationTargetType = 'town' | 'fuel' | 'paved_road';
 
 function useRemotenessIndex() {
-  const [, setRev] = useState(0);
+  const [, setRevision] = useState(0);
+
   useEffect(() => {
-    const unsub = remotenessStore.subscribe(() => setRev(r => r + 1));
-    return unsub;
+    const unsubscribe = remotenessStore.subscribe(() => {
+      setRevision((current) => current + 1);
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
     remotenessStore.start();
-    return () => { remotenessStore.stop(); };
+    return () => {
+      remotenessStore.stop();
+    };
   }, []);
 
-  return {
-    legacy: remotenessStore.get(),
-    index: remotenessStore.getIndex(),
-  };
+  return remotenessStore.getIndex();
 }
 
-// ══════════════════════════════════════════════════════════
-// COMPACT VIEW
-// ══════════════════════════════════════════════════════════
+function roundMiles(distanceMiles: number | null): string {
+  if (distanceMiles == null || !Number.isFinite(distanceMiles)) return '--';
+  return `${Math.max(0, Math.round(distanceMiles))} mi`;
+}
+
+function estimateOverallConfidence(
+  proximity: InfrastructureProximity,
+): ProximityEstimate['confidence'] {
+  const scores: Record<ProximityEstimate['confidence'], number> = {
+    high: 3,
+    medium: 2,
+    low: 1,
+    estimated: 0,
+  };
+
+  const samples = [
+    proximity.nearestPavedRoad.confidence,
+    proximity.nearestTown.confidence,
+    proximity.nearestFuelStation.confidence,
+  ];
+
+  const average = samples.reduce((sum, sample) => sum + scores[sample], 0) / samples.length;
+  if (average >= 2.5) return 'high';
+  if (average >= 1.5) return 'medium';
+  return 'low';
+}
+
+function getConfidenceColor(confidence: ProximityEstimate['confidence']): string {
+  if (confidence === 'high') return '#66BB6A';
+  if (confidence === 'medium') return '#FFB74D';
+  return TACTICAL.textMuted;
+}
+
+function getConfidenceLabel(confidence: ProximityEstimate['confidence']): string {
+  if (confidence === 'high') return 'High';
+  if (confidence === 'medium') return 'Medium';
+  return 'Low';
+}
+
+function ProximityLine({
+  label,
+  value,
+  emphasize = false,
+}: {
+  label: string;
+  value: string;
+  emphasize?: boolean;
+}) {
+  return (
+    <View style={styles.proximityLine}>
+      <Text style={styles.proximityLabel}>{label}</Text>
+      <Text style={[styles.proximityValue, emphasize ? styles.proximityValueEmphasis : null]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function ProximityTile({
+  label,
+  value,
+  emphasize = false,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  emphasize?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <View style={[styles.proximityTile, compact ? styles.proximityTileCompact : null]}>
+      <Text style={styles.proximityTileLabel}>{label}</Text>
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.proximityTileValue,
+          compact ? styles.proximityTileValueCompact : null,
+          emphasize ? styles.proximityValueEmphasis : null,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function RemotenessActionButton({
+  label,
+  icon,
+  onPress,
+  disabled = false,
+}: {
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  onPress?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.8}
+      disabled={disabled}
+      onPress={onPress}
+      style={[
+        styles.actionButton,
+        disabled ? styles.actionButtonDisabled : null,
+      ]}
+    >
+      <Ionicons
+        name={icon}
+        size={14}
+        color={disabled ? TACTICAL.textMuted : TACTICAL.amber}
+      />
+      <Text style={[styles.actionButtonText, disabled ? styles.actionButtonTextDisabled : null]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function RemotenessWaitingState({ compact = false }: { compact?: boolean }) {
+  return (
+    <View style={[styles.cardBody, compact ? styles.compactBody : null]}>
+      <Text style={[styles.waitingTitle, compact ? styles.waitingTitleCompact : null]}>
+        GPS required
+      </Text>
+      <Text style={styles.waitingSubtitle}>
+        Remoteness becomes live as soon as ECS has a usable location fix.
+      </Text>
+    </View>
+  );
+}
+
+function getProximityMetrics(index: RemotenessIndexOutput) {
+  return [
+    { label: 'Road', value: roundMiles(index.proximity.nearestPavedRoad.distanceMi) },
+    { label: 'Town', value: roundMiles(index.proximity.nearestTown.distanceMi) },
+    { label: 'Fuel', value: roundMiles(index.proximity.nearestFuelStation.distanceMi) },
+  ];
+}
+
+function renderProximityRows(index: RemotenessIndexOutput, compact = false) {
+  const rows = getProximityMetrics(index);
+
+  return (
+    <View style={[styles.proximityGroup, compact ? styles.proximityGroupCompact : null]}>
+      {rows.map((row, rowIndex) => (
+        <ProximityLine
+          key={row.label}
+          label={row.label}
+          value={row.value}
+          emphasize={rowIndex === 2 && row.value !== '--'}
+        />
+      ))}
+    </View>
+  );
+}
+
+function renderProximityGrid(index: RemotenessIndexOutput, compact = false) {
+  const rows = getProximityMetrics(index);
+
+  return (
+    <View style={[styles.proximityGrid, compact ? styles.proximityGridCompact : null]}>
+      <View style={styles.proximityGridRow}>
+        <ProximityTile label={rows[0].label} value={rows[0].value} compact={compact} />
+        <ProximityTile label={rows[1].label} value={rows[1].value} compact={compact} />
+      </View>
+      <View style={styles.proximityGridRow}>
+        <ProximityTile
+          label={rows[2].label}
+          value={rows[2].value}
+          emphasize={rows[2].value !== '--'}
+          compact={compact}
+        />
+      </View>
+    </View>
+  );
+}
 
 export function RemotenessIndexCompact() {
-  const { legacy, index } = useRemotenessIndex();
+  const index = useRemotenessIndex();
 
-  const level = index?.level ?? 'Low';
-  const color = index?.levelColor ?? legacy.tierColor;
-  const score = index?.score ?? legacy.score;
+  if (!index || index.gpsLat == null || index.gpsLon == null) {
+    return <WidgetCompactRow title="Isolation" summary="GPS unavailable" tone="unavailable" />;
+  }
 
-  // Forward forecast indicator
-  const forecastUp = index?.forecast?.isIncreasing ?? false;
+  const overallConfidence = estimateOverallConfidence(index.proximity);
+  const metrics = getProximityMetrics(index);
+  const compactSummary = `${index.level} | ${metrics[0].label} ${metrics[0].value} | ${metrics[2].label} ${metrics[2].value}`;
 
   return (
-    <View style={s.compactRow}>
-      <View style={s.compactCell}>
-        <Text style={s.compactLabel}>LEVEL</Text>
-        <Text style={[s.compactValue, { color, fontSize: 9 }]}>{level.toUpperCase()}</Text>
-      </View>
-      <View style={s.compactCell}>
-        <Text style={s.compactLabel}>SCORE</Text>
-        <Text style={[s.compactValue, { color }]}>{score}</Text>
-      </View>
-      <View style={s.compactCell}>
-        <Text style={s.compactLabel}>AHEAD</Text>
-        <Text style={[s.compactValue, { fontSize: 9, color: forecastUp ? '#E67E22' : '#4CAF50' }]}>
-          {forecastUp ? 'RISING' : 'STABLE'}
-        </Text>
-      </View>
-    </View>
+    <WidgetCompactRow
+      title="Isolation"
+      summary={compactSummary}
+      tone="neutral"
+      status={getConfidenceLabel(overallConfidence)}
+      statusTone="neutral"
+    />
   );
 }
-
-// ══════════════════════════════════════════════════════════
-// CARD VIEW
-// ══════════════════════════════════════════════════════════
 
 export function RemotenessIndexCard() {
-  const { legacy, index } = useRemotenessIndex();
+  const index = useRemotenessIndex();
 
-  if (!index) {
-    // Fallback to legacy display
-    return (
-      <View style={s.cardBody}>
-        <Text style={[s.tierLabel, { color: legacy.tierColor }]}>{legacy.tier}</Text>
-        <Text style={s.reasonText} numberOfLines={1}>{legacy.reason}</Text>
-      </View>
-    );
+  if (!index || index.gpsLat == null || index.gpsLon == null) {
+    return <RemotenessWaitingState />;
   }
 
-  const { level, levelColor, score, reason, forecast, connectivity } = index;
-
-  // Signal indicator
-  const signalIcon = connectivity.isOffline ? 'cloud-offline-outline' :
-    connectivity.signal === 'strong' ? 'cellular-outline' :
-    connectivity.signal === 'weak' ? 'cellular-outline' : 'wifi-outline';
-  const signalColor = connectivity.isOffline ? '#EF5350' :
-    connectivity.signal === 'strong' ? '#4CAF50' : '#FFB300';
+  const overallConfidence = estimateOverallConfidence(index.proximity);
+  const confidenceColor = getConfidenceColor(overallConfidence);
 
   return (
-    <View style={s.cardBody}>
-      {/* Level + Score */}
-      <View style={s.cardHeaderRow}>
-        <Text style={[s.tierLabel, { color: levelColor }]}>{level.toUpperCase()}</Text>
-        <View style={s.scoreChip}>
-          <Text style={[s.scoreChipText, { color: levelColor }]}>{score}</Text>
-        </View>
-      </View>
-
-      {/* Reason */}
-      <Text style={s.reasonText} numberOfLines={1}>{reason}</Text>
-
-      {/* Signal + Forecast row */}
-      <View style={s.cardInfoRow}>
-        <View style={s.cardInfoCell}>
-          <Ionicons name={signalIcon as any} size={10} color={signalColor} />
-          <Text style={[s.cardInfoText, { color: signalColor }]}>
-            {connectivity.signal.replace('_', ' ').toUpperCase()}
+    <View style={styles.cardBody}>
+      <View style={styles.headerRow}>
+        <View style={styles.heroContent}>
+          <Text style={styles.heroKicker}>Isolation</Text>
+          <Text style={[styles.levelText, styles.levelTextCard, { color: index.levelColor }]}>
+            {index.level.toUpperCase()}
           </Text>
         </View>
-        {forecast.available && forecast.advisory && (
-          <View style={s.cardInfoCell}>
-            <Ionicons name="arrow-forward-outline" size={10} color="#E67E22" />
-            <Text style={[s.cardInfoText, { color: '#E67E22' }]} numberOfLines={1}>
-              {forecast.advisory}
-            </Text>
-          </View>
-        )}
+        <View style={[styles.confidenceChip, { borderColor: `${confidenceColor}44`, backgroundColor: `${confidenceColor}16` }]}>
+          <Text style={[styles.confidenceChipText, { color: confidenceColor }]}>
+            {getConfidenceLabel(overallConfidence)}
+          </Text>
+        </View>
       </View>
+
+      {renderProximityGrid(index)}
     </View>
   );
 }
 
-// ══════════════════════════════════════════════════════════
-// DETAIL VIEW
-// ══════════════════════════════════════════════════════════
-
-export function RemotenessIndexDetailView() {
-  const { legacy, index } = useRemotenessIndex();
+export function RemotenessIndexDetailView({
+  onNavigateToTarget,
+}: {
+  onNavigateToTarget?: (target: RemotenessNavigationTargetType) => void;
+}) {
+  const index = useRemotenessIndex();
+  const overallConfidence = index ? estimateOverallConfidence(index.proximity) : 'low';
+  const confidenceColor = getConfidenceColor(overallConfidence);
+  const hasLocation = index?.gpsLat != null && index?.gpsLon != null;
 
   if (!index) {
     return (
-      <View style={s.detailContainer}>
-        <SectionHeader title="REMOTENESS INDEX" />
-        <MetricRow label="TIER" value={legacy.tier} color={legacy.tierColor} />
-        <MetricRow label="SCORE" value={`${legacy.score} / 100`} color={legacy.tierColor} />
-        <MetricRow label="STATUS" value="Engine initializing" color={TACTICAL.textMuted} />
+      <View style={styles.detailContainer}>
+        <Text style={styles.detailEyebrow}>Cinematic Remoteness Tier</Text>
+        <View style={styles.detailHero}>
+        <Text style={styles.waitingTitle}>Remoteness engine standing by</Text>
+        <Text style={styles.waitingSubtitle}>
+            ECS needs a valid GPS fix before it can score nearby infrastructure and bailout distance.
+        </Text>
+        </View>
       </View>
     );
   }
 
-  const { level, levelColor, score, rawScore, reason, description, factors,
-    availableFactorCount, totalFactorCount, proximity, connectivity,
-    terrain, forecast, advisories } = index;
-
-  const severityColor: Record<string, string> = {
-    info: '#5AC8FA',
-    caution: '#FFB300',
-    warning: '#E67E22',
-    critical: '#EF5350',
-  };
-
   return (
-    <ScrollView style={s.detailScroll} showsVerticalScrollIndicator={false}>
-      <View style={s.detailContainer}>
-        {/* ═══ CURRENT REMOTENESS ═══ */}
-        <SectionHeader title="CURRENT REMOTENESS" />
-        <View style={s.scoreDisplay}>
-          <Text style={[s.scoreBig, { color: levelColor }]}>{score}</Text>
-          <View style={s.scoreMeta}>
-            <Text style={[s.levelBadge, { color: levelColor }]}>{level.toUpperCase()}</Text>
-            <Text style={s.scoreSubtext}>{description}</Text>
+    <View style={styles.detailContainer}>
+      <Text style={styles.detailEyebrow}>Cinematic Remoteness Tier</Text>
+      <View style={styles.detailHero}>
+        <View style={styles.detailHeroTopRow}>
+          <Text style={[styles.detailLevel, { color: index.levelColor }]}>
+            {index.level.toUpperCase()}
+          </Text>
+          <View style={[styles.confidenceChip, { borderColor: `${confidenceColor}44`, backgroundColor: `${confidenceColor}16` }]}>
+            <Text style={[styles.confidenceChipText, { color: confidenceColor }]}>
+              {getConfidenceLabel(overallConfidence)} Confidence
+            </Text>
           </View>
         </View>
+        <Text style={styles.detailDescription}>{index.description}</Text>
+        <Text style={styles.detailReason}>{index.reason}</Text>
+      </View>
 
-        {/* Score bar */}
-        <View style={s.scoreBarOuter}>
-          <View style={[s.scoreBarFill, { width: `${Math.min(100, score)}%`, backgroundColor: levelColor }]} />
-          <View style={[s.scoreBarMarker, { left: '25%' }]} />
-          <View style={[s.scoreBarMarker, { left: '50%' }]} />
-          <View style={[s.scoreBarMarker, { left: '75%' }]} />
-        </View>
-        <View style={s.scoreBarLabels}>
-          <Text style={[s.scoreBarLabel, { color: '#4CAF50' }]}>LOW</Text>
-          <Text style={[s.scoreBarLabel, { color: '#FFB300' }]}>MOD</Text>
-          <Text style={[s.scoreBarLabel, { color: '#E67E22' }]}>REMOTE</Text>
-          <Text style={[s.scoreBarLabel, { color: '#C0392B' }]}>EXTREME</Text>
-        </View>
+      <View style={styles.actionsGroup}>
+        <RemotenessActionButton
+          label="Navigate to Nearest Town"
+          icon="business-outline"
+          onPress={() => onNavigateToTarget?.('town')}
+          disabled={!hasLocation || !onNavigateToTarget}
+        />
+        <RemotenessActionButton
+          label="Navigate to Nearest Fuel"
+          icon="flame-outline"
+          onPress={() => onNavigateToTarget?.('fuel')}
+          disabled={!hasLocation || !onNavigateToTarget}
+        />
+        <RemotenessActionButton
+          label="Navigate to Nearest Paved Road"
+          icon="navigate-outline"
+          onPress={() => onNavigateToTarget?.('paved_road')}
+          disabled={!hasLocation || !onNavigateToTarget}
+        />
+      </View>
 
-        <MetricRow label="REASON" value={reason} color={TACTICAL.textMuted} />
-        <MetricRow label="DATA INPUTS" value={`${availableFactorCount} / ${totalFactorCount}`} />
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Infrastructure Proximity</Text>
+        <ProximityLine label="Nearest Paved Road" value={roundMiles(index.proximity.nearestPavedRoad.distanceMi)} />
+        <ProximityLine label="Nearest Town" value={roundMiles(index.proximity.nearestTown.distanceMi)} />
+        <ProximityLine label="Nearest Fuel" value={roundMiles(index.proximity.nearestFuelStation.distanceMi)} emphasize />
+      </View>
 
-        {/* ═══ INTELLIGENCE ADVISORIES ═══ */}
-        {advisories.length > 0 && (
-          <>
-            <View style={s.divider} />
-            <SectionHeader title="ADVISORIES" />
-            {advisories.map((adv, i) => (
-              <View key={i} style={[s.advisoryRow, { borderLeftColor: severityColor[adv.severity] || '#FFB300' }]}>
-                <Ionicons
-                  name={adv.severity === 'critical' ? 'alert-circle' : adv.severity === 'warning' ? 'warning-outline' : 'information-circle-outline'}
-                  size={12}
-                  color={severityColor[adv.severity] || '#FFB300'}
-                />
-                <Text style={[s.advisoryText, { color: severityColor[adv.severity] || '#FFB300' }]}>
-                  {adv.message}
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Current Interpretation</Text>
+        <ProximityLine label="Confidence" value={getConfidenceLabel(overallConfidence)} />
+        <ProximityLine
+          label="Connectivity"
+          value={index.connectivity.signal.replace('_', ' ').toUpperCase()}
+        />
+        <ProximityLine
+          label="Forecast Ahead"
+          value={
+            index.forecast.available
+              ? index.forecast.isIncreasing
+                ? 'Increasing'
+                : 'Stable'
+              : 'Unavailable'
+          }
+        />
+      </View>
+
+      {index.advisories.length > 0 ? (
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Operational Advisories</Text>
+          {index.advisories.slice(0, 3).map((advisory) => {
+            const advisoryColor =
+              advisory.severity === 'critical'
+                ? TACTICAL.danger
+                : advisory.severity === 'warning'
+                  ? '#E67E22'
+                  : advisory.severity === 'caution'
+                    ? '#FFB300'
+                    : '#5AC8FA';
+            return (
+              <View key={advisory.id} style={[styles.advisoryRow, { borderLeftColor: advisoryColor }]}>
+                <Text style={[styles.advisoryText, { color: advisoryColor }]}>
+                  {advisory.message}
                 </Text>
               </View>
-            ))}
-          </>
-        )}
+            );
+          })}
+        </View>
+      ) : null}
 
-        {/* ═══ FACTOR BREAKDOWN ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="FACTOR BREAKDOWN" />
-        {factors.map((factor, i) => (
-          <View key={factor.id} style={s.factorRow}>
-            <View style={s.factorInfo}>
-              <Text style={s.factorLabel}>{factor.label.toUpperCase()}</Text>
-              {factor.detail && (
-                <Text style={s.factorDetail} numberOfLines={1}>{factor.detail}</Text>
-              )}
-            </View>
-            <View style={s.factorScoreCol}>
-              <View style={s.factorBarOuter}>
-                <View style={[s.factorBarFill, {
-                  width: `${Math.min(100, factor.rawScore)}%`,
-                  backgroundColor: factor.rawScore >= 70 ? '#EF5350' : factor.rawScore >= 40 ? '#FFB300' : '#4CAF50',
-                }]} />
-              </View>
-              <Text style={[s.factorScore, {
-                color: !factor.available ? TACTICAL.textMuted :
-                  factor.rawScore >= 70 ? '#EF5350' : factor.rawScore >= 40 ? '#FFB300' : '#4CAF50',
-              }]}>
-                {factor.available ? factor.rawScore : '\u2014'}
-              </Text>
-            </View>
-          </View>
-        ))}
-
-        {/* ═══ INFRASTRUCTURE PROXIMITY ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="INFRASTRUCTURE PROXIMITY" />
-        <MetricRow
-          label="NEAREST PAVED ROAD"
-          value={proximity.nearestPavedRoad.distanceMi != null ? `~${proximity.nearestPavedRoad.distanceMi} mi` : '\u2014'}
-          color={proximity.nearestPavedRoad.distanceMi != null && proximity.nearestPavedRoad.distanceMi > 15 ? '#E67E22' : undefined}
-        />
-        <MetricRow
-          label="NEAREST TOWN"
-          value={proximity.nearestTown.distanceMi != null ? `~${proximity.nearestTown.distanceMi} mi` : '\u2014'}
-          color={proximity.nearestTown.distanceMi != null && proximity.nearestTown.distanceMi > 30 ? '#E67E22' : undefined}
-        />
-        <MetricRow
-          label="NEAREST FUEL"
-          value={proximity.nearestFuelStation.distanceMi != null ? `~${proximity.nearestFuelStation.distanceMi} mi` : '\u2014'}
-          color={proximity.nearestFuelStation.distanceMi != null && proximity.nearestFuelStation.distanceMi > 40 ? '#EF5350' : undefined}
-        />
-        <MetricRow
-          label="EMERGENCY SERVICES"
-          value={proximity.nearestEmergencyServices.distanceMi != null ? `~${proximity.nearestEmergencyServices.distanceMi} mi` : '\u2014'}
-          color={proximity.nearestEmergencyServices.distanceMi != null && proximity.nearestEmergencyServices.distanceMi > 50 ? '#EF5350' : undefined}
-        />
-        <MetricRow
-          label="NEAREST SERVICES"
-          value={proximity.nearestServices.distanceMi != null ? `~${proximity.nearestServices.distanceMi} mi` : '\u2014'}
-        />
-        <MetricRow label="CONFIDENCE" value={proximity.nearestPavedRoad.confidence.toUpperCase()} color={TACTICAL.textMuted} />
-
-        {/* ═══ CONNECTIVITY ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="CONNECTIVITY" />
-        <MetricRow
-          label="SIGNAL"
-          value={connectivity.signal.replace('_', ' ').toUpperCase()}
-          color={connectivity.isOffline ? '#EF5350' : connectivity.signal === 'strong' ? '#4CAF50' : '#FFB300'}
-        />
-        <MetricRow label="CELLULAR" value={connectivity.hasCellular ? 'AVAILABLE' : 'UNAVAILABLE'} color={connectivity.hasCellular ? '#4CAF50' : TACTICAL.textMuted} />
-        <MetricRow label="QUALITY SCORE" value={`${connectivity.qualityScore} / 100`} />
-        <MetricRow label="OFFLINE" value={connectivity.isOffline ? 'YES' : 'NO'} color={connectivity.isOffline ? '#EF5350' : '#4CAF50'} />
-
-        {/* ═══ TERRAIN CONTEXT ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="TERRAIN CONTEXT" />
-        <MetricRow
-          label="ELEVATION"
-          value={terrain.elevationFt != null ? `${Math.round(terrain.elevationFt).toLocaleString()} ft` : '\u2014'}
-          color={terrain.elevationFt != null && terrain.elevationFt > 7000 ? '#E67E22' : undefined}
-        />
-        <MetricRow
-          label="COMPLEXITY"
-          value={terrain.complexity ? terrain.complexity.toUpperCase() : 'UNKNOWN'}
-          color={terrain.complexity === 'high' ? '#EF5350' : terrain.complexity === 'medium' ? '#FFB300' : '#4CAF50'}
-        />
-        <MetricRow label="BACKCOUNTRY" value={terrain.isBackcountry ? 'YES' : 'NO'} color={terrain.isBackcountry ? '#E67E22' : '#4CAF50'} />
-        <MetricRow label="ROUTE ISOLATION" value={`${terrain.routeIsolation} / 100`} color={terrain.routeIsolation > 60 ? '#EF5350' : terrain.routeIsolation > 30 ? '#FFB300' : '#4CAF50'} />
-
-        {/* ═══ FORWARD FORECAST ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="FORWARD REMOTENESS FORECAST" />
-        {!forecast.available ? (
-          <MetricRow label="STATUS" value="No route data" color={TACTICAL.textMuted} />
-        ) : (
-          <>
-            <MetricRow label="TREND" value={forecast.isIncreasing ? 'INCREASING' : 'STABLE'} color={forecast.isIncreasing ? '#E67E22' : '#4CAF50'} />
-            <MetricRow label="PEAK SCORE" value={`${forecast.peakScore}`} color={forecast.peakScore >= 75 ? '#EF5350' : forecast.peakScore >= 50 ? '#E67E22' : undefined} />
-            <MetricRow label="PEAK LEVEL" value={forecast.peakLevel.toUpperCase()} />
-            {forecast.peakDistanceMi > 0 && (
-              <MetricRow label="PEAK DISTANCE" value={`${forecast.peakDistanceMi} mi ahead`} />
-            )}
-            {forecast.advisory && (
-              <View style={[s.advisoryRow, { borderLeftColor: '#E67E22', marginTop: 6 }]}>
-                <Ionicons name="arrow-forward-outline" size={12} color="#E67E22" />
-                <Text style={[s.advisoryText, { color: '#E67E22' }]}>{forecast.advisory}</Text>
-              </View>
-            )}
-
-            {/* Forecast segments */}
-            <View style={s.forecastGrid}>
-              {forecast.segments.map((seg, i) => (
-                <View key={i} style={s.forecastSegment}>
-                  <Text style={s.forecastDist}>{seg.distanceAheadMi} mi</Text>
-                  <View style={[s.forecastDot, { backgroundColor: seg.color }]} />
-                  <Text style={[s.forecastScore, { color: seg.color }]}>{seg.score}</Text>
-                  <Text style={s.forecastTime}>{seg.timeAheadMin}m</Text>
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-        {/* ═══ LEVEL SCALE ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="REMOTENESS SCALE" />
-        <MetricRow label="0\u201325" value="LOW" color="#4CAF50" />
-        <MetricRow label="26\u201350" value="MODERATE" color="#FFB300" />
-        <MetricRow label="51\u201375" value="REMOTE" color="#E67E22" />
-        <MetricRow label="76\u2013100" value="EXTREME" color="#C0392B" />
-
-        {/* ═══ ENGINE INFO ═══ */}
-        <View style={s.divider} />
-        <SectionHeader title="ENGINE" />
-        <MetricRow label="VERSION" value="v3.0 (Remoteness Index)" />
-        <MetricRow label="FACTORS" value="7 (weighted multi-factor)" />
-        <MetricRow label="SMOOTHING" value="0.85 / 0.15" />
-        <MetricRow label="ANTI-FLICKER" value="30s hold / 8pt force" />
-        <MetricRow label="INTERVAL" value="~12s (timer-driven)" />
-        <MetricRow label="FORECAST" value={forecast.available ? 'ACTIVE' : 'INACTIVE'} color={forecast.available ? '#4CAF50' : TACTICAL.textMuted} />
-        <MetricRow
-          label="STATUS"
-          value={remotenessStore.isRunning() ? 'ACTIVE' : 'IDLE'}
-          color={remotenessStore.isRunning() ? '#4CAF50' : TACTICAL.textMuted}
-        />
-
-        <View style={{ height: 24 }} />
-      </View>
-    </ScrollView>
+      {!hasLocation ? (
+        <Text style={styles.unavailableText}>
+          Live location is required before ECS can hand off a nearest safety route.
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
-// ══════════════════════════════════════════════════════════
-// STYLES
-// ══════════════════════════════════════════════════════════
-
-const s = StyleSheet.create({
-  // ── Compact ──
-  compactRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  compactCell: { flex: 1, alignItems: 'center' },
-  compactLabel: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  compactValue: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-
-  // ── Card ──
-  cardBody: { gap: 4, justifyContent: 'center', alignItems: 'center', flex: 1, paddingHorizontal: 4 },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  tierLabel: { fontSize: 13, fontWeight: '800', letterSpacing: 2.5, textAlign: 'center', fontFamily: 'Courier' },
-  scoreChip: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.06)' },
-  scoreChipText: { fontSize: 11, fontWeight: '900', fontFamily: 'Courier' },
-  reasonText: { fontSize: 9, color: TACTICAL.textMuted, textAlign: 'center', fontFamily: 'Courier', letterSpacing: 0.5, opacity: 0.85 },
-  cardInfoRow: { flexDirection: 'row', gap: 10, marginTop: 2, flexWrap: 'wrap', justifyContent: 'center' },
-  cardInfoCell: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  cardInfoText: { fontSize: 8, fontWeight: '700', letterSpacing: 0.5 },
-
-  // ── Detail ──
-  detailScroll: { flex: 1 },
-  detailContainer: { gap: 2, paddingBottom: 16 },
-  sectionHeader: { fontSize: 10, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 1.5, marginTop: 8, marginBottom: 4 },
-  divider: { height: 1, backgroundColor: TACTICAL.border, marginVertical: 8 },
-
-  metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
-  metricLabel: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, flex: 1 },
-  metricValue: { fontSize: 11, fontWeight: '800', color: TACTICAL.text, fontFamily: 'Courier', flexShrink: 0, maxWidth: '55%', textAlign: 'right' },
-
-  // ── Score Display ──
-  scoreDisplay: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8, marginTop: 4 },
-  scoreBig: { fontSize: 42, fontWeight: '900', fontFamily: 'Courier' },
-  scoreMeta: { flex: 1, gap: 2 },
-  levelBadge: { fontSize: 14, fontWeight: '900', letterSpacing: 2 },
-  scoreSubtext: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, lineHeight: 14 },
-
-  // ── Score Bar ──
-  scoreBarOuter: { height: 8, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden', position: 'relative' },
-  scoreBarFill: { height: '100%', borderRadius: 4 },
-  scoreBarMarker: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.15)' },
-  scoreBarLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 3, paddingHorizontal: 2 },
-  scoreBarLabel: { fontSize: 7, fontWeight: '700', letterSpacing: 0.8 },
-
-  // ── Advisory ──
-  advisoryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingVertical: 5, paddingHorizontal: 8, borderLeftWidth: 2, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.02)', marginBottom: 3 },
-  advisoryText: { fontSize: 9, fontWeight: '700', flex: 1, lineHeight: 14 },
-
-  // ── Factor Breakdown ──
-  factorRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.04)' },
-  factorInfo: { flex: 1, gap: 1 },
-  factorLabel: { fontSize: 8, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1 },
-  factorDetail: { fontSize: 8, fontWeight: '500', color: TACTICAL.textMuted, opacity: 0.7 },
-  factorScoreCol: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 80 },
-  factorBarOuter: { flex: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' },
-  factorBarFill: { height: '100%', borderRadius: 2 },
-  factorScore: { fontSize: 10, fontWeight: '900', fontFamily: 'Courier', width: 24, textAlign: 'right' },
-
-  // ── Forecast Grid ──
-  forecastGrid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingHorizontal: 4 },
-  forecastSegment: { alignItems: 'center', gap: 3 },
-  forecastDist: { fontSize: 8, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.5 },
-  forecastDot: { width: 8, height: 8, borderRadius: 4 },
-  forecastScore: { fontSize: 11, fontWeight: '900', fontFamily: 'Courier' },
-  forecastTime: { fontSize: 7, fontWeight: '600', color: TACTICAL.textMuted },
+const styles = StyleSheet.create({
+  cardBody: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 2,
+  },
+  compactBody: {
+    gap: 6,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  heroContent: {
+    flex: 1,
+    gap: 2,
+  },
+  heroCompact: {
+    flex: 1,
+    gap: 1,
+  },
+  heroKicker: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  confidenceChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    alignSelf: 'flex-start',
+  },
+  confidenceChipText: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  levelText: {
+    fontSize: 10,
+    fontWeight: '900',
+    fontFamily: 'Courier',
+    letterSpacing: 1.4,
+  },
+  levelTextCard: {
+    fontSize: 14,
+  },
+  levelTextCompact: {
+    fontSize: 11,
+  },
+  proximityGroup: {
+    gap: 4,
+  },
+  proximityGroupCompact: {
+    gap: 3,
+  },
+  proximityGrid: {
+    gap: 5,
+  },
+  proximityGridCompact: {
+    gap: 4,
+  },
+  proximityGridRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  proximityTile: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    gap: 2,
+  },
+  proximityTileCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  proximityTileLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  proximityTileValue: {
+    fontSize: 12,
+    fontWeight: '900',
+    fontFamily: 'Courier',
+    color: TACTICAL.text,
+  },
+  proximityTileValueCompact: {
+    fontSize: 11,
+  },
+  proximityLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  proximityLabel: {
+    flex: 1,
+    fontSize: 9,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.5,
+  },
+  proximityValue: {
+    fontSize: 11,
+    fontWeight: '900',
+    fontFamily: 'Courier',
+    color: TACTICAL.text,
+  },
+  proximityValueEmphasis: {
+    color: TACTICAL.amber,
+  },
+  waitingTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    textAlign: 'center',
+    letterSpacing: 0.4,
+  },
+  waitingTitleCompact: {
+    fontSize: 10,
+  },
+  waitingSubtitle: {
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    textAlign: 'center',
+  },
+  detailContainer: {
+    gap: 12,
+    paddingBottom: 8,
+  },
+  detailEyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.amber,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  detailHero: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.06)',
+    padding: 14,
+    gap: 8,
+  },
+  detailHeroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  detailLevel: {
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 2,
+    fontFamily: 'Courier',
+  },
+  detailDescription: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: TACTICAL.text,
+    lineHeight: 18,
+  },
+  detailReason: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    lineHeight: 16,
+  },
+  actionsGroup: {
+    gap: 8,
+  },
+  actionButton: {
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(11,15,18,0.72)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  actionButtonDisabled: {
+    opacity: 0.55,
+  },
+  actionButtonText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    letterSpacing: 0.4,
+  },
+  actionButtonTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  sectionCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: 12,
+    gap: 8,
+  },
+  sectionTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.amber,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  advisoryRow: {
+    borderLeftWidth: 2,
+    paddingLeft: 8,
+  },
+  advisoryText: {
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  unavailableText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
+  },
 });
-
-
-

@@ -27,8 +27,8 @@
 
 import { vehicleSpecStore, type FuelType } from './vehicleSpecStore';
 import { consumablesStore, FUEL_DENSITY_LB_PER_GAL, WATER_DENSITY_LB_PER_GAL } from './consumablesStore';
-import { loadoutWeightCache } from './loadoutWeightCache';
 import { ecsLog } from './ecsLogger';
+import { getActiveVehicleContext } from './activeVehicleContext';
 
 // ── Phase 10: Safe numeric helper ────────────────────────────
 function _sn(value: any, fallback: number = 0): number {
@@ -872,7 +872,7 @@ export interface BuildWeightOverrides {
  * Reads vehicle specs, consumables, and item weights from their stores.
  * Returns a complete breakdown that all UI components should consume.
  *
- * @param vehicleId - Vehicle to compute for (uses first vehicle if omitted)
+ * @param vehicleId - Vehicle to compute for (uses the Fleet-selected active vehicle if omitted)
  * @param overrides - Optional overrides for form-preview (e.g., VehicleSpecsSection)
  */
 export function computeFullBuildWeightBreakdown(
@@ -882,16 +882,15 @@ export function computeFullBuildWeightBreakdown(
   // Phase 10: Wrap entire function in try-catch for crash protection
   try {
 
-  // ── Resolve vehicle spec ──
-  let resolvedVehicleId = vehicleId || '';
-  let spec = vehicleId ? vehicleSpecStore.get(vehicleId) : null;
-  if (!spec) {
-    const first = vehicleSpecStore.getFirst();
-    if (first) {
-      spec = first.spec;
-      resolvedVehicleId = first.vehicleId;
+    // ── Resolve vehicle spec ──
+    const activeVehicleContext = getActiveVehicleContext();
+    let resolvedVehicleId = vehicleId || activeVehicleContext.activeVehicleId || '';
+    let spec = vehicleId
+      ? vehicleSpecStore.get(vehicleId)
+      : activeVehicleContext.spec;
+    if (!spec) {
+      spec = resolvedVehicleId ? vehicleSpecStore.get(resolvedVehicleId) : null;
     }
-  }
 
   const base_weight_lb = overrides?.base_weight_lb ?? spec?.base_weight_lb ?? 0;
   const gvwr_lb = overrides?.gvwr_lb ?? spec?.gvwr_lb ?? 0;
@@ -913,11 +912,11 @@ export function computeFullBuildWeightBreakdown(
   const water_weight_lb = water_gal_current * WATER_DENSITY_LB_PER_GAL;
   const consumables_weight_lb = fuel_weight_lb + water_weight_lb;
 
-  // ── Items weight ──
-  // Use override if provided, otherwise read from loadout weight cache
-  const items_weight_lb = overrides?.items_weight_lb != null
-    ? overrides.items_weight_lb
-    : (loadoutWeightCache.getFirst()?.itemsWeightLb ?? 0);
+    // ── Items weight ──
+    // Use override if provided, otherwise read from loadout weight cache
+    const items_weight_lb = overrides?.items_weight_lb != null
+      ? overrides.items_weight_lb
+      : 0;
 
   // ── Build weight ──
   const build_weight_lb = base_weight_lb > 0

@@ -66,12 +66,33 @@ type Listener = (state: AdvisoryState) => void;
 
 // ── Constants ────────────────────────────────────────────────
 
-const MIN_INTERVAL_MS = 10_000;       // 10s minimum between messages
-const DEFAULT_DISPLAY_MS = 5_000;     // 5s default display duration
+const MIN_INTERVAL_MS = 8_500;        // 8.5s minimum between messages
+const DEFAULT_DISPLAY_MS = 6_500;     // 6.5s default display duration
 const DEDUP_WINDOW_MS = 60_000;       // 60s dedup window for same message
 const MAX_QUEUE_SIZE = 12;            // Max pending messages
 const OVEREXPOSURE_LIMIT = 3;         // Max times a message can show per 5min
 const OVEREXPOSURE_WINDOW_MS = 300_000; // 5 minute overexposure window
+
+function normalizeAdvisoryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s]/g, '')
+    .trim();
+}
+
+function advisoryFingerprint(message: Pick<AdvisoryMessage, 'mode' | 'text'>): string {
+  return `${message.mode}:${normalizeAdvisoryText(message.text)}`;
+}
+
+function isEscalation(
+  next: Pick<AdvisoryMessage, 'priority' | 'mode'>,
+  previous: Pick<AdvisoryMessage, 'priority' | 'mode'> | null | undefined,
+): boolean {
+  if (!previous) return false;
+  if (next.mode === 'alert' && previous.mode !== 'alert') return true;
+  return next.priority < previous.priority;
+}
 
 // ── Advisory Store Singleton ─────────────────────────────────
 
@@ -92,6 +113,9 @@ class AdvisoryStore {
 
   /** Track recent message IDs for deduplication */
   private recentMessages: Map<string, number> = new Map();
+
+  /** Track semantic message fingerprints for cooldown and escalation */
+  private recentFingerprints: Map<string, { shownAt: number; priority: number; mode: AdvisoryMode }> = new Map();
 
   /** Track message show counts for overexposure penalty */
   private showCounts: Map<string, { count: number; firstShown: number }> = new Map();
@@ -139,15 +163,44 @@ class AdvisoryStore {
       displayDuration: message.displayDuration ?? DEFAULT_DISPLAY_MS,
       interruptible: message.interruptible ?? true,
     };
+    const fingerprint = advisoryFingerprint(fullMessage);
+    const currentFingerprint = this.state.current ? advisoryFingerprint(this.state.current) : null;
+    const recentFingerprint = this.recentFingerprints.get(fingerprint);
+    const queuedIndex = this.queue.findIndex((entry) => advisoryFingerprint(entry) === fingerprint);
 
     // ── Deduplication check ──
     const lastSeen = this.recentMessages.get(message.id);
-    if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS) {
+    const fingerprintShownRecently =
+      recentFingerprint && Date.now() - recentFingerprint.shownAt < DEDUP_WINDOW_MS;
+    const escalatedFingerprint = isEscalation(fullMessage, recentFingerprint ?? null);
+    if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS && !escalatedFingerprint) {
       return; // Suppress duplicate
+    }
+    if (fingerprintShownRecently && !escalatedFingerprint) {
+      return; // Suppress semantic duplicate
+    }
+
+    if (currentFingerprint === fingerprint) {
+      if (
+        isEscalation(fullMessage, this.state.current) &&
+        ((this.state.current?.interruptible ?? false) || fullMessage.mode === 'alert')
+      ) {
+        this.clearTimers();
+        this.showMessage(fullMessage);
+      }
+      return;
+    }
+
+    if (queuedIndex >= 0) {
+      const queuedMessage = this.queue[queuedIndex];
+      if (isEscalation(fullMessage, queuedMessage)) {
+        this.queue.splice(queuedIndex, 1, fullMessage);
+      }
+      return;
     }
 
     // ── Overexposure check ──
-    const exposure = this.showCounts.get(message.id);
+    const exposure = this.showCounts.get(fingerprint);
     if (exposure) {
       if (Date.now() - exposure.firstShown < OVEREXPOSURE_WINDOW_MS &&
           exposure.count >= OVEREXPOSURE_LIMIT) {
@@ -200,6 +253,9 @@ class AdvisoryStore {
   clear(): void {
     this.clearTimers();
     this.queue = [];
+    this.recentMessages.clear();
+    this.recentFingerprints.clear();
+    this.showCounts.clear();
     this.clearCurrent();
   }
 
@@ -208,6 +264,9 @@ class AdvisoryStore {
     this.clearTimers();
     this.listeners.clear();
     this.queue = [];
+    this.recentMessages.clear();
+    this.recentFingerprints.clear();
+    this.showCounts.clear();
   }
 
   // ── Internal Engine ──────────────────────────────────────
@@ -233,6 +292,11 @@ class AdvisoryStore {
         this.recentMessages.delete(id);
       }
     }
+    for (const [fingerprint, data] of this.recentFingerprints) {
+      if (now - data.shownAt > DEDUP_WINDOW_MS) {
+        this.recentFingerprints.delete(fingerprint);
+      }
+    }
 
     // Clean up stale overexposure entries
     for (const [id, data] of this.showCounts) {
@@ -251,16 +315,22 @@ class AdvisoryStore {
 
   private showMessage(message: AdvisoryMessage): void {
     const now = Date.now();
+    const fingerprint = advisoryFingerprint(message);
 
     // Record in dedup map
     this.recentMessages.set(message.id, now);
+    this.recentFingerprints.set(fingerprint, {
+      shownAt: now,
+      priority: message.priority,
+      mode: message.mode,
+    });
 
     // Record in overexposure map
-    const existing = this.showCounts.get(message.id);
+    const existing = this.showCounts.get(fingerprint);
     if (existing) {
       existing.count++;
     } else {
-      this.showCounts.set(message.id, { count: 1, firstShown: now });
+      this.showCounts.set(fingerprint, { count: 1, firstShown: now });
     }
 
     // Update state

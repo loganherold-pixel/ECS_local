@@ -51,7 +51,7 @@ function getBleManager(): any {
   }
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { BleManager } = require("react-native-ble-plx");
     _bleManagerInstance = new BleManager();
     return _bleManagerInstance;
@@ -467,7 +467,7 @@ function inferVendorHint(device: any): string | undefined {
   if (!name) return undefined;
 
   // Common power-station vendor name patterns
-  const patterns: Array<[RegExp, string]> = [
+  const patterns: [RegExp, string][] = [
     [/ecoflow|delta|river/i, "ecoflow"],
     [/bluetti|ac\d{2,3}|eb\d{2}/i, "bluetti"],
     [/jackery/i, "jackery"],

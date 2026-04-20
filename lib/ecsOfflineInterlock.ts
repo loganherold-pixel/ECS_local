@@ -147,7 +147,7 @@ const STALE_THRESHOLD_MS = 120_000;
 
 // ── Internal State ───────────────────────────────────────
 
-let _mode: DataSourceMode = 'online';
+let _mode: DataSourceMode = 'offline';
 let _previousMode: DataSourceMode | null = null;
 let _modeChangedAt: string | null = null;
 let _pendingMode: DataSourceMode | null = null;
@@ -236,8 +236,15 @@ function _readConnectivityState(): {
     const level = connectivity.getLevel();
     return {
       ...defaults,
-      state: level === 'no_service' ? 'offline' : level === 'online' ? 'connected' : 'unknown',
-      internet_reachable: level === 'online',
+      state:
+        level === 'no_service'
+          ? 'offline'
+          : level === 'limited'
+            ? 'limited'
+            : level === 'normal'
+              ? 'connected'
+              : 'unknown',
+      internet_reachable: level === 'normal',
     };
   } catch {}
 
@@ -316,12 +323,9 @@ function _computeMode(
     return 'offline';
   }
 
-  // Unknown — if we have offline data, treat as hybrid; otherwise online
-  if (offlineReadiness.has_data) {
-    return 'hybrid';
-  }
-
-  return 'online';
+  // Unknown startup / unresolved connectivity should stay conservative until
+  // transport and reachability are reconciled.
+  return 'offline';
 }
 
 /**
@@ -413,6 +417,10 @@ function _buildStatusMessage(
   connectivity: ReturnType<typeof _readConnectivityState>,
   offlineReadiness: ReturnType<typeof _readOfflineReadiness>,
 ): string {
+  if (connectivity.state === 'unknown') {
+    return 'Evaluating connectivity…';
+  }
+
   if (offlineReadiness.is_downloading) {
     return 'Downloading offline data\u2026';
   }
@@ -676,7 +684,7 @@ function _onRegionChange(): void {
 
 function _defaultState(): InterlockState {
   return {
-    mode: 'online',
+    mode: 'offline',
     in_transition: false,
     previous_mode: null,
     mode_changed_at: null,
@@ -684,8 +692,8 @@ function _defaultState(): InterlockState {
     navigation_offline_available: false,
     route_covered_offline: false,
     position_covered_offline: false,
-    discovery_source: 'live_only',
-    navigation_source: 'live_only',
+    discovery_source: 'cached_only',
+    navigation_source: 'cached_only',
     offline_region_count: 0,
     offline_entry_count: 0,
     has_integrity_issues: false,
@@ -1151,7 +1159,7 @@ export const ecsOfflineInterlock = {
    */
   reset(): void {
     ecsOfflineInterlock.stopMonitoring();
-    _mode = 'online';
+    _mode = 'offline';
     _previousMode = null;
     _modeChangedAt = null;
     _pendingMode = null;

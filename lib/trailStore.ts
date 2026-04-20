@@ -956,7 +956,7 @@ ${trkLines.join('\n')}
         if (!currentBucket || currentBucket.color !== color) {
           // Start new segment; carry over last coord for continuity
           if (currentBucket && currentBucket.coordinates.length > 0) {
-            const lastCoord = currentBucket.coordinates[currentBucket.coordinates.length - 1];
+            const lastCoord: [number, number] = currentBucket.coordinates[currentBucket.coordinates.length - 1];
             currentBucket = { coordinates: [lastCoord], speed_mph: spd, color };
           } else {
             currentBucket = { coordinates: [], speed_mph: spd, color };
@@ -1043,7 +1043,7 @@ ${trkLines.join('\n')}
       const color = SPEED_BUCKET_COLORS[bucket];
       if (!cur || cur.color !== color) {
         if (cur && cur.coordinates.length > 0) {
-          const last = cur.coordinates[cur.coordinates.length - 1];
+          const last: [number, number] = cur.coordinates[cur.coordinates.length - 1];
           cur = { coordinates: [last], speed_mph: spd, color };
         } else {
           cur = { coordinates: [], speed_mph: spd, color };

@@ -21,6 +21,7 @@ import {
   Animated, Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
 import {
@@ -76,6 +77,10 @@ export interface UseWeatherAlertsResult {
   tempString: string | null;
   /** Wind info */
   windString: string | null;
+  /** Precipitation summary */
+  precipString: string | null;
+  /** State label for stale/offline/error */
+  statusText: string | null;
 }
 
 // ── Haversine distance (meters) ──────────────────────────────
@@ -146,6 +151,8 @@ export function useWeatherAlerts(
   const [conditionsSummary, setConditionsSummary] = useState<string | null>(null);
   const [tempString, setTempString] = useState<string | null>(null);
   const [windString, setWindString] = useState<string | null>(null);
+  const [precipString, setPrecipString] = useState<string | null>(null);
+  const [statusText, setStatusText] = useState<string | null>(null);
 
   const lastFetchLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const seenAlertKeysRef = useRef<Set<string>>(new Set());
@@ -172,6 +179,8 @@ export function useWeatherAlerts(
         setConditionsSummary(null);
         setTempString(null);
         setWindString(null);
+        setPrecipString(null);
+        setStatusText(null);
       }
       return next;
     });
@@ -207,16 +216,29 @@ export function useWeatherAlerts(
           }
         }
 
-        // Extract conditions summary from first waypoint with data
-        if (wp.current && wp.current.temp != null && !conditionsSummary) {
+        if (wp.current && wp.current.temp != null) {
           setConditionsSummary(wp.current.weather_main || 'Unknown');
           setTempString(`${Math.round(wp.current.temp)}°F`);
           if (wp.current.wind_speed != null) {
             setWindString(`${Math.round(wp.current.wind_speed)} mph`);
           }
+          const precipChance = wp.forecast?.[0]?.pop ?? null;
+          const precipType = (wp.current.snow_1h ?? wp.current.snow_3h ?? 0) > 0 ? 'Snow' : 'Rain';
+          setPrecipString(precipChance != null ? `${precipType} ${Math.round(precipChance)}%` : null);
+          break;
         }
       }
     }
+
+    setStatusText(
+      result.source === 'cache_stale'
+        ? 'Offline • last known forecast'
+        : result.source === 'fallback'
+          ? 'Weather unavailable'
+          : result.error
+            ? 'Weather degraded'
+            : null,
+    );
 
     // Sort by severity
     allAlerts.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
@@ -247,7 +269,7 @@ export function useWeatherAlerts(
 
     setAlerts(allAlerts);
     setMarkers(allMarkers);
-  }, [showToast, conditionsSummary]);
+  }, [showToast]);
 
   const fetchWeather = useCallback(async (lat: number, lng: number) => {
     if (loading) return;
@@ -285,7 +307,7 @@ export function useWeatherAlerts(
     if (shouldFetch) {
       fetchWeather(userLocation.lat, userLocation.lng);
     }
-  }, [enabled, userLocation?.lat, userLocation?.lng]);
+  }, [enabled, fetchWeather, userLocation]);
 
   // Periodic refresh every 5 minutes when enabled
   useEffect(() => {
@@ -303,7 +325,7 @@ export function useWeatherAlerts(
     return () => {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     };
-  }, [enabled, userLocation?.lat, userLocation?.lng]);
+  }, [enabled, fetchWeather, userLocation]);
 
   const severeCount = useMemo(() =>
     alerts.filter(a => a.severity === 'extreme' || a.severity === 'warning').length,
@@ -324,6 +346,8 @@ export function useWeatherAlerts(
     conditionsSummary,
     tempString,
     windString,
+    precipString,
+    statusText,
   };
 }
 
@@ -341,8 +365,12 @@ interface OverlayProps {
   conditionsSummary: string | null;
   tempString: string | null;
   windString: string | null;
+  precipString: string | null;
+  statusText: string | null;
   onDetailPress: () => void;
   onRefresh: () => void;
+  topOffset?: number;
+  leftOffset?: number;
 }
 
 export function WeatherAlertMapOverlay({
@@ -355,8 +383,12 @@ export function WeatherAlertMapOverlay({
   conditionsSummary,
   tempString,
   windString,
+  precipString,
+  statusText,
   onDetailPress,
   onRefresh,
+  topOffset = 10,
+  leftOffset = 10,
 }: OverlayProps) {
   const [expanded, setExpanded] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -386,7 +418,7 @@ export function WeatherAlertMapOverlay({
     worstSeverity === 'advisory' ? '#42A5F5' : TACTICAL.amber;
 
   return (
-    <View style={ovStyles.container} pointerEvents="box-none">
+    <View style={[ovStyles.container, { top: topOffset, left: leftOffset }]} pointerEvents="box-none">
       {/* Compact badge */}
       <TouchableOpacity
         style={[
@@ -428,16 +460,28 @@ export function WeatherAlertMapOverlay({
                 )}
               </View>
             ) : (
-              <View style={ovStyles.conditionsRow}>
-                {tempString && (
-                  <Text style={ovStyles.tempText}>{tempString}</Text>
+              <View style={ovStyles.conditionsStack}>
+                <View style={ovStyles.conditionsRow}>
+                  {tempString && (
+                    <Text style={ovStyles.tempText}>{tempString}</Text>
+                  )}
+                  {conditionsSummary && (
+                    <Text style={ovStyles.conditionsText}>{conditionsSummary}</Text>
+                  )}
+                  {!tempString && !conditionsSummary && (
+                    <Text style={ovStyles.conditionsText}>
+                      {loading ? 'Loading weather' : 'No alerts'}
+                    </Text>
+                  )}
+                </View>
+                {(windString || precipString) && (
+                  <Text style={ovStyles.secondaryLine} numberOfLines={1}>
+                    {windString || '--'}{windString && precipString ? ' • ' : ''}{precipString || ''}
+                  </Text>
                 )}
-                {conditionsSummary && (
-                  <Text style={ovStyles.conditionsText}>{conditionsSummary}</Text>
-                )}
-                {!tempString && !conditionsSummary && (
-                  <Text style={ovStyles.conditionsText}>
-                    {loading ? 'FETCHING...' : 'NO ALERTS'}
+                {statusText && (
+                  <Text style={ovStyles.statusLine} numberOfLines={1}>
+                    {statusText}
                   </Text>
                 )}
               </View>
@@ -565,7 +609,7 @@ export function WeatherAlertDetailModal({
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
+    <ECSModal visible={visible} onClose={onClose} dismissOnBackdrop={false} stackBehavior="replace">
       <View style={dmStyles.overlay}>
         <TouchableOpacity style={dmStyles.backdrop} onPress={onClose} activeOpacity={1} />
         <View style={dmStyles.sheet}>
@@ -748,7 +792,7 @@ export function WeatherAlertDetailModal({
           </View>
         </View>
       </View>
-    </Modal>
+    </ECSModal>
   );
 }
 
@@ -828,6 +872,9 @@ const ovStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  conditionsStack: {
+    gap: 2,
+  },
   tempText: {
     fontSize: 11,
     fontWeight: '700',
@@ -839,6 +886,19 @@ const ovStyles = StyleSheet.create({
     fontWeight: '600',
     color: TACTICAL.textMuted,
     letterSpacing: 0.5,
+  },
+  secondaryLine: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.4,
+    fontFamily: 'Courier',
+  },
+  statusLine: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.amber,
+    letterSpacing: 0.4,
   },
 
   // Expanded panel

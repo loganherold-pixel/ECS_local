@@ -112,6 +112,16 @@ let _backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
 // Phase 3D: Last known good summary (for grace window)
 let _lastKnownGoodSummary: ConnectivitySummary | null = null;
 
+function _describeReconciledAuthority(summary: ConnectivitySummary): string {
+  if (summary.network_type === 'none') {
+    return 'transport_none';
+  }
+  if (!summary.internet_reachable) {
+    return 'reachability_unverified';
+  }
+  return summary.active_source ?? 'no_active_source';
+}
+
 
 // ══════════════════════════════════════════════════════════
 // PHASE 3D: DEBOUNCE LAYER
@@ -185,6 +195,12 @@ function _computeFreshness(
   // Offline is always 'offline' freshness
   if (connectivityState === 'offline') {
     return 'offline';
+  }
+
+  // Unknown startup or unresolved transport should stay neutral until a
+  // reconciled device-network snapshot arrives.
+  if (connectivityState === 'unknown') {
+    return 'stale';
   }
 
   // Check if we're in recovery window
@@ -465,7 +481,8 @@ function _computeSummary(
   );
 
   // Phase 3D: Compute freshness
-  const freshness = _computeFreshness(debouncedState, true);
+  const freshness = _computeFreshness(debouncedState, rawState !== 'unknown');
+  const isLive = freshness === 'live' && debouncedState !== 'unknown';
 
   return {
     connectivity_state: debouncedState,
@@ -475,7 +492,7 @@ function _computeSummary(
     last_online_at: lastOnlineAt,
     active_source: best.provider_id,
     active_provider_count: activeCount,
-    is_live: true,
+    is_live: isLive,
     updated_at: new Date().toISOString(),
     // Phase 3B
     network_type: t.network_type ?? 'unknown',
@@ -525,6 +542,7 @@ function _update(): void {
         `[ConnectivityIntel] State transition: ${_lastState} → ${summary.connectivity_state} ` +
         `(type: ${summary.network_type}, quality: ${summary.quality}, ` +
         `reachable: ${summary.internet_reachable}, ` +
+        `authority: ${_describeReconciledAuthority(summary)}, ` +
         `freshness: ${summary.freshness}, ` +
         `latency: ${summary.latency_ms != null ? summary.latency_ms + 'ms' : 'n/a'})`
       );

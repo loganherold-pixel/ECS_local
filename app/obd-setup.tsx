@@ -122,6 +122,33 @@ export default function OBDSetupWizard() {
   const [step, setStep] = useState(0);
   const [deviceName, setDeviceName] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<OBD2DiscoveredDevice | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (step === 1 && !scanner.isScanning && !scanner.isConnected && !scanner.isConnecting) {
+      scanner.startScan(15000);
+    }
+  }, [step, scanner]);
+
+  const handleConnect = useCallback(async () => {
+    if (!selectedDevice) return;
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      if (scanner.isScanning) await scanner.stopScan();
+      const success = await scanner.connectToDevice(selectedDevice.id, selectedDevice.name);
+      if (success) {
+        setDeviceName(selectedDevice.name);
+        setStep(3);
+      } else {
+        setConnectError('Connection failed. Please try again.');
+      }
+    } catch (err: any) {
+      setConnectError(err?.message || 'Connection failed');
+    }
+    setConnecting(false);
+  }, [scanner, selectedDevice]);
 
   // ── Step 0: Welcome ──
   const renderWelcome = () => (
@@ -186,13 +213,6 @@ export default function OBDSetupWizard() {
 
   // ── Step 1: Scan ──
   const renderScan = () => {
-    // Auto-start scan
-    useEffect(() => {
-      if (step === 1 && !scanner.isScanning && !scanner.isConnected && !scanner.isConnecting) {
-        scanner.startScan(15000);
-      }
-    }, [step]);
-
     return (
       <ScrollView style={ws.scroll} contentContainerStyle={ws.scrollContent}>
         <Text style={ws.stepTitle}>Scanning for OBD-II Adapters</Text>
@@ -280,28 +300,6 @@ export default function OBDSetupWizard() {
 
   // ── Step 2: Connect ──
   const renderConnect = () => {
-    const [connecting, setConnecting] = useState(false);
-    const [connectError, setConnectError] = useState<string | null>(null);
-
-    const handleConnect = async () => {
-      if (!selectedDevice) return;
-      setConnecting(true);
-      setConnectError(null);
-      try {
-        if (scanner.isScanning) await scanner.stopScan();
-        const success = await scanner.connectToDevice(selectedDevice.id, selectedDevice.name);
-        if (success) {
-          setDeviceName(selectedDevice.name);
-          setStep(3);
-        } else {
-          setConnectError('Connection failed. Please try again.');
-        }
-      } catch (err: any) {
-        setConnectError(err?.message || 'Connection failed');
-      }
-      setConnecting(false);
-    };
-
     return (
       <ScrollView style={ws.scroll} contentContainerStyle={ws.scrollContent}>
         <Text style={ws.stepTitle}>Connect to Adapter</Text>

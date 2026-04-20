@@ -1,7 +1,7 @@
 /**
  * CommandDock — Permanent bottom navigation bar
  *
- * FLEET | NAVIGATE | DASHBOARD (crest) | DISCOVER | ALERT
+ * FLEET | NAVIGATE | DASHBOARD (crest) | EXPLORE | DISPATCH
  *
  * Updated for local premium badge assets:
  *   • Outer four tabs use local PNG badge icons
@@ -9,85 +9,92 @@
  *   • Dashboard crest remains live BrandShieldIcon
  *   • Safe-area support preserved
  *   • QuickActionsSheet long-press preserved
+ *
+ * Startup fix:
+ *   • Uses router.replace instead of router.push so dock navigation
+ *     does not create a visible Fleet → Dashboard transition.
+ *
+ * Hook-order fix:
+ *   • All hooks are declared before any conditional return.
  */
 
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   Pressable,
   StyleSheet,
   Animated,
-  Platform,
-  Image,
-  type ImageSourcePropType,
+  ImageBackground,
+  useWindowDimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useRouter, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import QuickActionsSheet from './QuickActionsSheet';
-import BrandShieldIcon from './BrandShieldIcon';
 
 import { MOTION, EASING, PRESS } from '../lib/motion';
 import { hapticMicro, hapticCommand } from '../lib/haptics';
 import { TYPO, ECS } from '../lib/theme';
+import {
+  hasSeenDashboardLongPressHint,
+  markDashboardLongPressHintSeen,
+} from '../lib/firstLaunchGuidanceStore';
+import {
+  ECS_COMMAND_DOCK_BAR_HEIGHT,
+  ECS_COMMAND_DOCK_LABEL_HEIGHT,
+  getCommandDockBottomPadding,
+  getCommandDockHeight,
+} from '../lib/shellLayout';
+import {
+  getDashboardChromeState,
+  subscribeDashboardChrome,
+} from '../lib/dashboardChromeStore';
+import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
+import { BOTTOM_BANNER_BG } from '../lib/chromeAssets';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
-  bar: '#151A21',
-  barTopEdge: '#1A2028',
-  barBorder: ECS.stroke,
+  bar: '#151A20',
+  barBorder: 'rgba(196,138,44,0.22)',
 
-  goldRail: '#A0813A',
-
-  radialCore: 'rgba(212,160,23,0.08)',
-  radialMid: 'rgba(212,160,23,0.04)',
-
-  iconMuted: ECS.muted,
-  iconActive: ECS.accent,
-
-  labelMuted: '#5A6370',
-  labelActive: ECS.accent,
-
-  goldUnderline: 'rgba(212,160,23,0.60)',
-
-  dashGlowOuter: 'rgba(181,139,58,0.10)',
-  dashGlowInner: 'rgba(212,160,23,0.18)',
+  labelMuted: '#6E7886',
+  labelActive: '#D1AC59',
 };
 
 // ── Shield sizing ────────────────────────────────────────────
-const SHIELD_ICON_SIZE = 72;
-const SHIELD_SCALE = 0.67;
+const SHIELD_ICON_SIZE = 80;
 
 // ── Outer badge sizing ───────────────────────────────────────
-const OUTER_BADGE_SIZE = 56;
 const OUTER_BADGE_SIZE_ACTIVE = 58;
 
 // ── Bar layout ───────────────────────────────────────────────
-const BAR_HEIGHT = 68;
-const ITEM_TOUCH_TARGET = 54;
-
-const DEFAULT_BOTTOM_PADDING = 6;
 const MIN_DOCK_LIFT = 0;
 
 const SCALE_PULSE_PEAK = 1.05;
 const SCALE_PULSE_DURATION = 120;
+const FIRST_LAUNCH_HINT_CYCLES = 5;
+const FIRST_LAUNCH_HINT_FADE_MS = 520;
+const FIRST_LAUNCH_HINT_IDLE_MS = 180;
 
-// ── Local badge assets ───────────────────────────────────────
-const BADGE_ICONS = {
+const DOCK_BADGES = {
   fleet: require('../assets/ecs/nav/fleet-badge.png'),
   navigate: require('../assets/ecs/nav/navigate-badge.png'),
+  dashboard: require('../assets/ecs/nav/ecs-center.png'),
   discover: require('../assets/ecs/nav/discover-badge.png'),
   alert: require('../assets/ecs/nav/alert-badge.png'),
 } as const;
 
+// ── Local badge assets ───────────────────────────────────────
 // ── Dock item config ─────────────────────────────────────────
 interface DockItem {
   key: 'fleet' | 'navigate' | 'dashboard' | 'discover' | 'alert';
   label: string;
   route: string;
   pathMatch: string[];
-  icon?: ImageSourcePropType;
+  badge?: number;
+  iconOffsetY?: number;
 }
 
 const DOCK_ITEMS: DockItem[] = [
@@ -96,34 +103,37 @@ const DOCK_ITEMS: DockItem[] = [
     label: 'FLEET',
     route: '/(tabs)/fleet',
     pathMatch: ['/fleet', '/vehicle-config'],
-    icon: BADGE_ICONS.fleet,
+    badge: DOCK_BADGES.fleet,
   },
   {
     key: 'navigate',
     label: 'NAVIGATE',
     route: '/(tabs)/navigate',
     pathMatch: ['/navigate', '/route', '/navigate-run', '/navigate-offline', '/navigate-bailouts'],
-    icon: BADGE_ICONS.navigate,
+    badge: DOCK_BADGES.navigate,
   },
   {
     key: 'dashboard',
     label: '',
     route: '/(tabs)/dashboard',
     pathMatch: ['/dashboard'],
+    badge: DOCK_BADGES.dashboard,
   },
   {
     key: 'discover',
-    label: 'DISCOVER',
+    label: 'EXPLORE',
     route: '/(tabs)/discover',
     pathMatch: ['/discover'],
-    icon: BADGE_ICONS.discover,
+    badge: DOCK_BADGES.discover,
+    iconOffsetY: 3.25,
   },
   {
     key: 'alert',
-    label: 'ALERT',
+    label: 'DISPATCH',
     route: '/(tabs)/alert',
     pathMatch: ['/alert', '/safety', '/intel', '/more'],
-    icon: BADGE_ICONS.alert,
+    badge: DOCK_BADGES.alert,
+    iconOffsetY: 3.75,
   },
 ];
 
@@ -173,17 +183,20 @@ function DockButton({
 
   const inactiveOpacity = colorProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.5, 0],
+    outputRange: [1, 0],
   });
 
   const activeOpacity = colorProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, 1],
   });
-
-  const underlineOpacity = colorProgress.interpolate({
+  const badgeOpacity = colorProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 1],
+    outputRange: [0.58, 1],
+  });
+  const badgeScale = colorProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.92, 1],
   });
 
   const handlePressIn = useCallback(() => {
@@ -209,13 +222,16 @@ function DockButton({
     onPress();
   }, [onPress]);
 
-  if (!item.icon) return null;
-
-const badgeOffsetY =
-  item.key === 'discover' || item.key === 'alert' ? 4 : 0;
+  if (!item.badge) return null;
 
   return (
-    <Pressable onPressIn={handlePressIn} onPressOut={handlePressOut} onPress={handlePress}>
+    <Pressable
+      style={styles.dockPressable}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onPress={handlePress}
+      hitSlop={8}
+    >
       <Animated.View
         style={[
           styles.dockItem,
@@ -224,33 +240,22 @@ const badgeOffsetY =
           },
         ]}
       >
-        <View style={styles.badgeContainer}>
-          <Animated.Image
-  source={item.icon}
-  resizeMode="contain"
-  style={[
-    styles.outerBadge,
-    styles.outerBadgeBase,
-    {
-      opacity: inactiveOpacity,
-      transform: [{ translateY: badgeOffsetY }],
-    },
-  ]}
-/>
-
-<Animated.Image
-  source={item.icon}
-  resizeMode="contain"
-  style={[
-    styles.outerBadge,
-    styles.outerBadgeActive,
-    {
-      opacity: activeOpacity,
-      transform: [{ translateY: badgeOffsetY }],
-    },
-  ]}
-/>
-        </View>
+        <Animated.View
+          style={[
+          styles.badgeContainer,
+          {
+            opacity: badgeOpacity,
+            transform: [{ translateY: item.iconOffsetY ?? 0 }, { scale: badgeScale }],
+          },
+        ]}
+      >
+          <Image
+            source={item.badge}
+            style={styles.badgeImage}
+            contentFit="contain"
+            transition={0}
+          />
+        </Animated.View>
 
         <View style={styles.labelContainer}>
           <Animated.Text
@@ -274,8 +279,6 @@ const badgeOffsetY =
             {item.label}
           </Animated.Text>
         </View>
-
-        <Animated.View style={[styles.activeUnderline, { opacity: underlineOpacity }]} />
       </Animated.View>
     </Pressable>
   );
@@ -286,24 +289,18 @@ function ShieldCenterButton({
   isActive,
   onTap,
   onLongPress,
+  hintOpacity,
+  hintScale,
 }: {
   isActive: boolean;
   onTap: () => void;
   onLongPress: () => void;
+  hintOpacity?: Animated.Value;
+  hintScale?: Animated.Value;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const glowAnim = useRef(new Animated.Value(isActive ? 1 : 0)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggered = useRef(false);
-
-  useEffect(() => {
-    Animated.timing(glowAnim, {
-      toValue: isActive ? 1 : 0,
-      duration: 280,
-      easing: EASING.standard,
-      useNativeDriver: false,
-    }).start();
-  }, [isActive, glowAnim]);
 
   const handlePressIn = useCallback(() => {
     longPressTriggered.current = false;
@@ -351,96 +348,231 @@ function ShieldCenterButton({
     }
   }, [onTap]);
 
-  const glowOpacity = glowAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
-
   return (
     <View style={styles.shieldSlot}>
-      <Animated.View style={[styles.shieldGlowOuter, { opacity: glowOpacity }]} pointerEvents="none" />
-      <Animated.View style={[styles.shieldGlowInner, { opacity: glowOpacity }]} pointerEvents="none" />
+      {hintOpacity && hintScale ? (
+        <Animated.View
+          style={[
+            styles.firstLaunchHintHalo,
+            {
+              opacity: hintOpacity,
+              transform: [{ scale: hintScale }],
+            },
+          ]}
+          pointerEvents="none"
+        />
+      ) : null}
 
       <Pressable onPressIn={handlePressIn} onPressOut={handlePressOut} onPress={handlePress}>
         <Animated.View
-  style={[
-    styles.shieldWrapper,
-    { transform: [{ translateY: -4 }, { scale: scaleAnim }] },
-  ]}
->
-  <View style={styles.shieldIconOnly}>
-    <BrandShieldIcon scale={SHIELD_SCALE} active={isActive} />
-  </View>
-</Animated.View>
+          style={[
+            styles.shieldPressable,
+            {
+              opacity: isActive ? 1 : 0.96,
+              transform: [{ translateY: -1 }, { scale: scaleAnim }],
+            },
+          ]}
+        >
+          <View style={styles.shieldWrapper}>
+            <Image
+              source={DOCK_BADGES.dashboard}
+              style={styles.shieldImage}
+              contentFit="contain"
+              transition={0}
+            />
+          </View>
+          <View style={styles.shieldLabelSpacer} />
+        </Animated.View>
       </Pressable>
     </View>
   );
 }
 
 // ── Radial center glow overlay ───────────────────────────────
-function RadialGradientOverlay() {
-  return (
-    <View style={styles.radialContainer} pointerEvents="none">
-      <View
-        style={[
-          styles.radialRing,
-          {
-            width: '40%',
-            height: '160%',
-            backgroundColor: DOCK.radialCore,
-            borderRadius: 999,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.radialRing,
-          {
-            width: '65%',
-            height: '200%',
-            backgroundColor: DOCK.radialMid,
-            borderRadius: 999,
-          },
-        ]}
-      />
-    </View>
-  );
-}
 
 // ── Main dock ────────────────────────────────────────────────
 export default function CommandDock() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const adaptive = useAdaptiveLayout();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
+  const [dashboardExpanded, setDashboardExpanded] = useState(
+    getDashboardChromeState().expanded
+  );
+  const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
+  const firstLaunchHintOpacity = useRef(new Animated.Value(0)).current;
+  const firstLaunchHintScale = useRef(new Animated.Value(0.96)).current;
+  const firstLaunchHintRunningRef = useRef(false);
+  const dockVisibilityAnim = useRef(
+    new Animated.Value(
+      pathname.includes('/dashboard') && getDashboardChromeState().expanded ? 0 : 1
+    )
+  ).current;
 
   const hiddenPaths = useMemo(
     () => new Set(['/login', '/create-access-key', '/', '/initialize', '/expedition-wizard']),
     []
   );
 
-  if (hiddenPaths.has(pathname)) {
+  const isHidden = hiddenPaths.has(pathname);
+  const hideForDashboardExpanded = pathname.includes('/dashboard') && dashboardExpanded;
+
+  const isItemActive = useCallback(
+    (item: DockItem): boolean => {
+      return item.pathMatch.some((p) => pathname.includes(p));
+    },
+    [pathname]
+  );
+
+  const handleNavigate = useCallback(
+    (route: string) => {
+      if (pathname === route) return;
+      router.replace(route as any);
+    },
+    [pathname, router]
+  );
+
+  const dockBottomPadding = getCommandDockBottomPadding(insets.bottom);
+  const dockHeight = getCommandDockHeight(insets.bottom);
+  const dockOuterGutter = adaptive.shell.dockOuterGutter;
+  const availableDockWidth = Math.max(
+    280,
+    windowWidth - insets.left - insets.right - dockOuterGutter * 2,
+  );
+  const dockFrameWidth = adaptive.shell.dockMaxWidth
+    ? Math.min(availableDockWidth, adaptive.shell.dockMaxWidth)
+    : availableDockWidth;
+  const dockHorizontalPadding = adaptive.shell.dockHorizontalPadding;
+
+  useEffect(() => {
+    return subscribeDashboardChrome((nextState) => {
+      setDashboardExpanded(nextState.expanded);
+    });
+  }, []);
+
+  useEffect(() => {
+    Animated.timing(dockVisibilityAnim, {
+      toValue: hideForDashboardExpanded ? 0 : 1,
+      duration: hideForDashboardExpanded ? 220 : 260,
+      easing: EASING.standard,
+      useNativeDriver: true,
+    }).start();
+  }, [dockVisibilityAnim, hideForDashboardExpanded]);
+
+  const dismissFirstLaunchHint = useCallback(() => {
+    firstLaunchHintRunningRef.current = false;
+    firstLaunchHintOpacity.stopAnimation();
+    firstLaunchHintScale.stopAnimation();
+    setShowFirstLaunchHint(false);
+    firstLaunchHintOpacity.setValue(0);
+    firstLaunchHintScale.setValue(0.96);
+  }, [firstLaunchHintOpacity, firstLaunchHintScale]);
+
+  useEffect(() => {
+    if (isHidden) {
+      dismissFirstLaunchHint();
+      return;
+    }
+
+    let cancelled = false;
+
+    const runFirstLaunchHint = async () => {
+      const seen = await hasSeenDashboardLongPressHint();
+      if (cancelled || seen) {
+        return;
+      }
+
+      await markDashboardLongPressHintSeen();
+      if (cancelled) {
+        return;
+      }
+
+      firstLaunchHintRunningRef.current = true;
+      setShowFirstLaunchHint(true);
+      firstLaunchHintOpacity.setValue(0);
+      firstLaunchHintScale.setValue(0.96);
+
+      const steps: Animated.CompositeAnimation[] = [];
+      for (let i = 0; i < FIRST_LAUNCH_HINT_CYCLES; i += 1) {
+        steps.push(
+          Animated.parallel([
+            Animated.timing(firstLaunchHintOpacity, {
+              toValue: 0.92,
+              duration: FIRST_LAUNCH_HINT_FADE_MS,
+              easing: EASING.standard,
+              useNativeDriver: true,
+            }),
+            Animated.timing(firstLaunchHintScale, {
+              toValue: 1.04,
+              duration: FIRST_LAUNCH_HINT_FADE_MS,
+              easing: EASING.standard,
+              useNativeDriver: true,
+            }),
+          ]),
+          Animated.delay(FIRST_LAUNCH_HINT_IDLE_MS),
+          Animated.parallel([
+            Animated.timing(firstLaunchHintOpacity, {
+              toValue: 0.18,
+              duration: FIRST_LAUNCH_HINT_FADE_MS,
+              easing: EASING.standard,
+              useNativeDriver: true,
+            }),
+            Animated.timing(firstLaunchHintScale, {
+              toValue: 0.98,
+              duration: FIRST_LAUNCH_HINT_FADE_MS,
+              easing: EASING.standard,
+              useNativeDriver: true,
+            }),
+          ]),
+        );
+      }
+
+      Animated.sequence([
+        ...steps,
+        Animated.parallel([
+          Animated.timing(firstLaunchHintOpacity, {
+            toValue: 0,
+            duration: 280,
+            easing: EASING.standard,
+            useNativeDriver: true,
+          }),
+          Animated.timing(firstLaunchHintScale, {
+            toValue: 1,
+            duration: 280,
+            easing: EASING.standard,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start(({ finished }) => {
+        if (!finished || cancelled) {
+          return;
+        }
+
+        firstLaunchHintRunningRef.current = false;
+        setShowFirstLaunchHint(false);
+        firstLaunchHintOpacity.setValue(0);
+        firstLaunchHintScale.setValue(0.96);
+      });
+    };
+
+    runFirstLaunchHint();
+
+    return () => {
+      cancelled = true;
+      dismissFirstLaunchHint();
+    };
+  }, [
+    dismissFirstLaunchHint,
+    firstLaunchHintOpacity,
+    firstLaunchHintScale,
+    isHidden,
+  ]);
+
+  if (isHidden) {
     return null;
   }
-
-  const isItemActive = (item: DockItem): boolean => {
-    return item.pathMatch.some((p) => pathname.includes(p));
-  };
-
-  const handleNavigate = (route: string) => {
-    router.push(route as any);
-  };
-
-  const bottomInset = Platform.OS === 'web' ? 0 : insets.bottom;
-
-  const dockBottomPadding =
-    Platform.OS === 'android'
-      ? Math.max(Math.min(bottomInset, 8), DEFAULT_BOTTOM_PADDING)
-      : bottomInset > 0
-        ? bottomInset
-        : DEFAULT_BOTTOM_PADDING;
-
-  const dockHeight = BAR_HEIGHT + dockBottomPadding;
 
   return (
     <>
@@ -449,12 +581,75 @@ export default function CommandDock() {
         onClose={() => setQuickActionsVisible(false)}
       />
 
-      <View style={[styles.dockContainer, { bottom: MIN_DOCK_LIFT }]}>
-        <View style={[styles.dockBar, { height: dockHeight, paddingBottom: dockBottomPadding }]}>
-          <View style={styles.goldRailLine} />
-          <View style={styles.barTopEdge} />
-          <RadialGradientOverlay />
+      <Animated.View
+        style={[
+          styles.dockContainer,
+          {
+            bottom: MIN_DOCK_LIFT,
+            paddingHorizontal: dockOuterGutter,
+            opacity: dockVisibilityAnim,
+            transform: [
+              {
+                translateY: dockVisibilityAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [dockHeight + 24, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+        pointerEvents={hideForDashboardExpanded ? 'none' : 'auto'}
+      >
+        <ImageBackground
+          pointerEvents="none"
+          source={BOTTOM_BANNER_BG}
+          resizeMode="cover"
+          imageStyle={styles.dockEdgeFillImage}
+          style={[
+            styles.dockEdgeFill,
+            {
+              height: dockHeight,
+            },
+          ]}
+        >
+          <View style={styles.dockEdgeScrim} />
+        </ImageBackground>
+        <View style={styles.hardenedTopLine} pointerEvents="none" />
 
+        {showFirstLaunchHint ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.firstLaunchHintContainer,
+              {
+                bottom: dockHeight - 14,
+                opacity: firstLaunchHintOpacity,
+                transform: [{ scale: firstLaunchHintScale }],
+              },
+            ]}
+          >
+            <Text style={styles.firstLaunchHintText}>
+              Long press for additional settings
+            </Text>
+            <View style={styles.firstLaunchHintArrow}>
+              <View style={styles.firstLaunchHintArrowStem} />
+              <View style={styles.firstLaunchHintArrowHead} />
+            </View>
+          </Animated.View>
+        ) : null}
+
+        <View
+          style={[
+            styles.dockBar,
+            {
+              height: dockHeight,
+              paddingBottom: dockBottomPadding,
+              width: dockFrameWidth,
+              alignSelf: 'center',
+              paddingHorizontal: dockHorizontalPadding,
+            },
+          ]}
+        >
           {DOCK_ITEMS.map((item) => {
             const active = isItemActive(item);
 
@@ -463,8 +658,16 @@ export default function CommandDock() {
                 <ShieldCenterButton
                   key={item.key}
                   isActive={active}
-                  onTap={() => handleNavigate(item.route)}
-                  onLongPress={() => setQuickActionsVisible(true)}
+                  hintOpacity={showFirstLaunchHint ? firstLaunchHintOpacity : undefined}
+                  hintScale={showFirstLaunchHint ? firstLaunchHintScale : undefined}
+                  onTap={() => {
+                    dismissFirstLaunchHint();
+                    handleNavigate(item.route);
+                  }}
+                  onLongPress={() => {
+                    dismissFirstLaunchHint();
+                    setQuickActionsVisible(true);
+                  }}
                 />
               );
             }
@@ -479,7 +682,7 @@ export default function CommandDock() {
             );
           })}
         </View>
-      </View>
+      </Animated.View>
     </>
   );
 }
@@ -490,100 +693,98 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
+    alignItems: 'center',
     zIndex: 9999,
     elevation: 9999,
   },
 
-  goldRailLine: {
+  dockEdgeFill: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 1.5,
-    backgroundColor: DOCK.goldRail,
-    zIndex: 2,
-  },
-
-  barTopEdge: {
-    position: 'absolute',
-    top: 1.5,
-    left: 0,
-    right: 0,
-    height: 3,
-    backgroundColor: DOCK.barTopEdge,
-    zIndex: 1,
-  },
-
-  dockBar: {
-  flexDirection: 'row',
-  alignItems: 'flex-end',
-  justifyContent: 'space-between',
-  backgroundColor: DOCK.bar,
-  paddingHorizontal: 10,
-  overflow: 'hidden',
-},
-
-  radialContainer: {
-    position: 'absolute',
-    top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 0,
-    overflow: 'hidden',
+  },
+  dockEdgeFillImage: {
+    width: '100%',
+    height: '100%',
+  },
+  dockEdgeScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(7, 10, 14, 0.16)',
   },
 
-  radialRing: {
+  hardenedTopLine: {
     position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(196,138,44,0.28)',
+    opacity: 0.95,
+  },
+
+  dockBar: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    borderTopWidth: 1,
+    borderTopColor: DOCK.barBorder,
+    paddingTop: 1,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
 
   dockItem: {
-  width: 72,
-  height: BAR_HEIGHT,
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  paddingTop: 16,
-  position: 'relative',
-  zIndex: 3,
-},
+    flex: 1,
+    minWidth: 0,
+    height: ECS_COMMAND_DOCK_BAR_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingTop: 0,
+    paddingBottom: 0,
+    position: 'relative',
+    zIndex: 3,
+  },
+
+  dockPressable: {
+    flex: 1,
+    alignItems: 'center',
+    minWidth: 0,
+  },
 
   badgeContainer: {
-  width: OUTER_BADGE_SIZE_ACTIVE,
-  height: 38,
-  alignItems: 'center',
-  justifyContent: 'center',
-  position: 'relative',
-  marginBottom: 2,
-},
-
-  outerBadge: {
-    position: 'absolute',
+    width: OUTER_BADGE_SIZE_ACTIVE + 2,
+    height: OUTER_BADGE_SIZE_ACTIVE + 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginBottom: 0,
   },
 
-  outerBadgeBase: {
-    width: OUTER_BADGE_SIZE,
-    height: OUTER_BADGE_SIZE,
-  },
-
-  outerBadgeActive: {
-    width: OUTER_BADGE_SIZE_ACTIVE,
-    height: OUTER_BADGE_SIZE_ACTIVE,
+  badgeImage: {
+    width: '100%',
+    height: '100%',
   },
 
   labelContainer: {
-  position: 'relative',
-  height: 14,
-  alignItems: 'center',
-  justifyContent: 'center',
-  marginTop: 2,
-},
+    position: 'relative',
+    height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -1,
+    width: '100%',
+  },
 
   dockLabel: {
     ...TYPO.U3,
-    fontSize: 7,
-    letterSpacing: 3,
+    fontSize: 7.5,
+    lineHeight: 9.5,
+    letterSpacing: 1.45,
     textAlign: 'center',
   },
 
@@ -602,57 +803,98 @@ const styles = StyleSheet.create({
     right: 0,
   },
 
-  activeUnderline: {
-    position: 'absolute',
-    bottom: 2,
-    left: '20%',
-    right: '20%',
-    height: 2,
-    backgroundColor: DOCK.goldUnderline,
-  },
-
   shieldSlot: {
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  width: SHIELD_ICON_SIZE + 12,
-  height: BAR_HEIGHT,
-  paddingTop: 6,
-  position: 'relative',
-  zIndex: 4,
-},
-
-  shieldGlowOuter: {
-    position: 'absolute',
-    width: SHIELD_ICON_SIZE + 16,
-    height: SHIELD_ICON_SIZE + 16,
-    borderRadius: (SHIELD_ICON_SIZE + 16) / 2,
-    backgroundColor: DOCK.dashGlowOuter,
-    zIndex: 0,
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: ECS_COMMAND_DOCK_BAR_HEIGHT,
+    paddingTop: 1,
+    paddingBottom: 0,
+    position: 'relative',
+    zIndex: 4,
   },
 
-  shieldGlowInner: {
+  firstLaunchHintHalo: {
     position: 'absolute',
-    width: SHIELD_ICON_SIZE + 2,
-    height: SHIELD_ICON_SIZE + 2,
-    borderRadius: (SHIELD_ICON_SIZE + 2) / 2,
-    backgroundColor: DOCK.dashGlowInner,
+    width: SHIELD_ICON_SIZE + 28,
+    height: SHIELD_ICON_SIZE + 28,
+    borderRadius: (SHIELD_ICON_SIZE + 28) / 2,
+    backgroundColor: 'rgba(212,160,23,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.22)',
     zIndex: 1,
   },
 
-  shieldWrapper: {
-  width: SHIELD_ICON_SIZE,
-  height: SHIELD_ICON_SIZE,
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 2,
-},
+  shieldPressable: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
 
-  shieldIconOnly: {
+  shieldWrapper: {
     width: SHIELD_ICON_SIZE,
     height: SHIELD_ICON_SIZE,
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'visible',
+  },
+
+  shieldImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  shieldLabelSpacer: {
+    height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
+    marginTop: -2,
+  },
+
+  firstLaunchHintContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 10000,
+    elevation: 10000,
+  },
+
+  firstLaunchHintText: {
+    ...TYPO.U3,
+    color: ECS.accent,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textAlign: 'center',
+    backgroundColor: 'rgba(12,15,20,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.18)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+
+  firstLaunchHintArrow: {
+    alignItems: 'center',
+    marginTop: 4,
+  },
+
+  firstLaunchHintArrowStem: {
+    width: 1.5,
+    height: 14,
+    backgroundColor: 'rgba(212,160,23,0.72)',
+  },
+
+  firstLaunchHintArrowHead: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(212,160,23,0.72)',
+    marginTop: -1,
   },
 });

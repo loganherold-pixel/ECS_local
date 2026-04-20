@@ -27,8 +27,22 @@
 import { vehicleSpecStore } from './vehicleSpecStore';
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { tiresLiftStore } from './tiresLiftStore';
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import { assessVehicleAssessmentConfidence } from './ai/confidenceEngine';
+import { explainRecommendation } from './ai/recommendationExplanationEngine';
+import type { ECSExplanationResult } from './ai/recommendationExplanationTypes';
 
 const TAG = '[RIG-COMPAT]';
+const DEBUG_RIG_COMPAT =
+  __DEV__ &&
+  ((globalThis as typeof globalThis & { __ECS_DEBUG_RIG_COMPAT__?: boolean })
+    .__ECS_DEBUG_RIG_COMPAT__ === true);
+let hasLoggedMissingVehicleProfile = false;
+
+function debugRigCompat(message: string): void {
+  if (!DEBUG_RIG_COMPAT) return;
+  console.log(TAG, message);
+}
 
 // ── Minimal Expedition Shape ────────────────────────────────
 // Defined here to avoid circular import with discoverEngine.
@@ -74,7 +88,9 @@ export interface CompatibilityResult {
   difficultyRating: DifficultyRating;
   factors: CompatibilityFactors;
   isFullScore: boolean;
+  confidence: ECSConfidenceResult;
   notes: string[];
+  explanation?: ECSExplanationResult | null;
 }
 
 export interface CompatibilityFactors {
@@ -394,11 +410,40 @@ export function calculateRigCompatibility(
 
   const score = clamp(Math.round(rawScore), 0, 100);
   const difficultyRating = getDifficultyRating(score);
+  const confidence = assessVehicleAssessmentConfidence({
+    hasVehicleProfile: true,
+    hasCoreSpecs: !!(profile.gvwr_lb && profile.base_weight_lb),
+    hasFuelSpecs: !!(profile.fuel_tank_capacity_gal && profile.avg_mpg),
+    hasTireConfig: !!profile.tireSizeInches,
+    hasSuspensionConfig: !!(profile.suspensionLiftInches || profile.isLeveled),
+    hasFullScore: hasFullData,
+  });
 
   if (fuelRangeCoverage < 50) notes.push('Fuel stops likely required');
   if (terrainMatch < 50) notes.push('Terrain may challenge this vehicle');
   if (tireSizeMatch < 50) notes.push('Tire size may be insufficient for this terrain');
   if (suspensionLiftMatch < 50) notes.push('Suspension lift may be too low for this trail');
+  const explanation = explainRecommendation({
+    type: 'vehicle_assessment',
+    drivers: notes.length > 0 ? notes : [
+      terrainMatch >= 75 ? 'strong terrain fit' : 'terrain fit limits',
+      fuelRangeCoverage >= 75 ? 'fuel range coverage' : 'fuel margin',
+      tireSizeMatch >= 75 ? 'tire size margin' : 'tire size limits',
+    ],
+    confidenceLevel: confidence.level,
+  });
+  debugRigCompat(
+    `${opp.name}: score=${score} (T:${terrainMatch} F:${fuelRangeCoverage} V:${vehicleCapability} Tire:${tireSizeMatch} Susp:${suspensionLiftMatch}) -> ${difficultyRating}`,
+  );
+  return {
+    score,
+    difficultyRating,
+    factors: { terrainMatch, fuelRangeCoverage, vehicleCapability, tireSizeMatch, suspensionLiftMatch },
+    isFullScore: hasFullData,
+    confidence,
+    notes,
+    explanation,
+  };
 
   console.log(TAG, `${opp.name}: score=${score} (T:${terrainMatch} F:${fuelRangeCoverage} V:${vehicleCapability} Tire:${tireSizeMatch} Susp:${suspensionLiftMatch}) → ${difficultyRating}`);
 
@@ -407,7 +452,9 @@ export function calculateRigCompatibility(
     difficultyRating,
     factors: { terrainMatch, fuelRangeCoverage, vehicleCapability, tireSizeMatch, suspensionLiftMatch },
     isFullScore: hasFullData,
+    confidence,
     notes,
+    explanation,
   };
 }
 
@@ -429,11 +476,17 @@ export function buildVehicleProfile(
 ): VehicleProfile | null {
   const vehicleId = vehicleRecord?.id || vehicleSetupStore.getActiveVehicleId();
   if (!vehicleId) {
+    if (!hasLoggedMissingVehicleProfile) {
+      hasLoggedMissingVehicleProfile = true;
+      debugRigCompat('No active vehicle; skipping profile build');
+    }
+    return null;
     console.log(TAG, 'No active vehicle — cannot build profile');
     return null;
   }
 
   const spec = vehicleSpecStore.get(vehicleId);
+  hasLoggedMissingVehicleProfile = false;
 
   const fuelTankGal = spec?.fuel_tank_capacity_gal || vehicleRecord?.fuel_tank_capacity_gal || 0;
   const avgMpg = vehicleRecord?.avg_mpg || 15;
@@ -479,6 +532,9 @@ export function buildVehicleProfile(
   };
 
   console.log(TAG, `Built profile for "${profile.vehicleName}": type=${vehicleType}, GVWR=${gvwr}, range=${fuelRange}mi, water=${waterCapGal}gal, tires=${tireSizeInches}", lift=${suspensionLiftInches}", leveled=${isLeveled}`);
+  debugRigCompat(
+    `Built profile for "${profile.vehicleName}": type=${vehicleType}, GVWR=${gvwr}, range=${fuelRange}mi, water=${waterCapGal}gal, tires=${tireSizeInches}", lift=${suspensionLiftInches}", leveled=${isLeveled}`,
+  );
   return profile;
 }
 
@@ -539,6 +595,10 @@ export function scoreAndSortOpportunities<T extends CompatibilityExpedition>(
   });
 
   scored.sort((a, b) => b.rigCompatibility - a.rigCompatibility);
+  debugRigCompat(
+    `Scored ${scored.length} opportunities; top=${scored[0]?.name ?? 'none'} (${scored[0]?.rigCompatibility ?? 0}%)`,
+  );
+  return { opportunities: scored, results };
 
   console.log(TAG, `Scored ${scored.length} opportunities — top: ${scored[0]?.name} (${scored[0]?.rigCompatibility}%)`);
   return { opportunities: scored, results };

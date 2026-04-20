@@ -208,6 +208,8 @@ export interface ResourceForecast {
 export interface VehicleProfileSnapshot {
   fuelCapacityGallons?: number | null;
   currentFuelPercent?: number | null;
+  waterCapacityGallons?: number | null;
+  batteryCapacityWh?: number | null;
   avgMpg?: number | null;
   /** Total vehicle + cargo weight in lbs (for fuel economy adjustment) */
   totalWeightLbs?: number | null;
@@ -642,7 +644,7 @@ export function computeResourceForecast(
   // FUEL FORECAST
   // ══════════════════════════════════════════════════════════
 
-  let mpgUsed = FORECAST_DEFAULTS.MPG;
+  let mpgUsed: number = FORECAST_DEFAULTS.MPG;
   if (vehicleProfile?.avgMpg && vehicleProfile.avgMpg > 0 && isFinite(vehicleProfile.avgMpg)) {
     mpgUsed = vehicleProfile.avgMpg;
     hasRealData = true;
@@ -661,7 +663,7 @@ export function computeResourceForecast(
   const adjustedMpg = safeNum(mpgUsed / combinedPenalty, FORECAST_DEFAULTS.MPG);
 
   // Resolve available fuel (gallons)
-  let fuelAvailable = FORECAST_DEFAULTS.FUEL_TANK_GAL;
+  let fuelAvailable: number = FORECAST_DEFAULTS.FUEL_TANK_GAL;
   const fuelNotes: string[] = [];
 
   if (vehicleProfile?.fuelCapacityGallons && vehicleProfile.fuelCapacityGallons > 0) {
@@ -731,7 +733,7 @@ export function computeResourceForecast(
   // WATER FORECAST
   // ══════════════════════════════════════════════════════════
 
-  let waterAvailable = FORECAST_DEFAULTS.WATER_GAL;
+  let waterAvailable: number = FORECAST_DEFAULTS.WATER_GAL;
   const waterNotes: string[] = [];
   const waterGPD = safeNum(
     loadoutTotals?.waterGallonsPerPersonPerDay ?? FORECAST_DEFAULTS.WATER_GPD,
@@ -742,12 +744,16 @@ export function computeResourceForecast(
     waterAvailable = loadoutTotals.waterGallons;
     waterNotes.push(`Loadout water: ${loadoutTotals.waterGallons.toFixed(1)} gal`);
     hasRealData = true;
+  } else if (vehicleProfile?.waterCapacityGallons != null && vehicleProfile.waterCapacityGallons > 0) {
+    waterAvailable = vehicleProfile.waterCapacityGallons;
+    waterNotes.push(`Vehicle water capacity: ${vehicleProfile.waterCapacityGallons.toFixed(1)} gal`);
+    hasRealData = true;
   } else {
     waterNotes.push(`Using default: ${FORECAST_DEFAULTS.WATER_GAL} gal`);
   }
 
   // Apply hot weather multiplier
-  let effectiveWaterGPD = waterGPD;
+  let effectiveWaterGPD: number = waterGPD;
   if (terrain?.isHotWeather) {
     effectiveWaterGPD *= FORECAST_DEFAULTS.HOT_WEATHER_WATER_MULT;
     waterNotes.push(`Hot weather: +${Math.round((FORECAST_DEFAULTS.HOT_WEATHER_WATER_MULT - 1) * 100)}% water usage`);
@@ -784,7 +790,7 @@ export function computeResourceForecast(
   // POWER FORECAST
   // ══════════════════════════════════════════════════════════
 
-  let powerAvailable = FORECAST_DEFAULTS.POWER_HOURS;
+  let powerAvailable: number = FORECAST_DEFAULTS.POWER_HOURS;
   const powerNotes: string[] = [];
   let solarContributionHours = 0;
 
@@ -804,6 +810,13 @@ export function computeResourceForecast(
       : 50;
     powerAvailable = drawW > 0 ? safeNum(remainingWh / drawW, FORECAST_DEFAULTS.POWER_HOURS) : FORECAST_DEFAULTS.POWER_HOURS;
     powerNotes.push(`Battery: ${telemetry.batterySocPercent}% SOC, ${telemetry.batteryCapacityWh} Wh`);
+    hasRealData = true;
+  } else if (vehicleProfile?.batteryCapacityWh != null && vehicleProfile.batteryCapacityWh > 0) {
+    const assumedDrawW = (telemetry?.avgDrawWatts && telemetry.avgDrawWatts > 0) ? telemetry.avgDrawWatts : 50;
+    powerAvailable = assumedDrawW > 0
+      ? safeNum(vehicleProfile.batteryCapacityWh / assumedDrawW, FORECAST_DEFAULTS.POWER_HOURS)
+      : FORECAST_DEFAULTS.POWER_HOURS;
+    powerNotes.push(`Configured battery capacity: ${Math.round(vehicleProfile.batteryCapacityWh)} Wh`);
     hasRealData = true;
   } else {
     powerNotes.push(`Using default: ${FORECAST_DEFAULTS.POWER_HOURS} hrs`);

@@ -144,6 +144,7 @@ function getBleManager(): any {
   }
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { BleManager } = require('react-native-ble-plx');
     _bleManager = new BleManager();
     return _bleManager;
@@ -166,7 +167,7 @@ class OBD2Adapter {
   private scanProgress = 0;
   private reconnectAttempt = 0;
 
-  private listeners: Array<() => void> = [];
+  private listeners: (() => void)[] = [];
   private scanTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private scanProgressTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -227,6 +228,7 @@ class OBD2Adapter {
 
   private setState(next: OBD2AdapterState): void {
     if (this.state === next) return;
+    const wasReconnecting = this.state === 'reconnecting';
     const prev = this.state;
     this.state = next;
     console.log(TAG, `State: ${prev} -> ${next}`);
@@ -235,7 +237,7 @@ class OBD2Adapter {
     try {
       if (next === 'reconnecting') {
         vehicleTelemetryService.signalReconnecting(true);
-      } else if (prev === 'reconnecting' && next !== 'reconnecting') {
+      } else if (wasReconnecting) {
         vehicleTelemetryService.signalReconnecting(false);
       }
     } catch {
@@ -431,6 +433,7 @@ class OBD2Adapter {
           hasSpeed: true, hasRpm: true, hasEngineLoad: true,
           hasCoolantTemp: true, hasIntakeTemp: true, hasBatteryVoltage: true,
           hasFuelLevel: true, hasFuelRate: true, hasEngineRuntime: true,
+          hasTirePressure: false, hasDTCs: false,
         },
         { protocol: 'OBD-II' },
       );

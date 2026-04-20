@@ -30,12 +30,14 @@ import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { getVehicleIcon } from '../../lib/vehicleIcons';
+import { getVehicleResourceProfile } from '../../lib/vehicleResourceProfile';
 
 import type { Vehicle } from '../../lib/types';
 import { missionExpeditionStore } from '../../lib/missionStore';
 import type { MissionExpedition } from '../../lib/missionTypes';
 import MissionMode from '../../components/mission/MissionMode';
 import { hapticMicro } from '../../lib/haptics';
+import { ECS_STATE_COPY } from '../../lib/ecsStateCopy';
 
 const TAG = '[EXPEDITIONS]';
 const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
@@ -56,10 +58,11 @@ class SetupErrorBoundary extends Component<EBProps, EBState> {
         <TopoBackground>
           <View style={s.center}>
             <Ionicons name="alert-circle-outline" size={48} color={TACTICAL.danger} />
-            <Text style={s.errorTitle}>EXPEDITION ERROR</Text>
-            <Text style={s.errorSub}>{this.state.error?.message || 'Unexpected error'}</Text>
+            <Text style={s.errorTitle}>{ECS_STATE_COPY.recovery.expeditionsLoadFailure.title}</Text>
+            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.expeditionsLoadFailure.message}</Text>
+            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.expeditionsLoadFailure.helper}</Text>
             <TouchableOpacity style={s.retryBtn} onPress={() => this.setState({ hasError: false, error: null })}>
-              <Text style={s.retryBtnText}>RETRY</Text>
+              <Text style={s.retryBtnText}>{ECS_STATE_COPY.recovery.expeditionsLoadFailure.ctaLabel.toUpperCase()}</Text>
             </TouchableOpacity>
           </View>
         </TopoBackground>
@@ -154,11 +157,17 @@ function SetupScreenInner() {
       }
 
       const newId = result.vehicle.id;
+      const sourceResources = getVehicleResourceProfile(v as any);
 
-      if (v.water_capacity_gal || v.fuel_tank_capacity_gal) {
+      if (
+        sourceResources.waterCapacityGal != null ||
+        sourceResources.batteryUsableWh != null ||
+        v.fuel_tank_capacity_gal != null
+      ) {
         await vehicleStore.update(newId, {
-          water_capacity_gal: v.water_capacity_gal,
+          water_capacity_gal: sourceResources.waterCapacityGal,
           fuel_tank_capacity_gal: v.fuel_tank_capacity_gal,
+          battery_usable_wh: sourceResources.batteryUsableWh,
         }, user?.id || null);
       }
 
@@ -366,6 +375,7 @@ function SetupScreenInner() {
             const hasConfig = !!(v as any).wizard_config;
             const vIcon = getVehicleIcon(v);
             const spec = vehicleSpecStore.get(v.id);
+            const resourceProfile = getVehicleResourceProfile(v as any);
 
             return (
               <View key={v.id} style={[s.vehicleCard, isActive && s.vehicleCardActive]}>
@@ -395,10 +405,10 @@ function SetupScreenInner() {
                       <Text style={s.statChipText}>{spec.base_weight_lb.toLocaleString()} lbs</Text>
                     </View>
                   ) : null}
-                  {v.water_capacity_gal ? (
+                  {resourceProfile.waterCapacityGal ? (
                     <View style={s.statChip}>
                       <Ionicons name="water-outline" size={10} color={TACTICAL.textMuted} />
-                      <Text style={s.statChipText}>{v.water_capacity_gal} gal</Text>
+                      <Text style={s.statChipText}>{resourceProfile.waterCapacityGal} gal</Text>
                     </View>
                   ) : null}
                   {(spec?.fuel_tank_capacity_gal || v.fuel_tank_capacity_gal) ? (
@@ -466,7 +476,7 @@ function SetupScreenInner() {
         {/* Footer */}
         <View style={s.footer}>
           <Text style={s.footerText}>
-            ECS SETUP  //  {vehicles.length} VEHICLE{vehicles.length !== 1 ? 'S' : ''}  //  {activeVehicle ? activeVehicle.name : 'NONE SELECTED'}
+            {`ECS SETUP | ${vehicles.length} VEHICLE${vehicles.length !== 1 ? 'S' : ''} | ${activeVehicle ? activeVehicle.name : 'NONE SELECTED'}`}
           </Text>
         </View>
       </View>

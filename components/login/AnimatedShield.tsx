@@ -16,17 +16,18 @@ import {
   Image,
 } from 'react-native';
 
-const ECS_BADGE_URI =
-  'https://d64gsuwffb70l.cloudfront.net/696e98bf1e58953c5b50217c_1771750520007_27f838da.png';
+const ECS_BADGE_SOURCE = require('../../assets/ecs/nav/ecs-center.png');
 
 interface Props {
   /** Width of the badge image */
   badgeWidth?: number;
   /** Height of the badge image (auto-calculated from aspect if not set) */
   badgeHeight?: number;
+  /** Enable pulse/glow/sweep effects */
+  animated?: boolean;
 }
 
-export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props) {
+export default function AnimatedShield({ badgeWidth = 160, badgeHeight, animated = true }: Props) {
   // Badge is roughly square with slight vertical bias (~1.05:1)
   const imgH = badgeHeight || Math.round(badgeWidth * 1.05);
 
@@ -34,6 +35,7 @@ export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props)
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    if (!animated) return;
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
@@ -50,12 +52,13 @@ export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props)
     );
     pulse.start();
     return () => pulse.stop();
-  }, [pulseAnim]);
+  }, [animated, pulseAnim]);
 
   // ── Gold glow pulse (opacity) ──────────────────────────────
   const glowAnim = useRef(new Animated.Value(0.12)).current;
 
   useEffect(() => {
+    if (!animated) return;
     const glow = Animated.loop(
       Animated.sequence([
         Animated.timing(glowAnim, {
@@ -72,13 +75,17 @@ export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props)
     );
     glow.start();
     return () => glow.stop();
-  }, [glowAnim]);
+  }, [animated, glowAnim]);
 
   // ── One-time highlight sweep ───────────────────────────────
   const sweepX = useRef(new Animated.Value(-1)).current;
-  const [sweepDone, setSweepDone] = useState(false);
+  const [sweepDone, setSweepDone] = useState(!animated);
 
   useEffect(() => {
+    if (!animated) {
+      setSweepDone(true);
+      return;
+    }
     const timer = setTimeout(() => {
       Animated.timing(sweepX, {
         toValue: 1,
@@ -90,7 +97,7 @@ export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props)
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [sweepX]);
+  }, [animated, sweepX]);
 
   const containerW = badgeWidth + 16;
   const containerH = imgH + 16;
@@ -121,7 +128,7 @@ export default function AnimatedShield({ badgeWidth = 160, badgeHeight }: Props)
         ]}
       >
         <Image
-          source={{ uri: ECS_BADGE_URI }}
+          source={ECS_BADGE_SOURCE}
           style={{
             width: badgeWidth,
             height: imgH,

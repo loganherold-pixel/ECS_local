@@ -23,6 +23,7 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
+import { ECS_READINESS_COPY } from '../../lib/ecsStateCopy';
 import {
   getPendingConflictCount,
   onConflictChange,
@@ -44,7 +45,7 @@ function getStateConfig(state: FleetSyncState, pendingCount: number, conflictCou
     return { icon: 'git-compare-outline', label: `${conflictCount} CONFLICT${conflictCount !== 1 ? 'S' : ''}`, color: '#FF9500', bgColor: 'rgba(255,149,0,0.10)', borderColor: 'rgba(255,149,0,0.35)' };
   }
   if (state === 'syncing') {
-    return { icon: 'sync-outline', label: 'SYNCING', color: '#5A9BD5', bgColor: 'rgba(90,155,213,0.10)', borderColor: 'rgba(90,155,213,0.35)' };
+    return { icon: 'sync-outline', label: ECS_READINESS_COPY.labels.syncing, color: '#5A9BD5', bgColor: 'rgba(90,155,213,0.10)', borderColor: 'rgba(90,155,213,0.35)' };
   }
   if (state === 'error') {
     return { icon: 'alert-circle-outline', label: 'SYNC ERROR', color: '#FF3B30', bgColor: 'rgba(255,59,48,0.10)', borderColor: 'rgba(255,59,48,0.35)' };
@@ -53,9 +54,9 @@ function getStateConfig(state: FleetSyncState, pendingCount: number, conflictCou
     return { icon: 'cloud-upload-outline', label: 'PENDING SYNC', color: TACTICAL.amber, bgColor: 'rgba(196,138,44,0.10)', borderColor: 'rgba(196,138,44,0.35)' };
   }
   if (!isOnline) {
-    return { icon: 'cloud-offline-outline', label: 'OFFLINE', color: '#8E8E93', bgColor: 'rgba(142,142,147,0.10)', borderColor: 'rgba(142,142,147,0.30)' };
+    return { icon: 'cloud-offline-outline', label: ECS_READINESS_COPY.labels.offlineSupport, color: '#8E8E93', bgColor: 'rgba(142,142,147,0.10)', borderColor: 'rgba(142,142,147,0.30)' };
   }
-  return { icon: 'checkmark-circle-outline', label: 'SYNCED', color: '#3E6B3E', bgColor: 'rgba(62,107,62,0.10)', borderColor: 'rgba(62,107,62,0.30)' };
+  return { icon: 'checkmark-circle-outline', label: ECS_READINESS_COPY.labels.online, color: '#3E6B3E', bgColor: 'rgba(62,107,62,0.10)', borderColor: 'rgba(62,107,62,0.30)' };
 }
 
 interface Props { onPress: () => void; }
@@ -105,7 +106,7 @@ export default function FleetSyncStatusIndicator({ onPress }: Props) {
       pulseRef.current?.stop(); pulseRef.current = null; pulseAnim.setValue(1);
     }
     return () => { pulseRef.current?.stop(); pulseRef.current = null; };
-  }, [derivedState]);
+  }, [derivedState, pulseAnim]);
 
   useEffect(() => {
     if (derivedState === 'syncing') {
@@ -116,7 +117,7 @@ export default function FleetSyncStatusIndicator({ onPress }: Props) {
       spinRef.current?.stop(); spinRef.current = null; spinAnim.setValue(0);
     }
     return () => { spinRef.current?.stop(); spinRef.current = null; };
-  }, [derivedState]);
+  }, [derivedState, spinAnim]);
 
   const spinRotation = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
