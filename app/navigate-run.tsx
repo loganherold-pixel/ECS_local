@@ -35,7 +35,7 @@ import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL, TYPO, DENSITY } from '../lib/theme';
 import { useApp } from '../context/AppContext';
-import { useGPSLocation } from '../lib/useGPSLocation';
+import type { GPSPosition } from '../lib/useGPSLocation';
 import {
   runStore,
   computeRunHealth,
@@ -43,13 +43,24 @@ import {
   metersToMiles,
   type ECSRun,
 } from '../lib/runStore';
+import { navigateRouteSessionStore } from '../lib/navigateRouteSessionStore';
 import { getMapboxToken, type MapStyleKey } from '../lib/mapConfig';
+import { connectivity } from '../lib/connectivity';
 import {
   getSegmentColor,
   type RunSegment,
   type SegmentRiskProfile,
   computeSegmentRisk,
 } from '../lib/segmentRiskEngine';
+import {
+  cacheOfflineRoute,
+  getOfflineCachedRoute,
+  getOfflineCachedRouteBySourceRouteId,
+  markOfflineRouteCacheFailed,
+  offlineCachedRouteToRun,
+  offlineCachedRouteToRunCacheManifest,
+  type OfflineRouteCacheStatus,
+} from '../lib/offlineRouteCacheService';
 import {
   bailoutStore,
   getBailoutTypeMeta,
@@ -69,6 +80,79 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 type CameraMode = 'free' | 'follow-north' | 'follow-heading';
 
+const NAVIGATION_GPS_MAX_AGE_MS = 2 * 60 * 1000;
+
+function isSegmentRiskProfile(value: unknown): value is SegmentRiskProfile {
+  return !!value && typeof value === 'object' && Array.isArray((value as any).segments);
+}
+
+function isFreshGpsPosition(position: GPSPosition | null): position is GPSPosition {
+  return !!position && Date.now() - position.timestamp <= NAVIGATION_GPS_MAX_AGE_MS;
+}
+
+function gpsPositionFromCoords(coords: any, timestamp?: number): GPSPosition {
+  return {
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    altitudeFt: coords.altitude != null ? coords.altitude * 3.28084 : null,
+    speedMph: coords.speed != null && coords.speed >= 0 ? coords.speed * 2.23694 : null,
+    headingDeg: coords.heading != null && coords.heading >= 0 ? coords.heading : null,
+    accuracyM: coords.accuracy != null ? coords.accuracy : null,
+    timestamp: timestamp || Date.now(),
+  };
+}
+
+async function requestImmediateGpsPosition(): Promise<GPSPosition | null> {
+  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve(gpsPositionFromCoords(pos.coords, pos.timestamp)),
+        (err) => reject(new Error(err?.message || 'GPS fix unavailable')),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+      );
+    });
+  }
+
+  if (Platform.OS !== 'web') {
+    const Location = await import('expo-location');
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      throw new Error('Location services are disabled.');
+    }
+
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      throw new Error('Location permission is required to start navigation.');
+    }
+
+    const loc = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.BestForNavigation,
+    });
+    return gpsPositionFromCoords(loc.coords, loc.timestamp);
+  }
+
+  return null;
+}
+
+function describeOfflineRouteCache(
+  status?: string | null,
+  tileRegionId?: string | null,
+): string {
+  if (status === 'complete' && tileRegionId) {
+    return 'Route and map area cached.';
+  }
+  if (status === 'downloading') {
+    return 'Route cached; map area cache is still downloading.';
+  }
+  if (status === 'failed') {
+    return 'Route cached; map tiles unavailable offline.';
+  }
+  if (status === 'unavailable') {
+    return 'Route cached; map tiles unavailable offline.';
+  }
+  return 'Route cached; map tiles unavailable offline.';
+}
+
 export default function NavigateRunDetail() {
   const router = useRouter();
   const { showToast } = useApp();
@@ -76,6 +160,7 @@ export default function NavigateRunDetail() {
   const runId = params.runId || '';
 
   const [run, setRun] = useState<ECSRun | null>(null);
+  const [isRunLoading, setIsRunLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [isExporting, setIsExporting] = useState(false);
@@ -86,73 +171,118 @@ export default function NavigateRunDetail() {
   // Default to route view on this screen so imported runs are visible immediately.
   const [cameraMode, setCameraMode] = useState<CameraMode>('free');
   const [mapExpanded, setMapExpanded] = useState(false);
+  const [offlineCacheStatus, setOfflineCacheStatus] = useState<OfflineRouteCacheStatus>('not_cached');
+  const [offlineCacheMessage, setOfflineCacheMessage] = useState<string | null>(null);
+  const [loadedFromOfflineCache, setLoadedFromOfflineCache] = useState(false);
 
   const [selectedSegment, setSelectedSegment] = useState<RunSegment | null>(null);
   const [segDetailVisible, setSegDetailVisible] = useState(false);
   const [bailouts, setBailouts] = useState<BailoutPoint[]>([]);
-
-  const gps = useGPSLocation({
-    enabled: true,
-    highAccuracy: true,
-  });
+  const [navigationStarting, setNavigationStarting] = useState(false);
+  const [runDetailGpsPosition, setRunDetailGpsPosition] = useState<GPSPosition | null>(null);
 
   const userLocation = useMemo(
     () =>
-      gps.position
+      runDetailGpsPosition
         ? {
-            lat: gps.position.latitude,
-            lng: gps.position.longitude,
+            lat: runDetailGpsPosition.latitude,
+            lng: runDetailGpsPosition.longitude,
           }
         : null,
-    [gps.position]
+    [runDetailGpsPosition]
   );
 
-  const vehicleHeading = gps.position?.headingDeg ?? null;
+  const vehicleHeading = runDetailGpsPosition?.headingDeg ?? null;
   const isFollowing = cameraMode !== 'free';
   const isHeadingMode = cameraMode === 'follow-heading';
 
-  console.log('[NavigateRun] screen mounted');
-  console.log('[NavigateRun] gps state', {
-    gpsStatus: gps.gpsStatus,
-    hasFix: gps.hasFix,
-    isWatching: gps.isWatching,
-    position: gps.position,
-  });
+  useEffect(() => {
+    let cancelled = false;
+    requestImmediateGpsPosition()
+      .then((position) => {
+        if (!cancelled && position) setRunDetailGpsPosition(position);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!runId) {
       setRun(null);
+      setIsRunLoading(false);
       return;
     }
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
     const maxAttempts = 12;
+    let offlineFallbackRequested = false;
+    let resolvedOfflineRun = false;
+    setRun(null);
+    setIsRunLoading(true);
 
     const loadRun = () => {
       if (cancelled) return;
+      if (resolvedOfflineRun) return;
 
       const latest = runStore.getById(runId);
 
-      console.log('[NavigateRun] load run by id', {
-        runId,
-        found: !!latest,
-        pointCount: latest?.points?.length ?? 0,
-        title: latest?.title ?? null,
-        attempt: attempts + 1,
-      });
-
       if (latest) {
-        setRun(latest);
+        setLoadedFromOfflineCache(false);
+        setOfflineCacheStatus(latest.offline_cache ? 'cached' : 'not_cached');
+        setOfflineCacheMessage(
+          latest.offline_cache
+            ? `${describeOfflineRouteCache(
+                latest.offline_cache.tile_cache_status,
+                latest.offline_cache.tile_region_id,
+              )} Saved ${new Date(latest.offline_cache.cached_at).toLocaleDateString()}.`
+            : connectivity.isOnline()
+              ? null
+              : 'Offline cache unavailable for this route.'
+        );
 
         if ((latest.points?.length ?? 0) > 0) {
+          setRun(latest);
+          setIsRunLoading(false);
           return;
         }
       }
 
+      if ((!latest || (latest.points?.length ?? 0) < 2) && !offlineFallbackRequested) {
+        offlineFallbackRequested = true;
+        Promise.all([getOfflineCachedRoute(runId), getOfflineCachedRouteBySourceRouteId(runId)])
+          .then((cachedRoute) => {
+            if (cancelled) return;
+            const resolvedRoute = cachedRoute[0] ?? cachedRoute[1];
+            if (!resolvedRoute) return;
+            resolvedOfflineRun = true;
+            setRun(offlineCachedRouteToRun(resolvedRoute));
+            setLoadedFromOfflineCache(true);
+            setIsRunLoading(false);
+            setOfflineCacheStatus(resolvedRoute.cacheStatus === 'failed' ? 'failed' : 'cached');
+            setOfflineCacheMessage(
+              `Loaded from offline route cache. ${describeOfflineRouteCache(
+                resolvedRoute.tileCacheStatus,
+                resolvedRoute.offlineTileRegionId,
+              )}`,
+            );
+          })
+          .catch(() => {
+            if (!cancelled) {
+              setOfflineCacheMessage('Offline cache unavailable for this route.');
+            }
+          });
+      }
+
       attempts += 1;
       if (attempts < maxAttempts) {
-        setTimeout(loadRun, 150);
+        retryTimer = setTimeout(loadRun, 150);
+      } else if (!latest || (latest.points?.length ?? 0) < 2) {
+        setIsRunLoading(false);
+        setOfflineCacheMessage('Offline cache unavailable for this route.');
       }
     };
 
@@ -160,6 +290,9 @@ export default function NavigateRunDetail() {
 
     return () => {
       cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, [runId]);
 
@@ -199,10 +332,17 @@ export default function NavigateRunDetail() {
   const hasToken = !!(mapToken && mapToken.length > 0);
   const mapHeight = mapExpanded ? SCREEN_H - 140 : Math.min(SCREEN_H * 0.42, 360);
 
+  const cachedSegmentProfile = useMemo<SegmentRiskProfile | null>(() => {
+    const cached = run?.offline_cache?.segment_risk;
+    return isSegmentRiskProfile(cached) ? cached : null;
+  }, [run?.offline_cache?.segment_risk]);
+
   const segmentProfile = useMemo<SegmentRiskProfile | null>(() => {
+    if (cachedSegmentProfile) return cachedSegmentProfile;
     if (!run || run.points.length < 2) return null;
+    if (loadedFromOfflineCache && !connectivity.isOnline()) return null;
     return computeSegmentRisk(run.id, run.points, run.build_snapshot);
-  }, [run]);
+  }, [cachedSegmentProfile, loadedFromOfflineCache, run]);
 
   const enrichedProfile = useMemo(() => {
     if (!segmentProfile || bailouts.length === 0) return segmentProfile;
@@ -285,6 +425,27 @@ export default function NavigateRunDetail() {
   );
 
   const riskProfile = enrichedProfile || segmentProfile;
+  const offlineCacheLabel = useMemo(() => {
+    switch (offlineCacheStatus) {
+      case 'caching':
+        return 'Caching';
+      case 'cached':
+        return 'Cached';
+      case 'failed':
+        return 'Cache Failed';
+      case 'not_cached':
+      default:
+        return 'Not Cached';
+    }
+  }, [offlineCacheStatus]);
+  const offlineCacheColor =
+    offlineCacheStatus === 'cached'
+      ? '#66BB6A'
+      : offlineCacheStatus === 'caching'
+        ? '#FFB300'
+        : offlineCacheStatus === 'failed'
+          ? '#EF5350'
+          : TACTICAL.textMuted;
 
   const handleSaveTitle = useCallback(() => {
     if (!run || !editTitle.trim()) return;
@@ -368,6 +529,145 @@ export default function NavigateRunDetail() {
     showToast('RUN SET AS ACTIVE');
   }, [run, showToast]);
 
+  const cacheRunForOfflineNavigation = useCallback(
+    async (
+      tileRegionId?: string | null,
+      tileCacheStatus: 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable' =
+        tileRegionId ? 'complete' : 'not_requested',
+      tileCacheError?: string | null,
+      options?: { includeRemoteConnectivityCache?: boolean },
+    ) => {
+      if (!run || !health) return null;
+
+      setOfflineCacheStatus('caching');
+      setOfflineCacheMessage('Saving route geometry and run detail for offline navigation...');
+
+      try {
+        const cachedRoute = await cacheOfflineRoute({
+          run,
+          health,
+          segmentRiskAnalysis: riskProfile,
+          offlineTileRegionId: tileRegionId ?? run.offline_cache?.tile_region_id ?? null,
+          tileCacheStatus,
+          tileCacheError,
+          includeRemoteConnectivityCache: options?.includeRemoteConnectivityCache ?? true,
+        });
+
+        const updated = runStore.cacheOffline(
+          run.id,
+          offlineCachedRouteToRunCacheManifest(cachedRoute, run),
+        );
+
+        if (updated) setRun(updated);
+        setOfflineCacheStatus('cached');
+        setOfflineCacheMessage(
+          describeOfflineRouteCache(cachedRoute.tileCacheStatus, cachedRoute.offlineTileRegionId)
+        );
+        return updated;
+      } catch (err: any) {
+        setOfflineCacheStatus('failed');
+        setOfflineCacheMessage(err?.message || 'Offline route cache failed.');
+        return null;
+      }
+    },
+    [health, riskProfile, run]
+  );
+
+  const handleOfflineRouteCacheFailure = useCallback(
+    async (message: string) => {
+      if (!run) return;
+      await markOfflineRouteCacheFailed(run, message).catch(() => null);
+      setOfflineCacheStatus('failed');
+      setOfflineCacheMessage(message);
+    },
+    [run]
+  );
+
+  const handleNavigateRun = useCallback(async () => {
+    if (!run || navigationStarting) return;
+
+    const routePoints = mapRunPoints.map((point) => ({
+      lat: point.lat,
+      lng: point.lng,
+    }));
+
+    if (routePoints.length < 2) {
+      showToast('ROUTE GEOMETRY UNAVAILABLE');
+      return;
+    }
+
+    setNavigationStarting(true);
+    try {
+      const startPosition = isFreshGpsPosition(runDetailGpsPosition)
+        ? runDetailGpsPosition
+        : await requestImmediateGpsPosition();
+
+      if (!startPosition) {
+        showToast('WAITING FOR GPS FIX TO START NAVIGATION');
+        return;
+      }
+      setRunDetailGpsPosition(startPosition);
+
+      const storedRun = runStore.upsert(run);
+      runStore.setActive(storedRun.id);
+      const updated = runStore.getById(storedRun.id) ?? storedRun;
+      setRun(updated);
+
+      navigateRouteSessionStore.setSnapshot({
+        sessionId: `run-${updated.id}`,
+        lifecycle: 'active',
+        source: 'run',
+        routeId: updated.id,
+        routeTitle: updated.title,
+        routeSubtitle: `${updated.stats.distance_miles.toFixed(1)} mi imported route`,
+        statusLabel: 'Route navigation active',
+        instruction: 'Navigation started. Proceed to the highlighted route.',
+        routePoints,
+        progressPoints: [{ lat: startPosition.latitude, lng: startPosition.longitude }],
+        currentLocation: {
+          latitude: startPosition.latitude,
+          longitude: startPosition.longitude,
+        },
+        headingDeg: startPosition.headingDeg ?? vehicleHeading,
+        remainingDistanceM: updated.stats.distance_m,
+        remainingDurationS: null,
+        etaIso: null,
+        progressPercent: 0,
+        nextInstructionDistanceM: null,
+        isRerouting: false,
+        isOffRoute: false,
+        offRouteDistanceM: null,
+        routeStatusKind: 'nominal',
+        updatedAt: new Date().toISOString(),
+      });
+      showToast('NAVIGATION STARTED. PROCEED TO THE HIGHLIGHTED ROUTE.');
+      router.back();
+    } catch (err: any) {
+      const message = String(err?.message || '');
+      if (/permission/i.test(message)) {
+        showToast('LOCATION PERMISSION REQUIRED');
+      } else {
+        showToast('WAITING FOR GPS FIX TO START NAVIGATION');
+      }
+    } finally {
+      setNavigationStarting(false);
+    }
+  }, [
+    mapRunPoints,
+    navigationStarting,
+    router,
+    run,
+    runDetailGpsPosition,
+    showToast,
+    vehicleHeading,
+  ]);
+
+  const openSegmentRiskAnalysis = useCallback(() => {
+    if (!riskProfile?.segments.length) return;
+    setSelectedSegment(riskProfile.max_risk_segment ?? riskProfile.segments[0]);
+    setSegDetailVisible(true);
+  }, [riskProfile]);
+
   const handleSegmentTap = useCallback(
     (segIndex: number) => {
       if (!enrichedProfile) return;
@@ -380,22 +680,6 @@ export default function NavigateRunDetail() {
     [enrichedProfile]
   );
 
-  console.log('[NavigateRun] route debug', {
-    totalPoints: run?.points?.length ?? 0,
-    mapRunPoints: mapRunPoints.length,
-    firstPoint: mapRunPoints[0] ?? null,
-    lastPoint: mapRunPoints[mapRunPoints.length - 1] ?? null,
-  });
-
-  console.log('[NavigateRun] map props', {
-    cameraMode,
-    isFollowing,
-    isHeadingMode,
-    showUserLocation: !!userLocation,
-    userLocation,
-    vehicleHeading,
-  });
-
   if (!run) {
     return (
       <View style={styles.container}>
@@ -403,15 +687,25 @@ export default function NavigateRunDetail() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={22} color={TACTICAL.text} />
           </TouchableOpacity>
-          <Text style={styles.topTitle}>RUN NOT FOUND</Text>
+          <Text style={styles.topTitle}>{isRunLoading ? 'LOADING RUN' : 'RUN NOT FOUND'}</Text>
         </View>
 
         <View style={styles.emptyState}>
-          <Ionicons name="alert-circle-outline" size={48} color={TACTICAL.textMuted} />
-          <Text style={styles.emptyText}>This run could not be loaded.</Text>
-          <TouchableOpacity style={styles.backNavBtn} onPress={() => router.back()}>
-            <Text style={styles.backNavBtnText}>BACK TO NAVIGATE</Text>
-          </TouchableOpacity>
+          <Ionicons
+            name={isRunLoading ? 'sync-outline' : 'alert-circle-outline'}
+            size={48}
+            color={TACTICAL.textMuted}
+          />
+          <Text style={styles.emptyText}>
+            {isRunLoading
+              ? 'Checking local route data and offline cache...'
+              : offlineCacheMessage || 'This run could not be loaded.'}
+          </Text>
+          {!isRunLoading ? (
+            <TouchableOpacity style={styles.backNavBtn} onPress={() => router.back()}>
+              <Text style={styles.backNavBtnText}>BACK TO NAVIGATE</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
     );
@@ -495,6 +789,31 @@ export default function NavigateRunDetail() {
             {run.source.toUpperCase()} — {new Date(run.created_at).toLocaleDateString()} —{' '}
             {run.stats.point_count} points
           </Text>
+          <View style={[styles.offlineStatusPill, { borderColor: offlineCacheColor + '66' }]}>
+            <View style={[styles.offlineStatusDot, { backgroundColor: offlineCacheColor }]} />
+            <Text style={[styles.offlineStatusText, { color: offlineCacheColor }]}>
+              Offline Cache: {offlineCacheLabel}
+            </Text>
+          </View>
+          {offlineCacheMessage ? (
+            <Text style={styles.offlineStatusMessage}>{offlineCacheMessage}</Text>
+          ) : null}
+          {run.points.length > 1 ? (
+            <TouchableOpacity
+              style={[
+                styles.navigateRouteButton,
+                navigationStarting && styles.navigateRouteButtonDisabled,
+              ]}
+              onPress={handleNavigateRun}
+              activeOpacity={0.86}
+              disabled={navigationStarting}
+            >
+              <Ionicons name="navigate-outline" size={15} color="#0B0F12" />
+              <Text style={styles.navigateRouteButtonText}>
+                {navigationStarting ? 'STARTING...' : 'NAVIGATE ROUTE'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {health && <RunHealthBadge health={health} />}
@@ -507,7 +826,13 @@ export default function NavigateRunDetail() {
               <Text style={styles.sectionSub}>PHASE 2.5</Text>
             </View>
 
-            <View style={styles.riskSummaryCard}>
+            <TouchableOpacity
+              style={styles.riskSummaryCard}
+              onPress={openSegmentRiskAnalysis}
+              activeOpacity={0.88}
+              accessibilityRole="button"
+              accessibilityLabel="Open segment risk analysis"
+            >
               <View style={styles.riskStatsRow}>
                 <RiskStat label="SEGMENTS" value={`${riskProfile.segments.length}`} />
                 <RiskStat
@@ -586,7 +911,7 @@ export default function NavigateRunDetail() {
                   <Ionicons name="chevron-forward" size={12} color={TACTICAL.textMuted} />
                 </TouchableOpacity>
               )}
-            </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -821,7 +1146,7 @@ export default function NavigateRunDetail() {
 
           <View style={styles.exportCard}>
             <Text style={styles.exportNote}>
-              GPX 1.1 — Compatible with OnX, Garmin, Gaia, CalTopo
+              GPX 1.1 - compatible with common GPX navigation apps
             </Text>
 
             <View style={styles.exportBtns}>
@@ -852,8 +1177,17 @@ export default function NavigateRunDetail() {
               run={run}
               floating={false}
               showToast={showToast}
-              onCacheComplete={() => {
-                showToast('ROUTE TILES CACHED');
+              onCacheStart={async (options) => {
+                await cacheRunForOfflineNavigation(null, 'downloading', null, options);
+                showToast('ROUTE CACHED; MAP AREA DOWNLOADING');
+              }}
+              onCacheComplete={async (regionId, options) => {
+                await cacheRunForOfflineNavigation(regionId, 'complete', null, options);
+                showToast('ROUTE AND MAP AREA CACHED');
+              }}
+              onCacheError={async (message) => {
+                await handleOfflineRouteCacheFailure(message);
+                showToast('ROUTE CACHE FAILED');
               }}
             />
           </View>
@@ -862,168 +1196,67 @@ export default function NavigateRunDetail() {
         <View style={{ height: 120 }} />
       </ScrollView>
 
-      <Modal visible={segDetailVisible} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.segModalOverlay}
-          activeOpacity={1}
-          onPress={() => setSegDetailVisible(false)}
-        >
-          <View style={styles.segModalContainer}>
-            {selectedSegment && (
-              <>
-                <View style={styles.segModalHeader}>
-                  <View
-                    style={[
-                      styles.segLevelDot,
-                      { backgroundColor: getSegmentColor(selectedSegment) },
-                    ]}
-                  />
-                  <Text style={styles.segModalTitle}>SEGMENT #{selectedSegment.seg_index + 1}</Text>
-                  <Text style={styles.segModalScore}>
-                    Score: {Math.round(selectedSegment.risk_score + selectedSegment.remoteness_score)}
-                    /100
-                  </Text>
-                  <TouchableOpacity onPress={() => setSegDetailVisible(false)}>
-                    <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.segStatsRow}>
-                  <View style={styles.segStat}>
-                    <Text style={styles.segStatLabel}>DISTANCE</Text>
-                    <Text style={styles.segStatValue}>
-                      {metersToMiles(selectedSegment.distance_m).toFixed(2)} mi
-                    </Text>
-                  </View>
-
-                  {selectedSegment.grade_pct != null && (
-                    <View style={styles.segStat}>
-                      <Text style={styles.segStatLabel}>GRADE</Text>
-                      <Text style={styles.segStatValue}>
-                        {Math.abs(selectedSegment.grade_pct).toFixed(1)}%
-                      </Text>
-                    </View>
-                  )}
-
-                  {selectedSegment.bailout_dist_m != null && (
-                    <View style={styles.segStat}>
-                      <Text style={styles.segStatLabel}>BAILOUT</Text>
-                      <Text style={styles.segStatValue}>
-                        {metersToMiles(selectedSegment.bailout_dist_m).toFixed(1)} mi
-                      </Text>
-                    </View>
-                  )}
-                </View>
-
-                <View style={styles.segReasonsSection}>
-                  <Text style={styles.segReasonsTitle}>RISK FACTORS</Text>
-
-                  {selectedSegment.reasons.length === 0 ? (
-                    <Text style={styles.segReasonText}>No risk factors identified</Text>
-                  ) : (
-                    selectedSegment.reasons.map((r, i) => (
-                      <View key={i} style={styles.segReasonRow}>
-                        <View
-                          style={[
-                            styles.segReasonDot,
-                            {
-                              backgroundColor:
-                                r.code === 'remoteness'
-                                  ? '#AB47BC'
-                                  : r.code.includes('grade')
-                                    ? '#FFB300'
-                                    : r.code.includes('range')
-                                      ? '#EF5350'
-                                      : '#78909C',
-                            },
-                          ]}
-                        />
-                        <View style={styles.segReasonContent}>
-                          <Text style={styles.segReasonLabel}>{r.label}</Text>
-                          {r.value != null && (
-                            <Text style={styles.segReasonValue}>
-                              {r.value}
-                              {r.unit}
-                            </Text>
-                          )}
-                          {r.detail && <Text style={styles.segReasonDetail}>{r.detail}</Text>}
-                        </View>
-                      </View>
-                    ))
-                  )}
-                </View>
-
-                <View style={styles.segLevelRow}>
-                  <View style={styles.segLevelItem}>
-                    <Text style={styles.segLevelLabel}>BASE RISK</Text>
-                    <View
-                      style={[
-                        styles.segLevelBadge,
-                        {
-                          backgroundColor:
-                            selectedSegment.risk_level === 'red'
-                              ? 'rgba(239,83,80,0.15)'
-                              : selectedSegment.risk_level === 'yellow'
-                                ? 'rgba(255,179,0,0.15)'
-                                : 'rgba(102,187,106,0.15)',
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.segLevelText,
-                          {
-                            color:
-                              selectedSegment.risk_level === 'red'
-                                ? '#EF5350'
-                                : selectedSegment.risk_level === 'yellow'
-                                  ? '#FFB300'
-                                  : '#66BB6A',
-                          },
-                        ]}
-                      >
-                        {selectedSegment.risk_level.toUpperCase()}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.segLevelItem}>
-                    <Text style={styles.segLevelLabel}>REMOTENESS</Text>
-                    <View
-                      style={[
-                        styles.segLevelBadge,
-                        {
-                          backgroundColor:
-                            selectedSegment.remoteness_level === 'red'
-                              ? 'rgba(239,83,80,0.15)'
-                              : selectedSegment.remoteness_level === 'yellow'
-                                ? 'rgba(255,179,0,0.15)'
-                                : 'rgba(102,187,106,0.15)',
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.segLevelText,
-                          {
-                            color:
-                              selectedSegment.remoteness_level === 'red'
-                                ? '#EF5350'
-                                : selectedSegment.remoteness_level === 'yellow'
-                                  ? '#FFB300'
-                                  : '#66BB6A',
-                          },
-                        ]}
-                      >
-                        {selectedSegment.remoteness_level.toUpperCase()}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              </>
-            )}
+      <Modal
+        visible={segDetailVisible}
+        transparent={false}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setSegDetailVisible(false)}
+      >
+        <View style={styles.segFullScreen}>
+          <View style={styles.segFullScreenHeader}>
+            <Text style={styles.segFullScreenEyebrow}>SEGMENT RISK ANALYSIS</Text>
+            <TouchableOpacity
+              style={styles.segCloseButton}
+              onPress={() => setSegDetailVisible(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close segment risk analysis"
+            >
+              <Ionicons name="close" size={22} color={TACTICAL.text} />
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+
+          <ScrollView
+            style={styles.segFullScreenScroll}
+            contentContainerStyle={styles.segFullScreenContent}
+          >
+            {riskProfile && riskProfile.segments.length > 0 ? (
+              <>
+                <View style={styles.segReportSummary}>
+                  <Text style={styles.segReportTitle}>{run.title}</Text>
+                  <View style={styles.riskStatsRow}>
+                    <RiskStat label="SEGMENTS" value={`${riskProfile.segments.length}`} />
+                    <RiskStat
+                      label="GREEN"
+                      value={`${riskProfile.total_green_segments}`}
+                      color="#66BB6A"
+                    />
+                    <RiskStat
+                      label="YELLOW"
+                      value={`${riskProfile.total_yellow_segments}`}
+                      color="#FFB300"
+                    />
+                    <RiskStat
+                      label="RED"
+                      value={`${riskProfile.total_red_segments}`}
+                      color="#EF5350"
+                    />
+                  </View>
+                </View>
+
+                {riskProfile.segments.map((segment) => (
+                  <SegmentRiskCard
+                    key={segment.id}
+                    segment={segment}
+                    highlighted={selectedSegment?.id === segment.id}
+                  />
+                ))}
+              </>
+            ) : (
+              <Text style={styles.segReasonText}>No segment risk data is available for this route.</Text>
+            )}
+          </ScrollView>
+        </View>
       </Modal>
 
       <Toast />
@@ -1045,6 +1278,129 @@ function RiskStat({ label, value, color }: { label: string; value: string; color
     <View style={styles.riskStatItem}>
       <Text style={[styles.riskStatValue, color ? { color } : null]}>{value}</Text>
       <Text style={styles.riskStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function getRiskLevelColor(level: string): string {
+  if (level === 'red') return '#EF5350';
+  if (level === 'yellow') return '#FFB300';
+  return '#66BB6A';
+}
+
+function getRiskLevelBg(level: string): string {
+  if (level === 'red') return 'rgba(239,83,80,0.15)';
+  if (level === 'yellow') return 'rgba(255,179,0,0.15)';
+  return 'rgba(102,187,106,0.15)';
+}
+
+function getRiskReasonColor(code: string): string {
+  if (code === 'remoteness') return '#AB47BC';
+  if (code.includes('grade')) return '#FFB300';
+  if (code.includes('range')) return '#EF5350';
+  return '#78909C';
+}
+
+function SegmentRiskCard({
+  segment,
+  highlighted,
+}: {
+  segment: RunSegment;
+  highlighted?: boolean;
+}) {
+  return (
+    <View style={[styles.segCard, highlighted && styles.segCardHighlighted]}>
+      <View style={styles.segModalHeader}>
+        <View style={[styles.segLevelDot, { backgroundColor: getSegmentColor(segment) }]} />
+        <Text style={styles.segModalTitle}>SEGMENT #{segment.seg_index + 1}</Text>
+        <Text style={styles.segModalScore}>
+          Score: {Math.round(segment.risk_score + segment.remoteness_score)}/100
+        </Text>
+      </View>
+
+      <View style={styles.segStatsRow}>
+        <View style={styles.segStat}>
+          <Text style={styles.segStatLabel}>DISTANCE</Text>
+          <Text style={styles.segStatValue}>{metersToMiles(segment.distance_m).toFixed(2)} mi</Text>
+        </View>
+
+        <View style={styles.segStat}>
+          <Text style={styles.segStatLabel}>GRADE</Text>
+          <Text style={styles.segStatValue}>
+            {segment.grade_pct == null ? 'N/A' : `${Math.abs(segment.grade_pct).toFixed(1)}%`}
+          </Text>
+        </View>
+
+        <View style={styles.segStat}>
+          <Text style={styles.segStatLabel}>BAILOUT</Text>
+          <Text style={styles.segStatValue}>
+            {segment.bailout_dist_m == null
+              ? 'N/A'
+              : `${metersToMiles(segment.bailout_dist_m).toFixed(1)} mi`}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.segReasonsSection}>
+        <Text style={styles.segReasonsTitle}>RISK FACTORS</Text>
+
+        {segment.reasons.length === 0 ? (
+          <Text style={styles.segReasonText}>Risk factors not flagged from available data</Text>
+        ) : (
+          segment.reasons.map((reason, index) => (
+            <View key={`${segment.id}-${reason.code}-${index}`} style={styles.segReasonRow}>
+              <View
+                style={[
+                  styles.segReasonDot,
+                  { backgroundColor: getRiskReasonColor(reason.code) },
+                ]}
+              />
+              <View style={styles.segReasonContent}>
+                <Text style={styles.segReasonLabel}>{reason.label}</Text>
+                {reason.value != null && (
+                  <Text style={styles.segReasonValue}>
+                    {reason.value}
+                    {reason.unit}
+                  </Text>
+                )}
+                {reason.detail && <Text style={styles.segReasonDetail}>{reason.detail}</Text>}
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
+      <View style={styles.segLevelRow}>
+        <View style={styles.segLevelItem}>
+          <Text style={styles.segLevelLabel}>BASE RISK</Text>
+          <View
+            style={[
+              styles.segLevelBadge,
+              { backgroundColor: getRiskLevelBg(segment.risk_level) },
+            ]}
+          >
+            <Text style={[styles.segLevelText, { color: getRiskLevelColor(segment.risk_level) }]}>
+              {segment.risk_level.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.segLevelItem}>
+          <Text style={styles.segLevelLabel}>REMOTENESS</Text>
+          <View
+            style={[
+              styles.segLevelBadge,
+              { backgroundColor: getRiskLevelBg(segment.remoteness_level) },
+            ]}
+          >
+            <Text
+              style={[styles.segLevelText, { color: getRiskLevelColor(segment.remoteness_level) }]}
+            >
+              {segment.remoteness_level.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
@@ -1115,6 +1471,61 @@ const styles = StyleSheet.create({
 
   runTitle: { ...TYPO.T0, color: TACTICAL.text, flex: 1 },
   runMeta: { ...TYPO.B2, fontSize: 10, color: TACTICAL.textMuted, marginTop: 4 },
+
+  offlineStatusPill: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 26,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(11,15,18,0.55)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+  },
+
+  offlineStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+
+  offlineStatusText: {
+    ...TYPO.U2,
+    fontSize: 8,
+    letterSpacing: 1,
+  },
+
+  offlineStatusMessage: {
+    ...TYPO.B2,
+    marginTop: 6,
+    fontSize: 10,
+    color: TACTICAL.textMuted,
+  },
+
+  navigateRouteButton: {
+    marginTop: 12,
+    minHeight: 42,
+    borderRadius: 12,
+    backgroundColor: TACTICAL.amber,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+
+  navigateRouteButtonDisabled: {
+    opacity: 0.72,
+  },
+
+  navigateRouteButtonText: {
+    ...TYPO.U1,
+    color: '#0B0F12',
+    fontSize: 10,
+    letterSpacing: 1.2,
+  },
 
   editRow: {
     flexDirection: 'row',
@@ -1373,20 +1784,75 @@ const styles = StyleSheet.create({
 
   backNavBtnText: { ...TYPO.U2, color: TACTICAL.textMuted },
 
-  segModalOverlay: {
+  segFullScreen: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
+    backgroundColor: TACTICAL.bg,
   },
 
-  segModalContainer: {
+  segFullScreenHeader: {
+    paddingTop: Platform.OS === 'web' ? 18 : 54,
+    paddingHorizontal: DENSITY.screenPad,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: TACTICAL.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  segFullScreenEyebrow: {
+    ...TYPO.T2,
+    color: TACTICAL.amber,
+    flex: 1,
+  },
+
+  segCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(62,79,60,0.12)',
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+  },
+
+  segFullScreenScroll: {
+    flex: 1,
+  },
+
+  segFullScreenContent: {
+    padding: DENSITY.screenPad,
+    paddingBottom: Platform.OS === 'web' ? 28 : 48,
+  },
+
+  segReportSummary: {
     backgroundColor: TACTICAL.panel,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderTopWidth: 2,
-    borderColor: TACTICAL.amber + '40',
-    padding: DENSITY.modalPad,
-    paddingBottom: Platform.OS === 'web' ? 20 : 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    padding: DENSITY.cardPad,
+    marginBottom: 12,
+  },
+
+  segReportTitle: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    marginBottom: 10,
+  },
+
+  segCard: {
+    backgroundColor: TACTICAL.panel,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    padding: DENSITY.cardPad,
+    marginBottom: 12,
+  },
+
+  segCardHighlighted: {
+    borderColor: TACTICAL.amber,
+    backgroundColor: 'rgba(196,138,44,0.08)',
   },
 
   segModalHeader: {
