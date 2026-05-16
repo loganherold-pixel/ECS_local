@@ -38,6 +38,7 @@ import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
 import { getBuilderState, getCachedExpeditions } from '../../lib/expeditionCache';
 import { routeStore, type ImportedRoute } from '../../lib/routeStore';
+import { runStore, type ECSRun, type RunPoint } from '../../lib/runStore';
 import { calculateRisk, getRiskColor, getPackingStats } from '../../lib/calculations';
 import TopoBackground from '../../components/TopoBackground';
 
@@ -46,6 +47,69 @@ import EnvironmentalIntel from '../../components/intel/EnvironmentalIntel';
 import DocumentPreviewModal, { ECS_VERSION, ECS_PRODUCT } from '../../components/intel/DocumentPreviewModal';
 import IntelInsertTabs from '../../components/intel/IntelInsertTabs';
 import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
+
+function buildIntelRunFromRoute(route: ImportedRoute | null): ECSRun | null {
+  if (!route) return null;
+
+  const points: RunPoint[] = [];
+  for (const segment of route.segments ?? []) {
+    for (const point of segment.points ?? []) {
+      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+      points.push({
+        idx: points.length,
+        lat: point.lat,
+        lng: point.lon,
+        ele_m: point.ele ?? null,
+        time: null,
+        type: 'route',
+      });
+    }
+  }
+
+  if (points.length < 2) return null;
+
+  const now = route.updated_at || route.created_at || new Date().toISOString();
+
+  return {
+    id: route.id,
+    user_id: route.user_id,
+    title: route.name || 'Active route',
+    source: route.source_format || 'import',
+    created_at: route.created_at,
+    updated_at: route.updated_at,
+    vehicle_id: null,
+    build_snapshot: {
+      vehicle_name: 'Intel route context',
+      vehicle_id: null,
+      estimated_range_miles: 0,
+      total_weight_lb: 0,
+      roof_weight_lb: 0,
+      hitch_weight_lb: 0,
+      limits: {
+        roof_limit_lb: 0,
+        hitch_limit_lb: 0,
+      },
+      captured_at: now,
+    },
+    stats: {
+      distance_m: route.total_distance_miles / 0.000621371,
+      distance_miles: route.total_distance_miles,
+      distance_km: route.total_distance_miles * 1.60934,
+      point_count: points.length,
+      start_lat: points[0]?.lat ?? null,
+      start_lng: points[0]?.lng ?? null,
+      end_lat: points[points.length - 1]?.lat ?? null,
+      end_lng: points[points.length - 1]?.lng ?? null,
+      elevation_gain_ft: route.elevation_gain_ft,
+      elevation_loss_ft: null,
+      min_ele_ft: null,
+      max_ele_ft: null,
+    },
+    points,
+    waypoints: route.waypoints ?? [],
+    is_active: route.is_active,
+  };
+}
 
 // Export inner component for use in unified Alert tab
 export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
@@ -63,6 +127,7 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
   // ── Local State ────────────────────────────────────────────
   const [builderState, setBuilderStateLocal] = useState<any>({});
   const [routes, setRoutes] = useState<ImportedRoute[]>([]);
+  const [activeRun, setActiveRun] = useState<ECSRun | null>(() => runStore.getActive());
   const [expeditions, setExpeditions] = useState<any[]>([]);
 
   // Document Preview Modal state
@@ -78,12 +143,17 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
       refreshActiveTrip();
       setBuilderStateLocal(getBuilderState());
       setRoutes(routeStore.getAll());
+      setActiveRun(runStore.getActive());
       setExpeditions(getCachedExpeditions());
     }, [refreshActiveTrip])
   );
 
   // ── Computed Values ────────────────────────────────────────
   const activeRoute = routeStore.getActive();
+  const activeIntelRun = useMemo(
+    () => activeRun ?? buildIntelRunFromRoute(activeRoute),
+    [activeRun, activeRoute],
+  );
 
   const risk = useMemo(() => {
     if (riskScore) {
@@ -189,6 +259,7 @@ export function IntelScreenInner({ embedded = false }: { embedded?: boolean }) {
             <View style={styles.contentPadded}>
               <EnvironmentalIntel
                 activeRoute={activeRoute}
+                activeRun={activeIntelRun}
                 riskScore={riskScore ? risk.score : null}
                 riskLevel={risk.level}
                 riskColor={riskColor}
