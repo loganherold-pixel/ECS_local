@@ -7828,7 +7828,7 @@ const handleDirectMapTapForPin = useCallback(
         campsiteDrawingPoints.length >= 3 &&
         getCampsiteDrawingDistanceMiles(firstPoint, nextPoint) <= CAMPSITE_DRAW_CLOSE_THRESHOLD_MILES
       ) {
-        showToast('PRESS CLOSE AREA, THEN SCAN');
+        showToast('PRESS FINISH, THEN SCAN');
         return;
       }
       setCampsiteDrawingPoints((current) => [...current, nextPoint]);
@@ -13108,7 +13108,7 @@ const scanCampsiteDrawing = useCallback(() => {
   }
 
   if (!campsiteDrawingClosed || campsiteDrawingPoints.length < 3) {
-    showToast('CLOSE CAMP SCOUT AREA FIRST');
+    showToast('FINISH CAMP SCOUT AREA FIRST');
     return;
   }
 
@@ -13213,7 +13213,7 @@ const handleCampScoutUseCurrentMapView = useCallback(() => {
 const saveCampsiteDrawing = useCallback(() => {
   hapticCommand();
   if (!campsiteDrawingClosed || campsiteDrawingPoints.length < 3) {
-    showToast('CLOSE DRAWING BEFORE SAVE');
+    showToast('FINISH DRAWING BEFORE SAVE');
     return;
   }
   const now = new Date().toISOString();
@@ -13249,7 +13249,7 @@ const saveCampsiteDrawing = useCallback(() => {
 const buildRouteOverCampsiteDrawing = useCallback(() => {
   hapticCommand();
   if (!campsiteDrawingClosed || campsiteDrawingPoints.length < 3) {
-    showToast('CLOSE DRAWING BEFORE ROUTE DESIGN');
+    showToast('FINISH DRAWING BEFORE ROUTE DESIGN');
     return;
   }
   if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
@@ -14784,8 +14784,8 @@ const stableMapSurface = useMemo(() => {
       <View
         style={[
           styles.mapFloatingControlsLayer,
-          (selectedCampIntelId || selectedCampScoutCandidateId || selectedCampOpsEndpointId) &&
-            styles.mapFloatingControlsLayerPersistent,
+          selectedCampIntelId && styles.mapFloatingControlsLayerPersistent,
+          (selectedCampScoutCandidateId || selectedCampOpsEndpointId) && styles.mapFloatingControlsLayerPersistent,
         ]}
         pointerEvents="box-none"
       >
@@ -15050,10 +15050,10 @@ const stableMapSurface = useMemo(() => {
                 onPress={clearCampsiteDrawing}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Cancel Camp Scout area selection"
+                accessibilityLabel="Clear campsite drawing"
               >
                 <Text style={[styles.routeBuilderStatusActionText, styles.campsitePolygonActionText]}>
-                  CANCEL
+                  CLEAR
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -15088,7 +15088,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!campsiteDrawingCanFinish}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Close Camp Scout area"
+                accessibilityLabel="Finish campsite drawing"
               >
                 <Text
                   style={[
@@ -15097,7 +15097,7 @@ const stableMapSurface = useMemo(() => {
                     !campsiteDrawingCanFinish && styles.routeBuilderStatusActionTextDisabled,
                   ]}
                 >
-                  CLOSE
+                  FINISH
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
