@@ -83,7 +83,8 @@ function EmergencyCard({
     outputRange: [0.08, 0.35],
   });
 
-  const hasBadge = !!protocol.badgeImage;
+  const [imageFailed, setImageFailed] = useState(false);
+  const hasBadge = Boolean(protocol.badgeImage && !imageFailed);
 
   return (
     // OUTER: Native-driven Animated.View — only transform (scale)
@@ -109,21 +110,21 @@ function EmergencyCard({
           onPress={handlePress}
           activeOpacity={0.8}
         >
+          {hasBadge ? (
+            <Image
+              source={{ uri: protocol.badgeImage }}
+              style={styles.cardBackgroundImage}
+              resizeMode="cover"
+              onError={() => setImageFailed(true)}
+            />
+          ) : null}
+          {hasBadge ? <View style={styles.cardImageScrim} /> : null}
+
           {/* Subtle accent glow line at top */}
           <View style={[styles.accentLine, { backgroundColor: protocol.accentColor }]} />
 
           {hasBadge ? (
-            <View style={styles.badgeContainer}>
-              <Image
-                source={{ uri: protocol.badgeImage }}
-                style={styles.badgeImage}
-                resizeMode="cover"
-              />
-              {/* Vignette overlay — darkens edges for seamless card integration */}
-              <View style={styles.contrastOverlay} />
-              {/* Bottom fade for smooth transition to subtitle text */}
-              <View style={styles.badgeBottomFade} />
-            </View>
+            <View style={styles.cardImageSpacer} />
           ) : (
             <View style={[styles.iconContainerFallback, { backgroundColor: `${protocol.accentColor}12` }]}>
               {getTacticalGlyph(protocol.id, protocol.accentColor, 28)}
@@ -147,14 +148,23 @@ function EmergencyCard({
 }
 
 // ── Main Grid ────────────────────────────────────────────
-export default function EmergencyGrid() {
+interface EmergencyGridProps {
+  onProtocolSelect?: (protocol: EmergencyProtocol) => void;
+}
+
+export default function EmergencyGrid({ onProtocolSelect }: EmergencyGridProps = {}) {
   const [selectedProtocol, setSelectedProtocol] = useState<EmergencyProtocol | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
 
   const handleCardPress = useCallback((protocol: EmergencyProtocol) => {
+    if (onProtocolSelect) {
+      onProtocolSelect(protocol);
+      return;
+    }
+
     setSelectedProtocol(protocol);
     setModalVisible(true);
-  }, []);
+  }, [onProtocolSelect]);
 
   const handleModalClose = useCallback(() => {
     setModalVisible(false);
@@ -181,12 +191,13 @@ export default function EmergencyGrid() {
         </View>
       ))}
 
-      {/* Protocol Modal */}
-      <EmergencyProtocolModal
-        visible={modalVisible}
-        protocol={selectedProtocol}
-        onClose={handleModalClose}
-      />
+      {onProtocolSelect ? null : (
+        <EmergencyProtocolModal
+          visible={modalVisible}
+          protocol={selectedProtocol}
+          onClose={handleModalClose}
+        />
+      )}
     </View>
   );
 }
@@ -224,8 +235,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 6,
     paddingBottom: 8,
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     alignItems: 'center',
+    position: 'relative',
   },
   accentLine: {
     position: 'absolute',
@@ -237,42 +249,20 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
 
-  // ── Badge Image ────────────────────────────────────────
-  badgeContainer: {
-    flex: 1,
-    width: '100%',
-    maxHeight: '65%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  badgeImage: {
+  // ── Protocol Image Background ──────────────────────────
+  cardBackgroundImage: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
-    opacity: 0.92,
+    opacity: 0.94,
   },
-  // Semi-transparent overlay to reduce contrast ~10-15%
-  // and soften highlights without blurring
-  contrastOverlay: {
+  cardImageScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(11, 15, 18, 0.10)',
+    backgroundColor: 'rgba(8, 11, 14, 0.32)',
   },
-  // Bottom fade gradient effect for smooth text transition
-  badgeBottomFade: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '35%',
-    backgroundColor: 'transparent',
-    // Simulated gradient via layered semi-transparent band
-    borderTopWidth: 0,
-    shadowColor: TACTICAL.panel,
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.6,
-    shadowRadius: 12,
+  cardImageSpacer: {
+    flex: 1,
+    minHeight: 52,
   },
 
   // ── Fallback icon (when no badge image) ───────────────
@@ -288,13 +278,16 @@ const styles = StyleSheet.create({
   // ── Text ──────────────────────────────────────────────
   cardSubtitle: {
     fontSize: 10,
-    color: TACTICAL.textMuted,
+    color: 'rgba(255,255,255,0.78)',
     fontWeight: '500',
     textAlign: 'center',
     lineHeight: 14,
     letterSpacing: 0.2,
     paddingHorizontal: 2,
     marginTop: 2,
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   cardFooter: {
     flexDirection: 'row',
@@ -310,7 +303,7 @@ const styles = StyleSheet.create({
   readyText: {
     fontSize: 8,
     fontWeight: '800',
-    color: 'rgba(255,255,255,0.3)',
+    color: 'rgba(255,255,255,0.5)',
     letterSpacing: 1.5,
   },
 });

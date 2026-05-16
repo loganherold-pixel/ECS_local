@@ -2,39 +2,67 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   StyleSheet,
   TextInput,
   ActivityIndicator,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSModalShell from './ECSModalShell';
+import WeatherIntelPanel from './weather/WeatherIntelPanel';
+import { EMERGENCY_PROTOCOLS } from './emergency/EmergencyData';
+import FieldUseProtocolDetail, { type FieldUseGuideProtocol } from './emergency/FieldUseProtocolDetail';
+import RecoveryProtocolDetail from './emergency/RecoveryProtocolDetail';
+import { RECOVERY_PROTOCOLS, isRecoveryProtocol, type ProtocolDefinition } from './emergency/RecoveryProtocolData';
+import { getTacticalGlyph } from './emergency/TacticalGlyphs';
 import { useApp } from '../context/AppContext';
 import { missionEventStore, missionNoteStore } from '../lib/missionStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
-import {
-  loadOpportunitiesWithCompatibility,
-  filterByRadius,
-  type DistanceRadius,
-} from '../lib/discoverEngine';
-import { selectHiddenGemRoutes } from '../lib/discoverCategoryEngine';
 import { dispatchStore } from '../lib/dispatchStore';
-import { commsStore } from '../lib/commsStore';
-import { hapticMicro } from '../lib/haptics';
+import { commsStore, type CustomCommsData } from '../lib/commsStore';
+import {
+  type ECSDeviceConnectionModel,
+  type ECSDiscoverySourceUiStatus,
+  type ECSScanSummary,
+  useUnifiedDeviceConnections,
+} from '../lib/unifiedScanner';
+import {
+  getSourceStatusDetail,
+  getSourceStatusLabel,
+} from '../lib/deviceConnectionScanMessaging';
+import { hapticCommand, hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
+import {
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  getShellBottomClearance,
+  getShellHeaderTopPadding,
+} from '../lib/shellLayout';
+import { useOperationalWeather } from '../lib/useOperationalWeather';
 
-type QuickPanel = 'main' | 'note' | 'beacon' | 'team' | 'proximity';
+type FieldUtilitiesView =
+  | 'menu'
+  | 'quickNote'
+  | 'emergencyComms'
+  | 'intel'
+  | 'protocols'
+  | 'protocolDetail'
+  | 'recoveryProtocols'
+  | 'recoveryProtocolDetail'
+  | 'team'
+  | 'bluetooth';
 
-type ProximityPick = {
-  id: string;
-  name: string;
-  region: string;
-  distanceFromUserMiles?: number;
-  discoveryScore?: number;
-  hiddenGem?: boolean;
+type FieldUtilitiesReturnTarget = 'dashboard' | 'quickActions' | 'map' | string;
+type FieldUtilityActionView = Exclude<FieldUtilitiesView, 'menu' | 'protocolDetail' | 'recoveryProtocolDetail'>;
+
+type FieldUtilitiesState = {
+  isOpen: boolean;
+  activeView: FieldUtilitiesView;
+  returnTarget?: FieldUtilitiesReturnTarget;
 };
 
 type QuickActionTile = {
@@ -48,13 +76,37 @@ type QuickActionTile = {
   availabilityLabel?: string;
 };
 
-const RADIUS_OPTIONS: readonly DistanceRadius[] = [25, 50, 100, 250, 500] as const;
-const DEFAULT_RADIUS: DistanceRadius = 50;
+const DEFAULT_FREQUENCIES = [
+  { label: 'CB Ch 9', detail: 'Emergency' },
+  { label: 'CB Ch 19', detail: 'Highway' },
+  { label: 'FRS Ch 1', detail: 'General' },
+  { label: 'GMRS 462.675', detail: 'Repeater' },
+  { label: 'HAM 146.520', detail: 'VHF Call' },
+];
+const DEFAULT_SIGNALS = [
+  { label: '3 of Anything', detail: 'Distress' },
+  { label: 'SOS', detail: '3S 3L 3S' },
+  { label: 'Ground V', detail: 'Need help' },
+  { label: 'Ground X', detail: 'Medical' },
+];
 const DEFAULT_EMERGENCY_CONTACTS = [
   { label: 'Emergency', value: '911' },
   { label: 'Poison Control', value: '800-222-1222' },
   { label: 'Search & Rescue', value: '911 -> SAR' },
 ];
+
+type EditableCommsSection = 'frequencies' | 'signals' | 'contacts';
+
+type EditableCommsEntry = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+type EditingCommsEntry = EditableCommsEntry & {
+  section: EditableCommsSection;
+};
+
 const TEAM_PING_OPTIONS = [
   { key: 'check-in', label: 'CHECK-IN', detail: 'Team check-in. All systems normal.', eventType: 'status_update' as const },
   { key: 'holding', label: 'HOLDING', detail: 'Holding position. Awaiting next update.', eventType: 'location_checkin' as const },
@@ -91,84 +143,227 @@ function formatCoords(lat: number, lng: number): string {
   return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
-function getEmergencyContacts(
-  primaryContact: string | null | undefined,
-  dispatchContacts: Array<{ label: string; detail: string }>,
-) {
-  const merged = [
-    ...(primaryContact?.trim()
-      ? [{ label: 'Primary Contact', value: primaryContact.trim() }]
-      : []),
-    ...dispatchContacts.map((contact) => ({
-      label: contact.label,
-      value: contact.detail,
-    })),
-    ...DEFAULT_EMERGENCY_CONTACTS,
-  ];
+function buildEmergencyFieldUseGuide(protocol: ProtocolDefinition): FieldUseGuideProtocol {
+  return {
+    id: protocol.id,
+    title: protocol.title,
+    subtitle: protocol.subtitle,
+    accentColor: protocol.accentColor,
+    image: protocol.fieldUtilityImage ?? protocol.image ?? null,
+    beforeLabel: 'BEFORE YOU ACT',
+    beforeItems: protocol.beforeYouPull,
+    stepCards: protocol.stepCards,
+    warningLabel: 'DO NOT',
+    warningItems: protocol.doNot,
+    completionLabel: 'SAFETY CHECK',
+    completionItems: protocol.completionCheck,
+  };
+}
 
-  const deduped: Array<{ label: string; value: string }> = [];
-  const seen = new Set<string>();
-
-  merged.forEach((entry) => {
-    const value = entry.value?.trim();
-    if (!value) return;
-    const key = `${entry.label.trim().toLowerCase()}::${value.toLowerCase()}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    deduped.push({ label: entry.label, value });
+function mergeCommsDefaultsWithOverrides(
+  prefix: string,
+  defaults: { label: string; detail: string }[],
+  overrides: EditableCommsEntry[],
+): EditableCommsEntry[] {
+  const overrideById = new Map(overrides.map((entry) => [entry.id, entry]));
+  const defaultIds = new Set<string>();
+  const mergedDefaults = defaults.map((entry, index) => {
+    const id = `default_${prefix}_${index}`;
+    defaultIds.add(id);
+    return overrideById.get(id) ?? { id, ...entry };
   });
 
-  return deduped.slice(0, 6);
+  return [
+    ...mergedDefaults,
+    ...overrides.filter((entry) => !defaultIds.has(entry.id)),
+  ];
 }
 
 interface Props {
   visible: boolean;
-  onClose: () => void;
+  onClose: (returnTarget?: FieldUtilitiesReturnTarget) => void;
+  returnTarget?: FieldUtilitiesReturnTarget;
 }
 
-export default function QuickActionsSheet({ visible, onClose }: Props) {
-  const router = useRouter();
+export default function QuickActionsSheet({ visible, onClose, returnTarget = 'dashboard' }: Props) {
+  const insets = useSafeAreaInsets();
+  const { height: viewportHeight } = useWindowDimensions();
   const { showToast, activeTrip, user } = useApp();
-  const [activePanel, setActivePanel] = useState<QuickPanel>('main');
+  const [fieldUtilitiesState, setFieldUtilitiesState] = useState<FieldUtilitiesState>({
+    isOpen: visible,
+    activeView: 'menu',
+    returnTarget,
+  });
   const [busy, setBusy] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [dispatchContacts, setDispatchContacts] = useState(() => commsStore.getAll().contacts);
-  const [radius, setRadius] = useState<DistanceRadius>(DEFAULT_RADIUS);
-  const [proximityLoading, setProximityLoading] = useState(false);
-  const [proximityResults, setProximityResults] = useState<ProximityPick[]>([]);
+  const [dispatchComms, setDispatchComms] = useState<CustomCommsData>(() => commsStore.getAll());
+  const [editingCommsEntry, setEditingCommsEntry] = useState<EditingCommsEntry | null>(null);
+  const [selectedProtocol, setSelectedProtocol] = useState<ProtocolDefinition | null>(null);
+  const [savedNotes, setSavedNotes] = useState(() =>
+    missionNoteStore.getByExpeditionId(activeTrip?.id ?? 'general'),
+  );
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
   const expeditionState = expeditionStateStore.getState();
   const hasTeam = (activeTrip?.team_size ?? 1) > 1;
-  const emergencyContacts = useMemo(
-    () => getEmergencyContacts(activeTrip?.emergency_contact, dispatchContacts),
-    [activeTrip?.emergency_contact, dispatchContacts],
+  const missionId = activeTrip?.id ?? 'general';
+  const fieldUtilitiesTopClearance = getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
+  const fieldUtilitiesBottomClearance = getShellBottomClearance(insets.bottom, 2);
+  const activeView = fieldUtilitiesState.activeView;
+  const protocolDetailActive = activeView === 'protocolDetail';
+  const recoveryProtocolDetailActive = activeView === 'recoveryProtocolDetail';
+  const protocolStaticActive =
+    activeView === 'protocols' ||
+    protocolDetailActive ||
+    activeView === 'recoveryProtocols' ||
+    recoveryProtocolDetailActive;
+  const protocolCompactMode = viewportHeight < 760;
+  const frequencyCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides('freq', DEFAULT_FREQUENCIES, dispatchComms.frequencies),
+    [dispatchComms.frequencies],
   );
-  const mainPanelActive = activePanel === 'main';
+  const signalCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides('signal', DEFAULT_SIGNALS, dispatchComms.signals),
+    [dispatchComms.signals],
+  );
+  const emergencyContactCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides(
+      'contact',
+      [
+        ...(activeTrip?.emergency_contact?.trim()
+          ? [{ label: 'Primary Contact', detail: activeTrip.emergency_contact.trim() }]
+          : []),
+        ...DEFAULT_EMERGENCY_CONTACTS.map((entry) => ({ label: entry.label, detail: entry.value })),
+      ],
+      dispatchComms.contacts,
+    ),
+    [activeTrip?.emergency_contact, dispatchComms.contacts],
+  );
+  const mainPanelActive = activeView === 'menu';
+  const intelWeatherGps = useMemo(
+    () => ({
+      lat: gpsCoords?.lat ?? null,
+      lng: gpsCoords?.lng ?? null,
+      hasFix: gpsCoords != null,
+      permissionDenied: false,
+    }),
+    [gpsCoords],
+  );
+  const fieldUtilitiesWeather = useOperationalWeather({
+    enabled: visible && activeView === 'intel',
+    gps: intelWeatherGps,
+    units: 'imperial',
+  });
 
-  const dismiss = useCallback((force = false) => {
-    if (busy && !force) return;
-    setActivePanel('main');
+  const refreshSavedNotes = useCallback(() => {
+    const notes = missionNoteStore.getByExpeditionId(missionId);
+    setSavedNotes(notes);
+    setSelectedNoteId((prev) => (prev && notes.some((note) => note.id === prev) ? prev : notes[0]?.id ?? null));
+  }, [missionId]);
+
+  const openFieldUtilities = useCallback((nextReturnTarget: FieldUtilitiesReturnTarget = returnTarget) => {
+    setFieldUtilitiesState({
+      isOpen: true,
+      activeView: 'menu',
+      returnTarget: nextReturnTarget,
+    });
+  }, [returnTarget]);
+
+  // Main Field Utilities X closes the panel and returns to the parent menu,
+  // normally Dashboard for the dock long-press flow.
+  const closeFieldUtilities = useCallback(() => {
+    const nextReturnTarget = fieldUtilitiesState.returnTarget ?? returnTarget;
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: false,
+      activeView: 'menu',
+    }));
     setNoteText('');
+    setSelectedNoteId(null);
+    setSelectedProtocol(null);
+    setEditingCommsEntry(null);
     setGpsCoords(null);
     setGpsLoading(false);
-    setProximityLoading(false);
-    onClose();
-  }, [busy, onClose]);
+    setBusy(false);
+    onClose(nextReturnTarget);
+  }, [fieldUtilitiesState.returnTarget, onClose, returnTarget]);
+
+  const openFieldUtilityAction = useCallback((action: FieldUtilityActionView) => {
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: action,
+    }));
+  }, []);
+
+  // Child X keeps Field Utilities open and returns to its main action menu.
+  const closeFieldUtilityAction = useCallback(() => {
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      activeView: 'menu',
+    }));
+    setSelectedProtocol(null);
+    setEditingCommsEntry(null);
+  }, []);
+
+  const handleShellClose = useCallback(() => {
+    if (activeView === 'menu') {
+      closeFieldUtilities();
+      return;
+    }
+
+    closeFieldUtilityAction();
+  }, [activeView, closeFieldUtilities, closeFieldUtilityAction]);
+
+  const handleShellBack = useCallback(() => {
+    if (activeView === 'menu') {
+      closeFieldUtilities();
+      return;
+    }
+
+    if (activeView === 'protocolDetail') {
+      openFieldUtilityAction('protocols');
+      return;
+    }
+
+    if (activeView === 'recoveryProtocolDetail') {
+      openFieldUtilityAction('recoveryProtocols');
+      return;
+    }
+
+    closeFieldUtilityAction();
+  }, [activeView, closeFieldUtilities, closeFieldUtilityAction, openFieldUtilityAction]);
 
   useEffect(() => {
     if (!visible) {
-      setActivePanel('main');
+      setFieldUtilitiesState({
+        isOpen: false,
+        activeView: 'menu',
+        returnTarget,
+      });
       setNoteText('');
       setGpsCoords(null);
       setGpsLoading(false);
-      setRadius(DEFAULT_RADIUS);
-      setProximityLoading(false);
-      setProximityResults([]);
+      setSelectedNoteId(null);
+      setSelectedProtocol(null);
+      setEditingCommsEntry(null);
       return;
     }
-  }, [visible]);
+
+    openFieldUtilities(returnTarget);
+  }, [openFieldUtilities, returnTarget, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    refreshSavedNotes();
+  }, [refreshSavedNotes, visible]);
+
+  useEffect(() => {
+    if (!visible || activeView !== 'quickNote') return;
+    refreshSavedNotes();
+  }, [activeView, refreshSavedNotes, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -176,7 +371,7 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
 
     void commsStore.waitForHydration().then(() => {
       if (!cancelled) {
-        setDispatchContacts(commsStore.getAll().contacts);
+        setDispatchComms(commsStore.getAll());
       }
     });
 
@@ -186,7 +381,7 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || activePanel !== 'beacon') return;
+    if (!visible || (activeView !== 'emergencyComms' && activeView !== 'intel')) return;
     let cancelled = false;
 
     (async () => {
@@ -201,56 +396,7 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [activePanel, visible]);
-
-  useEffect(() => {
-    if (!visible || activePanel !== 'proximity') return;
-    let cancelled = false;
-
-    (async () => {
-      setProximityLoading(true);
-      const coords = (await getGPSPosition()) ?? null;
-      if (cancelled) return;
-
-      const lat = coords?.lat;
-      const lng = coords?.lng;
-
-      const { opportunities, results } = loadOpportunitiesWithCompatibility(undefined, lat, lng);
-      const filtered = filterByRadius(opportunities, radius);
-      const picks = selectHiddenGemRoutes(filtered, results, radius, 10, 5)
-        .slice(0, 10)
-        .map((route) => ({
-          id: route.id,
-          name: route.name,
-          region: route.region,
-          distanceFromUserMiles: route.distanceFromUserMiles,
-          discoveryScore: route.discoveryScore,
-          hiddenGem: route.hiddenGem,
-        }));
-
-      if (!cancelled) {
-        setGpsCoords(coords);
-        setProximityResults(picks);
-        setProximityLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activePanel, radius, visible]);
-
-  const handleRoute = useCallback((path: '/power' | '/power/blu', failureMessage: string) => {
-    hapticMicro();
-    dismiss();
-    setTimeout(() => {
-      try {
-        router.push(path);
-      } catch {
-        showToast(failureMessage);
-      }
-    }, 80);
-  }, [dismiss, router, showToast]);
+  }, [activeView, visible]);
 
   const handleSaveNote = useCallback(async () => {
     if (!noteText.trim()) return;
@@ -258,22 +404,35 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
 
     try {
       const text = noteText.trim();
-      const missionId = activeTrip?.id ?? 'general';
-      missionNoteStore.create(missionId, text, 'quick_note');
+      const savedNote = missionNoteStore.create(missionId, text, 'quick_note');
       missionEventStore.append(missionId, 'NOTE_ADDED', {
         text,
         source: 'quick_actions',
         createdBy: user?.email ?? null,
         timestamp: new Date().toISOString(),
       });
+      refreshSavedNotes();
+      setSelectedNoteId(savedNote.id);
+      setNoteText('');
       showToast(ECS_TOAST_COPY.quickNoteSaved);
-      dismiss(true);
     } catch {
       showToast('Unable to save note');
     } finally {
       setBusy(false);
     }
-  }, [activeTrip?.id, dismiss, noteText, showToast, user?.email]);
+  }, [missionId, noteText, refreshSavedNotes, showToast, user?.email]);
+
+  const handleDeleteNote = useCallback((noteId: string) => {
+    hapticMicro();
+    const removed = missionNoteStore.remove(noteId);
+    if (!removed) {
+      showToast('Unable to delete note');
+      return;
+    }
+
+    refreshSavedNotes();
+    showToast('Note deleted');
+  }, [refreshSavedNotes, showToast]);
 
   const handleCopyCoords = useCallback(async () => {
     if (!gpsCoords) return;
@@ -289,6 +448,45 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
 
     showToast(`Coordinates ready: ${value}`);
   }, [gpsCoords, showToast]);
+
+  const handleStartEditCommsEntry = useCallback((
+    section: EditableCommsSection,
+    entry: EditableCommsEntry,
+  ) => {
+    void hapticMicro();
+    setEditingCommsEntry({ section, id: entry.id, label: entry.label, detail: entry.detail });
+  }, []);
+
+  const handleCancelEditCommsEntry = useCallback(() => {
+    setEditingCommsEntry(null);
+  }, []);
+
+  const handleSaveEditCommsEntry = useCallback(() => {
+    if (!editingCommsEntry) return;
+
+    const label = editingCommsEntry.label.trim();
+    const detail = editingCommsEntry.detail.trim();
+    if (!label) {
+      showToast('Comms title is required');
+      return;
+    }
+
+    const data = commsStore.getAll();
+    const currentColumn = data[editingCommsEntry.section];
+    const nextEntry = {
+      id: editingCommsEntry.id,
+      label,
+      detail: detail || '-',
+    };
+    const nextColumn = currentColumn.some((entry) => entry.id === editingCommsEntry.id)
+      ? currentColumn.map((entry) => (entry.id === editingCommsEntry.id ? nextEntry : entry))
+      : [...currentColumn, nextEntry];
+
+    const nextData = commsStore.replaceColumn(editingCommsEntry.section, nextColumn);
+    setDispatchComms(nextData);
+    setEditingCommsEntry(null);
+    showToast('Comms entry saved');
+  }, [editingCommsEntry, showToast]);
 
   const handleTeamPing = useCallback(async (headline: string, detail: string, eventType: 'status_update' | 'location_checkin' | 'safety_notice') => {
     if (!activeTrip || !hasTeam) return;
@@ -314,22 +512,22 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
       }
 
       showToast(ECS_TOAST_COPY.teamPingSent);
-      dismiss(true);
+      closeFieldUtilities();
     } catch {
       showToast('Unable to send team ping');
     } finally {
       setBusy(false);
     }
-  }, [activeTrip, dismiss, hasTeam, showToast]);
+  }, [activeTrip, closeFieldUtilities, hasTeam, showToast]);
 
   const tileItems: readonly QuickActionTile[] = [
     {
-      key: 'power',
-      label: 'Power',
-      subtitle: 'Open ECS power controls',
-      icon: 'battery-charging-outline',
-      color: '#AB47BC',
-      onPress: () => handleRoute('/power', 'Unable to open power controls'),
+      key: 'intel',
+      label: 'Weather',
+      subtitle: 'Current weather and trail conditions',
+      icon: 'cloud-outline',
+      color: '#FFB300',
+      onPress: () => openFieldUtilityAction('intel'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -339,17 +537,17 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
       subtitle: 'Capture a fast field note',
       icon: 'create-outline',
       color: TACTICAL.amber,
-      onPress: () => setActivePanel('note'),
+      onPress: () => openFieldUtilityAction('quickNote'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
     {
-      key: 'beacon',
-      label: 'Field Readiness',
-      subtitle: 'Contacts and current coordinates',
-      icon: 'locate-outline',
+      key: 'comms',
+      label: 'Comms',
+      subtitle: 'Emergency comms and coordinates',
+      icon: 'radio-outline',
       color: '#EF5350',
-      onPress: () => setActivePanel('beacon'),
+      onPress: () => openFieldUtilityAction('emergencyComms'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -359,7 +557,7 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
       subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
       icon: 'people-outline',
       color: '#42A5F5',
-      onPress: () => setActivePanel('team'),
+      onPress: () => openFieldUtilityAction('team'),
       disabled: !hasTeam,
       availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
     },
@@ -369,17 +567,27 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
       subtitle: 'Open device connections',
       icon: 'bluetooth-outline',
       color: '#5AC8FA',
-      onPress: () => handleRoute('/power/blu', 'Unable to open Bluetooth connections'),
+      onPress: () => openFieldUtilityAction('bluetooth'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
     {
-      key: 'proximity',
-      label: 'Trail Scan',
-      subtitle: 'Scan nearby route intelligence',
-      icon: 'trail-sign-outline',
-      color: '#66BB6A',
-      onPress: () => setActivePanel('proximity'),
+      key: 'protocols',
+      label: 'Emergency Protocol',
+      subtitle: 'Field stabilization steps',
+      icon: 'medkit-outline',
+      color: TACTICAL.danger,
+      onPress: () => openFieldUtilityAction('protocols'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'recovery-protocol',
+      label: 'Recovery Protocol',
+      subtitle: 'Vehicle recovery procedures for field extraction.',
+      icon: 'car-sport-outline',
+      color: TACTICAL.amber,
+      onPress: () => openFieldUtilityAction('recoveryProtocols'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -403,7 +611,12 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
         {tileItems.map((item) => (
           <TouchableOpacity
             key={item.key}
-            style={[styles.tile, item.disabled && styles.tileDisabled]}
+            style={[
+              styles.tile,
+              item.key === 'protocols' && styles.emergencyProtocolTile,
+              item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
+              item.disabled && styles.tileDisabled,
+            ]}
             onPress={item.onPress}
             activeOpacity={0.78}
             disabled={item.disabled || busy}
@@ -428,20 +641,16 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
     </View>
   );
 
-  const renderBackRow = (title: string, subtitle: string) => (
+  const renderPanelIntro = (title: string, subtitle: string) => (
     <View style={styles.panelIntro}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => setActivePanel('main')} activeOpacity={0.78}>
-        <Ionicons name="arrow-back" size={14} color={TACTICAL.textMuted} />
-        <Text style={styles.backText}>BACK</Text>
-      </TouchableOpacity>
       <Text style={styles.panelTitle}>{title}</Text>
       <Text style={styles.panelSubtitle}>{subtitle}</Text>
     </View>
   );
 
   const renderNotePanel = () => (
-    <View style={styles.panelBody}>
-      {renderBackRow('Quick Note', 'Capture a fast field note without leaving Dashboard.')}
+    <View style={[styles.panelBody, styles.notePanelBody]}>
+      {renderPanelIntro('Quick Note', 'Capture a fast field note without leaving Dashboard.')}
       <TextInput
         style={styles.noteInput}
         value={noteText}
@@ -465,22 +674,60 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
           <Text style={styles.primaryBtnText}>SAVE NOTE</Text>
         </TouchableOpacity>
       </View>
+
+      <View style={styles.savedNotesSection}>
+        <View style={styles.savedNotesHeader}>
+          <Text style={styles.savedNotesTitle}>Saved Notes</Text>
+          <Text style={styles.metaText}>{savedNotes.length}</Text>
+        </View>
+
+        {savedNotes.length > 0 ? (
+          <View style={styles.savedNotesList}>
+            {savedNotes.map((note) => {
+              const selected = note.id === selectedNoteId;
+              return (
+                <TouchableOpacity
+                  key={note.id}
+                  style={[styles.savedNoteCard, selected && styles.savedNoteCardSelected]}
+                  activeOpacity={0.84}
+                  onPress={() => setSelectedNoteId(note.id)}
+                >
+                  <View style={styles.savedNoteCopy}>
+                    <Text style={styles.savedNoteText}>{note.text}</Text>
+                    <Text style={styles.savedNoteMeta}>
+                      {new Date(note.createdAt).toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.savedNoteDeleteBtn}
+                    onPress={() => handleDeleteNote(note.id)}
+                    hitSlop={8}
+                    activeOpacity={0.78}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#EF5350" />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name="document-text-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>
+              Saved field notes will appear here after you press Save Note.
+            </Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 
-  const renderBeaconPanel = () => (
-    <View style={styles.panelBody}>
-      {renderBackRow('Field Readiness', 'Keep emergency contacts and current coordinates ready to share.')}
-      <View style={styles.infoCard}>
-        <Text style={styles.cardTitle}>Emergency Contacts</Text>
-        {emergencyContacts.map((contact) => (
-          <View key={`${contact.label}-${contact.value}`} style={styles.listRow}>
-            <Text style={styles.listLabel}>{contact.label}</Text>
-            <Text style={styles.listValue}>{contact.value}</Text>
-          </View>
-        ))}
-      </View>
-
+  const renderLiveCoordinatesCard = () => (
       <View style={styles.infoCard}>
         <Text style={styles.cardTitle}>Live Coordinates</Text>
         {gpsLoading ? (
@@ -502,12 +749,126 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
           <Text style={styles.stateText}>Coordinates unavailable</Text>
         )}
       </View>
+  );
+
+  const renderIntelPanel = () => (
+    <View style={[styles.panelBody, styles.intelPanelBody]}>
+      {renderPanelIntro('Weather', 'Current weather, forecast, alerts, and trail conditions.')}
+      {gpsLoading && !gpsCoords ? (
+        <View style={styles.stateRow}>
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.stateText}>Waiting for GPS</Text>
+        </View>
+      ) : null}
+      <WeatherIntelPanel
+        latitude={gpsCoords?.lat ?? null}
+        longitude={gpsCoords?.lng ?? null}
+        compact={false}
+        autoFetch={false}
+        weatherSnapshot={fieldUtilitiesWeather.snapshot}
+        onRefreshWeather={fieldUtilitiesWeather.refresh}
+        frameless
+      />
+    </View>
+  );
+
+  const renderEditableCommsEntry = (
+    section: EditableCommsSection,
+    entry: EditableCommsEntry,
+  ) => {
+    const editing =
+      editingCommsEntry?.section === section &&
+      editingCommsEntry.id === entry.id;
+
+    if (editing) {
+      return (
+        <View key={entry.id} style={[styles.commsEditRow, styles.commsEntryRowEditing]}>
+          <View style={styles.commsEditFields}>
+            <TextInput
+              style={[styles.commsEditInput, styles.commsEditTitleInput]}
+              value={editingCommsEntry.label}
+              onChangeText={(label) => setEditingCommsEntry((current) =>
+                current ? { ...current, label } : current,
+              )}
+              placeholder="Title"
+              placeholderTextColor={TACTICAL.textMuted}
+              autoFocus
+            />
+            <TextInput
+              style={[styles.commsEditInput, styles.commsEditDetailInput]}
+              value={editingCommsEntry.detail}
+              onChangeText={(detail) => setEditingCommsEntry((current) =>
+                current ? { ...current, detail } : current,
+              )}
+              placeholder="Info"
+              placeholderTextColor={TACTICAL.textMuted}
+            />
+          </View>
+          <View style={styles.commsEditActions}>
+            <TouchableOpacity
+              style={styles.commsCancelBtn}
+              onPress={handleCancelEditCommsEntry}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.commsCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.commsSaveBtn}
+              onPress={handleSaveEditCommsEntry}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.commsSaveText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        key={entry.id}
+        style={styles.commsEntryRow}
+        onLongPress={() => handleStartEditCommsEntry(section, entry)}
+        delayLongPress={420}
+        activeOpacity={0.86}
+      >
+        <Text style={styles.commsEntryLabel} numberOfLines={2}>{entry.label}</Text>
+        <Text style={styles.commsEntryDetail} numberOfLines={2}>{entry.detail}</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderCommsSection = (
+    title: string,
+    section: EditableCommsSection,
+    entries: EditableCommsEntry[],
+  ) => (
+    <View style={styles.infoCard}>
+      <View style={styles.commsSectionHeader}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={styles.commsHint}>Long press to edit</Text>
+      </View>
+      <View style={styles.commsEntryList}>
+        {entries.map((entry) => renderEditableCommsEntry(section, entry))}
+      </View>
+    </View>
+  );
+
+  const renderCommsPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Emergency Comms', 'Frequencies, field signals, emergency numbers, and shareable live coordinates.')}
+      <View style={styles.commsReferenceGrid}>
+        {renderCommsSection('Frequencies', 'frequencies', frequencyCards)}
+        {renderCommsSection('Signals', 'signals', signalCards)}
+        {renderCommsSection('Emergency Numbers', 'contacts', emergencyContactCards)}
+      </View>
+      {renderLiveCoordinatesCard()}
     </View>
   );
 
   const renderTeamPanel = () => (
     <View style={styles.panelBody}>
-      {renderBackRow('Team Ping', hasTeam ? 'Send a fast dispatch check-in to the active team.' : 'Team Ping requires an active team.')}
+      {renderPanelIntro('Team Ping', hasTeam ? 'Send a fast dispatch check-in to the active team.' : 'Team Ping requires an active team.')}
       {!hasTeam ? (
         <View style={styles.emptyState}>
           <Ionicons name="people-outline" size={22} color={TACTICAL.textMuted} />
@@ -535,73 +896,110 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
     </View>
   );
 
-  const renderProximityPanel = () => (
-    <View style={styles.panelBody}>
-      {renderBackRow('Trail Scan', 'Scan nearby hidden gems and trail options around your current area.')}
-      <View style={styles.radiusRow}>
-        {RADIUS_OPTIONS.map((option) => {
-          const active = option === radius;
-          return (
-            <TouchableOpacity
-              key={option}
-              style={[styles.radiusChip, active && styles.radiusChipActive]}
-              onPress={() => setRadius(option)}
-              activeOpacity={0.78}
-            >
-              <Text style={[styles.radiusChipText, active && styles.radiusChipTextActive]}>{option} MI</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+  const openProtocolDetail = useCallback((protocol: ProtocolDefinition) => {
+    void hapticMicro();
+    setSelectedProtocol(protocol);
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: 'protocolDetail',
+    }));
+  }, []);
 
-      {proximityLoading ? (
-        <View style={styles.stateRow}>
-          <ActivityIndicator size="small" color={TACTICAL.amber} />
-          <Text style={styles.stateText}>Scanning nearby Hidden Gems</Text>
+  const openRecoveryProtocolDetail = useCallback((protocol: ProtocolDefinition) => {
+    void hapticMicro();
+    setSelectedProtocol(protocol);
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: 'recoveryProtocolDetail',
+    }));
+  }, []);
+
+  const renderProtocolsPanel = () => (
+    <View style={[styles.panelBody, styles.protocolsPanelBody, styles.emergencyProtocolsPanelBody]}>
+      {renderPanelIntro('Emergency Protocol', 'Tap any card for immediate field stabilization steps.')}
+      <ProtocolActionGrid onSelectProtocol={openProtocolDetail} />
+    </View>
+  );
+
+  const renderRecoveryProtocolsPanel = () => (
+    <View style={[styles.panelBody, styles.protocolsPanelBody, styles.recoveryProtocolsPanelBody]}>
+      {renderPanelIntro('Vehicle Recovery Protocols', 'Tap any card for common recovery guidance.')}
+      <ProtocolActionGrid
+        protocols={RECOVERY_PROTOCOLS}
+        onSelectProtocol={openRecoveryProtocolDetail}
+      />
+    </View>
+  );
+
+  const renderProtocolDetailPanel = () => {
+    if (!selectedProtocol) {
+      return (
+        <View style={[styles.panelBody, styles.protocolDetailPanelBody]}>
+          {renderPanelIntro('Protocol Detail', 'Select a protocol to view stabilization steps.')}
+          <View style={styles.emptyState}>
+            <Ionicons name="medkit-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>No field protocol is selected.</Text>
+          </View>
         </View>
-      ) : (
-        <View style={styles.resultsListContent}>
-          {proximityResults.slice(0, 10).map((result, index) => (
-            <View key={result.id} style={styles.resultRow}>
-              <View style={styles.resultRank}>
-                <Text style={styles.resultRankText}>{index + 1}</Text>
-              </View>
-              <View style={styles.resultCopy}>
-                <Text style={styles.resultName}>{result.name}</Text>
-                <Text style={styles.resultRegion}>
-                  {result.region}
-                  {typeof result.distanceFromUserMiles === 'number' ? ` • ${result.distanceFromUserMiles} mi` : ''}
-                </Text>
-              </View>
-              <View style={styles.resultMeta}>
-                <Text style={styles.resultScore}>{result.discoveryScore ?? '--'}</Text>
-                <Text style={[styles.resultTag, { color: result.hiddenGem ? TACTICAL.amber : TACTICAL.textMuted }]}>
-                  {result.hiddenGem ? 'GEM' : 'ALT'}
-                </Text>
-              </View>
-            </View>
-          ))}
-          {proximityResults.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="trail-sign-outline" size={22} color={TACTICAL.textMuted} />
-              <Text style={styles.emptyStateText}>No nearby trail intelligence is available inside {radius} miles yet.</Text>
-            </View>
-          ) : null}
+      );
+    }
+
+    return (
+      <View style={[styles.panelBody, styles.protocolDetailPanelBody, protocolCompactMode && styles.protocolDetailPanelBodyCompact]}>
+        <FieldUseProtocolDetail protocol={buildEmergencyFieldUseGuide(selectedProtocol)} />
+      </View>
+    );
+  };
+
+  const renderRecoveryProtocolDetailPanel = () => {
+    if (!isRecoveryProtocol(selectedProtocol)) {
+      return (
+        <View style={[styles.panelBody, styles.protocolDetailPanelBody]}>
+          {renderPanelIntro('Recovery Protocol Detail', 'Select a recovery card to view field extraction steps.')}
+          <View style={styles.emptyState}>
+            <Ionicons name="car-sport-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>No recovery protocol is selected.</Text>
+          </View>
         </View>
-      )}
+      );
+    }
+
+    return (
+      <View style={[styles.panelBody, styles.protocolDetailPanelBody, protocolCompactMode && styles.protocolDetailPanelBodyCompact]}>
+        <RecoveryProtocolDetail protocol={selectedProtocol} />
+      </View>
+    );
+  };
+
+  const renderBluetoothPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Device Connections', 'Identify, select, connect, retry, or clear local Bluetooth device sessions.')}
+      <FieldUtilitiesBluetoothPanel />
     </View>
   );
 
   const panelContent = (() => {
-    switch (activePanel) {
-      case 'note':
+    switch (activeView) {
+      case 'quickNote':
         return renderNotePanel();
-      case 'beacon':
-        return renderBeaconPanel();
+      case 'intel':
+        return renderIntelPanel();
+      case 'emergencyComms':
+        return renderCommsPanel();
+      case 'protocols':
+        return renderProtocolsPanel();
+      case 'protocolDetail':
+        return renderProtocolDetailPanel();
+      case 'recoveryProtocols':
+        return renderRecoveryProtocolsPanel();
+      case 'recoveryProtocolDetail':
+        return renderRecoveryProtocolDetailPanel();
       case 'team':
         return renderTeamPanel();
-      case 'proximity':
-        return renderProximityPanel();
+      case 'bluetooth':
+        return renderBluetoothPanel();
       default:
         return renderMainPanel();
     }
@@ -610,36 +1008,427 @@ export default function QuickActionsSheet({ visible, onClose }: Props) {
   return (
     <ECSModalShell
       visible={visible}
-      onClose={() => dismiss()}
+      onClose={handleShellClose}
       title="Field Utilities"
       subtitle={
         mainPanelActive
-          ? 'Fast field controls stay dock-safe and ready without taking over the full screen.'
-          : 'Focused utility actions stay readable with enough height for the current task.'
+          ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
+          : 'Focused utility actions stay inside Field Utilities without changing tabs.'
       }
       icon="flash-outline"
       eyebrow="QUICK ACTIONS"
-      overlayClass="editor"
-      maxWidth={mainPanelActive ? 760 : 820}
-      maxHeightFraction={mainPanelActive ? 0.93 : 0.84}
-      minHeightFraction={mainPanelActive ? 0.9 : 0.76}
-      scrollable={!mainPanelActive}
-      keyboardAware={!mainPanelActive}
-      showHandle
-      dismissOnBackdrop
-      allowSwipeDismiss
-      contentContainerStyle={mainPanelActive ? styles.sheetScrollContentMain : undefined}
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={1}
+      minHeightFraction={1}
+      scrollable={!protocolStaticActive}
+      keyboardAware={activeView === 'quickNote'}
+      showHandle={false}
+      dismissOnBackdrop={false}
+      allowSwipeDismiss={false}
+      onBack={mainPanelActive ? undefined : handleShellBack}
+      closeGuardKey={activeView}
+      topClearanceOverride={fieldUtilitiesTopClearance}
+      bottomClearanceOverride={fieldUtilitiesBottomClearance}
+      bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : undefined}
+      contentContainerStyle={protocolStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
     >
       {panelContent}
     </ECSModalShell>
   );
 }
 
+function ProtocolActionGrid({
+  onSelectProtocol,
+  protocols = EMERGENCY_PROTOCOLS,
+}: {
+  onSelectProtocol: (protocol: ProtocolDefinition) => void;
+  protocols?: readonly ProtocolDefinition[];
+}) {
+  return (
+    <View style={styles.protocolActionGrid}>
+      {protocols.map((protocol) => (
+        <ProtocolActionCard
+          key={protocol.id}
+          protocol={protocol}
+          onSelectProtocol={onSelectProtocol}
+        />
+      ))}
+    </View>
+  );
+}
+
+function ProtocolActionCard({
+  protocol,
+  onSelectProtocol,
+}: {
+  protocol: ProtocolDefinition;
+  onSelectProtocol: (protocol: ProtocolDefinition) => void;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const protocolCardImage = protocol.image ?? protocol.fieldUtilityImage ?? protocol.badgeImage;
+  const protocolCardSource = typeof protocolCardImage === 'string' ? { uri: protocolCardImage } : protocolCardImage;
+  const showProtocolImage = Boolean(protocolCardSource && !imageFailed);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.protocolActionCard,
+        { borderColor: `${protocol.accentColor}38`, backgroundColor: `${protocol.accentColor}0F` },
+      ]}
+      onPress={() => onSelectProtocol(protocol)}
+      activeOpacity={0.78}
+    >
+      {/* Protocol cards intentionally use full-card images; failed assets fall back to accent card styling. */}
+      {showProtocolImage && protocolCardSource ? (
+        <Image
+          source={protocolCardSource}
+          style={styles.protocolActionImage}
+          resizeMode="cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <View style={styles.protocolActionFallback}>
+          <View style={[styles.protocolActionFallbackIcon, { borderColor: `${protocol.accentColor}40`, backgroundColor: `${protocol.accentColor}12` }]}>
+            {getTacticalGlyph(protocol.id, protocol.accentColor, 24) ?? (
+              <Ionicons name={getProtocolFallbackIconName(protocol.id)} size={23} color={protocol.accentColor} />
+            )}
+          </View>
+        </View>
+      )}
+      <View style={styles.protocolActionScrim} />
+      <View style={styles.protocolActionCopy}>
+        <Text style={[styles.protocolActionTitle, { color: protocol.accentColor }]} numberOfLines={2}>
+          {getFieldUtilityProtocolTitle(protocol)}
+        </Text>
+        <Text style={styles.protocolActionSubtitle} numberOfLines={2}>{protocol.subtitle}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function getFieldUtilityProtocolTitle(protocol: ProtocolDefinition): string {
+  if (protocol.id === 'hypothermia') {
+    // Keep the existing protocol id/content intact; Field Utilities uses the
+    // product-facing action label requested for this cold exposure workflow.
+    return 'Cold Exposure Stabilization';
+  }
+
+  return protocol.title;
+}
+
+function getProtocolFallbackIconName(protocolId: string): React.ComponentProps<typeof Ionicons>['name'] {
+  if (protocolId.includes('winch') || protocolId.includes('snatch') || protocolId.includes('deadman')) {
+    return 'git-pull-request-outline';
+  }
+  if (protocolId.includes('vehicle') || protocolId.includes('kinetic') || protocolId.includes('multi')) {
+    return 'car-sport-outline';
+  }
+  return 'shield-checkmark-outline';
+}
+
+function getBluetoothSourceTone(status: ECSDiscoverySourceUiStatus): string {
+  switch (status) {
+    case 'success':
+      return '#4CAF50';
+    case 'scanning':
+      return '#5AC8FA';
+    case 'failed':
+      return '#FF6B6B';
+    case 'unsupported':
+    case 'disabled':
+      return TACTICAL.amber;
+    case 'pending':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function BluetoothSourceSummary({ summary }: { summary: ECSScanSummary }) {
+  const hasStarted = summary.startedAt != null;
+  if (!hasStarted) return null;
+
+  return (
+    <View style={styles.bluetoothSourceSummary}>
+      {summary.sourceStatuses
+        .map((source) => {
+          const tone = getBluetoothSourceTone(source.status);
+          return (
+            <View key={source.key} style={styles.bluetoothSourceRow}>
+              <View style={[styles.bluetoothSourceDot, { backgroundColor: tone }]} />
+              <View style={styles.bluetoothSourceCopy}>
+                <Text style={styles.bluetoothSourceLabel}>{source.label}</Text>
+                <Text style={styles.bluetoothSourceDetail} numberOfLines={2}>
+                  {getSourceStatusDetail(source)}
+                </Text>
+              </View>
+              <Text style={[styles.bluetoothSourceStatus, { color: tone }]} numberOfLines={2}>
+                {getSourceStatusLabel(source)}
+              </Text>
+            </View>
+          );
+        })}
+    </View>
+  );
+}
+
+function FieldUtilitiesBluetoothPanel() {
+  const connections = useUnifiedDeviceConnections();
+
+  useEffect(() => {
+    if (__DEV__) {
+      console.log('[BT_SOURCE] field_utilities_device_connections_panel', {
+        file: 'components/QuickActionsSheet.tsx',
+        component: 'FieldUtilitiesBluetoothPanel',
+        hook: 'lib/useUnifiedDeviceConnections.ts',
+        buttonText: 'Scan for Device Connections',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!connections.routeIntent) return;
+    connections.consumeRouteIntent(connections.routeIntent.id);
+  }, [connections]);
+
+  const visibleDevices = connections.nearbyDevices;
+
+  const handlePrimaryAction = useCallback(async (device: ECSDeviceConnectionModel) => {
+    void hapticCommand();
+    if (device.isConnected) {
+      await connections.disconnectDevice(device.id);
+      return;
+    }
+    if (device.actionKind === 'retry') {
+      await connections.retryDevice(device.id, 'user_retry');
+      return;
+    }
+    await connections.connectDevice(device.id, 'user_device_action');
+  }, [connections]);
+
+  const handleScanAgain = useCallback(() => {
+    void hapticCommand();
+    void connections.rescan();
+  }, [connections]);
+
+  const handleConnectSelected = useCallback(() => {
+    void hapticCommand();
+    void connections.connectSelected('user_selected_batch');
+  }, [connections]);
+
+  return (
+    <View style={styles.bluetoothPanel}>
+      <View style={styles.bluetoothHero}>
+        <View style={styles.bluetoothHeroTop}>
+          <View style={styles.bluetoothIconWrap}>
+            <Ionicons name="bluetooth-outline" size={20} color="#5AC8FA" />
+          </View>
+          <View style={styles.bluetoothHeroCopy}>
+            <Text style={styles.bluetoothEyebrow}>UNIFIED SCANNER</Text>
+            <Text style={styles.bluetoothTitle}>{connections.globalSummaryLabel}</Text>
+            <Text style={styles.bluetoothBody}>
+              Device discovery uses the same unified scanner as Device Connections. Only currently discovered nearby devices appear here.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.bluetoothStatsRow}>
+          <BluetoothStat label="Connected" value={connections.connectedCount} />
+          <BluetoothStat label="Nearby" value={connections.nearbyDevices.length} />
+          <BluetoothStat label="Live" value={connections.liveCount} />
+        </View>
+
+        {connections.degradedMessage ? (
+          <Text style={styles.bluetoothNotice}>{connections.degradedMessage}</Text>
+        ) : connections.infoMessage ? (
+          <Text style={styles.bluetoothNotice}>{connections.infoMessage}</Text>
+        ) : null}
+
+        {__DEV__ ? <BluetoothSourceSummary summary={connections.lastScanSummary} /> : null}
+
+        <View style={styles.bluetoothActionRow}>
+          <TouchableOpacity
+            style={styles.bluetoothSecondaryBtn}
+            onPress={handleScanAgain}
+            activeOpacity={0.78}
+            disabled={connections.isScanning}
+            accessibilityState={{ disabled: connections.isScanning }}
+          >
+            {connections.isScanning ? (
+              <ActivityIndicator size={13} color={TACTICAL.textMuted} />
+            ) : (
+              <Ionicons name="refresh-outline" size={14} color={TACTICAL.textMuted} />
+            )}
+            <Text style={styles.bluetoothSecondaryText} numberOfLines={2}>
+              {connections.isScanning ? 'Scanning...' : 'Scan for Device Connections'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.bluetoothPrimaryBtn,
+              !connections.canConnectSelected ? styles.bluetoothPrimaryBtnDisabled : null,
+            ]}
+            onPress={handleConnectSelected}
+            activeOpacity={0.78}
+            disabled={!connections.canConnectSelected || connections.isBusy}
+          >
+            {connections.isBusy ? <ActivityIndicator size={13} color="#0B0F12" /> : null}
+            <Text style={[
+              styles.bluetoothPrimaryText,
+              !connections.canConnectSelected ? styles.bluetoothPrimaryTextDisabled : null,
+            ]}>
+              Connect Selected
+            </Text>
+          </TouchableOpacity>
+          {connections.selectedCount > 0 ? (
+            <TouchableOpacity
+              style={styles.bluetoothSecondaryBtn}
+              onPress={() => {
+                void hapticMicro();
+                connections.clearSelection();
+              }}
+              activeOpacity={0.78}
+            >
+              <Ionicons name="close-outline" size={14} color={TACTICAL.textMuted} />
+              <Text style={styles.bluetoothSecondaryText}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <View style={styles.bluetoothNearbyHeader}>
+          <Text style={styles.bluetoothNearbyTitle}>Found nearby devices</Text>
+          <Text style={styles.bluetoothNearbyBody}>
+            Saved, known, failed, and cloud-only records stay out of this actionable scan list.
+          </Text>
+        </View>
+      </View>
+
+      {visibleDevices.length > 0 ? (
+        <View style={styles.bluetoothDeviceList}>
+          {visibleDevices.map((device) => (
+            <BluetoothDeviceMiniRow
+              key={device.id}
+              device={device}
+              busy={connections.isBatchBusy || device.isConnecting}
+              onToggleSelection={connections.toggleSelection}
+              onPrimaryAction={handlePrimaryAction}
+            />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Ionicons name="bluetooth-outline" size={22} color={TACTICAL.textMuted} />
+          <Text style={styles.emptyStateText}>{connections.scanAreaMessage}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function BluetoothStat({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.bluetoothStat}>
+      <Text style={styles.bluetoothStatValue}>{value}</Text>
+      <Text style={styles.bluetoothStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function BluetoothDeviceMiniRow({
+  device,
+  busy,
+  onToggleSelection,
+  onPrimaryAction,
+}: {
+  device: ECSDeviceConnectionModel;
+  busy: boolean;
+  onToggleSelection: (deviceId: string) => void;
+  onPrimaryAction: (device: ECSDeviceConnectionModel) => void;
+}) {
+  const selectable = !device.isConnected && !device.isConnecting && (device.actionKind === 'connect' || device.actionKind === 'retry');
+  const actionDisabled =
+    busy ||
+    device.actionKind === 'none' ||
+    device.actionKind === 'connected' ||
+    device.actionKind === 'selected' ||
+    device.actionKind === 'disconnecting' ||
+    device.actionKind === 'connecting';
+
+  return (
+    <View style={[styles.bluetoothDeviceRow, device.isSelected ? styles.bluetoothDeviceRowSelected : null]}>
+      <TouchableOpacity
+        style={[styles.bluetoothSelect, device.isSelected ? styles.bluetoothSelectActive : null]}
+        onPress={() => {
+          if (!selectable) return;
+          void hapticMicro();
+          onToggleSelection(device.id);
+        }}
+        activeOpacity={selectable ? 0.78 : 1}
+        disabled={!selectable}
+      >
+        {device.isSelected ? <Ionicons name="checkmark" size={12} color="#0B0F12" /> : null}
+      </TouchableOpacity>
+
+      <View style={styles.bluetoothDeviceCopy}>
+        <Text style={styles.bluetoothDeviceName} numberOfLines={1}>{device.name}</Text>
+        <Text style={styles.bluetoothDeviceMeta} numberOfLines={1}>
+          {[device.provider, device.category, device.stateLabel].filter(Boolean).join(' / ')}
+        </Text>
+        <Text style={styles.bluetoothDeviceDetail} numberOfLines={2}>{device.detailLabel}</Text>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.bluetoothDeviceAction, actionDisabled ? styles.bluetoothDeviceActionDisabled : null]}
+        onPress={() => onPrimaryAction(device)}
+        disabled={actionDisabled}
+        activeOpacity={0.78}
+      >
+        {device.isConnecting || device.actionKind === 'disconnecting' ? (
+          <ActivityIndicator size={12} color={TACTICAL.amber} />
+        ) : (
+          <Text style={[styles.bluetoothDeviceActionText, actionDisabled ? styles.bluetoothDeviceActionTextDisabled : null]}>
+            {getBluetoothActionLabel(device)}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function getBluetoothActionLabel(device: ECSDeviceConnectionModel): string {
+  switch (device.actionKind) {
+    case 'disconnect':
+      return 'Disconnect';
+    case 'disconnecting':
+      return 'Disconnecting';
+    case 'retry':
+      return 'Retry';
+    case 'connect':
+      return 'Connect';
+    case 'connecting':
+      return 'Connecting';
+    case 'connected':
+      return 'Connected';
+    case 'selected':
+      return 'Selected';
+    default:
+      return 'Unavailable';
+  }
+}
+
 const styles = StyleSheet.create({
   sheetScrollContentMain: {
     justifyContent: 'flex-start',
     flexGrow: 1,
-    paddingBottom: 10,
+    minHeight: '100%',
+    paddingBottom: 12,
+  },
+  sheetStaticContent: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'flex-start',
+  },
+  quickProtocolStaticBody: {
+    padding: 10,
   },
   mainPanel: {
     flexGrow: 1,
@@ -701,6 +1490,14 @@ const styles = StyleSheet.create({
   tileDisabled: {
     opacity: 0.6,
   },
+  emergencyProtocolTile: {
+    borderColor: 'rgba(239,83,80,0.24)',
+    backgroundColor: 'rgba(239,83,80,0.055)',
+  },
+  recoveryProtocolTile: {
+    borderColor: 'rgba(76,175,80,0.22)',
+    backgroundColor: 'rgba(76,175,80,0.05)',
+  },
   tileIconWrap: {
     width: 34,
     height: 34,
@@ -754,23 +1551,45 @@ const styles = StyleSheet.create({
     color: ECS.muted,
   },
   panelBody: {
-    flex: 1,
+    flexGrow: 1,
+    minHeight: '100%',
     gap: 12,
   },
+  notePanelBody: {
+    minHeight: '100%',
+  },
+  intelPanelBody: {
+    gap: 10,
+  },
+  protocolsPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
+  },
+  emergencyProtocolsPanelBody: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(239,83,80,0.16)',
+    backgroundColor: 'rgba(239,83,80,0.035)',
+    padding: 8,
+  },
+  recoveryProtocolsPanelBody: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(76,175,80,0.15)',
+    backgroundColor: 'rgba(76,175,80,0.032)',
+    padding: 8,
+  },
+  protocolDetailPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 7,
+  },
+  protocolDetailPanelBodyCompact: {
+    gap: 5,
+  },
   panelIntro: {
-    gap: 6,
-  },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-  },
-  backText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1.4,
+    gap: 4,
   },
   panelTitle: {
     fontSize: 13,
@@ -799,6 +1618,66 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  savedNotesSection: {
+    gap: 10,
+    marginTop: 6,
+  },
+  savedNotesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  savedNotesTitle: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.5,
+  },
+  savedNotesList: {
+    gap: 8,
+  },
+  savedNoteCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  savedNoteCardSelected: {
+    borderColor: 'rgba(196,138,44,0.34)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  savedNoteCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  savedNoteText: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  savedNoteMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  savedNoteDeleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(239,83,80,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,83,80,0.18)',
   },
   metaText: {
     fontSize: 10,
@@ -831,27 +1710,198 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 10,
   },
+  commsReferenceGrid: {
+    gap: 12,
+  },
+  commsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  commsHint: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  commsEntryList: {
+    gap: 8,
+  },
+  commsEntryRow: {
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  commsEntryRowEditing: {
+    borderColor: 'rgba(196,138,44,0.38)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  commsEntryLabel: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  commsEntryDetail: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    textAlign: 'right',
+  },
+  commsEditRow: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 9,
+  },
+  commsEditFields: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  commsEditInput: {
+    minHeight: 42,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: TACTICAL.text,
+  },
+  commsEditTitleInput: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  commsEditDetailInput: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    textAlign: 'right',
+  },
+  commsEditActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  commsCancelBtn: {
+    minHeight: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commsCancelText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  commsSaveBtn: {
+    minHeight: 34,
+    borderRadius: 9,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commsSaveText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  protocolActionGrid: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignContent: 'space-between',
+    justifyContent: 'space-between',
+    rowGap: 8,
+    columnGap: 8,
+  },
+  protocolActionCard: {
+    width: '48.5%',
+    height: '31.2%',
+    minHeight: 86,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    justifyContent: 'flex-start',
+  },
+  protocolActionImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    opacity: 0.88,
+  },
+  protocolActionFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(5,8,10,0.92)',
+  },
+  protocolActionFallbackIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.78,
+  },
+  protocolActionScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5,8,10,0.42)',
+  },
+  protocolActionCopy: {
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    gap: 5,
+  },
+  protocolActionTitle: {
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textAlign: 'left',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  protocolActionSubtitle: {
+    fontSize: 9,
+    lineHeight: 12,
+    color: 'rgba(255,255,255,0.78)',
+    textAlign: 'left',
+  },
   cardTitle: {
     fontSize: 10,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.6,
-  },
-  listRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  listLabel: {
-    flex: 1,
-    fontSize: 11,
-    color: TACTICAL.text,
-  },
-  listValue: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
   },
   coordsText: {
     fontSize: 16,
@@ -902,6 +1952,282 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: TACTICAL.textMuted,
     textAlign: 'center',
+  },
+  bluetoothPanel: {
+    gap: 12,
+  },
+  bluetoothHero: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 12,
+    gap: 12,
+  },
+  bluetoothHeroTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  bluetoothIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(90,200,250,0.3)',
+    backgroundColor: 'rgba(90,200,250,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluetoothHeroCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  bluetoothEyebrow: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.8,
+  },
+  bluetoothTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  bluetoothBody: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  bluetoothStat: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  bluetoothStatValue: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
+  },
+  bluetoothStatLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  bluetoothNotice: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.text,
+  },
+  bluetoothSourceSummary: {
+    gap: 6,
+  },
+  bluetoothSourceRow: {
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bluetoothSourceDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  bluetoothSourceCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bluetoothSourceLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  bluetoothSourceDetail: {
+    marginTop: 2,
+    fontSize: 9,
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothSourceStatus: {
+    maxWidth: 96,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
+  bluetoothActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  bluetoothSecondaryBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bluetoothSecondaryText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  bluetoothPrimaryBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bluetoothPrimaryBtnDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  bluetoothPrimaryText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  bluetoothPrimaryTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  bluetoothNearbyHeader: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  bluetoothNearbyTitle: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#5AC8FA',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
+  },
+  bluetoothNearbyBody: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
+  },
+  bluetoothDeviceList: {
+    gap: 8,
+  },
+  bluetoothDeviceRow: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bluetoothDeviceRowSelected: {
+    borderColor: 'rgba(90,200,250,0.46)',
+    backgroundColor: 'rgba(90,200,250,0.08)',
+  },
+  bluetoothSelect: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluetoothSelectActive: {
+    borderColor: '#5AC8FA',
+    backgroundColor: '#5AC8FA',
+  },
+  bluetoothDeviceCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  bluetoothDeviceName: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  bluetoothDeviceMeta: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#5AC8FA',
+    textTransform: 'uppercase',
+  },
+  bluetoothDeviceDetail: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothDeviceAction: {
+    minHeight: 34,
+    minWidth: 82,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(90,200,250,0.34)',
+    backgroundColor: 'rgba(90,200,250,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  bluetoothDeviceActionDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+  },
+  bluetoothDeviceActionText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#5AC8FA',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  bluetoothDeviceActionTextDisabled: {
+    color: TACTICAL.textMuted,
   },
   optionList: {
     gap: 10,
@@ -958,63 +2284,5 @@ const styles = StyleSheet.create({
   },
   radiusChipTextActive: {
     color: TACTICAL.amber,
-  },
-  resultsListContent: {
-    gap: 8,
-    paddingBottom: 8,
-  },
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  resultRank: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: `${TACTICAL.amber}12`,
-    borderWidth: 1,
-    borderColor: `${TACTICAL.amber}28`,
-  },
-  resultRankText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-  },
-  resultCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  resultName: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: TACTICAL.text,
-  },
-  resultRegion: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-  },
-  resultMeta: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  resultScore: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
-  },
-  resultTag: {
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.1,
   },
 });

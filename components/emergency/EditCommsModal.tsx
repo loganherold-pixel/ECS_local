@@ -302,13 +302,15 @@ export default function EditCommsModal({
       icon={config.icon as any}
       eyebrow="DISPATCH COMMS PANEL"
       subtitle="Review the baseline reference, update saved field entries, and keep Dispatch ready offline."
-      maxWidth={780}
-      maxHeightFraction={0.88}
-      minHeightFraction={0.76}
+      maxWidth={860}
+      maxHeightFraction={0.94}
+      minHeightFraction={0.84}
       scrollable={false}
       keyboardAware
       overlayClass="editor"
       dismissOnBackdrop
+      allowSwipeDismiss={false}
+      stackBehavior="replace"
       headerRight={headerStatus}
       footer={footer}
       bodyStyle={styles.shellBody}

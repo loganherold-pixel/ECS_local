@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
@@ -58,10 +59,6 @@ const DEFAULT_CONTACTS_FOR_MODAL = EMERGENCY_CONTACTS.map((c) => ({
   label: c.label,
   detail: c.number,
 }));
-const FREQUENCY_GRID_CAPACITY = 9;
-const SIGNAL_GRID_CAPACITY = 9;
-const CONTACT_GRID_CAPACITY = 6;
-
 type SafetySection = 'protocols' | 'comms';
 
 export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) {
@@ -69,7 +66,7 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
   const headerTopPadding = getShellHeaderTopPadding(insets.top);
-  const contentBottomPadding = getShellBottomClearance(insets.bottom, 6);
+  const contentBottomPadding = getShellBottomClearance(insets.bottom, embedded ? 0 : 6);
   const [activeSection, setActiveSection] = useState<SafetySection>('protocols');
   const [commsEditVisible, setCommsEditVisible] = useState(false);
   const [commsEditColumn, setCommsEditColumn] = useState<CommsColumnType>('frequencies');
@@ -122,18 +119,12 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
       detail: contact.detail,
     })),
   ];
-  const visibleFrequencyCards = Array.from(
-    { length: FREQUENCY_GRID_CAPACITY },
-    (_, index) => allFrequencies[index] ?? null,
-  );
-  const visibleSignalCards = Array.from(
-    { length: SIGNAL_GRID_CAPACITY },
-    (_, index) => allSignals[index] ?? null,
-  );
-  const visibleContactCards = Array.from(
-    { length: CONTACT_GRID_CAPACITY },
-    (_, index) => allContacts[index] ?? null,
-  );
+  const frequencyCards = allFrequencies;
+  const signalCards = allSignals;
+  const contactCards = allContacts;
+  const frequencyNeedsScroll = allFrequencies.length > 6;
+  const signalNeedsScroll = allSignals.length > 6;
+  const contactNeedsScroll = allContacts.length > 4;
   const readinessTone = isOnline
     ? {
         label: 'ONLINE',
@@ -181,7 +172,7 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
           </View>
         )}
 
-        <View style={styles.sectionTabs}>
+        <View style={[styles.sectionTabs, embedded && styles.sectionTabsEmbedded]}>
           {sections.map((section) => {
             const isActive = activeSection === section.key;
             return (
@@ -206,14 +197,14 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
 
         <View style={[styles.content, { paddingBottom: contentBottomPadding }]}>
           {activeSection === 'protocols' && (
-            <View style={styles.sectionFill}>
-              <View style={styles.sectionHeaderRow}>
+            <View style={[styles.sectionFill, embedded && styles.sectionFillEmbedded]}>
+              <View style={[styles.sectionHeaderRow, embedded && styles.sectionHeaderRowEmbedded]}>
                 <Ionicons name="medkit-outline" size={14} color={TACTICAL.danger} />
                 <Text style={[styles.sectionTitle, { color: TACTICAL.danger }]}>
                   FIELD STABILIZATION PROTOCOLS
                 </Text>
               </View>
-              <Text style={styles.sectionDesc}>
+              <Text style={[styles.sectionDesc, embedded && styles.sectionDescEmbedded]}>
                 Tap any card for immediate field steps. Saved protocols remain readable offline.
               </Text>
               <View style={styles.gridFill}>
@@ -223,20 +214,30 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
           )}
 
           {activeSection === 'comms' && (
-            <View style={styles.sectionFill}>
-              <View style={styles.sectionHeaderRow}>
+            <View style={[styles.sectionFill, embedded && styles.sectionFillEmbedded]}>
+              <View style={[styles.sectionHeaderRow, embedded && styles.sectionHeaderRowEmbedded]}>
                 <Ionicons name="radio-outline" size={14} color={TACTICAL.amber} />
                 <Text style={styles.sectionTitle}>EMERGENCY COMMS REFERENCE</Text>
               </View>
-              <View style={styles.commsHint}>
+              <View style={[styles.commsHint, embedded && styles.commsHintEmbedded]}>
                 <Ionicons name="finger-print-outline" size={10} color={TACTICAL.textMuted} />
                 <Text style={styles.commsHintText}>
                   Tap Edit to update saved entries. Long-press still works when you need it.
                 </Text>
               </View>
-              <View style={[styles.commsColumns, adaptive.alert.dualPane ? styles.commsColumnsTablet : styles.commsColumnsPhone]}>
+              <View
+                style={[
+                  styles.commsColumns,
+                  adaptive.alert.dualPane ? styles.commsColumnsTablet : styles.commsColumnsPhone,
+                  embedded && styles.commsColumnsEmbedded,
+                ]}
+              >
                 <TouchableOpacity
-                  style={styles.commsColumn}
+                  style={[
+                    styles.commsColumn,
+                    adaptive.alert.dualPane ? styles.commsColumnTablet : styles.commsColumnPhone,
+                    embedded && !adaptive.alert.dualPane && styles.commsColumnPhoneEmbedded,
+                  ]}
                   onPress={() => openCommsEditor('frequencies')}
                   onLongPress={() => openCommsEditor('frequencies')}
                   delayLongPress={500}
@@ -245,36 +246,36 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
                   <View style={styles.commsGroupTitleRow}>
                     <View>
                       <Text style={styles.commsGroupTitle}>FREQUENCIES</Text>
-                      <Text style={styles.commsGroupMeta}>
-                        {Math.min(allFrequencies.length, FREQUENCY_GRID_CAPACITY)}/{FREQUENCY_GRID_CAPACITY} ready
-                      </Text>
+                      <Text style={styles.commsGroupMeta}>{allFrequencies.length} channels ready</Text>
                     </View>
                     <View style={styles.commsEditBadge}>
                       <Ionicons name="create-outline" size={11} color={TACTICAL.amber} />
                       <Text style={styles.commsEditBadgeText}>Edit</Text>
                     </View>
                   </View>
-                  <View style={styles.commsGrid}>
-                    {visibleFrequencyCards.map((item, index) => (
-                      <View
-                        key={`frequency-${index}`}
-                        style={[styles.commsGridCell, !item && styles.commsGridCellEmpty]}
-                      >
-                        {item ? (
-                          <>
-                            <Text style={styles.commsGridLabel} numberOfLines={2}>{item.label}</Text>
-                            <Text style={styles.commsGridDetail} numberOfLines={2}>{item.detail}</Text>
-                          </>
-                        ) : (
-                          <Text style={styles.commsGridPlaceholder}>OPEN</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
+                  <ScrollView
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator={false}
+                    style={frequencyNeedsScroll ? styles.commsGridScroll : undefined}
+                    contentContainerStyle={styles.commsGridScrollContent}
+                  >
+                    <View style={styles.commsGrid}>
+                      {frequencyCards.map((item, index) => (
+                        <View key={`${item.label}-${index}`} style={styles.commsGridCell}>
+                          <Text style={styles.commsGridLabel}>{item.label}</Text>
+                          <Text style={styles.commsGridDetail}>{item.detail}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </ScrollView>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.commsColumn}
+                  style={[
+                    styles.commsColumn,
+                    adaptive.alert.dualPane ? styles.commsColumnTablet : styles.commsColumnPhone,
+                    embedded && !adaptive.alert.dualPane && styles.commsColumnPhoneEmbedded,
+                  ]}
                   onPress={() => openCommsEditor('signals')}
                   onLongPress={() => openCommsEditor('signals')}
                   delayLongPress={500}
@@ -283,37 +284,33 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
                   <View style={styles.commsGroupTitleRow}>
                     <View>
                       <Text style={styles.commsGroupTitle}>SIGNALS</Text>
-                      <Text style={styles.commsGroupMeta}>
-                        {Math.min(allSignals.length, SIGNAL_GRID_CAPACITY)}/{SIGNAL_GRID_CAPACITY} ready
-                      </Text>
+                      <Text style={styles.commsGroupMeta}>{allSignals.length} signals ready</Text>
                     </View>
                     <View style={styles.commsEditBadge}>
                       <Ionicons name="create-outline" size={11} color={TACTICAL.amber} />
                       <Text style={styles.commsEditBadgeText}>Edit</Text>
                     </View>
                   </View>
-                  <View style={styles.commsGrid}>
-                    {visibleSignalCards.map((item, index) => (
-                      <View
-                        key={`signal-${index}`}
-                        style={[styles.commsGridCell, !item && styles.commsGridCellEmpty]}
-                      >
-                        {item ? (
-                          <>
-                            <Text style={styles.commsGridLabel} numberOfLines={2}>{item.label}</Text>
-                            <Text style={styles.commsGridDetail} numberOfLines={2}>{item.detail}</Text>
-                          </>
-                        ) : (
-                          <Text style={styles.commsGridPlaceholder}>OPEN</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
+                  <ScrollView
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator={false}
+                    style={signalNeedsScroll ? styles.commsGridScroll : undefined}
+                    contentContainerStyle={styles.commsGridScrollContent}
+                  >
+                    <View style={styles.commsGrid}>
+                      {signalCards.map((item, index) => (
+                        <View key={`${item.label}-${index}`} style={styles.commsGridCell}>
+                          <Text style={styles.commsGridLabel}>{item.label}</Text>
+                          <Text style={styles.commsGridDetail}>{item.detail}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </ScrollView>
                 </TouchableOpacity>
               </View>
 
               <TouchableOpacity
-                style={styles.emergencyCard}
+                style={[styles.emergencyCard, embedded && styles.emergencyCardEmbedded]}
                 onPress={() => openCommsEditor('contacts')}
                 onLongPress={() => openCommsEditor('contacts')}
                 delayLongPress={500}
@@ -325,35 +322,28 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
                       <Ionicons name="call-outline" size={13} color={TACTICAL.danger} />
                       <Text style={styles.emergencyCardTitle}>EMERGENCY NUMBERS</Text>
                     </View>
-                    <Text style={styles.emergencyCardMeta}>
-                      {Math.min(allContacts.length, CONTACT_GRID_CAPACITY)}/{CONTACT_GRID_CAPACITY} ready
-                    </Text>
+                    <Text style={styles.emergencyCardMeta}>{allContacts.length} numbers ready</Text>
                   </View>
                   <View style={[styles.commsEditBadge, styles.commsEditBadgeDanger]}>
                     <Ionicons name="create-outline" size={11} color={TACTICAL.danger} />
                     <Text style={[styles.commsEditBadgeText, styles.commsEditBadgeTextDanger]}>Edit</Text>
                   </View>
                 </View>
-                <View style={styles.contactGrid}>
-                  {visibleContactCards.map((contact, index) => (
-                    <View
-                      key={contact ? `${contact.label}-${index}` : `contact-slot-${index}`}
-                      style={[styles.contactCell, !contact && styles.contactCellEmpty]}
-                    >
-                      {contact ? (
-                        <>
-                          <Text style={styles.contactLabel} numberOfLines={2}>{contact.label}</Text>
-                          <Text style={styles.contactNumber} numberOfLines={2}>{contact.detail}</Text>
-                        </>
-                      ) : (
-                        <>
-                          <Text style={styles.contactPlaceholderLabel}>CUSTOM SLOT</Text>
-                          <Text style={styles.contactPlaceholderDetail}>Add from Edit</Text>
-                        </>
-                      )}
-                    </View>
-                  ))}
-                </View>
+                <ScrollView
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator={false}
+                  style={contactNeedsScroll ? styles.contactGridScroll : undefined}
+                  contentContainerStyle={styles.commsGridScrollContent}
+                >
+                  <View style={styles.contactGrid}>
+                    {contactCards.map((contact, index) => (
+                      <View key={`${contact.label}-${index}`} style={styles.contactCell}>
+                        <Text style={styles.contactLabel}>{contact.label}</Text>
+                        <Text style={styles.contactNumber}>{contact.detail}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </ScrollView>
               </TouchableOpacity>
 
               <View style={styles.commsFooterNotice}>
@@ -454,7 +444,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 12,
     gap: 5,
-    marginBottom: 6,
+    marginBottom: 4,
+  },
+  sectionTabsEmbedded: {
+    paddingHorizontal: 10,
+    marginBottom: 2,
   },
   sectionTab: {
     flex: 1,
@@ -487,13 +481,20 @@ const styles = StyleSheet.create({
   sectionFill: {
     flex: 1,
     paddingHorizontal: 14,
-    paddingTop: 4,
+    paddingTop: 2,
+  },
+  sectionFillEmbedded: {
+    paddingHorizontal: 12,
+    paddingTop: 0,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     marginBottom: 3,
+  },
+  sectionHeaderRowEmbedded: {
+    marginBottom: 2,
   },
   sectionTitle: {
     fontSize: 10,
@@ -505,7 +506,10 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: TACTICAL.textMuted,
     lineHeight: 13,
-    marginBottom: 6,
+    marginBottom: 4,
+  },
+  sectionDescEmbedded: {
+    marginBottom: 2,
   },
   gridFill: {
     flex: 1,
@@ -515,8 +519,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     marginTop: 2,
-    marginBottom: 6,
+    marginBottom: 4,
     paddingHorizontal: 2,
+  },
+  commsHintEmbedded: {
+    marginTop: 0,
+    marginBottom: 2,
   },
   commsHintText: {
     fontSize: 8,
@@ -525,9 +533,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   commsColumns: {
-    flex: 1,
-    gap: 10,
+    gap: 6,
     minHeight: 0,
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  commsColumnsEmbedded: {
+    gap: 5,
   },
   commsColumnsPhone: {
     flexDirection: 'column',
@@ -536,7 +548,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   commsColumn: {
-    flex: 1,
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden',
@@ -544,14 +555,24 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: GOLD_RAIL.subsection,
-    padding: isSmallDevice ? 6 : 8,
-    gap: 6,
+    padding: isSmallDevice ? 4 : 6,
+    gap: 4,
+  },
+  commsColumnPhone: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  commsColumnPhoneEmbedded: {
+    minHeight: isSmallDevice ? 132 : 144,
+  },
+  commsColumnTablet: {
+    flex: 1,
   },
   commsGroupTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   commsGroupTitle: {
     fontSize: isSmallDevice ? 7 : 8,
@@ -561,7 +582,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   commsGroupMeta: {
-    fontSize: 8,
+    fontSize: 7.5,
     color: TACTICAL.textMuted,
     letterSpacing: 0.3,
   },
@@ -569,8 +590,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(196, 138, 44, 0.2)',
@@ -592,63 +613,62 @@ const styles = StyleSheet.create({
   commsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: 4,
     alignContent: 'flex-start',
+  },
+  commsGridScroll: {
+    maxHeight: isSmallDevice ? 138 : 154,
+  },
+  commsGridScrollContent: {
+    paddingBottom: 1,
   },
   commsGridCell: {
     flexBasis: '31%',
     maxWidth: '31%',
     minWidth: 0,
-    minHeight: isSmallDevice ? 58 : 64,
-    paddingHorizontal: 7,
-    paddingVertical: 7,
+    minHeight: isSmallDevice ? 54 : 60,
+    paddingHorizontal: 5,
+    paddingVertical: 5,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(196, 138, 44, 0.14)',
     backgroundColor: 'rgba(0,0,0,0.2)',
     justifyContent: 'center',
-    gap: 3,
-    overflow: 'hidden',
-  },
-  commsGridCellEmpty: {
-    borderStyle: 'dashed',
-    borderColor: 'rgba(138,138,133,0.18)',
-    backgroundColor: 'rgba(255,255,255,0.02)',
+    gap: 2,
   },
   commsGridLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800',
     color: TACTICAL.text,
-    lineHeight: 12,
+    lineHeight: 10,
     flexShrink: 1,
   },
   commsGridDetail: {
-    fontSize: 8.5,
+    fontSize: 7.5,
     color: TACTICAL.textMuted,
-    lineHeight: 11,
+    lineHeight: 9,
     flexShrink: 1,
-  },
-  commsGridPlaceholder: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
   },
   emergencyCard: {
     backgroundColor: 'rgba(192, 57, 43, 0.06)',
     borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(192, 57, 43, 0.25)',
-    padding: 10,
-    marginTop: vGap,
+    padding: isSmallDevice ? 7 : 8,
+    marginTop: isSmallDevice ? 6 : vGap,
     overflow: 'hidden',
+    minHeight: 0,
+    flexShrink: 1,
+  },
+  emergencyCardEmbedded: {
+    marginTop: 5,
   },
   emergencyCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   emergencyHeaderCopy: {
     flex: 1,
@@ -666,71 +686,57 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   emergencyCardMeta: {
-    fontSize: 8,
+    fontSize: 7.5,
     color: TACTICAL.textMuted,
     letterSpacing: 0.3,
   },
   contactGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: 4,
     alignContent: 'flex-start',
   },
+  contactGridScroll: {
+    maxHeight: isSmallDevice ? 116 : 128,
+  },
   contactCell: {
-    flexBasis: '48%',
-    maxWidth: '48%',
+    flexBasis: '31%',
+    maxWidth: '31%',
     minWidth: 0,
-    minHeight: 54,
+    minHeight: isSmallDevice ? 54 : 60,
     justifyContent: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 5,
     backgroundColor: 'rgba(192, 57, 43, 0.04)',
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(192, 57, 43, 0.1)',
-    overflow: 'hidden',
-  },
-  contactCellEmpty: {
-    borderStyle: 'dashed',
-    borderColor: 'rgba(192, 57, 43, 0.12)',
-    backgroundColor: 'rgba(192, 57, 43, 0.02)',
+    gap: 2,
   },
   contactLabel: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 9,
+    fontWeight: '800',
     color: TACTICAL.text,
     flexShrink: 1,
-    lineHeight: 12,
+    lineHeight: 10,
   },
   contactNumber: {
-    fontSize: 9,
+    fontSize: 7.5,
     fontWeight: '800',
     color: TACTICAL.danger,
     fontFamily: 'Courier',
-    marginTop: 2,
     flexShrink: 1,
-    lineHeight: 11,
-  },
-  contactPlaceholderLabel: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
-  },
-  contactPlaceholderDetail: {
-    fontSize: 8,
-    color: TACTICAL.textMuted,
-    marginTop: 2,
+    lineHeight: 9,
   },
   commsFooterNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: vGap,
+    marginTop: isSmallDevice ? 5 : 6,
     paddingHorizontal: 4,
   },
   commsFooterText: {
-    fontSize: 9,
+    fontSize: 8.5,
     color: TACTICAL.textMuted,
     flex: 1,
   },

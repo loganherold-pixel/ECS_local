@@ -79,44 +79,28 @@ export default function EmergencyProtocolModal({ visible, protocol, onClose }: P
       icon="medkit-outline"
       eyebrow="FIELD PROTOCOL"
       subtitle={protocol.subtitle}
-      maxWidth={760}
-      maxHeightFraction={0.9}
-      minHeightFraction={0.84}
-      scrollable={false}
-      overlayClass="workflow"
+      maxWidth={620}
+      maxHeightFraction={0.82}
+      scrollable
+      overlayClass="info"
       dismissOnBackdrop
-      allowSwipeDismiss
-      showHandle
+      allowSwipeDismiss={false}
+      showHandle={false}
       bodyStyle={styles.shellBody}
     >
-      <View
-        style={[
-          styles.summaryCard,
-          {
-            borderColor: `${protocol.accentColor}30`,
-            backgroundColor: `${protocol.accentColor}10`,
-          },
-        ]}
-      >
+      <View style={styles.protocolBody}>
         <View
           style={[
-            styles.summaryGlyphWrap,
+            styles.protocolGlyphWrap,
             {
               borderColor: `${protocol.accentColor}30`,
-              backgroundColor: `${protocol.accentColor}16`,
+              backgroundColor: `${protocol.accentColor}10`,
             },
           ]}
         >
           {getTacticalGlyph(protocol.id, protocol.accentColor, 20)}
         </View>
-        <View style={styles.summaryCopy}>
-          <Text style={[styles.summaryTitle, { color: protocol.accentColor }]}>{protocol.title}</Text>
-          <Text style={styles.summarySubtitle}>{protocol.subtitle}</Text>
-          <Text style={styles.summaryHint}>Recognize fast. Stabilize immediately. Escalate early if symptoms worsen.</Text>
-        </View>
-      </View>
 
-      <View style={styles.protocolBody}>
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={[styles.sectionDot, { backgroundColor: protocol.accentColor }]} />
@@ -171,53 +155,25 @@ export default function EmergencyProtocolModal({ visible, protocol, onClose }: P
 
 const styles = StyleSheet.create({
   shellBody: {
-    flex: 1,
-    gap: 12,
+    gap: 8,
   },
-  summaryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  summaryGlyphWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+  protocolGlyphWrap: {
+    alignSelf: 'flex-start',
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-  },
-  summaryCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  summaryTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  summarySubtitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: TACTICAL.text,
-  },
-  summaryHint: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: TACTICAL.textMuted,
+    backgroundColor: 'rgba(196,138,44,0.08)',
   },
   protocolBody: {
-    flex: 1,
-    gap: 10,
+    gap: 7,
   },
   section: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
     backgroundColor: 'rgba(0,0,0,0.18)',
@@ -229,8 +185,8 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
+    gap: 7,
+    marginBottom: 5,
   },
   sectionDot: {
     width: 8,
@@ -238,15 +194,15 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.3,
   },
   bulletRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 9,
-    marginBottom: 5,
+    gap: 8,
+    marginBottom: 3,
   },
   bullet: {
     width: 5,
@@ -256,46 +212,46 @@ const styles = StyleSheet.create({
   },
   bulletText: {
     flex: 1,
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 10,
+    lineHeight: 13,
     color: TACTICAL.text,
   },
   stepRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 9,
-    marginBottom: 6,
+    gap: 8,
+    marginBottom: 3,
   },
   stepNumber: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.18)',
   },
   stepNumberText: {
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '800',
   },
   stepText: {
     flex: 1,
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 10,
+    lineHeight: 13,
     color: TACTICAL.text,
     paddingTop: 1,
   },
   evacuateRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 9,
-    marginBottom: 6,
+    gap: 8,
+    marginBottom: 3,
   },
   evacuateText: {
     flex: 1,
-    fontSize: 10.5,
-    lineHeight: 14,
+    fontSize: 9.5,
+    lineHeight: 12,
     color: TACTICAL.text,
   },
 });
