@@ -53,6 +53,10 @@ function AttitudeReadout({
         style,
       ]}
     >
+      <View pointerEvents="none" style={[styles.bracketCorner, styles.bracketTopLeft]} />
+      <View pointerEvents="none" style={[styles.bracketCorner, styles.bracketTopRight]} />
+      <View pointerEvents="none" style={[styles.bracketCorner, styles.bracketBottomLeft]} />
+      <View pointerEvents="none" style={[styles.bracketCorner, styles.bracketBottomRight]} />
       <Text
         testID={`${testIdBase}-label`}
         style={styles.label}
@@ -87,6 +91,36 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     overflow: 'visible',
     backgroundColor: 'transparent',
+  },
+  bracketCorner: {
+    position: 'absolute',
+    width: 14,
+    height: 10,
+    borderColor: 'rgba(249, 194, 84, 0.48)',
+  },
+  bracketTopLeft: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+  },
+  bracketTopRight: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+  },
+  bracketBottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 1,
+    borderLeftWidth: 1,
+  },
+  bracketBottomRight: {
+    right: 0,
+    bottom: 0,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
   },
   label: {
     color: 'rgba(249, 194, 84, 0.86)',
