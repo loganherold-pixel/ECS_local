@@ -1,9 +1,13 @@
 import React, { useMemo } from 'react';
 
 import AttitudeMonitorExpandedView from '../attitude/AttitudeMonitorExpandedView';
-import { useActiveAttitudeMonitorVehicleVisual } from '../../lib/attitudeMonitorVehicleVisual';
+import { useActiveAttitudeMonitorVehicleId } from '../../lib/attitudeMonitorVehicleVisual';
 import { getAttitudeSensorState } from '../../lib/attitudeMonitorModel';
 import { useAttitudeMonitorDisplayState } from '../../lib/useAttitudeMonitorDisplayState';
+import {
+  normalizeDeviceAttitudeTelemetry,
+  type DeviceAttitudeSensorStatus,
+} from '../../lib/deviceAttitudeTelemetry';
 import type { AttitudeWeightSignals } from '../../lib/vehicleWeightEngine';
 import type { RiskLevel } from '../../lib/terrainRiskEngine';
 import type { LoadModule, VehicleBaseline } from '../../lib/stabilityEngine';
@@ -14,7 +18,7 @@ interface Props {
   vehicleBaseline?: VehicleBaseline;
   rollAngleDeg?: number;
   pitchAngleDeg?: number;
-  sensorStatus?: 'LIVE' | 'CALIBRATED' | 'OFFLINE' | 'UNAVAILABLE';
+  sensorStatus?: DeviceAttitudeSensorStatus;
   sampleTimestampMs?: number | null;
   isCalibrated?: boolean;
   onCalibrate?: () => void;
@@ -41,16 +45,34 @@ function AttitudeMonitorWidget({
   pitchAngleDeg = 0,
   sensorStatus = 'OFFLINE',
   sampleTimestampMs = null,
+  isCalibrated = false,
+  onCalibrate,
+  onResetCalibration,
 }: Props) {
+  const attitudeTelemetry = useMemo(
+    () =>
+      normalizeDeviceAttitudeTelemetry({
+        rollDeg: rollAngleDeg,
+        pitchDeg: pitchAngleDeg,
+        sensorStatus,
+        sampleTimestampMs,
+      }),
+    [pitchAngleDeg, rollAngleDeg, sampleTimestampMs, sensorStatus],
+  );
   const displayState = useAttitudeMonitorDisplayState({
-    rollDeg: rollAngleDeg,
-    pitchDeg: pitchAngleDeg,
+    rollDeg: attitudeTelemetry.rollDeg,
+    pitchDeg: attitudeTelemetry.pitchDeg,
     sensorStatus,
-    sampleTimestampMs,
+    sampleTimestampMs: attitudeTelemetry.updatedAt,
     advanced: advancedEnabled,
     sourceOrigin: 'device_sensors',
+    telemetryHealthOverride: attitudeTelemetry.displayHealth,
+    sourceLabelOverride: attitudeTelemetry.sourceLabel,
+    sourceShortLabelOverride: attitudeTelemetry.sourceLabel,
+    sourceChipLabelOverride: attitudeTelemetry.sourceChipLabel,
+    sourceStatusLineOverride: attitudeTelemetry.sourceStatusLine,
   });
-  const heroVisual = useActiveAttitudeMonitorVehicleVisual();
+  const attitudeVehicleId = useActiveAttitudeMonitorVehicleId();
   const sensorState = useMemo(() => getAttitudeSensorState(sensorStatus), [sensorStatus]);
 
   return (
@@ -58,7 +80,12 @@ function AttitudeMonitorWidget({
       displayState={displayState}
       sensorState={sensorState}
       sensorStatus={sensorStatus}
-      heroVehicle={heroVisual}
+      vehicleId={attitudeVehicleId}
+      rawRollDeg={attitudeTelemetry.rawRollDeg}
+      rawPitchDeg={attitudeTelemetry.rawPitchDeg}
+      onCalibrate={onCalibrate}
+      onResetCalibration={onResetCalibration}
+      calibrationActive={isCalibrated}
     />
   );
 }

@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import type { VehicleAttitudeData } from '../../lib/vehicleDisplayTypes';
 import AttitudeMonitorSurface from '../attitude/AttitudeMonitorSurface';
-import { useActiveAttitudeMonitorVehicleVisual } from '../../lib/attitudeMonitorVehicleVisual';
+import { useActiveAttitudeMonitorVehicleId } from '../../lib/attitudeMonitorVehicleVisual';
 import { useAttitudeMonitorDisplayState } from '../../lib/useAttitudeMonitorDisplayState';
 import { TACTICAL } from '../../lib/theme';
 import type { AttitudeSourceOrigin } from '../../lib/attitudeMonitorModel';
@@ -77,7 +77,7 @@ function VehicleAttitudeScreen({ data }: Props) {
       tone === 'critical' ? 'warning' : tone === 'attention' ? 'caution' : null,
   });
   const live = displayState.liveMotion;
-  const heroVisual = useActiveAttitudeMonitorVehicleVisual();
+  const attitudeVehicleId = useActiveAttitudeMonitorVehicleId();
   const showGuidance =
     displayState.severity !== 'normal' || displayState.telemetryHealth !== 'live';
   const sourceLine = displayState.sourceLabel ?? displayState.statusText;
@@ -99,7 +99,8 @@ function VehicleAttitudeScreen({ data }: Props) {
           postureInstruction={guidanceLine}
           topLabel={displayState.sourceChipLabel ?? displayState.badgeLabel}
           variant="automotive"
-          heroVehicle={heroVisual}
+          vehicleId={attitudeVehicleId}
+          telemetryFrame="vehicle"
         />
       </View>
 

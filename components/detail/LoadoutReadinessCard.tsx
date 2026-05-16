@@ -186,7 +186,7 @@ export default function LoadoutReadinessCard({
   // ── Navigate to Fleet tab to configure loadout ─────────────
   const handleOpenLoadout = () => {
     // Loadout 2.0 is exclusively in the vehicle wizard on the Fleet tab.
-    router.push('/(tabs)/fleet' as any);
+      router.push('/fleet' as any);
   };
 
 
@@ -720,6 +720,5 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
 });
-
 
 

@@ -25,7 +25,6 @@ import {
   Pressable,
   StyleSheet,
   Animated,
-  ImageBackground,
   useWindowDimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -33,6 +32,7 @@ import { useRouter, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import QuickActionsSheet from './QuickActionsSheet';
+import { useTheme } from '../context/ThemeContext';
 
 import { MOTION, EASING, PRESS } from '../lib/motion';
 import { hapticMicro, hapticCommand } from '../lib/haptics';
@@ -43,9 +43,12 @@ import {
 } from '../lib/firstLaunchGuidanceStore';
 import {
   ECS_COMMAND_DOCK_BAR_HEIGHT,
+  ECS_COMMAND_DOCK_CENTER_SLOT_WIDTH,
+  ECS_COMMAND_DOCK_CENTER_SLOT_FLEX,
+  ECS_COMMAND_DOCK_EDGE_SLOT_FLEX,
+  ECS_COMMAND_DOCK_INNER_SLOT_FLEX,
   ECS_COMMAND_DOCK_LABEL_HEIGHT,
-  getCommandDockBottomPadding,
-  getCommandDockHeight,
+  ECS_COMMAND_DOCK_OUTER_ITEM_MAX_WIDTH,
 } from '../lib/shellLayout';
 import {
   getDashboardChromeState,
@@ -53,6 +56,12 @@ import {
 } from '../lib/dashboardChromeStore';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import { BOTTOM_BANNER_BG } from '../lib/chromeAssets';
+import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
+import { resolveDispatchRolloutConfig } from '../lib/dispatchRolloutConfig';
+import {
+  ECSGlobalBanner,
+  getEcsBottomSafePadding,
+} from './ECSGlobalBanner';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -67,7 +76,11 @@ const DOCK = {
 const SHIELD_ICON_SIZE = 80;
 
 // ── Outer badge sizing ───────────────────────────────────────
-const OUTER_BADGE_SIZE_ACTIVE = 58;
+const OUTER_BADGE_SIZE_ACTIVE = 70;
+const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 6;
+const OUTER_BADGE_TO_LABEL_OFFSET = -4;
+const CENTER_DASHBOARD_BUTTON_DROP = 6;
+const BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3;
 
 // ── Bar layout ───────────────────────────────────────────────
 const MIN_DOCK_LIFT = 0;
@@ -77,6 +90,7 @@ const SCALE_PULSE_DURATION = 120;
 const FIRST_LAUNCH_HINT_CYCLES = 5;
 const FIRST_LAUNCH_HINT_FADE_MS = 520;
 const FIRST_LAUNCH_HINT_IDLE_MS = 180;
+const QUICK_ACTIONS_NAV_LOCK_MS = 650;
 
 const DOCK_BADGES = {
   fleet: require('../assets/ecs/nav/fleet-badge.png'),
@@ -97,32 +111,34 @@ interface DockItem {
   iconOffsetY?: number;
 }
 
+type DockItemKey = DockItem['key'];
+
 const DOCK_ITEMS: DockItem[] = [
   {
     key: 'fleet',
     label: 'FLEET',
-    route: '/(tabs)/fleet',
+    route: '/fleet',
     pathMatch: ['/fleet', '/vehicle-config'],
     badge: DOCK_BADGES.fleet,
   },
   {
     key: 'navigate',
     label: 'NAVIGATE',
-    route: '/(tabs)/navigate',
+    route: '/navigate',
     pathMatch: ['/navigate', '/route', '/navigate-run', '/navigate-offline', '/navigate-bailouts'],
     badge: DOCK_BADGES.navigate,
   },
   {
     key: 'dashboard',
     label: '',
-    route: '/(tabs)/dashboard',
+    route: '/dashboard',
     pathMatch: ['/dashboard'],
     badge: DOCK_BADGES.dashboard,
   },
   {
     key: 'discover',
     label: 'EXPLORE',
-    route: '/(tabs)/discover',
+    route: '/discover',
     pathMatch: ['/discover'],
     badge: DOCK_BADGES.discover,
     iconOffsetY: 3.25,
@@ -130,22 +146,62 @@ const DOCK_ITEMS: DockItem[] = [
   {
     key: 'alert',
     label: 'DISPATCH',
-    route: '/(tabs)/alert',
+    route: '/alert',
     pathMatch: ['/alert', '/safety', '/intel', '/more'],
     badge: DOCK_BADGES.alert,
     iconOffsetY: 3.75,
   },
 ];
 
+function getDockSlotFlex(key: DockItemKey): number {
+  switch (key) {
+    case 'fleet':
+    case 'alert':
+      return ECS_COMMAND_DOCK_EDGE_SLOT_FLEX;
+    case 'navigate':
+    case 'discover':
+      return ECS_COMMAND_DOCK_INNER_SLOT_FLEX;
+    case 'dashboard':
+    default:
+      return ECS_COMMAND_DOCK_CENTER_SLOT_FLEX;
+  }
+}
+
+function getOuterSlotHorizontalPadding(
+  key: DockItemKey,
+  isLargePhone: boolean,
+  isTablet: boolean,
+): number {
+  const edgePadding = isTablet ? 9 : isLargePhone ? 8 : 7;
+  const innerPadding = isTablet ? 17 : isLargePhone ? 15 : 13;
+
+  switch (key) {
+    case 'navigate':
+    case 'discover':
+      return innerPadding;
+    case 'fleet':
+    case 'alert':
+      return edgePadding;
+    default:
+      return 0;
+  }
+}
+
 // ── Outer dock button using local badge images ───────────────
 function DockButton({
   item,
   isActive,
   onPress,
+  maxWidth,
+  labelMuted,
+  labelActive,
 }: {
   item: DockItem;
   isActive: boolean;
   onPress: () => void;
+  maxWidth: number;
+  labelMuted: string;
+  labelActive: string;
 }) {
   const pressScaleAnim = useRef(new Animated.Value(1)).current;
   const colorProgress = useRef(new Animated.Value(isActive ? 1 : 0)).current;
@@ -226,7 +282,7 @@ function DockButton({
 
   return (
     <Pressable
-      style={styles.dockPressable}
+      style={[styles.dockPressable, { maxWidth }]}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       onPress={handlePress}
@@ -236,13 +292,18 @@ function DockButton({
         style={[
           styles.dockItem,
           {
-            transform: [{ scale: pressScaleAnim }, { scale: scalePulse }],
+            transform: [
+              { translateY: OUTER_DOCK_ITEM_VERTICAL_OFFSET },
+              { scale: pressScaleAnim },
+              { scale: scalePulse },
+            ],
           },
         ]}
       >
         <Animated.View
           style={[
           styles.badgeContainer,
+          styles.outerBadgeContainer,
           {
             opacity: badgeOpacity,
             transform: [{ translateY: item.iconOffsetY ?? 0 }, { scale: badgeScale }],
@@ -257,11 +318,12 @@ function DockButton({
           />
         </Animated.View>
 
-        <View style={styles.labelContainer}>
+        <View style={[styles.labelContainer, styles.outerLabelContainer]}>
           <Animated.Text
             style={[
               styles.dockLabel,
               styles.labelBase,
+              { color: labelMuted },
               { opacity: inactiveOpacity },
             ]}
           >
@@ -273,6 +335,7 @@ function DockButton({
               styles.dockLabel,
               styles.labelOverlay,
               styles.labelActive,
+              { color: labelActive },
               { opacity: activeOpacity },
             ]}
           >
@@ -291,12 +354,14 @@ function ShieldCenterButton({
   onLongPress,
   hintOpacity,
   hintScale,
+  slotWidth,
 }: {
   isActive: boolean;
   onTap: () => void;
   onLongPress: () => void;
   hintOpacity?: Animated.Value;
   hintScale?: Animated.Value;
+  slotWidth: number;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -349,7 +414,7 @@ function ShieldCenterButton({
   }, [onTap]);
 
   return (
-    <View style={styles.shieldSlot}>
+    <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: CENTER_DASHBOARD_BUTTON_DROP }] }]}>
       {hintOpacity && hintScale ? (
         <Animated.View
           style={[
@@ -396,8 +461,10 @@ export default function CommandDock() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
+  const { palette, colors, effectiveTheme } = useTheme();
   const adaptive = useAdaptiveLayout();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
+  const quickActionsNavLockUntilRef = useRef(0);
   const [dashboardExpanded, setDashboardExpanded] = useState(
     getDashboardChromeState().expanded
   );
@@ -428,14 +495,37 @@ export default function CommandDock() {
 
   const handleNavigate = useCallback(
     (route: string) => {
+      if (quickActionsVisible || Date.now() < quickActionsNavLockUntilRef.current) {
+        if (__DEV__) {
+          console.log('[FIELD_UTILITIES] dock_navigation_ignored_quick_actions_active', {
+            route,
+            pathname,
+            quickActionsVisible,
+          });
+        }
+        return;
+      }
       if (pathname === route) return;
       router.replace(route as any);
     },
-    [pathname, router]
+    [pathname, quickActionsVisible, router]
   );
 
-  const dockBottomPadding = getCommandDockBottomPadding(insets.bottom);
-  const dockHeight = getCommandDockHeight(insets.bottom);
+  const openQuickActions = useCallback(() => {
+    quickActionsNavLockUntilRef.current = Date.now() + QUICK_ACTIONS_NAV_LOCK_MS;
+    setQuickActionsVisible(true);
+  }, []);
+
+  const closeQuickActions = useCallback(() => {
+    quickActionsNavLockUntilRef.current = Date.now() + QUICK_ACTIONS_NAV_LOCK_MS;
+    setQuickActionsVisible(false);
+  }, []);
+
+  const dockBottomPadding = getEcsBottomSafePadding(insets.bottom);
+  const dockHeight = ECS_COMMAND_DOCK_BAR_HEIGHT + dockBottomPadding;
+  const dockBackgroundDrop = Math.max(6, Math.min(dockBottomPadding, 10));
+  const dockBackgroundTopOffset = BOTTOM_BANNER_BACKGROUND_DROP_OFFSET;
+  const dockBackgroundHeight = dockHeight + dockBackgroundDrop;
   const dockOuterGutter = adaptive.shell.dockOuterGutter;
   const availableDockWidth = Math.max(
     280,
@@ -445,6 +535,21 @@ export default function CommandDock() {
     ? Math.min(availableDockWidth, adaptive.shell.dockMaxWidth)
     : availableDockWidth;
   const dockHorizontalPadding = adaptive.shell.dockHorizontalPadding;
+  const outerItemMaxWidth = adaptive.isTablet ? 148 : adaptive.isLargePhone ? 136 : ECS_COMMAND_DOCK_OUTER_ITEM_MAX_WIDTH;
+  const centerSlotWidth = adaptive.isTablet ? 140 : adaptive.isLargePhone ? 132 : ECS_COMMAND_DOCK_CENTER_SLOT_WIDTH;
+  const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
+  const visibleDockItems = useMemo(
+    () => DOCK_ITEMS.filter((item) => item.key !== 'alert' || dispatchRollout.dispatchTabVisibility),
+    [dispatchRollout.dispatchTabVisibility],
+  );
+  const dashboardDockItem = useMemo(
+    () => visibleDockItems.find((item) => item.key === 'dashboard') ?? DOCK_ITEMS[2],
+    [visibleDockItems],
+  );
+  const shellChrome = useMemo(
+    () => resolveShellChromeTheme({ effectiveTheme, palette, colors }),
+    [colors, effectiveTheme, palette],
+  );
 
   useEffect(() => {
     return subscribeDashboardChrome((nextState) => {
@@ -578,7 +683,7 @@ export default function CommandDock() {
     <>
       <QuickActionsSheet
         visible={quickActionsVisible}
-        onClose={() => setQuickActionsVisible(false)}
+        onClose={closeQuickActions}
       />
 
       <Animated.View
@@ -598,23 +703,29 @@ export default function CommandDock() {
             ],
           },
         ]}
-        pointerEvents={hideForDashboardExpanded ? 'none' : 'auto'}
+        pointerEvents={hideForDashboardExpanded || quickActionsVisible ? 'none' : 'auto'}
       >
-        <ImageBackground
-          pointerEvents="none"
+        <ECSGlobalBanner
           source={BOTTOM_BANNER_BG}
-          resizeMode="cover"
-          imageStyle={styles.dockEdgeFillImage}
+          placement="bottom"
           style={[
             styles.dockEdgeFill,
             {
-              height: dockHeight,
+              height: dockBackgroundHeight,
+              bottom: -(dockBackgroundDrop + dockBackgroundTopOffset),
             },
           ]}
-        >
-          <View style={styles.dockEdgeScrim} />
-        </ImageBackground>
-        <View style={styles.hardenedTopLine} pointerEvents="none" />
+        />
+        <View
+          style={[
+            styles.bannerTopRail,
+            {
+              top: dockBackgroundTopOffset,
+              backgroundColor: shellChrome.goldRail,
+            },
+          ]}
+          pointerEvents="none"
+        />
 
         {showFirstLaunchHint ? (
           <Animated.View
@@ -628,12 +739,12 @@ export default function CommandDock() {
               },
             ]}
           >
-            <Text style={styles.firstLaunchHintText}>
+            <Text style={[styles.firstLaunchHintText, { color: shellChrome.hintText }]}>
               Long press for additional settings
             </Text>
             <View style={styles.firstLaunchHintArrow}>
-              <View style={styles.firstLaunchHintArrowStem} />
-              <View style={styles.firstLaunchHintArrowHead} />
+              <View style={[styles.firstLaunchHintArrowStem, { backgroundColor: shellChrome.dockLabelActive }]} />
+              <View style={[styles.firstLaunchHintArrowHead, { borderTopColor: shellChrome.dockLabelActive }]} />
             </View>
           </Animated.View>
         ) : null}
@@ -650,37 +761,51 @@ export default function CommandDock() {
             },
           ]}
         >
-          {DOCK_ITEMS.map((item) => {
-            const active = isItemActive(item);
-
-            if (item.key === 'dashboard') {
-              return (
+          {visibleDockItems.map((item) => (
+            <View
+              key={item.key}
+              style={[
+                item.key === 'dashboard' ? styles.centerSlot : styles.outerSlot,
+                {
+                  flex: getDockSlotFlex(item.key),
+                  paddingHorizontal:
+                    item.key === 'dashboard'
+                      ? 0
+                      : getOuterSlotHorizontalPadding(
+                          item.key,
+                          adaptive.isLargePhone,
+                          adaptive.isTablet,
+                        ),
+                },
+              ]}
+            >
+              {item.key === 'dashboard' ? (
                 <ShieldCenterButton
-                  key={item.key}
-                  isActive={active}
+                  isActive={isItemActive(dashboardDockItem)}
                   hintOpacity={showFirstLaunchHint ? firstLaunchHintOpacity : undefined}
                   hintScale={showFirstLaunchHint ? firstLaunchHintScale : undefined}
                   onTap={() => {
                     dismissFirstLaunchHint();
-                    handleNavigate(item.route);
+                    handleNavigate(dashboardDockItem.route);
                   }}
                   onLongPress={() => {
                     dismissFirstLaunchHint();
-                    setQuickActionsVisible(true);
+                    openQuickActions();
                   }}
+                  slotWidth={centerSlotWidth}
                 />
-              );
-            }
-
-            return (
-              <DockButton
-                key={item.key}
-                item={item}
-                isActive={active}
-                onPress={() => handleNavigate(item.route)}
-              />
-            );
-          })}
+              ) : (
+                <DockButton
+                  item={item}
+                  isActive={isItemActive(item)}
+                  onPress={() => handleNavigate(item.route)}
+                  maxWidth={outerItemMaxWidth}
+                  labelMuted={shellChrome.dockLabelMuted}
+                  labelActive={shellChrome.dockLabelActive}
+                />
+              )}
+            </View>
+          ))}
         </View>
       </Animated.View>
     </>
@@ -703,33 +828,24 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    backgroundColor: '#020304',
   },
-  dockEdgeFillImage: {
-    width: '100%',
-    height: '100%',
-  },
-  dockEdgeScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(7, 10, 14, 0.16)',
-  },
-
-  hardenedTopLine: {
+  bannerTopRail: {
     position: 'absolute',
     top: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: 'rgba(196,138,44,0.28)',
-    opacity: 0.95,
+    left: -64,
+    right: -64,
+    height: 2,
+    opacity: 0.72,
   },
 
   dockBar: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderRadius: 0,
-    borderTopWidth: 1,
+    borderTopWidth: 0,
     borderTopColor: DOCK.barBorder,
     paddingTop: 1,
     shadowOpacity: 0,
@@ -737,15 +853,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 0,
   },
+  outerSlot: {
+    flex: 1,
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  centerSlot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
 
   dockItem: {
-    flex: 1,
-    minWidth: 0,
+    width: '100%',
     height: ECS_COMMAND_DOCK_BAR_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
-    width: '100%',
-    paddingTop: 0,
+    paddingTop: 2,
     paddingBottom: 0,
     position: 'relative',
     zIndex: 3,
@@ -754,7 +880,9 @@ const styles = StyleSheet.create({
   dockPressable: {
     flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
     minWidth: 0,
+    width: '100%',
   },
 
   badgeContainer: {
@@ -763,7 +891,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    marginBottom: 0,
+    marginBottom: 2,
+  },
+
+  outerBadgeContainer: {
+    marginBottom: OUTER_BADGE_TO_LABEL_OFFSET,
   },
 
   badgeImage: {
@@ -776,16 +908,22 @@ const styles = StyleSheet.create({
     height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -1,
+    marginTop: 1,
     width: '100%',
+    alignSelf: 'stretch',
+  },
+
+  outerLabelContainer: {
+    marginTop: -4,
   },
 
   dockLabel: {
     ...TYPO.U3,
-    fontSize: 7.5,
-    lineHeight: 9.5,
-    letterSpacing: 1.45,
+    fontSize: 8.4,
+    lineHeight: 10.5,
+    letterSpacing: 1.3,
     textAlign: 'center',
+    width: '100%',
   },
 
   labelBase: {
@@ -804,15 +942,14 @@ const styles = StyleSheet.create({
   },
 
   shieldSlot: {
-    flex: 1,
-    minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
     height: ECS_COMMAND_DOCK_BAR_HEIGHT,
-    paddingTop: 1,
+    paddingTop: 2,
     paddingBottom: 0,
     position: 'relative',
     zIndex: 4,
+    flexShrink: 0,
   },
 
   firstLaunchHintHalo: {
@@ -848,7 +985,7 @@ const styles = StyleSheet.create({
 
   shieldLabelSpacer: {
     height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
-    marginTop: -2,
+    marginTop: 0,
   },
 
   firstLaunchHintContainer: {

@@ -41,7 +41,7 @@ import {
   VEHICLE_TELEMETRY_PROVIDERS,
 } from '../src/vehicle-telemetry/VehicleTelemetryTypes';
 import { useVehicleTelemetry } from '../src/vehicle-telemetry/useVehicleTelemetry';
-import { useOBD2Scanner } from '../src/vehicle-telemetry/useOBD2Scanner';
+import { useUnifiedOBD2Scanner } from '../lib/unifiedScanner';
 import { vehicleTelemetryService } from '../src/vehicle-telemetry/VehicleTelemetryService';
 import { vehicleTelemetryDeviceRegistry } from '../src/vehicle-telemetry/VehicleTelemetryDeviceRegistry';
 
@@ -67,7 +67,7 @@ export default function VehicleTelemetrySettingsScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
   const vt = useVehicleTelemetry();
-  const scanner = useOBD2Scanner();
+  const scanner = useUnifiedOBD2Scanner();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [connectionSuccess, setConnectionSuccess] = useState<string | null>(null);

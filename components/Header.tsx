@@ -1,22 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
-import { DENSITY, TYPO } from '../lib/theme';
+import { TYPO } from '../lib/theme';
 import { CLOSE_BTN } from '../lib/uiConstants';
 import { useTheme } from '../context/ThemeContext';
 import { useApp } from '../context/AppContext';
+import { ecsLog } from '../lib/ecsLogger';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { operatorTrustModeStore } from '../lib/ai/operatorTrustMode';
 import type { ECSOperatorTrustMode } from '../lib/ai/operatorTrustTypes';
 import {
-  ECS_TOP_SHELL_EDGE_SLOT_WIDTH,
-  ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
+  ECS_TOP_BANNER_TITLE_CENTER_PADDING,
+  ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH,
+  ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH,
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  ECS_TOP_SHELL_CONTROL_SLOT_WIDTH,
+  getEcsTopBannerLayoutMetrics,
   getShellHeaderAnchorTop,
   getShellHeaderTopPadding,
 } from '../lib/shellLayout';
 import ProfileSettingsPanel from './ProfileSettingsPanel';
+import ThemeToggle from './ThemeToggle';
 import { getTopBannerToneColor, resolveProfileCommandStatus, resolveTopBannerPresentation } from '../lib/ui/topBannerStatusResolver';
 import type { ECSTopBannerCommandContext } from '../lib/ui/topBannerTypes';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
@@ -24,7 +30,11 @@ import { AUTH_COPY } from '../lib/auth/authCopy';
 import { resolveAccountUx } from '../lib/auth/accountUXResolver';
 import TacticalPopupShell from './TacticalPopupShell';
 import { openManageSubscription } from '../lib/subscriptionAccess';
-import { TOP_BANNER_BG } from '../lib/chromeAssets';
+import { VISIBILITY_THEME_CYCLE } from '../lib/appearanceStore';
+import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
+import FleetSyncModal from './fleet/FleetSyncModal';
+import TopBannerBackground, { resolveTopBannerVariant } from './TopBannerBackground';
+import { useEcsTopBannerHeight } from './ECSGlobalBanner';
 
 const HEADER = {
   bar: '#1E2125',
@@ -41,32 +51,8 @@ const HEADER = {
   statusOnline: '#3E6B3E',
 };
 
-const ACCOUNT_UTILITY_SHEETS = {
-  support: {
-    title: AUTH_COPY.account.support,
-    icon: 'help-buoy-outline' as const,
-    body:
-      `${AUTH_COPY.utility.supportPrompt}\n\n` +
-      'Use Reset password to send recovery instructions to your ECS email, or Manage access when account verification needs attention.\n\n' +
-      'If access still looks wrong after a refresh or restore, contact your established ECS support channel or account administrator.',
-  },
-  privacy: {
-    title: AUTH_COPY.account.privacy,
-    icon: 'lock-closed-outline' as const,
-    body:
-      'Your signed-in ECS account is used to verify access, restore purchases, and protect expedition data tied to your deployment.\n\n' +
-      'This surface keeps account-state details concise and avoids exposing internal auth metadata in normal field use.',
-  },
-  terms: {
-    title: AUTH_COPY.account.terms,
-    icon: 'document-text-outline' as const,
-    body:
-      'ECS account access is governed by your active deployment terms and operational policies.\n\n' +
-      'Use only authorized accounts, verify expedition decisions independently, and contact your ECS administrator if current account terms need review.',
-  },
-} as const;
-
 interface HeaderProps {
+  title?: string;
   onAuthPress?: () => void;
   guidance?: {
     eyebrow?: string;
@@ -77,18 +63,24 @@ interface HeaderProps {
   commandContext?: ECSTopBannerCommandContext | null;
 }
 
-function HeaderBackdropPanels() {
-  return (
-    <View style={styles.shellBackdrop} pointerEvents="none">
-      <View style={styles.shellBackdropWash} />
-      <View style={styles.shellBackdropSheen} />
-      <View style={styles.shellBackdropBand} />
-      <View style={styles.shellBackdropRim} />
-    </View>
-  );
+function resolveHeaderBannerSubject(
+  variant: ReturnType<typeof resolveTopBannerVariant>,
+): string | null {
+  switch (variant) {
+    case 'fleet':
+      return 'Fleet';
+    case 'navigate':
+      return 'Navigate';
+    case 'explore':
+      return 'Explore';
+    case 'dispatch':
+      return 'Dispatch';
+    default:
+      return null;
+  }
 }
 
-export default function Header({ onAuthPress, guidance, commandContext }: HeaderProps) {
+export default function Header({ title, onAuthPress, guidance, commandContext }: HeaderProps) {
   const router = useRouter();
   const {
     user,
@@ -108,14 +100,15 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
     sendPasswordReset,
     ecsProProduct,
   } = useApp();
-  const { appearanceMode, setAppearanceMode } = useTheme();
+  const { appearanceMode, setAppearanceMode, palette, colors, effectiveTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
+  const topBannerHeight = useEcsTopBannerHeight();
   const [profilePanelVisible, setProfilePanelVisible] = useState(false);
+  const [syncModalVisible, setSyncModalVisible] = useState(false);
   const [signOutConfirmVisible, setSignOutConfirmVisible] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [accountActionBusyId, setAccountActionBusyId] = useState<string | null>(null);
-  const [activeAccountUtilitySheet, setActiveAccountUtilitySheet] = useState<keyof typeof ACCOUNT_UTILITY_SHEETS | null>(null);
   const [geofenceRadius, setGeofenceRadius] = useState(() => expeditionStateStore.getGeofenceRadius());
   const [operatorTrustMode, setOperatorTrustMode] = useState<ECSOperatorTrustMode>(
     () => operatorTrustModeStore.mode,
@@ -211,25 +204,33 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
       user,
     ],
   );
+  const shellChrome = useMemo(
+    () => resolveShellChromeTheme({ effectiveTheme, palette, colors }),
+    [colors, effectiveTheme, palette],
+  );
   const toneColor = useMemo(
     () =>
       getTopBannerToneColor(bannerStatus.tone, {
-        active: HEADER.iconActive,
-        online: HEADER.statusOnline,
-        muted: HEADER.iconMuted,
+        active: shellChrome.iconActive,
+        online: shellChrome.online,
+        muted: shellChrome.iconMuted,
         degraded: '#D6A04B',
       }),
-    [bannerStatus.tone],
+    [bannerStatus.tone, shellChrome.iconActive, shellChrome.iconMuted, shellChrome.online],
   );
 
-  const titleText = guidance?.title ?? 'Expedition Command System';
+  const titleText = title ?? 'Expedition Command System';
+  const topBannerVariant = useMemo(() => resolveTopBannerVariant(titleText), [titleText]);
+  const bannerSubject = useMemo(
+    () => resolveHeaderBannerSubject(topBannerVariant),
+    [topBannerVariant],
+  );
+  const guidanceOverrideActive = Boolean(guidance?.title || guidance?.eyebrow || guidance?.detail);
 
   useEffect(() => {
     const nextKey = [
-      guidance?.eyebrow ?? bannerStatus.postureLabel,
       titleText,
       bannerStatus.statusLabel,
-      bannerStatus.statusDetail,
       bannerStatus.source,
       bannerStatus.priority,
     ].join('|');
@@ -237,15 +238,14 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
     if (shellMessageLogKeyRef.current === nextKey) return;
     shellMessageLogKeyRef.current = nextKey;
 
-    console.log('[ShellMessage]', {
+    ecsLog.debug('SHELL', '[ShellMessage]', {
       shellMessageSource: bannerStatus.source,
       shellMessageReason: bannerStatus.reason,
       shellMessagePriority: bannerStatus.priority,
       suppressedShellSources: bannerStatus.suppressedSources,
-      shellEyebrow: guidance?.eyebrow ?? bannerStatus.postureLabel,
       shellTitle: titleText,
       shellStatusLabel: bannerStatus.statusLabel,
-      shellStatusDetail: bannerStatus.statusDetail,
+      guidanceOverrideActive,
       gpsLive: bannerStatus.diagnostics.gpsLive,
       routeActive: bannerStatus.diagnostics.routeUsable && hasActiveExpeditionContext,
       connectivityState: connectivityStatus,
@@ -256,7 +256,7 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
   }, [
     bannerStatus,
     connectivityStatus,
-    guidance?.eyebrow,
+    guidanceOverrideActive,
     hasActiveExpeditionContext,
     offlineMode,
     titleText,
@@ -295,14 +295,22 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
   }, [signOut, signOutBusy]);
   const handleOpenAuthEntry = useCallback(() => {
     setProfilePanelVisible(false);
-    setActiveAccountUtilitySheet(null);
+    if (onAuthPress) {
+      onAuthPress();
+      return;
+    }
     router.replace('/login');
-  }, [router]);
+  }, [onAuthPress, router]);
   const handleAccountAction = useCallback(
     async (actionId: string) => {
       if (accountActionBusyId) return;
       if (actionId === 'sign_in') {
         handleOpenAuthEntry();
+        return;
+      }
+      if (actionId === 'sign_out') {
+        setProfilePanelVisible(false);
+        requestSignOut();
         return;
       }
       setAccountActionBusyId(actionId);
@@ -358,6 +366,7 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
       accountActionBusyId,
       handleOpenAuthEntry,
       purchaseEcsProMonthly,
+      requestSignOut,
       refreshAccessState,
       restoreEcsProAccess,
       sendPasswordReset,
@@ -365,10 +374,19 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
       user?.email,
     ],
   );
-  const handleUtilityPress = useCallback((utilityId: string) => {
-    if (utilityId === 'support' || utilityId === 'privacy' || utilityId === 'terms') {
-      setActiveAccountUtilitySheet(utilityId);
+  const openBluetoothConnections = useCallback(() => {
+    try {
+      router.push('/power/blu');
+    } catch {
+      try {
+        router.push('/power');
+      } catch {
+        showToast('Device connections unavailable');
+      }
     }
+  }, [router, showToast]);
+  const openSyncManagement = useCallback(() => {
+    setSyncModalVisible(true);
   }, []);
 
   const syncActionLabel = useMemo(() => {
@@ -377,9 +395,47 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
     if (bannerStatus.processingActive) return (bannerStatus.processingLabel ?? 'SYNCING').toUpperCase();
     return 'SYNC NOW';
   }, [bannerStatus.processingActive, bannerStatus.processingLabel, isOnline, syncStatus]);
-  const controlSlotWidth = Math.max(
-    ECS_TOP_SHELL_EDGE_SLOT_WIDTH,
-    ECS_TOP_SHELL_PROFILE_BUTTON_SIZE + 10,
+  const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
+  const useBannerTitleLayout = Boolean(bannerSubject);
+  const leftControlSlotWidth = useBannerTitleLayout
+    ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
+    : controlSlotWidth;
+  const rightControlSlotWidth = useBannerTitleLayout
+    ? ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH
+    : controlSlotWidth;
+  const centerContentPadding = useBannerTitleLayout
+    ? ECS_TOP_BANNER_TITLE_CENTER_PADDING
+    : 8;
+  const topBannerLayout = getEcsTopBannerLayoutMetrics(insets.top, topBannerHeight, {
+    isTablet: adaptive.isTablet,
+    shortHeight: adaptive.shortHeight,
+  });
+  const sharedHeaderHeight = useBannerTitleLayout
+    ? topBannerLayout.visibleHeight
+    : Math.max(adaptive.shell.headerMinHeight, topBannerHeight);
+  const sharedHeaderTopPadding = useBannerTitleLayout
+    ? topBannerLayout.topPadding
+    : getShellHeaderTopPadding(insets.top);
+  const shellStatusLabel = useMemo(() => {
+    if (bannerStatus.processingActive) return 'SYNC';
+    if (offlineMode || !isOnline) return 'OFFLINE';
+    return 'ONLINE';
+  }, [bannerStatus.processingActive, isOnline, offlineMode]);
+  const shellStatusPillStyle = useMemo(
+    () => ({
+      borderColor: toneColor + '45',
+      backgroundColor: toneColor + '12',
+      color: toneColor,
+    }),
+    [toneColor],
+  );
+  const bluetoothPillStyle = useMemo(
+    () => ({
+      borderColor: shellChrome.iconMuted + '45',
+      backgroundColor: shellChrome.iconMuted + '10',
+      color: shellChrome.iconMuted,
+    }),
+    [shellChrome.iconMuted],
   );
   const accountUx = useMemo(
     () =>
@@ -475,13 +531,13 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
             return null;
         }
       })
-      .filter(Boolean) as Array<{
+      .filter(Boolean) as {
       id: string;
       label: string;
       detail: string;
       icon: React.ComponentProps<typeof Ionicons>['name'];
       tone?: 'default' | 'primary' | 'danger';
-    }>;
+    }[];
 
     if (user?.email) {
       actions.push({
@@ -492,92 +548,160 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
         tone: 'default',
       });
     }
+    if (user) {
+      actions.push({
+        id: 'sign_out',
+        label: AUTH_COPY.account.signOut,
+        detail: 'End this device session and return to the secure ECS login screen.',
+        icon: 'log-out-outline',
+        tone: 'danger',
+      });
+    } else if (!actions.some((action) => action.id === 'sign_in')) {
+      actions.push({
+        id: 'sign_in',
+        label: AUTH_COPY.account.signIn,
+        detail: 'Open the full ECS sign-in screen for this device.',
+        icon: 'log-in-outline',
+        tone: 'primary',
+      });
+    }
 
     return actions;
-  }, [accountUx.availableActions, ecsProProduct?.priceLabel, user?.email]);
-  const utilityLinks = useMemo(
-    () => [
-      { id: 'support', label: AUTH_COPY.account.support, icon: 'help-buoy-outline' as const },
-      { id: 'privacy', label: AUTH_COPY.account.privacy, icon: 'lock-closed-outline' as const },
-      { id: 'terms', label: AUTH_COPY.account.terms, icon: 'document-text-outline' as const },
-    ],
-    [],
-  );
+  }, [accountUx.availableActions, ecsProProduct?.priceLabel, user]);
 
   return (
-    <ImageBackground
-      source={TOP_BANNER_BG}
-      resizeMode="cover"
-      imageStyle={styles.bannerTextureImage}
+    <View
       style={[
         styles.container,
+        useBannerTitleLayout ? styles.bannerMatchedContainer : null,
         {
-          paddingTop: getShellHeaderTopPadding(insets.top),
-          minHeight: adaptive.shell.headerMinHeight,
+          height: sharedHeaderHeight,
+          paddingTop: sharedHeaderTopPadding,
+          minHeight: sharedHeaderHeight,
         },
       ]}
     >
-      <HeaderBackdropPanels />
-      <View style={styles.barBottomEdge} />
-      <View style={styles.goldRailLine} />
+      <TopBannerBackground
+        variant={topBannerVariant}
+        resizeMode={useBannerTitleLayout ? 'cover' : undefined}
+        verticalOffset={useBannerTitleLayout ? topBannerLayout.bannerOffset : 0}
+        overscan={useBannerTitleLayout ? topBannerLayout.bannerOverscan : 0}
+      />
       <View
         style={[
           styles.contentRow,
+          useBannerTitleLayout ? styles.bannerMatchedContentRow : null,
           {
+            maxWidth: adaptive.shell.headerMaxWidth,
             paddingHorizontal: adaptive.shell.headerHorizontalPadding,
           },
         ]}
       >
-        <View style={[styles.edgeSlot, { width: controlSlotWidth }]} />
-
-        <View style={styles.centerContent}>
-          <View style={styles.statusRow}>
-            <Text
-              style={[
-                styles.guidanceEyebrow,
-                guidance?.tone === 'warning' && styles.guidanceEyebrowWarning,
-              ]}
-              numberOfLines={1}
+        <View
+          style={[
+            styles.edgeSlotBase,
+            useBannerTitleLayout ? styles.bannerMatchedEdgeSlot : null,
+            styles.edgeSlotStart,
+            { width: leftControlSlotWidth },
+          ]}
+        >
+          <View style={styles.statusPillCluster}>
+            <TouchableOpacity
+              style={[styles.statusPill, shellStatusPillStyle]}
+              onPress={openSyncManagement}
+              activeOpacity={0.78}
+              hitSlop={CLOSE_BTN.hitSlop}
+              accessibilityRole="button"
+              accessibilityLabel={`${shellStatusLabel} sync controls`}
+              accessibilityHint="Opens sync management and offline readiness controls"
             >
-              {guidance?.eyebrow ?? bannerStatus.postureLabel}
-            </Text>
+              <View style={[styles.statusPillDot, { backgroundColor: shellStatusPillStyle.color }]} />
+              <Text style={[styles.statusPillText, { color: shellStatusPillStyle.color }]}>
+                {shellStatusLabel}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.statusPill, bluetoothPillStyle]}
+              onPress={openBluetoothConnections}
+              activeOpacity={0.78}
+              hitSlop={CLOSE_BTN.hitSlop}
+              accessibilityRole="button"
+              accessibilityLabel="Bluetooth controls"
+              accessibilityHint="Opens device connections and Bluetooth controls"
+            >
+              <Ionicons name="bluetooth-outline" size={8} color={bluetoothPillStyle.color} />
+              <Text style={[styles.statusPillText, { color: bluetoothPillStyle.color }]}>BLU</Text>
+            </TouchableOpacity>
           </View>
-
-          <Text style={guidance ? styles.guidanceTitle : styles.product} numberOfLines={1}>
-            {titleText}
-          </Text>
         </View>
 
-        <View style={[styles.edgeSlot, { width: controlSlotWidth }]}>
+        <View
+          style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
+          pointerEvents="none"
+        >
+          {bannerSubject ? (
+            <View style={styles.bannerTitleStack}>
+              <Text
+                style={styles.bannerTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.74}
+              >
+                {bannerSubject}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View
+          style={[
+            styles.edgeSlotBase,
+            useBannerTitleLayout ? styles.bannerMatchedEdgeSlot : null,
+            styles.edgeSlotEnd,
+            { width: rightControlSlotWidth },
+          ]}
+        >
+          <View style={styles.rightControlCluster}>
+            <ThemeToggle
+              compact
+              size={30}
+              iconMode="eye"
+              cycleModes={VISIBILITY_THEME_CYCLE}
+            />
           <TouchableOpacity
             onPress={openProfilePanel}
-            style={styles.authBtn}
+            style={[
+              styles.authBtn,
+              {
+                backgroundColor: shellChrome.controlSurface,
+                borderColor: shellChrome.controlBorder,
+              },
+            ]}
             hitSlop={CLOSE_BTN.hitSlop}
             activeOpacity={0.7}
           >
             <Ionicons
               name={user ? 'person-circle' : 'person-circle-outline'}
-              size={24}
-              color={user ? HEADER.iconActive : HEADER.iconMuted}
+              size={18}
+              color={user ? shellChrome.iconActive : shellChrome.iconMuted}
             />
-            {bannerStatus.processingActive ? (
-              <View style={styles.syncBadge}>
+            {bannerStatus.processingActive && (
+              <View
+                style={[
+                  styles.syncBadge,
+                  {
+                    backgroundColor: shellChrome.syncBadgeSurface,
+                    borderColor: shellChrome.syncBadgeBorder,
+                  },
+                ]}
+              >
                 <Animated.View style={{ transform: [{ rotate: syncSpinRotation }] }}>
                   <Ionicons name="sync-outline" size={9} color={toneColor} />
                 </Animated.View>
               </View>
-            ) : (
-              <View
-                style={[
-                  styles.statusDot,
-                  {
-                    backgroundColor: toneColor,
-                    borderColor: HEADER.bar,
-                  },
-                ]}
-              />
             )}
           </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -595,8 +719,6 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
         accountActions={accountActions}
         accountActionBusyId={accountActionBusyId}
         onAccountAction={handleAccountAction}
-        utilityLinks={utilityLinks}
-        onUtilityPress={handleUtilityPress}
         statusLabel={profileStatus.statusLabel}
         statusDetail={profileStatus.statusDetail}
         statusTone={profileStatus.tone}
@@ -618,10 +740,14 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
           operatorTrustModeStore.setMode(mode);
         }}
         onProfilePress={!user ? handleOpenAuthEntry : undefined}
-        endActionLabel={user ? AUTH_COPY.logout.primary : AUTH_COPY.account.signIn}
-        endActionDetail={user ? AUTH_COPY.logout.supporting : 'Return to the full ECS sign-in screen.'}
-        endActionIcon={user ? 'log-out-outline' : 'log-in-outline'}
-        onEndAction={user ? requestSignOut : handleOpenAuthEntry}
+      />
+
+      <FleetSyncModal
+        visible={syncModalVisible}
+        onClose={() => setSyncModalVisible(false)}
+        eyebrow="ECS COMMAND"
+        title="Sync Management"
+        subtitle="Queue health, pending field changes, conflicts, and offline readiness."
       />
 
       <TacticalPopupShell
@@ -666,25 +792,11 @@ export default function Header({ onAuthPress, guidance, commandContext }: Header
           </Text>
         </View>
       </TacticalPopupShell>
-      <TacticalPopupShell
-        visible={!!activeAccountUtilitySheet}
-        onClose={() => setActiveAccountUtilitySheet(null)}
-        tier="global"
-        title={activeAccountUtilitySheet ? ACCOUNT_UTILITY_SHEETS[activeAccountUtilitySheet].title : ''}
-        subtitle="Expedition Command System"
-        eyebrow="ACCOUNT"
-        icon={activeAccountUtilitySheet ? ACCOUNT_UTILITY_SHEETS[activeAccountUtilitySheet].icon : 'help-buoy-outline'}
-        overlayClass="support"
-        maxWidth={500}
-        maxHeightFraction={0.68}
-      >
-        <View style={styles.accountUtilitySheetBody}>
-          <Text style={styles.accountUtilitySheetText}>
-            {activeAccountUtilitySheet ? ACCOUNT_UTILITY_SHEETS[activeAccountUtilitySheet].body : ''}
-          </Text>
-        </View>
-      </TacticalPopupShell>
-    </ImageBackground>
+      <View
+        pointerEvents="none"
+        style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}
+      />
+    </View>
   );
 }
 
@@ -692,29 +804,35 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     paddingTop: 0,
-    paddingBottom: 6,
+    paddingBottom: 8,
     borderBottomWidth: 0,
     overflow: 'hidden',
+    backgroundColor: '#020304',
   },
-  bannerTextureImage: {
-    width: '100%',
-    height: '100%',
+  bannerMatchedContainer: {
+    alignItems: 'center',
+    paddingBottom: 3,
   },
   contentRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     width: '100%',
     alignSelf: 'center',
-    paddingHorizontal: DENSITY.screenPad,
+    minHeight: ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  },
+  bannerMatchedContentRow: {
+    alignItems: 'center',
+    flex: 1,
   },
   goldRailLine: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 1.5,
+    height: 2,
     backgroundColor: HEADER.goldRail,
-    zIndex: 2,
+    opacity: 0.78,
+    zIndex: 4,
   },
   barBottomEdge: {
     position: 'absolute',
@@ -725,181 +843,118 @@ const styles = StyleSheet.create({
     backgroundColor: HEADER.barBottomEdge,
     zIndex: 1,
   },
-  shellBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 0,
-    overflow: 'hidden',
-  },
-  shellBackdropWash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(10, 13, 18, 0.18)',
-  },
-  shellBackdropSheen: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(24, 29, 34, 0.46)',
-  },
-  shellBackdropBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 10,
-    backgroundColor: 'rgba(201, 162, 76, 0.03)',
-  },
-  shellBackdropRim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    opacity: 1,
-  },
-  edgeSlot: {
-    width: ECS_TOP_SHELL_EDGE_SLOT_WIDTH,
-    alignItems: 'center',
-    justifyContent: 'center',
+  edgeSlotBase: {
+    width: ECS_TOP_SHELL_CONTROL_SLOT_WIDTH,
+    justifyContent: 'flex-end',
+    paddingBottom: 3,
     zIndex: 3,
+  },
+  bannerMatchedEdgeSlot: {
+    justifyContent: 'center',
+    paddingBottom: 0,
+  },
+  edgeSlotStart: {
+    alignItems: 'flex-start',
+  },
+  edgeSlotEnd: {
+    alignItems: 'flex-end',
+  },
+  rightControlCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  statusPillCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   centerContent: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-    paddingHorizontal: 8,
+    minWidth: 0,
     zIndex: 3,
-  },
-  statusRow: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    flexWrap: 'wrap',
-    minHeight: 12,
+    paddingHorizontal: 8,
+    paddingBottom: 0,
+    backgroundColor: 'transparent',
   },
-  guidanceEyebrow: {
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1.35,
+  bannerTitleStack: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  bannerTitle: {
+    maxWidth: '100%',
     color: HEADER.iconActive,
-    textTransform: 'uppercase',
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
+    letterSpacing: 0.65,
     textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
-  guidanceEyebrowWarning: {
-    color: '#D96C50',
-  },
-  guidanceTitle: {
-    ...TYPO.T2,
-    fontSize: 14,
-    lineHeight: 16,
-    letterSpacing: 0.18,
+  product: {
+    ...TYPO.T1,
+    fontSize: 16,
+    fontWeight: '800',
+    lineHeight: 19,
+    letterSpacing: 1.6,
     color: HEADER.productText,
     textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0, 0, 0, 0.34)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
-  guidanceDetail: {
-    ...TYPO.B2,
-    fontSize: 11,
-    lineHeight: 14,
-    color: HEADER.tripText,
-    textAlign: 'center',
-  },
-  offlineBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(201, 162, 76, 0.10)',
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: 'rgba(201, 162, 76, 0.25)',
-  },
-  offlineBadgeText: {
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    color: HEADER.iconActive,
-  },
-  liveStatusPill: {
-    paddingHorizontal: 8,
+  statusPill: {
+    minHeight: 16,
+    paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 999,
     borderWidth: 1,
-  },
-  liveStatusText: {
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 1.05,
-  },
-  product: {
-    ...TYPO.T2,
-    fontSize: 15,
-    lineHeight: 17,
-    letterSpacing: 0.28,
-    color: HEADER.productText,
-    textAlign: 'center',
-  },
-  detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    maxWidth: '100%',
+    gap: 4,
+    flexShrink: 0,
   },
-  activeTrip: {
-    ...TYPO.B2,
-    fontSize: 11,
-    fontWeight: '600',
-    color: HEADER.tripText,
-    textAlign: 'center',
-    flexShrink: 1,
+  statusPillDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
   },
-  detailFallback: {
-    ...TYPO.B2,
-    fontSize: 11,
-    lineHeight: 14,
-    color: HEADER.tripText,
-    textAlign: 'center',
-    opacity: 0.88,
+  statusPillText: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.72,
   },
   authBtn: {
-    width: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
-    height: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
-    borderRadius: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE / 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    backgroundColor: 'rgba(255,255,255,0.035)',
+    backgroundColor: 'rgba(255,255,255,0.045)',
     borderWidth: 1,
     borderColor: 'rgba(201,162,76,0.20)',
   },
-  statusDot: {
-    position: 'absolute',
-    bottom: 6,
-    right: 6,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    borderWidth: 1.5,
-  },
   syncBadge: {
     position: 'absolute',
-    bottom: 4,
-    right: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    right: -4,
+    top: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(17,20,24,0.92)',
@@ -956,13 +1011,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.3,
-  },
-  accountUtilitySheetBody: {
-    paddingTop: 2,
-  },
-  accountUtilitySheetText: {
-    color: '#8B949E',
-    fontSize: 13,
-    lineHeight: 20,
   },
 });

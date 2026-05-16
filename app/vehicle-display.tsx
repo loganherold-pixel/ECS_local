@@ -164,7 +164,7 @@ export default function VehicleDisplayPage() {
     if (router.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)/dashboard');
+      router.replace('/dashboard');
     }
   }, [router]);
 

@@ -25,11 +25,19 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import ECSModalShell from '../ECSModalShell';
 import { TACTICAL } from '../../lib/theme';
+import { ECS_STATUS } from '../../lib/ecsStatusTokens';
 import { hapticMicro } from '../../lib/haptics';
 import type { Vehicle } from '../../lib/types';
 import type { AccessoryFramework, ContainerZone } from '../../lib/accessoryFramework';
-import { generateContainerZonesFromAccessories, generateContainerZonesFromSelections } from '../../lib/accessoryFramework';
+import {
+  generateContainerZonesFromAccessories,
+  generateContainerZonesFromSelections,
+  normalizeAccessoryFramework,
+  resolveVehicleContainerZones,
+  sanitizeContainerZones,
+} from '../../lib/accessoryFramework';
 import type { AccessorySelections } from '../vehicle-wizard/AccessoryConfigStep';
+import { normalizeAccessorySelections } from '../vehicle-wizard/AccessoryConfigStep';
 import LoadoutWizardStep from '../vehicle-wizard/LoadoutWizardStep';
 import { vehicleStore } from '../../lib/vehicleStore';
 
@@ -62,19 +70,21 @@ function extractContainerZones(vehicle: Vehicle | null): ContainerZone[] {
   if (!vehicle) return [];
 
   const vAny = vehicle as any;
+  const resolvedZones = resolveVehicleContainerZones(vAny);
+  if (resolvedZones.length > 0) return resolvedZones;
 
   // Tier 1: Use persisted containerZones directly
-  if (vAny.containerZones && Array.isArray(vAny.containerZones) && vAny.containerZones.length > 0) {
-    console.log(TAG, 'Using persisted containerZones:', vAny.containerZones.length);
-    return vAny.containerZones;
+  const persistedZones = sanitizeContainerZones(vAny.containerZones);
+  if (persistedZones.length > 0) {
+    return persistedZones;
   }
 
   // Tier 2: Regenerate from accessoryFramework
-  if (vAny.accessoryFramework) {
+  const accessoryFramework = normalizeAccessoryFramework(vAny.accessoryFramework as AccessoryFramework | null);
+  if (accessoryFramework) {
     try {
-      const zones = generateContainerZonesFromAccessories(vAny.accessoryFramework as AccessoryFramework);
+      const zones = generateContainerZonesFromAccessories(accessoryFramework);
       if (zones.length > 0) {
-        console.log(TAG, 'Regenerated zones from accessoryFramework:', zones.length);
         return zones;
       }
     } catch (e) {
@@ -86,10 +96,9 @@ function extractContainerZones(vehicle: Vehicle | null): ContainerZone[] {
   const wizConfig = vAny.wizard_config;
   if (wizConfig && typeof wizConfig === 'object' && wizConfig._accessories) {
     try {
-      const parsed: AccessorySelections = JSON.parse(wizConfig._accessories);
+      const parsed: AccessorySelections = normalizeAccessorySelections(JSON.parse(wizConfig._accessories));
       const zones = generateContainerZonesFromSelections(parsed);
       if (zones.length > 0) {
-        console.log(TAG, 'Rebuilt zones from wizard_config._accessories:', zones.length);
         return zones;
       }
     } catch (e) {
@@ -122,15 +131,12 @@ export default function FleetLoadoutModal({
   useEffect(() => {
     // Detect modal opening (visible transitions from false → true)
     if (visible && !prevVisibleRef.current && vehicle?.id) {
-      console.log(TAG, `Modal opening for vehicle ${vehicle.id}, fetching fresh data`);
       // Re-fetch from vehicleStore (reads directly from localStorage)
       const fresh = vehicleStore.getById(vehicle.id);
       if (fresh) {
-        console.log(TAG, `Fresh vehicle fetched, containerZones:`, (fresh as any).containerZones?.length ?? 0);
         setFreshVehicle(fresh);
       } else {
         // Fallback to prop if not found in store (shouldn't happen)
-        console.warn(TAG, `Vehicle ${vehicle.id} not found in vehicleStore, using prop`);
         setFreshVehicle(vehicle);
       }
     }
@@ -224,7 +230,6 @@ export default function FleetLoadoutModal({
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
-    backgroundColor: '#0B0F12',
   },
   modalBody: {
     flex: 1,
@@ -238,9 +243,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
-    backgroundColor: 'rgba(196, 138, 44, 0.08)',
+    backgroundColor: ECS_STATUS.tone.selected.background,
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.2)',
+    borderColor: ECS_STATUS.tone.selected.border,
     maxWidth: 120,
   },
   vehicleBadgeText: {

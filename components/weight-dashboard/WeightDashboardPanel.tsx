@@ -4,9 +4,7 @@
  * Main container that aggregates:
  *   - Total vehicle weight gauge
  *   - CG visualization
- *   - Per-zone weight distribution
- *   - Tilt risk warnings
- *   - Before/after comparison
+ *   - Compact supporting values for operating weight and center of gravity
  *
  * PHASE 6: ContainerZone-aware weight distribution
  *   - Accepts containerZones prop from loadout system
@@ -23,29 +21,23 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Platform,
   RefreshControl,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
-import { useApp } from '../../context/AppContext';
-import { getBuilderState, getCachedVehicleZones } from '../../lib/expeditionCache';
-import { loadoutItemStore } from '../../lib/loadoutStore';
-import {
-  computeWeightDashboard,
-  computeWeightComparison,
-  type WeightDashboardData,
-  type WeightComparison,
-} from '../../lib/weightDashboardStore';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
+import { getBuilderState } from '../../lib/expeditionCache';
+import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
+import { type WeightDashboardData } from '../../lib/weightDashboardStore';
 import { lbsToKg } from '../../lib/weightStore';
-import { loadContainerZonesForVehicle } from '../../lib/containerZoneLoader';
 import type { ContainerZone } from '../../lib/accessoryFramework';
-import { resolveZoneBias } from '../../lib/accessoryFramework';
+import { vehicleStore } from '../../lib/vehicleStore';
+import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
+import { consumablesStore } from '../../lib/consumablesStore';
+import { tiresLiftStore } from '../../lib/tiresLiftStore';
+import { selectFleetVehicleState } from '../../lib/fleet/fleetVehicleStateSelectors';
 
 import CGVisualization from './CGVisualization';
-import ZoneWeightBars from './ZoneWeightBars';
-import TiltRiskPanel from './TiltRiskPanel';
-import WeightComparisonCard from './WeightComparisonCard';
 
 interface Props {
   loadoutId?: string | null;
@@ -55,7 +47,7 @@ interface Props {
   containerZones?: ContainerZone[];
   /** Vehicle ID to auto-load container zones from (if containerZones not provided) */
   vehicleId?: string | null;
-  /** If provided, shows before/after comparison */
+  /** Reserved for embedded add-item previews; ignored by the fixed Fleet summary dashboard. */
   pendingItem?: {
     name: string;
     weight_lbs: number;
@@ -68,119 +60,43 @@ interface Props {
 
 export default function WeightDashboardPanel({
   loadoutId: propLoadoutId,
-  wizardSelections: propSelections,
-  vehicleZones: propZones,
-  containerZones: propContainerZones,
   vehicleId: propVehicleId,
-  pendingItem,
   compact,
 }: Props) {
-  const { user } = useApp();
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [dashData, setDashData] = useState<WeightDashboardData | null>(null);
-  const [comparison, setComparison] = useState<WeightComparison | null>(null);
   const [showMetric, setShowMetric] = useState(false);
-  const [activeSection, setActiveSection] = useState<'overview' | 'zones' | 'stability'>('overview');
-  const [resolvedContainerZones, setResolvedContainerZones] = useState<ContainerZone[]>([]);
+  const [dataRevision, setDataRevision] = useState(0);
 
   const mountedRef = useRef(true);
+  const builderState = getBuilderState();
+  const effectiveVehicleId = propVehicleId || builderState?.vehicleId || null;
+  const canonicalVehicleState = useMemo(() => {
+    void dataRevision;
+    return selectFleetVehicleState(effectiveVehicleId);
+  }, [dataRevision, effectiveVehicleId]);
+  const effectiveLoadoutId = propLoadoutId || canonicalVehicleState?.activeLoadout?.id || builderState?.loadoutId || null;
 
   useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Resolve container zones: prop > vehicle load > empty
-  useEffect(() => {
-    if (propContainerZones && propContainerZones.length > 0) {
-      setResolvedContainerZones(propContainerZones);
-      return;
-    }
-
-    // Try to load from vehicle
-    const vid = propVehicleId || getBuilderState()?.vehicleId;
-    if (vid) {
-      const zones = loadContainerZonesForVehicle(vid);
-      if (zones.length > 0) {
-        setResolvedContainerZones(zones);
-        return;
-      }
-    }
-
-    setResolvedContainerZones([]);
-  }, [propContainerZones, propVehicleId]);
-
   // Load data
   const loadData = useCallback(async () => {
+    void dataRevision;
     try {
-      // Get builder state for wizard selections and vehicle info
-      const bs = getBuilderState();
-      const selections = propSelections || (bs.vehicleId ? getStoredSelections() : {});
-      const loadoutId = propLoadoutId || bs.loadoutId;
-
-      // Get vehicle zones
-      let zones = propZones;
-      if (!zones && bs.vehicleId) {
-        const cached = getCachedVehicleZones(bs.vehicleId);
-        if (cached.length > 0) {
-          zones = cached.map(z => ({
-            id: z.id,
-            name: z.name,
-            zone_type: z.zone_type,
-          }));
-        }
-      }
-
-      // Get loadout items
-      let items: { storage_location: string | null; weight_lbs: number | null; quantity: number }[] = [];
-      if (loadoutId) {
-        try {
-          const loadoutItems = await loadoutItemStore.getByLoadoutId(loadoutId, user?.id);
-          items = loadoutItems.map(i => ({
-            storage_location: i.storage_location,
-            weight_lbs: i.weight_lbs,
-            quantity: i.quantity,
-          }));
-        } catch (e) {
-          console.warn('[WeightDash] Failed to load items:', e);
-        }
-      }
-
-      // Compute dashboard data — PHASE 6: pass containerZones for spatial-bias-aware computation
-      const data = computeWeightDashboard(
-        selections,
-        items,
-        zones,
-        undefined,
-        resolvedContainerZones.length > 0 ? resolvedContainerZones : undefined,
-      );
-      if (mountedRef.current) {
-        setDashData(data);
-      }
-
-      // Compute comparison if pending item
-      if (pendingItem && pendingItem.weight_lbs > 0) {
-        const itemsAfter = [
-          ...items,
-          {
-            storage_location: pendingItem.storage_location,
-            weight_lbs: pendingItem.weight_lbs,
-            quantity: pendingItem.quantity,
-          },
-        ];
-        const comp = computeWeightComparison(
-          selections,
-          items,
-          itemsAfter,
-          zones,
-          resolvedContainerZones.length > 0 ? resolvedContainerZones : undefined,
-        );
+      const fleetState = selectFleetVehicleState(effectiveVehicleId);
+      if (!fleetState) {
         if (mountedRef.current) {
-          setComparison(comp);
+          setDashData(null);
+          setLoading(false);
+          setRefreshing(false);
         }
-      } else {
-        if (mountedRef.current) setComparison(null);
+        return;
+      }
+      if (mountedRef.current) {
+        setDashData(fleetState.operatingWeight.dashboardData);
       }
 
     } catch (e) {
@@ -191,25 +107,63 @@ export default function WeightDashboardPanel({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [propLoadoutId, propSelections, propZones, pendingItem, user?.id, resolvedContainerZones]);
+  }, [
+    effectiveVehicleId,
+    dataRevision,
+  ]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const offItems = loadoutItemStore.subscribe((updatedLoadoutId) => {
+      if (effectiveLoadoutId && updatedLoadoutId === effectiveLoadoutId) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    const offLoadouts = loadoutStore.subscribe((updatedLoadoutId, updatedVehicleId) => {
+      if (
+        (effectiveLoadoutId && updatedLoadoutId === effectiveLoadoutId) ||
+        (effectiveVehicleId && updatedVehicleId === effectiveVehicleId)
+      ) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    const offVehicles = vehicleStore.subscribe((event) => {
+      if (!effectiveVehicleId || event.vehicleId === effectiveVehicleId) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    const offSpecs = vehicleSpecStore.subscribe(() => {
+      if (effectiveVehicleId) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    const offConsumables = consumablesStore.subscribe(() => {
+      if (effectiveVehicleId) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    const offTiresLift = tiresLiftStore.subscribe((vehicleId) => {
+      if (!effectiveVehicleId || vehicleId === effectiveVehicleId) {
+        setDataRevision((revision) => revision + 1);
+      }
+    });
+    return () => {
+      offItems();
+      offLoadouts();
+      offVehicles();
+      offSpecs();
+      offConsumables();
+      offTiresLift();
+    };
+  }, [effectiveLoadoutId, effectiveVehicleId]);
+
   const handleRefresh = () => {
     setRefreshing(true);
     loadData();
   };
-
-  // Bias legend for container zones
-  const biasLegend = useMemo(() => {
-    if (resolvedContainerZones.length === 0) return null;
-    const highCount = resolvedContainerZones.filter(z => resolveZoneBias(z).verticalBias === 'high').length;
-    const midCount = resolvedContainerZones.filter(z => resolveZoneBias(z).verticalBias === 'mid').length;
-    const lowCount = resolvedContainerZones.filter(z => resolveZoneBias(z).verticalBias === 'low').length;
-    return { highCount, midCount, lowCount };
-  }, [resolvedContainerZones]);
 
   // Loading state
   if (loading) {
@@ -236,6 +190,21 @@ export default function WeightDashboardPanel({
   }
 
   const totalColor = dashData.loadoutWeight > 0 ? TACTICAL.amber : TACTICAL.textMuted;
+  const meta = dashData.operatingWeightMeta;
+  const payloadMarginLabel =
+    meta?.payloadRemainingLb == null
+      ? 'UNKNOWN'
+      : `${meta.payloadRemainingLb < 0 ? '-' : ''}${showMetric
+          ? lbsToKg(Math.abs(meta.payloadRemainingLb)).toLocaleString()
+          : Math.round(Math.abs(meta.payloadRemainingLb)).toLocaleString()
+        } ${showMetric ? 'kg' : 'lb'}`;
+  const payloadTone =
+    meta?.payloadRemainingLb == null
+      ? TACTICAL.textMuted
+      : meta.payloadRemainingLb < 0
+        ? '#EF5350'
+        : TACTICAL.amber;
+  const activeLoadZoneCount = dashData.zoneSummary.zones.filter((zone) => zone.totalWeightLbs > 0).length;
 
   return (
     <ScrollView
@@ -243,7 +212,11 @@ export default function WeightDashboardPanel({
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={TACTICAL.amber} />
+        <RefreshControl
+          {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+        />
       }
     >
       {/* Dashboard Header */}
@@ -264,36 +237,6 @@ export default function WeightDashboardPanel({
         </TouchableOpacity>
       </View>
 
-      {/* Container Zone Bias Banner (Phase 6) */}
-      {resolvedContainerZones.length > 0 && biasLegend && (
-        <View style={styles.biasBanner}>
-          <Ionicons name="git-network-outline" size={12} color={TACTICAL.amber} />
-          <Text style={styles.biasBannerText}>
-            SPATIAL BIAS ACTIVE — {resolvedContainerZones.length} ZONES
-          </Text>
-          <View style={styles.biasChips}>
-            {biasLegend.highCount > 0 && (
-              <View style={[styles.biasChip, { borderColor: 'rgba(239, 83, 80, 0.4)' }]}>
-                <View style={[styles.biasDot, { backgroundColor: '#EF5350' }]} />
-                <Text style={[styles.biasChipText, { color: '#EF5350' }]}>HIGH {biasLegend.highCount}</Text>
-              </View>
-            )}
-            {biasLegend.midCount > 0 && (
-              <View style={[styles.biasChip, { borderColor: 'rgba(196, 138, 44, 0.4)' }]}>
-                <View style={[styles.biasDot, { backgroundColor: TACTICAL.amber }]} />
-                <Text style={[styles.biasChipText, { color: TACTICAL.amber }]}>MID {biasLegend.midCount}</Text>
-              </View>
-            )}
-            {biasLegend.lowCount > 0 && (
-              <View style={[styles.biasChip, { borderColor: 'rgba(102, 187, 106, 0.4)' }]}>
-                <View style={[styles.biasDot, { backgroundColor: '#66BB6A' }]} />
-                <Text style={[styles.biasChipText, { color: '#66BB6A' }]}>LOW {biasLegend.lowCount}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-      )}
-
       {/* Total Weight Hero */}
       <View style={styles.heroCard}>
         <View style={styles.heroRow}>
@@ -306,7 +249,7 @@ export default function WeightDashboardPanel({
             </Text>
             <Text style={styles.heroUnit}>{showMetric ? 'KG' : 'LBS'}</Text>
           </View>
-          <Text style={styles.heroLabel}>TOTAL VEHICLE WEIGHT</Text>
+          <Text style={styles.heroLabel}>TOTAL OPERATING WEIGHT</Text>
         </View>
 
         {/* Weight breakdown */}
@@ -381,119 +324,80 @@ export default function WeightDashboardPanel({
         </View>
       </View>
 
-      {/* Section Tabs */}
-      {!compact && (
-        <View style={styles.sectionTabs}>
-          {(['overview', 'zones', 'stability'] as const).map(tab => {
-            const isActive = activeSection === tab;
-            const icons: Record<string, string> = {
-              overview: 'grid-outline',
-              zones: 'layers-outline',
-              stability: 'speedometer-outline',
-            };
-            return (
-              <TouchableOpacity
-                key={tab}
-                style={[styles.sectionTab, isActive && styles.sectionTabActive]}
-                onPress={() => setActiveSection(tab)}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={icons[tab] as any}
-                  size={14}
-                  color={isActive ? TACTICAL.amber : TACTICAL.textMuted}
-                />
-                <Text style={[styles.sectionTabText, isActive && styles.sectionTabTextActive]}>
-                  {tab.toUpperCase()}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+      <View style={styles.supportGrid}>
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>FRONT AXLE</Text>
+          <Text style={styles.supportValue}>{dashData.frontAxlePercent}%</Text>
+          <Text style={styles.supportMeta}>{dashData.frontAxleLoad.toLocaleString()} lb</Text>
         </View>
-      )}
-
-      {/* Before/After Comparison (if pending item) */}
-      {comparison && (
-        <View style={styles.section}>
-          <WeightComparisonCard
-            comparison={comparison}
-            itemName={pendingItem?.name}
-          />
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>REAR AXLE</Text>
+          <Text style={styles.supportValue}>{dashData.rearAxlePercent}%</Text>
+          <Text style={styles.supportMeta}>{dashData.rearAxleLoad.toLocaleString()} lb</Text>
         </View>
-      )}
-
-      {/* Overview / CG Section */}
-      {(activeSection === 'overview' || compact) && (
-        <View style={styles.section}>
-          <CGVisualization
-            cgResult={dashData.cgResult}
-            stability={dashData.stability}
-            frontAxlePercent={dashData.frontAxlePercent}
-            rearAxlePercent={dashData.rearAxlePercent}
-            totalWeight={dashData.totalVehicleWeight}
-          />
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>CG MODEL</Text>
+          <Text style={styles.supportValue}>{dashData.cgResult.modules.length}</Text>
+          <Text style={styles.supportMeta}>tracked modules</Text>
         </View>
-      )}
-
-      {/* Zones Section */}
-      {(activeSection === 'zones' || activeSection === 'overview' || compact) && (
-        <View style={styles.section}>
-          <ZoneWeightBars
-            zones={dashData.zoneSummary.zones}
-            warnings={dashData.zoneWarnings}
-            totalLoadoutWeight={dashData.loadoutWeight}
-            containerZones={resolvedContainerZones.length > 0 ? resolvedContainerZones : undefined}
-          />
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>LOAD ZONES</Text>
+          <Text style={styles.supportValue}>{activeLoadZoneCount}</Text>
+          <Text style={styles.supportMeta}>active weighted zones</Text>
         </View>
-      )}
-
-      {/* Stability Section */}
-      {(activeSection === 'stability' || activeSection === 'overview' || compact) && (
-        <View style={styles.section}>
-          <TiltRiskPanel
-            tiltRisk={dashData.tiltRisk}
-            stability={dashData.stability}
-          />
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>PAYLOAD MARGIN</Text>
+          <Text style={[styles.supportValue, { color: payloadTone }]}>{payloadMarginLabel}</Text>
+          <Text style={styles.supportMeta}>
+            {meta?.gvwrLb ? `GVWR ${Math.round(meta.gvwrLb).toLocaleString()} lb` : 'GVWR unavailable'}
+          </Text>
         </View>
-      )}
+        <View style={styles.supportCard}>
+          <Text style={styles.supportLabel}>CONFIDENCE</Text>
+          <Text style={styles.supportValue}>{meta ? `${Math.round(meta.confidenceScore)}%` : '--'}</Text>
+          <Text style={styles.supportMeta}>
+            {meta?.gvwrUsagePct != null ? `${meta.gvwrUsagePct}% GVWR used` : 'partial data'}
+          </Text>
+        </View>
+      </View>
 
-      {/* Zone Limit Warnings (if any overweight) */}
-      {dashData.zoneWarnings.filter(w => w.severity === 'overweight').length > 0 && (
-        <View style={styles.alertBanner}>
+      {meta?.payloadRemainingLb != null && meta.payloadRemainingLb < 0 ? (
+        <View style={styles.statusBanner}>
           <Ionicons name="warning" size={16} color="#EF5350" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.alertTitle}>ZONE CAPACITY EXCEEDED</Text>
-            {dashData.zoneWarnings
-              .filter(w => w.severity === 'overweight')
-              .map(w => (
-                <Text key={w.zoneId} style={styles.alertText}>
-                  {w.zoneName}: {w.currentWeight} / {w.capacityLbs} lbs ({w.utilizationPct}%)
-                </Text>
-              ))
-            }
-          </View>
+          <Text style={[styles.statusBannerText, { color: '#EF5350' }]}>
+            Operating weight exceeds known GVWR. Reduce load before staging.
+          </Text>
         </View>
-      )}
+      ) : null}
+
+      {meta?.partialDataReasons.length ? (
+        <View style={styles.statusBanner}>
+          <Ionicons name="information-circle-outline" size={16} color={TACTICAL.amber} />
+          <Text style={styles.statusBannerText} numberOfLines={3}>
+            {meta.partialDataReasons[0]}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={styles.section}>
+        <CGVisualization
+          cgResult={dashData.cgResult}
+          stability={dashData.stability}
+          frontAxlePercent={dashData.frontAxlePercent}
+          rearAxlePercent={dashData.rearAxlePercent}
+          totalWeight={dashData.totalVehicleWeight}
+          vehicleType={dashData.vehicleType}
+        />
+      </View>
 
       {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          {`ECS WEIGHT TRACKING | MODULES: ${dashData.cgResult.modules.length} |${dashData.stability.isAdvanced ? ' ADVANCED MODEL' : ' BASELINE MODEL'}${resolvedContainerZones.length > 0 ? ` | SPATIAL BIAS: ${resolvedContainerZones.length} ZONES` : ''}`}
+          {`ECS WEIGHT TRACKING | REAL VEHICLE + BUILD + LOADOUT | MODULES: ${dashData.cgResult.modules.length} |${dashData.stability.isAdvanced ? ' ADVANCED MODEL' : ' BASELINE MODEL'}`}
         </Text>
       </View>
     </ScrollView>
   );
-}
-
-// Helper to get stored wizard selections
-function getStoredSelections(): Record<string, string> {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem('ecs_wizard_selections');
-      if (raw) return JSON.parse(raw);
-    }
-  } catch {}
-  return {};
 }
 
 const styles = StyleSheet.create({
@@ -548,7 +452,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'web' ? 16 : 54,
+    paddingTop: 16,
     paddingBottom: 12,
   },
   dashHeaderLeft: {
@@ -581,52 +485,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1,
-  },
-
-  // Bias banner (Phase 6)
-  biasBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: 'rgba(196, 138, 44, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.15)',
-    flexWrap: 'wrap',
-  },
-  biasBannerText: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1.5,
-    flex: 1,
-  },
-  biasChips: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  biasChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-  },
-  biasDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-  },
-  biasChipText: {
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 0.5,
   },
 
   // Hero card
@@ -714,71 +572,69 @@ const styles = StyleSheet.create({
     height: '100%',
   },
 
-  // Section tabs
-  sectionTabs: {
+  supportGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
     marginHorizontal: 16,
     marginBottom: 12,
-    borderRadius: 10,
+  },
+  supportCard: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minWidth: 132,
+    padding: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: TACTICAL.border,
     backgroundColor: TACTICAL.panel,
-    overflow: 'hidden',
   },
-  sectionTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-  },
-  sectionTabActive: {
-    backgroundColor: 'rgba(196, 138, 44, 0.1)',
-    borderBottomWidth: 2,
-    borderBottomColor: TACTICAL.amber,
-  },
-  sectionTabText: {
-    fontSize: 9,
+  supportLabel: {
+    fontSize: 8,
     fontWeight: '800',
     color: TACTICAL.textMuted,
-    letterSpacing: 1,
+    letterSpacing: 1.4,
+    marginBottom: 5,
   },
-  sectionTabTextActive: {
+  supportValue: {
+    fontSize: 18,
+    fontWeight: '900',
     color: TACTICAL.amber,
+    fontFamily: 'Courier',
+  },
+  supportMeta: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    marginTop: 3,
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.22)',
+    backgroundColor: 'rgba(196, 138, 44, 0.07)',
+  },
+  statusBannerText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.amber,
+    letterSpacing: 0.4,
+    lineHeight: 15,
   },
 
   // Sections
   section: {
     paddingHorizontal: 16,
     marginBottom: 12,
-  },
-
-  // Alert banner
-  alertBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: 'rgba(239, 83, 80, 0.08)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 83, 80, 0.25)',
-  },
-  alertTitle: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#EF5350',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  alertText: {
-    fontSize: 10,
-    color: TACTICAL.text,
-    lineHeight: 16,
-    fontFamily: 'Courier',
   },
 
   // Footer

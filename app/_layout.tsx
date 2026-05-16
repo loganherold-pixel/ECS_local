@@ -12,9 +12,12 @@ import {
   useWindowDimensions,
   type AppStateStatus,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import AdaptiveBackground from '../components/login/AdaptiveBackground';
 import AuthBrandLockup from '../components/login/AuthBrandLockup';
+import ShellBodyBackground from '../components/ShellBodyBackground';
+import LoadingTransitionVideo from '../components/LoadingTransitionVideo';
 
 import { AppProvider, useApp } from '../context/AppContext';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
@@ -22,10 +25,16 @@ import { WizardStateProvider } from '../context/WizardStateContext';
 import { ViewerSettingsProvider } from '../context/ViewerSettingsContext';
 
 import CommandDock from '../components/CommandDock';
+import OfflineSyncStatusChip from '../components/navigate/OfflineSyncStatusChip';
 
 import { MOTION } from '../lib/motion';
 import { ECS } from '../lib/theme';
-import { flushDashboardWrites } from '../lib/dashboardStore';
+import { ecsLog } from '../lib/ecsLogger';
+import {
+  flushDashboardWrites,
+  isDashboardHydrated,
+  waitForDashboardHydration,
+} from '../lib/dashboardStore';
 import { sessionStore } from '../lib/sessionStore';
 import { setupStore } from '../lib/setupStore';
 import { vehicleStore } from '../lib/vehicleStore';
@@ -47,11 +56,7 @@ import {
   setIssueRuntimePath,
 } from '../lib/ecsIssueRuntime';
 import { createPersistedKeyValueCache } from '../lib/keyValuePersistence';
-import {
-  powerTelemetryManager,
-  MockPowerConnector,
-  logDevTokenInstructions,
-} from '../src/power';
+import { restoreUnifiedDeviceSessions } from '../lib/ecsLiveSystemBootstrap';
 import { resolveAccountUx } from '../lib/auth/accountUXResolver';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
@@ -63,8 +68,20 @@ import {
   markAuthTimingStart,
   recordAuthDiagnostic,
 } from '../lib/auth/authDiagnostics';
+import { redactAuthUserId } from '../lib/auth/authLogRedaction';
 import { runtimeSmokeStore } from '../lib/ai/runtimeSmokeStore';
 import { openManageSubscription } from '../lib/subscriptionAccess';
+import {
+  getCommandDockHeight,
+} from '../lib/shellLayout';
+import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
+import { stageNavigationFlow } from '../lib/ecsNavigationFlow';
+import { sanitizeLegacyVehicleFrameworkState } from '../lib/fleet/legacyVehicleFrameworkStateMigration';
+import {
+  getStartupDiagnosticsSnapshot,
+  logStartupStall,
+  markStartupPhase,
+} from '../lib/startupDiagnostics';
 
 if (typeof globalThis.fetch === 'undefined') {
   // @ts-ignore
@@ -72,7 +89,8 @@ if (typeof globalThis.fetch === 'undefined') {
 }
 
 // ── Auth screens that don't require authentication ───────────
-const AUTH_SCREENS = ['login', 'initialize', 'create-access-key', 'auth-info', 'pro'];
+const AUTH_SCREENS = ['login', 'initialize', 'create-access-key', 'auth-info', 'pro', 'join-expedition'];
+const AUTH_ROUTE_PREFIXES = ['/expedition-channel/join/'];
 
 // ── Screens that STRICTLY require authentication (cloud-only features) ──
 const PROTECTED_SCREENS = [
@@ -93,6 +111,20 @@ function normalizeRoutePath(path: string | null | undefined): string {
   const withoutGroups = path.replace(/\/\([^/]+\)/g, '');
   const normalized = withoutGroups.replace(/\/index$/, '') || '/';
   return normalized === '' ? '/' : normalized;
+}
+
+function firstRouteParam(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return value ?? null;
+}
+
+function isAuthRoutePath(path: string | null | undefined): boolean {
+  const normalized = normalizeRoutePath(path);
+  if (normalized === '/') return true;
+  return AUTH_SCREENS.some((screen) => normalized === `/${screen}`) ||
+    AUTH_ROUTE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 const SHELL_ROUTE_KEY = 'last_shell_route_v1';
@@ -119,6 +151,48 @@ const STARTUP_VISUAL_PALETTE = {
   amber: ECS.accent,
   card: ECS.bgPanel,
 } as const;
+const INITIAL_URL_RESOLUTION_TIMEOUT_MS = 1500;
+const MIN_LOADING_MS = 3000;
+const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;
+const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;
+const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 12000;
+
+function waitForShellStartupRequirement(
+  label: string,
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<{ timedOut: boolean }> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<{ timedOut: boolean }>((resolve) => {
+    timeout = setTimeout(() => {
+      ecsLog.warnOnce(
+        'CONFIG',
+        `startup:${label}:timeout`,
+        '[AuthGate] Startup requirement timed out; continuing with fallback route readiness',
+        { requirement: label, timeoutMs },
+      );
+      resolve({ timedOut: true });
+    }, timeoutMs);
+  });
+
+  return Promise.race([
+    promise
+      .then(() => ({ timedOut: false }))
+      .catch((error) => {
+        ecsLog.warnOnce(
+          'CONFIG',
+          `startup:${label}:failed`,
+          '[AuthGate] Startup requirement failed; continuing with fallback route readiness',
+          { requirement: label, error: error instanceof Error ? error.message : String(error) },
+        );
+        return { timedOut: false };
+      }),
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
 
 function normalizeStoredShellRoute(path: string | null | undefined): string | null {
   if (!path) return null;
@@ -197,7 +271,7 @@ function getStoredShellRoute(): string | null {
 
 function getPreferredShellRoute(): string {
   if (!setupStore.isComplete() || !resolveConfiguredVehiclePresence().hasConfiguredVehicle) {
-    return '/setup';
+    return '/fleet';
   }
   return getStoredShellRoute() ?? '/dashboard';
 }
@@ -234,7 +308,7 @@ function normalizeRequestedEntryRouteFromUrl(url: string | null | undefined): st
       scheme === 'http' ||
       scheme === 'https';
 
-    const candidates: Array<string | null | undefined> = [
+    const candidates: (string | null | undefined)[] = [
       explicitPath,
       pathname.startsWith('/--/') ? pathname.slice(3) : pathname,
       pathname,
@@ -284,14 +358,19 @@ function AuthGate() {
     refreshAccessState,
   } = useApp();
 
-  const { palette, isLight, themeReady } = useTheme();
+  const { palette, colors, isLight, themeReady } = useTheme();
+  const insets = useSafeAreaInsets();
+  const adaptive = useAdaptiveLayout();
   const authLayout = useMemo(() => resolveAuthLayoutMetrics(width, height), [width, height]);
   const pathname = usePathname();
-  const routeParams = useGlobalSearchParams<{ mode?: string }>();
+  const routeParams = useGlobalSearchParams<{ mode?: string; vehicleId?: string }>();
   const router = useRouter();
   const [startupRouteHydrated, setStartupRouteHydrated] = useState(false);
+  const [dashboardShellHydrated, setDashboardShellHydrated] = useState(() => isDashboardHydrated());
+  const [minimumLoadingElapsed, setMinimumLoadingElapsed] = useState(false);
   const [requestedEntryRoute, setRequestedEntryRoute] = useState<string | null>(null);
   const [initialEntryRouteResolved, setInitialEntryRouteResolved] = useState(false);
+  const [startupRecoveryVisible, setStartupRecoveryVisible] = useState(false);
   const [accessActionBusy, setAccessActionBusy] = useState<
     'refresh_access' | 'restore_purchases' | 'manage_subscription' | 'start_subscription' | 'sign_out' | null
   >(null);
@@ -300,16 +379,28 @@ function AuthGate() {
   const firstAuthenticatedFrameLoggedRef = useRef(false);
   const routeGuardFallbackRef = useRef<string | null>(null);
   const destinationResolutionRef = useRef<string | null>(null);
+  const postAuthLoadingNavigationRef = useRef<string | null>(null);
+  const legacyFleetSetupRedirectRef = useRef<string | null>(null);
   const degradedMessageRef = useRef<string | null>(null);
 
   const startupGatePending =
     authPhase === 'restoring' ||
     authPhase === 'signing_in' ||
     !startupRouteHydrated ||
-    !initialEntryRouteResolved ||
-    !themeReady;
+    !initialEntryRouteResolved;
   const statusBarStyle = !themeReady ? 'light' : isLight ? 'dark' : 'light';
-  const visualPalette = themeReady ? palette : STARTUP_VISUAL_PALETTE;
+  const visualPalette = useMemo(
+    () => ({
+      bg: themeReady ? palette.bg : STARTUP_VISUAL_PALETTE.bg,
+      bgElevated: themeReady ? colors.bgElevated : STARTUP_VISUAL_PALETTE.bgElevated,
+      border: themeReady ? colors.border : STARTUP_VISUAL_PALETTE.border,
+      text: themeReady ? palette.text : STARTUP_VISUAL_PALETTE.text,
+      textMuted: themeReady ? palette.textMuted : STARTUP_VISUAL_PALETTE.textMuted,
+      amber: themeReady ? palette.amber : STARTUP_VISUAL_PALETTE.amber,
+      card: themeReady ? colors.bgCard : STARTUP_VISUAL_PALETTE.card,
+    }),
+    [colors.bgCard, colors.bgElevated, colors.border, palette.amber, palette.bg, palette.text, palette.textMuted, themeReady],
+  );
   const normalizedPathname = useMemo(() => normalizeRoutePath(pathname), [pathname]);
   const persistedOfflineMode = startupRouteHydrated
     ? offlineModeCache.get(OFFLINE_MODE_KEY) === 'true'
@@ -333,26 +424,27 @@ function AuthGate() {
     sessionStore.checkSessionValidity() === 'valid';
   const guestOfflineAccess = effectiveOfflineMode && !hasAuthenticatedUser && !rememberedOfflineAccess;
   const shellOfflineMode = effectiveOfflineMode;
+  const setupRouteMode = firstRouteParam(routeParams.mode);
+  const setupRouteVehicleId = firstRouteParam(routeParams.vehicleId);
+  const legacyFleetSetupRoute =
+    normalizedPathname === '/setup' &&
+    (setupRouteMode === 'fleet-add' || setupRouteMode === 'fleet-edit');
   const preserveSetupRoute =
     normalizedPathname === '/setup' &&
-    (
-      routeParams.mode === 'fleet-add' ||
-      routeParams.mode === 'fleet-edit' ||
-      routeParams.mode === 'guest-entry'
-    );
+    setupRouteMode === 'guest-entry';
   const authNetworkState = effectiveOfflineMode
     ? 'offline'
     : bootstrapError
       ? 'reconnecting'
       : 'online';
   const credentialRecoveryMode =
-    routeParams.mode === 'reset'
+    setupRouteMode === 'reset'
       ? 'reset'
-      : routeParams.mode === 'activate'
+      : setupRouteMode === 'activate'
         ? 'activate'
         : 'unknown';
   const isResetCompletionScreen =
-    normalizedPathname === '/create-access-key' && routeParams.mode !== 'signup';
+    normalizedPathname === '/create-access-key' && setupRouteMode !== 'signup';
   const inSetup = normalizedPathname === '/setup';
   const accountUx = useMemo(
     () =>
@@ -387,6 +479,34 @@ function AuthGate() {
       ((hasAuthenticatedUser || guestOfflineAccess || rememberedOfflineAccess) && loading)
     );
   const isLoading = startupGatePending || postAuthBootstrapPending;
+  const unresolvedStartupRequiredFlags = useMemo(
+    () => [
+      authPhase === 'restoring' ? 'authReady' : null,
+      authPhase === 'signing_in' ? 'signInComplete' : null,
+      !startupRouteHydrated ? 'startupRouteHydrated' : null,
+      !initialEntryRouteResolved ? 'initialRouteReady' : null,
+      postAuthBootstrapPending ? 'postAuthBootstrapReady' : null,
+    ].filter((flag): flag is string => !!flag),
+    [
+      authPhase,
+      initialEntryRouteResolved,
+      postAuthBootstrapPending,
+      startupRouteHydrated,
+    ],
+  );
+  const optionalStartupServicesPending = useMemo(
+    () => [
+      !dashboardShellHydrated ? 'dashboardShellHydration' : null,
+      bootstrapError ? 'postAuthBootstrap' : null,
+      accessState?.accessState === 'unknown' ? 'accessVerification' : null,
+      'weather',
+      'realtime',
+      'dispatch',
+      'teamSync',
+      'cacheReadiness',
+    ].filter((flag): flag is string => !!flag),
+    [accessState?.accessState, bootstrapError, dashboardShellHydrated],
+  );
   const primaryAccessAction = accountUx.availableActions.find((action) => action.emphasis === 'primary') ?? null;
   const utilityAccessActions = accountUx.availableActions.filter((action) => action.emphasis !== 'primary');
   const billingBusy =
@@ -471,28 +591,22 @@ function AuthGate() {
       : bootstrapError || authNetworkState === 'reconnecting'
         ? AUTH_COPY.degraded.limitedConnectivity
         : null;
-  const authState = useMemo<
-    'booting' | 'unauthenticated' | 'authenticating' | 'authenticated' | 'entitlement_resolving' | 'auth_error'
-  >(() => {
-    if (isLoading) return 'booting';
-    if (accessActionBusy === 'sign_out') return 'authenticating';
-    if (!hasAuthenticatedUser) return bootstrapError ? 'auth_error' : 'unauthenticated';
-    if (entitlementResolving) return 'entitlement_resolving';
-    return 'authenticated';
-  }, [accessActionBusy, bootstrapError, entitlementResolving, hasAuthenticatedUser, isLoading]);
-
   useEffect(() => {
     if (startupRouteHydrated) return;
     let cancelled = false;
 
-    void Promise.all([
-      shellRouteCache.waitForHydration(),
-      offlineModeCache.waitForHydration(),
-      setupStateCache.waitForHydration(),
-      setupStore.waitForHydration(),
-      vehicleStore.waitForHydration(),
-      vehicleSetupStore.waitForHydration(),
-    ]).then(() => {
+    void waitForShellStartupRequirement(
+      'route state hydration',
+      Promise.all([
+        shellRouteCache.waitForHydration(),
+        offlineModeCache.waitForHydration(),
+        setupStateCache.waitForHydration(),
+        setupStore.waitForHydration(),
+        vehicleStore.waitForHydration(),
+        vehicleSetupStore.waitForHydration(),
+      ]).then(() => sanitizeLegacyVehicleFrameworkState()),
+      STARTUP_ROUTE_READINESS_TIMEOUT_MS,
+    ).then(() => {
       if (!cancelled) {
         setStartupRouteHydrated(true);
       }
@@ -504,7 +618,35 @@ function AuthGate() {
   }, [startupRouteHydrated]);
 
   useEffect(() => {
+    if (dashboardShellHydrated || isDashboardHydrated()) {
+      setDashboardShellHydrated(true);
+      return;
+    }
+
     let cancelled = false;
+    void waitForShellStartupRequirement(
+      'dashboard shell hydration',
+      waitForDashboardHydration(),
+      DASHBOARD_SHELL_READINESS_TIMEOUT_MS,
+    )
+      .then(() => {
+        if (!cancelled) {
+          setDashboardShellHydrated(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dashboardShellHydrated]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolutionTimeout = setTimeout(() => {
+      if (!cancelled) {
+        setInitialEntryRouteResolved(true);
+      }
+    }, INITIAL_URL_RESOLUTION_TIMEOUT_MS);
 
     void Linking.getInitialURL()
       .then((url) => {
@@ -513,18 +655,20 @@ function AuthGate() {
       })
       .finally(() => {
         if (!cancelled) {
+          clearTimeout(resolutionTimeout);
           setInitialEntryRouteResolved(true);
         }
       });
 
     return () => {
       cancelled = true;
+      clearTimeout(resolutionTimeout);
     };
   }, []);
 
   useEffect(() => {
     if (!startupRouteHydrated || !__DEV__) return;
-    console.log('[AuthGate] startup route hydration ready', {
+    ecsLog.debug('SHELL', '[AuthGate] startup route hydration ready', {
       pathname: normalizedPathname,
       persistedOfflineMode,
       persistedSetupComplete,
@@ -599,7 +743,7 @@ function AuthGate() {
 
   useEffect(() => {
     setIssueRuntimeActor({
-      userId: user?.id ?? null,
+      userId: redactAuthUserId(user?.id ?? null),
       isAdmin: operatorInfo?.is_admin === true,
     });
   }, [operatorInfo?.is_admin, user?.id]);
@@ -619,7 +763,7 @@ function AuthGate() {
   const inAuthScreen = useMemo(
     () =>
       !isResetCompletionScreen &&
-      AUTH_SCREENS.some((screen) => normalizedPathname === `/${screen}`),
+      isAuthRoutePath(normalizedPathname),
     [isResetCompletionScreen, normalizedPathname],
   );
   const inLogin = normalizedPathname === '/login';
@@ -679,38 +823,200 @@ function AuthGate() {
     ],
   );
   const redirectTarget = entryResolution.redirectTarget;
+  const normalizedRedirectTarget = redirectTarget ? normalizeRoutePath(redirectTarget) : null;
+  const redirectTargetIsAuthRoute = isAuthRoutePath(normalizedRedirectTarget);
+  const hasShellIdentity = hasAuthenticatedUser || guestOfflineAccess || rememberedOfflineAccess;
+  const postAuthLoadingTarget =
+    hasShellIdentity &&
+    entryResolution.shellAccessReady &&
+    normalizedRedirectTarget &&
+    !redirectTargetIsAuthRoute
+      ? normalizedRedirectTarget
+      : null;
+  const postAuthLoadingGateActive = !!postAuthLoadingTarget && normalizedPathname === '/';
+  const postAuthRedirectHoldingScreenActive =
+    !!postAuthLoadingTarget &&
+    (normalizedPathname === '/' || inAuthScreen) &&
+    normalizedPathname !== postAuthLoadingTarget;
+  const postAuthLoadingGateKey = postAuthLoadingGateActive
+    ? [
+        user?.id ?? (rememberedOfflineAccess ? 'remembered_offline' : guestOfflineAccess ? 'guest_offline' : 'shell'),
+        postAuthLoadingTarget,
+        entryResolution.kind,
+      ].join(':')
+    : null;
+
+  useEffect(() => {
+    if (startupGatePending) return;
+    markStartupPhase('initial_route_chosen', {
+      currentPath: normalizedPathname,
+      redirectTarget: redirectTarget ?? null,
+      entryKind: entryResolution.kind,
+      setupComplete,
+      authenticated: hasAuthenticatedUser,
+      rememberedOfflineAccess,
+      guestOfflineAccess,
+    });
+  }, [
+    entryResolution.kind,
+    guestOfflineAccess,
+    hasAuthenticatedUser,
+    normalizedPathname,
+    redirectTarget,
+    rememberedOfflineAccess,
+    setupComplete,
+    startupGatePending,
+  ]);
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (postAuthRedirectHoldingScreenActive) return;
+    if (inSetup || !setupComplete) {
+      markStartupPhase('app_rendered_setup', {
+        currentPath: normalizedPathname,
+        setupComplete,
+      });
+      return;
+    }
+    if (inAuthScreen || (!hasAuthenticatedUser && !guestOfflineAccess && !rememberedOfflineAccess)) {
+      markStartupPhase('app_rendered_sign_in', {
+        currentPath: normalizedPathname,
+        hasAuthenticatedUser,
+      });
+      return;
+    }
+    markStartupPhase('app_rendered_main', {
+      currentPath: normalizedPathname,
+      redirectTarget: redirectTarget ?? null,
+      entryKind: entryResolution.kind,
+    });
+  }, [
+    entryResolution.kind,
+    guestOfflineAccess,
+    hasAuthenticatedUser,
+    inAuthScreen,
+    inSetup,
+    isLoading,
+    normalizedPathname,
+    postAuthRedirectHoldingScreenActive,
+    redirectTarget,
+    rememberedOfflineAccess,
+    setupComplete,
+  ]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setStartupRecoveryVisible(false);
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      const currentPhase = getStartupDiagnosticsSnapshot().currentPhase;
+      const fallback =
+        authPhase === 'restoring' || authPhase === 'signing_in'
+          ? 'auth_recovery_surface'
+          : setupComplete
+            ? 'route_to_shell'
+            : 'route_to_setup';
+
+      logStartupStall({
+        currentPhase,
+        unresolvedRequiredFlags: unresolvedStartupRequiredFlags,
+        optionalServicesPending: optionalStartupServicesPending,
+        fallback,
+        details: {
+          authPhase,
+          currentPath: normalizedPathname,
+          setupComplete,
+          authenticated: hasAuthenticatedUser,
+          rememberedOfflineAccess,
+          guestOfflineAccess,
+        },
+      });
+
+      if (unresolvedStartupRequiredFlags.length > 0) {
+        markStartupPhase('startup_recovery_fallback', {
+          fallback,
+          unresolvedRequiredFlags: unresolvedStartupRequiredFlags,
+        });
+        setStartupRecoveryVisible(true);
+      }
+    }, STARTUP_LOADING_STALL_DIAGNOSTIC_MS);
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [
+    authPhase,
+    guestOfflineAccess,
+    hasAuthenticatedUser,
+    isLoading,
+    normalizedPathname,
+    optionalStartupServicesPending,
+    rememberedOfflineAccess,
+    setupComplete,
+    unresolvedStartupRequiredFlags,
+  ]);
+  const dashboardReady =
+    !startupGatePending &&
+    !postAuthBootstrapPending &&
+    !accessCheckPending &&
+    (postAuthLoadingTarget === '/dashboard' ? dashboardShellHydrated : true);
   const pendingRedirect = useMemo(() => {
     if (!redirectTarget) return false;
-    return normalizedPathname !== normalizeRoutePath(redirectTarget);
-  }, [normalizedPathname, redirectTarget]);
+    return normalizedPathname !== normalizedRedirectTarget;
+  }, [normalizedPathname, normalizedRedirectTarget, redirectTarget]);
   const effectivePendingRedirect = pendingRedirect && !suppressRedirect;
+  const dashboardRoutePending =
+    normalizedPathname === '/dashboard' && !dashboardShellHydrated;
   const shouldHideCommandDock =
     isLoading ||
     effectivePendingRedirect ||
+    dashboardRoutePending ||
     isResetCompletionScreen ||
     inAuthScreen ||
     normalizedPathname === '/pro' ||
-    normalizedPathname === '/setup' ||
     !entryResolution.shellAccessReady;
   const inPreAuthTree =
     normalizedPathname === '/' ||
     inAuthScreen ||
     isResetCompletionScreen ||
     (inSetup && !entryResolution.shellAccessReady);
+  const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;
+  const showSharedShellBodyBackground =
+    !inPreAuthTree &&
+    (
+      showCommandDock ||
+      normalizedPathname === '/fleet' ||
+      normalizedPathname === '/navigate' ||
+      normalizedPathname === '/dashboard' ||
+      normalizedPathname === '/discover' ||
+      normalizedPathname === '/explore' ||
+      normalizedPathname === '/alert' ||
+      normalizedPathname === '/vehicle-config' ||
+      normalizedPathname === '/route' ||
+      normalizedPathname === '/safety' ||
+      normalizedPathname === '/intel' ||
+      normalizedPathname === '/more'
+    );
+  const shellBodyTopInset = 0;
+  const shellBodyBottomInset = useMemo(
+    () => (showCommandDock ? getCommandDockHeight(insets.bottom) : 0),
+    [insets.bottom, showCommandDock],
+  );
   const stackScreenOptions = useMemo(
     () => ({
       headerShown: false,
       animation: 'fade' as const,
       animationDuration: MOTION.screenTransition,
-      contentStyle: { backgroundColor: visualPalette.bg },
+      contentStyle: { backgroundColor: inPreAuthTree ? visualPalette.bg : 'transparent' },
     }),
-    [visualPalette.bg],
+    [inPreAuthTree, visualPalette.bg],
   );
-  const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;
 
   useEffect(() => {
     if (!__DEV__) return;
-    console.log('[AuthGate] final route decision', {
+    ecsLog.debug('SHELL', '[AuthGate] final route decision', {
       pathname: normalizedPathname,
       redirectTarget,
       pendingRedirect: effectivePendingRedirect,
@@ -742,29 +1048,12 @@ function AuthGate() {
     setupComplete,
     shellOfflineMode,
   ]);
-  const showAuthenticatedShellHold =
-    !isResetCompletionScreen &&
-    hasAuthenticatedUser &&
-    !accessCheckPending &&
-    !shouldShowAccessGate;
   const showEntryBootstrapBanner =
     normalizedPathname === '/' || inAuthScreen || isResetCompletionScreen;
   const showBootstrapBanner =
     hasAuthenticatedUser &&
     showEntryBootstrapBanner &&
     !!(bootstrapError || degradedShellMessage);
-  const holdTitle = isResetCompletionScreen
-    ? credentialRecoveryMode === 'reset'
-      ? AUTH_COPY.resetPassword.verifying
-      : AUTH_COPY.activation.verifying
-    : authState === 'entitlement_resolving'
-      ? AUTH_COPY.session.verifyingAccess
-    : showAuthenticatedShellHold
-      ? entryResolution.shellRestoreEligible
-        ? AUTH_COPY.session.loadingSystems
-        : AUTH_COPY.session.preparing
-      : entryResolution.loadingLabel;
-  const showHoldDetail = authState !== 'entitlement_resolving' && !showAuthenticatedShellHold;
   const authEntryMode =
     isResetCompletionScreen
       ? 'manual_login'
@@ -773,10 +1062,25 @@ function AuthGate() {
         : entryResolution.kind === 'authenticated_restore'
           ? 'remembered_session'
           : 'cold_launch';
+  useEffect(() => {
+    postAuthLoadingNavigationRef.current = null;
+    setMinimumLoadingElapsed(false);
+
+    if (!postAuthLoadingGateKey && !postAuthRedirectHoldingScreenActive) return;
+
+    const minimumLoadingTimer = setTimeout(() => {
+      setMinimumLoadingElapsed(true);
+    }, MIN_LOADING_MS);
+
+    return () => {
+      clearTimeout(minimumLoadingTimer);
+    };
+  }, [postAuthLoadingGateKey, postAuthRedirectHoldingScreenActive]);
 
   const handleAccessAction = useCallback(
     async (
       actionId:
+        | 'sign_in'
         | 'refresh_access'
         | 'restore_purchases'
         | 'manage_subscription'
@@ -784,6 +1088,11 @@ function AuthGate() {
         | 'sign_out',
     ) => {
       if (accessActionBusy || billingBusy) return;
+
+      if (actionId === 'sign_in') {
+        router.replace('/login');
+        return;
+      }
 
       if (actionId === 'manage_subscription') {
         const ok = await openManageSubscription();
@@ -841,6 +1150,7 @@ function AuthGate() {
       purchaseEcsProMonthly,
       refreshAccessState,
       restoreEcsProAccess,
+      router,
       showToast,
       signOut,
       verificationFailureLine,
@@ -862,8 +1172,6 @@ function AuthGate() {
       shellAccessReady: entryResolution.shellAccessReady,
       shellRestoreEligible: entryResolution.shellRestoreEligible,
       routeRestoreEligible: entryResolution.routeRestoreEligible,
-      destinationSource: entryResolution.destinationSource,
-      routeRestoreRejected: entryResolution.routeRestoreRejected,
       accessState: accessState
         ? {
             role: accessState.role,
@@ -1167,9 +1475,53 @@ function AuthGate() {
   useEffect(() => {
     if (isLoading || suppressRedirect) return;
 
-    if (redirectTarget) {
-      if (effectivePendingRedirect) {
+    const replaceWithRedirectTarget = () => {
+      const run = async () => {
+        if (legacyFleetSetupRoute && redirectTarget === '/fleet') {
+          const legacyRedirectKey = `${setupRouteMode}:${setupRouteVehicleId ?? 'new'}`;
+          if (legacyFleetSetupRedirectRef.current !== legacyRedirectKey) {
+            legacyFleetSetupRedirectRef.current = legacyRedirectKey;
+            try {
+              await stageNavigationFlow({
+                source: 'fleet',
+                target: 'fleet',
+                intent: setupRouteMode === 'fleet-edit' ? 'fleet_edit_vehicle' : 'fleet_add_vehicle',
+                label: setupRouteMode === 'fleet-edit' ? 'Edit Vehicle' : 'Add Vehicle',
+                message: null,
+                context: { vehicleId: setupRouteVehicleId },
+              });
+            } catch (error) {
+              ecsLog.debug('SHELL', '[AuthGate] legacy Fleet setup redirect staging failed', {
+                mode: setupRouteMode,
+                vehicleId: setupRouteVehicleId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+        }
         router.replace(redirectTarget as any);
+      };
+      void run();
+    };
+
+    if (redirectTarget) {
+      if (postAuthLoadingGateActive || postAuthRedirectHoldingScreenActive) {
+        if (!minimumLoadingElapsed || !dashboardReady) {
+          return;
+        }
+
+        const navigationKey = `${postAuthLoadingGateKey ?? 'post_auth_loading'}:${redirectTarget}`;
+        if (postAuthLoadingNavigationRef.current === navigationKey) return;
+        postAuthLoadingNavigationRef.current = navigationKey;
+
+        if (effectivePendingRedirect) {
+          replaceWithRedirectTarget();
+        }
+        return;
+      }
+
+      if (effectivePendingRedirect) {
+        replaceWithRedirectTarget();
       }
       return;
     }
@@ -1178,17 +1530,27 @@ function AuthGate() {
     redirectTarget,
     router,
     isLoading,
+    dashboardReady,
     suppressRedirect,
+    postAuthLoadingTarget,
+    inAuthScreen,
+    normalizedPathname,
+    postAuthLoadingGateActive,
+    postAuthRedirectHoldingScreenActive,
+    minimumLoadingElapsed,
+    postAuthLoadingGateKey,
+    legacyFleetSetupRoute,
+    setupRouteMode,
+    setupRouteVehicleId,
   ]);
 
-  if (isLoading || effectivePendingRedirect) {
+  if (startupRecoveryVisible && isLoading) {
     return (
       <AdaptiveBackground>
         <View
           style={[
-            styles.loadingScreen,
+            styles.accessGateScreen,
             {
-              backgroundColor: 'transparent',
               paddingHorizontal: authLayout.horizontalPadding,
               paddingTop: authLayout.topPadding,
               paddingBottom: authLayout.bottomPadding,
@@ -1197,114 +1559,70 @@ function AuthGate() {
           ]}
         >
           <StatusBar style={statusBarStyle} />
-          {showAuthenticatedShellHold ? (
-            <View pointerEvents="none" style={styles.authenticatedFrameShell}>
-              <View
-                style={[
-                  styles.authenticatedShellHeader,
-                  {
-                    backgroundColor: `${visualPalette.bgElevated}F2`,
-                    borderColor: `${visualPalette.border}88`,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.authenticatedShellSurface,
-                  {
-                    borderColor: `${visualPalette.border}70`,
-                    backgroundColor: `${visualPalette.bgElevated}52`,
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.authenticatedShellLineWide,
-                    {
-                      backgroundColor: `${visualPalette.textMuted}18`,
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.authenticatedShellLineShort,
-                    {
-                      backgroundColor: `${visualPalette.textMuted}14`,
-                    },
-                  ]}
-                />
-              </View>
-              <View
-                style={[
-                  styles.authenticatedShellDock,
-                  {
-                    backgroundColor: `${visualPalette.bgElevated}F0`,
-                    borderColor: `${visualPalette.border}88`,
-                  },
-                ]}
-              />
-            </View>
-          ) : null}
-          <View style={[styles.loadingColumn, { maxWidth: authLayout.loadingMaxWidth }]}>
+          <View
+            style={[
+              styles.accessGateCard,
+              {
+                maxWidth: authLayout.accessGateMaxWidth,
+                backgroundColor: visualPalette.card,
+                borderColor: `${visualPalette.amber}26`,
+                shadowColor: '#000',
+              },
+            ]}
+          >
             <AuthBrandLockup
-              title={AUTH_COPY.title}
+              title="ECS Startup"
+              supporting="Startup is taking longer than expected."
               variant="state"
-              containerStyle={styles.loadingBrandBlock}
+              containerStyle={styles.accessGateBrandBlock}
               accentColor={visualPalette.amber}
               textColor={visualPalette.text}
               mutedColor={visualPalette.textMuted}
             />
-          <ActivityIndicator size="small" color={visualPalette.amber} />
-          <Text style={[styles.loadingText, { color: visualPalette.text }]}>
-            {holdTitle}
-          </Text>
-          {showHoldDetail ? (
-            <Text style={[styles.loadingDetailText, { color: visualPalette.textMuted }]}>
-              {entryResolution.loadingDetail}
+            <Text style={[styles.accessGateContext, { color: visualPalette.textMuted }]}>
+              ECS is continuing with a safe startup path. Live services can reconnect after the app opens.
             </Text>
-          ) : null}
+            {__DEV__ ? (
+              <View
+                style={[
+                  styles.accessStatusCard,
+                  {
+                    backgroundColor: `${visualPalette.bgElevated}E6`,
+                    borderColor: `${visualPalette.border}80`,
+                  },
+                ]}
+              >
+                <Text style={[styles.accessStatusEyebrow, { color: visualPalette.amber }]}>
+                  STARTUP DIAGNOSTICS
+                </Text>
+                <Text style={[styles.accessStatusLine, { color: visualPalette.textMuted }]}>
+                  Required: {unresolvedStartupRequiredFlags.join(', ') || 'none'}
+                </Text>
+                <Text style={[styles.accessStatusLine, { color: visualPalette.textMuted }]}>
+                  Optional: {optionalStartupServicesPending.join(', ') || 'none'}
+                </Text>
+              </View>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.accessPrimaryButton, { backgroundColor: visualPalette.amber }]}
+              activeOpacity={0.82}
+              onPress={() => {
+                setStartupRecoveryVisible(false);
+                router.replace((setupComplete ? getPreferredShellRoute() : '/setup') as any);
+              }}
+            >
+              <Text style={[styles.accessPrimaryButtonText, { color: visualPalette.bg }]}>
+                Continue
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </AdaptiveBackground>
     );
   }
 
-  if (accessCheckPending) {
-    return (
-      <AdaptiveBackground>
-        <View
-          style={[
-            styles.loadingScreen,
-            {
-              backgroundColor: 'transparent',
-              paddingHorizontal: authLayout.horizontalPadding,
-              paddingTop: authLayout.topPadding,
-              paddingBottom: authLayout.bottomPadding,
-              justifyContent: authLayout.centerContent ? 'center' : 'flex-start',
-            },
-          ]}
-        >
-          <StatusBar style={statusBarStyle} />
-          <View style={[styles.loadingColumn, { maxWidth: authLayout.loadingMaxWidth }]}>
-            <AuthBrandLockup
-              title={AUTH_COPY.title}
-              variant="state"
-              containerStyle={styles.loadingBrandBlock}
-              accentColor={visualPalette.amber}
-              textColor={visualPalette.text}
-              mutedColor={visualPalette.textMuted}
-            />
-          <ActivityIndicator size="small" color={visualPalette.amber} />
-          <Text style={[styles.loadingText, { color: visualPalette.text }]}>
-            {AUTH_COPY.session.verifyingAccess}
-          </Text>
-          <Text style={[styles.loadingDetailText, { color: visualPalette.textMuted }]}>
-            Confirming account access before opening the command surface.
-          </Text>
-          </View>
-        </View>
-      </AdaptiveBackground>
-    );
+  if (postAuthRedirectHoldingScreenActive) {
+    return <LoadingTransitionVideo />;
   }
 
   if (shouldShowAccessGate) {
@@ -1476,6 +1794,12 @@ function AuthGate() {
   return (
     <View style={{ flex: 1, backgroundColor: visualPalette.bg }}>
       <StatusBar style={statusBarStyle} />
+      {showSharedShellBodyBackground ? (
+        <ShellBodyBackground
+          topInset={shellBodyTopInset}
+          bottomInset={shellBodyBottomInset}
+        />
+      ) : null}
 
       {showBootstrapBanner && (
         <View
@@ -1521,6 +1845,8 @@ function AuthGate() {
           <Stack.Screen name="create-access-key" />
           <Stack.Screen name="auth-info" />
           <Stack.Screen name="pro" />
+          <Stack.Screen name="join-expedition" />
+          <Stack.Screen name="expedition-channel/join/[code]" />
           <Stack.Screen
             name="setup"
             options={{
@@ -1649,6 +1975,9 @@ function AuthGate() {
               />
             </Stack>
 
+            {showCommandDock ? (
+              <OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />
+            ) : null}
             {showCommandDock ? <CommandDock /> : null}
           </WizardStateProvider>
         </ViewerSettingsProvider>
@@ -1734,11 +2063,14 @@ export default function RootLayout() {
         prevState === 'active' &&
         (nextState === 'background' || nextState === 'inactive')
       ) {
-        console.log(
-          `[RootLayout] App state ${prevState} → ${nextState} — flushing dashboard writes`
+        ecsLog.debug(
+          'SHELL',
+          `[RootLayout] App state ${prevState} -> ${nextState} — flushing dashboard writes`,
         );
         flushDashboardWrites().catch((err) => {
-          console.warn('[RootLayout] Dashboard flush on background failed:', err);
+          ecsLog.warn('SHELL', '[RootLayout] Dashboard flush on background failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
         void flushQueuedIssueEvents();
 
@@ -1764,57 +2096,18 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (!__DEV__) return;
-
-    const ENABLE_MOCK_POWER = false;
-    if (!ENABLE_MOCK_POWER) {
-      console.log('[RootLayout] MockPowerConnector disabled — live-safe dev startup');
-      logDevTokenInstructions();
-      return;
-    }
-
-    let cancelled = false;
-    let mock: InstanceType<typeof MockPowerConnector> | null = null;
-
-    const initMockPower = async () => {
-      mock = new MockPowerConnector();
-      powerTelemetryManager.attachConnector(mock);
-
-      try {
-        await mock.connect('mock-dev');
-        if (!cancelled) {
-          console.log('[RootLayout] MockPowerConnector attached — telemetry streaming');
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.warn('[RootLayout] MockPowerConnector failed to connect:', err);
-        }
-      }
-
-      logDevTokenInstructions();
-    };
-
-    void initMockPower();
-
-    return () => {
-      cancelled = true;
-      if (mock) {
-        mock.disconnect().catch(() => {});
-        powerTelemetryManager.detachConnector();
-        mock.destroy();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     const cleanup = timelineIntelligenceEngine.initAutoMonitor();
-    console.log('[RootLayout] Timeline Intelligence Engine auto-monitor initialized');
+    ecsLog.debug('SHELL', '[RootLayout] Timeline Intelligence Engine auto-monitor initialized');
     return cleanup;
   }, []);
 
   useEffect(() => {
+    void restoreUnifiedDeviceSessions();
+  }, []);
+
+  useEffect(() => {
     androidAutoBridge.start();
-    console.log('[RootLayout] Android Auto bridge initialized');
+    ecsLog.debug('SHELL', '[RootLayout] Android Auto bridge initialized');
     return () => {
       androidAutoBridge.stop();
     };
@@ -1823,7 +2116,7 @@ export default function RootLayout() {
   useEffect(() => {
     const timer = setTimeout(() => {
       ecsSyncCoordinator.start();
-      console.log('[RootLayout] ECS Sync Coordinator started');
+      ecsLog.debug('SHELL', '[RootLayout] ECS Sync Coordinator started');
     }, 3000);
 
     return () => {
@@ -1835,7 +2128,7 @@ export default function RootLayout() {
   useEffect(() => {
     const timer = setTimeout(() => {
       ecsOfflineInterlock.initialize();
-      console.log('[RootLayout] ECS Offline Interlock initialized');
+      ecsLog.debug('SHELL', '[RootLayout] ECS Offline Interlock initialized');
     }, 4000);
 
     return () => {
@@ -1859,70 +2152,6 @@ const styles = StyleSheet.create({
   rootStartupFrame: {
     flex: 1,
     backgroundColor: ECS.bgPrimary,
-  },
-  loadingScreen: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  loadingColumn: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  loadingBrandBlock: {
-    marginBottom: AUTH_VISUAL_SPEC.spacing.headerSupportingGap.state,
-  },
-  authenticatedFrameShell: {
-    ...StyleSheet.absoluteFillObject,
-    paddingTop: 18,
-    paddingHorizontal: 18,
-    paddingBottom: 20,
-    justifyContent: 'space-between',
-  },
-  authenticatedShellHeader: {
-    height: 70,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  authenticatedShellSurface: {
-    flex: 1,
-    marginTop: 18,
-    marginBottom: 18,
-    borderRadius: 28,
-    borderWidth: 1,
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    gap: 12,
-  },
-  authenticatedShellLineWide: {
-    width: '68%',
-    height: 14,
-    borderRadius: 7,
-  },
-  authenticatedShellLineShort: {
-    width: '42%',
-    height: 10,
-    borderRadius: 5,
-  },
-  authenticatedShellDock: {
-    height: 84,
-    borderRadius: 24,
-    borderWidth: 1,
-  },
-  loadingText: {
-    marginTop: AUTH_VISUAL_SPEC.spacing.brandGap.compactLandscape,
-    fontSize: AUTH_VISUAL_SPEC.typography.loadingText.fontSize,
-    lineHeight: AUTH_VISUAL_SPEC.typography.loadingText.lineHeight,
-    fontWeight: AUTH_VISUAL_SPEC.typography.loadingText.fontWeight,
-    letterSpacing: AUTH_VISUAL_SPEC.typography.loadingText.letterSpacing,
-  },
-  loadingDetailText: {
-    maxWidth: 280,
-    textAlign: 'center',
-    fontSize: AUTH_VISUAL_SPEC.typography.loadingDetail.fontSize,
-    lineHeight: AUTH_VISUAL_SPEC.typography.loadingDetail.lineHeight,
-    opacity: 0.8,
   },
   bootstrapBanner: {
     flexDirection: 'row',

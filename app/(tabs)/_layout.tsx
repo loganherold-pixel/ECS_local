@@ -8,7 +8,7 @@
  *
  * Legacy tabs remain registered for deep links / backward compatibility.
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Tabs } from 'expo-router';
 import type { BottomTabNavigationOptions } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../../context/ThemeContext';
@@ -25,7 +25,8 @@ const primaryScreenOptions: BottomTabNavigationOptions = {
   tabBarShowLabel: false,
   tabBarStyle: hiddenTabBarStyle,
   animation: 'fade',
-  lazy: false,
+  lazy: true,
+  freezeOnBlur: true,
 };
 
 const hiddenRouteOptions: BottomTabNavigationOptions & { href: null } = {
@@ -34,92 +35,103 @@ const hiddenRouteOptions: BottomTabNavigationOptions & { href: null } = {
   href: null,
 };
 
+const dashboardOptions: BottomTabNavigationOptions = { title: 'Dashboard' };
+const fleetOptions: BottomTabNavigationOptions = { title: 'Fleet' };
+const navigateOptions: BottomTabNavigationOptions = { title: 'Navigate' };
+const discoverOptions: BottomTabNavigationOptions = { title: 'Explore' };
+const alertOptions: BottomTabNavigationOptions = { title: 'Dispatch' };
+
 export default function TabLayout() {
-  const { palette, themeReady } = useTheme();
-  const sceneBackgroundColor = themeReady ? palette.bg : ECS.bgPrimary;
+  const { themeReady } = useTheme();
+  const sceneBackgroundColor = themeReady ? 'transparent' : ECS.bgPrimary;
+  const sceneStyle = useMemo(
+    () => ({ backgroundColor: sceneBackgroundColor }),
+    [sceneBackgroundColor],
+  );
+  const tabScreenOptions = useMemo<BottomTabNavigationOptions>(
+    () => ({
+      ...primaryScreenOptions,
+      sceneStyle,
+    }),
+    [sceneStyle],
+  );
+  const hiddenOptions = useMemo<BottomTabNavigationOptions & { href: null }>(
+    () => ({
+      ...hiddenRouteOptions,
+      sceneStyle,
+    }),
+    [sceneStyle],
+  );
 
   return (
     <Tabs
       initialRouteName="dashboard"
-      screenOptions={{
-        ...primaryScreenOptions,
-        sceneStyle: { backgroundColor: sceneBackgroundColor },
-      }}
+      screenOptions={tabScreenOptions}
     >
       {/* Dashboard must mount first to avoid Fleet flashing on startup */}
       <Tabs.Screen
         name="dashboard"
-        options={{
-          title: 'Dashboard',
-        }}
+        options={dashboardOptions}
       />
 
       {/* Primary navigation tabs — visible via custom ECS CommandDock */}
       <Tabs.Screen
         name="fleet"
-        options={{
-          title: 'Fleet',
-        }}
+        options={fleetOptions}
       />
       <Tabs.Screen
         name="navigate"
-        options={{
-          title: 'Navigate',
-        }}
+        options={navigateOptions}
       />
       <Tabs.Screen
         name="discover"
-        options={{
-          title: 'Explore',
-        }}
+        options={discoverOptions}
       />
       <Tabs.Screen
         name="alert"
-        options={{
-          title: 'Dispatch',
-        }}
+        options={alertOptions}
       />
 
       {/* Legacy tabs — hidden from tab navigation, preserved for deep links */}
       <Tabs.Screen
         name="safety"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="intel"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="intelligence"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="expeditions"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="trips"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="loaditems"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="loadmap"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="more"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="vehicle-config"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
       <Tabs.Screen
         name="route"
-        options={{ ...hiddenRouteOptions, sceneStyle: { backgroundColor: sceneBackgroundColor } }}
+        options={hiddenOptions}
       />
     </Tabs>
   );

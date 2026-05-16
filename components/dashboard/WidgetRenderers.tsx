@@ -5171,7 +5171,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                   telemetryFrame="device"
                   mode="command"
                   showZeroButton={false}
-                  showReadouts={false}
+                  showReadouts={commandSensorLive}
                   showLiveHashIndicators={false}
                   onZero={undefined}
                 />
