@@ -6,11 +6,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import LoginHeroBackground from '../components/login/LoginHeroBackground';
+import LegalFooter from '../components/legal/LegalFooter';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { TACTICAL } from '../lib/theme';
 
 type AuthInfoSheet = 'terms' | 'privacy' | 'support';
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
+
+function logAuthInfoDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 const SHEET_META: Record<AuthInfoSheet, { icon: React.ComponentProps<typeof Ionicons>['name']; eyebrow: string; subtitle: string }> = {
   terms: {
@@ -49,9 +56,9 @@ export default function AuthInfoScreen() {
   );
 
   useEffect(() => {
-    console.log('[Auth] Legal/support route open', { sheet: sheetKey, source: 'auth-info' });
+    logAuthInfoDev('[Auth] Legal/support route open', { sheet: sheetKey, source: 'auth-info' });
     return () => {
-      console.log('[Auth] Legal/support route close', { sheet: sheetKey, source: 'auth-info' });
+      logAuthInfoDev('[Auth] Legal/support route close', { sheet: sheetKey, source: 'auth-info' });
     };
   }, [sheetKey]);
 
@@ -78,7 +85,7 @@ export default function AuthInfoScreen() {
           <View style={styles.cardHeader}>
             <Pressable
               onPress={() => {
-                console.log('[Auth] Legal/support route close', { sheet: sheetKey, source: 'back_button' });
+                logAuthInfoDev('[Auth] Legal/support route close', { sheet: sheetKey, source: 'back_button' });
                 router.back();
               }}
               accessibilityRole="button"
@@ -109,6 +116,7 @@ export default function AuthInfoScreen() {
                 {paragraph}
               </Text>
             ))}
+            <LegalFooter style={styles.legalFooter} />
           </ScrollView>
           </View>
         </View>
@@ -225,5 +233,9 @@ const styles = StyleSheet.create({
     color: 'rgba(232,226,211,0.86)',
     fontSize: 14,
     lineHeight: 22,
+  },
+  legalFooter: {
+    marginTop: 4,
+    paddingTop: 10,
   },
 });

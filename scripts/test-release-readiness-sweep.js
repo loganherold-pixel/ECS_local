@@ -34,7 +34,8 @@ assert(
     orchestratorTypesSource.includes('offline_capable_status_conflict') &&
     orchestratorTypesSource.includes('releaseDiagnostics?: ECSReleaseReadinessDiagnostics | null') &&
     orchestratorTypesSource.includes('masterChecklist: ECSReleaseChecklistSection[]') &&
-    orchestratorTypesSource.includes('unresolvedRiskSummary: ECSReleaseRiskSummary'),
+    orchestratorTypesSource.includes('unresolvedRiskSummary: ECSReleaseRiskSummary') &&
+    orchestratorTypesSource.includes('qaSummary: ECSReleaseQaSummary'),
   'orchestratorTypes.ts should define release diagnostics and the expanded invariant surface.',
 );
 
@@ -45,6 +46,8 @@ assert(
   'explore_surface',
   'alert_surface',
   'brief_surface',
+  'expedition_readiness_command_brief',
+  'dispersed_camping_eligibility',
   'shell_surface',
   'shared_command_stack',
   'shell_restore',
@@ -75,10 +78,58 @@ assert(
   'minimal_mode_noise',
   'planning_phase_ownership_gap',
   'missing_lead_target',
+  'expedition_readiness_category_gap',
+  'expedition_readiness_score_integrity',
+  'expedition_readiness_status_contradiction',
+  'expedition_readiness_unsafe_wording',
+  'expedition_readiness_synthetic_truth_gap',
+  'expedition_readiness_weather_freshness_gap',
+  'expedition_readiness_vehicle_truth_gap',
+  'expedition_readiness_offline_truth_gap',
+  'dispersed_camping_copy_guardrail_gap',
+  'dispersed_camping_classification_guardrail_gap',
+  'dispersed_camping_overlay_lifecycle_gap',
+  'dispersed_camping_candidate_generation_gap',
+  'dispersed_camping_data_freshness_gap',
+  'dispersed_camping_beta_flag_gap',
 ].forEach((issueCode) => {
   assert(
     releaseChecksSource.includes(`code: '${issueCode}'`) || releaseChecksSource.includes(`'${issueCode}'`),
     `releaseReadinessChecks.ts should account for ${issueCode}.`,
+  );
+});
+
+[
+  'Data grounding',
+  'Score integrity',
+  'Missing data handling',
+  'Legal/camp confidence wording',
+  'Vehicle-aware behavior',
+  'Offline readiness accuracy',
+  'Weather freshness',
+  'Route preview integration',
+  'Active guidance integration',
+  'Command Brief behavior',
+  'Dashboard widget behavior',
+  'Alert/Dispatch integration',
+  'AI/ECS Intelligence grounding',
+  'Android layout safety',
+  'No mock data presented as live',
+  'Dispersed Camping Eligibility',
+  'ECS-Inferred pins',
+  'stale/offline labels',
+  'explicit Scout action',
+].forEach((categoryLabel) => {
+  assert(
+    masterChecklistSource.includes(categoryLabel),
+    `Expedition Readiness release checklist should mention ${categoryLabel}.`,
+  );
+});
+
+['passed', 'riskLevel', 'blockers', 'warnings', 'recommendedFixes'].forEach((key) => {
+  assert(
+    releaseChecksSource.includes(`${key}:`) || releasePolishTypesSource.includes(`${key}:`),
+    `Release QA summary should expose ${key}.`,
   );
 });
 
@@ -112,7 +163,8 @@ assert(
   selectorSource.includes('releaseReadinessDiagnostics: aiState?.orchestrator?.releaseDiagnostics ?? null') &&
     debugSelectorSource.includes('selectReleaseReadinessDiagnostics') &&
     debugSelectorSource.includes('selectMasterReleaseChecklist') &&
-    debugSelectorSource.includes('selectReleaseRiskSummary'),
+    debugSelectorSource.includes('selectReleaseRiskSummary') &&
+    debugSelectorSource.includes('selectReleaseQaSummary'),
   'Internal selectors should expose release-readiness diagnostics for QA/admin use.',
 );
 

@@ -21,8 +21,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import LoginHeroBackground from '../components/login/LoginHeroBackground';
 import AuthStatusBanner from '../components/login/AuthStatusBanner';
+import LegalFooter from '../components/legal/LegalFooter';
 import PasswordVisibilityToggle from '../components/login/PasswordVisibilityToggle';
 import { AUTH_COPY } from '../lib/auth/authCopy';
+import { maskAuthEmail } from '../lib/auth/authLogRedaction';
 import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
 import { exportLocalData } from '../lib/localDataExport';
 import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
@@ -38,6 +40,12 @@ const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png'
 
 type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
+
+function logAuthDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
@@ -95,6 +103,7 @@ export default function LoginScreen() {
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const loginCtaRenderedRef = useRef(false);
+  const loginSubmitInFlightRef = useRef(false);
 
   const trimmedEmail = email.trim();
   const trimmedResetEmail = resetEmail.trim();
@@ -115,6 +124,15 @@ export default function LoginScreen() {
       disabled: loading,
     };
   }, [isOnline, loading, password, trimmedEmail]);
+  const loginDiagnosticState = useMemo(() => {
+    return {
+      loading: loginGuardState.loading,
+      isOnline: loginGuardState.isOnline,
+      hasEmail: loginGuardState.hasEmail,
+      emailValid: loginGuardState.emailValid,
+      disabled: loginGuardState.disabled,
+    };
+  }, [loginGuardState]);
   const loginDisabled = loginGuardState.disabled;
   const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
   const utilityBusy = loading || resetLoading || exportingLocalData;
@@ -158,7 +176,7 @@ export default function LoginScreen() {
   useEffect(() => {
     if (loginCtaRenderedRef.current) return;
     loginCtaRenderedRef.current = true;
-    console.log('[Auth] SignIn CTA rendered');
+    logAuthDev('[Auth] SignIn CTA rendered');
   }, []);
 
   const handlePrimaryPressIn = useCallback(() => {
@@ -216,9 +234,9 @@ export default function LoginScreen() {
 
     const destination =
       hasConfiguredVehicle && setupComplete
-        ? '/(tabs)/dashboard'
+        ? '/dashboard'
         : { pathname: '/setup', params: { mode: 'guest-entry' } };
-    console.log('[Auth] Free entry route decision', {
+    logAuthDev('[Auth] Free entry route decision', {
       destination,
       hasConfiguredVehicle,
       localVehicleCount,
@@ -233,7 +251,7 @@ export default function LoginScreen() {
 
   const handleViewPro = useCallback(() => {
     Keyboard.dismiss();
-    console.log('[Auth] Pro entry route decision', { destination: '/pro' });
+    logAuthDev('[Auth] Pro entry route decision', { destination: '/pro' });
     router.push('/pro');
   }, [router]);
 
@@ -252,22 +270,28 @@ export default function LoginScreen() {
 
   const handleOpenAuthInfo = useCallback((sheet: 'terms' | 'privacy' | 'support') => {
     Keyboard.dismiss();
-    console.log('[Auth] Legal/support route open', { sheet });
+    logAuthDev('[Auth] Legal/support route open', { sheet });
     router.push({ pathname: '/auth-info', params: { sheet } });
   }, [router]);
 
   const handleLogin = useCallback(async (source: 'cta_press' | 'password_submit' | 'accessibility_activate') => {
     clearStatus();
 
-    console.log('[Auth] SignIn validation start', {
+    if (loginSubmitInFlightRef.current) {
+      logAuthDev('[Auth] SignIn CTA blocked by in-flight request', {
+        source,
+        reason: 'in_flight',
+      });
+      return;
+    }
+
+    logAuthDev('[Auth] SignIn validation start', {
       source,
-      ...loginGuardState,
-      emailLength: trimmedEmail.length,
-      passwordLength: password.length,
+      ...loginDiagnosticState,
     });
 
     if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
-      console.log('[Auth] SignIn validation failed', {
+      logAuthDev('[Auth] SignIn validation failed', {
         source,
         reason: !trimmedEmail ? 'missing_email' : 'invalid_email',
       });
@@ -276,16 +300,16 @@ export default function LoginScreen() {
       return;
     }
     if (!password.trim()) {
-      console.log('[Auth] SignIn validation failed', {
+      logAuthDev('[Auth] SignIn validation failed', {
         source,
-        reason: 'missing_password',
+        reason: 'missing_credential',
       });
       setStatusMessage(AUTH_COPY.login.missingPassword);
       setStatusTone('error');
       return;
     }
     if (!isOnline) {
-      console.log('[Auth] SignIn validation failed', {
+      logAuthDev('[Auth] SignIn validation failed', {
         source,
         reason: 'offline',
       });
@@ -294,66 +318,42 @@ export default function LoginScreen() {
       return;
     }
 
-    console.log('[Auth] SignIn validation passed', {
+    logAuthDev('[Auth] SignIn validation passed', {
       source,
-      email: trimmedEmail.toLowerCase(),
+      email: maskAuthEmail(trimmedEmail),
     });
     Keyboard.dismiss();
+    loginSubmitInFlightRef.current = true;
     setLoading(true);
-    const loginEmail = trimmedEmail.toLowerCase();
-    console.log('[Auth] Login attempt start', {
-      source,
-      email: loginEmail,
-      keepSignedIn,
-      isOnline,
-    });
-    const result = await signIn(trimmedEmail, password, keepSignedIn);
-    console.log('[Auth] Auth request response', {
-      source,
-      email: loginEmail,
-      ok: !result.error,
-      error: result.error ?? null,
-      suspended: !!result.suspended,
-    });
+    const result = await signIn(trimmedEmail, password, keepSignedIn, source);
+    loginSubmitInFlightRef.current = false;
 
     if (result.error) {
       setLoading(false);
-      console.log('[Auth] Login attempt failure', {
-        email: loginEmail,
-        suspended: !!result.suspended,
-        reason: result.error,
-      });
       setShowPassword(false);
       setStatusMessage(normalizeLoginError(result.error, isOnline));
       setStatusTone('error');
       return;
     }
 
-    console.log('[Auth] Login attempt success', {
-      source,
-      email: loginEmail,
-      keepSignedIn,
-    });
     setShowPassword(false);
     setPassword('');
-  }, [clearStatus, isOnline, keepSignedIn, loginGuardState, password, signIn, trimmedEmail]);
+  }, [clearStatus, isOnline, keepSignedIn, loginDiagnosticState, password, signIn, trimmedEmail]);
 
   const handleLoginSubmit = useCallback((source: 'cta_press' | 'password_submit' | 'accessibility_activate') => {
-    console.log('[Auth] SignIn CTA press received', {
+    logAuthDev('[Auth] SignIn CTA press received', {
       source,
-      ...loginGuardState,
-      emailLength: trimmedEmail.length,
-      passwordLength: password.length,
+      ...loginDiagnosticState,
     });
     if (loading) {
-      console.log('[Auth] SignIn CTA blocked by disabled state', {
+      logAuthDev('[Auth] SignIn CTA blocked by disabled state', {
         source,
         reason: 'loading',
       });
       return;
     }
     void handleLogin(source);
-  }, [handleLogin, loading, loginGuardState, password.length, trimmedEmail.length]);
+  }, [handleLogin, loading, loginDiagnosticState]);
 
   const handleForgotPassword = useCallback(async () => {
     clearStatus();
@@ -565,6 +565,7 @@ const styles = StyleSheet.create({
   footerPillText: { fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(212,160,23,0.9)', letterSpacing: 0.5, textAlign: 'center' },
   createAccountHit: { marginTop: 10, minHeight: 28, justifyContent: 'center' },
   createAccountText: { fontSize: 14, lineHeight: 18, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
+  loginLegalFooter: { marginTop: 8 },
   utilityPressed: { opacity: 0.72 },
   disabledUtility: { opacity: 0.52 },
 });
@@ -638,6 +639,7 @@ const LoginFooterBlock = memo(function LoginFooterBlock({
       >
         <Text style={styles.createAccountText}>{AUTH_COPY.login.createAccount}</Text>
       </Pressable>
+      <LegalFooter style={styles.loginLegalFooter} />
     </View>
   );
 });

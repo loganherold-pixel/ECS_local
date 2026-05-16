@@ -20,11 +20,19 @@ import AppearanceSettingsModal from '../../components/AppearanceSettingsModal';
 import SyncQueueManager from '../../components/sync/SyncQueueManager';
 import StorageCleanupSettings from '../../components/storage/StorageCleanupSettings';
 import OfflineExpeditionDataPanel from '../../components/offline-data/OfflineExpeditionDataPanel';
+import { ReadinessPreferencesPanel } from '../../components/readiness';
 import RateLimitCleanupPanel from '../../components/RateLimitCleanupPanel';
 import TacticalPopupShell from '../../components/TacticalPopupShell';
+import AboutLegalSection from '../../components/legal/AboutLegalSection';
 import EcsIssueIntelligencePanel from '../../components/admin/EcsIssueIntelligencePanel';
+import ECS5RouteIntelligenceDebugPanel from '../../components/admin/ECS5RouteIntelligenceDebugPanel';
+import CampsiteRecommendationsReview from '../../components/admin/CampsiteRecommendationsReview';
+import CommunityCampsiteReview from '../../components/admin/CommunityCampsiteReview';
+import CampsiteReviewerManagement from '../../components/admin/CampsiteReviewerManagement';
+import MyCampsiteSubmissions from '../../components/campsites/MyCampsiteSubmissions';
 import FieldIssueReportModal from '../../components/feedback/FieldIssueReportModal';
 import type { AppearanceMode } from '../../lib/appearanceStore';
+import { campsiteReviewService } from '../../lib/campsites/campsiteReviewService';
 import { openManageSubscription } from '../../lib/subscriptionAccess';
 import { resolveEcsAccessState } from '../../lib/auth/accessResolver';
 import { resolveRoleSurfaceScopes } from '../../lib/auth/roleScopeResolver';
@@ -40,6 +48,11 @@ type SubTab =
   | 'offline-data'
   | 'rate-limits'
   | 'settings'
+  | 'my-campsites'
+  | 'community-campsite-review'
+  | 'campsite-review'
+  | 'reviewer-management'
+  | 'ecs5-debug'
   | 'stability';
 
 
@@ -47,7 +60,7 @@ type SubTab =
 
 
 const MODE_LABELS: Record<AppearanceMode, { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }> = {
-  auto: { label: 'Auto', icon: 'contrast-outline', color: '#80C0FF' },
+  dynamic: { label: 'Dynamic', icon: 'contrast-outline', color: '#80C0FF' },
   dark: { label: 'Dark', icon: 'moon-outline', color: '#8A8AFF' },
   light: { label: 'Light', icon: 'sunny-outline', color: '#FFB800' },
   driving: { label: 'Driving (Hi-Vis)', icon: 'car-sport-outline', color: '#E0A030' },
@@ -101,6 +114,7 @@ function MoreScreenInner() {
   const [appearanceModalVisible, setAppearanceModalVisible] = useState(false);
   const [sharedAccountModalVisible, setSharedAccountModalVisible] = useState(false);
   const [fieldIssueModalVisible, setFieldIssueModalVisible] = useState(false);
+  const [communityReviewNavVisible, setCommunityReviewNavVisible] = useState(false);
   const [sharedPassword, setSharedPassword] = useState('');
   const [sharedPasswordConfirm, setSharedPasswordConfirm] = useState('');
   const [revokeSharedSessions, setRevokeSharedSessions] = useState(false);
@@ -178,6 +192,27 @@ function MoreScreenInner() {
     !!user &&
     roleScopes.showBillingActions &&
     !resolvedAccess.hasFullAccess;
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!user) {
+      setCommunityReviewNavVisible(false);
+      return;
+    }
+    if (hasAdminAccess) {
+      setCommunityReviewNavVisible(true);
+      return;
+    }
+
+    void campsiteReviewService.listCommunityReviewQueue(1).then((result) => {
+      if (!cancelled) setCommunityReviewNavVisible(result.ok);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasAdminAccess, user]);
+
   const accountUx = React.useMemo(
     () =>
       resolveAccountUx({
@@ -275,7 +310,6 @@ function MoreScreenInner() {
     resetSharedAccountForm,
     revokeSharedSessions,
     rotateSharedAccountPassword,
-    router,
     refreshAccessState,
     sharedPassword,
     sharedPasswordConfirm,
@@ -414,8 +448,23 @@ Expedition Command System
             { key: 'storage' as SubTab, label: 'Storage', icon: 'server-outline' as const },
             { key: 'offline-data' as SubTab, label: 'Offline Data', icon: 'cloud-download-outline' as const },
             { key: 'rate-limits' as SubTab, label: 'Rate Limits', icon: 'speedometer-outline' as const },
+            ...(user
+              ? [
+                  { key: 'my-campsites' as SubTab, label: 'My Campsites', icon: 'trail-sign-outline' as const },
+                ]
+              : []),
+            ...(communityReviewNavVisible
+              ? [
+                  { key: 'community-campsite-review' as SubTab, label: 'Community Review', icon: 'shield-checkmark-outline' as const },
+                ]
+              : []),
             ...(hasAdminAccess
-              ? [{ key: 'stability' as SubTab, label: 'Stability', icon: 'pulse-outline' as const }]
+              ? [
+                  { key: 'campsite-review' as SubTab, label: 'Campsites', icon: 'trail-sign-outline' as const },
+                  { key: 'reviewer-management' as SubTab, label: 'Reviewers', icon: 'people-circle-outline' as const },
+                  { key: 'ecs5-debug' as SubTab, label: 'ECS 5.0 Debug', icon: 'analytics-outline' as const },
+                  { key: 'stability' as SubTab, label: 'Stability', icon: 'pulse-outline' as const },
+                ]
               : []),
             { key: 'settings' as SubTab, label: 'Settings', icon: 'settings-outline' as const },
           ]).map(tab => (
@@ -452,6 +501,16 @@ Expedition Command System
           </>
         ) : subTab === 'stability' && hasAdminAccess ? (
           <EcsIssueIntelligencePanel colors={colors} onToast={showToast} />
+        ) : subTab === 'my-campsites' && user ? (
+          <MyCampsiteSubmissions colors={colors} onToast={showToast} />
+        ) : subTab === 'community-campsite-review' && user ? (
+          <CommunityCampsiteReview colors={colors} onToast={showToast} />
+        ) : subTab === 'campsite-review' && hasAdminAccess ? (
+          <CampsiteRecommendationsReview colors={colors} onToast={showToast} />
+        ) : subTab === 'reviewer-management' && hasAdminAccess ? (
+          <CampsiteReviewerManagement colors={colors} onToast={showToast} />
+        ) : subTab === 'ecs5-debug' && hasAdminAccess ? (
+          <ECS5RouteIntelligenceDebugPanel colors={colors} />
         ) : noTrip && subTab !== 'settings' ? (
           <View style={styles.emptyState}>
             <Ionicons name="alert-circle-outline" size={48} color={colors.textMuted} />
@@ -680,7 +739,7 @@ Expedition Command System
 
               {/* Mode Selector */}
               <View style={styles.modeSelector}>
-                {(['auto', 'dark', 'light', 'driving'] as AppearanceMode[]).map(mode => {
+                {(['dynamic', 'dark', 'light', 'driving'] as AppearanceMode[]).map(mode => {
                   const cfg = MODE_LABELS[mode];
                   const isActive = appearanceMode === mode;
                   return (
@@ -760,8 +819,8 @@ Expedition Command System
                 <Ionicons name="git-network-outline" size={20} color={colors.gold} />
               </View>
               <View style={styles.powerCenterInfo}>
-                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>BLU Power Sources</Text>
-                <Text style={[styles.powerCenterDesc, { color: colors.textMuted }]}>Universal power telemetry — manage providers and devices</Text>
+                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>Device Connections</Text>
+                <Text style={[styles.powerCenterDesc, { color: colors.textMuted }]}>Unified Bluetooth device connections and live telemetry</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.gold} />
             </TouchableOpacity>
@@ -1082,6 +1141,9 @@ Expedition Command System
               </>
             )}
 
+            <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>EXPEDITION READINESS</Text>
+            <ReadinessPreferencesPanel onChange={showToast} />
+
             <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>ROOF WEIGHT THRESHOLDS</Text>
             <View style={styles.fieldGroup}>
               <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Roof Load Threshold (lbs)</Text>
@@ -1140,15 +1202,10 @@ Expedition Command System
                 <Text style={[styles.feedbackActionText, { color: colors.gold }]}>SEND FIELD REPORT</Text>
               </TouchableOpacity>
             </View>
-            <View style={[styles.aboutSection, { borderTopColor: colors.border }]}>
-              <Text style={[styles.aboutBrand, { color: colors.textMuted }]}>EXPEDITION COMMAND SYSTEM</Text>
-              <Text style={[styles.aboutProduct, { color: colors.gold }]}>Expedition Command System</Text>
-              <Text style={[styles.aboutVersion, { color: colors.textMuted }]}>v1.0.0</Text>
-              <Text style={[styles.aboutDesc, { color: colors.textSecondary }]}>
-                Offline-first expedition planning and packing command system with cloud sync.
-                Built for overland expeditions, remote operations, and field deployments.
-              </Text>
-            </View>
+            <AboutLegalSection
+              colors={colors}
+              onOpenLink={(sheet) => router.push({ pathname: '/auth-info', params: { sheet } } as any)}
+            />
 
           </>
 
