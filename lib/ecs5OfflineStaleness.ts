@@ -193,6 +193,17 @@ export function applyECS5RouteIntelligenceStaleness(
     expiresAt: summary.validUntil,
   }, now);
   if (!assessed.isStale) return summary;
+  const staleRouteUnknown: RouteIntelligenceSummary['unknowns'][number] = {
+    id: 'offline_stale_route_intelligence',
+    severity: 'warning',
+    title: 'Cached / Offline route intelligence',
+    message: assessed.offlineWarning ?? 'Cached / Offline route intelligence is stale and requires verification.',
+    evidenceIds: summary.evidence.map((item) => item.id),
+    recommendedAction: 'verify',
+  };
+  const unknowns = summary.unknowns.some((item) => item.id === staleRouteUnknown.id)
+    ? summary.unknowns
+    : [...summary.unknowns, staleRouteUnknown];
   return {
     ...summary,
     overallRecommendation: summary.overallRecommendation === 'proceed' ? 'verify' : summary.overallRecommendation,
@@ -218,16 +229,7 @@ export function applyECS5RouteIntelligenceStaleness(
       isStale: true,
       staleWarning: assessed.offlineWarning,
     },
-    unknowns: summary.unknowns.length > 0
-      ? summary.unknowns
-      : [{
-          id: 'offline_stale_route_intelligence',
-          severity: 'warning',
-          title: 'Cached / Offline route intelligence',
-          message: assessed.offlineWarning ?? 'Cached / Offline route intelligence is stale and requires verification.',
-          evidenceIds: summary.evidence.map((item) => item.id),
-          recommendedAction: 'verify',
-        }],
+    unknowns,
   };
 }
 
