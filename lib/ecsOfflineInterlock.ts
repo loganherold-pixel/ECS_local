@@ -47,8 +47,13 @@
  */
 
 import { AppState, type AppStateStatus } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[ECS-INTERLOCK]';
+
+function debugInterlock(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 // ── Data Source Mode ─────────────────────────────────────
 
@@ -165,6 +170,7 @@ let _preservedFilters: PreservedFilters | null = null;
 /** Cached interlock state */
 let _cachedState: InterlockState | null = null;
 let _cachedStateTimestamp = 0;
+let _lastNotifiedSignature: string | null = null;
 
 /** Store subscriptions */
 let _storeUnsubs: (() => void)[] = [];
@@ -176,7 +182,29 @@ let _monitoring = false;
 type Listener = (state: InterlockState) => void;
 const _listeners = new Set<Listener>();
 
+function _stateSignature(state: InterlockState): string {
+  return [
+    state.mode,
+    state.in_transition,
+    state.previous_mode ?? '',
+    state.discovery_offline_available,
+    state.navigation_offline_available,
+    state.route_covered_offline,
+    state.position_covered_offline,
+    state.discovery_source,
+    state.navigation_source,
+    state.offline_region_count,
+    state.offline_entry_count,
+    state.has_integrity_issues,
+    state.has_stale_regions,
+    state.status_message,
+  ].join('|');
+}
+
 function _notify(state: InterlockState): void {
+  const signature = _stateSignature(state);
+  if (signature === _lastNotifiedSignature) return;
+  _lastNotifiedSignature = signature;
   _listeners.forEach(fn => { try { fn(state); } catch {} });
 }
 
@@ -495,18 +523,24 @@ function _evaluate(): InterlockState {
       _transitionEndTimer = setTimeout(() => {
         _inTransition = false;
         _transitionEndTimer = null;
+        _cachedState = null;
+        _cachedStateTimestamp = 0;
         // Re-evaluate after transition settles
         _evaluate();
       }, TRANSITION_WINDOW_MS);
 
-      // Log mode transition (always, not throttled)
-      console.log(
-        TAG,
-        `Mode transition: ${_previousMode} \u2192 ${_mode} ` +
-        `(connectivity: ${connectivity.state}, ` +
-        `readiness: ${connectivity.operational_readiness}, ` +
-        `offline: ${offlineReadiness.has_data ? 'available' : 'none'})`
-      );
+      const transitionDetails = {
+        connectivity: connectivity.state,
+        from: _previousMode,
+        mode: _mode,
+        offlineAvailability: offlineReadiness.has_data ? 'available' : 'none',
+        readiness: connectivity.operational_readiness,
+      };
+      if (_mode === 'offline' || _mode === 'hybrid') {
+        ecsLog.warn('SYSTEM', `Offline interlock transitioned to ${_mode}`, transitionDetails);
+      } else {
+        debugInterlock('Offline interlock mode transition', transitionDetails);
+      }
 
       // Trigger downstream re-evaluations
       _onModeChange(debouncedMode, _previousMode);
@@ -515,6 +549,8 @@ function _evaluate(): InterlockState {
     // Resolve source priorities
     const discoverySource = _resolveDiscoverySource(_mode, offlineReadiness.has_data);
     const navigationSource = _resolveNavigationSource(_mode, offlineReadiness.has_data);
+
+    const previousCachedState = _cachedState;
 
     // Build state
     const state: InterlockState = {
@@ -542,18 +578,26 @@ function _evaluate(): InterlockState {
     _evalCount++;
 
     // Notify listeners if state changed meaningfully
-    if (modeChanged || !_cachedState) {
+    if (
+      modeChanged ||
+      !previousCachedState ||
+      _stateSignature(previousCachedState) !== _stateSignature(state)
+    ) {
       _notify(state);
     }
 
     // Verbose logging (throttled)
     if (_shouldLog()) {
-      console.log(
-        TAG,
-        `State: mode=${_mode}, discovery=${discoverySource}, nav=${navigationSource}, ` +
-        `offline=${offlineReadiness.has_data ? `${offlineReadiness.region_count}r/${offlineReadiness.entry_count}e` : 'none'}, ` +
-        `covers_pos=${offlineReadiness.covers_position}, covers_route=${offlineReadiness.covers_route}`
-      );
+      debugInterlock('Offline interlock state evaluated', {
+        coversPosition: offlineReadiness.covers_position,
+        coversRoute: offlineReadiness.covers_route,
+        discoverySource,
+        mode: _mode,
+        navigationSource,
+        offlineSummary: offlineReadiness.has_data
+          ? `${offlineReadiness.region_count}r/${offlineReadiness.entry_count}e`
+          : 'none',
+      });
     }
 
     return state;
@@ -571,22 +615,29 @@ function _evaluate(): InterlockState {
  * Triggers downstream re-evaluations in the correct order.
  */
 function _onModeChange(newMode: DataSourceMode, previousMode: DataSourceMode | null): void {
+  const invalidationState = { newMode, previousMode };
+  let cacheInvalidated = false;
+
   // 1. Invalidate offline cache readiness (forces re-evaluation)
   try {
     const { invalidateCacheReadiness } = require('./offlineCacheAwarenessEngine');
-    invalidateCacheReadiness();
+    cacheInvalidated = invalidateCacheReadiness('interlock_mode_change', invalidationState);
   } catch {}
 
   // 2. Invalidate navigation overlay cache
   try {
     const { offlineNavigationBridge } = require('./offlineNavigationBridge');
-    offlineNavigationBridge.invalidateCache();
+    offlineNavigationBridge.invalidateCache('interlock_mode_change', invalidationState);
   } catch {}
 
   // 3. Trigger Connectivity Intelligence re-evaluation
   try {
     const { connectivityIntelService } = require('./connectivityIntelService');
-    connectivityIntelService.invalidateCache();
+    if (cacheInvalidated) {
+      connectivityIntelService.forceUpdate();
+    } else {
+      connectivityIntelService.invalidateCache('interlock_mode_change', invalidationState);
+    }
   } catch {}
 
   // 4. Publish to ECS bus for Risk Engine and Assistant
@@ -614,15 +665,25 @@ function _onModeChange(newMode: DataSourceMode, previousMode: DataSourceMode | n
  * Re-evaluates offline readiness for the new route.
  */
 function _onRouteChange(): void {
+  let routeState: Record<string, unknown> = { routeId: null };
+  try {
+    const { routeStore } = require('./routeStore');
+    const activeRoute = routeStore.getActive?.();
+    routeState = {
+      routeId: activeRoute?.id ?? null,
+      segmentCount: activeRoute?.segments?.length ?? 0,
+    };
+  } catch {}
+
   // Invalidate caches that depend on route
   try {
     const { invalidateCacheReadiness } = require('./offlineCacheAwarenessEngine');
-    invalidateCacheReadiness();
+    invalidateCacheReadiness('interlock_route_change', routeState);
   } catch {}
 
   try {
     const { offlineNavigationBridge } = require('./offlineNavigationBridge');
-    offlineNavigationBridge.invalidateCache();
+    offlineNavigationBridge.invalidateCache('interlock_route_change', routeState);
   } catch {}
 
   // Invalidate cached interlock state
@@ -632,11 +693,10 @@ function _onRouteChange(): void {
   // Re-evaluate
   const state = _evaluate();
 
-  console.log(
-    TAG,
-    `Route change \u2192 re-evaluated: route_covered=${state.route_covered_offline}, ` +
-    `mode=${state.mode}`
-  );
+  debugInterlock('Offline interlock route re-evaluated', {
+    mode: state.mode,
+    routeCoveredOffline: state.route_covered_offline,
+  });
 }
 
 
@@ -647,15 +707,17 @@ function _onRouteChange(): void {
  * Re-evaluates connectivity, remoteness, and risk.
  */
 function _onRegionChange(): void {
+  const regionState = _readOfflineReadiness();
+
   // Invalidate all caches
   try {
     const { invalidateCacheReadiness } = require('./offlineCacheAwarenessEngine');
-    invalidateCacheReadiness();
+    invalidateCacheReadiness('interlock_region_change', regionState);
   } catch {}
 
   try {
     const { offlineNavigationBridge } = require('./offlineNavigationBridge');
-    offlineNavigationBridge.invalidateCache();
+    offlineNavigationBridge.invalidateCache('interlock_region_change', regionState);
   } catch {}
 
   // Invalidate cached interlock state
@@ -668,15 +730,15 @@ function _onRegionChange(): void {
   // Trigger CI re-evaluation (region changes affect operational readiness)
   try {
     const { connectivityIntelService } = require('./connectivityIntelService');
-    connectivityIntelService.invalidateCache();
+    connectivityIntelService.invalidateCache('interlock_region_change', regionState);
     connectivityIntelService.forceUpdate();
   } catch {}
 
-  console.log(
-    TAG,
-    `Region change \u2192 re-evaluated: regions=${state.offline_region_count}, ` +
-    `entries=${state.offline_entry_count}, mode=${state.mode}`
-  );
+  debugInterlock('Offline interlock region re-evaluated', {
+    entryCount: state.offline_entry_count,
+    mode: state.mode,
+    regionCount: state.offline_region_count,
+  });
 }
 
 
@@ -745,7 +807,9 @@ function _subscribeToStores(): void {
     _storeUnsubs.push(unsub);
   } catch {}
 
-  console.log(TAG, `Store subscriptions: ${_storeUnsubs.length} active`);
+  debugInterlock('Offline interlock store subscriptions active', {
+    activeSubscriptions: _storeUnsubs.length,
+  });
 }
 
 function _unsubscribeFromStores(): void {
@@ -764,7 +828,7 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
     _cachedState = null;
     _cachedStateTimestamp = 0;
     _evaluate();
-    console.log(TAG, 'App resumed \u2014 re-evaluating interlock state');
+    debugInterlock('Offline interlock app resumed; re-evaluating state');
   }
 }
 
@@ -784,7 +848,7 @@ export const ecsOfflineInterlock = {
   initialize(): void {
     if (_initialized) return;
 
-    console.log(TAG, 'Initializing (Integration Pass 3)...');
+    debugInterlock('Offline interlock initializing');
     _initialized = true;
 
     _subscribeToStores();
@@ -825,7 +889,7 @@ export const ecsOfflineInterlock = {
     }
 
     _monitoring = false;
-    console.log(TAG, `Stopped (evaluations: ${_evalCount})`);
+    debugInterlock('Offline interlock stopped', { evaluations: _evalCount });
   },
 
 
@@ -1167,11 +1231,12 @@ export const ecsOfflineInterlock = {
     _inTransition = false;
     _cachedState = null;
     _cachedStateTimestamp = 0;
+    _lastNotifiedSignature = null;
     _preservedFilters = null;
     _evalCount = 0;
     _initialized = false;
     _listeners.clear();
-    console.log(TAG, 'Reset complete');
+    debugInterlock('Offline interlock reset complete');
   },
 };
 

@@ -14,6 +14,8 @@
  * Phase 3A — skeleton with real persistence support.
  */
 
+import { ecsLog } from "../../../lib/ecsLogger";
+
 // ── Storage backend interface ───────────────────────────────────────────
 
 /**
@@ -162,9 +164,7 @@ export class TokenStore {
       if (val === "1") {
         await this.secureBackend.remove(testKey);
         this.backend = this.secureBackend;
-        if (__DEV__) {
-          console.log("[TokenStore] Using expo-secure-store backend.");
-        }
+        ecsLog.debug("POWER", "[TokenStore] Using expo-secure-store backend.");
         return;
       }
     } catch {
@@ -173,11 +173,10 @@ export class TokenStore {
 
     // Fall back to memory
     this.backend = this.memoryFallback;
-    if (__DEV__) {
-      console.log(
-        "[TokenStore] expo-secure-store unavailable — using in-memory fallback.",
-      );
-    }
+    ecsLog.debug(
+      "POWER",
+      "[TokenStore] expo-secure-store unavailable — using in-memory fallback.",
+    );
   }
 
   // ── Public API ──────────────────────────────────────────────────────
@@ -193,11 +192,7 @@ export class TokenStore {
     const meta = await this.getTokenMeta(providerId);
     if (meta?.expiresAt && Date.now() > meta.expiresAt) {
       // Token has expired — clean up
-      if (__DEV__) {
-        console.log(
-          `[TokenStore] Token for "${providerId}" has expired — clearing.`,
-        );
-      }
+      ecsLog.debug("POWER", `[TokenStore] Token for "${providerId}" has expired — clearing.`);
       await this.clearToken(providerId);
       return null;
     }

@@ -57,16 +57,29 @@ export interface AccessoryFrameworkEntry {
  */
 export interface AccessoryFramework {
   cabRack: AccessoryFrameworkEntry;
-  cabRackAccessories: AccessoryFrameworkEntry;
   bedDrawerStorage: AccessoryFrameworkEntry;
   roofRackCrossbars: AccessoryFrameworkEntry;
   rtt: AccessoryFrameworkEntry;
   interiorStorage: AccessoryFrameworkEntry;
-  fridgeSlide: AccessoryFrameworkEntry;
   recoveryMountSystem: AccessoryFrameworkEntry;
+  shellSystem: AccessoryFrameworkEntry;
+  truckBed: AccessoryFrameworkEntry;
   waterStorage: AccessoryFrameworkEntry;
   powerSystemBattery: AccessoryFrameworkEntry;
 }
+
+const ALL_FRAMEWORK_KEYS: (keyof AccessoryFramework)[] = [
+  'cabRack',
+  'bedDrawerStorage',
+  'roofRackCrossbars',
+  'rtt',
+  'interiorStorage',
+  'recoveryMountSystem',
+  'shellSystem',
+  'truckBed',
+  'waterStorage',
+  'powerSystemBattery',
+];
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -147,12 +160,10 @@ export interface ContainerZone {
  */
 const CATEGORY_TO_FRAMEWORK_KEY: Record<string, keyof AccessoryFramework> = {
   cab_rack:          'cabRack',
-  cab_rack_acc:      'cabRackAccessories',
   bed_drawer:        'bedDrawerStorage',
   roof_rack:         'roofRackCrossbars',
   rtt:               'rtt',
   interior_storage:  'interiorStorage',
-  fridge_slide:      'fridgeSlide',
   recovery_mount:    'recoveryMountSystem',
   water_storage:     'waterStorage',
   power_system:      'powerSystemBattery',
@@ -161,14 +172,12 @@ const CATEGORY_TO_FRAMEWORK_KEY: Record<string, keyof AccessoryFramework> = {
 /**
  * Reverse mapping: framework key → category ID
  */
-const FRAMEWORK_KEY_TO_CATEGORY: Record<keyof AccessoryFramework, string> = {
+const FRAMEWORK_KEY_TO_CATEGORY: Partial<Record<keyof AccessoryFramework, string>> = {
   cabRack:              'cab_rack',
-  cabRackAccessories:   'cab_rack_acc',
   bedDrawerStorage:     'bed_drawer',
   roofRackCrossbars:    'roof_rack',
   rtt:                  'rtt',
   interiorStorage:      'interior_storage',
-  fridgeSlide:          'fridge_slide',
   recoveryMountSystem:  'recovery_mount',
   waterStorage:         'water_storage',
   powerSystemBattery:   'power_system',
@@ -199,13 +208,13 @@ export type AccessorySystemCategory =
  */
 export const ACCESSORY_SYSTEM_CATEGORIES: Record<keyof AccessoryFramework, AccessorySystemCategory> = {
   cabRack:              'storage',
-  cabRackAccessories:   'storage',
   bedDrawerStorage:     'storage',
   roofRackCrossbars:    'mounting',
   rtt:                  'shelter',
   interiorStorage:      'storage',
-  fridgeSlide:          'thermal',
   recoveryMountSystem:  'recovery',
+  shellSystem:          'storage',
+  truckBed:             'storage',
   waterStorage:         'water',
   powerSystemBattery:   'power',
 };
@@ -303,16 +312,16 @@ interface ZoneDefinition {
  *   Power System       → low / rear / center       (underbody or bed floor)
  */
 const ZONE_DEFINITIONS: ZoneDefinition[] = [
-  { frameworkKey: 'cabRack',             id: 'cab_rack',          label: 'Cab Rack',              icon: 'barbell-outline',              color: '#FF6B6B', sortOrder: 0, systemCategory: 'storage',  verticalBias: 'high', longitudinalBias: 'front', lateralBias: 'center' },
-  { frameworkKey: 'cabRackAccessories',  id: 'cab_rack_acc',      label: 'Cab Rack Accessories',  icon: 'layers-outline',               color: '#FF8A5B', sortOrder: 1, systemCategory: 'storage',  verticalBias: 'high', longitudinalBias: 'front', lateralBias: 'center' },
-  { frameworkKey: 'roofRackCrossbars',   id: 'roof_rack',         label: 'Roof Rack / Crossbars', icon: 'resize-outline',               color: '#4FC3F7', sortOrder: 2, systemCategory: 'mounting', verticalBias: 'high', longitudinalBias: 'mid',   lateralBias: 'center' },
-  { frameworkKey: 'rtt',                 id: 'rtt',               label: 'Roof Top Tent',         icon: 'trail-sign-outline',           color: '#C77DFF', sortOrder: 3, systemCategory: 'shelter',  verticalBias: 'high', longitudinalBias: 'rear',  lateralBias: 'center' },
-  { frameworkKey: 'bedDrawerStorage',    id: 'bed_drawer',        label: 'Bed / Drawer Storage',  icon: 'server-outline',               color: '#96CEB4', sortOrder: 4, systemCategory: 'storage',  verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
-  { frameworkKey: 'interiorStorage',     id: 'interior_storage',  label: 'Interior Storage',      icon: 'file-tray-stacked-outline',    color: '#4ECDC4', sortOrder: 5, systemCategory: 'storage',  verticalBias: 'mid',  longitudinalBias: 'front', lateralBias: 'center' },
-  { frameworkKey: 'fridgeSlide',         id: 'fridge_slide',      label: 'Fridge / Slide',        icon: 'snow-outline',                 color: '#64DFDF', sortOrder: 6, systemCategory: 'thermal',  verticalBias: 'mid',  longitudinalBias: 'rear',  lateralBias: 'center' },
-  { frameworkKey: 'recoveryMountSystem', id: 'recovery_mount',    label: 'Recovery Mount System', icon: 'construct-outline',            color: '#AB47BC', sortOrder: 7, systemCategory: 'recovery', verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
-  { frameworkKey: 'waterStorage',        id: 'water_storage',     label: 'Water Storage',         icon: 'water-outline',                color: '#26A69A', sortOrder: 8, systemCategory: 'water',    verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
-  { frameworkKey: 'powerSystemBattery',  id: 'power_system',      label: 'Power System / Battery',icon: 'flash-outline',                color: '#FFB74D', sortOrder: 9, systemCategory: 'power',    verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'cabRack',             id: 'cab_rack',         label: 'Cab Rack',                          icon: 'barbell-outline',           color: '#FF6B6B', sortOrder: 0, systemCategory: 'storage',  verticalBias: 'high', longitudinalBias: 'front', lateralBias: 'center' },
+  { frameworkKey: 'roofRackCrossbars',   id: 'roof_rack',        label: 'Roof Rack / Crossbars',             icon: 'resize-outline',            color: '#4FC3F7', sortOrder: 1, systemCategory: 'mounting', verticalBias: 'high', longitudinalBias: 'mid',   lateralBias: 'center' },
+  { frameworkKey: 'rtt',                 id: 'rtt',              label: 'Roof Top Tent',                     icon: 'trail-sign-outline',        color: '#C77DFF', sortOrder: 2, systemCategory: 'shelter',  verticalBias: 'high', longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'bedDrawerStorage',    id: 'bed_drawer',       label: 'Drawer Storage',                    icon: 'server-outline',            color: '#96CEB4', sortOrder: 3, systemCategory: 'storage',  verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'interiorStorage',     id: 'interior_storage', label: 'Interior Storage',                  icon: 'file-tray-stacked-outline', color: '#4ECDC4', sortOrder: 4, systemCategory: 'storage',  verticalBias: 'mid',  longitudinalBias: 'front', lateralBias: 'center' },
+  { frameworkKey: 'recoveryMountSystem', id: 'recovery_mount',   label: 'Recovery Mount Hitch System',       icon: 'construct-outline',         color: '#AB47BC', sortOrder: 5, systemCategory: 'recovery', verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'shellSystem',         id: 'shell_system',     label: 'SmartCap / AluCab / Other Shell',  icon: 'archive-outline',           color: '#7E8CE0', sortOrder: 6, systemCategory: 'storage',  verticalBias: 'mid',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'truckBed',            id: 'truck_bed',        label: 'Truck Bed',                         icon: 'layers-outline',            color: '#6B8F71', sortOrder: 7, systemCategory: 'storage',  verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'waterStorage',        id: 'water_storage',    label: 'Water Storage',                     icon: 'water-outline',             color: '#26A69A', sortOrder: 8, systemCategory: 'water',    verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
+  { frameworkKey: 'powerSystemBattery',  id: 'power_system',     label: 'Power System / Battery',            icon: 'flash-outline',             color: '#FFB74D', sortOrder: 9, systemCategory: 'power',    verticalBias: 'low',  longitudinalBias: 'rear',  lateralBias: 'center' },
 ];
 
 /** Exported for use by vehicleSystemsIntegration.ts and other modules */
@@ -369,6 +378,168 @@ export function resolveZoneBias(zone: ContainerZone | { id: string; verticalBias
   return { verticalBias: 'mid', longitudinalBias: 'mid', lateralBias: 'center' };
 }
 
+const SUPPORTED_ZONE_IDS = new Set(ZONE_DEFINITIONS.map((definition) => definition.id));
+
+function createEmptyAccessoryFramework(): AccessoryFramework {
+  return Object.fromEntries(
+    ALL_FRAMEWORK_KEYS.map((frameworkKey) => [frameworkKey, { enabled: false }]),
+  ) as unknown as AccessoryFramework;
+}
+
+export function normalizeAccessoryFramework(
+  raw: Record<string, AccessoryFrameworkEntry> | AccessoryFramework | null | undefined,
+): AccessoryFramework | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const normalized = createEmptyAccessoryFramework();
+  for (const frameworkKey of ALL_FRAMEWORK_KEYS) {
+    const entry = raw[frameworkKey];
+    if (!entry || typeof entry !== 'object') continue;
+    normalized[frameworkKey] = {
+      enabled: Boolean(entry.enabled),
+      status: entry.enabled ? (entry.status === 'planned' ? 'planned' : 'installed') : undefined,
+    };
+  }
+
+  return normalized;
+}
+
+export function sanitizeContainerZones(rawZones: unknown): ContainerZone[] {
+  if (!Array.isArray(rawZones)) return [];
+
+  return rawZones
+    .filter(
+      (zone): zone is Partial<ContainerZone> & { id: string; label: string } =>
+        Boolean(zone) &&
+        typeof zone === 'object' &&
+        typeof (zone as ContainerZone).id === 'string' &&
+        typeof (zone as ContainerZone).label === 'string' &&
+        SUPPORTED_ZONE_IDS.has((zone as ContainerZone).id),
+    )
+    .map((zone) => {
+      const definition = ZONE_DEFINITIONS.find((candidate) => candidate.id === zone.id);
+      const bias = resolveZoneBias(zone as ContainerZone);
+      return {
+        id: zone.id,
+        label: definition?.label || zone.label,
+        accessoryKey: definition?.frameworkKey || (zone.accessoryKey as keyof AccessoryFramework),
+        status: (zone.status === 'planned' ? 'planned' : 'installed') as AccessoryStatus,
+        icon: typeof zone.icon === 'string' ? zone.icon : definition?.icon || 'cube-outline',
+        color: typeof zone.color === 'string' ? zone.color : definition?.color || '#8A8A85',
+        sortOrder: typeof zone.sortOrder === 'number' ? zone.sortOrder : definition?.sortOrder || 0,
+        ...bias,
+      };
+    })
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+const LOADOUT_FRAMEWORK_BASE_WEIGHTS_LBS: Record<string, number> = {
+  cab_rack: 85,
+  bed_drawer: 180,
+  roof_rack: 75,
+  shell_system: 213,
+};
+
+const SHELL_TRUCK_BED_VALUES = new Set(['rsi_smart_cap', 'alu_cab', 'other_topper']);
+const TRUCK_BED_VALUES = new Set([
+  'open_bed',
+  'cover',
+  'rack',
+  'rsi_smart_cap',
+  'alu_cab',
+  'other_topper',
+]);
+
+function readWizardConfig(wizardConfig: unknown): Record<string, any> | null {
+  return wizardConfig && typeof wizardConfig === 'object'
+    ? (wizardConfig as Record<string, any>)
+    : null;
+}
+
+function inferTruckBedSelection(
+  wizardConfig: Record<string, any> | null,
+  vehicleType: unknown,
+): string | null {
+  const directSelection =
+    typeof wizardConfig?.truck_bed === 'string'
+      ? wizardConfig.truck_bed.trim().toLowerCase()
+      : null;
+  if (directSelection) return directSelection;
+
+  if (typeof vehicleType === 'string') {
+    const normalizedType = vehicleType.trim().toLowerCase();
+    if (normalizedType.includes('truck') || normalizedType.includes('pickup')) {
+      return 'open_bed';
+    }
+  }
+
+  return null;
+}
+
+function applyVehicleLoadoutInferences(
+  framework: AccessoryFramework,
+  wizardConfig: Record<string, any> | null,
+  vehicleType?: unknown,
+): AccessoryFramework {
+  const truckBedSelection = inferTruckBedSelection(wizardConfig, vehicleType);
+  if (truckBedSelection && TRUCK_BED_VALUES.has(truckBedSelection)) {
+    framework.truckBed = { enabled: true, status: 'installed' };
+  }
+
+  if (truckBedSelection && SHELL_TRUCK_BED_VALUES.has(truckBedSelection)) {
+    framework.shellSystem = { enabled: true, status: 'installed' };
+  }
+
+  return framework;
+}
+
+export function resolveVehicleAccessoryFramework(vehicleLike: any): AccessoryFramework | null {
+  const wizardConfig = readWizardConfig(vehicleLike?.wizard_config);
+  const rawFramework =
+    vehicleLike?.accessoryFramework && typeof vehicleLike.accessoryFramework === 'object'
+      ? normalizeAccessoryFramework(vehicleLike.accessoryFramework as AccessoryFramework)
+      : null;
+
+  const framework = rawFramework || createEmptyAccessoryFramework();
+  applyVehicleLoadoutInferences(
+    framework,
+    wizardConfig,
+    vehicleLike?.vehicle_type ?? wizardConfig?.vehicle_type,
+  );
+
+  const hasEnabledZone = ALL_FRAMEWORK_KEYS.some((frameworkKey) => framework[frameworkKey]?.enabled);
+  return hasEnabledZone ? framework : null;
+}
+
+export function resolveVehicleContainerZones(vehicleLike: any): ContainerZone[] {
+  const rawZones = Array.isArray(vehicleLike?.containerZones)
+    ? vehicleLike.containerZones
+    : Array.isArray(vehicleLike?.zones)
+      ? vehicleLike.zones
+      : [];
+
+  const sanitizedZones = sanitizeContainerZones(rawZones);
+  const framework = resolveVehicleAccessoryFramework(vehicleLike);
+  const generatedZones = framework ? generateContainerZonesFromAccessories(framework) : [];
+
+  if (sanitizedZones.length === 0) return generatedZones;
+  if (generatedZones.length === 0) return sanitizedZones;
+
+  const merged = new Map<string, ContainerZone>();
+  for (const zone of sanitizedZones) merged.set(zone.id, zone);
+  for (const zone of generatedZones) {
+    if (!merged.has(zone.id)) {
+      merged.set(zone.id, zone);
+    }
+  }
+
+  return Array.from(merged.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+export function getContainerFrameworkWeightLbs(zoneId: string): number {
+  return LOADOUT_FRAMEWORK_BASE_WEIGHTS_LBS[zoneId] ?? 0;
+}
+
 
 
 
@@ -387,7 +558,7 @@ export function resolveZoneBias(zone: ContainerZone | { id: string; verticalBias
 export function buildAccessoryFramework(
   selections: AccessorySelections
 ): AccessoryFramework {
-  const framework: Record<string, AccessoryFrameworkEntry> = {};
+  const framework = createEmptyAccessoryFramework();
 
   for (const [categoryId, frameworkKey] of Object.entries(CATEGORY_TO_FRAMEWORK_KEY)) {
     const sel = selections[categoryId];
@@ -401,7 +572,7 @@ export function buildAccessoryFramework(
     }
   }
 
-  return framework as unknown as AccessoryFramework;
+  return framework;
 }
 
 /**
@@ -425,6 +596,7 @@ export function frameworkToSelections(
   }
 
   for (const [frameworkKey, categoryId] of Object.entries(FRAMEWORK_KEY_TO_CATEGORY)) {
+    if (!categoryId) continue;
     const entry = framework[frameworkKey as keyof AccessoryFramework];
     if (entry) {
       selections[categoryId] = {

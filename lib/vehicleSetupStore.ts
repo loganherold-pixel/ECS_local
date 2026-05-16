@@ -47,11 +47,13 @@ export const vehicleSetupStore = {
   },
 
   setActiveVehicleId: (vehicleId: string): void => {
+    if (read(ACTIVE_VEHICLE_KEY) === vehicleId) return;
     write(ACTIVE_VEHICLE_KEY, vehicleId);
     notifyListeners();
   },
 
   clearActiveVehicleId: (): void => {
+    if (!read(ACTIVE_VEHICLE_KEY)) return;
     remove(ACTIVE_VEHICLE_KEY);
     notifyListeners();
   },

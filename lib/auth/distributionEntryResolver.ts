@@ -7,6 +7,7 @@ import { AUTH_COPY } from './authCopy';
 
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
+  setupRecoveryRequired?: boolean;
   restorableShellRoute: string | null;
   requestedEntryRoute?: string | null;
   allowRequestedEntryRoute?: boolean;
@@ -18,6 +19,7 @@ function resolveAuthenticatedShellTarget(params: {
 } {
   const {
     setupComplete,
+    setupRecoveryRequired = false,
     restorableShellRoute,
     requestedEntryRoute = null,
     allowRequestedEntryRoute = false,
@@ -26,8 +28,8 @@ function resolveAuthenticatedShellTarget(params: {
 
   if (!setupComplete) {
     return {
-      target: '/setup',
-      destinationSource: 'setup',
+      target: setupRecoveryRequired ? '/fleet' : '/setup',
+      destinationSource: setupRecoveryRequired ? 'vehicle_recovery' : 'setup',
       routeRestoreRejected: false,
     };
   }
@@ -87,8 +89,22 @@ export function resolveDistributionEntryState(
   const routeRestoreEligible = shellRestoreEligible && !!restorableShellRoute;
   const allowPreSetupAccountRoute =
     shellAccessReady && !setupComplete && (currentPath === '/more' || currentPath === '/intel');
+  const allowVehicleRecoveryRoute =
+    shellAccessReady &&
+    !setupComplete &&
+    setupRecoveryRequired &&
+    (currentPath === '/fleet' || currentPath === '/vehicle-config');
+  const allowPreSetupShellRoute =
+    shellAccessReady &&
+    !setupComplete &&
+    !isProtectedScreen &&
+    (currentPath === '/fleet' ||
+      currentPath === '/vehicle-config' ||
+      currentPath === '/more' ||
+      currentPath === '/intel');
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
+    setupRecoveryRequired,
     restorableShellRoute,
     requestedEntryRoute,
     allowRequestedEntryRoute: true,
@@ -96,6 +112,7 @@ export function resolveDistributionEntryState(
   });
   const freshAuthShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
+    setupRecoveryRequired,
     restorableShellRoute,
     allowRouteRestore: false,
   });
@@ -231,14 +248,30 @@ export function resolveDistributionEntryState(
     if (setupRecoveryRequired && authenticated) {
       return {
         kind: 'setup_required',
-        redirectTarget: null,
+        redirectTarget: '/fleet',
         loadingLabel,
         loadingDetail,
         bootstrapLabel,
         shellAccessReady,
         shellRestoreEligible,
         routeRestoreEligible,
-        destinationSource: 'current_route',
+        destinationSource: 'vehicle_recovery',
+        routeRestoreRejected: false,
+        requestedRestorableRoute: restorableShellRoute,
+      };
+    }
+
+    if (!setupComplete && shellAccessReady) {
+      return {
+        kind: 'setup_required',
+        redirectTarget: '/fleet',
+        loadingLabel,
+        loadingDetail,
+        bootstrapLabel,
+        shellAccessReady,
+        shellRestoreEligible,
+        routeRestoreEligible,
+        destinationSource: 'vehicle_recovery',
         routeRestoreRejected: false,
         requestedRestorableRoute: restorableShellRoute,
       };
@@ -322,6 +355,38 @@ export function resolveDistributionEntryState(
   }
 
   if (shellAccessReady && !setupComplete && currentPath !== '/pro') {
+    if (setupRecoveryRequired && !allowVehicleRecoveryRoute) {
+      return {
+        kind: 'setup_required',
+        redirectTarget: '/fleet',
+        loadingLabel,
+        loadingDetail,
+        bootstrapLabel,
+        shellAccessReady,
+        shellRestoreEligible: false,
+        routeRestoreEligible: false,
+        destinationSource: 'vehicle_recovery',
+        routeRestoreRejected: false,
+        requestedRestorableRoute: restorableShellRoute,
+      };
+    }
+
+    if (allowPreSetupShellRoute) {
+      return {
+        kind: 'steady',
+        redirectTarget: null,
+        loadingLabel,
+        loadingDetail,
+        bootstrapLabel,
+        shellAccessReady,
+        shellRestoreEligible: false,
+        routeRestoreEligible: false,
+        destinationSource: 'current_route',
+        routeRestoreRejected: false,
+        requestedRestorableRoute: restorableShellRoute,
+      };
+    }
+
     return {
       kind: 'setup_required',
       redirectTarget: '/setup',

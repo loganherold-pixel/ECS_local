@@ -17,6 +17,8 @@ export type RoadNavSourceType =
   | 'forward_geocode'
   | 'manual_selection'
   | 'explore_handoff'
+  | 'offline_sync_open'
+  | 'dispatch_recovery'
   | 'restored_session';
 
 export interface RoadNavCoordinate {
@@ -340,6 +342,105 @@ function normalizeStepLocation(step: any): RoadNavCoordinate | null {
     return toCoordinate({ center: geometryCoordinate });
   }
   return null;
+}
+
+function toRad(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function distanceMeters(a: RoadNavCoordinate, b: RoadNavCoordinate): number {
+  const earthRadiusM = 6371000;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  return 2 * earthRadiusM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function sumGeometryDistanceMeters(geometry: RoadNavCoordinate[]): number {
+  let total = 0;
+  for (let index = 1; index < geometry.length; index += 1) {
+    total += distanceMeters(geometry[index - 1], geometry[index]);
+  }
+  return total;
+}
+
+export function buildRoadRouteFromCachedGeometry(params: {
+  id: string;
+  origin: RoadNavCoordinate;
+  destination: RoadNavDestination;
+  geometry: RoadNavCoordinate[];
+  distanceM?: number | null;
+  durationS?: number | null;
+  createdAt?: string | null;
+}): RoadNavRoute {
+  const validGeometry = params.geometry.filter((point) => toCoordinate(point));
+  const first = validGeometry[0];
+  const startsAtOrigin =
+    first && distanceMeters(params.origin, first) <= 30;
+  const geometry = startsAtOrigin ? validGeometry : [params.origin, ...validGeometry];
+
+  if (geometry.length < 2) {
+    geometry.push(params.destination.coordinate);
+  }
+
+  const distanceM =
+    typeof params.distanceM === 'number' && Number.isFinite(params.distanceM) && params.distanceM > 0
+      ? params.distanceM
+      : sumGeometryDistanceMeters(geometry);
+  const durationS =
+    typeof params.durationS === 'number' && Number.isFinite(params.durationS) && params.durationS > 0
+      ? params.durationS
+      : Math.max(60, distanceM / 13.4);
+  const bounds =
+    geometry.length > 1
+      ? computeBounds(geometry.map((point, index) => ({
+          idx: index,
+          lat: point.lat,
+          lng: point.lng,
+          ele_m: 0,
+          time: '',
+          type: 'road_nav_cached',
+        } as any)))
+      : null;
+
+  return {
+    id: params.id,
+    origin: params.origin,
+    destination: params.destination,
+    geometry,
+    distanceM,
+    durationS,
+    steps: [
+      {
+        id: 'cached-offline-route',
+        instruction: `Follow cached route toward ${params.destination.title}`,
+        distanceM,
+        durationS,
+        startDistanceM: 0,
+        endDistanceM: distanceM,
+        startDurationS: 0,
+        endDurationS: durationS,
+        maneuverType: 'continue',
+        modifier: null,
+        roadName: null,
+        location: geometry[0],
+        geometry,
+      },
+    ],
+    bounds: bounds
+      ? {
+          north: bounds.maxLat,
+          south: bounds.minLat,
+          east: bounds.maxLng,
+          west: bounds.minLng,
+        }
+      : null,
+    createdAt: params.createdAt ?? new Date().toISOString(),
+  };
 }
 
 export async function fetchRoadRoute(params: {

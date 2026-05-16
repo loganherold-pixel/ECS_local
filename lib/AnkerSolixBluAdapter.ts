@@ -32,6 +32,7 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 import {
   isAnkerSolixDeviceName,
   extractAnkerModelFromName,
@@ -392,6 +393,13 @@ class AnkerSolixBluAdapter {
     try {
       // On web or when BLE is unavailable, return simulated devices
       if (Platform.OS === 'web' || !this.isBleAvailable()) {
+        if (!isDevMockTelemetryAllowed()) {
+          console.log('[BT_LIVE] mock_disabled', { provider: 'anker_solix', phase: 'scan' });
+          this.discoveredDevices = [];
+          this.lastError = 'Live Bluetooth scan unavailable; mock discovery is disabled.';
+          this.lastErrorCode = 'MOCK_DISABLED';
+          return [];
+        }
         console.log('[AnkerSolixBluAdapter] BLE unavailable — using simulated discovery.');
         await this.simulateDelay(1500);
 
@@ -609,7 +617,7 @@ class AnkerSolixBluAdapter {
     this.reconnectAttempts = 0;
 
     bluStateStore.setReconnecting(false);
-    bluStateStore.reset();
+    bluStateStore.clearProviderTelemetry('anker_solix');
     bluSessionStore.recordDisconnection();
 
     this.notify();
@@ -1107,4 +1115,3 @@ class AnkerSolixBluAdapter {
 
 export const anker_solixBluAdapter = new AnkerSolixBluAdapter();
 export const ankerSolixBluAdapter = anker_solixBluAdapter;
-

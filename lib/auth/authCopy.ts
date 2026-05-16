@@ -21,7 +21,7 @@ export const AUTH_COPY = {
     rateLimited: 'Too many attempts. Please wait and try again.',
   },
   session: {
-    checking: 'Checking secure session...',
+    checking: 'Loading expedition systems...',
     verifyingAccess: 'Verifying ECS access...',
     preparing: 'Preparing command system...',
     loadingSystems: 'Loading expedition systems...',

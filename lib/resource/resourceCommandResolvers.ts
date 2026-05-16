@@ -2,6 +2,7 @@ import type { ECSAIState } from '../ai/aiOrchestrator';
 import type { ECSExpeditionPhase } from '../ai/expeditionPhaseTypes';
 import type { ECSOrchestratorCandidate, ECSOrchestratorSource } from '../ai/orchestratorTypes';
 import type { ECSOrchestratorTargetView } from '../ai/orchestratorSelectors';
+import type { EcsPowerIntelligenceSnapshot } from '../powerIntelligence';
 import type { ResourceForecast } from '../resourceForecastEngine';
 import type { ECSNormalizedProviderResult } from '../blu/providerNormalizationTypes';
 import type {
@@ -21,6 +22,7 @@ type ResolvePowerWidgetArgs = {
   outputWatts?: number | null;
   solarWatts?: number | null;
   connectedDeviceCount?: number | null;
+  powerIntelligence?: EcsPowerIntelligenceSnapshot | null;
   providerTelemetry?: ECSNormalizedProviderResult | null;
   aiState?: ECSAIState | null;
   dashboardView?: ECSOrchestratorTargetView | null;
@@ -219,9 +221,32 @@ function operationalPhaseNeedsPowerFocus(phase: ECSExpeditionPhase | null | unde
   return phase === 'camp_stationary' || phase === 'recovery_exit' || phase === 'active_expedition';
 }
 
+function powerIntelligenceTone(snapshot: EcsPowerIntelligenceSnapshot | null | undefined): ResourcePresentationTone {
+  if (!snapshot) return 'neutral';
+  if (snapshot.dataFreshness === 'stale' || snapshot.dataFreshness === 'offline') return 'degraded';
+  if (snapshot.advisoryCategory === 'critical_reserve' || snapshot.sustainabilityRating === 'critical') return 'critical';
+  if (
+    snapshot.advisoryCategory === 'unsustainable_drain'
+    || snapshot.advisoryCategory === 'heavy_drain'
+    || snapshot.sustainabilityRating === 'unsustainable'
+  ) {
+    return 'attention';
+  }
+  if (
+    snapshot.advisoryCategory === 'charging_recovering'
+    || snapshot.advisoryCategory === 'balanced_usage'
+    || snapshot.sustainabilityRating === 'recovering'
+    || snapshot.sustainabilityRating === 'balanced'
+  ) {
+    return 'good';
+  }
+  return 'neutral';
+}
+
 export function resolvePowerWidgetPresentation(args: ResolvePowerWidgetArgs): PowerWidgetPresentation {
   const batteryTone = toneFromPercent(args.batteryPercent);
   const providerTone = powerSupportTone(args.providerTelemetry);
+  const intelligenceTone = powerIntelligenceTone(args.powerIntelligence);
   const phase = args.aiState?.expeditionPhase ?? null;
   const candidates = resolveResourceCandidates(args.dashboardView);
   const routeCandidate = candidates.routeViability;
@@ -229,6 +254,8 @@ export function resolvePowerWidgetPresentation(args: ResolvePowerWidgetArgs): Po
   const lowPower = batteryTone === 'critical' || batteryTone === 'attention';
   const runtimeText = formatRuntimeMinutes(args.runtimeMinutes);
   const sourceLine = providerSourceLine(args.providerTelemetry);
+  const intelligenceHeadline = cleanText(args.powerIntelligence?.advisoryHeadline);
+  const intelligenceDetail = cleanText(args.powerIntelligence?.advisoryDetail);
   const flowSummary =
     formatFlowValue(args.inputWatts, 'input') !== '—'
       ? `${formatFlowValue(args.inputWatts, 'input')} in`
@@ -240,14 +267,16 @@ export function resolvePowerWidgetPresentation(args: ResolvePowerWidgetArgs): Po
 
   const commandRationale =
     lowPower && operationalPhaseNeedsPowerFocus(phase)
-      ? candidateText(routeCandidate) || candidateText(telemetryCandidate)
-      : candidateText(telemetryCandidate) || args.providerTelemetry?.explanation || null;
+      ? candidateText(routeCandidate) || candidateText(telemetryCandidate) || intelligenceDetail || intelligenceHeadline || null
+      : intelligenceDetail || candidateText(telemetryCandidate) || args.providerTelemetry?.explanation || null;
 
   const compactSummary =
     lowPower
       ? operationalPhaseNeedsPowerFocus(phase)
         ? 'Power margin tightening'
         : 'Power reserve deserves watch'
+      : intelligenceHeadline
+        ? intelligenceHeadline
       : args.providerTelemetry?.state === 'live_provider_connected'
         ? `Live power ${args.batteryPercent != null ? `${Math.round(args.batteryPercent)}% reserve` : 'telemetry active'}`
         : args.providerTelemetry?.summary || 'Stored power posture available';
@@ -263,23 +292,35 @@ export function resolvePowerWidgetPresentation(args: ResolvePowerWidgetArgs): Po
           label: routeCandidate?.title?.toUpperCase() || 'POWER WATCH',
           tone: toneFromPriority(routeCandidate) === 'neutral' ? batteryTone : toneFromPriority(routeCandidate),
         }
+      : intelligenceHeadline
+        ? {
+            label:
+              args.powerIntelligence?.advisoryCategory === 'critical_reserve'
+                ? 'CRITICAL RESERVE'
+                : args.powerIntelligence?.advisoryCategory === 'unsustainable_drain'
+                  ? 'POWER WATCH'
+                  : args.powerIntelligence?.advisoryCategory === 'charging_recovering'
+                    ? 'RECOVERING'
+                    : 'POWER INTEL',
+            tone: intelligenceTone,
+          }
       : providerBadge(args.providerTelemetry);
 
   const footer = buildFooter(
     sourceLine || args.providerTelemetry?.summary || null,
-    lowPower ? batteryTone : providerTone,
+    lowPower ? batteryTone : intelligenceHeadline ? intelligenceTone : providerTone,
   );
 
   return {
     compact: {
       summary: compactSummary,
-      tone: lowPower ? batteryTone : providerTone,
+      tone: lowPower ? batteryTone : intelligenceHeadline ? intelligenceTone : providerTone,
       status: compactStatus,
-      statusTone: lowPower ? batteryTone : providerTone,
+      statusTone: lowPower ? batteryTone : intelligenceHeadline ? intelligenceTone : providerTone,
     },
     badge,
     footer,
-    rationale: buildRationale(commandRationale, lowPower ? batteryTone : providerTone),
+    rationale: buildRationale(commandRationale, lowPower ? batteryTone : intelligenceHeadline ? intelligenceTone : providerTone),
     microMetrics: [
       {
         label: 'Runtime',
@@ -301,12 +342,12 @@ export function resolvePowerWidgetPresentation(args: ResolvePowerWidgetArgs): Po
       eyebrow: phaseLabel(phase),
       title:
         lowPower && operationalPhaseNeedsPowerFocus(phase)
-          ? routeCandidate?.title || 'Power posture needs attention'
-          : args.providerTelemetry?.label || 'Power posture',
-      summary: compactSummary,
+          ? routeCandidate?.title || intelligenceHeadline || 'Power posture needs attention'
+          : intelligenceHeadline || args.providerTelemetry?.label || 'Power posture',
+      summary: intelligenceDetail || compactSummary,
       sourceLine: sourceLine || null,
       rationaleLine: cleanText(commandRationale) || null,
-      tone: lowPower ? batteryTone : providerTone,
+      tone: lowPower ? batteryTone : intelligenceHeadline ? intelligenceTone : providerTone,
     },
   };
 }

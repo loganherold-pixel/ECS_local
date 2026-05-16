@@ -19,6 +19,7 @@
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 export interface GPSPosition {
   latitude: number;
@@ -56,6 +57,10 @@ const MPS_TO_MPH = 2.23694;
 // Expedition-grade live tracking defaults
 const DISTANCE_INTERVAL_M = 1;
 const TIME_INTERVAL_MS = 1000;
+
+function logGpsDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('GPS', `[GPS HOOK] ${message}`, details);
+}
 
 function positionsEquivalent(a: GPSPosition | null, b: GPSPosition | null): boolean {
   if (a === b) return true;
@@ -140,7 +145,6 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
   }, []);
 
   const logPositionDebug = useCallback((label: string, next: GPSPosition) => {
-    if (!__DEV__) return;
     const key = [
       next.timestamp,
       next.latitude.toFixed(6),
@@ -150,7 +154,7 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
     ].join(':');
     if (lastLoggedPositionKeyRef.current === key) return;
     lastLoggedPositionKeyRef.current = key;
-    console.log(`[GPS HOOK] ${label}`, {
+    logGpsDebug(label, {
       lat: next.latitude,
       lon: next.longitude,
       accuracy: next.accuracyM,
@@ -249,9 +253,7 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
 
     if (!enabled) {
       if (subscriptionRef.current) {
-        if (__DEV__) {
-          console.log('[GPS HOOK] Removing watchPositionAsync subscription (disabled)');
-        }
+        logGpsDebug('Removing watchPositionAsync subscription (disabled)');
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }
@@ -292,9 +294,7 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
 
     async function startNativeTracking() {
       try {
-        if (__DEV__) {
-          console.log('[GPS HOOK] startNativeTracking');
-        }
+        logGpsDebug('startNativeTracking');
 
         const Location = await import('expo-location');
         if (cancelled || !mountedRef.current) return;
@@ -351,16 +351,12 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         if (cancelled || !mountedRef.current) return;
 
         if (subscriptionRef.current) {
-          if (__DEV__) {
-            console.log('[GPS HOOK] Removing previous watchPositionAsync subscription');
-          }
+          logGpsDebug('Removing previous watchPositionAsync subscription');
           subscriptionRef.current.remove();
           subscriptionRef.current = null;
         }
 
-        if (__DEV__) {
-          console.log('[GPS HOOK] Starting watchPositionAsync');
-        }
+        logGpsDebug('Starting watchPositionAsync');
 
         subscriptionRef.current = await Location.watchPositionAsync(
           {
@@ -389,9 +385,9 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
         }
       } catch (e: any) {
         if (!cancelled && mountedRef.current) {
-          if (__DEV__) {
-            console.log('[GPS HOOK] Native tracking failed', e?.message || e);
-          }
+          ecsLog.warn('GPS', '[GPS HOOK] Native tracking failed', {
+            error: e?.message || String(e),
+          });
           setIsAvailable(false);
           setError('Native GPS unavailable');
         }
@@ -480,14 +476,10 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
     return () => {
       cancelled = true;
 
-      if (__DEV__) {
-        console.log('[GPS HOOK] Cleaning up GPS watcher');
-      }
+      logGpsDebug('Cleaning up GPS watcher');
 
       if (subscriptionRef.current) {
-        if (__DEV__) {
-          console.log('[GPS HOOK] Removing watchPositionAsync subscription');
-        }
+        logGpsDebug('Removing watchPositionAsync subscription');
         subscriptionRef.current.remove();
         subscriptionRef.current = null;
       }

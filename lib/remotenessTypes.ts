@@ -59,6 +59,28 @@ export interface ProximityEstimate {
   confidence: 'high' | 'medium' | 'low' | 'estimated';
   /** Source of the estimate */
   source: string;
+  /** Human-readable destination label when the source provides one */
+  label?: string | null;
+  /** Destination latitude when routable coordinates are known */
+  latitude?: number | null;
+  /** Destination longitude when routable coordinates are known */
+  longitude?: number | null;
+  /** Truthful freshness/source class for this destination estimate */
+  sourceState?: 'live' | 'cache' | 'unavailable';
+  /** Timestamp when this estimate was resolved */
+  updatedAt?: string;
+}
+
+export type RemotenessDestinationType = 'town' | 'fuel' | 'road';
+
+export interface RemotenessDestination {
+  type: RemotenessDestinationType;
+  label: string;
+  distanceMiles?: number;
+  latitude: number;
+  longitude: number;
+  source: 'live' | 'cache' | 'unavailable';
+  updatedAt?: string;
 }
 
 /** All proximity estimates for the current location */

@@ -21,6 +21,7 @@ import {
 } from './ai/operatorTrustResolvers';
 import type { ECSOperatorTrustMode } from './ai/operatorTrustTypes';
 import type { ECSDegradedOperationsResult } from './ai/degradedOperationsTypes';
+import { assessRouteGuidanceAvailability } from './ai/degradedOperationsEngine';
 import type { ECSExpeditionPhaseResult } from './ai/expeditionPhaseTypes';
 import { computeMissionScenario } from './ai/missionScenarioEngine';
 import type { ECSMissionScenarioResult } from './ai/missionScenarioTypes';
@@ -172,6 +173,23 @@ export interface MissionBriefPowerMeta {
   estimatedRuntimeMinutes: number | null;
 }
 
+export interface MissionBriefWeatherMeta {
+  source: ECSAIContext['environment']['weather']['source'];
+  staleness: ECSAIContext['environment']['weather']['staleness'];
+  severity: NonNullable<ECSAIContext['environment']['weather']['severity']>;
+  ageLabel: string | null;
+  hasPayload: boolean;
+  label: string;
+}
+
+export interface MissionBriefRouteGuidanceMeta {
+  requested: boolean;
+  available: boolean;
+  unavailable: boolean;
+  reason: string;
+  label: string;
+}
+
 export interface MissionBrief {
   generatedAt: string;
   status: MissionBriefStatus;
@@ -204,6 +222,8 @@ export interface MissionBrief {
   compactTone?: 'stable' | 'watch' | 'critical';
   changeSummary?: string | null;
   powerMeta?: MissionBriefPowerMeta | null;
+  weatherMeta?: MissionBriefWeatherMeta | null;
+  routeGuidanceMeta?: MissionBriefRouteGuidanceMeta | null;
   operatorTasks: MissionBriefTask[];
   operatorTaskLanes: MissionBriefTaskLane[];
   primaryTask?: MissionBriefTask | null;
@@ -219,10 +239,42 @@ export interface MissionBrief {
 // ============================================================
 
 export async function generateMissionBriefFromLiveState(liveState: ECSAILiveStateBridge | null = null): Promise<MissionBrief> {
-  const ctx = await buildAIContextFromLiveState(liveState, {
-    skipWeatherFetch: !!liveState?.environment?.weather,
-  });
+  const ctx = await buildAIContextFromLiveState(liveState);
   return generateMissionBrief(ctx);
+}
+
+let hasWarnedMissionScenarioFallback = false;
+
+function buildFallbackMissionScenario(error: unknown): ECSMissionScenarioResult {
+  const reason = error instanceof Error ? error.message : 'Mission scenario synthesis failed';
+  return {
+    level: 'unknown',
+    score: 0,
+    label: 'Planning picture limited',
+    summary: 'Mission scenario synthesis is temporarily unavailable, but the core mission brief remains active.',
+    strengths: [],
+    limitations: ['Mission scenario synthesis unavailable'],
+    requiredActions: ['Use the core route, weather, resource, and systems sections until scenario synthesis recovers.'],
+    supportingDimensions: {},
+    confidence: null,
+    priority: null,
+    explanation: {
+      text: `Scenario synthesis failed: ${reason}`,
+      shortText: 'Scenario synthesis unavailable.',
+    },
+  };
+}
+
+function computeMissionScenarioSafely(args: Parameters<typeof computeMissionScenario>[0]): ECSMissionScenarioResult {
+  try {
+    return computeMissionScenario(args);
+  } catch (error) {
+    if (!hasWarnedMissionScenarioFallback) {
+      hasWarnedMissionScenarioFallback = true;
+      console.warn('[MissionBrief] Scenario synthesis failed; using fallback scenario.', error);
+    }
+    return buildFallbackMissionScenario(error);
+  }
 }
 
 export function generateMissionBrief(
@@ -231,7 +283,7 @@ export function generateMissionBrief(
 ): MissionBrief {
   const operatorTrustMode = options.operatorTrustMode ?? operatorTrustModeStore.mode;
   const briefLimits = trustModeBriefLimits(operatorTrustMode);
-  const missionScenario = computeMissionScenario({
+  const missionScenario = computeMissionScenarioSafely({
     richContext: ctx,
     operatorTrustMode,
   });
@@ -381,6 +433,8 @@ export function generateMissionBrief(
           : 'stable',
     changeSummary: null,
     powerMeta: buildPowerMeta(ctx),
+    weatherMeta: buildWeatherMeta(ctx),
+    routeGuidanceMeta: buildRouteGuidanceMeta(ctx),
     operatorTasks,
     operatorTaskLanes,
     primaryTask,
@@ -892,6 +946,9 @@ function buildEnvironmentSection(ctx: ECSAIContext): MissionBriefSection {
   const gps = ctx.environment.gps;
   const conn = ctx.environment.connectivity;
   const weather = ctx.environment.weather.current;
+  const weatherSeverity = ctx.environment.weather.severity ?? 'none';
+  const weatherSummary = ctx.environment.weather.summaryLabel?.trim() ?? null;
+  const severeWeatherAlert = weather?.alerts?.find((a: any) => a.severity === 'extreme' || a.severity === 'warning') ?? null;
 
   if (remote) {
     if (remote.tier === 'EXTREME' || remote.tier === 'DEEP REMOTE') {
@@ -968,13 +1025,12 @@ function buildEnvironmentSection(ctx: ECSAIContext): MissionBriefSection {
   }
 
   if (weather) {
-    const severe = (weather.alerts ?? []).find((a: any) => a.severity === 'extreme' || a.severity === 'warning');
-    if (severe) {
+    if (severeWeatherAlert) {
       lines.push(line(
         'env-weather-alert',
-        severe.title,
-        severe.severity === 'extreme' ? 'alert' : 'advisory',
-        severe.severity === 'extreme' ? 1 : 2,
+        severeWeatherAlert.title,
+        severeWeatherAlert.severity === 'extreme' ? 'alert' : 'advisory',
+        severeWeatherAlert.severity === 'extreme' ? 1 : 2,
         'rainy-outline',
       ));
     }
@@ -1018,6 +1074,27 @@ function buildEnvironmentSection(ctx: ECSAIContext): MissionBriefSection {
         'advisory',
         4,
         'partly-sunny-outline',
+      ));
+    }
+  }
+
+  if (weatherSummary && weatherSeverity !== 'none') {
+    const normalizedSummary = weatherSummary.toLowerCase();
+    const duplicatesPrimaryAlert =
+      !!severeWeatherAlert &&
+      severeWeatherAlert.title.trim().toLowerCase() === normalizedSummary;
+
+    if (!duplicatesPrimaryAlert) {
+      lines.push(line(
+        'env-weather-summary',
+        weatherSummary,
+        weatherSeverity === 'extreme'
+          ? 'alert'
+          : weatherSeverity === 'warning'
+            ? 'advisory'
+            : 'standby',
+        weatherSeverity === 'extreme' ? 2 : weatherSeverity === 'warning' ? 3 : 5,
+        'cloudy-night-outline',
       ));
     }
   }
@@ -1533,7 +1610,7 @@ function buildOperatorNote(
   }
 
   if (ctx.meta.warnings.length > 0) {
-    return 'Some AI inputs are degraded or partially unavailable. Use visual confirmation where possible.';
+    return 'Some ECS intelligence inputs are degraded or partially unavailable. Use visual confirmation where possible.';
   }
 
   if (ctx.readiness.available === false && ctx.readiness.reason) {
@@ -1664,7 +1741,7 @@ function summarizeResourcesSection(_ctx: ECSAIContext, status: MissionBriefStatu
 }
 
 function summarizeSystemsSection(ctx: ECSAIContext, status: MissionBriefStatus): string {
-  if (ctx.meta.warnings.length > 0) return 'Some AI input channels are degraded or stale.';
+  if (ctx.meta.warnings.length > 0) return 'Some ECS intelligence input channels are degraded or stale.';
   if (status === 'red') return 'System confidence is degraded and requires correction.';
   if (status === 'yellow') return 'Systems are partially degraded but still usable.';
   return 'Core system confidence is stable.';
@@ -2063,6 +2140,51 @@ function buildPowerMeta(ctx: ECSAIContext): MissionBriefPowerMeta | null {
     outputWatts: num(power.outputWatts),
     solarInputWatts: num(power.solarInputWatts),
     estimatedRuntimeMinutes: num(power.estimatedRuntimeMinutes),
+  };
+}
+
+function buildWeatherMeta(ctx: ECSAIContext): MissionBriefWeatherMeta {
+  const weather = ctx.environment.weather;
+  const hasPayload = !!weather.current || !!weather.response?.results?.length;
+  const stale = weather.staleness === 'stale' || weather.staleness === 'very_stale';
+  const severity = weather.severity ?? 'none';
+  const providerUnavailable = weather.source === 'none' && !hasPayload;
+
+  let label = 'Weather status unknown';
+  if (severity === 'extreme' || severity === 'warning') {
+    label = 'Weather alert active';
+  } else if (providerUnavailable) {
+    label = 'Weather provider unavailable';
+  } else if (stale) {
+    label = 'Weather data is stale';
+  } else if (weather.staleness === 'fresh' || weather.staleness === 'aging') {
+    label = 'Weather updated recently';
+  }
+
+  return {
+    source: weather.source,
+    staleness: weather.staleness,
+    severity,
+    ageLabel: weather.ageLabel ?? null,
+    hasPayload,
+    label,
+  };
+}
+
+function buildRouteGuidanceMeta(ctx: ECSAIContext): MissionBriefRouteGuidanceMeta {
+  const state = assessRouteGuidanceAvailability({
+    hasActiveRoute: ctx.meta.hasActiveRoute || ctx.meta.hasActiveRun,
+    routeGuidanceRequested: ctx.meta.hasActiveRoute || ctx.meta.hasActiveRun,
+    hasRouteGeometry: !!ctx.route.activeRoute || !!ctx.route.activeRun || !!ctx.route.routeIntelligence || !!ctx.route.routeContext,
+    gpsStatus: (ctx.environment.gps as any)?.gpsStatus ?? null,
+  });
+
+  return {
+    requested: state.requested,
+    available: state.available,
+    unavailable: state.unavailable,
+    reason: state.reason,
+    label: state.label,
   };
 }
 

@@ -33,6 +33,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { connectivity, LATENCY_THRESHOLDS } from './connectivity';
 import type { ConnectivityDetailedState } from './connectivity';
 import { connectivityIntelStore } from './connectivityIntelStore';
+import { ecsLog } from './ecsLogger';
 import {
   buildOfflineCacheProviderData,
   invalidateCacheReadiness,
@@ -111,6 +112,14 @@ let _backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Phase 3D: Last known good summary (for grace window)
 let _lastKnownGoodSummary: ConnectivitySummary | null = null;
+
+function logConnectivityDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', `[ConnectivityIntel] ${message}`, details);
+}
+
+function logConnectivityWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn('SYSTEM', `[ConnectivityIntel] ${message}`, details);
+}
 
 function _describeReconciledAuthority(summary: ConnectivitySummary): string {
   if (summary.network_type === 'none') {
@@ -538,61 +547,76 @@ function _update(): void {
 
     // Phase 3D: Enhanced transition logging
     if (summary.connectivity_state !== _lastState) {
-      console.log(
-        `[ConnectivityIntel] State transition: ${_lastState} → ${summary.connectivity_state} ` +
-        `(type: ${summary.network_type}, quality: ${summary.quality}, ` +
-        `reachable: ${summary.internet_reachable}, ` +
-        `authority: ${_describeReconciledAuthority(summary)}, ` +
-        `freshness: ${summary.freshness}, ` +
-        `latency: ${summary.latency_ms != null ? summary.latency_ms + 'ms' : 'n/a'})`
-      );
+      logConnectivityDebug('State transition', {
+        from: _lastState,
+        to: summary.connectivity_state,
+        type: summary.network_type,
+        quality: summary.quality,
+        reachable: summary.internet_reachable,
+        authority: _describeReconciledAuthority(summary),
+        freshness: summary.freshness,
+        latencyMs: summary.latency_ms,
+      });
       _lastState = summary.connectivity_state;
     }
 
     // Phase 3B: Log network type changes
     if (summary.network_type !== _lastNetworkType) {
-      console.log(`[ConnectivityIntel] Network type: ${_lastNetworkType} → ${summary.network_type}`);
+      logConnectivityDebug('Network type changed', {
+        from: _lastNetworkType,
+        to: summary.network_type,
+      });
       _lastNetworkType = summary.network_type;
     }
 
     // Phase 3B: Log quality changes
     if (summary.quality !== _lastQuality) {
-      console.log(`[ConnectivityIntel] Quality: ${_lastQuality} → ${summary.quality}`);
+      logConnectivityDebug('Quality changed', {
+        from: _lastQuality,
+        to: summary.quality,
+      });
       _lastQuality = summary.quality;
     }
 
     // Phase 3D: Log freshness changes
     if (summary.freshness !== _lastFreshness) {
-      console.log(`[ConnectivityIntel] Freshness: ${_lastFreshness} → ${summary.freshness}`);
+      logConnectivityDebug('Freshness changed', {
+        from: _lastFreshness,
+        to: summary.freshness,
+      });
       _lastFreshness = summary.freshness;
     }
 
     // Phase 3C: Log cache readiness transitions
     if (summary.offline_cache_ready !== _lastCacheReady) {
-      console.log(
-        `[ConnectivityIntel] Cache readiness: ${_lastCacheReady} → ${summary.offline_cache_ready}`
-      );
+      logConnectivityDebug('Cache readiness changed', {
+        from: _lastCacheReady,
+        to: summary.offline_cache_ready,
+      });
       _lastCacheReady = summary.offline_cache_ready;
     }
 
     if (summary.cached_region_available !== _lastRegionAvailable) {
-      console.log(
-        `[ConnectivityIntel] Cached region: ${_lastRegionAvailable} → ${summary.cached_region_available}`
-      );
+      logConnectivityDebug('Cached region availability changed', {
+        from: _lastRegionAvailable,
+        to: summary.cached_region_available,
+      });
       _lastRegionAvailable = summary.cached_region_available;
     }
 
     if (summary.cached_route_available !== _lastRouteAvailable) {
-      console.log(
-        `[ConnectivityIntel] Cached route: ${_lastRouteAvailable} → ${summary.cached_route_available}`
-      );
+      logConnectivityDebug('Cached route availability changed', {
+        from: _lastRouteAvailable,
+        to: summary.cached_route_available,
+      });
       _lastRouteAvailable = summary.cached_route_available;
     }
 
     if (summary.operational_readiness !== _lastOperationalReadiness) {
-      console.log(
-        `[ConnectivityIntel] Operational readiness: ${_lastOperationalReadiness} → ${summary.operational_readiness}`
-      );
+      logConnectivityDebug('Operational readiness changed', {
+        from: _lastOperationalReadiness,
+        to: summary.operational_readiness,
+      });
       _lastOperationalReadiness = summary.operational_readiness;
     }
 
@@ -606,7 +630,9 @@ function _update(): void {
     }
   } catch (e) {
     // Phase 3D: Never crash ECS from connectivity updates
-    console.warn('[ConnectivityIntel] Update cycle error (non-fatal):', e);
+    logConnectivityWarn('Update cycle error (non-fatal)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
@@ -638,9 +664,9 @@ function _checkStale(): void {
 
     // Check if data has gone stale
     if (lastUpdateAge > staleThresholdMs && currentSummary.freshness !== 'stale' && currentSummary.freshness !== 'offline') {
-      console.log(
-        `[ConnectivityIntel] Data stale (${Math.round(lastUpdateAge / 1000)}s since last update)`
-      );
+      logConnectivityWarn('Data stale', {
+        secondsSinceLastUpdate: Math.round(lastUpdateAge / 1000),
+      });
       // Update freshness to stale without changing other fields
       const staleSummary: ConnectivitySummary = {
         ...currentSummary,
@@ -650,7 +676,9 @@ function _checkStale(): void {
       connectivityIntelStore.updateSummary(staleSummary);
     }
   } catch (e) {
-    console.warn('[ConnectivityIntel] Stale check error (non-fatal):', e);
+    logConnectivityWarn('Stale check error (non-fatal)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
@@ -668,7 +696,7 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
     if (nextAppState === 'active' && _isInBackground) {
       // ── Returning to foreground ──
       _isInBackground = false;
-      console.log('[ConnectivityIntel] App resumed — refreshing connectivity');
+      logConnectivityDebug('App resumed — refreshing connectivity');
 
       // Stop background polling
       if (_backgroundPollTimer) {
@@ -685,7 +713,7 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
     } else if (nextAppState === 'background' && !_isInBackground) {
       // ── Going to background ──
       _isInBackground = true;
-      console.log('[ConnectivityIntel] App backgrounded — persisting state');
+      logConnectivityDebug('App backgrounded — persisting state');
 
       // Persist current state
       connectivityIntelStore.persist();
@@ -699,7 +727,9 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
       }, BACKGROUND_POLL_INTERVAL_MS);
     }
   } catch (e) {
-    console.warn('[ConnectivityIntel] AppState handler error (non-fatal):', e);
+    logConnectivityWarn('AppState handler error (non-fatal)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
@@ -733,16 +763,16 @@ export const connectivityIntelService = {
    */
   initialize(): void {
     if (connectivityIntelStore.isInitialized()) {
-      console.log('[ConnectivityIntel] Already initialized');
+      logConnectivityDebug('Already initialized');
       return;
     }
 
-    console.log('[ConnectivityIntel] Initializing service (Phase 3D — Persistence & Recovery)...');
+    logConnectivityDebug('Initializing service (Phase 3D — Persistence & Recovery)...');
 
     // Attempt session restore
     const restored = connectivityIntelStore.restore();
     if (restored) {
-      console.log('[ConnectivityIntel] Previous session restored — will validate with live data');
+      logConnectivityDebug('Previous session restored — will validate with live data');
     }
 
     connectivityIntelStore.setInitialized(true);
@@ -758,7 +788,7 @@ export const connectivityIntelService = {
   startMonitoring(): void {
     if (connectivityIntelStore.isMonitoring()) return;
 
-    console.log('[ConnectivityIntel] Starting monitoring (Phase 3D — with persistence & recovery)...');
+    logConnectivityDebug('Starting monitoring (Phase 3D — with persistence & recovery)...');
     connectivityIntelStore.setMonitoring(true);
 
     // Ensure connectivity monitor is running
@@ -773,18 +803,35 @@ export const connectivityIntelService = {
     try {
       const { tileCacheStore } = require('./tileCacheStore');
       _tileCacheUnsub = tileCacheStore.subscribe(() => {
-        invalidateCacheReadiness();
-        _update();
+        let tileCacheState: Record<string, unknown> = { source: 'tile_cache_store' };
+        try {
+          const regions = tileCacheStore.getRegions?.() ?? [];
+          tileCacheState = {
+            source: 'tile_cache_store',
+            regionCount: regions.length,
+            completeCount: regions.filter((r: any) => r.status === 'complete').length,
+            partialCount: regions.filter((r: any) => r.status === 'partial').length,
+            failedCount: regions.filter((r: any) => r.status === 'failed').length,
+          };
+        } catch {}
+        const invalidated = invalidateCacheReadiness('tile_cache_store_change', tileCacheState);
+        if (invalidated) {
+          _update();
+        }
       });
     } catch (e) {
-      console.warn('[ConnectivityIntel] tileCacheStore subscription failed (non-fatal):', e);
+      logConnectivityWarn('tileCacheStore subscription failed (non-fatal)', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
 
     // Phase 3D: Start AppState listener
     try {
       _appStateSubscription = AppState.addEventListener('change', _handleAppStateChange);
     } catch (e) {
-      console.warn('[ConnectivityIntel] AppState listener failed (non-fatal):', e);
+      logConnectivityWarn('AppState listener failed (non-fatal)', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
 
     // Phase 3D: Start stale detection timer
@@ -806,7 +853,7 @@ export const connectivityIntelService = {
   stopMonitoring(): void {
     if (!connectivityIntelStore.isMonitoring()) return;
 
-    console.log('[ConnectivityIntel] Stopping monitoring...');
+    logConnectivityDebug('Stopping monitoring...');
 
     // Persist before stopping
     connectivityIntelStore.persist();
@@ -857,16 +904,21 @@ export const connectivityIntelService = {
   /**
    * Phase 3C: Invalidate and re-evaluate offline cache readiness.
    */
-  invalidateCache(): void {
-    invalidateCacheReadiness();
-    _update();
+  invalidateCache(reason = 'connectivity_intel_manual', sourceState?: unknown): void {
+    const invalidated = invalidateCacheReadiness(reason, sourceState);
+    if (invalidated) {
+      _update();
+    }
   },
 
   /**
    * Report data from an external provider.
    */
   reportProviderData(data: ConnectivityProviderData): void {
-    console.log(`[ConnectivityIntel] Provider data received: ${data.provider_id} (${data.state})`);
+    logConnectivityDebug('Provider data received', {
+      providerId: data.provider_id,
+      state: data.state,
+    });
     connectivityIntelStore.updateProviderData(data);
     _update();
   },
@@ -881,7 +933,7 @@ export const connectivityIntelService = {
         ...existing,
         is_active: false,
       });
-      console.log(`[ConnectivityIntel] Provider deactivated: ${providerId}`);
+      logConnectivityDebug('Provider deactivated', { providerId });
       _update();
     }
   },
@@ -953,7 +1005,7 @@ export const connectivityIntelService = {
   reset(): void {
     this.stopMonitoring();
     connectivityIntelStore.reset();
-    invalidateCacheReadiness();
+    invalidateCacheReadiness('connectivity_intel_reset');
     _updateCount = 0;
     _lastState = 'unknown';
     _lastNetworkType = 'unknown';
@@ -968,7 +1020,7 @@ export const connectivityIntelService = {
     _debouncedState = 'unknown';
     _lastKnownGoodSummary = null;
     _isInBackground = false;
-    console.log('[ConnectivityIntel] Service reset');
+    logConnectivityDebug('Service reset');
   },
 };
 

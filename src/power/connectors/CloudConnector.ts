@@ -20,6 +20,10 @@ import type {
   PowerConnectionState,
   PowerCapabilities,
 } from "../types/PowerTelemetry";
+import {
+  getPowerTruthLabel,
+  normalizePowerTelemetryTruth,
+} from "../types/PowerTelemetry";
 import type {
   ICloudProvider,
   CloudConnectorConfig,
@@ -27,9 +31,22 @@ import type {
 } from "../cloud/CloudTypes";
 import { DEFAULT_CLOUD_CONFIG } from "../cloud/CloudTypes";
 import type { TokenStore } from "../cloud/TokenStore";
+import { ecsLog } from "../../../lib/ecsLogger";
 
 // ── Subscriber type ─────────────────────────────────────────────────────
 type TelemetryCallback = (data: PowerTelemetry) => void;
+
+function logPowerDebug(providerId: string, message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug("POWER", `[CloudConnector:${providerId}] ${message}`, details);
+}
+
+function logPowerWarn(providerId: string, message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn("POWER", `[CloudConnector:${providerId}] ${message}`, details);
+}
+
+function logPowerError(providerId: string, message: string, details?: Record<string, unknown>): void {
+  ecsLog.error("POWER", `[CloudConnector:${providerId}] ${message}`, undefined, details);
+}
 
 // ── Default capabilities (all false) ────────────────────────────────────
 const EMPTY_CAPABILITIES: PowerCapabilities = {
@@ -82,11 +99,7 @@ export class CloudConnector implements IPowerConnector {
 
   async connect(deviceId: string): Promise<void> {
     if (this.internalState === "connected" || this.internalState === "polling") {
-      if (__DEV__) {
-        console.log(
-          `[CloudConnector:${this.provider.id}] Already connected — ignoring connect().`,
-        );
-      }
+      logPowerDebug(this.provider.id, "Already connected — ignoring connect().");
       return;
     }
 
@@ -103,9 +116,7 @@ export class CloudConnector implements IPowerConnector {
     if (!token) {
       this.setState("error");
       this.lastErrorMessage = `No token found for provider "${this.provider.id}". Call tokenStore.setToken() first.`;
-      if (__DEV__) {
-        console.error(`[CloudConnector:${this.provider.id}] ${this.lastErrorMessage}`);
-      }
+      logPowerError(this.provider.id, this.lastErrorMessage);
       throw new Error(this.lastErrorMessage);
     }
 
@@ -118,12 +129,10 @@ export class CloudConnector implements IPowerConnector {
       this.setState("error");
       this.lastErrorMessage =
         err instanceof Error ? err.message : "Provider connect() failed";
-      if (__DEV__) {
-        console.error(
-          `[CloudConnector:${this.provider.id}] Connect failed:`,
-          this.lastErrorMessage,
-        );
-      }
+      logPowerError(this.provider.id, "Connect failed", {
+        error: this.lastErrorMessage,
+        deviceId,
+      });
       throw err;
     }
 
@@ -131,11 +140,10 @@ export class CloudConnector implements IPowerConnector {
     this.capabilities = this.provider.getCapabilities();
     this.setState("connected");
 
-    if (__DEV__) {
-      console.log(
-        `[CloudConnector:${this.provider.id}] Connected to device "${deviceId}" — polling every ${this.config.pollIntervalMs}ms`,
-      );
-    }
+    logPowerDebug(this.provider.id, "Connected to device", {
+      deviceId,
+      pollIntervalMs: this.config.pollIntervalMs,
+    });
 
     // ── Step 4: Start polling ───────────────────────────────────────
     if (this.config.pollImmediately) {
@@ -154,12 +162,9 @@ export class CloudConnector implements IPowerConnector {
     try {
       await this.provider.disconnect();
     } catch (err) {
-      if (__DEV__) {
-        console.warn(
-          `[CloudConnector:${this.provider.id}] Provider disconnect() error:`,
-          err,
-        );
-      }
+      logPowerWarn(this.provider.id, "Provider disconnect() error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     this.deviceId = null;
@@ -170,9 +175,7 @@ export class CloudConnector implements IPowerConnector {
     this.lastErrorMessage = null;
     this.setState("idle");
 
-    if (__DEV__) {
-      console.log(`[CloudConnector:${this.provider.id}] Disconnected.`);
-    }
+    logPowerDebug(this.provider.id, "Disconnected.");
   }
 
   // ── IPowerConnector: getConnectionState ─────────────────────────────
@@ -258,10 +261,8 @@ export class CloudConnector implements IPowerConnector {
     const prev = this.internalState;
     this.internalState = state;
 
-    if (__DEV__ && prev !== state) {
-      console.log(
-        `[CloudConnector:${this.provider.id}] State: ${prev} → ${state}`,
-      );
+    if (prev !== state) {
+      logPowerDebug(this.provider.id, `State: ${prev} -> ${state}`);
     }
   }
 
@@ -338,11 +339,10 @@ export class CloudConnector implements IPowerConnector {
     this.lastErrorMessage =
       err instanceof Error ? err.message : String(err);
 
-    if (__DEV__) {
-      console.warn(
-        `[CloudConnector:${this.provider.id}] Poll error #${this.consecutiveErrors}:`,
-        this.lastErrorMessage,
-      );
+    if (this.consecutiveErrors === 1 || this.consecutiveErrors >= this.config.maxConsecutiveErrors) {
+      logPowerWarn(this.provider.id, `Poll error #${this.consecutiveErrors}`, {
+        error: this.lastErrorMessage,
+      });
     }
 
     // Apply backoff
@@ -358,17 +358,21 @@ export class CloudConnector implements IPowerConnector {
       this.setState("error");
       this.cancelPoll();
 
-      if (__DEV__) {
-        console.error(
-          `[CloudConnector:${this.provider.id}] Max consecutive errors (${this.config.maxConsecutiveErrors}) reached — entering error state.`,
-        );
-      }
+      logPowerError(
+        this.provider.id,
+        `Max consecutive errors (${this.config.maxConsecutiveErrors}) reached — entering error state.`,
+      );
 
       // Emit a stale telemetry update so subscribers know something is wrong
       if (this.currentTelemetry) {
+        const truth = normalizePowerTelemetryTruth({
+          ...this.currentTelemetry,
+          timestamp: this.currentTelemetry.timestamp,
+        });
         const staleTelemetry: PowerTelemetry = {
           ...this.currentTelemetry,
-          timestamp: Date.now(),
+          truth,
+          sourceLabel: getPowerTruthLabel(truth),
           flags: {
             ...this.currentTelemetry.flags,
             stale: true,
@@ -403,11 +407,19 @@ export class CloudConnector implements IPowerConnector {
         id: this.deviceId ?? "unknown",
         vendor: this.provider.id,
       },
+      truth: normalizePowerTelemetryTruth({
+        timestamp: now,
+        source: "cloud",
+        device: {
+          id: this.deviceId ?? "unknown",
+          vendor: this.provider.id,
+        },
+      }),
       capabilities: this.capabilities,
     };
 
     // Deep merge: partial overrides base for defined fields
-    return {
+    const merged: PowerTelemetry = {
       timestamp: partial.timestamp ?? now,
       source: partial.source ?? "cloud",
 
@@ -431,6 +443,7 @@ export class CloudConnector implements IPowerConnector {
         : base.flags,
 
       capabilities: partial.capabilities ?? base.capabilities ?? this.capabilities,
+      truth: partial.truth ?? base.truth,
 
       quality: {
         ...base.quality,
@@ -438,6 +451,17 @@ export class CloudConnector implements IPowerConnector {
         seq: this.packetSeq,
         lastPacketAt: now,
         connection: "connected",
+      },
+    };
+    const truth = normalizePowerTelemetryTruth(merged, now);
+    return {
+      ...merged,
+      truth,
+      sourceLabel: partial.sourceLabel ?? getPowerTruthLabel(truth),
+      isLive: truth.isLive,
+      flags: {
+        ...(merged.flags ?? {}),
+        stale: truth.isStale,
       },
     };
   }

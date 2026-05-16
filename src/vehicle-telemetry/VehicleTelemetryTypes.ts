@@ -18,6 +18,21 @@
  * vehicle itself (OBD-II, TPMS, internal sensors).
  */
 
+import type {
+  LegacyVehicleTelemetrySource,
+  VehicleTelemetrySnapshot,
+} from '../types/telemetry';
+export type {
+  ECSTelemetrySourceType,
+  ECSTelemetryFreshness,
+  ECSTelemetryConfidence,
+  ECSTelemetryWarningSeverity,
+  PowerTelemetrySourceType,
+  PowerTelemetrySnapshot,
+  VehicleTelemetryWarning,
+  VehicleTelemetrySnapshot,
+} from '../types/telemetry';
+
 // ═══════════════════════════════════════════════════════════
 // TELEMETRY PROVIDER MODEL
 // ═══════════════════════════════════════════════════════════
@@ -79,8 +94,49 @@ export type VehicleTelemetryConnectionState =
   | 'disconnected'
   | 'connecting'
   | 'connected'
+  | 'discovering_services'
+  | 'reading'
   | 'error'
+  | 'failed'
   | 'unsupported';
+
+export type TelemetryConnectionState =
+  | 'idle'
+  | 'scanning'
+  | 'connecting'
+  | 'connected'
+  | 'discovering_services'
+  | 'reading'
+  | 'unsupported'
+  | 'failed';
+
+export type VehicleTelemetrySource = LegacyVehicleTelemetrySource;
+
+export const EMPTY_VEHICLE_TELEMETRY_SNAPSHOT: VehicleTelemetrySnapshot = {
+  sourceType: 'unavailable',
+  sourceLabel: 'Unavailable',
+  freshness: 'offline',
+  confidence: 'unverified',
+  updatedAt: null,
+  source: 'unavailable',
+  isLive: false,
+  deviceId: null,
+  speedMph: null,
+  rpm: null,
+  coolantTempF: null,
+  intakeTempF: null,
+  engineLoadPct: null,
+  throttlePct: null,
+  batteryVoltage: null,
+  fuelLevelPct: null,
+  rangeMiles: null,
+  oilTempF: null,
+  transmissionTempF: null,
+  pitchDeg: null,
+  rollDeg: null,
+  headingDeg: null,
+  warnings: [],
+};
 
 // ═══════════════════════════════════════════════════════════
 // TELEMETRY DEVICE MODEL
@@ -178,6 +234,12 @@ export interface NormalizedVehicleTelemetry {
   /** Device ID that produced this reading */
   device_id: string;
 
+  /** Truthful origin for this vehicle telemetry reading. */
+  source?: VehicleTelemetrySource;
+
+  /** Per-PID normalized live values from an OBD-II adapter when available. */
+  obd2_values?: OBD2TelemetryValue[];
+
   // ── Core engine metrics ────────────────────────────────
 
   /** Vehicle speed in mph */
@@ -240,6 +302,23 @@ export interface NormalizedVehicleTelemetry {
 
   /** Tire temperatures in °F [FL, FR, RL, RR] */
   tire_temps?: [number | null, number | null, number | null, number | null];
+}
+
+export type OBD2TelemetryQuality =
+  | 'live'
+  | 'stale'
+  | 'unsupported'
+  | 'parser_error'
+  | 'no_response';
+
+export interface OBD2TelemetryValue {
+  pid: string;
+  label: string;
+  value: number;
+  unit: string;
+  timestamp: number;
+  sourceDeviceId: string;
+  quality: OBD2TelemetryQuality;
 }
 
 /**

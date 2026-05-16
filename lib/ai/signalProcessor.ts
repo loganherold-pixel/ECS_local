@@ -55,6 +55,11 @@ export type AIContext = {
   vehicle?: {
     healthScore?: number | null; // 0..100
     payloadMargin?: number | null; // lbs remaining
+    payloadUsedPct?: number | null; // 0..100
+    operatingWeightLbs?: number | null;
+    vehicleClass?: string | null;
+    vehicleClassLabel?: string | null;
+    weightConfidence?: string | null;
     fuelPercent?: number | null; // 0..100
     batteryPercent?: number | null; // 0..100
     coolantTempF?: number | null;

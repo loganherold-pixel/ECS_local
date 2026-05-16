@@ -27,6 +27,7 @@
 
 import { Platform } from 'react-native';
 import type { RouteIntelligence } from './routeAnalysisEngine';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[RESOURCE_FORECAST]';
 
@@ -206,11 +207,27 @@ export interface ResourceForecast {
 // ── Input Snapshot Types ─────────────────────────────────────
 
 export interface VehicleProfileSnapshot {
+  vehicleClass?: string | null;
+  vehicleClassLabel?: string | null;
+  vehicleClassConfidence?: string | null;
+  weightConfidenceLevel?: string | null;
+  payloadUsedPct?: number | null;
+  remainingPayloadLbs?: number | null;
+  payloadCapacityLbs?: number | null;
+  operatingWeightLbs?: number | null;
   fuelCapacityGallons?: number | null;
   currentFuelPercent?: number | null;
+  currentFuelGallons?: number | null;
+  fuelWeightLbs?: number | null;
   waterCapacityGallons?: number | null;
+  currentWaterGallons?: number | null;
+  waterWeightLbs?: number | null;
   batteryCapacityWh?: number | null;
   avgMpg?: number | null;
+  tireSizeInches?: number | null;
+  suspensionLiftInches?: number | null;
+  isLeveled?: boolean | null;
+  frontLevelInches?: number | null;
   /** Total vehicle + cargo weight in lbs (for fuel economy adjustment) */
   totalWeightLbs?: number | null;
   /** Base curb weight in lbs */
@@ -609,14 +626,28 @@ export function computeResourceForecast(
   terrain?: TerrainContext | null,
 ): ResourceForecast {
   if (!routeIntelligence) {
-    console.warn(TAG, 'computeResourceForecast called with null routeIntelligence — returning defaults');
+    ecsLog.warn(
+      'SYSTEM',
+      `${TAG} computeResourceForecast called without routeIntelligence; returning defaults`,
+    );
     return createDefaultForecast();
   }
 
   const routeMiles = safeNum(routeIntelligence.totalDistanceMiles);
 
   if (routeMiles <= 0) {
-    console.warn(TAG, 'Route distance is zero or negative — returning default forecast');
+    if (routeMiles < 0) {
+      ecsLog.warn(
+        'SYSTEM',
+        `${TAG} Route distance was negative; returning default forecast`,
+        { routeIntelligenceId: routeIntelligence.id, routeMiles },
+      );
+    } else {
+      ecsLog.debug('SYSTEM', `${TAG} Route distance unresolved; returning default forecast`, {
+        routeIntelligenceId: routeIntelligence.id,
+        routeMiles,
+      });
+    }
     return createDefaultForecast(routeIntelligence.id);
   }
 
@@ -666,7 +697,11 @@ export function computeResourceForecast(
   let fuelAvailable: number = FORECAST_DEFAULTS.FUEL_TANK_GAL;
   const fuelNotes: string[] = [];
 
-  if (vehicleProfile?.fuelCapacityGallons && vehicleProfile.fuelCapacityGallons > 0) {
+  if (vehicleProfile?.currentFuelGallons != null && vehicleProfile.currentFuelGallons >= 0) {
+    fuelAvailable = vehicleProfile.currentFuelGallons;
+    fuelNotes.push(`Current fuel: ${vehicleProfile.currentFuelGallons.toFixed(1)} gal`);
+    hasRealData = true;
+  } else if (vehicleProfile?.fuelCapacityGallons && vehicleProfile.fuelCapacityGallons > 0) {
     if (vehicleProfile.currentFuelPercent != null && vehicleProfile.currentFuelPercent > 0) {
       fuelAvailable = vehicleProfile.fuelCapacityGallons * (vehicleProfile.currentFuelPercent / 100);
       fuelNotes.push(`Tank: ${vehicleProfile.currentFuelPercent}% of ${vehicleProfile.fuelCapacityGallons} gal`);
@@ -743,6 +778,10 @@ export function computeResourceForecast(
   if (loadoutTotals?.waterGallons != null && loadoutTotals.waterGallons > 0) {
     waterAvailable = loadoutTotals.waterGallons;
     waterNotes.push(`Loadout water: ${loadoutTotals.waterGallons.toFixed(1)} gal`);
+    hasRealData = true;
+  } else if (vehicleProfile?.currentWaterGallons != null && vehicleProfile.currentWaterGallons >= 0) {
+    waterAvailable = vehicleProfile.currentWaterGallons;
+    waterNotes.push(`Current water: ${vehicleProfile.currentWaterGallons.toFixed(1)} gal`);
     hasRealData = true;
   } else if (vehicleProfile?.waterCapacityGallons != null && vehicleProfile.waterCapacityGallons > 0) {
     waterAvailable = vehicleProfile.waterCapacityGallons;
@@ -927,7 +966,11 @@ const _listeners = new Set<ForecastListener>();
 
 function _notify(forecast: ResourceForecast | null) {
   _listeners.forEach(fn => {
-    try { fn(forecast); } catch (e) { console.error(TAG, 'Listener error:', e); }
+    try {
+      fn(forecast);
+    } catch (e) {
+      ecsLog.error('SYSTEM', `${TAG} Forecast listener failed`, e);
+    }
   });
 }
 
@@ -949,7 +992,9 @@ function saveForecast(forecast: ResourceForecast): void {
   try {
     sSet(STORAGE_KEY, JSON.stringify(forecast));
   } catch (e) {
-    console.warn(TAG, 'Failed to save forecast:', e);
+    ecsLog.warn('SYSTEM', `${TAG} Failed to save forecast`, {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
@@ -999,10 +1044,16 @@ export const resourceForecastEngine = {
     saveForecast(forecast);
     _notify(forecast);
 
-    console.log(
-      TAG,
-      `Forecast computed: ${forecast.routeMiles} mi, sufficiency=${forecast.sufficiencyLevel}`,
-      `fuel=${forecast.fuel.status} water=${forecast.water.status} power=${forecast.power.status}`,
+    ecsLog.debug(
+      'SYSTEM',
+      `${TAG} Forecast computed`,
+      {
+        routeMiles: forecast.routeMiles,
+        sufficiencyLevel: forecast.sufficiencyLevel,
+        fuelStatus: forecast.fuel.status,
+        waterStatus: forecast.water.status,
+        powerStatus: forecast.power.status,
+      },
     );
 
     return forecast;
@@ -1032,7 +1083,7 @@ export const resourceForecastEngine = {
     _currentForecast = null;
     clearStoredForecast();
     _notify(null);
-    console.log(TAG, 'Forecast cleared');
+    ecsLog.debug('SYSTEM', `${TAG} Forecast cleared`);
   },
 
   /**

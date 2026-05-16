@@ -16,6 +16,7 @@
  */
 
 import type { BluProviderId, BluConnectionState, BluDevice, BluTelemetry, BluDeviceCapabilities } from './BluTypes';
+import type { BluetoothTelemetrySource } from './bluetoothLiveTelemetry';
 
 // ── Provider Lifecycle State ────────────────────────────────────────────
 
@@ -225,6 +226,18 @@ export interface EcsNormalizedReading {
   isStale: boolean;
   /** Whether this device is the primary power source */
   isPrimary: boolean;
+  /** Truthful telemetry origin. Mock data is dev-only and never live. */
+  telemetrySource?: BluetoothTelemetrySource;
+  /** User-facing source label for diagnostics/control pages. */
+  telemetrySourceLabel?: string;
+  /** True only when decoded live Bluetooth telemetry is flowing. */
+  isLive?: boolean;
+  /** Epoch-ms when this telemetry source was updated. */
+  updatedAt?: number;
+  /** Connected device is reachable, but telemetry is not decoded yet. */
+  telemetryUnsupported?: boolean;
+  /** Short reason for unsupported or unavailable telemetry. */
+  telemetryUnsupportedReason?: string;
 }
 
 // ── Charging State Enum ─────────────────────────────────────────────────

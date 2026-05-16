@@ -30,6 +30,7 @@
  *   connectivity.stopMonitoring()
  */
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 export type ConnectivityStatus = 'online' | 'offline' | 'reconnecting';
 
@@ -117,6 +118,7 @@ class ConnectivityMonitor {
   private _isInternetReachable = false;
   private _lastNetworkTypeCheck = 0;
   private _consecutiveReachabilityFailures = 0;
+  private _checkInFlight: Promise<boolean> | null = null;
 
   /** Current connectivity status */
   get status(): ConnectivityStatus {
@@ -445,7 +447,9 @@ class ConnectivityMonitor {
   private _handleOnlineEvent = (): void => {
     // Browser says we're online, verify with a ping
     this._detectNetworkType();
-    this._updateStatus('reconnecting');
+    if (this._initialized && this._status !== 'online' && !this._checkInFlight) {
+      this._updateStatus('reconnecting');
+    }
     this._checkConnectivity();
   };
 
@@ -468,7 +472,10 @@ class ConnectivityMonitor {
     this._detectNetworkType();
 
     if (prevType !== this._networkType) {
-      console.log(`[Connectivity] Network type changed: ${prevType} → ${this._networkType}`);
+      ecsLog.debug('SYSTEM', 'Connectivity network type changed', {
+        nextType: this._networkType,
+        previousType: prevType,
+      });
       // Trigger a full connectivity check to update reachability
       this._checkConnectivity();
     }
@@ -482,8 +489,16 @@ class ConnectivityMonitor {
 
     this._status = newStatus;
 
-    // Phase 3B: Log status transitions
-    console.log(`[Connectivity] Status: ${oldStatus} → ${newStatus} (type: ${this._networkType})`);
+    const transitionDetails = {
+      networkType: this._networkType,
+      nextStatus: newStatus,
+      previousStatus: oldStatus,
+    };
+    if (newStatus === 'offline' || newStatus === 'reconnecting') {
+      ecsLog.warn('SYSTEM', `Connectivity ${oldStatus} → ${newStatus}`, transitionDetails);
+    } else {
+      ecsLog.debug('SYSTEM', 'Connectivity status changed', transitionDetails);
+    }
 
     if (newStatus === 'online') {
       this._lastOnlineAt = new Date().toISOString();
@@ -523,7 +538,19 @@ class ConnectivityMonitor {
     });
   }
 
-  private async _checkConnectivity(): Promise<boolean> {
+  private _checkConnectivity(): Promise<boolean> {
+    if (this._checkInFlight) {
+      return this._checkInFlight;
+    }
+
+    this._checkInFlight = this._performConnectivityCheck().finally(() => {
+      this._checkInFlight = null;
+    });
+
+    return this._checkInFlight;
+  }
+
+  private async _performConnectivityCheck(): Promise<boolean> {
     const isWeb = Platform.OS === 'web';
 
     try {
@@ -649,7 +676,6 @@ class ConnectivityMonitor {
     this._stopPolling();
     this._pollTimer = setInterval(() => {
       if (this._status === 'offline' || this._status === 'reconnecting') {
-        this._updateStatus('reconnecting');
         this._checkConnectivity();
       }
     }, POLL_INTERVAL_MS);

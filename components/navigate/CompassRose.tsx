@@ -13,19 +13,19 @@
  *   - Supports lifting above custom dock/system nav via containerStyle
  *   - Preserves existing ECS compass visuals and behavior
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Platform,
   Animated,
-  Easing,
   TouchableOpacity,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 import { TACTICAL } from '../../lib/theme';
+import { ECS_EASE, ECS_MOTION } from '../../lib/ecsAnimations';
 import type { HeadingAccuracy } from '../../lib/useVehicleHeading';
 
 // ── Constants ────────────────────────────────────────────────
@@ -34,6 +34,9 @@ const DIAL_SIZE = 62;
 const INNER_SIZE = 34;
 const TICK_COUNT = 36; // every 10°
 const CARDINAL_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+const RECENTER_HINT_VISIBLE_MS = 3400;
+const RECENTER_HINT_FADE_MS = ECS_MOTION.intelBarFadeOut;
+let recenterHintSeenThisSession = false;
 
 function getCardinal(degrees: number): string {
   const idx = Math.round((((degrees % 360) + 360) % 360) / 45) % 8;
@@ -82,9 +85,11 @@ const CompassRose = React.memo(function CompassRose({
   paused = false,
 }: CompassRoseProps) {
   const [internalHeading, setInternalHeading] = useState<number | null>(null);
+  const [tapHintVisible, setTapHintVisible] = useState(() => !recenterHintSeenThisSession);
 
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const hintFadeAnim = useRef(new Animated.Value(recenterHintSeenThisSession ? 0 : 1)).current;
   const recalPulseAnim = useRef(new Animated.Value(0)).current;
   const prevHeadingRef = useRef<number>(0);
   const mountedRef = useRef(true);
@@ -95,6 +100,18 @@ const CompassRose = React.memo(function CompassRose({
     };
   }, []);
 
+  const dismissTapHint = useCallback(() => {
+    recenterHintSeenThisSession = true;
+    Animated.timing(hintFadeAnim, {
+      toValue: 0,
+      duration: RECENTER_HINT_FADE_MS,
+      easing: ECS_EASE.accelerate,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished && mountedRef.current) setTapHintVisible(false);
+    });
+  }, [hintFadeAnim]);
+
   // ── Fade in/out ────────────────────────────────────────────
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -103,6 +120,24 @@ const CompassRose = React.memo(function CompassRose({
       useNativeDriver: true,
     }).start();
   }, [visible, fadeAnim]);
+
+  useEffect(() => {
+    if (paused || isStationaryLocked) {
+      hintFadeAnim.setValue(1);
+      return undefined;
+    }
+
+    if (recenterHintSeenThisSession || !tapHintVisible) {
+      hintFadeAnim.setValue(0);
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      dismissTapHint();
+    }, RECENTER_HINT_VISIBLE_MS);
+
+    return () => clearTimeout(timer);
+  }, [dismissTapHint, hintFadeAnim, isStationaryLocked, paused, tapHintVisible]);
 
   // ── Recalibration pulse animation ─────────────────────────
   useEffect(() => {
@@ -208,8 +243,8 @@ const CompassRose = React.memo(function CompassRose({
 
     Animated.timing(rotateAnim, {
       toValue: smoothTarget,
-      duration: 300,
-      easing: Easing.out(Easing.quad),
+      duration: ECS_MOTION.compassRotationDuration,
+      easing: ECS_EASE.linear,
       useNativeDriver: true,
     }).start();
 
@@ -230,11 +265,20 @@ const CompassRose = React.memo(function CompassRose({
   const accuracyColor = getAccuracyColor(accuracy);
 
   const Wrapper = onPress ? TouchableOpacity : View;
+  const handlePress = () => {
+    if (tapHintVisible) {
+      dismissTapHint();
+    }
+    onPress?.();
+  };
   const wrapperProps = onPress
     ? {
-        onPress,
+        onPress: handlePress,
         activeOpacity: 0.85,
         hitSlop: { top: 10, bottom: 10, left: 10, right: 10 },
+        accessibilityRole: 'button' as const,
+        accessibilityLabel: 'Recenter map on current location',
+        accessibilityHint: 'Centers the map on your current GPS location.',
       }
     : {};
 
@@ -316,11 +360,16 @@ const CompassRose = React.memo(function CompassRose({
           <View style={styles.headingDot} />
         </View>
 
-        <View style={styles.recenterHint}>
+        <Animated.View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no"
+          style={[styles.recenterHint, { opacity: hintFadeAnim }]}
+        >
           <Text style={styles.recenterHintText}>
             {paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER'}
           </Text>
-        </View>
+        </Animated.View>
 
         {hasHeading && !paused ? (
           <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
@@ -505,21 +554,20 @@ const styles = StyleSheet.create({
   },
 
   headingDegrees: {
-    fontFamily: 'Courier',
-    marginTop: 1,
-    fontSize: 7,
-    fontWeight: '800',
-    color: 'rgba(230,230,225,0.68)',
-    letterSpacing: 0.8,
-    lineHeight: 9,
+    display: 'none',
+    width: 0,
+    height: 0,
+    fontSize: 0,
+    lineHeight: 0,
+    opacity: 0,
   },
 
   headingCardinal: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '900',
     color: TACTICAL.text,
     letterSpacing: 1.2,
-    lineHeight: 12,
+    lineHeight: 13,
     textTransform: 'uppercase',
   },
 
@@ -549,25 +597,25 @@ const styles = StyleSheet.create({
 
   recenterHint: {
     position: 'absolute',
-    top: -18,
+    top: COMPASS_SIZE + 6,
     alignSelf: 'center',
-    minWidth: 58,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 8,
-    backgroundColor: 'rgba(11,15,18,0.94)',
+    minWidth: 64,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 7,
+    backgroundColor: 'rgba(11,15,18,0.56)',
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.18)',
+    borderColor: 'rgba(196,138,44,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 6,
+    zIndex: 1,
   },
 
   recenterHintText: {
-    fontSize: 5.5,
+    fontSize: 6,
     fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
+    color: 'rgba(214,208,190,0.58)',
+    letterSpacing: 0.7,
   },
 
   headingQualityAccent: {

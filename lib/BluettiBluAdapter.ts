@@ -32,6 +32,7 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 import {
   isBluettiDeviceName,
   extractModelFromName,
@@ -392,6 +393,13 @@ class BluettiBluAdapter {
     try {
       // On web or when BLE is unavailable, return simulated devices
       if (Platform.OS === 'web' || !this.isBleAvailable()) {
+        if (!isDevMockTelemetryAllowed()) {
+          console.log('[BT_LIVE] mock_disabled', { provider: 'bluetti', phase: 'scan' });
+          this.discoveredDevices = [];
+          this.lastError = 'Live Bluetooth scan unavailable; mock discovery is disabled.';
+          this.lastErrorCode = 'MOCK_DISABLED';
+          return [];
+        }
         console.log('[BluettiBluAdapter] BLE unavailable — using simulated discovery.');
         await this.simulateDelay(1500);
 
@@ -609,7 +617,7 @@ class BluettiBluAdapter {
     this.reconnectAttempts = 0;
 
     bluStateStore.setReconnecting(false);
-    bluStateStore.reset();
+    bluStateStore.clearProviderTelemetry('bluetti');
     bluSessionStore.recordDisconnection();
 
     this.notify();
@@ -1106,4 +1114,3 @@ class BluettiBluAdapter {
 // ── Singleton ───────────────────────────────────────────────────────────
 
 export const bluettiBluAdapter = new BluettiBluAdapter();
-

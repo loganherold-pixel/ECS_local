@@ -27,7 +27,7 @@ import type { BluDevice, BluConnectionState, BluSystemStatus } from './BluTypes'
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
-import { getSelectedEcoFlowDevice } from './useEcoFlowLive';
+import { getSelectedEcoFlowDevice } from './ecoFlowSelectionStore';
 import {
   ecoFlowBluAdapter,
   type EcoFlowAdapterState,
@@ -479,88 +479,12 @@ export function useBluConnection(): BluConnectionState_Hook {
     if (restoreAttemptedRef.current) return;
     restoreAttemptedRef.current = true;
 
-    const cE = ecoFlowAdapter.getState();
-    const cB = bluettiAdapter.getState();
-    const cA = ankerSolixAdapter.getState();
-    const cJ = jackeryAdapter.getState();
-    const cG = goalZeroAdapter.getState();
-    const cR = renogyAdapter.getState();
-    const cRedarc = redarcAdapter.getState();
-    const cDakotaLithium = dakotaLithiumAdapter.getState();
-
-    if (
-      cE.connectionState === 'connected' ||
-      cB.connectionState === 'connected' ||
-      cA.connectionState === 'connected' ||
-      cJ.connectionState === 'connected' ||
-      cG.connectionState === 'connected' ||
-      cR.connectionState === 'connected' ||
-      cRedarc.connectionState === 'connected' ||
-      cDakotaLithium.connectionState === 'connected'
-    ) {
-      return;
+    if (bluSessionStore.hasPreviousSession() && __DEV__) {
+      console.log('[BT_BLOCKER] scan_stop reason=session_restore_requires_manual_scan');
     }
 
-    if (!bluSessionStore.hasPreviousSession()) return;
-
-    const session = bluSessionStore.getSession();
-
-    (async () => {
-      setIsConnecting(true);
-      try {
-        let restored = false;
-
-        if (session.provider === 'ecoflow') {
-          const selectedEcoFlowCloudDevice = getSelectedEcoFlowDevice();
-
-          // When ECS has an explicit cloud-selected EcoFlow device,
-          // skip BLU session auto-restore so the BLE path does not
-          // fight the cloud selection flow on mount.
-          if (selectedEcoFlowCloudDevice) {
-            restored = false;
-            if (__DEV__) {
-              console.log(
-                `[useBluConnection] Skipping EcoFlow BLU session restore because cloud-selected device is active: ${selectedEcoFlowCloudDevice}`,
-              );
-            }
-          } else {
-            restored = await ecoFlowAdapter.restoreSession();
-            if (restored) {
-              await syncEcoFlowPrimaryPreference();
-              if (mountedRef.current) setIsPolling(session.wasPolling);
-            }
-          }
-        } else if (session.provider === 'bluetti') {
-          restored = await bluettiAdapter.restoreSession();
-          if (restored && mountedRef.current) setBluettiIsPolling(true);
-        } else if (session.provider === 'anker_solix') {
-          restored = await ankerSolixAdapter.restoreSession();
-          if (restored && mountedRef.current) setAnkerSolixIsPolling(true);
-        } else if (session.provider === 'jackery') {
-          restored = await jackeryAdapter.restoreSession();
-          if (restored && mountedRef.current) setJackeryIsPolling(true);
-        } else if (session.provider === 'goal_zero') {
-          restored = await goalZeroAdapter.restoreSession();
-          if (restored && mountedRef.current) setGoalZeroIsPolling(true);
-        } else if (session.provider === 'renogy') {
-          restored = await renogyAdapter.restoreSession();
-          if (restored && mountedRef.current) setRenogyIsPolling(true);
-        } else if (session.provider === 'redarc') {
-          restored = await redarcAdapter.restoreSession();
-          if (restored && mountedRef.current) setRedarcIsPolling(true);
-        } else if (session.provider === 'dakota_lithium') {
-          restored = await dakotaLithiumAdapter.restoreSession();
-          if (restored && mountedRef.current) setDakotaLithiumIsPolling(true);
-        }
-
-        if (mountedRef.current) setSessionRestored(restored);
-      } catch (err) {
-        console.error('[useBluConnection] Session restore error:', err);
-      } finally {
-        if (mountedRef.current) setIsConnecting(false);
-      }
-    })();
-  }, [syncEcoFlowPrimaryPreference]);
+    setSessionRestored(false);
+  }, []);
 
   const primaryDevice = registeredDevices.find((d) => d.is_primary) ?? null;
   const systemStatus = bluStateStore?.getSystemStatus?.() ?? 'disconnected';

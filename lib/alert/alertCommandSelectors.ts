@@ -3,6 +3,7 @@ import type { ECSOperationalState } from '../ai/degradedOperationsTypes';
 import type { ECSExpeditionPhase } from '../ai/expeditionPhaseTypes';
 import type { ECSOrchestratorCandidate } from '../ai/orchestratorTypes';
 import type { ECSPriorityLevel } from '../ai/priorityTypes';
+import { isLowValueTelemetryDegradedSummary } from '../ai/degradedOperationsEngine';
 import type { ECSLiveStatusMap } from '../status/liveStatusTypes';
 
 export type AlertCommandGroup = {
@@ -88,6 +89,12 @@ function compareCandidates(a: ECSOrchestratorCandidate, b: ECSOrchestratorCandid
 
 function buildOperationalFallback(args: SelectAlertCommandStateArgs): AlertCommandGroup | null {
   if (!args.operationalState || args.operationalState === 'fully_operational') return null;
+  if (
+    args.operationalState === 'degraded' &&
+    isLowValueTelemetryDegradedSummary(args.operationalSummary)
+  ) {
+    return null;
+  }
 
   let level: ECSPriorityLevel = 'informational';
   switch (args.operationalState) {
@@ -151,7 +158,7 @@ export function selectAlertCommandState(
       grouped.set(key, {
         id: key,
         level,
-        title: cleanText(candidate.title) || 'Alert',
+        title: cleanText(candidate.title) || 'Dispatch advisory',
         summary:
           cleanText(candidate.explanation?.text) ||
           cleanText(candidate.summary) ||
@@ -193,15 +200,11 @@ export function selectAlertCommandState(
     informational: groupedList.filter((item) => item.level === 'informational'),
   };
 
-  let lead =
+  let lead: AlertCommandGroup =
     sections.critical[0] ??
     sections.warning[0] ??
     sections.caution[0] ??
-    null;
-
-  if (!lead) {
-    lead = buildOperationalFallback(args);
-  }
+    buildOperationalFallback(args);
 
   const orderedSecondary = groupedList.filter((item) => item.id !== lead?.id);
 

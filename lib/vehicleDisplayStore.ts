@@ -34,9 +34,19 @@ import {
   formatWeatherHeadline,
   formatWeatherWindLine,
 } from './ecsWeather';
+import {
+  getSharedOperationalWeatherState,
+  removeSharedOperationalWeatherConsumer,
+  setSharedOperationalWeatherConsumer,
+  subscribeSharedOperationalWeather,
+} from './useOperationalWeather';
+import {
+  isVehicleDisplayRunning,
+  setVehicleDisplayRunning,
+} from './vehicleDisplayRuntime';
 import { resolveDashboardValue } from './dashboardWidgetSources';
 import { buildVehiclePresentationModel } from './vehiclePresentationModel';
-import { reportLayoutFailure } from './ecsIssueIntelligence';
+import { reportLayoutFailure } from './ecsIssueReporter';
 import { createInitialAIOrchestratorMemory, runECSAI } from './ai/aiOrchestrator';
 import { selectAutomotiveCommandSurface } from './automotive/automotiveCommandSelectors';
 import { createDefaultAutomotiveSurfaceState } from './automotive/automotiveSurfaceTypes';
@@ -446,7 +456,7 @@ function sourceLabel(source: VehicleDataSource): string {
     case 'gps_live':
       return 'GPS live';
     case 'ai_navigation':
-      return 'AI / route';
+      return 'ECS route intelligence';
     case 'manual':
       return 'Manual fallback';
     case 'cached':
@@ -849,11 +859,11 @@ let _state: VehicleDisplayState = createDefaultState();
 let _sessionLogs: VehicleSessionLogEntry[] = [];
 let _refreshTimer: ReturnType<typeof setInterval> | null = null;
 let _isRunning = false;
-let _weatherFetchInFlight = false;
 let _roadSessionInFlight = false;
 let _roadSession: PersistedRoadNavigationSession | null = null;
 let _weatherSnapshot: ECSWeatherSnapshot | null = null;
 let _weatherUnavailableReason: string | null = null;
+let _sharedWeatherUnsubscribe: (() => void) | null = null;
 let _automotiveSurface = createDefaultAutomotiveSurfaceState();
 let _automotiveAIRefreshInFlight = false;
 let _automotiveAIMemory = createInitialAIOrchestratorMemory();
@@ -887,6 +897,27 @@ function _notify(): void {
       fn();
     } catch {}
   }
+}
+
+function _syncSharedOperationalWeatherConsumer(gps: any): void {
+  setSharedOperationalWeatherConsumer('vehicle_display', {
+    enabled: _isRunning,
+    gps: {
+      lat: gps?.position?.latitude ?? null,
+      lng: gps?.position?.longitude ?? null,
+      hasFix: Boolean(gps?.hasFix),
+      permissionDenied: Boolean(gps?.permissionDenied),
+    },
+    units: 'imperial',
+    freshnessWindowMs: 10 * 60 * 1000,
+    movementThresholdM: 750,
+  });
+}
+
+function _applySharedWeatherState(): void {
+  const sharedWeather = getSharedOperationalWeatherState();
+  _weatherSnapshot = sharedWeather.snapshot;
+  _weatherUnavailableReason = sharedWeather.snapshot.status.error ?? sharedWeather.snapshot.status.label ?? null;
 }
 
 function recordSessionEvent(
@@ -968,10 +999,7 @@ function buildNavigationData(params: {
     routePhase = 'completed';
   } else if (roadSession?.status === 'rerouting' || (routeLoaded && !gps?.hasFix)) {
     routePhase = 'alerting_or_degraded';
-  } else if (
-    roadSession?.status === 'navigation_active' ||
-    (!!activeRoute && activeRoute.is_active)
-  ) {
+  } else if (roadSession?.status === 'navigation_active') {
     routePhase = 'route_active';
   } else if (routePreview || routeLoaded) {
     routePhase = 'route_selected';
@@ -1292,7 +1320,12 @@ function buildWeatherHazardData(gps: any): VehicleWeatherHazardData {
     };
   }
 
-  if (!_weatherSnapshot) {
+  if (
+    !_weatherSnapshot ||
+    _weatherSnapshot.status.kind === 'permission-blocked' ||
+    _weatherSnapshot.status.kind === 'network-blocked' ||
+    (_weatherSnapshot.status.kind === 'error' && !_weatherSnapshot.raw)
+  ) {
     return {
       status: 'unavailable',
       condition: null,
@@ -1540,6 +1573,8 @@ function buildWeatherData(
 
 function _rebuildState(reason: 'tick' | 'async' = 'tick'): void {
   const gps = safeRequire('./gpsUIState')?.gpsUIState?.get?.() ?? {};
+  _syncSharedOperationalWeatherConsumer(gps);
+  _applySharedWeatherState();
   const connectivityModule = safeRequire('./connectivity')?.connectivity;
   const connectivityLevel = connectivityModule?.getLevel?.() ?? 'unknown';
   const remotenessStore = safeRequire('./remotenessStore')?.remotenessStore;
@@ -1789,33 +1824,6 @@ async function _refreshAsyncSources(gps: any): Promise<void> {
       _roadSessionInFlight = false;
     }
   }
-
-  if (!gps?.hasFix || _weatherFetchInFlight) return;
-
-  _weatherFetchInFlight = true;
-  try {
-    const { fetchWeatherForLocation } = await import('./weatherStore');
-    const { buildECSWeatherSnapshot } = await import('./ecsWeather');
-    const result = await fetchWeatherForLocation(
-      gps.position.latitude,
-      gps.position.longitude,
-      'imperial',
-      false,
-    );
-    _weatherSnapshot = buildECSWeatherSnapshot({
-      result,
-      waypoint: result.data.results?.[0] ?? null,
-      sourceType: 'current_location',
-      locationFallback: 'Current Position',
-    });
-    _weatherUnavailableReason = null;
-    _rebuildState('async');
-  } catch (error: any) {
-    _weatherUnavailableReason = error?.message ?? 'Weather unavailable';
-    _rebuildState('async');
-  } finally {
-    _weatherFetchInFlight = false;
-  }
 }
 
 async function _startAttitudeStream(): Promise<void> {
@@ -2003,6 +2011,11 @@ export const vehicleDisplayStore = {
   start(): void {
     if (_isRunning) return;
     _isRunning = true;
+    setVehicleDisplayRunning(true);
+    _sharedWeatherUnsubscribe = subscribeSharedOperationalWeather(() => {
+      _applySharedWeatherState();
+      _rebuildState('async');
+    });
     recordSessionEvent('car_session_started', { screen: _state.activeScreen });
     _rebuildState('tick');
     void _startAttitudeStream();
@@ -2013,6 +2026,10 @@ export const vehicleDisplayStore = {
   stop(): void {
     if (!_isRunning) return;
     _isRunning = false;
+    setVehicleDisplayRunning(false);
+    _sharedWeatherUnsubscribe?.();
+    _sharedWeatherUnsubscribe = null;
+    removeSharedOperationalWeatherConsumer('vehicle_display');
     recordSessionEvent('car_session_ended', { screen: _state.activeScreen });
     if (_refreshTimer) {
       clearInterval(_refreshTimer);
@@ -2021,13 +2038,16 @@ export const vehicleDisplayStore = {
     _stopAttitudeStream();
   },
   isRunning(): boolean {
-    return _isRunning;
+    return isVehicleDisplayRunning();
   },
   reset(): void {
     vehicleDisplayStore.stop();
     _manualMapOverrides = {};
     _weatherSnapshot = null;
     _weatherUnavailableReason = null;
+    _sharedWeatherUnsubscribe?.();
+    _sharedWeatherUnsubscribe = null;
+    removeSharedOperationalWeatherConsumer('vehicle_display');
     _roadSession = null;
     _sessionLogs = [];
     _lastLoggedRoutePhase = null;

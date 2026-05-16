@@ -7,13 +7,14 @@ import { gpsUIState } from './gpsUIState';
 import { routeStore } from './routeStore';
 import { loadRoadNavigationSession } from './roadNavigationStore';
 import { connectivityIntelStore } from './connectivityIntelStore';
-import { remotenessStore } from './remotenessStore';
-import { vehicleDisplayStore } from './vehicleDisplayStore';
+import { getRemotenessRuntimeSnapshot } from './remotenessRuntime';
+import { isVehicleDisplayRunning } from './vehicleDisplayRuntime';
 import { bluStateStore } from './BluStateStore';
 import { vehicleTelemetryStore } from '../src/vehicle-telemetry/VehicleTelemetryStore';
 import {
   getIssueRuntimeLayoutClass,
   getIssueRuntimeSnapshot,
+  type EcsIssueWeatherFreshness,
   type EcsIssueWeatherStatus,
 } from './ecsIssueRuntime';
 import {
@@ -174,7 +175,13 @@ function normalizeOfflineReadiness(value: string | null | undefined): 'ready' | 
   return 'missing';
 }
 
-function normalizeWeatherStatus(value: EcsIssueWeatherStatus | null | undefined): 'live' | 'stale' | 'unavailable' {
+function normalizeWeatherStatus(
+  value: EcsIssueWeatherStatus | null | undefined,
+  freshness?: EcsIssueWeatherFreshness | null,
+): 'live' | 'stale' | 'unavailable' {
+  if (freshness === 'fresh' || freshness === 'aging') return 'live';
+  if (freshness === 'stale' || freshness === 'very_stale') return 'stale';
+  if (freshness === 'missing') return 'unavailable';
   return value === 'live' || value === 'stale' ? value : 'unavailable';
 }
 
@@ -249,9 +256,9 @@ async function buildRuntimeContext(fallbackUsed = false): Promise<EcsIssueContex
     offlineReadiness: normalizeOfflineReadiness(
       String(connectivitySummary.operational_readiness ?? connectivitySummary.freshness ?? ''),
     ),
-    weatherStatus: normalizeWeatherStatus(runtime.weatherStatus),
-    remotenessAvailable: remotenessStore.isRunning(),
-    carSessionActive: vehicleDisplayStore.isRunning(),
+    weatherStatus: normalizeWeatherStatus(runtime.weatherStatus, runtime.weatherFreshness),
+    remotenessAvailable: getRemotenessRuntimeSnapshot().isRunning,
+    carSessionActive: isVehicleDisplayRunning(),
     layoutClass: getIssueRuntimeLayoutClass(),
     fallbackUsed,
     activeGuidanceExpected: routeState === 'active',

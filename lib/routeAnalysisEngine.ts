@@ -25,8 +25,16 @@
  */
 
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[ROUTE_ANALYSIS]';
+
+function logRouteAnalysisDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('MAP', message, details, {
+    tag: TAG,
+    debugFlag: 'ECS_DEBUG_ROUTE_ANALYSIS',
+  });
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -275,6 +283,39 @@ interface AnalysisPoint {
   ele_m: number | null; // elevation in meters
 }
 
+let lastRouteAnalysisSignature: string | null = null;
+let lastRouteAnalysisResult: RouteIntelligence | null = null;
+
+function buildAnalysisSignature(
+  points: AnalysisPoint[],
+  sourceId: string,
+  routeName: string,
+  avgSpeedMph: number,
+): string {
+  if (!points || points.length === 0) {
+    return `${sourceId}::${routeName}::${avgSpeedMph}::empty`;
+  }
+  const first = points[0];
+  const last = points[points.length - 1];
+  const sampleStep = Math.max(1, Math.floor(points.length / 8));
+  const sampled = points
+    .filter((_, index) => index % sampleStep === 0)
+    .slice(0, 10)
+    .map((point) => `${point.lat.toFixed(5)},${point.lon.toFixed(5)},${point.ele_m ?? 'x'}`)
+    .join('|');
+  return [
+    sourceId,
+    routeName,
+    avgSpeedMph,
+    points.length,
+    first.lat.toFixed(5),
+    first.lon.toFixed(5),
+    last.lat.toFixed(5),
+    last.lon.toFixed(5),
+    sampled,
+  ].join('::');
+}
+
 // ── Core Analysis Function ───────────────────────────────────
 
 /**
@@ -300,6 +341,12 @@ export function analyzeRoute(
   routeName: string,
   avgSpeedMph: number = DEFAULT_AVG_SPEED_MPH,
 ): RouteIntelligence {
+  const analysisSignature = buildAnalysisSignature(points, sourceId, routeName, avgSpeedMph);
+  if (lastRouteAnalysisSignature === analysisSignature && lastRouteAnalysisResult) {
+    logRouteAnalysisDebug('skipped_duplicate', { sourceId, routeName });
+    return lastRouteAnalysisResult;
+  }
+
   const now = new Date().toISOString();
 
   // ── Edge case: not enough points ──
@@ -570,7 +617,14 @@ export function analyzeRoute(
     avgSpeedAssumption: avgSpeedMph,
   };
 
-  console.log(TAG, `Analysis complete: ${routeName} — ${totalDistanceMi.toFixed(1)} mi, ${segments.length} segments`);
+  logRouteAnalysisDebug('analysis_complete', {
+    routeName,
+    totalDistanceMi: Number(totalDistanceMi.toFixed(1)),
+    segmentCount: segments.length,
+  });
+
+  lastRouteAnalysisSignature = analysisSignature;
+  lastRouteAnalysisResult = result;
 
   return result;
 }
@@ -770,9 +824,11 @@ export const routeAnalysisEngine = {
    */
   clear(): void {
     _currentIntelligence = null;
+    lastRouteAnalysisSignature = null;
+    lastRouteAnalysisResult = null;
     clearStoredIntelligence();
     _notify(null);
-    console.log(TAG, 'Intelligence cleared');
+    logRouteAnalysisDebug('intelligence_cleared');
   },
 
   /**

@@ -168,6 +168,18 @@ export const setupStore = {
     notifyListeners();
   },
 
+  clearLegacyVehicleFrameworkState: (options: { clearCompletion?: boolean } = {}): void => {
+    remove(SETUP_SKIPPED_RESOURCES_KEY);
+    remove(SETUP_CURRENT_STEP_KEY);
+    remove(SETUP_WELCOME_SHOWN_KEY);
+    remove(SETUP_RESOURCE_PROFILE_KEY);
+    if (options.clearCompletion) {
+      remove(SETUP_COMPLETE_KEY);
+      remove(SETUP_VEHICLE_ID_KEY);
+    }
+    notifyListeners();
+  },
+
   needsAttention: (): boolean => {
     if (setupStore.isComplete()) {
       if (setupStore.wasResourceProfileSkipped()) return true;

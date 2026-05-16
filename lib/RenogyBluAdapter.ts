@@ -34,6 +34,7 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 import {
   isRenogyDeviceName,
   extractRenogyModelFromName,
@@ -394,6 +395,13 @@ class RenogyBluAdapter {
 
     try {
       if (Platform.OS === 'web' || !this.isBleAvailable()) {
+        if (!isDevMockTelemetryAllowed()) {
+          console.log('[BT_LIVE] mock_disabled', { provider: 'renogy', phase: 'scan' });
+          this.discoveredDevices = [];
+          this.lastError = 'Live Bluetooth scan unavailable; mock discovery is disabled.';
+          this.lastErrorCode = 'MOCK_DISABLED';
+          return [];
+        }
         console.log('[RenogyBluAdapter] BLE unavailable — using simulated discovery.');
         await this.simulateDelay(1500);
 
@@ -592,7 +600,7 @@ class RenogyBluAdapter {
     this.reconnectAttempts = 0;
 
     bluStateStore.setReconnecting(false);
-    bluStateStore.reset();
+    bluStateStore.clearProviderTelemetry('renogy');
     bluSessionStore.recordDisconnection();
 
     this.notify();
@@ -1052,4 +1060,3 @@ class RenogyBluAdapter {
 // ── Singleton ───────────────────────────────────────────────────────────
 
 export const renogyBluAdapter = new RenogyBluAdapter();
-

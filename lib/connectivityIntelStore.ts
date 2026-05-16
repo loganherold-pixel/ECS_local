@@ -51,6 +51,7 @@ import {
   DEFAULT_CONNECTIVITY_SUMMARY,
   CONNECTIVITY_INTEL_SESSION_VERSION,
 } from './connectivityIntelTypes';
+import { ecsLog } from './ecsLogger';
 
 // ── Storage helpers (same pattern as VehicleTelemetryStore) ──
 const STORAGE_KEY = 'ecs_connectivity_intel_session';
@@ -123,6 +124,14 @@ let _persistedLastOnlineAt: string | null = null;
 /** Listeners */
 type Listener = () => void;
 const _listeners = new Set<Listener>();
+
+function logConnectivityDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', `[ConnectivityIntel] ${message}`, details);
+}
+
+function logConnectivityWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn('SYSTEM', `[ConnectivityIntel] ${message}`, details);
+}
 
 function _notify() {
   _listeners.forEach(fn => { try { fn(); } catch {} });
@@ -448,11 +457,11 @@ export const connectivityIntelStore = {
     if (prev.connectivity_state === 'offline' && _summary.connectivity_state === 'connected') {
       _inRecoveryWindow = true;
       _recoveryStartTimestamp = now;
-      console.log('[ConnectivityIntel] Recovery window started');
+      logConnectivityDebug('Recovery window started');
     }
     if (_inRecoveryWindow && (now - _recoveryStartTimestamp) > RECOVERY_WINDOW_MS) {
       _inRecoveryWindow = false;
-      console.log('[ConnectivityIntel] Recovery window ended — now live');
+      logConnectivityDebug('Recovery window ended — now live');
     }
 
     // Phase 3D: Preserve last_online_at across offline periods
@@ -462,16 +471,17 @@ export const connectivityIntelStore = {
 
     if (_cachedSummary == null || _summaryChanged(prev, _summary)) {
       _cachedSummary = { ..._summary };
-      console.log(
-        `[ConnectivityIntel] Summary updated: ${_summary.connectivity_state} ` +
-        `(${_summary.quality}, ${_summary.network_type}, ` +
-        `reachable=${_summary.internet_reachable}, ` +
-        `cache=${_summary.offline_cache_ready}, ` +
-        `region=${_summary.cached_region_available}, ` +
-        `route=${_summary.cached_route_available}, ` +
-        `readiness=${_summary.operational_readiness}, ` +
-        `freshness=${_summary.freshness})`
-      );
+      logConnectivityDebug('Summary updated', {
+        state: _summary.connectivity_state,
+        quality: _summary.quality,
+        networkType: _summary.network_type,
+        reachable: _summary.internet_reachable,
+        cacheReady: _summary.offline_cache_ready,
+        regionAvailable: _summary.cached_region_available,
+        routeAvailable: _summary.cached_route_available,
+        operationalReadiness: _summary.operational_readiness,
+        freshness: _summary.freshness,
+      });
       _notify();
     }
   },
@@ -502,7 +512,7 @@ export const connectivityIntelStore = {
    */
   setMonitoring(value: boolean): void {
     _monitoring = value;
-    console.log(`[ConnectivityIntel] Monitoring: ${value}`);
+    logConnectivityDebug('Monitoring changed', { value });
   },
 
   /**
@@ -510,7 +520,7 @@ export const connectivityIntelStore = {
    */
   setRecoveryStatus(status: typeof _recoveryStatus): void {
     _recoveryStatus = status;
-    console.log(`[ConnectivityIntel] Recovery status: ${status}`);
+    logConnectivityDebug('Recovery status changed', { status });
   },
 
   /**
@@ -519,7 +529,7 @@ export const connectivityIntelStore = {
   endRecoveryWindow(): void {
     if (_inRecoveryWindow) {
       _inRecoveryWindow = false;
-      console.log('[ConnectivityIntel] Recovery window ended (forced)');
+      logConnectivityDebug('Recovery window ended (forced)');
     }
   },
 
@@ -554,9 +564,11 @@ export const connectivityIntelStore = {
       };
 
       _ls.set(STORAGE_KEY, JSON.stringify(session));
-      console.log('[ConnectivityIntel] Session persisted');
+      logConnectivityDebug('Session persisted');
     } catch (e) {
-      console.warn('[ConnectivityIntel] Failed to persist session:', e);
+      logConnectivityWarn('Failed to persist session', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   },
 
@@ -574,7 +586,7 @@ export const connectivityIntelStore = {
       const raw = _ls.get(STORAGE_KEY);
       if (!raw) {
         _recoveryStatus = 'no_session';
-        console.log('[ConnectivityIntel] No persisted session found');
+        logConnectivityDebug('No persisted session found');
         return false;
       }
 
@@ -583,7 +595,10 @@ export const connectivityIntelStore = {
       // Version check — reject sessions from future versions
       if (session.version > CONNECTIVITY_INTEL_SESSION_VERSION) {
         _recoveryStatus = 'failed';
-        console.log('[ConnectivityIntel] Session version too new, discarding');
+        logConnectivityWarn('Session version too new, discarding', {
+          sessionVersion: session.version,
+          supportedVersion: CONNECTIVITY_INTEL_SESSION_VERSION,
+        });
         _ls.del(STORAGE_KEY);
         return false;
       }
@@ -592,7 +607,10 @@ export const connectivityIntelStore = {
       const age = Date.now() - new Date(session.persisted_at).getTime();
       if (age > LAST_KNOWN_MAX_AGE_MS) {
         _recoveryStatus = 'failed';
-        console.log('[ConnectivityIntel] Session too old, discarding');
+        logConnectivityDebug('Session too old, discarding', {
+          ageMs: age,
+          maxAgeMs: LAST_KNOWN_MAX_AGE_MS,
+        });
         _ls.del(STORAGE_KEY);
         return false;
       }
@@ -600,15 +618,15 @@ export const connectivityIntelStore = {
       // Phase 3D: Progressive migration v1 → v2 → v3 → v4
       let restoredSummary = session.last_summary;
       if (session.version < 2) {
-        console.log('[ConnectivityIntel] Migrating v1 session to v2');
+        logConnectivityDebug('Migrating v1 session to v2');
         restoredSummary = _migrateSummaryV1toV2(restoredSummary);
       }
       if (session.version < 3) {
-        console.log('[ConnectivityIntel] Migrating v2 session to v3');
+        logConnectivityDebug('Migrating v2 session to v3');
         restoredSummary = _migrateSummaryV2toV3(restoredSummary);
       }
       if (session.version < 4) {
-        console.log('[ConnectivityIntel] Migrating v3 session to v4');
+        logConnectivityDebug('Migrating v3 session to v4');
         restoredSummary = _migrateSummaryV3toV4(restoredSummary);
       }
 
@@ -660,17 +678,21 @@ export const connectivityIntelStore = {
       }
 
       _recoveryStatus = 'restored';
-      console.log(
-        `[ConnectivityIntel] Session restored (${session.active_providers.length} providers, ` +
-        `state: ${_summary.connectivity_state}, type: ${_summary.network_type}, ` +
-        `cache: ${_summary.offline_cache_ready}, readiness: ${_summary.operational_readiness}, ` +
-        `last_online: ${_persistedLastOnlineAt || 'none'})`
-      );
+      logConnectivityDebug('Session restored', {
+        activeProviderCount: session.active_providers.length,
+        state: _summary.connectivity_state,
+        networkType: _summary.network_type,
+        cacheReady: _summary.offline_cache_ready,
+        operationalReadiness: _summary.operational_readiness,
+        lastOnlineAt: _persistedLastOnlineAt,
+      });
       _notify();
       return true;
     } catch (e) {
       _recoveryStatus = 'failed';
-      console.warn('[ConnectivityIntel] Failed to restore session:', e);
+      logConnectivityWarn('Failed to restore session', {
+        error: e instanceof Error ? e.message : String(e),
+      });
       return false;
     }
   },
@@ -680,7 +702,7 @@ export const connectivityIntelStore = {
    */
   clearPersistedSession(): void {
     _ls.del(STORAGE_KEY);
-    console.log('[ConnectivityIntel] Persisted session cleared');
+    logConnectivityDebug('Persisted session cleared');
   },
 
 
@@ -703,7 +725,7 @@ export const connectivityIntelStore = {
     _recoveryStartTimestamp = 0;
     _persistedLastOnlineAt = null;
     _notify();
-    console.log('[ConnectivityIntel] Store reset');
+    logConnectivityDebug('Store reset');
   },
 
 

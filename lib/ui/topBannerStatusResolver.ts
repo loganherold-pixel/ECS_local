@@ -144,64 +144,12 @@ function resolvePostureLabel(input: ECSTopBannerResolverInput): {
   postureLabel: string;
   postureDetail: string;
 } {
-  const phase = input.commandContext?.expeditionPhase ?? null;
+  void input;
 
-  if (input.expeditionState === 'paused') {
-    return {
-      postureLabel: 'Expedition paused',
-      postureDetail: 'Standby posture with current session preserved.',
-    };
-  }
-
-  if (input.expeditionState === 'complete') {
-    return {
-      postureLabel: 'Expedition complete',
-      postureDetail: 'Recent session closed cleanly.',
-    };
-  }
-
-  if (!input.hasActiveExpeditionContext) {
-    return {
-      postureLabel: 'No active expedition',
-      postureDetail:
-        phase === 'vehicle_setup' || phase === 'staging'
-          ? 'Planning posture.'
-          : 'Command posture is standing by.',
-    };
-  }
-
-  switch (phase) {
-    case 'transit':
-      return {
-        postureLabel: 'Active expedition / transit',
-        postureDetail: 'Route support remains active.',
-      };
-    case 'trail_entry':
-      return {
-        postureLabel: 'Active expedition / trail entry',
-        postureDetail: 'Entering route-focused posture.',
-      };
-    case 'camp_stationary':
-      return {
-        postureLabel: 'Active expedition / stationary',
-        postureDetail: 'Stationary field posture remains active.',
-      };
-    case 'recovery_exit':
-      return {
-        postureLabel: 'Active expedition / exit',
-        postureDetail: 'Recovery posture is active.',
-      };
-    case 'active_expedition':
-      return {
-        postureLabel: 'Active expedition',
-        postureDetail: 'Field posture remains active.',
-      };
-    default:
-      return {
-        postureLabel: 'Active expedition',
-        postureDetail: 'Operational posture remains active.',
-      };
-  }
+  return {
+    postureLabel: 'Expedition Command System',
+    postureDetail: '',
+  };
 }
 
 function resolveConnectivityPresentation(

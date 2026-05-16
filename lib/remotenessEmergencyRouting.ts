@@ -2,8 +2,14 @@ import { bailoutStore, type BailoutPoint, type BailoutType } from './bailoutStor
 import { offlineExpeditionDbStore } from './offlineExpeditionDbStore';
 import type { DatasetEntry } from './offlineExpeditionDbTypes';
 import type { NavigationHandoffPayload } from './navigationHandoffStore';
+import type {
+  RemotenessDestination,
+} from './remotenessTypes';
+import type {
+  RemotenessNavigationTargetType,
+} from './remotenessDestinations';
 
-export type RemotenessNavigationTargetType = 'town' | 'fuel' | 'paved_road';
+export type { RemotenessNavigationTargetType } from './remotenessDestinations';
 
 export interface RemotenessResolvedTarget {
   type: RemotenessNavigationTargetType;
@@ -188,6 +194,47 @@ export function buildRemotenessNavigationPayload(
     },
     landmarkMetadata: null,
     raw: target.raw,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function buildRemotenessDestinationNavigationPayload(
+  destination: RemotenessDestination,
+): NavigationHandoffPayload {
+  const targetType =
+    destination.type === 'road'
+      ? 'paved_road'
+      : destination.type;
+
+  return {
+    id: `remoteness-${targetType}-${Date.now()}`,
+    source: 'search',
+    type: 'place',
+    title: destination.label,
+    subtitle: `${getRemotenessNavigationLabel(targetType)}${destination.distanceMiles != null ? ` - ${Math.round(destination.distanceMiles * 10) / 10} mi` : ''}`,
+    coordinate: {
+      lat: destination.latitude,
+      lng: destination.longitude,
+    },
+    trailheadCoordinate: null,
+    roadDestinationCoordinate: {
+      lat: destination.latitude,
+      lng: destination.longitude,
+    },
+    trailGeometry: [],
+    trailLengthMiles: destination.distanceMiles != null ? Math.round(destination.distanceMiles * 10) / 10 : null,
+    trailCategory: null,
+    tripMode: 'road',
+    routeMetadata: {
+      remotenessTargetType: targetType,
+      remotenessSource: destination.source,
+      distanceMiles: destination.distanceMiles ?? null,
+      updatedAt: destination.updatedAt ?? null,
+    },
+    landmarkMetadata: null,
+    trailWaypoints: [],
+    trailDecisionPoints: [],
+    raw: destination,
     createdAt: new Date().toISOString(),
   };
 }

@@ -15,12 +15,20 @@ import {
 } from './orchestratorSelectors';
 import { operatorTrustModeStore } from './operatorTrustMode';
 import { runtimeSmokeStore } from './runtimeSmokeStore';
+import {
+  buildReadinessExplanationPayload,
+  type ECSReadinessExplanationPayload,
+} from './readinessExplanationGuardrails';
 import type {
   ECSCommandStateDiagnostics,
   ECSOrchestratorOutput,
   ECSReleaseReadinessDiagnostics,
 } from './orchestratorTypes';
 import type { ECSLiveStatusMap } from '../status/liveStatusTypes';
+import {
+  useActiveReadinessAlert,
+  useCurrentExpeditionReadiness,
+} from '../readiness/expeditionReadinessSelectors';
 
 export type UseECSAIArgs = ECSAIActivationInput & {
   enabled?: boolean;
@@ -40,6 +48,7 @@ export type UseECSAIResult = {
   commandStateDiagnostics: ECSCommandStateDiagnostics | null;
   releaseReadinessDiagnostics: ECSReleaseReadinessDiagnostics | null;
   liveStatus: ECSLiveStatusMap | null;
+  readinessExplanation: ECSReadinessExplanationPayload | null;
   summaryLine: string;
   compactLine: string;
   topSignalTitle: string | null;
@@ -121,6 +130,12 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
   const [operatorTrustMode, setOperatorTrustMode] = useState(
     () => operatorTrustModeStore.mode,
   );
+  const expeditionReadiness = useCurrentExpeditionReadiness();
+  const activeReadinessAlert = useActiveReadinessAlert();
+  const readinessExplanation = useMemo(
+    () => expeditionReadiness ? buildReadinessExplanationPayload(expeditionReadiness) : null,
+    [expeditionReadiness],
+  );
 
   useEffect(() => {
     return operatorTrustModeStore.subscribe((nextMode) => {
@@ -161,6 +176,7 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
         resources: input.resources,
         userPreferences: input.userPreferences,
         powerAuthority: input.powerAuthority,
+        expeditionReadiness,
       }),
     [
       input.activeRun,
@@ -172,6 +188,7 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
       input.resources,
       input.userPreferences,
       input.powerAuthority,
+      expeditionReadiness,
     ],
   );
 
@@ -191,6 +208,7 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
         const result = await runECSAI(
           {
             ...input,
+            expeditionReadiness,
             previousAIState: memoryRef.current.lastState,
           },
           memoryRef.current,
@@ -236,8 +254,12 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
       commandDiagnostics: aiState?.orchestrator?.qaDiagnostics ?? null,
       releaseDiagnostics: aiState?.orchestrator?.releaseDiagnostics ?? null,
       liveStatus: aiState?.liveStatus ?? null,
+      expeditionReadiness,
+      activeReadinessAlert,
+      readinessExplanation,
+      aiSummary: aiState?.summaryLine ?? aiState?.orchestrator?.primary?.summary ?? readinessExplanation?.groundedSummary ?? null,
     });
-  }, [aiState]);
+  }, [activeReadinessAlert, aiState, expeditionReadiness, readinessExplanation]);
 
   return {
     aiState,
@@ -252,8 +274,9 @@ export function useECSAI(args: UseECSAIArgs): UseECSAIResult {
     commandStateDiagnostics: aiState?.orchestrator?.qaDiagnostics ?? null,
     releaseReadinessDiagnostics: aiState?.orchestrator?.releaseDiagnostics ?? null,
     liveStatus: aiState?.liveStatus ?? null,
-    summaryLine: aiState?.summaryLine ?? 'ECS AI offline.',
-    compactLine: aiState?.compactLine ?? 'AI STANDBY',
+    readinessExplanation,
+    summaryLine: aiState?.summaryLine ?? 'ECS Intelligence offline.',
+    compactLine: aiState?.compactLine ?? 'ECS INTEL STANDBY',
     topSignalTitle: aiState?.orchestrator?.primary?.title ?? aiState?.topSignal?.title ?? null,
     powerConfidence: aiState?.powerConfidence ?? 0,
     refreshAI,

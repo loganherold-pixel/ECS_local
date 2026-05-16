@@ -496,6 +496,18 @@ export const trailStore = {
     const points = getPoints();
     recalcStats(session, points);
 
+    if (points.length === 0) {
+      console.warn(
+        TAG,
+        `Trail recording stopped without recorded GPS points: ${session.id}`,
+        {
+          elapsedSeconds: session.elapsed_seconds,
+          expeditionId: session.expedition_id,
+          vehicleId: session.vehicle_id,
+        },
+      );
+    }
+
     // Archive to lightweight history (session metadata only)
     const history = getHistory();
     history.unshift(session);

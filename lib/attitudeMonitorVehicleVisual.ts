@@ -6,6 +6,13 @@ import {
   getAttitudeMonitorHeroAssetDefinition,
   getAttitudeMonitorHeroSource as getHeroSourceFromAssets,
 } from './attitudeMonitorAssets';
+import {
+  getVehicleAttitudeAssets,
+  resolveVehicleAttitudeAssetId,
+  type VehicleAttitudeAssets,
+  type VehicleAttitudeKey,
+  type VehicleAttitudeProfileInput,
+} from './vehicles/vehicleAttitudeAssets';
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
 import { vehicleStore } from './vehicleStore';
@@ -57,11 +64,22 @@ export interface AttitudeMonitorVehicleVisualDescriptor {
   familyId: AttitudeMonitorVehicleVisualFamilyId;
   displayName: string;
   assetSource: ImageSourcePropType;
+  rearAssetSource: ImageSourcePropType;
   compactAssetSource?: ImageSourcePropType | null;
   fit: AttitudeMonitorHeroFitProfile;
+  attitudeAssets: VehicleAttitudeAssets | null;
+  attitudeVehicleId: string;
+  missingVehicleId: string | null;
   usesFallbackFamily: boolean;
   usesFallbackAsset: boolean;
   matchedVehicleId: string | null;
+}
+
+export interface VehicleAttitudeBackdropResolution {
+  attitudeVehicleId: VehicleAttitudeKey;
+  backdropSrc: string | undefined;
+  backdropSource: ImageSourcePropType | null;
+  isFallback: boolean;
 }
 
 export const DEFAULT_ATTITUDE_MONITOR_VEHICLE_FAMILY_ID: AttitudeMonitorVehicleVisualFamilyId =
@@ -326,6 +344,19 @@ export function getAttitudeMonitorVehicleDescriptor(
   );
 }
 
+function createVehicleAttitudeProfileInput(
+  context?: Pick<ActiveVehicleContext, 'vehicle' | 'wizardConfig'> | null,
+): VehicleAttitudeProfileInput {
+  if (!context?.vehicle && !context?.wizardConfig) {
+    return null;
+  }
+
+  return {
+    ...(context.vehicle ?? {}),
+    wizard_config: context.wizardConfig ?? context.vehicle?.wizard_config ?? null,
+  };
+}
+
 export function resolveAttitudeMonitorVehicleVisual(
   context?: Pick<ActiveVehicleContext, 'activeVehicleId' | 'vehicle' | 'spec' | 'wizardConfig'> | null,
 ): AttitudeMonitorVehicleVisualDescriptor {
@@ -334,21 +365,64 @@ export function resolveAttitudeMonitorVehicleVisual(
   const requestedFamilyId = resolveFamilyId(context ?? null);
   const family = getAttitudeMonitorVehicleDescriptor(requestedFamilyId);
   const fallbackFamily = getAttitudeMonitorVehicleDescriptor(DEFAULT_ATTITUDE_MONITOR_VEHICLE_FAMILY_ID);
-  const assetSource = family.assetSource ?? fallbackFamily.assetSource;
-  const compactAssetSource = family.compactAssetSource ?? family.assetSource ?? fallbackFamily.assetSource;
+  const attitudeProfile = createVehicleAttitudeProfileInput(context ?? null);
+  const attitudeVehicleId = resolveVehicleAttitudeAssetId(attitudeProfile);
+  const attitudeAssets = getVehicleAttitudeAssets(attitudeProfile);
+  const assetSource = attitudeAssets?.attitudeImageSource ?? family.assetSource ?? fallbackFamily.assetSource;
+  const compactAssetSource = attitudeAssets?.attitudeImageSource ?? family.compactAssetSource ?? family.assetSource ?? fallbackFamily.assetSource;
   const usesFallbackFamily = family.id !== requestedFamilyId;
-  const usesFallbackAsset = assetSource === fallbackFamily.assetSource && family.id !== fallbackFamily.id;
+  const usesFallbackAsset = attitudeAssets?.fallbackUsed ?? false;
+  const fit = family.fit;
 
   return {
     familyId: family.id,
     displayName: family.displayName,
     assetSource,
+    rearAssetSource: assetSource,
     compactAssetSource,
-    fit: family.fit,
+    fit,
+    attitudeAssets,
+    attitudeVehicleId,
+    missingVehicleId: attitudeAssets ? null : attitudeVehicleId,
     usesFallbackFamily,
     usesFallbackAsset,
     matchedVehicleId: context?.activeVehicleId ?? context?.vehicle?.id ?? null,
   };
+}
+
+export function resolveAttitudeMonitorVehicleId(
+  context?: Pick<ActiveVehicleContext, 'vehicle' | 'wizardConfig'> | null,
+): VehicleAttitudeKey {
+  return resolveVehicleAttitudeAssetId(createVehicleAttitudeProfileInput(context ?? null));
+}
+
+function isVehicleContextInput(
+  value: Pick<ActiveVehicleContext, 'vehicle' | 'wizardConfig'> | VehicleAttitudeProfileInput | null | undefined,
+): value is Pick<ActiveVehicleContext, 'vehicle' | 'wizardConfig'> {
+  return Boolean(value && ('vehicle' in value || 'wizardConfig' in value));
+}
+
+export function resolveVehicleAttitudeBackdrop(
+  context?: Pick<ActiveVehicleContext, 'vehicle' | 'wizardConfig'> | VehicleAttitudeProfileInput | null,
+): VehicleAttitudeBackdropResolution {
+  const vehicleProfile = isVehicleContextInput(context)
+    ? createVehicleAttitudeProfileInput(context)
+    : ((context ?? null) as VehicleAttitudeProfileInput | null);
+  const attitudeVehicleId = resolveVehicleAttitudeAssetId(vehicleProfile);
+  const attitudeAssets = getVehicleAttitudeAssets(vehicleProfile);
+
+  return {
+    attitudeVehicleId,
+    backdropSrc: attitudeAssets?.attitudeImageSrc,
+    backdropSource: attitudeAssets?.attitudeImageSource ?? null,
+    isFallback: attitudeAssets?.fallbackUsed ?? true,
+  };
+}
+
+export function getVehicleAttitudeBackdropSrc(
+  vehicleProfile?: VehicleAttitudeProfileInput | null,
+): string | undefined {
+  return resolveVehicleAttitudeBackdrop(vehicleProfile ?? null).backdropSrc;
 }
 
 export function getAttitudeMonitorHeroSource(
@@ -396,5 +470,27 @@ export function useActiveAttitudeMonitorVehicleVisual(
   return useMemo(
     () => resolveAttitudeMonitorVehicleVisual(context ?? activeContext),
     [context, activeContext],
+  );
+}
+
+export function useActiveAttitudeMonitorVehicleId(
+  context?: ActiveVehicleContext | null,
+): string {
+  return useActiveAttitudeMonitorVehicleVisual(context).attitudeVehicleId;
+}
+
+export function useActiveVehicleAttitudeBackdrop(
+  context?: ActiveVehicleContext | null,
+): VehicleAttitudeBackdropResolution {
+  const visual = useActiveAttitudeMonitorVehicleVisual(context);
+
+  return useMemo(
+    () => ({
+      attitudeVehicleId: visual.attitudeVehicleId as VehicleAttitudeKey,
+      backdropSrc: visual.attitudeAssets?.attitudeImageSrc,
+      backdropSource: visual.attitudeAssets?.attitudeImageSource ?? null,
+      isFallback: visual.usesFallbackAsset,
+    }),
+    [visual],
   );
 }

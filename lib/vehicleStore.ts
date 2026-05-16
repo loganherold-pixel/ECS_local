@@ -26,11 +26,22 @@ import { createPersistedKeyValueCache } from './keyValuePersistence';
 import { tiresLiftStore } from './tiresLiftStore';
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
+import { ecsLog } from './ecsLogger';
 import type { Vehicle } from './types';
 
 const TAG = '[VehicleStore]';
 const LS_KEY = 'ecs_local_vehicles';
 const SYNC_FLAG_KEY = 'ecs_vehicles_synced';
+
+function logVehicleStoreDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('CONFIG', message, details, {
+    tag: TAG,
+    debugFlag: 'ECS_DEBUG_VEHICLE_STORE',
+    fingerprint: `${message}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
 
 // ── Helper: check if userId is valid for cloud sync ─────
 // Returns true only if userId is a non-empty string that isn't the local sentinel.
@@ -82,6 +93,14 @@ function generateId(): string {
   });
 }
 
+function hasMeaningfulVehicleValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+  return true;
+}
+
 // ── Change Notification System ───────────────────────────
 // Allows consumers (Fleet tab, Dashboard, etc.) to subscribe to
 // vehicle data changes and react immediately without relying on
@@ -100,7 +119,7 @@ let changeRevision = 0;
 function notifyChange(type: VehicleChangeEvent['type'], vehicleId: string | null = null) {
   changeRevision++;
   const event: VehicleChangeEvent = { type, vehicleId, revision: changeRevision };
-  console.log(TAG, `Change event: ${type} vehicleId=${vehicleId} rev=${changeRevision}`);
+  logVehicleStoreDebug('Change event', { type, vehicleId, revision: changeRevision });
   changeListeners.forEach(fn => {
     try { fn(event); } catch (e) {
       console.warn(TAG, 'Change listener error:', e);
@@ -114,14 +133,14 @@ function getLocalVehicles(): Vehicle[] {
   const raw = lsGet(LS_KEY);
   if (!raw) return [];
   try {
-    return JSON.parse(raw) as Vehicle[];
+    return (JSON.parse(raw) as Vehicle[]).map(normalizeVehicleRecord);
   } catch {
     return [];
   }
 }
 
 function saveLocalVehicles(vehicles: Vehicle[]): void {
-  lsSet(LS_KEY, JSON.stringify(vehicles));
+  lsSet(LS_KEY, JSON.stringify(vehicles.map(normalizeVehicleRecord)));
 }
 
 async function ensureVehicleStorageHydrated(): Promise<void> {
@@ -140,21 +159,21 @@ function cleanupRelatedData(vehicleId: string): void {
   // 1. Remove vehicle specs (weight, GVWR, fuel specs)
   try {
     vehicleSpecStore.remove(vehicleId);
-    console.log(TAG, `Removed specs for vehicle ${vehicleId}`);
+    logVehicleStoreDebug('Removed specs for vehicle', { vehicleId });
   } catch (e) {
     console.warn(TAG, 'Failed to remove vehicle specs:', e);
   }
 
   try {
     consumablesStore.remove(vehicleId);
-    console.log(TAG, `Removed consumables for vehicle ${vehicleId}`);
+    logVehicleStoreDebug('Removed consumables for vehicle', { vehicleId });
   } catch (e) {
     console.warn(TAG, 'Failed to remove vehicle consumables:', e);
   }
 
   try {
     tiresLiftStore.remove(vehicleId);
-    console.log(TAG, `Removed tires/lift config for vehicle ${vehicleId}`);
+    logVehicleStoreDebug('Removed tires/lift config for vehicle', { vehicleId });
   } catch (e) {
     console.warn(TAG, 'Failed to remove tires/lift config:', e);
   }
@@ -162,13 +181,13 @@ function cleanupRelatedData(vehicleId: string): void {
   // 2. Remove fetchVehicleZones.ts zone cache
   try {
     lsRemove(ZONE_CACHE_PREFIX + vehicleId);
-    console.log(TAG, `Removed zone cache for vehicle ${vehicleId}`);
+    logVehicleStoreDebug('Removed zone cache for vehicle', { vehicleId });
   } catch {}
 
   // 3. Remove expeditionCache.ts zone cache
   try {
     lsRemove(EXP_ZONE_CACHE_PREFIX + vehicleId);
-    console.log(TAG, `Removed expedition zone cache for vehicle ${vehicleId}`);
+    logVehicleStoreDebug('Removed expedition zone cache for vehicle', { vehicleId });
   } catch {}
 
   // 4. Clean up pending vehicle configs that reference this vehicle
@@ -179,7 +198,10 @@ function cleanupRelatedData(vehicleId: string): void {
       const filtered = pending.filter((c: any) => c.vehicle_id !== vehicleId);
       if (filtered.length !== pending.length) {
         lsSet(PENDING_CONFIGS_KEY, JSON.stringify(filtered));
-        console.log(TAG, `Removed ${pending.length - filtered.length} pending config(s) for vehicle ${vehicleId}`);
+        logVehicleStoreDebug('Removed pending vehicle config entries', {
+          vehicleId,
+          removedCount: pending.length - filtered.length,
+        });
       }
     }
   } catch {}
@@ -199,7 +221,7 @@ function cleanupRelatedData(vehicleId: string): void {
         bs.zoneCount = 0;
         bs.lastUpdated = new Date().toISOString();
         lsSet(BUILDER_STATE_KEY, JSON.stringify(bs));
-        console.log(TAG, `Reset builder state (was referencing deleted vehicle ${vehicleId})`);
+        logVehicleStoreDebug('Reset builder state for deleted vehicle', { vehicleId });
       }
     }
   } catch {}
@@ -219,11 +241,97 @@ export type VehicleUpdateData =
 
 const LOCAL_ONLY_UPDATE_KEYS = new Set([
   'battery_usable_wh',
+  'fuel_type',
+  'base_weight_lb',
+  'curb_weight_lb',
+  'empty_weight_lb',
+  'gvwr_lb',
+  'front_base_weight_lb',
+  'rear_base_weight_lb',
+  'front_gawr_lb',
+  'rear_gawr_lb',
+  'wheelbase_in',
+  'tire_size_inches',
+  'tire_width_inches',
+  'wheel_diameter_inches',
+  'tire_model',
+  'suspension_lift_inches',
+  'is_leveled',
+  'front_level_inches',
+  'ground_clearance_inches',
   'wizard_config',
   'zones',
   'accessoryFramework',
   'containerZones',
 ]);
+
+const LOCAL_ONLY_VEHICLE_FIELDS: (keyof Vehicle)[] = [
+  'battery_usable_wh',
+  'fuel_type',
+  'base_weight_lb',
+  'curb_weight_lb',
+  'empty_weight_lb',
+  'gvwr_lb',
+  'front_base_weight_lb',
+  'rear_base_weight_lb',
+  'front_gawr_lb',
+  'rear_gawr_lb',
+  'wheelbase_in',
+  'tire_size_inches',
+  'tire_width_inches',
+  'wheel_diameter_inches',
+  'tire_model',
+  'suspension_lift_inches',
+  'is_leveled',
+  'front_level_inches',
+  'ground_clearance_inches',
+];
+
+export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
+  return {
+    ...vehicle,
+    notes: vehicle.notes ?? null,
+    fuel_tank_capacity_gal: vehicle.fuel_tank_capacity_gal ?? null,
+    avg_mpg: vehicle.avg_mpg ?? null,
+    current_fuel_percent: vehicle.current_fuel_percent ?? 100,
+    water_capacity_gal: vehicle.water_capacity_gal ?? null,
+    current_water_gal: vehicle.current_water_gal ?? 0,
+    water_updated_at: vehicle.water_updated_at ?? null,
+    battery_usable_wh: vehicle.battery_usable_wh ?? null,
+    fuel_type: vehicle.fuel_type ?? null,
+    base_weight_lb: vehicle.base_weight_lb ?? null,
+    curb_weight_lb: vehicle.curb_weight_lb ?? null,
+    empty_weight_lb: vehicle.empty_weight_lb ?? null,
+    gvwr_lb: vehicle.gvwr_lb ?? null,
+    front_base_weight_lb: vehicle.front_base_weight_lb ?? null,
+    rear_base_weight_lb: vehicle.rear_base_weight_lb ?? null,
+    front_gawr_lb: vehicle.front_gawr_lb ?? null,
+    rear_gawr_lb: vehicle.rear_gawr_lb ?? null,
+    wheelbase_in: vehicle.wheelbase_in ?? null,
+    tire_size_inches: vehicle.tire_size_inches ?? null,
+    tire_width_inches: vehicle.tire_width_inches ?? null,
+    wheel_diameter_inches: vehicle.wheel_diameter_inches ?? null,
+    tire_model: vehicle.tire_model ?? null,
+    suspension_lift_inches: Math.max(0, Number(vehicle.suspension_lift_inches) || 0),
+    is_leveled: Boolean(vehicle.is_leveled ?? false),
+    front_level_inches: vehicle.front_level_inches ?? null,
+    ground_clearance_inches: vehicle.ground_clearance_inches ?? null,
+  };
+}
+
+function mergeLocalOnlyVehicleFields<T extends Vehicle>(target: T, localVersion: Vehicle | null | undefined): T {
+  if (!localVersion) return target;
+  const merged = { ...target } as any;
+  for (const field of LOCAL_ONLY_VEHICLE_FIELDS) {
+    if (
+      hasMeaningfulVehicleValue((localVersion as any)[field]) &&
+      !hasMeaningfulVehicleValue(merged[field])
+    ) {
+      merged[field] = (localVersion as any)[field];
+    }
+  }
+  return normalizeVehicleRecord(merged as Vehicle) as T;
+}
 
 function buildCloudPayload(data: VehicleUpdateData, now: string): Record<string, any> {
   const payload: Record<string, any> = { updated_at: now };
@@ -328,6 +436,23 @@ export const vehicleStore = {
             if (localVersion) {
               // Merge local-only extension properties onto the cloud vehicle
               const merged = { ...cloudVehicle } as any;
+              const fallbackFields: (keyof Vehicle)[] = [
+                'name',
+                'type',
+                'make',
+                'model',
+                'year',
+                'avg_mpg',
+                'fuel_tank_capacity_gal',
+                'water_capacity_gal',
+                'battery_usable_wh',
+              ];
+              for (const field of fallbackFields) {
+                if (!hasMeaningfulVehicleValue((merged as any)[field]) && hasMeaningfulVehicleValue((localVersion as any)[field])) {
+                  (merged as any)[field] = (localVersion as any)[field];
+                }
+              }
+              Object.assign(merged, mergeLocalOnlyVehicleFields(merged as Vehicle, localVersion));
               if ((localVersion as any).accessoryFramework) {
                 merged.accessoryFramework = (localVersion as any).accessoryFramework;
               }
@@ -348,9 +473,9 @@ export const vehicleStore = {
               if ((localVersion as any).battery_usable_wh !== undefined) {
                 merged.battery_usable_wh = (localVersion as any).battery_usable_wh;
               }
-              return merged as Vehicle;
+              return normalizeVehicleRecord(merged as Vehicle);
             }
-            return cloudVehicle;
+            return normalizeVehicleRecord(cloudVehicle);
           });
 
           // Also include any locally persisted vehicles not yet present in cloud.
@@ -363,9 +488,9 @@ export const vehicleStore = {
           });
 
           if (localOnly.length > 0) {
-            return { vehicles: [...mergedCloudVehicles, ...localOnly], source: 'merged' };
+            return { vehicles: [...mergedCloudVehicles, ...localOnly.map(normalizeVehicleRecord)], source: 'merged' };
           }
-          return { vehicles: mergedCloudVehicles, source: 'cloud' };
+          return { vehicles: mergedCloudVehicles.map(normalizeVehicleRecord), source: 'cloud' };
         }
       } catch (err) {
         console.warn(TAG, 'Cloud fetch failed, using local:', err);
@@ -373,7 +498,7 @@ export const vehicleStore = {
     }
 
     // Fallback to local
-    return { vehicles: localVehicles, source: 'local' };
+    return { vehicles: localVehicles.map(normalizeVehicleRecord), source: 'local' };
   },
 
 
@@ -416,10 +541,12 @@ export const vehicleStore = {
             const locals = getLocalVehicles();
             const alreadyLocal = locals.some(v => v.id === cloudData.id);
             if (!alreadyLocal) {
-              locals.push(cloudData);
+              locals.push(normalizeVehicleRecord(cloudData as Vehicle));
               saveLocalVehicles(locals);
               await flushVehicleStorage();
-              console.log(TAG, 'Cloud-created vehicle also saved to local storage:', cloudData.id);
+            logVehicleStoreDebug('Cloud-created vehicle also saved locally', {
+              vehicleId: cloudData.id,
+            });
             }
           } catch (e) {
           }
@@ -457,6 +584,24 @@ export const vehicleStore = {
       current_water_gal: 0,
       water_updated_at: null,
       battery_usable_wh: null,
+      fuel_type: null,
+      base_weight_lb: null,
+      curb_weight_lb: null,
+      empty_weight_lb: null,
+      gvwr_lb: null,
+      front_base_weight_lb: null,
+      rear_base_weight_lb: null,
+      front_gawr_lb: null,
+      rear_gawr_lb: null,
+      wheelbase_in: null,
+      tire_size_inches: null,
+      tire_width_inches: null,
+      wheel_diameter_inches: null,
+      tire_model: null,
+      suspension_lift_inches: 0,
+      is_leveled: false,
+      front_level_inches: null,
+      ground_clearance_inches: null,
       created_at: now,
       updated_at: now,
     };
@@ -521,7 +666,7 @@ export const vehicleStore = {
           if (!error && cloudData) {
             updatedCloud = true;
             updatedVehicle = cloudData as Vehicle;
-            console.log(TAG, `Updated vehicle ${vehicleId} in cloud`);
+            logVehicleStoreDebug('Updated vehicle in cloud', { vehicleId });
           } else {
             console.warn(TAG, `Cloud update failed for ${vehicleId}:`, error?.message);
             // Fall through to local update
@@ -570,14 +715,14 @@ export const vehicleStore = {
         if (!updatedVehicle) {
           updatedVehicle = merged;
         }
-        console.log(TAG, `Updated vehicle ${vehicleId} in local storage`);
+        logVehicleStoreDebug('Updated vehicle in local storage', { vehicleId });
       } else if (updatedCloud && updatedVehicle) {
         // Vehicle exists in cloud but not locally — add it to local cache
         localVehicles.push(updatedVehicle);
         saveLocalVehicles(localVehicles);
         await flushVehicleStorage();
         updatedLocal = true;
-        console.log(TAG, `Vehicle ${vehicleId} not in local storage — added cloud version locally`);
+        logVehicleStoreDebug('Added cloud vehicle version to local storage', { vehicleId });
       } else {
         console.warn(TAG, `Vehicle ${vehicleId} not found in local storage`);
       }
@@ -606,7 +751,7 @@ export const vehicleStore = {
         error: `Vehicle ${vehicleId} not found`,
       };
     }
-    console.log(TAG, `Vehicle ${vehicleId} updated (in: ${updatedIn})`);
+    logVehicleStoreDebug('Vehicle updated', { vehicleId, updatedIn });
     // Notify listeners of the update
     notifyChange('update', vehicleId);
     return { vehicle: updatedVehicle, updatedIn };
@@ -647,7 +792,7 @@ export const vehicleStore = {
 
         if (!error) {
           deletedCloud = true;
-          console.log(TAG, `Deleted vehicle ${vehicleId} from cloud`);
+          logVehicleStoreDebug('Deleted vehicle from cloud', { vehicleId });
         } else {
           console.warn(TAG, `Cloud delete failed for ${vehicleId}:`, error.message);
         }
@@ -680,11 +825,15 @@ export const vehicleStore = {
         saveLocalVehicles(filtered);
         await flushVehicleStorage();
         deletedLocal = true;
-        console.log(TAG, `Removed vehicle ${vehicleId} from local storage (${originalCount} → ${filtered.length})`);
+        logVehicleStoreDebug('Removed vehicle from local storage', {
+          vehicleId,
+          originalCount,
+          remainingCount: filtered.length,
+        });
       } else {
         // Vehicle wasn't in local storage (might be cloud-only)
         deletedLocal = deletedCloud; // Consider it "deleted" if cloud succeeded
-        console.log(TAG, `Vehicle ${vehicleId} not found in local storage`);
+        logVehicleStoreDebug('Vehicle not found in local storage', { vehicleId });
       }
     } catch (err: any) {
       console.error(TAG, `Local delete error for ${vehicleId}:`, err);
@@ -698,7 +847,7 @@ export const vehicleStore = {
 
     if (vehicleSetupStore.getActiveVehicleId() === vehicleId) {
       vehicleSetupStore.clearActiveVehicleId();
-      console.log(TAG, `Cleared active vehicle context for deleted vehicle ${vehicleId}`);
+      logVehicleStoreDebug('Cleared active vehicle context for deleted vehicle', { vehicleId });
     }
 
     // ── Result ──────────────────────────────────────────────────
@@ -709,7 +858,7 @@ export const vehicleStore = {
           : 'local';
 
     if (success) {
-      console.log(TAG, `Vehicle ${vehicleId} fully deleted (from: ${deletedFrom})`);
+      logVehicleStoreDebug('Vehicle fully deleted', { vehicleId, deletedFrom });
       // Notify listeners of the deletion
       notifyChange('delete', vehicleId);
     }
@@ -788,10 +937,10 @@ export const vehicleStore = {
           // Replace local vehicle with cloud version
           const idx = localVehicles.findIndex(v => v.id === vehicle.id);
           if (idx !== -1) {
-            localVehicles[idx] = {
-              ...data,
-              battery_usable_wh: vehicle.battery_usable_wh ?? null,
-            } as Vehicle;
+            localVehicles[idx] = mergeLocalOnlyVehicleFields(
+              normalizeVehicleRecord(data as Vehicle),
+              vehicle,
+            );
             if ((vehicle as any).wizard_config) {
               (localVehicles[idx] as any).wizard_config = (vehicle as any).wizard_config;
             }
@@ -837,8 +986,9 @@ export const vehicleStore = {
       _resources: selections._resources ?? (existingVehicle as any)?.wizard_config?._resources,
     };
 
-    // If authenticated with real UUID, try cloud edge function
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    // If authenticated with real UUID, try cloud edge function only when
+    // this backend exposes it. Otherwise we go straight to the local path.
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('setup-vehicle-zones')) {
 
       try {
         const { data, error } = await supabase.functions.invoke('setup-vehicle-zones', {
@@ -878,9 +1028,21 @@ export const vehicleStore = {
           return { success: true, totalSlots: data.total_slots || 20 };
         }
 
-        console.warn(TAG, 'Edge function failed:', error);
+        console.warn(TAG, 'setup-vehicle-zones cloud finalize failed; using local fallback', {
+          vehicleId,
+          errorName: (error as any)?.name ?? null,
+          errorMessage: (error as any)?.message ?? String(error),
+          status: (error as any)?.context?.status ?? (error as any)?.status ?? null,
+          statusText: (error as any)?.context?.statusText ?? null,
+        });
       } catch (err) {
-        console.warn(TAG, 'Edge function error:', err);
+        console.warn(TAG, 'setup-vehicle-zones cloud finalize threw; using local fallback', {
+          vehicleId,
+          errorName: (err as any)?.name ?? null,
+          errorMessage: (err as any)?.message ?? String(err),
+          status: (err as any)?.context?.status ?? (err as any)?.status ?? null,
+          statusText: (err as any)?.context?.statusText ?? null,
+        });
       }
     }
 

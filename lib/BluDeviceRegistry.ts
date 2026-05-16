@@ -227,6 +227,8 @@ class BluDeviceRegistry {
           ...existing,
           display_name: device.display_name || existing.display_name,
           model: device.model || existing.model,
+          product_type: device.product_type ?? existing.product_type,
+          telemetry_capable: device.telemetry_capable ?? existing.telemetry_capable,
           connection_state: device.connection_state,
           last_seen: Math.max(device.last_seen, existing.last_seen),
           capabilities: {
@@ -318,6 +320,26 @@ class BluDeviceRegistry {
       }
 
       this.persist();
+    });
+  }
+
+  async clearPrimary(provider?: BluProviderId): Promise<void> {
+    return this.enqueue(() => {
+      const devices = this.load();
+      let changed = false;
+      for (const d of devices) {
+        if ((provider == null || d.provider === provider) && d.is_primary) {
+          d.is_primary = false;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        this.persist();
+        console.log(
+          `[BluDeviceRegistry] Cleared primary${provider ? ` for provider: ${provider}` : ''}`,
+        );
+      }
     });
   }
 

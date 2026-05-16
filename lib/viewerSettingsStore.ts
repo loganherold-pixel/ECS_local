@@ -143,10 +143,16 @@ export const viewerSettingsStore = {
 // ── QA Logging ────────────────────────────────────────────
 const QA_PREFIX = '[ECS:ViewerSettings]';
 
+function logViewerSettingsDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
+
 export function logViewerSettingsChange(action: string, detail?: Record<string, any>) {
   const ts = new Date().toISOString();
   const settings = readSettings();
-  console.log(
+  logViewerSettingsDev(
     `${QA_PREFIX} ${ts} | ${action}`,
     detail ? { ...detail, currentSettings: settings } : { currentSettings: settings }
   );
@@ -154,12 +160,12 @@ export function logViewerSettingsChange(action: string, detail?: Record<string, 
 
 export function logWidgetEvent(action: string, detail?: Record<string, any>) {
   const ts = new Date().toISOString();
-  console.log(`[ECS:Widget] ${ts} | ${action}`, detail || '');
+  logViewerSettingsDev(`[ECS:Widget] ${ts} | ${action}`, detail || '');
 }
 
 export function logLayoutEvent(action: string, detail?: Record<string, any>) {
   const ts = new Date().toISOString();
-  console.log(`[ECS:Layout] ${ts} | ${action}`, detail || '');
+  logViewerSettingsDev(`[ECS:Layout] ${ts} | ${action}`, detail || '');
 }
 
 

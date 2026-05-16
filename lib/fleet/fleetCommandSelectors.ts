@@ -92,7 +92,6 @@ function buildLimitations(args: SelectFleetCommandStateArgs): string[] {
   if (!args.hasLiftProfile) items.push('lift profile is still estimated');
   if (!args.hasAccessoriesConfigured) items.push('accessory systems are not configured');
   if (!args.hasLoadout) items.push('loadout readiness is still incomplete');
-  if (!args.hasLiveTelemetry && args.hasSelectedVehicle) items.push('resource data is manual-only');
   return items;
 }
 

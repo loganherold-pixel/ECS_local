@@ -32,6 +32,10 @@ interface AttitudeMonitorDisplayStateInput {
   sourceOrigin?: AttitudeSourceOrigin | null;
   telemetryHealthOverride?: AttitudeTelemetryHealth;
   severityOverride?: AttitudeSeverityState | null;
+  sourceLabelOverride?: string | null;
+  sourceShortLabelOverride?: string | null;
+  sourceChipLabelOverride?: string | null;
+  sourceStatusLineOverride?: string | null;
 }
 
 export interface AttitudeMonitorDisplayState {
@@ -115,6 +119,10 @@ export function useAttitudeMonitorDisplayState({
   sourceOrigin,
   telemetryHealthOverride,
   severityOverride,
+  sourceLabelOverride,
+  sourceShortLabelOverride,
+  sourceChipLabelOverride,
+  sourceStatusLineOverride,
 }: AttitudeMonitorDisplayStateInput): AttitudeMonitorDisplayState {
   // This hook is the runtime normalization seam for every Attitude surface:
   // smoothing, stale-data hold behavior, severity stability, and trust metadata
@@ -133,7 +141,6 @@ export function useAttitudeMonitorDisplayState({
   });
   const [severityState, setSeverityState] = useState<AttitudeSeverityState>('normal');
 
-  const nowMs = Date.now();
   const rawHasValues = rollDeg != null && pitchDeg != null;
   const baseHealth: AttitudeTelemetryHealth = telemetryHealthOverride
     ? telemetryHealthOverride
@@ -164,12 +171,35 @@ export function useAttitudeMonitorDisplayState({
   }, [baseHealth, pitchDeg, rawHasValues, rollDeg, sampleTimestampMs]);
 
   const lastGood = lastGoodRef.current;
+  const nowMs = Date.now();
   const lastGoodAgeMs = lastGood == null ? Number.POSITIVE_INFINITY : nowMs - lastGood.at;
   const liveAgeMs = sampleTimestampMs == null ? 0 : nowMs - sampleTimestampMs;
   const liveHasFreshSample = baseHealth === 'live' && rawHasValues && liveAgeMs <= STALE_AFTER_MS;
-  const showingHeldData = !liveHasFreshSample && lastGood != null && lastGoodAgeMs <= HOLD_LAST_GOOD_MS;
+  const showingRecentData =
+    !liveHasFreshSample &&
+    baseHealth === 'recent' &&
+    lastGood != null &&
+    lastGoodAgeMs <= HOLD_LAST_GOOD_MS;
+  const showingHeldData =
+    !liveHasFreshSample &&
+    !showingRecentData &&
+    baseHealth !== 'stale' &&
+    lastGood != null &&
+    lastGoodAgeMs <= HOLD_LAST_GOOD_MS;
+  const showingExpiredStaleData =
+    !liveHasFreshSample &&
+    baseHealth === 'stale' &&
+    lastGood != null;
   const telemetryHealth: AttitudeTelemetryHealth =
-    liveHasFreshSample ? 'live' : showingHeldData ? 'stale' : 'unavailable';
+    liveHasFreshSample
+      ? 'live'
+      : showingRecentData
+        ? 'recent'
+        : showingHeldData
+          ? 'stale'
+          : showingExpiredStaleData
+            ? 'stale'
+            : 'unavailable';
 
   const lastGoodAtMs = lastGood?.at ?? null;
 
@@ -210,17 +240,19 @@ export function useAttitudeMonitorDisplayState({
   const displayRollDeg =
     telemetryHealth === 'live'
       ? smoothedAngles.rollDeg
-      : telemetryHealth === 'stale'
+      : telemetryHealth === 'recent' || telemetryHealth === 'stale'
         ? lastGood?.rollDeg ?? smoothedAngles.rollDeg
         : null;
   const displayPitchDeg =
     telemetryHealth === 'live'
       ? smoothedAngles.pitchDeg
-      : telemetryHealth === 'stale'
+      : telemetryHealth === 'recent' || telemetryHealth === 'stale'
         ? lastGood?.pitchDeg ?? smoothedAngles.pitchDeg
         : null;
 
   useEffect(() => {
+    const nowMs = Date.now();
+
     if (severityOverride) {
       severityRef.current = severityOverride;
       upgradeTargetRef.current = null;
@@ -297,7 +329,6 @@ export function useAttitudeMonitorDisplayState({
     advanced,
     displayPitchDeg,
     displayRollDeg,
-    nowMs,
     severityOverride,
     telemetryHealth,
   ]);
@@ -323,24 +354,34 @@ export function useAttitudeMonitorDisplayState({
   );
 
   const postureInstruction =
-    telemetryHealth === 'stale'
+    telemetryHealth === 'recent'
+      ? 'Using recent device attitude sample.'
+      : telemetryHealth === 'stale'
       ? 'Holding last known posture.'
       : stateMeta?.postureInstruction ?? telemetryMeta.hint;
   const postureLabel =
-    telemetryHealth === 'stale'
+    telemetryHealth === 'recent'
+      ? 'Device attitude recent'
+      : telemetryHealth === 'stale'
       ? 'Telemetry stale'
       : stateMeta?.postureLabel ?? telemetryMeta.title;
   const tone = telemetryHealth === 'live' ? stateMeta?.tone ?? 'good' : telemetryMeta.tone;
+  const resolvedSourceLabel = sourceLabelOverride ?? sourceMeta.label;
+  const resolvedSourceShortLabel = sourceShortLabelOverride ?? sourceMeta.shortLabel;
+  const resolvedSourceChipLabel = sourceChipLabelOverride ?? sourceMeta.chipLabel;
   const sourceStatusLine =
-    sourceMeta.label == null
+    sourceStatusLineOverride ??
+    (resolvedSourceLabel == null
       ? null
-      : telemetryHealth === 'stale'
-        ? `${sourceMeta.shortLabel ?? sourceMeta.label} • Holding last known posture`
+      : telemetryHealth === 'recent'
+        ? `${resolvedSourceShortLabel ?? resolvedSourceLabel} • Recent device attitude`
+        : telemetryHealth === 'stale'
+          ? `${resolvedSourceShortLabel ?? resolvedSourceLabel} • Holding last known posture`
         : telemetryHealth === 'unavailable'
-          ? sourceMeta.shortLabel ?? sourceMeta.label
+          ? resolvedSourceShortLabel ?? resolvedSourceLabel
           : sourceMeta.confidenceLabel
-            ? `${sourceMeta.label} • ${sourceMeta.confidenceLabel}`
-            : sourceMeta.label;
+            ? `${resolvedSourceLabel} • ${sourceMeta.confidenceLabel}`
+            : resolvedSourceLabel);
 
   return useMemo(
     () => ({
@@ -355,12 +396,16 @@ export function useAttitudeMonitorDisplayState({
       label:
         telemetryHealth === 'live'
           ? stateMeta?.label ?? 'STABLE ATTITUDE'
+          : telemetryHealth === 'recent'
+            ? telemetryMeta.badgeLabel
           : telemetryHealth === 'stale'
             ? 'STALE ATTITUDE'
             : telemetryMeta.badgeLabel,
       statusText:
         telemetryHealth === 'live'
           ? stateMeta?.statusText ?? telemetryMeta.hint
+          : telemetryHealth === 'recent'
+            ? 'Recent device attitude sample'
           : telemetryHealth === 'stale'
             ? 'Holding last known posture'
             : telemetryMeta.hint,
@@ -375,13 +420,13 @@ export function useAttitudeMonitorDisplayState({
       title: telemetryMeta.title,
       telemetryHint: telemetryMeta.hint,
       sourceOrigin: sourceMeta.origin,
-      sourceLabel: sourceMeta.label,
-      sourceShortLabel: sourceMeta.shortLabel,
-      sourceChipLabel: sourceMeta.chipLabel,
+      sourceLabel: resolvedSourceLabel,
+      sourceShortLabel: resolvedSourceShortLabel,
+      sourceChipLabel: resolvedSourceChipLabel,
       sourceStatusLine,
       confidence: sourceMeta.confidence,
       confidenceLabel: sourceMeta.confidenceLabel,
-      liveMotion: telemetryHealth !== 'unavailable' && displayRollDeg != null && displayPitchDeg != null,
+      liveMotion: telemetryHealth === 'live' && displayRollDeg != null && displayPitchDeg != null,
     }),
     [
       displayPitchDeg,
@@ -393,13 +438,13 @@ export function useAttitudeMonitorDisplayState({
       severityOverride,
       severityState,
       showingHeldData,
-      sourceMeta.chipLabel,
       sourceMeta.confidence,
       sourceMeta.confidenceLabel,
-      sourceMeta.label,
       sourceMeta.origin,
-      sourceMeta.shortLabel,
       sourceStatusLine,
+      resolvedSourceChipLabel,
+      resolvedSourceLabel,
+      resolvedSourceShortLabel,
       stateMeta,
       telemetryHealth,
       telemetryMeta.badgeLabel,

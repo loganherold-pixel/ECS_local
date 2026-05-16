@@ -15,8 +15,10 @@
 import { Platform } from 'react-native';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 
-export type AppearanceMode = 'auto' | 'dark' | 'light' | 'driving';
+export type AppearanceMode = 'dynamic' | 'dark' | 'light' | 'driving';
 export type EffectiveTheme = 'dark' | 'light' | 'driving';
+export const VISIBILITY_THEME_CYCLE: readonly AppearanceMode[] = ['dark', 'light', 'dynamic'];
+export const DEFAULT_THEME_CYCLE: readonly AppearanceMode[] = ['dark', 'light', 'driving', 'dynamic'];
 
 const STORAGE_KEY_MODE = 'ecs_appearance_mode';
 const STORAGE_KEY_AUTO_DRIVING = 'ecs_auto_driving_enabled';
@@ -57,7 +59,7 @@ function setStored(key: string, value: string): void {
 type AppearanceListener = (mode: AppearanceMode, autoDriving: boolean) => void;
 
 class AppearanceStore {
-  private _mode: AppearanceMode = 'auto';
+  private _mode: AppearanceMode = 'dark';
   private _autoDrivingEnabled: boolean = false;
   private _listeners: Set<AppearanceListener> = new Set();
 
@@ -77,8 +79,9 @@ class AppearanceStore {
 
   private _load(): void {
     const storedMode = getStored(STORAGE_KEY_MODE);
-    if (storedMode && ['auto', 'dark', 'light', 'driving'].includes(storedMode)) {
-      this._mode = storedMode as AppearanceMode;
+    const normalizedMode = this.normalizeMode(storedMode);
+    if (normalizedMode) {
+      this._mode = normalizedMode;
     }
     const storedAutoDriving = getStored(STORAGE_KEY_AUTO_DRIVING);
     this._autoDrivingEnabled = storedAutoDriving === 'true';
@@ -91,8 +94,9 @@ class AppearanceStore {
     const storedAutoDriving = appearancePersistence.get(STORAGE_KEY_AUTO_DRIVING);
     let changed = false;
 
-    if (storedMode && ['auto', 'dark', 'light', 'driving'].includes(storedMode) && storedMode !== this._mode) {
-      this._mode = storedMode as AppearanceMode;
+    const normalizedMode = this.normalizeMode(storedMode);
+    if (normalizedMode && normalizedMode !== this._mode) {
+      this._mode = normalizedMode;
       changed = true;
     }
 
@@ -117,6 +121,20 @@ class AppearanceStore {
   get isAutoDrivingActive(): boolean { return this._autoDrivingActive; }
   get isHydrated(): boolean { return this._hydrated; }
 
+  private normalizeMode(mode: string | null | undefined): AppearanceMode | null {
+    switch (mode) {
+      case 'auto':
+      case 'dynamic':
+        return 'dynamic';
+      case 'dark':
+      case 'light':
+      case 'driving':
+        return mode;
+      default:
+        return null;
+    }
+  }
+
   // ── Setters ─────────────────────────────────────────────
   setMode(mode: AppearanceMode): void {
     this._mode = mode;
@@ -124,7 +142,7 @@ class AppearanceStore {
     // If user manually selects a mode, mark as manual override
     this._lastManualOverrideAt = Date.now();
     // If user manually selects non-driving, deactivate auto-driving
-    if (mode !== 'driving' && mode !== 'auto') {
+    if (mode !== 'driving' && mode !== 'dynamic') {
       this._autoDrivingActive = false;
     }
     this._notify();
@@ -157,7 +175,7 @@ class AppearanceStore {
     if (this._mode === 'light') return 'light';
 
     // Auto mode: follow device color scheme
-    if (this._mode === 'auto') {
+    if (this._mode === 'dynamic') {
       return deviceColorScheme === 'light' ? 'light' : 'dark';
     }
 
@@ -226,10 +244,10 @@ class AppearanceStore {
   }
 
   // ── Cycle mode (for quick toggle) ───────────────────────
-  cycleMode(): AppearanceMode {
-    const order: AppearanceMode[] = ['dark', 'light', 'driving', 'auto'];
-    const idx = order.indexOf(this._mode);
-    const next = order[(idx + 1) % order.length];
+  cycleMode(order: readonly AppearanceMode[] = DEFAULT_THEME_CYCLE): AppearanceMode {
+    const normalizedOrder = order.length > 0 ? [...order] : [...DEFAULT_THEME_CYCLE];
+    const idx = normalizedOrder.indexOf(this._mode);
+    const next = normalizedOrder[(idx + 1) % normalizedOrder.length] ?? normalizedOrder[0] ?? 'dark';
     this.setMode(next);
     return next;
   }

@@ -4,6 +4,7 @@ import {
   reportNonFatalIssue,
   reportRecoverableFailure,
 } from '../ecsIssueIntelligence';
+import { sanitizeAuthLogPayload } from './authLogRedaction';
 
 export type AuthEntryMode =
   | 'manual_login'
@@ -258,28 +259,29 @@ export function recordAuthDiagnostic(
   name: AuthDiagnosticEventName,
   payload: AuthDiagnosticPayload = {},
 ): void {
-  const counterKey = payload.failure_category
-    ? `${name}:${payload.failure_category}`
+  const safePayload = sanitizeAuthLogPayload(payload);
+  const counterKey = safePayload.failure_category
+    ? `${name}:${safePayload.failure_category}`
     : name;
   const retryCount = bumpCounter(counterKey);
   const event: AuthDiagnosticEvent = {
     name,
     occurred_at: new Date().toISOString(),
-    route: payload.route ?? null,
-    entry_mode: payload.entry_mode ?? null,
-    result: payload.result ?? null,
-    failure_category: payload.failure_category ?? null,
-    duration_ms: payload.duration_ms ?? null,
-    network_state: payload.network_state ?? null,
-    access_state: payload.access_state ?? null,
+    route: safePayload.route ?? null,
+    entry_mode: safePayload.entry_mode ?? null,
+    result: safePayload.result ?? null,
+    failure_category: safePayload.failure_category ?? null,
+    duration_ms: safePayload.duration_ms ?? null,
+    network_state: safePayload.network_state ?? null,
+    access_state: safePayload.access_state ?? null,
     retry_count: retryCount,
-    metadata: payload.metadata ?? {},
+    metadata: safePayload.metadata ?? {},
   };
 
   writeEvents([...readEvents(), event]);
 
-  if (shouldEscalate(name, payload.failure_category)) {
-    reportEscalatedAuthIssue(name, payload, retryCount);
+  if (shouldEscalate(name, safePayload.failure_category)) {
+    reportEscalatedAuthIssue(name, safePayload, retryCount);
   }
 }
 

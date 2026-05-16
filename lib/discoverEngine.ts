@@ -72,6 +72,9 @@ function debugDiscoverEngine(message: string): void {
 export const DISTANCE_RADIUS_OPTIONS = [25, 50, 100, 250, 500] as const;
 export type DistanceRadius = typeof DISTANCE_RADIUS_OPTIONS[number];
 export const DEFAULT_DISTANCE_RADIUS: DistanceRadius = 100;
+// Minimum drivable trail length for Explorer discovery surfaces.
+// Trails shorter than this are filtered out to reduce low-value route noise.
+export const MIN_DISCOVERY_ROUTE_MILES = 5;
 
 // ── Hard distance cap ────────────────────────────────────────
 // Trails beyond this distance NEVER appear in default Discovery results.
@@ -167,6 +170,172 @@ export interface ExpeditionOpportunity {
   popularityScore?: number;           // 0–100 how well-known the route is (higher = more popular)
   estimatedTravelHours?: number;      // estimated driving/travel time in hours
   hiddenGem?: boolean;                // computed tag for lesser-known high-quality routes
+  // ── Route preview metadata (optional; normalized at read time) ──
+  coordinate?: { lat: number; lng: number } | null;
+  destinationCoordinate?: { lat: number; lng: number } | null;
+  endpointCoordinate?: { lat: number; lng: number } | null;
+  endCoordinate?: { lat: number; lng: number } | null;
+  routeGeometry?: unknown;
+  trailGeometry?: unknown;
+  waypoints?: unknown[];
+  routeMetadata?: Record<string, unknown>;
+}
+
+function slugifyRouteId(value: string): string {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'explore-route';
+}
+
+function hasPreviewCoordinate(value: unknown): boolean {
+  if (!value) return false;
+  if (Array.isArray(value) && value.length >= 2) {
+    const lng = Number(value[0]);
+    const lat = Number(value[1]);
+    return Number.isFinite(lat) && Number.isFinite(lng);
+  }
+  if (typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const lat = Number(candidate.lat ?? candidate.latitude ?? candidate.y);
+  const lng = Number(candidate.lng ?? candidate.lon ?? candidate.longitude ?? candidate.x);
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180
+  );
+}
+
+function hasPreviewGeometry(value: unknown): boolean {
+  if (!value) return false;
+  if (Array.isArray(value)) {
+    return value.filter(hasPreviewCoordinate).length >= 2;
+  }
+  if (typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const nested =
+    candidate.coordinates ??
+    candidate.geometry ??
+    candidate.points ??
+    candidate.path ??
+    candidate.polyline;
+  if (nested && nested !== value) return hasPreviewGeometry(nested);
+  if (Array.isArray(candidate.segments)) {
+    return candidate.segments.flatMap((segment) => (hasPreviewGeometry(segment) ? [segment] : [])).length > 0;
+  }
+  return false;
+}
+
+export function normalizeExploreOpportunityRoute(
+  opportunity: ExpeditionOpportunity,
+  index = 0,
+): ExpeditionOpportunity {
+  const baseId =
+    typeof opportunity.id === 'string' && opportunity.id.trim().length > 0
+      ? opportunity.id.trim()
+      : slugifyRouteId(
+          [
+            opportunity.name,
+            opportunity.region,
+            Number.isFinite(opportunity.startLat) ? opportunity.startLat.toFixed(4) : '',
+            Number.isFinite(opportunity.startLng) ? opportunity.startLng.toFixed(4) : '',
+            index,
+          ].filter(Boolean).join('-'),
+        );
+  const routeRecord = opportunity as ExpeditionOpportunity & Record<string, unknown>;
+  const metadata =
+    routeRecord.routeMetadata && typeof routeRecord.routeMetadata === 'object'
+      ? { ...(routeRecord.routeMetadata as Record<string, unknown>) }
+      : {};
+  const endpointCandidate =
+    routeRecord.destinationCoordinate ??
+    routeRecord.endpointCoordinate ??
+    routeRecord.endCoordinate ??
+    metadata.destinationCoordinate ??
+    metadata.endpointCoordinate ??
+    metadata.endCoordinate ??
+    metadata.finalDestinationCoordinate;
+  const hasGeometry =
+    hasPreviewGeometry(routeRecord.routeGeometry) ||
+    hasPreviewGeometry(routeRecord.trailGeometry) ||
+    hasPreviewGeometry(routeRecord.geometry) ||
+    hasPreviewGeometry(routeRecord.polyline);
+  const hasEndpoint = hasPreviewCoordinate(endpointCandidate);
+  const hasWaypoints =
+    Array.isArray(routeRecord.waypoints) &&
+    routeRecord.waypoints.filter(hasPreviewCoordinate).length >= 2;
+  const previewMetadataStatus =
+    hasGeometry
+      ? 'geometry'
+      : hasEndpoint
+        ? 'endpoint'
+        : hasWaypoints
+          ? 'waypoints'
+          : hasValidRouteEntryPoint(opportunity)
+            ? 'trailhead_only'
+            : 'unavailable';
+
+  return {
+    ...opportunity,
+    id: baseId,
+    name:
+      typeof opportunity.name === 'string' && opportunity.name.trim().length > 0
+        ? opportunity.name.trim()
+        : `Explore Route ${index + 1}`,
+    region:
+      typeof opportunity.region === 'string' && opportunity.region.trim().length > 0
+        ? opportunity.region.trim()
+        : 'Unknown Region',
+    terrainType:
+      typeof opportunity.terrainType === 'string' && opportunity.terrainType.trim().length > 0
+        ? opportunity.terrainType.trim()
+        : 'Mixed Terrain',
+    highlights: Array.isArray(opportunity.highlights) ? opportunity.highlights : [],
+    routeMetadata: {
+      ...metadata,
+      previewMetadataStatus,
+      routePreviewUnavailableReason:
+        previewMetadataStatus === 'trailhead_only'
+          ? 'Route preview unavailable for this route until endpoint or route geometry is added.'
+          : previewMetadataStatus === 'unavailable'
+            ? 'Route preview unavailable because route coordinates are missing.'
+            : null,
+    },
+  };
+}
+
+export function normalizeExploreOpportunityRoutes(
+  opportunities: ExpeditionOpportunity[],
+): ExpeditionOpportunity[] {
+  return opportunities.map((opportunity, index) =>
+    normalizeExploreOpportunityRoute(opportunity, index),
+  );
+}
+
+export function hasValidRouteEntryPoint(opportunity: Pick<ExpeditionOpportunity, 'startLat' | 'startLng'>): boolean {
+  const { startLat, startLng } = opportunity;
+  return (
+    Number.isFinite(startLat) &&
+    Number.isFinite(startLng) &&
+    Math.abs(startLat) <= 90 &&
+    Math.abs(startLng) <= 180
+  );
+}
+
+export function isDiscoverableRoute(opportunity: ExpeditionOpportunity): boolean {
+  return (
+    hasValidRouteEntryPoint(opportunity) &&
+    Number.isFinite(opportunity.distanceMiles) &&
+    opportunity.distanceMiles >= MIN_DISCOVERY_ROUTE_MILES
+  );
+}
+
+export function filterDiscoverableRoutes(
+  opportunities: ExpeditionOpportunity[],
+): ExpeditionOpportunity[] {
+  return opportunities.filter(isDiscoverableRoute);
 }
 
 
@@ -648,6 +817,18 @@ const SEED_OPPORTUNITIES: ExpeditionOpportunity[] = [
   { id: 'canyonlands-maze', name: 'Canyonlands Maze District', region: 'Maze District, Utah', regionGroup: 'utah-canyonlands', distanceMiles: 48, terrainType: 'Desert Canyon', remotenessScore: 10, estimatedFuelRequired: 8, suggestedCamps: 2, description: 'The most remote and least-visited district of Canyonlands National Park. Intricate canyon maze, ancient rock art, and absolute solitude in the heart of the Colorado Plateau.', highlights: ['Maze Overlook', 'Harvest Scene pictographs', 'Chocolate Drops formations', 'Absolute desert solitude'], elevationGainFt: 3200, estimatedDays: 2, bestSeason: 'Spring / Fall', permitRequired: true, imageTag: 'desert-canyon', startLat: 38.3200, startLng: -110.1800, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 7, popularityScore: 15, estimatedTravelHours: 8 },
   { id: 'owyhee-canyonlands', name: 'Owyhee Canyonlands', region: 'Owyhee County, Idaho', regionGroup: 'idaho-montana', distanceMiles: 180, terrainType: 'Desert Canyon', remotenessScore: 9, estimatedFuelRequired: 20, suggestedCamps: 3, description: 'A vast and empty desert canyon landscape in the Owyhee Canyonlands of southwestern Idaho. Rhyolite canyons, hot springs, and some of the lowest population density in the US.', highlights: ['Bruneau Canyon overlook', 'Natural hot springs', 'Rhyolite canyon walls', 'Zero cell coverage zones'], elevationGainFt: 7600, estimatedDays: 3, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-canyon', startLat: 42.7500, startLng: -116.1000, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 8, estimatedTravelHours: 16 },
   { id: 'alvord-desert-loop', name: 'Alvord Desert Loop', region: 'Southeastern Oregon', regionGroup: 'oregon-cascades', distanceMiles: 120, terrainType: 'Desert Sand / Rock', remotenessScore: 9, estimatedFuelRequired: 15, suggestedCamps: 2, description: 'A remote loop through the Alvord Desert and Steens Mountain in southeastern Oregon. Playa driving, hot springs, and dramatic fault-block mountain scenery.', highlights: ['Alvord Desert playa driving', 'Steens Mountain summit', 'Wildhorse hot springs', 'Fault-block escarpment views'], elevationGainFt: 6400, estimatedDays: 2, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 42.5500, startLng: -118.5500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 12, estimatedTravelHours: 10 },
+  { id: 'mendocino-m1-ridge', name: 'Mendocino M1 Ridge Road', region: 'Mendocino National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 54, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 7, suggestedCamps: 1, description: 'A high-clearance forest road route along the Mendocino ridge network with dirt climbs, dispersed camps, and long views across the Coast Range.', highlights: ['High-clearance forest road', 'Coast Range views', 'Dispersed camp access', 'Seasonal dirt climbs'], elevationGainFt: 4200, estimatedDays: 1, bestSeason: 'Late Spring / Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.9000, startLng: -122.7400, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 18, estimatedTravelHours: 5 },
+  { id: 'usal-road-lost-coast', name: 'Usal Road Lost Coast', region: 'Lost Coast, California', regionGroup: 'sierra-nevada', distanceMiles: 28, terrainType: 'Forest / Coastal', remotenessScore: 7, estimatedFuelRequired: 5, suggestedCamps: 1, description: 'A rough coastal dirt road through redwood and coastal forest with remote beach access, mud holes after rain, and narrow shelf sections.', highlights: ['Remote coastal dirt road', 'Beach camp access', 'Redwood corridors', 'Muddy seasonal sections'], elevationGainFt: 2600, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.8300, startLng: -123.8400, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 24, estimatedTravelHours: 4 },
+  { id: 'high-lakes-ohv', name: 'High Lakes OHV Network', region: 'Lassen National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 22, terrainType: 'Alpine / Rock', remotenessScore: 6, estimatedFuelRequired: 4, suggestedCamps: 1, description: 'A compact high-country OHV network with granite shelves, lake access, and connected 4WD tracks above the forest line.', highlights: ['4WD lake access', 'Granite shelves', 'High-country camps', 'Connected OHV tracks'], elevationGainFt: 2400, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 40.0500, startLng: -121.3500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 28, estimatedTravelHours: 4 },
+  { id: 'fordyce-creek-trail', name: 'Fordyce Creek Trail', region: 'Tahoe National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 12, terrainType: 'Alpine / Rock', remotenessScore: 6, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A rugged 4x4 trail with creek crossings, granite ledges, and high-consequence rock obstacles in the northern Sierra.', highlights: ['Creek crossings', 'Granite ledges', 'Technical 4x4 line', 'Sierra forest access'], elevationGainFt: 2100, estimatedDays: 1, bestSeason: 'Summer', permitRequired: false, imageTag: 'alpine-mountain', startLat: 39.3700, startLng: -120.5300, recommendedTireSize: 35, recommendedLift: 3, terrainDifficulty: 9, popularityScore: 38, estimatedTravelHours: 5 },
+  { id: 'bowman-lake-road', name: 'Bowman Lake Road', region: 'Tahoe National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 21, terrainType: 'Forest / Mountain', remotenessScore: 5, estimatedFuelRequired: 3, suggestedCamps: 1, description: 'A rough forest road corridor to Bowman Lake with washboard, rocky stretches, and dispersed camping near alpine water.', highlights: ['Alpine lake access', 'Rocky forest road', 'Dispersed camps', 'Sierra granite views'], elevationGainFt: 1900, estimatedDays: 1, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.4500, startLng: -120.6500, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 26, estimatedTravelHours: 3 },
+  { id: 'pine-nut-mountain-tracks', name: 'Pine Nut Mountain Tracks', region: 'Western Nevada', regionGroup: 'great-basin', distanceMiles: 46, terrainType: 'Desert Sand / Rock', remotenessScore: 6, estimatedFuelRequired: 6, suggestedCamps: 0, description: 'A network of desert two-track and rocky ridgeline roads east of Carson Valley with broad views and multiple 4WD route options.', highlights: ['Desert two-track', 'Rocky ridge roads', 'Carson Valley views', 'Open BLM route network'], elevationGainFt: 3600, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.0500, startLng: -119.6000, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 16, estimatedTravelHours: 5 },
+  { id: 'moon-rocks-ohv', name: 'Moon Rocks OHV Area', region: 'Reno, Nevada', regionGroup: 'great-basin', distanceMiles: 18, terrainType: 'Desert Sand / Rock', remotenessScore: 4, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A drivable OHV area north of Reno with slickrock-like formations, sandy washes, and short connected 4WD loops.', highlights: ['OHV slickrock formations', 'Sandy washes', 'Short 4WD loops', 'Open desert access'], elevationGainFt: 1500, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.8800, startLng: -119.7200, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 22, estimatedTravelHours: 3 },
+  { id: 'fort-sage-ohv', name: 'Fort Sage OHV Area', region: 'Lassen County, California', regionGroup: 'great-basin', distanceMiles: 34, terrainType: 'Desert Sand / Rock', remotenessScore: 5, estimatedFuelRequired: 4, suggestedCamps: 0, description: 'A high-desert OHV route network with rocky climbs, sand washes, and open BLM terrain near the California-Nevada line.', highlights: ['High-desert OHV network', 'Rocky climbs', 'Sand washes', 'BLM route access'], elevationGainFt: 2200, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.7300, startLng: -120.0100, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 5, popularityScore: 18, estimatedTravelHours: 4 },
+  { id: 'black-rock-playa-loop', name: 'Black Rock Playa Loop', region: 'Black Rock Desert, Nevada', regionGroup: 'great-basin', distanceMiles: 84, terrainType: 'Desert Sand / Rock', remotenessScore: 8, estimatedFuelRequired: 9, suggestedCamps: 1, description: 'A remote desert loop across playa margins, primitive roads, and hot spring approaches in the Black Rock backcountry.', highlights: ['Primitive desert roads', 'Playa margin driving', 'Hot spring approaches', 'Dark sky camps'], elevationGainFt: 1800, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 40.7600, startLng: -119.2000, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 14, estimatedTravelHours: 7 },
+  { id: 'high-rock-canyon', name: 'High Rock Canyon Route', region: 'Northern Nevada', regionGroup: 'great-basin', distanceMiles: 62, terrainType: 'Desert Canyon', remotenessScore: 9, estimatedFuelRequired: 8, suggestedCamps: 1, description: 'A remote high-desert canyon route with primitive road surfaces, volcanic cliffs, and long gaps between services.', highlights: ['Remote canyon road', 'Volcanic cliff walls', 'Primitive crossings', 'Long service gaps'], elevationGainFt: 2600, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-canyon', startLat: 41.3500, startLng: -119.3300, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 12, estimatedTravelHours: 6 },
+  { id: 'bald-mountain-ohv', name: 'Bald Mountain OHV Route', region: 'Sierra National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 15, terrainType: 'Alpine / Rock', remotenessScore: 5, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A Sierra 4WD route with granite shelves, optional rock obstacles, and forested high-country views near Shaver Lake.', highlights: ['Granite shelves', 'Optional rock obstacles', 'High-country views', 'Forest 4WD access'], elevationGainFt: 2100, estimatedDays: 1, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 37.0800, startLng: -119.1600, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 30, estimatedTravelHours: 4 },
+  { id: 'coyote-flat-tracks', name: 'Coyote Flat Tracks', region: 'Eastern Sierra, California', regionGroup: 'sierra-nevada', distanceMiles: 32, terrainType: 'Alpine / Mountain Pass', remotenessScore: 7, estimatedFuelRequired: 5, suggestedCamps: 1, description: 'A high-elevation 4WD track system above Bishop with rocky climbs, exposed alpine plateaus, and dispersed camp options.', highlights: ['High-elevation 4WD track', 'Alpine plateau camps', 'Rocky climbs', 'Eastern Sierra views'], elevationGainFt: 4300, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 37.2600, startLng: -118.5700, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 24, estimatedTravelHours: 5 },
 ];
 
 
@@ -687,7 +868,7 @@ export function filterByRadius(
   maxDistanceMiles: number,
 ): ExpeditionOpportunity[] {
   return opportunities.filter(
-    op => (op.distanceFromUserMiles ?? Infinity) <= maxDistanceMiles
+    op => isDiscoverableRoute(op) && (op.distanceFromUserMiles ?? Infinity) <= maxDistanceMiles
   );
 }
 
@@ -827,7 +1008,7 @@ export function loadExpeditionOpportunities(): ExpeditionOpportunity[] {
   stabilityLog('Discovery', 'info', `Loading ${SEED_OPPORTUNITIES.length} expedition opportunities`);
   try {
     // Phase 15: Validate metadata on every route
-    let validated = [...SEED_OPPORTUNITIES].map(op =>
+    let validated = normalizeExploreOpportunityRoutes([...SEED_OPPORTUNITIES]).map(op =>
       validateRouteMetadata(op, op.id) as ExpeditionOpportunity
     );
 
@@ -837,15 +1018,15 @@ export function loadExpeditionOpportunities(): ExpeditionOpportunity[] {
       stabilityLog('Discovery', 'warn', `Found ${dupeCount} duplicate routes in seed dataset`);
     }
 
-    // Deduplicate
-    validated = deduplicateOpportunities(validated);
+    // Deduplicate, then drop routes that do not meet base discovery requirements.
+    validated = filterDiscoverableRoutes(deduplicateOpportunities(validated));
 
     stabilityLog('Discovery', 'info', `Loaded ${validated.length} validated opportunities`);
     return validated;
   } catch (e) {
     stabilityLog('Discovery', 'error', 'Failed to load expedition opportunities', e);
     // Graceful fallback: return raw seed data without validation
-    return deduplicateOpportunities([...SEED_OPPORTUNITIES]);
+    return filterDiscoverableRoutes(deduplicateOpportunities(normalizeExploreOpportunityRoutes([...SEED_OPPORTUNITIES])));
   }
 }
 
@@ -878,9 +1059,10 @@ export function loadOpportunitiesWithCompatibility(
   profile: VehicleProfile | null;
 } {
   // Phase 15: Validate metadata on all routes before processing
-  let raw = deduplicateOpportunities([...SEED_OPPORTUNITIES]).map(op =>
+  let raw = deduplicateOpportunities(normalizeExploreOpportunityRoutes([...SEED_OPPORTUNITIES])).map(op =>
     validateRouteMetadata(op, op.id) as ExpeditionOpportunity
   );
+  raw = filterDiscoverableRoutes(raw);
 
   // Phase 15: Audit for duplicates after initial dedup
   const dupeCount = auditDuplicates(raw, 'loadOpportunitiesWithCompatibility');
@@ -911,19 +1093,8 @@ export function loadOpportunitiesWithCompatibility(
       results: new Map(),
       profile: null,
     };
-    console.log(TAG, 'No vehicle profile — returning distance-sorted opportunities without compatibility');
-    // Enrich with match scores (no compat data)
-    raw = enrichWithMatchScores(raw, new Map());
-    // Sort by match score (distance-dominant when no vehicle)
-    raw = sortByMatchScore(raw);
-    return {
-      opportunities: raw,
-      results: new Map(),
-      profile: null,
-    };
   }
   debugDiscoverEngine(`Scoring ${raw.length} opportunities against "${profile.vehicleName}"`);
-  console.log(TAG, `Scoring ${raw.length} opportunities against "${profile.vehicleName}"`);
   const { opportunities: scored, results } = scoreAndSortOpportunities(profile, raw);
 
   // Re-enrich scored results with distance (scoring may have stripped it)

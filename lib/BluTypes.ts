@@ -14,6 +14,9 @@
  * Phase 7A — Architecture hardening: charging/output/warning state enums.
  */
 
+import type { PowerTelemetryTruth } from '../src/power/types/PowerTelemetry';
+import type { BluetoothTelemetrySource } from './bluetoothLiveTelemetry';
+
 
 
 // ── BLU Provider Identifiers ────────────────────────────────────────────
@@ -107,6 +110,10 @@ export interface BluDevice {
   display_name: string;
   /** Model name, e.g. "DELTA 2 Max" */
   model: string;
+  /** Provider product category. For EcoFlow BLU telemetry, only power_station is eligible. */
+  product_type?: string;
+  /** Whether this device can be used as a BLU telemetry primary. */
+  telemetry_capable?: boolean;
   /** Current connection lifecycle state */
   connection_state: BluConnectionState;
   /** Epoch-ms when this device was last seen */
@@ -186,6 +193,26 @@ export interface BluTelemetry {
   alerts?: string[];
   /** Opaque provider payload for future parsing/debugging */
   raw?: Record<string, unknown>;
+  /** Optional poll/session guard token from an adapter. Used to ignore stale async results. */
+  pollToken?: string | number;
+  /** Primary device at the time the telemetry request started, if known. */
+  sessionPrimaryDeviceId?: string | null;
+  /** Epoch-ms when the provider poll/request was started, if known. */
+  pollStartedAt?: number;
+  /** Truthful telemetry origin. Mock data is dev-only and never treated as live. */
+  source?: BluetoothTelemetrySource;
+  /** Epoch-ms when this telemetry source was updated. Defaults to timestamp. */
+  updatedAt?: number;
+  /** Whether decoded live telemetry is actively flowing from hardware. */
+  isLive?: boolean;
+  /** Normalized power truth contract for UI and advisory surfaces. */
+  truth?: PowerTelemetryTruth;
+  /** User-facing source label for diagnostics/control surfaces. */
+  telemetrySourceLabel?: string;
+  /** Connected device is reachable, but ECS has not decoded telemetry for it yet. */
+  telemetryUnsupported?: boolean;
+  /** Short explanation when telemetry is unavailable or undecoded. */
+  telemetryUnsupportedReason?: string;
 }
 
 // ── BLU Summary Object ──────────────────────────────────────────────────
@@ -238,6 +265,18 @@ export interface BluSummary {
   ac_output_watts?: number | null;
   /** DC output power (W) when provider splits AC/DC */
   dc_output_watts?: number | null;
+  /** Truthful telemetry origin for the active summary. */
+  source?: BluetoothTelemetrySource;
+  /** User-facing telemetry source label. */
+  sourceLabel?: string;
+  /** True only for decoded live Bluetooth telemetry. */
+  isLive?: boolean;
+  /** Normalized power truth contract for UI and advisory surfaces. */
+  truth?: PowerTelemetryTruth;
+  /** Connected source is reachable, but telemetry is not decoded. */
+  telemetryUnsupported?: boolean;
+  /** Short reason for unavailable or unsupported telemetry. */
+  telemetryUnsupportedReason?: string;
 }
 
 // ── Default / Empty Values ──────────────────────────────────────────────
@@ -259,6 +298,11 @@ export const EMPTY_BLU_SUMMARY: BluSummary = {
   battery_watts: null,
   ac_output_watts: null,
   dc_output_watts: null,
+  source: 'unavailable',
+  sourceLabel: 'Unavailable',
+  isLive: false,
+  telemetryUnsupported: false,
+  telemetryUnsupportedReason: undefined,
 };
 
 export const DEFAULT_BLU_CAPABILITIES: BluDeviceCapabilities = {
@@ -304,6 +348,8 @@ export interface BluSessionSnapshot {
   timestamp: number;
   /** Whether polling was active */
   wasPolling: boolean;
+  /** Optional reason when a provider is intentionally disconnected/degraded. */
+  disconnectReason?: string;
   /** Version tag for forward compatibility */
   version: number;
 }
@@ -314,6 +360,7 @@ export const EMPTY_BLU_SESSION: BluSessionSnapshot = {
   primaryDeviceId: null,
   timestamp: 0,
   wasPolling: false,
+  disconnectReason: undefined,
   version: 1,
 };
 

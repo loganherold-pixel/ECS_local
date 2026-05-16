@@ -4,7 +4,7 @@ import type {
   ECSOrchestratorOutput,
   ECSReleaseReadinessDiagnostics,
 } from './orchestratorTypes';
-import type { ECSReleaseChecklistSection, ECSReleaseRiskSummary } from './releasePolishAuditTypes';
+import type { ECSReleaseChecklistSection, ECSReleaseQaSummary, ECSReleaseRiskSummary } from './releasePolishAuditTypes';
 export {
   selectRuntimeSmokeContradictions,
   selectRuntimeSmokeSnapshot,
@@ -45,4 +45,10 @@ export function selectReleaseRiskSummary(
   output: ECSOrchestratorOutput | null | undefined,
 ): ECSReleaseRiskSummary | null {
   return output?.releaseDiagnostics?.unresolvedRiskSummary ?? null;
+}
+
+export function selectReleaseQaSummary(
+  output: ECSOrchestratorOutput | null | undefined,
+): ECSReleaseQaSummary | null {
+  return output?.releaseDiagnostics?.qaSummary ?? null;
 }

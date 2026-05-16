@@ -9,6 +9,7 @@
 
 import { supabase, isSupabaseConfigured } from './supabase';
 import { AUTH_COPY } from './auth/authCopy';
+import { sanitizeAuthLogPayload } from './auth/authLogRedaction';
 import {
   buildSharedAccountAccessState,
   type AccountRole,
@@ -44,6 +45,12 @@ type EdgeInvokeFallback = {
   error: { message: string; name?: string };
   status?: number | null;
 };
+
+function logOptionalAuditFailure(label: string, error: unknown): void {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.debug(label, sanitizeAuthLogPayload(error));
+  }
+}
 
 /**
  * Sanitize Supabase error messages into clean, user-friendly copy
@@ -291,7 +298,7 @@ async function callAuthHandler(
           action: body?.action ?? 'unknown',
           status,
           message,
-          error: errorObj,
+          error: sanitizeAuthLogPayload(errorObj),
         });
       }
 
@@ -312,7 +319,7 @@ async function callAuthHandler(
         functionName: AUTH_HANDLER_NAME,
         action: body?.action ?? 'unknown',
         message,
-        error: e,
+        error: sanitizeAuthLogPayload(e),
       });
     }
 
@@ -367,9 +374,9 @@ export async function postLogin(userId: string, email: string): Promise<PostLogi
   if (error || !data) {
     const access = buildSafeFallbackAccessState();
     if (!error || isAuthHandlerOptionalFailure(error)) {
-      console.warn('[Auth] Post-login handler unavailable (non-blocking):', error || 'No data');
+      console.warn('[Auth] Post-login handler unavailable (non-blocking):', sanitizeAuthLogPayload(error || 'No data'));
     } else {
-      console.warn('[Auth] Post-login handler failed (non-blocking):', error);
+      console.warn('[Auth] Post-login handler failed (non-blocking):', sanitizeAuthLogPayload(error));
     }
 
     return {
@@ -597,12 +604,12 @@ export async function logAuditEvent(
         action: 'log_event',
         user_id: userId || 'anonymous',
         event,
-        metadata: metadata || {},
+        metadata: sanitizeAuthLogPayload(metadata || {}),
       },
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Audit log failed:', e);
+    logOptionalAuditFailure('[Auth] Optional audit log skipped:', e);
   }
 }
 
@@ -619,7 +626,7 @@ export async function logPasswordUpdate(userId: string | null): Promise<void> {
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Password update audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional password audit skipped:', e);
   }
 }
 
@@ -636,7 +643,7 @@ export async function logLogout(userId: string | null): Promise<void> {
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Logout audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional logout audit skipped:', e);
   }
 }
 
@@ -650,12 +657,12 @@ export async function logLoginFailed(email: string): Promise<void> {
         action: 'log_event',
         user_id: 'anonymous',
         event: 'login_failed',
-        metadata: { email },
+        metadata: sanitizeAuthLogPayload({ email }),
       },
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Login failed audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional login-failed audit skipped:', e);
   }
 }
 

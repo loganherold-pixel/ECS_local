@@ -2,6 +2,8 @@ import type {
   ECSDegradedOperationsInput,
   ECSDegradedOperationsResult,
   ECSOperationalState,
+  ECSRouteGuidanceAvailability,
+  ECSRouteGuidanceAvailabilityInput,
 } from './degradedOperationsTypes';
 
 function pushUnique(target: string[], value: string | null | undefined) {
@@ -13,6 +15,26 @@ function pushUnique(target: string[], value: string | null | undefined) {
 
 function dedupeList(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function normalizeCopy(value: string | null | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+export function isLowValueTelemetryDegradedSummary(summary: string | null | undefined): boolean {
+  const normalized = normalizeCopy(summary);
+  if (!normalized) return false;
+
+  return (
+    normalized.includes('live vehicle data is reduced') &&
+    normalized.includes('blending saved inputs with partial telemetry')
+  ) || (
+    normalized.includes('live telemetry is unavailable') &&
+    normalized.includes('guidance is leaning on saved inputs')
+  );
 }
 
 function classifyGps(status: string | null | undefined): 'good' | 'weak' | 'missing' {
@@ -77,6 +99,41 @@ function cachedMapsAvailable(input: ECSDegradedOperationsInput): boolean {
     || input.offlineCacheState === 'warning';
 }
 
+export function assessRouteGuidanceAvailability(
+  input: ECSRouteGuidanceAvailabilityInput,
+): ECSRouteGuidanceAvailability {
+  const gps = classifyGps(input.gpsStatus);
+  const requested = !!input.routeGuidanceRequested;
+
+  if (!requested) {
+    return {
+      requested,
+      available: false,
+      unavailable: false,
+      reason: 'not_requested',
+      label: 'Route guidance not active',
+    };
+  }
+
+  let reason: ECSRouteGuidanceAvailability['reason'] = 'available';
+  if (!input.hasActiveRoute) {
+    reason = 'no_active_route';
+  } else if (!input.hasRouteGeometry) {
+    reason = 'missing_geometry';
+  } else if (gps === 'missing') {
+    reason = 'gps_missing';
+  }
+
+  const available = reason === 'available';
+  return {
+    requested,
+    available,
+    unavailable: !available,
+    reason,
+    label: available ? 'Route guidance available' : 'Route guidance unavailable',
+  };
+}
+
 function buildSummary(args: {
   state: ECSOperationalState;
   offline: boolean;
@@ -85,6 +142,8 @@ function buildSummary(args: {
   weatherStale: boolean;
   telemetryMode: 'live' | 'partial' | 'manual' | 'missing';
   hasCachedMaps: boolean;
+  routeGuidanceRequested: boolean;
+  routeGuidanceAvailable: boolean;
   routeGuidanceUnavailable: boolean;
   routeRiskEstimated: boolean;
 }): string {
@@ -120,7 +179,12 @@ function buildSummary(args: {
   }
 
   if (args.weatherStale) {
-    return 'Weather is stale, but route guidance remains available.';
+    const guidanceLine = args.routeGuidanceRequested
+      ? args.routeGuidanceAvailable
+        ? ' Route guidance available.'
+        : ' Route guidance unavailable.'
+      : '';
+    return `Weather data is stale.${guidanceLine}`;
   }
   if (args.routeRiskEstimated) {
     return 'Route risk remains available, but one or more supporting inputs are estimated.';
@@ -192,11 +256,10 @@ export function assessDegradedOperations(
   const limitedNet = connectivityLevel === 'limited';
   const hasCachedMaps = cachedMapsAvailable(input);
   const weatherStaleness = String(input.weatherStaleness ?? 'unknown').toLowerCase();
-  const weatherStale = weatherStaleness === 'stale' || weatherStaleness === 'very_stale' || weatherStaleness === 'unknown';
+  const weatherStale = weatherStaleness === 'stale' || weatherStaleness === 'very_stale';
   const routeGuidanceRequested = !!input.routeGuidanceRequested;
-  const routeGuidanceUnavailable =
-    routeGuidanceRequested
-    && (!input.hasActiveRoute || !input.hasRouteGeometry || gps === 'missing');
+  const routeGuidance = assessRouteGuidanceAvailability(input);
+  const routeGuidanceUnavailable = routeGuidance.unavailable;
   const routeRiskEstimated =
     !!input.routeRiskAvailable
     && (
@@ -335,6 +398,8 @@ export function assessDegradedOperations(
     weatherStale,
     telemetryMode,
     hasCachedMaps,
+    routeGuidanceRequested,
+    routeGuidanceAvailable: routeGuidance.available,
     routeGuidanceUnavailable,
     routeRiskEstimated,
   });

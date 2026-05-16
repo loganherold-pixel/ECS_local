@@ -30,6 +30,7 @@ import {
 } from './storage';
 import { pushTable } from './sync';
 import { connectivity } from './connectivity';
+import { registerLocalWriteNotifier } from './localWriteBridge';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -645,6 +646,9 @@ class AutoPushManager {
 // ── Singleton ─────────────────────────────────────────────────
 
 export const autoPush = new AutoPushManager();
+registerLocalWriteNotifier(() => {
+  autoPush.notifyWrite();
+});
 
 // ── Storage notification hook ─────────────────────────────────
 /**

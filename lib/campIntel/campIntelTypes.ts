@@ -3,12 +3,19 @@ import type { ExpeditionForecast } from '../expeditionForecastEngine';
 import type { RemotenessIndexOutput } from '../remotenessTypes';
 import type { RouteIntelligence } from '../routeAnalysisEngine';
 import type { TerrainIntelligence } from '../terrainAnalysisEngine';
+import type { CampsiteRating, CampsiteRatingFactor } from '../campsites/campsiteRatingTypes';
 
 export type CampIntelCategory =
   | 'suggested'
   | 'backup'
   | 'emergency'
   | 'saved'
+  | 'established'
+  | 'community'
+  | 'private'
+  | 'group'
+  | 'pending'
+  | 'review'
   | 'previously_used'
   | 'rejected'
   | 'caution';
@@ -47,6 +54,27 @@ export type CampIntelFeedbackCode =
   | 'not_legal'
   | 'too_small'
   | 'blocked';
+
+export type CampIntelEvidenceSourceLabel =
+  | 'ECS-Inferred'
+  | 'User-Supported'
+  | 'Field-Confirmed'
+  | 'Disputed'
+  | 'Avoid / Restricted';
+
+export interface CampIntelEvidenceSummary {
+  sourceLabel: CampIntelEvidenceSourceLabel;
+  intelConfidence: 'High' | 'Medium' | 'Low';
+  latestEvidence: string;
+  evidenceTypes: string[];
+  access: string;
+  restrictionSignal: string;
+  landUseConfidence: string;
+  usePressure: string;
+  concern: string | null;
+  photoEvidenceCount: number | null;
+  newestPhotoAgeLabel: string | null;
+}
 
 export type CampIntelBadgeType =
   | 'vehicle_fit'
@@ -568,6 +596,8 @@ export interface CampIntelSite {
   confidence: CampIntelConfidence;
   confidenceLabel: string;
   confidenceScore: number;
+  rating: CampsiteRating;
+  ratingFactors: CampsiteRatingFactor[];
   overallScore: number;
   scoreBreakdown: CampIntelScoreBreakdown;
   quickVerdict: string;
@@ -584,10 +614,14 @@ export interface CampIntelSite {
   offlineStatus: CampIntelOfflineStatus;
   offlineAssessment: CampIntelOfflineAssessment | null;
   sourceType: CampIntelSourceType;
+  evidenceSummary: CampIntelEvidenceSummary;
   detourDistanceMiles: number | null;
   sourceRouteId: string | null;
   sourceRouteName: string | null;
   segmentLabel: string | null;
+  fallbackStage: number;
+  criteriaBroadened: boolean;
+  credibilityTier: CampsiteCandidate['credibilityTier'];
   isSaved: boolean;
   wasUsedBefore: boolean;
   classification: CampIntelRecommendationClass;
@@ -651,6 +685,8 @@ export interface CampIntelStructuredSummary {
   bestShelteredCandidate: CampIntelStructuredSummaryCandidate | null;
   stopBeforeDark: boolean;
   lowConfidenceBeyondTop: boolean;
+  criteriaBroadened: boolean;
+  broadenedCriteriaNotice: string | null;
 }
 
 export interface CampIntelCachedRouteResult {
@@ -672,6 +708,11 @@ export interface CampIntelMarkerPayload {
   category: CampIntelCategory;
   confidence: CampIntelConfidence;
   confidenceScore: number;
+  rating: CampsiteRating;
+  score: number;
+  rank?: number;
+  rankLabel?: string;
+  ratingFactors: CampsiteRatingFactor[];
   selected: boolean;
   badges: {
     label: string;

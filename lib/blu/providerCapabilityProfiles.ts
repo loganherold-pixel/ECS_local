@@ -68,6 +68,21 @@ const PROVIDER_CAPABILITY_OVERRIDES: Partial<Record<BluProviderId, Partial<ECSPr
   },
 };
 
+function normalizeProviderVerificationStatus(
+  status: string | null | undefined,
+): ECSProviderCapabilityProfile['providerVerificationStatus'] {
+  switch (status) {
+    case 'verified':
+    case 'implemented':
+    case 'limited':
+    case 'planned':
+    case 'unknown':
+      return status;
+    default:
+      return 'unknown';
+  }
+}
+
 export function getProviderCapabilityProfile(
   providerId: BluProviderId | null | undefined,
 ): ECSProviderCapabilityProfile | null {
@@ -83,7 +98,6 @@ export function getProviderCapabilityProfile(
     liveUpdateCapable: override.liveUpdateCapable ?? true,
     cloudFallbackEligible: override.cloudFallbackEligible ?? false,
     metricCoverage: override.metricCoverage ?? DEFAULT_METRIC_COVERAGE,
-    providerVerificationStatus: meta?.status ?? 'unknown',
+    providerVerificationStatus: normalizeProviderVerificationStatus(meta?.status),
   };
 }
-

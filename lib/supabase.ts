@@ -21,6 +21,9 @@ const DEPLOYED_EDGE_FUNCTIONS = new Set([
   "ai-route-suggestions",
   "issue-intelligence",
   "get-map-token",
+  "campgrounds-search",
+  "campground-detail",
+  "dispersed-camping-eligibility",
 ]);
 export const EDGE_FUNCTION_UNAVAILABLE_CODE = "EDGE_FUNCTION_UNAVAILABLE";
 export const SUPABASE_CONFIG_UNAVAILABLE_CODE = "SUPABASE_CONFIG_UNAVAILABLE";
@@ -203,6 +206,28 @@ function createSafeClient(): SupabaseClient {
 
 export const isSupabaseConfigured = Boolean(url && anon);
 export const supabase = createSafeClient();
+
+export async function clearPersistedSupabaseAuthState(): Promise<void> {
+  if (Platform.OS === "web") {
+    try {
+      if (typeof localStorage !== "undefined") {
+        const keysToRemove: string[] = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          if (key && key.startsWith("sb-") && key.includes("-auth-token")) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+      }
+    } catch {}
+    return;
+  }
+
+  await nativeSupabaseAuthCache.waitForHydration();
+  nativeSupabaseAuthCache.clear();
+  await nativeSupabaseAuthCache.flush();
+}
 
 export function getSupabaseConfigurationDiagnostics() {
   return {

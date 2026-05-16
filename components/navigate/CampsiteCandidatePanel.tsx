@@ -29,6 +29,20 @@ import type {
   ConfidenceLevel,
 } from '../../lib/campsiteCandidateEngine';
 import { campsiteCandidateEngine } from '../../lib/campsiteCandidateEngine';
+import type {
+  CampCandidate as CampOpsCandidate,
+  CampCandidateEnrichment,
+  CampOpsImpact,
+  CampRecommendationSet,
+  CampSuitabilityScores,
+} from '../../lib/campops/campOpsTypes';
+import {
+  CAMP_OPS_ENDPOINT_RECOMMENDATION_LABEL,
+  CAMP_OPS_LEGACY_SEARCH_RESULTS_LABEL,
+  getCampOpsLegacyCandidateStatus,
+  getCampOpsLegacyListNotice,
+  type CampOpsLegacyCandidateStatus,
+} from '../../lib/campops/campOpsLegacyCoexistence';
 
 // ── Props ────────────────────────────────────────────────────
 
@@ -41,6 +55,10 @@ interface CampsiteCandidatePanelProps {
   onClose: () => void;
   /** When true, shows a loading indicator instead of empty state */
   loading?: boolean;
+  /** Optional navigation action supplied by the host screen */
+  onNavigateToCamp?: (camp: CampOpsCandidate) => void;
+  /** Optional share action supplied by the host screen */
+  onShareCamp?: (camp: CampOpsCandidate) => void;
 }
 
 
@@ -84,6 +102,11 @@ function getConfidenceIcon(level: ConfidenceLevel): string {
   }
 }
 
+function getCandidateConfidenceLabel(candidate: CampsiteCandidate): string {
+  if (candidate.viabilityConfidenceLabel === 'Limited confidence') return 'Limited';
+  return candidate.viabilityConfidenceLabel ?? candidate.confidence;
+}
+
 // ── Difficulty Colors ────────────────────────────────────────
 
 function getDifficultyColor(difficulty: string): string {
@@ -96,6 +119,356 @@ function getDifficultyColor(difficulty: string): string {
   }
 }
 
+type CampOpsCardRole = 'recommended' | 'backup' | 'emergency';
+
+type CampOpsCardSpec = {
+  role: CampOpsCardRole;
+  title: string;
+  emptyName: string;
+  status: string;
+  icon: string;
+  color: string;
+  camp: CampOpsCandidate | null;
+};
+
+type CampOpsDetailRow = {
+  label: string;
+  value: string;
+};
+
+function formatCampOpsUnknown(value: string | number | null | undefined): string {
+  if (value == null || value === '') return 'Unknown';
+  return String(value);
+}
+
+function formatCampOpsScore(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return 'Unknown';
+  return `${Math.round(Number(value))}`;
+}
+
+function formatCampOpsDateTime(iso: string | null | undefined): string {
+  if (!iso) return 'Unknown';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatCampOpsMinutes(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(Number(minutes))) return 'Unknown';
+  const rounded = Math.round(Number(minutes));
+  const abs = Math.abs(rounded);
+  const hours = Math.floor(abs / 60);
+  const remainder = abs % 60;
+  const formatted = hours > 0 ? `${hours}h ${remainder}m` : `${remainder}m`;
+  return rounded < 0 ? `${formatted} after sunset` : formatted;
+}
+
+function formatCampOpsMiles(miles: number | null | undefined): string {
+  if (miles == null || !Number.isFinite(Number(miles))) return 'Unknown';
+  return `${Math.round(Number(miles) * 10) / 10} mi`;
+}
+
+function formatCampOpsLabel(value: string | null | undefined): string {
+  if (!value) return 'Unknown';
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function formatCampOpsDebtStatus(value: string | null | undefined): string {
+  if (value === 'safe') return 'Adequate';
+  return formatCampOpsLabel(value);
+}
+
+function formatCampOpsImpact(impact: CampOpsImpact | null | undefined): string {
+  if (!impact || impact.value == null || !Number.isFinite(Number(impact.value))) {
+    return 'Unknown';
+  }
+
+  const value = Math.round(Number(impact.value) * 10) / 10;
+  const unitLabel =
+    impact.unit === 'percent' ? '%' :
+    impact.unit === 'miles' ? ' mi' :
+    impact.unit === 'gallons' ? ' gal' :
+    impact.unit === 'minutes' ? ' min' :
+    impact.unit === 'score' ? ' score' :
+    '';
+  const impactLabel = impact.impact === 'unknown' ? '' : ` (${formatCampOpsLabel(impact.impact)})`;
+  return `${value}${unitLabel}${impactLabel}`;
+}
+
+function formatCampOpsConfidence(value: string | null | undefined): string {
+  if (!value || value === 'unknown') return 'Unknown confidence';
+  return `${formatCampOpsLabel(value)} confidence`;
+}
+
+function formatCampOpsFireStatus(enrichment: CampCandidateEnrichment | null | undefined): string {
+  if (!enrichment) return 'Unknown';
+  if (enrichment.campfireAllowed === 'no') return 'Campfire prohibited';
+  if (enrichment.campfireAllowed === 'restricted') return 'Campfire restricted';
+  if (enrichment.fireRestrictionStatus && enrichment.fireRestrictionStatus !== 'unknown') {
+    return formatCampOpsLabel(enrichment.fireRestrictionStatus);
+  }
+  return 'Unknown';
+}
+
+function formatCampOpsWeatherStatus(enrichment: CampCandidateEnrichment | null | undefined): string {
+  if (!enrichment) return 'Unknown';
+  if (enrichment.weatherExposureLevel && enrichment.weatherExposureLevel !== 'unknown') {
+    return `${formatCampOpsLabel(enrichment.weatherExposureLevel)} exposure`;
+  }
+  if (enrichment.weatherExposure && enrichment.weatherExposure !== 'unknown') {
+    return formatCampOpsLabel(enrichment.weatherExposure);
+  }
+  return 'Unknown';
+}
+
+function summarizeCampOpsFreshness(
+  signals: NonNullable<CampCandidateEnrichment['sourceSignals']>,
+): string {
+  if (signals.length === 0) return 'Unknown';
+  if (signals.some(signal => signal.freshnessStatus === 'expired')) return 'Source data is expired';
+  if (signals.some(signal => signal.freshnessStatus === 'stale' || signal.isStale)) return 'Source data is stale';
+  if (signals.some(signal => signal.freshnessStatus === 'unknown')) return 'Unknown';
+  return 'Fresh';
+}
+
+function getCampOpsWeatherFreshness(enrichment: CampCandidateEnrichment | null | undefined): string {
+  const weatherSignals = (enrichment?.sourceSignals ?? []).filter(signal =>
+    signal.fields.some(field =>
+      [
+        'weatherExposure',
+        'weatherExposureLevel',
+        'forecastTimeWindow',
+        'windSpeedMph',
+        'windGustMph',
+        'precipitationRisk',
+        'stormRisk',
+        'heatRisk',
+        'coldRisk',
+        'smokeOrAirQualityRisk',
+      ].includes(field),
+    ),
+  );
+  return summarizeCampOpsFreshness(weatherSignals);
+}
+
+function formatCampOpsService(service: CampCandidateEnrichment['nearestFuel'] | null | undefined): string {
+  if (!service) return 'Unknown';
+  const distance = service.routeAwareDistanceMiles ?? service.distanceFromRouteMiles ?? service.distanceFromCampMiles;
+  const distanceLabel = distance == null ? null : formatCampOpsMiles(distance);
+  const status = service.status && service.status !== 'unknown' ? formatCampOpsLabel(service.status) : 'Unknown status';
+  return `${service.name}${distanceLabel ? `, ${distanceLabel}` : ''} (${status})`;
+}
+
+function getCampOpsServiceSummary(enrichment: CampCandidateEnrichment | null | undefined): string {
+  if (!enrichment) return 'Unknown';
+  const summaries = [
+    enrichment.nearestFuel ? `Fuel: ${formatCampOpsService(enrichment.nearestFuel)}` : null,
+    enrichment.nearestWater ? `Water: ${formatCampOpsService(enrichment.nearestWater)}` : null,
+    enrichment.nearestTownOrExit ? `Exit: ${formatCampOpsService(enrichment.nearestTownOrExit)}` : null,
+  ].filter((summary): summary is string => Boolean(summary));
+  return summaries[0] ?? 'Unknown';
+}
+
+function getCampOpsCards(recommendationSet: CampRecommendationSet): CampOpsCardSpec[] {
+  return [
+    {
+      role: 'recommended',
+      title: 'Recommended Camp',
+      emptyName: 'No recommended camp',
+      status: recommendationSet.recommendedCamp ? 'Recommended' : 'Not recommended',
+      icon: 'checkmark-circle-outline',
+      color: '#8BC34A',
+      camp: recommendationSet.recommendedCamp,
+    },
+    {
+      role: 'backup',
+      title: 'Backup Camp',
+      emptyName: 'No backup camp',
+      status: recommendationSet.backupCamp ? 'Backup' : 'Unknown confidence',
+      icon: 'git-branch-outline',
+      color: '#FFB74D',
+      camp: recommendationSet.backupCamp,
+    },
+    {
+      role: 'emergency',
+      title: 'Emergency Camp',
+      emptyName: 'No emergency endpoint',
+      status: recommendationSet.emergencyCamp ? 'Fallback only' : 'Unknown confidence',
+      icon: 'warning-outline',
+      color: '#EF5350',
+      camp: recommendationSet.emergencyCamp,
+    },
+  ];
+}
+
+function getCampOpsRoleLabel(role: CampOpsCardRole): string {
+  switch (role) {
+    case 'recommended': return 'Recommended';
+    case 'backup': return 'Backup';
+    case 'emergency': return 'Emergency stop';
+    default: return 'Unknown confidence';
+  }
+}
+
+function getCampOpsExplanation(role: CampOpsCardRole, recommendationSet: CampRecommendationSet): string | null | undefined {
+  switch (role) {
+    case 'recommended': return recommendationSet.explanations?.whyRecommended;
+    case 'backup': return recommendationSet.explanations?.whyBackup;
+    case 'emergency': return recommendationSet.explanations?.whyEmergency;
+    default: return null;
+  }
+}
+
+function getCampOpsReasons(
+  role: CampOpsCardRole,
+  camp: CampOpsCandidate | null,
+  scores: CampSuitabilityScores | null | undefined,
+  recommendationSet: CampRecommendationSet,
+): string[] {
+  const explanation = getCampOpsExplanation(role, recommendationSet);
+  const reasons = [
+    explanation || null,
+    scores?.overall != null ? `Overall suitability ${formatCampOpsScore(scores.overall)}` : null,
+    scores?.legal != null ? `Legal score ${formatCampOpsScore(scores.legal)}` : null,
+    scores?.resources != null ? `Resource score ${formatCampOpsScore(scores.resources)}` : null,
+    camp?.sourceConfidence ? `Source ${formatCampOpsConfidence(camp.sourceConfidence)}` : null,
+  ].filter((reason): reason is string => Boolean(reason));
+
+  return reasons.length > 0 ? reasons.slice(0, 3) : ['CampOps is waiting on more camp data.'];
+}
+
+function getCampOpsWarnings(
+  enrichment: CampCandidateEnrichment | null | undefined,
+  recommendationSet: CampRecommendationSet,
+): string[] {
+  const warnings = [
+    ...recommendationSet.warnings,
+    ...(enrichment?.dataLimitations ?? []),
+    ...recommendationSet.confidenceSummary.missingDataFields.map(field => `Missing ${field}`),
+    ...(enrichment?.sourceSignals ?? [])
+      .filter(signal => signal.freshnessStatus === 'stale' || signal.freshnessStatus === 'expired' || signal.isStale)
+      .map(signal => signal.freshnessStatus === 'expired' ? 'Source data is expired' : 'Source data is stale'),
+    ...(enrichment?.sourceResolutions ?? [])
+      .filter(resolution => resolution.conflictDetected)
+      .map(resolution => resolution.conflictSummary || `Source conflict for ${formatCampOpsLabel(resolution.field)}`),
+  ];
+  const uniqueWarnings = Array.from(new Set(warnings.filter(Boolean)));
+  return uniqueWarnings.slice(0, 3);
+}
+
+function getCampOpsSourceTransparency(
+  camp: CampOpsCandidate | null,
+  enrichment: CampCandidateEnrichment | null | undefined,
+  recommendationSet: CampRecommendationSet,
+): CampOpsDetailRow[] {
+  const missingCritical = recommendationSet.confidenceSummary.missingDataFields.length > 0
+    ? recommendationSet.confidenceSummary.missingDataFields.slice(0, 2).map(formatCampOpsLabel).join(', ')
+    : 'None listed';
+
+  return [
+    { label: 'Legal confidence', value: formatCampOpsConfidence(enrichment?.legalConfidence ?? camp?.legalConfidence) },
+    { label: 'Closure status', value: enrichment?.closureStatus ? formatCampOpsLabel(enrichment.closureStatus) : 'Closure status unknown' },
+    { label: 'Fire restrictions', value: formatCampOpsFireStatus(enrichment) === 'Unknown' ? 'Fire restrictions unknown' : formatCampOpsFireStatus(enrichment) },
+    { label: 'Weather freshness', value: getCampOpsWeatherFreshness(enrichment) },
+    { label: 'Service/resupply', value: getCampOpsServiceSummary(enrichment) },
+    { label: 'Missing critical data', value: missingCritical },
+  ];
+}
+
+function getCampOpsSourceDetails(enrichment: CampCandidateEnrichment | null | undefined): string[] {
+  const resolutions = enrichment?.sourceResolutions ?? [];
+  const conflicts = resolutions
+    .filter(resolution => resolution.conflictDetected)
+    .map(resolution => `Source conflict: ${resolution.conflictSummary || formatCampOpsLabel(resolution.field)}`);
+  const staleSources = resolutions.flatMap(resolution =>
+    resolution.staleSources.map(source => `Stale source: ${source}`),
+  );
+  const missingSources = resolutions.flatMap(resolution =>
+    resolution.missingSources.map(source => `Missing source: ${source}`),
+  );
+  const summaries = resolutions.flatMap(resolution =>
+    resolution.sourceSummaries.map(summary => `Source detail: ${summary}`),
+  );
+  const signalLimitations = (enrichment?.sourceSignals ?? [])
+    .filter(signal => signal.limitation)
+    .map(signal => `Source detail: ${signal.limitation}`);
+
+  return Array.from(new Set([
+    ...conflicts,
+    ...staleSources,
+    ...missingSources,
+    ...summaries,
+    ...signalLimitations,
+  ].filter(Boolean))).slice(0, 6);
+}
+
+function getCampOpsResourceDebtDetails(enrichment: CampCandidateEnrichment | null | undefined): string[] {
+  const debt = enrichment?.resourceDebt;
+  if (!debt) return [];
+  const details: string[] = [];
+  const debtItems = [
+    ['Fuel debt', debt.fuel],
+    ['Water debt', debt.water],
+    ['Daylight debt', debt.daylight],
+    ['Camp uncertainty debt', debt.campUncertainty],
+  ] as const;
+
+  for (const [label, item] of debtItems) {
+    details.push(`${label}: ${formatCampOpsDebtStatus(item.status)} - ${item.reason}`);
+  }
+
+  return details.slice(0, 4);
+}
+
+function getCampOpsGateDetails(
+  camp: CampOpsCandidate | null,
+  recommendationSet: CampRecommendationSet,
+): string[] {
+  if (!camp) return [];
+  const rejected = recommendationSet.rejectedCandidates.find(candidate => candidate.candidate.id === camp.id);
+  if (!rejected) return [];
+  const gateReasons = rejected.gates.map(gate => `${formatCampOpsLabel(gate.severity)} gate: ${gate.reason}`);
+  return Array.from(new Set([...rejected.reasons, ...gateReasons])).slice(0, 3);
+}
+
+function getCampOpsDecisionPointDetails(recommendationSet: CampRecommendationSet): string[] {
+  const decisionPoint = recommendationSet.decisionPoint;
+  if (!decisionPoint) return [];
+  const turnoff = decisionPoint.latestRecommendedTurnoff;
+  const turnoffLabel = turnoff?.label
+    ? `${turnoff.label}${turnoff.distanceMiles != null ? `, ${formatCampOpsMiles(turnoff.distanceMiles)}` : ''}`
+    : null;
+  return [
+    `Decision point: ${formatCampOpsLabel(decisionPoint.kind)}${decisionPoint.decisionDeadlineIso ? ` by ${formatCampOpsDateTime(decisionPoint.decisionDeadlineIso)}` : ''}`,
+    `Recommended action: ${decisionPoint.recommendedAction}`,
+    `Continue risk: ${decisionPoint.riskIfContinues}`,
+    turnoffLabel ? `Latest turnoff: ${turnoffLabel}` : null,
+  ].filter((detail): detail is string => Boolean(detail));
+}
+
+function getCampOpsCardFields(
+  camp: CampOpsCandidate | null,
+  enrichment: CampCandidateEnrichment | null | undefined,
+  scores: CampSuitabilityScores | null | undefined,
+): { label: string; value: string }[] {
+  return [
+    { label: 'Score', value: formatCampOpsScore(scores?.overall) },
+    { label: 'Legal', value: formatCampOpsConfidence(enrichment?.legalConfidence ?? camp?.legalConfidence) },
+    { label: 'ETA', value: formatCampOpsDateTime(enrichment?.etaIso) },
+    { label: 'Sunset', value: formatCampOpsMinutes(enrichment?.sunsetMarginMinutes) },
+    { label: 'Fuel', value: formatCampOpsImpact(enrichment?.fuelImpact) },
+    { label: 'Water', value: formatCampOpsImpact(enrichment?.waterImpact) },
+    { label: 'Fire', value: formatCampOpsFireStatus(enrichment) },
+    { label: 'Weather', value: formatCampOpsWeatherStatus(enrichment) },
+    { label: 'Late risk', value: formatCampOpsLabel(enrichment?.lateArrivalRisk) },
+    { label: 'Trailer', value: formatCampOpsLabel(enrichment?.trailerSuitability) },
+    { label: 'Group fit', value: formatCampOpsScore(scores?.groupFit) },
+    { label: 'Data', value: formatCampOpsConfidence(enrichment?.dataConfidence) },
+  ];
+}
+
 // ── Component ────────────────────────────────────────────────
 
 export default function CampsiteCandidatePanel({
@@ -103,6 +476,8 @@ export default function CampsiteCandidatePanel({
   visible,
   onClose,
   loading,
+  onNavigateToCamp,
+  onShareCamp,
 }: CampsiteCandidatePanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
@@ -183,6 +558,9 @@ export default function CampsiteCandidatePanel({
 
   const hasSuggested = suggestedCampsites.length > 0;
   const bestLevel = hasSuggested ? suggestedCampsites[0].suitabilityLevel : null;
+  const campOpsRecommendationSet = result.campOps?.enabled ? result.campOps.recommendationSet : null;
+  const campOpsLegacyNotice = getCampOpsLegacyListNotice(result, campOpsRecommendationSet);
+  const campOpsRecommendationsVisible = Boolean(campOpsRecommendationSet);
 
 
   // ── Collapsed Badge ────────────────────────────────────────
@@ -239,7 +617,9 @@ export default function CampsiteCandidatePanel({
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Ionicons name="bonfire-outline" size={14} color="#8BC34A" />
-          <Text style={styles.headerTitle}>SUGGESTED CAMPSITES</Text>
+          <Text style={styles.headerTitle}>
+            {campOpsRecommendationsVisible ? 'CAMPSITE RESULTS' : 'SUGGESTED CAMPSITES'}
+          </Text>
 
         </View>
         <View style={styles.headerRight}>
@@ -298,7 +678,9 @@ export default function CampsiteCandidatePanel({
           <Text style={[styles.statValue, bestLevel ? { color: getSuitabilityColor(bestLevel) } : {}]}>
             {bestLevel || '—'}
           </Text>
-          <Text style={styles.statLabel}>BEST</Text>
+          <Text style={styles.statLabel}>
+            {campOpsRecommendationsVisible ? 'TOP RESULT' : 'BEST'}
+          </Text>
         </View>
         <View style={styles.statChip}>
           <Text style={[styles.statValue, bestConfidence ? { color: getConfidenceColor(bestConfidence) } : {}]}>
@@ -315,16 +697,40 @@ export default function CampsiteCandidatePanel({
         nestedScrollEnabled
         showsVerticalScrollIndicator={false}
       >
+        {campOpsRecommendationSet && (
+          <CampOpsRecommendationCards
+            recommendationSet={campOpsRecommendationSet}
+            onNavigateToCamp={onNavigateToCamp}
+            onShareCamp={onShareCamp}
+          />
+        )}
+
         {candidateCount === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="alert-circle-outline" size={16} color={TACTICAL.textMuted} />
             <Text style={styles.emptyText}>No campsite candidates detected for this route.</Text>
             <Text style={styles.emptySubText}>
-              Route may be too short, too steep, or lack suitable flat segments.
+              {result?.emptyStateMessage ??
+                'Route may be too short, too steep, or lack suitable flat segments.'}
             </Text>
           </View>
         ) : (
           <>
+            {campOpsRecommendationSet && (
+              <View style={styles.legacyCoexistencePanel}>
+                <View style={styles.legacyCoexistenceHeader}>
+                  <Text style={styles.legacyCoexistenceTitle}>{CAMP_OPS_LEGACY_SEARCH_RESULTS_LABEL}</Text>
+                  <Text style={styles.legacyCoexistencePill}>{CAMP_OPS_ENDPOINT_RECOMMENDATION_LABEL}</Text>
+                </View>
+                <Text style={styles.legacyCoexistenceText}>
+                  CampOps cards are operational recommendations. Legacy entries remain available camps/results and do not override the endpoint recommendation.
+                </Text>
+                {campOpsLegacyNotice && (
+                  <Text style={styles.legacyCoexistenceWarning}>{campOpsLegacyNotice}</Text>
+                )}
+              </View>
+            )}
+
             {/* Suggested Campsites (Top 3) */}
             {suggestedCampsites.map((candidate, idx) => (
               <SuggestedCampsiteCard
@@ -332,6 +738,7 @@ export default function CampsiteCandidatePanel({
                 candidate={candidate}
                 rank={idx + 1}
                 isTop={idx === 0}
+                campOpsStatus={getCampOpsLegacyCandidateStatus(candidate, result, campOpsRecommendationSet)}
               />
             ))}
 
@@ -361,6 +768,7 @@ export default function CampsiteCandidatePanel({
                 key={`additional-${candidate.segmentIndex}`}
                 candidate={candidate}
                 rank={suggestedCampsites.length + idx + 1}
+                campOpsStatus={getCampOpsLegacyCandidateStatus(candidate, result, campOpsRecommendationSet)}
               />
             ))}
           </>
@@ -379,16 +787,204 @@ export default function CampsiteCandidatePanel({
   );
 }
 
+function CampOpsRecommendationCards({
+  recommendationSet,
+  onNavigateToCamp,
+  onShareCamp,
+}: {
+  recommendationSet: CampRecommendationSet;
+  onNavigateToCamp?: (camp: CampOpsCandidate) => void;
+  onShareCamp?: (camp: CampOpsCandidate) => void;
+}) {
+  const [expandedRole, setExpandedRole] = useState<CampOpsCardRole | null>('recommended');
+  const cards = getCampOpsCards(recommendationSet);
+
+  return (
+    <View style={styles.campOpsSection}>
+      <View style={styles.campOpsSectionHeader}>
+        <View style={styles.campOpsSectionTitleRow}>
+          <Ionicons name="trail-sign-outline" size={11} color="#8BC34A" />
+          <Text style={styles.campOpsSectionTitle}>CAMPOPS RECOMMENDATIONS</Text>
+        </View>
+        <View style={styles.campOpsConfidencePill}>
+          <Text style={styles.campOpsConfidenceText}>
+            {formatCampOpsConfidence(recommendationSet.confidenceSummary.level)}
+          </Text>
+        </View>
+      </View>
+
+      {cards.map(card => {
+        const enrichment = card.camp
+          ? recommendationSet.enrichmentsByCandidateId?.[card.camp.id]
+          : null;
+        const scores = card.camp
+          ? recommendationSet.scoresByCandidateId?.[card.camp.id]
+          : null;
+        const fields = getCampOpsCardFields(card.camp, enrichment, scores);
+        const reasons = getCampOpsReasons(card.role, card.camp, scores, recommendationSet);
+        const warnings = getCampOpsWarnings(enrichment, recommendationSet);
+        const sourceTransparency = getCampOpsSourceTransparency(card.camp, enrichment, recommendationSet);
+        const sourceDetails = getCampOpsSourceDetails(enrichment);
+        const resourceDebtDetails = getCampOpsResourceDebtDetails(enrichment);
+        const gateDetails = getCampOpsGateDetails(card.camp, recommendationSet);
+        const decisionPointDetails = getCampOpsDecisionPointDetails(recommendationSet);
+        const detailRows = [
+          ...decisionPointDetails,
+          ...reasons.map(reason => `Positive factor: ${reason}`),
+          ...gateDetails.map(detail => `Gate/caution reason: ${detail}`),
+          ...resourceDebtDetails.map(detail => `Resource debt: ${detail}`),
+          ...sourceTransparency.map(row => `${row.label}: ${row.value}`),
+          ...sourceDetails,
+          ...(recommendationSet.explanations?.plannedCampDowngrade
+            ? [`Downgrade reason: ${recommendationSet.explanations.plannedCampDowngrade}`]
+            : []),
+          ...recommendationSet.assumptions.slice(0, 3).map(assumption => `Assumption: ${assumption}`),
+        ];
+        const expanded = expandedRole === card.role;
+        const hasExpandableDetails = detailRows.length > 0;
+
+        return (
+          <View
+            key={`campops-${card.role}`}
+            style={[styles.campOpsCard, { borderColor: card.color + '38' }]}
+          >
+            <View style={styles.campOpsCardHeader}>
+              <View style={styles.campOpsTitleGroup}>
+                <View style={[styles.campOpsRoleIcon, { borderColor: card.color + '50', backgroundColor: card.color + '12' }]}>
+                  <Ionicons name={card.icon as any} size={12} color={card.color} />
+                </View>
+                <View style={styles.campOpsTitleTextGroup}>
+                  <Text style={styles.campOpsRoleLabel}>{card.title}</Text>
+                  <Text style={styles.campOpsCampName} numberOfLines={1}>
+                    {card.camp ? formatCampOpsUnknown(card.camp.name) : card.emptyName}
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.campOpsStatusBadge, { borderColor: card.color + '45' }]}>
+                <Text style={[styles.campOpsStatusText, { color: card.color }]}>
+                  {card.status}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.campOpsMetaRow}>
+              <Text style={styles.campOpsMetaText}>
+                Role: {getCampOpsRoleLabel(card.role)}
+              </Text>
+              <Text style={styles.campOpsMetaText}>
+                Source: {formatCampOpsConfidence(card.camp?.sourceConfidence)}
+              </Text>
+            </View>
+
+            <View style={styles.campOpsFieldGrid}>
+              {fields.map(field => (
+                <View key={`${card.role}-${field.label}`} style={styles.campOpsField}>
+                  <Text style={styles.campOpsFieldLabel}>{field.label}</Text>
+                  <Text style={styles.campOpsFieldValue} numberOfLines={1}>
+                    {field.value}
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.campOpsTransparencyStrip}>
+              {sourceTransparency.slice(0, 3).map(row => (
+                <View key={`${card.role}-source-${row.label}`} style={styles.campOpsTransparencyChip}>
+                  <Text style={styles.campOpsTransparencyLabel}>{row.label}</Text>
+                  <Text style={styles.campOpsTransparencyValue} numberOfLines={1}>{row.value}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.campOpsReasons}>
+              {reasons.map((reason, idx) => (
+                <View key={`${card.role}-reason-${idx}`} style={styles.campOpsReasonRow}>
+                  <Ionicons name="checkmark-circle-outline" size={9} color="#8BC34A" />
+                  <Text style={styles.campOpsReasonText} numberOfLines={2}>{reason}</Text>
+                </View>
+              ))}
+            </View>
+
+            {warnings.length > 0 && (
+              <View style={styles.campOpsWarnings}>
+                {warnings.map((warning, idx) => (
+                  <View key={`${card.role}-warning-${idx}`} style={styles.campOpsWarningRow}>
+                    <Ionicons name="alert-circle-outline" size={9} color="#FFB74D" />
+                    <Text style={styles.campOpsWarningText} numberOfLines={2}>{warning}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {hasExpandableDetails && (
+              <View>
+                <TouchableOpacity
+                  style={styles.campOpsWhyButton}
+                  onPress={() => setExpandedRole(expanded ? null : card.role)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+                    size={10}
+                    color={TACTICAL.textMuted}
+                  />
+                  <Text style={styles.campOpsWhyText}>Why this recommendation?</Text>
+                </TouchableOpacity>
+                {expanded && (
+                  <View style={styles.campOpsWhyPanel}>
+                    {detailRows.map((detail, idx) => (
+                      <Text key={`${card.role}-detail-${idx}`} style={styles.campOpsWhyDetail}>
+                        {detail}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            {card.camp && (onNavigateToCamp || onShareCamp) && (
+              <View style={styles.campOpsActions}>
+                {onNavigateToCamp && (
+                  <TouchableOpacity
+                    style={styles.campOpsActionButton}
+                    onPress={() => onNavigateToCamp(card.camp!)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="navigate-outline" size={10} color="#8BC34A" />
+                    <Text style={styles.campOpsActionText}>Route</Text>
+                  </TouchableOpacity>
+                )}
+                {onShareCamp && (
+                  <TouchableOpacity
+                    style={styles.campOpsActionButton}
+                    onPress={() => onShareCamp(card.camp!)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="share-outline" size={10} color="#8BC34A" />
+                    <Text style={styles.campOpsActionText}>Share</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 // ── Suggested Campsite Card (Phase 2+3 — Top 3) ─────────────
 
 function SuggestedCampsiteCard({
   candidate,
   rank,
   isTop,
+  campOpsStatus,
 }: {
   candidate: CampsiteCandidate;
   rank: number;
   isTop: boolean;
+  campOpsStatus?: CampOpsLegacyCandidateStatus | null;
 }) {
   const suitColor = getSuitabilityColor(candidate.suitabilityLevel);
   const suitIcon = getSuitabilityIcon(candidate.suitabilityLevel);
@@ -396,6 +992,7 @@ function SuggestedCampsiteCard({
   const confIcon = getConfidenceIcon(candidate.confidence);
   const difficultyColor = getDifficultyColor(candidate.difficulty);
   const arrivalStr = campsiteCandidateEngine.formatArrivalTime(candidate.estimatedArrivalHour);
+  const confidenceLabel = getCandidateConfidenceLabel(candidate);
 
   return (
     <View style={[styles.suggestedCard, isTop && styles.suggestedCardTop]}>
@@ -412,14 +1009,19 @@ function SuggestedCampsiteCard({
         </View>
 
         {/* Suitability + Confidence badges */}
-        <View style={styles.badgeStack}>
-          <View style={[styles.suitabilityBadge, { borderColor: suitColor + '50', backgroundColor: suitColor + '10' }]}>
-            <Ionicons name={suitIcon as any} size={10} color={suitColor} />
-            <Text style={[styles.suitabilityLabel, { color: suitColor }]}>{candidate.suitabilityLevel}</Text>
+          <View style={styles.badgeStack}>
+          {campOpsStatus && campOpsStatus.kind !== 'available_result' && (
+            <View style={styles.legacyCampOpsStatusBadge}>
+              <Text style={styles.legacyCampOpsStatusText}>{campOpsStatus.label}</Text>
+            </View>
+          )}
+            <View style={[styles.suitabilityBadge, { borderColor: suitColor + '50', backgroundColor: suitColor + '10' }]}>
+              <Ionicons name={suitIcon as any} size={10} color={suitColor} />
+              <Text style={[styles.suitabilityLabel, { color: suitColor }]}>{candidate.suitabilityLevel}</Text>
           </View>
           <View style={[styles.confidenceBadge, { borderColor: confColor + '40', backgroundColor: confColor + '08' }]}>
             <Ionicons name={confIcon as any} size={8} color={confColor} />
-            <Text style={[styles.confidenceLabel, { color: confColor }]}>{candidate.confidence}</Text>
+            <Text style={[styles.confidenceLabel, { color: confColor }]}>{confidenceLabel}</Text>
           </View>
         </View>
       </View>
@@ -460,6 +1062,13 @@ function SuggestedCampsiteCard({
         </View>
       )}
 
+      {campOpsStatus && campOpsStatus.kind !== 'available_result' && (
+        <View style={styles.legacyCampOpsStatusRow}>
+          <Ionicons name="git-compare-outline" size={9} color="#FFB74D" />
+          <Text style={styles.legacyCampOpsStatusDetail}>{campOpsStatus.detail}</Text>
+        </View>
+      )}
+
       {/* Candidate reasons */}
       <View style={styles.reasonsContainer}>
         {candidate.candidateReason.slice(0, 3).map((reason, rIdx) => (
@@ -490,13 +1099,16 @@ function SuggestedCampsiteCard({
 function AdditionalCandidateCard({
   candidate,
   rank,
+  campOpsStatus,
 }: {
   candidate: CampsiteCandidate;
   rank: number;
+  campOpsStatus?: CampOpsLegacyCandidateStatus | null;
 }) {
   const suitColor = getSuitabilityColor(candidate.suitabilityLevel);
   const confColor = getConfidenceColor(candidate.confidence);
   const arrivalStr = campsiteCandidateEngine.formatArrivalTime(candidate.estimatedArrivalHour);
+  const confidenceLabel = getCandidateConfidenceLabel(candidate);
 
   return (
     <View style={styles.additionalCard}>
@@ -512,10 +1124,15 @@ function AdditionalCandidateCard({
           {candidate.suitabilityLevel}
         </Text>
         {/* Phase 3: Confidence in compact view */}
-        <View style={[styles.additionalConfBadge, { borderColor: confColor + '30' }]}>
-          <Text style={[styles.additionalConfText, { color: confColor }]}>{candidate.confidence}</Text>
+          <View style={[styles.additionalConfBadge, { borderColor: confColor + '30' }]}>
+            <Text style={[styles.additionalConfText, { color: confColor }]}>{confidenceLabel}</Text>
+          </View>
+          {campOpsStatus && campOpsStatus.kind !== 'available_result' && (
+            <View style={styles.additionalCampOpsStatusBadge}>
+              <Text style={styles.additionalCampOpsStatusText}>{campOpsStatus.label}</Text>
+            </View>
+          )}
         </View>
-      </View>
       <View style={styles.additionalMeta}>
         <Text style={styles.additionalMetaText}>
           ~{arrivalStr} from start
@@ -767,6 +1384,301 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     gap: 6,
   },
+  legacyCoexistencePanel: {
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(255,183,77,0.18)',
+    backgroundColor: 'rgba(255,183,77,0.05)',
+  },
+  legacyCoexistenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  legacyCoexistenceTitle: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    color: '#FFB74D',
+    textTransform: 'uppercase',
+  },
+  legacyCoexistencePill: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: '#8BC34A',
+    textTransform: 'uppercase',
+  },
+  legacyCoexistenceText: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: 'rgba(230,230,225,0.72)',
+  },
+  legacyCoexistenceWarning: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: '#FFB74D',
+  },
+
+  // CampOps recommendation cards
+  campOpsSection: {
+    gap: 6,
+    marginBottom: 2,
+  },
+  campOpsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+  },
+  campOpsSectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  campOpsSectionTitle: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.4,
+    color: '#8BC34A',
+  },
+  campOpsConfidencePill: {
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(139,195,74,0.25)',
+    backgroundColor: 'rgba(139,195,74,0.07)',
+  },
+  campOpsConfidenceText: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '700',
+    color: '#8BC34A',
+  },
+  campOpsCard: {
+    backgroundColor: 'rgba(20,25,30,0.78)',
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 8,
+    gap: 6,
+  },
+  campOpsCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  campOpsTitleGroup: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    minWidth: 0,
+  },
+  campOpsRoleIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  campOpsTitleTextGroup: {
+    flex: 1,
+    gap: 1,
+    minWidth: 0,
+  },
+  campOpsRoleLabel: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    color: TACTICAL.textMuted,
+  },
+  campOpsCampName: {
+    fontFamily: 'Courier',
+    fontSize: 12,
+    fontWeight: '800',
+    color: TACTICAL.text,
+  },
+  campOpsStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 5,
+    borderWidth: 1,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  campOpsStatusText: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  campOpsMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  campOpsMetaText: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: TACTICAL.textMuted,
+  },
+  campOpsFieldGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  campOpsField: {
+    width: '31.5%',
+    minHeight: 36,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(30,35,43,0.85)',
+    backgroundColor: 'rgba(30,35,43,0.38)',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+    justifyContent: 'center',
+  },
+  campOpsFieldLabel: {
+    fontFamily: 'monospace',
+    fontSize: 6,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: TACTICAL.textMuted,
+    textTransform: 'uppercase',
+  },
+  campOpsFieldValue: {
+    fontFamily: 'Courier',
+    fontSize: 9,
+    fontWeight: '700',
+    color: TACTICAL.text,
+    marginTop: 2,
+  },
+  campOpsTransparencyStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  campOpsTransparencyChip: {
+    width: '31.5%',
+    minHeight: 34,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(138,138,133,0.2)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+    justifyContent: 'center',
+  },
+  campOpsTransparencyLabel: {
+    fontFamily: 'monospace',
+    fontSize: 6,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    color: TACTICAL.textMuted,
+    textTransform: 'uppercase',
+  },
+  campOpsTransparencyValue: {
+    fontFamily: 'Courier',
+    fontSize: 8,
+    fontWeight: '700',
+    color: 'rgba(230,230,225,0.78)',
+    marginTop: 2,
+  },
+  campOpsReasons: {
+    gap: 3,
+  },
+  campOpsReasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  campOpsReasonText: {
+    flex: 1,
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: 'rgba(230,230,225,0.74)',
+  },
+  campOpsWarnings: {
+    gap: 3,
+    paddingTop: 2,
+  },
+  campOpsWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  campOpsWarningText: {
+    flex: 1,
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: '#FFB74D',
+  },
+  campOpsWhyButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(138,138,133,0.22)',
+    backgroundColor: 'rgba(30,35,43,0.28)',
+  },
+  campOpsWhyText: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '800',
+    letterSpacing: 1,
+    color: TACTICAL.textMuted,
+  },
+  campOpsWhyPanel: {
+    gap: 3,
+    marginTop: 5,
+    paddingLeft: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: 'rgba(139,195,74,0.24)',
+  },
+  campOpsWhyDetail: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: 'rgba(230,230,225,0.7)',
+  },
+  campOpsActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  campOpsActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(139,195,74,0.3)',
+    backgroundColor: 'rgba(139,195,74,0.08)',
+  },
+  campOpsActionText: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: '#8BC34A',
+  },
 
   // ── Empty State ──
   emptyState: {
@@ -885,6 +1797,34 @@ const styles = StyleSheet.create({
     fontSize: 7,
     fontWeight: '700',
     letterSpacing: 0.8,
+  },
+  legacyCampOpsStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,183,77,0.35)',
+    backgroundColor: 'rgba(255,183,77,0.08)',
+  },
+  legacyCampOpsStatusText: {
+    fontFamily: 'monospace',
+    fontSize: 7,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    color: '#FFB74D',
+    textTransform: 'uppercase',
+  },
+  legacyCampOpsStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 2,
+  },
+  legacyCampOpsStatusDetail: {
+    flex: 1,
+    fontFamily: 'monospace',
+    fontSize: 8,
+    color: '#FFB74D',
   },
 
   // ── Metrics Row ──
@@ -1065,6 +2005,21 @@ const styles = StyleSheet.create({
     fontSize: 6,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  additionalCampOpsStatusBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,183,77,0.28)',
+    backgroundColor: 'rgba(255,183,77,0.07)',
+    marginLeft: 3,
+  },
+  additionalCampOpsStatusText: {
+    fontFamily: 'monospace',
+    fontSize: 6,
+    fontWeight: '800',
+    color: '#FFB74D',
   },
   additionalMeta: {
     flexDirection: 'row',

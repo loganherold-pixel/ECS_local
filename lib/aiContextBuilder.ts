@@ -45,6 +45,7 @@ import { telemetryConfigStore, computeTelemetryReadout } from './telemetryStore'
 import { bluPowerAuthority, type BluAuthoritySnapshot } from './BluPowerAuthority';
 import { normalizeBluProviderState } from './blu/providerNormalizationEngine';
 import type { ECSNormalizedProviderResult } from './blu/providerNormalizationTypes';
+import { ecsPowerIntelligence, type EcsPowerIntelligenceSnapshot } from './powerIntelligence';
 
 import type {
   ResourceForecast,
@@ -63,7 +64,10 @@ import { connectivity } from './connectivity';
 import type { ConnectivityDetailedState } from './connectivity';
 
 import type { WeatherResponse, WaypointWeather } from './weatherTypes';
-import { fetchWeather, getWeatherStaleness, getWeatherAge } from './weatherStore';
+import { getWeatherAge } from './weatherStore';
+import { getSharedOperationalWeatherState } from './useOperationalWeather';
+import { getWeatherFreshness } from './weatherFreshness';
+import { hasUsableWeatherPayload } from './weatherSurfaceSelectors';
 import type { CampIntelStructuredSummary } from './campIntel/campIntelTypes';
 import type { CampDecisionState } from './campIntel/campDecisionTypes';
 import { connectivityIntelStore } from './connectivityIntelStore';
@@ -76,6 +80,19 @@ import { buildECSLiveStatusMap } from './status/liveStatusResolver';
 import type { ECSLiveStatusMap } from './status/liveStatusTypes';
 import { setupStore } from './setupStore';
 import { vehicleSetupStore } from './vehicleSetupStore';
+import { vehicleStore } from './vehicleStore';
+import { vehicleSpecStore } from './vehicleSpecStore';
+import { consumablesStore } from './consumablesStore';
+import { tiresLiftStore } from './tiresLiftStore';
+import { getVehicleResourceProfile } from './vehicleResourceProfile';
+import {
+  getActiveVehicleState,
+  type ECSVehicularState,
+} from './fleet/activeVehicleState';
+import {
+  buildEnvironmentSnapshot,
+  type EnvironmentSnapshot,
+} from './environmentSnapshotService';
 
 // ============================================================
 // TYPES
@@ -123,6 +140,7 @@ export interface ECSAIRouteBlock {
 }
 
 export interface ECSAIEnvironmentBlock {
+  snapshot: EnvironmentSnapshot;
   remoteness: RemotenessOutput | null;
   connectivity: ConnectivityDetailedState | null;
   gps: GPSUIState;
@@ -141,8 +159,37 @@ export interface ECSAIResourcesBlock {
   telemetryReadout: TelemetryReadout | null;
   telemetryConfig: ReturnType<typeof telemetryConfigStore.get> | null;
   forecast: ResourceForecast | null;
+  vehicleIntelligence: ECSAIVehicleIntelligenceBlock | null;
   powerAuthority: ECSAIPowerAuthorityBlock | null;
+  powerIntelligence: EcsPowerIntelligenceSnapshot | null;
   providerTelemetry: ECSNormalizedProviderResult | null;
+}
+
+export interface ECSAIVehicleIntelligenceBlock {
+  available: boolean;
+  activeVehicleId: string | null;
+  vehicleId: string | null;
+  identityLabel: string | null;
+  knownAttributes: {
+    vehicleType: string | null;
+    drivetrain: string | null;
+    engine: string | null;
+    fuelType: string | null;
+    body: string | null;
+  };
+  classId: ECSVehicularState['intelligence']['classification']['classId'];
+  classLabel: string;
+  classConfidence: ECSVehicularState['intelligence']['classification']['confidence'];
+  classReasons: string[];
+  classTraits: ECSVehicularState['intelligence']['classification']['traits'];
+  weightSnapshot: ECSVehicularState['weight'];
+  capabilitySnapshot: ECSVehicularState['capability'];
+  modificationSnapshot: ECSVehicularState['modifications'];
+  loadoutSnapshot: ECSVehicularState['loadout'];
+  centerOfGravitySnapshot: ECSVehicularState['centerOfGravity'];
+  suggestions: string[];
+  confidence: ECSVehicularState['confidence'];
+  status: ECSVehicularState['status'];
 }
 
 
@@ -212,6 +259,8 @@ export interface ECSAIContext {
   summary: {
     missionName: string | null;
     vehicleName: string | null;
+    vehicleClass?: string | null;
+    vehicleWeightConfidence?: string | null;
     routeName: string | null;
     remotenessTier: string | null;
     remotenessScore: number | null;
@@ -225,6 +274,8 @@ export interface ECSAIContext {
     operationalState?: string | null;
     operationalSummary?: string | null;
     expeditionPhase?: string | null;
+    powerHeadline?: string | null;
+    powerSustainability?: string | null;
     criticalIssues: string[];
   };
 }
@@ -250,6 +301,7 @@ export interface ECSAILiveStateBridge {
 export interface ECSAIContextBuildOptions {
   liveState?: ECSAILiveStateBridge | null;
   skipWeatherFetch?: boolean;
+  useStoreFallbacks?: boolean;
 }
 
 // ============================================================
@@ -266,9 +318,10 @@ export async function buildAIContextFromLiveState(
 ): Promise<ECSAIContext> {
   const warnings: string[] = [];
   const live = liveState ?? options.liveState ?? null;
+  const useStoreFallbacks = options.useStoreFallbacks !== false;
 
-  const storeMissionExpedition = missionExpeditionStore.getActive();
-  const storeExpeditionRecord = expeditionStateStore.getCurrentExpedition();
+  const storeMissionExpedition = useStoreFallbacks ? missionExpeditionStore.getActive() : null;
+  const storeExpeditionRecord = useStoreFallbacks ? expeditionStateStore.getCurrentExpedition() : null;
   const effectiveExpeditionId = live?.mission?.expedition?.id
     ?? live?.mission?.expeditionRecord?.id
     ?? storeMissionExpedition?.id
@@ -276,9 +329,9 @@ export async function buildAIContextFromLiveState(
     ?? null;
 
   const storeSnapshot =
-    storeMissionExpedition?.snapshotId
+    useStoreFallbacks && storeMissionExpedition?.snapshotId
       ? missionSnapshotStore.getById(storeMissionExpedition.snapshotId)
-      : effectiveExpeditionId
+      : useStoreFallbacks && effectiveExpeditionId
         ? missionSnapshotStore.getByExpeditionId(effectiveExpeditionId)
         : null;
 
@@ -286,14 +339,14 @@ export async function buildAIContextFromLiveState(
   const expeditionRecord = live?.mission?.expeditionRecord ?? storeExpeditionRecord ?? null;
   const snapshot = live?.mission?.snapshot ?? storeSnapshot ?? null;
 
-  const storeItems = effectiveExpeditionId ? missionItemStore.getByExpeditionId(effectiveExpeditionId) : [];
-  const storeStats = effectiveExpeditionId ? computeMissionStats(effectiveExpeditionId) : null;
+  const storeItems = useStoreFallbacks && effectiveExpeditionId ? missionItemStore.getByExpeditionId(effectiveExpeditionId) : [];
+  const storeStats = useStoreFallbacks && effectiveExpeditionId ? computeMissionStats(effectiveExpeditionId) : null;
   const mergedItemCounts = normalizeItemCounts(live?.mission?.itemCounts, storeItems);
 
-  const activeRoute = live?.route?.activeRoute ?? routeStore.getActive() ?? null;
-  const activeRun = live?.route?.activeRun ?? (runStore.getActive ? runStore.getActive() : null) ?? null;
-  const routeIntelligence = live?.route?.routeIntelligence ?? routeAnalysisEngine.getCurrent() ?? null;
-  const terrainIntelligence = live?.route?.terrainIntelligence ?? terrainAnalysisEngine.getCurrent() ?? null;
+  const activeRoute = live?.route?.activeRoute ?? (useStoreFallbacks ? routeStore.getActive() : null) ?? null;
+  const activeRun = live?.route?.activeRun ?? (useStoreFallbacks && runStore.getActive ? runStore.getActive() : null) ?? null;
+  const routeIntelligence = live?.route?.routeIntelligence ?? (useStoreFallbacks ? routeAnalysisEngine.getCurrent() : null) ?? null;
+  const terrainIntelligence = live?.route?.terrainIntelligence ?? (useStoreFallbacks ? terrainAnalysisEngine.getCurrent() : null) ?? null;
 
   const storeTotalWaypoints = activeRoute?.waypoints?.length ?? activeRun?.waypoints?.length ?? 0;
   const providedProgress = live?.route?.progress;
@@ -330,38 +383,80 @@ export async function buildAIContextFromLiveState(
       expeditionRecord,
     });
 
-  const remoteness = live?.environment?.remoteness ?? getRemotenessSafe(warnings);
-  const gps = live?.environment?.gps ?? gpsUIState.get();
-  const connectivityState = live?.environment?.connectivity ?? getConnectivitySafe(warnings);
+  const remoteness = live?.environment?.remoteness ?? (useStoreFallbacks ? getRemotenessSafe(warnings) : null);
+  const gps = live?.environment?.gps ?? (useStoreFallbacks ? gpsUIState.get() : ({} as GPSUIState));
+  const connectivityState = live?.environment?.connectivity ?? (useStoreFallbacks ? getConnectivitySafe(warnings) : null);
 
-  const shouldSkipWeatherFetch = !!(options.skipWeatherFetch || live?.flags?.skipWeatherFetch || live?.environment?.weather);
-  const weatherBundle = live?.environment?.weather
+  const hasLiveBridgeWeather = hasUsableWeatherPayload(live?.environment?.weather);
+  const shouldSkipWeatherFetch = !!(options.skipWeatherFetch || live?.flags?.skipWeatherFetch || hasLiveBridgeWeather);
+  const weatherBundle = hasLiveBridgeWeather && live?.environment?.weather
     ? normalizeWeatherBundle(live.environment.weather)
     : await getWeatherBundle({
-        activeRoute,
-        activeRun,
         gps,
         warnings,
         skipFetch: shouldSkipWeatherFetch,
       });
-
-  const authoritySnapshot = getBluAuthoritySnapshotSafe();
-  const authorityPower = normalizeAuthorityPower(authoritySnapshot);
-  const telemetryConfig = live?.resources?.telemetryConfig
-    ?? (effectiveExpeditionId ? telemetryConfigStore.get(effectiveExpeditionId) : null);
-  const providerTelemetry = normalizeBluProviderState({
-    expeditionId: effectiveExpeditionId,
-    authoritySnapshot,
-    telemetryConfig,
-    manualBaselineAvailable:
-      !!snapshot ||
-      !!telemetryConfig ||
-      !!live?.summary?.vehicleName,
+  const environmentRemotenessIndex =
+    useStoreFallbacks
+      ? (() => {
+          try {
+            return (remotenessStore as any).getIndex?.() ?? null;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  const environmentSnapshot = buildEnvironmentSnapshot({
+    coordinate: gps?.hasFix && gps.position
+      ? {
+          latitude: gps.position.latitude,
+          longitude: gps.position.longitude,
+          accuracyM: gps.position.accuracyM,
+          altitudeFt: gps.position.altitudeFt,
+          source: 'gps',
+          updatedAt: gps.position.timestamp,
+        }
+      : null,
+    regionLabel:
+      (weatherBundle.current as any)?.location_name ??
+      (weatherBundle.current as any)?.locationName ??
+      null,
+    regionSource: weatherBundle.current ? 'weather_provider' : 'unavailable',
+    solarTimes: {
+      sunrise: (weatherBundle.current as any)?.sunrise ?? null,
+      sunset: (weatherBundle.current as any)?.sunset ?? null,
+      source: 'weather_provider',
+    },
+    remoteness: environmentRemotenessIndex,
   });
+  for (const warning of environmentSnapshot.warnings) {
+    warnings.push(`Environment: ${warning}`);
+  }
+
+  const authoritySnapshot = useStoreFallbacks ? getBluAuthoritySnapshotSafe() : null;
+  const authorityPower = normalizeAuthorityPower(authoritySnapshot);
+  const powerIntelligence = live?.resources?.powerIntelligence ?? (useStoreFallbacks ? getPowerIntelligenceSafe() : null);
+  const telemetryConfig = live?.resources?.telemetryConfig
+    ?? (useStoreFallbacks && effectiveExpeditionId ? telemetryConfigStore.get(effectiveExpeditionId) : null);
+  const providerTelemetry = useStoreFallbacks
+    ? normalizeBluProviderState({
+        expeditionId: effectiveExpeditionId,
+        authoritySnapshot,
+        telemetryConfig,
+        manualBaselineAvailable:
+          !!snapshot ||
+          !!telemetryConfig ||
+          !!live?.summary?.vehicleName,
+      })
+    : null;
 
   const telemetryReadout = live?.resources?.telemetryReadout
     ?? buildAuthorityTelemetryReadout(authorityPower, providerTelemetry)
-    ?? (effectiveExpeditionId ? computeTelemetryReadout(effectiveExpeditionId) : null);
+    ?? (useStoreFallbacks && effectiveExpeditionId ? computeTelemetryReadout(effectiveExpeditionId) : null);
+
+  const vehicleIntelligence =
+    live?.resources?.vehicleIntelligence
+    ?? (useStoreFallbacks ? buildVehicleIntelligenceSafe(warnings) : null);
 
   const forecast = live?.resources?.forecast ?? buildResourceForecastSafe({
     routeIntelligence,
@@ -372,6 +467,7 @@ export async function buildAIContextFromLiveState(
     weather: weatherBundle.current,
     warnings,
     authorityPower,
+    useStoreFallbacks,
   });
 
   const terrainRisk = live?.risk?.terrainRisk ?? buildTerrainRiskSafe({
@@ -398,6 +494,7 @@ export async function buildAIContextFromLiveState(
       stats: live?.mission?.stats ?? storeStats,
       telemetryReadout,
       forecast,
+      powerIntelligence,
       terrainRisk,
       gps,
       connectivityState,
@@ -418,6 +515,8 @@ export async function buildAIContextFromLiveState(
     remoteness,
     telemetryReadout,
     forecast,
+    powerIntelligence,
+    vehicleIntelligence,
     weather: weatherBundle.current,
   });
 
@@ -430,16 +529,20 @@ export async function buildAIContextFromLiveState(
     pinDropMode: live?.navigation?.pinDropMode ?? null,
   };
 
-  const connectivitySummary = connectivityIntelStore.getSummary();
-  const cacheSnapshot = evaluateCacheReadiness();
+  const connectivitySummary = useStoreFallbacks ? connectivityIntelStore.getSummary() : null;
+  const cacheSnapshot = useStoreFallbacks ? evaluateCacheReadiness() : null;
 
   const storage: ECSAIStorageBlock = {
     offlineCacheState:
       live?.storage?.offlineCacheState
-      ?? deriveOfflineCacheState(connectivitySummary, cacheSnapshot),
+      ?? (
+        useStoreFallbacks && connectivitySummary && cacheSnapshot
+          ? deriveOfflineCacheState(connectivitySummary, cacheSnapshot)
+          : 'unknown'
+      ),
     storageUsageLabel:
       live?.storage?.storageUsageLabel
-      ?? deriveOfflineCacheUsageLabel(cacheSnapshot),
+      ?? (useStoreFallbacks && cacheSnapshot ? deriveOfflineCacheUsageLabel(cacheSnapshot) : null),
   };
 
   const operations: ECSAIOperationsBlock = {
@@ -484,8 +587,8 @@ export async function buildAIContextFromLiveState(
     current:
       live?.phase?.current
       ?? inferExpeditionPhase({
-        setupComplete: setupStore.isComplete(),
-        hasActiveVehicle: !!vehicleSetupStore.getActiveVehicleId() || !!missionExpedition?.vehicleId || !!expeditionRecord?.activeVehicleId,
+        setupComplete: useStoreFallbacks ? setupStore.isComplete() : false,
+        hasActiveVehicle: (useStoreFallbacks && !!vehicleSetupStore.getActiveVehicleId()) || !!missionExpedition?.vehicleId || !!expeditionRecord?.activeVehicleId,
         hasActiveExpedition: !!missionExpedition || !!expeditionRecord,
         expeditionState: expeditionRecord?.state ?? missionExpedition?.status ?? null,
         hasSelectedRoute: !!activeRoute || !!activeRun,
@@ -507,7 +610,7 @@ export async function buildAIContextFromLiveState(
 
   const sourceMode: ECSAIContextMeta['sourceMode'] =
     live
-      ? (options.skipWeatherFetch || live.flags?.skipWeatherFetch ? 'live_bridge' : 'hybrid')
+      ? (options.skipWeatherFetch || live.flags?.skipWeatherFetch || hasLiveBridgeWeather ? 'live_bridge' : 'hybrid')
       : 'stores';
 
   const contextBase = {
@@ -547,6 +650,7 @@ export async function buildAIContextFromLiveState(
     },
 
     environment: {
+      snapshot: environmentSnapshot,
       remoteness,
       connectivity: connectivityState,
       gps,
@@ -557,7 +661,9 @@ export async function buildAIContextFromLiveState(
       telemetryReadout,
       telemetryConfig,
       forecast,
+      vehicleIntelligence,
       powerAuthority: authorityPower,
+      powerIntelligence,
       providerTelemetry,
     },
 
@@ -577,9 +683,15 @@ export async function buildAIContextFromLiveState(
       missionName: live?.summary?.missionName ?? missionExpedition?.name ?? expeditionRecord?.vehicleName ?? null,
       vehicleName:
         live?.summary?.vehicleName
+        ?? vehicleIntelligence?.identityLabel
         ?? missionExpedition?.vehicleName
         ?? expeditionRecord?.vehicleName
         ?? (snapshot as any)?.snapshotJson?.vehicle?.name
+        ?? null,
+      vehicleClass: live?.summary?.vehicleClass ?? vehicleIntelligence?.classLabel ?? null,
+      vehicleWeightConfidence:
+        live?.summary?.vehicleWeightConfidence
+        ?? vehicleIntelligence?.weightSnapshot.confidenceLevel
         ?? null,
       routeName: live?.summary?.routeName ?? (routeIntelligence as any)?.routeName ?? activeRoute?.name ?? activeRun?.title ?? null,
       remotenessTier: live?.summary?.remotenessTier ?? (remoteness as any)?.tier ?? null,
@@ -599,6 +711,8 @@ export async function buildAIContextFromLiveState(
       operationalState: live?.summary?.operationalState ?? operations.degraded.shortLabel ?? null,
       operationalSummary: live?.summary?.operationalSummary ?? operations.degraded.summary ?? null,
       expeditionPhase: live?.summary?.expeditionPhase ?? phase.current.label ?? null,
+      powerHeadline: live?.summary?.powerHeadline ?? powerIntelligence?.advisoryHeadline ?? null,
+      powerSustainability: live?.summary?.powerSustainability ?? powerIntelligence?.sustainabilityRating ?? null,
       criticalIssues,
     },
   };
@@ -614,6 +728,7 @@ export async function buildAIContextFromLiveState(
 export function summarizeAIContext(ctx: ECSAIContext): string {
   const parts = [
     ctx.summary.missionName ? `Mission ${ctx.summary.missionName}` : null,
+    ctx.summary.vehicleClass ? `vehicle ${ctx.summary.vehicleClass}` : null,
     ctx.summary.routeName ? `route ${ctx.summary.routeName}` : null,
     ctx.summary.weatherLevel ? `weather ${ctx.summary.weatherLevel}` : null,
     ctx.summary.forecastLevel ? `forecast ${shortForecastLabel(ctx.summary.forecastLevel as SufficiencyLevel | null | undefined)}` : null,
@@ -679,17 +794,16 @@ function getConnectivitySafe(warnings: string[]): ConnectivityDetailedState | nu
 }
 
 async function getWeatherBundle(params: {
-  activeRoute: ImportedRoute | null;
-  activeRun: ECSRun | null;
   gps: GPSUIState;
   warnings: string[];
   skipFetch?: boolean;
 }): Promise<ECSAIContext['environment']['weather']> {
-  const { activeRoute, activeRun, gps, warnings, skipFetch } = params;
+  const { gps, warnings, skipFetch } = params;
+  const gpsLat = Number((gps as any)?.position?.latitude);
+  const gpsLng = Number((gps as any)?.position?.longitude);
+  const hasGpsFix = Number.isFinite(gpsLat) && Number.isFinite(gpsLng);
 
-  const coord = pickPrimaryWeatherCoordinate(activeRoute, activeRun, gps);
-
-  if (!coord || skipFetch) {
+  if (!hasGpsFix || skipFetch) {
     return {
       current: null,
       response: null,
@@ -702,20 +816,40 @@ async function getWeatherBundle(params: {
   }
 
   try {
-    const response = await fetchWeather([coord], 'imperial');
-    const current = response?.results?.[0] ?? null;
-    const fetchedAtMs = response?.fetched_at ? new Date(response.fetched_at).getTime() : NaN;
-    const hasFetchedAt = Number.isFinite(fetchedAtMs);
-
+    const sharedWeather = getSharedOperationalWeatherState();
+    const snapshot = sharedWeather.snapshot;
+    const source = snapshot.status.source;
+    const current = source === 'fallback' ? null : snapshot.raw;
+    const response = source === 'fallback' ? null : sharedWeather.result?.data ?? null;
+    const freshness = getWeatherFreshness({
+      source,
+      fetchedAt: response?.fetched_at ?? snapshot.fetchedAt,
+      updatedAt: snapshot.normalized.updatedAt,
+      cachedAt: sharedWeather.result?.cachedAt ?? snapshot.status.cachedAt ?? snapshot.status.timestampMs ?? null,
+      hasWeatherData: Boolean(current || response?.results?.length),
+    });
     const severity = classifyWeatherSeverity(current);
+
     return {
       current,
       response,
-      source: 'live',
-      staleness: hasFetchedAt ? getWeatherStaleness(fetchedAtMs) : 'unknown',
-      ageLabel: hasFetchedAt ? getWeatherAge(fetchedAtMs) : null,
+      source:
+        source === 'live'
+          ? 'live'
+          : source === 'cache_fresh' || source === 'cache_stale'
+            ? 'cache'
+            : 'none',
+      staleness:
+        snapshot.status.freshness && snapshot.status.freshness !== 'missing'
+          ? snapshot.status.freshness
+          : freshness.freshness === 'missing'
+            ? 'unknown'
+            : freshness.freshness,
+      ageLabel: freshness.ageMinutes != null ? getWeatherAge(freshness.timestampMs ?? Date.now()) : null,
       severity,
-      summaryLabel: severity === 'none' ? null : `WX ${severity.toUpperCase()}`,
+      summaryLabel:
+        snapshot.status.label ??
+        (severity === 'none' ? null : `WX ${severity.toUpperCase()}`),
     };
   } catch (err: any) {
     warnings.push(`Weather unavailable: ${err?.message || 'unknown error'}`);
@@ -734,7 +868,7 @@ async function getWeatherBundle(params: {
 function normalizeWeatherBundle(
   weather: Partial<ECSAIEnvironmentBlock['weather']> | null | undefined,
 ): ECSAIEnvironmentBlock['weather'] {
-  const current = weather?.current ?? null;
+  const current = weather?.current ?? weather?.response?.results?.[0] ?? null;
   const severity = (weather?.severity ?? classifyWeatherSeverity(current)) as ECSAIEnvironmentBlock['weather']['severity'];
 
   return {
@@ -767,35 +901,18 @@ function classifyWeatherSeverity(weather: WaypointWeather | null): 'none' | 'adv
   return 'none';
 }
 
-function pickPrimaryWeatherCoordinate(
-  activeRoute: ImportedRoute | null,
-  activeRun: ECSRun | null,
-  gps: GPSUIState,
-): { lat: number; lng: number; label?: string } | null {
-  const gpsLat = Number((gps as any)?.position?.latitude);
-  const gpsLng = Number((gps as any)?.position?.longitude);
-
-  if (Number.isFinite(gpsLat) && Number.isFinite(gpsLng)) {
-    return { lat: gpsLat, lng: gpsLng, label: 'Current Position' };
-  }
-
-  const routePoint = (activeRoute as any)?.segments?.[0]?.points?.[0];
-  if (routePoint) {
-    return { lat: routePoint.lat, lng: routePoint.lon, label: (activeRoute as any)?.name ?? 'Active Route' };
-  }
-
-  const runPoint = (activeRun as any)?.points?.[0];
-  if (runPoint) {
-    return { lat: runPoint.lat, lng: runPoint.lng, label: (activeRun as any)?.title ?? 'Active Run' };
-  }
-
-  return null;
-}
-
 
 function getBluAuthoritySnapshotSafe(): BluAuthoritySnapshot | null {
   try {
     return bluPowerAuthority.getSnapshot();
+  } catch {
+    return null;
+  }
+}
+
+function getPowerIntelligenceSafe(): EcsPowerIntelligenceSnapshot | null {
+  try {
+    return ecsPowerIntelligence.getSnapshot();
   } catch {
     return null;
   }
@@ -861,6 +978,41 @@ function buildAuthorityTelemetryReadout(
   } as any;
 }
 
+function buildVehicleIntelligenceSafe(warnings: string[]): ECSAIVehicleIntelligenceBlock | null {
+  try {
+    const state = getActiveVehicleState();
+    return {
+      available: state.status === 'ready' || state.status === 'incomplete',
+      activeVehicleId: state.identity.activeVehicleId,
+      vehicleId: state.identity.vehicleId,
+      identityLabel: state.identity.hasVehicle ? state.identity.displayName : null,
+      knownAttributes: {
+        vehicleType: state.identity.vehicleType,
+        drivetrain: state.specs?.drivetrain ?? null,
+        engine: state.specs?.engine ?? null,
+        fuelType: state.capability.fuelType,
+        body: state.identity.vehicleType,
+      },
+      classId: state.intelligence.classification.classId,
+      classLabel: state.intelligence.classification.label,
+      classConfidence: state.intelligence.classification.confidence,
+      classReasons: state.intelligence.classification.reasons,
+      classTraits: state.intelligence.classification.traits,
+      weightSnapshot: state.weight,
+      capabilitySnapshot: state.capability,
+      modificationSnapshot: state.modifications,
+      loadoutSnapshot: state.loadout,
+      centerOfGravitySnapshot: state.centerOfGravity,
+      suggestions: state.intelligence.suggestions,
+      confidence: state.confidence,
+      status: state.status,
+    };
+  } catch (err: any) {
+    warnings.push(`Vehicle intelligence unavailable: ${err?.message || 'unknown error'}`);
+    return null;
+  }
+}
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -874,6 +1026,7 @@ function buildResourceForecastSafe(params: {
   weather: WaypointWeather | null;
   warnings: string[];
   authorityPower?: ECSAIPowerAuthorityBlock | null;
+  useStoreFallbacks?: boolean;
 }): ResourceForecast | null {
   const {
     routeIntelligence,
@@ -884,12 +1037,15 @@ function buildResourceForecastSafe(params: {
     weather,
     warnings,
     authorityPower,
+    useStoreFallbacks = true,
   } = params;
 
-  if (!routeIntelligence) return resourceForecastEngine.getCurrent();
+  if (!routeIntelligence) {
+    return useStoreFallbacks ? resourceForecastEngine.getCurrent() : null;
+  }
 
   try {
-    const vehicleProfile = buildVehicleProfileSnapshot(snapshot, telemetryConfig);
+    const vehicleProfile = buildVehicleProfileSnapshot(snapshot, telemetryConfig, useStoreFallbacks);
     const loadoutTotals = buildLoadoutTotalsSnapshot(snapshot);
     const telemetry = buildTelemetrySnapshot(telemetryReadout, telemetryConfig, authorityPower);
     const terrain = buildTerrainContext(terrainIntelligence, routeIntelligence, weather);
@@ -903,23 +1059,62 @@ function buildResourceForecastSafe(params: {
     );
   } catch (err: any) {
     warnings.push(`Resource forecast build failed: ${err?.message || 'unknown error'}`);
-    return resourceForecastEngine.getCurrent();
+    return useStoreFallbacks ? resourceForecastEngine.getCurrent() : null;
   }
 }
 
 function buildVehicleProfileSnapshot(
   snapshot: ExpeditionSnapshot | null,
   telemetryConfig: ReturnType<typeof telemetryConfigStore.get> | null,
+  useStoreFallbacks = true,
 ): VehicleProfileSnapshot | null {
-  if (!snapshot && !telemetryConfig) return null;
+  if (!snapshot && !telemetryConfig && !useStoreFallbacks) return null;
 
   const totalWeightLbs = sumSnapshotWeight(snapshot);
+  const activeVehicleId = useStoreFallbacks ? vehicleSetupStore.getActiveVehicleId() : null;
+  const vehicle = activeVehicleId ? vehicleStore.getById(activeVehicleId) : null;
+  const spec = activeVehicleId ? vehicleSpecStore.get(activeVehicleId) : null;
+  const consumables = activeVehicleId ? consumablesStore.get(activeVehicleId) : null;
+  const tiresLift = activeVehicleId ? tiresLiftStore.get(activeVehicleId) : null;
+  const resourceProfile = getVehicleResourceProfile(vehicle as any, { spec, consumables, tiresLift });
+  const activeVehicleState = useStoreFallbacks && activeVehicleId ? getActiveVehicleState(activeVehicleId) : null;
+  const liveFuelCapacity = (telemetryConfig as any)?.fuelCapacityGal ?? null;
+  const liveFuelRemaining = (telemetryConfig as any)?.fuelRemainingGal ?? null;
+  const fuelCapacityGallons = liveFuelCapacity ?? resourceProfile.fuelTankCapacityGal;
+  const currentFuelGallons =
+    liveFuelRemaining != null && Number.isFinite(liveFuelRemaining)
+      ? liveFuelRemaining
+      : activeVehicleId
+        ? resourceProfile.currentFuelGallons
+        : null;
+  const currentWaterGallons = activeVehicleId ? resourceProfile.currentWaterGallons : null;
+
   return {
-    fuelCapacityGallons: (telemetryConfig as any)?.fuelCapacityGal ?? null,
-    currentFuelPercent: percent((telemetryConfig as any)?.fuelRemainingGal, (telemetryConfig as any)?.fuelCapacityGal),
-    avgMpg: (telemetryConfig as any)?.fuelMpg ?? null,
-    totalWeightLbs,
-    curbWeightLbs: null,
+    fuelCapacityGallons,
+    currentFuelPercent: percent(currentFuelGallons, fuelCapacityGallons),
+    currentFuelGallons,
+    fuelWeightLbs: activeVehicleId ? resourceProfile.currentFuelWeightLb : null,
+    waterCapacityGallons: resourceProfile.waterCapacityGal,
+    currentWaterGallons,
+    waterWeightLbs: activeVehicleId ? resourceProfile.currentWaterWeightLb : null,
+    batteryCapacityWh: resourceProfile.batteryUsableWh,
+    avgMpg: (telemetryConfig as any)?.fuelMpg ?? (vehicle as any)?.avg_mpg ?? null,
+    totalWeightLbs:
+      activeVehicleState?.weight.estimatedOperatingWeightLbs
+      ?? (totalWeightLbs + resourceProfile.currentFuelWeightLb + resourceProfile.currentWaterWeightLb),
+    curbWeightLbs: activeVehicleState?.weight.baseWeightLbs ?? spec?.base_weight_lb ?? null,
+    vehicleClass: activeVehicleState?.intelligence.classification.classId ?? null,
+    vehicleClassLabel: activeVehicleState?.intelligence.classification.label ?? null,
+    vehicleClassConfidence: activeVehicleState?.intelligence.classification.confidence ?? null,
+    weightConfidenceLevel: activeVehicleState?.weight.confidenceLevel ?? null,
+    payloadUsedPct: activeVehicleState?.weight.payloadUsedPct ?? null,
+    remainingPayloadLbs: activeVehicleState?.weight.remainingPayloadLbs ?? null,
+    payloadCapacityLbs: activeVehicleState?.weight.payloadCapacityLbs ?? null,
+    operatingWeightLbs: activeVehicleState?.weight.estimatedOperatingWeightLbs ?? null,
+    tireSizeInches: resourceProfile.tireSizeInches,
+    suspensionLiftInches: resourceProfile.suspensionLiftInches,
+    isLeveled: resourceProfile.isLeveled,
+    frontLevelInches: resourceProfile.frontLevelInches,
   };
 }
 
@@ -1043,13 +1238,14 @@ function collectCriticalIssues(params: {
   stats: MissionStats | null;
   telemetryReadout: TelemetryReadout | null;
   forecast: ResourceForecast | null;
+  powerIntelligence: EcsPowerIntelligenceSnapshot | null;
   terrainRisk: DynamicRiskResult | null;
   gps: GPSUIState;
   connectivityState: ConnectivityDetailedState | null;
   weather: WaypointWeather | null;
   weatherLevel?: string | null;
 }): string[] {
-  const { stats, telemetryReadout, forecast, terrainRisk, gps, connectivityState, weather, weatherLevel } = params;
+  const { stats, telemetryReadout, forecast, powerIntelligence, terrainRisk, gps, connectivityState, weather, weatherLevel } = params;
   const issues: string[] = [];
 
   if (((stats as any)?.criticalMissing ?? 0) > 0) {
@@ -1065,6 +1261,13 @@ function collectCriticalIssues(params: {
     issues.push('Resources projected to fall short');
   } else if ((forecast as any)?.sufficiencyLevel === 'Resources Limited') {
     issues.push('Resource margins are tight');
+  }
+
+  if (
+    powerIntelligence?.advisoryCategory === 'critical_reserve'
+    || powerIntelligence?.advisoryCategory === 'unsustainable_drain'
+  ) {
+    issues.push(powerIntelligence.advisoryHeadline);
   }
 
   if ((terrainRisk as any)?.riskLevel === 'critical') {
@@ -1103,6 +1306,7 @@ function computeCompleteness(parts: Record<string, any>): number {
     !!parts.terrainIntelligence,
     !!parts.remoteness,
     !!parts.telemetryReadout,
+    !!parts.vehicleIntelligence,
     !!parts.forecast,
     !!parts.weather,
   ];

@@ -78,7 +78,7 @@ export function resolveSurfaceLayoutProfile(
     shell: {
       headerMaxWidth: shellHeaderMaxWidth,
       headerHorizontalPadding:
-        tier === 'wide_tablet' ? 28 : tier === 'standard_tablet' ? 24 : tier === 'large_phone' ? 18 : 14,
+        tier === 'wide_tablet' ? 24 : tier === 'standard_tablet' ? 20 : tier === 'large_phone' ? 14 : 10,
       headerMinHeight:
         tier === 'wide_tablet' ? 70 : tier === 'standard_tablet' ? 66 : tier === 'large_phone' ? 58 : 54,
       dockMaxWidth,

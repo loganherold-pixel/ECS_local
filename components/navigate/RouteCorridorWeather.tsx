@@ -21,9 +21,9 @@ import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
 import {
-  fetchWeatherWithStatus,
   type WeatherFetchResult,
 } from '../../lib/weatherStore';
+import { fetchSharedWeatherForCoordinates } from '../../lib/weatherService';
 import type {
   WeatherCoordinate,
   WeatherAlert,
@@ -101,6 +101,12 @@ export interface RouteCorridorResult {
     statusText: string | null;
     severeLine: string | null;
   };
+}
+
+interface UseRouteCorridorWeatherOptions {
+  forceActive?: boolean;
+  persistPreference?: boolean;
+  emitToasts?: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────
@@ -381,8 +387,15 @@ export function useRouteCorridorWeather(
   activeRun: ECSRun | null,
   userLocation: { lat: number; lng: number } | null,
   showToast: (msg: string) => void,
+  options: UseRouteCorridorWeatherOptions = {},
 ): RouteCorridorResult {
+  const {
+    forceActive = false,
+    persistPreference = true,
+    emitToasts = true,
+  } = options;
   const [enabled, setEnabled] = useState<boolean>(() => {
+    if (forceActive && !persistPreference) return false;
     try {
       if (typeof localStorage !== 'undefined') {
         return localStorage.getItem(ROUTE_WX_KEY) === 'true';
@@ -390,6 +403,7 @@ export function useRouteCorridorWeather(
     } catch {}
     return false;
   });
+  const intelligenceActive = enabled || forceActive;
 
   const [weatherPoints, setWeatherPoints] = useState<RouteWeatherPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -412,19 +426,21 @@ export function useRouteCorridorWeather(
     hapticMicro();
     setEnabled(prev => {
       const next = !prev;
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(ROUTE_WX_KEY, String(next));
-        }
-      } catch {}
-      if (!next) {
+      if (persistPreference) {
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(ROUTE_WX_KEY, String(next));
+          }
+        } catch {}
+      }
+      if (!next && !forceActive) {
         setWeatherPoints([]);
         setSource(null);
         setError(null);
       }
       return next;
     });
-  }, []);
+  }, [forceActive, persistPreference]);
 
   // Sample route points when run changes
   const sampledCoords = useMemo(() => {
@@ -443,7 +459,7 @@ export function useRouteCorridorWeather(
   }, [activeRun]);
 
   const fetchRouteWeather = useCallback(async () => {
-    if (!enabled || sampledCoords.length < 2 || loading) return;
+    if (!intelligenceActive || sampledCoords.length < 2 || loading) return;
 
     setLoading(true);
     try {
@@ -453,12 +469,21 @@ export function useRouteCorridorWeather(
         label: s.label,
       }));
 
-      const result = await fetchWeatherWithStatus(coordinates, 'imperial');
+      const sharedWeather = await fetchSharedWeatherForCoordinates(
+        coordinates,
+        'imperial',
+        false,
+        'route_segment',
+      );
+      const result = sharedWeather.result;
       if (!mountedRef.current) return;
 
       setSource(result.source);
       setError(result.error);
-      setLastFetchAt(Date.now());
+      {
+        const parsedFetchedAt = Date.parse(result.data.fetched_at);
+        setLastFetchAt(Number.isFinite(parsedFetchedAt) ? parsedFetchedAt : Date.now());
+      }
 
       // Map results to RouteWeatherPoints
       const points: RouteWeatherPoint[] = sampledCoords.map((sc, idx) => {
@@ -488,7 +513,7 @@ export function useRouteCorridorWeather(
         }
       }
 
-      if (newHazards.length > 0) {
+      if (emitToasts && newHazards.length > 0) {
         hapticWarning();
         const worst = newHazards.find(h => h.hazardLevel === 'hazardous') || newHazards[0];
         const label = worst.hazardLevel === 'hazardous' ? 'HAZARDOUS' : 'SEVERE';
@@ -506,7 +531,7 @@ export function useRouteCorridorWeather(
       }
     }
     if (mountedRef.current) setLoading(false);
-  }, [enabled, sampledCoords, loading, showToast]);
+  }, [emitToasts, intelligenceActive, loading, sampledCoords, showToast]);
 
   const refresh = useCallback(() => {
     hapticMicro();
@@ -516,7 +541,7 @@ export function useRouteCorridorWeather(
 
   // Fetch when enabled, route changes, or on mount
   useEffect(() => {
-    if (!enabled || sampledCoords.length < 2) return;
+    if (!intelligenceActive || sampledCoords.length < 2) return;
 
     // Route changed — re-fetch
     const routeId = activeRun?.id || null;
@@ -527,11 +552,11 @@ export function useRouteCorridorWeather(
     } else if (!lastFetchAt) {
       fetchRouteWeather();
     }
-  }, [enabled, activeRun?.id, fetchRouteWeather, lastFetchAt, sampledCoords.length]);
+  }, [intelligenceActive, activeRun?.id, fetchRouteWeather, lastFetchAt, sampledCoords.length]);
 
   // Periodic refresh
   useEffect(() => {
-    if (!enabled || sampledCoords.length < 2) {
+    if (!intelligenceActive || sampledCoords.length < 2) {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       return;
     }
@@ -543,7 +568,7 @@ export function useRouteCorridorWeather(
     return () => {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     };
-  }, [enabled, fetchRouteWeather, sampledCoords.length]);
+  }, [intelligenceActive, fetchRouteWeather, sampledCoords.length]);
 
   // Compute approaching hazard
   const approachingHazard = useMemo(() => {

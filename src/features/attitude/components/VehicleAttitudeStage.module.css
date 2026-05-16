@@ -1,0 +1,82 @@
+.attitudeStage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--attitude-aspect-ratio, 1753 / 1024);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.attitudeImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+.attitudeSvgOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.attitudeReadout {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2;
+  color: var(--ecs-attitude-readout, #eafcff);
+  font-family: var(--ecs-font-digital, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  text-align: center;
+  text-shadow:
+    0 0 8px rgba(0, 234, 255, 0.45),
+    0 1px 8px rgba(0, 0, 0, 0.62);
+  white-space: nowrap;
+}
+
+.zeroButton {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  pointer-events: auto;
+  min-width: 54px;
+  min-height: 23px;
+  padding: 4px 12px;
+  border: 1px solid var(--ecs-attitude-zero-border, rgba(212, 160, 23, 0.42));
+  border-radius: 999px;
+  background: var(--ecs-attitude-zero-bg, rgba(10, 13, 16, 0.62));
+  color: var(--ecs-attitude-zero-text, #d4a017);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.7px;
+  line-height: 14px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.zeroButton:disabled,
+.zeroButton[aria-disabled='true'] {
+  border-color: rgba(139, 148, 158, 0.2);
+  color: rgba(139, 148, 158, 0.68);
+}
+
+.zeroButton:active {
+  background: rgba(212, 160, 23, 0.14);
+}
+
+.childrenLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: auto;
+}

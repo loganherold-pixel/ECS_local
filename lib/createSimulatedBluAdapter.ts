@@ -8,6 +8,7 @@ import type {
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluSessionStore } from './BluSessionStore';
 import { bluStateStore } from './BluStateStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 
 export interface SimulatedBluModelSpec {
   id: string;
@@ -250,6 +251,18 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
     }
 
     async scanForDevices(): Promise<SimulatedDiscoveredDevice[]> {
+      if (!isDevMockTelemetryAllowed()) {
+        console.log('[BT_LIVE] mock_disabled', {
+          provider: config.provider,
+          phase: 'scan',
+        });
+        this.discoveredDevices = [];
+        this.lastError = 'Mock Bluetooth discovery is disabled. Use a physical device for live scanning.';
+        this.lastErrorCode = 'MOCK_DISABLED';
+        this.notify();
+        return [];
+      }
+
       if (this.isScanning) {
         return this.discoveredDevices;
       }
@@ -276,6 +289,18 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
     }
 
     async connect(deviceId?: string): Promise<SimulatedConnectResult> {
+      if (!isDevMockTelemetryAllowed()) {
+        console.log('[BT_LIVE] mock_disabled', {
+          provider: config.provider,
+          deviceId: deviceId ?? null,
+          phase: 'connect',
+        });
+        return this.handleConnectError(
+          'Mock Bluetooth connections are disabled. Use a physical device for live BLE.',
+          'MOCK_DISABLED',
+        );
+      }
+
       this.connectionState = 'connecting';
       this.lastError = null;
       this.lastErrorCode = null;
@@ -371,6 +396,7 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
       this.isReconnecting = false;
       this.reconnectAttempts = 0;
       bluStateStore.setReconnecting(false);
+      bluStateStore.clearProviderTelemetry(config.provider);
       bluSessionStore.recordDisconnection();
       this.notify();
       this.emitEvent('disconnected', { meta: { requested: true } });
@@ -468,6 +494,19 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
     }
 
     async pollTelemetry(deviceId?: string): Promise<SimulatedPollResult> {
+      if (!isDevMockTelemetryAllowed()) {
+        console.log('[BT_LIVE] mock_disabled', {
+          provider: config.provider,
+          deviceId: deviceId ?? null,
+          phase: 'telemetry',
+        });
+        return {
+          success: false,
+          telemetry: null,
+          error: 'Mock Bluetooth telemetry is disabled.',
+        };
+      }
+
       const targetDeviceId = deviceId ?? this.getPrimaryDeviceId();
       if (!targetDeviceId) {
         return { success: false, telemetry: null, error: 'No device available to poll.' };
@@ -567,6 +606,9 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
         timestamp: Date.now(),
         provider: config.provider,
         device_id: deviceId,
+        source: 'mock_dev',
+        isLive: false,
+        telemetrySourceLabel: 'Dev Mock',
         battery_percent: batteryPercent,
         input_watts: inputWatts,
         output_watts: outputWatts,
@@ -579,6 +621,9 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
         battery_volts: Math.round(state.batteryVolts * 10) / 10,
         capacity_wh: modelSpec.capacityWh,
         charge_cycles: state.chargeCycles,
+        raw: {
+          simulated: true,
+        },
       };
     }
 
@@ -642,4 +687,3 @@ export function createSimulatedBluAdapter(config: SimulatedBluAdapterConfig) {
 
   return new SimulatedBluAdapter();
 }
-

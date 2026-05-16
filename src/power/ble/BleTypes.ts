@@ -10,6 +10,7 @@ export type BleInternalState =
   | "scanning"
   | "connecting"
   | "connected"
+  | "disconnecting"
   | "error";
 
 // ── BLE-specific discovered device (extends the generic shape) ──────────

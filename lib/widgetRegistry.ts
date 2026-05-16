@@ -61,6 +61,7 @@ export type RequiredSensor = 'motion' | 'gps' | 'none';
 
 export type DashboardMode = 'expedition' | 'highway';
 export type DashboardWidgetFootprint = '1x1' | '1x2' | '2x1' | '2x2';
+export type FixedDashboardWidgetFootprint = '1x1' | '2x1' | '2x2';
 export type DashboardWidgetSizeClass = 'large' | 'standard';
 export type DashboardTabEligibility = 'expedition' | 'highway' | 'both';
 
@@ -116,15 +117,17 @@ export interface WidgetRegistryEntry {
 
 
 // ═══════════════════════════════════════════════════════════
-// CORE 6 INSTRUMENT IDS — Canonical list
+// CORE INSTRUMENT IDS — Canonical list
 // ═══════════════════════════════════════════════════════════
 export const CORE_INSTRUMENT_IDS: readonly string[] = [
   'vehicle-systems',
   'attitude-monitor',
-  'remoteness',
-  'progress',
-  'sustainability',
-  'vehicle-twin',
+  'attitude-command',
+  'navigate-surface',
+  'ecs-power',
+  'expedition-readiness',
+  'hwy-elevation-profile',
+  'expedition-status-summary',
 ] as const;
 
 export interface DashboardWidgetTemplate {
@@ -173,19 +176,38 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     pickerEnabled: true,
   },
   {
+    widgetId: 'attitude-command',
+    label: 'Attitude Command',
+    purpose: 'Full-size attitude command surface with weather, daylight, route, power, and vehicle context around the inclinometer.',
+    recommendedSize: 'large',
+    recommendedWidgetSize: '2x2',
+    supportedWidgetSizes: ['2x2'],
+    minimumWidgetSize: '2x2',
+    userResizable: false,
+    priority: 2,
+    tabEligibility: 'expedition',
+    supportedModes: ['expedition'],
+    liveData: true,
+    liveSources: ['motion sensors', 'weather', 'route state', 'power authority', 'vehicle telemetry'],
+    defaultModes: [],
+    isDefaultSelectable: true,
+    fallbackBehavior: 'Keeps the attitude surface visible while marking missing weather, route, power, or vehicle data compactly.',
+    pickerEnabled: true,
+  },
+  {
     widgetId: 'vehicle-systems',
     label: 'Vehicle Systems',
-    purpose: 'Top-level mechanical and vehicle condition summary with fuel, water, load, and endurance.',
+    purpose: 'Compact vehicle systems, live telemetry, and remoteness context.',
     recommendedSize: 'standard',
     recommendedWidgetSize: '1x1',
-    supportedWidgetSizes: ['1x1', '2x1'],
+    supportedWidgetSizes: ['1x1'],
     minimumWidgetSize: '1x1',
-    userResizable: true,
-    priority: 2,
+    userResizable: false,
+    priority: 3,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
-    liveSources: ['vehicle state', 'stored vehicle profile'],
+    liveSources: ['vehicle state', 'vehicle telemetry service', 'stored vehicle profile', 'gps remoteness context'],
     defaultModes: ['highway'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Falls back to configured vehicle profile data and clearly labels missing live inputs.',
@@ -197,9 +219,9 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     purpose: 'Isolation, bailout, and distance-from-help awareness for expedition decisions.',
     recommendedSize: 'standard',
     recommendedWidgetSize: '1x1',
-    supportedWidgetSizes: ['1x1', '2x1'],
+    supportedWidgetSizes: ['1x1'],
     minimumWidgetSize: '1x1',
-    userResizable: true,
+    userResizable: false,
     priority: 3,
     tabEligibility: 'expedition',
     supportedModes: ['expedition'],
@@ -208,18 +230,56 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: ['expedition'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Shows a degraded remoteness state until GPS and signal context are available.',
+    pickerEnabled: false,
+  },
+  {
+    widgetId: 'route-confidence',
+    label: 'Route Confidence',
+    purpose: 'Compact route confidence, remoteness, and signal-ahead awareness for expedition decisions.',
+    recommendedSize: 'standard',
+    recommendedWidgetSize: '1x1',
+    supportedWidgetSizes: ['1x1'],
+    minimumWidgetSize: '1x1',
+    userResizable: false,
+    priority: 5,
+    tabEligibility: 'expedition',
+    supportedModes: ['expedition', 'highway'],
+    liveData: true,
+    liveSources: ['remoteness forecast', 'offline route cache', 'route context'],
+    defaultModes: [],
+    isDefaultSelectable: true,
+    fallbackBehavior: 'Shows a pending confidence state until remoteness or route context is available.',
+    pickerEnabled: false,
+  },
+  {
+    widgetId: 'expedition-readiness',
+    label: 'Expedition Readiness',
+    purpose: 'Compact deterministic Expedition Readiness score, decision status, top concern, and freshness link into Command Brief.',
+    recommendedSize: 'standard',
+    recommendedWidgetSize: '1x1',
+    supportedWidgetSizes: ['1x1', '2x1'],
+    minimumWidgetSize: '1x1',
+    userResizable: true,
+    priority: 4,
+    tabEligibility: 'expedition',
+    supportedModes: ['expedition'],
+    liveData: true,
+    liveSources: ['Expedition Readiness store', 'route context', 'fleet profile', 'weather freshness', 'offline package state'],
+    defaultModes: [],
+    isDefaultSelectable: true,
+    fallbackBehavior: 'Shows no-active-expedition or limited-confidence states without recalculating readiness in the widget.',
     pickerEnabled: true,
   },
   {
     widgetId: 'progress',
     label: 'Route Progress',
-    purpose: 'Trip progress, distance remaining, ETA, and route state at a glance.',
+    purpose: 'Trip progress, distance remaining, and time remaining at a glance.',
     recommendedSize: 'standard',
-    recommendedWidgetSize: '2x1',
-    supportedWidgetSizes: ['2x1', '1x1'],
+    recommendedWidgetSize: '1x1',
+    supportedWidgetSizes: ['1x1'],
     minimumWidgetSize: '1x1',
-    userResizable: true,
-    priority: 4,
+    userResizable: false,
+    priority: 6,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
@@ -227,7 +287,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: ['highway'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Keeps the widget visible with a neutral no-route state instead of blanking out.',
-    pickerEnabled: true,
+    pickerEnabled: false,
   },
   {
     widgetId: 'navigate-surface',
@@ -235,9 +295,9 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     purpose: 'A wide embedded route surface for monitoring live map context from Dashboard.',
     recommendedSize: 'standard',
     recommendedWidgetSize: '2x1',
-    supportedWidgetSizes: ['2x1', '2x2'],
+    supportedWidgetSizes: ['2x1'],
     minimumWidgetSize: '2x1',
-    userResizable: true,
+    userResizable: false,
     priority: 5,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
@@ -257,7 +317,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     supportedWidgetSizes: ['1x1', '2x1'],
     minimumWidgetSize: '1x1',
     userResizable: true,
-    priority: 6,
+    priority: 7,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
@@ -265,7 +325,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: ['expedition', 'highway'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Preserves cached weather and clearly marks stale, waiting, offline, or unavailable states.',
-    pickerEnabled: true,
+    pickerEnabled: false,
   },
   {
     widgetId: 'ecs-power',
@@ -276,7 +336,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     supportedWidgetSizes: ['2x1', '1x1'],
     minimumWidgetSize: '1x1',
     userResizable: true,
-    priority: 7,
+    priority: 6,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
@@ -292,10 +352,10 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     purpose: 'High-level expedition resource sufficiency across fuel, water, and endurance horizon.',
     recommendedSize: 'standard',
     recommendedWidgetSize: '1x1',
-    supportedWidgetSizes: ['1x1', '2x1'],
+    supportedWidgetSizes: ['1x1'],
     minimumWidgetSize: '1x1',
-    userResizable: true,
-    priority: 8,
+    userResizable: false,
+    priority: 9,
     tabEligibility: 'expedition',
     supportedModes: ['expedition'],
     liveData: true,
@@ -303,7 +363,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: false,
     fallbackBehavior: 'Falls back to stored consumables and conservative reserve estimates when live data is partial.',
-    pickerEnabled: true,
+    pickerEnabled: false,
   },
   {
     widgetId: 'vehicle-telemetry',
@@ -314,7 +374,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     supportedWidgetSizes: ['1x1', '2x1'],
     minimumWidgetSize: '1x1',
     userResizable: true,
-    priority: 9,
+    priority: 10,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
@@ -322,28 +382,102 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: false,
     fallbackBehavior: 'Retains last-known telemetry and shows clean disconnected or reconnecting states.',
-    pickerEnabled: true,
+    pickerEnabled: false,
   },
   {
     widgetId: 'hwy-elevation-profile',
     label: 'Elevation / Terrain',
-    purpose: 'Altitude, grade, and terrain context for the road or route ahead.',
+    purpose: 'Wide terrain surface combining elevation, wind, daylight, and sun-glare operating context.',
     recommendedSize: 'standard',
-    recommendedWidgetSize: '1x1',
-    supportedWidgetSizes: ['1x1'],
-    minimumWidgetSize: '1x1',
+    recommendedWidgetSize: '2x1',
+    supportedWidgetSizes: ['2x1'],
+    minimumWidgetSize: '2x1',
     userResizable: false,
-    priority: 10,
+    priority: 7,
     tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
-    liveSources: ['gps', 'route elevation context'],
+    liveSources: ['gps', 'route elevation context', 'weather solar times', 'weather wind'],
     defaultModes: [],
     isDefaultSelectable: false,
-    fallbackBehavior: 'Shows current elevation context and gracefully degrades when no route profile is available.',
+    fallbackBehavior: 'Shows current elevation context and gracefully degrades when terrain, daylight, or wind data is unavailable.',
+    pickerEnabled: true,
+  },
+  {
+    widgetId: 'expedition-status-summary',
+    label: 'Expedition Status',
+    purpose: 'Compact ECS expedition status with top concern, next action, convoy, resource, vehicle, and data-quality context.',
+    recommendedSize: 'standard',
+    recommendedWidgetSize: '2x1',
+    supportedWidgetSizes: ['2x1', '1x1'],
+    minimumWidgetSize: '1x1',
+    userResizable: true,
+    priority: 8,
+    tabEligibility: 'expedition',
+    supportedModes: ['expedition'],
+    liveData: true,
+    liveSources: ['expedition assessment store', 'route context', 'convoy context', 'logistics context', 'vehicle context'],
+    defaultModes: [],
+    isDefaultSelectable: false,
+    fallbackBehavior: 'Shows a no-active-expedition state instead of treating demo or missing route data as live status.',
     pickerEnabled: true,
   },
 ] as const;
+
+export const DASHBOARD_WIDGET_REPLACEMENTS: Readonly<Record<string, string | null>> = {
+  progress: 'navigate-surface',
+  'route-progress': 'navigate-surface',
+  'hwy-forward-weather': 'attitude-command',
+  'hwy-daylight-remaining': 'hwy-elevation-profile',
+  'hwy-sun-glare': 'hwy-elevation-profile',
+  'hwy-wind-monitor': 'hwy-elevation-profile',
+  'hwy-road-hazards': 'hwy-elevation-profile',
+  'hwy-power-monitor': 'ecs-power',
+  'power-systems': 'ecs-power',
+  'ecoflow-power': 'ecs-power',
+  remoteness: 'vehicle-systems',
+  'route-confidence': 'vehicle-systems',
+  'vehicle-telemetry': 'vehicle-systems',
+  sustainability: 'vehicle-systems',
+};
+
+export const ATTITUDE_COMMAND_REPLACEMENT_WIDGET_IDS: readonly string[] = [
+  'attitude-command',
+  'navigate-surface',
+] as const;
+
+const ATTITUDE_COMMAND_REPLACEMENT_LABELS: Readonly<Record<string, string>> = {
+  'navigate-surface': 'Navigation Command',
+};
+
+export function getDashboardWidgetReplacement(widgetId: string | null | undefined): string | null {
+  if (!widgetId) return null;
+  return Object.prototype.hasOwnProperty.call(DASHBOARD_WIDGET_REPLACEMENTS, widgetId)
+    ? DASHBOARD_WIDGET_REPLACEMENTS[widgetId]
+    : widgetId;
+}
+
+export function filterDashboardWidgetPickerEntriesForReplacement<T extends { widget_id: string }>(
+  entries: readonly T[],
+  intent: 'add' | 'replace',
+  currentWidgetType: string | null | undefined,
+): T[] {
+  if (intent === 'replace' && currentWidgetType === 'attitude-command') {
+    return entries.filter(entry => ATTITUDE_COMMAND_REPLACEMENT_WIDGET_IDS.includes(entry.widget_id));
+  }
+  return [...entries];
+}
+
+export function getDashboardWidgetPickerDisplayName(
+  widgetId: string,
+  intent: 'add' | 'replace',
+  currentWidgetType: string | null | undefined,
+): string | null {
+  if (intent === 'replace' && currentWidgetType === 'attitude-command') {
+    return ATTITUDE_COMMAND_REPLACEMENT_LABELS[widgetId] ?? null;
+  }
+  return null;
+}
 
 export const CURATED_DASHBOARD_WIDGET_IDS: readonly string[] = DASHBOARD_WIDGET_CATALOG
   .filter(entry => entry.pickerEnabled)
@@ -351,7 +485,7 @@ export const CURATED_DASHBOARD_WIDGET_IDS: readonly string[] = DASHBOARD_WIDGET_
 
 export const DASHBOARD_MODE_WIDGET_IDS: Record<DashboardMode, readonly string[]> = {
   expedition: DASHBOARD_WIDGET_CATALOG
-    .filter(entry => entry.pickerEnabled && entry.supportedModes.includes('expedition'))
+    .filter(entry => entry.pickerEnabled)
     .map(entry => entry.widgetId),
   highway: DASHBOARD_WIDGET_CATALOG
     .filter(entry => entry.pickerEnabled && entry.supportedModes.includes('highway'))
@@ -368,18 +502,14 @@ export const DEFAULT_DASHBOARD_LAYOUTS: Record<
   expedition: {
     gridLayout: '2x2',
     slots: [
-      { widgetId: 'attitude-monitor', widgetSize: '2x1' },
-      { widgetId: 'remoteness', widgetSize: '1x1' },
-      { widgetId: 'hwy-forward-weather', widgetSize: '1x1' },
+      { widgetId: 'attitude-command', widgetSize: '2x2' },
     ],
   },
   highway: {
     gridLayout: '2x2',
     slots: [
       { widgetId: 'vehicle-systems', widgetSize: '1x1' },
-      { widgetId: 'progress', widgetSize: '1x1' },
-      { widgetId: 'hwy-forward-weather', widgetSize: '1x1' },
-      { widgetId: 'hwy-cell-coverage', widgetSize: '1x1' },
+      { widgetId: 'navigate-surface', widgetSize: '2x1' },
     ],
   },
 };
@@ -397,7 +527,7 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
   {
     widget_id: 'vehicle-systems',
     display_name: 'Vehicle Systems',
-    description: 'At-a-glance mission health: load, balance, fuel, water, power',
+    description: 'Merged vehicle systems, live telemetry, load, power, and remoteness context',
     icon: 'speedometer-outline',
     category: 'vehicle',
     default_size: '1x1',
@@ -410,7 +540,7 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     supports_compact: true,
     supports_advanced: true,
     supports_modes: ['expedition', 'highway'],
-    data_provides: ['total_load', 'front_axle', 'rear_axle', 'cg_height', 'fuel_range', 'water_level', 'power_remaining', 'endurance'],
+    data_provides: ['total_load', 'front_axle', 'rear_axle', 'cg_height', 'fuel_range', 'water_level', 'power_remaining', 'endurance', 'engine_status', 'battery_voltage', 'remoteness_tier', 'cellular_status'],
     render_ready: true,
     core_instrument: true,
     widget_status: 'active',
@@ -424,7 +554,7 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     icon: 'compass-outline',
     category: 'safety',
     default_size: '2x1',
-    default_dashboard: true,
+    default_dashboard: false,
     default_position_order: 1,
     removable: true,
     requires_advanced_mode: false,
@@ -440,6 +570,28 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
   },
 
   // 3) Remoteness — Environmental Isolation
+  {
+    widget_id: 'attitude-command',
+    display_name: 'Attitude Command',
+    description: 'Full-size attitude command surface with weather, route, power, and vehicle context',
+    icon: 'compass-outline',
+    category: 'safety',
+    default_size: '2x2',
+    default_dashboard: true,
+    default_position_order: 1,
+    removable: true,
+    requires_advanced_mode: false,
+    requires_sensor: 'motion',
+    tab_scope: 'dashboard_only',
+    supports_compact: false,
+    supports_advanced: true,
+    supports_modes: ['expedition'],
+    data_provides: ['roll', 'pitch', 'tilt', 'sensor_status', 'weather', 'daylight', 'route_progress', 'power_remaining', 'vehicle_status'],
+    render_ready: true,
+    core_instrument: true,
+    widget_status: 'active',
+  },
+
   {
     widget_id: 'remoteness',
     display_name: 'Remoteness',
@@ -459,6 +611,28 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     data_provides: ['remoteness_tier', 'distance_to_road', 'cellular_status'],
     render_ready: true,
     core_instrument: true,
+    widget_status: 'active',
+  },
+
+  // Route Confidence — Compact remoteness readiness
+  {
+    widget_id: 'route-confidence',
+    display_name: 'Route Confidence',
+    description: 'Compact confidence score and signal forecast powered by remoteness context',
+    icon: 'analytics-outline',
+    category: 'mission',
+    default_size: '1x1',
+    default_dashboard: false,
+    default_position_order: 12,
+    removable: true,
+    requires_advanced_mode: false,
+    requires_sensor: 'none',
+    tab_scope: 'dashboard_only',
+    supports_compact: true,
+    supports_advanced: false,
+    supports_modes: ['expedition', 'highway'],
+    data_provides: ['route_confidence', 'signal_forecast', 'offline_readiness'],
+    render_ready: true,
     widget_status: 'active',
   },
 
@@ -503,6 +677,60 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     supports_modes: ['expedition', 'highway'],
     data_provides: ['route_state', 'destination', 'map_context', 'gps_position'],
     render_ready: true,
+    widget_status: 'active',
+  },
+
+  {
+    widget_id: 'expedition-readiness',
+    display_name: 'Expedition Readiness',
+    description: 'Deterministic Expedition Readiness score, status, top concern, and Command Brief handoff',
+    icon: 'shield-checkmark-outline',
+    category: 'mission',
+    default_size: '1x1',
+    default_dashboard: false,
+    default_position_order: 4,
+    removable: true,
+    requires_advanced_mode: false,
+    requires_sensor: 'none',
+    tab_scope: 'dashboard_only',
+    supports_compact: true,
+    supports_advanced: false,
+    supports_modes: ['expedition'],
+    data_provides: ['readiness_score', 'readiness_status', 'readiness_concern', 'source_freshness'],
+    render_ready: true,
+    core_instrument: true,
+    widget_status: 'active',
+  },
+
+  {
+    widget_id: 'expedition-status-summary',
+    display_name: 'Expedition Status',
+    description: 'Compact ECS expedition status, top concern, next action, convoy, resources, vehicle, and data quality',
+    icon: 'analytics-outline',
+    category: 'mission',
+    default_size: '2x1',
+    default_dashboard: false,
+    default_position_order: 6,
+    removable: true,
+    requires_advanced_mode: false,
+    requires_sensor: 'none',
+    tab_scope: 'dashboard_only',
+    supports_compact: true,
+    supports_advanced: false,
+    supports_modes: ['expedition'],
+    data_provides: [
+      'expedition_status',
+      'top_concern',
+      'next_recommended_action',
+      'next_checkpoint',
+      'convoy_accountability',
+      'limiting_resource',
+      'limiting_vehicle',
+      'assessment_confidence',
+      'data_quality',
+    ],
+    render_ready: true,
+    core_instrument: false,
     widget_status: 'active',
   },
 
@@ -857,7 +1085,7 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     description: 'Unified battery and house power status across connected ECS power providers',
     icon: 'battery-charging-outline',
     category: 'vehicle',
-    default_size: '1x1',
+    default_size: '2x1',
     default_dashboard: false,
     default_position_order: 8,
     removable: true,
@@ -1084,10 +1312,10 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
   {
     widget_id: 'hwy-elevation-profile',
     display_name: 'Elevation / Terrain',
-    description: 'Altitude, grade, and terrain context for the road or route ahead',
+    description: 'Wide terrain context with elevation, grade, wind, daylight, and sun-glare awareness',
     icon: 'trending-up-outline',
     category: 'highway' as WidgetCategory,
-    default_size: '1x1' as const,
+    default_size: '2x1' as const,
     default_dashboard: false,
     default_position_order: 74,
     removable: true,
@@ -1097,7 +1325,7 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     supports_compact: true,
     supports_advanced: false,
     supports_modes: ['expedition', 'highway'] as DashboardMode[],
-    data_provides: ['elevation', 'grade', 'altitude_gain'],
+    data_provides: ['elevation', 'grade', 'altitude_gain', 'wind_monitor', 'daylight_remaining', 'sun_glare'],
     render_ready: true,
     core_instrument: false,
     widget_status: 'active',
@@ -1233,7 +1461,7 @@ export function getDashboardCatalogEntry(widgetId: string): DashboardCatalogEntr
 
 export function getDashboardCatalogEntries(mode?: DashboardMode): DashboardCatalogEntry[] {
   return DASHBOARD_WIDGET_CATALOG
-    .filter(entry => entry.pickerEnabled && (!mode || entry.supportedModes.includes(mode)))
+    .filter(entry => entry.pickerEnabled && (!mode || DASHBOARD_MODE_WIDGET_IDS[mode].includes(entry.widgetId)))
     .sort((a, b) => a.priority - b.priority);
 }
 
@@ -1242,26 +1470,47 @@ export function getDashboardReplacementOrder(mode: DashboardMode): string[] {
 }
 
 export function getDashboardRecommendedSize(widgetId: string): DashboardWidgetFootprint {
-  return getDashboardCatalogEntry(widgetId)?.recommendedWidgetSize
+  const recommended = getDashboardCatalogEntry(widgetId)?.recommendedWidgetSize
     ?? getWidgetEntry(widgetId)?.default_size
     ?? '1x1';
+  return normalizeFixedDashboardWidgetSize(widgetId, recommended);
 }
 
 export function getDashboardSupportedSizes(widgetId: string): DashboardWidgetFootprint[] {
   const entry = getDashboardCatalogEntry(widgetId);
-  if (!entry) {
-    return [getDashboardRecommendedSize(widgetId)];
-  }
-  return [...entry.supportedWidgetSizes];
+  const supported = entry ? [...entry.supportedWidgetSizes] : [getDashboardRecommendedSize(widgetId)];
+  const fixed = supported
+    .map((size) => normalizeFixedDashboardWidgetSize(widgetId, size))
+    .filter((size, index, list) => list.indexOf(size) === index);
+  return fixed.length > 0 ? fixed : [normalizeFixedDashboardWidgetSize(widgetId)];
+}
+
+export function normalizeFixedDashboardWidgetSize(
+  widgetId: string,
+  requestedSize?: DashboardWidgetFootprint | null,
+): FixedDashboardWidgetFootprint {
+  if (widgetId === 'attitude-command') return '2x2';
+  if (widgetId === 'attitude-monitor' || widgetId === 'navigate-surface') return '2x1';
+
+  const requested =
+    requestedSize ??
+    getDashboardCatalogEntry(widgetId)?.recommendedWidgetSize ??
+    getWidgetEntry(widgetId)?.default_size ??
+    '1x1';
+
+  if (requested === '2x2') return '2x2';
+  if (requested === '2x1') return '2x1';
+  return '1x1';
 }
 
 export function normalizeDashboardWidgetSize(
   widgetId: string,
   requestedSize?: DashboardWidgetFootprint | null,
 ): DashboardWidgetFootprint {
+  const fixedRequested = normalizeFixedDashboardWidgetSize(widgetId, requestedSize);
   const supported = getDashboardSupportedSizes(widgetId);
-  if (requestedSize && supported.includes(requestedSize)) {
-    return requestedSize;
+  if (supported.includes(fixedRequested)) {
+    return fixedRequested;
   }
   return supported[0] ?? getDashboardRecommendedSize(widgetId);
 }
@@ -1272,7 +1521,8 @@ export function canResizeDashboardWidget(widgetId: string): boolean {
 }
 
 export function isCuratedWidgetForMode(widgetId: string, mode: DashboardMode): boolean {
-  return DASHBOARD_MODE_WIDGET_IDS[mode].includes(widgetId);
+  if (DASHBOARD_MODE_WIDGET_IDS[mode].includes(widgetId)) return true;
+  return false;
 }
 
 /** Get all widgets available for a given tab scope */
@@ -1318,21 +1568,25 @@ export function getDashboardLibraryWidgets(
       if (mode && !isCuratedWidgetForMode(w.widget_id, mode)) return false;
       return true;
     })
+    .map((entry) => ({
+      ...entry,
+      default_size: normalizeFixedDashboardWidgetSize(entry.widget_id, entry.default_size),
+    }))
     .sort((a, b) => {
-      return (priorityMap.get(a.widget_id) ?? 999) - (priorityMap.get(b.widget_id) ?? 999);
+      const leftPriority = priorityMap.get(a.widget_id) ?? a.default_position_order ?? 999;
+      const rightPriority = priorityMap.get(b.widget_id) ?? b.default_position_order ?? 999;
+      return leftPriority - rightPriority;
     });
 }
 
 export function validateCuratedDashboardConfig(): string[] {
   const issues: string[] = [];
   const curatedUniqueIds = new Set(CURATED_DASHBOARD_WIDGET_IDS);
-  const catalogIds = DASHBOARD_WIDGET_CATALOG.map(entry => entry.widgetId);
+  const pickerEntries = DASHBOARD_WIDGET_CATALOG.filter(entry => entry.pickerEnabled);
+  const catalogIds = pickerEntries.map(entry => entry.widgetId);
 
-  if (CURATED_DASHBOARD_WIDGET_IDS.length !== 10) {
-    issues.push(`Expected 10 curated dashboard widgets, found ${CURATED_DASHBOARD_WIDGET_IDS.length}.`);
-  }
-  if (DASHBOARD_WIDGET_CATALOG.length !== 10) {
-    issues.push(`Expected 10 dashboard catalog entries, found ${DASHBOARD_WIDGET_CATALOG.length}.`);
+  if (CURATED_DASHBOARD_WIDGET_IDS.length !== 8) {
+    issues.push(`Expected 8 curated dashboard widgets, found ${CURATED_DASHBOARD_WIDGET_IDS.length}.`);
   }
   if (curatedUniqueIds.size !== CURATED_DASHBOARD_WIDGET_IDS.length) {
     issues.push('Curated dashboard widget IDs contain duplicates.');
@@ -1356,8 +1610,8 @@ export function validateCuratedDashboardConfig(): string[] {
   if (expeditionDefault.length > 4) {
     issues.push(`Expedition default must fit inside 4 dashboard slots, found ${expeditionDefault.length}.`);
   }
-  if (!expeditionDefault.some(slot => slot.widgetId === 'attitude-monitor')) {
-    issues.push('Expedition default must include Attitude Monitor.');
+  if (!expeditionDefault.some(slot => slot.widgetId === 'attitude-monitor' || slot.widgetId === 'attitude-command')) {
+    issues.push('Expedition default must include an Attitude instrument.');
   }
 
   for (const mode of Object.keys(DEFAULT_DASHBOARD_LAYOUTS) as DashboardMode[]) {
@@ -1368,10 +1622,10 @@ export function validateCuratedDashboardConfig(): string[] {
     }
   }
 
-  const priorities = DASHBOARD_WIDGET_CATALOG.map(entry => entry.priority).sort((a, b) => a - b);
+  const priorities = pickerEntries.map(entry => entry.priority).sort((a, b) => a - b);
   for (let i = 0; i < priorities.length; i += 1) {
     if (priorities[i] !== i + 1) {
-      issues.push('Dashboard widget priorities must form a complete 1-10 ranking.');
+      issues.push('Dashboard widget priorities must form a complete 1-8 ranking.');
       break;
     }
   }
@@ -1583,7 +1837,9 @@ export function auditWidgetRegistry(): void {
       );
     }
   }
-  console.log(`[WidgetRegistry] Audit complete: ${WIDGET_REGISTRY.length} widgets, ${ids.size} unique IDs.`);
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(`[WidgetRegistry] Audit complete: ${WIDGET_REGISTRY.length} widgets, ${ids.size} unique IDs.`);
+  }
 }
 
 

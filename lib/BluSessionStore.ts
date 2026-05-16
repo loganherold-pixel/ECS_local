@@ -124,6 +124,10 @@ class BluSessionStore {
         : 0;
 
     const wasPolling = candidate.wasPolling === true;
+    const disconnectReason =
+      typeof candidate.disconnectReason === 'string' && candidate.disconnectReason.trim() !== ''
+        ? candidate.disconnectReason
+        : undefined;
 
     return {
       ...EMPTY_BLU_SESSION,
@@ -132,6 +136,7 @@ class BluSessionStore {
       connectionState,
       primaryDeviceId,
       wasPolling,
+      disconnectReason,
       timestamp,
     };
   }
@@ -246,7 +251,8 @@ class BluSessionStore {
         `[BluSessionStore] Session saved: provider=${normalized.provider}` +
         ` | state=${normalized.connectionState}` +
         ` | primary=${normalized.primaryDeviceId}` +
-        ` | polling=${normalized.wasPolling}`,
+        ` | polling=${normalized.wasPolling}` +
+        (normalized.disconnectReason ? ` | reason=${normalized.disconnectReason}` : ''),
       );
     } catch (err) {
       console.error('[BluSessionStore] Failed to save session:', err);
@@ -278,6 +284,23 @@ class BluSessionStore {
       provider,
       connectionState: 'connected',
       primaryDeviceId,
+      disconnectReason: undefined,
+    });
+  }
+
+  /**
+   * Record a provider-scoped degraded/disconnected state without losing provider identity.
+   */
+  recordProviderDegraded(
+    provider: BluProviderId,
+    reason: string,
+  ): void {
+    this.updateSession({
+      provider,
+      connectionState: 'disconnected',
+      primaryDeviceId: null,
+      wasPolling: false,
+      disconnectReason: reason,
     });
   }
 

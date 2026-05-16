@@ -22,11 +22,27 @@
 //   are still available via the legacy categorizeRoutes function.
 // ============================================================
 
-import type { ExpeditionOpportunity } from './discoverEngine';
+import {
+  MIN_DISCOVERY_ROUTE_MILES,
+  isDiscoverableRoute,
+  type ExpeditionOpportunity,
+} from './discoverEngine';
 import type { CompatibilityResult, VehicleProfile } from './rigCompatibilityEngine';
 import type { ECSOperationalState } from './ai/degradedOperationsTypes';
 import type { ECSExpeditionPhase } from './ai/expeditionPhaseTypes';
 import { explainRecommendation } from './ai/recommendationExplanationEngine';
+import {
+  HIDDEN_GEMS_ACCEPTABLE_MIN_RESULTS as HIDDEN_GEM_MINIMUM_ACCEPTABLE_THRESHOLD,
+  HIDDEN_GEMS_HEALTHY_MIN_RESULTS as HIDDEN_GEM_HEALTHY_THRESHOLD,
+  HIDDEN_GEMS_MAX_RESULTS_RENDERED,
+  resolveHiddenGemsEffectiveRadiusMiles as resolveHiddenGemEffectiveRadiusMiles,
+  resolveHiddenGemsFallbackMode as resolveHiddenGemFallbackMode,
+  getHiddenGemsFallbackStageDefinition as resolveHiddenGemFallbackThresholds,
+  resolveHiddenGemsMaxFallbackStage as resolveHiddenGemMaxFallbackStage,
+  resolveHiddenGemsTripTypeFitFloor,
+  normalizeHiddenGemsScore,
+  type HiddenGemsMode as HiddenGemFallbackMode,
+} from './explore/hiddenGemsThresholds';
 import type { ECSLiveStatusResult } from './status/liveStatusTypes';
 
 const TAG = '[DISCOVER-CATEGORY]';
@@ -62,10 +78,8 @@ const HIDDEN_GEM_MAX_POPULARITY = 42;
 const HIDDEN_GEM_UNKNOWN_POPULARITY = 34;
 const HIDDEN_GEM_MIN_REMOTENESS = 6;
 const HIDDEN_GEM_MIN_SCENERY = 3; // elevation gain proxy
-const HIDDEN_GEM_MIN_LENGTH_MILES = 5;
 const HIDDEN_GEM_HIGH_CONFIDENCE_MIN = 70;
 const HIDDEN_GEM_MEDIUM_CONFIDENCE_MIN = 54;
-const HIDDEN_GEM_RECOVERY_MIN_COUNT = 6;
 const POPULAR_TRAIL_MIN_POPULARITY = 50;
 const POPULAR_TRAIL_KEYWORDS = [
   'iconic',
@@ -139,7 +153,6 @@ const MOTO_ONLY_ROUTE_KEYWORDS = [
   'enduro',
   'atv only',
   'utv only',
-  'ohv park',
 ];
 const AMBIGUOUS_ARTIFACT_KEYWORDS = [
   'utility corridor',
@@ -150,9 +163,13 @@ const AMBIGUOUS_ARTIFACT_KEYWORDS = [
 ];
 const OFFROAD_ROUTE_KEYWORDS = [
   '4x4',
+  '4wd',
+  'ohv',
   'overland',
   'forest service road',
   'service road',
+  'high clearance road',
+  'primitive road',
   'two track',
   'two-track',
   'jeep trail',
@@ -162,6 +179,18 @@ const OFFROAD_ROUTE_KEYWORDS = [
   'creek crossing',
   'shelf road',
   'rock garden',
+];
+const GENERIC_ROUTE_NAME_PATTERNS = [
+  'unnamed',
+  'unmarked',
+  'forest road',
+  'service road',
+  'two track',
+  'two-track',
+  'connector road',
+  'access road',
+  'utility road',
+  'trail spur',
 ];
 
 // ── Overexposure Penalty ─────────────────────────────────────
@@ -332,6 +361,13 @@ export interface HiddenGemPipelineDiagnostics {
   fallbackCandidateCount: number;
   finalBaselineEligibleCount: number;
   unknownPopularityCount: number;
+  healthyThreshold: number;
+  minimumAcceptableThreshold: number;
+  fallbackStage: number;
+  fallbackMode: HiddenGemFallbackMode;
+  effectiveRadiusMiles: number;
+  criteriaExpanded: boolean;
+  uiNotice: string | null;
 }
 
 export interface HiddenGemRecommendationPage {
@@ -391,6 +427,8 @@ export interface CategoryStats {
  * and good terrain variety.
  */
 export function isPopularTrail(op: ExpeditionOpportunity): boolean {
+  if (!isDiscoverableRoute(op)) return false;
+
   const popularity = op.popularityScore ?? 0;
   if (popularity >= POPULAR_TRAIL_MIN_POPULARITY) return true;
 
@@ -418,6 +456,7 @@ export function isHiddenGem(op: ExpeditionOpportunity): boolean {
   const compactFootprint = (op.distanceMiles ?? 0) <= HIDDEN_GEM_MAX_FOOTPRINT_MILES && (op.estimatedDays ?? 1) <= HIDDEN_GEM_MAX_DURATION_DAYS;
 
   return (
+    supportsExploratoryDiscovery(op) &&
     !isPopularTrail(op) &&
     popularity <= HIDDEN_GEM_MAX_POPULARITY &&
     remoteness >= HIDDEN_GEM_MIN_REMOTENESS &&
@@ -539,7 +578,7 @@ export function categorizeRoutesExpanded(
   const all: CategorizedRoute[] = [];
 
   // Enrich with hidden gems first
-  const enriched = enrichWithHiddenGems(opportunities);
+  const enriched = enrichWithHiddenGems(opportunities.filter(isDiscoverableRoute));
 
   for (const op of enriched) {
     const compat = compatResults.get(op.id) ?? null;
@@ -602,6 +641,32 @@ function getRouteSearchableText(op: ExpeditionOpportunity): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function hasNamedTrailIdentity(op: ExpeditionOpportunity): boolean {
+  const normalizedName = normalizeRouteName(op.name ?? '');
+  if (normalizedName.length === 0) return false;
+  if (GENERIC_ROUTE_NAME_PATTERNS.some((pattern) => normalizedName.includes(pattern))) {
+    return false;
+  }
+  return normalizedName.split(/\s+/).filter(Boolean).length >= 2;
+}
+
+function hasEstablishedTrailIdentity(op: ExpeditionOpportunity): boolean {
+  const searchableText = getRouteSearchableText(op);
+  return (
+    hasNamedTrailIdentity(op) &&
+    (
+      (op.popularityScore ?? 0) >= POPULAR_TRAIL_MIN_POPULARITY ||
+      (op.highlights?.length ?? 0) >= 3 ||
+      POPULAR_TRAIL_KEYWORDS.some((keyword) => searchableText.includes(keyword)) ||
+      MARQUEE_TRAIL_NAMES.some((name) => searchableText.includes(name))
+    )
+  );
+}
+
+function supportsExploratoryDiscovery(op: ExpeditionOpportunity): boolean {
+  return isDiscoverableRoute(op) && isVehicleAppropriateRoute(op);
 }
 
 function normalizeRouteName(name: string): string {
@@ -996,7 +1061,7 @@ function computeVehicleTrailConfidence(
     vehicleTrailSignals.score * 0.32,
   );
 
-  if ((op.distanceMiles ?? 0) < HIDDEN_GEM_MIN_LENGTH_MILES) confidenceScore -= 18;
+  if (!Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES) confidenceScore -= 18;
   if (compat && compat.score < 40) confidenceScore -= 12;
   if ((op.popularityScore ?? 45) > POPULAR_TRAIL_MIN_POPULARITY) confidenceScore -= 8;
   if (AMBIGUOUS_ARTIFACT_KEYWORDS.some((keyword) => getRouteSearchableText(op).includes(keyword))) {
@@ -1044,25 +1109,16 @@ function isHiddenGemCandidate(
   seasonStatus: HiddenGemSeasonStatus,
   confidence: ReturnType<typeof computeVehicleTrailConfidence>,
 ): boolean {
-  const popularity = op.popularityScore ?? HIDDEN_GEM_UNKNOWN_POPULARITY;
-  const oversizedRoute = (op.distanceMiles ?? 0) > HIDDEN_GEM_MAX_FOOTPRINT_MILES || (op.estimatedDays ?? 1) > HIDDEN_GEM_MAX_DURATION_DAYS;
-  const tooShort = (op.distanceMiles ?? 0) < HIDDEN_GEM_MIN_LENGTH_MILES;
+  void compat;
+  void seasonStatus;
+  void confidence;
+  const tooShort = !Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES;
 
   if (!isRouteWithinRadius(op, radiusMiles)) return false;
   if (isPopularTrail(op)) return false;
-  if (popularity > HIDDEN_GEM_MAX_POPULARITY) return false;
   if (tooShort) return false;
-  if (seasonStatus === 'closed') return false;
   if (!isVehicleAppropriateRoute(op)) return false;
-  if (confidence.confidenceTier === 'excluded' || confidence.confidenceTier === 'low') return false;
-  if (
-    confidence.confidenceTier === 'medium' &&
-    (confidence.vehicleTrailSignalScore < 56 || confidence.metadataQualityScore < 48 || confidence.geometryConfidenceScore < 44)
-  ) {
-    return false;
-  }
-  if (oversizedRoute && popularity >= 18) return false;
-  if (isRigMismatch(op, compat)) return false;
+  if (getExplicitExclusionClassification(op).classification != null) return false;
 
   return true;
 }
@@ -1252,6 +1308,7 @@ function computeHiddenGemUniquenessScore(
   const terrainDifficulty = op.terrainDifficulty ?? 5;
   const highlightScore = clamp(Math.min((op.highlights?.length ?? 0) * 18, 100), 0, 100);
   const offRoadIdentity = hasOffRoadEvidence(op) ? 86 : 38;
+  const exploratoryIdentityScore = hasNamedTrailIdentity(op) ? 58 : 92;
   const remotenessBand =
     remoteness >= 5 && remoteness <= 8
       ? 92
@@ -1270,8 +1327,9 @@ function computeHiddenGemUniquenessScore(
       lowTrafficScore * 0.42 +
       remotenessBand * 0.2 +
       terrainIdentity * 0.14 +
-      highlightScore * 0.12 +
-      offRoadIdentity * 0.12,
+      highlightScore * 0.08 +
+      offRoadIdentity * 0.08 +
+      exploratoryIdentityScore * 0.08,
     ),
     0,
     100,
@@ -1456,6 +1514,11 @@ function refineHiddenGemScore(args: {
   const popularity = args.op.popularityScore ?? 45;
   const metadataQualityScore = args.confidence.metadataQualityScore;
   const geometryConfidenceScore = args.confidence.geometryConfidenceScore;
+  const exploratoryIdentityCandidate =
+    !hasNamedTrailIdentity(args.op) &&
+    args.confidence.vehicleTrailSignalScore >= 58 &&
+    geometryConfidenceScore >= 52 &&
+    popularity <= HIDDEN_GEM_UNKNOWN_POPULARITY;
   const routeQualityScore = clamp(
     Math.round(
       metadataQualityScore * 0.38 +
@@ -1478,7 +1541,7 @@ function refineHiddenGemScore(args: {
     0,
     100,
   );
-  const ambiguityPenalty =
+  const ambiguityPenaltyBase =
     popularity >= 40
       ? 18
       : popularity >= 34
@@ -1486,6 +1549,9 @@ function refineHiddenGemScore(args: {
         : popularity >= 28
           ? 4
           : 0;
+  const ambiguityPenalty = exploratoryIdentityCandidate
+    ? Math.max(ambiguityPenaltyBase - 6, 0)
+    : ambiguityPenaltyBase;
   const vehicleFitModifier =
     args.compat == null
       ? args.vehicleProfile
@@ -1532,10 +1598,17 @@ function refineHiddenGemScore(args: {
     100,
   );
 
+  if (exploratoryIdentityCandidate) {
+    confidenceWeightedScore = clamp(confidenceWeightedScore + 6, 0, 100);
+  }
+
   let suppressionReason: string | null = null;
   if (popularity >= 38 && args.confidence.confidenceScore < 74) {
     suppressionReason = 'classification support is partial';
-  } else if (metadataQualityScore < 42 || geometryConfidenceScore < 40) {
+  } else if (
+    (metadataQualityScore < 42 || geometryConfidenceScore < 40) &&
+    !exploratoryIdentityCandidate
+  ) {
     suppressionReason = 'route support data is weak';
   } else if (args.confidence.confidenceScore < 52) {
     suppressionReason = 'support confidence is too weak';
@@ -1619,7 +1692,7 @@ function computeTripTypeFitScore(
   op: ExpeditionOpportunity,
   discoveryTab: DiscoveryTabId | null | undefined,
 ): number {
-  if (!discoveryTab) return 72;
+  if (!discoveryTab) return 100;
 
   const miles = op.distanceMiles ?? 0;
   const days = op.estimatedDays ?? 1;
@@ -1656,6 +1729,7 @@ function computePopularTrailClassificationConfidence(
   const marqueeTrail = MARQUEE_TRAIL_NAMES.some((name) => searchableText.includes(name));
   const keywordHit = POPULAR_TRAIL_KEYWORDS.some((keyword) => searchableText.includes(keyword));
   const highlightCount = op.highlights?.length ?? 0;
+  const establishedIdentity = hasEstablishedTrailIdentity(op);
 
   let score = 40;
   if (popularity >= POPULAR_TRAIL_MIN_POPULARITY) {
@@ -1669,6 +1743,8 @@ function computePopularTrailClassificationConfidence(
   if ((op.estimatedDays ?? 1) >= 2) score += 6;
   if (highlightCount >= 4) score += 6;
   if ((op.remotenessScore ?? 0) >= 6) score += 4;
+  if (establishedIdentity) score += 10;
+  else score -= 14;
 
   return clamp(Math.round(score), 0, 100);
 }
@@ -2148,7 +2224,7 @@ function buildHiddenGemResult(
   const disqualificationReasons: HiddenGemDisqualificationReason[] = [];
   const confidence = computeVehicleTrailConfidence(op, compat);
   const oversizedRoute = (op.distanceMiles ?? 0) > HIDDEN_GEM_MAX_FOOTPRINT_MILES || (op.estimatedDays ?? 1) > HIDDEN_GEM_MAX_DURATION_DAYS;
-  const tooShort = (op.distanceMiles ?? 0) < HIDDEN_GEM_MIN_LENGTH_MILES;
+  const tooShort = !Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES;
   const lacksLocalDistinction = !isVehicleAppropriateRoute(op);
 
   if (!isRouteWithinRadius(op, radiusMiles)) disqualificationReasons.push('radius_exceeded');
@@ -2194,11 +2270,20 @@ function buildHiddenGemResult(
     recommendationStatus: options.recommendationStatus ?? null,
   });
   const hiddenGemScore = refinedScore.confidenceWeightedScore;
+  const coreDisqualificationReasons = new Set<HiddenGemDisqualificationReason>([
+    'radius_exceeded',
+    'popular_trail',
+    'too_short',
+    'access_restricted',
+    'excluded_hiking',
+    'excluded_pedestrian',
+    'excluded_moto_only',
+    'excluded_bike_only',
+    'insufficient_local_distinction',
+  ]);
   const hiddenGemEligible =
     isHiddenGemCandidate(op, compat, radiusMiles, seasonStatus, confidence) &&
-    refinedScore.promotionStrength !== 'suppressed' &&
-    hiddenGemScore >= 62 &&
-    disqualificationReasons.length === 0;
+    !disqualificationReasons.some((reason) => coreDisqualificationReasons.has(reason));
   const recommendationReasons = hiddenGemEligible
     ? buildRecommendationReasons(op, compat, radiusMiles, seasonStatus, weatherStatus, options.vehicleProfile)
     : [];
@@ -2266,90 +2351,49 @@ function buildHiddenGemResult(
   };
 }
 
-function isHiddenGemRecoveryCandidate(
-  candidate: HiddenGemResult,
-  radiusMiles: number,
-): boolean {
-  const route = candidate.route;
-  const classification = candidate.sourceMetadata?.classification;
-  const confidenceTier = candidate.sourceMetadata?.confidenceTier;
-  const confidenceScore = candidate.sourceMetadata?.confidenceScore ?? 0;
-  const popularityScore =
-    candidate.sourceMetadata?.popularityScore ??
-    route.popularityScore ??
-    HIDDEN_GEM_UNKNOWN_POPULARITY;
-  const blockedReasons = new Set(candidate.disqualificationReasons);
-  const distanceFromUserMiles =
+function getHiddenGemDistanceFromUserMiles(candidate: HiddenGemResult): number {
+  return (
     candidate.sourceMetadata?.distanceFromUserMiles ??
-    route.distanceFromUserMiles ??
-    route.distanceMiles ??
-    Number.POSITIVE_INFINITY;
-
-  if (candidate.hiddenGemEligible || candidate.isPopular) return false;
-  if (distanceFromUserMiles > radiusMiles) return false;
-  if (popularityScore > 48) return false;
-  if (confidenceTier === 'low' || confidenceTier === 'excluded') return false;
-  if (confidenceScore < 52) return false;
-  if (candidate.sourceMetadata?.promotionStrength === 'suppressed') return false;
-  if (
-    blockedReasons.has('popular_trail') ||
-    blockedReasons.has('too_short') ||
-    blockedReasons.has('seasonal_closure') ||
-    blockedReasons.has('weather_risk') ||
-    blockedReasons.has('access_restricted') ||
-    blockedReasons.has('hazard_flagged') ||
-    blockedReasons.has('rig_mismatch') ||
-    blockedReasons.has('radius_exceeded') ||
-    blockedReasons.has('excluded_hiking') ||
-    blockedReasons.has('excluded_pedestrian') ||
-    blockedReasons.has('excluded_moto_only') ||
-    blockedReasons.has('excluded_bike_only') ||
-    blockedReasons.has('suppressed_low_confidence')
-  ) {
-    return false;
-  }
-  if (
-    classification !== 'candidate_hidden_gem' &&
-    classification !== 'candidate_vehicle_trail' &&
-    classification !== 'visible_with_warning'
-  ) {
-    return false;
-  }
-
-  return candidate.hiddenGemScore >= 56 && candidate.suitabilityScore >= 58;
+    candidate.route.distanceFromUserMiles ??
+    candidate.route.distanceMiles ??
+    Number.POSITIVE_INFINITY
+  );
 }
 
-function isHiddenGemFallbackCandidate(
+function getStageAdjustedHiddenGemScore(candidate: HiddenGemResult, stage: number): number {
+  const thresholds = resolveHiddenGemFallbackThresholds(stage);
+  const popularity = candidate.sourceMetadata?.popularityScore ?? candidate.route.popularityScore ?? 45;
+  const popularityPenalty =
+    popularity >= 40
+      ? 18
+      : popularity >= 34
+        ? 10
+        : popularity >= 28
+          ? 4
+          : 0;
+  const recoveredPenalty = popularityPenalty * (1 - thresholds.popularityPenaltyStrength);
+  return clamp(candidate.hiddenGemScore + recoveredPenalty, 0, 100);
+}
+
+function isStageEligibleHiddenGemCandidate(
   candidate: HiddenGemResult,
   radiusMiles: number,
+  stage: number,
 ): boolean {
-  const route = candidate.route;
-  const confidenceTier = candidate.sourceMetadata?.confidenceTier;
-  const confidenceScore = candidate.sourceMetadata?.confidenceScore ?? 0;
-  const popularityScore =
-    candidate.sourceMetadata?.popularityScore ??
-    route.popularityScore ??
-    HIDDEN_GEM_UNKNOWN_POPULARITY;
-  const distanceFromUserMiles =
-    candidate.sourceMetadata?.distanceFromUserMiles ??
-    route.distanceFromUserMiles ??
-    route.distanceMiles ??
-    Number.POSITIVE_INFINITY;
-  const blockedReasons = new Set(candidate.disqualificationReasons);
+  if (stage === 0) return candidate.hiddenGemEligible;
 
-  if (candidate.hiddenGemEligible || candidate.isPopular) return false;
+  const route = candidate.route;
+  const classification = candidate.sourceMetadata?.classification;
+  const blockedReasons = new Set(candidate.disqualificationReasons);
+  const distanceFromUserMiles = getHiddenGemDistanceFromUserMiles(candidate);
+
+  if (candidate.isPopular) return false;
   if (distanceFromUserMiles > radiusMiles) return false;
-  if (confidenceTier === 'low' || confidenceTier === 'excluded') return false;
-  if (confidenceScore < 50) return false;
-  if (candidate.sourceMetadata?.promotionStrength === 'suppressed') return false;
+  if (blockedReasons.has('radius_exceeded') || blockedReasons.has('popular_trail') || blockedReasons.has('too_short')) {
+    return false;
+  }
   if (
-    blockedReasons.has('popular_trail') ||
-    blockedReasons.has('seasonal_closure') ||
-    blockedReasons.has('weather_risk') ||
     blockedReasons.has('access_restricted') ||
-    blockedReasons.has('hazard_flagged') ||
-    blockedReasons.has('rig_mismatch') ||
-    blockedReasons.has('radius_exceeded') ||
     blockedReasons.has('excluded_hiking') ||
     blockedReasons.has('excluded_pedestrian') ||
     blockedReasons.has('excluded_moto_only') ||
@@ -2358,12 +2402,16 @@ function isHiddenGemFallbackCandidate(
   ) {
     return false;
   }
+  if (
+    classification !== 'accepted_hidden_gem' &&
+    classification !== 'candidate_hidden_gem' &&
+    classification !== 'candidate_vehicle_trail' &&
+    classification !== 'visible_with_warning'
+  ) {
+    return false;
+  }
 
-  return (
-    popularityScore <= 50 &&
-    candidate.hiddenGemScore >= 52 &&
-    candidate.suitabilityScore >= 54
-  );
+  return true;
 }
 
 export function getHiddenGemRecommendations(
@@ -2373,7 +2421,11 @@ export function getHiddenGemRecommendations(
 ): HiddenGemRecommendationPage {
   const pageSize = Math.max(1, options.pageSize ?? 10);
   const radiusMiles = options.radiusMiles ?? 500;
-  const dedupedOpportunities = dedupeExploreRoutes(opportunities, compatResults, radiusMiles);
+  const dedupedOpportunities = dedupeExploreRoutes(
+    opportunities.filter(isDiscoverableRoute),
+    compatResults,
+    radiusMiles,
+  );
   const emptyDiagnostics: HiddenGemPipelineDiagnostics = {
     rawCandidateCount: opportunities.length,
     dedupedCandidateCount: dedupedOpportunities.length,
@@ -2387,6 +2439,13 @@ export function getHiddenGemRecommendations(
     fallbackCandidateCount: 0,
     finalBaselineEligibleCount: 0,
     unknownPopularityCount: 0,
+    healthyThreshold: HIDDEN_GEM_HEALTHY_THRESHOLD,
+    minimumAcceptableThreshold: HIDDEN_GEM_MINIMUM_ACCEPTABLE_THRESHOLD,
+    fallbackStage: 0,
+    fallbackMode: 'strict',
+    effectiveRadiusMiles: radiusMiles,
+    criteriaExpanded: false,
+    uiNotice: null,
   };
 
   if (dedupedOpportunities.length === 0) {
@@ -2423,10 +2482,12 @@ export function getHiddenGemRecommendations(
   const radiusMatchedCandidates = evaluatedCandidates.filter(
     (candidate) => !candidate.disqualificationReasons.includes('radius_exceeded'),
   );
+  const baselineThresholds = resolveHiddenGemFallbackThresholds(0);
   const tripTypeMatchedCandidates = radiusMatchedCandidates.filter(
-    (candidate) => (candidate.sourceMetadata?.tripTypeFitScore ?? 72) >= 60,
+    (candidate) =>
+      (candidate.sourceMetadata?.tripTypeFitScore ?? 72) >=
+      resolveHiddenGemsTripTypeFitFloor(baselineThresholds.tripTypeMatchMode),
   );
-  const targetRecoveryCount = Math.max(pageSize, HIDDEN_GEM_RECOVERY_MIN_COUNT);
   const strictEligibleCandidates = evaluatedCandidates.filter((candidate) => candidate.hiddenGemEligible);
   const popularTrailSuppressedCount = radiusMatchedCandidates.filter((candidate) =>
     candidate.disqualificationReasons.includes('popular_trail'),
@@ -2434,7 +2495,9 @@ export function getHiddenGemRecommendations(
   const qualityThresholdRejectedCount = radiusMatchedCandidates.filter((candidate) =>
     candidate.disqualificationReasons.includes('suppressed_low_confidence') ||
     candidate.sourceMetadata?.promotionStrength === 'suppressed' ||
-    (!candidate.hiddenGemEligible && candidate.hiddenGemScore < 62)
+    (!candidate.hiddenGemEligible &&
+      normalizeHiddenGemsScore(getStageAdjustedHiddenGemScore(candidate, 0)) <
+        baselineThresholds.minScoreNormalized)
   ).length;
   const validationRejectedCount = radiusMatchedCandidates.filter((candidate) =>
     candidate.disqualificationReasons.some((reason) =>
@@ -2446,56 +2509,68 @@ export function getHiddenGemRecommendations(
   const unknownPopularityCount = radiusMatchedCandidates.filter(
     (candidate) => candidate.sourceMetadata?.popularityScore == null,
   ).length;
+  const strictCount = strictEligibleCandidates.length;
+  const maxFallbackStage = resolveHiddenGemMaxFallbackStage(strictCount);
+  const targetCount =
+    strictCount >= HIDDEN_GEM_HEALTHY_THRESHOLD
+      ? HIDDEN_GEM_HEALTHY_THRESHOLD
+      : strictCount >= HIDDEN_GEM_MINIMUM_ACCEPTABLE_THRESHOLD
+        ? strictCount
+        : HIDDEN_GEM_MINIMUM_ACCEPTABLE_THRESHOLD;
   let surfacedCandidates = strictEligibleCandidates;
+  let appliedFallbackStage = 0;
   let recoveryCandidateCount = 0;
   let fallbackCandidateCount = 0;
 
-  if (radiusMiles >= 100 && strictEligibleCandidates.length < targetRecoveryCount) {
-    const supplementalCandidates = evaluatedCandidates.filter((candidate) =>
-      !strictEligibleCandidates.some((eligible) => eligible.id === candidate.id) &&
-      isHiddenGemRecoveryCandidate(candidate, radiusMiles),
+  for (let stage = 1; stage <= maxFallbackStage; stage += 1) {
+    const stageCandidates = evaluatedCandidates.filter((candidate) =>
+      isStageEligibleHiddenGemCandidate(candidate, radiusMiles, stage),
     );
-    recoveryCandidateCount = supplementalCandidates.length;
-    surfacedCandidates = [...strictEligibleCandidates, ...supplementalCandidates]
-      .sort((a, b) => {
-        const scoreDiff = b.hiddenGemScore - a.hiddenGemScore;
-        if (scoreDiff !== 0) return scoreDiff;
+    const addedCount = stageCandidates.filter((candidate) =>
+      !strictEligibleCandidates.some((eligible) => eligible.id === candidate.id),
+    ).length;
 
-        const suitabilityDiff = b.suitabilityScore - a.suitabilityScore;
-        if (suitabilityDiff !== 0) return suitabilityDiff;
+    if (stage <= 3) {
+      recoveryCandidateCount = Math.max(recoveryCandidateCount, addedCount);
+    }
+    if (stage >= 4) {
+      fallbackCandidateCount = Math.max(fallbackCandidateCount, addedCount);
+    }
 
-        const confidenceDiff =
-          (b.sourceMetadata?.confidenceScore ?? 0) - (a.sourceMetadata?.confidenceScore ?? 0);
-        if (confidenceDiff !== 0) return confidenceDiff;
+    if (stageCandidates.length <= surfacedCandidates.length) {
+      continue;
+    }
 
-        return a.id.localeCompare(b.id);
-      })
-      .slice(0, Math.max(targetRecoveryCount, strictEligibleCandidates.length));
-  }
+    surfacedCandidates = stageCandidates;
+    appliedFallbackStage = stage;
 
-  if (surfacedCandidates.length === 0 && radiusMiles >= 100) {
-    const fallbackCandidates = evaluatedCandidates
-      .filter((candidate) => isHiddenGemFallbackCandidate(candidate, radiusMiles))
-      .sort((a, b) => {
-        const scoreDiff = b.hiddenGemScore - a.hiddenGemScore;
-        if (scoreDiff !== 0) return scoreDiff;
-
-        const suitabilityDiff = b.suitabilityScore - a.suitabilityScore;
-        if (suitabilityDiff !== 0) return suitabilityDiff;
-
-        const confidenceDiff =
-          (b.sourceMetadata?.confidenceScore ?? 0) - (a.sourceMetadata?.confidenceScore ?? 0);
-        if (confidenceDiff !== 0) return confidenceDiff;
-
-        return a.id.localeCompare(b.id);
-      })
-      .slice(0, targetRecoveryCount);
-
-    fallbackCandidateCount = fallbackCandidates.length;
-    if (fallbackCandidates.length > 0) {
-      surfacedCandidates = fallbackCandidates;
+    if (stageCandidates.length >= targetCount) {
+      break;
     }
   }
+
+  surfacedCandidates = surfacedCandidates
+    .slice()
+    .sort((a, b) => {
+      const scoreDiff =
+        getStageAdjustedHiddenGemScore(b, appliedFallbackStage) -
+        getStageAdjustedHiddenGemScore(a, appliedFallbackStage);
+      if (scoreDiff !== 0) return scoreDiff;
+
+      const suitabilityDiff = b.suitabilityScore - a.suitabilityScore;
+      if (suitabilityDiff !== 0) return suitabilityDiff;
+
+      const confidenceDiff =
+        (b.sourceMetadata?.confidenceScore ?? 0) - (a.sourceMetadata?.confidenceScore ?? 0);
+      if (confidenceDiff !== 0) return confidenceDiff;
+
+      return a.id.localeCompare(b.id);
+    });
+
+  surfacedCandidates = surfacedCandidates.slice(0, HIDDEN_GEMS_MAX_RESULTS_RENDERED);
+
+  const appliedThresholds = resolveHiddenGemFallbackThresholds(appliedFallbackStage);
+  const effectiveRadiusMiles = resolveHiddenGemEffectiveRadiusMiles(radiusMiles, appliedFallbackStage);
 
   const pipelineDiagnostics: HiddenGemPipelineDiagnostics = {
     rawCandidateCount: opportunities.length,
@@ -2510,6 +2585,13 @@ export function getHiddenGemRecommendations(
     fallbackCandidateCount,
     finalBaselineEligibleCount: surfacedCandidates.length,
     unknownPopularityCount,
+    healthyThreshold: HIDDEN_GEM_HEALTHY_THRESHOLD,
+    minimumAcceptableThreshold: HIDDEN_GEM_MINIMUM_ACCEPTABLE_THRESHOLD,
+    fallbackStage: appliedFallbackStage,
+    fallbackMode: resolveHiddenGemFallbackMode(appliedFallbackStage),
+    effectiveRadiusMiles,
+    criteriaExpanded: appliedFallbackStage > 0,
+    uiNotice: surfacedCandidates.length > 0 ? appliedThresholds.uiNotice : null,
   };
 
   const totalPages = Math.max(1, Math.ceil(surfacedCandidates.length / pageSize));
@@ -2540,7 +2622,11 @@ export function getPopularTrailRecommendations(
   options: HiddenGemRecommendationOptions & { discoveryTab?: DiscoveryTabId | null } = {},
 ): CategorizedRoute[] {
   const radiusMiles = options.radiusMiles ?? 500;
-  const dedupedOpportunities = dedupeExploreRoutes(opportunities, compatResults, radiusMiles);
+  const dedupedOpportunities = dedupeExploreRoutes(
+    opportunities.filter(isDiscoverableRoute),
+    compatResults,
+    radiusMiles,
+  );
   const now = options.now ?? new Date();
 
   const rankedCandidates = dedupedOpportunities
@@ -2553,13 +2639,12 @@ export function getPopularTrailRecommendations(
       const confidence = computeVehicleTrailConfidence(op, compat);
       const identityKey = getRouteIdentityKey(op);
 
-      if (!isRouteWithinRadius(op, radiusMiles) || !isPopularTrail(op) || !isVehicleAppropriateRoute(op)) {
-        return null;
-      }
-      if (seasonStatus === 'closed') {
-        return null;
-      }
-      if (confidence.confidenceTier === 'excluded' || confidence.confidenceTier === 'low') {
+      if (
+        !isDiscoverableRoute(op) ||
+        !isRouteWithinRadius(op, radiusMiles) ||
+        !isPopularTrail(op) ||
+        !isVehicleAppropriateRoute(op)
+      ) {
         return null;
       }
 
@@ -2593,15 +2678,12 @@ export function getPopularTrailRecommendations(
         recommendationStatus: options.recommendationStatus ?? null,
       });
 
-      if (refinedScore.promotionStrength === 'suppressed') {
-        return null;
-      }
-      if (refinedScore.confidenceWeightedScore < 54) {
-        return null;
-      }
+      const promotionStrength = refinedScore.promotionStrength === 'suppressed'
+        ? 'softened'
+        : refinedScore.promotionStrength;
 
       const classification: ExploreRouteClassification =
-        refinedScore.promotionStrength === 'softened'
+        promotionStrength === 'softened'
           ? 'visible_with_warning'
           : 'candidate_vehicle_trail';
       const discoveryScore = calculateDiscoveryScore(op, compat, radiusMiles, false);
@@ -2645,7 +2727,7 @@ export function getPopularTrailRecommendations(
 
       return {
         route,
-        promotionStrength: refinedScore.promotionStrength,
+        promotionStrength,
         classificationConfidence: refinedScore.classificationConfidence,
       };
     })

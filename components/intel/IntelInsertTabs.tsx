@@ -136,8 +136,16 @@ export default function IntelInsertTabs({
         title={getSheetTitle()}
         icon={getSheetIcon() as any}
         eyebrow="DISPATCH INSERT PANEL"
-        maxWidth={860}
-        maxHeightFraction={0.74}
+        overlayClass="workflow"
+        maxWidth={980}
+        maxHeightFraction={0.92}
+        minHeightFraction={0.86}
+        scrollable
+        dismissOnBackdrop
+        allowSwipeDismiss
+        showHandle={false}
+        bodyStyle={styles.insertPanelBody}
+        contentContainerStyle={styles.insertPanelContent}
       >
         {activeInsert === 'permits' && (
           <PermitsAccessPanel onToast={onToast} />
@@ -203,6 +211,14 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: TACTICAL.amber,
+  },
+  insertPanelBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  insertPanelContent: {
+    flexGrow: 1,
+    minHeight: 0,
   },
 });
 

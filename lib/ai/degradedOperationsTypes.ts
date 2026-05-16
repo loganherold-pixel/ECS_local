@@ -37,3 +37,18 @@ export interface ECSDegradedOperationsInput {
   forecastAvailable?: boolean;
   cloudDependentRecommendations?: boolean;
 }
+
+export interface ECSRouteGuidanceAvailabilityInput {
+  hasActiveRoute?: boolean;
+  routeGuidanceRequested?: boolean;
+  hasRouteGeometry?: boolean;
+  gpsStatus?: string | null;
+}
+
+export interface ECSRouteGuidanceAvailability {
+  requested: boolean;
+  available: boolean;
+  unavailable: boolean;
+  reason: 'not_requested' | 'no_active_route' | 'missing_geometry' | 'gps_missing' | 'available';
+  label: 'Route guidance available' | 'Route guidance unavailable' | 'Route guidance not active';
+}

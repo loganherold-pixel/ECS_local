@@ -41,9 +41,20 @@ import type {
   BluProviderId,
   BluConnectionState,
   BluSystemStatus,
+  BluDevice,
 } from './BluTypes';
 import { EMPTY_BLU_SUMMARY } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
+import { bluSessionStore } from './BluSessionStore';
+import {
+  getBluetoothTelemetrySourceLabel,
+  inferBluetoothTelemetrySource,
+  isBluetoothSourceLive,
+  shouldAcceptBluetoothTelemetry,
+} from './bluetoothLiveTelemetry';
+import { describeEcoFlowBluEligibility } from './ecoflowBluTelemetryEligibility';
+import { ecsTelemetryStore } from '../src/telemetry/ECSTelemetryStore';
+import { bluTelemetryToEcsTelemetryEvents } from '../src/telemetry/telemetryAdapters';
 
 // ── Configuration ───────────────────────────────────────────────────────
 
@@ -59,10 +70,28 @@ const FRESHNESS_CHECK_INTERVAL_MS = 10_000;
 // ── Subscriber type ─────────────────────────────────────────────────────
 
 type BluStateSubscriber = (summary: BluSummary) => void;
+type BluFreshnessState = 'fresh' | 'updating' | 'stale';
 
 // ── Per-device telemetry cache ──────────────────────────────────────────
 
 type DeviceKey = string; // `${provider}:${device_id}`
+type TelemetryRejectReason =
+  | 'missing_device_id'
+  | 'unregistered_device'
+  | 'non_primary_device'
+  | 'unauthorized_cloud_telemetry'
+  | 'unsupported_product_type'
+  | 'stale_session_primary';
+
+type TelemetryValidationResult =
+  | { ok: true; device: BluDevice }
+  | {
+      ok: false;
+      reason: TelemetryRejectReason;
+      device?: BluDevice;
+      activePrimaryDeviceId: string | null;
+      productType?: string | null;
+    };
 
 function makeKey(provider: BluProviderId, deviceId: string): DeviceKey {
   return `${provider}:${deviceId}`;
@@ -79,6 +108,7 @@ class BluStateStore {
   private pollSuccessCount = 0;
   private pollFailureCount = 0;
   private consecutiveFailures = 0;
+  private freshnessState: BluFreshnessState = 'stale';
 
   /** Phase 1D: Whether a reconnect attempt is in progress. */
   private isReconnecting = false;
@@ -267,9 +297,40 @@ class BluStateStore {
    * Updates the per-device cache and recomputes the summary.
    */
   ingestTelemetry(telemetry: BluTelemetry): void {
-    const key = makeKey(telemetry.provider, telemetry.device_id);
-    this.telemetryCache.set(key, telemetry);
-    this.lastIngestAt = Date.now();
+    const source = inferBluetoothTelemetrySource(telemetry);
+    if (!shouldAcceptBluetoothTelemetry(source)) {
+      console.log('[BT_LIVE] mock_disabled', {
+        provider: telemetry.provider,
+        deviceId: telemetry.device_id,
+      });
+      return;
+    }
+
+    const validation = this.validateTelemetryBeforeCommit(telemetry, source);
+    if (!validation.ok) {
+      this.logRejectedTelemetry(telemetry, validation, source);
+      return;
+    }
+
+    const now = Date.now();
+    const enrichedTelemetry: BluTelemetry = {
+      ...telemetry,
+      source,
+      updatedAt: telemetry.updatedAt ?? telemetry.timestamp ?? now,
+      telemetrySourceLabel: telemetry.telemetrySourceLabel ?? getBluetoothTelemetrySourceLabel(source),
+      isLive: isBluetoothSourceLive(source) && telemetry.isLive !== false && telemetry.telemetryUnsupported !== true,
+      raw: {
+        ...(telemetry.raw ?? {}),
+        deviceName: validation.device.display_name,
+        model: validation.device.model,
+      },
+    };
+
+    const key = makeKey(enrichedTelemetry.provider, enrichedTelemetry.device_id);
+    this.telemetryCache.set(key, enrichedTelemetry);
+    ecsTelemetryStore.ingestEvents(bluTelemetryToEcsTelemetryEvents(enrichedTelemetry));
+    this.lastIngestAt = now;
+    this.freshnessState = 'fresh';
     this.pollSuccessCount++;
     this.consecutiveFailures = 0;
 
@@ -280,15 +341,129 @@ class BluStateStore {
     }
 
     console.log(
-      `[BluStateStore] Telemetry ingested: ${telemetry.provider}:${telemetry.device_id}` +
-      ` | SOC=${telemetry.battery_percent ?? '?'}%` +
-      ` | IN=${telemetry.input_watts ?? '?'}W` +
-      ` | OUT=${telemetry.output_watts ?? '?'}W` +
-      ` | SOLAR=${telemetry.solar_input_watts ?? '?'}W` +
-      ` | RT=${telemetry.estimated_runtime_minutes ?? '?'}min`,
+      `[BluStateStore] Telemetry ingested: ${enrichedTelemetry.provider}:${enrichedTelemetry.device_id}` +
+      ` | source=${enrichedTelemetry.telemetrySourceLabel}` +
+      ` | SOC=${enrichedTelemetry.battery_percent ?? '?'}%` +
+      ` | IN=${enrichedTelemetry.input_watts ?? '?'}W` +
+      ` | OUT=${enrichedTelemetry.output_watts ?? '?'}W` +
+      ` | SOLAR=${enrichedTelemetry.solar_input_watts ?? '?'}W` +
+      ` | RT=${enrichedTelemetry.estimated_runtime_minutes ?? '?'}min`,
+    );
+
+    console.log(
+      enrichedTelemetry.telemetryUnsupported ? '[BT_LIVE] telemetry_unsupported' : '[BT_LIVE] telemetry_decoded',
+      {
+        provider: enrichedTelemetry.provider,
+        deviceId: enrichedTelemetry.device_id,
+        source: enrichedTelemetry.source,
+        isLive: enrichedTelemetry.isLive,
+      },
     );
 
     this.recomputeSummary();
+  }
+
+  private validateTelemetryBeforeCommit(
+    telemetry: BluTelemetry,
+    source: ReturnType<typeof inferBluetoothTelemetrySource>,
+  ): TelemetryValidationResult {
+    const provider = telemetry.provider;
+    const deviceId = String(telemetry.device_id ?? '').trim();
+    const primary = bluDeviceRegistry.getPrimary();
+    const activePrimaryDeviceId = primary?.device_id ?? null;
+
+    if (!deviceId) {
+      return {
+        ok: false,
+        reason: 'missing_device_id',
+        activePrimaryDeviceId,
+      };
+    }
+
+    const device = bluDeviceRegistry.getDevice(provider, deviceId);
+    if (!device) {
+      return {
+        ok: false,
+        reason: 'unregistered_device',
+        activePrimaryDeviceId,
+      };
+    }
+
+    if (!primary || primary.provider !== provider || primary.device_id !== deviceId) {
+      return {
+        ok: false,
+        reason: 'non_primary_device',
+        device,
+        activePrimaryDeviceId,
+        productType: device.product_type ?? null,
+      };
+    }
+
+    const sessionPrimaryDeviceId = bluSessionStore.getSession().primaryDeviceId;
+    if (
+      telemetry.sessionPrimaryDeviceId &&
+      sessionPrimaryDeviceId &&
+      telemetry.sessionPrimaryDeviceId !== sessionPrimaryDeviceId
+    ) {
+      return {
+        ok: false,
+        reason: 'stale_session_primary',
+        device,
+        activePrimaryDeviceId,
+        productType: device.product_type ?? null,
+      };
+    }
+
+    const isEcoFlowCloudTelemetry =
+      provider === 'ecoflow' && source === 'provider_cloud';
+    if (isEcoFlowCloudTelemetry) {
+      const eligibility = describeEcoFlowBluEligibility({
+        deviceId: device.device_id,
+        deviceName: device.display_name,
+        model: device.model,
+        productType: device.product_type,
+      });
+
+      if (device.connection_state === 'unsupported') {
+        return {
+          ok: false,
+          reason: 'unauthorized_cloud_telemetry',
+          device,
+          activePrimaryDeviceId,
+          productType: eligibility.productType,
+        };
+      }
+
+      if (device.telemetry_capable === false || !eligibility.telemetryCapable) {
+        return {
+          ok: false,
+          reason: 'unsupported_product_type',
+          device,
+          activePrimaryDeviceId,
+          productType: eligibility.productType,
+        };
+      }
+    }
+
+    return { ok: true, device };
+  }
+
+  private logRejectedTelemetry(
+    telemetry: BluTelemetry,
+    validation: Exclude<TelemetryValidationResult, { ok: true }>,
+    source: ReturnType<typeof inferBluetoothTelemetrySource>,
+  ): void {
+    console.warn('[BluStateStore] Telemetry rejected', {
+      reason: validation.reason,
+      provider: telemetry.provider,
+      deviceId: telemetry.device_id || null,
+      activePrimaryDeviceId: validation.activePrimaryDeviceId,
+      productType: validation.productType ?? validation.device?.product_type ?? null,
+      connectionState: validation.device?.connection_state ?? null,
+      source,
+      pollToken: telemetry.pollToken ?? null,
+      sessionPrimaryDeviceId: telemetry.sessionPrimaryDeviceId ?? null,
+    });
   }
 
   /**
@@ -323,6 +498,56 @@ class BluStateStore {
   }
 
   /**
+   * Remove cached telemetry for a single provider without disturbing
+   * other providers that may still be connected and live.
+   */
+  clearProviderTelemetry(provider: BluProviderId): void {
+    let removed = false;
+
+    for (const key of Array.from(this.telemetryCache.keys())) {
+      if (key.startsWith(`${provider}:`)) {
+        const [, deviceId] = key.split(':');
+        if (deviceId) ecsTelemetryStore.markDeviceUnavailable(deviceId, 'power_device', `${provider} disconnected.`);
+        this.telemetryCache.delete(key);
+        removed = true;
+      }
+    }
+
+    if (!removed && this.summary.active_provider !== provider) return;
+
+    let latestTimestamp: number | null = null;
+    for (const telemetry of this.telemetryCache.values()) {
+      if (!latestTimestamp || telemetry.timestamp > latestTimestamp) {
+        latestTimestamp = telemetry.timestamp;
+      }
+    }
+    this.lastIngestAt = latestTimestamp;
+    this.freshnessState = latestTimestamp === null
+      ? 'stale'
+      : this.getFreshnessStateForAge(Date.now() - latestTimestamp);
+
+    if (this.telemetryCache.size === 0) {
+      const hadLiveState =
+        this.summary.available ||
+        this.isReconnecting ||
+        this.connectionSuccessAt !== null;
+
+      this.summary = { ...EMPTY_BLU_SUMMARY };
+      this.lastIngestAt = null;
+      this.freshnessState = 'stale';
+      this.isReconnecting = false;
+      this.connectionSuccessAt = null;
+
+      if (hadLiveState) {
+        this.notify();
+      }
+      return;
+    }
+
+    this.recomputeSummary();
+  }
+
+  /**
    * Phase 1D: Set reconnecting state.
    * Called when the adapter detects a stale session and starts reconnecting.
    */
@@ -348,12 +573,16 @@ class BluStateStore {
    * Clear all telemetry and reset to empty state.
    */
   reset(): void {
+    for (const telemetry of this.telemetryCache.values()) {
+      ecsTelemetryStore.markDeviceUnavailable(telemetry.device_id, 'power_device', 'Power telemetry reset.');
+    }
     this.telemetryCache.clear();
     this.summary = { ...EMPTY_BLU_SUMMARY };
     this.lastIngestAt = null;
     this.pollSuccessCount = 0;
     this.pollFailureCount = 0;
     this.consecutiveFailures = 0;
+    this.freshnessState = 'stale';
     this.isReconnecting = false;
     this.connectionSuccessAt = null;
     this.notify();
@@ -383,6 +612,8 @@ class BluStateStore {
       timestamp: Date.now(),
       provider: 'ecoflow',
       device_id: data.deviceId,
+      source: 'provider_cloud',
+      isLive: false,
       battery_percent: data.batteryPct ?? undefined,
       solar_input_watts: data.solarWatts ?? undefined,
       input_watts: data.inputWatts ?? undefined,
@@ -431,8 +662,15 @@ class BluStateStore {
     if (this.lastIngestAt === null) return;
 
     const ageMs = Date.now() - this.lastIngestAt;
+    const nextFreshnessState = this.getFreshnessStateForAge(ageMs);
 
-    if (ageMs > GRACE_WINDOW_MS) {
+    if (nextFreshnessState === this.freshnessState) {
+      return;
+    }
+
+    this.freshnessState = nextFreshnessState;
+
+    if (nextFreshnessState === 'stale') {
       console.log(
         `[BluStateStore] Telemetry stale (${Math.round(ageMs / 1000)}s > ${GRACE_WINDOW_MS / 1000}s grace window). Reverting to placeholder.`,
       );
@@ -443,20 +681,25 @@ class BluStateStore {
         ...this.summary,
         connection_state: 'error',
         is_stale: true,
+        source: 'cache',
+        sourceLabel: 'Last Known',
+        isLive: false,
       };
 
       if (!this.summaryEquals(this.summary, staleSummary)) {
         this.summary = staleSummary;
         this.notify();
       }
-    } else if (ageMs > FRESHNESS_THRESHOLD_MS) {
-      // Phase 1E: Transitional "updating" state — notify subscribers
-      // so UI can show subtle "Updating..." indicator
-      this.notify();
     }
   }
 
   // ── Summary Recomputation ──────────────────────────────────────────
+
+  private getFreshnessStateForAge(ageMs: number): BluFreshnessState {
+    if (ageMs > GRACE_WINDOW_MS) return 'stale';
+    if (ageMs > FRESHNESS_THRESHOLD_MS) return 'updating';
+    return 'fresh';
+  }
 
   /**
    * Recompute the BLU summary from the primary device's cached telemetry.
@@ -509,6 +752,11 @@ class BluStateStore {
       battery_watts: t.battery_watts ?? null,
       ac_output_watts: t.ac_output_watts ?? null,
       dc_output_watts: t.dc_output_watts ?? null,
+      source: t.source ?? inferBluetoothTelemetrySource(t),
+      sourceLabel: t.telemetrySourceLabel ?? getBluetoothTelemetrySourceLabel(t.source),
+      isLive: t.isLive === true,
+      telemetryUnsupported: t.telemetryUnsupported === true,
+      telemetryUnsupportedReason: t.telemetryUnsupportedReason,
     };
 
     // Only notify if values actually changed
@@ -539,6 +787,11 @@ class BluStateStore {
       a.battery_watts === b.battery_watts &&
       a.ac_output_watts === b.ac_output_watts &&
       a.dc_output_watts === b.dc_output_watts
+      && a.source === b.source
+      && a.sourceLabel === b.sourceLabel
+      && a.isLive === b.isLive
+      && a.telemetryUnsupported === b.telemetryUnsupported
+      && a.telemetryUnsupportedReason === b.telemetryUnsupportedReason
     );
   }
 }

@@ -3,11 +3,15 @@ import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 import type { RoadNavCoordinate, RoadNavDestination } from './mapboxRoadNavigation';
 import type { ExpeditionOpportunity } from './discoverEngine';
+import {
+  extractExploreRouteCampMarkers,
+  type ExploreRouteCampMarker,
+} from './exploreRouteCampHandoff';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
 const nativeNavigationHandoffCache = createPersistedKeyValueCache('ecs_navigation_handoff');
 
-export type NavigationHandoffSource = 'search' | 'explore' | 'saved' | 'import';
+export type NavigationHandoffSource = 'search' | 'explore' | 'saved' | 'import' | 'dispatch';
 export type NavigationHandoffType =
   | 'address'
   | 'place'
@@ -15,6 +19,15 @@ export type NavigationHandoffType =
   | 'trailhead'
   | 'hybrid_route';
 export type NavigationTripMode = 'road' | 'trail' | 'hybrid';
+export type NavigationRouteSource =
+  | 'gpx'
+  | 'cached_gpx'
+  | 'built'
+  | 'explore'
+  | 'drawn'
+  | 'saved'
+  | 'search'
+  | 'dispatch_recovery';
 
 export interface NavigationTrailWaypoint {
   id: string;
@@ -62,12 +75,40 @@ export interface NavigationHandoffPayload {
   trailLengthMiles: number | null;
   trailCategory: string | null;
   tripMode: NavigationTripMode | null;
+  routeSource?: NavigationRouteSource;
+  requiresOnlineRouting?: boolean;
   trailWaypoints: NavigationTrailWaypoint[];
   trailDecisionPoints: NavigationTrailDecisionPoint[];
+  campMarkers?: ExploreRouteCampMarker[];
   routeMetadata: Record<string, unknown> | null;
   landmarkMetadata: Record<string, unknown> | null;
   raw: unknown;
   createdAt: string;
+}
+
+export function getNavigationHandoffRouteUnavailableReason(
+  payload: Pick<
+    NavigationHandoffPayload,
+    'coordinate' | 'trailheadCoordinate' | 'roadDestinationCoordinate' | 'trailGeometry'
+  > | null | undefined,
+): string | null {
+  if (!payload) return 'Route path unavailable.';
+  const hasGeometry = Array.isArray(payload.trailGeometry) && payload.trailGeometry.length > 1;
+  const hasCoordinate =
+    !!payload.coordinate ||
+    !!payload.trailheadCoordinate ||
+    !!payload.roadDestinationCoordinate;
+
+  return hasGeometry || hasCoordinate ? null : 'Route path unavailable.';
+}
+
+export function canStageNavigationHandoffRoute(
+  payload: Pick<
+    NavigationHandoffPayload,
+    'coordinate' | 'trailheadCoordinate' | 'roadDestinationCoordinate' | 'trailGeometry'
+  > | null | undefined,
+): boolean {
+  return getNavigationHandoffRouteUnavailableReason(payload) == null;
 }
 
 function isCoordinate(value: unknown): value is RoadNavCoordinate {
@@ -340,6 +381,41 @@ function extractRoadCoordinate(value: unknown): RoadNavCoordinate | null {
   return null;
 }
 
+function extractFinalCoordinate(value: unknown): RoadNavCoordinate | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const routeMetadata =
+    candidate.routeMetadata && typeof candidate.routeMetadata === 'object'
+      ? (candidate.routeMetadata as Record<string, unknown>)
+      : candidate.route_metadata && typeof candidate.route_metadata === 'object'
+        ? (candidate.route_metadata as Record<string, unknown>)
+        : {};
+  const fields = [
+    candidate.finalDestinationCoordinate,
+    candidate.final_destination_coordinate,
+    candidate.destinationCoordinate,
+    candidate.destination_coordinate,
+    candidate.endpointCoordinate,
+    candidate.endpoint_coordinate,
+    candidate.endCoordinate,
+    candidate.end_coordinate,
+    candidate.finishCoordinate,
+    candidate.finish_coordinate,
+    routeMetadata.finalDestinationCoordinate,
+    routeMetadata.destinationCoordinate,
+    routeMetadata.endpointCoordinate,
+    routeMetadata.endCoordinate,
+    routeMetadata.finishCoordinate,
+  ];
+
+  for (const field of fields) {
+    const coordinate = normalizeCoordinate(field);
+    if (coordinate) return coordinate;
+  }
+
+  return null;
+}
+
 function haversineMiles(a: RoadNavCoordinate, b: RoadNavCoordinate): number {
   const R = 3958.8;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
@@ -401,7 +477,7 @@ export function toRoadDestinationFromHandoff(
     title: payload.title,
     subtitle: payload.subtitle,
     coordinate,
-    sourceType: 'explore_handoff',
+    sourceType: payload.routeSource === 'dispatch_recovery' ? 'dispatch_recovery' : 'explore_handoff',
     raw: payload.raw,
   };
 }
@@ -412,6 +488,10 @@ export function buildExploreNavigationPayload(
   const title = String(route.name || 'Trail destination').trim();
   const subtitle = [route.region, route.terrainType].filter(Boolean).join(' • ') || null;
   const routeRecord = route as unknown as Record<string, unknown>;
+  const sourceRouteMetadata =
+    routeRecord.routeMetadata && typeof routeRecord.routeMetadata === 'object'
+      ? (routeRecord.routeMetadata as Record<string, unknown>)
+      : {};
   const trailheadCoordinate =
     Number.isFinite(Number(route.startLat)) && Number.isFinite(Number(route.startLng))
       ? { lat: Number(route.startLat), lng: Number(route.startLng) }
@@ -419,11 +499,13 @@ export function buildExploreNavigationPayload(
   const trailGeometry = extractTrailGeometry(route);
   const coordinate =
     normalizeCoordinate(routeRecord.coordinate) ??
-    trailheadCoordinate ??
-    (trailGeometry.length > 0 ? trailGeometry[trailGeometry.length - 1] : null);
+    extractFinalCoordinate(route) ??
+    (trailGeometry.length > 0 ? trailGeometry[trailGeometry.length - 1] : null) ??
+    trailheadCoordinate;
   const roadDestinationCoordinate = extractRoadCoordinate(route);
   const trailWaypoints = normalizeTrailWaypoints(route, trailGeometry);
   const trailDecisionPoints = normalizeTrailDecisionPoints(route, trailGeometry);
+  const campMarkers = extractExploreRouteCampMarkers(route);
   const trailLengthMiles =
     Number.isFinite(Number(route.distanceMiles))
       ? Math.round(Number(route.distanceMiles) * 10) / 10
@@ -450,16 +532,35 @@ export function buildExploreNavigationPayload(
     trailLengthMiles,
     trailCategory: route.terrainType ?? null,
     tripMode: null,
+    routeSource: 'explore',
+    requiresOnlineRouting: type === 'hybrid_route' || type === 'place',
     trailWaypoints,
     trailDecisionPoints,
+    campMarkers,
     routeMetadata: {
+      ...sourceRouteMetadata,
       region: route.region,
       regionGroup: route.regionGroup,
       terrainType: route.terrainType,
       estimatedDays: route.estimatedDays,
+      estimatedTravelHours:
+        Number.isFinite(Number(routeRecord.estimatedTravelHours))
+          ? Number(routeRecord.estimatedTravelHours)
+          : null,
       remotenessScore: route.remotenessScore,
       difficultyRating: route.difficultyRating ?? null,
+      terrainDifficulty:
+        Number.isFinite(Number(routeRecord.terrainDifficulty))
+          ? Number(routeRecord.terrainDifficulty)
+          : null,
       distanceMiles: route.distanceMiles,
+      campSuitability: typeof routeRecord.campSuitability === 'string' ? routeRecord.campSuitability : null,
+      suggestedCamps:
+        Number.isFinite(Number(routeRecord.suggestedCamps))
+          ? Number(routeRecord.suggestedCamps)
+          : null,
+      routeCampMarkerCount: campMarkers.length,
+      cautionNotes: typeof routeRecord.cautionNotes === 'string' ? routeRecord.cautionNotes : null,
     },
     landmarkMetadata: {
       highlights: Array.isArray(route.highlights) ? route.highlights : [],
@@ -509,21 +610,36 @@ export async function loadNavigationHandoffPayload(): Promise<NavigationHandoffP
   try {
     const parsed = JSON.parse(raw) as NavigationHandoffPayload;
     if (!parsed || typeof parsed !== 'object') return null;
+    const trailGeometry = normalizeGeometry(parsed.trailGeometry);
     return {
       ...parsed,
       coordinate: normalizeCoordinate(parsed.coordinate),
       trailheadCoordinate: normalizeCoordinate(parsed.trailheadCoordinate),
       roadDestinationCoordinate: normalizeCoordinate(parsed.roadDestinationCoordinate),
-      trailGeometry: normalizeGeometry(parsed.trailGeometry),
+      trailGeometry,
       trailWaypoints: normalizeTrailWaypoints(
         { waypoints: parsed.trailWaypoints },
-        normalizeGeometry(parsed.trailGeometry),
+        trailGeometry,
       ),
       trailDecisionPoints: normalizeTrailDecisionPoints(
         { decisionPoints: parsed.trailDecisionPoints },
-        normalizeGeometry(parsed.trailGeometry),
+        trailGeometry,
       ),
-      tripMode: classifyNavigationHandoff(parsed),
+      campMarkers: Array.isArray(parsed.campMarkers)
+        ? parsed.campMarkers.filter((marker) =>
+            Number.isFinite(Number(marker.latitude)) &&
+            Number.isFinite(Number(marker.longitude)),
+          )
+        : [],
+      tripMode: classifyNavigationHandoff({
+        ...parsed,
+        coordinate: normalizeCoordinate(parsed.coordinate),
+        trailheadCoordinate: normalizeCoordinate(parsed.trailheadCoordinate),
+        roadDestinationCoordinate: normalizeCoordinate(parsed.roadDestinationCoordinate),
+        trailGeometry,
+      }),
+      routeSource: parsed.routeSource,
+      requiresOnlineRouting: parsed.requiresOnlineRouting,
     };
   } catch {
     return null;

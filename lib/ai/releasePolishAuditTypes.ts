@@ -7,6 +7,8 @@ export type ECSReleaseChecklistSectionId =
   | 'explore_surface'
   | 'alert_surface'
   | 'brief_surface'
+  | 'expedition_readiness_command_brief'
+  | 'dispersed_camping_eligibility'
   | 'shell_surface'
   | 'shared_command_stack'
   | 'shell_restore'
@@ -29,4 +31,14 @@ export type ECSReleaseRiskSummary = {
   mustFix: string[];
   shouldFix: string[];
   safeToDefer: string[];
+};
+
+export type ECSReleaseQaRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export type ECSReleaseQaSummary = {
+  passed: boolean;
+  riskLevel: ECSReleaseQaRiskLevel;
+  blockers: string[];
+  warnings: string[];
+  recommendedFixes: string[];
 };

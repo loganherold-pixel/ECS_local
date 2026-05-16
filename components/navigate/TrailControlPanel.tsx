@@ -66,10 +66,11 @@ export default function TrailControlPanel({
 
   const handleStop = useCallback(() => {
     hapticCommand();
+    const pointsBeforeStop = trailStore.getStats().point_count;
     trailStore.stop(activeExpeditionName || null);
     setConfirmStop(false);
     onStatusChange();
-    showToast('TRAIL SAVED');
+    showToast(pointsBeforeStop > 0 ? 'TRAIL SAVED' : 'TRAIL ENDED — NO GPS POINTS');
   }, [activeExpeditionName, onStatusChange, showToast]);
 
 

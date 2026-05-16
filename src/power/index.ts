@@ -60,9 +60,6 @@ export {
 // ── BLE Connector ───────────────────────────────────────────────────────
 export { BleConnector } from "./connectors/BleConnector";
 
-// ── Mock Connector (dev / demo) ─────────────────────────────────────────
-export { MockPowerConnector } from "./connectors/MockPowerConnector";
-
 // ── BLE Backoff Utility ─────────────────────────────────────────────────
 export { createBackoff } from "./ble/backoff";
 export type { Backoff, BackoffConfig } from "./ble/backoff";
@@ -178,8 +175,6 @@ export { useBlu } from "../../lib/useBlu";
 export type { BluHookResult } from "../../lib/useBlu";
 
 // ── BLU Phase 1B — EcoFlow Adapter + Connection Hook ────────────────────
-export { useBluConnection } from "../../lib/useBluConnection";
-export type { BluConnectionState_Hook } from "../../lib/useBluConnection";
 export { ecoFlowBluAdapter } from "../../lib/EcoFlowBluAdapter";
 export type {
   EcoFlowConnectResult,

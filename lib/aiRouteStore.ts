@@ -17,6 +17,7 @@ import {
   isDeployedEdgeFunction,
   isEdgeFunctionUnavailableError,
 } from './supabase';
+import { ecsLog } from './ecsLogger';
 import type {
   AIGeneratedRoute,
   AIRouteState,
@@ -30,9 +31,32 @@ const TAG = '[AIRouteStore]';
 // ── Cache TTL: 5 minutes ─────────────────────────────────────
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FAILURE_COOLDOWN_MS = 90 * 1000;
+const UNIFIED_DRIVABLE_TRAILS_CATEGORY = 'all-drivable-trails';
 
 // ── Max routes per category ──────────────────────────────────
 const MAX_ROUTES_PER_CATEGORY = 6;
+
+function debugAIRoutes(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('DISCOVERY', message, details);
+}
+
+function resolveBackendCategory(
+  category: string,
+  radiusMiles: number,
+): DiscoveryTabId {
+  if (category === 'day-trips' || category === 'weekend-trips' || category === 'expeditions' || category === 'remote-routes') {
+    return category;
+  }
+
+  if (category === UNIFIED_DRIVABLE_TRAILS_CATEGORY) {
+    if (radiusMiles <= 50) return 'day-trips';
+    if (radiusMiles <= 150) return 'weekend-trips';
+    if (radiusMiles <= 300) return 'expeditions';
+    return 'remote-routes';
+  }
+
+  return 'expeditions';
+}
 
 // ── Default state ────────────────────────────────────────────
 const DEFAULT_STATE: AIRouteState = {
@@ -184,10 +208,11 @@ class AIRouteStoreClass {
   // ── Fetch AI Routes ──────────────────────────────────────
   async fetchRoutes(params: AIRouteRequestParams): Promise<AIGeneratedRoute[]> {
     const { category } = params;
+    const backendCategory = resolveBackendCategory(category, params.radiusMiles);
 
     // Check cache
     if (this.isCacheValid(category) && this.hasRoutes(category)) {
-      console.log(TAG, `Using cached routes for ${category}`);
+      debugAIRoutes('Using cached AI routes', { category });
       return this.getRoutes(category);
     }
 
@@ -200,7 +225,9 @@ class AIRouteStoreClass {
     if (cooldownUntil > Date.now()) {
       const remainingSeconds = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000));
       const signature = this.lastFailureSignatureByCategory[category] || 'cooldown';
-      console.log(TAG, `Skipping ECS route fetch for ${category} during cooldown (${remainingSeconds}s remaining)`, {
+      debugAIRoutes('Skipping AI route fetch during cooldown', {
+        category,
+        remainingSeconds,
         signature,
       });
       return this.getRoutes(category);
@@ -230,13 +257,17 @@ class AIRouteStoreClass {
     this.notify();
 
     const requestPromise = (async () => {
-      console.log(TAG, `Fetching AI routes for ${category}...`);
+      debugAIRoutes('Fetching AI routes', {
+        category,
+        backendCategory,
+        radiusMiles: params.radiusMiles,
+      });
 
       const { data, error } = await supabase.functions.invoke('ai-route-suggestions', {
         body: {
           latitude: params.latitude,
           longitude: params.longitude,
-          category: params.category,
+          category: backendCategory,
           radiusMiles: params.radiusMiles,
           vehicleType: params.vehicleType,
           vehicleBuild: params.vehicleBuild,
@@ -246,7 +277,7 @@ class AIRouteStoreClass {
       });
 
       if (controller.signal.aborted) {
-        console.log(TAG, `Request aborted for ${category}`);
+        debugAIRoutes('AI route request aborted', { category });
         return [];
       }
 
@@ -266,7 +297,9 @@ class AIRouteStoreClass {
       const routes = (response.routes || []).slice(0, MAX_ROUTES_PER_CATEGORY);
 
       const responseMeta = response.meta ?? {};
-      console.log(TAG, `ECS route response received for ${category}`, {
+      debugAIRoutes('AI route response received', {
+        category,
+        backendCategory,
         routeCount: routes.length,
         mode: responseMeta.mode ?? 'unknown',
         reason: responseMeta.reason ?? null,
@@ -300,7 +333,10 @@ class AIRouteStoreClass {
       this.lastFailureSignatureByCategory[category] = '';
       this.notify();
 
-      console.log(TAG, `Loaded ${enrichedRoutes.length} AI routes for ${category}`);
+      debugAIRoutes('AI routes loaded', {
+        category,
+        routeCount: enrichedRoutes.length,
+      });
       return enrichedRoutes;
     })().catch((err: any) => {
       if (controller.signal.aborted) return [];

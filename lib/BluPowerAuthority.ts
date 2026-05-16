@@ -9,6 +9,14 @@ import { jackeryBluAdapter } from './JackeryBluAdapter';
 import { renogyBluAdapter } from './RenogyBluAdapter';
 import { redarcBluAdapter } from './RedarcBluAdapter';
 import { dakotaLithiumBluAdapter } from './DakotaLithiumBluAdapter';
+import type { PowerTelemetry, PowerTelemetryTruth } from '../src/power/types/PowerTelemetry';
+import {
+  POWER_LIVE_MAX_AGE_MS,
+  POWER_STALE_MAX_AGE_MS,
+  getPowerTruthLabel,
+  normalizePowerTelemetryProviderId,
+  normalizePowerTelemetryTruth,
+} from '../src/power/types/PowerTelemetry';
 
 export type BluProviderKey =
   | 'ecoflow'
@@ -67,6 +75,7 @@ export interface BluAuthoritySnapshot {
   providerLabel: string | null;
   lastUpdatedAt: number | null;
   freshnessText: string;
+  truth: PowerTelemetryTruth;
 }
 
 export interface BluAuthorityStatusEvent {
@@ -100,8 +109,8 @@ export type BluAuthorityEvent =
 export type BluAuthorityListener = (snapshot: BluAuthoritySnapshot) => void;
 export type BluAuthorityEventListener = (event: BluAuthorityEvent) => void;
 
-const FRESH_WINDOW_MS = 30_000;
-const STALE_WINDOW_MS = 90_000;
+const FRESH_WINDOW_MS = POWER_LIVE_MAX_AGE_MS;
+const STALE_WINDOW_MS = POWER_STALE_MAX_AGE_MS;
 const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const PROVIDERS: BluProviderKey[] = [
@@ -142,16 +151,109 @@ function freshnessFromAge(
 ): PowerFreshnessLabel {
   if (isReconnecting) return 'reconnecting';
   if (!hasTelemetry || ageMs == null) {
-    return connectionState === 'connected' ? 'live' : 'disconnected';
+    return connectionState === 'connected' ? 'last_known' : 'disconnected';
   }
-  if (ageMs < FRESH_WINDOW_MS && connectionState === 'connected') return 'live';
+  if (ageMs <= FRESH_WINDOW_MS && connectionState === 'connected') return 'live';
   if (ageMs <= STALE_WINDOW_MS) {
-    return connectionState === 'connected' ? 'live' : 'last_known';
+    return 'last_known';
   }
   if (ageMs < LAST_KNOWN_MAX_AGE_MS) {
-    return connectionState === 'connected' ? 'stale' : 'last_known';
+    return 'stale';
   }
   return connectionState === 'connected' ? 'stale' : 'disconnected';
+}
+
+function telemetrySourceToPowerSource(source: BluTelemetry['source']): PowerTelemetry['source'] {
+  switch (source) {
+    case 'ble_live':
+      return 'ble';
+    case 'provider_cloud':
+      return 'cloud';
+    case 'cache':
+      return 'unavailable';
+    case 'mock_dev':
+      return 'mock_dev';
+    case 'unavailable':
+    default:
+      return 'unavailable';
+  }
+}
+
+function buildPowerTruth(
+  telemetry: BluTelemetry | null,
+  device: BluDevice | null,
+  activeProvider: BluProviderKey | null,
+  providerState: BluAuthorityProviderState | null,
+): PowerTelemetryTruth {
+  if (telemetry?.truth) {
+    return normalizePowerTelemetryTruth({
+      timestamp: telemetry.timestamp,
+      source: telemetrySourceToPowerSource(telemetry.source),
+      truth: telemetry.truth,
+      device: {
+        id: telemetry.device_id,
+        vendor: telemetry.provider,
+        model: device?.model ?? undefined,
+      },
+    });
+  }
+
+  if (telemetry) {
+    const explicitTruth =
+      telemetry.source === 'cache' || telemetry.telemetryUnsupported
+        ? {
+          sourceTruth: telemetry.source === 'cache' ? 'cached' as const : 'device_detected' as const,
+          providerId: normalizePowerTelemetryProviderId(telemetry.provider),
+          deviceId: telemetry.device_id,
+          deviceName: device?.display_name ?? device?.model ?? undefined,
+          confidence: telemetry.telemetryUnsupported ? 0.35 : 0.95,
+          isLive: telemetry.isLive === true,
+          isStale: false,
+          isManual: false,
+          isSimulated: telemetry.source === 'mock_dev',
+          reason: telemetry.telemetryUnsupportedReason,
+        }
+        : undefined;
+    return normalizePowerTelemetryTruth({
+      timestamp: telemetry.timestamp,
+      source: telemetrySourceToPowerSource(telemetry.source),
+      device: {
+        id: telemetry.device_id,
+        vendor: telemetry.provider,
+        model: device?.model ?? undefined,
+      },
+      truth: explicitTruth,
+    });
+  }
+
+  if (device || providerState?.connectionState === 'connected') {
+    return normalizePowerTelemetryTruth({
+      timestamp: Date.now(),
+      source: 'unavailable',
+      device: {
+        id: device?.device_id ?? providerState?.primaryDeviceId ?? 'detected',
+        vendor: activeProvider ?? 'unknown',
+        model: device?.model ?? undefined,
+      },
+      truth: {
+        sourceTruth: 'device_detected',
+        providerId: activeProvider ?? undefined,
+        deviceId: device?.device_id ?? providerState?.primaryDeviceId ?? undefined,
+        deviceName: device?.display_name ?? device?.model ?? undefined,
+        confidence: 0.35,
+        isLive: false,
+        isStale: false,
+        isManual: false,
+        isSimulated: false,
+        reason: 'Device detected; live telemetry setup required.',
+      },
+    });
+  }
+
+  return normalizePowerTelemetryTruth({
+    source: 'unavailable',
+    device: { id: 'unavailable', vendor: 'unknown' },
+  });
 }
 
 function getFreshnessText(timestamp: number | null): string {
@@ -501,6 +603,12 @@ class BluPowerAuthority {
     const chosenProviderState = activeProvider ? providers[activeProvider] : null;
     const lastUpdatedAt = primaryTelemetry?.timestamp ?? null;
     const freshness = chosenProviderState?.freshness ?? 'disconnected';
+    const truth = buildPowerTruth(
+      primaryTelemetry ?? null,
+      resolvedPrimaryDevice ?? null,
+      activeProvider,
+      chosenProviderState,
+    );
 
     return {
       activeProvider,
@@ -530,7 +638,8 @@ class BluPowerAuthority {
       deviceLabel: resolvedPrimaryDevice?.display_name ?? null,
       providerLabel: activeProvider ? PROVIDER_LABELS[activeProvider] : null,
       lastUpdatedAt,
-      freshnessText: getFreshnessText(lastUpdatedAt),
+      freshnessText: getFreshnessText(lastUpdatedAt) || getPowerTruthLabel(truth),
+      truth,
     };
   }
 

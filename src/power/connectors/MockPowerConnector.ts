@@ -19,6 +19,7 @@ import type {
   PowerConnectionState,
   PowerCapabilities,
 } from "../types/PowerTelemetry";
+import { normalizePowerTelemetryTruth } from "../types/PowerTelemetry";
 
 // ── Configuration ───────────────────────────────────────────────────────
 
@@ -239,7 +240,18 @@ export class MockPowerConnector implements IPowerConnector {
 
     const telemetry: PowerTelemetry = {
       timestamp: now,
-      source: "sim",
+      source: "mock_dev",
+      sourceLabel: "Demo",
+      isLive: false,
+      truth: normalizePowerTelemetryTruth({
+        timestamp: now,
+        source: "mock_dev",
+        device: {
+          id: this.deviceId,
+          vendor: "ECS",
+          model: "Simulator",
+        },
+      }),
       device: {
         id: this.deviceId,
         vendor: "ECS",

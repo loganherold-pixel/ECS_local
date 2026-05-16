@@ -32,6 +32,7 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 import {
   isGoalZeroDeviceName,
   extractGoalZeroModelFromName,
@@ -406,6 +407,13 @@ class GoalZeroBluAdapter {
     try {
       // On web or when BLE is unavailable, return simulated devices
       if (Platform.OS === 'web' || !this.isBleAvailable()) {
+        if (!isDevMockTelemetryAllowed()) {
+          console.log('[BT_LIVE] mock_disabled', { provider: 'goal_zero', phase: 'scan' });
+          this.discoveredDevices = [];
+          this.lastError = 'Live Bluetooth scan unavailable; mock discovery is disabled.';
+          this.lastErrorCode = 'MOCK_DISABLED';
+          return [];
+        }
         console.log('[GoalZeroBluAdapter] BLE unavailable — using simulated discovery.');
         await this.simulateDelay(1500);
 
@@ -617,7 +625,7 @@ class GoalZeroBluAdapter {
     this.reconnectAttempts = 0;
 
     bluStateStore.setReconnecting(false);
-    bluStateStore.reset();
+    bluStateStore.clearProviderTelemetry('goal_zero');
     bluSessionStore.recordDisconnection();
 
     this.notify();
@@ -1113,4 +1121,3 @@ class GoalZeroBluAdapter {
 // ── Singleton ───────────────────────────────────────────────────────────
 
 export const goalZeroBluAdapter = new GoalZeroBluAdapter();
-

@@ -19,6 +19,11 @@ import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import type { RoadNavSearchSuggestion } from '../../lib/mapboxRoadNavigation';
 import type { RoadNavigationSessionState } from '../../lib/useRoadNavigation';
 import { ECS_CTA_LABELS } from '../../lib/ecsStateCopy';
+import type {
+  RouteGuidanceReadinessTone,
+  RouteGuidanceReadinessViewModel,
+} from '../../lib/routeGuidanceReadinessPresentation';
+import type { NavigateRouteConfidenceSummary } from '../../lib/remote/routeConfidenceSummary';
 
 type Props = {
   topOffset: number;
@@ -46,9 +51,12 @@ type Props = {
   onEndNavigation: () => void;
   onClearDestination: () => void;
   onReroute: () => void;
+  activeGuidanceMinimized?: boolean;
+  onToggleActiveGuidanceMinimized?: () => void;
+  activeAccessoryMinimized?: boolean;
+  onExpandActiveAccessory?: () => void;
   uiMode: 'idle' | 'search' | 'preview' | 'active' | 'arrived' | 'error';
   showSearchSurface?: boolean;
-  showActiveTopCard?: boolean;
   previewContext?: {
     tripMode: 'road' | 'trail' | 'hybrid';
     eyebrow: string;
@@ -67,6 +75,8 @@ type Props = {
     dismissLabel?: string;
     stepListLabel?: string;
     arrivalMessage?: string | null;
+    readinessStack?: RouteGuidanceReadinessViewModel | null;
+    routeConfidenceSummary?: NavigateRouteConfidenceSummary | null;
   } | null;
   activeContext?: {
     tripMode?: 'road' | 'trail' | 'hybrid';
@@ -86,9 +96,14 @@ type Props = {
     rerouteLabel?: string;
     endLabel?: string;
     arrivalMessage?: string | null;
+    routeConfidenceSummary?: NavigateRouteConfidenceSummary | null;
   } | null;
   onPrimaryPreviewAction?: () => void;
+  onPrepareOffline?: () => void;
   onRouteOverview?: () => void;
+  onOpenCommandBrief?: () => void;
+  previewAccessory?: React.ReactNode;
+  activeAccessory?: React.ReactNode;
 };
 
 function formatDistance(meters: number | null | undefined): string {
@@ -122,12 +137,13 @@ function formatEta(etaIso: string | null): string {
 
 function getManeuverIcon(instruction: string | null): React.ComponentProps<typeof Ionicons>['name'] {
   const lower = String(instruction ?? '').toLowerCase();
+  if (lower.includes('u-turn')) return 'refresh';
   if (lower.includes('left')) return 'arrow-back';
   if (lower.includes('right')) return 'arrow-forward';
-  if (lower.includes('u-turn')) return 'refresh';
   if (lower.includes('arrive') || lower.includes('destination')) return 'flag';
   if (lower.includes('merge')) return 'git-merge';
   if (lower.includes('roundabout')) return 'sync';
+  if (lower.includes('continue') || lower.includes('straight')) return 'arrow-up';
   return 'navigate';
 }
 
@@ -153,6 +169,22 @@ function getPreviewStatusTone(statusLabel: string): ECSStatusTone {
   if (normalized.includes('active')) return 'active';
   if (normalized.includes('building') || normalized.includes('updating')) return 'info';
   return 'selected';
+}
+
+function readinessToneColor(tone: RouteGuidanceReadinessTone): string {
+  switch (tone) {
+    case 'positive':
+      return '#66BB6A';
+    case 'caution':
+      return '#FFB300';
+    case 'warning':
+      return '#EF5350';
+    case 'info':
+      return '#6EA8FF';
+    case 'neutral':
+    default:
+      return TACTICAL.textMuted;
+  }
 }
 
 function SearchSurface({
@@ -320,6 +352,7 @@ function StepList({
 function PreviewCard({
   session,
   previewLoading,
+  topOffset,
   bottomOffset,
   horizontalInset = 16,
   bottomCardRightInset = 0,
@@ -329,11 +362,15 @@ function PreviewCard({
   stepListExpanded,
   previewContext,
   onPrimaryPreviewAction,
+  onPrepareOffline,
   onRouteOverview,
+  onOpenCommandBrief,
+  previewAccessory,
 }: Pick<
   Props,
   | 'session'
   | 'previewLoading'
+  | 'topOffset'
   | 'bottomOffset'
   | 'horizontalInset'
   | 'bottomCardRightInset'
@@ -343,7 +380,10 @@ function PreviewCard({
   | 'stepListExpanded'
   | 'previewContext'
   | 'onPrimaryPreviewAction'
+  | 'onPrepareOffline'
   | 'onRouteOverview'
+  | 'onOpenCommandBrief'
+  | 'previewAccessory'
 >) {
   const route = session.route;
   const effectiveMetrics =
@@ -359,11 +399,12 @@ function PreviewCard({
               : '--',
           },
         ];
-  const primaryActionLabel = previewContext?.primaryActionLabel ?? 'Start Navigation';
+  const primaryActionLabel = previewContext?.primaryActionLabel ?? 'Start Guidance';
   const primaryActionDisabled =
     previewContext?.primaryActionDisabled ?? !route;
-  const showSteps = previewContext?.showSteps ?? !!route;
+  const showSteps = false;
   const showOverview = previewContext?.showOverview ?? !!route;
+  const dismissLabel = previewContext?.dismissLabel ?? 'Not Yet';
   const previewTitle = previewContext?.title ?? session.destination?.title ?? 'Route Selected';
   const previewSubtitle = previewContext?.subtitle ?? session.destination?.subtitle ?? null;
   const previewStatusLabel =
@@ -376,19 +417,28 @@ function PreviewCard({
   const previewPhaseText =
     primaryActionDisabled
       ? 'Guidance inactive until preview data is ready.'
-      : 'Guidance inactive until you choose Navigate.';
+      : 'Guidance inactive until you start guidance.';
   const previewStatusText =
     previewContext?.statusText ??
     (previewLoading
       ? 'Preparing road route'
       : session.error || session.routeStatusLabel || 'Route staged');
+  const readinessStack = previewContext?.readinessStack ?? null;
+  const routeConfidenceExplanation = readinessStack?.routeConfidenceExplanation ?? null;
+  const routeConfidenceSignals = [
+    ...(routeConfidenceExplanation?.supportingSignals ?? []),
+    ...(routeConfidenceExplanation?.uncertainSignals ?? []),
+  ].slice(0, 3);
+  const readinessActions = readinessStack?.recommendedActions ?? [];
 
   return (
     <View
       pointerEvents="box-none"
       style={[
         styles.bottomWrap,
+        styles.previewBottomWrap,
         {
+          top: topOffset,
           bottom: bottomOffset,
           left: horizontalInset,
           right: horizontalInset,
@@ -396,103 +446,211 @@ function PreviewCard({
         },
       ]}
     >
-      <ECSCard variant="primary" style={styles.bottomCard}>
-        <View style={styles.previewSummaryWrap}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.cardHeaderTextWrap}>
-              <View style={styles.previewHeaderBadgeRow}>
-                <Text style={styles.eyebrow}>{previewContext?.eyebrow ?? 'ROUTE PREVIEW'}</Text>
-                {previewContext?.tripMode ? (
+      {previewAccessory ? <View style={styles.previewAccessoryWrap}>{previewAccessory}</View> : null}
+      <ECSCard variant="primary" style={[styles.bottomCard, styles.previewBottomCard]}>
+        <ScrollView
+          style={styles.previewCardScroll}
+          contentContainerStyle={styles.previewCardScrollContent}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.previewSummaryWrap}>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardHeaderTextWrap}>
+                <View style={styles.previewHeaderBadgeRow}>
+                  <Text style={styles.eyebrow}>{previewContext?.eyebrow ?? 'ROUTE PREVIEW'}</Text>
+                  {previewContext?.tripMode ? (
+                    <ECSBadge
+                      label={previewContext.tripMode.toUpperCase()}
+                      tone="category"
+                      compact
+                    />
+                  ) : null}
+                  {previewContext?.sourceLabel ? (
+                    <ECSBadge
+                      label={previewContext.sourceLabel}
+                      tone="info"
+                      compact
+                    />
+                  ) : null}
                   <ECSBadge
-                    label={previewContext.tripMode.toUpperCase()}
-                    tone="category"
+                    label={previewStatusLabel}
+                    tone={getPreviewStatusTone(previewStatusLabel)}
                     compact
                   />
-                ) : null}
-                {previewContext?.sourceLabel ? (
-                  <ECSBadge
-                    label={previewContext.sourceLabel}
-                    tone="info"
-                    compact
-                  />
-                ) : null}
-                <ECSBadge
-                  label={previewStatusLabel}
-                  tone={getPreviewStatusTone(previewStatusLabel)}
-                  compact
-                />
-              </View>
-              <Text style={styles.cardTitle} numberOfLines={1}>
-                {previewTitle}
-              </Text>
-              {!!previewSubtitle ? (
-                <Text style={styles.cardSubtitle} numberOfLines={1}>
-                  {previewSubtitle}
+                </View>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {previewTitle}
                 </Text>
-              ) : null}
+                {!!previewSubtitle ? (
+                  <Text style={styles.cardSubtitle} numberOfLines={1}>
+                    {previewSubtitle}
+                  </Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={onClearDestination} hitSlop={10}>
+                <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={onClearDestination} hitSlop={10}>
-              <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
-            </TouchableOpacity>
+
+            <View style={styles.previewPhaseRow}>
+              <Text style={styles.previewPhaseText}>{previewPhaseText}</Text>
+            </View>
+            <Text style={styles.routeStatusText}>{previewStatusText}</Text>
           </View>
 
-          <View style={styles.previewPhaseRow}>
-            <Text style={styles.previewPhaseText}>{previewPhaseText}</Text>
+          <View style={styles.metricRow}>
+            {effectiveMetrics.map((metric) => (
+              <View key={metric.label} style={styles.metricBlock}>
+                <Text style={styles.metricLabel}>{metric.label}</Text>
+                <Text style={styles.metricValue}>{metric.value}</Text>
+              </View>
+            ))}
           </View>
-          <Text style={styles.routeStatusText}>{previewStatusText}</Text>
-        </View>
 
-        <View style={styles.metricRow}>
-          {effectiveMetrics.map((metric) => (
-            <View key={metric.label} style={styles.metricBlock}>
-              <Text style={styles.metricLabel}>{metric.label}</Text>
-              <Text style={styles.metricValue}>{metric.value}</Text>
-            </View>
-          ))}
-        </View>
-
-        {previewContext?.noteText ? (
-          <Text style={styles.previewNoteText}>{previewContext.noteText}</Text>
-        ) : null}
-
-        {showSteps ? (
-          <TouchableOpacity
-            style={styles.inlineLinkButton}
-            onPress={onToggleSteps}
-            activeOpacity={0.82}
-          >
-            <Ionicons
-              name={stepListExpanded ? 'list' : 'list-outline'}
-              size={14}
-              color={TACTICAL.amber}
-            />
-            <Text style={styles.inlineLinkButtonText}>
-              {previewContext?.stepListLabel ?? 'View route steps'}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-
-        <ECSActionRow style={styles.actionRow}>
-          {showOverview ? (
-            <ECSButton
-              label={previewContext?.overviewLabel ?? 'Overview'}
-              icon="scan-outline"
-              variant="secondary"
-              size="medium"
-              onPress={onRouteOverview}
-            />
+          {previewContext?.noteText ? (
+            <Text style={styles.previewNoteText}>{previewContext.noteText}</Text>
           ) : null}
 
-          <ECSButton
-            label={primaryActionLabel}
-            icon="play"
-            variant="primary"
-            size="medium"
-            onPress={onPrimaryPreviewAction ?? onStartNavigation}
-            disabled={primaryActionDisabled}
-            grow
-          />
-        </ECSActionRow>
+          {readinessStack ? (
+            <View style={styles.readinessStackCard}>
+              <View style={styles.readinessStackHeader}>
+                <Text style={styles.readinessStackTitle}>Readiness before Start Guidance</Text>
+                {readinessActions.length > 0 || onOpenCommandBrief ? (
+                  <View style={styles.readinessActionRow}>
+                    {onOpenCommandBrief ? (
+                      <TouchableOpacity
+                        style={styles.readinessActionButton}
+                        onPress={onOpenCommandBrief}
+                        activeOpacity={0.84}
+                      >
+                        <Text style={styles.readinessActionButtonText}>
+                          Open Brief
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {readinessActions.map((action) => {
+                      const onPress =
+                        action.id === 'prepare_offline'
+                          ? onPrepareOffline
+                          : action.id === 'review_route'
+                            ? onRouteOverview
+                            : undefined;
+                      if (!onPress) return null;
+                      return (
+                        <TouchableOpacity
+                          key={action.id}
+                          style={styles.readinessActionButton}
+                          onPress={onPress}
+                          activeOpacity={0.84}
+                        >
+                          <Text style={styles.readinessActionButtonText}>
+                            {action.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.readinessRows}>
+                {readinessStack.rows.map((row) => (
+                  <View key={row.id} style={styles.readinessRow}>
+                    <Text style={styles.readinessRowLabel}>{row.label}</Text>
+                    <Text
+                      style={[
+                        styles.readinessRowValue,
+                        { color: readinessToneColor(row.tone) },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {row.value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {readinessStack.primaryConcern ? (
+                <Text style={styles.readinessConcernText}>
+                  Primary concern: {readinessStack.primaryConcern}
+                </Text>
+              ) : null}
+              {routeConfidenceSignals.length > 0 || routeConfidenceExplanation?.customRouteWarning ? (
+                <View style={styles.routeConfidenceExplanation}>
+                  <Text style={styles.routeConfidenceExplanationTitle}>
+                    Route Confidence explanation
+                  </Text>
+                  {routeConfidenceSignals.length > 0 ? (
+                    <Text style={styles.routeConfidenceExplanationText}>
+                      {routeConfidenceSignals.join(' - ')}
+                    </Text>
+                  ) : null}
+                  {routeConfidenceExplanation?.customRouteWarning ? (
+                    <Text style={styles.routeConfidenceExplanationText}>
+                      {routeConfidenceExplanation.customRouteWarning}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {showSteps ? (
+            <TouchableOpacity
+              style={styles.inlineLinkButton}
+              onPress={onToggleSteps}
+              activeOpacity={0.82}
+            >
+              <Ionicons
+                name={stepListExpanded ? 'list' : 'list-outline'}
+                size={14}
+                color={TACTICAL.amber}
+              />
+              <Text style={styles.inlineLinkButtonText}>
+                {previewContext?.stepListLabel ?? 'View route steps'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <ECSActionRow compact wrap style={[styles.actionRow, styles.previewActionRow]}>
+            <ECSButton
+              label={dismissLabel}
+              icon="close"
+              variant="secondary"
+              size="compact"
+              onPress={onClearDestination}
+              numberOfLines={2}
+              style={styles.previewActionButton}
+              textStyle={styles.previewActionButtonText}
+            />
+
+            {showOverview ? (
+              <ECSButton
+                label={previewContext?.overviewLabel ?? 'Overview'}
+                icon="scan-outline"
+                variant="secondary"
+                size="compact"
+                onPress={onRouteOverview}
+                numberOfLines={2}
+                style={styles.previewActionButton}
+                textStyle={styles.previewActionButtonText}
+              />
+            ) : null}
+
+            <ECSButton
+              label={primaryActionLabel}
+              icon="play"
+              variant="primary"
+              size="compact"
+              onPress={onPrimaryPreviewAction ?? onStartNavigation}
+              disabled={primaryActionDisabled}
+              grow
+              numberOfLines={2}
+              style={[styles.previewActionButton, styles.previewPrimaryActionButton]}
+              textStyle={styles.previewActionButtonText}
+            />
+          </ECSActionRow>
+        </ScrollView>
       </ECSCard>
     </View>
   );
@@ -501,31 +659,34 @@ function PreviewCard({
 function ActiveNavigationCard({
   session,
   topOffset,
-  bottomOffset,
   horizontalInset = 16,
   guidanceRightInset = 0,
   onEndNavigation,
   onReroute,
+  activeGuidanceMinimized = false,
+  onToggleActiveGuidanceMinimized,
   activeContext,
-  showActiveTopCard = true,
+  activeAccessory,
+  activeAccessoryMinimized = false,
+  onExpandActiveAccessory,
 }: Pick<
   Props,
   | 'session'
   | 'topOffset'
-  | 'bottomOffset'
   | 'horizontalInset'
   | 'guidanceRightInset'
   | 'onEndNavigation'
   | 'onReroute'
+  | 'activeGuidanceMinimized'
+  | 'onToggleActiveGuidanceMinimized'
+  | 'activeAccessoryMinimized'
+  | 'onExpandActiveAccessory'
   | 'activeContext'
-> & {
-  showActiveTopCard?: boolean;
-}) {
+  | 'activeAccessory'
+>) {
   const nextInstruction =
     activeContext?.instruction ?? session.nextInstruction ?? 'Continue on highlighted route';
   const isRerouting = !activeContext && (session.status === 'rerouting' || session.isOffRoute);
-  const routeTitle = activeContext?.title ?? session.destination?.title ?? 'Route Active';
-  const routeSubtitle = activeContext?.subtitle ?? session.destination?.subtitle ?? null;
   const effectiveMetrics =
     activeContext?.metrics && activeContext.metrics.length > 0
       ? activeContext.metrics.slice(0, 3)
@@ -539,118 +700,111 @@ function ActiveNavigationCard({
   const statusLine = activeContext?.statusText ?? session.routeStatusLabel ?? 'Route active';
   const distanceLine =
     activeContext?.distanceLabel ?? formatDistance(session.nextInstructionDistanceM);
+  const guidanceTargetLabel =
+    nextInstruction.toLowerCase().includes('arriv') ||
+    nextInstruction.toLowerCase().includes('destination')
+      ? 'arrival'
+      : 'next action';
   const guidanceEyebrow =
     activeContext?.eyebrow ?? (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
   const maneuverIcon = getManeuverIcon(nextInstruction);
-
-  return (
-    <>
-      {showActiveTopCard ? (
-      <View
-        pointerEvents="box-none"
-        style={[styles.activeTopWrap, { top: topOffset, left: horizontalInset, right: horizontalInset }]}
-      >
-        <ECSCard variant="primary" style={styles.activeTopCard}>
-          <View style={styles.activeHeaderRow}>
-            <View style={styles.activeHeaderTextWrap}>
-              <View style={styles.previewHeaderBadgeRow}>
-                <Text style={styles.eyebrow}>
-                  {activeContext?.eyebrow ?? (isRerouting ? 'REROUTING' : 'ACTIVE GUIDANCE')}
-                </Text>
-                {activeContext?.tripMode ? (
-                  <ECSBadge
-                    label={activeContext.tripMode.toUpperCase()}
-                    tone="category"
-                    compact
-                  />
-                ) : null}
-                {activeContext?.progressLabel ? (
-                  <ECSBadge
-                    label={activeContext.progressLabel}
-                    tone={isRerouting ? 'warning' : 'active'}
-                    compact
-                  />
-                ) : null}
-              </View>
-              <Text style={styles.activeRouteTitle} numberOfLines={1}>
-                {routeTitle}
-              </Text>
-              {!!routeSubtitle ? (
-                <Text style={styles.activeRouteSubtitle} numberOfLines={1}>
-                  {routeSubtitle}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-
-          <View style={styles.maneuverRow}>
-            <View style={styles.maneuverIconWrap}>
-              <Ionicons
-                name={maneuverIcon}
-                size={18}
-                color={TACTICAL.amber}
-              />
-            </View>
-            <View style={styles.maneuverTextWrap}>
-              <Text style={styles.activeSectionLabel}>
-                {isRerouting ? 'ROUTE UPDATE' : 'NEXT GUIDANCE'}
-              </Text>
-              <Text style={styles.activeInstruction} numberOfLines={2}>
-                {nextInstruction}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.activeMetaRow}>
-            <Text style={styles.activeMetaValue}>
-              {activeContext?.distanceLabel ?? formatDistance(session.nextInstructionDistanceM)}
-            </Text>
-            <Text style={styles.activeMetaDivider}>•</Text>
-              <Text style={styles.activeMetaText}>
-                {activeContext?.statusText ?? session.routeStatusLabel ?? 'Route active'}
-              </Text>
-          </View>
-          {activeContext?.noteText ? (
-            <Text style={styles.activeNoteText}>{activeContext.noteText}</Text>
-          ) : null}
-        </ECSCard>
-      </View>
-      ) : null}
-
+  const guidancePosition = {
+    top: topOffset,
+    left: horizontalInset,
+    right: horizontalInset,
+    paddingRight: guidanceRightInset,
+  };
+  if (activeGuidanceMinimized) {
+    return (
       <View
         pointerEvents="box-none"
         style={[
           styles.activeGuidanceWrap,
-          {
-            bottom: bottomOffset,
-            left: horizontalInset,
-            right: horizontalInset,
-            paddingRight: guidanceRightInset,
-          },
+          guidancePosition,
+          styles.activeGuidanceMiniWrap,
         ]}
       >
-        <ECSPanel variant="secondary" style={styles.activeGuidanceCard}>
+        <TouchableOpacity
+          style={styles.activeGuidanceMiniButton}
+          onPress={onToggleActiveGuidanceMinimized}
+          activeOpacity={0.86}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`Expand active guidance. ${nextInstruction}`}
+          accessibilityHint="Restores the route update panel without changing Active Expedition Readiness state."
+        >
+          <Ionicons name={maneuverIcon} size={21} color={TACTICAL.amber} />
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.activeGuidanceWrap,
+        guidancePosition,
+      ]}
+    >
+      <ECSPanel
+        variant="secondary"
+        style={[styles.activeGuidanceCard, styles.activeGuidanceCardBanner]}
+      >
           <View style={styles.activeGuidanceHeaderRow}>
             <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
               {guidanceEyebrow}
             </Text>
-            <View style={styles.activeGuidanceHeaderBadges}>
-              {activeContext?.tripMode ? (
-                <ECSBadge
-                  label={activeContext.tripMode.toUpperCase()}
-                  tone="category"
-                  compact
-                />
-              ) : null}
-              {activeContext?.progressLabel ? (
+            {activeContext?.progressLabel ? (
+              <View style={styles.activeGuidanceHeaderBadges}>
                 <ECSBadge
                   label={activeContext.progressLabel}
                   tone={isRerouting ? 'warning' : 'active'}
                   compact
                 />
-              ) : null}
-            </View>
+              </View>
+            ) : null}
+            {onToggleActiveGuidanceMinimized ? (
+              <TouchableOpacity
+                style={styles.activeGuidanceMinimizeButton}
+                onPress={onToggleActiveGuidanceMinimized}
+                activeOpacity={0.82}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Minimize active guidance"
+              >
+                <Ionicons name="remove" size={13} color={TACTICAL.amber} />
+                <Text style={styles.activeGuidanceMinimizeButtonText}>Minimize</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.activeGuidanceEndButton}
+              onPress={onEndNavigation}
+              activeOpacity={0.82}
+              hitSlop={8}
+            >
+              <Ionicons name="square" size={10} color="#FFD9C7" />
+              <Text style={styles.activeGuidanceEndButtonText}>
+                {activeContext?.endLabel ?? 'End Nav'}
+              </Text>
+            </TouchableOpacity>
           </View>
+          {activeAccessoryMinimized && onExpandActiveAccessory ? (
+            <View style={styles.activeReadinessMiniRow}>
+              <TouchableOpacity
+                style={styles.activeReadinessMiniButton}
+                onPress={onExpandActiveAccessory}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Reopen Active Expedition Readiness"
+              >
+                <Ionicons name="document-text-outline" size={12} color={TACTICAL.amber} />
+                <Text style={styles.activeReadinessMiniButtonText} numberOfLines={1}>
+                  Readiness
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           <View style={styles.activeGuidanceRow}>
             <View style={styles.activeGuidanceIconWrap}>
               <Ionicons name={maneuverIcon} size={18} color={TACTICAL.amber} />
@@ -660,7 +814,7 @@ function ActiveNavigationCard({
                 {nextInstruction}
               </Text>
               <Text style={styles.activeGuidanceDetail} numberOfLines={1}>
-                {distanceLine ? `${distanceLine} to next action` : statusLine}
+                {distanceLine ? `${distanceLine} to ${guidanceTargetLabel}` : statusLine}
               </Text>
             </View>
           </View>
@@ -681,10 +835,11 @@ function ActiveNavigationCard({
               </View>
             ))}
           </View>
-        </ECSPanel>
-      </View>
-
-    </>
+          {activeAccessory && !activeAccessoryMinimized ? (
+            <View style={styles.activeAccessoryWrap}>{activeAccessory}</View>
+          ) : null}
+      </ECSPanel>
+    </View>
   );
 }
 
@@ -788,9 +943,10 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
     () => (props.session.route?.steps?.length ?? 0) > 0,
     [props.session.route?.steps],
   );
+  const routeStepOverlayEnabled = false;
 
   return (
-    <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+    <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, styles.overlayRoot]}>
       {shouldShowSearch ? (
         <SearchSurface
           topOffset={props.topOffset}
@@ -807,7 +963,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
         />
       ) : null}
 
-      {props.stepListExpanded && hasSteps ? (
+      {routeStepOverlayEnabled && props.stepListExpanded && hasSteps ? (
         <StepList
           session={props.session}
           bottomOffset={props.stepListBottomOffset ?? props.bottomOffset + 142}
@@ -819,6 +975,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
         <PreviewCard
           session={props.session}
           previewLoading={props.previewLoading}
+          topOffset={props.topOffset}
           bottomOffset={props.bottomOffset}
           horizontalInset={props.horizontalInset}
           bottomCardRightInset={props.bottomCardRightInset ?? props.guidanceRightInset ?? 0}
@@ -828,7 +985,10 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           stepListExpanded={props.stepListExpanded}
           previewContext={props.previewContext}
           onPrimaryPreviewAction={props.onPrimaryPreviewAction}
+          onPrepareOffline={props.onPrepareOffline}
           onRouteOverview={props.onRouteOverview}
+          previewAccessory={props.previewAccessory}
+          onOpenCommandBrief={props.onOpenCommandBrief}
         />
       ) : null}
 
@@ -836,14 +996,17 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
         <ActiveNavigationCard
           session={props.session}
           topOffset={props.topOffset}
-          bottomOffset={props.bottomOffset}
           horizontalInset={props.horizontalInset}
           guidanceRightInset={props.guidanceRightInset}
           onEndNavigation={props.onEndNavigation}
           onReroute={props.onReroute}
-        activeContext={props.activeContext}
-        showActiveTopCard={props.showActiveTopCard}
-      />
+          activeGuidanceMinimized={props.activeGuidanceMinimized}
+          onToggleActiveGuidanceMinimized={props.onToggleActiveGuidanceMinimized}
+          activeAccessoryMinimized={props.activeAccessoryMinimized}
+          onExpandActiveAccessory={props.onExpandActiveAccessory}
+          activeContext={props.activeContext}
+          activeAccessory={props.activeAccessory}
+        />
       ) : null}
 
       {shouldShowArrived ? (
@@ -866,6 +1029,10 @@ RoadNavigationOverlay.displayName = 'RoadNavigationOverlay';
 export default RoadNavigationOverlay;
 
 const styles = StyleSheet.create({
+  overlayRoot: {
+    zIndex: 90,
+    elevation: 90,
+  },
   searchWrap: {
     position: 'absolute',
     left: 16,
@@ -990,25 +1157,6 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     backgroundColor: 'transparent',
   },
-  activeTopWrap: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    zIndex: 82,
-    alignItems: 'center',
-    pointerEvents: 'box-none',
-  },
-  activeTopCard: {
-    width: '100%',
-    maxWidth: 430,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    elevation: 14,
-  },
   previewTopCard: {
     width: '100%',
     maxWidth: 430,
@@ -1023,6 +1171,39 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 12,
+  },
+  previewAccessoryWrap: {
+    width: '100%',
+    maxWidth: 430,
+    marginBottom: 10,
+  },
+  activeAccessoryWrap: {
+    width: '100%',
+    marginTop: 0,
+  },
+  activeReadinessMiniRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+    marginBottom: 0,
+  },
+  activeReadinessMiniButton: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  activeReadinessMiniButtonText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    letterSpacing: 0,
   },
   previewSummaryWrap: {
     gap: 8,
@@ -1099,40 +1280,72 @@ const styles = StyleSheet.create({
     zIndex: 80,
     alignItems: 'center',
   },
+  previewBottomWrap: {
+    zIndex: 92,
+    elevation: 92,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
+  },
   activeGuidanceWrap: {
     position: 'absolute',
     left: 16,
     right: 16,
-    zIndex: 81,
+    zIndex: 120,
     alignItems: 'center',
-    paddingLeft: 8,
+    paddingLeft: 0,
+  },
+  activeGuidanceMiniWrap: {
+    alignItems: 'flex-start',
+    paddingLeft: 0,
+    paddingRight: 0,
+  },
+  activeGuidanceMiniButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(8,12,15,0.88)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    elevation: 14,
   },
   activeGuidanceCard: {
     width: '100%',
-    maxWidth: 392,
-    minHeight: 108,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderColor: 'rgba(196,138,44,0.18)',
-    backgroundColor: 'rgba(8,12,15,0.84)',
+    maxWidth: 720,
+    minHeight: 0,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderColor: 'rgba(196,138,44,0.34)',
+    backgroundColor: 'rgba(5,8,10,0.90)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 7 },
     shadowOpacity: 0.28,
     shadowRadius: 16,
     elevation: 14,
-    gap: 9,
+    gap: 5,
+  },
+  activeGuidanceCardBanner: {
+    maxWidth: undefined,
+    minHeight: 0,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
   },
   activeGuidanceHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 6,
   },
   activeGuidanceEyebrow: {
     ...TYPO.U2,
     color: TACTICAL.amber,
-    fontSize: 8,
-    letterSpacing: 2.1,
+    fontSize: 7.5,
+    letterSpacing: 1.6,
     flexShrink: 1,
   },
   activeGuidanceHeaderBadges: {
@@ -1142,15 +1355,49 @@ const styles = StyleSheet.create({
     gap: 6,
     flexShrink: 1,
   },
+  activeGuidanceMinimizeButton: {
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  activeGuidanceMinimizeButtonText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.amber,
+    fontSize: 8,
+  },
+  activeGuidanceEndButton: {
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,128,92,0.26)',
+    backgroundColor: 'rgba(82,18,12,0.44)',
+  },
+  activeGuidanceEndButtonText: {
+    ...ECS_TEXT.chip,
+    color: '#FFD9C7',
+    fontSize: 8,
+  },
   activeGuidanceRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
+    alignItems: 'center',
+    gap: 8,
   },
   activeGuidanceIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(212,160,23,0.12)',
@@ -1164,37 +1411,37 @@ const styles = StyleSheet.create({
   },
   activeGuidanceInstruction: {
     ...ECS_TEXT.cardTitle,
-    fontSize: 14,
-    lineHeight: 18,
-    minHeight: 36,
+    fontSize: 13,
+    lineHeight: 16,
+    minHeight: 0,
   },
   activeGuidanceDetail: {
     ...ECS_TEXT.helper,
-    marginTop: 4,
+    marginTop: 2,
     color: TACTICAL.textMuted,
   },
   activeGuidanceMetricsRow: {
     flexDirection: 'row',
-    gap: 7,
+    gap: 5,
   },
   activeGuidanceMetricChip: {
     flex: 1,
     minWidth: 0,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
     backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    gap: 1,
   },
   activeGuidanceMetricLabel: {
     ...ECS_TEXT.statLabel,
-    fontSize: 8,
+    fontSize: 7.5,
   },
   activeGuidanceMetricValue: {
     ...ECS_TEXT.statValue,
-    fontSize: 12,
+    fontSize: 11.5,
   },
   bottomCard: {
     width: '100%',
@@ -1206,6 +1453,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.36,
     shadowRadius: 16,
     elevation: 16,
+  },
+  previewBottomCard: {
+    maxHeight: '100%',
+    minHeight: 0,
+    flexShrink: 1,
+    zIndex: 93,
+    elevation: 93,
+  },
+  previewCardScroll: {
+    width: '100%',
+    flexShrink: 1,
+  },
+  previewCardScrollContent: {
+    paddingBottom: 1,
   },
   bottomDrawerWrap: {
     position: 'absolute',
@@ -1362,6 +1623,87 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.helper,
     color: '#B8B8B8',
   },
+  readinessStackCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 8,
+  },
+  readinessStackHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  readinessStackTitle: {
+    ...ECS_TEXT.sectionTitle,
+    flex: 1,
+    color: TACTICAL.textMuted,
+  },
+  readinessActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+    maxWidth: '58%',
+  },
+  readinessActionButton: {
+    minHeight: 28,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(196,138,44,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readinessActionButtonText: {
+    ...ECS_TEXT.button,
+    color: TACTICAL.amber,
+    fontSize: 10,
+  },
+  readinessRows: {
+    gap: 5,
+  },
+  readinessRow: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  readinessRowLabel: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+  },
+  readinessRowValue: {
+    ...ECS_TEXT.chip,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  readinessConcernText: {
+    ...ECS_TEXT.helper,
+    color: '#FFB300',
+  },
+  routeConfidenceExplanation: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingTop: 7,
+    gap: 4,
+  },
+  routeConfidenceExplanationTitle: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.textMuted,
+  },
+  routeConfidenceExplanationText: {
+    ...ECS_TEXT.helper,
+    color: '#B8B8B8',
+    lineHeight: 14,
+  },
   inlineLinkButton: {
     marginTop: 8,
     alignSelf: 'flex-start',
@@ -1382,6 +1724,26 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     marginTop: 10,
+  },
+  previewActionRow: {
+    alignItems: 'stretch',
+  },
+  previewActionButton: {
+    flexGrow: 1,
+    flexBasis: 98,
+    minWidth: 96,
+    minHeight: 34,
+    paddingHorizontal: 8,
+  },
+  previewPrimaryActionButton: {
+    flexGrow: 1.4,
+    flexBasis: 120,
+  },
+  previewActionButtonText: {
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: 12,
   },
   buttonDisabled: {
     opacity: 0.45,

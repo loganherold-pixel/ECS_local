@@ -1,6 +1,7 @@
 import { reportDegradedState, reportRecoverableFailure } from '../ecsIssueIntelligence';
 import type {
   ECSRuntimeContradiction,
+  ECSDispersedCampingRuntimeSmokeSnapshot,
   ECSRuntimeSmokeCommandInput,
   ECSRuntimeSmokeCommandSnapshot,
   ECSRuntimeSmokeShellInput,
@@ -15,6 +16,7 @@ const listeners = new Set<Listener>();
 
 let shellSnapshot: ECSRuntimeSmokeShellSnapshot | null = null;
 let commandSnapshot: ECSRuntimeSmokeCommandSnapshot | null = null;
+let dispersedCampingSnapshot: ECSDispersedCampingRuntimeSmokeSnapshot | null = null;
 
 let state: ECSRuntimeSmokeState = {
   capturedAt: 0,
@@ -65,6 +67,11 @@ function normalizeCommandSnapshot(input: ECSRuntimeSmokeCommandInput): ECSRuntim
       resources: input.liveStatus?.resources ?? null,
       readiness: input.liveStatus?.readiness ?? null,
     },
+    expeditionReadiness: input.expeditionReadiness ?? null,
+    activeReadinessAlert: input.activeReadinessAlert ?? null,
+    readinessExplanation: input.readinessExplanation ?? null,
+    aiSummary: input.aiSummary ?? input.primarySummary ?? null,
+    dispersedCamping: input.dispersedCamping ?? null,
   };
 }
 
@@ -96,7 +103,11 @@ function logContradictions(contradictions: ECSRuntimeContradiction[]): void {
               ? 'Offline-capable label mismatch'
               : contradiction.code === 'stale_command_lingering'
                 ? 'Stale-state drift'
-                : 'Command-state contradiction';
+              : contradiction.code.includes('readiness')
+                ? 'Expedition readiness contradiction'
+                : contradiction.code.includes('dispersed_camping')
+                  ? 'Dispersed camping eligibility contradiction'
+                  : 'Command-state contradiction';
 
     reporter({
       severity:
@@ -116,9 +127,13 @@ function logContradictions(contradictions: ECSRuntimeContradiction[]): void {
               ? 'fleet'
               : contradiction.code.includes('offline')
                 ? 'offline'
-                : contradiction.code.includes('severity')
-                  ? 'alert'
-                  : 'dashboard',
+          : contradiction.code.includes('readiness')
+            ? 'dashboard'
+            : contradiction.code.includes('dispersed_camping')
+              ? 'navigate'
+            : contradiction.code.includes('severity')
+              ? 'alert'
+              : 'dashboard',
       message: contradiction.message,
       signature: `runtime_smoke:${contradictionKey(contradiction)}`,
       metadata: {
@@ -133,20 +148,26 @@ function logContradictions(contradictions: ECSRuntimeContradiction[]): void {
 
 function recomputeState(): void {
   const enabled = Boolean(shellSnapshot?.enabled || (__DEV__ && (shellSnapshot || commandSnapshot)));
+  const commandForSmoke = commandSnapshot
+    ? {
+        ...commandSnapshot,
+        dispersedCamping: dispersedCampingSnapshot ?? commandSnapshot.dispersedCamping,
+      }
+    : null;
   const contradictions = detectRuntimeContradictions({
     shell: shellSnapshot,
-    command: commandSnapshot,
+    command: commandForSmoke,
   });
   const markers = buildRuntimeSmokeMarkers({
     shell: shellSnapshot,
-    command: commandSnapshot,
+    command: commandForSmoke,
   });
 
   const nextState: ECSRuntimeSmokeState = {
     capturedAt: Date.now(),
     enabled,
     shell: shellSnapshot,
-    command: commandSnapshot,
+    command: commandForSmoke,
     markers,
     contradictions,
     lastLoggedKeys: state.lastLoggedKeys,
@@ -187,6 +208,11 @@ export const runtimeSmokeStore = {
 
   updateCommand(input: ECSRuntimeSmokeCommandInput): void {
     commandSnapshot = normalizeCommandSnapshot(input);
+    recomputeState();
+  },
+
+  updateDispersedCamping(input: ECSDispersedCampingRuntimeSmokeSnapshot | null): void {
+    dispersedCampingSnapshot = input;
     recomputeState();
   },
 };

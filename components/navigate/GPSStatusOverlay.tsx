@@ -35,6 +35,7 @@ interface Props {
   /** Whether the map has finished loading */
   mapReady: boolean;
   topOffset?: number;
+  bottomOffset?: number;
   horizontalInset?: number;
   maxWidth?: number;
 }
@@ -49,6 +50,7 @@ export default function GPSStatusOverlay({
   onRetry,
   mapReady,
   topOffset = 8,
+  bottomOffset,
   horizontalInset = 8,
   maxWidth = 320,
 }: Props) {
@@ -157,17 +159,17 @@ export default function GPSStatusOverlay({
     const statusLabel = isRetrying
       ? `REFRESHING LOCATION${retryCount > 0 ? ` (${retryCount})` : ''}`
       : 'LOCATING POSITION';
+    const overlayPosition =
+      bottomOffset != null
+        ? { bottom: bottomOffset, left: horizontalInset, right: horizontalInset }
+        : { top: topOffset, left: horizontalInset, right: horizontalInset };
 
     return (
       <Animated.View
         style={[
           styles.acquiringOverlay,
-          {
-            opacity: fadeAnim,
-            top: topOffset,
-            left: horizontalInset,
-            right: horizontalInset,
-          },
+          { opacity: fadeAnim },
+          overlayPosition,
         ]}
         pointerEvents="box-none"
       >
@@ -200,16 +202,17 @@ export default function GPSStatusOverlay({
   }
 
   // ── Fix Acquired — Fading Out ────────────────────────
+  const overlayPosition =
+    bottomOffset != null
+      ? { bottom: bottomOffset, left: horizontalInset, right: horizontalInset }
+      : { top: topOffset, left: horizontalInset, right: horizontalInset };
+
   return (
     <Animated.View
       style={[
         styles.acquiringOverlay,
-        {
-          opacity: fadeAnim,
-          top: topOffset,
-          left: horizontalInset,
-          right: horizontalInset,
-        },
+        { opacity: fadeAnim },
+        overlayPosition,
       ]}
       pointerEvents="none"
     >
@@ -345,7 +348,7 @@ const styles = StyleSheet.create({
   acquiringOverlay: {
     position: 'absolute',
     zIndex: 40,
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   acquiringBanner: {
     flexDirection: 'row',

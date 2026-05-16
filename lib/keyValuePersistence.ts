@@ -5,11 +5,13 @@ import {
   fsWriteString,
   getDocumentDirectory,
 } from './fsCompat';
+import { ecsLog } from './ecsLogger';
 
 interface PersistedKeyValueCache {
   get: (key: string) => string | null;
   set: (key: string, value: string) => void;
   delete: (key: string) => void;
+  clear: () => void;
   flush: () => Promise<void>;
   waitForHydration: () => Promise<void>;
   isHydrated: () => boolean;
@@ -46,6 +48,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
   const shouldDebug = IS_DEV_ENV && STARTUP_DEBUG_FILE_KEYS.has(fileKey);
   const isWeb = Platform.OS === 'web';
   let cache: Record<string, string> = {};
+  const knownKeys = new Set<string>();
   let hydrated = isWeb;
   let pendingWrite: ReturnType<typeof setTimeout> | null = null;
   let writePromise: Promise<void> = createResolvedPromise();
@@ -59,11 +62,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
 
   function debugLog(message: string, metadata?: Record<string, unknown>) {
     if (!shouldDebug) return;
-    if (metadata) {
-      console.log(`[KeyValuePersistence:${fileKey}] ${message}`, metadata);
-      return;
-    }
-    console.log(`[KeyValuePersistence:${fileKey}] ${message}`);
+    ecsLog.debug('SYSTEM', `[KeyValuePersistence:${fileKey}] ${message}`, metadata);
   }
 
   function normalizeDirectoryPath(dir: string | null | undefined): string | null {
@@ -95,6 +94,15 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (index < attempts - 1) {
         await sleep(STARTUP_HYDRATION_RETRY_DELAY_MS);
       }
+    }
+
+    if (isStartupCriticalKey) {
+      ecsLog.warnOnce(
+        'SYSTEM',
+        `kvp:${fileKey}:document-dir-unavailable`,
+        `[KeyValuePersistence:${fileKey}] documentDirectory remained unavailable during startup hydration`,
+        { attempts },
+      );
     }
 
     return null;
@@ -175,6 +183,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
               return typeof entry[0] === 'string' && typeof entry[1] === 'string';
             }),
           );
+          Object.keys(cache).forEach((key) => knownKeys.add(key));
           resolvedNativePath = path;
           debugLog('hydrated snapshot accepted', {
             path,
@@ -215,12 +224,14 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (isWeb) {
         try {
           if (typeof localStorage !== 'undefined') {
+            knownKeys.add(key);
             return localStorage.getItem(key);
           }
         } catch {}
         return null;
       }
 
+      knownKeys.add(key);
       return Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null;
     },
 
@@ -228,12 +239,14 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (isWeb) {
         try {
           if (typeof localStorage !== 'undefined') {
+            knownKeys.add(key);
             localStorage.setItem(key, value);
           }
         } catch {}
         return;
       }
 
+      knownKeys.add(key);
       cache[key] = value;
       debugLog('set key', { key, value });
       scheduleNativeWrite();
@@ -243,6 +256,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (isWeb) {
         try {
           if (typeof localStorage !== 'undefined') {
+            knownKeys.delete(key);
             localStorage.removeItem(key);
           }
         } catch {}
@@ -250,8 +264,27 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       }
 
       if (Object.prototype.hasOwnProperty.call(cache, key)) {
+        knownKeys.delete(key);
         delete cache[key];
         debugLog('delete key', { key });
+        scheduleNativeWrite();
+      }
+    },
+
+    clear() {
+      if (isWeb) {
+        try {
+          if (typeof localStorage !== 'undefined') {
+            Array.from(knownKeys).forEach((key) => localStorage.removeItem(key));
+          }
+        } catch {}
+        return;
+      }
+
+      if (Object.keys(cache).length > 0) {
+        cache = {};
+        knownKeys.clear();
+        debugLog('cleared cache');
         scheduleNativeWrite();
       }
     },

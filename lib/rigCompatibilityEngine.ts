@@ -21,10 +21,12 @@
 //   vehicleSpecStore    → GVWR, base_weight_lb, fuel_tank_capacity_gal, fuel_type
 //   vehicleSetupStore   → active vehicle ID
 //   vehicleStore        → vehicle record (avg_mpg, water_capacity_gal, type, make, model)
-//   tiresLiftStore      → tireSizeInches, suspensionLiftInches, isLeveled
+//   tiresLiftStore      → tireSizeInches, suspensionLiftInches, isLeveled, frontLevelInches
 // ============================================================
 
 import { vehicleSpecStore } from './vehicleSpecStore';
+import { getVehicleResourceProfile } from './vehicleResourceProfile';
+import { vehicleStore } from './vehicleStore';
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { tiresLiftStore } from './tiresLiftStore';
 import type { ECSConfidenceResult } from './ai/confidenceTypes';
@@ -80,6 +82,7 @@ export interface VehicleProfile {
   tireSizeInches: number;           // 0 = not configured / stock
   suspensionLiftInches: number;     // 0 = stock
   isLeveled: boolean;
+  frontLevelInches: number | null;
 }
 
 // ── Compatibility Result ────────────────────────────────────
@@ -319,9 +322,12 @@ function calculateSuspensionLiftMatch(
   const recommendedLift = opp.recommendedLift || getDefaultRecommendedLift(opp);
   const vehicleLift = profile.suspensionLiftInches;
   const isLeveled = profile.isLeveled;
+  const frontLevelInches = profile.frontLevelInches ?? 0;
 
-  // Effective lift: leveling kits add ~0.5" effective clearance benefit
-  const effectiveLift = vehicleLift + (isLeveled && vehicleLift === 0 ? 0.5 : 0);
+  const levelBonus = isLeveled
+    ? Math.max(0.5, Math.min(4, frontLevelInches > 0 ? frontLevelInches : 1) * 0.25)
+    : 0;
+  const effectiveLift = vehicleLift + (vehicleLift === 0 ? levelBonus : Math.min(levelBonus, 0.5));
 
   return scoreSuspensionLift(effectiveLift, recommendedLift, opp.terrainType, opp.elevationGainFt);
 }
@@ -444,18 +450,6 @@ export function calculateRigCompatibility(
     notes,
     explanation,
   };
-
-  console.log(TAG, `${opp.name}: score=${score} (T:${terrainMatch} F:${fuelRangeCoverage} V:${vehicleCapability} Tire:${tireSizeMatch} Susp:${suspensionLiftMatch}) → ${difficultyRating}`);
-
-  return {
-    score,
-    difficultyRating,
-    factors: { terrainMatch, fuelRangeCoverage, vehicleCapability, tireSizeMatch, suspensionLiftMatch },
-    isFullScore: hasFullData,
-    confidence,
-    notes,
-    explanation,
-  };
 }
 
 // ============================================================
@@ -481,24 +475,26 @@ export function buildVehicleProfile(
       debugRigCompat('No active vehicle; skipping profile build');
     }
     return null;
-    console.log(TAG, 'No active vehicle — cannot build profile');
-    return null;
   }
 
   const spec = vehicleSpecStore.get(vehicleId);
   hasLoggedMissingVehicleProfile = false;
+  const resolvedVehicleRecord = (vehicleRecord ??
+    (vehicleStore.getById(vehicleId) as typeof vehicleRecord | null)) ?? null;
+  const tiresLift = tiresLiftStore.get(vehicleId);
+  const resourceProfile = getVehicleResourceProfile(resolvedVehicleRecord as any, { spec, tiresLift });
 
-  const fuelTankGal = spec?.fuel_tank_capacity_gal || vehicleRecord?.fuel_tank_capacity_gal || 0;
-  const avgMpg = vehicleRecord?.avg_mpg || 15;
-  const waterCapGal = vehicleRecord?.water_capacity_gal || 0;
+  const fuelTankGal = spec?.fuel_tank_capacity_gal || resolvedVehicleRecord?.fuel_tank_capacity_gal || 0;
+  const avgMpg = resolvedVehicleRecord?.avg_mpg || 15;
+  const waterCapGal = resourceProfile.waterCapacityGal ?? 0;
   const gvwr = spec?.gvwr_lb || 0;
   const baseWeight = spec?.base_weight_lb || 0;
   const payloadCapacity = gvwr > 0 && baseWeight > 0 ? gvwr - baseWeight : 0;
   const fuelRange = fuelTankGal > 0 && avgMpg > 0 ? fuelTankGal * avgMpg : 0;
 
-  let vehicleType = vehicleRecord?.type || 'truck';
-  const make = (vehicleRecord?.make || '').toLowerCase();
-  const model = (vehicleRecord?.model || '').toLowerCase();
+  let vehicleType = resolvedVehicleRecord?.type || 'truck';
+  const make = (resolvedVehicleRecord?.make || '').toLowerCase();
+  const model = (resolvedVehicleRecord?.model || '').toLowerCase();
   if (make === 'jeep') vehicleType = 'jeep';
   if (model.includes('sprinter') || model.includes('transit') || model.includes('promaster')) vehicleType = 'suv_van';
   if (model.includes('4runner') || model.includes('bronco') || model.includes('land cruiser') ||
@@ -506,18 +502,17 @@ export function buildVehicleProfile(
   if (model.includes('outback') || model.includes('crosstrek') || model.includes('rav4') ||
       model.includes('passport') || model.includes('santa cruz')) vehicleType = 'car_crossover';
 
-  // ── Read Tires / Lift from store ──
-  const tiresLift = tiresLiftStore.get(vehicleId);
-  const tireSizeInches = tiresLift?.tireSizeInches || 0;
-  const suspensionLiftInches = tiresLift?.suspensionLiftInches || 0;
-  const isLeveled = tiresLift?.isLeveled || false;
+  const tireSizeInches = resourceProfile.tireSizeInches || 0;
+  const suspensionLiftInches = resourceProfile.suspensionLiftInches || 0;
+  const isLeveled = resourceProfile.isLeveled || false;
+  const frontLevelInches = resourceProfile.frontLevelInches ?? null;
 
   const profile: VehicleProfile = {
     vehicleId,
-    vehicleName: vehicleRecord?.name || 'Vehicle',
+    vehicleName: resolvedVehicleRecord?.name || 'Vehicle',
     vehicleType,
-    make: vehicleRecord?.make || null,
-    model: vehicleRecord?.model || null,
+    make: resolvedVehicleRecord?.make || null,
+    model: resolvedVehicleRecord?.model || null,
     gvwr_lb: gvwr,
     base_weight_lb: baseWeight,
     fuel_tank_capacity_gal: fuelTankGal,
@@ -529,11 +524,11 @@ export function buildVehicleProfile(
     tireSizeInches,
     suspensionLiftInches,
     isLeveled,
+    frontLevelInches,
   };
 
-  console.log(TAG, `Built profile for "${profile.vehicleName}": type=${vehicleType}, GVWR=${gvwr}, range=${fuelRange}mi, water=${waterCapGal}gal, tires=${tireSizeInches}", lift=${suspensionLiftInches}", leveled=${isLeveled}`);
   debugRigCompat(
-    `Built profile for "${profile.vehicleName}": type=${vehicleType}, GVWR=${gvwr}, range=${fuelRange}mi, water=${waterCapGal}gal, tires=${tireSizeInches}", lift=${suspensionLiftInches}", leveled=${isLeveled}`,
+    `Built profile for "${profile.vehicleName}": type=${vehicleType}, GVWR=${gvwr}, range=${fuelRange}mi, water=${waterCapGal}gal, tires=${tireSizeInches}", lift=${suspensionLiftInches}", leveled=${isLeveled}, frontLevel=${frontLevelInches ?? 'na'}`,
   );
   return profile;
 }
@@ -544,33 +539,48 @@ export function buildProfileFromSpecs(): VehicleProfile | null {
 
   const spec = vehicleSpecStore.get(vehicleId);
   if (!spec) return null;
-
-  const fuelRange = spec.fuel_tank_capacity_gal > 0 ? spec.fuel_tank_capacity_gal * 15 : 0;
-
-  // ── Read Tires / Lift from store ──
+  const activeVehicle = vehicleStore.getById(vehicleId) as {
+    id: string;
+    name?: string | null;
+    type?: string | null;
+    make?: string | null;
+    model?: string | null;
+    avg_mpg?: number | null;
+    water_capacity_gal?: number | null;
+    fuel_tank_capacity_gal?: number | null;
+  } | null;
   const tiresLift = tiresLiftStore.get(vehicleId);
-  const tireSizeInches = tiresLift?.tireSizeInches || 0;
-  const suspensionLiftInches = tiresLift?.suspensionLiftInches || 0;
-  const isLeveled = tiresLift?.isLeveled || false;
+  const resourceProfile = getVehicleResourceProfile(activeVehicle as any, { spec, tiresLift });
+
+  const fuelTankCapacityGal = spec.fuel_tank_capacity_gal || activeVehicle?.fuel_tank_capacity_gal || 0;
+  const avgMpg = activeVehicle?.avg_mpg || 15;
+  const waterCapacityGal = resourceProfile.waterCapacityGal ?? 0;
+  const fuelRange = fuelTankCapacityGal > 0 ? fuelTankCapacityGal * avgMpg : 0;
+
+  const tireSizeInches = resourceProfile.tireSizeInches || 0;
+  const suspensionLiftInches = resourceProfile.suspensionLiftInches || 0;
+  const isLeveled = resourceProfile.isLeveled || false;
+  const frontLevelInches = resourceProfile.frontLevelInches ?? null;
 
   return {
     vehicleId,
-    vehicleName: 'Vehicle',
-    vehicleType: 'truck',
-    make: null,
-    model: null,
+    vehicleName: activeVehicle?.name || 'Vehicle',
+    vehicleType: activeVehicle?.type || 'truck',
+    make: activeVehicle?.make || null,
+    model: activeVehicle?.model || null,
     gvwr_lb: spec.gvwr_lb,
     base_weight_lb: spec.base_weight_lb,
-    fuel_tank_capacity_gal: spec.fuel_tank_capacity_gal,
+    fuel_tank_capacity_gal: fuelTankCapacityGal,
     fuel_type: spec.fuel_type,
-    avg_mpg: 15,
-    water_capacity_gal: 0,
+    avg_mpg: avgMpg,
+    water_capacity_gal: waterCapacityGal,
     payload_capacity_lb: spec.gvwr_lb > 0 && spec.base_weight_lb > 0
       ? spec.gvwr_lb - spec.base_weight_lb : 0,
     fuel_range_miles: fuelRange,
     tireSizeInches,
     suspensionLiftInches,
     isLeveled,
+    frontLevelInches,
   };
 }
 
@@ -598,9 +608,6 @@ export function scoreAndSortOpportunities<T extends CompatibilityExpedition>(
   debugRigCompat(
     `Scored ${scored.length} opportunities; top=${scored[0]?.name ?? 'none'} (${scored[0]?.rigCompatibility ?? 0}%)`,
   );
-  return { opportunities: scored, results };
-
-  console.log(TAG, `Scored ${scored.length} opportunities — top: ${scored[0]?.name} (${scored[0]?.rigCompatibility}%)`);
   return { opportunities: scored, results };
 }
 

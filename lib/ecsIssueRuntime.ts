@@ -2,6 +2,7 @@ import { Dimensions } from 'react-native';
 import { getECSLayoutClass } from './useAdaptiveLayout';
 
 export type EcsIssueWeatherStatus = 'live' | 'stale' | 'unavailable';
+export type EcsIssueWeatherFreshness = 'fresh' | 'aging' | 'stale' | 'very_stale' | 'unknown' | 'missing';
 export type EcsIssueLayoutClass = 'compact' | 'medium' | 'expanded';
 
 interface EcsIssueRuntimeActor {
@@ -16,6 +17,12 @@ interface EcsIssueRuntimeState {
   isOnline: boolean | null;
   syncStatus: string | null;
   weatherStatus: EcsIssueWeatherStatus | null;
+  weatherSource: string | null;
+  weatherFreshness: EcsIssueWeatherFreshness | null;
+  weatherFetchedAt: number | null;
+  weatherCachedAt: number | null;
+  weatherStale: boolean | null;
+  lastSuccessfulWeatherFetchAt: number | null;
 }
 
 const runtimeState: EcsIssueRuntimeState = {
@@ -28,6 +35,12 @@ const runtimeState: EcsIssueRuntimeState = {
   isOnline: null,
   syncStatus: null,
   weatherStatus: null,
+  weatherSource: null,
+  weatherFreshness: null,
+  weatherFetchedAt: null,
+  weatherCachedAt: null,
+  weatherStale: null,
+  lastSuccessfulWeatherFetchAt: null,
 };
 
 function normalizePath(path: string | null | undefined): string | null {
@@ -74,8 +87,36 @@ export function setIssueRuntimeConnectivity(params: {
   }
 }
 
-export function setIssueRuntimeWeatherStatus(status: EcsIssueWeatherStatus | null): void {
+export function setIssueRuntimeWeatherStatus(
+  status: EcsIssueWeatherStatus | null,
+  metadata?: {
+    source?: string | null;
+    freshness?: EcsIssueWeatherFreshness | null;
+    fetchedAt?: number | null;
+    cachedAt?: number | null;
+    stale?: boolean | null;
+    lastSuccessfulFetchAt?: number | null;
+  },
+): void {
   runtimeState.weatherStatus = status;
+  if (typeof metadata?.source !== 'undefined') {
+    runtimeState.weatherSource = metadata.source;
+  }
+  if (typeof metadata?.freshness !== 'undefined') {
+    runtimeState.weatherFreshness = metadata.freshness;
+  }
+  if (typeof metadata?.fetchedAt !== 'undefined') {
+    runtimeState.weatherFetchedAt = metadata.fetchedAt;
+  }
+  if (typeof metadata?.cachedAt !== 'undefined') {
+    runtimeState.weatherCachedAt = metadata.cachedAt;
+  }
+  if (typeof metadata?.stale !== 'undefined') {
+    runtimeState.weatherStale = metadata.stale;
+  }
+  if (typeof metadata?.lastSuccessfulFetchAt !== 'undefined') {
+    runtimeState.lastSuccessfulWeatherFetchAt = metadata.lastSuccessfulFetchAt;
+  }
 }
 
 export function getIssueRuntimeLayoutClass(): EcsIssueLayoutClass {
@@ -95,5 +136,11 @@ export function getIssueRuntimeSnapshot(): Readonly<EcsIssueRuntimeState> {
     isOnline: runtimeState.isOnline,
     syncStatus: runtimeState.syncStatus,
     weatherStatus: runtimeState.weatherStatus,
+    weatherSource: runtimeState.weatherSource,
+    weatherFreshness: runtimeState.weatherFreshness,
+    weatherFetchedAt: runtimeState.weatherFetchedAt,
+    weatherCachedAt: runtimeState.weatherCachedAt,
+    weatherStale: runtimeState.weatherStale,
+    lastSuccessfulWeatherFetchAt: runtimeState.lastSuccessfulWeatherFetchAt,
   };
 }

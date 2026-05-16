@@ -34,6 +34,8 @@ const ARRIVAL_CONFIRMATION_COUNT = 2;
 const REROUTE_COOLDOWN_MS = 6000;
 const ROAD_NAV_PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const ROAD_NAV_ACTIVE_RESTORE_MAX_AGE_MS = 18 * 60 * 60 * 1000;
+const ROUTE_REQUEST_TIMEOUT_MS = 20000;
+const ROUTE_TIMEOUT_ERROR_MESSAGE = 'Route generation timed out. Check connection and retry.';
 
 export type RoadNavigationConfidenceState =
   | 'on_route'
@@ -88,6 +90,10 @@ export interface UseRoadNavigationOutput {
     destination: RoadNavDestination,
     createdFrom?: RoadNavSourceType,
   ) => Promise<void>;
+  previewRoute: (
+    route: RoadNavRoute,
+    createdFrom?: RoadNavSourceType,
+  ) => Promise<void>;
   startNavigation: () => void;
   endNavigation: () => Promise<void>;
   clearDestination: () => Promise<void>;
@@ -131,6 +137,30 @@ function isRestorableRoadSession(
     default:
       return false;
   }
+}
+
+function getRouteErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function withRouteRequestTimeout<T>(
+  request: Promise<T>,
+  timeoutMs = ROUTE_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(ROUTE_TIMEOUT_ERROR_MESSAGE));
+    }, timeoutMs);
+  });
+
+  return Promise.race([request, timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  });
 }
 
 function randomSessionId(): string {
@@ -232,6 +262,40 @@ function buildCumulativeDistances(points: RoadNavCoordinate[]): number[] {
     cumulative[i] = cumulative[i - 1] + distanceMeters(points[i - 1], points[i]);
   }
   return cumulative;
+}
+
+function isArrivalLikeInstruction(instruction: string | null | undefined): boolean {
+  const normalized = String(instruction ?? '').trim().toLowerCase();
+  return normalized.includes('arrive') || normalized.includes('destination');
+}
+
+function selectGuidanceStep(
+  steps: RoadNavRoute['steps'],
+  currentStepIndex: number,
+): { stepIndex: number; step: RoadNavRoute['steps'][number] | null } {
+  if (steps.length === 0) {
+    return { stepIndex: 0, step: null };
+  }
+
+  const resolvedCurrentIndex = clamp(currentStepIndex, 0, steps.length - 1);
+  const currentStep = steps[resolvedCurrentIndex] ?? null;
+  if (!currentStep) {
+    return { stepIndex: resolvedCurrentIndex, step: null };
+  }
+
+  const lastIndex = steps.length - 1;
+  if (
+    resolvedCurrentIndex >= lastIndex ||
+    currentStep.maneuverType === 'arrive' ||
+    isArrivalLikeInstruction(currentStep.instruction)
+  ) {
+    return { stepIndex: resolvedCurrentIndex, step: currentStep };
+  }
+
+  return {
+    stepIndex: resolvedCurrentIndex + 1,
+    step: steps[resolvedCurrentIndex + 1] ?? currentStep,
+  };
 }
 
 function projectProgressOnRoute(
@@ -359,9 +423,16 @@ function computeSessionFromRoute(
   const resolvedStepIndex =
     currentStepIndex >= 0 ? currentStepIndex : Math.max(route.steps.length - 1, 0);
   const currentStep = route.steps[resolvedStepIndex] ?? null;
-  const distanceToNextM = currentStep
-    ? Math.max(currentStep.endDistanceM - progress.traveledDistanceM, 0)
-    : null;
+  const guidanceStepSelection = selectGuidanceStep(route.steps, resolvedStepIndex);
+  const distanceToNextM =
+    currentStep != null
+      ? Math.max(currentStep.endDistanceM - progress.traveledDistanceM, 0)
+      : guidanceStepSelection.step != null
+        ? Math.max(
+            guidanceStepSelection.step.endDistanceM - progress.traveledDistanceM,
+            0,
+          )
+        : null;
   const remainingDistanceM = progress.remainingDistanceM;
   const remainingDurationS =
     route.distanceM > 0
@@ -374,7 +445,7 @@ function computeSessionFromRoute(
 
   return {
     currentStepIndex: resolvedStepIndex,
-    nextInstruction: currentStep?.instruction ?? null,
+    nextInstruction: guidanceStepSelection.step?.instruction ?? currentStep?.instruction ?? null,
     nextInstructionDistanceM: distanceToNextM,
     remainingDistanceM,
     remainingDurationS,
@@ -412,6 +483,26 @@ function createEmptySession(): RoadNavigationSessionState {
   };
 }
 
+let activeRoadNavigationSession: RoadNavigationSessionState = createEmptySession();
+const activeRoadNavigationSessionListeners = new Set<() => void>();
+
+function publishActiveRoadNavigationSession(session: RoadNavigationSessionState): void {
+  if (activeRoadNavigationSession === session) return;
+  activeRoadNavigationSession = session;
+  activeRoadNavigationSessionListeners.forEach((listener) => listener());
+}
+
+export function getActiveRoadNavigationSession(): RoadNavigationSessionState {
+  return activeRoadNavigationSession;
+}
+
+export function subscribeActiveRoadNavigationSession(listener: () => void): () => void {
+  activeRoadNavigationSessionListeners.add(listener);
+  return () => {
+    activeRoadNavigationSessionListeners.delete(listener);
+  };
+}
+
 export function useRoadNavigation(params: {
   accessToken: string | null;
   currentLocation: RoadNavigationLocation | null;
@@ -431,6 +522,12 @@ export function useRoadNavigation(params: {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [stepListExpanded, setStepListExpanded] = useState(false);
   const [session, setSession] = useState<RoadNavigationSessionState>(createEmptySession);
+  const sessionRef = useRef(session);
+
+  useEffect(() => {
+    sessionRef.current = session;
+    publishActiveRoadNavigationSession(session);
+  }, [session]);
 
   const searchRequestIdRef = useRef(0);
   const sessionTokenRef = useRef(createRoadSearchSessionToken());
@@ -442,6 +539,7 @@ export function useRoadNavigation(params: {
   const arrivalHitCountRef = useRef(0);
   const restoreAttemptedRef = useRef(false);
   const inFlightRouteKeyRef = useRef<string | null>(null);
+  const routeRequestSeqRef = useRef(0);
 
   const clearSearchUi = useCallback(() => {
     searchRequestIdRef.current += 1;
@@ -568,20 +666,31 @@ export function useRoadNavigation(params: {
       }
 
       inFlightRouteKeyRef.current = routeKey;
+      const requestSeq = routeRequestSeqRef.current + 1;
+      routeRequestSeqRef.current = requestSeq;
       setPreviewLoading(true);
       try {
-        const route = await fetchRoadRoute({
-          accessToken,
-          origin: currentLocation,
-          destination,
-        });
+        const route = await withRouteRequestTimeout(
+          fetchRoadRoute({
+            accessToken,
+            origin: currentLocation,
+            destination,
+          }),
+        );
+
+        if (
+          routeRequestSeqRef.current !== requestSeq ||
+          inFlightRouteKeyRef.current !== routeKey
+        ) {
+          return;
+        }
 
         applyRoute(route, requestedStatus, destination, createdFrom, rerouteCount);
       } finally {
         if (inFlightRouteKeyRef.current === routeKey) {
           inFlightRouteKeyRef.current = null;
+          setPreviewLoading(false);
         }
-        setPreviewLoading(false);
       }
     },
     [accessToken, applyRoute, currentLocation, liveServicesEnabled, persistSession],
@@ -637,7 +746,17 @@ export function useRoadNavigation(params: {
       session.status === 'navigation_active' ? 'navigation_active' : 'route_preview',
       session.createdFrom === 'restored_session' ? 'restored_session' : session.createdFrom,
       session.rerouteCount,
-    );
+    ).catch((error: unknown) => {
+      setSession((prev) => {
+        if (!prev.destination || prev.route) return prev;
+        return {
+          ...prev,
+          status: 'error',
+          error: getRouteErrorMessage(error, 'Route restore unavailable'),
+          routeStatusLabel: 'Route unavailable',
+        };
+      });
+    });
   }, [
     accessToken,
     currentLocation,
@@ -760,10 +879,7 @@ export function useRoadNavigation(params: {
         setSession((prev) => ({
           ...prev,
           status: 'error',
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Destination could not be resolved',
+          error: getRouteErrorMessage(error, 'Destination could not be resolved'),
         }));
       } finally {
         setSearchLoading(false);
@@ -809,17 +925,29 @@ export function useRoadNavigation(params: {
         setSession((prev) => ({
           ...prev,
           status: 'error',
-          error:
-            error instanceof Error ? error.message : 'Route preview unavailable',
+          error: getRouteErrorMessage(error, 'Route preview unavailable'),
         }));
       }
     },
     [clearSearchUi, currentLocation, requestRouteForDestination],
   );
 
+  const previewRoute = useCallback(
+    async (
+      route: RoadNavRoute,
+      createdFrom: RoadNavSourceType = 'manual_selection',
+    ) => {
+      clearSearchUi();
+      setStepListExpanded(false);
+      applyRoute(route, 'route_preview', route.destination, createdFrom, 0);
+    },
+    [applyRoute, clearSearchUi],
+  );
+
   const reroute = useCallback(
     async (_reason = 'off_route') => {
-      if (!session.destination) return;
+      const activeSession = sessionRef.current;
+      if (!activeSession.destination) return;
       if (!currentLocation) return;
       if (!accessToken || !liveServicesEnabled) {
         setSession((prev) => ({
@@ -833,7 +961,7 @@ export function useRoadNavigation(params: {
         return;
       }
 
-      const nextRerouteCount = session.rerouteCount + 1;
+      const nextRerouteCount = activeSession.rerouteCount + 1;
       rerouteCooldownRef.current = Date.now();
       setSession((prev) => ({
         ...prev,
@@ -847,16 +975,16 @@ export function useRoadNavigation(params: {
 
       try {
         await requestRouteForDestination(
-          session.destination,
+          activeSession.destination,
           'navigation_active',
-          session.createdFrom,
+          activeSession.createdFrom,
           nextRerouteCount,
         );
       } catch (error) {
         setSession((prev) => ({
           ...prev,
           status: 'navigation_active',
-          error: error instanceof Error ? error.message : 'Route update unavailable',
+          error: getRouteErrorMessage(error, 'Route update unavailable'),
           routeStatusLabel: 'Route update unavailable',
         }));
       }
@@ -866,19 +994,17 @@ export function useRoadNavigation(params: {
       currentLocation,
       liveServicesEnabled,
       requestRouteForDestination,
-      session.createdFrom,
-      session.destination,
-      session.rerouteCount,
     ],
   );
 
   useEffect(() => {
-    if (!currentLocation || !session.route) return;
-    if (!['route_preview', 'navigation_active', 'rerouting', 'arrived'].includes(session.status)) {
+    const activeSession = sessionRef.current;
+    if (!currentLocation || !activeSession.route) return;
+    if (!['route_preview', 'navigation_active', 'rerouting', 'arrived'].includes(activeSession.status)) {
       return;
     }
 
-    const computed = computeSessionFromRoute(session.route, currentLocation, session);
+    const computed = computeSessionFromRoute(activeSession.route, currentLocation, activeSession);
     const accuracyPad = getAccuracyPadMeters(currentLocation);
     const speedMph = getSpeedMph(currentLocation);
     const lowSpeed = speedMph > 0 && speedMph < 4;
@@ -904,11 +1030,11 @@ export function useRoadNavigation(params: {
       'rerouting',
       'rejoined',
     ];
-    const wasRecovering = recoveringStates.includes(session.routeConfidenceState);
+    const wasRecovering = recoveringStates.includes(activeSession.routeConfidenceState);
 
-    let nextConfidenceState: RoadNavigationConfidenceState = session.routeConfidenceState;
+    let nextConfidenceState: RoadNavigationConfidenceState = activeSession.routeConfidenceState;
 
-    if (session.status === 'rerouting') {
+    if (activeSession.status === 'rerouting') {
       nextConfidenceState = 'rerouting';
       lowConfidenceHitCountRef.current = 0;
       tempDeviationHitCountRef.current = 0;
@@ -944,7 +1070,7 @@ export function useRoadNavigation(params: {
       offRouteHitCountRef.current = 0;
       rejoinHitCountRef.current = 0;
       nextConfidenceState =
-        session.routeConfidenceState === 'rejoined' ? 'on_route' : 'on_route';
+        activeSession.routeConfidenceState === 'rejoined' ? 'on_route' : 'on_route';
     } else if (offRouteDistance <= tempDeviationThreshold) {
       arrivalHitCountRef.current = 0;
       offRouteHitCountRef.current = 0;
@@ -954,7 +1080,7 @@ export function useRoadNavigation(params: {
       nextConfidenceState =
         lowConfidenceHitCountRef.current >= LOW_CONFIDENCE_CONFIRMATION_COUNT
           ? 'low_confidence'
-          : session.routeConfidenceState === 'temporary_deviation'
+          : activeSession.routeConfidenceState === 'temporary_deviation'
             ? 'temporary_deviation'
             : 'on_route';
     } else if (offRouteDistance <= offRouteThreshold || lowSpeed) {
@@ -966,7 +1092,7 @@ export function useRoadNavigation(params: {
       nextConfidenceState =
         tempDeviationHitCountRef.current >= TEMP_DEVIATION_CONFIRMATION_COUNT
           ? 'temporary_deviation'
-          : session.routeConfidenceState === 'off_route'
+          : activeSession.routeConfidenceState === 'off_route'
             ? 'off_route'
             : 'low_confidence';
     } else {
@@ -982,12 +1108,12 @@ export function useRoadNavigation(params: {
     }
 
     const nextRouteStatusLabel = getRouteStateLabel(
-      session.status === 'rerouting' ? 'rerouting' : session.status === 'arrived' ? 'arrived' : session.status === 'route_preview' ? 'route_preview' : 'navigation_active',
+      activeSession.status === 'rerouting' ? 'rerouting' : activeSession.status === 'arrived' ? 'arrived' : activeSession.status === 'route_preview' ? 'route_preview' : 'navigation_active',
       nextConfidenceState,
       liveServicesEnabled,
     );
     const nextCompletionReason: RoadNavigationCompletionReason =
-      session.status === 'navigation_active' && nextConfidenceState === 'arrived'
+      activeSession.status === 'navigation_active' && nextConfidenceState === 'arrived'
         ? 'auto_arrival'
         : null;
     const nextIsOffRoute =
@@ -1032,7 +1158,7 @@ export function useRoadNavigation(params: {
       return nextSession;
     });
 
-    if (session.status === 'navigation_active') {
+    if (activeSession.status === 'navigation_active') {
       if (
         nextConfidenceState === 'off_route' &&
         Date.now() - rerouteCooldownRef.current >= REROUTE_COOLDOWN_MS
@@ -1077,6 +1203,8 @@ export function useRoadNavigation(params: {
   }, [persistSession, session.destination, session.route]);
 
   const clearDestination = useCallback(async () => {
+    routeRequestSeqRef.current += 1;
+    inFlightRouteKeyRef.current = null;
     sessionTokenRef.current = createRoadSearchSessionToken();
     lowConfidenceHitCountRef.current = 0;
     tempDeviationHitCountRef.current = 0;
@@ -1084,6 +1212,7 @@ export function useRoadNavigation(params: {
     rejoinHitCountRef.current = 0;
     arrivalHitCountRef.current = 0;
     setStepListExpanded(false);
+    setPreviewLoading(false);
     clearSearchUi();
     setSession(createEmptySession());
     await clearRoadNavigationSession();
@@ -1126,6 +1255,7 @@ export function useRoadNavigation(params: {
     hasSearchResults: suggestions.length > 0,
     selectSuggestion,
     previewDestination,
+    previewRoute,
     startNavigation,
     endNavigation,
     clearDestination,

@@ -71,6 +71,10 @@ export function getRouteLabelConfig(label: RouteLabel): RouteLabelConfig {
   return ROUTE_LABEL_CONFIGS[label] ?? ROUTE_LABEL_CONFIGS['Known Route'];
 }
 
+export function getRouteLabelDisplay(label: RouteLabel): string {
+  return label === 'ECS Suggested' ? 'ECS-Inferred' : label;
+}
+
 // ══════════════════════════════════════════════════════════
 // HIDDEN GEM SCORING MODEL
 // ══════════════════════════════════════════════════════════
@@ -452,18 +456,22 @@ export function evaluateVehicleMatch(
   const concerns: string[] = [];
   let score = compatResult?.score ?? 60;
 
-  if (op.recommendedTireSize && vehicleProfile.tireSizeInches) {
-    const tireDiff = vehicleProfile.tireSizeInches - op.recommendedTireSize;
+  const tireSizeInches = vehicleProfile?.tireSizeInches ?? Number.NaN;
+  const recommendedTireSize = op.recommendedTireSize ?? Number.NaN;
+  if (Number.isFinite(tireSizeInches) && Number.isFinite(recommendedTireSize)) {
+    const tireDiff = tireSizeInches - recommendedTireSize;
     if (tireDiff < -2) {
-      concerns.push(`Recommended ${op.recommendedTireSize}" tires — current setup may be undersized`);
+      concerns.push(`Recommended ${recommendedTireSize}" tires — current setup may be undersized`);
       score = Math.max(score - 10, 0);
     }
   }
 
-  if (op.recommendedLift != null) {
-    const liftDiff = (vehicleProfile.suspensionLiftInches ?? 0) - op.recommendedLift;
+  const suspensionLiftInches = vehicleProfile?.suspensionLiftInches ?? 0;
+  const recommendedLift = op.recommendedLift ?? Number.NaN;
+  if (Number.isFinite(recommendedLift)) {
+    const liftDiff = suspensionLiftInches - recommendedLift;
     if (liftDiff < -1) {
-      concerns.push(`Recommended ${op.recommendedLift}" lift — current clearance may be limited`);
+      concerns.push(`Recommended ${recommendedLift}" lift — current clearance may be limited`);
       score = Math.max(score - 5, 0);
     }
   }
@@ -476,7 +484,7 @@ export function evaluateVehicleMatch(
   else if (score >= 30) { level = 'Challenging'; color = '#E67E22'; }
   else { level = 'Exceeds Setup'; color = '#EF5350'; }
 
-  const vName = vehicleProfile.vehicleName ?? 'Your vehicle';
+  const vName = vehicleProfile?.vehicleName ?? 'Your vehicle';
   const primaryConcern = formatLoadoutConcern(concerns[0]);
   const note = score >= 70
     ? `${vName} is well-matched for this route`
@@ -494,8 +502,8 @@ export function evaluateVehicleMatch(
       hasVehicleProfile: true,
       hasCoreSpecs: true,
       hasFuelSpecs: false,
-      hasTireConfig: !!vehicleProfile.tireSizeInches,
-      hasSuspensionConfig: !!(vehicleProfile.suspensionLiftInches || vehicleProfile.isLeveled),
+      hasTireConfig: !!vehicleProfile?.tireSizeInches,
+      hasSuspensionConfig: !!(vehicleProfile?.suspensionLiftInches || vehicleProfile?.isLeveled),
       hasFullScore: false,
     });
 
@@ -780,7 +788,7 @@ export function compareRoutes(routeA: EnrichedDiscoveryRoute, routeB: EnrichedDi
       { field: 'duration', label: 'Duration', valueA: `${routeA.estimatedDays}d`, valueB: `${routeB.estimatedDays}d`, advantage: routeA.estimatedDays < routeB.estimatedDays ? 'A' : routeA.estimatedDays > routeB.estimatedDays ? 'B' : 'equal' },
       { field: 'remoteness', label: 'Remoteness', valueA: `${routeA.remotenessScore}/10`, valueB: `${routeB.remotenessScore}/10`, advantage: 'equal' },
       { field: 'risk', label: 'Risk Preview', valueA: routeA.riskPreview.level, valueB: routeB.riskPreview.level, advantage: routeA.riskPreview.score < routeB.riskPreview.score ? 'A' : routeA.riskPreview.score > routeB.riskPreview.score ? 'B' : 'equal' },
-      { field: 'vehicleMatch', label: 'Vehicle Match', valueA: routeA.vehicleMatch.level, valueB: routeB.vehicleMatch.level, advantage: routeA.vehicleMatch.score > routeB.vehicleMatch.score ? 'A' : routeA.vehicleMatch.score < routeB.vehicleMatch.score ? 'B' : 'equal' },
+      { field: 'vehicleMatch', label: 'Vehicle Fit', valueA: routeA.vehicleMatch.level, valueB: routeB.vehicleMatch.level, advantage: routeA.vehicleMatch.score > routeB.vehicleMatch.score ? 'A' : routeA.vehicleMatch.score < routeB.vehicleMatch.score ? 'B' : 'equal' },
       { field: 'difficulty', label: 'Difficulty', valueA: `${routeA.terrainDifficulty ?? 5}/10`, valueB: `${routeB.terrainDifficulty ?? 5}/10`, advantage: 'equal' },
       { field: 'fuel', label: 'Fuel Required', valueA: `${routeA.estimatedFuelRequired} gal`, valueB: `${routeB.estimatedFuelRequired} gal`, advantage: routeA.estimatedFuelRequired < routeB.estimatedFuelRequired ? 'A' : routeA.estimatedFuelRequired > routeB.estimatedFuelRequired ? 'B' : 'equal' },
     ],

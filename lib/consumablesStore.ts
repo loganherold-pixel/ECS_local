@@ -53,7 +53,9 @@ export type ConsumableInputSource = 'manual' | 'sensor';
 
 export interface ConsumablesState {
   fuel_percent_current: number;
+  fuel_gal_current?: number | null;
   fuel_source?: ConsumableInputSource;
+  fuel_gal_updated_at?: number | null;
   water_gal_current: number;
   water_source?: ConsumableInputSource;
   water_updated_at?: number | null;
@@ -94,8 +96,10 @@ function notifyListeners() {
 
 function getDefaultConsumablesState(): ConsumablesState {
   return {
-    fuel_percent_current: 100,
+    fuel_percent_current: 0,
+    fuel_gal_current: 0,
     fuel_source: 'manual',
+    fuel_gal_updated_at: null,
     water_gal_current: 0,
     water_source: 'manual',
     water_updated_at: null,
@@ -111,7 +115,9 @@ function getDefaultConsumablesState(): ConsumablesState {
 function sanitizeConsumablesState(state: Partial<ConsumablesState> | null | undefined): ConsumablesState {
   return {
     fuel_percent_current: clampFuel(state?.fuel_percent_current ?? 100),
+    fuel_gal_current: clampOptionalQuantity(state?.fuel_gal_current),
     fuel_source: state?.fuel_source === 'sensor' ? 'sensor' : 'manual',
+    fuel_gal_updated_at: typeof state?.fuel_gal_updated_at === 'number' ? state.fuel_gal_updated_at : null,
     water_gal_current: clampWater(state?.water_gal_current ?? 0),
     water_source: state?.water_source === 'sensor' ? 'sensor' : 'manual',
     water_updated_at: typeof state?.water_updated_at === 'number' ? state.water_updated_at : null,
@@ -136,6 +142,12 @@ export const consumablesStore = {
     all[vehicleId] = {
       ...sanitizeConsumablesState(state),
       fuel_source: state.fuel_source === 'sensor' ? 'sensor' : 'manual',
+      fuel_gal_updated_at:
+        typeof state.fuel_gal_updated_at === 'number'
+          ? state.fuel_gal_updated_at
+          : state.fuel_gal_current != null
+            ? Date.now()
+            : null,
       water_updated_at:
         typeof state.water_updated_at === 'number' ? state.water_updated_at : Date.now(),
       alternate_fluid_updated_at:
@@ -159,7 +171,33 @@ export const consumablesStore = {
     all[vehicleId] = {
       ...existing,
       fuel_percent_current: clampFuel(fuelPercent),
+      fuel_gal_current: null,
+      fuel_gal_updated_at: null,
       fuel_source: source,
+    };
+    saveAllConsumables(all);
+    notifyListeners();
+  },
+
+  setFuelGal: (
+    vehicleId: string,
+    fuelGal: number,
+    source: ConsumableInputSource = 'manual',
+  ): void => {
+    const all = getAllConsumables();
+    const existing = sanitizeConsumablesState(all[vehicleId] ?? getDefaultConsumablesState());
+    const spec = vehicleSpecStore.get(vehicleId);
+    const fuelGalCurrent = clampWater(fuelGal);
+    const fuelPercent =
+      spec?.fuel_tank_capacity_gal && spec.fuel_tank_capacity_gal > 0
+        ? clampFuel((fuelGalCurrent / spec.fuel_tank_capacity_gal) * 100)
+        : existing.fuel_percent_current;
+    all[vehicleId] = {
+      ...existing,
+      fuel_percent_current: fuelPercent,
+      fuel_gal_current: fuelGalCurrent,
+      fuel_source: source,
+      fuel_gal_updated_at: Date.now(),
     };
     saveAllConsumables(all);
     notifyListeners();
@@ -218,9 +256,13 @@ export const consumablesStore = {
   computeFuelWeightLb: (vehicleId: string): number => {
     const state = consumablesStore.get(vehicleId);
     const spec = vehicleSpecStore.get(vehicleId);
-    if (!spec || !spec.fuel_tank_capacity_gal) return 0;
-    const fuelType = spec.fuel_type || 'diesel';
-    const fuelGalCurrent = spec.fuel_tank_capacity_gal * (state.fuel_percent_current / 100);
+    const fuelType = spec?.fuel_type || 'diesel';
+    const fuelGalCurrent =
+      state.fuel_gal_current != null
+        ? state.fuel_gal_current
+        : spec?.fuel_tank_capacity_gal
+          ? spec.fuel_tank_capacity_gal * (state.fuel_percent_current / 100)
+          : 0;
     return fuelGalCurrent * FUEL_DENSITY_LB_PER_GAL[fuelType];
   },
 

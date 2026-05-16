@@ -78,7 +78,7 @@ export const WIDGET_CHANNEL_MAP: Record<string, EcsChannel[]> = {
 
   // ── Highway Widgets ────────────────────────────────────
   'hwy-forward-weather':    ['connectivity'],
-  'hwy-daylight-remaining': [],  // Uses device clock + GPS
+  'hwy-daylight-remaining': [],  // Uses GPS coordinate + resolved coordinate timezone
   'hwy-wind-monitor':       ['connectivity'],
   'hwy-elevation-profile':  ['route'],
   'hwy-road-hazards':       ['connectivity', 'route'],

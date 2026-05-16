@@ -27,11 +27,16 @@ import type {
   NormalizedVehicleTelemetry,
   VehicleTelemetrySummary,
   VehicleTelemetryConnectionState,
+  VehicleTelemetrySnapshot,
+  VehicleTelemetrySource,
   EngineStatus,
   TelemetryFreshnessLabel,
 } from './VehicleTelemetryTypes';
-import { EMPTY_TELEMETRY, EMPTY_SUMMARY, VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
+import { EMPTY_TELEMETRY, EMPTY_SUMMARY, EMPTY_VEHICLE_TELEMETRY_SNAPSHOT, VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
 import { vehicleTelemetryDeviceRegistry } from './VehicleTelemetryDeviceRegistry';
+import { ecsLog } from '../../lib/ecsLogger';
+import { ecsTelemetryStore } from '../telemetry/ECSTelemetryStore';
+import { vehicleTelemetryToEcsTelemetryEvents } from '../telemetry/telemetryAdapters';
 
 // ── Phase 15: Stability Guards ──────────────────────────────
 import {
@@ -92,7 +97,153 @@ type ECSVehicleTelemetryState = {
   freshnessText: string;
   telemetry: NormalizedVehicleTelemetry;
   summary: VehicleTelemetrySummary;
+  snapshot: VehicleTelemetrySnapshot;
 };
+
+const VEHICLE_TELEMETRY_UNSUPPORTED_REASON = 'Connected — telemetry not yet decoded';
+
+function toEcsFreshness(
+  label: TelemetryFreshnessLabel,
+  hasDecodedData: boolean,
+): VehicleTelemetrySnapshot['freshness'] {
+  if (!hasDecodedData) {
+    return label === 'disconnected' ? 'offline' : 'unknown';
+  }
+  if (label === 'live') return 'live';
+  if (label === 'last_known' || label === 'reconnecting') return 'recent';
+  if (label === 'stale') return 'stale';
+  if (label === 'disconnected') return 'offline';
+  return 'unknown';
+}
+
+function sourceLabelFor(sourceType: VehicleTelemetrySnapshot['sourceType']): string {
+  switch (sourceType) {
+    case 'obd_live':
+      return 'Live OBD';
+    case 'ble_live':
+      return 'Live Bluetooth';
+    case 'device_sensor':
+      return 'Device sensor';
+    case 'blu_power_live':
+      return 'Live BLU power';
+    case 'manual':
+      return 'Manual';
+    case 'cached':
+      return 'Last known';
+    case 'simulated':
+      return 'Simulated';
+    case 'unavailable':
+    default:
+      return 'Unavailable';
+  }
+}
+
+function confidenceFor(
+  sourceType: VehicleTelemetrySnapshot['sourceType'],
+  freshness: VehicleTelemetrySnapshot['freshness'],
+): VehicleTelemetrySnapshot['confidence'] {
+  if (sourceType === 'unavailable') return 'unverified';
+  if (sourceType === 'simulated') return 'unverified';
+  if (sourceType === 'manual') return 'low';
+  if (freshness === 'stale') return 'low';
+  if (freshness === 'recent') return 'medium';
+  if (freshness === 'live') return 'high';
+  return 'unverified';
+}
+
+function isFiniteMetric(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function readEnvFlag(name: string): string | null {
+  try {
+    const value = typeof process !== 'undefined' ? process.env?.[name] : undefined;
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDevMockTelemetryAllowed(): boolean {
+  const envValue = readEnvFlag('EXPO_PUBLIC_ECS_ENABLE_MOCK_BLUETOOTH');
+  if (envValue) return /^(1|true|yes|on)$/i.test(envValue.trim());
+  try {
+    return (globalThis as { __ECS_ENABLE_MOCK_BLUETOOTH__?: boolean }).__ECS_ENABLE_MOCK_BLUETOOTH__ === true;
+  } catch {
+    return false;
+  }
+}
+
+function inferTelemetryInputSource(telemetry: NormalizedVehicleTelemetry): VehicleTelemetrySource | null {
+  const rawSource = (telemetry as NormalizedVehicleTelemetry & { source?: unknown; raw?: Record<string, unknown> | null }).source;
+  if (
+    rawSource === 'bluetooth_obd_live' ||
+    rawSource === 'native_vehicle_live' ||
+    rawSource === 'manual' ||
+    rawSource === 'cache' ||
+    rawSource === 'unavailable' ||
+    rawSource === 'mock_dev'
+  ) {
+    return rawSource;
+  }
+
+  const raw = (telemetry as NormalizedVehicleTelemetry & { raw?: Record<string, unknown> | null }).raw ?? null;
+  const deviceId = String(telemetry.device_id ?? '').toLowerCase();
+  if (deviceId.includes('sim') || raw?.mock === true || raw?.demo === true || raw?.simulated === true) {
+    return 'mock_dev';
+  }
+
+  return null;
+}
+
+function getDecodedTelemetryFields(telemetry: NormalizedVehicleTelemetry): string[] {
+  const fields: [keyof NormalizedVehicleTelemetry, string][] = [
+    ['vehicle_speed', 'speedMph'],
+    ['engine_rpm', 'rpm'],
+    ['coolant_temp', 'coolantTempF'],
+    ['battery_voltage', 'batteryVoltage'],
+    ['fuel_level', 'fuelPercent'],
+    ['engine_load', 'engineLoadPercent'],
+    ['intake_temp', 'intakeTempF'],
+    ['throttle_position', 'throttlePercent'],
+  ];
+
+  return fields
+    .filter(([key]) => isFiniteMetric(telemetry[key]))
+    .map(([, label]) => label);
+}
+
+function buildVehicleTelemetrySnapshotSignature(snapshot: VehicleTelemetrySnapshot): string {
+  const warningsSignature = snapshot.warnings
+    .map((warning) => `${warning.id}:${warning.severity}:${warning.message}`)
+    .join(',');
+  return [
+    snapshot.sourceType,
+    snapshot.sourceLabel,
+    snapshot.freshness,
+    snapshot.confidence,
+    snapshot.updatedAt ?? '',
+    snapshot.source,
+    snapshot.isLive ? '1' : '0',
+    snapshot.deviceId ?? '',
+    snapshot.speedMph ?? '',
+    snapshot.rpm ?? '',
+    snapshot.coolantTempF ?? '',
+    snapshot.intakeTempF ?? '',
+    snapshot.engineLoadPct ?? '',
+    snapshot.throttlePct ?? '',
+    snapshot.batteryVoltage ?? '',
+    snapshot.fuelLevelPct ?? '',
+    snapshot.rangeMiles ?? '',
+    snapshot.oilTempF ?? '',
+    snapshot.transmissionTempF ?? '',
+    snapshot.pitchDeg ?? '',
+    snapshot.rollDeg ?? '',
+    snapshot.headingDeg ?? '',
+    snapshot.unsupportedReason ?? '',
+    warningsSignature,
+  ].join('|');
+}
 
 function scheduleRetry(connectFn: () => void): void {
   if (_retryCount >= MAX_TELEMETRY_RETRIES) {
@@ -214,6 +365,8 @@ function deriveEngineStatus(telemetry: NormalizedVehicleTelemetry): EngineStatus
 class VehicleTelemetryStore {
   private latestTelemetry: NormalizedVehicleTelemetry = { ...EMPTY_TELEMETRY };
   private summary: VehicleTelemetrySummary = { ...EMPTY_SUMMARY };
+  private snapshot: VehicleTelemetrySnapshot = { ...EMPTY_VEHICLE_TELEMETRY_SNAPSHOT };
+  private snapshotSignature = buildVehicleTelemetrySnapshotSignature(this.snapshot);
   private listeners: StoreListener[] = [];
   private initialized = false;
 
@@ -224,6 +377,7 @@ class VehicleTelemetryStore {
   private serviceUnsubscribers: (() => void)[] = [];
   private lastConnectionState: VehicleTelemetryConnectionState = 'disconnected';
   private restoredFromPersistence = false;
+  private lastLoggedSnapshotSource: VehicleTelemetrySource | null = null;
 
   constructor() {
     this.restoreLastKnown();
@@ -236,6 +390,16 @@ class VehicleTelemetryStore {
       const raw = sGet(VT_STORAGE_KEYS.LAST_TELEMETRY);
       if (raw) {
         const parsed = JSON.parse(raw) as NormalizedVehicleTelemetry;
+        if (inferTelemetryInputSource(parsed) === 'mock_dev' && !isDevMockTelemetryAllowed()) {
+          ecsLog.warn('TELEMETRY', '[VEHICLE_TELEMETRY] mock_blocked', {
+            deviceId: parsed?.device_id ?? null,
+            provider: parsed?.provider ?? null,
+            source: 'persisted_cache',
+          });
+          sRemove(VT_STORAGE_KEYS.LAST_TELEMETRY);
+          this.initialized = true;
+          return;
+        }
         const timestamp = Number(parsed?.timestamp ?? 0);
         const age = Date.now() - timestamp;
 
@@ -244,14 +408,19 @@ class VehicleTelemetryStore {
           this.restoredFromPersistence = true;
           this.recomputeSummary();
           this.scheduleStaleTransition();
-          console.log(TAG, 'Restored last known telemetry');
+          ecsLog.debug('TELEMETRY', `${TAG} Restored last known telemetry`);
+          ecsLog.debug('TELEMETRY', '[VEHICLE_TELEMETRY] cache_used', {
+            updatedAt: new Date(timestamp).toISOString(),
+          });
         } else {
-          console.log(TAG, 'Last known telemetry too old — discarded');
+          ecsLog.debug('TELEMETRY', `${TAG} Last known telemetry too old — discarded`);
           sRemove(VT_STORAGE_KEYS.LAST_TELEMETRY);
         }
       }
     } catch (error) {
-      console.warn(TAG, 'Failed to restore telemetry:', error);
+      ecsLog.warn('TELEMETRY', `${TAG} Failed to restore telemetry`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     this.initialized = true;
@@ -263,7 +432,9 @@ class VehicleTelemetryStore {
         sSet(VT_STORAGE_KEYS.LAST_TELEMETRY, JSON.stringify(this.latestTelemetry));
       }
     } catch (error) {
-      console.warn(TAG, 'Failed to persist telemetry:', error);
+      ecsLog.warn('TELEMETRY', `${TAG} Failed to persist telemetry`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -308,12 +479,195 @@ class VehicleTelemetryStore {
       device_name: primary?.device_name || null,
       provider: primary?.provider || null,
     };
+    this.snapshot = this.commitSnapshot(this.buildSnapshot());
+    this.logSnapshotSource(this.snapshot);
+  }
+
+  private commitSnapshot(next: VehicleTelemetrySnapshot): VehicleTelemetrySnapshot {
+    const nextSignature = buildVehicleTelemetrySnapshotSignature(next);
+    if (this.snapshotSignature === nextSignature) {
+      return this.snapshot;
+    }
+    this.snapshotSignature = nextSignature;
+    this.snapshot = next;
+    return this.snapshot;
+  }
+
+  private buildSnapshot(): VehicleTelemetrySnapshot {
+    const t = this.latestTelemetry;
+    const summary = this.summary;
+    const primary = vehicleTelemetryDeviceRegistry.getPrimary();
+    const connectionState = this.resolveConnectionState();
+    const freshnessLabel = this.getFreshnessLabel();
+    const decodedFields = getDecodedTelemetryFields(t);
+    const hasDecodedData = summary.has_data && decodedFields.length > 0;
+    const updatedAt = summary.last_updated ?? null;
+    const deviceId = t.device_id || primary?.device_id || null;
+    const connected = connectionState === 'connected' || connectionState === 'reading' || connectionState === 'unsupported';
+    const explicitSource = inferTelemetryInputSource(t);
+    const fuelLevelPct = isFiniteMetric(t.fuel_level) ? t.fuel_level : null;
+    const engineLoadPct = isFiniteMetric(t.engine_load) ? t.engine_load : null;
+    const throttlePct = isFiniteMetric(t.throttle_position) ? t.throttle_position : null;
+    const warnings = Array.isArray((t as NormalizedVehicleTelemetry & { diagnosticCodes?: unknown }).diagnosticCodes)
+      ? (t as NormalizedVehicleTelemetry & { diagnosticCodes?: string[] }).diagnosticCodes?.map((code) => ({
+          id: `dtc:${code}`,
+          message: `Diagnostic code ${code}`,
+          severity: 'watch' as const,
+          source: 'vehicle_telemetry',
+        })) ?? []
+      : [];
+
+    const base = {
+      updatedAt,
+      deviceId,
+      speedMph: isFiniteMetric(t.vehicle_speed) ? t.vehicle_speed : null,
+      rpm: isFiniteMetric(t.engine_rpm) ? t.engine_rpm : null,
+      coolantTempF: isFiniteMetric(t.coolant_temp) ? t.coolant_temp : null,
+      intakeTempF: isFiniteMetric(t.intake_temp) ? t.intake_temp : null,
+      engineLoadPct,
+      throttlePct,
+      batteryVoltage: isFiniteMetric(t.battery_voltage) ? t.battery_voltage : null,
+      fuelLevelPct,
+      rangeMiles: null,
+      oilTempF: isFiniteMetric(t.oil_temp) ? t.oil_temp : null,
+      transmissionTempF: isFiniteMetric(t.transmission_temp) ? t.transmission_temp : null,
+      pitchDeg: null,
+      rollDeg: null,
+      headingDeg: null,
+      warnings,
+      fuelPercent: fuelLevelPct,
+      engineLoadPercent: engineLoadPct,
+      throttlePercent: throttlePct,
+      diagnosticCodes: Array.isArray((t as NormalizedVehicleTelemetry & { diagnosticCodes?: unknown }).diagnosticCodes)
+        ? (t as NormalizedVehicleTelemetry & { diagnosticCodes?: string[] }).diagnosticCodes
+        : undefined,
+    };
+
+    if (hasDecodedData && freshnessLabel === 'live' && connected) {
+      const source: VehicleTelemetrySource = t.provider === 'vehicle_internal'
+        ? 'native_vehicle_live'
+        : 'bluetooth_obd_live';
+      const sourceType: VehicleTelemetrySnapshot['sourceType'] = source === 'native_vehicle_live' ? 'device_sensor' : 'obd_live';
+      const freshness = toEcsFreshness(freshnessLabel, hasDecodedData);
+      return {
+        ...base,
+        sourceType,
+        sourceLabel: sourceLabelFor(sourceType),
+        freshness,
+        confidence: confidenceFor(sourceType, freshness),
+        source,
+        isLive: freshness === 'live',
+      };
+    }
+
+    if (hasDecodedData && explicitSource === 'manual') {
+      const sourceType = 'manual';
+      const freshness = toEcsFreshness(freshnessLabel, hasDecodedData);
+      return {
+        ...base,
+        sourceType,
+        sourceLabel: sourceLabelFor(sourceType),
+        freshness: freshness === 'live' ? 'recent' : freshness,
+        confidence: confidenceFor(sourceType, freshness),
+        source: 'manual',
+        isLive: false,
+      };
+    }
+
+    if (hasDecodedData && explicitSource === 'mock_dev') {
+      const sourceType = 'simulated';
+      const freshness = toEcsFreshness(freshnessLabel, hasDecodedData);
+      return {
+        ...base,
+        sourceType,
+        sourceLabel: sourceLabelFor(sourceType),
+        freshness: freshness === 'offline' ? 'unknown' : freshness,
+        confidence: confidenceFor(sourceType, freshness),
+        source: 'mock_dev',
+        isLive: false,
+      };
+    }
+
+    if (hasDecodedData && updatedAt) {
+      const sourceType = 'cached';
+      const freshness = toEcsFreshness(freshnessLabel, hasDecodedData);
+      return {
+        ...base,
+        sourceType,
+        sourceLabel: sourceLabelFor(sourceType),
+        freshness: freshness === 'live' ? 'recent' : freshness,
+        confidence: confidenceFor(sourceType, freshness === 'live' ? 'recent' : freshness),
+        source: 'cache',
+        isLive: false,
+      };
+    }
+
+    if (connected || primary?.connection_state === 'connected' || primary?.connection_state === 'unsupported') {
+      const warning = {
+        id: 'vehicle-telemetry:not-decoded',
+        message: VEHICLE_TELEMETRY_UNSUPPORTED_REASON,
+        severity: 'watch' as const,
+        source: 'vehicle_telemetry',
+      };
+      return {
+        ...base,
+        sourceType: 'unavailable',
+        sourceLabel: sourceLabelFor('unavailable'),
+        freshness: 'unknown',
+        confidence: 'unverified',
+        warnings: [...warnings, warning],
+        source: 'unavailable',
+        isLive: false,
+        unsupportedReason: VEHICLE_TELEMETRY_UNSUPPORTED_REASON,
+      };
+    }
+
+    return {
+      ...EMPTY_VEHICLE_TELEMETRY_SNAPSHOT,
+      sourceType: 'unavailable',
+      sourceLabel: sourceLabelFor('unavailable'),
+      freshness: 'offline',
+      confidence: 'unverified',
+      updatedAt: null,
+      source: 'unavailable',
+      isLive: false,
+      unsupportedReason: 'No vehicle telemetry source is connected.',
+    };
+  }
+
+  private logSnapshotSource(snapshot: VehicleTelemetrySnapshot): void {
+    if (this.lastLoggedSnapshotSource === snapshot.source) return;
+    this.lastLoggedSnapshotSource = snapshot.source;
+    ecsLog.debug('TELEMETRY', '[VEHICLE_TELEMETRY] source_selected', {
+      source: snapshot.source,
+      isLive: snapshot.isLive,
+      deviceId: snapshot.deviceId ?? null,
+    });
+    if (snapshot.source === 'cache') {
+      ecsLog.debug('TELEMETRY', '[VEHICLE_TELEMETRY] cache_used', {
+        updatedAt: snapshot.updatedAt ?? null,
+      });
+    }
+    if (snapshot.source === 'unavailable') {
+      ecsLog.debug('TELEMETRY', '[VEHICLE_TELEMETRY] unavailable', {
+        reason: snapshot.unsupportedReason ?? 'no_decoded_vehicle_telemetry',
+      });
+    }
   }
 
   // ── Service helpers ─────────────────────────────────────
 
   private normalizeConnectionState(value: unknown): VehicleTelemetryConnectionState | null {
-    if (value === 'connected' || value === 'connecting' || value === 'disconnected') {
+    if (
+      value === 'connected' ||
+      value === 'connecting' ||
+      value === 'disconnected' ||
+      value === 'discovering_services' ||
+      value === 'reading' ||
+      value === 'unsupported' ||
+      value === 'failed' ||
+      value === 'error'
+    ) {
       return value;
     }
     return null;
@@ -383,7 +737,9 @@ class VehicleTelemetryStore {
         this.serviceUnsubscribers.push(normalized);
       }
     } catch (error) {
-      console.warn(TAG, `Failed to register telemetry service listener for ${event}:`, error);
+      ecsLog.warn('TELEMETRY', `${TAG} Failed to register telemetry service listener for ${event}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -410,7 +766,7 @@ class VehicleTelemetryStore {
     if (timeUntilStale <= 0) return;
 
     this.staleTransitionTimer = setTimeout(() => {
-      console.log(TAG, 'Telemetry grace window expired — marking as stale');
+      ecsLog.warn('TELEMETRY', `${TAG} Telemetry grace window expired — marking as stale`);
       this.notify();
     }, timeUntilStale + 500);
   }
@@ -517,7 +873,7 @@ class VehicleTelemetryStore {
     this.restoredFromPersistence = false;
     this.recomputeSummary();
     this.scheduleStaleTransition();
-    console.log(TAG, 'Telemetry service connected');
+    ecsLog.debug('TELEMETRY', `${TAG} Telemetry service connected`);
     this.notify();
   }
 
@@ -531,7 +887,11 @@ class VehicleTelemetryStore {
       this.callServiceReconnect();
     }
 
-    console.log(TAG, 'Telemetry service disconnected');
+    if (allowRetry && this.summary.has_data) {
+      ecsLog.warn('TELEMETRY', `${TAG} Telemetry service disconnected — retaining last known data while reconnecting`);
+    } else {
+      ecsLog.debug('TELEMETRY', `${TAG} Telemetry service disconnected`);
+    }
     this.notify();
   }
 
@@ -540,7 +900,7 @@ class VehicleTelemetryStore {
     this.isReconnecting = true;
     this.recomputeSummary();
     this.scheduleStaleTransition();
-    console.log(TAG, 'Telemetry service reconnecting');
+    ecsLog.debug('TELEMETRY', `${TAG} Telemetry service reconnecting`);
     this.notify();
   }
 
@@ -550,7 +910,7 @@ class VehicleTelemetryStore {
     this.lastConnectionState = 'connected';
     this.recomputeSummary();
     this.scheduleStaleTransition();
-    console.log(TAG, 'Telemetry service reconnected');
+    ecsLog.debug('TELEMETRY', `${TAG} Telemetry service reconnected`);
     this.notify();
   }
 
@@ -560,7 +920,7 @@ class VehicleTelemetryStore {
     this.recomputeSummary();
     this.scheduleStaleTransition();
     this.callServiceReconnect();
-    console.log(TAG, 'Telemetry service reconnect failed');
+    ecsLog.warn('TELEMETRY', `${TAG} Telemetry service reconnect failed`);
     this.notify();
   }
 
@@ -573,6 +933,15 @@ class VehicleTelemetryStore {
   // ── Data ingestion ──────────────────────────────────────
 
   ingest(telemetry: NormalizedVehicleTelemetry): void {
+    const inputSource = inferTelemetryInputSource(telemetry);
+    if (inputSource === 'mock_dev' && !isDevMockTelemetryAllowed()) {
+      ecsLog.warn('TELEMETRY', '[VEHICLE_TELEMETRY] mock_blocked', {
+        deviceId: telemetry.device_id ?? null,
+        provider: telemetry.provider ?? null,
+      });
+      return;
+    }
+
     const primary = vehicleTelemetryDeviceRegistry.getPrimary();
 
     if (primary && telemetry.device_id !== primary.device_id) {
@@ -581,6 +950,7 @@ class VehicleTelemetryStore {
     }
 
     this.latestTelemetry = telemetry;
+    ecsTelemetryStore.ingestEvents(vehicleTelemetryToEcsTelemetryEvents(telemetry));
     this.lastConnectionState = 'connected';
     this.isReconnecting = false;
     this.restoredFromPersistence = false;
@@ -591,6 +961,18 @@ class VehicleTelemetryStore {
 
     if (telemetry.device_id) {
       vehicleTelemetryDeviceRegistry.touchDevice(telemetry.device_id);
+    }
+
+    ecsLog.debug('TELEMETRY', '[VEHICLE_TELEMETRY] live_update', {
+      deviceId: telemetry.device_id || null,
+      fields: getDecodedTelemetryFields(telemetry),
+    });
+    if (telemetry.provider === 'obd2' || inferTelemetryInputSource(telemetry) === 'bluetooth_obd_live') {
+      ecsLog.debug('TELEMETRY', '[OBD2] telemetry_store_updated', {
+        deviceId: telemetry.device_id || null,
+        fields: getDecodedTelemetryFields(telemetry),
+        source: inferTelemetryInputSource(telemetry) ?? 'bluetooth_obd_live',
+      });
     }
 
     resetRetryState();
@@ -605,6 +987,12 @@ class VehicleTelemetryStore {
 
   getLatestTelemetry(): NormalizedVehicleTelemetry {
     return { ...this.latestTelemetry };
+  }
+
+  getTelemetrySnapshot(): VehicleTelemetrySnapshot {
+    this.snapshot = this.commitSnapshot(this.buildSnapshot());
+    this.logSnapshotSource(this.snapshot);
+    return this.snapshot;
   }
 
   hasData(): boolean {
@@ -655,7 +1043,7 @@ class VehicleTelemetryStore {
     if (reconnecting) {
       this.lastConnectionState = 'connecting';
     }
-    console.log(TAG, `Reconnecting state: ${reconnecting}`);
+    ecsLog.debug('TELEMETRY', `${TAG} Reconnecting state: ${reconnecting}`);
     this.recomputeSummary();
     this.notify();
   }
@@ -732,6 +1120,7 @@ class VehicleTelemetryStore {
       freshnessText: this.getFreshnessText(),
       telemetry: this.getLatestTelemetry(),
       summary,
+      snapshot: this.getTelemetrySnapshot(),
     };
   }
 
@@ -741,15 +1130,21 @@ class VehicleTelemetryStore {
   }
 
   clear(): void {
+    if (this.latestTelemetry.device_id) {
+      ecsTelemetryStore.markDeviceUnavailable(this.latestTelemetry.device_id, 'obd2', 'OBD2 telemetry disconnected.');
+    }
     this.latestTelemetry = { ...EMPTY_TELEMETRY };
     this.summary = { ...EMPTY_SUMMARY };
+    this.snapshot = { ...EMPTY_VEHICLE_TELEMETRY_SNAPSHOT };
+    this.snapshotSignature = buildVehicleTelemetrySnapshotSignature(this.snapshot);
     this.isReconnecting = false;
     this.restoredFromPersistence = false;
     this.lastConnectionState = 'disconnected';
+    this.lastLoggedSnapshotSource = null;
     this.cancelStaleTransition();
     cancelRetries();
     sRemove(VT_STORAGE_KEYS.LAST_TELEMETRY);
-    console.log(TAG, 'Store cleared');
+    ecsLog.debug('TELEMETRY', `${TAG} Store cleared`);
     this.notify();
   }
 }

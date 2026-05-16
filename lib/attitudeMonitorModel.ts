@@ -6,7 +6,7 @@ import {
 
 export type AttitudeSurfaceTone = 'good' | 'attention' | 'critical' | 'neutral';
 export type AttitudeSeverityState = 'normal' | 'caution' | 'warning';
-export type AttitudeTelemetryHealth = 'live' | 'stale' | 'unavailable';
+export type AttitudeTelemetryHealth = 'live' | 'recent' | 'stale' | 'unavailable';
 export type AttitudeSourceOrigin =
   | 'vehicle_telemetry'
   | 'blu_device'
@@ -251,20 +251,31 @@ export function getAttitudeTelemetryMeta(
     return {
       live: true,
       waiting: false,
-      badgeLabel: sensorStatus === 'CALIBRATED' ? 'SENSOR CALIBRATED' : 'LIVE SENSOR',
-      title: sensorStatus === 'CALIBRATED' ? 'Sensor calibrated' : 'Live attitude',
-      hint: sensorStatus === 'CALIBRATED' ? 'Calibration is active.' : 'Live pitch and roll are updating.',
+      badgeLabel: 'DEVICE ATTITUDE LIVE',
+      title: 'Device Attitude Live',
+      hint: sensorStatus === 'CALIBRATED' ? 'Calibration is active.' : 'Device pitch and roll are updating.',
       tone: 'good',
     };
   }
 
   if (health === 'stale') {
     return {
-      live: true,
+      live: false,
       waiting: false,
       badgeLabel: 'STALE ATTITUDE',
       title: 'Telemetry stale',
       hint: 'Holding last known posture.',
+      tone: 'attention',
+    };
+  }
+
+  if (health === 'recent') {
+    return {
+      live: false,
+      waiting: false,
+      badgeLabel: 'DEVICE ATTITUDE RECENT',
+      title: 'Device attitude recent',
+      hint: 'Using a recent device attitude sample.',
       tone: 'attention',
     };
   }
@@ -283,9 +294,13 @@ export function getAttitudeTelemetryMeta(
   return {
     live: false,
     waiting: false,
-    badgeLabel: 'SENSOR UNAVAILABLE',
-    title: 'Sensor unavailable',
-    hint: 'Check motion permissions.',
+    badgeLabel: 'UNAVAILABLE',
+    title: 'Device attitude unavailable',
+    hint: sensorStatus === 'BACKGROUND'
+      ? 'Device attitude pauses in the background.'
+      : sensorStatus === 'PAUSED'
+        ? 'Device attitude updates are paused.'
+        : 'Check motion permissions.',
     tone: 'neutral',
   };
 }
@@ -322,9 +337,9 @@ export function getAttitudeSourceMeta(
           }
         : origin === 'device_sensors'
           ? {
-              label: 'Device sensors',
-              shortLabel: 'Device sensors',
-              chipLabel: 'DEVICE SENSORS',
+              label: 'Device attitude',
+              shortLabel: 'Device attitude',
+              chipLabel: 'DEVICE ATTITUDE',
               confidence: 'medium' as AttitudeTrustConfidence,
             }
           : {
@@ -363,9 +378,9 @@ export function getAttitudeSensorState(sensorStatus?: string): AttitudeSensorSta
     return {
       live: true,
       waiting: false,
-      badgeLabel: sensorStatus === 'CALIBRATED' ? 'SENSOR CALIBRATED' : 'LIVE SENSOR',
-      title: sensorStatus === 'CALIBRATED' ? 'Sensor calibrated' : 'Live attitude',
-      hint: sensorStatus === 'CALIBRATED' ? 'Calibration is active.' : 'Live pitch and roll are updating.',
+      badgeLabel: 'DEVICE ATTITUDE LIVE',
+      title: 'Device Attitude Live',
+      hint: sensorStatus === 'CALIBRATED' ? 'Calibration is active.' : 'Device pitch and roll are updating.',
       tone: 'good',
     };
   }
@@ -384,9 +399,13 @@ export function getAttitudeSensorState(sensorStatus?: string): AttitudeSensorSta
   return {
     live: false,
     waiting: false,
-    badgeLabel: 'SENSOR UNAVAILABLE',
-    title: 'Sensor unavailable',
-    hint: 'Check motion permissions.',
+    badgeLabel: 'UNAVAILABLE',
+    title: 'Device attitude unavailable',
+    hint: sensorStatus === 'BACKGROUND'
+      ? 'Device attitude pauses in the background.'
+      : sensorStatus === 'PAUSED'
+        ? 'Device attitude updates are paused.'
+        : 'Check motion permissions.',
     tone: 'neutral',
   };
 }

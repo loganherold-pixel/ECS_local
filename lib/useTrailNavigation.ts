@@ -157,6 +157,26 @@ function createEmptySession(): TrailNavigationSessionState {
   };
 }
 
+let activeTrailNavigationSession: TrailNavigationSessionState = createEmptySession();
+const activeTrailNavigationSessionListeners = new Set<() => void>();
+
+function publishActiveTrailNavigationSession(session: TrailNavigationSessionState): void {
+  if (activeTrailNavigationSession === session) return;
+  activeTrailNavigationSession = session;
+  activeTrailNavigationSessionListeners.forEach((listener) => listener());
+}
+
+export function getActiveTrailNavigationSession(): TrailNavigationSessionState {
+  return activeTrailNavigationSession;
+}
+
+export function subscribeActiveTrailNavigationSession(listener: () => void): () => void {
+  activeTrailNavigationSessionListeners.add(listener);
+  return () => {
+    activeTrailNavigationSessionListeners.delete(listener);
+  };
+}
+
 export interface UseTrailNavigationOutput {
   session: TrailNavigationSessionState;
   uiMode: 'idle' | 'preview' | 'active' | 'arrived' | 'error';
@@ -176,6 +196,10 @@ export function useTrailNavigation(params: {
   const { location, enabled = true } = params;
   const [session, setSession] = useState<TrailNavigationSessionState>(createEmptySession);
   const restoreAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    publishActiveTrailNavigationSession(session);
+  }, [session]);
   const offTrailHitCountRef = useRef(0);
   const rejoinHitCountRef = useRef(0);
   const reverseProgressCountRef = useRef(0);

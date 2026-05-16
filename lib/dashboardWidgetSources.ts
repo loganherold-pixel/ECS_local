@@ -60,8 +60,8 @@ export function getDashboardSourceLabel(
   const labels: Record<DashboardValueSource, { short: string; long: string }> = {
     live: { short: 'LIVE', long: 'Live telemetry' },
     bluetooth: { short: 'BLUETOOTH', long: 'Bluetooth live' },
-    'ai-derived': { short: 'ECS', long: 'ECS-derived / route-derived' },
-    manual: { short: 'MANUAL', long: 'Manual entry / fallback' },
+    'ai-derived': { short: 'ECS', long: 'ECS-Inferred / route-derived' },
+    manual: { short: 'MANUAL', long: 'Manual entry' },
     unavailable: { short: 'UNAVAILABLE', long: 'Unavailable' },
   };
 

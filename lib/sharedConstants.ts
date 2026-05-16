@@ -32,6 +32,7 @@ export type WidgetType =
   | 'vehicle-systems'
   | 'stability-index'
   | 'attitude-monitor'
+  | 'attitude-command'
   | 'mission-sustainment'
   | 'operational-readiness'
   | 'sustainability'
@@ -44,6 +45,8 @@ export type WidgetType =
   | 'ecoflow-power'
   | 'ecs-power'
   | 'vehicle-telemetry'
+  | 'expedition-readiness'
+  | 'expedition-status-summary'
   | 'expedition-risk'
   | 'terrain-risk'
   // Highway widgets

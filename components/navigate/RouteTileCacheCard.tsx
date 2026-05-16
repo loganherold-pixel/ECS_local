@@ -48,6 +48,11 @@ import {
 } from '../../lib/routeTileCacheEngine';
 import { connectivity } from '../../lib/connectivity';
 import type { ECSRun } from '../../lib/runStore';
+import {
+  estimateRemoteCacheSizeMB,
+  formatRemoteCacheLastVerified,
+  formatRemoteCacheSize,
+} from '../../lib/remote/offlineRemoteCache';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -59,7 +64,9 @@ interface Props {
   /** When true, renders as a floating overlay with absolute positioning. Default: true */
   floating?: boolean;
   /** Legacy callback for navigate-run.tsx compatibility */
-  onCacheComplete?: (regionId: string) => void;
+  onCacheStart?: (options?: { includeRemoteConnectivityCache: boolean }) => void | Promise<void>;
+  onCacheComplete?: (regionId: string, options?: { includeRemoteConnectivityCache: boolean }) => void | Promise<void>;
+  onCacheError?: (message: string) => void | Promise<void>;
 }
 
 type CardState = 'prompt' | 'caching' | 'cached' | 'compact' | 'error';
@@ -72,7 +79,9 @@ export default function RouteTileCacheCard({
   visible = true,
   showToast,
   floating = true,
+  onCacheStart,
   onCacheComplete,
+  onCacheError,
 }: Props) {
   // ── State ─────────────────────────────────────────────
   const [analysis, setAnalysis] = useState<RouteAnalysis | null>(null);
@@ -83,6 +92,7 @@ export default function RouteTileCacheCard({
   const [isOnline, setIsOnline] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [cacheRemoteConnectivity, setCacheRemoteConnectivity] = useState(true);
 
   // Animation refs
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -165,6 +175,14 @@ export default function RouteTileCacheCard({
     setCardState('caching');
     setExpanded(true);
     markAutoCacheOffered(run.id);
+    try {
+      await onCacheStart?.({ includeRemoteConnectivityCache: cacheRemoteConnectivity });
+    } catch (err: any) {
+      setCardState('error');
+      setError(err?.message || 'Failed to save route for offline use');
+      void Promise.resolve(onCacheError?.(err?.message || 'Failed to save route for offline use')).catch(() => {});
+      return;
+    }
 
     const result = await startRouteCaching(analysis, mapStyle, (prog) => {
       if (!mountedRef.current) return;
@@ -175,23 +193,45 @@ export default function RouteTileCacheCard({
         setStorage(getStorageOverview());
         const updated = analyzeRoute(run);
         if (updated && mountedRef.current) setAnalysis(updated);
-        showToast?.(`ROUTE CACHED: ${prog.downloadedTiles} tiles, ${formatStorageSize(prog.downloadedSizeMB)}`);
-        if (prog.regionId) onCacheComplete?.(prog.regionId);
+        showToast?.(`OFFLINE READY: ${prog.downloadedTiles} tiles, ${formatStorageSize(prog.downloadedSizeMB)}`);
+        if (prog.regionId) {
+          void Promise.resolve(onCacheComplete?.(prog.regionId, {
+            includeRemoteConnectivityCache: cacheRemoteConnectivity,
+          })).catch((err: any) => {
+            void Promise.resolve(onCacheError?.(err?.message || 'Failed to save route cache manifest')).catch(() => {});
+          });
+        }
       } else if (prog.status === 'error') {
         setCardState('error');
         setError(prog.message || 'Download failed');
-        showToast?.('ROUTE CACHE FAILED');
+        void Promise.resolve(onCacheError?.(prog.message || 'Download failed')).catch(() => {});
+        showToast?.('OFFLINE READINESS FAILED');
       } else if (prog.status === 'cancelled') {
         setCardState('prompt');
-        showToast?.('ROUTE CACHE CANCELLED');
+        showToast?.('OFFLINE PREP CANCELLED');
       }
-    });
+    }, cacheRemoteConnectivity
+      ? estimateRemoteCacheSizeMB({
+          routePointCount: analysis.pointCount,
+          segmentCount: Math.max(1, Math.ceil(Math.max(analysis.pointCount - 1, 1) / 5)),
+        })
+      : 0);
 
     if (!result.success && mountedRef.current) {
       setCardState('error');
       setError(result.error || 'Failed to start download');
+      void Promise.resolve(onCacheError?.(result.error || 'Failed to start download')).catch(() => {});
     }
-  }, [analysis, mapStyle, run, showToast, onCacheComplete]);
+  }, [
+    analysis,
+    cacheRemoteConnectivity,
+    mapStyle,
+    run,
+    showToast,
+    onCacheStart,
+    onCacheComplete,
+    onCacheError,
+  ]);
 
   const handleCancel = useCallback(() => {
     if (progress?.regionId) {
@@ -210,13 +250,13 @@ export default function RouteTileCacheCard({
       setStorage(getStorageOverview());
       const updated = analyzeRoute(run);
       if (updated && mountedRef.current) setAnalysis(updated);
-      showToast?.('ROUTE CACHE DELETED');
+      showToast?.('OFFLINE READINESS CLEARED');
     };
 
     if (Platform.OS === 'web') {
-      if (confirm('Delete cached tiles for this route?')) doDelete();
+      if (confirm('Clear offline readiness data for this route?')) doDelete();
     } else {
-      Alert.alert('Delete Route Cache', 'Remove all cached tiles for this route?', [
+      Alert.alert('Clear Offline Readiness', 'Remove cached tiles for this route?', [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: doDelete },
       ]);
@@ -249,6 +289,14 @@ export default function RouteTileCacheCard({
     storage?.quotaLevel === 'warning' ? '#FFB300' :
     storage?.quotaLevel === 'critical' ? '#FF7043' :
     '#EF5350';
+  const remoteCacheSizeMB = analysis
+    ? estimateRemoteCacheSizeMB({
+        routePointCount: analysis.pointCount,
+        segmentCount: Math.max(1, Math.ceil(Math.max(analysis.pointCount - 1, 1) / 5)),
+      })
+    : 0;
+  const remoteCacheBytes = Math.round(remoteCacheSizeMB * 1024 * 1024);
+  const remoteCacheLastVerified = run.offline_cache?.remote_cache?.lastUpdated ?? null;
 
   // ── Render guards ─────────────────────────────────────
   if (!visible || !analysis || run.points.length < 2) return null;
@@ -272,7 +320,7 @@ export default function RouteTileCacheCard({
           color={statusColor}
         />
         <Text style={[styles.compactLabel, { color: statusColor }]}>
-          {cardState === 'cached' ? 'OFFLINE' : 'CACHE'}
+          {cardState === 'cached' ? 'READY' : 'OFFLINE'}
         </Text>
         {cardState === 'cached' && analysis.cachedRegion && (
           <Text style={styles.compactSize}>
@@ -296,10 +344,10 @@ export default function RouteTileCacheCard({
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
         <Ionicons name="layers-outline" size={13} color={statusColor} />
         <Text style={[styles.headerTitle, { color: statusColor }]}>
-          {cardState === 'cached' ? 'ROUTE CACHED' :
-           cardState === 'caching' ? 'CACHING ROUTE' :
-           cardState === 'error' ? 'CACHE ERROR' :
-           'OFFLINE CACHE'}
+          {cardState === 'cached' ? 'OFFLINE READY' :
+           cardState === 'caching' ? 'PREPARING OFFLINE' :
+           cardState === 'error' ? 'READINESS ISSUE' :
+           'OFFLINE READINESS'}
         </Text>
         <Text style={styles.headerZoom}>Z{analysis.zoomMin}\u2013{analysis.zoomMax}</Text>
         <TouchableOpacity
@@ -316,7 +364,7 @@ export default function RouteTileCacheCard({
         <View style={styles.progressSection}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressLabel}>
-              {progress.message || 'Downloading...'}
+              {progress.message || 'Preparing offline data...'}
             </Text>
             <Text style={styles.progressPercent}>{progress.percent}%</Text>
           </View>
@@ -411,7 +459,7 @@ export default function RouteTileCacheCard({
               <Text style={[styles.cachedKPIValue, { color: '#66BB6A' }]}>
                 {analysis.cacheCoverage}%
               </Text>
-              <Text style={styles.cachedKPILabel}>COVERAGE</Text>
+              <Text style={styles.cachedKPILabel}>READINESS</Text>
             </View>
           </View>
 
@@ -423,13 +471,23 @@ export default function RouteTileCacheCard({
             </Text>
           )}
 
+          {run.offline_cache?.remote_cache?.enabled && (
+            <View style={styles.remoteReadyRow}>
+              <Ionicons name="radio-outline" size={11} color={TACTICAL.amber} />
+              <Text style={styles.remoteReadyText}>Remoteness & connectivity cached</Text>
+              <Text style={styles.remoteReadyAge}>
+                {formatRemoteCacheLastVerified(remoteCacheLastVerified)}
+              </Text>
+            </View>
+          )}
+
           {/* Storage usage bar */}
           {storage && renderStorageBar(storage, storageQuotaColor)}
 
           {/* Delete button */}
           <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteCache} activeOpacity={0.8}>
             <Ionicons name="trash-outline" size={11} color={TACTICAL.textMuted} />
-            <Text style={styles.deleteBtnText}>DELETE CACHE</Text>
+            <Text style={styles.deleteBtnText}>CLEAR READINESS</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -470,6 +528,27 @@ export default function RouteTileCacheCard({
 
           {/* Recommendation text */}
           <Text style={styles.recommendText}>{analysis.recommendationReason}</Text>
+
+          <TouchableOpacity
+            style={styles.remoteOptionRow}
+            onPress={() => setCacheRemoteConnectivity((prev) => !prev)}
+            activeOpacity={0.84}
+          >
+            <View style={[
+              styles.remoteOptionCheck,
+              cacheRemoteConnectivity && styles.remoteOptionCheckActive,
+            ]}>
+              {cacheRemoteConnectivity && (
+                <Ionicons name="checkmark" size={10} color="#0B0F12" />
+              )}
+            </View>
+            <View style={styles.remoteOptionCopy}>
+              <Text style={styles.remoteOptionTitle}>Cache Remoteness & Connectivity</Text>
+              <Text style={styles.remoteOptionText}>
+                Adds remoteness tiles and connectivity summaries ({formatRemoteCacheSize(remoteCacheBytes)}).
+              </Text>
+            </View>
+          </TouchableOpacity>
 
           {/* Zoom breakdown toggle */}
           <TouchableOpacity
@@ -528,9 +607,9 @@ export default function RouteTileCacheCard({
             >
               <Ionicons name="cloud-download-outline" size={14} color="#0B0F12" />
               <Text style={styles.cacheBtnText}>
-                {!isOnline ? 'OFFLINE' :
+                {!isOnline ? 'NO NETWORK' :
                  analysis.tileCount > 100000 ? 'TOO LARGE' :
-                 'CACHE ROUTE'}
+                 'PREPARE OFFLINE'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -799,6 +878,30 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     textAlign: 'center',
   },
+  remoteReadyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 5,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255,179,0,0.06)',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(255,179,0,0.18)',
+  },
+  remoteReadyText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    letterSpacing: 0.5,
+  },
+  remoteReadyAge: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+  },
   deleteBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -854,6 +957,47 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     textAlign: 'center',
     lineHeight: 13,
+  },
+  remoteOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    backgroundColor: 'rgba(255,179,0,0.05)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,179,0,0.16)',
+  },
+  remoteOptionCheck: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,179,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11,15,18,0.65)',
+  },
+  remoteOptionCheckActive: {
+    backgroundColor: TACTICAL.amber,
+    borderColor: TACTICAL.amber,
+  },
+  remoteOptionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  remoteOptionTitle: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  remoteOptionText: {
+    fontSize: 8,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    lineHeight: 11,
   },
 
   // ── Breakdown ───────────────────────────────────────

@@ -68,8 +68,38 @@ export { bluSessionStore } from './BluSessionStore';
 // ── Hooks ───────────────────────────────────────────────────────────────
 export { useBlu } from './useBlu';
 export type { BluHookResult } from './useBlu';
-export { useBluConnection } from './useBluConnection';
-export type { BluConnectionState_Hook } from './useBluConnection';
+export {
+  useUnifiedDeviceConnections,
+  useUnifiedOBD2Scanner,
+  createUnifiedScannerSnapshot,
+  mapConnectionStatusToScannerState,
+  mapScanAreaStateToScannerState,
+  normalizeUnifiedScannerDevice,
+} from './unifiedScanner';
+export type {
+  ECSConnectionActionKind,
+  ECSConnectionRouteIntent,
+  ECSConnectionScanAreaState,
+  ECSConnectionSection,
+  ECSConnectionStatus,
+  ECSDeviceConnectionModel,
+  ECSDiscoverySourceSummary,
+  ECSDiscoverySourceUiStatus,
+  ECSScanSummary,
+  UnifiedDeviceConnectionsResult,
+  UnifiedOBD2ScannerHookResult,
+  OBD2AdapterState,
+  OBD2DiscoveredDevice,
+  OBD2ScanDiagnostics,
+  UnifiedScannerConnectionState,
+  UnifiedScannerDevice,
+  UnifiedScannerDeviceCategory,
+  UnifiedScannerErrorSource,
+  UnifiedScannerProvider,
+  UnifiedScannerSnapshot,
+  UnifiedScannerTelemetryState,
+  UnifiedScannerTransport,
+} from './unifiedScanner';
 
 // ── Adapters — EcoFlow ──────────────────────────────────────────────────
 export { ecoFlowBluAdapter } from './EcoFlowBluAdapter';
@@ -202,4 +232,7 @@ export {
 } from './RenogyConstants';
 
 export type { RenogyModelSpec, RenogyDeviceCategory } from './RenogyConstants';
+
+// ── Expedition Readiness ────────────────────────────────────────────────
+export * from './readiness';
 

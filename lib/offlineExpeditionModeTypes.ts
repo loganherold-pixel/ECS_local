@@ -310,7 +310,7 @@ export const DASHBOARD_SYSTEM_DEFAULTS: Record<string, {
     stale_threshold_minutes: 0,
   },
   ai_advisory: {
-    name: 'AI Advisory',
+    name: 'ECS Advisory',
     default_behavior: 'unavailable',
     uses_local_telemetry: false,
     stale_threshold_minutes: 0,

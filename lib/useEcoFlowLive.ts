@@ -13,7 +13,13 @@ import { Platform } from 'react-native';
 import { bluPowerAuthority, type BluAuthoritySnapshot } from './BluPowerAuthority';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { ecoFlowBluAdapter } from './EcoFlowBluAdapter';
-import { EcoFlowCloudProvider, powerDeviceStore } from '../src/power';
+import { EcoFlowCloudProvider } from '../src/power/cloud/providers/EcoFlowCloudProvider';
+import { powerDeviceStore } from '../src/power/devices/PowerDeviceStore';
+import {
+  getSelectedEcoFlowDevice as readSelectedEcoFlowDevice,
+  getSelectedEcoFlowDeviceName as readSelectedEcoFlowDeviceName,
+  setSelectedEcoFlowDevice as persistSelectedEcoFlowDevice,
+} from './ecoFlowSelectionStore';
 
 // ── Persistent storage ──────────────────────────────────────
 
@@ -57,28 +63,18 @@ function storageRemove(key: string): void {
 // ── Public helpers for device selection ──────────────────────
 
 export function getSelectedEcoFlowDevice(): string | null {
-  return storageGet(DEVICE_KEY) || null;
+  return readSelectedEcoFlowDevice();
 }
 
 export function getSelectedEcoFlowDeviceName(): string | null {
-  return storageGet(DEVICE_NAME_KEY) || null;
+  return readSelectedEcoFlowDeviceName();
 }
 
 export function setSelectedEcoFlowDevice(
   deviceId: string | null,
   deviceName: string | null = null,
 ): void {
-  if (deviceId) {
-    storageSet(DEVICE_KEY, deviceId);
-    if (deviceName) {
-      storageSet(DEVICE_NAME_KEY, deviceName);
-    }
-    void powerDeviceStore.setSelected('EcoFlow', [deviceId]).catch(() => {});
-  } else {
-    storageRemove(DEVICE_KEY);
-    storageRemove(DEVICE_NAME_KEY);
-    void powerDeviceStore.clearSelected('EcoFlow').catch(() => {});
-  }
+  persistSelectedEcoFlowDevice(deviceId, deviceName);
 }
 
 // ── Hook types ──────────────────────────────────────────────
@@ -148,6 +144,7 @@ type PerDeviceTelemetry = {
 
 const CLOUD_CONNECT_TOKEN = 'CLOUD';
 const CLOUD_POLL_INTERVAL_MS = 15000;
+const CLOUD_CATALOG_REFRESH_MS = 60000;
 
 function formatAgo(epochMs: number | null): string | null {
   if (epochMs == null) return null;
@@ -239,6 +236,11 @@ function resolveSelectedPerDeviceTelemetry(
 
 export function useEcoFlowLive(): EcoFlowLiveData {
   const cloudProviderRef = useRef(new EcoFlowCloudProvider());
+  const cloudConnectDeviceIdRef = useRef<string | null>(null);
+  const cloudCatalogRef = useRef<{
+    fetchedAt: number;
+    devices: Awaited<ReturnType<EcoFlowCloudProvider['listDevices']>>;
+  } | null>(null);
   const [snapshot, setSnapshot] = useState<BluAuthoritySnapshot>(() =>
     bluPowerAuthority.getSnapshot(),
   );
@@ -284,9 +286,10 @@ export function useEcoFlowLive(): EcoFlowLiveData {
 
     let persistedId = getSelectedEcoFlowDevice();
     let persistedName = getSelectedEcoFlowDeviceName();
+    let selectedFromStore: string[] = [];
 
     try {
-      const selectedFromStore = await powerDeviceStore.getSelected('EcoFlow');
+      selectedFromStore = await powerDeviceStore.getSelected('EcoFlow');
       if ((!persistedId || selectedFromStore.includes(persistedId) === false) && selectedFromStore.length > 0) {
         persistedId = selectedFromStore[0];
       }
@@ -294,9 +297,17 @@ export function useEcoFlowLive(): EcoFlowLiveData {
       /* noop */
     }
 
-    // If still nothing selected, use cloud catalog to resolve a live device.
+    // Only refresh the cloud catalog when selection metadata is missing. Live
+    // telemetry polling should not re-list the full account catalog every tick.
     try {
-      const catalog = await provider.listDevices();
+      let catalog = cloudCatalogRef.current?.devices ?? [];
+      const catalogIsFresh =
+        !!cloudCatalogRef.current &&
+        Date.now() - cloudCatalogRef.current.fetchedAt < CLOUD_CATALOG_REFRESH_MS;
+      if ((!persistedId || !persistedName) && !catalogIsFresh) {
+        catalog = await provider.listDevices();
+        cloudCatalogRef.current = { fetchedAt: Date.now(), devices: catalog };
+      }
       if (!persistedId && catalog.length > 0) {
         persistedId = catalog[0].deviceId;
         persistedName = catalog[0].name ?? catalog[0].model ?? 'EcoFlow';
@@ -326,8 +337,19 @@ export function useEcoFlowLive(): EcoFlowLiveData {
 
     try {
       // Keep the cloud provider pinned to the selected EcoFlow device.
-      await powerDeviceStore.setSelected('EcoFlow', [persistedId]);
-      await provider.connect(persistedId, CLOUD_CONNECT_TOKEN);
+      if (selectedFromStore.length !== 1 || selectedFromStore[0] !== persistedId) {
+        await powerDeviceStore.setSelected('EcoFlow', [persistedId]);
+      }
+      const activeDeviceIds = provider.getActiveDeviceIds();
+      const needsConnect =
+        !provider.isConnected() ||
+        cloudConnectDeviceIdRef.current !== persistedId ||
+        activeDeviceIds.length !== 1 ||
+        activeDeviceIds[0] !== persistedId;
+      if (needsConnect) {
+        await provider.connect(persistedId, CLOUD_CONNECT_TOKEN);
+        cloudConnectDeviceIdRef.current = persistedId;
+      }
       const nextTelemetry = await provider.pollOnce();
       const perDevice = provider.getPerDeviceTelemetry();
 

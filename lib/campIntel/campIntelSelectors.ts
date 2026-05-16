@@ -1,10 +1,21 @@
 import type { ExpeditionForecast } from '../expeditionForecastEngine';
+import {
+  CAMPSITE_UI_NOTICE_BROADER,
+  CAMPSITE_UI_NOTICE_LOWER_CONFIDENCE,
+} from '../campsites/campsiteThresholds';
+import {
+  campsiteRatingFromScore,
+  campsiteRatingImpactFromScore,
+  type CampsiteRatingFactor,
+} from '../campsites/campsiteRatingTypes';
 import type {
   CampIntelAssessmentRow,
   CampIntelCategory,
   CampIntelConfidence,
   CampIntelConfidenceBreakdown,
   CampIntelEngineResult,
+  CampIntelEvidenceSummary,
+  CampIntelFeedbackCode,
   CampIntelMarkerPayload,
   CampIntelMicroBadge,
   CampIntelOfflineAssessment,
@@ -31,6 +42,69 @@ function scoreToTone(score: number): CampIntelTone {
   return 'warning';
 }
 
+function formatRatingFactorScore(score: number | null | undefined): string | undefined {
+  return score == null || !Number.isFinite(score) ? undefined : `${Math.round(score)}/100`;
+}
+
+function toneToRatingImpact(tone: CampIntelTone | undefined): CampsiteRatingFactor['impact'] {
+  if (tone === 'positive') return 'positive';
+  if (tone === 'warning') return 'negative';
+  return 'neutral';
+}
+
+function buildCampIntelRatingFactors(ranked: CampIntelRankedCandidate): CampsiteRatingFactor[] {
+  const detourDistance = ranked.point.routeRelation.detourDistanceMiles;
+  const routeProximityScore =
+    detourDistance == null
+      ? 100
+      : Math.max(0, Math.min(100, Math.round(100 - Math.min(detourDistance, 5) * 16)));
+
+  return [
+    {
+      label: 'Camping suitability',
+      value: formatRatingFactorScore(ranked.scores.overnightSuitabilityScore),
+      impact: campsiteRatingImpactFromScore(ranked.scores.overnightSuitabilityScore),
+      description: ranked.overnightAssessment.summary || ranked.overnightAssessment.label,
+    },
+    {
+      label: 'Terrain suitability',
+      value: formatRatingFactorScore(ranked.scores.campabilityScore.raw),
+      impact: campsiteRatingImpactFromScore(ranked.scores.campabilityScore.raw),
+      description:
+        ranked.scores.campabilityScore.reasons[0]?.label ??
+        'Terrain appears suitable for dispersed camping.',
+    },
+    {
+      label: 'Access confidence',
+      value: formatRatingFactorScore(ranked.scores.accessScore.raw),
+      impact: campsiteRatingImpactFromScore(ranked.scores.accessScore.raw),
+      description:
+        ranked.scores.accessScore.reasons[0]?.label ??
+        'Access confidence is based on route-access signals.',
+    },
+    {
+      label: 'Land-Use Confidence',
+      value: formatRatingFactorScore(ranked.scores.complianceScore.raw),
+      impact: campsiteRatingImpactFromScore(ranked.scores.complianceScore.raw),
+      description:
+        ranked.scores.complianceScore.reasons[0]?.label ??
+        'Land-use confidence reflects available public-land and restriction signals.',
+    },
+    {
+      label: 'Route proximity',
+      value: detourDistance == null ? 'On corridor' : `${detourDistance.toFixed(1)} mi detour`,
+      impact: campsiteRatingImpactFromScore(routeProximityScore),
+      description: 'Route proximity is treated as an eligibility and usability signal for the campsite.',
+    },
+    {
+      label: 'Cell coverage',
+      value: `${Math.round((1 - ranked.enrichment.safety.commsDeadZoneRisk) * 100)}/100`,
+      impact: toneToRatingImpact(ranked.enrichment.safety.commsDeadZoneRisk >= 0.55 ? 'warning' : 'positive'),
+      description: 'Communication confidence is based on the current comms dead-zone risk estimate.',
+    },
+  ].slice(0, 5);
+}
+
 function confidenceLabel(confidence: CampIntelConfidence): string {
   switch (confidence) {
     case 'high':
@@ -46,6 +120,163 @@ function confidenceFromScore(score: number): CampIntelConfidence {
   if (score >= 74) return 'high';
   if (score >= 48) return 'medium';
   return 'low';
+}
+
+function confidenceTitle(label: CampIntelConfidence): CampIntelEvidenceSummary['intelConfidence'] {
+  switch (label) {
+    case 'high':
+      return 'High';
+    case 'medium':
+      return 'Medium';
+    default:
+      return 'Low';
+  }
+}
+
+function isSupportFeedback(feedback: CampIntelFeedbackCode): boolean {
+  return feedback === 'excellent_camp' || feedback === 'usable';
+}
+
+function isRestrictionFeedback(feedback: CampIntelFeedbackCode): boolean {
+  return feedback === 'blocked' || feedback === 'inaccessible' || feedback === 'not_legal';
+}
+
+function isConcernFeedback(feedback: CampIntelFeedbackCode): boolean {
+  return isRestrictionFeedback(feedback) || feedback === 'poor' || feedback === 'too_exposed' || feedback === 'too_small';
+}
+
+function formatEvidenceTypes(args: {
+  feedback: CampIntelFeedbackCode[];
+  isSaved: boolean;
+  wasUsedBefore: boolean;
+  sourceType: CampIntelRankedCandidate['point']['sourceType'];
+  accessConfidenceScore: number;
+}): string[] {
+  const { feedback, isSaved, wasUsedBefore, sourceType, accessConfidenceScore } = args;
+  const types: string[] = [];
+  const add = (value: string) => {
+    if (!types.includes(value)) types.push(value);
+  };
+
+  if (isSaved || feedback.some(isSupportFeedback)) add('user support');
+  if (wasUsedBefore || sourceType === 'verified') add('field confirmation');
+  if (feedback.some(isRestrictionFeedback)) add('restriction report');
+  if (feedback.includes('inaccessible') || feedback.includes('blocked') || accessConfidenceScore >= 55) add('access note');
+  if (feedback.includes('too_exposed') || feedback.includes('too_small') || feedback.includes('poor')) add('usability note');
+
+  return types.slice(0, 4);
+}
+
+function deriveAccessLabel(args: {
+  feedback: CampIntelFeedbackCode[];
+  sourceType: CampIntelRankedCandidate['point']['sourceType'];
+  accessConfidenceScore: number;
+}): string {
+  const { feedback, sourceType, accessConfidenceScore } = args;
+  if (feedback.includes('blocked') || feedback.includes('inaccessible')) return 'Blocked';
+  if (accessConfidenceScore >= 76) return 'Clear';
+  if ((sourceType === 'route_candidate' || sourceType === 'inferred' || sourceType === 'fallback') && accessConfidenceScore >= 58) {
+    return 'Likely reachable';
+  }
+  if (accessConfidenceScore >= 42) return 'Questionable';
+  return 'Unknown';
+}
+
+function deriveRestrictionSignal(args: {
+  feedback: CampIntelFeedbackCode[];
+  complianceScore: number;
+  complianceConfidence: CampIntelConfidence;
+}): string {
+  const { feedback, complianceScore, complianceConfidence } = args;
+  if (feedback.includes('not_legal')) return 'Confirmed';
+  if (feedback.includes('blocked') || feedback.includes('inaccessible')) return 'Reported';
+  if (complianceScore < 55 || complianceConfidence === 'low') return 'Possible';
+  if (complianceScore >= 70) return 'None known';
+  return 'Unknown';
+}
+
+function deriveUsePressureLabel(privacyScore: number): string {
+  if (!Number.isFinite(privacyScore)) return 'Unknown';
+  if (privacyScore >= 70) return 'Light';
+  if (privacyScore >= 45) return 'Moderate';
+  return 'High';
+}
+
+function deriveCampIntelEvidenceSummary(args: {
+  ranked: CampIntelRankedCandidate;
+  isSaved: boolean;
+  wasUsedBefore: boolean;
+  feedback: CampIntelFeedbackCode[];
+}): CampIntelEvidenceSummary {
+  const { ranked, isSaved, wasUsedBefore, feedback } = args;
+  const hasSupport = isSaved || wasUsedBefore || feedback.some(isSupportFeedback) || ranked.point.sourceType === 'saved' || ranked.point.sourceType === 'historical' || ranked.point.sourceType === 'verified';
+  const hasRestriction = feedback.some(isRestrictionFeedback);
+  const hasConcern = feedback.some(isConcernFeedback);
+  const disputed = hasSupport && (hasRestriction || hasConcern);
+  const sourceLabel: CampIntelEvidenceSummary['sourceLabel'] = disputed
+    ? 'Disputed'
+    : hasRestriction || ranked.scores.complianceScore.raw < 45
+      ? 'Avoid / Restricted'
+      : wasUsedBefore || ranked.point.sourceType === 'verified'
+        ? 'Field-Confirmed'
+        : hasSupport
+          ? 'User-Supported'
+          : 'ECS-Inferred';
+  const evidenceTypes = formatEvidenceTypes({
+    feedback,
+    isSaved,
+    wasUsedBefore,
+    sourceType: ranked.point.sourceType,
+    accessConfidenceScore: ranked.confidence.breakdown.accessConfidence.score,
+  });
+  const latestEvidence =
+    evidenceTypes.length === 0
+      ? 'None'
+      : sourceLabel === 'Field-Confirmed'
+        ? 'Last Field Report'
+        : sourceLabel === 'Avoid / Restricted'
+          ? 'Restriction report'
+          : sourceLabel === 'Disputed'
+            ? 'Conflicting reports'
+            : 'User-supported evidence';
+  const restrictionSignal = deriveRestrictionSignal({
+    feedback,
+    complianceScore: ranked.scores.complianceScore.raw,
+    complianceConfidence: ranked.confidence.breakdown.complianceConfidence.label,
+  });
+  const access = deriveAccessLabel({
+    feedback,
+    sourceType: ranked.point.sourceType,
+    accessConfidenceScore: ranked.confidence.breakdown.accessConfidence.score,
+  });
+  const concern =
+    sourceLabel === 'Disputed'
+      ? 'Conflicting user/data reports'
+      : sourceLabel === 'Avoid / Restricted'
+        ? restrictionSignal === 'Confirmed'
+          ? 'restriction confirmed'
+          : access === 'Blocked'
+            ? 'access blocked'
+            : 'restriction reported'
+        : access === 'Blocked'
+          ? 'access blocked'
+          : restrictionSignal === 'Possible'
+            ? 'restriction signal possible'
+            : null;
+
+  return {
+    sourceLabel,
+    intelConfidence: confidenceTitle(ranked.confidence.label),
+    latestEvidence,
+    evidenceTypes,
+    access,
+    restrictionSignal,
+    landUseConfidence: confidenceTitle(ranked.confidence.breakdown.complianceConfidence.label),
+    usePressure: deriveUsePressureLabel(Math.round(ranked.enrichment.desirability.privacy * 100)),
+    concern,
+    photoEvidenceCount: null,
+    newestPhotoAgeLabel: null,
+  };
 }
 
 function classificationToCategory(
@@ -94,6 +325,11 @@ function riskBadgeTone(tone: CampIntelTone): CampIntelTone {
   return tone === 'neutral' ? 'caution' : tone;
 }
 
+function toCandidateAccessReasons(ranked: CampIntelRankedCandidate): string[] {
+  return (ranked.point.candidate.candidateReason ?? [])
+    .filter((reason) => reason === 'Remote from major roadways' || reason === 'Near drivable trail access');
+}
+
 function toMicroBadges(ranked: CampIntelRankedCandidate): CampIntelMicroBadge[] {
   const badges: CampIntelMicroBadge[] = [];
   if (ranked.scores.vehicleFitScore.raw < 55) {
@@ -103,7 +339,7 @@ function toMicroBadges(ranked: CampIntelRankedCandidate): CampIntelMicroBadge[] 
     badges.push({ id: 'weather', type: 'weather', label: 'Weather caution', tone: 'warning' });
   }
   if (ranked.scores.complianceScore.raw < 55) {
-    badges.push({ id: 'legal', type: 'legal', label: 'Legal uncertainty', tone: 'warning' });
+    badges.push({ id: 'legal', type: 'legal', label: 'Restriction signal', tone: 'warning' });
   }
   if (ranked.scores.arrivalRiskScore >= 56) {
     badges.push({ id: 'arrival', type: 'arrival', label: 'Night arrival', tone: 'caution' });
@@ -116,6 +352,11 @@ function toMicroBadges(ranked: CampIntelRankedCandidate): CampIntelMicroBadge[] 
 
 function toReasonChips(ranked: CampIntelRankedCandidate): CampIntelReasonChip[] {
   return [
+    ...toCandidateAccessReasons(ranked).map((label, index) => ({
+      id: `access-context-${index}`,
+      label,
+      tone: 'positive' as const,
+    })),
     ...ranked.explanation.topPositiveReasons.slice(0, 2).map((label, index) => ({
       id: `positive-${index}`,
       label,
@@ -193,7 +434,7 @@ function buildOfflineAssessment(
     notes.push('Weather may be stale');
   }
   if (complianceReduced) {
-    notes.push('Compliance confidence reduced');
+    notes.push('Restriction signal reduced');
   }
   if (cachedRouteContext) {
     notes.push('Recommendation based on cached route and terrain inputs');
@@ -213,9 +454,17 @@ function buildTrustNotes(
   offlineAssessment: CampIntelOfflineAssessment | null,
 ): string[] {
   const notes = [...(offlineAssessment?.notes ?? [])];
+  const { candidate } = ranked.point;
+
+  if (candidate.criteriaBroadened) {
+    notes.push('Broader campsite corridor criteria were used.');
+  }
+  if (candidate.credibilityTier === 'possible_stop') {
+    notes.push('This is a possible stop/camp candidate, not a confirmed campsite.');
+  }
 
   if (ranked.enrichment.compliance.legality === 'uncertain') {
-    notes.push('Verify signs and local conditions');
+    notes.push('Verify signs, land-use guidance, and local conditions');
   }
   if (ranked.enrichment.terrain.slopeRisk >= 0.5) {
     notes.push('Slope confidence remains limited');
@@ -313,6 +562,16 @@ export function mapRankedCandidateToSite(args: {
   const offlineAssessment = buildOfflineAssessment(ranked, routeWeather);
   const trustNotes = buildTrustNotes(ranked, offlineAssessment);
   const confidenceBreakdown = toConfidenceBreakdown(ranked);
+  const rating = campsiteRatingFromScore(ranked.scores.overallScore);
+  const ratingFactors = buildCampIntelRatingFactors(ranked);
+  const accessReasons = toCandidateAccessReasons(ranked);
+  const topPositiveReasons = Array.from(new Set([...accessReasons, ...ranked.explanation.topPositiveReasons]));
+  const evidenceSummary = deriveCampIntelEvidenceSummary({
+    ranked,
+    isSaved,
+    wasUsedBefore,
+    feedback,
+  });
 
   return {
     id: ranked.point.id,
@@ -323,6 +582,8 @@ export function mapRankedCandidateToSite(args: {
     confidence,
     confidenceLabel: confidenceLabel(confidence),
     confidenceScore: ranked.confidence.score,
+    rating,
+    ratingFactors,
     overallScore: ranked.scores.overallScore,
     scoreBreakdown: {
       access: ranked.scores.accessScore.raw,
@@ -333,7 +594,7 @@ export function mapRankedCandidateToSite(args: {
       desirability: ranked.scores.desirabilityScore.raw,
     },
     quickVerdict: ranked.recommendation.quickVerdict,
-    explanationReasons: ranked.explanation.whySuggested,
+    explanationReasons: Array.from(new Set([...accessReasons, ...ranked.explanation.whySuggested])),
     whyNotTopRanked: ranked.explanation.whyNotTopRanked,
     riskFlags: ranked.riskFlags,
     reasonChips: toReasonChips(ranked),
@@ -346,10 +607,14 @@ export function mapRankedCandidateToSite(args: {
     offlineStatus: ranked.point.onlineContext.offlineStatus,
     offlineAssessment,
     sourceType: ranked.point.sourceType,
+    evidenceSummary,
     detourDistanceMiles: ranked.point.routeRelation.detourDistanceMiles,
     sourceRouteId: ranked.point.routeRelation.sourceRouteId,
     sourceRouteName: ranked.point.routeRelation.sourceRouteName,
     segmentLabel: ranked.point.routeRelation.segmentRange,
+    fallbackStage: ranked.point.candidate.fallbackStage,
+    criteriaBroadened: ranked.point.candidate.criteriaBroadened,
+    credibilityTier: ranked.point.candidate.credibilityTier,
     isSaved,
     wasUsedBefore,
     classification: ranked.classification,
@@ -368,7 +633,7 @@ export function mapRankedCandidateToSite(args: {
     confidenceBreakdown,
     unresolvedUnknowns: ranked.confidence.unknowns,
     recommendationSummary: ranked.recommendation.summaryLine,
-    topPositiveReasons: ranked.explanation.topPositiveReasons,
+    topPositiveReasons,
     topCautionReasons: ranked.explanation.topCautionReasons,
     trustNotes,
     feedback,
@@ -436,6 +701,12 @@ export function buildCampIntelStructuredSummary(args: {
       site.quickVerdict.toLowerCase().includes('after dark'),
   );
   const lowConfidenceBeyondTop = viable.slice(1).some((site) => site.confidence === 'low');
+  const criteriaBroadened = viable.some((site) => site.criteriaBroadened);
+  const broadenedCriteriaNotice = viable.some((site) => site.credibilityTier === 'possible_stop')
+    ? CAMPSITE_UI_NOTICE_LOWER_CONFIDENCE
+    : criteriaBroadened
+      ? CAMPSITE_UI_NOTICE_BROADER
+      : null;
   const offlineAssessment =
     viable.find((site) => site.offlineAssessment)?.offlineAssessment ??
     (cached
@@ -443,7 +714,7 @@ export function buildCampIntelStructuredSummary(args: {
           title: 'Offline Assessment',
           notes: [
             'Recommendation based on cached route and terrain inputs',
-            'Compliance confidence reduced',
+            'Restriction signal reduced',
           ],
           weatherStale: routeWeather?.source !== 'live',
           complianceConfidenceReduced: true,
@@ -452,6 +723,9 @@ export function buildCampIntelStructuredSummary(args: {
       : null);
 
   const routeGuidance: string[] = [];
+  if (broadenedCriteriaNotice) {
+    routeGuidance.push(broadenedCriteriaNotice);
+  }
   if (viable.length >= 2 && best?.detourDistanceMiles != null) {
     const next = viable[1] ?? null;
     routeGuidance.push(
@@ -489,7 +763,7 @@ export function buildCampIntelStructuredSummary(args: {
     best != null
       ? `${best.quickVerdict}. ${best.recommendationSummary}`
       : offlineAssessment
-        ? 'Use cached route-aware camp results with reduced trust in freshness and compliance.'
+        ? 'Use cached route-aware camp results with reduced trust in freshness and restriction signals.'
         : 'Current route and terrain context do not support a strong camp recommendation.';
 
   return {
@@ -509,6 +783,8 @@ export function buildCampIntelStructuredSummary(args: {
     bestShelteredCandidate: toSummaryCandidate(bestSheltered),
     stopBeforeDark,
     lowConfidenceBeyondTop,
+    criteriaBroadened,
+    broadenedCriteriaNotice,
   };
 }
 
@@ -520,7 +796,7 @@ export function downgradeCampIntelSiteForOffline(site: CampIntelSite): CampIntel
     notes: Array.from(
       new Set([
         'Recommendation based on cached route and terrain inputs',
-        'Compliance confidence reduced',
+        'Restriction signal reduced',
         ...(site.weatherSummary ? ['Weather may be stale'] : []),
       ]),
     ),
@@ -550,6 +826,9 @@ export function toCampIntelMarkerPayload(site: CampIntelSite, selected = false):
     category: site.category,
     confidence: site.confidence,
     confidenceScore: site.confidenceScore,
+    rating: site.rating ?? campsiteRatingFromScore(site.overallScore),
+    score: site.overallScore,
+    ratingFactors: site.ratingFactors ?? [],
     selected,
     badges: site.microBadges.map((badge) => ({
       label: badge.label,

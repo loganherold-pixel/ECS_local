@@ -28,6 +28,11 @@ import type {
   EcsConnectionCallback,
   EcsWarningCallback,
 } from './IEcsPowerProvider';
+import {
+  getBluetoothTelemetrySourceLabel,
+  normalizeBluetoothTelemetrySource,
+  shouldAcceptBluetoothTelemetry,
+} from './bluetoothLiveTelemetry';
 
 // ── Provider Branding Constants ─────────────────────────────────────────
 
@@ -153,6 +158,29 @@ class EcsProviderRegistryImpl {
   private cachedReadings: Map<string, EcsNormalizedReading> = new Map(); // deviceId -> latest reading
   private lastSystemState: EcsSystemPowerState | null = null;
 
+  private normalizeReadingSource(reading: EcsNormalizedReading): EcsNormalizedReading | null {
+    const fallback = reading.provider === 'ecoflow'
+      ? 'provider_cloud'
+      : reading.isStale
+        ? 'cache'
+        : 'ble_live';
+    const source = normalizeBluetoothTelemetrySource(reading.telemetrySource, fallback);
+    if (!shouldAcceptBluetoothTelemetry(source)) {
+      console.log('[BT_LIVE] mock_disabled', {
+        provider: reading.provider,
+        deviceId: reading.deviceId,
+      });
+      return null;
+    }
+    return {
+      ...reading,
+      telemetrySource: source,
+      telemetrySourceLabel: reading.telemetrySourceLabel ?? getBluetoothTelemetrySourceLabel(source),
+      isLive: source === 'ble_live' && reading.isLive !== false && !reading.telemetryUnsupported && !reading.isStale,
+      updatedAt: reading.updatedAt ?? reading.lastUpdated,
+    };
+  }
+
   // ── Provider Registration ───────────────────────────────────────────
 
   /**
@@ -172,12 +200,16 @@ class EcsProviderRegistryImpl {
     const unsubs: (() => void)[] = [];
 
     unsubs.push(provider.onTelemetry((reading) => {
-      this.cachedReadings.set(reading.deviceId, reading);
+      const normalizedReading = this.normalizeReadingSource(reading);
+      if (!normalizedReading) return;
+      this.cachedReadings.set(normalizedReading.deviceId, normalizedReading);
       this.notifyTelemetrySubscribers();
       this.notifyStateSubscribers();
     }));
 
     unsubs.push(provider.onConnectionChange((_state) => {
+      this.reconcileProviderCache(provider);
+      this.notifyTelemetrySubscribers();
       this.notifyStateSubscribers();
     }));
 
@@ -189,6 +221,8 @@ class EcsProviderRegistryImpl {
     }));
 
     this.providerUnsubscribers.set(id, unsubs);
+    this.reconcileProviderCache(provider);
+    this.notifyStateSubscribers();
   }
 
   /**
@@ -209,6 +243,7 @@ class EcsProviderRegistryImpl {
     }
 
     this.providers.delete(id);
+    this.notifyTelemetrySubscribers();
     this.notifyStateSubscribers();
   }
 
@@ -298,8 +333,10 @@ class EcsProviderRegistryImpl {
     for (const result of results) {
       if (result.status === 'fulfilled') {
         for (const reading of result.value) {
-          this.cachedReadings.set(reading.deviceId, reading);
-          allReadings.push(reading);
+          const normalizedReading = this.normalizeReadingSource(reading);
+          if (!normalizedReading) continue;
+          this.cachedReadings.set(normalizedReading.deviceId, normalizedReading);
+          allReadings.push(normalizedReading);
         }
       }
     }
@@ -349,6 +386,7 @@ class EcsProviderRegistryImpl {
 
     await Promise.allSettled(promises);
     this.cachedReadings.clear();
+    this.notifyTelemetrySubscribers();
     this.notifyStateSubscribers();
   }
 
@@ -548,6 +586,37 @@ class EcsProviderRegistryImpl {
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────────
+
+  private reconcileProviderCache(provider: IEcsPowerProvider): void {
+    const connectedById = new Map(
+      provider
+        .getConnectedDevices()
+        .map((device) => [device.device_id, device] as const),
+    );
+
+    for (const [deviceId, reading] of Array.from(this.cachedReadings.entries())) {
+      if (reading.provider !== provider.providerId) continue;
+
+      const connectedDevice = connectedById.get(deviceId);
+      if (!connectedDevice || connectedDevice.connection_state !== 'connected') {
+        this.cachedReadings.delete(deviceId);
+        continue;
+      }
+
+      if (
+        reading.connectionState !== connectedDevice.connection_state ||
+        reading.isDisconnected ||
+        reading.isPrimary !== connectedDevice.is_primary
+      ) {
+        this.cachedReadings.set(deviceId, {
+          ...reading,
+          connectionState: connectedDevice.connection_state,
+          isDisconnected: false,
+          isPrimary: connectedDevice.is_primary,
+        });
+      }
+    }
+  }
 
   /**
    * Destroy all providers and clean up.

@@ -118,6 +118,51 @@ export function buildMasterReleaseChecklist(args: {
       ],
     },
     {
+      id: 'expedition_readiness_command_brief',
+      label: 'Expedition Readiness / Command Brief',
+      status: inferStatus({
+        issues,
+        blockerCodes: [
+          'expedition_readiness_category_gap',
+          'expedition_readiness_score_integrity',
+          'expedition_readiness_status_contradiction',
+          'expedition_readiness_unsafe_wording',
+          'expedition_readiness_weather_freshness_gap',
+          'expedition_readiness_vehicle_truth_gap',
+          'expedition_readiness_offline_truth_gap',
+        ],
+        watchCodes: ['expedition_readiness_synthetic_truth_gap', 'stale_signal_churn', 'cross_tab_warning_cluster'],
+        extraBlocker: issues.some((issue) => (
+          issue.code === 'expedition_readiness_synthetic_truth_gap' && issue.severity === 'error'
+        )),
+      }),
+      notes: [
+        'Data grounding, Score integrity, Missing data handling, Legal/camp confidence wording, Vehicle-aware behavior.',
+        'Offline readiness accuracy, Weather freshness, Route preview integration, Active guidance integration, Command Brief behavior.',
+        'Dashboard widget behavior, Alert/Dispatch integration, AI/ECS Intelligence grounding, Android layout safety, No mock data presented as live.',
+      ],
+    },
+    {
+      id: 'dispersed_camping_eligibility',
+      label: 'Dispersed Camping Eligibility',
+      status: inferStatus({
+        issues,
+        blockerCodes: [
+          'dispersed_camping_copy_guardrail_gap',
+          'dispersed_camping_classification_guardrail_gap',
+          'dispersed_camping_overlay_lifecycle_gap',
+          'dispersed_camping_candidate_generation_gap',
+          'dispersed_camping_data_freshness_gap',
+          'dispersed_camping_beta_flag_gap',
+        ],
+      }),
+      notes: [
+        'Eligibility wording only: verify local rules, closures, fire restrictions, permits, and posted signs.',
+        'Classifier must never mark private, tribal, military, known-closure, or restricted regions high/medium.',
+        'Navigate overlay lifecycle, WebView layer ordering, route summary, ECS-Inferred pins, stale/offline labels, and explicit Scout action stay beta-gated.',
+      ],
+    },
+    {
       id: 'shell_surface',
       label: 'Top Banner / Profile Shell',
       status: inferStatus({

@@ -1,5 +1,9 @@
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 
+import {
+  getBleRuntimeUnsupportedMessage,
+  isBleNativeModuleUnavailableError,
+} from '../src/power/ble/BleScanReadiness';
 import { ensureBlePermissions } from '../src/power/ble/BlePermissions';
 import type {
   BluConnectionState,
@@ -11,6 +15,7 @@ import type {
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluSessionStore } from './BluSessionStore';
 import { bluStateStore } from './BluStateStore';
+import { getBluetoothTelemetrySourceLabel, hasDecodedBluetoothTelemetryMetrics } from './bluetoothLiveTelemetry';
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const BACKGROUND_POLL_INTERVAL_MS = 60_000;
@@ -138,11 +143,19 @@ function getBleManager(): any {
     throw new Error('Bluetooth is unavailable on web.');
   }
 
-  // Lazy require keeps web builds safe.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { BleManager } = require('react-native-ble-plx');
-  bleManagerInstance = new BleManager();
-  return bleManagerInstance;
+  try {
+    // Lazy require keeps web builds safe.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { BleManager } = require('react-native-ble-plx');
+    bleManagerInstance = new BleManager();
+    return bleManagerInstance;
+  } catch (error) {
+    if (isBleNativeModuleUnavailableError(error)) {
+      throw new Error(getBleRuntimeUnsupportedMessage());
+    }
+    const message = String((error as any)?.message ?? error ?? 'unknown error');
+    throw new Error(`Failed to initialize Bluetooth manager: ${message}`);
+  }
 }
 
 function normalizeUuid(uuid?: string | null): string {
@@ -223,31 +236,13 @@ function getStandardTelemetry(
     readCharacteristic(ctx.characteristicMap, BATTERY_SERVICE_UUID, BATTERY_POWER_STATE_UUID)?.valueBase64,
   );
 
-  let batteryWatts: number | undefined;
-  let inputWatts: number | undefined;
-  let outputWatts: number | undefined;
-
-  if (batteryStateRaw != null) {
-    const charging = (batteryStateRaw & 0b0000_0100) !== 0;
-    const discharging = (batteryStateRaw & 0b0000_1000) !== 0;
-    if (charging) {
-      inputWatts = 1;
-      batteryWatts = 1;
-    } else if (discharging) {
-      outputWatts = 1;
-      batteryWatts = -1;
-    }
-  }
-
   return {
     battery_percent: batteryLevel ?? undefined,
     temperature_celsius: temperature ?? undefined,
-    input_watts: inputWatts,
-    output_watts: outputWatts,
-    battery_watts: batteryWatts,
     raw: {
       rssi: ctx.rssi,
       readableCharacteristics: ctx.characteristicMap.size,
+      batteryPowerStateRaw: batteryStateRaw,
     },
     signal_strength: ctx.rssi ?? undefined,
   };
@@ -283,7 +278,7 @@ function errorFromCode(code: string): string {
     case 'UNSUPPORTED_FIRMWARE':
       return 'Unsupported firmware.';
     case 'PLATFORM_UNSUPPORTED':
-      return 'Bluetooth is unavailable on this platform.';
+      return getBleRuntimeUnsupportedMessage();
     default:
       return 'Connection failed.';
   }
@@ -291,6 +286,9 @@ function errorFromCode(code: string): string {
 
 function detectErrorCode(error: unknown): string {
   const message = String((error as any)?.message ?? error ?? '').toLowerCase();
+  if (isBleNativeModuleUnavailableError(error) || message.includes('development build')) {
+    return 'PLATFORM_UNSUPPORTED';
+  }
   if (message.includes('powered off') || message.includes('bluetooth state') || message.includes('disabled')) {
     return 'BLUETOOTH_DISABLED';
   }
@@ -429,8 +427,9 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       let manager: any;
       try {
         manager = getBleManager();
-      } catch {
-        return this.failScan('Bluetooth disabled.', 'BLUETOOTH_DISABLED');
+      } catch (error) {
+        const errorCode = detectErrorCode(error);
+        return this.failScan(errorFromCode(errorCode), errorCode);
       }
 
       this.isScanning = true;
@@ -499,6 +498,15 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.lastError = null;
       this.lastErrorCode = null;
       this.connectionState = 'connecting';
+      if (this.isScanning) {
+        try {
+          const manager = getBleManager();
+          manager.stopDeviceScan?.();
+        } catch {
+          // Best effort only.
+        }
+        this.isScanning = false;
+      }
       this.notify();
       this.emitEvent('connect', { meta: { deviceId: deviceId ?? null } });
 
@@ -506,17 +514,21 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         return this.handleConnectError('Bluetooth is unavailable on web.', 'PLATFORM_UNSUPPORTED');
       }
 
-      if (this.discoveredDevices.length === 0) {
-        await this.scanForDevices();
-      }
-
       const target =
         this.discoveredDevices.find((item) => item.id === deviceId) ??
+        (deviceId
+          ? {
+              id: deviceId,
+              name: this.connectedDevices.find((item) => item.device_id === deviceId)?.display_name ?? `${config.displayName} Device`,
+              rssi: -90,
+              model: config.displayName,
+            }
+          : null) ??
         this.discoveredDevices[0] ??
         null;
 
       if (!target) {
-        return this.handleConnectError('No supported devices found.', 'DEVICE_UNAVAILABLE');
+        return this.handleConnectError('Start a device scan before connecting.', 'DEVICE_UNAVAILABLE');
       }
 
       const permissions = await ensureBlePermissions();
@@ -532,6 +544,11 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         });
 
         await device.discoverAllServicesAndCharacteristics();
+        console.log('[BT_LIVE] device_connected', {
+          provider: config.provider,
+          deviceId: target.id,
+          name: target.name,
+        });
         this.connectedDeviceRef = device;
         this.attachDisconnectMonitor(device);
 
@@ -583,12 +600,9 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     async connectAll(): Promise<NativeBleConnectResult[]> {
-      if (this.discoveredDevices.length === 0) {
-        await this.scanForDevices();
-      }
       const first = this.discoveredDevices[0];
       if (!first) {
-        return [this.handleConnectError('No supported devices found.', 'DEVICE_UNAVAILABLE')];
+        return [this.handleConnectError('Start a device scan before connecting.', 'DEVICE_UNAVAILABLE')];
       }
       return [await this.connect(first.id)];
     }
@@ -609,6 +623,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.isReconnecting = false;
       this.reconnectAttempts = 0;
       bluStateStore.setReconnecting(false);
+      bluStateStore.clearProviderTelemetry(config.provider);
       bluSessionStore.recordDisconnection();
       this.notify();
       this.emitEvent('disconnected', { meta: { requested: true } });
@@ -630,8 +645,9 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       const session = bluSessionStore.getSession();
       if (session.provider !== config.provider) return false;
 
-      await this.scanForDevices();
-      const restored = await this.connect(session.primaryDeviceId ?? undefined);
+      if (!session.primaryDeviceId) return false;
+
+      const restored = await this.connect(session.primaryDeviceId);
       if (!restored.success) return false;
 
       if (session.primaryDeviceId) {
@@ -706,8 +722,6 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         this.isPaused = !active;
         if (active && this.connectionState === 'connected' && this.connectedDeviceRef) {
           void this.pollConnectedDevices();
-        } else if (active && this.connectionState !== 'connected' && bluSessionStore.getPreviousProvider() === config.provider) {
-          void this.restoreSession();
         }
         this.notify();
       });
@@ -820,10 +834,22 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
           rssi,
         });
         const merged = coalesceTelemetry(standard, vendorSpecific);
+        const hasDecodedMetrics = hasDecodedBluetoothTelemetryMetrics(merged as Record<string, unknown>);
         const telemetry: BluTelemetry = {
           timestamp: Date.now(),
           provider: config.provider,
           device_id: targetId,
+          source: 'ble_live',
+          updatedAt: Date.now(),
+          telemetrySourceLabel: getBluetoothTelemetrySourceLabel('ble_live'),
+          isLive: hasDecodedMetrics,
+          telemetryUnsupported: !hasDecodedMetrics,
+          telemetryUnsupportedReason: hasDecodedMetrics
+            ? undefined
+            : 'Connected over Bluetooth; telemetry is not decoded for this model yet.',
+          status_text: hasDecodedMetrics
+            ? merged.status_text
+            : 'Connected over Bluetooth; telemetry not yet decoded.',
           ...merged,
         };
 
@@ -841,6 +867,11 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         this.notify();
         this.emitEvent('telemetry', { telemetry, device: bluDeviceRegistry.getDevice(config.provider, targetId) ?? null });
         this.emitEvent('data', { telemetry, device: bluDeviceRegistry.getDevice(config.provider, targetId) ?? null });
+        console.log(hasDecodedMetrics ? '[BT_LIVE] telemetry_decoded' : '[BT_LIVE] telemetry_unsupported', {
+          provider: config.provider,
+          deviceId: targetId,
+          readableCharacteristics: characteristicMap.size,
+        });
 
         return { success: true, telemetry, error: null };
       } catch (error) {
@@ -989,6 +1020,13 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     ): Promise<Map<string, CharacteristicSnapshot>> {
       const map = new Map<string, CharacteristicSnapshot>();
       const services = await device.services();
+      console.log('[BT_LIVE] services_discovered', {
+        provider: config.provider,
+        deviceId: String(device?.id ?? ''),
+        count: Array.isArray(services) ? services.length : 0,
+        services: Array.isArray(services) ? services.map((service: any) => service?.uuid).filter(Boolean) : [],
+        metadataOnly,
+      });
 
       for (const service of services ?? []) {
         const serviceUuid = normalizeUuid(service?.uuid);
@@ -1012,6 +1050,13 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
           try {
             const reading = await device.readCharacteristicForService(service.uuid, characteristic.uuid);
+            console.log('[BT_LIVE] characteristic_update', {
+              provider: config.provider,
+              deviceId: String(device?.id ?? ''),
+              serviceUuid,
+              characteristicUuid,
+              metadataOnly,
+            });
             map.set(makeCharacteristicKey(service.uuid, characteristic.uuid), {
               serviceUuid,
               characteristicUuid,

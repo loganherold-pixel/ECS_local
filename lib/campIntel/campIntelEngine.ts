@@ -1,4 +1,5 @@
 import type { CampsiteCandidate, CampsiteCandidateResult } from '../campsiteCandidateEngine';
+import { evaluateCampsiteCandidateViability } from '../campsites/campsiteViabilityFilter';
 import type {
   CampIntelCandidateEnrichment,
   CampIntelCandidatePoint,
@@ -16,6 +17,7 @@ import type {
   CampIntelRouteRelationInfo,
   CampIntelRiskFlag,
   CampIntelVehicleCompatibilityContext,
+  CampIntelViabilityResult,
   CampIntelVehicleContext,
 } from './campIntelTypes';
 import { classifyCampIntelCandidate } from './campIntelClassification';
@@ -27,6 +29,57 @@ import {
   scoreCampIntelDimensions,
 } from './campIntelScoring';
 import { getDefaultCampIntelMissionMode, getCampIntelWeightProfile } from './campIntelWeights';
+
+function mergeCoreScoreViability(args: {
+  candidate: CampsiteCandidate;
+  result: CampsiteCandidateResult;
+  scores: {
+    overnightSuitabilityScore: number;
+    campabilityScore: { raw: number };
+    accessScore: { raw: number };
+    complianceScore: { raw: number };
+  };
+  baseViability: CampIntelViabilityResult;
+}): CampIntelViabilityResult {
+  const { candidate, result, scores, baseViability } = args;
+  const coreEvaluation = evaluateCampsiteCandidateViability(
+    {
+      ...candidate,
+      campSuitability: scores.overnightSuitabilityScore,
+      campsiteSuitability: scores.overnightSuitabilityScore,
+      terrainSuitability: scores.campabilityScore.raw,
+      accessConfidence: scores.accessScore.raw,
+      legalAccess: scores.complianceScore.raw,
+    },
+    {
+      source: result.source ?? result.analysisSource ?? 'route',
+      generationId: result.id,
+      routeIntelligenceId: result.routeIntelligenceId,
+      polygonId: result.polygonId,
+      analysisLayer: 'camp_intel',
+    },
+  );
+
+  if (coreEvaluation.isViable) return baseViability;
+
+  const failedCoreReasons = coreEvaluation.failingScoreNames.map(
+    (name) => `Required campsite core score below 70 or unavailable: ${name}.`,
+  );
+
+  return {
+    isViableCandidate: false,
+    failedViabilityReasons: Array.from(new Set([
+      ...baseViability.failedViabilityReasons,
+      ...failedCoreReasons,
+    ])),
+    viabilityGateStatus:
+      coreEvaluation.failingScoreNames.includes('legalAccess')
+        ? 'rejected_compliance'
+        : coreEvaluation.failingScoreNames.includes('accessConfidence')
+          ? 'rejected_access'
+          : 'rejected_terrain',
+  };
+}
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -409,7 +462,19 @@ function buildResourceImplications(point: CampIntelCandidatePoint, input: CampIn
   };
 }
 
-function buildRiskFlags(ranked: Omit<CampIntelRankedCandidate, 'overallRank' | 'classification' | 'explanation' | 'recommendation'>): CampIntelRiskFlag[] {
+function buildRiskFlags(
+  ranked: Pick<
+    CampIntelRankedCandidate,
+    | 'point'
+    | 'enrichment'
+    | 'scores'
+    | 'confidence'
+    | 'viability'
+    | 'arrivalAssessment'
+    | 'overnightAssessment'
+    | 'departureAssessment'
+  >,
+): CampIntelRiskFlag[] {
   const flags: CampIntelRiskFlag[] = [];
   if (ranked.scores.vehicleFitScore.raw < 55) flags.push({ id: 'vehicle', type: 'vehicle', label: 'Vehicle fit caution', tone: 'caution' });
   if (ranked.scores.safetyScore.raw < 55) flags.push({ id: 'weather', type: 'weather', label: 'Overnight risk elevated', tone: 'warning' });
@@ -425,7 +490,20 @@ function buildRiskFlags(ranked: Omit<CampIntelRankedCandidate, 'overallRank' | '
   return flags.slice(0, 5);
 }
 
-function buildRecommendation(ranked: Omit<CampIntelRankedCandidate, 'overallRank' | 'classification' | 'explanation' | 'recommendation'>, classification: CampIntelRankedCandidate['classification']) {
+function buildRecommendation(
+  ranked: Pick<
+    CampIntelRankedCandidate,
+    | 'point'
+    | 'enrichment'
+    | 'scores'
+    | 'confidence'
+    | 'viability'
+    | 'arrivalAssessment'
+    | 'overnightAssessment'
+    | 'departureAssessment'
+  >,
+  classification: CampIntelRankedCandidate['classification'],
+) {
   const vehicleFit = ranked.scores.vehicleFitScore.raw;
   const access = ranked.scores.accessScore.raw;
   const safety = ranked.scores.safetyScore.raw;
@@ -571,7 +649,12 @@ export function buildCampIntelEngine(
       const enrichment = buildEnrichment(point, input);
       const confidence = scoreCampIntelConfidence(point, enrichment, appliedWeightProfile);
       const scores = scoreCampIntelDimensions(point, enrichment, appliedWeightProfile, confidence);
-      const viability = evaluateCampIntelViability(point, enrichment);
+      const viability = mergeCoreScoreViability({
+        candidate,
+        result,
+        scores,
+        baseViability: evaluateCampIntelViability(point, enrichment),
+      });
       const assessments = buildCampIntelSubAssessments(point, enrichment, scores);
       return { point, enrichment, confidence, scores, viability, ...assessments };
     });

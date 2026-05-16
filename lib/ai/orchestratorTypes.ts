@@ -6,8 +6,11 @@ import type { ECSExplanationResult } from './recommendationExplanationTypes';
 import type { ECSTrustMetadata } from './trustTypes';
 import type {
   ECSReleaseChecklistSection,
+  ECSReleaseQaSummary,
   ECSReleaseRiskSummary,
 } from './releasePolishAuditTypes';
+import type { ECSReadinessExplanationPayload } from './readinessExplanationGuardrails';
+import type { ExpeditionReadinessAssessment } from '../readiness/expeditionReadinessTypes';
 
 export type ECSOrchestratorSource =
   | 'mission_scenario'
@@ -126,7 +129,21 @@ export type ECSReleaseReadinessIssueCode =
   | 'offline_capable_conflict'
   | 'minimal_mode_noise'
   | 'planning_phase_ownership_gap'
-  | 'missing_lead_target';
+  | 'missing_lead_target'
+  | 'expedition_readiness_category_gap'
+  | 'expedition_readiness_score_integrity'
+  | 'expedition_readiness_status_contradiction'
+  | 'expedition_readiness_unsafe_wording'
+  | 'expedition_readiness_synthetic_truth_gap'
+  | 'expedition_readiness_weather_freshness_gap'
+  | 'expedition_readiness_vehicle_truth_gap'
+  | 'expedition_readiness_offline_truth_gap'
+  | 'dispersed_camping_copy_guardrail_gap'
+  | 'dispersed_camping_classification_guardrail_gap'
+  | 'dispersed_camping_overlay_lifecycle_gap'
+  | 'dispersed_camping_candidate_generation_gap'
+  | 'dispersed_camping_data_freshness_gap'
+  | 'dispersed_camping_beta_flag_gap';
 
 export type ECSReleaseReadinessIssue = {
   code: ECSReleaseReadinessIssueCode;
@@ -159,6 +176,7 @@ export type ECSReleaseReadinessDiagnostics = {
   };
   masterChecklist: ECSReleaseChecklistSection[];
   unresolvedRiskSummary: ECSReleaseRiskSummary;
+  qaSummary: ECSReleaseQaSummary;
 };
 
 export type ECSOrchestratorCandidate = {
@@ -188,6 +206,8 @@ export type ECSOrchestratorOutput = {
   suppressed: ECSOrchestratorCandidate[];
   activePhase?: ECSExpeditionPhase | null;
   operationalState?: ECSDegradedOperationsResult | null;
+  expeditionReadiness?: ExpeditionReadinessAssessment | null;
+  readinessExplanation?: ECSReadinessExplanationPayload | null;
   qaDiagnostics?: ECSCommandStateDiagnostics | null;
   releaseDiagnostics?: ECSReleaseReadinessDiagnostics | null;
 };

@@ -35,15 +35,25 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
-import { getSelectedEcoFlowDevice } from './useEcoFlowLive';
+import { getSelectedEcoFlowDevice } from './ecoFlowSelectionStore';
+import {
+  ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
+  isEcoFlowUnauthorizedDeviceError,
+} from './ecoflowUnauthorizedDevice';
+import {
+  describeEcoFlowBluEligibility,
+  normalizeEcoFlowBluCandidate,
+} from './ecoflowBluTelemetryEligibility';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
 /** Raw device shape returned by the ecoflow edge function (action: 'devices'). */
 interface EcoFlowRawDevice {
-  id: string;
-  name: string;
-  online: boolean;
+  id?: string;
+  deviceId?: string;
+  name?: string;
+  deviceName?: string;
+  online?: boolean;
   model?: string;
   productType?: string;
 }
@@ -114,6 +124,8 @@ const RECONNECT_THRESHOLD = 3;
 
 /** Phase 1D: Max reconnect attempts before giving up. */
 const MAX_RECONNECT_ATTEMPTS = 3;
+
+const ECOFLOW_NO_ELIGIBLE_TELEMETRY_DEVICE_REASON = 'no_eligible_ecoflow_telemetry_device';
 
 /** Phase 1D: Delay between reconnect attempts: 10 seconds. */
 const RECONNECT_DELAY_MS = 10_000;
@@ -211,6 +223,10 @@ class EcoFlowBluAdapter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private eventListeners = new Map<EcoFlowAdapterEventName, Set<EcoFlowAdapterEventListener>>();
   private lastTelemetry: BluTelemetry | null = null;
+  private unauthorizedDeviceIds = new Set<string>();
+  private unauthorizedWarningDeviceIds = new Set<string>();
+  private ineligibleDeviceIds = new Set<string>();
+  private pollingTargetDeviceId: string | null = null;
 
   // ── Lifecycle/Event API ────────────────────────────────────────────
 
@@ -299,7 +315,9 @@ class EcoFlowBluAdapter {
 
   getECSBridgeState(): EcoFlowECSBridgeState {
     const primary = bluDeviceRegistry.getPrimary();
-    const primaryDeviceId = primary?.provider === 'ecoflow' ? primary.device_id : this.getPrimaryDeviceId();
+    const primaryDeviceId = primary?.provider === 'ecoflow' && this.isBluTelemetryDevice(primary)
+      ? primary.device_id
+      : this.getPrimaryDeviceId();
     const primaryDevice = primaryDeviceId
       ? this.discoveredDevices.find((device) => device.device_id === primaryDeviceId) ?? null
       : null;
@@ -350,6 +368,9 @@ class EcoFlowBluAdapter {
     this.consecutiveFailures = 0;
     this.reconnectAttempts = 0;
     this.isReconnecting = false;
+    this.unauthorizedDeviceIds.clear();
+    this.unauthorizedWarningDeviceIds.clear();
+    this.ineligibleDeviceIds.clear();
     bluStateStore.setReconnecting(false);
     this.notify();
 
@@ -377,31 +398,48 @@ class EcoFlowBluAdapter {
 
       // ── Normalize devices ──────────────────────────────────────
       const rawDevices: EcoFlowRawDevice[] = data.devices || [];
-      console.log(`[EcoFlowBluAdapter] Discovered ${rawDevices.length} device(s)`);
+      console.log(`[EcoFlowBluAdapter] listedDevices: discovered ${rawDevices.length} EcoFlow device(s)`);
 
       if (rawDevices.length === 0) {
-        // Not an error — account connected, but no devices available
-        this.connectionState = 'connected';
-        this.discoveredDevices = [];
-        this.lastTelemetry = null;
-        this.isReconnecting = false;
-        bluStateStore.setReconnecting(false);
-
-        // Phase 1D: Persist session even with no devices
-        bluSessionStore.recordConnection('ecoflow', null);
-
-        this.notify();
+        await this.enterNoEligibleEcoFlowState('No EcoFlow devices are available for BLU telemetry.');
         this.emit('connected', this.getECSBridgeState());
 
         return {
           success: true,
           devices: [],
-          error: null,
-          errorCode: null,
+          error: this.lastError,
+          errorCode: this.lastErrorCode,
         };
       }
 
-      const bluDevices = rawDevices.map((raw) => this.normalizeDevice(raw));
+      const selectableRawDevices = this.getSelectableTelemetryRawDevices(rawDevices);
+      console.log(
+        `[EcoFlowBluAdapter] selectableDevices: ${selectableRawDevices.length} EcoFlow BLU telemetry-capable device(s)`,
+      );
+
+      // Clear prior EcoFlow BLU registry entries so stale non-power devices cannot remain primary.
+      await bluDeviceRegistry.clearProvider('ecoflow');
+
+      if (selectableRawDevices.length === 0) {
+        await this.enterNoEligibleEcoFlowState('No EcoFlow power station is eligible for BLU telemetry.');
+        this.emit('connected', this.getECSBridgeState());
+        console.warn('[EcoFlowBluAdapter] no eligible telemetry device available; BLU will remain disconnected.');
+
+        return {
+          success: true,
+          devices: [],
+          error: this.lastError,
+          errorCode: this.lastErrorCode,
+        };
+      }
+
+      const bluDevices = selectableRawDevices.map((raw) => {
+        const device = this.normalizeDevice(raw);
+        if (this.unauthorizedDeviceIds.has(device.device_id)) {
+          return { ...device, connection_state: 'unsupported' as BluConnectionState };
+        }
+        return device;
+      });
 
       // ── Register in BLU Device Registry (with Phase 1D dedup) ──
       for (const device of bluDevices) {
@@ -410,6 +448,8 @@ class EcoFlowBluAdapter {
           device_id: device.device_id,
           display_name: device.display_name,
           model: device.model,
+          product_type: device.product_type,
+          telemetry_capable: device.telemetry_capable,
           connection_state: device.connection_state,
           last_seen: device.last_seen,
           capabilities: device.capabilities,
@@ -433,13 +473,6 @@ class EcoFlowBluAdapter {
           device.connection_state,
         );
       }
-
-      // Phase 1D: Persist session
-      const primary = bluDeviceRegistry.getPrimary();
-      bluSessionStore.recordConnection(
-        'ecoflow',
-        primary?.device_id ?? null,
-      );
 
       this.notify();
       this.emit('connected', this.getECSBridgeState());
@@ -488,14 +521,19 @@ class EcoFlowBluAdapter {
     this.lastErrorCode = null;
     this.pollCount = 0;
     this.lastPollAt = null;
+    this.pollingTargetDeviceId = null;
     this.consecutiveFailures = 0;
     this.isPaused = false;
     this.isReconnecting = false;
     this.reconnectAttempts = 0;
+    this.unauthorizedDeviceIds.clear();
+    this.unauthorizedWarningDeviceIds.clear();
+    this.ineligibleDeviceIds.clear();
 
     // Reset only reconnecting state here. Do not hard-reset the global BLU store,
     // because other providers may still be active in the unified power system.
     bluStateStore.setReconnecting(false);
+    bluStateStore.clearProviderTelemetry('ecoflow');
 
     // Phase 1D: Persist disconnection
     bluSessionStore.recordDisconnection();
@@ -630,27 +668,37 @@ class EcoFlowBluAdapter {
 
       // Re-register devices (with dedup/merge)
       const rawDevices: EcoFlowRawDevice[] = data.devices || [];
-      for (const raw of rawDevices) {
-        const device = this.normalizeDevice(raw);
+      const selectableRawDevices = this.getSelectableTelemetryRawDevices(rawDevices);
+      await bluDeviceRegistry.clearProvider('ecoflow');
+      for (const raw of selectableRawDevices) {
+        const normalized = this.normalizeDevice(raw);
+        const device = this.unauthorizedDeviceIds.has(normalized.device_id)
+          ? { ...normalized, connection_state: 'unsupported' as BluConnectionState }
+          : normalized;
         await bluDeviceRegistry.registerDevice({
           provider: device.provider,
           device_id: device.device_id,
           display_name: device.display_name,
           model: device.model,
+          product_type: device.product_type,
+          telemetry_capable: device.telemetry_capable,
           connection_state: device.connection_state,
           last_seen: device.last_seen,
           capabilities: device.capabilities,
         });
+      }
+      if (selectableRawDevices.length === 0) {
+        await this.enterNoEligibleEcoFlowState('No EcoFlow power station is eligible for BLU telemetry.');
+        console.warn('[EcoFlowBluAdapter] reconnect found no eligible EcoFlow BLU telemetry device.');
+        this.emit('reconnect_success', this.getECSBridgeState());
+        this.emit('reconnected', this.getECSBridgeState());
+        return;
       }
 
       this.discoveredDevices = bluDeviceRegistry.getByProvider('ecoflow');
 
       // Ensure the preferred primary device is restored if still available
       await this.syncPreferredPrimaryDevice();
-
-      // Update session
-      const primary = bluDeviceRegistry.getPrimary();
-      bluSessionStore.recordConnection('ecoflow', primary?.device_id ?? null);
 
       this.notify();
       this.emit('reconnect_success', this.getECSBridgeState());
@@ -720,16 +768,40 @@ class EcoFlowBluAdapter {
     this.isPolling = true;
 
     try {
-      // Determine which device to poll
-      const targetDeviceId = deviceId || this.getPrimaryDeviceId();
+      // Determine which device to poll. The target must match the current
+      // eligible primary so stale async callers cannot reroute the session.
+      const activePrimaryDeviceId = this.getPrimaryDeviceId();
+      const targetDeviceId = deviceId || this.pollingTargetDeviceId || activePrimaryDeviceId;
       if (!targetDeviceId) {
+        await this.enterNoEligibleEcoFlowState('No eligible EcoFlow power station available for BLU telemetry');
         return {
           success: false,
           telemetry: null,
-          error: 'No device available to poll',
+          error: 'No eligible EcoFlow power station available for BLU telemetry',
+        };
+      }
+      if (activePrimaryDeviceId && targetDeviceId !== activePrimaryDeviceId) {
+        console.warn(
+          `[EcoFlowBluAdapter] Ignoring stale EcoFlow poll target ${targetDeviceId}; active primary is ${activePrimaryDeviceId}.`,
+        );
+        return {
+          success: false,
+          telemetry: null,
+          error: 'Stale EcoFlow polling target ignored',
+        };
+      }
+      const targetDevice = bluDeviceRegistry.getDevice('ecoflow', targetDeviceId);
+      if (!this.isBluTelemetryDevice(targetDevice)) {
+        this.ineligibleDeviceIds.add(targetDeviceId);
+        await this.enterNoEligibleEcoFlowState(`Refused unsupported EcoFlow telemetry device ${targetDeviceId}.`);
+        return {
+          success: false,
+          telemetry: null,
+          error: 'Selected EcoFlow device is not eligible for BLU telemetry',
         };
       }
 
+      const pollStartedAt = Date.now();
       const supabase = await getSupabase();
       if (!supabase) {
         this.handlePollFailure('ECS services unavailable');
@@ -740,24 +812,50 @@ class EcoFlowBluAdapter {
         };
       }
 
-      const { data, error } = await supabase.functions.invoke('ecoflow', {
+      let { data, error } = await supabase.functions.invoke('ecoflow', {
         body: { action: 'telemetry', deviceId: targetDeviceId },
       });
 
       if (error || !data?.ok) {
-        const code = data?.code || 'UNKNOWN';
-        const userMsg = this.mapErrorToUserMessage(code, data?.message);
-        this.handlePollFailure(userMsg);
-        console.log(`[EcoFlowBluAdapter] Telemetry poll failed: ${code}`);
+        if (isEcoFlowUnauthorizedDeviceError(data ?? error)) {
+          await this.markDeviceUnauthorized(targetDeviceId);
+          await this.enterNoEligibleEcoFlowState(ECOFLOW_UNAUTHORIZED_DEVICE_REASON);
+          return {
+            success: false,
+            telemetry: null,
+            error: ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
+          };
+        } else {
+          const code = data?.code || 'UNKNOWN';
+          const userMsg = this.mapErrorToUserMessage(code, data?.message);
+          this.handlePollFailure(userMsg);
+          console.log(`[EcoFlowBluAdapter] Telemetry poll failed: ${code}`);
+          return {
+            success: false,
+            telemetry: null,
+            error: userMsg,
+          };
+        }
+      }
+
+      if (this.getPrimaryDeviceId() !== targetDeviceId) {
+        console.warn(
+          `[EcoFlowBluAdapter] Ignoring stale EcoFlow telemetry response for ${targetDeviceId}; primary changed before ingest.`,
+        );
         return {
           success: false,
           telemetry: null,
-          error: userMsg,
+          error: 'Stale EcoFlow telemetry response ignored',
         };
       }
 
       // ── Normalize telemetry ────────────────────────────────────
-      const telemetry = this.normalizeTelemetry(targetDeviceId, data as EcoFlowRawTelemetry);
+      const telemetry: BluTelemetry = {
+        ...this.normalizeTelemetry(targetDeviceId, data as EcoFlowRawTelemetry),
+        pollToken: `${targetDeviceId}:${pollStartedAt}`,
+        sessionPrimaryDeviceId: activePrimaryDeviceId,
+        pollStartedAt,
+      };
 
       // ── Feed into BLU state store ──────────────────────────────
       this.lastTelemetry = telemetry;
@@ -829,6 +927,13 @@ class EcoFlowBluAdapter {
    */
   startPolling(intervalMs: number = DEFAULT_POLL_INTERVAL_MS): void {
     this.stopPolling();
+    const targetDeviceId = this.getPrimaryDeviceId();
+    if (!targetDeviceId) {
+      console.warn('[EcoFlowBluAdapter] Polling not started: no eligible EcoFlow telemetry primary.');
+      void this.enterNoEligibleEcoFlowState('No eligible EcoFlow telemetry primary for polling.');
+      return;
+    }
+    this.pollingTargetDeviceId = targetDeviceId;
     this.currentPollInterval = intervalMs;
     this.isPaused = false;
 
@@ -836,7 +941,14 @@ class EcoFlowBluAdapter {
     this.registerAppStateListener();
 
     // Phase 1D: Persist polling state
-    bluSessionStore.recordPollingStarted();
+    bluSessionStore.saveSession({
+      provider: 'ecoflow',
+      connectionState: 'connected',
+      primaryDeviceId: targetDeviceId,
+      timestamp: Date.now(),
+      wasPolling: true,
+      version: 1,
+    });
 
     const tick = async () => {
       if (this.connectionState !== 'connected' && !this.isReconnecting) return;
@@ -846,7 +958,7 @@ class EcoFlowBluAdapter {
         return;
       }
 
-      await this.pollTelemetry();
+      await this.pollTelemetry(this.pollingTargetDeviceId ?? undefined);
 
       // Determine next interval based on failure count
       const nextInterval = this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
@@ -945,15 +1057,23 @@ class EcoFlowBluAdapter {
    */
   async setPrimaryDevice(deviceId: string): Promise<void> {
     console.log(`[EcoFlowBluAdapter] Setting primary device: ${deviceId}`);
-    await bluDeviceRegistry.setPrimary('ecoflow', deviceId);
 
-    // Update local discovered devices
-    this.discoveredDevices = bluDeviceRegistry.getByProvider('ecoflow');
+    if (this.unauthorizedDeviceIds.has(deviceId)) {
+      await this.enterNoEligibleEcoFlowState(ECOFLOW_UNAUTHORIZED_DEVICE_REASON);
+      return;
+    }
 
-    // Phase 1D: Persist primary device change
-    bluSessionStore.recordPrimaryDeviceChange(deviceId);
+    const requestedDevice = bluDeviceRegistry.getDevice('ecoflow', deviceId);
+    if (!this.isBluTelemetryDevice(requestedDevice)) {
+      this.ineligibleDeviceIds.add(deviceId);
+      console.warn(
+        `[EcoFlowBluAdapter] Refused BLU primary selection for unsupported EcoFlow device: ${deviceId}.`,
+      );
+      await this.enterNoEligibleEcoFlowState(`EcoFlow device ${deviceId} is not eligible for BLU telemetry.`);
+      return;
+    }
 
-    this.notify();
+    await this.commitEcoFlowPrimary(deviceId);
 
     // Poll the new primary device immediately to reroute telemetry
     console.log(`[EcoFlowBluAdapter] Rerouting telemetry to new primary: ${deviceId}`);
@@ -994,6 +1114,12 @@ class EcoFlowBluAdapter {
     this.consecutiveFailures++;
     bluStateStore.recordPollFailure(error);
 
+    if (this.lastErrorCode === 'NO_ELIGIBLE_TELEMETRY_DEVICE') {
+      this.notify();
+      this.emit('error', { message: error, state: this.getECSBridgeState() });
+      return;
+    }
+
     if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       console.log(
         `[EcoFlowBluAdapter] ${this.consecutiveFailures} consecutive failures — backing off to ${BACKOFF_POLL_INTERVAL_MS / 1000}s interval`,
@@ -1016,15 +1142,159 @@ class EcoFlowBluAdapter {
     this.emit('error', { message: error, state: this.getECSBridgeState() });
   }
 
+  private getSelectableTelemetryRawDevices(rawDevices: EcoFlowRawDevice[]): EcoFlowRawDevice[] {
+    const selectable: EcoFlowRawDevice[] = [];
+    const seen = new Set<string>();
+
+    for (const raw of rawDevices) {
+      const eligibility = describeEcoFlowBluEligibility(raw);
+      if (!eligibility.deviceId || seen.has(eligibility.deviceId)) continue;
+      seen.add(eligibility.deviceId);
+
+      console.log(
+        `[EcoFlowBluAdapter] listed device | id=${eligibility.deviceId} | name=${eligibility.deviceName} | model=${eligibility.model} | productType=${eligibility.productType}`,
+      );
+
+      if (!eligibility.telemetryCapable) {
+        this.ineligibleDeviceIds.add(eligibility.deviceId);
+        console.log(
+          `[EcoFlowBluAdapter] filtered out EcoFlow device | id=${eligibility.deviceId} | productType=${eligibility.productType} | reason=unsupported_productType_for_blu_telemetry`,
+        );
+        continue;
+      }
+
+      if (this.unauthorizedDeviceIds.has(eligibility.deviceId)) {
+        console.warn(
+          `[EcoFlowBluAdapter] filtered out EcoFlow device | id=${eligibility.deviceId} | reason=unauthorized_for_cloud_telemetry`,
+        );
+        continue;
+      }
+
+      if (this.ineligibleDeviceIds.has(eligibility.deviceId)) {
+        console.warn(
+          `[EcoFlowBluAdapter] filtered out EcoFlow device | id=${eligibility.deviceId} | reason=session_ineligible_for_blu_telemetry`,
+        );
+        continue;
+      }
+
+      selectable.push(raw);
+    }
+
+    return selectable;
+  }
+
+  private isBluTelemetryDevice(device: BluDevice | null | undefined): boolean {
+    if (!device || device.provider !== 'ecoflow') return false;
+    if (this.unauthorizedDeviceIds.has(device.device_id)) return false;
+    if (this.ineligibleDeviceIds.has(device.device_id)) return false;
+    if (device.connection_state === 'unsupported') return false;
+    if (device.telemetry_capable === false) return false;
+    return normalizeEcoFlowBluCandidate({
+      deviceId: device.device_id,
+      deviceName: device.display_name,
+      model: device.model,
+      productType: device.product_type,
+    }).telemetryCapable;
+  }
+
+  private async clearEcoFlowTelemetryPrimary(reason: string): Promise<void> {
+    await this.enterNoEligibleEcoFlowState(reason);
+  }
+
+  private async enterNoEligibleEcoFlowState(reason: string): Promise<void> {
+    this.stopPollingWithoutSessionWrite();
+    this.cancelReconnect();
+    await bluDeviceRegistry.clearPrimary('ecoflow');
+    bluStateStore.clearProviderTelemetry('ecoflow');
+    bluStateStore.setReconnecting(false);
+    this.connectionState = 'disconnected';
+    this.pollingTargetDeviceId = null;
+    this.lastTelemetry = null;
+    this.lastError = reason;
+    this.lastErrorCode = 'NO_ELIGIBLE_TELEMETRY_DEVICE';
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+    this.consecutiveFailures = 0;
+    this.discoveredDevices = bluDeviceRegistry.getByProvider('ecoflow');
+    bluSessionStore.recordProviderDegraded(
+      'ecoflow',
+      ECOFLOW_NO_ELIGIBLE_TELEMETRY_DEVICE_REASON,
+    );
+    this.notify();
+    this.emitStatus();
+    console.warn(`[EcoFlowBluAdapter] no eligible telemetry device available: ${reason}`);
+  }
+
+  private stopPollingWithoutSessionWrite(): void {
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  private async commitEcoFlowPrimary(deviceId: string): Promise<boolean> {
+    const device = bluDeviceRegistry.getDevice('ecoflow', deviceId);
+    if (!this.isBluTelemetryDevice(device)) {
+      this.ineligibleDeviceIds.add(deviceId);
+      console.warn(`[EcoFlowBluAdapter] refused ineligible EcoFlow primary transaction: ${deviceId}`);
+      return false;
+    }
+
+    await bluDeviceRegistry.setPrimary('ecoflow', deviceId);
+    this.pollingTargetDeviceId = deviceId;
+    this.connectionState = 'connected';
+    this.lastError = null;
+    this.lastErrorCode = null;
+    this.discoveredDevices = bluDeviceRegistry.getByProvider('ecoflow');
+    bluSessionStore.saveSession({
+      provider: 'ecoflow',
+      connectionState: 'connected',
+      primaryDeviceId: deviceId,
+      timestamp: Date.now(),
+      wasPolling: Boolean(this.pollTimer),
+      version: 1,
+    });
+    console.log(`[EcoFlowBluAdapter] selected telemetry primary: ${deviceId}`);
+    this.notify();
+    this.emitStatus();
+    return true;
+  }
+
+  private async markDeviceUnauthorized(deviceId: string): Promise<void> {
+    if (!this.unauthorizedDeviceIds.has(deviceId)) {
+      this.unauthorizedDeviceIds.add(deviceId);
+    }
+    this.ineligibleDeviceIds.add(deviceId);
+
+    if (!this.unauthorizedWarningDeviceIds.has(deviceId)) {
+      this.unauthorizedWarningDeviceIds.add(deviceId);
+      console.warn(
+        `[EcoFlowBluAdapter] EcoFlow device ${deviceId} is unauthorized for cloud telemetry; excluding it for this session.`,
+      );
+    }
+
+    await bluDeviceRegistry.updateConnectionState('ecoflow', deviceId, 'unsupported');
+    bluStateStore.clearProviderTelemetry('ecoflow');
+    if (this.pollingTargetDeviceId === deviceId) {
+      this.pollingTargetDeviceId = null;
+    }
+    this.discoveredDevices = bluDeviceRegistry.getByProvider('ecoflow');
+    this.notify();
+    this.emitStatus();
+  }
+
   /**
    * Normalize a raw EcoFlow device into a BluDevice.
    */
   private normalizeDevice(raw: EcoFlowRawDevice): BluDevice {
+    const eligibility = normalizeEcoFlowBluCandidate(raw);
     return {
       provider: 'ecoflow',
-      device_id: raw.id,
-      display_name: raw.name || raw.id || 'Unknown Device',
-      model: raw.model || raw.productType || 'EcoFlow Device',
+      device_id: eligibility.deviceId,
+      display_name: eligibility.deviceName,
+      model: eligibility.model,
+      product_type: eligibility.productType,
+      telemetry_capable: eligibility.telemetryCapable,
       connection_state: raw.online ? 'connected' : 'disconnected',
       last_seen: Date.now(),
       capabilities: { ...ECOFLOW_CAPABILITIES },
@@ -1047,6 +1317,9 @@ class EcoFlowBluAdapter {
       timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
       provider: 'ecoflow',
       device_id: deviceId,
+      source: 'provider_cloud',
+      isLive: false,
+      telemetrySourceLabel: 'Provider Cloud',
 
       // Core fields
       battery_percent:
@@ -1081,11 +1354,17 @@ class EcoFlowBluAdapter {
    */
   private getPrimaryDeviceId(): string | null {
     const primary = bluDeviceRegistry.getPrimary();
-    if (primary && primary.provider === 'ecoflow') {
+    if (
+      primary &&
+      primary.provider === 'ecoflow' &&
+      this.isBluTelemetryDevice(primary)
+    ) {
       return primary.device_id;
     }
-    // Fallback: first EcoFlow device
-    const ecoDevices = bluDeviceRegistry.getByProvider('ecoflow');
+    // Fallback: first eligible EcoFlow power station
+    const ecoDevices = bluDeviceRegistry
+      .getByProvider('ecoflow')
+      .filter((device) => this.isBluTelemetryDevice(device));
     return ecoDevices.length > 0 ? ecoDevices[0].device_id : null;
   }
 
@@ -1100,15 +1379,22 @@ class EcoFlowBluAdapter {
    */
   private getPreferredPrimaryDeviceId(): string | null {
     const selected = getSelectedEcoFlowDevice();
-    if (selected) return selected;
+    if (selected && this.isBluTelemetryDevice(bluDeviceRegistry.getDevice('ecoflow', selected))) return selected;
 
     const session = bluSessionStore.getSession();
-    if (session.provider === 'ecoflow' && session.primaryDeviceId) {
+    if (
+      session.provider === 'ecoflow' &&
+      session.primaryDeviceId &&
+      this.isBluTelemetryDevice(bluDeviceRegistry.getDevice('ecoflow', session.primaryDeviceId))
+    ) {
       return session.primaryDeviceId;
     }
 
     const primary = bluDeviceRegistry.getPrimary();
-    if (primary?.provider === 'ecoflow') {
+    if (
+      primary?.provider === 'ecoflow' &&
+      this.isBluTelemetryDevice(primary)
+    ) {
       return primary.device_id;
     }
 
@@ -1121,18 +1407,32 @@ class EcoFlowBluAdapter {
   private async syncPreferredPrimaryDevice(): Promise<void> {
     const preferredId = this.getPreferredPrimaryDeviceId();
     if (!preferredId) {
-      await bluDeviceRegistry.ensurePrimary('ecoflow');
+      const fallback = this.getPrimaryDeviceId();
+      if (fallback) {
+        await this.commitEcoFlowPrimary(fallback);
+      } else {
+        await this.enterNoEligibleEcoFlowState('No eligible EcoFlow telemetry primary.');
+        console.warn('[EcoFlowBluAdapter] no eligible telemetry device available for primary selection.');
+      }
       return;
     }
 
     const devices = bluDeviceRegistry.getByProvider('ecoflow');
-    const exists = devices.some((device) => device.device_id === preferredId);
+    const exists = devices.some((device) =>
+      device.device_id === preferredId &&
+      this.isBluTelemetryDevice(device),
+    );
 
     if (exists) {
-      await bluDeviceRegistry.setPrimary('ecoflow', preferredId);
-      bluSessionStore.recordPrimaryDeviceChange(preferredId);
+      await this.commitEcoFlowPrimary(preferredId);
     } else {
-      await bluDeviceRegistry.ensurePrimary('ecoflow');
+      const fallback = this.getPrimaryDeviceId();
+      if (fallback) {
+        await this.commitEcoFlowPrimary(fallback);
+      } else {
+        await this.enterNoEligibleEcoFlowState('No eligible EcoFlow telemetry primary.');
+        console.warn('[EcoFlowBluAdapter] no eligible telemetry device available for primary selection.');
+      }
     }
   }
 

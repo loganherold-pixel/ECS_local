@@ -29,12 +29,16 @@
 
 import { customWidgetStore } from './customWidgetStore';
 import { reportDataIntegrityFailure, reportRecoverableFailure } from './ecsIssueIntelligence';
+import { ecsLog } from './ecsLogger';
 import {
   WIDGET_REGISTRY,
   isDashboardEmpty,
   getDashboardRecommendedSize,
+  getDashboardSupportedSizes,
+  getDashboardWidgetReplacement,
   getDefaultDashboardLayout,
   isCuratedWidgetForMode,
+  isCuratedDashboardWidget,
   isRetiredDashboardWidget,
   normalizeDashboardWidgetSize,
   validateCuratedDashboardConfig,
@@ -63,7 +67,7 @@ export type DashboardProfile = 'expedition' | 'vehicle' | 'emergency';
 
 export type GridLayout = '1x1' | '1x2' | '1x3' | '2x1' | '2x2' | '2x3';
 
-/** Widget cell span size: colSpan x rowSpan */
+/** Widget cell span size: colSpan x rowSpan. Curated Dashboard widgets keep their canonical 1x1, 2x1, or 2x2 footprints. */
 export type WidgetSize = '1x1' | '1x2' | '2x1' | '2x2';
 
 export const WIDGET_SIZE_CONFIG: Record<WidgetSize, { colSpan: number; rowSpan: number; label: string }> = {
@@ -77,7 +81,6 @@ export const WIDGET_SIZE_CONFIG: Record<WidgetSize, { colSpan: number; rowSpan: 
 export function getAvailableSizes(gridLayout: GridLayout): WidgetSize[] {
   const config = GRID_LAYOUT_CONFIG[gridLayout];
   const sizes: WidgetSize[] = ['1x1'];
-  if (config.rows >= 2) sizes.push('1x2');
   if (config.cols >= 2) sizes.push('2x1');
   if (config.cols >= 2 && config.rows >= 2) sizes.push('2x2');
   return sizes;
@@ -141,7 +144,7 @@ function computeCellPlacements(
     let rowSpan = Math.min(sizeConfig.rowSpan, gridRows);
 
     if (!slot.widgetType) {
-      colSpan = 1;
+      colSpan = gridCols >= 2 ? gridCols : 1;
       rowSpan = 1;
     }
 
@@ -329,16 +332,24 @@ export type WidgetType =
   | 'vehicle-systems'
   | 'stability-index'
   | 'attitude-monitor'
+  | 'attitude-command'
   | 'mission-sustainment'
   | 'operational-readiness'
   | 'sustainability'
   | 'progress'
   | 'navigate-surface'
   | 'remoteness'
+  | 'route-confidence'
   | 'expedition-channel'
   | 'trip-demand-analyzer'
   | 'vehicle-twin'
   | 'ecoflow-power'
+  | 'ecs-power'
+  | 'vehicle-telemetry'
+  | 'expedition-readiness'
+  | 'expedition-status-summary'
+  | 'expedition-risk'
+  | 'terrain-risk'
   // Highway widgets
   | 'hwy-forward-weather'
   | 'hwy-daylight-remaining'
@@ -369,7 +380,7 @@ export interface WidgetDefinition {
  * This maintains backward compatibility with existing code that uses WIDGET_CATALOG.
  */
 export const WIDGET_CATALOG: WidgetDefinition[] = WIDGET_REGISTRY
-  .filter(w => w.render_ready)
+  .filter(w => w.render_ready && isCuratedDashboardWidget(w.widget_id))
   .map(entry => ({
     type: entry.widget_id,
     name: entry.display_name,
@@ -415,7 +426,7 @@ export interface WidgetSlot {
 
 /** Helper to get the effective size of a widget slot */
 export function getSlotSize(slot: WidgetSlot): WidgetSize {
-  return slot.widgetSize || '1x1';
+  return slot.widgetSize || '2x1';
 }
 
 
@@ -444,20 +455,13 @@ export interface DashboardState {
   advancedModeEnabled: boolean;
   /** Per-widget auto-collapse overrides (widget_id → enabled) */
   perWidgetAutoCollapse: Record<string, boolean>;
-  /** Last selected dashboard tab ('expedition' | 'highway') */
+  /** Legacy operational tab preference retained for persisted state compatibility */
   lastSelectedTab: 'expedition' | 'highway';
 }
 
 
 const STORAGE_KEY = 'ecs_dashboard_state';
 const MAX_SLOTS = 6; // 2x3 max
-const FIXED_DASHBOARD_SLOT_COUNT = 4;
-const FIXED_DASHBOARD_POSITIONS = [
-  { gridColumn: 0, gridRow: 0 },
-  { gridColumn: 1, gridRow: 0 },
-  { gridColumn: 0, gridRow: 1 },
-  { gridColumn: 1, gridRow: 1 },
-] as const;
 
 function createSlots(count: number): WidgetSlot[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -584,19 +588,46 @@ function buildDefaultSlots(mode: DashboardMode): WidgetSlot[] {
       settings: {},
     })),
     mode,
+    layout.gridLayout,
   );
 }
 
 function getSizeConfig(size: WidgetSize): { colSpan: number; rowSpan: number } {
-  return WIDGET_SIZE_CONFIG[size] ?? WIDGET_SIZE_CONFIG['1x1'];
+  return WIDGET_SIZE_CONFIG[size] ?? WIDGET_SIZE_CONFIG['2x1'];
 }
 
 function clampDashboardWidgetSize(widgetId: string, size?: WidgetSize | null): WidgetSize {
   return normalizeDashboardWidgetSize(widgetId, size) as WidgetSize;
 }
 
-function getFixedDashboardSlotCount(mode?: DashboardMode | null): number {
-  return mode ? FIXED_DASHBOARD_SLOT_COUNT : MAX_SLOTS;
+function getDashboardLayoutConfig(layout?: GridLayout | null) {
+  return GRID_LAYOUT_CONFIG[layout ?? '2x2'] ?? GRID_LAYOUT_CONFIG['2x2'];
+}
+
+function canDashboardLayoutHostWidget(
+  widgetId: string,
+  layout?: GridLayout | null,
+): boolean {
+  const config = getDashboardLayoutConfig(layout);
+  const supportedSizes = getDashboardSupportedSizes(widgetId);
+
+  return supportedSizes.some((size) => {
+    const sizeConfig = WIDGET_SIZE_CONFIG[size];
+    return sizeConfig.colSpan <= config.cols && sizeConfig.rowSpan <= config.rows;
+  });
+}
+
+function getFixedDashboardSlotCount(mode?: DashboardMode | null, layout?: GridLayout | null): number {
+  return mode ? getDashboardLayoutConfig(layout).total : MAX_SLOTS;
+}
+
+function getDashboardSlotPosition(index: number, layout?: GridLayout | null) {
+  const config = getDashboardLayoutConfig(layout);
+  const cols = Math.max(config.cols, 1);
+  return {
+    gridColumn: index % cols,
+    gridRow: Math.floor(index / cols),
+  };
 }
 
 function clampProfileWidgetSize(
@@ -610,14 +641,14 @@ function clampProfileWidgetSize(
   return clampDashboardWidgetSize(widgetId, size);
 }
 
-function createEmptyDashboardSlot(index: number): WidgetSlot {
-  const fixedPosition = FIXED_DASHBOARD_POSITIONS[index];
+function createEmptyDashboardSlot(index: number, layout?: GridLayout | null): WidgetSlot {
+  const fixedPosition = getDashboardSlotPosition(index, layout);
   return {
     slotIndex: index,
     widgetType: null,
-    widgetSize: '1x1',
-    gridColumn: fixedPosition?.gridColumn ?? 0,
-    gridRow: fixedPosition?.gridRow ?? index,
+    widgetSize: '2x1',
+    gridColumn: fixedPosition.gridColumn,
+    gridRow: fixedPosition.gridRow,
     layoutVersion: DASHBOARD_LAYOUT_VERSION,
     settings: {},
   };
@@ -626,36 +657,49 @@ function createEmptyDashboardSlot(index: number): WidgetSlot {
 function applyFixedDashboardLayoutMetadata(
   profile: DashboardProfile,
   slots: WidgetSlot[],
+  layout: GridLayout,
   modeOverride?: DashboardMode | null,
 ): WidgetSlot[] {
   const mode = modeOverride ?? dashboardModeForProfile(profile);
-  const count = getFixedDashboardSlotCount(mode);
+  const count = getFixedDashboardSlotCount(mode, layout);
   const byIndex = new Map<number, WidgetSlot>();
+  const overflowSlots: WidgetSlot[] = [];
 
   slots.forEach((slot, index) => {
     const key = Number.isInteger(slot.slotIndex) ? slot.slotIndex : index;
     if (key >= 0 && key < count && !byIndex.has(key)) {
       byIndex.set(key, slot);
+      return;
     }
+    overflowSlots.push(slot);
   });
 
+  const fallbackSlots = [
+    ...overflowSlots.filter(slot => !!slot.widgetType),
+    ...overflowSlots.filter(slot => !slot.widgetType),
+  ];
+
   return Array.from({ length: count }, (_, index) => {
-    const source = byIndex.get(index) ?? slots[index] ?? createEmptyDashboardSlot(index);
-    const widgetId = source.widgetType && mode && isCuratedWidgetForMode(source.widgetType, mode)
-      ? source.widgetType
-      : source.widgetType && !mode
-        ? source.widgetType
+    const source =
+      byIndex.get(index) ??
+      fallbackSlots.shift() ??
+      createEmptyDashboardSlot(index, layout);
+    const replacementWidgetId = getDashboardWidgetReplacement(source.widgetType);
+    const widgetId = replacementWidgetId && mode && isCuratedWidgetForMode(replacementWidgetId, mode)
+      ? replacementWidgetId
+      : replacementWidgetId && !mode
+        ? replacementWidgetId
         : null;
-    const fixedPosition = FIXED_DASHBOARD_POSITIONS[index];
+    const fixedPosition = getDashboardSlotPosition(index, layout);
 
     return {
       slotIndex: index,
       widgetType: widgetId,
       widgetSize: widgetId
         ? clampProfileWidgetSize(profile, widgetId, source.widgetSize, mode)
-        : '1x1',
-      gridColumn: fixedPosition?.gridColumn ?? 0,
-      gridRow: fixedPosition?.gridRow ?? index,
+        : '2x1',
+      gridColumn: fixedPosition.gridColumn,
+      gridRow: fixedPosition.gridRow,
       layoutVersion: DASHBOARD_LAYOUT_VERSION,
       settings: source.settings || {},
     };
@@ -723,7 +767,7 @@ function applyDashboardLayoutMetadata(slots: WidgetSlot[]): WidgetSlot[] {
       slotIndex: index,
       widgetSize: slot.widgetType
         ? clampDashboardWidgetSize(slot.widgetType, slot.widgetSize)
-        : '1x1',
+        : '2x1',
       layoutVersion: DASHBOARD_LAYOUT_VERSION,
     }))
   );
@@ -733,20 +777,27 @@ function normalizeDashboardSlotsForProfile(
   profile: DashboardProfile,
   slots: WidgetSlot[],
   modeOverride?: DashboardMode | null,
+  layoutOverride?: GridLayout | null,
 ): WidgetSlot[] {
   const mode = modeOverride ?? dashboardModeForProfile(profile);
   if (!mode) {
     return applyDashboardLayoutMetadata(slots);
   }
 
+  const layout = layoutOverride ?? '2x2';
   const used = new Set<string>();
-  const fixedSlots = applyFixedDashboardLayoutMetadata(profile, slots, mode).map((slot) => {
+  const fixedSlots = applyFixedDashboardLayoutMetadata(profile, slots, layout, mode).map((slot) => {
     const widgetId = slot.widgetType;
-    if (!widgetId || !isCuratedWidgetForMode(widgetId, mode) || used.has(widgetId)) {
+    if (
+      !widgetId ||
+      !isCuratedWidgetForMode(widgetId, mode) ||
+      used.has(widgetId) ||
+      !canDashboardLayoutHostWidget(widgetId, layout)
+    ) {
       return {
         ...slot,
         widgetType: null,
-        widgetSize: '1x1' as WidgetSize,
+        widgetSize: '2x1' as WidgetSize,
         settings: slot.settings || {},
       };
     }
@@ -760,7 +811,75 @@ function normalizeDashboardSlotsForProfile(
     };
   });
 
-  return fixedSlots;
+  const maxRows = Math.max(getDashboardLayoutConfig(layout).rows, 1);
+  let usedRows = 0;
+  const activeSlots: WidgetSlot[] = [];
+
+  for (const slot of fixedSlots) {
+    if (!slot.widgetType) continue;
+    const size = clampProfileWidgetSize(profile, slot.widgetType, slot.widgetSize, mode);
+    const rowSpan = size === '2x2' ? 2 : 1;
+    if (usedRows + rowSpan > maxRows) {
+      continue;
+    }
+
+    usedRows += rowSpan;
+    activeSlots.push({
+      ...slot,
+      widgetSize: size,
+      settings: slot.settings || {},
+    });
+  }
+
+  const count = getFixedDashboardSlotCount(mode, layout);
+  return Array.from({ length: count }, (_, index) => {
+    const active = activeSlots[index];
+    const fixedPosition = getDashboardSlotPosition(index, layout);
+    if (active?.widgetType) {
+      return {
+        ...active,
+        slotIndex: index,
+        gridColumn: fixedPosition.gridColumn,
+        gridRow: fixedPosition.gridRow,
+        layoutVersion: DASHBOARD_LAYOUT_VERSION,
+      };
+    }
+
+    return createEmptyDashboardSlot(index, layout);
+  });
+}
+
+function getDashboardWidgetRowSpan(widgetId: string, requestedSize?: WidgetSize | null): number {
+  return clampDashboardWidgetSize(widgetId, requestedSize) === '2x2' ? 2 : 1;
+}
+
+function getUsedDashboardRows(slots: WidgetSlot[], excludeSlotIndex?: number): number {
+  return slots.reduce((total, slot) => {
+    if (!slot.widgetType || slot.slotIndex === excludeSlotIndex) return total;
+    return total + getDashboardWidgetRowSpan(slot.widgetType, slot.widgetSize);
+  }, 0);
+}
+
+function canAssignWidgetToDashboardSlot(
+  profile: DashboardProfile,
+  slots: WidgetSlot[],
+  layout: GridLayout,
+  slotIndex: number,
+  widgetType: string,
+  mode?: DashboardMode | null,
+): boolean {
+  if (slotIndex < 0 || slotIndex >= slots.length) return false;
+  if (mode && !isCuratedWidgetForMode(widgetType, mode)) return false;
+  if (!canDashboardLayoutHostWidget(widgetType, layout)) return false;
+
+  const maxRows = Math.max(getDashboardLayoutConfig(layout).rows, 1);
+  const usedRows = getUsedDashboardRows(slots, slotIndex);
+  const requestedRows = getDashboardWidgetRowSpan(
+    widgetType,
+    clampProfileWidgetSize(profile, widgetType, getDashboardRecommendedSize(widgetType), mode),
+  );
+
+  return usedRows + requestedRows <= maxRows;
 }
 
 function repairDashboardSlots(
@@ -769,7 +888,12 @@ function repairDashboardSlots(
 ): WidgetSlot[] {
   const mode = dashboardModeForProfile(profile);
   if (!mode) return applyDashboardLayoutMetadata(slots);
-  return normalizeDashboardSlotsForProfile(profile, slots, mode);
+  return normalizeDashboardSlotsForProfile(
+    profile,
+    slots,
+    mode,
+    getDefaultDashboardLayout(mode).gridLayout,
+  );
 }
 
 function createDefaultState(): DashboardState {
@@ -782,7 +906,7 @@ function createDefaultState(): DashboardState {
     schemaVersion: DASHBOARD_PERSISTENCE_SCHEMA_VERSION,
     activeProfile: 'expedition',
     dashboardMode: 'expedition',
-    autoCollapseEnabled: true,
+    autoCollapseEnabled: false,
     advancedModeEnabled: false,
     perWidgetAutoCollapse: {},
     lastSelectedTab: 'expedition',
@@ -792,7 +916,7 @@ function createDefaultState(): DashboardState {
         gridLayout: expeditionLayout.gridLayout,
         slots: expeditionSlots,
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
-        gridColumns: DASHBOARD_GRID_COLUMNS,
+        gridColumns: GRID_LAYOUT_CONFIG[expeditionLayout.gridLayout].cols,
         lastUIState: {},
       },
       vehicle: {
@@ -800,7 +924,7 @@ function createDefaultState(): DashboardState {
         gridLayout: highwayLayout.gridLayout,
         slots: highwaySlots,
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
-        gridColumns: DASHBOARD_GRID_COLUMNS,
+        gridColumns: GRID_LAYOUT_CONFIG[highwayLayout.gridLayout].cols,
         lastUIState: {},
       },
       emergency: {
@@ -871,13 +995,14 @@ function validateAndMigrate(parsed: any): DashboardState | null {
     const profileSlots = coercePersistedSlots(rawProfile);
 
     if (mode) {
+      const migratedLayout = migrateGridLayout(currentLayout);
       profiles[p] = {
         ...defaultProfile,
         profile: p,
-        gridLayout: '2x2',
-        slots: normalizeDashboardSlotsForProfile(p, profileSlots, mode),
+        gridLayout: migratedLayout,
+        slots: normalizeDashboardSlotsForProfile(p, profileSlots, mode, migratedLayout),
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
-        gridColumns: DASHBOARD_GRID_COLUMNS,
+        gridColumns: GRID_LAYOUT_CONFIG[migratedLayout].cols,
         lastUIState: isPlainObject(rawProfile) ? coerceRecord(rawProfile.lastUIState) : {},
         lastUsedPreset:
           isPlainObject(rawProfile) && typeof rawProfile.lastUsedPreset === 'string'
@@ -893,7 +1018,7 @@ function validateAndMigrate(parsed: any): DashboardState | null {
       gridLayout: migrateGridLayout(currentLayout),
       slots: applyDashboardLayoutMetadata(profileSlots),
       layoutVersion: DASHBOARD_LAYOUT_VERSION,
-      gridColumns: DASHBOARD_GRID_COLUMNS,
+      gridColumns: GRID_LAYOUT_CONFIG[migrateGridLayout(currentLayout)].cols,
       lastUIState: isPlainObject(rawProfile) ? coerceRecord(rawProfile.lastUIState) : {},
       lastUsedPreset:
         isPlainObject(rawProfile) && typeof rawProfile.lastUsedPreset === 'string'
@@ -915,7 +1040,7 @@ function validateAndMigrate(parsed: any): DashboardState | null {
     activeProfile,
     profiles,
     dashboardMode,
-    autoCollapseEnabled: parsed.autoCollapseEnabled !== false,
+    autoCollapseEnabled: false,
     advancedModeEnabled: parsed.advancedModeEnabled === true,
     perWidgetAutoCollapse: coerceBooleanRecord(parsed.perWidgetAutoCollapse),
     lastSelectedTab,
@@ -990,7 +1115,7 @@ export async function hydrateDashboardState(): Promise<DashboardState | null> {
       const validated = validateAndMigrate(parsed);
       if (validated) {
         _cachedState = validated;
-        console.log('[DashboardStore] Hydrated from persistent storage');
+        ecsLog.debug('SHELL', 'Dashboard state hydrated from persistent storage');
         markHydrated();
         return validated;
       }
@@ -1011,7 +1136,7 @@ export async function hydrateDashboardState(): Promise<DashboardState | null> {
   // No persisted state found — use defaults
   // (Don't set _cachedState here; let getStorage() return fresh defaults each time
   //  until a mutation occurs, which will then cache and persist)
-  console.log('[DashboardStore] No persisted state found — using defaults');
+  ecsLog.debug('SHELL', 'Dashboard state missing persisted storage; using defaults');
   _cachedState = createDefaultState();
   markHydrated();
   return _cachedState;
@@ -1072,26 +1197,28 @@ export const dashboardStore = {
 
   getGridLayout(profile: DashboardProfile): GridLayout {
     const state = getStorage();
-    if (profile === 'expedition' || profile === 'vehicle') {
-      return '2x2';
-    }
-    return state.profiles[profile]?.gridLayout || '2x2';
+    const mode = dashboardModeForProfile(profile);
+    const defaultLayout = mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2';
+    return state.profiles[profile]?.gridLayout || defaultLayout;
   },
 
   setGridLayout(profile: DashboardProfile, layout: GridLayout): void {
     const state = getStorage();
+    const mode = dashboardModeForProfile(profile);
     if (!state.profiles[profile]) {
       const defaults = createDefaultState();
       state.profiles[profile] = defaults.profiles[profile];
     }
-    const nextLayout = profile === 'expedition' || profile === 'vehicle' ? '2x2' : layout;
+    const nextLayout = layout;
     state.profiles[profile].gridLayout = nextLayout;
     state.profiles[profile].slots = normalizeDashboardSlotsForProfile(
       profile,
       state.profiles[profile].slots || [],
+      mode,
+      nextLayout,
     );
     state.profiles[profile].layoutVersion = DASHBOARD_LAYOUT_VERSION;
-    state.profiles[profile].gridColumns = DASHBOARD_GRID_COLUMNS;
+    state.profiles[profile].gridColumns = GRID_LAYOUT_CONFIG[nextLayout].cols;
     saveStorage(state);
     queueDashboardAction('dashboard_layout_change', { profile, layout: nextLayout }, `Grid layout changed to ${nextLayout} on ${profile}`);
   },
@@ -1100,44 +1227,69 @@ export const dashboardStore = {
   getProfileSlots(profile: DashboardProfile): WidgetSlot[] {
     const state = getStorage();
     const profileState = state.profiles[profile];
+    const mode = dashboardModeForProfile(profile);
     if (!profileState) {
-      const mode = dashboardModeForProfile(profile);
       return mode ? buildDefaultSlots(mode) : [];
     }
-    return normalizeDashboardSlotsForProfile(profile, profileState.slots || []);
+    return normalizeDashboardSlotsForProfile(
+      profile,
+      profileState.slots || [],
+      mode,
+      profileState.gridLayout,
+    );
+  },
+
+  canAssignWidget(profile: DashboardProfile, slotIndex: number, widgetType: string): boolean {
+    const state = getStorage();
+    const mode = dashboardModeForProfile(profile);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
+    return canAssignWidgetToDashboardSlot(profile, slots, currentLayout, slotIndex, widgetType, mode);
   },
 
 
   setProfileSlots(profile: DashboardProfile, slots: WidgetSlot[]): void {
     const state = getStorage();
+    const mode = dashboardModeForProfile(profile);
+    const defaultLayout = mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2';
+    const currentLayout = state.profiles[profile]?.gridLayout || defaultLayout;
     if (!state.profiles[profile]) {
       state.profiles[profile] = {
         profile,
-        gridLayout: '2x2',
+        gridLayout: currentLayout,
         slots: [],
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
-        gridColumns: DASHBOARD_GRID_COLUMNS,
+        gridColumns: GRID_LAYOUT_CONFIG[currentLayout].cols,
         lastUIState: {},
       };
     }
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     state.profiles[profile].layoutVersion = DASHBOARD_LAYOUT_VERSION;
-    state.profiles[profile].gridColumns = DASHBOARD_GRID_COLUMNS;
+    state.profiles[profile].gridColumns = GRID_LAYOUT_CONFIG[currentLayout].cols;
     saveStorage(state);
   },
 
-  assignWidget(profile: DashboardProfile, slotIndex: number, widgetType: string): void {
+  assignWidget(profile: DashboardProfile, slotIndex: number, widgetType: string): boolean {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
 
     if (mode && !isCuratedWidgetForMode(widgetType, mode)) {
       console.warn(`[DashboardStore] Refusing to assign widget "${widgetType}" to ${profile}; not curated for ${mode}.`);
-      return;
+      return false;
     }
 
-    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    if (!canDashboardLayoutHostWidget(widgetType, currentLayout)) {
+      console.warn(`[DashboardStore] Refusing to assign widget "${widgetType}" to ${profile}; layout ${currentLayout} cannot host its minimum size.`);
+      return false;
+    }
+    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
     if (slotIndex < 0 || slotIndex >= slots.length) {
-      return;
+      return false;
+    }
+    if (!canAssignWidgetToDashboardSlot(profile, slots, currentLayout, slotIndex, widgetType, mode)) {
+      console.warn(`[DashboardStore] Refusing to assign widget "${widgetType}" to ${profile}; dashboard region is full or incompatible with its canonical size.`);
+      return false;
     }
 
     slots[slotIndex] = {
@@ -1148,17 +1300,19 @@ export const dashboardStore = {
       settings: slots[slotIndex].settings || {},
     };
 
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     state.profiles[profile].layoutVersion = DASHBOARD_LAYOUT_VERSION;
-    state.profiles[profile].gridColumns = DASHBOARD_GRID_COLUMNS;
+    state.profiles[profile].gridColumns = GRID_LAYOUT_CONFIG[currentLayout].cols;
     saveStorage(state);
     queueDashboardAction('dashboard_widget_assign', { profile, slotIndex, widgetType }, `Widget "${widgetType}" assigned to slot ${slotIndex}`);
+    return true;
   },
 
   removeWidget(profile: DashboardProfile, slotIndex: number): void {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
 
     // All widgets are now user-manageable — no removal restrictions
     const targetIndex = slots.findIndex(slot => slot.slotIndex === slotIndex);
@@ -1168,11 +1322,11 @@ export const dashboardStore = {
       slots[targetIndex] = {
         ...slots[targetIndex],
         widgetType: null,
-        widgetSize: '1x1',
+        widgetSize: '2x1',
         settings: {},
       };
     }
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     saveStorage(state);
     queueDashboardAction('dashboard_widget_remove', { profile, slotIndex, widgetId }, `Widget "${widgetId}" removed from slot ${slotIndex}`);
   },
@@ -1180,7 +1334,8 @@ export const dashboardStore = {
   swapSlots(profile: DashboardProfile, fromIndex: number, toIndex: number): void {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const slots = [...normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode)];
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const slots = [...normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout)];
     const fromArrayIndex = slots.findIndex(slot => slot.slotIndex === fromIndex);
     const toArrayIndex = slots.findIndex(slot => slot.slotIndex === toIndex);
     if (fromArrayIndex >= 0 && toArrayIndex >= 0) {
@@ -1200,7 +1355,7 @@ export const dashboardStore = {
         settings: fromSlot.settings || {},
       };
     }
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     saveStorage(state);
     queueDashboardAction('dashboard_widget_swap', { profile, fromIndex, toIndex }, `Widgets swapped: slot ${fromIndex} and slot ${toIndex}`);
   },
@@ -1209,12 +1364,13 @@ export const dashboardStore = {
   updateWidgetSettings(profile: DashboardProfile, slotIndex: number, settings: Record<string, any>): void {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
     const targetIndex = slots.findIndex(slot => slot.slotIndex === slotIndex);
     if (targetIndex >= 0) {
       slots[targetIndex].settings = { ...slots[targetIndex].settings, ...settings };
     }
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     saveStorage(state);
   },
 
@@ -1244,14 +1400,17 @@ export const dashboardStore = {
 
   // ── Auto-Collapse ───────────────────────────────────────
   getAutoCollapseEnabled(): boolean {
-    const state = getStorage();
-    return state.autoCollapseEnabled !== false; // default true
+    void getStorage();
+    return false;
   },
 
   setAutoCollapseEnabled(enabled: boolean): void {
+    void enabled;
     const state = getStorage();
-    state.autoCollapseEnabled = enabled;
-    saveStorage(state);
+    if (state.autoCollapseEnabled !== false) {
+      state.autoCollapseEnabled = false;
+      saveStorage(state);
+    }
   },
 
   // ── Per-Widget Auto-Collapse ────────────────────────────
@@ -1259,7 +1418,7 @@ export const dashboardStore = {
     const state = getStorage();
     // Default to global setting if no per-widget override
     if (state.perWidgetAutoCollapse[widgetId] === undefined) {
-      return state.autoCollapseEnabled !== false;
+      return false;
     }
     return state.perWidgetAutoCollapse[widgetId];
   },
@@ -1299,13 +1458,14 @@ export const dashboardStore = {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
     if (mode) {
+      const defaultLayout = getDefaultDashboardLayout(mode);
       state.profiles[profile] = {
         ...state.profiles[profile],
         profile,
-        gridLayout: '2x2',
+        gridLayout: defaultLayout.gridLayout,
         slots: buildDefaultSlots(mode),
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
-        gridColumns: DASHBOARD_GRID_COLUMNS,
+        gridColumns: GRID_LAYOUT_CONFIG[defaultLayout.gridLayout].cols,
         lastUIState: state.profiles[profile]?.lastUIState || {},
         lastUsedPreset: undefined,
       };
@@ -1342,7 +1502,8 @@ export const dashboardStore = {
   setWidgetSize(profile: DashboardProfile, slotIndex: number, size: WidgetSize): void {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const slots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
     const targetIndex = slots.findIndex(slot => slot.slotIndex === slotIndex);
     if (targetIndex >= 0 && slots[targetIndex].widgetType) {
       const widgetId = slots[targetIndex].widgetType!;
@@ -1351,7 +1512,7 @@ export const dashboardStore = {
         widgetSize: clampProfileWidgetSize(profile, widgetId, size, mode),
       };
     }
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode);
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, slots, mode, currentLayout);
     saveStorage(state);
     queueDashboardAction('dashboard_widget_resize', { profile, slotIndex, size }, `Widget in slot ${slotIndex} resized to ${size}`);
   },
@@ -1373,18 +1534,19 @@ export const dashboardStore = {
 
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const currentSlots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const currentSlots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
     const resizedSlots = currentSlots.map((slot, index) => ({
       ...slot,
       widgetSize: slot.widgetType
         ? clampProfileWidgetSize(profile, slot.widgetType, (preset.slotSizes[index] as WidgetSize | undefined) ?? slot.widgetSize, mode)
-        : '1x1',
+        : '2x1',
     }));
 
-    state.profiles[profile].gridLayout = mode ? '2x2' : preset.gridLayout;
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, resizedSlots, mode);
+    state.profiles[profile].gridLayout = preset.gridLayout;
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, resizedSlots, mode, preset.gridLayout);
     state.profiles[profile].layoutVersion = DASHBOARD_LAYOUT_VERSION;
-    state.profiles[profile].gridColumns = DASHBOARD_GRID_COLUMNS;
+    state.profiles[profile].gridColumns = GRID_LAYOUT_CONFIG[preset.gridLayout].cols;
     state.profiles[profile].lastUsedPreset = presetId;
     saveStorage(state);
     queueDashboardAction('dashboard_preset_apply', { profile, presetId, newLayout: state.profiles[profile].gridLayout }, `Preset "${presetId}" applied to ${profile}`);
@@ -1400,18 +1562,19 @@ export const dashboardStore = {
   applyCustomPreset(profile: DashboardProfile, preset: CustomPreset): GridLayout {
     const state = getStorage();
     const mode = dashboardModeForProfile(profile);
-    const currentSlots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode);
+    const currentLayout = state.profiles[profile]?.gridLayout || (mode ? getDefaultDashboardLayout(mode).gridLayout : '2x2');
+    const currentSlots = normalizeDashboardSlotsForProfile(profile, state.profiles[profile]?.slots || [], mode, currentLayout);
     const resizedSlots = currentSlots.map((slot, index) => ({
       ...slot,
       widgetSize: slot.widgetType
         ? clampProfileWidgetSize(profile, slot.widgetType, (preset.slotSizes[index] as WidgetSize | undefined) ?? slot.widgetSize, mode)
-        : '1x1',
+        : '2x1',
     }));
 
-    state.profiles[profile].gridLayout = mode ? '2x2' : (preset.gridLayout as GridLayout);
-    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, resizedSlots, mode);
+    state.profiles[profile].gridLayout = preset.gridLayout as GridLayout;
+    state.profiles[profile].slots = normalizeDashboardSlotsForProfile(profile, resizedSlots, mode, preset.gridLayout as GridLayout);
     state.profiles[profile].layoutVersion = DASHBOARD_LAYOUT_VERSION;
-    state.profiles[profile].gridColumns = DASHBOARD_GRID_COLUMNS;
+    state.profiles[profile].gridColumns = GRID_LAYOUT_CONFIG[preset.gridLayout as GridLayout].cols;
     state.profiles[profile].lastUsedPreset = preset.id;
     saveStorage(state);
     queueDashboardAction('dashboard_preset_apply', { profile, presetId: preset.id, newLayout: state.profiles[profile].gridLayout }, `Custom preset "${preset.name}" applied to ${profile}`);

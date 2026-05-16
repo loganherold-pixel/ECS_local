@@ -34,6 +34,7 @@
 
 import { Platform } from 'react-native';
 import type { ExpeditionOpportunity, RegionGroupId } from './discoverEngine';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[EXPLORE-PROGRESS]';
 
@@ -140,10 +141,9 @@ class ExplorationProgressStore {
   constructor() {
     this.listeners = new Set();
     this.state = this._loadFromStorage();
-    console.log(
-      TAG,
-      `Initialized with ${this.state.completions.length} completed routes`,
-    );
+    ecsLog.debug('DISCOVERY', 'Exploration progress initialized', {
+      completedRoutes: this.state.completions.length,
+    });
   }
 
   // ── Persistence ────────────────────────────────────────────

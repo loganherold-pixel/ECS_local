@@ -92,6 +92,22 @@ export const ECS_EASE = {
   linear: Easing.out(Easing.quad),
 } as const;
 
+export function useStableAnimatedValue(initialValue: number): Animated.Value {
+  const valueRef = useRef<Animated.Value | null>(null);
+  if (valueRef.current === null) {
+    valueRef.current = new Animated.Value(initialValue);
+  }
+  return valueRef.current;
+}
+
+export function useStableAnimatedValueXY(initialValue: { x: number; y: number }): Animated.ValueXY {
+  const valueRef = useRef<Animated.ValueXY | null>(null);
+  if (valueRef.current === null) {
+    valueRef.current = new Animated.ValueXY(initialValue);
+  }
+  return valueRef.current;
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 // 1. SMOOTH VALUE TRANSITIONS
@@ -118,7 +134,7 @@ export function useAnimatedNumber(
     useNativeDriver?: boolean;
   },
 ): Animated.Value {
-  const animatedValue = useRef(new Animated.Value(targetValue)).current;
+  const animatedValue = useStableAnimatedValue(targetValue);
   const prevValue = useRef(targetValue);
   const isFirstRender = useRef(true);
 
@@ -249,7 +265,7 @@ export function useWidgetGlow(): {
   triggerGlow: (color?: string) => void;
   isGlowing: boolean;
 } {
-  const glowOpacity = useRef(new Animated.Value(0)).current;
+  const glowOpacity = useStableAnimatedValue(0);
   const [glowColor, setGlowColor] = useState('rgba(196,138,44,0.25)');
   const [isGlowing, setIsGlowing] = useState(false);
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -345,7 +361,7 @@ export function useSmoothRotation(
   const easing = options?.easing ?? ECS_EASE.linear;
   const invert = options?.invert ?? false;
 
-  const animatedValue = useRef(new Animated.Value(0)).current;
+  const animatedValue = useStableAnimatedValue(0);
   const prevDegRef = useRef(0);
 
   useEffect(() => {
@@ -413,7 +429,7 @@ export function useWidgetFocus(options?: {
   const durationIn = options?.durationIn ?? ECS_MOTION.widgetFocusIn;
   const durationOut = options?.durationOut ?? ECS_MOTION.widgetFocusOut;
 
-  const focusScale = useRef(new Animated.Value(1)).current;
+  const focusScale = useStableAnimatedValue(1);
   const [isFocused, setIsFocused] = useState(false);
 
   const onPressIn = useCallback(() => {
@@ -461,7 +477,7 @@ export function useDashboardFade(initialVisible: boolean = true): {
   fadeOut: (callback?: () => void) => void;
   fadeSwitch: (onSwitch: () => void) => void;
 } {
-  const fadeOpacity = useRef(new Animated.Value(initialVisible ? 1 : 0)).current;
+  const fadeOpacity = useStableAnimatedValue(initialVisible ? 1 : 0);
 
   const fadeIn = useCallback((callback?: () => void) => {
     Animated.timing(fadeOpacity, {
@@ -522,7 +538,7 @@ export function useIntelligenceBarFade(): {
   showMessage: (onComplete?: () => void) => void;
   hideMessage: (onComplete?: () => void) => void;
 } {
-  const messageOpacity = useRef(new Animated.Value(0)).current;
+  const messageOpacity = useStableAnimatedValue(0);
 
   const showMessage = useCallback((onComplete?: () => void) => {
     messageOpacity.setValue(0);

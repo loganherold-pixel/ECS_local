@@ -34,6 +34,7 @@
  */
 
 import { ecsBus } from './ecsBus';
+import { ecsLog } from './ecsLogger';
 import type {
   EcsChannel,
   EcsPowerSummary,
@@ -52,6 +53,10 @@ import type {
 } from './ecsSyncTypes';
 
 const TAG = '[ECS-SYNC]';
+
+function debugSync(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 // ── Configuration ────────────────────────────────────────
 
@@ -588,10 +593,12 @@ function _refreshAllSummaries(): void {
 
     // Throttled logging
     if (_cascadeCount <= 3 || _cascadeCount % 10 === 0) {
-      console.log(
-        TAG,
-        `Cascade #${_cascadeCount}: ${availCount}/${Object.keys(_storeStatus).length} systems available (${elapsed}ms)`
-      );
+      debugSync('Sync cascade completed', {
+        availableSystems: availCount,
+        cascadeCount: _cascadeCount,
+        durationMs: elapsed,
+        totalSystems: Object.keys(_storeStatus).length,
+      });
     }
   } catch (e) {
     console.warn(TAG, 'Refresh cascade error:', e);
@@ -738,7 +745,8 @@ function _subscribeToStores(): void {
           // Invalidate cache readiness so CI picks up the change
           try {
             const { invalidateCacheReadiness } = require('./offlineCacheAwarenessEngine');
-            invalidateCacheReadiness();
+            const readiness = offlineExpeditionDbStore.evaluateReadiness?.();
+            invalidateCacheReadiness('sync_offline_expedition_store_change', readiness ?? null);
           } catch {}
           _debouncedRefresh();
         });
@@ -759,7 +767,10 @@ function _subscribeToStores(): void {
     }
   }
 
-  console.log(TAG, `Store subscriptions: ${successCount}/${storeSubscribers.length} active`);
+  debugSync('Sync coordinator store subscriptions active', {
+    activeSubscriptions: successCount,
+    totalSubscriptions: storeSubscribers.length,
+  });
 }
 
 /**
@@ -810,7 +821,7 @@ function _wireBusCascade(): void {
   );
   _busUnsubs.push(assistantUnsub);
 
-  console.log(TAG, 'Bus cascade wiring complete');
+  debugSync('Sync coordinator bus cascade wiring complete');
 }
 
 /**
@@ -844,11 +855,11 @@ export const ecsSyncCoordinator = {
    */
   start(): void {
     if (_lifecycle === 'running') {
-      console.log(TAG, 'Already running');
-      return;
-    }
+    debugSync('Sync coordinator already running');
+    return;
+  }
 
-    console.log(TAG, 'Starting (Integration Pass 1)...');
+  debugSync('Sync coordinator starting');
     _lifecycle = 'initializing';
     _initTimestamp = Date.now();
 
@@ -869,7 +880,10 @@ export const ecsSyncCoordinator = {
     }, PERIODIC_REFRESH_MS);
 
     _lifecycle = 'running';
-    console.log(TAG, `Started (periodic: ${PERIODIC_REFRESH_MS / 1000}s, store debounce: ${STORE_CHANGE_DEBOUNCE_MS / 1000}s)`);
+  debugSync('Sync coordinator started', {
+    periodicSeconds: PERIODIC_REFRESH_MS / 1000,
+    storeDebounceSeconds: STORE_CHANGE_DEBOUNCE_MS / 1000,
+  });
   },
 
   /**
@@ -879,7 +893,7 @@ export const ecsSyncCoordinator = {
   stop(): void {
     if (_lifecycle === 'stopped' || _lifecycle === 'idle') return;
 
-    console.log(TAG, 'Stopping...');
+  debugSync('Sync coordinator stopping');
 
     // Flush pending updates
     ecsBus.flush();
@@ -901,7 +915,7 @@ export const ecsSyncCoordinator = {
     _unwireBusCascade();
 
     _lifecycle = 'stopped';
-    console.log(TAG, `Stopped (cascades: ${_cascadeCount})`);
+  debugSync('Sync coordinator stopped', { cascades: _cascadeCount });
   },
 
   /**
@@ -925,7 +939,7 @@ export const ecsSyncCoordinator = {
     }
 
     _lifecycle = 'suspended';
-    console.log(TAG, 'Suspended');
+  debugSync('Sync coordinator suspended');
   },
 
   /**
@@ -945,7 +959,7 @@ export const ecsSyncCoordinator = {
       _refreshAllSummaries();
     }, PERIODIC_REFRESH_MS);
 
-    console.log(TAG, 'Resumed');
+  debugSync('Sync coordinator resumed');
   },
 
   /**
@@ -1070,6 +1084,6 @@ export const ecsSyncCoordinator = {
     _lastCascadeAt = null;
     Object.keys(_storeStatus).forEach(k => delete (_storeStatus as any)[k]);
     _lifecycle = 'idle';
-    console.log(TAG, 'Full reset complete');
+  debugSync('Sync coordinator reset complete');
   },
 };

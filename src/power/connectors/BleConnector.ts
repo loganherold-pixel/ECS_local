@@ -23,6 +23,7 @@ import type {
   PowerConnectionState,
   PowerCapabilities,
 } from "../types/PowerTelemetry";
+import { normalizePowerTelemetryTruth } from "../types/PowerTelemetry";
 import type {
   BleInternalState,
   BleDiscoveredDevice,
@@ -32,8 +33,13 @@ import {
   DEFAULT_SCAN_OPTIONS,
   DEFAULT_HEARTBEAT_CONFIG,
 } from "../ble/BleTypes";
+import {
+  getBleRuntimeUnsupportedMessage,
+  isBleNativeModuleUnavailableError,
+} from "../ble/BleScanReadiness";
 import { createBackoff } from "../ble/backoff";
 import type { Backoff } from "../ble/backoff";
+import { ecsLog } from "../../../lib/ecsLogger";
 
 // ── Lazy BLE manager ────────────────────────────────────────────────────
 
@@ -56,8 +62,11 @@ function getBleManager(): any {
     _bleManagerInstance = new BleManager();
     return _bleManagerInstance;
   } catch (err) {
+    if (isBleNativeModuleUnavailableError(err)) {
+      throw new Error(getBleRuntimeUnsupportedMessage());
+    }
     throw new Error(
-      `[BleConnector] Failed to initialise BleManager: ${err}`,
+      `[BleConnector] Failed to initialize Bluetooth manager: ${String((err as any)?.message ?? err ?? "unknown error")}`,
     );
   }
 }
@@ -65,6 +74,14 @@ function getBleManager(): any {
 // ── Constants ───────────────────────────────────────────────────────────
 
 const TAG = "[BleConnector]";
+
+function logPowerDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug("POWER", `${TAG} ${message}`, details);
+}
+
+function logPowerWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn("POWER", `${TAG} ${message}`, details);
+}
 
 const ALL_FALSE_CAPABILITIES: PowerCapabilities = {
   hasSOC: false,
@@ -86,6 +103,7 @@ export class BleConnector implements IPowerConnector {
   private discovered: Map<string, BleDiscoveredDevice> = new Map();
   private connectedDeviceId: string | null = null;
   private connectedDeviceRef: any | null = null; // BLE Device reference
+  private disconnectSubscription: { remove?: () => void } | null = null;
   private currentTelemetry: PowerTelemetry | null = null;
   private subscribers: Set<TelemetryCallback> = new Set();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -103,6 +121,8 @@ export class BleConnector implements IPowerConnector {
         return "idle";
       case "connecting":
         return "connecting";
+      case "disconnecting":
+        return "disconnecting";
       case "connected":
         return "connected";
       case "error":
@@ -148,7 +168,9 @@ export class BleConnector implements IPowerConnector {
       { allowDuplicates: opts.allowDuplicates },
       (error: any, device: any) => {
         if (error) {
-          console.warn(TAG, "Scan error:", error.message ?? error);
+          logPowerWarn("Scan error", {
+            error: error?.message ?? String(error),
+          });
           // Don't transition to error for transient scan issues
           return;
         }
@@ -256,7 +278,10 @@ export class BleConnector implements IPowerConnector {
       // Monitor disconnection
       this.monitorDisconnection(device);
     } catch (err: any) {
-      console.warn(TAG, "Connect failed:", err?.message ?? err);
+      logPowerWarn("Connect failed", {
+        error: err?.message ?? String(err),
+        deviceId,
+      });
       this.setState("error");
       throw new Error(`[BleConnector] Connection failed: ${err?.message}`);
     }
@@ -266,13 +291,20 @@ export class BleConnector implements IPowerConnector {
 
   async disconnect(): Promise<void> {
     this.stopHeartbeat();
+    this.removeDisconnectionMonitor();
+    this.setState("disconnecting");
 
     if (this.connectedDeviceRef) {
       try {
         const mgr = getBleManager();
         await mgr.cancelDeviceConnection(this.connectedDeviceId!);
-      } catch {
-        // Ignore — device may already be disconnected
+        const stillConnected = await mgr.isDeviceConnected?.(this.connectedDeviceId!).catch(() => false);
+        if (stillConnected) {
+          throw new Error("[BleConnector] Device remained connected after disconnect request.");
+        }
+      } catch (error) {
+        this.setState("error");
+        throw error;
       }
     }
 
@@ -314,6 +346,7 @@ export class BleConnector implements IPowerConnector {
   destroy(): void {
     this.stopHeartbeat();
     this.stopScan().catch(() => {});
+    this.removeDisconnectionMonitor();
 
     if (this.connectedDeviceRef) {
       try {
@@ -339,9 +372,7 @@ export class BleConnector implements IPowerConnector {
     const prev = this.state;
     this.state = next;
     // Log state transitions for debugging
-    if (__DEV__) {
-      console.log(TAG, `State: ${prev} -> ${next}`);
-    }
+    logPowerDebug(`State: ${prev} -> ${next}`);
   }
 
   // ── Private: heartbeat telemetry ────────────────────────────────────
@@ -383,10 +414,30 @@ export class BleConnector implements IPowerConnector {
     const telemetry: PowerTelemetry = {
       timestamp: now,
       source: "ble",
+      sourceLabel: "Detected — setup required",
+      isLive: false,
       device: {
         id: this.connectedDeviceId,
         vendor: "unknown",
       },
+      truth: normalizePowerTelemetryTruth({
+        timestamp: now,
+        source: "unavailable",
+        device: {
+          id: this.connectedDeviceId,
+          vendor: "unknown",
+        },
+        truth: {
+          sourceTruth: "device_detected",
+          deviceId: this.connectedDeviceId,
+          confidence: 0.35,
+          isLive: false,
+          isStale: false,
+          isManual: false,
+          isSimulated: false,
+          reason: "BLE device connected; vendor telemetry decoder not active.",
+        },
+      }),
       capabilities: { ...ALL_FALSE_CAPABILITIES },
       quality: {
         rssi: this.lastRssi,
@@ -418,15 +469,16 @@ export class BleConnector implements IPowerConnector {
 
   private monitorDisconnection(device: any): void {
     const mgr = getBleManager();
-    mgr.onDeviceDisconnected(
+    this.removeDisconnectionMonitor();
+    this.disconnectSubscription = mgr.onDeviceDisconnected(
       device.id,
       (error: any, _disconnectedDevice: any) => {
+        this.disconnectSubscription = null;
         if (this.connectedDeviceId === device.id) {
-          console.warn(
-            TAG,
-            "Device disconnected:",
-            error?.message ?? "clean disconnect",
-          );
+          logPowerWarn("Device disconnected", {
+            error: error?.message ?? "clean disconnect",
+            deviceId: device.id,
+          });
           this.stopHeartbeat();
           this.connectedDeviceRef = null;
           this.connectedDeviceId = null;
@@ -435,6 +487,14 @@ export class BleConnector implements IPowerConnector {
         }
       },
     );
+  }
+
+  private removeDisconnectionMonitor(): void {
+    if (!this.disconnectSubscription) return;
+    try {
+      this.disconnectSubscription.remove?.();
+    } catch {}
+    this.disconnectSubscription = null;
   }
 
   // ── Private: subscriber notification ────────────────────────────────

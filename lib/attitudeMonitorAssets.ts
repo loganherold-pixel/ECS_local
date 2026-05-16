@@ -20,7 +20,7 @@ export interface AttitudeMonitorHeroAssetDefinition {
 }
 
 export interface AttitudeMonitorBackgroundAssetDefinition {
-  id: 'darker-tactical-canyon';
+  id: 'popup-container-background';
   displayName: string;
   relativeAssetPath: string;
   source: ImageSourcePropType;
@@ -54,14 +54,14 @@ export interface AttitudeMonitorBackgroundPresentation {
 export const ATTITUDE_MONITOR_TOPO_OVERLAY_ENABLED = ATTITUDE_MONITOR_TUNING.visual.topoOverlayEnabled;
 
 const DEFAULT_FULLSIZE_TRUCK_HERO = require('../assets/attitude/vehicles/default/fullsize-truck-hero.png');
-const DARKER_TACTICAL_CANYON_BACKGROUND = require('../assets/attitude/backgrounds/darker-tactical-canyon.png');
+const POPUP_CONTAINER_BACKGROUND = require('../assets/chrome/backgrounds/popup-container-bg.png');
 const SUBTLE_TOPO_OVERLAY = require('../assets/attitude/overlays/subtle-topo-overlay.png');
 
 export const ATTITUDE_MONITOR_BACKGROUND_ASSET: AttitudeMonitorBackgroundAssetDefinition = {
-  id: 'darker-tactical-canyon',
-  displayName: 'Darker tactical canyon',
-  relativeAssetPath: 'assets/attitude/backgrounds/darker-tactical-canyon.png',
-  source: DARKER_TACTICAL_CANYON_BACKGROUND,
+  id: 'popup-container-background',
+  displayName: 'Popup container background',
+  relativeAssetPath: 'assets/chrome/backgrounds/popup-container-bg.png',
+  source: POPUP_CONTAINER_BACKGROUND,
   resizeMode: 'cover',
   opacityByUsage: {
     compact: ATTITUDE_MONITOR_TUNING.visual.backgroundByUsage.compact.opacity,

@@ -193,10 +193,6 @@ export const AUTH_VISUAL_SPEC = {
       fontSize: 14,
       lineHeight: 20,
     },
-    stateSupporting: {
-      fontSize: 13,
-      lineHeight: 18,
-    },
     fieldLabel: {
       fontSize: 12,
       lineHeight: 16,

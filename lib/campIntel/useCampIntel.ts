@@ -8,6 +8,11 @@ import { createMigratingNonSecureStorage } from '../nonSecureStorage';
 import type { RemotenessIndexOutput } from '../remotenessTypes';
 import type { RouteIntelligence } from '../routeAnalysisEngine';
 import type { TerrainIntelligence } from '../terrainAnalysisEngine';
+import {
+  CAMPSITE_MAX_HIGH_CONFIDENCE_MARKERS,
+  CAMPSITE_MAX_MARKERS_RENDERED,
+  resolveCampsiteRouteDistanceLimitMiles,
+} from '../campsites/campsiteThresholds';
 import { buildCampIntelEngine } from './campIntelEngine';
 import { compareCampIntelSites } from './campIntelCompare';
 import { buildCampDecisionState } from './campDecisionEngine';
@@ -51,6 +56,22 @@ const DEFAULT_CACHE_STATE: { byRouteKey: Record<string, CampIntelCachedRouteResu
   byRouteKey: {},
 };
 
+function isCampIntelFeedbackCode(value: unknown): value is CampIntelFeedbackCode {
+  switch (value) {
+    case 'excellent_camp':
+    case 'usable':
+    case 'poor':
+    case 'inaccessible':
+    case 'too_exposed':
+    case 'not_legal':
+    case 'too_small':
+    case 'blocked':
+      return true;
+    default:
+      return false;
+  }
+}
+
 type UseCampIntelOptions = {
   candidates: CampsiteCandidateResult | null;
   routeIntelligence: RouteIntelligence | null;
@@ -76,9 +97,10 @@ type UseCampIntelResult = {
   getNearbySites: (siteId: string, limit?: number) => CampIntelSite[];
   compareSites: (siteIds: string[]) => CampIntelComparisonResult | null;
   compareSiteWithNearby: (siteId: string, limit?: number) => CampIntelComparisonResult | null;
+  saveCamp: (siteId: string) => boolean;
   toggleSavedCamp: (siteId: string) => boolean;
   markCampUsed: (siteId: string) => boolean;
-  reportCampUnusable: (siteId: string) => void;
+  reportCampUnusable: (siteId: string) => boolean;
   recordCampFeedback: (siteId: string, feedback: CampIntelFeedbackCode) => boolean;
   getCampFeedback: (siteId: string | null | undefined) => CampIntelFeedbackCode[];
 };
@@ -144,6 +166,33 @@ function dedupeVisibleSites(sites: CampIntelSite[]): CampIntelSite[] {
   return curated.sort((a, b) => b.overallScore - a.overallScore || b.confidenceScore - a.confidenceScore);
 }
 
+function capVisibleSitesForDisplay(sites: CampIntelSite[]): CampIntelSite[] {
+  const capped: CampIntelSite[] = [];
+  let highConfidenceCount = 0;
+
+  for (const site of sites) {
+    const routeDistanceLimitMiles = resolveCampsiteRouteDistanceLimitMiles(site.fallbackStage);
+    if (site.detourDistanceMiles != null && site.detourDistanceMiles > routeDistanceLimitMiles) {
+      continue;
+    }
+
+    const isHighConfidence = site.confidence === 'high';
+    if (isHighConfidence && highConfidenceCount >= CAMPSITE_MAX_HIGH_CONFIDENCE_MARKERS) {
+      continue;
+    }
+
+    capped.push(site);
+    if (isHighConfidence) {
+      highConfidenceCount += 1;
+    }
+    if (capped.length >= CAMPSITE_MAX_MARKERS_RENDERED) {
+      break;
+    }
+  }
+
+  return capped;
+}
+
 function summarizeCachedSites(sites: CampIntelSite[]): string {
   return sites
     .map((site) =>
@@ -175,6 +224,8 @@ function summarizeCachedSummary(summary: CampIntelStructuredSummary): string {
     bestShelteredCandidate: summary.bestShelteredCandidate?.id ?? null,
     stopBeforeDark: summary.stopBeforeDark,
     lowConfidenceBeyondTop: summary.lowConfidenceBeyondTop,
+    criteriaBroadened: summary.criteriaBroadened,
+    broadenedCriteriaNotice: summary.broadenedCriteriaNotice,
     offlineAssessment: summary.offlineAssessment?.notes ?? null,
   });
 }
@@ -188,7 +239,6 @@ const APPROXIMATE_VEHICLE_PROFILES: Record<string, ApproximateVehicleProfile> = 
 
 function deriveVehicleContext(activeVehicleContext: ReturnType<typeof getActiveVehicleContext>): CampIntelVehicleContext {
   const vehicle = activeVehicleContext.vehicle;
-  const tiresLift = activeVehicleContext.tiresLift;
   const vehicleType = vehicle?.type ?? '';
   const approx =
     APPROXIMATE_VEHICLE_PROFILES[vehicleType] ??
@@ -213,10 +263,10 @@ function deriveVehicleContext(activeVehicleContext: ReturnType<typeof getActiveV
     wheelbaseInches: approx.wheelbaseInches,
     clearanceInches:
       approx.clearanceInches +
-      (tiresLift?.suspensionLiftInches ?? 0) +
-      Math.max(0, ((tiresLift?.tireSizeInches ?? 29) - 29) / 2),
-    tireSizeInches: tiresLift?.tireSizeInches ?? null,
-    suspensionLiftInches: tiresLift?.suspensionLiftInches ?? null,
+      activeVehicleContext.resourceProfile.suspensionLiftInches +
+      Math.max(0, ((activeVehicleContext.resourceProfile.tireSizeInches ?? 29) - 29) / 2),
+    tireSizeInches: activeVehicleContext.resourceProfile.tireSizeInches,
+    suspensionLiftInches: activeVehicleContext.resourceProfile.suspensionLiftInches,
     trailerAttached: /\btrailer\b|\bhitch\b/.test(allNames),
     rooftopTent: /\brtt\b|rooftop tent|roof tent/.test(allNames),
     loadoutWeightLbs: activeVehicleContext.loadoutTotalWeightLbs || null,
@@ -232,25 +282,20 @@ function deriveResourceContext(
   overrides?: Partial<CampIntelResourceContext> | null,
 ): CampIntelResourceContext {
   const vehicle = activeVehicleContext.vehicle;
-  const consumables = activeVehicleContext.consumables;
-  const fuelPercent =
-    consumables?.fuel_percent_current ??
-    vehicle?.current_fuel_percent ??
-    null;
-  const fuelCapacity =
-    activeVehicleContext.spec?.fuel_tank_capacity_gal ??
-    activeVehicleContext.resourceProfile.fuelTankCapacityGal ??
-    vehicle?.fuel_tank_capacity_gal ??
-    null;
+  const resources = activeVehicleContext.resourceProfile;
+  const fuelPercent = resources.currentFuelPercent ?? vehicle?.current_fuel_percent ?? null;
+  const fuelCapacity = resources.fuelTankCapacityGal ?? vehicle?.fuel_tank_capacity_gal ?? null;
   const avgMpg = vehicle?.avg_mpg ?? null;
   const fuelRangeMiles =
-    fuelPercent != null && fuelCapacity != null && avgMpg != null
-      ? Math.round((fuelPercent / 100) * fuelCapacity * avgMpg)
+    resources.currentFuelGallons > 0 && avgMpg != null
+      ? Math.round(resources.currentFuelGallons * avgMpg)
+      : fuelPercent != null && fuelCapacity != null && avgMpg != null
+        ? Math.round((fuelPercent / 100) * fuelCapacity * avgMpg)
       : null;
-  const waterCapacity = activeVehicleContext.resourceProfile.waterCapacityGal;
+  const waterCapacity = resources.waterCapacityGal;
   const waterPercent =
-    consumables?.water_gal_current != null && waterCapacity != null && waterCapacity > 0
-      ? Math.round((consumables.water_gal_current / waterCapacity) * 100)
+    resources.currentWaterGallons >= 0 && waterCapacity != null && waterCapacity > 0
+      ? Math.round((resources.currentWaterGallons / waterCapacity) * 100)
       : vehicle?.current_water_gal != null &&
           vehicle?.water_capacity_gal != null &&
           vehicle.water_capacity_gal > 0
@@ -319,7 +364,7 @@ function deriveSupportSignals(args: {
     suggestedCamps: candidates?.candidates?.length ?? 0,
     description: 'Derived support signal for active route camp desirability.',
     highlights: scenicHighlights,
-    elevationGainFt: routeIntelligence?.totalElevationGainFeet ?? 0,
+    elevationGainFt: routeIntelligence?.elevationGainFeet ?? 0,
     estimatedDays: Math.max(1, Math.round((routeIntelligence?.estimatedDriveTimeHours ?? 6) / 7)),
     bestSeason: 'Current',
     permitRequired: false,
@@ -361,9 +406,9 @@ function buildRouteKey(args: {
   return `${routeId}:${args.missionMode ?? 'auto'}`;
 }
 
-function loadPreferences(): CampIntelPreferenceState {
+async function loadPreferences(): Promise<CampIntelPreferenceState> {
   try {
-    const raw = campIntelStorage.getItem(CAMP_INTEL_STORAGE_KEY);
+    const raw = await campIntelStorage.read(CAMP_INTEL_STORAGE_KEY);
     if (!raw) return DEFAULT_PREFERENCES;
     const parsed = JSON.parse(raw);
     return {
@@ -381,7 +426,7 @@ function loadPreferences(): CampIntelPreferenceState {
           ? Object.fromEntries(
               Object.entries(parsed.feedbackByCampId).map(([key, value]) => [
                 key,
-                Array.isArray(value) ? value.filter((entry) => typeof entry === 'string') : [],
+                Array.isArray(value) ? value.filter(isCampIntelFeedbackCode) : [],
               ]),
             )
           : {},
@@ -391,9 +436,9 @@ function loadPreferences(): CampIntelPreferenceState {
   }
 }
 
-function loadCacheState(): { byRouteKey: Record<string, CampIntelCachedRouteResult> } {
+async function loadCacheState(): Promise<{ byRouteKey: Record<string, CampIntelCachedRouteResult> }> {
   try {
-    const raw = campIntelStorage.getItem(CAMP_INTEL_CACHE_STORAGE_KEY);
+    const raw = await campIntelStorage.read(CAMP_INTEL_CACHE_STORAGE_KEY);
     if (!raw) return DEFAULT_CACHE_STATE;
     const parsed = JSON.parse(raw);
     return {
@@ -408,22 +453,18 @@ function loadCacheState(): { byRouteKey: Record<string, CampIntelCachedRouteResu
 }
 
 function persistPreferences(next: CampIntelPreferenceState): void {
-  try {
-    campIntelStorage.setItem(CAMP_INTEL_STORAGE_KEY, JSON.stringify(next));
-  } catch {}
+  void campIntelStorage.write(CAMP_INTEL_STORAGE_KEY, JSON.stringify(next));
 }
 
 function persistCacheState(next: { byRouteKey: Record<string, CampIntelCachedRouteResult> }): void {
-  try {
-    campIntelStorage.setItem(CAMP_INTEL_CACHE_STORAGE_KEY, JSON.stringify(next));
-  } catch {}
+  void campIntelStorage.write(CAMP_INTEL_CACHE_STORAGE_KEY, JSON.stringify(next));
 }
 
-function toggleId(ids: string[], id: string): string[] {
+function toggleId<T extends string>(ids: T[], id: T): T[] {
   return ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id];
 }
 
-function upsertId(ids: string[], id: string): string[] {
+function upsertId<T extends string>(ids: T[], id: T): T[] {
   return ids.includes(id) ? ids : [...ids, id];
 }
 
@@ -450,12 +491,28 @@ export function useCampIntel({
 }: UseCampIntelOptions): UseCampIntelResult {
   const [hydrated, setHydrated] = useState(false);
   const [preferences, setPreferences] = useState<CampIntelPreferenceState>(DEFAULT_PREFERENCES);
+  const preferencesRef = useRef<CampIntelPreferenceState>(DEFAULT_PREFERENCES);
   const [cacheState, setCacheState] = useState(DEFAULT_CACHE_STATE);
 
   useEffect(() => {
-    setPreferences(loadPreferences());
-    setCacheState(loadCacheState());
-    setHydrated(true);
+    let mounted = true;
+
+    void (async () => {
+      const [nextPreferences, nextCacheState] = await Promise.all([
+        loadPreferences(),
+        loadCacheState(),
+      ]);
+
+      if (!mounted) return;
+      preferencesRef.current = nextPreferences;
+      setPreferences(nextPreferences);
+      setCacheState(nextCacheState);
+      setHydrated(true);
+    })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const activeVehicleContext = getActiveVehicleContext();
@@ -637,11 +694,13 @@ export function useCampIntel({
 
   const visibleSites = useMemo(
     () =>
-      dedupeVisibleSites(
-        allSites.filter(
-          (site) =>
-            !preferences.rejectedCampIds.includes(site.id) &&
-            site.classification !== 'rejected_low_confidence',
+      capVisibleSitesForDisplay(
+        dedupeVisibleSites(
+          allSites.filter(
+            (site) =>
+              !preferences.rejectedCampIds.includes(site.id) &&
+              site.classification !== 'rejected_low_confidence',
+          ),
         ),
       ),
     [allSites, preferences.rejectedCampIds],
@@ -737,13 +796,26 @@ export function useCampIntel({
 
   const updatePreferences = useCallback(
     (updater: (current: CampIntelPreferenceState) => CampIntelPreferenceState) => {
-      setPreferences((current) => {
-        const next = updater(current);
-        persistPreferences(next);
-        return next;
-      });
+      const next = updater(preferencesRef.current);
+      preferencesRef.current = next;
+      persistPreferences(next);
+      setPreferences(next);
+      return next;
     },
     [],
+  );
+
+  const saveCamp = useCallback(
+    (siteId: string) => {
+      const alreadySaved = preferencesRef.current.savedCampIds.includes(siteId);
+      updatePreferences((current) => ({
+        ...current,
+        savedCampIds: upsertId(current.savedCampIds, siteId),
+        rejectedCampIds: current.rejectedCampIds.filter((value) => value !== siteId),
+      }));
+      return !alreadySaved;
+    },
+    [updatePreferences],
   );
 
   const toggleSavedCamp = useCallback(
@@ -761,10 +833,9 @@ export function useCampIntel({
 
   const recordCampFeedback = useCallback(
     (siteId: string, feedback: CampIntelFeedbackCode) => {
-      let recorded = false;
+      const alreadyRecorded = preferencesRef.current.feedbackByCampId[siteId]?.includes(feedback) ?? false;
       updatePreferences((current) => {
         const nextFeedback = upsertId(current.feedbackByCampId[siteId] ?? [], feedback);
-        recorded = nextFeedback.includes(feedback);
         return {
           ...current,
           feedbackByCampId: {
@@ -773,20 +844,19 @@ export function useCampIntel({
           },
         };
       });
-      return recorded;
+      return !alreadyRecorded;
     },
     [updatePreferences],
   );
 
   const markCampUsedBase = useCallback(
     (siteId: string) => {
-      let used = false;
+      const alreadyUsed = preferencesRef.current.usedCampIds.includes(siteId);
       updatePreferences((current) => {
         const nextUsedCampIds = upsertId(current.usedCampIds, siteId);
-        used = nextUsedCampIds.includes(siteId);
         return { ...current, usedCampIds: nextUsedCampIds };
       });
-      return used;
+      return !alreadyUsed;
     },
     [updatePreferences],
   );
@@ -804,6 +874,7 @@ export function useCampIntel({
 
   const reportCampUnusable = useCallback(
     (siteId: string) => {
+      const alreadyRejected = preferencesRef.current.rejectedCampIds.includes(siteId);
       updatePreferences((current) => ({
         ...current,
         rejectedCampIds: upsertId(current.rejectedCampIds, siteId),
@@ -813,6 +884,7 @@ export function useCampIntel({
           [siteId]: upsertId(current.feedbackByCampId[siteId] ?? [], 'blocked'),
         },
       }));
+      return !alreadyRejected;
     },
     [updatePreferences],
   );
@@ -834,6 +906,7 @@ export function useCampIntel({
     getNearbySites,
     compareSites,
     compareSiteWithNearby,
+    saveCamp,
     toggleSavedCamp,
     markCampUsed,
     reportCampUnusable,

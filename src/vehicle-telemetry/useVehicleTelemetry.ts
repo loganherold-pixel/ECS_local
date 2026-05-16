@@ -18,6 +18,7 @@ import type {
   VehicleTelemetryDevice,
   VehicleTelemetryProviderId,
   NormalizedVehicleTelemetry,
+  VehicleTelemetrySnapshot,
   EngineStatus,
   TelemetryFreshnessLabel,
   SessionRecoveryStatus,
@@ -29,6 +30,9 @@ import { vehicleTelemetryService } from './VehicleTelemetryService';
 export interface VehicleTelemetryHookResult {
   /** Current telemetry summary */
   summary: VehicleTelemetrySummary;
+
+  /** Normalized source-aware telemetry snapshot for truthful UI rendering */
+  snapshot: VehicleTelemetrySnapshot;
 
   /** Whether any telemetry data is available */
   hasData: boolean;
@@ -106,7 +110,7 @@ export interface VehicleTelemetryHookResult {
   lastUpdatedText: string | null;
 
   /** Connection state string including reconnecting */
-  connectionDisplayState: 'connected' | 'connecting' | 'reconnecting' | 'disconnected' | 'error';
+  connectionDisplayState: 'connected' | 'connecting' | 'reconnecting' | 'disconnected' | 'error' | 'unsupported';
 }
 
 /**
@@ -182,7 +186,9 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
         vehicleTelemetryStore.clear();
       }
 
-      console.log('[VT-Hook] Provider disconnected and cleaned up');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[VT-Hook] Provider disconnected and cleaned up');
+      }
     } catch (err: any) {
       console.warn('[VT-Hook] Disconnect error:', err?.message);
     }
@@ -204,12 +210,14 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
     if (ecsState.isReconnecting) return 'reconnecting' as const;
     if (summary.connection_state === 'connected') return 'connected' as const;
     if (summary.connection_state === 'connecting') return 'connecting' as const;
+    if (summary.connection_state === 'unsupported') return 'unsupported' as const;
     if (summary.connection_state === 'error') return 'error' as const;
     return 'disconnected' as const;
   })();
 
   return {
     summary,
+    snapshot: ecsState.snapshot,
     hasData: summary.has_data,
     isFresh: vehicleTelemetryStore.isFresh(),
     isStale: vehicleTelemetryStore.isStale(),

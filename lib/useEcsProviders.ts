@@ -17,6 +17,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { BluProviderId, BluDevice, BluConnectionState } from './BluTypes';
+import type { BluetoothTelemetrySource } from './bluetoothLiveTelemetry';
 import type {
   EcsNormalizedReading,
   EcsProviderWarning,
@@ -33,6 +34,7 @@ import {
   getTelemetryFreshness,
   type TelemetryFreshness,
 } from './EcsProviderDiagnostics';
+import { ensureEcsPowerProvidersRegistered } from './ecsLiveSystemBootstrap';
 
 // ── Provider Summary (for UI iteration) ─────────────────────────────────
 
@@ -115,6 +117,16 @@ export interface EcsDeviceSummary {
   freshness: TelemetryFreshness;
   /** Last updated timestamp */
   lastUpdated: number | null;
+  /** Truthful telemetry origin for the reading. */
+  telemetrySource: BluetoothTelemetrySource;
+  /** User-facing source label. */
+  telemetrySourceLabel: string;
+  /** True only when decoded live Bluetooth telemetry is flowing. */
+  isLive: boolean;
+  /** Connected source is reachable, but telemetry is not decoded. */
+  telemetryUnsupported: boolean;
+  /** Reason for unsupported or unavailable telemetry. */
+  telemetryUnsupportedReason?: string;
 }
 
 // ── Hook Return Type ────────────────────────────────────────────────────
@@ -182,6 +194,8 @@ export interface EcsProvidersHookResult {
 // ── Hook Implementation ─────────────────────────────────────────────────
 
 export function useEcsProviders(): EcsProvidersHookResult {
+  ensureEcsPowerProvidersRegistered();
+
   const [systemState, setSystemState] = useState<EcsSystemPowerState | null>(null);
   const [readings, setReadings] = useState<EcsNormalizedReading[]>([]);
   const [warnings, setWarnings] = useState<EcsProviderWarning[]>([]);
@@ -274,6 +288,11 @@ export function useEcsProviders(): EcsProvidersHookResult {
       warningState: reading.warningState,
       freshness: getTelemetryFreshness(reading.lastUpdated),
       lastUpdated: reading.lastUpdated,
+      telemetrySource: reading.telemetrySource ?? 'unavailable',
+      telemetrySourceLabel: reading.telemetrySourceLabel ?? 'Unavailable',
+      isLive: reading.isLive === true,
+      telemetryUnsupported: reading.telemetryUnsupported === true,
+      telemetryUnsupportedReason: reading.telemetryUnsupportedReason,
     };
   });
 

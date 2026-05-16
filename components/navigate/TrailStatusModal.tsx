@@ -24,6 +24,7 @@ interface Props {
   onReplay: () => void;
   onReplayFromHistory: (trailId: string) => void;
   onExportFromHistory: (trailId: string, format: 'gpx' | 'json') => void;
+  onRecommendTrailPack?: (trailId: string) => void;
   showToast: (msg: string) => void;
 }
 
@@ -39,6 +40,7 @@ export default function TrailStatusModal({
   onReplay,
   onReplayFromHistory,
   onExportFromHistory,
+  onRecommendTrailPack,
   showToast,
 }: Props) {
   const [confirmStop, setConfirmStop] = useState(false);
@@ -83,10 +85,11 @@ export default function TrailStatusModal({
 
   const handleStop = useCallback(() => {
     hapticCommand();
+    const pointsBeforeStop = trailStore.getStats().point_count;
     trailStore.stop(activeExpeditionName || null);
     setConfirmStop(false);
     onStatusChange();
-    showToast('TRAIL SAVED');
+    showToast(pointsBeforeStop > 0 ? 'TRAIL SAVED' : 'TRAIL ENDED — NO GPS POINTS');
   }, [activeExpeditionName, onStatusChange, showToast]);
 
   const statusColor =
@@ -110,7 +113,7 @@ export default function TrailStatusModal({
         <View style={styles.headerLeft}>
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Ionicons name="trail-sign-outline" size={16} color={TACTICAL.amber} />
-          <Text style={styles.headerTitle}>TRAIL</Text>
+          <Text style={styles.headerTitle}>RECORD TRAIL</Text>
           <Text style={[styles.statusText, { color: statusColor }]}>
             {statusLabel}
           </Text>
@@ -133,7 +136,7 @@ export default function TrailStatusModal({
         <View style={styles.controls}>
           {isIdle && (
             <TouchableOpacity style={styles.primaryBtn} onPress={handleStart}>
-              <Text style={styles.primaryText}>START</Text>
+              <Text style={styles.primaryText}>START RECORDING</Text>
             </TouchableOpacity>
           )}
 
@@ -160,24 +163,41 @@ export default function TrailStatusModal({
               </TouchableOpacity>
             </>
           )}
+
+          {stats.point_count > 0 && (
+            <TouchableOpacity style={styles.secondaryBtn} onPress={onExport}>
+              <Text style={styles.secondaryText}>EXPORT</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* HISTORY */}
         {historyTrails.length > 0 && (
           <View style={{ marginTop: 16 }}>
             {historyTrails.slice(0, 10).map(trail => (
-              <TouchableOpacity
-                key={trail.id}
-                style={styles.historyCard}
-                onPress={() => {
-                  onReplayFromHistory(trail.id);
-                  onClose();
-                }}
-              >
-                <Text style={styles.historyText}>
-                  {trail.name || 'Trail'} • {trail.distance_miles.toFixed(1)} MI
-                </Text>
-              </TouchableOpacity>
+              <View key={trail.id} style={styles.historyCard}>
+                <TouchableOpacity
+                  activeOpacity={0.78}
+                  onPress={() => {
+                    onReplayFromHistory(trail.id);
+                    onClose();
+                  }}
+                >
+                  <Text style={styles.historyText}>
+                    {trail.name || 'Trail'} - {trail.distance_miles.toFixed(1)} MI
+                  </Text>
+                </TouchableOpacity>
+                {onRecommendTrailPack ? (
+                  <TouchableOpacity
+                    style={styles.recommendTrailPackBtn}
+                    activeOpacity={0.82}
+                    onPress={() => onRecommendTrailPack(trail.id)}
+                  >
+                    <Ionicons name="trail-sign-outline" size={12} color={TACTICAL.amber} />
+                    <Text style={styles.recommendTrailPackText}>RECOMMEND THIS ROUTE</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             ))}
           </View>
         )}
@@ -242,6 +262,7 @@ const styles = StyleSheet.create({
 
   controls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
 
@@ -287,6 +308,7 @@ const styles = StyleSheet.create({
   },
 
   historyCard: {
+    gap: 8,
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
@@ -296,6 +318,25 @@ const styles = StyleSheet.create({
 
   historyText: {
     color: TACTICAL.text,
+  },
+
+  recommendTrailPackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0C',
+  },
+
+  recommendTrailPackText: {
+    color: TACTICAL.amber,
+    fontSize: 10,
+    fontWeight: '800',
   },
 
   confirmOverlay: {

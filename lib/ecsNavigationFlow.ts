@@ -13,6 +13,8 @@ export type ECSNavigationSurface =
   | 'alert';
 
 export type ECSNavigationFlowIntent =
+  | 'fleet_add_vehicle'
+  | 'fleet_edit_vehicle'
   | 'vehicle_context_updated'
   | 'vehicle_ready_confirmed'
   | 'route_preview'

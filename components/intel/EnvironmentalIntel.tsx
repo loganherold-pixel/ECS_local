@@ -1,9 +1,16 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECSInlineHelper, ECSStateMessage } from '../ECSStateMessage';
 import { ECSIconButton } from '../ECSButton';
-import { ECSCard, ECSListRow, ECSPanel, ECSSection, ECSSectionBadge, ECSSectionHeader } from '../ECSSurface';
+import {
+  ECSCard,
+  ECSListRow,
+  ECSPanel,
+  ECSSection,
+  ECSSectionBadge,
+  ECSSectionHeader,
+} from '../ECSSurface';
 import { ECSBadge, ECSStateIndicator } from '../ECSStatus';
 
 import { TACTICAL } from '../../lib/theme';
@@ -12,123 +19,310 @@ import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import {
   formatWeatherAlertLine,
-  formatWeatherHeadline,
   formatWeatherWindLine,
 } from '../../lib/ecsWeather';
+import {
+  buildUnifiedWeatherCorridor,
+  getWeatherSolarTimes,
+} from '../../lib/weatherSurfaceSelectors';
 import { ECS_STATE_COPY } from '../../lib/ecsStateCopy';
+import type { ECSRun } from '../../lib/runStore';
+import {
+  useRouteCorridorWeather,
+  type SegmentHazardLevel,
+} from '../navigate/RouteCorridorWeather';
+import {
+  buildEnvironmentSnapshot,
+  formatEnvironmentTime,
+  formatSunlightRemaining,
+  getSunlightSourceLabel,
+} from '../../lib/environmentSnapshotService';
+import { remotenessStore } from '../../lib/remotenessStore';
 
 interface Props {
   activeRoute: ImportedRoute | null;
+  activeRun: ECSRun | null;
   riskScore: number | null;
   riskLevel: string;
   riskColor: string;
 }
 
-type RouteWeatherTarget = {
-  lat: number;
-  lng: number;
-  label: string;
-};
+const silentRouteWeatherToast = (_message: string) => {};
 
-function deriveRouteWeatherTarget(activeRoute: ImportedRoute | null): RouteWeatherTarget | null {
-  if (!activeRoute) return null;
-
-  const waypoint = activeRoute.waypoints[0];
-  if (waypoint) {
-    return {
-      lat: waypoint.lat,
-      lng: waypoint.lon,
-      label: activeRoute.name || 'Route Origin',
-    };
-  }
-
-  const point = activeRoute.segments[0]?.points[0];
-  if (point) {
-    return {
-      lat: point.lat,
-      lng: point.lon,
-      label: activeRoute.name || 'Route Origin',
-    };
-  }
-
-  return null;
-}
-
-function formatShortTime(unixSeconds: number | null | undefined): string {
-  if (!unixSeconds || !Number.isFinite(unixSeconds)) return '--';
-
-  return new Date(unixSeconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function formatElevationLine(feet: number | null, source: string): string {
+  if (feet == null || !Number.isFinite(feet)) return 'Elevation unavailable';
+  const label = source === 'gps' ? 'Device altitude' : source === 'last_known' ? 'Last known' : 'Elevation source';
+  return `${Math.round(feet).toLocaleString()} ft · ${label}`;
 }
 
 function getStatusAppearance(kind: string) {
   switch (kind) {
+    case 'live':
     case 'ready':
       return { label: 'LIVE DATA', color: '#4CAF50', icon: 'cloud-done-outline' as const };
+    case 'cached':
     case 'stale':
       return { label: 'CACHED', color: '#D4A017', icon: 'time-outline' as const };
     case 'offline':
       return { label: 'OFFLINE', color: '#5DADE2', icon: 'cloud-offline-outline' as const };
+    case 'permission_required':
+    case 'permission-blocked':
+      return { label: 'LOCATION REQUIRED', color: TACTICAL.textMuted, icon: 'locate-outline' as const };
+    case 'network-blocked':
+      return { label: 'NETWORK REQUIRED', color: TACTICAL.danger, icon: 'cloud-offline-outline' as const };
     case 'loading':
       return { label: 'LOADING', color: TACTICAL.textMuted, icon: 'sync-outline' as const };
+    case 'provider_error':
+    case 'unavailable':
     case 'error':
       return { label: 'UNAVAILABLE', color: TACTICAL.danger, icon: 'alert-circle-outline' as const };
     default:
-      return { label: 'ROUTE REQUIRED', color: TACTICAL.textMuted, icon: 'locate-outline' as const };
+      return { label: 'LOCATION REQUIRED', color: TACTICAL.textMuted, icon: 'locate-outline' as const };
   }
 }
 
-export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, riskColor }: Props) {
-  const routeCoordinate = useMemo(() => deriveRouteWeatherTarget(activeRoute), [activeRoute]);
+function getRouteHazardColor(level: SegmentHazardLevel): string {
+  switch (level) {
+    case 'hazardous':
+      return TACTICAL.danger;
+    case 'warning':
+      return '#FF7043';
+    case 'caution':
+      return TACTICAL.amber;
+    default:
+      return '#4CAF50';
+  }
+}
+
+function getRouteHazardLabel(level: SegmentHazardLevel): string {
+  switch (level) {
+    case 'hazardous':
+      return 'HAZARD';
+    case 'warning':
+      return 'WARNING';
+    case 'caution':
+      return 'CAUTION';
+    default:
+      return 'CLEAR';
+  }
+}
+
+export default function EnvironmentalIntel({
+  activeRoute,
+  activeRun,
+  riskScore,
+  riskLevel,
+  riskColor,
+}: Props) {
+  const [, setRemotenessRevision] = useState(0);
   const gps = useThrottledGPS();
-  const { snapshot, refresh } = useOperationalWeather({
+  const { snapshot, refresh, result } = useOperationalWeather({
     enabled: true,
     gps: {
       lat: gps.position?.latitude ?? null,
       lng: gps.position?.longitude ?? null,
       hasFix: gps.hasFix,
+      permissionDenied: gps.permissionDenied,
+      accuracyM: gps.position?.accuracyM ?? null,
     },
-    routeCoordinate,
     units: 'imperial',
   });
+  const routeWeatherLocation = useMemo(
+    () => (
+      gps.hasFix && gps.position?.latitude != null && gps.position?.longitude != null
+        ? { lat: gps.position.latitude, lng: gps.position.longitude }
+        : null
+    ),
+    [gps.hasFix, gps.position?.latitude, gps.position?.longitude],
+  );
+  const routeWeather = useRouteCorridorWeather(
+    activeRun,
+    routeWeatherLocation,
+    silentRouteWeatherToast,
+    {
+      forceActive: true,
+      persistPreference: false,
+      emitToasts: false,
+    },
+  );
+  useEffect(() => {
+    remotenessStore.start();
+    const unsubscribe = remotenessStore.subscribe(() => {
+      setRemotenessRevision((value) => value + 1);
+    });
+    return () => {
+      unsubscribe();
+      remotenessStore.stop();
+    };
+  }, []);
+  const remotenessIndex = remotenessStore.getIndex();
+
+  const weatherSurface = useMemo(
+    () => buildUnifiedWeatherCorridor({ snapshot, result, routeWeather }),
+    [result, routeWeather, snapshot],
+  );
+  const solarTimes = useMemo(
+    () => getWeatherSolarTimes(weatherSurface.current),
+    [weatherSurface],
+  );
+  const resolvedCurrentWeather = weatherSurface.current?.current ?? null;
+
+  const resolvedCondition =
+    snapshot.current.condition ??
+    snapshot.current.description ??
+    resolvedCurrentWeather?.weather_main ??
+    resolvedCurrentWeather?.weather_description ??
+    weatherSurface.label;
+  const resolvedTemperatureF =
+    snapshot.current.temp ??
+    resolvedCurrentWeather?.temp ??
+    weatherSurface.temperatureF;
+  const resolvedSunrise =
+    snapshot.raw?.current?.sunrise ??
+    resolvedCurrentWeather?.sunrise ??
+    solarTimes.sunrise;
+  const resolvedSunset =
+    snapshot.raw?.current?.sunset ??
+    resolvedCurrentWeather?.sunset ??
+    solarTimes.sunset;
+  const gpsLat = gps.position?.latitude ?? null;
+  const gpsLon = gps.position?.longitude ?? null;
+  const gpsAccuracyM = gps.position?.accuracyM ?? null;
+  const gpsAltitudeFt = gps.position?.altitudeFt ?? null;
+  const gpsTimestamp = gps.position?.timestamp ?? null;
+  const environment = useMemo(
+    () => buildEnvironmentSnapshot({
+      coordinate: gps.hasFix && gpsLat != null && gpsLon != null
+        ? {
+            latitude: gpsLat,
+            longitude: gpsLon,
+            accuracyM: gpsAccuracyM,
+            altitudeFt: gpsAltitudeFt,
+            source: 'gps',
+            updatedAt: gpsTimestamp,
+          }
+        : null,
+      regionLabel: snapshot.locationName || null,
+      regionSource: snapshot.locationName ? 'weather_provider' : 'unavailable',
+      solarTimes: {
+        sunrise: resolvedSunrise,
+        sunset: resolvedSunset,
+        source: 'weather_provider',
+        updatedAt: snapshot.status.timestampMs ?? snapshot.status.cachedAt ?? snapshot.fetchedAt ?? null,
+      },
+      remoteness: remotenessIndex,
+    }),
+    [
+      gps.hasFix,
+      gpsAccuracyM,
+      gpsAltitudeFt,
+      gpsLat,
+      gpsLon,
+      gpsTimestamp,
+      remotenessIndex,
+      resolvedSunrise,
+      resolvedSunset,
+      snapshot.fetchedAt,
+      snapshot.locationName,
+      snapshot.status.cachedAt,
+      snapshot.status.timestampMs,
+    ],
+  );
+  const sunlightLine =
+    environment.sunlight.status === 'unavailable'
+      ? getSunlightSourceLabel(environment.sunlight)
+      : `${formatSunlightRemaining(environment.sunlight)} · ${getSunlightSourceLabel(environment.sunlight)}`;
+  const remotenessLine =
+    environment.remoteness.score == null
+      ? 'Remoteness unknown'
+      : `${environment.remoteness.label} · services appear limited`;
+  const elevationLine = formatElevationLine(environment.elevation.feet, environment.elevation.source);
+  const resolvedWindLine = snapshot.raw || weatherSurface.current
+    ? formatWeatherWindLine(snapshot)
+    : 'Wind and precipitation details unavailable.';
 
   const statusAppearance = getStatusAppearance(snapshot.status.kind);
-  const headline = snapshot.status.kind === 'ready' || snapshot.status.kind === 'stale' || snapshot.status.kind === 'offline'
-    ? formatWeatherHeadline(snapshot)
-    : 'Weather intelligence unavailable';
-  const windLine = snapshot.raw ? formatWeatherWindLine(snapshot) : 'Wind and precipitation details unavailable.';
-  const alertLine = formatWeatherAlertLine(snapshot);
-  const alertCount = snapshot.alerts.length;
-  const severeAlert = snapshot.alerts[0] ?? null;
+  const headline =
+    snapshot.status.kind === 'ready' ||
+    snapshot.status.kind === 'live' ||
+    snapshot.status.kind === 'cached' ||
+    snapshot.status.kind === 'stale' ||
+    snapshot.status.kind === 'offline'
+      ? `${resolvedCondition ?? 'Weather'} • ${resolvedTemperatureF != null ? `${Math.round(resolvedTemperatureF)}°` : '--'}`
+      : 'Weather intelligence unavailable';
+  const alertLine = formatWeatherAlertLine(snapshot) || weatherSurface.summaryLabel || '';
+  const alertCount = weatherSurface.alerts.length;
+  const severeAlert = weatherSurface.alerts[0] ?? null;
+  const routeHazardDetails = useMemo(
+    () => routeWeather.points
+      .filter((point) => point.hazardLevel !== 'clear')
+      .map((point) => {
+        const current = point.weather?.current;
+        const primaryReason =
+          point.hazardReasons[0] ??
+          point.weather?.alerts?.[0]?.title ??
+          'Route weather requires attention';
+        const condition = current?.weather_main ?? current?.weather_description ?? null;
+        const wind = current?.wind_speed != null ? `${Math.round(current.wind_speed)} mph wind` : null;
+        const temp = current?.temp != null ? `${Math.round(current.temp)} deg` : null;
+        const supportingDetail = [condition, temp, wind].filter(Boolean).join(' / ');
+
+        return {
+          key: `${point.idx}-${point.label}-${point.hazardLevel}`,
+          level: point.hazardLevel,
+          label: `${point.label} - ${point.distanceMi.toFixed(1)} mi`,
+          title: primaryReason,
+          detail: supportingDetail || point.weather?.alerts?.[0]?.description || 'Route-corridor weather hazard.',
+        };
+      })
+      .slice(0, 4),
+    [routeWeather.points],
+  );
+  const routeHazardCount = routeWeather.hazardousCount + routeWeather.cautionCount;
+  const routeHazardSummary = routeWeather.hasRoute
+    ? routeHazardCount > 0
+      ? `${routeHazardCount} route-corridor weather ${routeHazardCount === 1 ? 'hazard' : 'hazards'}`
+      : routeWeather.points.length > 0
+        ? 'No route-corridor weather hazards detected.'
+        : routeWeather.loading
+          ? 'Loading route-corridor weather hazards.'
+          : routeWeather.error || 'Route-corridor weather is pending.'
+    : null;
   const hasWeatherMetrics = Boolean(
-    snapshot.current.condition ||
-    snapshot.current.temp != null ||
-    snapshot.current.windSpeed != null ||
-    snapshot.current.precipChance != null ||
-    snapshot.raw?.current?.sunrise != null ||
-    snapshot.raw?.current?.sunset != null,
+    resolvedCondition ||
+    resolvedTemperatureF != null ||
+    weatherSurface.windMph != null ||
+    weatherSurface.precipitationIntensity != null ||
+    resolvedSunrise != null ||
+    resolvedSunset != null,
   );
 
   const weatherStateCopy = useMemo(() => {
     switch (snapshot.status.kind) {
+      case 'permission_required':
+      case 'permission-blocked':
+        return 'Location permission is required before ECS can resolve live weather from your device position.';
+      case 'network-blocked':
+        return snapshot.status.label || 'Network access is required to refresh live weather conditions.';
       case 'waiting_for_gps':
-        return activeRoute
-          ? 'Waiting for a usable location fix to refine route conditions.'
-          : 'Waiting for current location or an active route to load dispatch weather.';
+        return 'Waiting for a usable device location fix to load live dispatch weather.';
       case 'loading':
         return 'Refreshing field weather and alert conditions.';
       case 'offline':
         return snapshot.status.label || 'Offline. Showing last known weather if available.';
+      case 'cached':
+        return snapshot.status.label || 'Showing cached weather while ECS checks for a fresher update.';
       case 'stale':
         return snapshot.status.label || 'Cached weather is older than ECS prefers for live field use.';
+      case 'provider_error':
       case 'error':
         return snapshot.status.error || 'Weather service unavailable right now.';
+      case 'unavailable':
+        return snapshot.status.error || 'No valid weather location is available right now.';
       default:
-        return snapshot.current.description || 'Live weather data available for the active route.';
+        return snapshot.current.description || 'Live weather data available for the current ECS location.';
     }
-  }, [activeRoute, snapshot]);
+  }, [snapshot]);
 
   const showWeatherDetails = hasWeatherMetrics && snapshot.status.kind !== 'loading';
   const lastUpdatedLabel = snapshot.fetchedAt
@@ -137,11 +331,9 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
   const sourceLabel =
     snapshot.sourceType === 'current_location'
       ? 'Current position'
-      : snapshot.sourceType === 'route_origin'
-        ? 'Route origin'
-        : snapshot.sourceType === 'cached'
-          ? 'Cached field data'
-          : 'Weather source';
+      : snapshot.sourceType === 'cached'
+        ? 'Cached field data'
+        : 'Weather source';
 
   return (
     <ECSSection style={styles.section}>
@@ -178,7 +370,7 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
               <View style={styles.lightStat}>
                 <Ionicons name="thermometer-outline" size={18} color={TACTICAL.amber} />
                 <Text style={styles.lightValue}>
-                  {snapshot.current.temp != null ? `${Math.round(snapshot.current.temp)}°` : '--'}
+                  {resolvedTemperatureF != null ? `${Math.round(resolvedTemperatureF)}°` : '--'}
                 </Text>
                 <Text style={styles.lightLabel}>TEMP</Text>
               </View>
@@ -187,7 +379,9 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
 
               <View style={styles.lightStat}>
                 <Ionicons name="sunny-outline" size={16} color={TACTICAL.amber} />
-                <Text style={styles.lightValue}>{formatShortTime(snapshot.raw?.current?.sunrise)}</Text>
+                <Text style={styles.lightValue}>
+                  {formatEnvironmentTime(environment.sunlight.sunriseIso, environment.timezone.id)}
+                </Text>
                 <Text style={styles.lightLabel}>SUNRISE</Text>
               </View>
 
@@ -195,14 +389,31 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
 
               <View style={styles.lightStat}>
                 <Ionicons name="moon-outline" size={16} color="#5DADE2" />
-                <Text style={styles.lightValue}>{formatShortTime(snapshot.raw?.current?.sunset)}</Text>
+                <Text style={styles.lightValue}>
+                  {formatEnvironmentTime(environment.sunlight.sunsetIso, environment.timezone.id)}
+                </Text>
                 <Text style={styles.lightLabel}>SUNSET</Text>
               </View>
             </View>
 
             <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>SUNLIGHT</Text>
+              <Text style={styles.infoValue}>{sunlightLine}</Text>
+            </View>
+
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>ELEVATION</Text>
+              <Text style={styles.infoValue}>{elevationLine}</Text>
+            </View>
+
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>REMOTENESS</Text>
+              <Text style={styles.infoValue}>{remotenessLine}</Text>
+            </View>
+
+            <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>WIND / PRECIP</Text>
-              <Text style={styles.infoValue}>{windLine}</Text>
+              <Text style={styles.infoValue}>{resolvedWindLine}</Text>
             </View>
 
             <View style={styles.infoRow}>
@@ -216,6 +427,39 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
             <Text style={styles.weatherEmptyText}>{weatherStateCopy}</Text>
           </View>
         )}
+
+        {routeWeather.hasRoute ? (
+          <View style={styles.routeHazardBlock}>
+            <View style={styles.routeHazardHeader}>
+              <Text style={styles.infoLabel}>ROUTE WEATHER HAZARDS</Text>
+              <Text style={styles.routeHazardStatus}>
+                {routeWeather.loading ? 'REFRESHING' : routeWeather.source ? routeWeather.source.toUpperCase() : 'PENDING'}
+              </Text>
+            </View>
+            <Text style={styles.infoValue}>{routeHazardSummary}</Text>
+            {routeHazardDetails.length > 0 ? (
+              <View style={styles.routeHazardList}>
+                {routeHazardDetails.map((hazard) => {
+                  const color = getRouteHazardColor(hazard.level);
+                  return (
+                    <View key={hazard.key} style={styles.routeHazardItem}>
+                      <View style={[styles.routeHazardPill, { borderColor: `${color}55`, backgroundColor: `${color}12` }]}>
+                        <Text style={[styles.routeHazardPillText, { color }]}>
+                          {getRouteHazardLabel(hazard.level)}
+                        </Text>
+                      </View>
+                      <View style={styles.routeHazardCopy}>
+                        <Text style={styles.routeHazardTitle}>{hazard.title}</Text>
+                        <Text style={styles.routeHazardMeta}>{hazard.label}</Text>
+                        <Text style={styles.routeHazardDetail}>{hazard.detail}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </ECSCard>
 
       <ECSPanel variant="quiet" style={styles.subCard}>
@@ -242,7 +486,11 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
       </ECSPanel>
 
       <ECSPanel variant="quiet" style={styles.subCard}>
-        <ECSSectionHeader title="RISK OVERVIEW" icon="shield-outline" accentColor={riskColor || TACTICAL.textMuted} />
+        <ECSSectionHeader
+          title="RISK OVERVIEW"
+          icon="shield-outline"
+          accentColor={riskColor || TACTICAL.textMuted}
+        />
         {riskScore !== null ? (
           <View style={styles.riskRow}>
             <View style={[styles.riskBadge, { borderColor: `${riskColor}30` }]}>
@@ -277,7 +525,7 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
           </View>
         ) : hasWeatherMetrics && (snapshot.status.kind === 'ready' || snapshot.status.kind === 'stale' || snapshot.status.kind === 'offline') ? (
           <ECSStateIndicator
-            label="No active alerts reported for the route origin."
+            label="No active alerts reported for the current ECS location."
             tone="live"
             icon="checkmark-circle-outline"
             style={styles.alertClear}
@@ -290,7 +538,15 @@ export default function EnvironmentalIntel({ activeRoute, riskScore, riskLevel, 
   );
 }
 
-function TerrainRow({ label, value, noDivider = false }: { label: string; value: string; noDivider?: boolean }) {
+function TerrainRow({
+  label,
+  value,
+  noDivider = false,
+}: {
+  label: string;
+  value: string;
+  noDivider?: boolean;
+}) {
   return (
     <ECSListRow
       label={label}
@@ -393,6 +649,71 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: TACTICAL.text,
   },
+  routeHazardBlock: {
+    gap: 6,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(62,79,60,0.12)',
+  },
+  routeHazardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  routeHazardStatus: {
+    fontSize: 7,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.1,
+  },
+  routeHazardList: {
+    gap: 6,
+  },
+  routeHazardItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 8,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(62,79,60,0.16)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+  },
+  routeHazardPill: {
+    minWidth: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 7,
+    borderWidth: 1,
+  },
+  routeHazardPillText: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  routeHazardCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  routeHazardTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.text,
+  },
+  routeHazardMeta: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.amber,
+    letterSpacing: 0.5,
+  },
+  routeHazardDetail: {
+    fontSize: 9,
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+  },
   weatherEmptyState: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -405,8 +726,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: TACTICAL.textMuted,
   },
-  subCard: {
-  },
+  subCard: {},
   terrainGrid: { gap: 1 },
   terrainRow: {
     paddingVertical: 5,

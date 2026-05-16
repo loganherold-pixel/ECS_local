@@ -214,6 +214,7 @@ function resolveVehicleReadinessDimension(args: {
     if (vehicleProfile.fuel_tank_capacity_gal > 0 && vehicleProfile.avg_mpg > 0) score += 14;
     if (vehicleProfile.water_capacity_gal > 0) score += 10;
     if (vehicleProfile.tireSizeInches > 0) score += 8;
+    if (vehicleProfile.suspensionLiftInches > 0 || vehicleProfile.isLeveled || (vehicleProfile.frontLevelInches ?? 0) > 0) score += 4;
     if (vehicleProfile.payload_capacity_lb > 0) score += 6;
     if (vehicleProfile.vehicleName) score += 4;
   }

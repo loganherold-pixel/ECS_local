@@ -34,6 +34,10 @@
 import { Platform } from 'react-native';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
+import {
+  isExpeditionCloudTableUnavailable,
+  markExpeditionCloudTableUnavailable,
+} from './expeditionCloudSyncAvailability';
 
 const TAG = '[EXPEDITION_STATE]';
 
@@ -45,6 +49,16 @@ export interface ExpeditionRecord {
   state: ExpeditionState;
   activeVehicleId: string;
   vehicleName: string;
+  expeditionName?: string;
+  description?: string;
+  teamLeaderName?: string;
+  teamLeaderCallsign?: string;
+  startLocationLabel?: string;
+  destination?: string;
+  areaOfOperation?: string;
+  commsNotes?: string;
+  privacyMode?: 'invite_only' | 'open';
+  joinMode?: 'approval_required' | 'open';
   startTime: string;
   endTime: string | null;
   pausedAt: string | null;       // timestamp when paused
@@ -82,7 +96,6 @@ export type TimelineEventType =
   | 'expedition_paused'
   | 'expedition_resumed'
   | 'expedition_ended'
-  | 'expedition_dismissed'
   | 'tracking_update'
   | 'geofence_exit'
   | 'geofence_entry'
@@ -133,6 +146,23 @@ function sSet(key: string, value: string): void {
   }
 }
 
+function sClear(key: string): void {
+  try {
+    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
+      localStorage.removeItem(key);
+    }
+    delete mem[key];
+    if (Platform.OS !== 'web') {
+      expeditionPersistence.delete(key);
+    }
+  } catch {
+    delete mem[key];
+    if (Platform.OS !== 'web') {
+      expeditionPersistence.delete(key);
+    }
+  }
+}
+
 function uuid(): string {
   const c: any = typeof crypto !== 'undefined' ? crypto : null;
   if (c && c.randomUUID) return c.randomUUID();
@@ -172,6 +202,18 @@ async function hydrateNativeState(): Promise<void> {
       mem[key] = value;
     }
   });
+
+  try {
+    const rawCurrent = mem[KEYS.currentExpedition];
+    const current = rawCurrent ? JSON.parse(rawCurrent) as ExpeditionRecord : null;
+    const hasActiveLifecycle = current?.state === 'active' || current?.state === 'paused';
+    if (!hasActiveLifecycle) {
+      sClear(KEYS.homeGeofence);
+    }
+  } catch {
+    sClear(KEYS.currentExpedition);
+    sClear(KEYS.homeGeofence);
+  }
 }
 
 const expeditionStateHydration = hydrateNativeState();
@@ -180,6 +222,9 @@ const expeditionStateHydration = hydrateNativeState();
 
 async function syncSessionToCloud(record: ExpeditionRecord, userId?: string | null): Promise<string | null> {
   if (!isSupabaseConfigured) return null;
+  if (isExpeditionCloudTableUnavailable('expedition_sessions')) {
+    return record.cloudSessionId;
+  }
   try {
     const payload: any = {
       vehicle_id: record.activeVehicleId,
@@ -205,6 +250,9 @@ async function syncSessionToCloud(record: ExpeditionRecord, userId?: string | nu
         .update(payload)
         .eq('id', record.cloudSessionId);
       if (error) {
+        if (markExpeditionCloudTableUnavailable(TAG, 'expedition_sessions', error)) {
+          return record.cloudSessionId;
+        }
         console.warn(TAG, 'Cloud session update failed:', error.message);
         return record.cloudSessionId;
       }
@@ -219,12 +267,18 @@ async function syncSessionToCloud(record: ExpeditionRecord, userId?: string | nu
         .select('id')
         .single();
       if (error || !data) {
+        if (error && markExpeditionCloudTableUnavailable(TAG, 'expedition_sessions', error)) {
+          return null;
+        }
         console.warn(TAG, 'Cloud session create failed:', error?.message);
         return null;
       }
       return data.id;
     }
   } catch (e: any) {
+    if (markExpeditionCloudTableUnavailable(TAG, 'expedition_sessions', e)) {
+      return record.cloudSessionId;
+    }
     console.warn(TAG, 'Cloud sync error:', e?.message);
     return null;
   }
@@ -232,8 +286,9 @@ async function syncSessionToCloud(record: ExpeditionRecord, userId?: string | nu
 
 async function logTimelineToCloud(sessionId: string, eventType: TimelineEventType, eventData: Record<string, any>): Promise<void> {
   if (!isSupabaseConfigured) return;
+  if (isExpeditionCloudTableUnavailable('expedition_timeline_events')) return;
   try {
-    await supabase
+    const { error } = await supabase
       .from('expedition_timeline_events')
       .insert({
         session_id: sessionId,
@@ -241,7 +296,12 @@ async function logTimelineToCloud(sessionId: string, eventType: TimelineEventTyp
         event_data: eventData,
         occurred_at: new Date().toISOString(),
       });
+    if (error) {
+      if (markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline_events', error)) return;
+      console.warn(TAG, 'Timeline cloud log failed:', error.message);
+    }
   } catch (e: any) {
+    if (markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline_events', e)) return;
     console.warn(TAG, 'Timeline cloud log failed:', e?.message);
   }
 }
@@ -331,8 +391,8 @@ export const expeditionStateStore = {
     appendLocalTimeline(event);
 
     // Background cloud sync
-    if (record?.cloudSessionId || record?.id) {
-      logTimelineToCloud(record?.cloudSessionId || record?.id || sessionId, eventType, eventData).catch(() => {});
+    if (record?.cloudSessionId) {
+      logTimelineToCloud(record.cloudSessionId, eventType, eventData).catch(() => {});
     }
 
     return event;
@@ -342,6 +402,17 @@ export const expeditionStateStore = {
   beginExpedition(params: {
     activeVehicleId: string;
     vehicleName: string;
+    expeditionName?: string;
+    description?: string;
+    teamLeaderName?: string;
+    teamLeaderCallsign?: string;
+    startLocationLabel?: string;
+    destination?: string;
+    areaOfOperation?: string;
+    commsNotes?: string;
+    privacyMode?: 'invite_only' | 'open';
+    joinMode?: 'approval_required' | 'open';
+    startTime?: string;
     startFuelLevel?: number | null;
     startWaterLevel?: number | null;
     latitude?: number | null;
@@ -353,7 +424,17 @@ export const expeditionStateStore = {
       state: 'active',
       activeVehicleId: params.activeVehicleId,
       vehicleName: params.vehicleName,
-      startTime: new Date().toISOString(),
+      expeditionName: params.expeditionName,
+      description: params.description,
+      teamLeaderName: params.teamLeaderName,
+      teamLeaderCallsign: params.teamLeaderCallsign,
+      startLocationLabel: params.startLocationLabel,
+      destination: params.destination,
+      areaOfOperation: params.areaOfOperation,
+      commsNotes: params.commsNotes,
+      privacyMode: params.privacyMode,
+      joinMode: params.joinMode,
+      startTime: params.startTime ?? new Date().toISOString(),
       endTime: null,
       pausedAt: null,
       totalPausedMs: 0,
@@ -385,6 +466,15 @@ export const expeditionStateStore = {
     this.logTimelineEvent('expedition_started', {
       vehicleId: params.activeVehicleId,
       vehicleName: params.vehicleName,
+      expeditionName: params.expeditionName,
+      description: params.description,
+      teamLeaderName: params.teamLeaderName,
+      teamLeaderCallsign: params.teamLeaderCallsign,
+      destination: params.destination,
+      areaOfOperation: params.areaOfOperation,
+      commsNotes: params.commsNotes,
+      privacyMode: params.privacyMode,
+      joinMode: params.joinMode,
       startFuelLevel: params.startFuelLevel,
       startWaterLevel: params.startWaterLevel,
     });
@@ -524,25 +614,11 @@ export const expeditionStateStore = {
     // Background cloud sync
     syncSessionToCloud(record, params?.userId).catch(() => {});
 
+    // Completed expeditions should not leave a stale auto-start geofence behind.
+    this.clearHomeGeofence();
+
     this._notify();
     return record;
-  },
-
-  // ── Dismiss completed expedition (back to standby) ─────
-  dismissExpedition(): void {
-    const record = this.getCurrentExpedition();
-    if (record && record.state === 'complete') {
-      // Log timeline event before clearing
-      this.logTimelineEvent('expedition_dismissed', {
-        expeditionId: record.id,
-        vehicleName: record.vehicleName,
-        duration: record.duration,
-      });
-
-      sSet(KEYS.currentExpedition, '');
-      console.log(TAG, 'Expedition dismissed, returning to standby');
-      this._notify();
-    }
   },
 
   // ── Update tracking data during active expedition ──────
@@ -563,7 +639,8 @@ export const expeditionStateStore = {
 
   // ── Force reset to standby ─────────────────────────────
   reset(): void {
-    sSet(KEYS.currentExpedition, '');
+    sClear(KEYS.currentExpedition);
+    this.clearHomeGeofence();
     this._notify();
   },
 
@@ -596,6 +673,10 @@ export const expeditionStateStore = {
   // ── Geofence ───────────────────────────────────────────
   setHomeGeofence(lat: number, lng: number): void {
     sSet(KEYS.homeGeofence, JSON.stringify({ lat, lng }));
+  },
+
+  clearHomeGeofence(): void {
+    sClear(KEYS.homeGeofence);
   },
 
   getHomeGeofence(): { lat: number; lng: number } | null {
@@ -677,6 +758,7 @@ export const expeditionStateStore = {
   // ── Load session history from cloud ────────────────────
   async loadCloudHistory(userId: string): Promise<ExpeditionLogEntry[]> {
     if (!isSupabaseConfigured) return [];
+    if (isExpeditionCloudTableUnavailable('expedition_sessions')) return [];
     try {
       const { data, error } = await supabase
         .from('expedition_sessions')
@@ -685,7 +767,10 @@ export const expeditionStateStore = {
         .order('created_at', { ascending: false })
         .limit(50);
 
-      if (error || !data) return [];
+      if (error || !data) {
+        if (error) markExpeditionCloudTableUnavailable(TAG, 'expedition_sessions', error);
+        return [];
+      }
 
       return data.map((row: any) => ({
         id: row.id,
@@ -699,7 +784,8 @@ export const expeditionStateStore = {
         waterDelta: row.water_delta,
         peakRemoteness: row.peak_remoteness,
       }));
-    } catch {
+    } catch (e) {
+      markExpeditionCloudTableUnavailable(TAG, 'expedition_sessions', e);
       return [];
     }
   },

@@ -170,19 +170,20 @@ class VehicleTelemetryService {
 
   // ── Event Emitter ───────────────────────────────────────
 
-  on(event: VTEventName, cb: VTListener): Unsubscribe {
-    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-    this.listeners.get(event)!.add(cb);
+  on(event: string, cb: VTListener): Unsubscribe {
+    const typedEvent = event as VTEventName;
+    if (!this.listeners.has(typedEvent)) this.listeners.set(typedEvent, new Set());
+    this.listeners.get(typedEvent)!.add(cb);
     return () => {
-      this.listeners.get(event)?.delete(cb);
+      this.listeners.get(typedEvent)?.delete(cb);
     };
   }
 
-  subscribe(event: VTEventName, cb: VTListener): Unsubscribe {
+  subscribe(event: string, cb: VTListener): Unsubscribe {
     return this.on(event, cb);
   }
 
-  addListener(event: VTEventName, cb: VTListener): { remove: () => void } {
+  addListener(event: string, cb: VTListener): { remove: () => void } {
     const unsub = this.on(event, cb);
     return { remove: unsub };
   }
@@ -202,6 +203,10 @@ class VehicleTelemetryService {
   // ── Public Read API ────────────────────────────────────
 
   getState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  getConnectionState(): ConnectionState {
     return this.connectionState;
   }
 
@@ -458,7 +463,12 @@ class VehicleTelemetryService {
     if (this.adapter === adapter) return;
     this.unbindAdapter();
     this.adapter = adapter;
+    this.started = true;
+    this.pollerEnabled = true;
+    this.pollerRunning = !!adapter.isConnected?.();
     this.bindAdapter(adapter);
+    this.resolveCurrentDevice();
+    this.emit('state', this.getServiceStateSnapshot());
   }
 
   setPrimaryDevice(device: DeviceLike | null): void {
@@ -567,8 +577,10 @@ class VehicleTelemetryService {
   };
 
   private handleConnected = (_payload?: any): void => {
+    this.started = true;
     this.resolveCurrentDevice();
     this.markRegistryState('connected');
+    this.pollerEnabled = true;
     this.setConnectionState('connected');
     this.retryCount = 0;
     this.clearRetryTimer();
@@ -576,11 +588,19 @@ class VehicleTelemetryService {
     this.emit('connect', { device: this.currentDevice });
   };
 
-  private handleDisconnected = (_payload?: any): void => {
+  private handleDisconnected = (payload?: any): void => {
     this.markRegistryState('disconnected');
+    this.pollerRunning = false;
     this.setConnectionState('disconnected');
     this.emit('disconnected', { device: this.currentDevice });
     this.emit('disconnect', { device: this.currentDevice });
+
+    const requested = payload?.requested === true || payload?.reason === 'user_disconnect';
+    if (requested) {
+      this.started = false;
+      this.pollerEnabled = false;
+      return;
+    }
 
     if (this.started) {
       this.scheduleReconnect();
@@ -588,7 +608,9 @@ class VehicleTelemetryService {
   };
 
   private handleReconnectStarted = (_payload?: any): void => {
+    this.started = true;
     this.markRegistryState('reconnecting');
+    this.pollerRunning = false;
     this.setConnectionState('reconnecting');
     this.emit('reconnecting', { device: this.currentDevice });
     this.emit('reconnect_start', { device: this.currentDevice });
@@ -753,6 +775,7 @@ class VehicleTelemetryService {
 }
 
 export const vehicleTelemetryService = new VehicleTelemetryService();
+vehicleTelemetryStore.attachToService(vehicleTelemetryService);
 export default vehicleTelemetryService;
 export type {
   AdapterLike as VehicleTelemetryAdapterLike,

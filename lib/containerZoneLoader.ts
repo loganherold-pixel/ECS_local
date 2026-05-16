@@ -13,7 +13,12 @@
 
 import { Platform } from 'react-native';
 import type { ContainerZone, AccessoryFramework } from './accessoryFramework';
-import { generateContainerZonesFromAccessories, resolveZoneBias } from './accessoryFramework';
+import {
+  generateContainerZonesFromAccessories,
+  normalizeAccessoryFramework,
+  resolveZoneBias,
+  sanitizeContainerZones,
+} from './accessoryFramework';
 
 const LS_KEY = 'ecs_local_vehicles';
 const memoryStore: Record<string, string> = {};
@@ -58,13 +63,14 @@ export function loadContainerZonesForVehicle(vehicleId: string): ContainerZone[]
     if (!vehicle) return [];
 
     // Priority 1: Pre-computed containerZones from Phase 2 (backfill bias)
-    if (vehicle.containerZones && Array.isArray(vehicle.containerZones) && vehicle.containerZones.length > 0) {
-      return (vehicle.containerZones as any[]).map(ensureZoneBias);
+    const persistedZones = sanitizeContainerZones(vehicle.containerZones);
+    if (persistedZones.length > 0) {
+      return persistedZones.map(ensureZoneBias);
     }
 
     // Priority 2: Regenerate from accessoryFramework (includes bias from Phase 5B)
-    if (vehicle.accessoryFramework) {
-      const framework = vehicle.accessoryFramework as AccessoryFramework;
+    const framework = normalizeAccessoryFramework(vehicle.accessoryFramework as AccessoryFramework | null);
+    if (framework) {
       const zones = generateContainerZonesFromAccessories(framework);
       if (zones.length > 0) return zones;
     }
@@ -92,12 +98,12 @@ export function vehicleHasAccessories(vehicleId: string): boolean {
     const vehicle = vehicles.find((v: any) => v.id === vehicleId);
     if (!vehicle) return false;
 
-    if (vehicle.containerZones && Array.isArray(vehicle.containerZones) && vehicle.containerZones.length > 0) {
+    if (sanitizeContainerZones(vehicle.containerZones).length > 0) {
       return true;
     }
 
-    if (vehicle.accessoryFramework) {
-      const fw = vehicle.accessoryFramework as AccessoryFramework;
+    const fw = normalizeAccessoryFramework(vehicle.accessoryFramework as AccessoryFramework | null);
+    if (fw) {
       return Object.values(fw).some((entry: any) => entry && entry.enabled);
     }
 

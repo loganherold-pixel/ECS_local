@@ -11,7 +11,12 @@ import { explainRecommendation } from '../ai/recommendationExplanationEngine';
 import { buildTrustMetadata } from '../ai/trustContract';
 import { bucketStableScore } from '../ai/scoreStability';
 import type { EnrichedDiscoveryRoute } from '../discoveryIntelligenceEngine';
+import type { ECSVehicularState } from '../fleet/activeVehicleState';
 import type { ECSLiveStatusResult } from '../status/liveStatusTypes';
+import {
+  getActiveVehicleSnapshotForEcs,
+  scoreVehicleSuitabilityForEcs,
+} from '../vehicleEcsIntegration';
 
 export type ExploreSectionType = 'hidden_gem' | 'popular_trail';
 
@@ -29,6 +34,7 @@ export type ExploreOrchestrationParams = {
   operationalState?: ECSOperationalState | null;
   recommendationStatus?: ECSLiveStatusResult | null;
   primaryCandidate?: ECSOrchestratorCandidate | null;
+  activeVehicleState?: ECSVehicularState | null;
   hasGPSFix: boolean;
 };
 
@@ -111,6 +117,7 @@ function enrichRouteForExplore(
   rawOrchestrationScore += degradedAdjustment(params.operationalState, route, params.section);
   rawOrchestrationScore += recommendationStatusAdjustment(params.recommendationStatus);
   rawOrchestrationScore += externalFocusAdjustment(params.primaryCandidate, adjustedConfidence.level);
+  rawOrchestrationScore += vehicleSuitabilityAdjustment(route, params);
   rawOrchestrationScore += trustModeExploreScoreAdjustment({
     mode: operatorTrustMode,
     confidenceLevel: adjustedConfidence.level,
@@ -160,6 +167,47 @@ function baseRouteScore(
     curatedRoute.categoryScore ??
     route.gemScore.score;
   return (curatedPopularScore * 0.84) + ((route.vehicleFit?.score ?? route.vehicleMatch?.score ?? 0) * 0.16);
+}
+
+function routeAccessDemand(route: EnrichedDiscoveryRoute): string | null {
+  const fields = [
+    (route as any).accessDifficulty,
+    (route as any).difficulty,
+    (route as any).trailDifficulty,
+    (route as any).terrainDifficultyLabel,
+    route.riskPreview?.level,
+  ].filter(Boolean).join(' ');
+  const text = fields.toLowerCase();
+  if (text.includes('technical') || text.includes('difficult')) return 'technical';
+  if (text.includes('high') || text.includes('clearance')) return 'high_clearance';
+  if (text.includes('moderate')) return 'moderate';
+  if (text.includes('easy') || text.includes('low')) return 'easy';
+  return null;
+}
+
+function vehicleSuitabilityAdjustment(
+  route: EnrichedDiscoveryRoute,
+  params: ExploreOrchestrationParams,
+): number {
+  const fit = scoreVehicleSuitabilityForEcs({
+    activeVehicleState: params.activeVehicleState ?? getActiveVehicleSnapshotForEcs(),
+    accessDemand: routeAccessDemand(route),
+    routeDistanceMiles: route.distanceMiles ?? route.distanceFromUserMiles ?? null,
+    remotenessScore: route.remotenessScore != null ? route.remotenessScore * 10 : null,
+  });
+  switch (fit.level) {
+    case 'strong':
+      return 8;
+    case 'workable':
+      return 4;
+    case 'caution':
+      return -8;
+    case 'limited':
+      return -18;
+    case 'unknown':
+    default:
+      return -4;
+  }
 }
 
 function confidenceBoost(level: EnrichedDiscoveryRoute['recommendationConfidence']['level']): number {
@@ -346,6 +394,16 @@ function buildExploreDrivers(
   const drivers: string[] = [];
 
   if (section === 'hidden_gem') {
+    const fit = scoreVehicleSuitabilityForEcs({
+      accessDemand: routeAccessDemand(route),
+      routeDistanceMiles: route.distanceMiles ?? route.distanceFromUserMiles ?? null,
+      remotenessScore: route.remotenessScore != null ? route.remotenessScore * 10 : null,
+    });
+    if (fit.level === 'strong' || fit.level === 'workable') {
+      drivers.push(fit.label.toLowerCase());
+    } else if (fit.concerns[0]) {
+      drivers.push(fit.concerns[0].toLowerCase());
+    }
     if (route.gemScore.factors.lowPopularity >= 70 || route.routeLabel === 'Hidden Gem') {
       drivers.push('lower exposure');
     }
@@ -361,6 +419,14 @@ function buildExploreDrivers(
       drivers.push('remote setting');
     }
   } else {
+    const fit = scoreVehicleSuitabilityForEcs({
+      accessDemand: routeAccessDemand(route),
+      routeDistanceMiles: route.distanceMiles ?? route.distanceFromUserMiles ?? null,
+      remotenessScore: route.remotenessScore != null ? route.remotenessScore * 10 : null,
+    });
+    if (fit.level === 'strong' || fit.level === 'workable') {
+      drivers.push(fit.label.toLowerCase());
+    }
     const curatedDrivers = (route as ExploreRouteWithCurationMetadata).sourceMetadata?.rationaleDrivers ?? [];
     if (curatedDrivers.length > 0) {
       drivers.push(...curatedDrivers);

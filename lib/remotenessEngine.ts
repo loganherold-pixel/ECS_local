@@ -603,6 +603,22 @@ export interface RemotenessEngineInput {
   cacheReady: boolean;
   gpsLat: number | null;
   gpsLon: number | null;
+  infrastructureOverride?: Partial<InfrastructureProximity> | null;
+}
+
+function mergeInfrastructureProximity(
+  base: InfrastructureProximity,
+  override?: Partial<InfrastructureProximity> | null,
+): InfrastructureProximity {
+  if (!override) return base;
+
+  return {
+    nearestPavedRoad: override.nearestPavedRoad ?? base.nearestPavedRoad,
+    nearestTown: override.nearestTown ?? base.nearestTown,
+    nearestFuelStation: override.nearestFuelStation ?? base.nearestFuelStation,
+    nearestEmergencyServices: override.nearestEmergencyServices ?? base.nearestEmergencyServices,
+    nearestServices: override.nearestServices ?? base.nearestServices,
+  };
 }
 
 export function computeFullRemoteness(input: RemotenessEngineInput): {
@@ -618,14 +634,20 @@ export function computeFullRemoteness(input: RemotenessEngineInput): {
   confidence: RemotenessIndexOutput['confidence'];
   priority: RemotenessIndexOutput['priority'];
 } {
-  // 1. Estimate infrastructure proximity
-  const proximity = estimateInfrastructureProximity(
+  // 1. Estimate infrastructure proximity, then overlay any live GPS-derived
+  // lookups so road / town / fuel can stay truthful without rewriting the
+  // rest of the remoteness model.
+  const estimatedProximity = estimateInfrastructureProximity(
     input.speedMph,
     input.connectivityState,
     input.elevationFt,
     input.hasActiveRoute,
     input.terrainComplexity,
     input.cacheReady,
+  );
+  const proximity = mergeInfrastructureProximity(
+    estimatedProximity,
+    input.infrastructureOverride,
   );
 
   // 2. Assess connectivity
@@ -720,7 +742,6 @@ export function computeFullRemoteness(input: RemotenessEngineInput): {
     description,
     confidence,
     priority,
-    explanation,
   };
 }
 

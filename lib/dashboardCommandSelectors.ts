@@ -4,6 +4,7 @@ import type { ECSOrchestratorTargetView } from './ai/orchestratorSelectors';
 import type { ECSOperationalState, ECSDegradedOperationsResult } from './ai/degradedOperationsTypes';
 import type { ECSExpeditionPhase } from './ai/expeditionPhaseTypes';
 import type { ECSLiveStatusMap } from './status/liveStatusTypes';
+import { isLowValueTelemetryDegradedSummary } from './ai/degradedOperationsEngine';
 import { selectLiveStatusForSource } from './status/liveStatusResolver';
 
 export type DashboardCommandTone =
@@ -60,7 +61,6 @@ type SelectDashboardCommandStateArgs = {
   operationalSummary: string | null | undefined;
   operations: ECSDegradedOperationsResult | null | undefined;
   liveStatus: ECSLiveStatusMap | null | undefined;
-  isCompact: boolean;
   hasLiveGps: boolean;
   isOnline: boolean;
 };
@@ -206,7 +206,6 @@ export function selectDashboardCommandState(
     operationalSummary,
     operations,
     liveStatus,
-    isCompact,
     hasLiveGps,
     isOnline,
   } = args;
@@ -222,6 +221,12 @@ export function selectDashboardCommandState(
     (operationalState && operationalState !== 'fully_operational'
       ? capitalizeWords(operationalState)
       : null);
+  const suppressOperationalFallback =
+    !primary &&
+    !missionBrief &&
+    operations?.state === 'degraded' &&
+    isLowValueTelemetryDegradedSummary(operations.summary ?? operationalSummary);
+  const visibleOperationalLabel = suppressOperationalFallback ? null : operationalLabel;
 
   const primaryTitle =
     cleanText(primary?.title) ||
@@ -248,7 +253,7 @@ export function selectDashboardCommandState(
     ? priorityTone(primary.priority?.level)
     : operationalTone(operations?.state ?? operationalState);
 
-  const banner = primary || operations || missionBrief
+  const banner = !suppressOperationalFallback && (primary || operations || missionBrief)
     ? {
         title: primaryTitle,
         detail:
@@ -306,10 +311,10 @@ export function selectDashboardCommandState(
   if (confidence) {
     badges.push(confidence);
   }
-  if (operationalLabel) {
+  if (visibleOperationalLabel) {
     badges.push({
       id: 'operations',
-      label: operationalLabel,
+      label: visibleOperationalLabel,
       tone:
         operations?.state === 'degraded' ||
         operations?.state === 'limited' ||
@@ -329,34 +334,32 @@ export function selectDashboardCommandState(
     });
   }
 
-  const secondaryLabels = secondaryTitles(secondary, isCompact ? 1 : 2);
+  const secondaryLabels = secondaryTitles(secondary, 2);
 
   return {
     primary,
     secondary,
     passive,
     phaseLabel,
-    operationalLabel,
+    operationalLabel: visibleOperationalLabel,
     compactSummary:
       cleanText(primary?.summary) ||
       cleanText(compactLine) ||
       cleanText(summaryLine) ||
       cleanText(missionBrief?.compactLabel) ||
       primaryTitle,
-    metaLabel: cleanText(missionBrief?.compactLabel) || phaseLabel || operationalLabel,
+    metaLabel: cleanText(missionBrief?.compactLabel) || phaseLabel || visibleOperationalLabel,
     metaSignal: cleanText(primary?.title) || cleanText(topSignalTitle) || null,
     banner,
     surface: {
-      visible: Boolean(primary || secondaryLabels.length || operationalLabel),
+      visible: Boolean(primary || secondaryLabels.length || visibleOperationalLabel),
       eyebrow: buildEyebrow({
         phaseLabel,
-        operationalLabel,
+        operationalLabel: visibleOperationalLabel,
         primary,
       }),
       title: primaryTitle,
-      detail: isCompact
-        ? cleanText(primary?.summary) || cleanText(compactLine) || null
-        : primaryDetail,
+      detail: primaryDetail,
       badges,
       secondary: secondaryLabels,
     },

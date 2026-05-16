@@ -5,16 +5,15 @@
  * In Expo SDK 54 (expo-file-system ~19.0.0), ALL function-based APIs
  * are deprecated in favour of the new File / Directory class API.
  *
- * This module provides drop-in wrapper functions that use a 3-layer
+ * This module provides drop-in wrapper functions that use a 2-layer
  * fallback strategy for every operation:
  *
  *   Layer 1 — expo-file-system/legacy  (the official compat shim)
  *   Layer 2 — new File / Directory API (the SDK 54+ replacement)
- *   Layer 3 — classic API with typeof guard (last resort, may warn)
  *
  * Consumers import from here instead of calling expo-file-system
- * directly, ensuring the app works across SDK 53, 54, and future
- * versions without deprecation warnings or runtime crashes.
+ * directly, ensuring the app avoids SDK 54 deprecated method imports
+ * while preserving current file paths and behavior.
  *
  * Deprecated APIs wrapped:
  *   getInfoAsync, makeDirectoryAsync, deleteAsync, writeAsStringAsync,
@@ -24,6 +23,7 @@
  */
 
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 // ── Module-level caches ──────────────────────────────────────
 
@@ -34,6 +34,7 @@ let _modernFS: any = null;
 let _modernLoaded = false;
 
 let _documentDir: string | null = null;
+let _documentDirPromise: Promise<string> | null = null;
 const SHOULD_DEBUG_DOCUMENT_DIR =
   typeof __DEV__ !== 'undefined' && __DEV__ && Platform.OS === 'android';
 
@@ -65,11 +66,7 @@ async function getModern(): Promise<any> {
 
 function debugDocumentDir(message: string, metadata?: Record<string, unknown>) {
   if (!SHOULD_DEBUG_DOCUMENT_DIR) return;
-  if (metadata) {
-    console.log(`[fsCompat] ${message}`, metadata);
-    return;
-  }
-  console.log(`[fsCompat] ${message}`);
+  ecsLog.debug('SYSTEM', `[fsCompat] ${message}`, metadata);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -82,51 +79,47 @@ function debugDocumentDir(message: string, metadata?: Record<string, unknown>) {
  */
 export async function getDocumentDirectory(): Promise<string> {
   if (_documentDir) return _documentDir;
+  if (_documentDirPromise) return _documentDirPromise;
 
-  // Layer 1: legacy shim
-  // ECS already has native persisted state written at this location.
-  // Prefer it first so startup/session/setup caches rehydrate from the
-  // same durable path across updates and dev-client reloads.
+  _documentDirPromise = (async () => {
+    // Layer 1: legacy shim
+    // ECS already has native persisted state written at this location.
+    // Prefer it first so startup/session/setup caches rehydrate from the
+    // same durable path across updates and dev-client reloads.
+    try {
+      const legacy = await getLegacy();
+      debugDocumentDir('legacy documentDirectory probe', {
+        value: legacy?.documentDirectory ?? null,
+      });
+      if (legacy?.documentDirectory) {
+        _documentDir = legacy.documentDirectory;
+        if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
+        return _documentDir ?? '';
+      }
+    } catch {}
+
+    // Layer 2: new Paths API
+    try {
+      const mod = await getModern();
+      debugDocumentDir('Paths.document probe', {
+        value: mod?.Paths?.document?.uri ?? null,
+      });
+      if (mod?.Paths?.document?.uri) {
+        _documentDir = mod.Paths.document.uri;
+        if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
+        return _documentDir ?? '';
+      }
+    } catch {}
+
+    debugDocumentDir('documentDirectory unresolved');
+    return '';
+  })();
+
   try {
-    const legacy = await getLegacy();
-    debugDocumentDir('legacy documentDirectory probe', {
-      value: legacy?.documentDirectory ?? null,
-    });
-    if (legacy?.documentDirectory) {
-      _documentDir = legacy.documentDirectory;
-      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
-      return _documentDir ?? '';
-    }
-  } catch {}
-
-  // Layer 2: classic module
-  try {
-    const mod = await getModern();
-    debugDocumentDir('classic documentDirectory probe', {
-      value: mod?.documentDirectory ?? null,
-    });
-    if (mod?.documentDirectory) {
-      _documentDir = mod.documentDirectory;
-      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
-      return _documentDir ?? '';
-    }
-  } catch {}
-
-  // Layer 3: new Paths API
-  try {
-    const mod = await getModern();
-    debugDocumentDir('Paths.document probe', {
-      value: mod?.Paths?.document?.uri ?? null,
-    });
-    if (mod?.Paths?.document?.uri) {
-      _documentDir = mod.Paths.document.uri;
-      if (_documentDir && !_documentDir.endsWith('/')) _documentDir += '/';
-      return _documentDir ?? '';
-    }
-  } catch {}
-
-  debugDocumentDir('documentDirectory unresolved');
-  return '';
+    return await _documentDirPromise;
+  } finally {
+    _documentDirPromise = null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -192,20 +185,6 @@ export async function fsGetInfo(uri: string): Promise<FsInfo> {
     }
   } catch {}
 
-  // Layer 3: classic API (may warn on SDK 54+)
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.getInfoAsync === 'function') {
-      const info = await (mod as any).getInfoAsync(uri);
-      return {
-        exists: !!info.exists,
-        isDirectory: !!info.isDirectory,
-        size: (info as any).size ?? 0,
-        uri,
-      };
-    }
-  } catch {}
-
   return notFound;
 }
 
@@ -232,15 +211,6 @@ export async function fsMakeDir(uri: string): Promise<void> {
     if (mod?.Directory) {
       const dir = new mod.Directory(uri);
       dir.create();
-      return;
-    }
-  } catch {}
-
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.makeDirectoryAsync === 'function') {
-      await (mod as any).makeDirectoryAsync(uri, { intermediates: true });
       return;
     }
   } catch {}
@@ -302,14 +272,6 @@ export async function fsDelete(uri: string, options?: { idempotent?: boolean }):
     }
   } catch {}
 
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.deleteAsync === 'function') {
-      await (mod as any).deleteAsync(uri, options ?? { idempotent: true });
-      return;
-    }
-  } catch {}
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -360,18 +322,6 @@ export async function fsWriteString(
     }
   } catch {}
 
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.writeAsStringAsync === 'function') {
-      const enc = encoding === 'base64'
-        ? ((mod as any).EncodingType?.Base64 ?? 'base64')
-        : ((mod as any).EncodingType?.UTF8 ?? 'utf8');
-      await (mod as any).writeAsStringAsync(uri, content, { encoding: enc });
-      return;
-    }
-  } catch {}
-
   console.warn('[fsCompat] fsWriteString: no viable API for', uri);
 }
 
@@ -418,17 +368,6 @@ export async function fsReadString(
       } else {
         return await file.text();
       }
-    }
-  } catch {}
-
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.readAsStringAsync === 'function') {
-      const enc = encoding === 'base64'
-        ? ((mod as any).EncodingType?.Base64 ?? 'base64')
-        : ((mod as any).EncodingType?.UTF8 ?? 'utf8');
-      return await (mod as any).readAsStringAsync(uri, { encoding: enc });
     }
   } catch {}
 
@@ -526,20 +465,7 @@ export async function fsDownload(
     }
   } catch {}
 
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.downloadAsync === 'function') {
-      const result = await (mod as any).downloadAsync(url, destUri);
-      return {
-        uri: result?.uri ?? destUri,
-        status: result?.status ?? 0,
-        headers: result?.headers,
-      };
-    }
-  } catch {}
-
-  // Layer 4: fetch + write fallback
+  // Layer 3: fetch + write fallback
   try {
     const response = await fetch(url);
     if (!response.ok) {
@@ -589,14 +515,6 @@ export async function fsReadDir(uri: string): Promise<string[]> {
     }
   } catch {}
 
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.readDirectoryAsync === 'function') {
-      return await (mod as any).readDirectoryAsync(uri);
-    }
-  } catch {}
-
   console.warn('[fsCompat] fsReadDir: no viable API for', uri);
   return [];
 }
@@ -625,20 +543,7 @@ export async function fsGetDiskStorage(): Promise<{
     }
   } catch {}
 
-  // Layer 2: no new API equivalent — skip to Layer 3
-
-  // Layer 3: classic API
-  try {
-    const mod = await getModern();
-    if (typeof (mod as any)?.getFreeDiskStorageAsync === 'function') {
-      const freeBytes = await (mod as any).getFreeDiskStorageAsync();
-      const totalBytes = typeof (mod as any).getTotalDiskCapacityAsync === 'function'
-        ? await (mod as any).getTotalDiskCapacityAsync()
-        : 0;
-      return { freeBytes, totalBytes };
-    }
-  } catch {}
-
+  // No new SDK 54 File/Directory equivalent is available here.
   return null;
 }
 

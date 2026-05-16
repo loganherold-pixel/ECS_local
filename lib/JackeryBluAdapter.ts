@@ -32,6 +32,7 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
+import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
 import {
   isJackeryDeviceName,
   extractJackeryModelFromName,
@@ -409,6 +410,13 @@ class JackeryBluAdapter {
     try {
       // On web or when BLE is unavailable, return simulated devices
       if (Platform.OS === 'web' || !this.isBleAvailable()) {
+        if (!isDevMockTelemetryAllowed()) {
+          console.log('[BT_LIVE] mock_disabled', { provider: 'jackery', phase: 'scan' });
+          this.discoveredDevices = [];
+          this.lastError = 'Live Bluetooth scan unavailable; mock discovery is disabled.';
+          this.lastErrorCode = 'MOCK_DISABLED';
+          return [];
+        }
         console.log('[JackeryBluAdapter] BLE unavailable — using simulated discovery.');
         await this.simulateDelay(1500);
 
@@ -621,7 +629,7 @@ class JackeryBluAdapter {
     this.reconnectAttempts = 0;
 
     bluStateStore.setReconnecting(false);
-    bluStateStore.reset();
+    bluStateStore.clearProviderTelemetry('jackery');
     bluSessionStore.recordDisconnection();
 
     this.notify();
@@ -1106,4 +1114,3 @@ class JackeryBluAdapter {
 // ── Singleton ───────────────────────────────────────────────────────────
 
 export const jackeryBluAdapter = new JackeryBluAdapter();
-

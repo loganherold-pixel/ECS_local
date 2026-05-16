@@ -77,8 +77,8 @@ export const PROVIDER_DISPLAY: Record<
     subtitle: 'Portable Power Station',
     supportLevel: 'verified',
     supportLabel: 'Verified',
-    supportNote: 'Strongest current ECS provider path for controlled deployment.',
-    connectionMethod: 'Cloud API + BLE',
+    supportNote: 'Cloud metadata and local scanner support are tracked separately.',
+    connectionMethod: 'Cloud API / local scanner',
   },
   Bluetti: {
     label: 'Bluetti',
@@ -86,9 +86,9 @@ export const PROVIDER_DISPLAY: Record<
     icon: 'cube',
     subtitle: 'Battery System',
     supportLevel: 'ui_only',
-    supportLabel: 'UI Only / Unverified',
-    supportNote: 'Architecture exists, but native discovery and telemetry still rely on simulated fallback and are not field-ready.',
-    connectionMethod: 'Bluetooth',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   AnkerSolix: {
     label: 'Anker SOLIX',
@@ -96,9 +96,9 @@ export const PROVIDER_DISPLAY: Record<
     icon: 'battery-charging',
     subtitle: 'Portable Power Station',
     supportLevel: 'ui_only',
-    supportLabel: 'UI Only / Unverified',
-    supportNote: 'Architecture exists, but native discovery and telemetry still rely on simulated fallback and are not field-ready.',
-    connectionMethod: 'Bluetooth',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   Jackery: {
     label: 'Jackery',
@@ -106,9 +106,9 @@ export const PROVIDER_DISPLAY: Record<
     icon: 'sunny',
     subtitle: 'Solar Generator',
     supportLevel: 'ui_only',
-    supportLabel: 'UI Only / Unverified',
-    supportNote: 'Architecture exists, but native discovery and telemetry still rely on simulated fallback and are not field-ready.',
-    connectionMethod: 'Bluetooth',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   GoalZero: {
     label: 'Goal Zero',
@@ -116,9 +116,9 @@ export const PROVIDER_DISPLAY: Record<
     icon: 'compass',
     subtitle: 'Power Station',
     supportLevel: 'ui_only',
-    supportLabel: 'UI Only / Unverified',
-    supportNote: 'Architecture exists, but native discovery and telemetry still rely on simulated fallback and are not field-ready.',
-    connectionMethod: 'Bluetooth',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   Renogy: {
     label: 'Renogy',
@@ -126,35 +126,36 @@ export const PROVIDER_DISPLAY: Record<
     icon: 'hardware-chip',
     subtitle: 'Battery System',
     supportLevel: 'ui_only',
-    supportLabel: 'UI Only / Unverified',
-    supportNote: 'Architecture exists, but native discovery and telemetry still rely on simulated fallback and are not field-ready.',
-    connectionMethod: 'Bluetooth',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   Redarc: {
     label: 'REDARC',
     color: '#C62828',
     icon: 'car',
     subtitle: 'Direct Bluetooth Telemetry',
-    supportLevel: 'partial',
-    supportLabel: 'Partial / Unverified',
-    supportNote: 'A native BLE path exists, but broader field verification is still required before production trust.',
-    connectionMethod: 'Bluetooth',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   DakotaLithium: {
     label: 'Dakota Lithium',
     color: '#6FBF4B',
     icon: 'shield',
     subtitle: 'Bluetooth Battery Monitor',
-    supportLevel: 'partial',
-    supportLabel: 'Partial / Unverified',
-    supportNote: 'A native BLE path exists, but broader field verification is still required before production trust.',
-    connectionMethod: 'Bluetooth',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
 };
 
 export interface ManagedPowerDevice {
   id: string;
   provider: PowerProviderId;
+  providerDeviceId?: string | null;
   connectionMethod: ConnectionMethod;
   /** Original device name from provider */
   originalName: string;
@@ -321,6 +322,16 @@ class PowerSetupStoreImpl {
   /** Get devices by provider */
   getByProvider(provider: PowerProviderId): ManagedPowerDevice[] {
     return this.getAll().filter((d) => d.provider === provider);
+  }
+
+  /** Get a device by stable provider-owned device identifier */
+  getByProviderDevice(
+    provider: PowerProviderId,
+    providerDeviceId: string,
+  ): ManagedPowerDevice | null {
+    return this.getAll().find((d) => (
+      d.provider === provider && d.providerDeviceId === providerDeviceId
+    )) ?? null;
   }
 
   /** Add a new managed device */

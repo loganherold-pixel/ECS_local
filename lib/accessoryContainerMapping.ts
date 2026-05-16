@@ -111,35 +111,17 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
   },
 
   // ── Cab Rack Accessories → Cab Rack Acc Containers ─────
-  cab_rack_acc: {
-    groupId: 'cab_rack_accessories',
-    groupLabel: 'Cab Rack Accessories',
-    icon: 'layers-outline',
-    color: '#FF8A5B',
-    sortOrder: 1,
-    defaultContainers: [
-      {
-        containerId: 'cab_rack_acc_main',
-        name: 'Cab Rack Accessories',
-        defaultSlots: 3,
-        zoneType: 'RACK',
-        icon: 'layers-outline',
-        color: '#FF8A5B',
-      },
-    ],
-  },
-
   // ── Bed / Drawer → Bed Drawer Containers ───────────────
   bed_drawer: {
     groupId: 'bed_drawer_storage',
-    groupLabel: 'Bed / Drawer Storage',
+    groupLabel: 'Drawer Storage',
     icon: 'server-outline',
     color: '#96CEB4',
-    sortOrder: 2,
+    sortOrder: 1,
     defaultContainers: [
       {
         containerId: 'bed_drawer_main',
-        name: 'Bed Drawer System',
+        name: 'Drawer Storage',
         defaultSlots: 8,
         zoneType: 'DRAWER',
         icon: 'server-outline',
@@ -154,7 +136,7 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
     groupLabel: 'Roof Storage',
     icon: 'resize-outline',
     color: '#4FC3F7',
-    sortOrder: 3,
+    sortOrder: 2,
     defaultContainers: [
       {
         containerId: 'roof_rack_main',
@@ -173,7 +155,7 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
     groupLabel: 'Sleep System',
     icon: 'trail-sign-outline',
     color: '#C77DFF',
-    sortOrder: 4,
+    sortOrder: 3,
     defaultContainers: [
       {
         containerId: 'rtt_main',
@@ -192,7 +174,7 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
     groupLabel: 'Interior Storage',
     icon: 'file-tray-stacked-outline',
     color: '#4ECDC4',
-    sortOrder: 5,
+    sortOrder: 4,
     defaultContainers: [
       {
         containerId: 'interior_main',
@@ -206,35 +188,17 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
   },
 
   // ── Fridge / Slide → Kitchen Containers ────────────────
-  fridge_slide: {
-    groupId: 'kitchen_system',
-    groupLabel: 'Kitchen / Fridge',
-    icon: 'snow-outline',
-    color: '#64DFDF',
-    sortOrder: 6,
-    defaultContainers: [
-      {
-        containerId: 'fridge_main',
-        name: 'Fridge / Slide',
-        defaultSlots: 3,
-        zoneType: 'KITCHEN',
-        icon: 'snow-outline',
-        color: '#64DFDF',
-      },
-    ],
-  },
-
   // ── Recovery Mount → Recovery Containers ───────────────
   recovery_mount: {
     groupId: 'recovery_system',
-    groupLabel: 'Recovery System',
+    groupLabel: 'Recovery Mount Hitch System',
     icon: 'construct-outline',
     color: '#AB47BC',
-    sortOrder: 7,
+    sortOrder: 5,
     defaultContainers: [
       {
         containerId: 'recovery_main',
-        name: 'Recovery Equipment',
+        name: 'Recovery Mount Hitch System',
         defaultSlots: 2,
         zoneType: 'RECOVERY',
         icon: 'construct-outline',
@@ -249,7 +213,7 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
     groupLabel: 'Water System',
     icon: 'water-outline',
     color: '#26A69A',
-    sortOrder: 8,
+    sortOrder: 6,
     defaultContainers: [
       {
         containerId: 'water_main',
@@ -268,7 +232,7 @@ const ACCESSORY_CONTAINER_MAP: Record<string, Omit<ContainerGroup, 'accessoryCat
     groupLabel: 'Power System',
     icon: 'flash-outline',
     color: '#FFB74D',
-    sortOrder: 9,
+    sortOrder: 7,
     defaultContainers: [
       {
         containerId: 'power_main',
@@ -404,14 +368,14 @@ export function getGroupCount(allocations: ContainerAllocation[]): number {
  */
 export function allocationsToZonePayload(
   allocations: ContainerAllocation[],
-): Array<{
+): {
   zoneName: string;
   zoneType: string;
   slotCount: number;
   color: string;
   icon: string;
   sortOrder: number;
-}> {
+}[] {
   return allocations.map(a => ({
     zoneName: a.name,
     zoneType: a.zoneType,

@@ -59,6 +59,11 @@ import type { ECSOrchestratorCandidate, ECSOrchestratorOutput } from './orchestr
 import type { ECSLiveStatusMap } from '../status/liveStatusTypes';
 import { selectLiveStatusForSource } from '../status/liveStatusResolver';
 import {
+  runECSAIAdvisoryEngine,
+  type ECSAIAdvisory,
+  type ECSAISuppressionState,
+} from './index';
+import {
   buildTrustMetadata,
   gateCandidateTrust,
   prependTrustWording,
@@ -66,6 +71,8 @@ import {
 } from './trustContract';
 import type { ECSTrustFreshnessClass } from './trustFreshness';
 import { buildVehicleProfile } from '../rigCompatibilityEngine';
+import { extractFleetFabricPayload } from '../fleet/fleetFabricService';
+import type { ExpeditionReadinessAssessment } from '../readiness/expeditionReadinessTypes';
 
 export type ECSCommandMode =
   | 'standby'
@@ -113,6 +120,8 @@ export type ECSAIState = {
   liveStatus: ECSLiveStatusMap | null;
   operatorTrustMode: ECSOperatorTrustMode;
   orchestrator: ECSOrchestratorOutput | null;
+  advisories: ECSAIAdvisory[];
+  suppressedAdvisories: ECSAIAdvisory[];
   summaryLine: string;
   compactLine: string;
   telemetryConfidence: number;
@@ -125,6 +134,7 @@ export type ECSAIOrchestratorMemory = {
   processor: ProcessorMemory;
   lastState: ECSAIState | null;
   lastRunAt: number | null;
+  advisorySuppressionState: ECSAISuppressionState;
 };
 
 export type ECSAIActivationInput = {
@@ -137,6 +147,7 @@ export type ECSAIActivationInput = {
   resources?: unknown;
   userPreferences?: unknown;
   powerAuthority?: unknown;
+  expeditionReadiness?: ExpeditionReadinessAssessment | null;
   previousAIState?: ECSAIState | null;
 };
 
@@ -159,6 +170,7 @@ export function createInitialAIOrchestratorMemory(): ECSAIOrchestratorMemory {
     processor: createInitialProcessorMemory(),
     lastState: null,
     lastRunAt: null,
+    advisorySuppressionState: {},
   };
 }
 
@@ -222,6 +234,7 @@ export async function runECSAI(
     topSignal,
     fallbackPriority: preliminaryPriority,
     operatorTrustMode,
+    expeditionReadiness: input.expeditionReadiness ?? null,
     previousOutput:
       input.previousAIState?.orchestrator
       ?? memory.lastState?.orchestrator
@@ -232,6 +245,12 @@ export async function runECSAI(
     brief?.priority ?? null,
     priorityFromSignal(topSignal),
   ]);
+  const advisoryResult = runECSAIAdvisoryEngine({
+    context: richContext,
+    surface: 'dashboard',
+    previousSuppressionState: memory.advisorySuppressionState,
+    now,
+  });
 
   const readiness = computeReadiness({
     context,
@@ -279,6 +298,8 @@ export async function runECSAI(
     liveStatus: richContext?.liveStatus ?? null,
     operatorTrustMode,
     orchestrator,
+    advisories: advisoryResult.advisories,
+    suppressedAdvisories: advisoryResult.suppressedAdvisories,
     summaryLine,
     compactLine,
     telemetryConfidence: confidence.telemetry,
@@ -291,6 +312,7 @@ export async function runECSAI(
     processor: signalResult.memory,
     lastState: state,
     lastRunAt: now,
+    advisorySuppressionState: advisoryResult.suppressionState,
   };
 
   return {
@@ -306,7 +328,6 @@ async function safelyBuildRichContext(
   try {
     return await buildAIContextFromLiveState(liveState, {
       liveState,
-      skipWeatherFetch: !!liveState?.environment?.weather,
     });
   } catch {
     return null;
@@ -319,6 +340,7 @@ function buildLiveStateBridge(
 ): ECSAILiveStateBridge | null {
   const activeRun = asRecord(input.activeRun);
   const vehicleConfig = asRecord(input.vehicleConfig);
+  const fleetFabric = extractFleetFabricPayload(input.vehicleConfig);
   const telemetry = asRecord(input.telemetry);
   const weatherCorridor = asRecord(input.weatherCorridor);
   const routeIntelligence = asRecord(input.routeIntelligence);
@@ -337,6 +359,14 @@ function buildLiveStateBridge(
       : safeString(weatherCorridor.source) === 'live'
         ? 'live'
         : 'none';
+  const bridgedWeatherCurrent =
+    weatherCorridor.current && typeof weatherCorridor.current === 'object'
+      ? (weatherCorridor.current as any)
+      : null;
+  const bridgedWeatherResponse =
+    weatherCorridor.response && typeof weatherCorridor.response === 'object'
+      ? (weatherCorridor.response as any)
+      : null;
 
   const bridge: ECSAILiveStateBridge = {
     builtAt: new Date(now).toISOString(),
@@ -347,8 +377,8 @@ function buildLiveStateBridge(
     environment: {
       remoteness: Object.keys(remoteness).length ? (input.remoteness as any) : undefined,
       weather: {
-        current: null,
-        response: null,
+        current: bridgedWeatherCurrent,
+        response: bridgedWeatherResponse,
         source: weatherSource,
         staleness: normalizeWeatherStaleness(safeString(weatherCorridor.staleness)),
         ageLabel: safeString(weatherCorridor.ageLabel),
@@ -362,6 +392,7 @@ function buildLiveStateBridge(
     resources: {
       telemetryReadout: buildTelemetryReadoutBridge(telemetry, powerAuthority),
       forecast: null,
+      vehicleIntelligence: buildFleetFabricVehicleIntelligenceBridge(fleetFabric),
     },
     summary: {
       missionName:
@@ -369,9 +400,12 @@ function buildLiveStateBridge(
         safeString(activeRun.name) ??
         null,
       vehicleName:
+        safeString(fleetFabric?.vehicle.nickname) ??
         safeString(vehicleConfig.name) ??
         safeString(vehicleConfig.vehicle_name) ??
         null,
+      vehicleClass: fleetFabric?.vehicleIntelligence.classification.label ?? null,
+      vehicleWeightConfidence: fleetFabric?.vehicleIntelligence.weightConfidenceLevel ?? null,
       routeName:
         safeString(routeIntelligence.routeName) ??
         safeString(activeRun.routeName) ??
@@ -395,11 +429,111 @@ function buildLiveStateBridge(
   const hasPayload =
     !!bridge.route?.activeRun ||
     !!bridge.route?.routeIntelligence ||
+    !!bridge.environment?.weather?.current ||
+    !!bridge.environment?.weather?.response ||
     !!bridge.environment?.remoteness ||
     !!bridge.resources?.telemetryReadout ||
-    (bridge.summary?.criticalIssues?.length ?? 0) > 0;
+    !!bridge.environment?.weather?.summaryLabel ||
+    (bridge.summary?.criticalIssues?.length ?? 0) > 0 ||
+    !!fleetFabric;
 
   return hasPayload ? bridge : null;
+}
+
+function buildFleetFabricVehicleIntelligenceBridge(fleetFabric: ReturnType<typeof extractFleetFabricPayload>): any | null {
+  if (!fleetFabric?.vehicleIntelligence) return null;
+  const intelligence = fleetFabric.vehicleIntelligence;
+  return {
+    available: true,
+    activeVehicleId: fleetFabric.vehicle.id ?? null,
+    vehicleId: fleetFabric.vehicle.id ?? null,
+    identityLabel: fleetFabric.vehicle.nickname ?? null,
+    knownAttributes: {
+      vehicleType: fleetFabric.vehicle.vehicleType ?? null,
+      drivetrain: fleetFabric.build.drivetrain ?? null,
+      engine: fleetFabric.build.engine ?? null,
+      fuelType: fleetFabric.build.resourceProfile?.fuelType ?? null,
+      body: fleetFabric.vehicle.vehicleType ?? null,
+    },
+    classId: intelligence.classification.classId,
+    classLabel: intelligence.classification.label,
+    classConfidence: intelligence.classification.confidence,
+    classReasons: intelligence.classification.reasons,
+    classTraits: intelligence.classification.traits,
+    weightSnapshot: {
+      vehicleId: fleetFabric.vehicle.id ?? null,
+      baseWeightLbs: fleetFabric.weight.baseNetWeight?.lbs ?? null,
+      gvwrLbs: fleetFabric.weight.gvwr?.lbs ?? null,
+      accessoryWeightLbs: fleetFabric.weight.installedAccessoryWeight?.lbs ?? 0,
+      cargoLoadoutWeightLbs: fleetFabric.weight.activeLoadoutWeight?.lbs ?? 0,
+      consumablesWeightLbs: fleetFabric.weight.consumablesWeight?.lbs ?? 0,
+      knownContributionsWeightLbs: fleetFabric.weight.operatingWeight?.lbs ?? 0,
+      estimatedOperatingWeightLbs: intelligence.operatingWeightLbs,
+      remainingPayloadLbs: intelligence.remainingPayloadLbs,
+      payloadCapacityLbs: fleetFabric.weight.payloadCapacity?.lbs ?? null,
+      payloadUsedPct: intelligence.payloadUsedPct,
+      gvwrOverageRisk: fleetFabric.weight.gvwrOverageRisk,
+      weightConfidence: fleetFabric.weight.confidence,
+      confidenceLabel: 'medium',
+      confidenceLevel: intelligence.weightConfidenceLevel,
+      confidenceCopy: fleetFabric.weight.confidenceMetadata?.copy ?? null,
+      isEstimate: intelligence.weightConfidenceLevel !== 'verified',
+      isPartial: intelligence.weightConfidenceLevel === 'incomplete' || intelligence.weightConfidenceLevel === 'unknown',
+      sourceLabels: [],
+      partialDataReasons: fleetFabric.weight.confidenceMetadata?.reasons ?? [],
+      warnings: fleetFabric.weight.warnings ?? [],
+    },
+    capabilitySnapshot: {
+      vehicleId: fleetFabric.vehicle.id ?? null,
+      hasVehicle: true,
+      fuelTankCapacityGal: fleetFabric.build.resourceProfile?.fuelTankCapacityGal ?? null,
+      fuelType: fleetFabric.build.resourceProfile?.fuelType ?? null,
+      currentFuelPercent: fleetFabric.build.resourceProfile?.currentFuelPercent ?? null,
+      currentFuelGallons: fleetFabric.build.resourceProfile?.currentFuelGallons ?? 0,
+      waterCapacityGal: fleetFabric.build.resourceProfile?.waterCapacityGal ?? null,
+      currentWaterGallons: fleetFabric.build.resourceProfile?.currentWaterGallons ?? 0,
+      batteryUsableWh: null,
+      tireSizeInches: fleetFabric.build.tireSizeInches ?? null,
+      suspensionLiftInches: fleetFabric.build.suspensionLiftInches ?? null,
+      isLeveled: fleetFabric.build.isLeveled ?? false,
+      useCaseChips: fleetFabric.buildMetadata.useCases ?? [],
+      confidenceLabel: 'medium',
+    },
+    modificationSnapshot: {
+      accessoryCount: fleetFabric.accessories.length,
+      accessoryWeightLbs: fleetFabric.weight.installedAccessoryWeight?.lbs ?? 0,
+      containerZoneCount: fleetFabric.compartments.length,
+      tireSizeInches: fleetFabric.build.tireSizeInches ?? null,
+      suspensionLiftInches: fleetFabric.build.suspensionLiftInches ?? null,
+      isLeveled: fleetFabric.build.isLeveled ?? false,
+      frontLevelInches: fleetFabric.build.frontLevelInches ?? null,
+    },
+    loadoutSnapshot: {
+      activeLoadoutId: fleetFabric.activeLoadout.id,
+      activeLoadoutName: fleetFabric.activeLoadout.name,
+      itemCount: fleetFabric.activeLoadout.items.length,
+      cargoLoadoutWeightLbs: fleetFabric.weight.activeLoadoutWeight?.lbs ?? 0,
+    },
+    centerOfGravitySnapshot: {
+      riskLevel: fleetFabric.weight.topHeavyRisk,
+      topHeavyRisk: fleetFabric.weight.topHeavyRisk,
+      frontAxleRisk: fleetFabric.weight.frontAxleRisk,
+      rearAxleRisk: fleetFabric.weight.rearAxleRisk,
+      x: null,
+      y: null,
+      z: null,
+      totalKnownWeightLbs: null,
+      dataQuality: null,
+      warnings: fleetFabric.weight.warnings ?? [],
+    },
+    suggestions: intelligence.suggestions,
+    confidence: {
+      score: fleetFabric.weight.confidence,
+      label: 'medium',
+      reasons: fleetFabric.weight.confidenceMetadata?.reasons ?? [],
+    },
+    status: 'ready',
+  };
 }
 
 function buildTelemetryReadoutBridge(
@@ -543,7 +677,30 @@ function mergeSignalContext(
       healthScore:
         fallback.vehicle?.healthScore ??
         deriveHealthScore(telemetryState),
-      payloadMargin: fallback.vehicle?.payloadMargin ?? null,
+      payloadMargin:
+        fallback.vehicle?.payloadMargin ??
+        rich.resources.vehicleIntelligence?.weightSnapshot.remainingPayloadLbs ??
+        null,
+      payloadUsedPct:
+        fallback.vehicle?.payloadUsedPct ??
+        rich.resources.vehicleIntelligence?.weightSnapshot.payloadUsedPct ??
+        null,
+      operatingWeightLbs:
+        fallback.vehicle?.operatingWeightLbs ??
+        rich.resources.vehicleIntelligence?.weightSnapshot.estimatedOperatingWeightLbs ??
+        null,
+      vehicleClass:
+        fallback.vehicle?.vehicleClass ??
+        rich.resources.vehicleIntelligence?.classId ??
+        null,
+      vehicleClassLabel:
+        fallback.vehicle?.vehicleClassLabel ??
+        rich.resources.vehicleIntelligence?.classLabel ??
+        null,
+      weightConfidence:
+        fallback.vehicle?.weightConfidence ??
+        rich.resources.vehicleIntelligence?.weightSnapshot.confidenceLevel ??
+        null,
       fuelPercent: fallback.vehicle?.fuelPercent ?? null,
       batteryPercent:
         fallback.vehicle?.batteryPercent ??
@@ -1117,6 +1274,7 @@ function buildOrchestratorOutput(args: {
   topSignal: Signal | null;
   fallbackPriority: ECSPriorityResult | null;
   operatorTrustMode: ECSOperatorTrustMode;
+  expeditionReadiness?: ExpeditionReadinessAssessment | null;
   previousOutput?: ECSOrchestratorOutput | null;
 }): ECSOrchestratorOutput | null {
   const candidates = collectOrchestratorCandidates(args);
@@ -1199,12 +1357,14 @@ function buildOrchestratorOutput(args: {
       suppressed: hardened.suppressed,
       activePhase,
       operationalState: args.richContext?.operations?.degraded ?? args.brief?.operations ?? null,
+      expeditionReadiness: args.expeditionReadiness ?? null,
       qaDiagnostics,
     },
     richContext: args.richContext,
     liveStatus: args.richContext?.liveStatus ?? null,
     operatorTrustMode: args.operatorTrustMode,
     commandDiagnostics: qaDiagnostics,
+    expeditionReadiness: args.expeditionReadiness ?? null,
   });
 
   return {
@@ -1214,6 +1374,7 @@ function buildOrchestratorOutput(args: {
     suppressed: hardened.suppressed,
     activePhase,
     operationalState: args.richContext?.operations?.degraded ?? args.brief?.operations ?? null,
+    expeditionReadiness: args.expeditionReadiness ?? null,
     qaDiagnostics,
     releaseDiagnostics,
   };
@@ -2644,6 +2805,7 @@ function buildFallbackContext(
   previousState: ECSAIState | null,
 ): AIContext {
   const activeRun = asRecord(input.activeRun);
+  const fleetFabric = extractFleetFabricPayload(input.vehicleConfig);
   const telemetry = asRecord(input.telemetry);
   const weatherCorridor = asRecord(input.weatherCorridor);
   const routeIntelligence = asRecord(input.routeIntelligence);
@@ -2670,14 +2832,27 @@ function buildFallbackContext(
     },
     vehicle: {
       healthScore:
+        safeNumber(fleetFabric?.scoring.overallScore) ??
         safeNumber(telemetry.healthScore) ??
         safeNumber(activeRun.healthScore) ??
         previousState?.context.vehicle?.healthScore ??
         null,
       payloadMargin:
+        safeNumber(fleetFabric?.weight.payloadRemaining?.lbs) ??
         safeNumber(activeRun.payloadMargin) ??
         safeNumber(activeRun.remainingPayload) ??
         null,
+      payloadUsedPct:
+        safeNumber(fleetFabric?.vehicleIntelligence.payloadUsedPct) ??
+        safeNumber(fleetFabric?.weight.gvwrUsagePct) ??
+        null,
+      operatingWeightLbs:
+        safeNumber(fleetFabric?.vehicleIntelligence.operatingWeightLbs) ??
+        safeNumber(fleetFabric?.weight.operatingWeight?.lbs) ??
+        null,
+      vehicleClass: safeString(fleetFabric?.vehicleIntelligence.classification.classId),
+      vehicleClassLabel: safeString(fleetFabric?.vehicleIntelligence.classification.label),
+      weightConfidence: safeString(fleetFabric?.vehicleIntelligence.weightConfidenceLevel),
       fuelPercent:
         safeNumber(telemetry.fuelPercent) ??
         safeNumber(activeRun.fuelPercent) ??
