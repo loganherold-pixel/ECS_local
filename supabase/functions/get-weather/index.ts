@@ -2,8 +2,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const OPENWEATHER_API_KEY = Deno.env.get("OPENWEATHER_API_KEY");
+const OPENWEATHER_PREFER_ONECALL_3 = Deno.env.get("OPENWEATHER_PREFER_ONECALL_3") !== "false";
 const REQUEST_TIMEOUT_MS = 10000;
-const FORECAST_DAY_LIMIT = 5;
+const FORECAST_DAY_LIMIT = 16;
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -219,6 +220,35 @@ function buildCurrent(currentData: any, label: string | null) {
   };
 }
 
+function buildCurrentFromOneCall(payload: any, label: string | null) {
+  const current = payload?.current ?? {};
+  return {
+    temp: safeNumber(current?.temp),
+    feels_like: safeNumber(current?.feels_like),
+    temp_min: null,
+    temp_max: null,
+    humidity: safeNumber(current?.humidity),
+    pressure: safeNumber(current?.pressure),
+    visibility: safeNumber(current?.visibility),
+    wind_speed: safeNumber(current?.wind_speed),
+    wind_deg: safeNumber(current?.wind_deg),
+    wind_gust: safeNumber(current?.wind_gust),
+    clouds: safeNumber(current?.clouds),
+    weather_id: safeNumber(current?.weather?.[0]?.id),
+    weather_main: current?.weather?.[0]?.main ?? null,
+    weather_description: current?.weather?.[0]?.description ?? null,
+    weather_icon: current?.weather?.[0]?.icon ?? null,
+    rain_1h: safeNumber(current?.rain?.["1h"]),
+    rain_3h: null,
+    snow_1h: safeNumber(current?.snow?.["1h"]),
+    snow_3h: null,
+    sunrise: safeNumber(current?.sunrise),
+    sunset: safeNumber(current?.sunset),
+    location_name: label,
+    dt: safeNumber(current?.dt),
+  };
+}
+
 function buildDailyForecast(forecastList: any[]) {
   const byDay = new Map<string, any[]>();
 
@@ -242,8 +272,10 @@ function buildDailyForecast(forecastList: any[]) {
       const tempsMax = entries.map(item => safeNumber(item?.main?.temp_max)).filter((value): value is number => value != null);
       const humidities = entries.map(item => safeNumber(item?.main?.humidity)).filter((value): value is number => value != null);
       const pressures = entries.map(item => safeNumber(item?.main?.pressure)).filter((value): value is number => value != null);
+      const temps = entries.map(item => safeNumber(item?.main?.temp)).filter((value): value is number => value != null);
       const winds = entries.map(item => safeNumber(item?.wind?.speed) ?? 0);
       const gusts = entries.map(item => safeNumber(item?.wind?.gust) ?? 0);
+      const windDirections = entries.map(item => safeNumber(item?.wind?.deg)).filter((value): value is number => value != null);
       const pops = entries.map(item => clamp(Number(item?.pop ?? 0), 0, 1));
       const rainTotal = entries.reduce((sum, item) => sum + (safeNumber(item?.rain?.["3h"]) ?? 0), 0);
       const snowTotal = entries.reduce((sum, item) => sum + (safeNumber(item?.snow?.["3h"]) ?? 0), 0);
@@ -251,12 +283,14 @@ function buildDailyForecast(forecastList: any[]) {
 
       return {
         date,
+        temp_day: temps.length ? Math.round(temps.reduce((sum, value) => sum + value, 0) / temps.length) : null,
         temp_min: tempsMin.length ? Math.round(Math.min(...tempsMin)) : null,
         temp_max: tempsMax.length ? Math.round(Math.max(...tempsMax)) : null,
         humidity: humidities.length ? Math.round(humidities.reduce((sum, value) => sum + value, 0) / humidities.length) : null,
         pressure: pressures.length ? Math.round(pressures.reduce((sum, value) => sum + value, 0) / pressures.length) : null,
         wind_max: Math.round(Math.max(...winds)),
         wind_gust_max: Math.round(Math.max(...gusts)),
+        wind_deg: windDirections.length ? Math.round(windDirections.reduce((sum, value) => sum + value, 0) / windDirections.length) : null,
         pop: Math.round(Math.max(...pops) * 100),
         rain_total: Number(rainTotal.toFixed(1)),
         snow_total: Number(snowTotal.toFixed(1)),
@@ -266,6 +300,58 @@ function buildDailyForecast(forecastList: any[]) {
         weather_icon: noonish?.weather?.[0]?.icon ?? "01d",
       };
     });
+}
+
+function buildDailyForecastFromOneCall(dailyList: any[]) {
+  return (Array.isArray(dailyList) ? dailyList : [])
+    .slice(0, FORECAST_DAY_LIMIT)
+    .map((day) => {
+      const date = typeof day?.dt === "number"
+        ? new Date(day.dt * 1000).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+      const weather = day?.weather?.[0] ?? {};
+      return {
+        date,
+        temp_day: safeNumber(day?.temp?.day),
+        temp_min: safeNumber(day?.temp?.min),
+        temp_max: safeNumber(day?.temp?.max),
+        humidity: safeNumber(day?.humidity),
+        pressure: safeNumber(day?.pressure),
+        wind_max: safeNumber(day?.wind_speed),
+        wind_gust_max: safeNumber(day?.wind_gust),
+        wind_deg: safeNumber(day?.wind_deg),
+        sunrise: safeNumber(day?.sunrise),
+        sunset: safeNumber(day?.sunset),
+        pop: Math.round(clamp(Number(day?.pop ?? 0), 0, 1) * 100),
+        rain_total: safeNumber(day?.rain) ?? 0,
+        snow_total: safeNumber(day?.snow) ?? 0,
+        weather_id: safeNumber(weather?.id),
+        weather_main: weather?.main ?? "Unknown",
+        weather_description: weather?.description ?? "Unavailable",
+        weather_icon: weather?.icon ?? "01d",
+      };
+    });
+}
+
+function buildAlertsFromOneCall(alertList: any[]): WeatherAlert[] {
+  return (Array.isArray(alertList) ? alertList : []).map((alert) => {
+    const title = String(alert?.event ?? "Weather Alert");
+    const text = `${title} ${String(alert?.description ?? "")}`.toLowerCase();
+    const severity: WeatherAlert["severity"] =
+      /(extreme|emergency|danger|severe)/.test(text)
+        ? "extreme"
+        : /(warning|watch)/.test(text)
+          ? "warning"
+          : "advisory";
+    return {
+      severity,
+      title,
+      description: String(alert?.description ?? title),
+      type: title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "weather",
+      effective: typeof alert?.start === "number" ? new Date(alert.start * 1000).toISOString() : null,
+      expires: typeof alert?.end === "number" ? new Date(alert.end * 1000).toISOString() : null,
+    };
+  });
 }
 
 function deriveAlerts(current: any, dailyForecast: any[], units: Units): WeatherAlert[] {
@@ -408,6 +494,32 @@ function deriveAlerts(current: any, dailyForecast: any[], units: Units): Weather
 }
 
 async function fetchCoordinateWeather(coord: InputCoordinate, units: Units) {
+  if (OPENWEATHER_PREFER_ONECALL_3) {
+    try {
+      const oneCallUrl =
+        `https://api.openweathermap.org/data/3.0/onecall?lat=${coord.lat}&lon=${coord.lng}` +
+        `&units=${units}&appid=${OPENWEATHER_API_KEY}`;
+      const oneCallData = await fetchJson(oneCallUrl);
+      const current = buildCurrentFromOneCall(oneCallData, coord.label ?? null);
+      const forecast = buildDailyForecastFromOneCall(oneCallData?.daily ?? []);
+      const providerAlerts = buildAlertsFromOneCall(oneCallData?.alerts ?? []);
+      const alerts = providerAlerts.length ? providerAlerts : deriveAlerts(current, forecast, units);
+
+      return {
+        lat: coord.lat,
+        lng: coord.lng,
+        label: coord.label ?? null,
+        error: null,
+        current,
+        forecast,
+        alerts,
+        trail_conditions: deriveTrailConditions(current),
+      };
+    } catch {
+      // Fall through to the existing OpenWeather 2.5 current + forecast provider path.
+    }
+  }
+
   const currentUrl =
     `https://api.openweathermap.org/data/2.5/weather?lat=${coord.lat}&lon=${coord.lng}` +
     `&units=${units}&appid=${OPENWEATHER_API_KEY}`;
