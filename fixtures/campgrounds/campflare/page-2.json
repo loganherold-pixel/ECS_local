@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "id": "cf-page-2",
+      "name": "Page Two Campground",
+      "latitude": 38.1,
+      "longitude": -120.1,
+      "availabilityStatus": "sold_out",
+      "lastCheckedAt": "2026-05-14T12:00:00.000Z",
+      "expiresAt": "2026-05-14T12:15:00.000Z"
+    }
+  ],
+  "hasMore": false,
+  "nextCursor": null
+}

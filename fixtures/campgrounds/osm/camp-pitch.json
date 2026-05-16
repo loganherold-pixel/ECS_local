@@ -1,0 +1,11 @@
+{
+  "type": "node",
+  "id": 104,
+  "lat": 38.4004,
+  "lon": -120.4004,
+  "tags": {
+    "tourism": "camp_pitch",
+    "name": "Site 4A",
+    "firepit": "yes"
+  }
+}

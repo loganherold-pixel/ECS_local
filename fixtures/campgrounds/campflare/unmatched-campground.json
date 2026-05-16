@@ -1,0 +1,12 @@
+{
+  "id": "cf-unmatched-1005",
+  "name": "Far Ridge Campground",
+  "latitude": 42.0001,
+  "longitude": -111.0001,
+  "sourceUrl": "https://campflare.com/campgrounds/cf-unmatched-1005",
+  "availabilityStatus": "available",
+  "availableSiteCount": 1,
+  "reservable": true,
+  "lastCheckedAt": "2026-05-14T12:00:00.000Z",
+  "expiresAt": "2026-05-14T12:15:00.000Z"
+}

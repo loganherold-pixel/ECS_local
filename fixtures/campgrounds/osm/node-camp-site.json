@@ -1,0 +1,17 @@
+{
+  "type": "node",
+  "id": 101,
+  "lat": 38.1001,
+  "lon": -120.1001,
+  "tags": {
+    "tourism": "camp_site",
+    "name": "Juniper Flats Campground",
+    "operator": "USFS",
+    "capacity": "24",
+    "toilets": "yes",
+    "drinking_water": "yes",
+    "picnic_table": "yes",
+    "fire_ring": "yes",
+    "website": "https://example.test/juniper-flats"
+  }
+}

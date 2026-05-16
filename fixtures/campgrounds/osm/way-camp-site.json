@@ -1,0 +1,15 @@
+{
+  "type": "way",
+  "id": 102,
+  "center": {
+    "lat": 38.2002,
+    "lon": -120.2002
+  },
+  "tags": {
+    "tourism": "camp_site",
+    "name": "Pine Bowl Camp",
+    "operator": "County Parks",
+    "showers": "yes",
+    "trash": "yes"
+  }
+}

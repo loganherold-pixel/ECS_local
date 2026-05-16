@@ -1,0 +1,23 @@
+{
+  "facilityId": "ra-2001",
+  "facilityName": "Juniper Flats Campground",
+  "location": {
+    "lat": 38.71234,
+    "lng": -119.81234
+  },
+  "facilityType": "campground",
+  "agency": "USFS",
+  "operator": "ReserveAmerica",
+  "bookingUrl": "https://www.reserveamerica.com/explore/juniper-flats/RA-2001",
+  "url": "https://www.reserveamerica.com/facilityDetails.do?contractCode=RA&parkId=2001",
+  "facilityStatus": "active",
+  "totalSites": 24,
+  "campsites": [
+    { "type": "standard" },
+    { "type": "tent" }
+  ],
+  "facilityAmenities": [
+    { "name": "Water" },
+    { "name": "Toilets" }
+  ]
+}

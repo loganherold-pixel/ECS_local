@@ -1,0 +1,31 @@
+{
+  "RECDATA": [
+    {
+      "FacilityID": "RIDB-PAGE-1",
+      "FacilityName": "First Page Campground",
+      "FacilityLatitude": 38.1,
+      "FacilityLongitude": -119.1,
+      "FacilityTypeDescription": "Campground"
+    },
+    {
+      "FacilityID": "RIDB-DUPLICATE",
+      "FacilityName": "Duplicate Campground Old",
+      "FacilityLatitude": 38.2,
+      "FacilityLongitude": -119.2,
+      "FacilityTypeDescription": "Campground"
+    },
+    {
+      "FacilityID": "RIDB-DUPLICATE",
+      "FacilityName": "Duplicate Campground Updated",
+      "FacilityLatitude": 38.25,
+      "FacilityLongitude": -119.25,
+      "FacilityTypeDescription": "Campground"
+    }
+  ],
+  "METADATA": {
+    "RESULTS": {
+      "CURRENT_COUNT": 3,
+      "TOTAL_COUNT": 5
+    }
+  }
+}

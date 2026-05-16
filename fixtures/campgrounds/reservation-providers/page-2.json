@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "page-2",
+      "name": "Page Two Campground",
+      "latitude": 38.1,
+      "longitude": -120.1
+    }
+  ],
+  "hasMore": false,
+  "total": 2,
+  "limit": 1,
+  "offset": 1
+}

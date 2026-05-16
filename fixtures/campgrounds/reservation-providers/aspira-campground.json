@@ -1,0 +1,13 @@
+{
+  "campgroundId": "aspira-3001",
+  "campgroundName": "Pine Basin Campground",
+  "lat": 39.1002,
+  "lon": -120.2002,
+  "type": "rv park",
+  "managingOrg": "Pine Basin County Parks",
+  "reservation_url": "https://aspira.example/reserve/pine-basin",
+  "detail_url": "https://aspira.example/campgrounds/pine-basin",
+  "status": "seasonal",
+  "campsiteCount": 42,
+  "amenities": "water; restrooms; showers; hookups; dump station"
+}
