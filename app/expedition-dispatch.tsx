@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   Platform, ActivityIndicator, RefreshControl,
@@ -8,6 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL } from '../lib/theme';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../lib/nonObstructiveRefreshControl';
 import { useApp } from '../context/AppContext';
 import TopoBackground from '../components/TopoBackground';
 import { dispatchStore } from '../lib/dispatchStore';
@@ -29,6 +30,11 @@ import DispatchQueueBadge from '../components/dispatch/DispatchQueueBadge';
 import DispatchQueueModal from '../components/dispatch/DispatchQueueModal';
 import { expeditionStore } from '../lib/expeditionCommandStore';
 import type { EcsExpedition } from '../lib/expeditionTypes';
+import {
+  getDispatchRolloutDisabledCopy,
+  isDispatchFeatureEnabled,
+  resolveDispatchRolloutConfig,
+} from '../lib/dispatchRolloutConfig';
 
 const PAGE_SIZE = 25;
 
@@ -66,11 +72,13 @@ export default function ExpeditionDispatchScreen() {
 
   const isArchived = expedition?.status === 'archived' || expedition?.status === 'completed';
   const isActive = expedition?.status === 'active';
-  const canPost = isActive && member?.role !== 'viewer';
+  const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
+  const externalDispatchIntegrationEnabled = isDispatchFeatureEnabled(dispatchRollout, 'externalDispatchIntegration');
+  const canPost = externalDispatchIntegrationEnabled && isActive && member?.role !== 'viewer';
 
   // ── Track queue count ──────────────────────────────────────
   useEffect(() => {
-    if (!expeditionId) return;
+    if (!externalDispatchIntegrationEnabled || !expeditionId) return;
 
     // Initial count
     setQueueCount(dispatchQueue.countByExpedition(expeditionId));
@@ -81,10 +89,12 @@ export default function ExpeditionDispatchScreen() {
     });
 
     return () => { unsub(); };
-  }, [expeditionId]);
+  }, [expeditionId, externalDispatchIntegrationEnabled]);
 
   // ── Auto-flush on reconnect ────────────────────────────────
   useEffect(() => {
+    if (!externalDispatchIntegrationEnabled) return;
+
     // Start auto-flush monitoring
     dispatchQueue.startAutoFlush();
 
@@ -118,7 +128,7 @@ export default function ExpeditionDispatchScreen() {
       unsubFlush();
       // Don't stop auto-flush here — it's managed globally
     };
-  }, [expeditionId, sortOrder, showToast]);
+  }, [expeditionId, externalDispatchIntegrationEnabled, sortOrder, showToast]);
   const fetchExpedition = useCallback(async () => {
     if (!expeditionId) return;
     try {
@@ -130,20 +140,28 @@ export default function ExpeditionDispatchScreen() {
   }, [expeditionId]);
 
   const ensureMembership = useCallback(async () => {
-    if (!expeditionId || !user) return;
+    if (!externalDispatchIntegrationEnabled || !expeditionId || !user) return;
     try {
       const { data } = await dispatchStore.ensureMember(expeditionId, 'owner');
       if (mountedRef.current) setMember(data);
     } catch (err) {
       console.warn('[ExpeditionDispatch] ensureMembership error:', err);
     }
-  }, [expeditionId, user]);
+  }, [expeditionId, externalDispatchIntegrationEnabled, user]);
 
 
 
   // ── Fetch events ───────────────────────────────────────────
   const fetchEvents = useCallback(async (pageNum: number = 0, append: boolean = false) => {
     if (!expeditionId) return;
+    if (!externalDispatchIntegrationEnabled) {
+      setEvents([]);
+      setTotalEvents(0);
+      setHasMore(false);
+      setPage(0);
+      setError(null);
+      return;
+    }
     try {
       const { data, error: fetchError } = await dispatchStore.listEvents(expeditionId, pageNum, sortOrder);
       if (!mountedRef.current) return;
@@ -166,7 +184,7 @@ export default function ExpeditionDispatchScreen() {
       console.warn('[ExpeditionDispatch] fetchEvents error:', err);
       if (mountedRef.current) setError(err.message || 'Failed to load events');
     }
-  }, [expeditionId, sortOrder]);
+  }, [expeditionId, externalDispatchIntegrationEnabled, sortOrder]);
 
   // ── Initial load ───────────────────────────────────────────
   const initialLoad = useCallback(async () => {
@@ -185,7 +203,7 @@ export default function ExpeditionDispatchScreen() {
 
   // ── Realtime subscription ──────────────────────────────────
   useFocusEffect(useCallback(() => {
-    if (!expeditionId) return;
+    if (!externalDispatchIntegrationEnabled || !expeditionId) return;
 
     const channel = supabase
       .channel(`dispatch-${expeditionId}`)
@@ -222,7 +240,7 @@ export default function ExpeditionDispatchScreen() {
         realtimeRef.current = null;
       }
     };
-  }, [expeditionId, sortOrder]));
+  }, [expeditionId, externalDispatchIntegrationEnabled, sortOrder]));
 
   // ── Pull to refresh ────────────────────────────────────────
   const handleRefresh = async () => {
@@ -256,6 +274,11 @@ export default function ExpeditionDispatchScreen() {
 
   // ── Compose submit (online or offline queue) ───────────────
   const handleComposeSubmit = async (form: ComposeEventForm) => {
+    if (!externalDispatchIntegrationEnabled) {
+      showToast('Expedition Dispatch feed is unavailable for internal beta.');
+      throw new Error('External Dispatch integration is disabled for internal beta.');
+    }
+
     if (!isOnline) {
       // OFFLINE: Queue the event for later
       dispatchQueue.enqueue(expeditionId, form);
@@ -338,17 +361,21 @@ export default function ExpeditionDispatchScreen() {
           </View>
           <View style={styles.headerRight}>
             {/* Queue Badge */}
-            <DispatchQueueBadge
-              expeditionId={expeditionId}
-              onPress={() => setQueueVisible(true)}
-            />
-            <TouchableOpacity
-              onPress={() => setMembersVisible(true)}
-              style={styles.crewBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="people-outline" size={17} color={TACTICAL.text} />
-            </TouchableOpacity>
+            {externalDispatchIntegrationEnabled ? (
+              <>
+                <DispatchQueueBadge
+                  expeditionId={expeditionId}
+                  onPress={() => setQueueVisible(true)}
+                />
+                <TouchableOpacity
+                  onPress={() => setMembersVisible(true)}
+                  style={styles.crewBtn}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="people-outline" size={17} color={TACTICAL.text} />
+                </TouchableOpacity>
+              </>
+            ) : null}
             <View style={[styles.statusDot, { backgroundColor: isActive ? '#4CAF50' : isArchived ? TACTICAL.textMuted : TACTICAL.amber }]} />
             <Text style={[styles.statusLabel, { color: isActive ? '#4CAF50' : isArchived ? TACTICAL.textMuted : TACTICAL.amber }]}>
               {expedition.status.toUpperCase()}
@@ -363,6 +390,15 @@ export default function ExpeditionDispatchScreen() {
           <View style={styles.archivedBanner}>
             <Ionicons name="lock-closed-outline" size={13} color={TACTICAL.textMuted} />
             <Text style={styles.archivedBannerText}>ARCHIVED — READ ONLY</Text>
+          </View>
+        )}
+
+        {!externalDispatchIntegrationEnabled && (
+          <View style={styles.rolloutBanner}>
+            <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.amber} />
+            <Text style={styles.rolloutBannerText}>
+              Internal preview only. {getDispatchRolloutDisabledCopy('externalDispatchIntegration')}
+            </Text>
           </View>
         )}
 
@@ -401,10 +437,9 @@ export default function ExpeditionDispatchScreen() {
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
+              {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              tintColor={TACTICAL.amber}
-              colors={[TACTICAL.amber]}
             />
           }
         >
@@ -443,9 +478,13 @@ export default function ExpeditionDispatchScreen() {
           {events.length === 0 && !error && queueCount === 0 && (
             <View style={styles.emptyState}>
               <Ionicons name="radio-outline" size={40} color={TACTICAL.textMuted} />
-              <Text style={styles.emptyTitle}>NO DISPATCH EVENTS</Text>
+              <Text style={styles.emptyTitle}>
+                {externalDispatchIntegrationEnabled ? 'NO DISPATCH EVENTS' : 'EXPEDITION DISPATCH UNAVAILABLE'}
+              </Text>
               <Text style={styles.emptySubtitle}>
-                {canPost
+                {!externalDispatchIntegrationEnabled
+                  ? 'External Dispatch feed sync is disabled for internal beta. Use the Dispatch tab for local Recovery/CAD reports.'
+                  : canPost
                   ? 'Post the first event to start the dispatch feed.'
                   : 'No events have been posted yet.'}
               </Text>
@@ -481,7 +520,7 @@ export default function ExpeditionDispatchScreen() {
 
         {/* ── Compose FAB ─────────────────────────────────── */}
         {/* Allow composing when offline too — events will be queued */}
-        {(canPost || (!isOnline && isActive && member?.role !== 'viewer')) && (
+        {externalDispatchIntegrationEnabled && (canPost || (!isOnline && isActive && member?.role !== 'viewer')) && (
           <TouchableOpacity
             style={[
               styles.composeFab,
@@ -583,6 +622,26 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: TACTICAL.textMuted,
     letterSpacing: 2,
+  },
+  rolloutBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(196, 138, 44, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.24)',
+  },
+  rolloutBannerText: {
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
   },
 
   // Controls

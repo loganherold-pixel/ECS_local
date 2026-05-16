@@ -695,6 +695,7 @@ function logWeatherZeroReason(reason: string, signatureScope = 'global'): void {
     return;
   }
   lastWeatherZeroReason = signature;
+  console.log('[DISPATCH_WIRE]', `weather_events reason=${reason}`, { reason, signatureScope });
   ecsLog.dev('SYSTEM', 'weather_events reason', { reason, signatureScope }, {
     tag: '[DISPATCH_WIRE]',
     debugFlag: 'ECS_DEBUG_DISPATCH_WIRE',
@@ -1410,7 +1411,7 @@ export function buildLiveDispatchEvents({
     return lastLiveDispatchEvents;
   }
 
-  const weatherEvents = buildWeatherEvents(weatherState);
+  const weatherEvents = weatherState ? buildWeatherEvents(weatherState) : [];
   logCount('weather_events', weatherEvents.length);
 
   const routeEvents = buildRouteEvents(activeRouteState);

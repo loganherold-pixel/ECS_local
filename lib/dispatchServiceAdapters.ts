@@ -109,6 +109,10 @@ export interface DispatchServiceAdapters {
   linkedContext: DispatchLinkedContextAdapter;
 }
 
+const DISPATCH_DEV_DATA_ENABLED =
+  (typeof __DEV__ !== 'undefined' && __DEV__ === true) ||
+  (typeof process !== 'undefined' && process.env?.ECS_DISPATCH_DEMO_DATA === '1');
+
 function expeditionStatusFromState(state: ExpeditionState): DispatchActiveExpeditionContext['status'] {
   return state;
 }
@@ -260,6 +264,15 @@ function listTimelineEvents(_expedition: DispatchActiveExpeditionContext): Dispa
 }
 
 export function getDispatchPersistenceDefaults() {
+  if (!DISPATCH_DEV_DATA_ENABLED) {
+    return {
+      pings: [],
+      queueItems: [],
+      assignments: [],
+      timelineEvents: [],
+    };
+  }
+
   return {
     pings: [],
     queueItems: [],
