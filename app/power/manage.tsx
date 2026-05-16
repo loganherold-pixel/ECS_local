@@ -27,6 +27,7 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 
 import { useTheme } from '../../context/ThemeContext';
 import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 import {
   powerSetupStore,
   PROVIDER_DISPLAY,
@@ -201,9 +202,9 @@ function DeviceCard({
 
           <Text style={[styles.actionText, { color: '#FF3B30' }]}>
             {device.connectionState === 'disconnected' || device.connectionState === 'unavailable'
-              ? 'REOPEN SETUP'
+              ? 'OPEN SCANNER'
               : device.connectionState === 'reconnecting'
-                ? 'CHECK SETUP'
+                ? 'CHECK SCANNER'
                 : 'DISCONNECT'}
           </Text>
         </TouchableOpacity>
@@ -342,20 +343,20 @@ export default function PowerManageScreen() {
 
   const handleDisconnect = useCallback(async (device: ManagedPowerDevice) => {
     if (device.connectionState === 'disconnected' || device.connectionState === 'reconnecting' || device.connectionState === 'unavailable') {
-      const message = `${device.customName} stays disconnected until ECS confirms a real provider session again. Reopen setup to reconnect and verify live hardware state.`;
+      const message = `${device.customName} stays disconnected until ECS confirms a real provider session again. Open Device Connections to reconnect and verify live hardware state.`;
       if (Platform.OS === 'web') {
         if (confirm(message)) {
-          router.push('/power/setup');
+          router.push('/power/blu');
         }
         return;
       }
 
       Alert.alert(
-        'Reconnect Requires Live Provider Confirmation',
+        'Reconnect Requires Live Device Confirmation',
         message,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Setup', onPress: () => router.push('/power/setup') },
+          { text: 'Open Device Connections', onPress: () => router.push('/power/blu') },
         ],
       );
       return;
@@ -421,7 +422,7 @@ export default function PowerManageScreen() {
         </View>
         <TouchableOpacity
           style={[styles.addBtnSmall, { backgroundColor: palette.amber }]}
-          onPress={() => router.push('/power/setup')}
+          onPress={() => router.push('/power/blu')}
           activeOpacity={0.7}
         >
           <Ionicons name="add" size={18} color="#000" />
@@ -433,7 +434,11 @@ export default function PowerManageScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.amber} colors={[palette.amber]} />
+          <RefreshControl
+            {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         }
       >
         {/* Summary */}
@@ -503,7 +508,7 @@ export default function PowerManageScreen() {
             </Text>
             <TouchableOpacity
               style={[styles.addBtn, { backgroundColor: palette.amber }]}
-              onPress={() => router.push('/power/setup')}
+              onPress={() => router.push('/power/blu')}
               activeOpacity={0.7}
             >
               <Ionicons name="add-outline" size={18} color="#000" />
@@ -529,7 +534,7 @@ export default function PowerManageScreen() {
         {totalCount > 0 && (
           <TouchableOpacity
             style={[styles.addMoreBtn, { borderColor: palette.amber + '40' }]}
-            onPress={() => router.push('/power/setup')}
+            onPress={() => router.push('/power/blu')}
             activeOpacity={0.7}
           >
             <Ionicons name="add-circle-outline" size={18} color={palette.amber} />

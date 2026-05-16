@@ -110,6 +110,8 @@ export default function QuickAddLibrary({
       icon="library-outline"
       overlayClass="workflow"
       stackBehavior="allow-stack"
+      scrollable
+      maxHeightFraction={0.98}
       footer={(
         <ECSOverlayFooter>
           <ECSButton
@@ -273,14 +275,14 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   modalContent: {
-    gap: 12,
+    gap: 10,
   },
   headerBlock: {
     borderRadius: 14,
     borderWidth: 1,
     backgroundColor: 'rgba(10,14,18,0.86)',
-    padding: 12,
-    gap: 10,
+    padding: 10,
+    gap: 8,
   },
   headerRow: {
     flexDirection: 'row',
@@ -328,7 +330,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    minHeight: 42,
+    minHeight: 40,
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
@@ -362,10 +364,10 @@ const styles = StyleSheet.create({
   chipWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 6,
   },
   resultsWrap: {
-    gap: 12,
+    gap: 10,
   },
   groupSection: {
     borderRadius: 14,

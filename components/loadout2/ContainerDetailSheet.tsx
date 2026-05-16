@@ -163,6 +163,8 @@ export default function ContainerDetailSheet({
         icon="cube-outline"
         overlayClass="workflow"
         stackBehavior="allow-stack"
+        scrollable
+        maxHeightFraction={0.98}
         footer={(
           <ECSOverlayFooter>
             {!isLiquid ? (
@@ -301,14 +303,14 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   modalContent: {
-    gap: 12,
+    gap: 10,
   },
   summaryCard: {
     borderRadius: 14,
     borderWidth: 1,
     backgroundColor: 'rgba(10,14,18,0.84)',
-    padding: 12,
-    gap: 10,
+    padding: 10,
+    gap: 8,
   },
   summaryRow: {
     flexDirection: 'row',
@@ -362,8 +364,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.border,
     backgroundColor: TACTICAL.panel,
-    padding: 12,
-    gap: 10,
+    padding: 10,
+    gap: 8,
   },
   searchRow: {
     flexDirection: 'row',

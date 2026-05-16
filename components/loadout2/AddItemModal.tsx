@@ -1,50 +1,26 @@
-/**
- * AddItemModal — Loadout 2.0 Add/Edit Item Form
- *
- * Two modes:
- *   1. Standard items: Name, Qty, Unit Weight, Unit (lb/kg), Notes, Critical
- *   2. Liquid items (water_storage): Liquid Name, Amount, Unit (gal/L), Liquid Type
- *
- * Liquid mode auto-computes weight from density constants.
- * Prevents saving liquid items with amount <= 0.
- */
-import React, { useState, useEffect, useMemo } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  Modal,
-  StyleSheet,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+import { ECSButton } from '../ECSButton';
+import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import {
   LIQUID_CONTAINER_KEY,
   LIQUID_DENSITIES,
-  computeLiquidWeight,
   computeItemTotal,
+  computeLiquidWeight,
 } from '../../lib/loadout2Types';
 import type { LoadoutItem, LoadoutItemCategory, WeightSource } from '../../lib/types';
 
-// ── Props ───────────────────────────────────────────────────
 export interface AddItemModalProps {
   visible: boolean;
   onClose: () => void;
   onSave: (item: AddItemPayload) => void;
-  /** Container key this item belongs to */
   containerKey: string;
-  /** Container label for display */
   containerLabel: string;
-  /** Container accent color */
   containerColor: string;
-  /** If editing, pass the existing item */
   editItem?: LoadoutItem | null;
-  /** Whether save is in progress */
   saving?: boolean;
 }
 
@@ -57,7 +33,6 @@ export interface AddItemPayload {
   storage_location: string;
   category?: LoadoutItemCategory;
   weight_source?: WeightSource;
-  /** Liquid metadata (encoded in notes for persistence) */
   _liquidMeta?: {
     type: 'water' | 'fuel' | 'other';
     amount: number;
@@ -82,7 +57,6 @@ export default function AddItemModal({
   const isLiquidContainer = containerKey === LIQUID_CONTAINER_KEY;
   const isEditing = !!editItem;
 
-  // ── Standard form state ───────────────────────────────────
   const [name, setName] = useState('');
   const [qty, setQty] = useState('1');
   const [unitWeight, setUnitWeight] = useState('');
@@ -90,14 +64,14 @@ export default function AddItemModal({
   const [notes, setNotes] = useState('');
   const [isCritical, setIsCritical] = useState(false);
 
-  // ── Liquid form state ─────────────────────────────────────
   const [liquidName, setLiquidName] = useState('Water');
   const [liquidAmount, setLiquidAmount] = useState('');
   const [liquidUnit, setLiquidUnit] = useState<LiquidUnit>('gallons');
   const [liquidType, setLiquidType] = useState<LiquidType>('water');
 
-  // ── Populate form when editing ────────────────────────────
   useEffect(() => {
+    if (!visible) return;
+
     if (editItem) {
       setName(editItem.name);
       setQty(String(editItem.quantity || 1));
@@ -105,7 +79,6 @@ export default function AddItemModal({
       setNotes(editItem.notes || '');
       setIsCritical(editItem.is_critical);
 
-      // Parse liquid metadata from notes
       if (isLiquidContainer && editItem.notes) {
         const match = editItem.notes.match(/\[LIQUID:(\w+):([\d.]+):(\w+)\]/);
         if (match) {
@@ -113,61 +86,57 @@ export default function AddItemModal({
           setLiquidType(match[1] as LiquidType);
           setLiquidAmount(match[2]);
           setLiquidUnit(match[3] as LiquidUnit);
+          return;
         }
       }
-    } else {
-      // Reset form
-      setName('');
-      setQty('1');
-      setUnitWeight('');
-      setWeightUnit('lb');
-      setNotes('');
-      setIsCritical(false);
-      setLiquidName('Water');
-      setLiquidAmount('');
-      setLiquidUnit('gallons');
-      setLiquidType('water');
+      return;
     }
-  }, [editItem, visible, isLiquidContainer]);
 
-  // ── Computed weights ──────────────────────────────────────
+    setName('');
+    setQty('1');
+    setUnitWeight('');
+    setWeightUnit('lb');
+    setNotes('');
+    setIsCritical(false);
+    setLiquidName('Water');
+    setLiquidAmount('');
+    setLiquidUnit('gallons');
+    setLiquidType('water');
+  }, [editItem, isLiquidContainer, visible]);
+
   const computedStandardTotal = useMemo(() => {
-    const q = parseInt(qty) || 1;
-    const w = parseFloat(unitWeight) || 0;
-    if (weightUnit === 'kg') {
-      return computeItemTotal(q, w * 2.20462); // convert kg to lb
-    }
-    return computeItemTotal(q, w);
+    const quantity = parseInt(qty, 10) || 1;
+    const weight = parseFloat(unitWeight) || 0;
+    const weightLbs = weightUnit === 'kg' ? weight * 2.20462 : weight;
+    return computeItemTotal(quantity, weightLbs);
   }, [qty, unitWeight, weightUnit]);
 
   const computedLiquidWeight = useMemo(() => {
     const amount = parseFloat(liquidAmount) || 0;
     if (amount <= 0) return 0;
     return computeLiquidWeight(amount, liquidUnit, liquidType);
-  }, [liquidAmount, liquidUnit, liquidType]);
+  }, [liquidAmount, liquidType, liquidUnit]);
 
-  // ── Validation ────────────────────────────────────────────
   const canSave = useMemo(() => {
     if (isLiquidContainer) {
       const amount = parseFloat(liquidAmount) || 0;
       return liquidName.trim().length > 0 && amount > 0;
     }
     return name.trim().length > 0;
-  }, [isLiquidContainer, liquidName, liquidAmount, name]);
+  }, [isLiquidContainer, liquidAmount, liquidName, name]);
 
-  // ── Save handler ──────────────────────────────────────────
   const handleSave = () => {
     if (!canSave || saving) return;
 
     if (isLiquidContainer) {
       const amount = parseFloat(liquidAmount) || 0;
-      const weight = computeLiquidWeight(amount, liquidUnit, liquidType);
+      const liquidWeight = computeLiquidWeight(amount, liquidUnit, liquidType);
       const liquidMeta = `[LIQUID:${liquidType}:${amount}:${liquidUnit}]`;
 
       onSave({
         name: liquidName.trim(),
         quantity: 1,
-        weight_lbs: weight,
+        weight_lbs: liquidWeight,
         is_critical: isCritical,
         notes: liquidMeta,
         storage_location: containerKey,
@@ -175,364 +144,355 @@ export default function AddItemModal({
         weight_source: 'estimate',
         _liquidMeta: { type: liquidType, amount, unit: liquidUnit },
       });
-    } else {
-      const q = parseInt(qty) || 1;
-      const w = parseFloat(unitWeight) || 0;
-      const weightLbs = weightUnit === 'kg' ? w * 2.20462 : w;
-
-      onSave({
-        name: name.trim(),
-        quantity: q,
-        weight_lbs: weightLbs > 0 ? Math.round(weightLbs * 100) / 100 : null,
-        is_critical: isCritical,
-        notes: notes.trim() || null,
-        storage_location: containerKey,
-        weight_source: weightLbs > 0 ? 'measured' : 'estimate',
-      });
+      return;
     }
+
+    const quantity = parseInt(qty, 10) || 1;
+    const weight = parseFloat(unitWeight) || 0;
+    const weightLbs = weightUnit === 'kg' ? weight * 2.20462 : weight;
+
+    onSave({
+      name: name.trim(),
+      quantity,
+      weight_lbs: weightLbs > 0 ? Math.round(weightLbs * 100) / 100 : null,
+      is_critical: isCritical,
+      notes: notes.trim() || null,
+      storage_location: containerKey,
+      weight_source: weightLbs > 0 ? 'measured' : 'estimate',
+    });
   };
 
+  const actionLabel = isEditing
+    ? 'Save Changes'
+    : isLiquidContainer
+      ? 'Add Liquid'
+      : 'Add Item';
+
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={styles.sheet}>
-          {/* ── Header ──────────────────────────────────────── */}
-          <View style={[styles.header, { borderBottomColor: `${containerColor}30` }]}>
-            <View style={styles.headerLeft}>
-              <View style={[styles.headerIcon, { backgroundColor: `${containerColor}18` }]}>
-                <Ionicons
-                  name={isLiquidContainer ? 'water' : 'add-circle-outline'}
-                  size={16}
-                  color={containerColor}
-                />
-              </View>
-              <View>
-                <Text style={styles.headerTitle}>
-                  {isEditing ? 'EDIT ITEM' : isLiquidContainer ? 'ADD LIQUID' : 'ADD ITEM'}
-                </Text>
-                <Text style={[styles.headerSub, { color: containerColor }]}>{containerLabel}</Text>
-              </View>
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <Ionicons name="close" size={22} color={TACTICAL.textMuted} />
-            </TouchableOpacity>
+    <ECSModalShell
+      visible={visible}
+      onClose={onClose}
+      title={isEditing ? 'Edit Item' : isLiquidContainer ? 'Add Liquid' : 'Add Item'}
+      subtitle={containerLabel}
+      eyebrow={isLiquidContainer ? 'LIQUID CONTAINER' : 'LOADOUT ITEM'}
+      icon={isLiquidContainer ? 'water-outline' : 'add-circle-outline'}
+      overlayClass="workflow"
+      stackBehavior="allow-stack"
+      scrollable
+      keyboardAware
+      maxHeightFraction={0.98}
+      bodyStyle={styles.shellBody}
+      contentContainerStyle={styles.shellContent}
+      footer={(
+        <ECSOverlayFooter>
+          <ECSButton
+            label="Cancel"
+            variant="secondary"
+            size="large"
+            onPress={onClose}
+            grow
+          />
+          <ECSButton
+            label={actionLabel}
+            icon={isEditing ? 'checkmark-circle-outline' : 'add-circle-outline'}
+            variant="primary"
+            size="large"
+            onPress={handleSave}
+            disabled={!canSave}
+            loading={saving}
+            grow
+          />
+        </ECSOverlayFooter>
+      )}
+    >
+      <View style={[styles.summaryCard, { borderColor: `${containerColor}28` }]}>
+        <View style={styles.summaryRow}>
+          <View style={[styles.summaryIconWrap, { backgroundColor: `${containerColor}18` }]}>
+            <Ionicons
+              name={isLiquidContainer ? 'water-outline' : 'cube-outline'}
+              size={16}
+              color={containerColor}
+            />
           </View>
+          <View style={styles.summaryCopy}>
+            <Text style={styles.summaryTitle}>
+              {isEditing ? 'Update the selected loadout entry.' : 'Stage gear inside this container.'}
+            </Text>
+            <Text style={[styles.summarySubtitle, { color: containerColor }]}>{containerLabel}</Text>
+          </View>
+        </View>
+      </View>
 
-          <ScrollView style={styles.body} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            {isLiquidContainer ? (
-              /* ══════════════════════════════════════════════════
-                 LIQUID FORM
-                 ══════════════════════════════════════════════════ */
-              <>
-                {/* Liquid Name */}
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>LIQUID NAME</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={liquidName}
-                    onChangeText={setLiquidName}
-                    placeholder="Water"
-                    placeholderTextColor={TACTICAL.textMuted}
-                    autoFocus={!isEditing}
-                  />
-                </View>
-
-                {/* Liquid Type Selector */}
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>LIQUID TYPE</Text>
-                  <View style={styles.toggleRow}>
-                    {(['water', 'fuel', 'other'] as LiquidType[]).map(t => {
-                      const active = liquidType === t;
-                      const icons: Record<LiquidType, string> = {
-                        water: 'water-outline',
-                        fuel: 'flame-outline',
-                        other: 'flask-outline',
-                      };
-                      return (
-                        <TouchableOpacity
-                          key={t}
-                          style={[styles.toggleBtn, active && { borderColor: containerColor, backgroundColor: `${containerColor}12` }]}
-                          onPress={() => setLiquidType(t)}
-                        >
-                          <Ionicons name={icons[t] as any} size={14} color={active ? containerColor : TACTICAL.textMuted} />
-                          <Text style={[styles.toggleText, active && { color: containerColor }]}>
-                            {t.toUpperCase()}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                {/* Amount + Unit */}
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>AMOUNT</Text>
-                  <View style={styles.amountRow}>
-                    <TextInput
-                      style={[styles.input, styles.amountInput]}
-                      value={liquidAmount}
-                      onChangeText={(v) => setLiquidAmount(v.replace(/[^0-9.]/g, ''))}
-                      placeholder="0.0"
-                      placeholderTextColor={TACTICAL.textMuted}
-                      keyboardType="decimal-pad"
-                    />
-                    <View style={styles.unitToggle}>
-                      <TouchableOpacity
-                        style={[styles.unitBtn, liquidUnit === 'gallons' && styles.unitBtnActive]}
-                        onPress={() => setLiquidUnit('gallons')}
-                      >
-                        <Text style={[styles.unitBtnText, liquidUnit === 'gallons' && styles.unitBtnTextActive]}>GAL</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.unitBtn, liquidUnit === 'liters' && styles.unitBtnActive]}
-                        onPress={() => setLiquidUnit('liters')}
-                      >
-                        <Text style={[styles.unitBtnText, liquidUnit === 'liters' && styles.unitBtnTextActive]}>L</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Computed Weight Display */}
-                <View style={styles.weightPreview}>
-                  <Ionicons name="scale-outline" size={16} color={TACTICAL.amber} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.weightPreviewLabel}>COMPUTED WEIGHT</Text>
-                    <Text style={styles.weightPreviewValue}>
-                      {computedLiquidWeight > 0
-                        ? `${computedLiquidWeight.toFixed(1)} lb`
-                        : 'Enter amount above'}
-                    </Text>
-                  </View>
-                  {computedLiquidWeight > 0 && (
-                    <View style={styles.densityBadge}>
-                      <Text style={styles.densityText}>
-                        {LIQUID_DENSITIES[liquidType].lbPerGallon} lb/gal
-                      </Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Validation Warning */}
-                {liquidAmount !== '' && (parseFloat(liquidAmount) || 0) <= 0 && (
-                  <View style={styles.validationWarn}>
-                    <Ionicons name="warning-outline" size={14} color={TACTICAL.danger} />
-                    <Text style={styles.validationText}>Amount must be greater than 0</Text>
-                  </View>
-                )}
-              </>
-            ) : (
-              /* ══════════════════════════════════════════════════
-                 STANDARD ITEM FORM
-                 ══════════════════════════════════════════════════ */
-              <>
-                {/* Item Name */}
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>ITEM NAME</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={name}
-                    onChangeText={setName}
-                    placeholder="e.g. Recovery Strap"
-                    placeholderTextColor={TACTICAL.textMuted}
-                    autoFocus={!isEditing}
-                  />
-                </View>
-
-                {/* Qty + Unit Weight */}
-                <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.fieldLabel}>QUANTITY</Text>
-                    <View style={styles.qtyRow}>
-                      <TouchableOpacity
-                        style={styles.qtyStepBtn}
-                        onPress={() => setQty(String(Math.max(1, (parseInt(qty) || 1) - 1)))}
-                      >
-                        <Ionicons name="remove" size={16} color={TACTICAL.textMuted} />
-                      </TouchableOpacity>
-                      <TextInput
-                        style={[styles.input, styles.qtyInput]}
-                        value={qty}
-                        onChangeText={(v) => setQty(v.replace(/[^0-9]/g, ''))}
-                        keyboardType="number-pad"
-                        textAlign="center"
-                      />
-                      <TouchableOpacity
-                        style={styles.qtyStepBtn}
-                        onPress={() => setQty(String((parseInt(qty) || 1) + 1))}
-                      >
-                        <Ionicons name="add" size={16} color={containerColor} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.fieldLabel}>UNIT WEIGHT</Text>
-                    <View style={styles.amountRow}>
-                      <TextInput
-                        style={[styles.input, styles.amountInput, { fontFamily: 'Courier' }]}
-                        value={unitWeight}
-                        onChangeText={(v) => setUnitWeight(v.replace(/[^0-9.]/g, ''))}
-                        placeholder="0.0"
-                        placeholderTextColor={TACTICAL.textMuted}
-                        keyboardType="decimal-pad"
-                      />
-                      <View style={styles.unitToggle}>
-                        <TouchableOpacity
-                          style={[styles.unitBtn, weightUnit === 'lb' && styles.unitBtnActive]}
-                          onPress={() => setWeightUnit('lb')}
-                        >
-                          <Text style={[styles.unitBtnText, weightUnit === 'lb' && styles.unitBtnTextActive]}>LB</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.unitBtn, weightUnit === 'kg' && styles.unitBtnActive]}
-                          onPress={() => setWeightUnit('kg')}
-                        >
-                          <Text style={[styles.unitBtnText, weightUnit === 'kg' && styles.unitBtnTextActive]}>KG</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Computed Total */}
-                {computedStandardTotal > 0 && (
-                  <View style={styles.weightPreview}>
-                    <Ionicons name="scale-outline" size={16} color={TACTICAL.amber} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.weightPreviewLabel}>ITEM TOTAL WEIGHT</Text>
-                      <Text style={styles.weightPreviewValue}>
-                        {computedStandardTotal.toFixed(1)} lb
-                        {(parseInt(qty) || 1) > 1 && ` (${parseInt(qty) || 1} x ${parseFloat(unitWeight) || 0} ${weightUnit})`}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-
-                {/* Notes */}
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>NOTES (OPTIONAL)</Text>
-                  <TextInput
-                    style={[styles.input, { minHeight: 50 }]}
-                    value={notes}
-                    onChangeText={setNotes}
-                    placeholder="Additional details..."
-                    placeholderTextColor={TACTICAL.textMuted}
-                    multiline
-                  />
-                </View>
-              </>
-            )}
-
-            {/* ── Critical Toggle (both modes) ───────────────── */}
+      <View style={styles.body}>
+        {isLiquidContainer ? (
+          <>
             <View style={styles.field}>
-              <Text style={styles.fieldLabel}>CRITICAL ITEM</Text>
-              <TouchableOpacity
-                style={[styles.criticalToggle, isCritical && styles.criticalToggleActive]}
-                onPress={() => setIsCritical(!isCritical)}
-              >
-                <Ionicons
-                  name={isCritical ? 'alert-circle' : 'alert-circle-outline'}
-                  size={18}
-                  color={isCritical ? TACTICAL.danger : TACTICAL.textMuted}
-                />
-                <Text style={[styles.criticalToggleText, isCritical && { color: TACTICAL.danger }]}>
-                  {isCritical ? 'YES — REQUIRED FOR MISSION' : 'NO'}
-                </Text>
-              </TouchableOpacity>
+              <Text style={styles.fieldLabel}>LIQUID NAME</Text>
+              <TextInput
+                style={styles.input}
+                value={liquidName}
+                onChangeText={setLiquidName}
+                placeholder="Water"
+                placeholderTextColor={TACTICAL.textMuted}
+                autoFocus={!isEditing}
+              />
             </View>
 
-            {/* ── Save Button ────────────────────────────────── */}
-            <TouchableOpacity
-              style={[
-                styles.saveBtn,
-                { borderColor: `${containerColor}50` },
-                !canSave && styles.saveBtnDisabled,
-              ]}
-              onPress={handleSave}
-              disabled={!canSave || saving}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color={TACTICAL.text} />
-              ) : (
-                <>
-                  <Ionicons
-                    name={isEditing ? 'checkmark-circle-outline' : 'add-circle-outline'}
-                    size={18}
-                    color={canSave ? TACTICAL.text : TACTICAL.textMuted}
-                  />
-                  <Text style={[styles.saveBtnText, !canSave && { color: TACTICAL.textMuted }]}>
-                    {isEditing ? 'SAVE CHANGES' : isLiquidContainer ? 'ADD LIQUID' : 'ADD TO CONTAINER'}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>LIQUID TYPE</Text>
+              <View style={styles.toggleRow}>
+                {(['water', 'fuel', 'other'] as LiquidType[]).map((type) => {
+                  const active = liquidType === type;
+                  const icons: Record<LiquidType, string> = {
+                    water: 'water-outline',
+                    fuel: 'flame-outline',
+                    other: 'flask-outline',
+                  };
+                  return (
+                    <TouchableOpacity
+                      key={type}
+                      style={[
+                        styles.toggleBtn,
+                        active && { borderColor: containerColor, backgroundColor: `${containerColor}12` },
+                      ]}
+                      onPress={() => setLiquidType(type)}
+                    >
+                      <Ionicons
+                        name={icons[type] as any}
+                        size={14}
+                        color={active ? containerColor : TACTICAL.textMuted}
+                      />
+                      <Text style={[styles.toggleText, active && { color: containerColor }]}>
+                        {type.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
 
-            <View style={{ height: 40 }} />
-          </ScrollView>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>AMOUNT</Text>
+              <View style={styles.amountRow}>
+                <TextInput
+                  style={[styles.input, styles.amountInput]}
+                  value={liquidAmount}
+                  onChangeText={(value) => setLiquidAmount(value.replace(/[^0-9.]/g, ''))}
+                  placeholder="0.0"
+                  placeholderTextColor={TACTICAL.textMuted}
+                  keyboardType="decimal-pad"
+                />
+                <View style={styles.unitToggle}>
+                  <TouchableOpacity
+                    style={[styles.unitBtn, liquidUnit === 'gallons' && styles.unitBtnActive]}
+                    onPress={() => setLiquidUnit('gallons')}
+                  >
+                    <Text style={[styles.unitBtnText, liquidUnit === 'gallons' && styles.unitBtnTextActive]}>
+                      GAL
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.unitBtn, liquidUnit === 'liters' && styles.unitBtnActive]}
+                    onPress={() => setLiquidUnit('liters')}
+                  >
+                    <Text style={[styles.unitBtnText, liquidUnit === 'liters' && styles.unitBtnTextActive]}>
+                      L
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.weightPreview}>
+              <Ionicons name="scale-outline" size={16} color={TACTICAL.amber} />
+              <View style={styles.weightPreviewCopy}>
+                <Text style={styles.weightPreviewLabel}>COMPUTED WEIGHT</Text>
+                <Text style={styles.weightPreviewValue}>
+                  {computedLiquidWeight > 0 ? `${computedLiquidWeight.toFixed(1)} lb` : 'Enter amount above'}
+                </Text>
+              </View>
+              {computedLiquidWeight > 0 ? (
+                <View style={styles.densityBadge}>
+                  <Text style={styles.densityText}>{LIQUID_DENSITIES[liquidType].lbPerGallon} lb/gal</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {liquidAmount !== '' && (parseFloat(liquidAmount) || 0) <= 0 ? (
+              <View style={styles.validationWarn}>
+                <Ionicons name="warning-outline" size={14} color={TACTICAL.danger} />
+                <Text style={styles.validationText}>Amount must be greater than 0</Text>
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>ITEM NAME</Text>
+              <TextInput
+                style={styles.input}
+                value={name}
+                onChangeText={setName}
+                placeholder="e.g. Recovery Strap"
+                placeholderTextColor={TACTICAL.textMuted}
+                autoFocus={!isEditing}
+              />
+            </View>
+
+            <View style={styles.fieldRow}>
+              <View style={styles.fieldHalf}>
+                <Text style={styles.fieldLabel}>QUANTITY</Text>
+                <View style={styles.qtyRow}>
+                  <TouchableOpacity
+                    style={styles.qtyStepBtn}
+                    onPress={() => setQty(String(Math.max(1, (parseInt(qty, 10) || 1) - 1)))}
+                  >
+                    <Ionicons name="remove" size={16} color={TACTICAL.textMuted} />
+                  </TouchableOpacity>
+                  <TextInput
+                    style={[styles.input, styles.qtyInput]}
+                    value={qty}
+                    onChangeText={(value) => setQty(value.replace(/[^0-9]/g, ''))}
+                    keyboardType="number-pad"
+                    textAlign="center"
+                  />
+                  <TouchableOpacity
+                    style={styles.qtyStepBtn}
+                    onPress={() => setQty(String((parseInt(qty, 10) || 1) + 1))}
+                  >
+                    <Ionicons name="add" size={16} color={containerColor} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.fieldHalf}>
+                <Text style={styles.fieldLabel}>UNIT WEIGHT</Text>
+                <View style={styles.amountRow}>
+                  <TextInput
+                    style={[styles.input, styles.amountInput, styles.monoInput]}
+                    value={unitWeight}
+                    onChangeText={(value) => setUnitWeight(value.replace(/[^0-9.]/g, ''))}
+                    placeholder="0.0"
+                    placeholderTextColor={TACTICAL.textMuted}
+                    keyboardType="decimal-pad"
+                  />
+                  <View style={styles.unitToggle}>
+                    <TouchableOpacity
+                      style={[styles.unitBtn, weightUnit === 'lb' && styles.unitBtnActive]}
+                      onPress={() => setWeightUnit('lb')}
+                    >
+                      <Text style={[styles.unitBtnText, weightUnit === 'lb' && styles.unitBtnTextActive]}>
+                        LB
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.unitBtn, weightUnit === 'kg' && styles.unitBtnActive]}
+                      onPress={() => setWeightUnit('kg')}
+                    >
+                      <Text style={[styles.unitBtnText, weightUnit === 'kg' && styles.unitBtnTextActive]}>
+                        KG
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {computedStandardTotal > 0 ? (
+              <View style={styles.weightPreview}>
+                <Ionicons name="scale-outline" size={16} color={TACTICAL.amber} />
+                <View style={styles.weightPreviewCopy}>
+                  <Text style={styles.weightPreviewLabel}>ITEM TOTAL WEIGHT</Text>
+                  <Text style={styles.weightPreviewValue}>
+                    {computedStandardTotal.toFixed(1)} lb
+                    {(parseInt(qty, 10) || 1) > 1
+                      ? ` (${parseInt(qty, 10) || 1} x ${parseFloat(unitWeight) || 0} ${weightUnit})`
+                      : ''}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>NOTES (OPTIONAL)</Text>
+              <TextInput
+                style={[styles.input, styles.notesInput]}
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Additional details..."
+                placeholderTextColor={TACTICAL.textMuted}
+                multiline
+              />
+            </View>
+          </>
+        )}
+
+        <View style={styles.field}>
+          <Text style={styles.fieldLabel}>CRITICAL ITEM</Text>
+          <TouchableOpacity
+            style={[styles.criticalToggle, isCritical && styles.criticalToggleActive]}
+            onPress={() => setIsCritical(!isCritical)}
+          >
+            <Ionicons
+              name={isCritical ? 'alert-circle' : 'alert-circle-outline'}
+              size={18}
+              color={isCritical ? TACTICAL.danger : TACTICAL.textMuted}
+            />
+            <Text style={[styles.criticalToggleText, isCritical && styles.criticalToggleTextActive]}>
+              {isCritical ? 'YES - REQUIRED FOR MISSION' : 'NO'}
+            </Text>
+          </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      </View>
+    </ECSModalShell>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// STYLES
-// ═══════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
-  overlay: {
+  shellBody: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    justifyContent: 'flex-end',
+    minHeight: 0,
   },
-  sheet: {
-    backgroundColor: TACTICAL.panel,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '88%',
-    borderTopWidth: 2,
-    borderColor: TACTICAL.border,
+  shellContent: {
+    gap: 10,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
+  summaryCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    padding: 12,
   },
-  headerLeft: {
+  summaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  headerIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
+  summaryIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 2,
+  summaryCopy: {
+    flex: 1,
+    minWidth: 0,
   },
-  headerSub: {
+  summaryTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    letterSpacing: 0.4,
+  },
+  summarySubtitle: {
     fontSize: 9,
     fontWeight: '700',
     letterSpacing: 1,
-    marginTop: 1,
+    marginTop: 3,
   },
   body: {
-    padding: 18,
+    gap: 2,
   },
-
-  // ── Fields ────────────────────────────────────────────────
   field: {
     marginBottom: 16,
   },
@@ -562,8 +522,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-
-  // ── Qty Row ───────────────────────────────────────────────
+  monoInput: {
+    fontFamily: 'Courier',
+  },
+  notesInput: {
+    minHeight: 56,
+    textAlignVertical: 'top',
+  },
   qtyRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -585,8 +550,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 16,
   },
-
-  // ── Amount Row ────────────────────────────────────────────
   amountRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -595,8 +558,6 @@ const styles = StyleSheet.create({
   amountInput: {
     flex: 1,
   },
-
-  // ── Unit Toggle ───────────────────────────────────────────
   unitToggle: {
     flexDirection: 'row',
     borderRadius: 8,
@@ -621,134 +582,103 @@ const styles = StyleSheet.create({
   unitBtnTextActive: {
     color: TACTICAL.amber,
   },
-
-  // ── Toggle Row (Liquid Type) ──────────────────────────────
   toggleRow: {
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
   },
   toggleBtn: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 10,
-    borderRadius: 8,
+    minHeight: 44,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: TACTICAL.border,
     backgroundColor: TACTICAL.bg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   toggleText: {
-    fontSize: 9,
-    fontWeight: '900',
+    fontSize: 10,
+    fontWeight: '800',
     color: TACTICAL.textMuted,
-    letterSpacing: 1,
+    letterSpacing: 0.9,
   },
-
-  // ── Weight Preview ────────────────────────────────────────
   weightPreview: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    padding: 12,
-    marginBottom: 16,
-    borderRadius: 10,
-    backgroundColor: 'rgba(196,138,44,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.2)',
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+    marginBottom: 16,
+  },
+  weightPreviewCopy: {
+    flex: 1,
   },
   weightPreviewLabel: {
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
+    color: TACTICAL.amber,
+    letterSpacing: 1.2,
+    marginBottom: 2,
   },
   weightPreviewValue: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    fontFamily: 'Courier',
-    marginTop: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: TACTICAL.text,
   },
   densityBadge: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 5,
-    backgroundColor: 'rgba(138,138,133,0.08)',
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(138,138,133,0.15)',
+    borderColor: 'rgba(196,138,44,0.18)',
   },
   densityText: {
-    fontSize: 8,
-    fontWeight: '700',
+    fontSize: 9,
+    fontWeight: '800',
     color: TACTICAL.textMuted,
-    fontFamily: 'Courier',
+    letterSpacing: 0.6,
   },
-
-  // ── Validation Warning ────────────────────────────────────
   validationWarn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    padding: 10,
+    gap: 8,
+    marginTop: -4,
     marginBottom: 16,
-    borderRadius: 8,
-    backgroundColor: `${TACTICAL.danger}10`,
-    borderWidth: 1,
-    borderColor: `${TACTICAL.danger}30`,
   },
   validationText: {
     fontSize: 10,
     fontWeight: '700',
     color: TACTICAL.danger,
   },
-
-  // ── Critical Toggle ───────────────────────────────────────
   criticalToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: TACTICAL.bg,
-    borderRadius: 10,
+    minHeight: 46,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: TACTICAL.border,
-  },
-  criticalToggleActive: {
-    borderColor: `${TACTICAL.danger}50`,
-    backgroundColor: `${TACTICAL.danger}08`,
-  },
-  criticalToggleText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
-  },
-
-  // ── Save Button ───────────────────────────────────────────
-  saveBtn: {
+    backgroundColor: TACTICAL.bg,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 10,
-    backgroundColor: TACTICAL.accent,
-    borderRadius: 12,
-    paddingVertical: 14,
-    borderWidth: 1,
-    marginTop: 4,
   },
-  saveBtnDisabled: {
-    opacity: 0.4,
+  criticalToggleActive: {
+    borderColor: 'rgba(224,64,48,0.45)',
+    backgroundColor: 'rgba(224,64,48,0.08)',
   },
-  saveBtnText: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 2,
+  criticalToggleText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.7,
+  },
+  criticalToggleTextActive: {
+    color: TACTICAL.danger,
   },
 });
-
-
-

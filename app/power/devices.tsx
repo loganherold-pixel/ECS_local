@@ -1,14 +1,15 @@
 /**
- * EcoFlow Device Picker — Power Center
+ * EcoFlow Cloud Device Picker — Power Center
  *
- * Fetches EcoFlow devices through the unified EcoFlowCloudProvider catalog path.
+ * Fetches EcoFlow devices through the unified power telemetry service catalog path.
+ * This is a cloud catalog selector, not a Bluetooth scanner.
  * Displays each device as a selectable card with:
  *   - Device name
  *   - Online / Offline status indicator
  *   - Device ID (monospace, long-press to copy)
  *
  * Single-select: tapping a device stores its ID in persistent storage
- * under 'ecs_ecoflow_selected_device'. The useEcoFlowLive hook reads
+ * under 'ecs_ecoflow_selected_device'. The feature power service reads
  * from this key to poll telemetry for the correct device.
  *
  * Includes a refresh button to re-fetch the device list.
@@ -29,12 +30,13 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 
 import { useTheme } from '../../context/ThemeContext';
 import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
-import { EcoFlowCloudProvider, powerDeviceStore } from '../../src/power';
 import {
-  getSelectedEcoFlowDevice,
-  setSelectedEcoFlowDevice,
-  getSelectedEcoFlowDeviceName,
-} from '../../lib/useEcoFlowLive';
+  getEcoFlowPowerDeviceCatalog,
+  getPrimaryEcoFlowPowerDevice,
+  getPrimaryEcoFlowPowerDeviceName,
+  getSelectedEcoFlowPowerDevices,
+  setPrimaryEcoFlowPowerDevice,
+} from '../../src/features/power/services/powerTelemetryService';
 
 // ── Clipboard helper (safe import) ──────────────────────────────────────
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -380,7 +382,7 @@ export default function EcoFlowDevicePickerScreen() {
   // ── Load persisted selection on mount ────────────────────────────────
   useEffect(() => {
     mountedRef.current = true;
-    const persisted = getSelectedEcoFlowDevice();
+    const persisted = getPrimaryEcoFlowPowerDevice();
     if (persisted) setSelectedId(persisted);
     fetchDevices();
     return () => {
@@ -395,10 +397,9 @@ export default function EcoFlowDevicePickerScreen() {
     setErrorMsg(null);
 
     try {
-      const provider = new EcoFlowCloudProvider();
-      const catalogDevices = await provider.listDevices();
-      const selectedDeviceIds = await powerDeviceStore.getSelected('EcoFlow');
-      const persistedSelection = getSelectedEcoFlowDevice();
+      const catalogDevices = await getEcoFlowPowerDeviceCatalog();
+      const selectedDeviceIds = await getSelectedEcoFlowPowerDevices();
+      const persistedSelection = getPrimaryEcoFlowPowerDevice();
 
       if (!mountedRef.current) return;
 
@@ -420,7 +421,7 @@ export default function EcoFlowDevicePickerScreen() {
 
       if (persistedSelection && !selectedDeviceIds.includes(persistedSelection)) {
         const matchedCatalog = normalizedCatalog.find((device) => device.id === persistedSelection);
-        const persistedName = getSelectedEcoFlowDeviceName();
+        const persistedName = getPrimaryEcoFlowPowerDeviceName();
         fallbackDevices.push({
           id: persistedSelection,
           name: matchedCatalog?.name || persistedName || 'Active EcoFlow Device',
@@ -462,7 +463,7 @@ export default function EcoFlowDevicePickerScreen() {
   const selectDevice = useCallback((deviceId: string) => {
     const selectedDevice = devices.find((device) => device.id === deviceId) ?? null;
     setSelectedId(deviceId);
-    setSelectedEcoFlowDevice(deviceId, selectedDevice?.name ?? null);
+    setPrimaryEcoFlowPowerDevice(deviceId, selectedDevice?.name ?? null);
   }, [devices]);
 
   // ── Derived values ──────────────────────────────────────────────────
@@ -813,7 +814,7 @@ export default function EcoFlowDevicePickerScreen() {
                 ]}
                 onPress={() => {
                   setSelectedId(null);
-                  setSelectedEcoFlowDevice(null, null);
+                  setPrimaryEcoFlowPowerDevice(null, null);
                 }}
                 activeOpacity={0.7}
               >
@@ -850,122 +851,6 @@ export default function EcoFlowDevicePickerScreen() {
             )}
           </View>
         )}
-
-        {/* ── Supported providers reference ─────────────────── */}
-        <Text
-          style={[
-            styles.sectionLabel,
-            {
-              color: palette.amber,
-              borderBottomColor: GOLD_RAIL.section,
-              marginTop: SPACING.lg,
-            },
-          ]}
-        >
-          SUPPORTED PROVIDERS
-        </Text>
-
-        {[
-          {
-            name: 'EcoFlow',
-            icon: 'flash-outline',
-            status: 'Cloud API Active',
-            active: true,
-          },
-          {
-            name: 'Bluetti',
-            icon: 'cube-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-          {
-            name: 'Anker SOLIX',
-            icon: 'battery-charging-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-          {
-            name: 'Jackery',
-            icon: 'sunny-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-          {
-            name: 'Goal Zero',
-            icon: 'compass-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-          {
-            name: 'REDARC',
-            icon: 'car-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-          {
-            name: 'Dakota Lithium',
-            icon: 'shield-outline',
-            status: 'BLE Active',
-            active: true,
-          },
-        ].map((provider, idx) => (
-          <View
-            key={idx}
-            style={[
-              styles.providerCard,
-              {
-                backgroundColor: palette.panel,
-                borderColor: provider.active
-                  ? palette.amber + '30'
-                  : palette.border,
-              },
-            ]}
-          >
-            <Ionicons
-              name={provider.icon}
-              size={18}
-              color={provider.active ? palette.amber : palette.textMuted}
-            />
-            <Text
-              style={[
-                styles.providerCardName,
-                {
-                  color: provider.active ? palette.text : palette.textMuted,
-                },
-              ]}
-            >
-              {provider.name}
-            </Text>
-            <View
-              style={[
-                styles.providerStatusBadge,
-                {
-                  backgroundColor: provider.active
-                    ? palette.amber + '12'
-                    : palette.border + '40',
-                  borderColor: provider.active
-                    ? palette.amber + '25'
-                    : palette.border,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.providerStatusText,
-                  {
-                    color: provider.active
-                      ? palette.amber
-                      : palette.textMuted,
-                  },
-                ]}
-              >
-                {provider.status}
-              </Text>
-            </View>
-          </View>
-        ))}
-
-
 
         <View style={{ height: 100 }} />
       </ScrollView>

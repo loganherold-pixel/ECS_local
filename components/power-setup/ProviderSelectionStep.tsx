@@ -71,6 +71,7 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
           const display = PROVIDER_DISPLAY[provider.id];
           const isUiOnly = display.supportLevel === 'ui_only';
           const readiness = resolveProviderReadiness(provider.id);
+          const trailingIconColor = isUiOnly ? readiness.color : palette.textMuted;
           return (
             <TouchableOpacity
               key={provider.id}
@@ -143,7 +144,7 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
                 <Ionicons
                   name={isUiOnly ? 'lock-closed-outline' : 'chevron-forward'}
                   size={16}
-                  color={isUiOnly ? supportColor : palette.textMuted}
+                  color={trailingIconColor}
                 />
               </View>
             </TouchableOpacity>

@@ -16,7 +16,7 @@ import {
   type PowerProviderId,
 } from '../../lib/powerSetupStore';
 import { resolvePowerReadiness, resolveProviderReadiness } from '../../lib/powerReadiness';
-import { bluDeviceRegistry, useBluConnection, type BluProviderId } from '../../src/power';
+import { useUnifiedDeviceConnections, type ECSDeviceConnectionModel } from '../../lib/unifiedScanner';
 
 export interface DiscoveredDevice {
   id: string;
@@ -35,7 +35,7 @@ interface Props {
 
 type ScanState = 'idle' | 'scanning' | 'found' | 'connecting' | 'connected' | 'error';
 
-const POWER_TO_BLU_PROVIDER: Partial<Record<PowerProviderId, BluProviderId>> = {
+const POWER_TO_SCANNER_PROVIDER: Partial<Record<PowerProviderId, string>> = {
   EcoFlow: 'ecoflow',
   Bluetti: 'bluetti',
   AnkerSolix: 'anker_solix',
@@ -46,17 +46,6 @@ const POWER_TO_BLU_PROVIDER: Partial<Record<PowerProviderId, BluProviderId>> = {
   DakotaLithium: 'dakota_lithium',
 };
 
-const PROVIDER_SETUP_NOTES: Partial<Record<PowerProviderId, string>> = {
-  Redarc: 'Direct Bluetooth telemetry may be available on supported REDARC hardware, but field verification is still required.',
-  DakotaLithium: 'Direct Bluetooth telemetry may be available on supported Dakota Lithium hardware, but field verification is still required.',
-  Bluetti: 'This provider remains a UI-only path because native discovery still falls back to simulated devices.',
-  AnkerSolix: 'This provider remains a UI-only path because native discovery still falls back to simulated devices.',
-  Jackery: 'This provider remains a UI-only path because native discovery still falls back to simulated devices.',
-  GoalZero: 'This provider remains a UI-only path because native discovery still falls back to simulated devices.',
-  Renogy: 'This provider remains a UI-only path because native discovery still falls back to simulated devices.',
-  EcoFlow: 'EcoFlow remains the strongest current ECS provider path and uses the existing integration flow.',
-};
-
 function getSignalLabel(signal: number): { label: string; color: string } {
   if (signal >= -60) return { label: 'STRONG', color: '#34C759' };
   if (signal >= -75) return { label: 'MODERATE', color: '#FFB800' };
@@ -65,145 +54,76 @@ function getSignalLabel(signal: number): { label: string; color: string } {
 
 function normalizeDiscoveredDevices(
   provider: PowerProviderId,
-  discoveredDevices: any[],
+  discoveredDevices: ECSDeviceConnectionModel[],
 ): DiscoveredDevice[] {
   return discoveredDevices.map((device) => ({
-    id: String(device?.id ?? ''),
-    name: String(device?.name ?? device?.display_name ?? 'Power Device'),
-    model: String(device?.model ?? 'Unknown Model'),
+    id: device.id,
+    name: device.name,
+    model: String(device.subtype ?? device.category ?? 'Unknown Model'),
     signal:
-      typeof device?.rssi === 'number'
-        ? device.rssi
-        : typeof device?.signal_strength === 'number'
-          ? device.signal_strength
-          : provider === 'EcoFlow'
-            ? -65
-            : -90,
+      typeof device.signalStrength === 'number'
+        ? device.signalStrength
+        : provider === 'EcoFlow'
+          ? -65
+          : -90,
     provider,
   }));
 }
 
 export default function ConnectionStep({ palette, provider, onDeviceSelected, onBack }: Props) {
   const display = PROVIDER_DISPLAY[provider];
-  const isUiOnlyPath = display.supportLevel === 'ui_only';
   const providerReadiness = resolveProviderReadiness(provider);
-  const blu = useBluConnection();
+  const connections = useUnifiedDeviceConnections();
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
-  const mountedRef = useRef(true);
+  const completedSelectionRef = useRef<string | null>(null);
   const [scanState, setScanState] = useState<ScanState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
-  const bluProvider = POWER_TO_BLU_PROVIDER[provider] ?? null;
-  const providerBinding = useMemo(() => {
-    switch (provider) {
-      case 'EcoFlow':
-        return {
-          connectionState: blu.connectionState,
-          isScanning: blu.isConnecting,
-          discoveredDevices: blu.discoveredDevices,
-          scan: blu.refreshDevices,
-          connect: blu.connect,
-          error: blu.error,
-        };
-      case 'Bluetti':
-        return {
-          connectionState: blu.bluettiConnectionState,
-          isScanning: blu.bluettiIsScanning,
-          discoveredDevices: blu.bluettiDiscoveredDevices,
-          scan: blu.bluettiScan,
-          connect: blu.bluettiConnect,
-          error: blu.bluettiError,
-        };
-      case 'AnkerSolix':
-        return {
-          connectionState: blu.ankerSolixConnectionState,
-          isScanning: blu.ankerSolixIsScanning,
-          discoveredDevices: blu.ankerSolixDiscoveredDevices,
-          scan: blu.ankerSolixScan,
-          connect: blu.ankerSolixConnect,
-          error: blu.ankerSolixError,
-        };
-      case 'Jackery':
-        return {
-          connectionState: blu.jackeryConnectionState,
-          isScanning: blu.jackeryIsScanning,
-          discoveredDevices: blu.jackeryDiscoveredDevices,
-          scan: blu.jackeryScan,
-          connect: blu.jackeryConnect,
-          error: blu.jackeryError,
-        };
-      case 'GoalZero':
-        return {
-          connectionState: blu.goalZeroConnectionState,
-          isScanning: blu.goalZeroIsScanning,
-          discoveredDevices: blu.goalZeroDiscoveredDevices,
-          scan: blu.goalZeroScan,
-          connect: blu.goalZeroConnect,
-          error: blu.goalZeroError,
-        };
-      case 'Renogy':
-        return {
-          connectionState: blu.renogyConnectionState,
-          isScanning: blu.renogyIsScanning,
-          discoveredDevices: blu.renogyDiscoveredDevices,
-          scan: blu.renogyScan,
-          connect: blu.renogyConnect,
-          error: blu.renogyError,
-        };
-      case 'Redarc':
-        return {
-          connectionState: blu.redarcConnectionState,
-          isScanning: blu.redarcIsScanning,
-          discoveredDevices: blu.redarcDiscoveredDevices,
-          scan: blu.redarcScan,
-          connect: blu.redarcConnect,
-          error: blu.redarcError,
-        };
-      case 'DakotaLithium':
-        return {
-          connectionState: blu.dakotaLithiumConnectionState,
-          isScanning: blu.dakotaLithiumIsScanning,
-          discoveredDevices: blu.dakotaLithiumDiscoveredDevices,
-          scan: blu.dakotaLithiumScan,
-          connect: blu.dakotaLithiumConnect,
-          error: blu.dakotaLithiumError,
-        };
-      default:
-        return null;
-    }
-  }, [blu, provider]);
+  const scannerProviderId = POWER_TO_SCANNER_PROVIDER[provider] ?? null;
+  const scannerDevices = useMemo(() => (
+    connections.devices.filter((device) =>
+      device.kind === 'power' &&
+      device.providerId === scannerProviderId &&
+      (device.isDiscoverable || device.isConnected || device.isConnecting)
+    )
+  ), [connections.devices, scannerProviderId]);
 
   const devices = useMemo(
-    () => (providerBinding ? normalizeDiscoveredDevices(provider, providerBinding.discoveredDevices) : []),
-    [provider, providerBinding],
+    () => normalizeDiscoveredDevices(provider, scannerDevices),
+    [provider, scannerDevices],
   );
   const readinessConnectionState = useMemo(() => {
     if (scanState === 'connected') return 'connected';
     if (scanState === 'connecting') return 'connecting';
     if (scanState === 'scanning') return 'scanning';
-
-    switch (providerBinding?.connectionState) {
+    switch (connections.scannerSnapshot.state) {
+      case 'streaming':
+        return 'live';
+      case 'connected':
+        return 'connected';
+      case 'connecting':
+        return 'connecting';
+      case 'scanning':
+        return 'scanning';
       case 'error':
-      case 'unsupported':
+      case 'permission_required':
+      case 'bluetooth_off':
         return 'unavailable';
+      case 'idle':
+      case 'discovered':
+      case 'disconnecting':
+      case 'disconnected':
       default:
-        return providerBinding?.connectionState ?? null;
+        return 'disconnected';
     }
-  }, [providerBinding?.connectionState, scanState]);
+  }, [connections.scannerSnapshot.state, scanState]);
   const runtimeReadiness = resolvePowerReadiness({
     providerId: provider,
     connectionState: readinessConnectionState,
     hasTelemetry: scanState === 'connected',
     hasStoredSnapshot: devices.length > 0,
   });
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (scanState === 'scanning') {
@@ -219,81 +139,64 @@ export default function ConnectionStep({ palette, provider, onDeviceSelected, on
   }, [pulseAnim, scanState]);
 
   useEffect(() => {
-    if (!providerBinding) return;
-    if (providerBinding.error) {
-      setError(providerBinding.error);
-      setScanState('error');
-      return;
-    }
-    if (providerBinding.isScanning) {
+    if (connections.isScanning) {
       setScanState('scanning');
       return;
     }
-    if (providerBinding.connectionState === 'connected' && selectedDeviceId) {
+    const selectedScannerDevice = selectedDeviceId
+      ? scannerDevices.find((device) => device.id === selectedDeviceId)
+      : null;
+    if (selectedScannerDevice?.lastError) {
+      setError(selectedScannerDevice.lastError);
+      setScanState('error');
+      return;
+    }
+    if (selectedScannerDevice?.isConnected && selectedDeviceId) {
       setScanState('connected');
+      if (completedSelectionRef.current !== selectedDeviceId) {
+        completedSelectionRef.current = selectedDeviceId;
+        onDeviceSelected({
+          id: selectedScannerDevice.id,
+          name: selectedScannerDevice.name,
+          model: String(selectedScannerDevice.subtype ?? selectedScannerDevice.category ?? 'Unknown Model'),
+          signal: selectedScannerDevice.signalStrength ?? -90,
+          provider,
+        });
+      }
       return;
     }
     if (devices.length > 0) {
       setScanState('found');
       return;
     }
-  }, [devices.length, providerBinding, selectedDeviceId]);
+    if (connections.scanAreaState === 'permission_denied' || connections.scanAreaState === 'bluetooth_unavailable' || connections.scanAreaState === 'ble_failed') {
+      setError(connections.scanAreaMessage);
+      setScanState('error');
+    }
+  }, [connections.isScanning, connections.scanAreaMessage, connections.scanAreaState, devices.length, onDeviceSelected, provider, scannerDevices, selectedDeviceId]);
 
   const startScan = useCallback(async () => {
-    if (!providerBinding) return;
     setError(null);
     setSelectedDeviceId(null);
+    completedSelectionRef.current = null;
     setScanState('scanning');
-    await providerBinding.scan();
-  }, [providerBinding]);
+    await connections.rescan();
+  }, [connections]);
 
   const connectToDevice = useCallback(async (device: DiscoveredDevice) => {
-    if (!providerBinding || !bluProvider) return;
-
     setSelectedDeviceId(device.id);
+    completedSelectionRef.current = null;
     setError(null);
     setScanState('connecting');
-    const result = await providerBinding.connect(device.id) as any;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const registered =
-      bluDeviceRegistry.getDevice(bluProvider, device.id) ??
-      (Array.isArray(result?.devices)
-        ? result.devices.find((candidate: any) => candidate?.provider === bluProvider)
-        : null) ??
-      bluDeviceRegistry.getByProvider(bluProvider).find((candidate) => candidate.connection_state === 'connected') ??
-      null;
-
-    if (registered?.connection_state === 'connected') {
-      setScanState('connected');
-      setTimeout(() => {
-        if (!mountedRef.current) return;
-        onDeviceSelected({
-          ...device,
-          id: String(registered.device_id ?? device.id),
-          name: String(registered.display_name ?? device.name),
-          model: String(registered.model ?? device.model),
-        });
-      }, 700);
-      return;
-    }
-
-    setError(providerBinding.error ?? 'Connection failed.');
-    setScanState('error');
-  }, [bluProvider, onDeviceSelected, providerBinding]);
+    await connections.connectDevice(device.id, 'user_device_action');
+  }, [connections]);
 
   useEffect(() => {
-    if (isUiOnlyPath) {
-      setError('This provider path remains UI-only until real hardware discovery replaces the simulated fallback.');
+    if (display.supportLevel === 'ui_only') {
+      setError('This provider is not available through the production unified scanner yet.');
       setScanState('error');
-      return;
     }
-    if (!providerBinding) return;
-    const timer = setTimeout(() => {
-      void startScan();
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [isUiOnlyPath, providerBinding, startScan]);
+  }, [display.supportLevel]);
 
   return (
     <View style={styles.container}>
@@ -314,7 +217,7 @@ export default function ConnectionStep({ palette, provider, onDeviceSelected, on
       <View style={[styles.infoCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
         <Ionicons name="information-circle-outline" size={16} color={display.color} />
         <Text style={[styles.infoText, { color: palette.text }]}>
-          {PROVIDER_SETUP_NOTES[provider] ?? 'Bluetooth setup is handled directly inside ECS.'}
+          Device discovery uses the ECS unified scanner. Only nearby devices returned by the production scanner can be selected here.
         </Text>
       </View>
 
@@ -440,7 +343,12 @@ export default function ConnectionStep({ palette, provider, onDeviceSelected, on
             activeOpacity={0.7}
           >
             <Ionicons name="refresh-outline" size={14} color={palette.textMuted} />
-            <Text style={[styles.rescanText, { color: palette.textMuted }]}>SCAN AGAIN</Text>
+            <Text
+              style={[styles.rescanText, { color: palette.textMuted }]}
+              numberOfLines={2}
+            >
+              SCAN FOR DEVICE CONNECTIONS
+            </Text>
           </TouchableOpacity>
         </ScrollView>
       )}
@@ -454,14 +362,16 @@ export default function ConnectionStep({ palette, provider, onDeviceSelected, on
           <Text style={[styles.errorDesc, { color: palette.textMuted }]}>
             {error || 'Unable to discover or connect to a supported device.'}
           </Text>
-          {!isUiOnlyPath && (
+          {display.supportLevel !== 'ui_only' && (
             <TouchableOpacity
               style={[styles.retryBtn, { backgroundColor: display.color }]}
               onPress={() => void startScan()}
               activeOpacity={0.7}
             >
               <Ionicons name="refresh-outline" size={14} color="#FFF" />
-              <Text style={styles.retryBtnText}>TRY AGAIN</Text>
+              <Text style={styles.retryBtnText} numberOfLines={2}>
+                SCAN FOR DEVICE CONNECTIONS
+              </Text>
             </TouchableOpacity>
           )}
         </View>
@@ -606,7 +516,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 10,
   },
-  rescanText: { fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
+  rescanText: { fontSize: 10, fontWeight: '800', letterSpacing: 1.4, flexShrink: 1, textAlign: 'center' },
   errorContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingBottom: SPACING.xl },
   errorIcon: {
     width: 72,
@@ -627,7 +537,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
   },
-  retryBtnText: { color: '#FFF', fontSize: 11, fontWeight: '900', letterSpacing: 1.4 },
+  retryBtnText: { color: '#FFF', fontSize: 11, fontWeight: '900', letterSpacing: 1.4, flexShrink: 1, textAlign: 'center' },
   backBtn: {
     marginTop: SPACING.md,
     flexDirection: 'row',

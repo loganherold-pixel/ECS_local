@@ -64,7 +64,10 @@ export default function ContainerGrid({
   }, [containerZones, items]);
 
   // ── Compute totals ─────────────────────────────────────────
-  const totalWeight = useMemo(() => getTotalLoadoutWeight(items), [items]);
+  const totalWeight = useMemo(
+    () => getTotalLoadoutWeight(items, containerZones),
+    [items, containerZones],
+  );
   const unassignedCount = useMemo(() => getUnassignedItemCount(items, containerZones), [items, containerZones]);
   const unassignedWeight = useMemo(() => getUnassignedWeight(items, containerZones), [items, containerZones]);
 

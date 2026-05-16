@@ -12,7 +12,7 @@
  *   5. Success / First Telemetry
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -28,9 +28,8 @@ import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL } from '../lib/theme';
 import Header from '../components/Header';
-import { useOBD2Scanner } from '../src/vehicle-telemetry/useOBD2Scanner';
+import { useUnifiedOBD2Scanner, type OBD2DiscoveredDevice } from '../lib/unifiedScanner';
 import { useVehicleTelemetry } from '../src/vehicle-telemetry/useVehicleTelemetry';
-import type { OBD2DiscoveredDevice } from '../src/vehicle-telemetry/OBD2Adapter';
 
 // ═══════════════════════════════════════════════════════════
 // SUPPORTED ADAPTERS
@@ -117,19 +116,13 @@ const stepS = StyleSheet.create({
 
 export default function OBDSetupWizard() {
   const router = useRouter();
-  const scanner = useOBD2Scanner();
+  const scanner = useUnifiedOBD2Scanner();
   const vt = useVehicleTelemetry();
   const [step, setStep] = useState(0);
   const [deviceName, setDeviceName] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<OBD2DiscoveredDevice | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (step === 1 && !scanner.isScanning && !scanner.isConnected && !scanner.isConnecting) {
-      scanner.startScan(15000);
-    }
-  }, [step, scanner]);
 
   const handleConnect = useCallback(async () => {
     if (!selectedDevice) return;
@@ -215,9 +208,9 @@ export default function OBDSetupWizard() {
   const renderScan = () => {
     return (
       <ScrollView style={ws.scroll} contentContainerStyle={ws.scrollContent}>
-        <Text style={ws.stepTitle}>Scanning for OBD-II Adapters</Text>
+        <Text style={ws.stepTitle}>Find OBD-II Adapters</Text>
         <Text style={ws.stepDesc}>
-          Make sure your adapter is plugged in and the vehicle ignition is ON.
+          Make sure your adapter is plugged in and the vehicle ignition is ON, then start a scan when you are ready.
         </Text>
 
         {/* Scan progress */}
@@ -280,9 +273,9 @@ export default function OBDSetupWizard() {
         ) : (
           <View style={ws.emptyState}>
             <Ionicons name="bluetooth-outline" size={40} color={TACTICAL.textMuted} />
-            <Text style={ws.emptyTitle}>No Devices Found</Text>
+            <Text style={ws.emptyTitle}>Scan Not Started</Text>
             <Text style={ws.emptyDesc}>
-              Ensure your OBD-II adapter is plugged in and Bluetooth is enabled.
+              Press Scan for Device Connections to begin Bluetooth discovery.
             </Text>
           </View>
         )}
@@ -291,7 +284,7 @@ export default function OBDSetupWizard() {
         {!scanner.isScanning && (
           <TouchableOpacity style={ws.secondaryBtn} onPress={() => scanner.startScan(15000)} activeOpacity={0.7}>
             <Ionicons name="refresh-outline" size={14} color={TACTICAL.amber} />
-            <Text style={ws.secondaryBtnText}>SCAN AGAIN</Text>
+            <Text style={ws.secondaryBtnText} numberOfLines={2}>SCAN FOR DEVICE CONNECTIONS</Text>
           </TouchableOpacity>
         )}
       </ScrollView>
@@ -456,7 +449,7 @@ export default function OBDSetupWizard() {
 
         <TouchableOpacity
           style={ws.primaryBtn}
-          onPress={() => router.replace('/(tabs)/dashboard')}
+              onPress={() => router.replace('/dashboard')}
           activeOpacity={0.7}
         >
           <Text style={ws.primaryBtnText}>RETURN TO DASHBOARD</Text>
@@ -559,7 +552,7 @@ const ws = StyleSheet.create({
   primaryBtnDisabled: { opacity: 0.6 },
   primaryBtnText: { fontSize: 13, fontWeight: '800', color: TACTICAL.bg, letterSpacing: 1.5 },
   secondaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: TACTICAL.amber + '30', backgroundColor: TACTICAL.amber + '08' },
-  secondaryBtnText: { fontSize: 11, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 1.5 },
+  secondaryBtnText: { fontSize: 11, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 1.5, flexShrink: 1, textAlign: 'center' },
 
   // ── Scan ──
   scanProgressContainer: { height: 3, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' },

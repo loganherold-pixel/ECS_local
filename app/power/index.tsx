@@ -29,16 +29,19 @@ import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
 import { useTheme } from '../../context/ThemeContext';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 
 import { usePowerTelemetry } from '../../src/power/hooks/usePowerTelemetry';
-import { useEcoFlowLive, setSelectedEcoFlowDevice } from '../../lib/useEcoFlowLive';
 import { resolvePowerReadiness } from '../../lib/powerReadiness';
+import {
+  getEcoFlowPowerDeviceCatalog,
+  getEcoFlowPowerTelemetryDevices,
+  getSelectedEcoFlowPowerDevices,
+  setPrimaryEcoFlowPowerDevice,
+  useEcoFlowPowerLive,
+} from '../../src/features/power/services/powerTelemetryService';
 
 import PowerFlowDiagram from '../../src/components/power/PowerFlowDiagram';
-
-import { EcoFlowCloudProvider, powerDeviceStore } from '../../src/power';
-
-const ecoFlowProvider = new EcoFlowCloudProvider();
 
 interface DeviceEntry {
   deviceId: string;
@@ -144,7 +147,7 @@ export default function PowerCenterScreen() {
   const router = useRouter();
   const { palette, colors } = useTheme();
   const telemetry = usePowerTelemetry();
-  const ecoFlow = useEcoFlowLive();
+  const ecoFlow = useEcoFlowPowerLive();
   const ecoFlowRefresh = ecoFlow.refresh;
   const ecoFlowVersion = ecoFlow.version;
   const selectedEcoFlowDeviceId = ecoFlow.selectedDeviceId;
@@ -164,15 +167,18 @@ export default function PowerCenterScreen() {
     if (!mountedRef.current) return;
 
     try {
-      const perDevice = ecoFlowProvider.getPerDeviceTelemetry();
-      const selectedIds = await powerDeviceStore.getSelected('EcoFlow');
+      const perDevice = getEcoFlowPowerTelemetryDevices();
+      const selectedIds = await getSelectedEcoFlowPowerDevices();
       const selectedId = ecoFlow.selectedDeviceId ?? selectedIds[0] ?? null;
 
       if (perDevice.length > 0) {
         const mapped = perDevice.map((d: any) => {
           const restricted =
+            d?.unauthorized === true ||
             typeof d?.error === 'string' &&
-            d.error.toLowerCase().includes('not allowed');
+            (d.error.toLowerCase().includes('not allowed') ||
+              d.error.toLowerCase().includes('not authorized') ||
+              d.error.toLowerCase().includes('unauthorized'));
 
           return {
             deviceId: d.deviceId,
@@ -193,19 +199,19 @@ export default function PowerCenterScreen() {
         return;
       }
 
-      const catalog = await ecoFlowProvider.listDevices();
+      const catalog = await getEcoFlowPowerDeviceCatalog();
       const selectedSet = new Set(selectedIds);
 
       const fallbackEntries: DeviceEntry[] = catalog.map((item) => ({
-        deviceId: item.deviceId,
+        deviceId: item.id,
         name: item.name,
         model: item.model,
         productType: item.productType,
-        role: item.deviceId === selectedId ? 'primary' : selectedSet.has(item.deviceId) ? 'supporting' : 'supporting',
-        socPct: item.deviceId === selectedId ? ecoFlow.batteryPct ?? undefined : undefined,
-        wattsIn: item.deviceId === selectedId ? ecoFlow.inputWatts ?? undefined : undefined,
-        wattsOut: item.deviceId === selectedId ? ecoFlow.outputWatts ?? undefined : undefined,
-        solarWatts: item.deviceId === selectedId ? ecoFlow.solarWatts ?? undefined : undefined,
+        role: item.id === selectedId ? 'primary' : selectedSet.has(item.id) ? 'supporting' : 'supporting',
+        socPct: item.id === selectedId ? ecoFlow.batteryPct ?? undefined : undefined,
+        wattsIn: item.id === selectedId ? ecoFlow.inputWatts ?? undefined : undefined,
+        wattsOut: item.id === selectedId ? ecoFlow.outputWatts ?? undefined : undefined,
+        solarWatts: item.id === selectedId ? ecoFlow.solarWatts ?? undefined : undefined,
       }));
 
       if (selectedId && !fallbackEntries.find((item) => item.deviceId === selectedId)) {
@@ -257,7 +263,7 @@ export default function PowerCenterScreen() {
     async (entry: DeviceEntry) => {
       if (!entry?.deviceId) return;
 
-      setSelectedEcoFlowDevice(entry.deviceId, entry.name ?? entry.model ?? null);
+      setPrimaryEcoFlowPowerDevice(entry.deviceId, entry.name ?? entry.model ?? null);
 
       if (mountedRef.current) {
         setDeviceEntries((prev) =>
@@ -362,10 +368,9 @@ export default function PowerCenterScreen() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
+            {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={palette.amber}
-            colors={[palette.amber]}
           />
         }
       >
@@ -707,7 +712,7 @@ export default function PowerCenterScreen() {
           activeOpacity={0.76}
         >
           <Ionicons name="bluetooth-outline" size={18} color="#FFF" />
-          <Text style={[styles.actionBtnText, { color: '#FFF' }]}>BLU SOURCES</Text>
+          <Text style={[styles.actionBtnText, { color: '#FFF' }]}>DEVICE CONNECTIONS</Text>
           <Ionicons name="chevron-forward" size={16} color="#FFF" />
         </TouchableOpacity>
 
