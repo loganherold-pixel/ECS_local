@@ -104,15 +104,31 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            def uploadStoreFile = System.getenv("ECS_ANDROID_UPLOAD_STORE_FILE") ?: findProperty("ECS_ANDROID_UPLOAD_STORE_FILE")
+            def uploadStorePassword = System.getenv("ECS_ANDROID_UPLOAD_STORE_PASSWORD") ?: findProperty("ECS_ANDROID_UPLOAD_STORE_PASSWORD")
+            def uploadKeyAlias = System.getenv("ECS_ANDROID_UPLOAD_KEY_ALIAS") ?: findProperty("ECS_ANDROID_UPLOAD_KEY_ALIAS")
+            def uploadKeyPassword = System.getenv("ECS_ANDROID_UPLOAD_KEY_PASSWORD") ?: findProperty("ECS_ANDROID_UPLOAD_KEY_PASSWORD")
+
+            if (uploadStoreFile && uploadStorePassword && uploadKeyAlias && uploadKeyPassword) {
+                storeFile file(uploadStoreFile)
+                storePassword uploadStorePassword
+                keyAlias uploadKeyAlias
+                keyPassword uploadKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            def hasUploadSigning =
+                (System.getenv("ECS_ANDROID_UPLOAD_STORE_FILE") ?: findProperty("ECS_ANDROID_UPLOAD_STORE_FILE")) &&
+                (System.getenv("ECS_ANDROID_UPLOAD_STORE_PASSWORD") ?: findProperty("ECS_ANDROID_UPLOAD_STORE_PASSWORD")) &&
+                (System.getenv("ECS_ANDROID_UPLOAD_KEY_ALIAS") ?: findProperty("ECS_ANDROID_UPLOAD_KEY_ALIAS")) &&
+                (System.getenv("ECS_ANDROID_UPLOAD_KEY_PASSWORD") ?: findProperty("ECS_ANDROID_UPLOAD_KEY_PASSWORD"))
+            signingConfig hasUploadSigning ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

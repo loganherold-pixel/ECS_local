@@ -32,7 +32,12 @@ Thumbs.db
 !.env.template
 
 # Native/build outputs
+.gradle-local*/
+.gradle-user-home/
+.npm-cache/
+artifacts/
 android/.gradle/
+android/.kotlin/
 android/build/
 android/app/build/
 android/app/.cxx/
@@ -45,17 +50,16 @@ supabase/.temp/
 tmp/
 .tmp/
 .tmp-*
+.smoke/
+.expo-export-check/
+.expo-runtime/
+.cleanup-quarantine/
+.cleanup-safety/
 .codex-*
 .expo-*.log
 tmp_*.json
-/*_*.png
-/*_*.xml
-/*_*.txt
-/*-*.png
-/*-*.xml
-/*-*.txt
-/*.bin
-/*.jar
+/tmp_*.png
+/tmp-*.png
 /app.lnk
 
 expo-env.d.ts

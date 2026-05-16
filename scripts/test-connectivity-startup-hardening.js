@@ -27,6 +27,28 @@ assert(
 );
 
 assert(
+  connectivitySource.includes("if (this._initialized && this._status !== 'online' && !this._checkInFlight)") &&
+    connectivitySource.includes("!this._checkInFlight") &&
+    connectivitySource.includes("this._updateStatus('reconnecting');"),
+  'connectivity.ts should only publish reconnecting from online events after initial reconciliation, when not already online, and when no check is already in flight.'
+);
+
+assert(
+  connectivitySource.includes('private _checkInFlight: Promise<boolean> | null = null;') &&
+    connectivitySource.includes('if (this._checkInFlight)') &&
+    connectivitySource.includes('return this._checkInFlight;') &&
+    connectivitySource.includes('this._performConnectivityCheck().finally(() =>') &&
+    connectivitySource.includes('this._checkInFlight = null;'),
+  'connectivity.ts should serialize reachability checks so startup/event/poll checks cannot race into status flapping.'
+);
+
+assert(
+  !connectivitySource.includes("if (this._status === 'offline' || this._status === 'reconnecting') {\n        this._updateStatus('reconnecting');") &&
+    !connectivitySource.includes("if (this._status === 'offline' || this._status === 'reconnecting') {\r\n        this._updateStatus('reconnecting');"),
+  'connectivity polling should not force offline devices through reconnecting before a check.'
+);
+
+assert(
   intelStoreSource.includes("connectivity_state: restoredTransportNone ? 'offline' : 'unknown'"),
   'connectivityIntelStore restore should sanitize restored sessions into offline/unknown startup state.'
 );
@@ -58,9 +80,41 @@ assert(
 );
 
 assert(
+  interlockSource.includes('_stateSignature') &&
+    interlockSource.includes('_lastNotifiedSignature'),
+  'ecsOfflineInterlock should suppress duplicate listener notifications for identical state.'
+);
+
+assert(
   interlockSource.includes("discovery_source: 'cached_only'") &&
     interlockSource.includes("navigation_source: 'cached_only'"),
   'ecsOfflineInterlock default source priorities should not unlock live-only behavior during boot.'
+);
+
+assert(
+  read('lib/offlineCacheAwarenessEngine.ts').includes('INVALIDATION_DEDUPE_WINDOW_MS') &&
+    read('lib/offlineNavigationBridge.ts').includes('INVALIDATION_DEDUPE_WINDOW_MS'),
+  'offline cache invalidators should dedupe identical startup invalidation bursts.'
+);
+
+assert(
+  read('lib/offlineCacheAwarenessEngine.ts').includes('VOLATILE_INVALIDATION_KEYS') &&
+    read('lib/offlineNavigationBridge.ts').includes('VOLATILE_INVALIDATION_KEYS'),
+  'offline cache invalidators should ignore volatile timestamp fields when building idempotency keys.'
+);
+
+assert(
+  intelServiceSource.includes("const invalidated = invalidateCacheReadiness('tile_cache_store_change', tileCacheState);") &&
+    (intelServiceSource.includes("if (invalidated) {\n          _update();") ||
+      intelServiceSource.includes("if (invalidated) {\r\n          _update();")),
+  'connectivityIntelService should skip tile-cache re-evaluation when cache invalidation was deduped.'
+);
+
+assert(
+  intelServiceSource.includes("const invalidated = invalidateCacheReadiness(reason, sourceState);") &&
+    (intelServiceSource.includes("if (invalidated) {\n      _update();") ||
+      intelServiceSource.includes("if (invalidated) {\r\n      _update();")),
+  'connectivityIntelService.invalidateCache should not re-evaluate for duplicate invalidation keys.'
 );
 
 console.log('Connectivity startup hardening checks passed.');

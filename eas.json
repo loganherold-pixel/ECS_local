@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 18.4.0",
+    "version": ">= 18.5.0",
     "appVersionSource": "remote"
   },
   "build": {
@@ -8,21 +8,49 @@
       "developmentClient": true,
       "distribution": "internal"
     },
-    "fieldtest": {
-      "distribution": "internal",
-      "channel": "fieldtest",
-      "android": {
-        "buildType": "apk"
-      }
-    },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_NO_TELEMETRY": "1"
+      }
+    },
+    "fieldtest": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_NO_TELEMETRY": "1"
+      }
+    },
+    "campops-preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_NO_TELEMETRY": "1"
       }
     },
     "production": {
-      "autoIncrement": true
+      "environment": "production",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_NO_TELEMETRY": "1"
+      }
     }
   },
   "submit": {
