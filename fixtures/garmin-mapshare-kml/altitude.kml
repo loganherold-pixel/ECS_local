@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Altitude Position</name>
+      <TimeStamp><when>2026-04-29T18:30:00Z</when></TimeStamp>
+      <Point><coordinates>-119.5383,37.8651,2456.5</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>
