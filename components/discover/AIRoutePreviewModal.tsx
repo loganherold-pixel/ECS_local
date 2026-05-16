@@ -4,11 +4,11 @@
 // Full-screen modal with:
 //   - Route overview and expedition summary
 //   - Risk preview section with factors
-//   - Vehicle capability match
+//   - Vehicle Fit
 //   - Route intelligence advisories
 //   - Hidden gem indicator
 //   - Terrain, remoteness, difficulty details
-//   - Action buttons: Save, Build Expedition, Compare, View on Map
+//   - Action buttons: Save, Build Route, Compare, View on Map
 // ============================================================
 
 import React from 'react';
@@ -18,9 +18,15 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
+import {
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  getShellBottomClearance,
+  getShellHeaderTopPadding,
+} from '../../lib/shellLayout';
 import {
   getTerrainColor,
   getRemotenessLabel,
@@ -35,19 +41,28 @@ import {
 import {
   type EnrichedDiscoveryRoute,
   getRouteLabelConfig,
+  getRouteLabelDisplay,
   generateRouteIntelligence,
   toggleSaveRoute,
   isRouteSaved,
 } from '../../lib/discoveryIntelligenceEngine';
 import TacticalPopupShell from '../TacticalPopupShell';
 import { ECSOverlayFooter } from '../ECSModalShell';
+import { ExpeditionReadinessCard } from '../readiness';
+import { buildExploreRouteReadinessAssessment } from '../../lib/readiness/exploreRouteReadiness';
 
 interface AIRoutePreviewModalProps {
   visible: boolean;
   route: AIGeneratedRoute | null;
   enrichedRoute?: EnrichedDiscoveryRoute | null;
+  hasVehicle?: boolean;
   onClose: () => void;
-  onBuildExpedition?: () => void;
+  onRoutePreview?: () => void;
+  routePreviewDisabled?: boolean;
+  routePreviewDisabledReason?: string | null;
+  onBuildRoute?: () => void;
+  buildRouteDisabled?: boolean;
+  buildRouteDisabledReason?: string | null;
   onNavigate?: () => void;
 }
 
@@ -55,12 +70,23 @@ export default function AIRoutePreviewModal({
   visible,
   route,
   enrichedRoute,
+  hasVehicle = false,
   onClose,
-  onBuildExpedition,
+  onRoutePreview,
+  routePreviewDisabled = false,
+  routePreviewDisabledReason = null,
+  onBuildRoute,
+  buildRouteDisabled = false,
+  buildRouteDisabledReason = null,
   onNavigate,
 }: AIRoutePreviewModalProps) {
+  const insets = useSafeAreaInsets();
+
   if (!route) return null;
 
+  const shellTopClearance =
+    getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
+  const shellBottomClearance = getShellBottomClearance(insets.bottom, 2);
   const terrainColor = getTerrainColor(route.terrainType);
   const remotenessColor = getRemotenessColor(route.remotenessScore);
   const remotenessLabel = getRemotenessLabel(route.remotenessScore);
@@ -70,10 +96,12 @@ export default function AIRoutePreviewModal({
 
   const routeLabel = enrichedRoute?.routeLabel ?? 'ECS Suggested';
   const labelConfig = getRouteLabelConfig(routeLabel);
+  const routeLabelDisplay = getRouteLabelDisplay(routeLabel);
   const riskPreview = enrichedRoute?.riskPreview;
   const vehicleMatch = enrichedRoute?.vehicleMatch;
   const gemScore = enrichedRoute?.gemScore;
   const intelligence = enrichedRoute ? generateRouteIntelligence(enrichedRoute) : [];
+  const readinessAssessment = buildExploreRouteReadinessAssessment(enrichedRoute ?? route, { hasVehicle });
 
   const getDiffLabel = (d: number): string => {
     if (d <= 2) return 'EASY';
@@ -100,26 +128,104 @@ export default function AIRoutePreviewModal({
       onClose={onClose}
       title="Route Preview"
       subtitle={route.region}
-      eyebrow={routeLabel.toUpperCase()}
+      eyebrow={routeLabelDisplay.toUpperCase()}
       icon={labelConfig.icon as any}
       overlayClass="workflow"
       maxWidth={980}
-      maxHeightFraction={0.86}
-      minHeightFraction={0.7}
+      maxHeightFraction={1}
+      minHeightFraction={1}
+      showHandle={false}
+      scrollable
+      topClearanceOverride={shellTopClearance}
+      bottomClearanceOverride={shellBottomClearance}
+      contentContainerStyle={s.fullHeightContent}
       footer={(
         <ECSOverlayFooter>
-          <TouchableOpacity style={s.primaryAction} activeOpacity={0.8} onPress={() => { hapticMicro(); onBuildExpedition?.(); }}>
-            <Ionicons name="compass-outline" size={16} color={ECS.bgPrimary} />
-            <Text style={s.primaryActionText}>BUILD EXPEDITION</Text>
+          <TouchableOpacity
+            style={s.secondaryAction}
+            activeOpacity={0.7}
+            onPress={() => {
+              hapticMicro();
+              onClose();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Close route detail"
+          >
+            <Ionicons name="close-outline" size={14} color={TACTICAL.textMuted} />
+            <Text style={s.secondaryActionText} numberOfLines={2}>
+              CLOSE
+            </Text>
+          </TouchableOpacity>
+          {onRoutePreview ? (
+            <TouchableOpacity
+              style={[s.secondaryAction, s.routePreviewAction, routePreviewDisabled && s.secondaryActionDisabled]}
+              activeOpacity={routePreviewDisabled ? 1 : 0.7}
+              disabled={routePreviewDisabled}
+              onPress={() => {
+                if (routePreviewDisabled) return;
+                hapticMicro();
+                onRoutePreview();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Route Preview"
+              accessibilityHint={routePreviewDisabledReason ?? 'Preview this route on the map without starting navigation.'}
+              accessibilityState={{ disabled: routePreviewDisabled }}
+            >
+              <Ionicons
+                name="map-outline"
+                size={14}
+                color={routePreviewDisabled ? TACTICAL.textMuted : TACTICAL.amber}
+              />
+              <Text
+                style={[
+                  s.secondaryActionText,
+                  s.routePreviewActionText,
+                  routePreviewDisabled && s.secondaryActionTextDisabled,
+                ]}
+                numberOfLines={2}
+              >
+                ROUTE{'\n'}PREVIEW
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={[s.primaryAction, buildRouteDisabled && s.primaryActionDisabled]}
+            activeOpacity={buildRouteDisabled ? 1 : 0.8}
+            disabled={buildRouteDisabled}
+            onPress={() => {
+              if (buildRouteDisabled) return;
+              hapticMicro();
+              onBuildRoute?.();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Build Route"
+            accessibilityHint={buildRouteDisabledReason ?? undefined}
+            accessibilityState={{ disabled: buildRouteDisabled }}
+          >
+            <Ionicons
+              name="compass-outline"
+              size={16}
+              color={buildRouteDisabled ? TACTICAL.textMuted : ECS.bgPrimary}
+            />
+            <Text
+              style={[s.primaryActionText, buildRouteDisabled && s.primaryActionTextDisabled]}
+              numberOfLines={2}
+            >
+              BUILD{'\n'}ROUTE
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => { hapticMicro(); toggleSaveRoute(route.id); }}>
             <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={14} color={saved ? TACTICAL.amber : TACTICAL.textMuted} />
-            <Text style={[s.secondaryActionText, saved && { color: TACTICAL.amber }]}>{saved ? 'SAVED' : 'SAVE ROUTE'}</Text>
+            <Text style={[s.secondaryActionText, saved && { color: TACTICAL.amber }]} numberOfLines={2}>
+              {saved ? 'SAVED' : 'SAVE\nROUTE'}
+            </Text>
           </TouchableOpacity>
           {onNavigate ? (
             <TouchableOpacity style={s.secondaryAction} activeOpacity={0.7} onPress={() => { hapticMicro(); onNavigate(); }}>
               <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
-              <Text style={s.secondaryActionText}>OPEN IN NAVIGATE</Text>
+              <Text style={s.secondaryActionText} numberOfLines={2}>
+                OPEN IN{'\n'}NAVIGATE
+              </Text>
             </TouchableOpacity>
           ) : null}
         </ECSOverlayFooter>
@@ -128,11 +234,25 @@ export default function AIRoutePreviewModal({
       <View style={s.scrollContent}>
           <View style={[s.labelBadge, { borderColor: labelConfig.color + '50', backgroundColor: labelConfig.color + '14' }]}>
             <Ionicons name={labelConfig.icon as any} size={10} color={labelConfig.color} />
-            <Text style={[s.labelBadgeText, { color: labelConfig.color }]}>{routeLabel.toUpperCase()}</Text>
+            <Text style={[s.labelBadgeText, { color: labelConfig.color }]}>{routeLabelDisplay.toUpperCase()}</Text>
           </View>
           {/* Route Name */}
           <Text style={s.routeName}>{route.name}</Text>
           <Text style={s.routeRegion}>{route.region}</Text>
+          {buildRouteDisabled && buildRouteDisabledReason ? (
+            <View style={s.routeUnavailableNotice}>
+              <Ionicons name="alert-circle-outline" size={12} color={TACTICAL.textMuted} />
+              <Text style={s.routeUnavailableText}>{buildRouteDisabledReason}</Text>
+            </View>
+          ) : null}
+
+          <ExpeditionReadinessCard
+            assessment={readinessAssessment}
+            title="Overall Readiness"
+            categoryLimit={7}
+            concernLimit={3}
+            compactCategories
+          />
 
           {/* Risk Preview Banner */}
           {riskPreview && (
@@ -161,7 +281,7 @@ export default function AIRoutePreviewModal({
             <View style={[s.vehicleBanner, { borderColor: vehicleMatch.color + '30', backgroundColor: vehicleMatch.color + '08' }]}>
               <Ionicons name="car-outline" size={14} color={vehicleMatch.color} />
               <View style={s.vehicleContent}>
-                <Text style={[s.vehicleLevel, { color: vehicleMatch.color }]}>VEHICLE MATCH: {vehicleMatch.level.toUpperCase()}</Text>
+                <Text style={[s.vehicleLevel, { color: vehicleMatch.color }]}>VEHICLE FIT: {vehicleMatch.level.toUpperCase()}</Text>
                 <Text style={s.vehicleNote}>{vehicleMatch.note}</Text>
                 {vehicleMatch.concerns.map((c, i) => (
                   <Text key={i} style={s.vehicleConcern}>{c}</Text>
@@ -174,7 +294,7 @@ export default function AIRoutePreviewModal({
           <View style={[s.confidenceBanner, { borderColor: confidenceColor + '30', backgroundColor: confidenceColor + '08' }]}>
             <Ionicons name={confidenceIcon as any} size={14} color={confidenceColor} />
             <View style={s.confidenceContent}>
-              <Text style={[s.confidenceTitle, { color: confidenceColor }]}>{confidenceLabel}</Text>
+              <Text style={[s.confidenceTitle, { color: confidenceColor }]}>ROUTE CONFIDENCE: {confidenceLabel}</Text>
               <Text style={s.confidenceDesc}>
                 {route.confidence === 'high'
                   ? 'This route follows well-documented forest service roads or BLM routes.'
@@ -326,7 +446,7 @@ export default function AIRoutePreviewModal({
           <View style={s.disclaimer}>
             <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
             <Text style={s.disclaimerText}>
-              This route was generated by ECS based on geographic data and terrain analysis. 
+              This ECS-Inferred route is based on geographic data and terrain analysis.
               Verify road conditions, access permissions, and seasonal closures before departure. 
               ECS-suggested routes are expedition concepts, not verified navigable trails.
             </Text>
@@ -338,6 +458,11 @@ export default function AIRoutePreviewModal({
 }
 
 const s = StyleSheet.create({
+  fullHeightContent: {
+    flexGrow: 1,
+    minHeight: '100%',
+    justifyContent: 'flex-start',
+  },
   labelBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1,
@@ -439,18 +564,83 @@ const s = StyleSheet.create({
   // Actions
   primaryAction: {
     flex: 1,
-    minHeight: 44,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: 48,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingHorizontal: 12, backgroundColor: TACTICAL.amber, borderRadius: 12,
+    paddingHorizontal: 8, backgroundColor: TACTICAL.amber, borderRadius: 12,
   },
-  primaryActionText: { fontSize: 13, fontWeight: '800', color: ECS.bgPrimary, letterSpacing: 3 },
+  primaryActionDisabled: {
+    backgroundColor: ECS.bgElev,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    opacity: 0.56,
+  },
+  primaryActionText: {
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '800',
+    color: ECS.bgPrimary,
+    letterSpacing: 1.2,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    flexShrink: 1,
+  },
+  primaryActionTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
   secondaryAction: {
     flex: 1,
-    minHeight: 44,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: 48,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: ECS.stroke, backgroundColor: ECS.bgPanel,
+    paddingHorizontal: 7, borderRadius: 10, borderWidth: 1, borderColor: ECS.stroke, backgroundColor: ECS.bgPanel,
   },
-  secondaryActionText: { fontSize: 9, fontWeight: '800', color: TACTICAL.textMuted, letterSpacing: 2 },
+  routePreviewAction: {
+    borderColor: TACTICAL.amber + '38',
+    backgroundColor: TACTICAL.amber + '10',
+  },
+  secondaryActionDisabled: {
+    opacity: 0.56,
+  },
+  secondaryActionText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.1,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    flexShrink: 1,
+  },
+  routePreviewActionText: {
+    color: TACTICAL.amber,
+  },
+  secondaryActionTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  routeUnavailableNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  routeUnavailableText: {
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
 
   // Disclaimer
   disclaimer: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: 4, paddingVertical: 8 },

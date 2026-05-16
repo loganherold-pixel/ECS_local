@@ -23,6 +23,7 @@ import {
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -30,20 +31,22 @@ import { useIsFocused } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
 import TopoBackground from '../../components/TopoBackground';
+import Header from '../../components/Header';
 import { ECSSegmentedControl } from '../../components/ECSChip';
 import { ECSSection, ECSSectionBadge, ECSSectionHeader } from '../../components/ECSSurface';
 import {
   ECSResultsEmptyState,
-  ECSResultsMetaRow,
 } from '../../components/ECSResults';
 import { ECSSkeletonBlock, ECSLoadingSection, ECSTransientNotice } from '../../components/ECSLoading';
 import TacticalPopupShell from '../../components/TacticalPopupShell';
 import EnrichedRouteCard from '../../components/discover/EnrichedRouteCard';
 import ExpeditionAnalysisModal from '../../components/discover/ExpeditionAnalysisModal';
 import DistanceRadiusFilter from '../../components/discover/DistanceRadiusFilter';
-import DiscoveryCategoryTabs from '../../components/discover/DiscoveryCategoryTabs';
 import AIRouteCard from '../../components/discover/AIRouteCard';
 import AIRoutePreviewModal from '../../components/discover/AIRoutePreviewModal';
+import TrailPackCard from '../../components/discover/TrailPackCard';
+import TrailPackPreviewModal from '../../components/trailPacks/TrailPackPreviewModal';
+import { getExploreRouteThumbnailAssignments } from '../../lib/exploreTrailThumbnails';
 import {
   loadOpportunitiesWithCompatibility,
   loadExpeditionOpportunities,
@@ -52,6 +55,7 @@ import {
   DEFAULT_DISTANCE_RADIUS,
   DISTANCE_RADIUS_OPTIONS,
   DEFAULT_USER_LOCATION,
+  MIN_DISCOVERY_ROUTE_MILES,
   type ExpeditionOpportunity,
   type DistanceRadius,
 } from '../../lib/discoverEngine';
@@ -65,17 +69,15 @@ import {
 import {
   categorizeRoutesExpanded,
   dedupeExploreRoutes,
-  DISCOVERY_TABS,
   getHiddenGemRecommendations,
   getPopularTrailRecommendations,
   type DiscoveryTabId,
   type CategorizedRoute,
   type ExploreRouteSourceMetadata,
-  type ExpandedDiscoverCategories,
   type HiddenGemPipelineDiagnostics,
-  type HiddenGemRecommendationReason,
   type HiddenGemResult,
 } from '../../lib/discoverCategoryEngine';
+import { HIDDEN_GEMS_MAX_RESULTS_RENDERED } from '../../lib/explore/hiddenGemsThresholds';
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import { vehicleStore } from '../../lib/vehicleStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
@@ -95,8 +97,13 @@ import {
 } from '../../lib/discoveryIntelligenceEngine';
 import {
   buildExploreNavigationPayload,
+  canStageNavigationHandoffRoute,
+  clearNavigationHandoffPayload,
+  getNavigationHandoffRouteUnavailableReason,
   saveNavigationHandoffPayload,
+  type NavigationHandoffPayload,
 } from '../../lib/navigationHandoffStore';
+import { extractExploreRouteCampMarkers } from '../../lib/exploreRouteCampHandoff';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { useECSAI } from '../../lib/ai/useECSAI';
 import {
@@ -111,12 +118,68 @@ import {
   upsertFavoriteTrailPlan,
 } from '../../lib/exploreFavoritesStore';
 import { orchestrateExploreSectionRoutes } from '../../lib/explore/exploreOrchestratorAdapter';
-import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
+import {
+  canStartTrailPackGuidance,
+  distanceMilesBetween,
+  getDefaultECSTrailPacks,
+  getDiscoverableTrailPacks,
+  getTrailPackGeometryCoordinates,
+  trailPackToExpeditionOpportunity,
+  type ECSTrailPackDiscoveryItem,
+} from '../../lib/explore/trailPacks';
+import {
+  buildTrailPackConfidenceInputsFromFeedback,
+  getTrailPackFeedbackSnapshot,
+  submitTrailPackFeedback,
+  subscribeTrailPackFeedback,
+  type ECSTrailPackFeedbackType,
+} from '../../lib/explore/trailPackFeedback';
+import { buildTrailPackReviewStatesFromFeedback } from '../../lib/explore/trailPackReviewQueue';
+import TrailPackSubmissionModal from '../../components/trailPacks/TrailPackSubmissionModal';
+import {
+  trailPackRouteInputFromNavigationPayload,
+  trailPackSubmissionStore,
+  type ECSTrailPackSubmission,
+  type ECSTrailPackSubmissionRouteInput,
+} from '../../lib/explore/trailPackSubmissions';
+import {
+  applyExploreRefinementFilter,
+  EXPLORE_REFINEMENT_OPTIONS,
+  getExploreRefinementCounts,
+  type ExploreRefinementFilter,
+} from '../../lib/explore/exploreRefinementFilter';
+import {
+  buildExploreRouteOverlaySegmentsFromRoutes,
+  type ExploreRouteOverlayCategory,
+} from '../../lib/navigateExploreRoutesOverlay';
+import { saveExploreRoutesMapHandoff } from '../../lib/exploreRoutesMapHandoff';
+import {
+  getExploreFilterStateSnapshot,
+  loadExploreFilterStateSnapshot,
+  saveExploreFilterStateSnapshot,
+  type ExplorerCategoryPanelKey,
+} from '../../lib/exploreFilterStateStore';
+import { getShellBottomClearance } from '../../lib/shellLayout';
 import { reportDegradedState, reportRecoverableFailure } from '../../lib/ecsIssueIntelligence';
 import { ECS_CTA_LABELS, ECS_READINESS_COPY, ECS_STATE_COPY } from '../../lib/ecsStateCopy';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { ecsLog } from '../../lib/ecsLogger';
+import {
+  buildExploreRouteReadinessStorePatch,
+  expeditionReadinessStore,
+} from '../../lib/readiness';
 
-const TAG = '[DISCOVER]';
+const TAG = '[EXPLORE]';
+// Preserve the legacy categorization binding during Metro/HMR transitions while
+// the unified drivable-trail pipeline fully replaces the old category tabs.
+void categorizeRoutesExpanded;
+const EXPLORE_ALL_TRAILS_AI_CATEGORY = 'all-drivable-trails';
+const UNIFIED_TRAIL_FILTER_META = {
+  label: 'ALL DRIVABLE TRAILS',
+  icon: 'trail-sign-outline',
+  accentColor: TACTICAL.amber,
+  description: 'Radius-first drivable trail discovery for off-road routes within your current search range.',
+} as const;
 
 type PopularTrailRouteWithMetadata = CategorizedRoute & {
   sourceMetadata?: ExploreRouteSourceMetadata;
@@ -131,7 +194,7 @@ type PopularTrailEnrichedRoute = EnrichedDiscoveryRoute & {
 
 
 
-const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon: string; accentColor: string; description: string }[] = [
+export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon: string; accentColor: string; description: string }[] = [
   { id: 'day-trips', label: 'DAY TRIPS', icon: 'sunny-outline', accentColor: '#66BB6A', description: 'Short routes under 6 hours — perfect for a day out' },
   { id: 'weekend-trips', label: 'WEEKEND TRIPS', icon: 'moon-outline', accentColor: 'rgba(140, 120, 210, 0.85)', description: '1–2 day routes for overnight exploration' },
   { id: 'expeditions', label: 'EXPEDITIONS', icon: 'compass-outline', accentColor: 'rgba(200, 150, 60, 0.85)', description: 'Multi-day backcountry routes for extended travel' },
@@ -139,8 +202,15 @@ const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon: string
 ];
 
 const FAVORITES_VISIBLE_LIMIT = 5;
-const HIDDEN_GEM_PAGE_SIZE = 10;
+const EXPLORE_CATEGORY_PAGE_SIZE = 10;
+const HIDDEN_GEM_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
+const POPULAR_TRAIL_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
+const TRAIL_PACK_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
+const AI_ROUTE_IDEA_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
+const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
+const EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT = 368;
 const HIDDEN_GEM_AI_TIMEOUT_MS = 4500;
+
 const DISCOVER_LOCATION_REFRESH_THRESHOLD_MI = 5;
 const TOKEN_STOP_WORDS = new Set([
   'trail',
@@ -159,6 +229,10 @@ const TOKEN_STOP_WORDS = new Set([
   'valley',
   'basin',
 ]);
+
+function routePassesExploreMapLength(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
+  return Number.isFinite(Number(route?.distanceMiles)) && Number(route?.distanceMiles) >= MIN_DISCOVERY_ROUTE_MILES;
+}
 
 type HiddenGemOrchestrationStatus =
   | 'baseline_candidates_ready'
@@ -197,6 +271,13 @@ interface HiddenGemOrchestrationDiagnostics {
   fallbackCandidateCount: number;
   finalBaselineEligibleCount: number;
   unknownPopularityCount: number;
+  healthyThreshold: number;
+  minimumAcceptableThreshold: number;
+  fallbackStage: number;
+  fallbackMode: 'strict' | 'balanced' | 'relaxed';
+  effectiveRadiusMiles: number;
+  criteriaExpanded: boolean;
+  uiNotice: string | null;
   routeCatalogCount: number;
   radiusFilteredCatalogCount: number;
   activeTabCandidateCount: number;
@@ -455,24 +536,20 @@ function SectionCardSkeletonList() {
   );
 }
 
-const HIDDEN_GEM_REASON_LABELS: Record<HiddenGemRecommendationReason, string> = {
-  good_full_size_truck_fit: 'GOOD FIT FOR YOUR RIG',
-  good_jeep_fit: 'GOOD FIT FOR YOUR RIG',
-  good_adventure_van_fit: 'GOOD FIT FOR YOUR RIG',
-  good_vehicle_fit: 'GOOD FIT FOR YOUR RIG',
-  low_traffic: 'LOWER TRAFFIC',
-  seasonally_open: 'OPEN THIS SEASON',
-  weather_compatible: 'WEATHER-COMPATIBLE',
-  moderate_challenge_match: 'CHALLENGE MATCH',
-  useful_expedition_alternative: 'STRONG ALTERNATIVE',
-  nearby_option: 'CLOSE ENOUGH TO RUN',
-};
+function buildValidatedExploreNavigationPayload(route: ExpeditionOpportunity | null | undefined): {
+  payload: NavigationHandoffPayload | null;
+  unavailableReason: string | null;
+} {
+  if (!route) {
+    return { payload: null, unavailableReason: 'Route path unavailable.' };
+  }
+  const payload = buildExploreNavigationPayload(route);
+  const unavailableReason = getNavigationHandoffRouteUnavailableReason(payload);
+  return { payload, unavailableReason };
+}
 
-function getHiddenGemContextTags(result: HiddenGemResult): string[] {
-  return result.recommendationReasons
-    .map((reason) => HIDDEN_GEM_REASON_LABELS[reason])
-    .filter(Boolean)
-    .slice(0, 3);
+function getExploreRouteBuildUnavailableReason(route: ExpeditionOpportunity | null | undefined): string | null {
+  return buildValidatedExploreNavigationPayload(route).unavailableReason;
 }
 
 function formatStackedPlanLabel(plan: FavoriteTrailPlan): string {
@@ -488,7 +565,6 @@ function formatStackedPlanLabel(plan: FavoriteTrailPlan): string {
 // ============================================================
 function DiscoverScreenInner() {
   const insets = useSafeAreaInsets();
-  const headerTopPadding = useMemo(() => getShellHeaderTopPadding(insets.top), [insets.top]);
   const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
   const router = useRouter();
   const isFocused = useIsFocused();
@@ -507,9 +583,15 @@ function DiscoverScreenInner() {
 
   // ── Loading state ─────────────────────────────────────────
   const [isLoading, setIsLoading] = useState(true);
+  const initialExploreFilterStateRef = useRef(getExploreFilterStateSnapshot());
 
   // ── Distance radius filter state ──────────────────────────
-  const [distanceRadius, setDistanceRadius] = useState<DistanceRadius | null>(DEFAULT_DISTANCE_RADIUS);
+  const [distanceRadius, setDistanceRadius] = useState<DistanceRadius | null>(
+    initialExploreFilterStateRef.current.radiusMiles,
+  );
+  const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(
+    initialExploreFilterStateRef.current.refinement,
+  );
 
   // ── User location state ───────────────────────────────────
   const [userLat, setUserLat] = useState<number>(DEFAULT_USER_LOCATION.latitude);
@@ -520,12 +602,19 @@ function DiscoverScreenInner() {
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
 
-  // ── Phase 16: Category tab state ──────────────────────────
-  const [activeTab, setActiveTab] = useState<DiscoveryTabId>('day-trips');
-  const [showLesserKnown, setShowLesserKnown] = useState(true);
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
+  const [popularTrailPageIndex, setPopularTrailPageIndex] = useState(0);
+  const [trailPackPageIndex, setTrailPackPageIndex] = useState(0);
+  const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);
+  const [favoritesPageIndex, setFavoritesPageIndex] = useState(0);
+  const [activeExplorerCategoryPanel, setActiveExplorerCategoryPanel] = useState<ExplorerCategoryPanelKey | null>(
+    initialExploreFilterStateRef.current.activeCategoryPanel,
+  );
   const [hasLoadedExplorer, setHasLoadedExplorer] = useState(false);
+  const [exploreFilterHydrated, setExploreFilterHydrated] = useState(false);
   const [hiddenGemCycleNotice, setHiddenGemCycleNotice] = useState<string | null>(null);
+  const [popularTrailCycleNotice, setPopularTrailCycleNotice] = useState<string | null>(null);
+  const [exploreMapHandoffNotice, setExploreMapHandoffNotice] = useState<string | null>(null);
 
   // ── Phase 17: AI Route state ──────────────────────────────
   const [aiRoutes, setAiRoutes] = useState<AIGeneratedRoute[]>([]);
@@ -533,6 +622,13 @@ function DiscoverScreenInner() {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPreviewRoute, setAiPreviewRoute] = useState<AIGeneratedRoute | null>(null);
   const [aiPreviewVisible, setAiPreviewVisible] = useState(false);
+  const [trailPackPreview, setTrailPackPreview] = useState<ECSTrailPackDiscoveryItem | null>(null);
+  const [trailPackFeedbackEvents, setTrailPackFeedbackEvents] = useState(() => getTrailPackFeedbackSnapshot());
+  const [trailPackSubmissionSnapshot, setTrailPackSubmissionSnapshot] = useState(() =>
+    trailPackSubmissionStore.getSnapshot(),
+  );
+  const [trailPackSubmissionRoute, setTrailPackSubmissionRoute] =
+    useState<ECSTrailPackSubmissionRouteInput | null>(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [hiddenGemAITimedOut, setHiddenGemAITimedOut] = useState(false);
   const [favoritesSnapshot, setFavoritesSnapshot] = useState(() => getExploreFavoritesSnapshot());
@@ -554,6 +650,21 @@ function DiscoverScreenInner() {
     },
   });
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadExploreFilterStateSnapshot().then((snapshot) => {
+      if (cancelled) return;
+      setDistanceRadius(snapshot.radiusMiles);
+      setExploreRefinement(snapshot.refinement);
+      setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel);
+      setExploreFilterHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // ── Phase 13: Exploration Progress state ───────────────────
   const [completedIds, setCompletedIds] = useState<Set<string>>(
     () => explorationProgressStore.getCompletedIds(),
@@ -567,10 +678,29 @@ function DiscoverScreenInner() {
     activeVehicleIdRef.current = activeVehicleId;
   }, [activeVehicleId]);
 
+  useEffect(() => {
+    const unsubscribe = subscribeTrailPackFeedback(() => {
+      setTrailPackFeedbackEvents(getTrailPackFeedbackSnapshot());
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = trailPackSubmissionStore.subscribe(() => {
+      setTrailPackSubmissionSnapshot(trailPackSubmissionStore.getSnapshot());
+    });
+    return unsubscribe;
+  }, []);
+
   const refreshRigContext = useCallback(() => {
     if (!mountedRef.current) return;
     setHiddenGemPageIndex(0);
+    setPopularTrailPageIndex(0);
+    setTrailPackPageIndex(0);
+    setAiRouteIdeaPageIndex(0);
+    setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
+    setPopularTrailCycleNotice(null);
     aiRouteStore.clearAll();
     setRigContextRevision((current) => current + 1);
   }, []);
@@ -599,21 +729,21 @@ function DiscoverScreenInner() {
   useEffect(() => {
     const unsub = aiRouteStore.subscribe(() => {
       if (mountedRef.current) {
-        setAiRoutes(aiRouteStore.getRoutes(activeTab));
-        setAiLoading(aiRouteStore.isLoading(activeTab));
-        setAiError(aiRouteStore.getError(activeTab));
+        setAiRoutes(aiRouteStore.getRoutes(EXPLORE_ALL_TRAILS_AI_CATEGORY));
+        setAiLoading(aiRouteStore.isLoading(EXPLORE_ALL_TRAILS_AI_CATEGORY));
+        setAiError(aiRouteStore.getError(EXPLORE_ALL_TRAILS_AI_CATEGORY));
         setAiEnabled(aiRouteStore.isEnabled());
       }
     });
     return unsub;
-  }, [activeTab]);
+  }, []);
 
-  // ── Phase 17: Sync AI routes when tab changes ──────────────
+  // ── Phase 17: Sync AI routes for the unified trail feed ───
   useEffect(() => {
-    setAiRoutes(aiRouteStore.getRoutes(activeTab));
-    setAiLoading(aiRouteStore.isLoading(activeTab));
-    setAiError(aiRouteStore.getError(activeTab));
-  }, [activeTab]);
+    setAiRoutes(aiRouteStore.getRoutes(EXPLORE_ALL_TRAILS_AI_CATEGORY));
+    setAiLoading(aiRouteStore.isLoading(EXPLORE_ALL_TRAILS_AI_CATEGORY));
+    setAiError(aiRouteStore.getError(EXPLORE_ALL_TRAILS_AI_CATEGORY));
+  }, []);
 
   useEffect(() => {
     if (!aiEnabled || !aiLoading) {
@@ -629,7 +759,7 @@ function DiscoverScreenInner() {
     }, HIDDEN_GEM_AI_TIMEOUT_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [aiEnabled, aiLoading, activeTab]);
+  }, [aiEnabled, aiLoading]);
 
   // ── Phase 13: Exploration stats (memoized) ─────────────────
   const explorationStats = useMemo<ExplorationStats>(() => {
@@ -752,55 +882,117 @@ function DiscoverScreenInner() {
       distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
     );
   }, [opportunities, distanceRadius]);
+  const activeDistanceRadius =
+    distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
 
-  // ── Phase 16: Expanded categories ─────────────────────────
-  const expandedCategories = useMemo<ExpandedDiscoverCategories>(() => {
-    return categorizeRoutesExpanded(
-      radiusFilteredOpportunities,
-      compatResults,
-      distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
-      showLesserKnown,
-    );
-  }, [radiusFilteredOpportunities, compatResults, distanceRadius, showLesserKnown]);
-
-  // ── Get active tab routes ─────────────────────────────────
-  const activeTabRoutes = useMemo<CategorizedRoute[]>(() => {
-    switch (activeTab) {
-      case 'day-trips': return expandedCategories.dayTrips;
-      case 'weekend-trips': return expandedCategories.weekendTrips;
-      case 'expeditions': return expandedCategories.expeditions;
-      case 'remote-routes': return expandedCategories.remoteRoutes;
-      default: return expandedCategories.all;
-    }
-  }, [activeTab, expandedCategories]);
+  // ── Unified drivable trail feed ───────────────────────────
+  const activeTabRoutes = useMemo<ExpeditionOpportunity[]>(
+    () => radiusFilteredOpportunities,
+    [radiusFilteredOpportunities],
+  );
 
   const canonicalActiveTabRoutes = useMemo<ExpeditionOpportunity[]>(
     () =>
       dedupeExploreRoutes(
         activeTabRoutes,
         compatResults,
-        distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
+        activeDistanceRadius,
       ),
-    [activeTabRoutes, compatResults, distanceRadius],
+    [activeTabRoutes, compatResults, activeDistanceRadius],
   );
   const canonicalRadiusFilteredRoutes = useMemo<ExpeditionOpportunity[]>(
     () =>
       dedupeExploreRoutes(
         radiusFilteredOpportunities,
         compatResults,
-        distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
+        activeDistanceRadius,
       ),
-    [radiusFilteredOpportunities, compatResults, distanceRadius],
+    [radiusFilteredOpportunities, compatResults, activeDistanceRadius],
+  );
+  const exploreRefinementCounts = useMemo(
+    () => getExploreRefinementCounts(canonicalRadiusFilteredRoutes),
+    [canonicalRadiusFilteredRoutes],
+  );
+  const refinedCanonicalRoutes = useMemo<ExpeditionOpportunity[]>(
+    () => applyExploreRefinementFilter(canonicalRadiusFilteredRoutes, exploreRefinement),
+    [canonicalRadiusFilteredRoutes, exploreRefinement],
+  );
+  const ownerTrailPackIds = useMemo(
+    () => trailPackSubmissionSnapshot.submissions.map((submission) => submission.trailPack.id),
+    [trailPackSubmissionSnapshot.submissions],
+  );
+  const trailPackCatalog = useMemo(
+    () => {
+      const localSubmissions = trailPackSubmissionSnapshot.submissions.map((submission) => submission.trailPack);
+      const defaultPacks = getDefaultECSTrailPacks();
+      const localIds = new Set(localSubmissions.map((pack) => pack.id));
+      return [...localSubmissions, ...defaultPacks.filter((pack) => !localIds.has(pack.id))];
+    },
+    [trailPackSubmissionSnapshot.submissions],
+  );
+  const trailPackFeedbackConfidenceInputs = useMemo(
+    () => buildTrailPackConfidenceInputsFromFeedback(trailPackFeedbackEvents),
+    [trailPackFeedbackEvents],
+  );
+  const trailPackFeedbackReviewStates = useMemo(
+    () => buildTrailPackReviewStatesFromFeedback(trailPackCatalog, trailPackFeedbackEvents),
+    [trailPackCatalog, trailPackFeedbackEvents],
+  );
+  const discoverableTrailPacks = useMemo(
+    () =>
+      getDiscoverableTrailPacks(
+        trailPackCatalog,
+        { latitude: userLat, longitude: userLng },
+        activeDistanceRadius,
+        {
+          includeOwnDrafts: ownerTrailPackIds.length > 0,
+          ownTrailPackIds: ownerTrailPackIds,
+          confidenceInputsByTrailPackId: trailPackFeedbackConfidenceInputs,
+          reviewStatesByTrailPackId: trailPackFeedbackReviewStates,
+        },
+      ),
+    [
+      activeDistanceRadius,
+      trailPackCatalog,
+      trailPackFeedbackConfidenceInputs,
+      trailPackFeedbackReviewStates,
+      ownerTrailPackIds,
+      userLat,
+      userLng,
+    ],
+  );
+  const broaderTrailPackResults = useMemo(
+    () =>
+      getDiscoverableTrailPacks(
+        trailPackCatalog,
+        { latitude: userLat, longitude: userLng },
+        activeDistanceRadius,
+        {
+          includeBroaderResults: true,
+          includeOwnDrafts: ownerTrailPackIds.length > 0,
+          ownTrailPackIds: ownerTrailPackIds,
+          confidenceInputsByTrailPackId: trailPackFeedbackConfidenceInputs,
+          reviewStatesByTrailPackId: trailPackFeedbackReviewStates,
+        },
+      ),
+    [
+      activeDistanceRadius,
+      trailPackCatalog,
+      trailPackFeedbackConfidenceInputs,
+      trailPackFeedbackReviewStates,
+      ownerTrailPackIds,
+      userLat,
+      userLng,
+    ],
   );
 
-  const discoveryTabs = Array.isArray(DISCOVERY_TABS) && DISCOVERY_TABS.length > 0 ? DISCOVERY_TABS : FALLBACK_DISCOVERY_TABS;
-  const activeTabMeta = discoveryTabs.find(t => t.id === activeTab) ?? discoveryTabs[0];
+  const activeTabMeta = UNIFIED_TRAIL_FILTER_META;
   const exploreSourceDiagnostics = useMemo(() => {
     const offlineModeActive = offlineDiscoveryBridge.isOffline();
     return {
       routeCatalogCount: opportunities.length,
       radiusFilteredCatalogCount: radiusFilteredOpportunities.length,
-      activeTabCandidateCount: canonicalActiveTabRoutes.length,
+      activeTabCandidateCount: refinedCanonicalRoutes.length,
       routeSourceMode: discoverRouteSourceMode,
       routeSourceHydrated: discoverSourceHydrated,
       routeSourceLoaded: discoverSourceHydrated && opportunities.length > 0,
@@ -816,7 +1008,7 @@ function DiscoverScreenInner() {
   }, [
     opportunities.length,
     radiusFilteredOpportunities.length,
-    canonicalActiveTabRoutes.length,
+    refinedCanonicalRoutes.length,
     discoverRouteSourceMode,
     discoverSourceHydrated,
     discoverRouteSourceFailureReason,
@@ -862,23 +1054,28 @@ function DiscoverScreenInner() {
       ? `${vehicleProfile.vehicleName || 'Unknown Vehicle'}`
       : 'stock SUV';
 
-    const existingNames = canonicalActiveTabRoutes.map((route) => route.name);
+    const existingNames = refinedCanonicalRoutes.map((route) => route.name);
 
     await aiRouteStore.fetchRoutes({
       latitude: userLat,
       longitude: userLng,
-      category: activeTab,
-      radiusMiles: distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
+      category: EXPLORE_ALL_TRAILS_AI_CATEGORY,
+      radiusMiles: activeDistanceRadius,
       vehicleType,
       vehicleBuild: vehicleProfile ? `${vehicleProfile.vehicleName || ''}` : '',
       count: 6,
       existingRouteNames: existingNames,
     });
-  }, [aiEnabled, activeTab, distanceRadius, userLat, userLng, vehicleProfile, canonicalActiveTabRoutes]);
+  }, [activeDistanceRadius, aiEnabled, userLat, userLng, vehicleProfile, refinedCanonicalRoutes]);
 
   // ── Phase 17: Auto-fetch AI routes on tab/radius change ───
   useEffect(() => {
-    if (!isLoading && aiEnabled && !aiRouteStore.isCacheValid(activeTab) && !aiRouteStore.isLoading(activeTab)) {
+    if (
+      !isLoading &&
+      aiEnabled &&
+      !aiRouteStore.isCacheValid(EXPLORE_ALL_TRAILS_AI_CATEGORY) &&
+      !aiRouteStore.isLoading(EXPLORE_ALL_TRAILS_AI_CATEGORY)
+    ) {
       // Delay slightly to avoid blocking UI
       const timer = setTimeout(() => {
         if (mountedRef.current) {
@@ -887,13 +1084,20 @@ function DiscoverScreenInner() {
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [activeTab, distanceRadius, isLoading, aiEnabled, handleFetchAIRoutes]);
+  }, [distanceRadius, isLoading, aiEnabled, handleFetchAIRoutes]);
+
+  const stageExploreReadinessPreview = useCallback((op: ExpeditionOpportunity) => {
+    expeditionReadinessStore.setReadinessInputPatch(
+      buildExploreRouteReadinessStorePatch(op, { hasVehicle: !!activeVehicleId }),
+    );
+  }, [activeVehicleId]);
 
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
+    stageExploreReadinessPreview(op);
     setSelectedOpportunity(op);
     setAnalysisVisible(true);
-  }, []);
+  }, [stageExploreReadinessPreview]);
 
   const handleCloseAnalysis = useCallback(() => {
     setAnalysisVisible(false);
@@ -904,30 +1108,39 @@ function DiscoverScreenInner() {
     hapticMicro();
     setDistanceRadius(radius);
     setHiddenGemPageIndex(0);
+    setPopularTrailPageIndex(0);
+    setTrailPackPageIndex(0);
+    setAiRouteIdeaPageIndex(0);
+    setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
+    setPopularTrailCycleNotice(null);
     // Clear AI cache when radius changes
     aiRouteStore.clearAll();
   }, []);
 
-  const handleChangeDiscoveryTab = useCallback((tab: DiscoveryTabId) => {
+  const handleExploreRefinementChange = useCallback((refinement: ExploreRefinementFilter | null) => {
     hapticMicro();
-    setActiveTab(tab);
+    setExploreRefinement(refinement);
+    setHiddenGemPageIndex(0);
+    setPopularTrailPageIndex(0);
+    setTrailPackPageIndex(0);
+    setAiRouteIdeaPageIndex(0);
+    setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-  }, []);
-
-  const handleToggleLesserKnown = useCallback((nextValue: boolean) => {
-    hapticMicro();
-    setShowLesserKnown(nextValue);
-    setHiddenGemCycleNotice(null);
+    setPopularTrailCycleNotice(null);
   }, []);
 
   const handleResetDiscoveryFilters = useCallback(() => {
     hapticMicro();
-    setActiveTab('day-trips');
     setDistanceRadius(DEFAULT_DISTANCE_RADIUS);
-    setShowLesserKnown(true);
+    setExploreRefinement(null);
     setHiddenGemPageIndex(0);
+    setPopularTrailPageIndex(0);
+    setTrailPackPageIndex(0);
+    setAiRouteIdeaPageIndex(0);
+    setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
+    setPopularTrailCycleNotice(null);
     aiRouteStore.clearAll();
   }, []);
 
@@ -947,33 +1160,195 @@ function DiscoverScreenInner() {
 
   const handleAIPreview = useCallback((route: AIGeneratedRoute) => {
     hapticMicro();
+    stageExploreReadinessPreview(route);
     setAiPreviewRoute(route);
     setAiPreviewVisible(true);
-  }, []);
+  }, [stageExploreReadinessPreview]);
 
   const handleNavigateToRoute = useCallback(
-    async (route: ExpeditionOpportunity) => {
+    async (
+      route: ExpeditionOpportunity,
+      options: {
+        flowLabel?: string;
+        flowMessage?: string;
+        flowContext?: Record<string, unknown>;
+        autoStartNavigation?: boolean;
+      } = {},
+    ) => {
       hapticMicro();
+      stageExploreReadinessPreview(route);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore route handoff unavailable',
+          ecsArea: 'explore',
+          message: unavailableReason ?? 'Route path unavailable.',
+          signature: `explore_route_handoff_unavailable:${route.id}`,
+          metadata: {
+            routeId: route.id,
+            routeName: route.name,
+            source: 'explore',
+          },
+        });
+        return;
+      }
+
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
       setAiPreviewRoute(null);
-      const payload = buildExploreNavigationPayload(route);
+      setTrailPackPreview(null);
       await saveNavigationHandoffPayload(payload);
       await stageNavigationFlow({
         source: 'explore',
         target: 'navigate',
         intent: 'route_preview',
-        label: 'Trail Preview Ready',
-        message: 'Trail preview is ready in Navigate. Review the line, then start guidance when ready.',
+        label: options.flowLabel ?? (options.autoStartNavigation ? 'Starting Guidance' : 'Route Ready'),
+        message: options.flowMessage ?? (options.autoStartNavigation
+          ? 'Route preview accepted. Starting guidance in Navigate.'
+          : 'Route is staged in Navigate. Review Active Guidance, then start when ready.'),
         context: {
           routeId: payload.id,
           tripMode: payload.tripMode,
+          autoStartNavigation: options.autoStartNavigation === true,
+          ...options.flowContext,
         },
       });
-      router.push('/(tabs)/navigate');
+      router.push('/navigate');
     },
-    [router],
+    [router, stageExploreReadinessPreview],
+  );
+
+  const handleViewRouteCamps = useCallback(
+    async (route: ExpeditionOpportunity) => {
+      const campMarkers = extractExploreRouteCampMarkers(route);
+      if (campMarkers.length === 0) return;
+
+      hapticMicro();
+      stageExploreReadinessPreview(route);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore route camp handoff unavailable',
+          ecsArea: 'explore',
+          message: unavailableReason ?? 'Route camp pins unavailable.',
+          signature: `explore_route_camp_handoff_unavailable:${route.id}`,
+          metadata: {
+            routeId: route.id,
+            routeName: route.name,
+            source: 'explore',
+          },
+        });
+        return;
+      }
+
+      const campPayload: NavigationHandoffPayload = {
+        ...payload,
+        campMarkers,
+        routeMetadata: {
+          ...(payload.routeMetadata ?? {}),
+          exploreAction: 'view_camps',
+          routeCampMarkerCount: campMarkers.length,
+        },
+      };
+
+      setAnalysisVisible(false);
+      setSelectedOpportunity(null);
+      setAiPreviewVisible(false);
+      setAiPreviewRoute(null);
+      setTrailPackPreview(null);
+      await saveNavigationHandoffPayload(campPayload);
+      await stageNavigationFlow({
+        source: 'explore',
+        target: 'navigate',
+        intent: 'route_preview',
+        label: 'Route Camps',
+        message: 'Route camp pins are staged in Navigate.',
+        context: {
+          routeId: campPayload.id,
+          tripMode: campPayload.tripMode,
+          exploreAction: 'view_camps',
+          routeCampMarkerCount: campMarkers.length,
+        },
+      });
+      router.push('/navigate');
+    },
+    [router, stageExploreReadinessPreview],
+  );
+
+  const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
+    hapticMicro();
+    setTrailPackPreview(trailPack);
+  }, []);
+
+  const handleCloseTrailPackPreview = useCallback(() => {
+    setTrailPackPreview(null);
+  }, []);
+
+  const handleTrailPackFeedback = useCallback(
+    (trailPackId: string, type: ECSTrailPackFeedbackType, note?: string) =>
+      submitTrailPackFeedback({
+        trailPackId,
+        type,
+        note,
+        vehicleProfileId: activeVehicleId ?? undefined,
+      }),
+    [activeVehicleId],
+  );
+
+  const handleSubmitFavoriteTrailPack = useCallback((favorite: FavoriteTrailRecord) => {
+    hapticMicro();
+    const routeInput = trailPackRouteInputFromNavigationPayload(
+      favorite.navigationPayload,
+      'explore_saved_route',
+    );
+    setTrailPackSubmissionRoute(routeInput);
+  }, []);
+
+  const handleTrailPackSubmitted = useCallback((_submission: ECSTrailPackSubmission) => {
+    setTrailPackSubmissionRoute(null);
+  }, []);
+
+  const handleStartTrailPackGuidance = useCallback(
+    async (trailPack: ECSTrailPackDiscoveryItem) => {
+      if (!canStartTrailPackGuidance(trailPack)) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Trail Pack guidance unavailable',
+          ecsArea: 'explore',
+          message: 'Route geometry is unavailable for this Trail Pack.',
+          signature: `trail_pack_guidance_unavailable:${trailPack.id}`,
+          metadata: {
+            trailPackId: trailPack.id,
+            trailPackName: trailPack.name,
+            source: trailPack.source,
+          },
+        });
+        return;
+      }
+
+      const geometry = getTrailPackGeometryCoordinates(trailPack);
+      const startPoint = geometry[0] ?? trailPack.centerCoordinate;
+      const distanceToStartMiles = distanceMilesBetween(
+        { latitude: userLat, longitude: userLng },
+        startPoint,
+      );
+      const isAwayFromStart = distanceToStartMiles > 1;
+      await handleNavigateToRoute(trailPackToExpeditionOpportunity(trailPack), {
+        flowLabel: 'Trail Pack Staged',
+        flowMessage: isAwayFromStart
+          ? 'Trail Pack staged. Navigate to the route start before beginning guidance.'
+          : 'Trail Pack staged in Navigate. Review Active Guidance, then start when ready.',
+        flowContext: {
+          trailPackId: trailPack.id,
+          routeStartDistanceMiles: Math.round(distanceToStartMiles * 10) / 10,
+          routeStartRequired: isAwayFromStart,
+        },
+      });
+    },
+    [handleNavigateToRoute, userLat, userLng],
   );
 
   const handleCloseAIPreview = useCallback(() => {
@@ -982,19 +1357,33 @@ function DiscoverScreenInner() {
   }, []);
 
   // ── Phase 18: Enriched routes with discovery intelligence ──
+  const selectedOpportunityBuildUnavailableReason = useMemo(
+    () => getExploreRouteBuildUnavailableReason(selectedOpportunity),
+    [selectedOpportunity],
+  );
+  const selectedOpportunityCampMarkers = useMemo(
+    () => extractExploreRouteCampMarkers(selectedOpportunity),
+    [selectedOpportunity],
+  );
+
+  const aiPreviewBuildUnavailableReason = useMemo(
+    () => getExploreRouteBuildUnavailableReason(aiPreviewRoute),
+    [aiPreviewRoute],
+  );
+
   const enrichedKnown = useMemo<EnrichedDiscoveryRoute[]>(() => {
-    if (canonicalActiveTabRoutes.length === 0) return [];
-    return enrichKnownRoutes(canonicalActiveTabRoutes, vehicleProfile, compatResults);
-  }, [canonicalActiveTabRoutes, vehicleProfile, compatResults]);
+    if (refinedCanonicalRoutes.length === 0) return [];
+    return enrichKnownRoutes(refinedCanonicalRoutes, vehicleProfile, compatResults);
+  }, [refinedCanonicalRoutes, vehicleProfile, compatResults]);
 
   const enrichedKnownMap = useMemo(
     () => new Map(enrichedKnown.map((route) => [route.id, route])),
     [enrichedKnown],
   );
   const enrichedHiddenGemSourceRoutes = useMemo<EnrichedDiscoveryRoute[]>(() => {
-    if (canonicalRadiusFilteredRoutes.length === 0) return [];
-    return enrichKnownRoutes(canonicalRadiusFilteredRoutes, vehicleProfile, compatResults);
-  }, [canonicalRadiusFilteredRoutes, vehicleProfile, compatResults]);
+    if (refinedCanonicalRoutes.length === 0) return [];
+    return enrichKnownRoutes(refinedCanonicalRoutes, vehicleProfile, compatResults);
+  }, [refinedCanonicalRoutes, vehicleProfile, compatResults]);
 
   const enrichedHiddenGemSourceMap = useMemo(
     () => new Map(enrichedHiddenGemSourceRoutes.map((route) => [route.id, route])),
@@ -1003,7 +1392,7 @@ function DiscoverScreenInner() {
 
   const popularTrailsState = useMemo(() => {
     try {
-      if (canonicalActiveTabRoutes.length === 0) {
+      if (refinedCanonicalRoutes.length === 0) {
         return {
           routes: [] as PopularTrailEnrichedRoute[],
           rankedRoutes: [] as PopularTrailRouteWithMetadata[],
@@ -1013,12 +1402,11 @@ function DiscoverScreenInner() {
       }
 
       const rankedRoutes = getPopularTrailRecommendations(
-        canonicalActiveTabRoutes,
+        refinedCanonicalRoutes,
         compatResults,
         {
           radiusMiles: distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
           vehicleProfile,
-          discoveryTab: activeTab,
           expeditionPhase: aiState?.expeditionPhase ?? null,
           operationalState: aiState?.operationalState ?? null,
           recommendationStatus: liveStatus?.recommendations ?? null,
@@ -1057,31 +1445,34 @@ function DiscoverScreenInner() {
       };
     }
   }, [
-    canonicalActiveTabRoutes,
+    refinedCanonicalRoutes,
     compatResults,
     distanceRadius,
     vehicleProfile,
-    activeTab,
     aiState?.expeditionPhase,
     aiState?.operationalState,
     liveStatus?.recommendations,
     enrichedKnownMap,
   ]);
 
+  const popularTrailRouteIds = useMemo(
+    () => new Set(popularTrailsState.routes.map((route) => route.id)),
+    [popularTrailsState.routes],
+  );
+
   const hiddenGemBaselineState = useMemo(() => {
     try {
       const recommendationSet = getHiddenGemRecommendations(
-        canonicalRadiusFilteredRoutes,
+        refinedCanonicalRoutes,
         compatResults,
         {
           radiusMiles: distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
           pageIndex: 0,
-          pageSize: Math.max(canonicalRadiusFilteredRoutes.length, HIDDEN_GEM_PAGE_SIZE, 1),
+          pageSize: HIDDEN_GEMS_MAX_RESULTS_RENDERED,
           vehicleProfile,
           expeditionPhase: aiState?.expeditionPhase ?? null,
           operationalState: aiState?.operationalState ?? null,
           recommendationStatus: liveStatus?.recommendations ?? null,
-          discoveryTab: activeTab,
         },
       );
       return {
@@ -1108,16 +1499,22 @@ function DiscoverScreenInner() {
           fallbackCandidateCount: 0,
           finalBaselineEligibleCount: 0,
           unknownPopularityCount: 0,
+          healthyThreshold: 0,
+          minimumAcceptableThreshold: 0,
+          fallbackStage: 0,
+          fallbackMode: 'strict',
+          effectiveRadiusMiles: 0,
+          criteriaExpanded: false,
+          uiNotice: null,
         } satisfies HiddenGemPipelineDiagnostics,
         error: 'Hidden gem recommendations are temporarily unavailable.',
       };
     }
   }, [
-    canonicalRadiusFilteredRoutes,
+    refinedCanonicalRoutes,
     compatResults,
     distanceRadius,
     vehicleProfile,
-    activeTab,
     aiState?.expeditionPhase,
     aiState?.operationalState,
     liveStatus?.recommendations,
@@ -1260,17 +1657,16 @@ function DiscoverScreenInner() {
   ]);
 
   const hiddenGemExploreOrchestration = useMemo(() => {
-    const routes = hiddenGemOrchestration.items
-      .map((item) => {
-        const route = enrichedHiddenGemSourceMap.get(item.id) ?? null;
-        if (!route) return null;
-        return {
-          ...route,
-          routeLabel: 'Hidden Gem' as const,
-          routeLabelConfig: getRouteLabelConfig('Hidden Gem'),
-        };
-      })
-      .filter((route): route is EnrichedDiscoveryRoute => !!route);
+    const routes: EnrichedDiscoveryRoute[] = [];
+    hiddenGemOrchestration.items.forEach((item) => {
+      const route = enrichedHiddenGemSourceMap.get(item.id);
+      if (!route) return;
+      routes.push({
+        ...route,
+        routeLabel: 'Hidden Gem' as const,
+        routeLabelConfig: getRouteLabelConfig('Hidden Gem'),
+      });
+    });
     const result = orchestrateExploreSectionRoutes({
       section: 'hidden_gem',
       routes,
@@ -1280,8 +1676,8 @@ function DiscoverScreenInner() {
       primaryCandidate: exploreView.primary,
       hasGPSFix,
     });
-    const displayRoutes = result.surfaced.length > 0 ? result.surfaced : result.softened;
-    const surfacedIds = new Set(displayRoutes.map((route) => route.id));
+    const displayRoutes = [...result.surfaced, ...result.softened, ...result.suppressed]
+      .filter((route) => !popularTrailRouteIds.has(route.id));
     const baselineById = new Map(hiddenGemOrchestration.items.map((item) => [item.id, item]));
     const routeMap = new Map(
       displayRoutes.map((route) => {
@@ -1304,15 +1700,17 @@ function DiscoverScreenInner() {
       }),
     );
     const items = hiddenGemOrchestration.items
-      .filter((item) => surfacedIds.has(item.id));
+      .filter((item) => !popularTrailRouteIds.has(item.id));
 
     return {
       ...result,
+      summaryNote: null,
       items,
       routeMap,
     };
   }, [
     hiddenGemOrchestration.items,
+    popularTrailRouteIds,
     enrichedHiddenGemSourceMap,
     aiState?.expeditionPhase,
     aiState?.operationalState,
@@ -1351,11 +1749,6 @@ function DiscoverScreenInner() {
   const hiddenGemPage = hiddenGemState.page;
   const hiddenGemDiagnostics = hiddenGemOrchestration.diagnostics;
   const lastHiddenGemIssueSignatureRef = useRef<string | null>(null);
-  const hiddenGemRouteIds = useMemo(
-    () => new Set(hiddenGemExploreOrchestration.items.map((item) => item.id)),
-    [hiddenGemExploreOrchestration.items],
-  );
-
   useEffect(() => {
     const signature = `${hiddenGemDiagnostics.status}:${hiddenGemDiagnostics.finalSource}:${hiddenGemDiagnostics.finalEligibleCount}:${hiddenGemDiagnostics.aiCandidateCount}`;
     if (lastHiddenGemIssueSignatureRef.current === signature) return;
@@ -1365,9 +1758,9 @@ function DiscoverScreenInner() {
     if (hiddenGemDiagnostics.status === 'ai_unavailable_fallback_used') {
       reportRecoverableFailure({
         severity: 'medium',
-        issueTitle: 'Hidden Gems AI unavailable',
+        issueTitle: 'Hidden Gems ECS intelligence unavailable',
         ecsArea: 'explore',
-        message: aiError || 'Hidden Gems fell back to the validated baseline because AI was unavailable',
+        message: aiError || 'Hidden Gems fell back to the validated baseline because ECS intelligence was unavailable',
         signature: `hidden_gems_ai_unavailable:${aiError || 'unavailable'}`,
         metadata: diagnosticsMetadata,
         fallbackUsed: true,
@@ -1378,9 +1771,9 @@ function DiscoverScreenInner() {
     if (hiddenGemDiagnostics.status === 'ai_timeout_fallback_used') {
       reportRecoverableFailure({
         severity: 'medium',
-        issueTitle: 'Hidden Gems AI timeout',
+        issueTitle: 'Hidden Gems ECS intelligence timeout',
         ecsArea: 'explore',
-        message: 'Hidden Gems AI refinement timed out and the validated baseline was retained',
+        message: 'Hidden Gems ECS intelligence refinement timed out and the validated baseline was retained',
         signature: 'hidden_gems_ai_timeout',
         metadata: diagnosticsMetadata,
         fallbackUsed: true,
@@ -1391,19 +1784,16 @@ function DiscoverScreenInner() {
     if (hiddenGemDiagnostics.status === 'ai_noop_baseline_retained' && hiddenGemDiagnostics.aiEnabled) {
       reportDegradedState({
         severity: 'low',
-        issueTitle: 'Hidden Gems AI returned no refinement',
+        issueTitle: 'Hidden Gems ECS intelligence returned no refinement',
         ecsArea: 'explore',
-        message: 'AI orchestration completed without refining the validated baseline list',
+        message: 'ECS intelligence orchestration completed without refining the validated baseline list',
         signature: 'hidden_gems_ai_noop',
         metadata: diagnosticsMetadata,
         fallbackUsed: hiddenGemDiagnostics.finalSource === 'validated_baseline',
       });
     }
   }, [aiError, hiddenGemDiagnostics]);
-  const popularTrailRoutes = useMemo(
-    () => popularTrailsState.routes.filter((route) => !hiddenGemRouteIds.has(route.id)),
-    [hiddenGemRouteIds, popularTrailsState.routes],
-  );
+  const popularTrailRoutes = popularTrailsState.routes;
   const popularTrailExploreOrchestration = useMemo(() => {
     const result = orchestrateExploreSectionRoutes({
       section: 'popular_trail',
@@ -1414,13 +1804,10 @@ function DiscoverScreenInner() {
       primaryCandidate: exploreView.primary,
       hasGPSFix,
     });
-    const filteredMetadataById = new Map(
-      Array.from(popularTrailsState.routeMetadataById.entries()).filter(
-        ([routeId]) => !hiddenGemRouteIds.has(routeId),
-      ),
-    );
+    const filteredMetadataById = popularTrailsState.routeMetadataById;
+    const displayRoutes = [...result.surfaced, ...result.softened, ...result.suppressed];
     const routeMap = new Map<string, PopularTrailEnrichedRoute>(
-      result.surfaced.map((route) => {
+      displayRoutes.map((route) => {
         const baseline = filteredMetadataById.get(route.id);
         const rationaleText = baseline?.sourceMetadata?.rationaleText ?? null;
 
@@ -1442,12 +1829,13 @@ function DiscoverScreenInner() {
 
     return {
       ...result,
+      summaryNote: null,
+      routes: displayRoutes,
       routeMap,
     };
   }, [
     popularTrailRoutes,
     popularTrailsState.routeMetadataById,
-    hiddenGemRouteIds,
     aiState?.expeditionPhase,
     aiState?.operationalState,
     exploreView.primary,
@@ -1462,63 +1850,294 @@ function DiscoverScreenInner() {
       .filter((route): route is EnrichedDiscoveryRoute => !!route);
   }, [hiddenGemPage.items, hiddenGemExploreOrchestration.routeMap]);
 
-  const hiddenGemContextTagMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    hiddenGemPage.items.forEach((item) => {
-      map.set(item.id, getHiddenGemContextTags(item));
-    });
-    return map;
-  }, [hiddenGemPage.items]);
   const distanceRadiusMetaLabel = distanceRadius == null ? 'All Range' : `${distanceRadius} mi`;
   const distanceRadiusNarrative = distanceRadius == null ? 'the current range' : `${distanceRadius} miles`;
   const distanceRadiusFooterLabel = distanceRadius == null ? 'ALL RANGE' : `${distanceRadius} MI`;
+  const selectedExploreRefinementLabel =
+    EXPLORE_REFINEMENT_OPTIONS.find((option) => option.key === exploreRefinement)?.label ?? null;
+  const exploreFilterNarrative = selectedExploreRefinementLabel
+    ? `${distanceRadiusNarrative} with ${selectedExploreRefinementLabel.toLowerCase()} selected`
+    : distanceRadiusNarrative;
+
+  const radiusFilteredAIRoutes = useMemo<AIGeneratedRoute[]>(
+    () => filterByRadius(aiRoutes, activeDistanceRadius) as AIGeneratedRoute[],
+    [activeDistanceRadius, aiRoutes],
+  );
+  const refinedAIRoutes = useMemo(
+    () => applyExploreRefinementFilter(radiusFilteredAIRoutes, exploreRefinement),
+    [radiusFilteredAIRoutes, exploreRefinement],
+  );
+
+  const exploreMapHandoffBuild = useMemo(() => {
+    const hiddenGemRoutes = hiddenGemExploreOrchestration.items
+      .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
+      .filter(routePassesExploreMapLength);
+    const popularTrailRoutes = popularTrailExploreOrchestration.routes.filter(routePassesExploreMapLength);
+    const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
+
+    return buildExploreRouteOverlaySegmentsFromRoutes({
+      hiddenGemRoutes,
+      popularTrailRoutes,
+      ecsRouteIdeaRoutes,
+      maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES,
+    });
+  }, [
+    hiddenGemExploreOrchestration.items,
+    hiddenGemExploreOrchestration.routeMap,
+    popularTrailExploreOrchestration.routes,
+    refinedAIRoutes,
+  ]);
+
+  const exploreMapHandoffCategories = useMemo<ExploreRouteOverlayCategory[]>(() => {
+    const categories = new Set<ExploreRouteOverlayCategory>();
+    exploreMapHandoffBuild.segments.forEach((segment) => categories.add(segment.category));
+    return Array.from(categories);
+  }, [exploreMapHandoffBuild.segments]);
+
+  useEffect(() => {
+    if (!exploreFilterHydrated) return;
+    void saveExploreFilterStateSnapshot({
+      radiusMiles: distanceRadius,
+      refinement: exploreRefinement,
+      activeCategoryPanel: activeExplorerCategoryPanel,
+      resultSetSummary: {
+        displayedRouteCount: exploreMapHandoffBuild.segments.length,
+        candidateCount: exploreMapHandoffBuild.candidateCount,
+        skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
+        cappedCount: exploreMapHandoffBuild.cappedCount,
+      },
+    });
+  }, [
+    activeExplorerCategoryPanel,
+    distanceRadius,
+    exploreFilterHydrated,
+    exploreMapHandoffBuild.candidateCount,
+    exploreMapHandoffBuild.cappedCount,
+    exploreMapHandoffBuild.segments.length,
+    exploreMapHandoffBuild.skippedMissingGeometryCount,
+    exploreRefinement,
+  ]);
+
+  const handleDisplayExploreRoutesOnMap = useCallback(async () => {
+    hapticMicro();
+    setExploreMapHandoffNotice(null);
+
+    if (exploreMapHandoffBuild.segments.length === 0) {
+      setExploreMapHandoffNotice(
+        exploreMapHandoffBuild.candidateCount > 0
+          ? 'No map-ready route geometry is available for the current Explore filters.'
+          : 'No Explorer routes match the current filters yet.',
+      );
+      return;
+    }
+
+    const label = selectedExploreRefinementLabel
+      ? `Explorer routes - ${distanceRadiusFooterLabel} / ${selectedExploreRefinementLabel}`
+      : `Explorer routes - ${distanceRadiusFooterLabel}`;
+
+    await clearNavigationHandoffPayload();
+    await saveExploreFilterStateSnapshot({
+      radiusMiles: distanceRadius,
+      refinement: exploreRefinement,
+      activeCategoryPanel: activeExplorerCategoryPanel,
+      resultSetSummary: {
+        displayedRouteCount: exploreMapHandoffBuild.segments.length,
+        candidateCount: exploreMapHandoffBuild.candidateCount,
+        skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
+        cappedCount: exploreMapHandoffBuild.cappedCount,
+      },
+    });
+    await saveExploreRoutesMapHandoff({
+      label,
+      radiusMiles: activeDistanceRadius,
+      refinementLabel: selectedExploreRefinementLabel,
+      categories: exploreMapHandoffCategories,
+      segments: exploreMapHandoffBuild.segments,
+      candidateCount: exploreMapHandoffBuild.candidateCount,
+      skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
+      cappedCount: exploreMapHandoffBuild.cappedCount,
+    });
+    await stageNavigationFlow({
+      source: 'explore',
+      target: 'navigate',
+      intent: 'route_preview',
+      label: 'Explore Routes',
+      message: 'Filtered Explorer routes are displayed on the Navigate map.',
+      context: {
+        exploreAction: 'display_filtered_routes',
+        radiusMiles: activeDistanceRadius,
+        refinementLabel: selectedExploreRefinementLabel,
+        displayedRouteCount: exploreMapHandoffBuild.segments.length,
+        candidateCount: exploreMapHandoffBuild.candidateCount,
+        skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
+        cappedCount: exploreMapHandoffBuild.cappedCount,
+      },
+    });
+    router.push('/navigate');
+  }, [
+    activeDistanceRadius,
+    activeExplorerCategoryPanel,
+    distanceRadiusFooterLabel,
+    distanceRadius,
+    exploreMapHandoffBuild.candidateCount,
+    exploreMapHandoffBuild.cappedCount,
+    exploreMapHandoffBuild.segments,
+    exploreMapHandoffBuild.skippedMissingGeometryCount,
+    exploreMapHandoffCategories,
+    exploreRefinement,
+    router,
+    selectedExploreRefinementLabel,
+  ]);
 
   const hiddenGemSummary = useMemo(() => {
     const orchestrationNote = hiddenGemExploreOrchestration.summaryNote;
+    const fallbackNotice = hiddenGemDiagnostics.criteriaExpanded ? hiddenGemDiagnostics.uiNotice : null;
     if (hiddenGemPage.eligibleCount === 0) {
       const base =
         hiddenGemDiagnostics.rawCandidateCount === 0
-          ? `No routes were available to evaluate as Hidden Gems inside ${distanceRadiusNarrative}.`
-          : hiddenGemDiagnostics.tripTypeMatchedCount === 0
-          ? `Routes were loaded inside ${distanceRadiusNarrative}, but none matched the current ${activeTabMeta.label.toLowerCase()} filter strongly enough to enter Hidden Gems review.`
-          : `Routes were loaded inside ${distanceRadiusNarrative}, but none qualified as lesser-known drivable picks for the current ${activeTabMeta.label.toLowerCase()} filter.`;
-      return orchestrationNote ? `${base} ${orchestrationNote}` : base;
+          ? `No routes were available to evaluate as Hidden Gems inside ${exploreFilterNarrative}.`
+          : `Routes were loaded inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the radius, refinement, drivable-access, popularity, entry validation, length, seasonal fit, and rig checks.`;
+      const withFallback = fallbackNotice ? `${base} ${fallbackNotice}` : base;
+      return orchestrationNote ? `${withFallback} ${orchestrationNote}` : withFallback;
     }
     const filteredCount = Math.max(hiddenGemPage.totalCandidates - hiddenGemPage.eligibleCount, 0);
     if (filteredCount > 0) {
-      const base = `${hiddenGemPage.eligibleCount} curated lesser-known off-road routes inside ${distanceRadiusNarrative} for the current ${activeTabMeta.label.toLowerCase()} filter. ${filteredCount} routes were held back for popularity, trail type, length, seasonal fit, or rig mismatch.`;
-      return orchestrationNote ? `${base} ${orchestrationNote}` : base;
+      const base = `${hiddenGemPage.eligibleCount} exploratory off-road routes qualified inside ${exploreFilterNarrative}. ${filteredCount} routes were held back for popularity, trail type, entry validation, length, seasonal fit, or rig mismatch.`;
+      const withFallback = fallbackNotice ? `${base} ${fallbackNotice}` : base;
+      return orchestrationNote ? `${withFallback} ${orchestrationNote}` : withFallback;
     }
-    const base = `${hiddenGemPage.eligibleCount} curated lesser-known off-road routes inside ${distanceRadiusNarrative} for the current ${activeTabMeta.label.toLowerCase()} filter.`;
-    return orchestrationNote ? `${base} ${orchestrationNote}` : base;
+    const base = `${hiddenGemPage.eligibleCount} exploratory off-road routes qualified inside ${exploreFilterNarrative}.`;
+    const withFallback = fallbackNotice ? `${base} ${fallbackNotice}` : base;
+    return orchestrationNote ? `${withFallback} ${orchestrationNote}` : withFallback;
   }, [
     hiddenGemPage.eligibleCount,
     hiddenGemPage.totalCandidates,
-    distanceRadiusNarrative,
-    activeTabMeta.label,
+    exploreFilterNarrative,
     hiddenGemDiagnostics.rawCandidateCount,
-    hiddenGemDiagnostics.tripTypeMatchedCount,
+    hiddenGemDiagnostics.criteriaExpanded,
+    hiddenGemDiagnostics.uiNotice,
     hiddenGemExploreOrchestration.summaryNote,
   ]);
 
-  const topAIRoutes = useMemo(() => aiRoutes.slice(0, 2), [aiRoutes]);
-  const visiblePopularTrails = useMemo<PopularTrailEnrichedRoute[]>(
-    () =>
-      popularTrailExploreOrchestration.surfaced
-        .slice(0, 4)
-        .map((route) => popularTrailExploreOrchestration.routeMap.get(route.id) ?? route),
-    [popularTrailExploreOrchestration.routeMap, popularTrailExploreOrchestration.surfaced],
-  );
+  const aiRouteIdeaPage = useMemo(() => {
+    const pageSize = AI_ROUTE_IDEA_PAGE_SIZE;
+    const eligibleCount = refinedAIRoutes.length;
+    const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
+    const normalizedPageIndex = eligibleCount === 0
+      ? 0
+      : ((aiRouteIdeaPageIndex % totalPages) + totalPages) % totalPages;
+    const offset = normalizedPageIndex * pageSize;
+    const items = refinedAIRoutes.slice(offset, offset + pageSize);
+
+    return {
+      items,
+      eligibleCount,
+      pageIndex: normalizedPageIndex,
+      pageSize,
+      totalPages,
+      offset,
+      nextPageIndex: items.length === 0 ? 0 : (normalizedPageIndex + 1) % totalPages,
+    };
+  }, [aiRouteIdeaPageIndex, refinedAIRoutes]);
+  const visibleAIRoutes = aiRouteIdeaPage.items;
+  const popularTrailPage = useMemo(() => {
+    const pageSize = POPULAR_TRAIL_PAGE_SIZE;
+    const eligibleCount = popularTrailExploreOrchestration.routes.length;
+    const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
+    const normalizedPageIndex = eligibleCount === 0
+      ? 0
+      : ((popularTrailPageIndex % totalPages) + totalPages) % totalPages;
+    const offset = normalizedPageIndex * pageSize;
+    const items = popularTrailExploreOrchestration.routes
+      .slice(offset, offset + pageSize)
+      .map((route) => popularTrailExploreOrchestration.routeMap.get(route.id) ?? route);
+
+    return {
+      items,
+      eligibleCount,
+      pageIndex: normalizedPageIndex,
+      pageSize,
+      totalPages,
+      offset,
+      nextPageIndex: items.length === 0 ? 0 : (normalizedPageIndex + 1) % totalPages,
+    };
+  }, [
+    popularTrailExploreOrchestration.routeMap,
+    popularTrailExploreOrchestration.routes,
+    popularTrailPageIndex,
+  ]);
+  const visiblePopularTrails = popularTrailPage.items;
+  const trailPackPage = useMemo(() => {
+    const pageSize = TRAIL_PACK_PAGE_SIZE;
+    const eligibleCount = discoverableTrailPacks.length;
+    const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
+    const normalizedPageIndex = eligibleCount === 0
+      ? 0
+      : ((trailPackPageIndex % totalPages) + totalPages) % totalPages;
+    const offset = normalizedPageIndex * pageSize;
+    const items = discoverableTrailPacks.slice(offset, offset + pageSize);
+
+    return {
+      items,
+      eligibleCount,
+      pageIndex: normalizedPageIndex,
+      pageSize,
+      totalPages,
+      offset,
+    };
+  }, [discoverableTrailPacks, trailPackPageIndex]);
+  const visibleTrailPacks = trailPackPage.items;
   const popularTrailSummary = useMemo(() => {
-    const base = `Recognized destination-grade routes inside ${distanceRadiusNarrative} for the current ${activeTabMeta.label.toLowerCase()} filter.`;
+    const base = `${popularTrailPage.eligibleCount} named drivable trail${popularTrailPage.eligibleCount === 1 ? '' : 's'} qualified inside ${exploreFilterNarrative}.`;
     return popularTrailExploreOrchestration.summaryNote
       ? `${base} ${popularTrailExploreOrchestration.summaryNote}`
       : base;
-  }, [distanceRadiusNarrative, activeTabMeta.label, popularTrailExploreOrchestration.summaryNote]);
+  }, [exploreFilterNarrative, popularTrailExploreOrchestration.summaryNote, popularTrailPage.eligibleCount]);
   const hiddenGemPageCount = hiddenGemPage.totalPages;
+  const popularTrailPageCount = popularTrailPage.totalPages;
+  const trailPackPageCount = trailPackPage.totalPages;
+  const aiRouteIdeaPageCount = aiRouteIdeaPage.totalPages;
   const visibleHiddenGemRoutes = enrichedHiddenGemRoutes;
+  const hiddenGemThumbnailAssignments = useMemo(
+    () => getExploreRouteThumbnailAssignments(visibleHiddenGemRoutes, 'hiddenGems'),
+    [visibleHiddenGemRoutes],
+  );
+  const popularTrailThumbnailAssignments = useMemo(
+    () => getExploreRouteThumbnailAssignments(visiblePopularTrails, 'popularTrails'),
+    [visiblePopularTrails],
+  );
+  const knownRouteThumbnailAssignments = useMemo(
+    () => getExploreRouteThumbnailAssignments(enrichedKnown, 'knownRoutes'),
+    [enrichedKnown],
+  );
+  const trailPackThumbnailAssignments = useMemo(
+    () => getExploreRouteThumbnailAssignments(
+      visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
+      'trailPacks',
+    ),
+    [visibleTrailPacks],
+  );
+  const aiRouteThumbnailAssignments = useMemo(
+    () => getExploreRouteThumbnailAssignments(visibleAIRoutes, 'ecsRouteIdeas'),
+    [visibleAIRoutes],
+  );
   const hiddenGemWindowStart = hiddenGemPage.eligibleCount === 0 ? 0 : hiddenGemPage.offset + 1;
   const hiddenGemWindowEnd = Math.min(hiddenGemPage.offset + hiddenGemPage.items.length, hiddenGemPage.eligibleCount);
+  const popularTrailWindowStart = popularTrailPage.eligibleCount === 0 ? 0 : popularTrailPage.offset + 1;
+  const popularTrailWindowEnd = Math.min(
+    popularTrailPage.offset + popularTrailPage.items.length,
+    popularTrailPage.eligibleCount,
+  );
+  const trailPackWindowStart = trailPackPage.eligibleCount === 0 ? 0 : trailPackPage.offset + 1;
+  const trailPackWindowEnd = Math.min(
+    trailPackPage.offset + trailPackPage.items.length,
+    trailPackPage.eligibleCount,
+  );
+  const aiRouteIdeaWindowStart = aiRouteIdeaPage.eligibleCount === 0 ? 0 : aiRouteIdeaPage.offset + 1;
+  const aiRouteIdeaWindowEnd = Math.min(
+    aiRouteIdeaPage.offset + aiRouteIdeaPage.items.length,
+    aiRouteIdeaPage.eligibleCount,
+  );
   const vehicleProfileSignature = useMemo(
     () =>
       vehicleProfile
@@ -1533,21 +2152,27 @@ function DiscoverScreenInner() {
     [vehicleProfile],
   );
   const activeTabRouteSignature = useMemo(
-    () => canonicalActiveTabRoutes.map((route) => route.id).join('|'),
-    [canonicalActiveTabRoutes],
+    () => refinedCanonicalRoutes.map((route) => route.id).join('|'),
+    [refinedCanonicalRoutes],
   );
 
   useEffect(() => {
     setHiddenGemPageIndex(0);
+    setPopularTrailPageIndex(0);
+    setTrailPackPageIndex(0);
+    setAiRouteIdeaPageIndex(0);
+    setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-  }, [distanceRadius, activeTab, showLesserKnown, vehicleProfileSignature, activeTabRouteSignature]);
+    setPopularTrailCycleNotice(null);
+    setExploreMapHandoffNotice(null);
+  }, [distanceRadius, exploreRefinement, vehicleProfileSignature, activeTabRouteSignature]);
 
   useEffect(() => {
     if (!__DEV__) return;
     const nextSignature = JSON.stringify(hiddenGemDiagnostics);
     if (lastHiddenGemDiagnosticsSignatureRef.current === nextSignature) return;
     lastHiddenGemDiagnosticsSignatureRef.current = nextSignature;
-    console.info(TAG, 'Hidden Gems orchestration', hiddenGemDiagnostics);
+    ecsLog.debug('DISCOVERY', `${TAG} Hidden Gems orchestration`, hiddenGemDiagnostics);
   }, [hiddenGemDiagnostics]);
 
   useEffect(() => {
@@ -1555,7 +2180,7 @@ function DiscoverScreenInner() {
     const nextSignature = JSON.stringify(exploreSourceDiagnostics);
     if (lastExploreSourceDiagnosticsSignatureRef.current === nextSignature) return;
     lastExploreSourceDiagnosticsSignatureRef.current = nextSignature;
-    console.info(TAG, 'Explore source diagnostics', exploreSourceDiagnostics);
+    ecsLog.debug('DISCOVERY', `${TAG} Explore source diagnostics`, exploreSourceDiagnostics);
   }, [exploreSourceDiagnostics]);
 
   useEffect(() => {
@@ -1578,10 +2203,30 @@ function DiscoverScreenInner() {
     setHiddenGemPageIndex(hiddenGemPage.nextPageIndex);
   }, [hiddenGemPage.nextPageIndex, hiddenGemPage.pageIndex, hiddenGemPage.totalPages]);
 
+  const handleAdvancePopularTrails = useCallback(() => {
+    hapticMicro();
+    if (popularTrailPage.totalPages <= 1) {
+      setPopularTrailCycleNotice('All qualifying popular trails in this radius are already on screen.');
+      return;
+    }
+    if (popularTrailPage.pageIndex + 1 >= popularTrailPage.totalPages) {
+      setPopularTrailCycleNotice('All qualifying popular trails in this radius have been viewed. Cycling back through the ranked set.');
+    } else {
+      setPopularTrailCycleNotice(null);
+    }
+    setPopularTrailPageIndex(popularTrailPage.nextPageIndex);
+  }, [popularTrailPage.nextPageIndex, popularTrailPage.pageIndex, popularTrailPage.totalPages]);
+
+  const handleAdvanceAIRouteIdeas = useCallback(() => {
+    hapticMicro();
+    if (aiRouteIdeaPage.totalPages <= 1) return;
+    setAiRouteIdeaPageIndex(aiRouteIdeaPage.nextPageIndex);
+  }, [aiRouteIdeaPage.nextPageIndex, aiRouteIdeaPage.totalPages]);
+
   const enrichedAI = useMemo<EnrichedDiscoveryRoute[]>(() => {
-    if (aiRoutes.length === 0) return [];
-    return enrichAIRoutes(aiRoutes, vehicleProfile);
-  }, [aiRoutes, vehicleProfile]);
+    if (refinedAIRoutes.length === 0) return [];
+    return enrichAIRoutes(refinedAIRoutes, vehicleProfile);
+  }, [refinedAIRoutes, vehicleProfile]);
 
   // Record shown routes for diversity rotation
   useEffect(() => {
@@ -1596,14 +2241,31 @@ function DiscoverScreenInner() {
     return map;
   }, [enrichedAI]);
 
-  const totalRouteCount = canonicalActiveTabRoutes.length + aiRoutes.length;
-  const hasDiscoveryOverrides =
-    activeTab !== 'day-trips' ||
-    distanceRadius !== DEFAULT_DISTANCE_RADIUS ||
-    !showLesserKnown;
+  const totalRouteCount = refinedCanonicalRoutes.length + refinedAIRoutes.length;
+  const hasDiscoveryOverrides = distanceRadius !== DEFAULT_DISTANCE_RADIUS || exploreRefinement != null;
+  const showRefinementEmptyState =
+    exploreRefinement != null &&
+    radiusFilteredOpportunities.length > 0 &&
+    refinedCanonicalRoutes.length === 0;
   const favoriteTrails = favoritesSnapshot.favorites;
   const favoritePlans = favoritesSnapshot.plans;
-  const favoritesTotal = favoriteTrails.length + favoritePlans.length;
+  const filteredExploreRouteIds = useMemo(() => {
+    const ids = new Set<string>();
+    refinedCanonicalRoutes.forEach((route) => ids.add(String(route.id)));
+    refinedAIRoutes.forEach((route) => ids.add(String(route.id)));
+    return ids;
+  }, [refinedAIRoutes, refinedCanonicalRoutes]);
+  const filteredFavoriteTrails = useMemo(() => {
+    if (filteredExploreRouteIds.size === 0) return [] as FavoriteTrailRecord[];
+    return favoriteTrails.filter((favorite) => filteredExploreRouteIds.has(favorite.sourceTrailId));
+  }, [favoriteTrails, filteredExploreRouteIds]);
+  const filteredFavoritePlans = useMemo(() => {
+    if (filteredExploreRouteIds.size === 0) return [] as FavoriteTrailPlan[];
+    return favoritePlans.filter((plan) =>
+      plan.items.some((item) => filteredExploreRouteIds.has(item.sourceTrailId)),
+    );
+  }, [favoritePlans, filteredExploreRouteIds]);
+  const favoritesTotal = filteredFavoriteTrails.length + filteredFavoritePlans.length;
   const latestFavoriteTrail = favoriteTrails[0] ?? null;
   const latestFavoritePlan = favoritePlans[0] ?? null;
   const favoritesSummaryText = latestFavoriteTrail
@@ -1645,6 +2307,10 @@ function DiscoverScreenInner() {
     });
   }, [favoriteTrailMap]);
 
+  useEffect(() => {
+    setFavoritesPageIndex(0);
+  }, [favoritesView, filteredFavoriteTrails.length, filteredFavoritePlans.length]);
+
   const handleToggleFavorite = useCallback((route: ExpeditionOpportunity) => {
     void toggleFavoriteTrail(route);
   }, []);
@@ -1664,7 +2330,7 @@ function DiscoverScreenInner() {
           tripMode: favorite.navigationPayload.tripMode,
         },
       });
-      router.push('/(tabs)/navigate');
+      router.push('/navigate');
     },
     [router],
   );
@@ -1789,8 +2455,48 @@ function DiscoverScreenInner() {
   const showSectionLoading = isLoading && hasLoadedExplorer;
   const favoriteTrailListScrollable = favoriteTrails.length > FAVORITES_VISIBLE_LIMIT;
   const favoritePlanListScrollable = favoritePlans.length > FAVORITES_VISIBLE_LIMIT;
-  const favoriteTrailCards = favoriteTrails.map((favorite) => {
+  const activeFavoritePanelItems = favoritesView === 'trails' ? filteredFavoriteTrails : filteredFavoritePlans;
+  const favoritePanelTotalPages = Math.max(
+    1,
+    Math.ceil(activeFavoritePanelItems.length / EXPLORE_CATEGORY_PAGE_SIZE),
+  );
+  const normalizedFavoritesPageIndex = activeFavoritePanelItems.length === 0
+    ? 0
+    : Math.min(favoritesPageIndex, favoritePanelTotalPages - 1);
+  const favoritePanelOffset = normalizedFavoritesPageIndex * EXPLORE_CATEGORY_PAGE_SIZE;
+  const pagedFavoriteTrails = useMemo(
+    () =>
+      favoritesView === 'trails'
+        ? filteredFavoriteTrails.slice(favoritePanelOffset, favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE)
+        : [],
+    [favoritePanelOffset, favoritesView, filteredFavoriteTrails],
+  );
+  const pagedFavoritePlans = useMemo(
+    () =>
+      favoritesView === 'plans'
+        ? filteredFavoritePlans.slice(favoritePanelOffset, favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE)
+        : [],
+    [favoritePanelOffset, favoritesView, filteredFavoritePlans],
+  );
+  const favoriteTrailThumbnailAssignments = useMemo(
+    () =>
+      getExploreRouteThumbnailAssignments(
+        pagedFavoriteTrails.map((favorite) => ({
+          id: favorite.sourceTrailId,
+          name: favorite.title,
+          region: favorite.subtitle ?? undefined,
+          imageTag: favorite.imageTag ?? undefined,
+          terrainType: favorite.trailCategory ?? undefined,
+          description: favorite.summary ?? undefined,
+          category: favorite.trailCategory ?? undefined,
+        })),
+        'favorites',
+      ),
+    [pagedFavoriteTrails],
+  );
+  const favoriteTrailCards = pagedFavoriteTrails.map((favorite) => {
     const isSelected = selectedPlanFavoriteIds.includes(favorite.favoriteId);
+    const favoriteThumbnail = favoriteTrailThumbnailAssignments.get(String(favorite.sourceTrailId)) ?? null;
     return (
       <TouchableOpacity
         key={favorite.favoriteId}
@@ -1836,6 +2542,22 @@ function DiscoverScreenInner() {
           )}
         </View>
 
+        {favoriteThumbnail?.uri ? (
+          <View style={s.favoriteThumbnailFrame}>
+            <Image
+              source={{ uri: favoriteThumbnail.uri }}
+              style={s.favoriteThumbnailImage}
+              resizeMode="contain"
+              accessibilityLabel={`${favorite.title} saved trail thumbnail`}
+            />
+            <View style={s.favoriteThumbnailScrim} />
+            <View style={s.favoriteThumbnailBadge}>
+              <Ionicons name="image-outline" size={9} color={TACTICAL.amber} />
+              <Text style={s.favoriteThumbnailBadgeText}>SAVED TRAIL</Text>
+            </View>
+          </View>
+        ) : null}
+
         <View style={s.favoriteMetaRow}>
           {favorite.tripMode ? (
             <View style={s.favoriteMetaBadge}>
@@ -1857,17 +2579,31 @@ function DiscoverScreenInner() {
         {!favoritesPlanMode ? (
           <View style={s.favoriteQuickRow}>
             <Text style={s.favoriteQuickHint}>Review saved route</Text>
-            <TouchableOpacity
-              style={s.favoriteQuickNavigateBtn}
-              activeOpacity={0.75}
-              onPress={(event) => {
-                event.stopPropagation?.();
-                void handleNavigateToFavorite(favorite);
-              }}
-            >
-              <Ionicons name="navigate-outline" size={11} color={TACTICAL.amber} />
-              <Text style={s.favoriteQuickNavigateText}>NAVIGATE</Text>
-            </TouchableOpacity>
+            <View style={s.favoriteToolbarActions}>
+              <TouchableOpacity
+                style={s.favoriteQuickNavigateBtn}
+                activeOpacity={0.75}
+                accessibilityLabel="Submit to ECS Trail Packs"
+                onPress={(event) => {
+                  event.stopPropagation?.();
+                  handleSubmitFavoriteTrailPack(favorite);
+                }}
+              >
+                <Ionicons name="trail-sign-outline" size={11} color={TACTICAL.amber} />
+                <Text style={s.favoriteQuickNavigateText}>SUBMIT</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.favoriteQuickNavigateBtn}
+                activeOpacity={0.75}
+                onPress={(event) => {
+                  event.stopPropagation?.();
+                  void handleNavigateToFavorite(favorite);
+                }}
+              >
+                <Ionicons name="navigate-outline" size={11} color={TACTICAL.amber} />
+                <Text style={s.favoriteQuickNavigateText}>NAVIGATE</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : (
           <View style={s.favoritePlanModeHintRow}>
@@ -1880,7 +2616,7 @@ function DiscoverScreenInner() {
       </TouchableOpacity>
     );
   });
-  const favoritePlanCards = favoritePlans.map((plan) => (
+  const favoritePlanCards = pagedFavoritePlans.map((plan) => (
     <TouchableOpacity
       key={plan.planId}
       style={s.favoritePlanCard}
@@ -1937,34 +2673,561 @@ function DiscoverScreenInner() {
     </TouchableOpacity>
   ));
 
+  const explorerCategoryTiles = useMemo(
+    () => [
+      {
+        key: 'hiddenGems' as const,
+        label: 'Hidden Gems',
+        icon: 'diamond-outline',
+        count: hiddenGemPage.eligibleCount,
+        accentColor: TACTICAL.amber,
+        description: 'Lower-profile routes matched to the active filters.',
+      },
+      {
+        key: 'popularTrails' as const,
+        label: 'Popular Trails',
+        icon: 'trail-sign-outline',
+        count: popularTrailPage.eligibleCount,
+        accentColor: '#66BB6A',
+        description: 'Known trail routes inside the current range.',
+      },
+      {
+        key: 'trailPacks' as const,
+        label: 'Trail Packs',
+        icon: 'albums-outline',
+        count: trailPackPage.eligibleCount,
+        accentColor: TACTICAL.amber,
+        description: 'ECS-native route packs submitted, reviewed, or validated by ECS.',
+      },
+      {
+        key: 'ecsRouteIdeas' as const,
+        label: 'ECS Route Ideas',
+        icon: 'navigate-outline',
+        count: aiRouteIdeaPage.eligibleCount,
+        accentColor: '#5AC8FA',
+        description: 'Generated route ideas filtered to this context.',
+      },
+      {
+        key: 'favorites' as const,
+        label: 'Favorites',
+        icon: 'star-outline',
+        count: favoritesTotal,
+        accentColor: '#E6B84C',
+        description: 'Saved routes that still match the active Explore context.',
+      },
+    ],
+    [
+      aiRouteIdeaPage.eligibleCount,
+      favoritesTotal,
+      hiddenGemPage.eligibleCount,
+      popularTrailPage.eligibleCount,
+      trailPackPage.eligibleCount,
+    ],
+  );
+
+  const activeExplorerCategoryConfig = explorerCategoryTiles.find(
+    (category) => category.key === activeExplorerCategoryPanel,
+  ) ?? null;
+
+  const activeExplorerPanelPage = useMemo(() => {
+    switch (activeExplorerCategoryPanel) {
+      case 'hiddenGems':
+        return {
+          pageIndex: hiddenGemPage.pageIndex,
+          totalPages: hiddenGemPage.totalPages,
+          totalItems: hiddenGemPage.eligibleCount,
+          windowStart: hiddenGemWindowStart,
+          windowEnd: hiddenGemWindowEnd,
+        };
+      case 'popularTrails':
+        return {
+          pageIndex: popularTrailPage.pageIndex,
+          totalPages: popularTrailPage.totalPages,
+          totalItems: popularTrailPage.eligibleCount,
+          windowStart: popularTrailWindowStart,
+          windowEnd: popularTrailWindowEnd,
+        };
+      case 'trailPacks':
+        return {
+          pageIndex: trailPackPage.pageIndex,
+          totalPages: trailPackPage.totalPages,
+          totalItems: trailPackPage.eligibleCount,
+          windowStart: trailPackWindowStart,
+          windowEnd: trailPackWindowEnd,
+        };
+      case 'ecsRouteIdeas':
+        return {
+          pageIndex: aiRouteIdeaPage.pageIndex,
+          totalPages: aiRouteIdeaPage.totalPages,
+          totalItems: aiRouteIdeaPage.eligibleCount,
+          windowStart: aiRouteIdeaWindowStart,
+          windowEnd: aiRouteIdeaWindowEnd,
+        };
+      case 'favorites':
+        return {
+          pageIndex: normalizedFavoritesPageIndex,
+          totalPages: favoritePanelTotalPages,
+          totalItems: activeFavoritePanelItems.length,
+          windowStart: activeFavoritePanelItems.length === 0 ? 0 : favoritePanelOffset + 1,
+            windowEnd: Math.min(
+            favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE,
+            activeFavoritePanelItems.length,
+          ),
+        };
+      default:
+        return {
+          pageIndex: 0,
+          totalPages: 1,
+          totalItems: 0,
+          windowStart: 0,
+          windowEnd: 0,
+        };
+    }
+  }, [
+    activeExplorerCategoryPanel,
+    activeFavoritePanelItems.length,
+    aiRouteIdeaPage.eligibleCount,
+    aiRouteIdeaPage.pageIndex,
+    aiRouteIdeaPage.totalPages,
+    aiRouteIdeaWindowEnd,
+    aiRouteIdeaWindowStart,
+    favoritePanelOffset,
+    favoritePanelTotalPages,
+    hiddenGemPage.eligibleCount,
+    hiddenGemPage.pageIndex,
+    hiddenGemPage.totalPages,
+    hiddenGemWindowEnd,
+    hiddenGemWindowStart,
+    normalizedFavoritesPageIndex,
+    popularTrailPage.eligibleCount,
+    popularTrailPage.pageIndex,
+    popularTrailPage.totalPages,
+    popularTrailWindowEnd,
+    popularTrailWindowStart,
+    trailPackPage.eligibleCount,
+    trailPackPage.pageIndex,
+    trailPackPage.totalPages,
+    trailPackWindowEnd,
+    trailPackWindowStart,
+  ]);
+
+  const handleOpenExplorerCategoryPanel = useCallback((category: ExplorerCategoryPanelKey) => {
+    hapticMicro();
+    setActiveExplorerCategoryPanel(category);
+  }, []);
+
+  const handleCloseExplorerCategoryPanel = useCallback(() => {
+    hapticMicro();
+    setActiveExplorerCategoryPanel(null);
+  }, []);
+
+  const handleChangeExplorerCategoryPage = useCallback(
+    (direction: -1 | 1) => {
+      if (!activeExplorerCategoryPanel) return;
+      hapticMicro();
+      const clampPage = (nextIndex: number, totalPages: number) =>
+        Math.max(0, Math.min(nextIndex, Math.max(totalPages - 1, 0)));
+
+      switch (activeExplorerCategoryPanel) {
+        case 'hiddenGems':
+          setHiddenGemPageIndex((current) => clampPage(current + direction, hiddenGemPage.totalPages));
+          setHiddenGemCycleNotice(null);
+          break;
+        case 'popularTrails':
+          setPopularTrailPageIndex((current) => clampPage(current + direction, popularTrailPage.totalPages));
+          setPopularTrailCycleNotice(null);
+          break;
+        case 'trailPacks':
+          setTrailPackPageIndex((current) => clampPage(current + direction, trailPackPage.totalPages));
+          break;
+        case 'ecsRouteIdeas':
+          setAiRouteIdeaPageIndex((current) => clampPage(current + direction, aiRouteIdeaPage.totalPages));
+          break;
+        case 'favorites':
+          setFavoritesPageIndex((current) => clampPage(current + direction, favoritePanelTotalPages));
+          break;
+      }
+    },
+    [
+      activeExplorerCategoryPanel,
+      aiRouteIdeaPage.totalPages,
+      favoritePanelTotalPages,
+      hiddenGemPage.totalPages,
+      popularTrailPage.totalPages,
+      trailPackPage.totalPages,
+    ],
+  );
+
+  const renderExplorerCategoryPanelContent = () => {
+    switch (activeExplorerCategoryPanel) {
+      case 'hiddenGems':
+        if (showSectionLoading) return <SectionCardSkeletonList />;
+        if (hiddenGemState.error) {
+          return (
+            <ExplorerStateCard
+              icon="cloud-offline-outline"
+              title={ECS_READINESS_COPY.explore.hiddenGemsLimitedTitle}
+              message={ECS_READINESS_COPY.explore.hiddenGemsLimitedMessage}
+            />
+          );
+        }
+        if (visibleHiddenGemRoutes.length === 0) {
+          return (
+            <ExplorerStateCard
+              icon="diamond-outline"
+              title="No Hidden Gems in Range"
+              message={
+                hiddenGemDiagnostics.rawCandidateCount === 0
+                  ? `No routes were available to evaluate as Hidden Gems inside ${exploreFilterNarrative}.`
+                  : `Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the active filters were applied.`
+              }
+            />
+          );
+        }
+        return (
+          <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
+            {visibleHiddenGemRoutes.map((route) => (
+              <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
+                <EnrichedRouteCard
+                  route={route}
+                  hasVehicle={!!activeVehicleId}
+                  isFavorited={favoriteTrailIds.has(String(route.id))}
+                  presentationVariant="hidden-gem"
+                  collectionLabel="Hidden Gems"
+                  thumbnailOverride={hiddenGemThumbnailAssignments.get(String(route.id)) ?? null}
+                  onSelect={() => handleSelectOpportunity(route)}
+                  onNavigate={() => {
+                    void handleNavigateToRoute(route);
+                  }}
+                  onToggleFavorite={() => handleToggleFavorite(route)}
+                  isCompleted={completedIds?.has(route.id) ?? false}
+                  compactPreview
+                />
+              </View>
+            ))}
+          </View>
+        );
+      case 'popularTrails':
+        if (showSectionLoading) return <SectionCardSkeletonList />;
+        if (popularTrailsState.error) {
+          return (
+            <ExplorerStateCard
+              icon="cloud-offline-outline"
+              title={ECS_READINESS_COPY.explore.popularTrailsLimitedTitle}
+              message={ECS_READINESS_COPY.explore.popularTrailsLimitedMessage}
+            />
+          );
+        }
+        if (visiblePopularTrails.length === 0) {
+          return (
+            <ExplorerStateCard
+              icon="trail-sign-outline"
+              title="No Popular Trails in Range"
+              message={`No marquee routes were found inside ${exploreFilterNarrative} after the active trail filters were applied.`}
+            />
+          );
+        }
+        return (
+          <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
+            {visiblePopularTrails.map((route) => (
+              <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
+                <EnrichedRouteCard
+                  route={route}
+                  hasVehicle={!!activeVehicleId}
+                  isFavorited={favoriteTrailIds.has(String(route.id))}
+                  presentationVariant="popular-trail"
+                  collectionLabel="Popular Trails"
+                  thumbnailOverride={popularTrailThumbnailAssignments.get(String(route.id)) ?? null}
+                  onSelect={() => handleSelectOpportunity(route)}
+                  onNavigate={() => {
+                    void handleNavigateToRoute(route);
+                  }}
+                  onToggleFavorite={() => handleToggleFavorite(route)}
+                  isCompleted={completedIds?.has(route.id) ?? false}
+                  compactPreview
+                />
+              </View>
+            ))}
+          </View>
+        );
+      case 'trailPacks':
+        if (showSectionLoading) {
+          return (
+            <ExplorerStateCard
+              icon="hourglass-outline"
+              title="Loading Trail Packs"
+              message="Scanning approved ECS Trail Packs within selected radius…"
+            />
+          );
+        }
+        if (!hasGPSFix) {
+          return (
+            <ExplorerStateCard
+              icon="location-outline"
+              title="Location Needed"
+              message="Trail Packs need your location or a selected search area to filter nearby routes."
+            />
+          );
+        }
+        if (visibleTrailPacks.length === 0) {
+          if (broaderTrailPackResults.length > 0) {
+            return (
+              <ExplorerStateCard
+                icon="shield-half-outline"
+                title="Lower Confidence Nearby"
+                message="Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results."
+              />
+            );
+          }
+          return (
+            <ExplorerStateCard
+              icon="albums-outline"
+              title="No Trail Packs Found"
+              message="No approved Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems."
+            />
+          );
+        }
+        return (
+          <View style={s.trailPackPanelStack}>
+            {visibleTrailPacks.some((trailPack) => trailPack.reviewStatus !== 'approved') ? (
+              <View style={s.inlineSectionNotice}>
+                <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
+                <Text style={s.inlineSectionNoticeText}>
+                  This Trail Pack is under ECS review and is not visible to other users.
+                </Text>
+              </View>
+            ) : null}
+            <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
+              {visibleTrailPacks.map((trailPack) => {
+                const trailPackRoute = trailPackToExpeditionOpportunity(trailPack);
+                return (
+                  <View
+                    key={trailPack.id}
+                    style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}
+                  >
+                    <TrailPackCard
+                      trailPack={trailPack}
+                      hasVehicle={!!activeVehicleId}
+                      isFavorited={favoriteTrailIds.has(String(trailPackRoute.id))}
+                      thumbnailOverride={trailPackThumbnailAssignments.get(String(trailPackRoute.id)) ?? null}
+                      onPreview={() => handlePreviewTrailPack(trailPack)}
+                      onStartGuidance={() => {
+                        void handleStartTrailPackGuidance(trailPack);
+                      }}
+                      onSave={() => {
+                        handleToggleFavorite(trailPackRoute);
+                        handleTrailPackFeedback(trailPack.id, 'saved');
+                      }}
+                      compactPreview
+                    />
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        );
+      case 'ecsRouteIdeas':
+        if (aiLoading && visibleAIRoutes.length === 0) {
+          return (
+            <View style={s.aiLoadingContainer}>
+              <ActivityIndicator size="small" color="#5AC8FA" />
+              <Text style={s.aiLoadingText}>REFINING ECS ROUTE IDEAS...</Text>
+              <Text style={s.aiLoadingSubText}>Keeping the current Explore results visible while suggestions refresh.</Text>
+            </View>
+          );
+        }
+        if (aiError && visibleAIRoutes.length === 0) {
+          return (
+            <View style={s.aiErrorContainer}>
+              <Ionicons name="cloud-offline-outline" size={16} color={TACTICAL.textMuted} />
+              <Text style={s.aiErrorText}>{ECS_STATE_COPY.recovery.exploreIdeasLimited.message}</Text>
+              <TouchableOpacity style={s.aiRetryBtn} onPress={handleFetchAIRoutes} activeOpacity={0.7}>
+                <Ionicons name="refresh-outline" size={10} color={TACTICAL.amber} />
+                <Text style={s.aiRetryBtnText}>{ECS_STATE_COPY.recovery.exploreIdeasLimited.ctaLabel.toUpperCase()}</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+        if (visibleAIRoutes.length === 0) {
+          return (
+            <ExplorerStateCard
+              icon="navigate-outline"
+              title="No ECS Route Ideas Yet"
+              message={`ECS route ideas appear automatically when matching suggestions are available inside ${exploreFilterNarrative}.`}
+            />
+          );
+        }
+        return (
+          <View style={s.routeCardGrid}>
+            {visibleAIRoutes.map((route) => (
+              <AIRouteCard
+                key={route.id}
+                route={route}
+                enrichedRoute={enrichedAIMap.get(route.id) ?? null}
+                hasVehicle={!!activeVehicleId}
+                isFavorited={favoriteTrailIds.has(String(route.id))}
+                thumbnailOverride={aiRouteThumbnailAssignments.get(String(route.id)) ?? null}
+                onPreview={() => handleAIPreview(route)}
+                onNavigate={() => {
+                  void handleNavigateToRoute(route);
+                }}
+                onToggleFavorite={() => handleToggleFavorite(route)}
+                onBuildRoute={() => {
+                  void handleNavigateToRoute(route);
+                }}
+                compactPreview
+              />
+            ))}
+          </View>
+        );
+      case 'favorites':
+        return (
+          <View style={s.explorerPanelFavoritesWrap}>
+            <View style={s.favoriteSegmentWrap}>
+              <ECSSegmentedControl
+                options={[
+                  { key: 'trails', label: 'TRAILS', badge: filteredFavoriteTrails.length > 0 ? filteredFavoriteTrails.length : null },
+                  { key: 'plans', label: 'PLANS', badge: filteredFavoritePlans.length > 0 ? filteredFavoritePlans.length : null },
+                ]}
+                value={favoritesView}
+                onChange={(next) => {
+                  hapticMicro();
+                  setFavoritesPageIndex(0);
+                  setFavoritesView(next as 'trails' | 'plans');
+                  if (next === 'plans') {
+                    exitFavoritesPlanMode();
+                  }
+                }}
+              />
+            </View>
+
+            {favoritesView === 'trails' ? (
+              <>
+                <View style={s.favoriteToolbar}>
+                  {favoritesPlanMode ? (
+                    <>
+                      <Text style={s.favoriteToolbarText}>
+                        {selectedPlanFavoriteIds.length} selected for stacking
+                      </Text>
+                      <View style={s.favoriteToolbarActions}>
+                        <TouchableOpacity
+                          style={s.favoriteToolbarBtn}
+                          activeOpacity={0.78}
+                          onPress={exitFavoritesPlanMode}
+                        >
+                          <Text style={s.favoriteToolbarBtnText}>CANCEL</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            s.favoriteToolbarPrimaryBtn,
+                            selectedPlanFavoriteIds.length < 2 && s.favoriteToolbarPrimaryBtnDisabled,
+                          ]}
+                          activeOpacity={selectedPlanFavoriteIds.length < 2 ? 1 : 0.82}
+                          disabled={selectedPlanFavoriteIds.length < 2}
+                          onPress={handleBeginCreatePlan}
+                        >
+                          <Text style={s.favoriteToolbarPrimaryText}>CREATE STACK</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={s.favoriteToolbarText}>
+                        Favorites are filtered to the current Explore route context.
+                      </Text>
+                      <TouchableOpacity
+                        style={s.favoritePlannerBtn}
+                        activeOpacity={0.8}
+                        onPress={handleToggleFavoritesPlanMode}
+                      >
+                        <Ionicons name="checkmark-circle-outline" size={11} color={TACTICAL.amber} />
+                        <Text style={s.favoritePlannerBtnText}>SELECT</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+
+                {filteredFavoriteTrails.length === 0 ? (
+                  <ECSResultsEmptyState
+                    style={s.favoriteEmptyState}
+                    title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
+                    message="No saved trails match the current Explore filters."
+                    icon="star-outline"
+                    variant="compact"
+                  />
+                ) : (
+                  <View style={s.favoriteList}>{favoriteTrailCards}</View>
+                )}
+              </>
+            ) : (
+              filteredFavoritePlans.length > 0 ? (
+                <View style={s.favoritePlanList}>{favoritePlanCards}</View>
+              ) : (
+                <ECSResultsEmptyState
+                  style={s.favoriteEmptyState}
+                  title="No Stacked Plans in Context"
+                  message="Saved trail stacks appear here when at least one stop matches the current Explore filters."
+                  icon="git-merge-outline"
+                  variant="compact"
+                />
+              )
+            )}
+          </View>
+        );
+      default:
+        return null;
+    }
+  };
+
 
   return (
     <TopoBackground>
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
-        {/* Header */}
-        <View style={[s.header, contentFrameStyle, { paddingTop: headerTopPadding }]}>
-          <View>
-            <Text style={s.headerBrand}>Expedition Command System</Text>
-            <Text style={s.headerTitle}>Explore</Text>
-          </View>
-        </View>
+        <Header title="Explore" />
 
-        <View style={s.goldRail} />
-
+        <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
 
           {(!showInitialLoading && (opportunities.length > 0 || showSectionLoading)) && (
             <View style={s.discoveryControlsWrap}>
-              <DiscoveryCategoryTabs
-                activeTab={activeTab}
-                onChangeTab={handleChangeDiscoveryTab}
-                categories={expandedCategories}
-                showLesserKnown={showLesserKnown}
-                onToggleLesserKnown={handleToggleLesserKnown}
-                hiddenGemBadgeCount={showSectionLoading ? null : hiddenGemPage.eligibleCount}
+              <DistanceRadiusFilter
+                selectedRadius={distanceRadius}
+                onChangeRadius={handleRadiusChange}
+                hasGPSFix={hasGPSFix}
+                totalCount={opportunities.length}
+                filteredCount={radiusFilteredOpportunities.length}
+                refinedCount={refinedCanonicalRoutes.length}
+                selectedRefinement={exploreRefinement}
+                refinementCounts={exploreRefinementCounts}
+                onChangeRefinement={handleExploreRefinementChange}
+                isLoading={isLoading}
               />
 
-              <DistanceRadiusFilter selectedRadius={distanceRadius} onChangeRadius={handleRadiusChange} hasGPSFix={hasGPSFix} totalCount={opportunities.length} filteredCount={radiusFilteredOpportunities.length} isLoading={isLoading} />
+              <View style={s.exploreMapHandoffCard}>
+                <View style={s.exploreMapHandoffCopy}>
+                  <Text style={s.exploreMapHandoffTitle}>Map the current Explore filter</Text>
+                  <Text style={s.exploreMapHandoffSubtitle} numberOfLines={2}>
+                    {exploreMapHandoffBuild.segments.length > 0
+                      ? `${exploreMapHandoffBuild.segments.length} map-ready trail line${exploreMapHandoffBuild.segments.length === 1 ? '' : 's'} from the current radius${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
+                      : 'Open matching Explorer routes on Navigate when map geometry is available.'}
+                  </Text>
+                  {exploreMapHandoffNotice ? (
+                    <Text style={s.exploreMapHandoffNotice} numberOfLines={2}>
+                      {exploreMapHandoffNotice}
+                    </Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity
+                  style={s.exploreMapHandoffButton}
+                  onPress={handleDisplayExploreRoutesOnMap}
+                  activeOpacity={0.86}
+                  accessibilityRole="button"
+                  accessibilityLabel="Display current Explorer routes on the Navigate map"
+                >
+                  <Ionicons name="map-outline" size={14} color="#091014" />
+                  <Text style={s.exploreMapHandoffButtonText}>Display on Map</Text>
+                </TouchableOpacity>
+              </View>
 
               {showSectionLoading && (
                 <ECSTransientNotice
@@ -1976,16 +3239,6 @@ function DiscoverScreenInner() {
                 />
               )}
 
-              <ECSResultsMetaRow
-                chips={[
-                  { label: activeTabMeta.label, selected: true },
-                  { label: showSectionLoading ? 'Refreshing' : distanceRadiusMetaLabel },
-                  { label: showSectionLoading ? 'Popular Sync' : `Popular ${popularTrailRoutes.length}` },
-                  { label: showSectionLoading ? 'Gems Sync' : `Gems ${hiddenGemPage.eligibleCount}` },
-                  ...(hasGPSFix ? [{ label: 'GPS Lock' }] : []),
-                ]}
-                style={s.discoverySummaryRow}
-              />
             </View>
           )}
 
@@ -2026,7 +3279,7 @@ function DiscoverScreenInner() {
                   ? 'No trails match the current Explore scan.'
                   : `No trails fall inside the current ${distanceRadius}-mile scan.`
               }
-              helper="Widen the radius or reset the current trail filters to continue exploring."
+              helper="Widen the radius or reset Explore to the default radius to continue exploring."
               actionLabel={distanceRadius != null && distanceRadius < 500 ? ECS_CTA_LABELS.expandRadius : hasDiscoveryOverrides ? ECS_CTA_LABELS.resetFilters : undefined}
               onAction={
                 distanceRadius != null && distanceRadius < 500
@@ -2039,6 +3292,18 @@ function DiscoverScreenInner() {
                     : undefined
               }
               icon="locate-outline"
+            />
+          )}
+
+          {!showInitialLoading && !showSectionLoading && showRefinementEmptyState && (
+            <ECSResultsEmptyState
+              style={s.emptyRadius}
+              title="No Trails Match This Filter"
+              message={`${selectedExploreRefinementLabel ?? 'This refinement'} has no matches inside ${distanceRadiusNarrative}.`}
+              helper="Clear the refinement or choose a different range to keep exploring the current trail catalog."
+              actionLabel="Clear Refinement"
+              onAction={() => handleExploreRefinementChange(null)}
+              icon="options-outline"
             />
           )}
 
@@ -2062,12 +3327,6 @@ function DiscoverScreenInner() {
                       <Text style={s.aiBadgeText}>{aiRoutes.length} ECS</Text>
                     </View>
                   )}
-                  {showLesserKnown && (
-                    <View style={s.lesserKnownBadge}>
-                      <Ionicons name="eye-off-outline" size={8} color={TACTICAL.amber} />
-                      <Text style={s.lesserKnownText}>LESSER KNOWN</Text>
-                    </View>
-                  )}
                 </View>
               </View>
 
@@ -2080,12 +3339,14 @@ function DiscoverScreenInner() {
                   route={route}
                   hasVehicle={!!activeVehicleId}
                   isFavorited={favoriteTrailIds.has(String(route.id))}
+                  thumbnailOverride={knownRouteThumbnailAssignments.get(String(route.id)) ?? null}
                   onSelect={() => handleSelectOpportunity(route)}
                   onNavigate={() => {
                     void handleNavigateToRoute(route);
                   }}
                   onToggleFavorite={() => handleToggleFavorite(route)}
                   isCompleted={completedIds?.has(route.id) ?? false}
+                  compactPreview
                 />
               ))}
 
@@ -2106,16 +3367,17 @@ function DiscoverScreenInner() {
                       key={route.id}
                       route={route}
                       enrichedRoute={enrichedAIMap.get(route.id) ?? null}
+                      hasVehicle={!!activeVehicleId}
                       isFavorited={favoriteTrailIds.has(String(route.id))}
                       onPreview={() => handleAIPreview(route)}
                       onNavigate={() => {
                         void handleNavigateToRoute(route);
                       }}
                       onToggleFavorite={() => handleToggleFavorite(route)}
-                      onBuildExpedition={() => {
-                        hapticMicro();
-                        // Navigate to expedition builder with route context
+                      onBuildRoute={() => {
+                        void handleNavigateToRoute(route);
                       }}
+                      compactPreview
                     />
                   ))}
                 </>
@@ -2181,7 +3443,64 @@ function DiscoverScreenInner() {
             </View>
           )}
 
-          {(!showInitialLoading && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
+          {(!showInitialLoading && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
+            <View style={s.explorerCategoryGrid}>
+              {explorerCategoryTiles.map((category) => {
+                const isEmpty = category.count === 0;
+                return (
+                  <TouchableOpacity
+                    key={category.key}
+                    style={[
+                      s.explorerCategoryTile,
+                      {
+                        borderColor: `${category.accentColor}${isEmpty ? '22' : '42'}`,
+                        backgroundColor: isEmpty ? 'rgba(10,14,18,0.72)' : ECS.bgPanel,
+                      },
+                    ]}
+                    activeOpacity={0.82}
+                    onPress={() => handleOpenExplorerCategoryPanel(category.key)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${category.label}`}
+                  >
+                    <View
+                      style={[
+                        s.explorerCategoryIconWrap,
+                        {
+                          borderColor: `${category.accentColor}35`,
+                          backgroundColor: `${category.accentColor}10`,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={category.icon as any}
+                        size={17}
+                        color={isEmpty ? TACTICAL.textMuted : category.accentColor}
+                      />
+                    </View>
+                    <View style={s.explorerCategoryCopy}>
+                      <Text
+                        style={[
+                          s.explorerCategoryTitle,
+                          { color: isEmpty ? TACTICAL.textMuted : TACTICAL.text },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {category.label}
+                      </Text>
+                      <Text style={[s.explorerCategoryCount, { color: category.accentColor }]}>
+                        {category.count}
+                      </Text>
+                    </View>
+                    <Text style={s.explorerCategoryHint} numberOfLines={2}>
+                      {isEmpty ? 'No matches for active filters' : category.description}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {false && (!showInitialLoading && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
             <>
               <ECSSection style={[s.discoverySection, s.hiddenGemSection]}>
                 <ECSSectionHeader
@@ -2254,20 +3573,25 @@ function DiscoverScreenInner() {
                     title="No Hidden Gems in Range"
                     message={
                       hiddenGemDiagnostics.rawCandidateCount === 0
-                        ? `The route catalog is loaded, but no drivable routes fell inside ${distanceRadiusNarrative} for Hidden Gems review.`
-                        : hiddenGemDiagnostics.tripTypeMatchedCount === 0
-                        ? `Routes were found inside ${distanceRadiusNarrative}, but none matched the current ${activeTabMeta.label.toLowerCase()} filter strongly enough to enter Hidden Gems scoring.`
+                        ? `The route catalog is loaded, but no drivable routes fell inside ${exploreFilterNarrative} for Hidden Gems review.`
                         : hasGPSFix
-                        ? `Routes were evaluated inside ${distanceRadiusNarrative}, but none qualified as lesser-known drivable picks for your current rig and ${activeTabMeta.label.toLowerCase()} filter.`
-                        : `Explore is still using the default search location until live GPS becomes available. Routes were evaluated inside ${distanceRadiusNarrative}, but none qualified as lesser-known drivable picks for the current ${activeTabMeta.label.toLowerCase()} filter.`
+                        ? `Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates for your current rig after the active trail filters were applied.`
+                        : `Explore is still using the default search location until live GPS becomes available. Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the active trail filters were applied.`
                     }
                   />
                 ) : (
                   <>
-                    <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
-                      {visibleHiddenGemRoutes.map((route) => {
-                        const contextTags = hiddenGemContextTagMap.get(route.id) ?? [];
-                        return (
+                    <ScrollView
+                      style={s.sectionCardViewport}
+                      contentContainerStyle={[
+                        s.routeCardGrid,
+                        s.sectionCardViewportContent,
+                        showExploreRouteGrid && s.routeCardGridExpanded,
+                      ]}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={visibleHiddenGemRoutes.length > 3}
+                    >
+                      {visibleHiddenGemRoutes.map((route) => (
                           <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
                             <EnrichedRouteCard
                               route={route}
@@ -2275,26 +3599,18 @@ function DiscoverScreenInner() {
                               isFavorited={favoriteTrailIds.has(String(route.id))}
                               presentationVariant="hidden-gem"
                               collectionLabel="Hidden Gems"
+                              thumbnailOverride={hiddenGemThumbnailAssignments.get(String(route.id)) ?? null}
                               onSelect={() => handleSelectOpportunity(route)}
                               onNavigate={() => {
                                 void handleNavigateToRoute(route);
                               }}
                               onToggleFavorite={() => handleToggleFavorite(route)}
                               isCompleted={completedIds?.has(route.id) ?? false}
+                              compactPreview
                             />
-                            {contextTags.length > 0 && (
-                              <View style={s.hiddenGemContextRow}>
-                                {contextTags.map((tag) => (
-                                  <View key={`${route.id}-${tag}`} style={s.hiddenGemContextChip}>
-                                    <Text style={s.hiddenGemContextChipText}>{tag}</Text>
-                                  </View>
-                                ))}
-                              </View>
-                            )}
                           </View>
-                        );
-                      })}
-                    </View>
+                        ))}
+                    </ScrollView>
 
                     {hiddenGemPage.eligibleCount > hiddenGemPage.pageSize && (
                       <TouchableOpacity
@@ -2308,7 +3624,7 @@ function DiscoverScreenInner() {
                           color={TACTICAL.amber}
                         />
                         <Text style={s.hiddenGemPagerText}>
-                          {hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? 'RESTART GEMS' : 'NEXT 10'}
+                          {hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? 'RESTART 10' : 'NEXT 10'}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -2323,7 +3639,15 @@ function DiscoverScreenInner() {
                   accentColor="#66BB6A"
                   badge={
                     <ECSSectionBadge
-                      label={showSectionLoading ? 'UPDATING' : popularTrailsState.error ? ECS_READINESS_COPY.labels.limited : `${popularTrailExploreOrchestration.surfaced.length} WITHIN RANGE`}
+                      label={
+                        showSectionLoading
+                          ? 'UPDATING'
+                          : popularTrailsState.error
+                          ? ECS_READINESS_COPY.labels.limited
+                          : popularTrailPage.eligibleCount === 0
+                          ? 'NO PICKS'
+                          : `${popularTrailWindowStart}-${popularTrailWindowEnd} OF ${popularTrailPage.eligibleCount}`
+                      }
                       color="#66BB6A"
                     />
                   }
@@ -2333,6 +3657,13 @@ function DiscoverScreenInner() {
                     ? ECS_READINESS_COPY.explore.popularTrailsLimitedDetail
                     : popularTrailSummary}
                 </Text>
+
+                {popularTrailCycleNotice ? (
+                  <View style={s.inlineSectionNotice}>
+                    <Ionicons name="information-circle-outline" size={12} color="#66BB6A" />
+                    <Text style={s.inlineSectionNoticeText}>{popularTrailCycleNotice}</Text>
+                  </View>
+                ) : null}
 
                 {showSectionLoading ? (
                   <SectionCardSkeletonList />
@@ -2356,28 +3687,58 @@ function DiscoverScreenInner() {
                   <ExplorerStateCard
                     icon="flag-outline"
                     title="No Popular Trails in Range"
-                    message={`No marquee routes were found inside ${distanceRadiusNarrative} for the current ${activeTabMeta.label.toLowerCase()} filter.`}
+                    message={`No marquee routes were found inside ${exploreFilterNarrative} after the active trail filters were applied.`}
                   />
                 ) : (
-                  <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
-                    {visiblePopularTrails.map((route) => (
-                      <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
-                        <EnrichedRouteCard
-                          route={route}
-                          hasVehicle={!!activeVehicleId}
-                          isFavorited={favoriteTrailIds.has(String(route.id))}
-                          presentationVariant="popular-trail"
-                          collectionLabel="Popular Trails"
-                          onSelect={() => handleSelectOpportunity(route)}
-                          onNavigate={() => {
-                            void handleNavigateToRoute(route);
-                          }}
-                          onToggleFavorite={() => handleToggleFavorite(route)}
-                          isCompleted={completedIds?.has(route.id) ?? false}
+                  <>
+                    <ScrollView
+                      style={s.sectionCardViewport}
+                      contentContainerStyle={[
+                        s.routeCardGrid,
+                        s.sectionCardViewportContent,
+                        showExploreRouteGrid && s.routeCardGridExpanded,
+                      ]}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={visiblePopularTrails.length > 3}
+                    >
+                      {visiblePopularTrails.map((route) => (
+                          <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
+                            <EnrichedRouteCard
+                              route={route}
+                              hasVehicle={!!activeVehicleId}
+                              isFavorited={favoriteTrailIds.has(String(route.id))}
+                              presentationVariant="popular-trail"
+                              collectionLabel="Popular Trails"
+                              thumbnailOverride={popularTrailThumbnailAssignments.get(String(route.id)) ?? null}
+                              onSelect={() => handleSelectOpportunity(route)}
+                              onNavigate={() => {
+                                void handleNavigateToRoute(route);
+                              }}
+                              onToggleFavorite={() => handleToggleFavorite(route)}
+                              isCompleted={completedIds?.has(route.id) ?? false}
+                              compactPreview
+                            />
+                          </View>
+                        ))}
+                    </ScrollView>
+
+                    {popularTrailPage.eligibleCount > popularTrailPage.pageSize && (
+                      <TouchableOpacity
+                        style={[s.hiddenGemPagerBtn, s.popularTrailPagerBtn]}
+                        activeOpacity={0.82}
+                        onPress={handleAdvancePopularTrails}
+                      >
+                        <Ionicons
+                          name="chevron-forward-outline"
+                          size={14}
+                          color="#66BB6A"
                         />
-                      </View>
-                    ))}
-                  </View>
+                        <Text style={[s.hiddenGemPagerText, s.popularTrailPagerText]}>
+                          {popularTrailPage.pageIndex + 1 >= popularTrailPageCount ? 'RESTART 10' : 'NEXT 10'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
                 )}
               </ECSSection>
 
@@ -2386,10 +3747,18 @@ function DiscoverScreenInner() {
                   title="ECS ROUTE IDEAS"
                   icon="sparkles-outline"
                   accentColor="#5AC8FA"
-                  badge={<ECSSectionBadge label={`${aiRoutes.length} IDEA${aiRoutes.length !== 1 ? 'S' : ''}`} />}
+                  badge={
+                    <ECSSectionBadge
+                      label={
+                        aiRouteIdeaPage.eligibleCount === 0
+                          ? 'NO IDEAS'
+                          : `${aiRouteIdeaWindowStart}-${aiRouteIdeaWindowEnd} OF ${aiRouteIdeaPage.eligibleCount}`
+                      }
+                    />
+                  }
                 />
                 <Text style={s.discoverySectionDescription}>
-                  Optional ECS route ideas for {activeTabMeta.label.toLowerCase()} inside {distanceRadiusNarrative}.
+                  Optional ECS route ideas for drivable off-road trails inside {exploreFilterNarrative}.
                 </Text>
 
                 <View style={s.routeCardMetaRow}>
@@ -2404,17 +3773,17 @@ function DiscoverScreenInner() {
                   </View>
                 </View>
 
-                {topAIRoutes.length === 0 && !aiLoading && !aiError && (
+                {visibleAIRoutes.length === 0 && !aiLoading && !aiError && (
                   <View style={s.emptyRouteCard}>
                     <Ionicons name="sparkles-outline" size={20} color={TACTICAL.textMuted} />
                     <Text style={s.emptyRouteCardTitle}>NO ECS ROUTE IDEAS YET</Text>
                     <Text style={s.emptyRouteCardText}>
-                      Refresh ECS route ideas when you want a second pass on the current Explore filters.
+                      ECS route ideas appear automatically when matching suggestions are available inside the active range.
                     </Text>
                   </View>
                 )}
 
-                {!aiLoading && aiError && topAIRoutes.length === 0 && (
+                {!aiLoading && aiError && visibleAIRoutes.length === 0 && (
                   <View style={s.aiErrorContainer}>
                     <Ionicons name="cloud-offline-outline" size={16} color={TACTICAL.textMuted} />
                     <Text style={s.aiErrorText}>{ECS_STATE_COPY.recovery.exploreIdeasLimited.message}</Text>
@@ -2425,7 +3794,7 @@ function DiscoverScreenInner() {
                   </View>
                 )}
 
-                {aiLoading && (
+                {aiLoading && visibleAIRoutes.length === 0 && (
                   <View style={s.aiLoadingContainer}>
                     <ActivityIndicator size="small" color="#5AC8FA" />
                     <Text style={s.aiLoadingText}>REFINING ECS ROUTE IDEAS...</Text>
@@ -2433,41 +3802,53 @@ function DiscoverScreenInner() {
                   </View>
                 )}
 
-                {!aiLoading && topAIRoutes.length === 0 && aiEnabled && activeTabRoutes.length > 0 && !aiError && (
-                  <TouchableOpacity
-                    style={s.generateAIBtn}
-                    activeOpacity={0.8}
-                    onPress={handleFetchAIRoutes}
-                  >
-                    <View style={s.generateAIBtnInner}>
-                      <Ionicons name="sparkles-outline" size={14} color="#5AC8FA" />
-                      <View style={s.generateAIBtnContent}>
-                        <Text style={s.generateAIBtnTitle}>GET ECS ROUTE IDEAS</Text>
-                        <Text style={s.generateAIBtnDesc}>
-                          Find more {activeTabMeta.label.toLowerCase()} within {distanceRadiusNarrative}.
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
-                    </View>
-                  </TouchableOpacity>
-                )}
+                {visibleAIRoutes.length > 0 && (
+                  <>
+                    <ScrollView
+                      style={s.sectionCardViewport}
+                      contentContainerStyle={s.sectionCardViewportContent}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={visibleAIRoutes.length > 3}
+                    >
+                      {visibleAIRoutes.map((route) => (
+                        <AIRouteCard
+                          key={route.id}
+                          route={route}
+                          enrichedRoute={enrichedAIMap.get(route.id) ?? null}
+                          hasVehicle={!!activeVehicleId}
+                          isFavorited={favoriteTrailIds.has(String(route.id))}
+                          thumbnailOverride={aiRouteThumbnailAssignments.get(String(route.id)) ?? null}
+                          onPreview={() => handleAIPreview(route)}
+                          onNavigate={() => {
+                            void handleNavigateToRoute(route);
+                          }}
+                          onToggleFavorite={() => handleToggleFavorite(route)}
+                          onBuildRoute={() => {
+                            void handleNavigateToRoute(route);
+                          }}
+                          compactPreview
+                        />
+                      ))}
+                    </ScrollView>
 
-                {topAIRoutes.map((route) => (
-                  <AIRouteCard
-                    key={route.id}
-                    route={route}
-                    enrichedRoute={enrichedAIMap.get(route.id) ?? null}
-                    isFavorited={favoriteTrailIds.has(String(route.id))}
-                    onPreview={() => handleAIPreview(route)}
-                    onNavigate={() => {
-                      void handleNavigateToRoute(route);
-                    }}
-                    onToggleFavorite={() => handleToggleFavorite(route)}
-                    onBuildExpedition={() => {
-                      hapticMicro();
-                    }}
-                  />
-                ))}
+                    {aiRouteIdeaPage.eligibleCount > aiRouteIdeaPage.pageSize && (
+                      <TouchableOpacity
+                        style={[s.hiddenGemPagerBtn, s.aiRouteIdeaPagerBtn]}
+                        activeOpacity={0.82}
+                        onPress={handleAdvanceAIRouteIdeas}
+                      >
+                        <Ionicons
+                          name="chevron-forward-outline"
+                          size={14}
+                          color="#5AC8FA"
+                        />
+                        <Text style={[s.hiddenGemPagerText, s.aiRouteIdeaPagerText]}>
+                          {aiRouteIdeaPage.pageIndex + 1 >= aiRouteIdeaPageCount ? 'RESTART 10' : 'NEXT 10'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
+                )}
               </ECSSection>
 
               <ECSSection style={s.discoverySection}>
@@ -2656,23 +4037,191 @@ function DiscoverScreenInner() {
 
           <View style={s.footerNote}>
             <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
-            <Text style={s.footerNoteText}>
-              {vehicleProfile
-                ? `Showing ${hiddenGemPage.eligibleCount} Explore picks and ${canonicalActiveTabRoutes.length} ${activeTabMeta.label.toLowerCase()}${aiRoutes.length > 0 ? ` + ${aiRoutes.length} ECS route idea${aiRoutes.length !== 1 ? 's' : ''}` : ''} inside ${distanceRadiusFooterLabel.toLowerCase()}. ${explorationStats.totalRoutesCompleted} route${explorationStats.totalRoutesCompleted !== 1 ? 's' : ''} explored (${explorationStats.totalMilesExplored} mi). ${hasGPSFix ? 'GPS active.' : 'Enable location for accuracy.'}${showLesserKnown ? ' Lesser-known routes boosted.' : ''}`
-                : `Add a vehicle to see personalized match scores and richer hidden-gem recommendations.${aiRoutes.length > 0 ? ` ${aiRoutes.length} ECS route ideas available.` : ''}`}
-            </Text>
+            <View style={s.footerNoteCopy}>
+              <Text style={s.footerNoteText}>
+                {vehicleProfile
+                  ? `Showing ${hiddenGemPage.eligibleCount} Explore picks and ${refinedCanonicalRoutes.length} drivable trail${refinedCanonicalRoutes.length !== 1 ? 's' : ''}${refinedAIRoutes.length > 0 ? ` + ${refinedAIRoutes.length} ECS route idea${refinedAIRoutes.length !== 1 ? 's' : ''}` : ''} inside ${distanceRadiusFooterLabel.toLowerCase()}${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel.toLowerCase()}` : ''}. ${explorationStats.totalRoutesCompleted} route${explorationStats.totalRoutesCompleted !== 1 ? 's' : ''} explored (${explorationStats.totalMilesExplored} mi). ${hasGPSFix ? 'GPS active.' : 'Enable location for accuracy.'}`
+                  : `Add a vehicle to see personalized match scores and richer hidden-gem recommendations.${refinedAIRoutes.length > 0 ? ` ${refinedAIRoutes.length} ECS route ideas available.` : ''}`}
+              </Text>
+              <Text style={s.footerNoteSubtext}>
+                {`ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles to reduce trail noise and surface routes worth your time.`}
+              </Text>
+            </View>
           </View>
 
           <View style={{ height: 20 }} />
         </ScrollView>
 
+        {activeExplorerCategoryConfig && (
+          <View style={s.explorerPanelLayer} pointerEvents="box-none">
+            <View style={[s.explorerPanelShell, contentFrameStyle]} pointerEvents="auto">
+              <View style={s.explorerPanelHeader}>
+                <View style={s.explorerPanelTitleWrap}>
+                  <View
+                    style={[
+                      s.explorerPanelIconWrap,
+                      {
+                        borderColor: `${activeExplorerCategoryConfig.accentColor}42`,
+                        backgroundColor: `${activeExplorerCategoryConfig.accentColor}12`,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={activeExplorerCategoryConfig.icon as any}
+                      size={16}
+                      color={activeExplorerCategoryConfig.accentColor}
+                    />
+                  </View>
+                  <View style={s.explorerPanelTitleCopy}>
+                    <Text style={s.explorerPanelEyebrow}>EXPLORE CATEGORY</Text>
+                    <Text style={s.explorerPanelTitle}>{activeExplorerCategoryConfig.label}</Text>
+                    <Text style={s.explorerPanelSubtitle} numberOfLines={2}>
+                      {activeExplorerCategoryConfig.description}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={s.explorerPanelClose}
+                  activeOpacity={0.78}
+                  onPress={handleCloseExplorerCategoryPanel}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close Explore category panel"
+                >
+                  <Ionicons name="close" size={18} color={TACTICAL.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={s.explorerPanelMetaRow}>
+                <View style={s.explorerPanelCountBadge}>
+                  <Text style={s.explorerPanelCountText}>
+                    {activeExplorerPanelPage.totalItems} ITEM{activeExplorerPanelPage.totalItems === 1 ? '' : 'S'}
+                  </Text>
+                </View>
+                <View style={s.explorerPanelCountBadge}>
+                  <Text style={s.explorerPanelCountText}>
+                    {activeExplorerPanelPage.totalItems === 0
+                      ? '0 OF 0'
+                      : `${activeExplorerPanelPage.windowStart}-${activeExplorerPanelPage.windowEnd} OF ${activeExplorerPanelPage.totalItems}`}
+                  </Text>
+                </View>
+              </View>
+
+              <ScrollView
+                style={s.explorerPanelScroll}
+                contentContainerStyle={s.explorerPanelScrollContent}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator
+              >
+                {renderExplorerCategoryPanelContent()}
+              </ScrollView>
+
+              {activeExplorerPanelPage.totalPages > 1 && (
+                <View style={s.explorerPanelPager}>
+                  {activeExplorerPanelPage.pageIndex > 0 ? (
+                    <TouchableOpacity
+                      style={s.explorerPanelPagerBtn}
+                      activeOpacity={0.78}
+                      onPress={() => handleChangeExplorerCategoryPage(-1)}
+                    >
+                      <Ionicons name="chevron-back-outline" size={13} color={TACTICAL.amber} />
+                      <Text style={s.explorerPanelPagerText}>PREVIOUS</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={s.explorerPanelPagerSlot} />
+                  )}
+
+                  <Text style={s.explorerPanelPageLabel}>
+                    PAGE {activeExplorerPanelPage.pageIndex + 1} / {activeExplorerPanelPage.totalPages}
+                  </Text>
+
+                  {activeExplorerPanelPage.pageIndex + 1 < activeExplorerPanelPage.totalPages ? (
+                    <TouchableOpacity
+                      style={s.explorerPanelPagerBtn}
+                      activeOpacity={0.78}
+                      onPress={() => handleChangeExplorerCategoryPage(1)}
+                    >
+                      <Text style={s.explorerPanelPagerText}>NEXT</Text>
+                      <Ionicons name="chevron-forward-outline" size={13} color={TACTICAL.amber} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={s.explorerPanelPagerSlot} />
+                  )}
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+        </View>
+
           <View style={[s.footer, contentFrameStyle]}>
             <Text style={s.footerText}>
-            {`EXPEDITION COMMAND SYSTEM | ${totalRouteCount} ROUTE${totalRouteCount !== 1 ? 'S' : ''} | ${distanceRadiusFooterLabel} | ${hiddenGemPage.eligibleCount} PICKS | ${activeTabMeta.label}${aiRoutes.length > 0 ? ` | ${aiRoutes.length} ECS` : ''}`}
+            {`EXPEDITION COMMAND SYSTEM | ${totalRouteCount} ROUTE${totalRouteCount !== 1 ? 'S' : ''} | ${distanceRadiusFooterLabel}${selectedExploreRefinementLabel ? ` | ${selectedExploreRefinementLabel.toUpperCase()}` : ''} | ${hiddenGemPage.eligibleCount} PICKS | ${trailPackPage.eligibleCount} TRAIL PACK${trailPackPage.eligibleCount === 1 ? '' : 'S'} | ALL DRIVABLE TRAILS${refinedAIRoutes.length > 0 ? ` | ${refinedAIRoutes.length} ECS` : ''}`}
             </Text>
           </View>
 
-        <ExpeditionAnalysisModal visible={analysisVisible} opportunity={selectedOpportunity} compatResult={selectedOpportunity ? (compatResults.get(selectedOpportunity.id) || null) : null} vehicleProfile={vehicleProfile} hasVehicle={!!activeVehicleId} onClose={handleCloseAnalysis} onNavigate={selectedOpportunity ? () => { void handleNavigateToRoute(selectedOpportunity); } : undefined} />
+        <ExpeditionAnalysisModal
+          visible={analysisVisible}
+          opportunity={selectedOpportunity}
+          compatResult={selectedOpportunity ? (compatResults.get(selectedOpportunity.id) || null) : null}
+          vehicleProfile={vehicleProfile}
+          hasVehicle={!!activeVehicleId}
+          onClose={handleCloseAnalysis}
+          onBuildRoute={selectedOpportunity ? () => { void handleNavigateToRoute(selectedOpportunity); } : undefined}
+          buildRouteDisabled={!!selectedOpportunityBuildUnavailableReason}
+          buildRouteDisabledReason={selectedOpportunityBuildUnavailableReason}
+          campsActionAvailable={selectedOpportunityCampMarkers.length > 0}
+          onViewCamps={
+            selectedOpportunity && selectedOpportunityCampMarkers.length > 0
+              ? () => { void handleViewRouteCamps(selectedOpportunity); }
+              : undefined
+          }
+        />
+
+        <TrailPackPreviewModal
+          visible={!!trailPackPreview}
+          trailPack={trailPackPreview}
+          isSaved={
+            trailPackPreview
+              ? favoriteTrailIds.has(String(trailPackToExpeditionOpportunity(trailPackPreview).id))
+              : false
+          }
+          onClose={handleCloseTrailPackPreview}
+          onRoutePreview={
+            trailPackPreview
+              ? () => {
+                  void handleNavigateToRoute(trailPackToExpeditionOpportunity(trailPackPreview), {
+                    flowLabel: 'Route Preview',
+                    flowMessage: 'Trail Pack is staged in Navigate. Review the map overview, then start when ready.',
+                  });
+                }
+              : undefined
+          }
+          onStartGuidance={() => {
+            if (trailPackPreview) void handleStartTrailPackGuidance(trailPackPreview);
+          }}
+          onSave={() => {
+            if (!trailPackPreview) return;
+            const trailPackRoute = trailPackToExpeditionOpportunity(trailPackPreview);
+            handleToggleFavorite(trailPackRoute);
+            handleTrailPackFeedback(trailPackPreview.id, 'saved');
+          }}
+          onFeedback={(type, note) =>
+            trailPackPreview
+              ? handleTrailPackFeedback(trailPackPreview.id, type, note)
+              : { ok: false, reason: 'Trail Pack preview unavailable.' }
+          }
+          offlineCacheAvailable={false}
+        />
+
+        <TrailPackSubmissionModal
+          visible={!!trailPackSubmissionRoute}
+          routeInput={trailPackSubmissionRoute}
+          currentLocation={hasGPSFix ? { latitude: userLat, longitude: userLng } : null}
+          onClose={() => setTrailPackSubmissionRoute(null)}
+          onSubmitted={handleTrailPackSubmitted}
+        />
 
         {/* ── Phase 18: AI Route Preview Modal with enrichment ── */}
         <TacticalPopupShell
@@ -2784,7 +4333,18 @@ function DiscoverScreenInner() {
           visible={aiPreviewVisible}
           route={aiPreviewRoute}
           enrichedRoute={aiPreviewRoute ? (enrichedAIMap.get(aiPreviewRoute.id) ?? null) : null}
+          hasVehicle={!!activeVehicleId}
           onClose={handleCloseAIPreview}
+          onRoutePreview={
+            aiPreviewRoute
+              ? () => {
+                  void handleNavigateToRoute(aiPreviewRoute, {
+                    flowLabel: 'Route Preview',
+                    flowMessage: 'ECS route idea is staged in Navigate. Review the map overview, then start when ready.',
+                  });
+                }
+              : undefined
+          }
           onNavigate={
             aiPreviewRoute
               ? () => {
@@ -2792,9 +4352,15 @@ function DiscoverScreenInner() {
                 }
               : undefined
           }
-          onBuildExpedition={() => {
-            handleCloseAIPreview();
-          }}
+          onBuildRoute={
+            aiPreviewRoute
+              ? () => {
+                  void handleNavigateToRoute(aiPreviewRoute);
+                }
+              : undefined
+          }
+          buildRouteDisabled={!!aiPreviewBuildUnavailableReason}
+          buildRouteDisabledReason={aiPreviewBuildUnavailableReason}
         />
 
       </View>
@@ -2877,6 +4443,10 @@ const s = StyleSheet.create({
   },
 
   // ── Scroll ────────────────────────────────────────────
+  explorerBody: {
+    flex: 1,
+    position: 'relative',
+  },
   scrollArea: { flex: 1 },
   scrollContent: {
     paddingHorizontal: 14,
@@ -2885,17 +4455,271 @@ const s = StyleSheet.create({
     flexGrow: 1,
   },
   discoveryControlsWrap: {
-    marginTop: 6,
-    marginBottom: 10,
-    gap: 7,
+    marginTop: 3,
+    marginBottom: 7,
+    gap: 5,
   },
   discoveryRefreshNotice: {
     marginTop: 2,
   },
-  discoverySummaryRow: {
+  exploreMapHandoffCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: ECS.radius,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(10,14,17,0.74)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  exploreMapHandoffCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  exploreMapHandoffTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  exploreMapHandoffSubtitle: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  exploreMapHandoffNotice: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  exploreMapHandoffButton: {
+    minHeight: 34,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: TACTICAL.amber,
+    borderWidth: 1,
+    borderColor: 'rgba(255,220,140,0.5)',
+  },
+  exploreMapHandoffButtonText: {
+    color: '#091014',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  explorerCategoryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  explorerCategoryTile: {
+    width: '48.5%',
+    minHeight: 124,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  explorerCategoryIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  explorerCategoryCopy: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  explorerCategoryTitle: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  explorerCategoryCount: {
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  explorerCategoryHint: {
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+  },
+  explorerPanelLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(3,6,9,0.56)',
+  },
+  explorerPanelShell: {
+    flex: 1,
+    alignSelf: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '32',
+    backgroundColor: 'rgba(8,12,15,0.98)',
+    padding: 12,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.32,
+    shadowRadius: 22,
+    elevation: 12,
+  },
+  explorerPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  explorerPanelTitleWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  explorerPanelIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 13,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  explorerPanelTitleCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  explorerPanelEyebrow: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1.8,
+    color: TACTICAL.textMuted,
+  },
+  explorerPanelTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    color: TACTICAL.text,
+  },
+  explorerPanelSubtitle: {
+    fontSize: 10,
+    fontWeight: '600',
+    lineHeight: 14,
+    color: TACTICAL.textMuted,
+  },
+  explorerPanelClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  explorerPanelMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  explorerPanelCountBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: TACTICAL.amber + '0C',
+  },
+  explorerPanelCountText: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    color: TACTICAL.amber,
+  },
+  explorerPanelScroll: {
+    flex: 1,
+  },
+  explorerPanelScrollContent: {
+    paddingBottom: 8,
+    gap: 8,
+  },
+  explorerPanelFavoritesWrap: {
+    gap: 10,
+  },
+  explorerPanelPager: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: ECS.stroke,
+  },
+  explorerPanelPagerBtn: {
+    minWidth: 104,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '30',
+    backgroundColor: TACTICAL.amber + '10',
+  },
+  explorerPanelPagerSlot: {
+    minWidth: 104,
+  },
+  explorerPanelPagerBtnDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    opacity: 0.56,
+  },
+  explorerPanelPagerText: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    color: TACTICAL.amber,
+  },
+  explorerPanelPagerTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  explorerPanelPageLabel: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    color: TACTICAL.textMuted,
   },
   discoveryFilterSummary: {
     marginTop: 8,
@@ -2915,8 +4739,8 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   discoverySection: {
-    marginBottom: 16,
-    gap: 8,
+    marginBottom: 12,
+    gap: 7,
   },
   hiddenGemSection: {
     borderColor: 'rgba(230,184,76,0.18)',
@@ -2949,8 +4773,14 @@ const s = StyleSheet.create({
     marginBottom: 4,
   },
   hiddenGemCardWrap: {
-    gap: 6,
-    marginBottom: 10,
+    marginBottom: 2,
+  },
+  sectionCardViewport: {
+    maxHeight: EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT,
+    flexGrow: 0,
+  },
+  sectionCardViewportContent: {
+    paddingBottom: 2,
   },
   sectionStateAction: {
     alignSelf: 'center',
@@ -2979,6 +4809,9 @@ const s = StyleSheet.create({
     color: '#66BB6A',
   },
   routeCardGrid: {
+    gap: 4,
+  },
+  trailPackPanelStack: {
     gap: 10,
   },
   routeCardGridExpanded: {
@@ -2986,7 +4819,7 @@ const s = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    rowGap: 10,
+    rowGap: 6,
   },
   inlineSectionNotice: {
     flexDirection: 'row',
@@ -3007,27 +4840,6 @@ const s = StyleSheet.create({
     color: TACTICAL.textMuted,
     lineHeight: 14,
   },
-  hiddenGemContextRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    paddingHorizontal: 6,
-    paddingBottom: 2,
-  },
-  hiddenGemContextChip: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '30',
-    backgroundColor: ECS.bgElev,
-  },
-  hiddenGemContextChipText: {
-    fontSize: 7,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1,
-  },
   hiddenGemPagerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3035,18 +4847,32 @@ const s = StyleSheet.create({
     alignSelf: 'stretch',
     gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
-    marginTop: 8,
+    marginTop: 6,
   },
   hiddenGemPagerText: {
     fontSize: 9,
     fontWeight: '800',
     color: TACTICAL.amber,
     letterSpacing: 1.3,
+  },
+  popularTrailPagerBtn: {
+    borderColor: '#66BB6A30',
+    backgroundColor: '#66BB6A0D',
+  },
+  popularTrailPagerText: {
+    color: '#66BB6A',
+  },
+  aiRouteIdeaPagerBtn: {
+    borderColor: '#5AC8FA30',
+    backgroundColor: '#5AC8FA0D',
+  },
+  aiRouteIdeaPagerText: {
+    color: '#5AC8FA',
   },
   favoriteUtilityHeader: {
     flexDirection: 'row',
@@ -3509,6 +5335,43 @@ const s = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  favoriteThumbnailFrame: {
+    height: 76,
+    maxHeight: 82,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: 'rgba(5,7,9,0.92)',
+  },
+  favoriteThumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  favoriteThumbnailScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  favoriteThumbnailBadge: {
+    position: 'absolute',
+    left: 8,
+    bottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '30',
+    backgroundColor: 'rgba(10,12,14,0.72)',
+  },
+  favoriteThumbnailBadgeText: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   favoriteMetaRow: {
     flexDirection: 'row',
@@ -4239,12 +6102,21 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 4,
   },
+  footerNoteCopy: {
+    flex: 1,
+    gap: 3,
+  },
   footerNoteText: {
     fontSize: 10,
     fontWeight: '500',
     color: TACTICAL.textMuted,
     lineHeight: 15,
-    flex: 1,
+  },
+  footerNoteSubtext: {
+    fontSize: 9,
+    fontWeight: '500',
+    color: TACTICAL.textMuted + 'B8',
+    lineHeight: 13,
   },
 
   // ── Footer ────────────────────────────────────────────

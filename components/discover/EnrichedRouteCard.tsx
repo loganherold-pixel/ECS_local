@@ -4,12 +4,12 @@
 // Displays a known route card enriched with:
 //   - Route label (Known Route, Hidden Gem, Remote Option, etc.)
 //   - Risk preview indicator
-//   - Vehicle match indicator
+//   - Vehicle Fit indicator
 //   - Hidden gem badge
 //   - All standard route information
 // ============================================================
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS } from '../../lib/theme';
@@ -28,11 +28,24 @@ import {
 import {
   type EnrichedDiscoveryRoute,
   getRouteLabelConfig,
+  getRouteLabelDisplay,
 } from '../../lib/discoveryIntelligenceEngine';
-import { getExploreTrailThumbnail } from '../../lib/exploreTrailThumbnails';
-import { formatConfidenceCompactLine } from '../../lib/ai/confidenceEngine';
-import { formatTrustCompactLine } from '../../lib/ai/trustContract';
+import {
+  getExploreTrailThumbnail,
+  type ExploreTrailThumbnailAssignment,
+} from '../../lib/exploreTrailThumbnails';
+import { deriveExploreRouteConfidence } from '../../lib/routeConfidencePresentation';
+import {
+  getExploreRemotenessRating,
+  getExploreRouteConfidencePercent,
+} from '../../lib/explore/exploreRemotenessPresentation';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import RouteConfidenceSummaryRow from './RouteConfidenceSummaryRow';
+import ExploreReadinessSummary from './ExploreReadinessSummary';
+import {
+  buildExploreRouteReadinessAssessment,
+  getExploreRouteReadinessSummary,
+} from '../../lib/readiness/exploreRouteReadiness';
 
 type ExploreCardPresentationVariant = 'default' | 'hidden-gem' | 'popular-trail';
 
@@ -46,6 +59,8 @@ interface EnrichedRouteCardProps {
   onToggleFavorite?: () => void;
   presentationVariant?: ExploreCardPresentationVariant;
   collectionLabel?: string;
+  compactPreview?: boolean;
+  thumbnailOverride?: ExploreTrailThumbnailAssignment | null;
 }
 
 export default function EnrichedRouteCard({
@@ -58,13 +73,16 @@ export default function EnrichedRouteCard({
   onToggleFavorite,
   presentationVariant = 'default',
   collectionLabel,
+  compactPreview = false,
+  thumbnailOverride,
 }: EnrichedRouteCardProps) {
   const adaptive = useAdaptiveLayout();
   const terrainColor = getTerrainColor(route.terrainType);
   const remotenessColor = getRemotenessColor(route.remotenessScore);
   const remotenessLabel = getRemotenessLabel(route.remotenessScore);
   const labelConfig = getRouteLabelConfig(route.routeLabel);
-  const thumbnail = getExploreTrailThumbnail(route);
+  const routeLabelDisplay = getRouteLabelDisplay(route.routeLabel);
+  const thumbnail = thumbnailOverride ?? getExploreTrailThumbnail(route);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const riskPreview = route.riskPreview;
   const vehicleMatch = route.vehicleMatch;
@@ -75,9 +93,9 @@ export default function EnrichedRouteCard({
     : route.routeLabel === 'Known Route' || route.routeLabel === 'Local Favorite'
     ? 'Established destination route with proven trail identity'
     : route.description;
-  const confidenceLine =
-    formatTrustCompactLine(route.trust ?? null) ||
-    formatConfidenceCompactLine(route.recommendationConfidence);
+  const routeConfidence = deriveExploreRouteConfidence(route);
+  const remotenessRating = getExploreRemotenessRating(route);
+  const routeConfidencePercent = getExploreRouteConfidencePercent(route, routeConfidence);
   const explanationLine = route.explanation?.text ?? null;
 
   const getDiffLabel = (d: number): string => {
@@ -108,7 +126,6 @@ export default function EnrichedRouteCard({
     route.estimatedDays != null ? `${route.estimatedDays} ${route.estimatedDays === 1 ? 'day' : 'days'}` : null,
     route.terrainType ? route.terrainType : null,
   ].filter(Boolean);
-  const primaryActionLabel = onNavigate ? 'PREVIEW ROUTE' : 'VIEW DETAILS';
   const riskTone = riskPreview?.level?.toLowerCase().includes('high') ? 'unavailable' : 'warning';
   const showThumbnail = !!thumbnail?.uri && thumbnail.state !== 'suppressed_mismatch' && !thumbnailFailed;
   const thumbnailBorderColor =
@@ -146,6 +163,14 @@ export default function EnrichedRouteCard({
         : null);
   const isTabletCard = adaptive.explore.routeColumns > 1 || adaptive.isTablet;
   const thumbnailSize = isTabletCard ? { width: 96, height: 68 } : { width: 76, height: 58 };
+  const readinessAssessment = useMemo(
+    () => buildExploreRouteReadinessAssessment(route, { hasVehicle: _hasVehicle }),
+    [route, _hasVehicle],
+  );
+  const readinessSummary = useMemo(
+    () => getExploreRouteReadinessSummary(readinessAssessment, route, { hasVehicle: _hasVehicle }),
+    [readinessAssessment, route, _hasVehicle],
+  );
 
   return (
     <TouchableOpacity
@@ -157,6 +182,7 @@ export default function EnrichedRouteCard({
         variant="primary"
         style={[
           s.card,
+          compactPreview && s.cardCompact,
           isTabletCard && s.cardTablet,
           {
             borderColor: presentation.borderColor,
@@ -170,7 +196,7 @@ export default function EnrichedRouteCard({
           <View style={[s.accentBot, { backgroundColor: riskPreview?.color ?? '#4CAF50' }]} />
         </View>
 
-        <View style={[s.cardBody, isTabletCard && s.cardBodyTablet]}>
+        <View style={[s.cardBody, compactPreview && s.cardBodyCompact, isTabletCard && !compactPreview && s.cardBodyTablet]}>
         {/* Badge Row */}
         <View style={s.badgeRowWrap}>
           <View style={s.badgeRow}>
@@ -190,13 +216,13 @@ export default function EnrichedRouteCard({
               </View>
             ) : null}
             <ECSBadge
-              label={route.routeLabel}
+              label={routeLabelDisplay}
               icon={labelConfig.icon as any}
               tone="category"
               compact
               colorOverride={labelConfig.color}
             />
-            {riskPreview && (
+            {!compactPreview && riskPreview && (
               <ECSBadge
                 label={riskPreview.level}
                 icon="shield-outline"
@@ -205,7 +231,7 @@ export default function EnrichedRouteCard({
                 colorOverride={riskPreview.color}
               />
             )}
-            {isCompleted && (
+            {!compactPreview && isCompleted && (
               <ECSBadge
                 label="Explored"
                 icon="checkmark-circle"
@@ -244,7 +270,7 @@ export default function EnrichedRouteCard({
           ) : null}
         </View>
 
-        <View style={s.heroRow}>
+        <View style={[s.heroRow, compactPreview && s.heroRowCompact]}>
           <View style={s.heroCopy}>
             {/* Name + Region */}
             <View style={s.nameBlock}>
@@ -253,17 +279,25 @@ export default function EnrichedRouteCard({
             </View>
 
             {/* Supporting metadata */}
-            <View style={s.metadataRow}>
-              {compactMeta.map((item) => (
-                <View key={`${route.id}-${item}`} style={s.metadataBadge}>
-                  <Text style={s.metadataBadgeText}>{item}</Text>
-                </View>
-              ))}
-            </View>
+            {!compactPreview ? (
+              <View style={s.metadataRow}>
+                {compactMeta.map((item) => (
+                  <View key={`${route.id}-${item}`} style={s.metadataBadge}>
+                    <Text style={s.metadataBadgeText}>{item}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
 
           {showThumbnail ? (
-            <View style={[s.thumbnailFrame, thumbnailSize, { borderColor: thumbnailBorderColor }]}>
+            <View
+              style={[
+                s.thumbnailFrame,
+                compactPreview ? s.thumbnailFrameCompact : thumbnailSize,
+                { borderColor: thumbnailBorderColor },
+              ]}
+            >
               <Image
                 source={{ uri: thumbnail?.uri ?? '' }}
                 style={s.thumbnailImage}
@@ -291,94 +325,120 @@ export default function EnrichedRouteCard({
           {vehicleMatch && vehicleMatch.score > 0 && (
             <View style={s.statItem}>
               <Ionicons name="car-outline" size={10} color={vehicleMatch.color} />
-              <Text style={[s.statValue, { color: vehicleMatch.color, fontSize: 10 }]}>{vehicleMatch.score}</Text>
-              <Text style={s.statUnit}>MATCH</Text>
+              <Text style={[s.statValue, { color: vehicleMatch.color, fontSize: 10 }]}>{vehicleMatch.score}%</Text>
+              <Text style={s.statUnit}>FIT</Text>
             </View>
           )}
         </View>
 
-        <Text style={[s.cardSummary, isTabletCard && s.cardSummaryTablet]} numberOfLines={isTabletCard ? 3 : 2}>{summaryText}</Text>
-        {confidenceLine ? (
-          <Text style={s.confidenceLine} numberOfLines={1}>
-            {confidenceLine}
-          </Text>
-        ) : null}
-        {explanationLine ? (
-          <Text style={s.explanationLine} numberOfLines={2}>
-            {explanationLine}
-          </Text>
-        ) : null}
-
-        {readinessWarning ? (
-          <View style={s.warningStrip}>
-            <View style={s.warningHeader}>
-              <Ionicons name="warning-outline" size={11} color={TACTICAL.amber} />
-              <Text style={s.warningTitle}>Loadout not ready</Text>
-            </View>
-            {readinessReason ? (
-              <Text style={s.warningReason} numberOfLines={1}>
-                {readinessReason}
-              </Text>
-            ) : null}
+        <View style={s.remoteDecisionRow}>
+          <View style={[s.remoteDecisionBadge, { borderColor: remotenessColor + '40', backgroundColor: remotenessColor + '0C' }]}>
+            <Ionicons name="radio-outline" size={9} color={remotenessColor} />
+            <Text style={[s.remoteDecisionText, { color: remotenessColor }]}>
+              Remote: {remotenessRating}
+            </Text>
           </View>
-        ) : null}
-
-        {/* Chip Row */}
-        <View style={s.chipRow}>
-          <ECSChip
-            label={route.terrainType.toUpperCase()}
-            icon="trail-sign-outline"
-            compact
-            style={[s.chipTone, { borderColor: terrainColor + '40', backgroundColor: terrainColor + '0C' }]}
-            textStyle={{ color: terrainColor }}
-          />
-          <ECSChip
-            label={diffLabel}
-            icon="speedometer-outline"
-            compact
-            style={[s.chipTone, { borderColor: diffColor + '40', backgroundColor: diffColor + '0C' }]}
-            textStyle={{ color: diffColor }}
-          />
-          <ECSChip
-            label={remotenessLabel}
-            icon="radio-outline"
-            compact
-            style={[s.chipTone, { borderColor: remotenessColor + '40', backgroundColor: remotenessColor + '0C' }]}
-            textStyle={{ color: remotenessColor }}
-          />
+          <View style={s.remoteDecisionBadge}>
+            <Ionicons name="pulse-outline" size={9} color={TACTICAL.amber} />
+            <Text style={s.remoteDecisionText}>
+              Confidence: {routeConfidencePercent}%
+            </Text>
+          </View>
         </View>
 
-        {/* Action Row */}
-        <ECSCardFooter style={s.actionRow}>
-        <ECSActionRow compact>
-          <ECSButton
-            label={primaryActionLabel === 'PREVIEW ROUTE' ? 'Preview Route' : 'View Details'}
-            icon="chevron-forward"
-            variant="secondary"
-            size="compact"
-            onPress={(event: any) => {
-              event?.stopPropagation?.();
-              hapticMicro();
-              onSelect();
-            }}
-            grow
-          />
+        <ExploreReadinessSummary
+          assessment={readinessAssessment}
+          summary={readinessSummary}
+          compact={compactPreview}
+        />
 
-          {onNavigate ? (
-            <ECSButton
-              label="Open in Navigate"
-              icon="navigate-outline"
-              variant="tertiary"
-              size="compact"
-              onPress={(event: any) => {
-                event.stopPropagation?.();
-                hapticMicro();
-                onNavigate();
-              }}
-            />
-          ) : null}
-        </ECSActionRow>
-        </ECSCardFooter>
+        {!compactPreview ? (
+          <>
+            <Text style={[s.cardSummary, isTabletCard && s.cardSummaryTablet]} numberOfLines={isTabletCard ? 3 : 2}>{summaryText}</Text>
+            <RouteConfidenceSummaryRow result={routeConfidence} />
+            {explanationLine ? (
+              <Text style={s.explanationLine} numberOfLines={2}>
+                {explanationLine}
+              </Text>
+            ) : null}
+
+            {readinessWarning ? (
+              <View style={s.warningStrip}>
+                <View style={s.warningHeader}>
+                  <Ionicons name="warning-outline" size={11} color={TACTICAL.amber} />
+                  <Text style={s.warningTitle}>Loadout not ready</Text>
+                </View>
+                {readinessReason ? (
+                  <Text style={s.warningReason} numberOfLines={1}>
+                    {readinessReason}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+
+            {/* Chip Row */}
+            <View style={s.chipRow}>
+              <ECSChip
+                label={route.terrainType.toUpperCase()}
+                icon="trail-sign-outline"
+                compact
+                style={[s.chipTone, { borderColor: terrainColor + '40', backgroundColor: terrainColor + '0C' }]}
+                textStyle={{ color: terrainColor }}
+              />
+              <ECSChip
+                label={diffLabel}
+                icon="speedometer-outline"
+                compact
+                style={[s.chipTone, { borderColor: diffColor + '40', backgroundColor: diffColor + '0C' }]}
+                textStyle={{ color: diffColor }}
+              />
+              <ECSChip
+                label={remotenessLabel}
+                icon="radio-outline"
+                compact
+                style={[s.chipTone, { borderColor: remotenessColor + '40', backgroundColor: remotenessColor + '0C' }]}
+                textStyle={{ color: remotenessColor }}
+              />
+            </View>
+
+            {/* Action Row */}
+            <ECSCardFooter style={s.actionRow}>
+              <ECSActionRow compact>
+                <ECSButton
+                  label={onNavigate ? 'Preview Route'.replace(' ', '\n') : 'View Details'.replace(' ', '\n')}
+                  icon="chevron-forward"
+                  variant="secondary"
+                  size="compact"
+                  numberOfLines={2}
+                  textStyle={s.routeActionButtonText}
+                  onPress={(event: any) => {
+                    event?.stopPropagation?.();
+                    hapticMicro();
+                    onSelect();
+                  }}
+                  grow
+                />
+
+                {onNavigate ? (
+                  <ECSButton
+                    label={'Open in Navigate'.replace(' in ', ' in\n')}
+                    icon="navigate-outline"
+                    variant="tertiary"
+                    size="compact"
+                    numberOfLines={2}
+                    style={s.routeActionButton}
+                    textStyle={s.routeActionButtonText}
+                    onPress={(event: any) => {
+                      event.stopPropagation?.();
+                      hapticMicro();
+                      onNavigate();
+                    }}
+                  />
+                ) : null}
+              </ECSActionRow>
+            </ECSCardFooter>
+          </>
+        ) : null}
       </View>
       </ECSCard>
     </TouchableOpacity>
@@ -391,6 +451,9 @@ const s = StyleSheet.create({
     marginBottom: 10,
     padding: 0,
   },
+  cardCompact: {
+    marginBottom: 4,
+  },
   cardTablet: {
     marginBottom: 12,
   },
@@ -399,6 +462,7 @@ const s = StyleSheet.create({
   accentTop: { flex: 1 },
   accentBot: { flex: 1 },
   cardBody: { flex: 1, padding: 12, gap: 7 },
+  cardBodyCompact: { padding: 10, gap: 6 },
   cardBodyTablet: { padding: 14, gap: 8 },
 
   badgeRowWrap: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
@@ -436,6 +500,10 @@ const s = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 10,
   },
+  heroRowCompact: {
+    alignItems: 'center',
+    gap: 8,
+  },
   heroCopy: {
     flex: 1,
     gap: 7,
@@ -451,6 +519,11 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
+  },
+  thumbnailFrameCompact: {
+    width: 58,
+    height: 44,
+    borderRadius: 8,
   },
   thumbnailImage: {
     width: '100%',
@@ -504,14 +577,6 @@ const s = StyleSheet.create({
   cardSummaryTablet: {
     lineHeight: 16,
   },
-  confidenceLine: {
-    ...ECS_TEXT.helper,
-    fontSize: 10,
-    fontWeight: '700',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.3,
-    textTransform: 'uppercase',
-  },
   explanationLine: {
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
@@ -526,6 +591,29 @@ const s = StyleSheet.create({
   statItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   statValue: { ...ECS_TEXT.statValue, fontSize: 12, color: TACTICAL.amber, letterSpacing: -0.1 },
   statUnit: { ...ECS_TEXT.statLabel, fontSize: 7 },
+  remoteDecisionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  remoteDecisionBadge: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  remoteDecisionText: {
+    ...ECS_TEXT.chip,
+    fontSize: 7,
+    color: TACTICAL.amber,
+  },
   warningStrip: {
     gap: 4,
     paddingHorizontal: 9,
@@ -556,6 +644,17 @@ const s = StyleSheet.create({
 
   actionRow: {
     paddingTop: 4,
+  },
+  routeActionButton: {
+    flex: 1,
+    minWidth: 0,
+  },
+  routeActionButtonText: {
+    lineHeight: 10,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    flexShrink: 1,
   },
 });
 

@@ -1,9 +1,9 @@
 // ============================================================
 // DISTANCE RADIUS FILTER — Discover Tab Distance Control
 // ============================================================
-// Compact segmented filter for selecting maximum expedition
-// distance from the user. ECS tactical styling with gold
-// accents and dark panel background.
+// Compact Explore filters panel. Distance radius stays as the
+// primary scope, and refinement chips narrow trails that already
+// passed the current radius and eligibility filters.
 //
 // Phase 4.5: Updated options (25|50|100|250|500), default 100mi,
 // added loading indicator and GPS accuracy hint.
@@ -22,6 +22,10 @@ import {
   DISTANCE_RADIUS_OPTIONS,
   type DistanceRadius,
 } from '../../lib/discoverEngine';
+import {
+  EXPLORE_REFINEMENT_OPTIONS,
+  type ExploreRefinementFilter,
+} from '../../lib/explore/exploreRefinementFilter';
 
 interface DistanceRadiusFilterProps {
   selectedRadius: DistanceRadius | null;
@@ -32,6 +36,11 @@ interface DistanceRadiusFilterProps {
   totalCount: number;
   /** Filtered count after radius */
   filteredCount: number;
+  /** Filtered count after radius plus selected refinement */
+  refinedCount: number;
+  selectedRefinement: ExploreRefinementFilter | null;
+  refinementCounts: Record<ExploreRefinementFilter, number>;
+  onChangeRefinement: (refinement: ExploreRefinementFilter | null) => void;
   /** Whether results are currently loading/refreshing */
   isLoading?: boolean;
 }
@@ -42,6 +51,10 @@ export default function DistanceRadiusFilter({
   hasGPSFix,
   totalCount,
   filteredCount,
+  refinedCount,
+  selectedRefinement,
+  refinementCounts,
+  onChangeRefinement,
   isLoading = false,
 }: DistanceRadiusFilterProps) {
   const { width } = useWindowDimensions();
@@ -49,17 +62,19 @@ export default function DistanceRadiusFilter({
 
   return (
     <ECSSliderField
-      label={compact ? 'Radius' : 'Distance Radius'}
+      label="Filters"
       helper={
-        filteredCount < totalCount
-          ? selectedRadius == null
-            ? `Showing ${filteredCount} of ${totalCount} trails across the current range`
-            : `Showing ${filteredCount} of ${totalCount} trails within ${selectedRadius} mi`
-          : hasGPSFix
-            ? 'Using your live location for radius matching.'
-            : 'Using approximate location until GPS improves.'
+        selectedRefinement
+          ? `Showing ${refinedCount} of ${filteredCount} in-range trails after refinement`
+          : filteredCount < totalCount
+            ? selectedRadius == null
+              ? `Showing ${filteredCount} of ${totalCount} trails across the current range`
+              : `Showing ${filteredCount} of ${totalCount} trails within ${selectedRadius} mi`
+            : hasGPSFix
+              ? 'Using your live location for radius matching.'
+              : 'Using approximate location until GPS improves.'
       }
-      valueLabel={selectedRadius == null ? 'ALL RANGE' : `${selectedRadius} MI`}
+      valueLabel={selectedRefinement ? `${refinedCount} MATCHES` : selectedRadius == null ? 'ALL RANGE' : `${selectedRadius} MI`}
       style={s.container}
     >
       {/* Header row */}
@@ -82,11 +97,12 @@ export default function DistanceRadiusFilter({
           {hasGPSFix && (
             <ECSBadge label="GPS" tone="live" compact />
           )}
-          <ECSBadge label={`${filteredCount}/${totalCount}`} tone="selected" compact />
+          <ECSBadge label={`${selectedRefinement ? refinedCount : filteredCount}/${totalCount}`} tone="selected" compact />
         </View>
       </View>
 
       {/* Segmented control */}
+      <Text style={s.filterGroupLabel}>RANGE</Text>
       <View style={[s.segmentedRow, compact && s.segmentedRowCompact]}>
         {DISTANCE_RADIUS_OPTIONS.map((radius) => {
           const isActive = radius === selectedRadius;
@@ -125,6 +141,52 @@ export default function DistanceRadiusFilter({
         })}
       </View>
 
+      <Text style={s.filterGroupLabel}>REFINE</Text>
+      <View style={[s.refinementRow, compact && s.segmentedRowCompact]}>
+        {EXPLORE_REFINEMENT_OPTIONS.map((option) => {
+          const isActive = option.key === selectedRefinement;
+          const matchCount = refinementCounts[option.key] ?? 0;
+          const disabled = !isActive && matchCount === 0;
+          return (
+            <TouchableOpacity
+              key={option.key}
+              style={[
+                s.refinementChip,
+                compact && s.refinementChipCompact,
+                isActive && s.segmentActive,
+                disabled && s.refinementChipDisabled,
+              ]}
+              activeOpacity={disabled ? 1 : 0.75}
+              disabled={disabled}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isActive, disabled }}
+              onPress={() => {
+                onChangeRefinement(isActive ? null : option.key);
+              }}
+            >
+              <Text
+                style={[
+                  s.refinementChipText,
+                  isActive && s.segmentTextActive,
+                  disabled && s.refinementChipTextDisabled,
+                ]}
+              >
+                {option.label}
+              </Text>
+              <Text
+                style={[
+                  s.refinementChipCount,
+                  isActive && s.segmentUnitActive,
+                  disabled && s.refinementChipTextDisabled,
+                ]}
+              >
+                {matchCount}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
     </ECSSliderField>
   );
 }
@@ -138,10 +200,10 @@ const s = StyleSheet.create({
     borderRadius: ECS.radius,
     borderWidth: 1,
     borderColor: ECS.stroke,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    marginBottom: 10,
-    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    marginBottom: 6,
+    gap: 5,
   },
 
   // ── Header ────────────────────────────────────────────
@@ -156,7 +218,7 @@ const s = StyleSheet.create({
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
   },
   headerLabel: {
     fontSize: 8,
@@ -167,7 +229,7 @@ const s = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
   headerRightCompact: {
     gap: 4,
@@ -230,10 +292,17 @@ const s = StyleSheet.create({
   segmentedRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 5,
+    gap: 4,
   },
   segmentedRowCompact: {
     gap: 4,
+  },
+  filterGroupLabel: {
+    fontSize: 7,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.6,
+    marginTop: 0,
   },
   segment: {
     minWidth: '18%',
@@ -242,14 +311,14 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    paddingVertical: 7,
+    paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
   },
   segmentCompact: {
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   segmentActive: {
     borderColor: TACTICAL.amber + '50',
@@ -278,6 +347,50 @@ const s = StyleSheet.create({
   },
 
   // ── Filter Status ─────────────────────────────────────
+  refinementRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  refinementChip: {
+    minWidth: '46%',
+    flexGrow: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  refinementChipCompact: {
+    minWidth: '48%',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+  refinementChipDisabled: {
+    opacity: 0.45,
+  },
+  refinementChipText: {
+    flexShrink: 1,
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+  },
+  refinementChipCount: {
+    fontSize: 9,
+    fontWeight: '800',
+    fontFamily: 'Courier',
+    color: TACTICAL.textMuted,
+    opacity: 0.75,
+  },
+  refinementChipTextDisabled: {
+    color: TACTICAL.textMuted,
+    opacity: 0.55,
+  },
   filterStatus: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -4,15 +4,14 @@
 // Compact, non-scrolling filter surface for Day Trips,
 // Weekend Trips, Expeditions, and Remote Routes.
 //
-// Includes explicit Hidden Gems vs Popular Trails emphasis
-// control without adding extra vertical bulk.
+// Keeps Explore focused on the core trip-type filters only.
 // ============================================================
 
 import React from 'react';
 import { View, StyleSheet, useWindowDimensions } from 'react-native';
-import { GOLD_RAIL, ECS } from '../../lib/theme';
+import { ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
-import { ECSChip, ECSSegmentedControl } from '../ECSChip';
+import { ECSChip } from '../ECSChip';
 import {
   DISCOVERY_TABS,
   type DiscoveryTabId,
@@ -23,12 +22,8 @@ interface DiscoveryCategoryTabsProps {
   activeTab: DiscoveryTabId;
   onChangeTab: (tab: DiscoveryTabId) => void;
   categories: ExpandedDiscoverCategories;
-  showLesserKnown: boolean;
-  onToggleLesserKnown: (value: boolean) => void;
   /** Optional ECS suggestion counts per category */
   ecsSuggestionCounts?: Record<string, number>;
-  /** Optional surfaced Hidden Gems count for the current active filter/radius. */
-  hiddenGemBadgeCount?: number | null;
 }
 
 const FILTER_LABELS: Record<DiscoveryTabId, string> = {
@@ -42,10 +37,7 @@ export default function DiscoveryCategoryTabs({
   activeTab,
   onChangeTab,
   categories,
-  showLesserKnown,
-  onToggleLesserKnown,
   ecsSuggestionCounts,
-  hiddenGemBadgeCount,
 }: DiscoveryCategoryTabsProps) {
   const { width } = useWindowDimensions();
   const compact = width < 380;
@@ -63,16 +55,6 @@ export default function DiscoveryCategoryTabs({
 
   const getECSSuggestionCount = (tabId: DiscoveryTabId): number => {
     return ecsSuggestionCounts?.[tabId] ?? 0;
-  };
-
-  const hiddenGemCount =
-    hiddenGemBadgeCount ?? categories.all.filter((route) => route.hiddenGem).length;
-
-  const handleSelectMode = (nextValue: boolean) => {
-    if (nextValue !== showLesserKnown) {
-      hapticMicro();
-      onToggleLesserKnown(nextValue);
-    }
   };
 
   return (
@@ -102,28 +84,6 @@ export default function DiscoveryCategoryTabs({
           );
         })}
       </View>
-
-      <View style={s.goldDivider} />
-
-      <View style={s.modeRow}>
-        <ECSSegmentedControl
-          options={[
-            {
-              key: 'hidden',
-              label: 'Hidden Gems',
-              icon: 'diamond-outline',
-              badge: hiddenGemCount > 0 ? hiddenGemCount : null,
-            },
-            {
-              key: 'popular',
-              label: 'Popular Trails',
-              icon: 'flag-outline',
-            },
-          ]}
-          value={showLesserKnown ? 'hidden' : 'popular'}
-          onChange={(next) => handleSelectMode(next === 'hidden')}
-        />
-      </View>
     </View>
   );
 }
@@ -152,14 +112,5 @@ const s = StyleSheet.create({
   },
   tabHalf: {
     width: '48.5%',
-  },
-  goldDivider: {
-    height: GOLD_RAIL.subsectionWidth,
-    backgroundColor: GOLD_RAIL.subsection,
-    marginHorizontal: 10,
-  },
-  modeRow: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
   },
 });
