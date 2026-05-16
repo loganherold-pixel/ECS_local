@@ -432,3 +432,21 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/issue-intelligence/deno.json"
 entrypoint = "./functions/issue-intelligence/index.ts"
+
+[functions.campgrounds-search]
+enabled = true
+# Mobile clients call this public map endpoint with the project publishable key.
+# Provider API keys and the service-role key stay server-side in Edge Function
+# environment variables.
+verify_jwt = false
+import_map = "./functions/campgrounds-search/deno.json"
+entrypoint = "./functions/campgrounds-search/index.ts"
+
+[functions.dispersed-camping-eligibility]
+enabled = true
+# Mobile clients call this public map endpoint with the project publishable key.
+# PAD-US is queried only server-side; no provider secrets are exposed to React
+# Native.
+verify_jwt = false
+import_map = "./functions/dispersed-camping-eligibility/deno.json"
+entrypoint = "./functions/dispersed-camping-eligibility/index.ts"
