@@ -23,6 +23,7 @@ import ECSModal from '../ECSModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useViewerSettings } from '../../context/ViewerSettingsContext';
 import type { ViewerMode, ViewerThemeMode, ViewerGridDensity } from '../../lib/viewerSettingsStore';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 interface ViewerSettingsPanelProps {
   visible: boolean;
@@ -80,16 +81,26 @@ function OptionCard({
 
 // ── Applied Indicator ─────────────────────────────────────
 function AppliedIndicator({ visible }: { visible: boolean }) {
-  const [fadeAnim] = useState(new Animated.Value(0));
+  const fadeAnim = useStableAnimatedValue(0);
 
   useEffect(() => {
-    if (visible) {
-      Animated.sequence([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
-        Animated.delay(1800),
-        Animated.timing(fadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-      ]).start();
+    fadeAnim.stopAnimation();
+    if (!visible) {
+      fadeAnim.setValue(0);
+      return;
     }
+
+    const animation = Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(fadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]);
+    animation.start();
+
+    return () => {
+      animation.stop();
+      fadeAnim.stopAnimation();
+    };
   }, [visible, fadeAnim]);
 
   if (!visible) return null;

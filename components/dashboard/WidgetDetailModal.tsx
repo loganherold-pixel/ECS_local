@@ -3,6 +3,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import TacticalPopupShell from '../TacticalPopupShell';
 import { TACTICAL } from '../../lib/theme';
@@ -15,6 +16,9 @@ import { getDashboardWidgetReadiness, type DashboardWidgetReadinessStatus } from
 import type { LoadItem, RiskScore, Trip, UserSettings, Waypoint } from '../../lib/types';
 import { WidgetDetailLeadCard, WidgetDetailStateCard } from './WidgetDetailChrome';
 import { DASHBOARD_WIDGET_GRAMMAR } from './widgetGrammar';
+import { getShellBottomClearance, getShellHeaderAnchorTop } from '../../lib/shellLayout';
+
+let lastWidgetDetailBoundsLogKey: string | null = null;
 
 interface WidgetDetailModalProps {
   visible: boolean;
@@ -60,10 +64,9 @@ interface WidgetDetailModalProps {
   onClose: () => void;
   onReplace: () => void;
   onRemove: () => void;
-  onOpenPowerConnections?: () => void;
-  onOpenTelemetrySetup?: () => void;
   onOpenNavigate?: () => void;
   onOpenFleet?: () => void;
+  onOpenCommandBrief?: () => void;
   onRemotenessNavigateToTarget?: (target: 'town' | 'fuel' | 'paved_road') => void;
 }
 
@@ -75,10 +78,9 @@ export default function WidgetDetailModal({
   onClose,
   onReplace,
   onRemove,
-  onOpenPowerConnections,
-  onOpenTelemetrySetup,
   onOpenNavigate,
   onOpenFleet,
+  onOpenCommandBrief,
   onRemotenessNavigateToTarget,
 }: WidgetDetailModalProps) {
   const widgetType = slot?.widgetType ?? null;
@@ -86,51 +88,39 @@ export default function WidgetDetailModal({
   const widgetDef = widgetType ? catalog.find(widget => widget.type === widgetType) ?? null : null;
   const registryEntry = widgetType ? getWidgetEntry(widgetType) ?? null : null;
   const readiness = getDashboardWidgetReadiness(widgetType, { widgetData, renderOptions });
-  const powerState = widgetData.powerAuthority;
-  const powerConnected = Boolean(
-    powerState?.isConnected ||
-    powerState?.hasPowerData ||
-    powerState?.deviceLabel ||
-    powerState?.providerLabel,
-  );
-  const powerNeedsReconnect =
-    powerState?.freshness === 'disconnected' ||
-    powerState?.freshness === 'last_known' ||
-    powerState?.isReconnecting;
-  const actionModel =
-    widgetType === 'ecs-power'
-      ? {
-          primaryLabel: powerConnected
-            ? (powerNeedsReconnect ? 'Reconnect' : 'Manage Connection')
-            : 'Connect',
-          primaryIcon: powerConnected
-            ? (powerNeedsReconnect ? 'refresh-outline' : 'flash-outline')
-            : 'flash-outline',
-          primaryTone: 'primary' as const,
-          onPrimary: onOpenPowerConnections ?? onReplace,
-        }
-      : {
-          primaryLabel: 'Replace Widget',
-          primaryIcon: 'swap-horizontal-outline' as const,
-          primaryTone: 'neutral' as const,
-          onPrimary: onReplace,
-        };
   const readinessActionHandler =
-    readiness?.actionKey === 'open_power_connections'
-      ? onOpenPowerConnections
-      : readiness?.actionKey === 'open_telemetry_setup'
-        ? onOpenTelemetrySetup
-        : readiness?.actionKey === 'open_navigate'
-          ? onOpenNavigate
-          : readiness?.actionKey === 'open_fleet'
-            ? onOpenFleet
-            : undefined;
+    readiness?.actionKey === 'open_navigate'
+      ? onOpenNavigate
+      : readiness?.actionKey === 'open_fleet'
+        ? onOpenFleet
+        : readiness?.actionKey === 'open_command_brief'
+          ? onOpenCommandBrief
+          : undefined;
   const handleReadinessAction = React.useCallback(() => {
     if (!readinessActionHandler) return;
     onClose();
     readinessActionHandler();
   }, [onClose, readinessActionHandler]);
   const readinessAccent = getReadinessAccent(readiness?.status);
+  const insets = useSafeAreaInsets();
+  const widgetDetailTopClearance = getShellHeaderAnchorTop(insets.top, {
+    webTop: 64,
+    nativeOffset: 48,
+    minTop: 58,
+  });
+  const widgetDetailBottomClearance = getShellBottomClearance(insets.bottom, 2);
+  const boundsLogKey = [
+    widgetType ?? 'none',
+    widgetDetailTopClearance,
+    widgetDetailBottomClearance,
+  ].join(':');
+
+  React.useEffect(() => {
+    if (__DEV__ && visible && lastWidgetDetailBoundsLogKey !== boundsLogKey) {
+      lastWidgetDetailBoundsLogKey = boundsLogKey;
+      console.log('[WIDGET_DETAIL] bounds_applied fullHeight=true');
+    }
+  }, [boundsLogKey, visible]);
 
   if (!visible || !slot || !widgetType || !widgetDef) return null;
 
@@ -148,16 +138,18 @@ export default function WidgetDetailModal({
       title={widgetDef.name}
       overlayClass="editor"
       maxWidth={940}
-      maxHeightFraction={0.9}
-      minHeightFraction={0.78}
+      maxHeightFraction={1}
+      minHeightFraction={1}
+      topClearanceOverride={widgetDetailTopClearance}
+      bottomClearanceOverride={widgetDetailBottomClearance}
       footer={
         <ECSActionRow>
           <ECSButton
-            label={actionModel.primaryLabel}
-            icon={actionModel.primaryIcon as any}
-            variant={actionModel.primaryTone === 'primary' ? 'primary' : 'secondary'}
+            label="Replace Widget"
+            icon="swap-horizontal-outline"
+            variant="secondary"
             size="medium"
-            onPress={actionModel.onPrimary}
+            onPress={onReplace}
             grow
           />
           <ECSButton
@@ -213,6 +205,8 @@ export default function WidgetDetailModal({
       <View style={styles.detailContent}>
         {renderWidgetDetail(widgetType, widgetData, {
           ...(renderOptions ?? {}),
+          onCloseDetail: onClose,
+          onOpenCommandBrief,
           onRemotenessNavigateToTarget,
         })}
       </View>

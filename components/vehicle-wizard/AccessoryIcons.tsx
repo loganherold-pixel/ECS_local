@@ -47,10 +47,6 @@ const CATEGORY_ICON_MAP: Record<string, { mci: string; fallback: string }> = {
     mci: 'truck-flatbed',          // Truck cab with rack/flatbed roofline
     fallback: 'barbell-outline',
   },
-  cab_rack_acc: {
-    mci: 'car-light-high',         // Light bar / awning accessory symbol
-    fallback: 'layers-outline',
-  },
   bed_drawer: {
     mci: 'archive-arrow-down-outline', // Drawer / sliding tray
     fallback: 'server-outline',
@@ -66,10 +62,6 @@ const CATEGORY_ICON_MAP: Record<string, { mci: string; fallback: string }> = {
   interior_storage: {
     mci: 'package-variant-closed', // Storage bins / crate
     fallback: 'file-tray-stacked-outline',
-  },
-  fridge_slide: {
-    mci: 'fridge-outline',         // Fridge
-    fallback: 'snow-outline',
   },
   recovery_mount: {
     mci: 'hook',                   // Recovery hook / tow point

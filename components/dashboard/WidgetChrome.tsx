@@ -1,10 +1,9 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { TACTICAL } from '../../lib/theme';
 import { ECSWidgetFallback } from '../ECSStateMessage';
 import { ECSWidgetSkeleton } from '../ECSLoading';
-import { ECSCard } from '../ECSSurface';
 import { ECSCardTitle, ECSHelperText, ECSSectionTitle, ECSStatLabel, ECSStatValue } from '../ECSText';
 import { ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import { ECSBadge } from '../ECSStatus';
@@ -49,6 +48,35 @@ interface WidgetCardShellProps {
   } | null;
   footer?: React.ReactNode;
   children: React.ReactNode;
+}
+
+interface ECSInstrumentPanelProps {
+  title?: string;
+  icon?: React.ReactNode;
+  subtitle?: string;
+  statusPill?: {
+    label: string;
+    tone?: WidgetTone;
+  } | null;
+  badge?: {
+    label: string;
+    tone?: WidgetTone;
+  } | null;
+  footer?: React.ReactNode;
+  header?: React.ReactNode;
+  background?: React.ReactNode;
+  children: React.ReactNode;
+  variant?: 'support' | 'command';
+  sizeVariant?: 'compact' | 'medium' | 'wide' | 'dominant';
+  titleAlign?: 'left' | 'center' | 'right';
+  glowIntensity?: 'none' | 'low' | 'medium' | 'high';
+  innerTexture?: boolean;
+  bottomStrip?: React.ReactNode;
+  selected?: boolean;
+  active?: boolean;
+  showActiveEdge?: boolean;
+  style?: StyleProp<ViewStyle>;
+  contentStyle?: StyleProp<ViewStyle>;
 }
 
 interface WidgetPrimaryValueProps {
@@ -164,9 +192,112 @@ export function getWidgetStateBadge(
   };
 }
 
+export function ECSInstrumentPanel({
+  title,
+  icon,
+  subtitle,
+  statusPill,
+  badge,
+  footer,
+  header,
+  background,
+  children,
+  variant = 'support',
+  sizeVariant,
+  titleAlign = 'left',
+  glowIntensity,
+  innerTexture = true,
+  bottomStrip,
+  selected = false,
+  active = false,
+  showActiveEdge = true,
+  style,
+  contentStyle,
+}: ECSInstrumentPanelProps) {
+  const resolvedSizeVariant = sizeVariant ?? (variant === 'command' ? 'dominant' : 'medium');
+  const resolvedGlowIntensity = glowIntensity ?? (active || selected ? 'medium' : 'low');
+  const resolvedStatusPill = statusPill ?? badge ?? null;
+  const hasHeader = Boolean(header || title || subtitle || icon || resolvedStatusPill);
+  return (
+    <View
+      style={[
+        styles.instrumentPanel,
+        variant === 'command' && styles.instrumentPanelCommand,
+        resolvedSizeVariant === 'compact' && styles.instrumentPanelCompact,
+        resolvedSizeVariant === 'wide' && styles.instrumentPanelWide,
+        resolvedSizeVariant === 'dominant' && styles.instrumentPanelDominant,
+        resolvedGlowIntensity === 'none' && styles.instrumentGlowNone,
+        resolvedGlowIntensity === 'medium' && styles.instrumentGlowMedium,
+        resolvedGlowIntensity === 'high' && styles.instrumentGlowHigh,
+        selected && styles.instrumentPanelSelected,
+        active && styles.instrumentPanelActive,
+        style,
+      ]}
+    >
+      {background ? <View pointerEvents="none" style={styles.instrumentBackground}>{background}</View> : null}
+      {innerTexture ? (
+        <View pointerEvents="none" style={styles.instrumentTopoLayer}>
+          <View style={[styles.instrumentTopoLine, styles.instrumentTopoLineOne]} />
+          <View style={[styles.instrumentTopoLine, styles.instrumentTopoLineTwo]} />
+          <View style={[styles.instrumentTopoLine, styles.instrumentTopoLineThree]} />
+          <View style={[styles.instrumentTopoLine, styles.instrumentTopoLineFour]} />
+        </View>
+      ) : null}
+      <View pointerEvents="none" style={styles.instrumentInnerStroke} />
+      {showActiveEdge && (active || selected) ? <View pointerEvents="none" style={styles.instrumentActiveEdge} /> : null}
+      <View style={[styles.instrumentContent, contentStyle]}>
+        {hasHeader ? (
+          <View style={styles.instrumentHeader}>
+            {header ?? (
+              <>
+                <View style={[
+                  styles.instrumentTitleCluster,
+                  titleAlign === 'center' && styles.instrumentTitleClusterCenter,
+                  titleAlign === 'right' && styles.instrumentTitleClusterRight,
+                ]}>
+                  {icon ? <View style={styles.instrumentIconSlot}>{icon}</View> : null}
+                  <View style={[
+                    styles.instrumentTitleTextWrap,
+                    titleAlign === 'center' && styles.instrumentTitleTextCenter,
+                    titleAlign === 'right' && styles.instrumentTitleTextRight,
+                  ]}>
+                    {title ? (
+                      <Text style={[
+                        styles.instrumentTitle,
+                        titleAlign === 'center' && styles.instrumentTextCenter,
+                        titleAlign === 'right' && styles.instrumentTextRight,
+                      ]} numberOfLines={1}>
+                        {title}
+                      </Text>
+                    ) : null}
+                    {subtitle ? (
+                      <Text style={[
+                        styles.instrumentSubtitle,
+                        titleAlign === 'center' && styles.instrumentTextCenter,
+                        titleAlign === 'right' && styles.instrumentTextRight,
+                      ]} numberOfLines={1}>
+                        {subtitle}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+                {resolvedStatusPill ? (
+                  <WidgetStatusBadge label={resolvedStatusPill.label} tone={resolvedStatusPill.tone} />
+                ) : null}
+              </>
+            )}
+          </View>
+        ) : null}
+        <View style={styles.instrumentBody}>{children}</View>
+        {bottomStrip ?? footer ? <View style={styles.instrumentFooter}>{bottomStrip ?? footer}</View> : null}
+      </View>
+    </View>
+  );
+}
+
 export function WidgetCardShell({ badge, footer, children }: WidgetCardShellProps) {
   return (
-    <ECSCard variant="compact" style={styles.cardSurface}>
+    <ECSInstrumentPanel style={styles.cardSurface} glowIntensity={badge?.tone === 'live' ? 'medium' : 'low'}>
       <View style={styles.shell}>
         <View style={styles.headerZone}>
           {badge ? <WidgetStatusBadge label={badge.label} tone={badge.tone} /> : <View style={styles.badgePlaceholder} />}
@@ -174,7 +305,7 @@ export function WidgetCardShell({ badge, footer, children }: WidgetCardShellProp
         <View style={styles.main}>{children}</View>
         <View style={styles.footer}>{footer ?? <View style={styles.footerPlaceholder} />}</View>
       </View>
-    </ECSCard>
+    </ECSInstrumentPanel>
   );
 }
 
@@ -297,6 +428,193 @@ export function WidgetStateMessage({ state }: { state: WidgetStateDescriptor }) 
 const styles = StyleSheet.create({
   cardSurface: {
     flex: 1,
+  },
+  instrumentPanel: {
+    flex: 1,
+    minHeight: 0,
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(207, 151, 54, 0.54)',
+    backgroundColor: 'rgba(4, 7, 10, 0.94)',
+    shadowColor: '#D6A13A',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+  instrumentPanelCommand: {
+    borderRadius: 14,
+    borderColor: 'rgba(222, 174, 73, 0.72)',
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+  },
+  instrumentPanelCompact: {
+    borderRadius: 10,
+  },
+  instrumentPanelWide: {
+    borderRadius: 12,
+  },
+  instrumentPanelDominant: {
+    borderRadius: 14,
+    borderColor: 'rgba(222, 174, 73, 0.72)',
+  },
+  instrumentPanelSelected: {
+    borderColor: 'rgba(247, 201, 104, 0.82)',
+  },
+  instrumentPanelActive: {
+    borderColor: 'rgba(247, 201, 104, 0.88)',
+  },
+  instrumentGlowNone: {
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  instrumentGlowMedium: {
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  instrumentGlowHigh: {
+    shadowOpacity: 0.38,
+    shadowRadius: 22,
+    elevation: 6,
+  },
+  instrumentTopoLayer: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.42,
+  },
+  instrumentBackground: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+    borderRadius: 12,
+  },
+  instrumentTopoLine: {
+    position: 'absolute',
+    height: 1,
+    borderRadius: 999,
+    backgroundColor: 'rgba(207, 151, 54, 0.16)',
+  },
+  instrumentTopoLineOne: {
+    top: 18,
+    left: -22,
+    width: 170,
+    transform: [{ rotate: '-8deg' }],
+  },
+  instrumentTopoLineTwo: {
+    top: 50,
+    right: -36,
+    width: 220,
+    transform: [{ rotate: '7deg' }],
+  },
+  instrumentTopoLineThree: {
+    bottom: 32,
+    left: 18,
+    width: 190,
+    transform: [{ rotate: '5deg' }],
+  },
+  instrumentTopoLineFour: {
+    bottom: 14,
+    right: 10,
+    width: 130,
+    transform: [{ rotate: '-6deg' }],
+  },
+  instrumentInnerStroke: {
+    position: 'absolute',
+    top: 3,
+    right: 3,
+    bottom: 3,
+    left: 3,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(241, 199, 103, 0.13)',
+  },
+  instrumentActiveEdge: {
+    position: 'absolute',
+    top: 0,
+    right: 18,
+    left: 18,
+    height: 1,
+    backgroundColor: 'rgba(247, 201, 104, 0.72)',
+    shadowColor: '#F1C767',
+    shadowOpacity: 0.78,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  instrumentContent: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  instrumentHeader: {
+    minHeight: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  instrumentTitleCluster: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  instrumentTitleClusterCenter: {
+    justifyContent: 'center',
+  },
+  instrumentTitleClusterRight: {
+    justifyContent: 'flex-end',
+  },
+  instrumentIconSlot: {
+    width: 14,
+    minWidth: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  instrumentTitleTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  instrumentTitleTextCenter: {
+    flex: 0,
+    alignItems: 'center',
+  },
+  instrumentTitleTextRight: {
+    flex: 0,
+    alignItems: 'flex-end',
+  },
+  instrumentTextCenter: {
+    textAlign: 'center',
+  },
+  instrumentTextRight: {
+    textAlign: 'right',
+  },
+  instrumentTitle: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    includeFontPadding: false,
+    textTransform: 'uppercase',
+  },
+  instrumentSubtitle: {
+    color: 'rgba(230, 237, 243, 0.58)',
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    includeFontPadding: false,
+  },
+  instrumentBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  instrumentFooter: {
+    marginTop: 5,
   },
   shell: {
     flex: 1,

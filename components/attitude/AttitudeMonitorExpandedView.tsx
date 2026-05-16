@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -16,6 +16,11 @@ import {
   formatAttitudeDegrees,
   type AttitudeSensorState,
 } from '../../lib/attitudeMonitorModel';
+import {
+  syncAttitudeApproachingLimitTone,
+  useAttitudeMonitorSoundPreference,
+} from '../../lib/attitudeMonitorAudio';
+import { hapticMicro } from '../../lib/haptics';
 import { TACTICAL } from '../../lib/theme';
 import AttitudeMonitorSurface from './AttitudeMonitorSurface';
 
@@ -23,20 +28,31 @@ interface AttitudeMonitorExpandedViewProps {
   displayState: AttitudeMonitorDisplayState;
   sensorState: AttitudeSensorState;
   sensorStatus?: string;
+  vehicleId?: string | null;
   heroVehicle?: AttitudeMonitorVehicleVisualDescriptor;
+  rawRollDeg?: number | null;
+  rawPitchDeg?: number | null;
+  onCalibrate?: () => void;
+  onResetCalibration?: () => void;
+  calibrationActive?: boolean;
   style?: ViewStyle;
 }
 
 function getSourceLabel(sensorStatus?: string) {
   switch (sensorStatus) {
     case 'CALIBRATED':
-      return 'Calibrated sensor';
     case 'LIVE':
-      return 'Live sensor';
+      return 'Device Attitude Live';
+    case 'PAUSED':
+    case 'BACKGROUND':
+      return 'Device Attitude Recent';
+    case 'PERMISSION_DENIED':
+    case 'UNAVAILABLE':
+      return 'Unavailable';
     case 'AWAITING':
-      return 'Awaiting sensors';
+      return 'Unavailable';
     default:
-      return 'Sensor unavailable';
+      return 'Unavailable';
   }
 }
 
@@ -44,10 +60,17 @@ function AttitudeMonitorExpandedView({
   displayState,
   sensorState,
   sensorStatus,
+  vehicleId,
   heroVehicle,
+  rawRollDeg,
+  rawPitchDeg,
+  onCalibrate,
+  onResetCalibration,
+  calibrationActive = false,
   style,
 }: AttitudeMonitorExpandedViewProps) {
   const [layoutWidth, setLayoutWidth] = useState(0);
+  const { enabled: soundEnabled, toggle: toggleSoundEnabled } = useAttitudeMonitorSoundPreference();
 
   const width = layoutWidth || 680;
   const wide = width >= 940;
@@ -76,14 +99,29 @@ function AttitudeMonitorExpandedView({
         : 'rgba(255,255,255,0.06)';
   const topLabel = displayState.sourceChipLabel ?? (displayState.telemetryHealth === 'live' ? null : displayState.badgeLabel);
   const sensorSummary = useMemo(() => {
+    if (displayState.telemetryHealth === 'recent') {
+      return 'Device Attitude Recent';
+    }
     if (displayState.telemetryHealth === 'stale') {
-      return 'Holding last known posture';
+      return 'Stale';
     }
     return getSourceLabel(sensorStatus);
   }, [displayState.telemetryHealth, sensorStatus]);
   const sensorHealthBody = displayState.sourceStatusLine
     ? `${displayState.sourceStatusLine}. ${displayState.telemetryHint}`
     : `${sensorSummary}. ${displayState.telemetryHint}`;
+  const handleToggleSound = useCallback(() => {
+    void hapticMicro();
+    toggleSoundEnabled();
+  }, [toggleSoundEnabled]);
+
+  useEffect(() => {
+    syncAttitudeApproachingLimitTone({
+      severity: displayState.severity,
+      telemetryHealth: displayState.telemetryHealth,
+      soundEnabled,
+    });
+  }, [displayState.severity, displayState.telemetryHealth, soundEnabled]);
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width: nextWidth } = event.nativeEvent.layout;
@@ -96,6 +134,8 @@ function AttitudeMonitorExpandedView({
         <AttitudeMonitorSurface
           rollDeg={displayState.displayRollDeg}
           pitchDeg={displayState.displayPitchDeg}
+          rawRollDeg={rawRollDeg ?? displayState.rawRollDeg}
+          rawPitchDeg={rawPitchDeg ?? displayState.rawPitchDeg}
           live={displayState.liveMotion}
           tone={displayState.tone}
           postureLabel={displayState.postureLabel}
@@ -104,7 +144,13 @@ function AttitudeMonitorExpandedView({
           pitchColor={displayState.liveMotion ? displayState.pitchColor : TACTICAL.textMuted}
           topLabel={topLabel}
           variant={wide ? 'vehicle' : 'detail'}
+          vehicleId={vehicleId ?? heroVehicle?.attitudeVehicleId}
           heroVehicle={heroVehicle}
+          soundEnabled={soundEnabled}
+          onToggleSound={handleToggleSound}
+          onCalibrate={onCalibrate}
+          onResetCalibration={onResetCalibration}
+          calibrationActive={calibrationActive}
         />
       </View>
 

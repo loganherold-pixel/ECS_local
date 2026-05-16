@@ -23,7 +23,8 @@ import React, {
   useMemo,
   type ReactNode,
 } from 'react';
-import { useColorScheme } from 'react-native';
+import { Platform, useColorScheme } from 'react-native';
+import { LightSensor, type LightSensorMeasurement } from 'expo-sensors';
 
 import {
   TACTICAL,
@@ -130,7 +131,7 @@ interface ThemeContextType {
   drivingOverrides: DrivingOverrides;
   setAppearanceMode: (mode: AppearanceMode) => void;
   setAutoDrivingEnabled: (enabled: boolean) => void;
-  cycleMode: () => AppearanceMode;
+  cycleMode: (order?: readonly AppearanceMode[]) => AppearanceMode;
   feedSpeed: (speedMph: number) => 'activated' | 'deactivated' | null;
   dismissAutoDriving: () => void;
 }
@@ -143,13 +144,13 @@ const ThemeContext = createContext<ThemeContextType>({
   isDriving: false,
   isLight: false,
   isDark: true,
-  appearanceMode: 'auto',
+  appearanceMode: 'dark',
   autoDrivingEnabled: false,
   isAutoDrivingActive: false,
   drivingOverrides: DEFAULT_OVERRIDES,
   setAppearanceMode: () => {},
   setAutoDrivingEnabled: () => {},
-  cycleMode: () => 'auto',
+  cycleMode: () => 'dark',
   feedSpeed: () => null,
   dismissAutoDriving: () => {},
 });
@@ -158,6 +159,7 @@ export const useTheme = (): ThemeContextType => useContext(ThemeContext);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const deviceColorScheme = useColorScheme();
+  const fallbackDynamicTheme = deviceColorScheme === 'light' ? 'light' : 'dark';
 
   const [appearanceMode, setAppearanceModeState] = useState<AppearanceMode>(
     appearanceStore.mode
@@ -169,6 +171,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [autoDrivingActive, setAutoDrivingActive] = useState<boolean>(
     appearanceStore.isAutoDrivingActive
   );
+  const [dynamicTheme, setDynamicTheme] = useState<'dark' | 'light'>(fallbackDynamicTheme);
 
   // Listen for store changes (from speed detection)
   useEffect(() => {
@@ -209,12 +212,81 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setAutoDrivingActive(appearanceStore.isAutoDrivingActive);
   }, []);
 
-  const cycleMode = useCallback((): AppearanceMode => {
-    const next = appearanceStore.cycleMode();
+  const cycleMode = useCallback((order?: readonly AppearanceMode[]): AppearanceMode => {
+    const next = appearanceStore.cycleMode(order);
     setAppearanceModeState(next);
     setAutoDrivingActive(appearanceStore.isAutoDrivingActive);
     return next;
   }, []);
+
+  useEffect(() => {
+    setDynamicTheme((current) => (current === fallbackDynamicTheme ? current : fallbackDynamicTheme));
+  }, [fallbackDynamicTheme]);
+
+  useEffect(() => {
+    if (appearanceMode !== 'dynamic' || (autoDrivingActive && autoDrivingEnabled)) {
+      return;
+    }
+
+    let active = true;
+    let subscription: { remove: () => void } | null = null;
+    let smoothedLux = 0;
+    let initialized = false;
+    let resolvedTheme: 'dark' | 'light' = fallbackDynamicTheme;
+
+    const applyResolvedTheme = (nextTheme: 'dark' | 'light') => {
+      if (!active || nextTheme === resolvedTheme) return;
+      resolvedTheme = nextTheme;
+      setDynamicTheme((current) => (current === nextTheme ? current : nextTheme));
+    };
+
+    const applyIlluminance = (illuminance: number) => {
+      const safeLux = Number.isFinite(illuminance) ? Math.max(0, illuminance) : 0;
+      smoothedLux = initialized ? smoothedLux * 0.75 + safeLux * 0.25 : safeLux;
+      initialized = true;
+
+      if (smoothedLux >= 6000) {
+        applyResolvedTheme('light');
+        return;
+      }
+
+      if (smoothedLux <= 1500) {
+        applyResolvedTheme('dark');
+      }
+    };
+
+    void (async () => {
+      if (Platform.OS !== 'android') {
+        applyResolvedTheme(fallbackDynamicTheme);
+        return;
+      }
+
+      try {
+        const available = await LightSensor.isAvailableAsync();
+        if (!active || !available) {
+          applyResolvedTheme(fallbackDynamicTheme);
+          return;
+        }
+
+        LightSensor.setUpdateInterval(2000);
+        subscription = LightSensor.addListener(({ illuminance }: LightSensorMeasurement) => {
+          applyIlluminance(illuminance);
+        });
+      } catch {
+        applyResolvedTheme(fallbackDynamicTheme);
+      }
+    })();
+
+    return () => {
+      active = false;
+      subscription?.remove();
+    };
+  }, [
+    appearanceMode,
+    autoDrivingActive,
+    autoDrivingEnabled,
+    fallbackDynamicTheme,
+  ]);
 
   const feedSpeed = useCallback((speedMph: number) => {
     const result = appearanceStore.feedSpeed(speedMph);
@@ -233,8 +305,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // ── Resolve effective theme ─────────────────────────────
   const effectiveTheme = useMemo<EffectiveTheme>(() => {
+    if (appearanceMode === 'dynamic' && !(autoDrivingActive && autoDrivingEnabled)) {
+      return dynamicTheme;
+    }
     return appearanceStore.resolveEffectiveTheme(deviceColorScheme);
-  }, [appearanceMode, deviceColorScheme, autoDrivingActive]);
+  }, [appearanceMode, autoDrivingActive, autoDrivingEnabled, deviceColorScheme, dynamicTheme]);
 
   // ── Select palette + colors ─────────────────────────────
   const palette = useMemo<TacticalPalette>(() => {

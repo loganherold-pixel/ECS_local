@@ -14,7 +14,7 @@
  * - ECS dark command interface design
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import {
   Text,
   TouchableOpacity,
@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { useTheme } from '../../context/ThemeContext';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 interface ModeActivationBannerProps {
   visible: boolean;
@@ -39,8 +40,8 @@ export default function ModeActivationBanner({
   onDismiss,
 }: ModeActivationBannerProps) {
   const { palette } = useTheme();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.95)).current;
+  const fadeAnim = useStableAnimatedValue(0);
+  const scaleAnim = useStableAnimatedValue(0.95);
 
   useEffect(() => {
     if (visible) {

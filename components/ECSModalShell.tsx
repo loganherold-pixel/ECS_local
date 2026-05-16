@@ -17,11 +17,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSModal, { type OverlayTier } from './ECSModal';
-import { TACTICAL } from '../lib/theme';
+import ECSShellTexture from './ECSShellTexture';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import type { OverlayStackBehavior } from '../lib/overlayCoordinator';
 import { EASING, MOTION } from '../lib/motion';
+import { useTheme } from '../context/ThemeContext';
+import { ECS_POPUP_SURFACE_DARK } from '../lib/theme';
 
 export type ECSOverlayClass = 'workflow' | 'editor' | 'action' | 'dialog' | 'info' | 'support';
 
@@ -40,8 +42,8 @@ type OverlayPreset = {
 const OVERLAY_PRESETS: Record<ECSOverlayClass, OverlayPreset> = {
   workflow: {
     layout: 'sheet',
-    maxHeightFraction: 0.88,
-    minHeightFraction: 0.72,
+    maxHeightFraction: 0.94,
+    minHeightFraction: 0.86,
     maxWidth: 980,
     showHandle: false,
     allowSwipeDismiss: false,
@@ -129,6 +131,9 @@ export interface ECSModalShellProps {
   titleStyle?: StyleProp<TextStyle>;
   headerRight?: React.ReactNode;
   onBack?: () => void;
+  closeGuardKey?: string | number | boolean | null;
+  topClearanceOverride?: number;
+  bottomClearanceOverride?: number;
 }
 
 export function ECSOverlayFooter({
@@ -166,13 +171,48 @@ export default function ECSModalShell({
   titleStyle,
   headerRight,
   onBack,
+  closeGuardKey,
+  topClearanceOverride,
+  bottomClearanceOverride,
 }: ECSModalShellProps) {
   const preset = OVERLAY_PRESETS[overlayClass] ?? OVERLAY_PRESETS.editor;
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
+  const { palette, colors, effectiveTheme } = useTheme();
   const translateY = useRef(new Animated.Value(0)).current;
   const closingRef = useRef(false);
+  const surfaceTheme = useMemo(() => {
+    if (effectiveTheme === 'light') {
+      return {
+        shellBg: 'rgba(255, 251, 245, 0.97)',
+        shellBorder: 'rgba(169,119,27,0.22)',
+        headerBg: 'rgba(248, 244, 236, 0.96)',
+        handleBg: 'rgba(248, 244, 236, 0.98)',
+        handleBar: 'rgba(110, 78, 24, 0.18)',
+        controlBg: 'rgba(255,255,255,0.72)',
+        controlBorder: 'rgba(169,119,27,0.18)',
+        divider: 'rgba(169,119,27,0.14)',
+        footerBg: 'rgba(248, 244, 236, 0.94)',
+      };
+    }
+
+    if (effectiveTheme === 'driving') {
+      return {
+        shellBg: 'rgba(30, 35, 40, 0.99)',
+        shellBorder: 'rgba(224,160,48,0.24)',
+        headerBg: 'rgba(38, 44, 50, 0.98)',
+        handleBg: 'rgba(38, 44, 50, 0.98)',
+        handleBar: 'rgba(241, 211, 160, 0.18)',
+        controlBg: 'rgba(42,48,56,0.9)',
+        controlBorder: 'rgba(224,160,48,0.18)',
+        divider: 'rgba(224,160,48,0.14)',
+        footerBg: 'rgba(34, 39, 45, 0.96)',
+      };
+    }
+
+    return ECS_POPUP_SURFACE_DARK;
+  }, [effectiveTheme]);
 
   const adaptiveMaxWidth =
     preset.layout === 'dialog'
@@ -195,13 +235,26 @@ export default function ECSModalShell({
   const controlSize = adaptive.overlay.controlSize;
   const iconGlyphSize = adaptive.overlay.iconGlyphSize;
   const actionGlyphSize = adaptive.overlay.actionGlyphSize;
+  const isWorkflowSheet = overlayClass === 'workflow' && preset.layout === 'sheet';
 
-  const topClearance = Platform.OS === 'web'
+  const defaultTopClearance = Platform.OS === 'web'
     ? 22
-    : Math.max(insets.top + (isExpanded ? 18 : 10), preset.layout === 'dialog' ? 18 : 12);
-  const bottomClearance = preset.layout === 'sheet'
-    ? getShellBottomClearance(insets.bottom, isExpanded ? 18 : 10)
+    : Math.max(
+      insets.top + (isExpanded ? (isWorkflowSheet ? 12 : 18) : (isWorkflowSheet ? 6 : 10)),
+      preset.layout === 'dialog' ? 18 : (isWorkflowSheet ? 8 : 12),
+    );
+  const defaultBottomClearance = preset.layout === 'sheet'
+    ? getShellBottomClearance(
+      insets.bottom,
+      isExpanded ? (isWorkflowSheet ? 10 : 18) : (isWorkflowSheet ? 2 : 10),
+    )
     : Math.max(insets.bottom + 18, 20);
+  const topClearance = typeof topClearanceOverride === 'number'
+    ? topClearanceOverride
+    : defaultTopClearance;
+  const bottomClearance = typeof bottomClearanceOverride === 'number'
+    ? bottomClearanceOverride
+    : defaultBottomClearance;
   const availableHeight = Math.max(320, height - topClearance - bottomClearance);
   const shellMaxHeight = Math.min(availableHeight, Math.round(height * resolvedMaxHeightFraction));
   const shellMinHeight = typeof resolvedMinHeightFraction === 'number'
@@ -223,19 +276,17 @@ export default function ECSModalShell({
     }
   }, [translateY, visible]);
 
-  const handleDismiss = useCallback(() => {
+  useEffect(() => {
+    if (visible) {
+      closingRef.current = false;
+    }
+  }, [closeGuardKey, visible]);
+
+  const requestClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
-    Animated.timing(translateY, {
-      toValue: shellMaxHeight + 48,
-      duration: MOTION.modalDismiss,
-      easing: EASING.accelerate,
-      useNativeDriver: true,
-    }).start(() => {
-      closingRef.current = false;
-      onClose();
-    });
-  }, [onClose, shellMaxHeight, translateY]);
+    onClose();
+  }, [onClose]);
 
   const panResponder = useMemo(() => {
     if (preset.layout !== 'sheet' || !resolvedAllowSwipeDismiss) return null;
@@ -250,7 +301,7 @@ export default function ECSModalShell({
       },
       onPanResponderRelease: (_, gestureState) => {
         if (gestureState.dy > 90 || gestureState.vy > 0.8) {
-          handleDismiss();
+          requestClose();
           return;
         }
 
@@ -270,10 +321,10 @@ export default function ECSModalShell({
         }).start();
       },
     });
-  }, [handleDismiss, preset.layout, resolvedAllowSwipeDismiss, shellMaxHeight, translateY]);
+  }, [preset.layout, requestClose, resolvedAllowSwipeDismiss, shellMaxHeight, translateY]);
 
   const bodyPaddingBottom = footer
-    ? bodyPadding + 6
+    ? bodyPadding + (isWorkflowSheet ? 2 : 6)
     : bodyPadding + 14 + (preset.layout === 'sheet' ? insets.bottom : 0);
   const footerPaddingBottom = 14 + (preset.layout === 'sheet' ? insets.bottom : 0);
   const headerMinHeight = Math.max(58, controlSize + headerPaddingVertical * 2);
@@ -288,12 +339,18 @@ export default function ECSModalShell({
           maxHeight: shellMaxHeight,
           minHeight: shellMinHeight,
           transform: [{ translateY }],
+          backgroundColor: surfaceTheme.shellBg,
+          borderColor: surfaceTheme.shellBorder,
         },
       ]}
     >
+      <ECSShellTexture />
       {resolvedShowHandle && preset.layout === 'sheet' ? (
-        <View style={styles.handleZone} {...(panResponder?.panHandlers ?? {})}>
-          <View style={styles.handleBar} />
+        <View
+          style={[styles.handleZone, { backgroundColor: surfaceTheme.handleBg }]}
+          {...(panResponder?.panHandlers ?? {})}
+        >
+          <View style={[styles.handleBar, { backgroundColor: surfaceTheme.handleBar }]} />
         </View>
       ) : null}
 
@@ -304,6 +361,7 @@ export default function ECSModalShell({
             minHeight: headerMinHeight,
             paddingHorizontal: headerPaddingHorizontal,
             paddingVertical: headerPaddingVertical,
+            backgroundColor: surfaceTheme.headerBg,
           },
         ]}
       >
@@ -316,13 +374,15 @@ export default function ECSModalShell({
                   width: controlSize,
                   height: controlSize,
                   borderRadius: Math.round(controlSize * 0.28),
+                  backgroundColor: surfaceTheme.controlBg,
+                  borderColor: surfaceTheme.controlBorder,
                 },
               ]}
               onPress={onBack}
               activeOpacity={0.8}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="arrow-back" size={iconGlyphSize} color={TACTICAL.textMuted} />
+              <Ionicons name="arrow-back" size={iconGlyphSize} color={palette.textMuted} />
             </TouchableOpacity>
           ) : null}
 
@@ -333,21 +393,23 @@ export default function ECSModalShell({
                 width: controlSize,
                 height: controlSize,
                 borderRadius: Math.round(controlSize * 0.3),
+                backgroundColor: `${palette.amber}14`,
+                borderColor: `${palette.amber}30`,
               },
             ]}
           >
-            <Ionicons name={icon} size={iconGlyphSize} color={TACTICAL.amber} />
+            <Ionicons name={icon} size={iconGlyphSize} color={palette.amber} />
           </View>
 
           <View style={styles.titleCopy}>
             {eyebrow ? (
-              <Text style={[styles.eyebrow, { fontSize: adaptive.overlay.eyebrowSize }]}>{eyebrow}</Text>
+              <Text style={[styles.eyebrow, { fontSize: adaptive.overlay.eyebrowSize, color: palette.textMuted }]}>{eyebrow}</Text>
             ) : null}
-            <Text style={[styles.title, { fontSize: adaptive.overlay.titleSize }, titleStyle]} numberOfLines={1}>
+            <Text style={[styles.title, { fontSize: adaptive.overlay.titleSize, color: palette.amber }, titleStyle]} numberOfLines={1}>
               {title}
             </Text>
             {subtitle ? (
-              <Text style={[styles.subtitle, { fontSize: adaptive.overlay.subtitleSize }]} numberOfLines={2}>
+              <Text style={[styles.subtitle, { fontSize: adaptive.overlay.subtitleSize, color: colors.textSecondary }]} numberOfLines={2}>
                 {subtitle}
               </Text>
             ) : null}
@@ -363,18 +425,20 @@ export default function ECSModalShell({
                 width: controlSize,
                 height: controlSize,
                 borderRadius: Math.round(controlSize * 0.28),
+                backgroundColor: surfaceTheme.controlBg,
+                borderColor: surfaceTheme.controlBorder,
               },
             ]}
-            onPress={resolvedAllowSwipeDismiss ? handleDismiss : onClose}
+            onPress={requestClose}
             activeOpacity={0.8}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="close" size={actionGlyphSize} color={TACTICAL.textMuted} />
+            <Ionicons name="close" size={actionGlyphSize} color={palette.textMuted} />
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={styles.divider} />
+      <View style={[styles.divider, { backgroundColor: surfaceTheme.divider }]} />
 
       {resolvedScrollable ? (
         <ScrollView
@@ -411,13 +475,14 @@ export default function ECSModalShell({
 
       {footer ? (
         <>
-          <View style={styles.divider} />
+          <View style={[styles.divider, { backgroundColor: surfaceTheme.divider }]} />
           <View
             style={[
               styles.footer,
               {
                 paddingHorizontal: footerPaddingHorizontal,
                 paddingBottom: footerPaddingBottom,
+                backgroundColor: surfaceTheme.footerBg,
               },
             ]}
           >
@@ -441,7 +506,7 @@ export default function ECSModalShell({
   return (
     <ECSModal
       visible={visible}
-      onClose={resolvedAllowSwipeDismiss ? handleDismiss : onClose}
+      onClose={requestClose}
       tier={tier}
       stackBehavior={stackBehavior}
       dismissOnBackdrop={resolvedDismissOnBackdrop}
@@ -532,9 +597,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.22)',
     borderWidth: 1,
-    borderColor: 'rgba(62,79,60,0.24)',
   },
   iconWrap: {
     width: 32,
@@ -543,26 +606,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.24)',
-    backgroundColor: 'rgba(196,138,44,0.10)',
   },
   titleCopy: {
     flex: 1,
     minWidth: 0,
   },
   eyebrow: {
-    color: TACTICAL.textMuted,
     fontWeight: '800',
     letterSpacing: 2.2,
     marginBottom: 2,
   },
   title: {
-    color: TACTICAL.amber,
     fontWeight: '900',
     letterSpacing: 1.4,
   },
   subtitle: {
-    color: TACTICAL.textMuted,
     lineHeight: 14,
     marginTop: 3,
   },
@@ -572,13 +630,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.30)',
     borderWidth: 1,
-    borderColor: 'rgba(62,79,60,0.25)',
   },
   divider: {
     height: 1,
-    backgroundColor: 'rgba(196,138,44,0.16)',
   },
   scrollView: {
     flex: 1,
@@ -593,7 +648,6 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingTop: 12,
-    backgroundColor: 'rgba(10,13,16,0.94)',
   },
   footerRow: {
     flexDirection: 'row',

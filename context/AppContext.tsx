@@ -49,7 +49,11 @@ import React, {
 
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as Linking from "expo-linking";
-import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import {
+  supabase,
+  isSupabaseConfigured,
+  clearPersistedSupabaseAuthState,
+} from "../lib/supabase";
 import { AUTH_COPY } from "../lib/auth/authCopy";
 import type {
   Trip,
@@ -118,6 +122,12 @@ import {
   recordAuthDiagnostic,
 } from '../lib/auth/authDiagnostics';
 import {
+  hashAuthIdentifier,
+  maskAuthEmail,
+  redactAuthUserId,
+  sanitizeAuthLogPayload,
+} from '../lib/auth/authLogRedaction';
+import {
   canReuseOperatorInfoSnapshot,
   resolveCachedOperatorAccessSnapshot,
 } from '../lib/auth/offlineAccessPolicy';
@@ -142,6 +152,12 @@ import { vehicleSpecStore } from '../lib/vehicleSpecStore';
 import { tiresLiftStore } from '../lib/tiresLiftStore';
 import { consumablesStore } from '../lib/consumablesStore';
 import { powerSetupStore } from '../lib/powerSetupStore';
+import {
+  getStartupDiagnosticsSnapshot,
+  logStartupStall,
+  markStartupPhase,
+} from '../lib/startupDiagnostics';
+import { ecsLog } from '../lib/ecsLogger';
 
 
 
@@ -151,6 +167,34 @@ const OFFLINE_MODE_KEY = 'ecs_offline_mode';
 const SHELL_ROUTE_KEY = 'last_shell_route_v1';
 const offlineModeCache = createPersistedKeyValueCache('ecs_runtime_flags');
 const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
+const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;
+const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 6000;
+const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;
+
+interface StartupHydrationResult {
+  persistedOfflineMode: boolean;
+  storageReady: boolean;
+  indexedDbReady: boolean;
+  storageBackend: 'indexeddb' | 'local_fallback';
+  timedOutRequirements: string[];
+}
+
+let startupHydrationPromise: Promise<StartupHydrationResult> | null = null;
+let startupHydrationResult: StartupHydrationResult | null = null;
+let startupStoresLogEmitted = false;
+let startupDashboardLogEmitted = false;
+let startupRequiredReadinessLogEmitted = false;
+let connectivityIntelInitializedForAppSession = false;
+
+function logStartupDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('SYSTEM', message, details, {
+    tag: '[ECS]',
+    debugFlag: 'ECS_DEBUG_STARTUP',
+    fingerprint: `${message}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
 
 function getPersistedOfflineMode(): boolean {
   return offlineModeCache.get(OFFLINE_MODE_KEY) === 'true';
@@ -164,8 +208,46 @@ function setPersistedOfflineMode(value: boolean): void {
   }
 }
 
+function getStartupStorageBackend(indexedDbReady: boolean): StartupHydrationResult['storageBackend'] {
+  return indexedDbReady ? 'indexeddb' : 'local_fallback';
+}
+
 async function ensureSlotsSeeded(tripId: string, userId: string | null) {
   await loadMapSlotStore.seedForTrip(tripId, userId || undefined);
+}
+
+function withStartupTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<{ value: T; timedOut: boolean }> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<{ value: T; timedOut: boolean }>((resolve) => {
+    timeout = setTimeout(() => {
+      console.warn(`[ECS] Startup requirement timed out; continuing with fallback`, {
+        requirement: label,
+        timeoutMs,
+      });
+      resolve({ value: fallback, timedOut: true });
+    }, timeoutMs);
+  });
+
+  return Promise.race([
+    promise
+      .then((value) => ({ value, timedOut: false }))
+      .catch((error) => {
+        console.warn(`[ECS] Startup requirement failed; continuing with fallback`, {
+          requirement: label,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { value: fallback, timedOut: false };
+      }),
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
 }
 
 interface SessionInfo {
@@ -173,6 +255,9 @@ interface SessionInfo {
   expiryLabel: string | null;
   sessionCreatedAt: string | null;
 }
+
+type AuthLoginSource = 'cta_press' | 'password_submit' | 'accessibility_activate' | 'unknown';
+type SignInResult = { error?: string; suspended?: boolean };
 
 type BillingFlowState =
   | 'idle'
@@ -264,6 +349,14 @@ function mapOperatorInfoFromBackend(data: Partial<OperatorInfo>, fallbackEmail: 
   };
 }
 
+function isMissingRefreshTokenError(error: unknown): boolean {
+  const message = String((error as { message?: string } | null | undefined)?.message ?? error ?? '')
+    .trim()
+    .toLowerCase();
+
+  return message.includes('invalid refresh token') || message.includes('refresh token not found');
+}
+
 interface AppContextValue {
   // Auth
   user: any | null;
@@ -313,7 +406,7 @@ interface AppContextValue {
   refreshActiveTrip: () => Promise<void>;
   setActiveTripId: (id: string) => Promise<void>;
   triggerSync: () => Promise<void>;
-  signIn: (email: string, password: string, keepSignedIn?: boolean) => Promise<{ error?: string; suspended?: boolean }>;
+  signIn: (email: string, password: string, keepSignedIn?: boolean, source?: AuthLoginSource) => Promise<SignInResult>;
   signUp: (email: string, password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<{ error?: string }>;
@@ -335,11 +428,142 @@ const ToastContext = createContext<string | null>(null);
 export const useApp = () => useContext(AppContext);
 export const useToastState = () => useContext(ToastContext);
 
+function isRoutineRefreshToast(msg: string): boolean {
+  const normalized = msg
+    .trim()
+    .toLowerCase()
+    .replace(/[\s.]+$/g, '')
+    .replace(/\u2026$/g, '');
+
+  return normalized === 'refreshing';
+}
+
+async function ensureStartupHydration(): Promise<StartupHydrationResult> {
+  if (startupHydrationResult) {
+    return startupHydrationResult;
+  }
+
+  if (!startupHydrationPromise) {
+    startupHydrationPromise = (async () => {
+      markStartupPhase('stores_hydration_start');
+      const requiredHydrations: Array<[string, Promise<unknown>]> = [
+        ['setupStore', setupStore.waitForHydration()],
+        ['vehicleSetupStore', vehicleSetupStore.waitForHydration()],
+        ['sessionStore', sessionStore.waitForHydration()],
+        ['offlineModeCache', offlineModeCache.waitForHydration()],
+        ['vehicleStore', vehicleStore.waitForHydration()],
+        ['loadoutStore', loadoutStore.waitForHydration()],
+        ['vehicleSpecStore', vehicleSpecStore.waitForHydration()],
+        ['tiresLiftStore', tiresLiftStore.waitForHydration()],
+        ['consumablesStore', consumablesStore.waitForHydration()],
+        ['powerSetupStore', powerSetupStore.waitForHydration()],
+      ];
+      const timedOutRequirements: string[] = [];
+
+      await Promise.all(
+        requiredHydrations.map(async ([label, promise]) => {
+          const result = await withStartupTimeout(
+            label,
+            promise,
+            STARTUP_REQUIRED_READINESS_TIMEOUT_MS,
+            null,
+          );
+          if (result.timedOut) timedOutRequirements.push(label);
+        }),
+      );
+
+      if (!startupStoresLogEmitted) {
+        startupStoresLogEmitted = true;
+        logStartupDebug('startup stores hydrated', {
+          persistedOfflineMode: getPersistedOfflineMode(),
+          setupComplete: setupStore.isComplete(),
+          sessionValidity: sessionStore.checkSessionValidity(),
+          timedOutRequirements,
+        });
+      }
+      markStartupPhase('stores_hydration_done', {
+        timedOutRequirements,
+      });
+      markStartupPhase('setup_status_known', {
+        setupComplete: setupStore.isComplete(),
+        sessionValidity: sessionStore.checkSessionValidity(),
+      });
+
+      const indexedDbReadyResult = await withStartupTimeout(
+        'indexedDB availability',
+        isDBReady(),
+        STARTUP_REQUIRED_READINESS_TIMEOUT_MS,
+        false,
+      );
+      const indexedDbReady = indexedDbReadyResult.value;
+
+      if (indexedDbReady) {
+        void migrateLocalStorageToIndexedDB()
+          .then((didMigrate) => {
+            if (didMigrate) logStartupDebug('Migrated localStorage data to IndexedDB');
+          })
+          .catch((e) => {
+            console.warn('[ECS] Startup storage migration failed (non-fatal):', e);
+          });
+      }
+
+      void withStartupTimeout(
+        'optional dashboard/expedition hydration',
+        Promise.all([
+          hydrateDashboardState(),
+          hydrateCustomPresets(),
+          waitForExpeditionStateHydration(),
+        ]),
+        STARTUP_OPTIONAL_READINESS_TIMEOUT_MS,
+        null,
+      ).then((result) => {
+        if (result.timedOut) return;
+        if (!startupDashboardLogEmitted) {
+          startupDashboardLogEmitted = true;
+          logStartupDebug('Dashboard state hydrated from persistent storage');
+        }
+      });
+      markStartupPhase('optional_services_started', {
+        services: ['dashboard_hydration', 'expedition_state_hydration', 'storage_migration'],
+      });
+
+      startupHydrationResult = {
+        persistedOfflineMode: getPersistedOfflineMode(),
+        storageReady: true,
+        indexedDbReady,
+        storageBackend: getStartupStorageBackend(indexedDbReady),
+        timedOutRequirements,
+      };
+
+      if (!startupRequiredReadinessLogEmitted) {
+        startupRequiredReadinessLogEmitted = true;
+        logStartupDebug('startup shell readiness resolved', {
+          persistedOfflineMode: startupHydrationResult.persistedOfflineMode,
+          storageReady: startupHydrationResult.storageReady,
+          indexedDbReady: startupHydrationResult.indexedDbReady,
+          storageBackend: startupHydrationResult.storageBackend,
+          localPersistenceFallbackActive: !startupHydrationResult.indexedDbReady,
+          setupComplete: setupStore.isComplete(),
+          sessionValidity: sessionStore.checkSessionValidity(),
+          timedOutRequirements,
+        });
+      }
+
+      return startupHydrationResult;
+    })().finally(() => {
+      startupHydrationPromise = null;
+    });
+  }
+
+  return startupHydrationPromise;
+}
+
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [signInPending, setSignInPending] = useState(false);
+  const signInAttemptRef = useRef<Promise<SignInResult> | null>(null);
   const [startupSessionRestored, setStartupSessionRestored] = useState(false);
   const [operatorInfo, setOperatorInfo] = useState<OperatorInfo | null>(null);
   const [billingFlowState, setBillingFlowState] = useState<BillingFlowState>('idle');
@@ -382,11 +606,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const syncProcessorsInitRef = useRef(false);
   const signOutIntentRef = useRef(false);
   const sessionRestoreInFlightRef = useRef(false);
+  const startupAuthInitializationStartedRef = useRef(false);
+  const authLoadingRef = useRef(authLoading);
+  const authRestoreDoneLoggedRef = useRef(false);
 
   // Keep userRef in sync
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  useEffect(() => {
+    authLoadingRef.current = authLoading;
+  }, [authLoading]);
+
+  useEffect(() => {
+    if (!startupStateHydrated || !authLoading) return undefined;
+
+    const timeout = setTimeout(() => {
+      if (!authLoadingRef.current) return;
+
+      const sessionValidity = sessionStore.checkSessionValidity();
+      const hasValidStoredSession = sessionValidity === 'valid';
+      const unresolvedRequiredFlags = [
+        !startupStateHydrated ? 'storesHydrated' : null,
+        authLoadingRef.current ? 'authReady' : null,
+      ].filter((flag): flag is string => !!flag);
+
+      logStartupStall({
+        currentPhase: getStartupDiagnosticsSnapshot().currentPhase,
+        unresolvedRequiredFlags,
+        optionalServicesPending: [
+          'weather',
+          'realtime',
+          'dispatch',
+          'team_sync',
+          'cache_readiness',
+        ],
+        fallback: hasValidStoredSession ? 'remembered_offline_shell' : 'signed_out_shell',
+        details: {
+          sessionValidity,
+          setupComplete: setupStore.isComplete(),
+          connectivityOnline: connectivity.isOnline(),
+        },
+      });
+      markStartupPhase('startup_recovery_fallback', {
+        reason: 'auth_restore_timeout',
+        fallback: hasValidStoredSession ? 'remembered_offline_shell' : 'signed_out_shell',
+      });
+
+      sessionRestoreInFlightRef.current = false;
+      setSignInPending(false);
+      setStartupSessionRestored(false);
+
+      if (hasValidStoredSession) {
+        setOfflineMode(true);
+        setPersistedOfflineMode(true);
+      } else {
+        setUser(null);
+      }
+
+      setAuthLoading(false);
+    }, STARTUP_AUTH_RESTORE_TIMEOUT_MS);
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [authLoading, startupStateHydrated]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (authRestoreDoneLoggedRef.current) return;
+    authRestoreDoneLoggedRef.current = true;
+    markStartupPhase('auth_restore_done', {
+      authenticated: !!user,
+      offlineMode,
+      sessionValidity: sessionStore.checkSessionValidity(),
+    });
+  }, [authLoading, offlineMode, user]);
 
   useEffect(() => {
     operatorInfoRef.current = operatorInfo;
@@ -419,13 +715,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return 'signing_in';
     }
 
-    if (
-      user &&
-      (
-        loading ||
-        (!offlineMode && connectivity.isOnline() && accessState?.accessState === 'unknown')
-      )
-    ) {
+    if (user && loading) {
       return 'signed_in_bootstrapping';
     }
 
@@ -437,9 +727,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [accessState?.accessState, authLoading, loading, offlineMode, signInPending, startupStateHydrated, user]);
 
   const showToast = useCallback((msg: string) => {
+    if (isRoutineRefreshToast(msg)) return;
     setToastMsg(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToastMsg(null), 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
   }, []);
 
   const clearAuthenticatedRuntimeState = useCallback((options?: {
@@ -489,77 +789,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Offline mode actions ────────────────────────────────────
   const enterOfflineMode = useCallback(() => {
+    if (offlineMode) return;
     setOfflineMode(true);
     setPersistedOfflineMode(true);
-  }, []);
+  }, [offlineMode]);
 
   const exitOfflineMode = useCallback(() => {
+    if (!offlineMode) return;
     setOfflineMode(false);
     setPersistedOfflineMode(false);
-  }, []);
+  }, [offlineMode]);
 
   // ── Initialize IndexedDB + migrate from localStorage + hydrate dashboard ────
   useEffect(() => {
-    (async () => {
-      try {
-        await Promise.all([
-          setupStore.waitForHydration(),
-          vehicleSetupStore.waitForHydration(),
-          sessionStore.waitForHydration(),
-          offlineModeCache.waitForHydration(),
-          vehicleStore.waitForHydration(),
-          loadoutStore.waitForHydration(),
-          vehicleSpecStore.waitForHydration(),
-          tiresLiftStore.waitForHydration(),
-          consumablesStore.waitForHydration(),
-          powerSetupStore.waitForHydration(),
-        ]);
-        if (__DEV__) {
-          console.log('[ECS] startup stores hydrated', {
-            persistedOfflineMode: getPersistedOfflineMode(),
-            setupComplete: setupStore.isComplete(),
-            sessionValidity: sessionStore.checkSessionValidity(),
-          });
-        }
-        setOfflineMode(getPersistedOfflineMode());
-      } catch (e) {
-        console.warn('[ECS] Startup state hydration failed (non-fatal):', e);
-      } finally {
-        setStartupStateHydrated(true);
-      }
+    let cancelled = false;
 
-      const ready = await isDBReady();
-      setDbReady(ready);
+    void ensureStartupHydration().then((result) => {
+      if (cancelled) return;
 
-      if (ready) {
-        const didMigrate = await migrateLocalStorageToIndexedDB();
-        if (didMigrate) console.log("[ECS] Migrated localStorage data to IndexedDB");
-      }
-
-      // ── Hydrate dashboard state from persistent storage ──
-      // This reads from expo-file-system (native) or localStorage (web)
-      // and populates the in-memory cache so the dashboard renders
-      // with the user's saved widget arrangement, grid layout, and settings.
-      // Must run before setLoading(false) so the dashboard has data on first render.
-      try {
-        await Promise.all([
-          hydrateDashboardState(),
-          hydrateCustomPresets(),
-          waitForExpeditionStateHydration(),
-        ]);
-        console.log('[ECS] Dashboard state hydrated from persistent storage');
-      } catch (e) {
-        console.warn('[ECS] Dashboard hydration failed (non-fatal):', e);
-        // Non-fatal — dashboard will use defaults until first mutation persists
-      }
+      setOfflineMode(prev => (prev === result.persistedOfflineMode ? prev : result.persistedOfflineMode));
+      setDbReady(prev => (prev === result.storageReady ? prev : result.storageReady));
+      setStartupStateHydrated(true);
 
       if (!isSupabaseConfigured) {
-        setSyncStatus("offline");
+        setSyncStatus(prev => (prev === "offline" ? prev : "offline"));
       }
 
       setLoading(false);
-    })();
-  }, [clearAuthenticatedRuntimeState]);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
 
   // ── Connectivity monitoring ─────────────────────────────────
@@ -567,10 +829,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     connectivity.startMonitoring();
 
     const unsub = connectivity.onStatusChange((status, wasOffline) => {
-      setConnectivityStatus(status);
-      setIsOnline(status === 'online');
+      setConnectivityStatus(prev => (prev === status ? prev : status));
+      setIsOnline(prev => (prev === (status === 'online') ? prev : status === 'online'));
 
       if (status === 'online' && wasOffline) {
+        if (!getPersistedOfflineMode()) {
+          setOfflineMode(prev => (prev === false ? prev : false));
+        }
+
         const currentUser = userRef.current;
 
         if (currentUser && isSupabaseConfigured) {
@@ -621,7 +887,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           showToast("Online — sign in to sync");
         }
       } else if (status === 'offline') {
-        setSyncStatus("offline");
+        setSyncStatus(prev => (prev === "offline" ? prev : "offline"));
         showToast("Offline — working locally");
       }
     });
@@ -635,8 +901,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setQueueSize(queue.length);
     });
 
-    setIsOnline(connectivity.isOnline());
-    setConnectivityStatus(connectivity.status);
+    const initialOnline = connectivity.isOnline();
+    const initialStatus = connectivity.status;
+    setIsOnline(prev => (prev === initialOnline ? prev : initialOnline));
+    setConnectivityStatus(prev => (prev === initialStatus ? prev : initialStatus));
 
     return () => {
       unsub();
@@ -645,6 +913,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       offlineQueue.stopAutoProcess();
       dispatchQueue.stopAutoFlush();
     };
+  // This monitor is intended to initialize once for the provider lifetime.
+  // It reads stable refs for mutable auth state and should not be re-bound.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Initialize Connectivity Intelligence Service ────────────
@@ -658,26 +929,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ciInitRef.current = true;
 
     try {
-      connectivityIntelService.initialize();
-      console.log('[ECS] Connectivity Intelligence service initialized');
+      if (!connectivityIntelInitializedForAppSession) {
+        connectivityIntelService.initialize();
+        connectivityIntelInitializedForAppSession = true;
+        logStartupDebug('Connectivity Intelligence service initialized');
+      } else {
+        connectivityIntelService.startMonitoring();
+      }
     } catch (err) {
       console.warn('[ECS] Connectivity Intelligence initialization failed (non-fatal):', err);
     }
 
-    return () => {
-      connectivityIntelService.stopMonitoring();
-    };
+    return undefined;
   }, []);
 
 
   // ── Initialize Sync Action Processors ───────────────────────
   // Registers all category processors (expedition, loadout, route, checklist,
   // field_log, waypoint, dashboard) and starts the auto-process connectivity
-  // listener. Called ONCE after both the database client (IndexedDB) and the
-  // connectivity monitor are initialized.
+  // listener. Called ONCE after the required storage layer has hydrated and the
+  // connectivity monitor is initialized. On native, IndexedDB is unavailable by
+  // design, so the queue/store layers continue through their local fallback.
   //
   // Timing: This runs after:
-  //   1. IndexedDB is ready (dbReady = true)
+  //   1. Required storage is ready (dbReady = true)
   //   2. Connectivity monitoring has started (useEffect above)
   //   3. Queue data has been loaded from localStorage (SyncActionQueue constructor)
   //
@@ -859,89 +1134,102 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    sessionRestoreInFlightRef.current = true;
-    markAuthTimingStart('auth_session_restore');
-    recordAuthDiagnostic('auth_session_restore_started', {
-      entry_mode: 'cold_launch',
-      result: 'started',
-      network_state: connectivity.isOnline() ? 'online' : 'offline',
-      metadata: {
-        hasOfflineSession: sessionStore.checkSessionValidity() === 'valid',
-        keepSignedIn: sessionStore.getPreferences().keepSignedIn,
-      },
-    });
-
-    // Step 0: Check session store validity BEFORE Supabase session check
-    const sessionValidity = sessionStore.checkSessionValidity();
-    const hasPersistentSession = sessionValidity === 'valid';
-    const hasTransientRuntimeSession =
-      sessionValidity === 'no_preference' && sessionStore.hasTransientRuntimeSession();
-    console.log('[Auth] Session store validity:', sessionValidity);
-    if (__DEV__) {
-      console.log('[Auth] startup auth init snapshot', {
+    const shouldRunStartupSessionRestore = !startupAuthInitializationStartedRef.current;
+    if (shouldRunStartupSessionRestore) {
+      startupAuthInitializationStartedRef.current = true;
+      sessionRestoreInFlightRef.current = true;
+      markAuthTimingStart('auth_session_restore');
+      markStartupPhase('auth_restore_start', {
         isOnline: connectivity.isOnline(),
-        persistedOfflineMode: getPersistedOfflineMode(),
-        setupComplete: setupStore.isComplete(),
-        lastUserId: sessionStore.getPreferences().lastUserId,
+        sessionValidity: sessionStore.checkSessionValidity(),
       });
+      recordAuthDiagnostic('auth_session_restore_started', {
+        entry_mode: 'cold_launch',
+        result: 'started',
+        network_state: connectivity.isOnline() ? 'online' : 'offline',
+        metadata: {
+          hasOfflineSession: sessionStore.checkSessionValidity() === 'valid',
+          keepSignedIn: sessionStore.getPreferences().keepSignedIn,
+        },
+      });
+    } else if (__DEV__) {
+      console.log('[Auth] Skipping duplicate startup session restore on provider remount');
     }
 
-    if (sessionValidity === 'expired') {
-      // 30-day expiry has passed — force re-login
-      console.log('[Auth] 30-day session expired — clearing session');
-      sessionRestoreInFlightRef.current = false;
-      recordAuthDiagnostic('auth_session_restore_failed', {
-        entry_mode: 'remembered_session',
-        result: 'failure',
-        failure_category: 'session_expired',
-        duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
-        network_state: connectivity.isOnline() ? 'online' : 'offline',
-        metadata: { phase: 'startup_auth_init', sessionValidity },
-      });
-      recordAuthDiagnostic('auth_reauthentication_required', {
-        entry_mode: 'remembered_session',
-        result: 'failure',
-        failure_category: 'session_expired',
-        network_state: connectivity.isOnline() ? 'online' : 'offline',
-      });
-      setAuthNotice(
-        connectivity.isOnline() ? AUTH_COPY.session.expired : AUTH_COPY.session.reconnect
-      );
-      setStartupSessionRestored(false);
-      clearAuthenticatedRuntimeState();
-      supabase.auth.signOut().catch(() => {});
-      setAuthLoading(false);
-      return;
-    }
+    if (shouldRunStartupSessionRestore) {
+      // Step 0: Check session store validity BEFORE Supabase session check
+      const sessionValidity = sessionStore.checkSessionValidity();
+      const hasPersistentSession = sessionValidity === 'valid';
+      const hasTransientRuntimeSession =
+        sessionValidity === 'no_preference' && sessionStore.hasTransientRuntimeSession();
+      const shouldSkipProviderSessionRestore = !hasPersistentSession && !hasTransientRuntimeSession;
+      console.log('[Auth] Session store validity:', sessionValidity);
+      if (__DEV__) {
+        console.log('[Auth] startup auth init snapshot', {
+          isOnline: connectivity.isOnline(),
+          persistedOfflineMode: getPersistedOfflineMode(),
+          setupComplete: setupStore.isComplete(),
+          lastUserId: redactAuthUserId(sessionStore.getPreferences().lastUserId),
+        });
+      }
 
-    // Step 1: Check existing Supabase session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const currentUser = session?.user || null;
+      if (sessionValidity === 'expired') {
+        // 30-day expiry has passed — force re-login
+        console.log('[Auth] 30-day session expired — clearing session');
+        sessionRestoreInFlightRef.current = false;
+        recordAuthDiagnostic('auth_session_restore_failed', {
+          entry_mode: 'remembered_session',
+          result: 'failure',
+          failure_category: 'session_expired',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          metadata: { phase: 'startup_auth_init', sessionValidity },
+        });
+        recordAuthDiagnostic('auth_reauthentication_required', {
+          entry_mode: 'remembered_session',
+          result: 'failure',
+          failure_category: 'session_expired',
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+        });
+        setAuthNotice(
+          connectivity.isOnline() ? AUTH_COPY.session.expired : AUTH_COPY.session.reconnect
+        );
+        setStartupSessionRestored(false);
+        clearAuthenticatedRuntimeState();
+        supabase.auth.signOut().catch(() => {});
+        setAuthLoading(false);
+        return;
+      }
+
+      if (shouldSkipProviderSessionRestore) {
+        console.log('[Auth] Clearing non-persistent provider state before startup restore', {
+          sessionValidity,
+        });
+        sessionRestoreInFlightRef.current = false;
+        recordAuthDiagnostic('auth_session_restore_succeeded', {
+          entry_mode: 'cold_launch',
+          result: 'success',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          access_state: 'signed_out',
+          metadata: {
+            restoredUser: false,
+            clearedNonPersistentProviderSession: true,
+            sessionValidity,
+            preflightCleanup: true,
+          },
+        });
+        setStartupSessionRestored(false);
+        clearAuthenticatedRuntimeState();
+        void clearPersistedSupabaseAuthState();
+        setAuthLoading(false);
+      } else {
+      // Step 1: Check existing Supabase session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        const currentUser = session?.user || null;
 
       if (currentUser) {
-        if (!hasPersistentSession && !hasTransientRuntimeSession) {
-          console.log('[Auth] Clearing non-persistent provider session on startup', {
-            sessionValidity,
-          });
-          sessionRestoreInFlightRef.current = false;
-          recordAuthDiagnostic('auth_session_restore_succeeded', {
-            entry_mode: 'cold_launch',
-            result: 'success',
-            duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
-            network_state: connectivity.isOnline() ? 'online' : 'offline',
-            access_state: 'signed_out',
-            metadata: {
-              restoredUser: false,
-              clearedNonPersistentProviderSession: true,
-              sessionValidity,
-            },
-          });
-          setStartupSessionRestored(false);
-          clearAuthenticatedRuntimeState();
-          supabase.auth.signOut().catch(() => {});
-          setAuthLoading(false);
-          return;
-        }
+
 
         // Valid Supabase session found — extend expiry if "keep signed in".
         // We also honor a fresh non-persistent runtime session that was just
@@ -949,7 +1237,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sessionRestoreInFlightRef.current = false;
         markAuthTimingStart('auth_success_to_first_frame');
         recordAuthDiagnostic('auth_session_restore_succeeded', {
-          entry_mode: hasPersistentSession ? 'remembered_session' : 'active_session',
+          entry_mode: hasPersistentSession ? 'remembered_session' : 'cold_launch',
           result: 'success',
           duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
           network_state: connectivity.isOnline() ? 'online' : 'offline',
@@ -963,10 +1251,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sessionStore.extendExpiry();
         setSignInPending(false);
         setStartupSessionRestored(true);
-        if (!connectivity.isOnline()) {
-          setOfflineMode(true);
-          setPersistedOfflineMode(true);
-        }
         setUser(currentUser);
         setAuthLoading(false);
 
@@ -986,11 +1270,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }).catch((err) => {
           // NEVER treat this as auth failure
-          console.warn('[Auth] Operator status check failed (non-blocking):', err);
-          if (!connectivity.isOnline()) {
-            setOfflineMode(true);
-            setPersistedOfflineMode(true);
-          }
+          console.warn('[Auth] Operator status check failed (non-blocking):', sanitizeAuthLogPayload(err));
           const cached = resolveCachedOperatorAccessSnapshot({
             snapshot: operatorInfoRef.current,
             currentUserEmail: currentUser.email || null,
@@ -1017,7 +1297,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setStartupSessionRestored(false);
           setSignInPending(false);
           setOfflineMode(true);
-          setPersistedOfflineMode(true);
           setUser(null);
           setAuthLoading(false);
         } else {
@@ -1036,15 +1315,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setAuthLoading(false);
         }
       }
-    }).catch((err) => {
-      // Session check itself failed — check offline fallback
-      console.warn('[Auth] Session check failed:', err);
+      }).catch((err) => {
+        // Session check itself failed — check offline fallback
+        console.warn('[Auth] Session check failed:', sanitizeAuthLogPayload(err));
+
+      if (isMissingRefreshTokenError(err)) {
+        console.log('[Auth] Treating missing refresh token as signed-out startup state');
+        sessionRestoreInFlightRef.current = false;
+        recordAuthDiagnostic('auth_session_restore_succeeded', {
+          entry_mode: 'cold_launch',
+          result: 'success',
+          duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          access_state: 'signed_out',
+          metadata: {
+            restoredUser: false,
+            recoveredFromMissingRefreshToken: true,
+          },
+        });
+        setStartupSessionRestored(false);
+        clearAuthenticatedRuntimeState();
+        void clearPersistedSupabaseAuthState();
+        setAuthLoading(false);
+        return;
+      }
 
       if (!connectivity.isOnline() && hasPersistentSession) {
         // Network error but we have a stored session — allow offline access
         console.log('[Auth] Session check failed but offline session exists — entering offline mode');
         setOfflineMode(true);
-        setPersistedOfflineMode(true);
         recordAuthDiagnostic('auth_session_restore_succeeded', {
           entry_mode: 'remembered_session',
           result: 'success',
@@ -1061,7 +1360,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           failure_category: 'session_restore_failed',
           duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
           network_state: 'online',
-          metadata: { phase: 'session_check', error: err instanceof Error ? err.message : String(err ?? 'unknown') },
+          metadata: {
+            phase: 'session_check',
+            error: sanitizeAuthLogPayload(err instanceof Error ? err.message : String(err ?? 'unknown')),
+          },
         });
         setAuthNotice('Unable to verify your session right now. Please try again.');
       } else {
@@ -1076,6 +1378,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       setAuthLoading(false);
     });
+      }
+    }
 
     // Step 3: Listen for auth state changes
     const {
@@ -1097,7 +1401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         setStartupSessionRestored(false);
         clearAuthenticatedRuntimeState();
-        supabase.auth.signOut().catch(() => {});
+        void clearPersistedSupabaseAuthState();
         setAuthLoading(false);
         return;
       }
@@ -1116,10 +1420,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (currentUser) {
         signOutIntentRef.current = false;
         setAuthNotice(null);
-        if (!connectivity.isOnline()) {
-          setOfflineMode(true);
-          setPersistedOfflineMode(true);
-        }
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
           markAuthTimingStart('auth_success_to_first_frame');
         }
@@ -1136,10 +1436,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setOperatorInfo(mapOperatorInfoFromBackend(info as Partial<OperatorInfo>, currentUser.email || null));
         }).catch(() => {
           // Silently fail — never redirect
-          if (!connectivity.isOnline()) {
-            setOfflineMode(true);
-            setPersistedOfflineMode(true);
-          }
           const cached = resolveCachedOperatorAccessSnapshot({
             snapshot: operatorInfoRef.current,
             currentUserEmail: currentUser.email || null,
@@ -1398,7 +1694,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setOperatorInfo(safeDefault);
       return safeDefault;
     } catch (err) {
-      console.warn('[Auth] Access state refresh failed (non-blocking):', err);
+      console.warn('[Auth] Access state refresh failed (non-blocking):', sanitizeAuthLogPayload(err));
       if (canReuseOperatorInfoSnapshot({
         snapshot: operatorInfoRef.current,
         currentUserEmail: currentUser.email || null,
@@ -1488,121 +1784,170 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * 3. Post-login bootstrap runs in background (non-blocking)
    * 4. NEVER treat bootstrap failure as auth failure
    */
-  const signIn = useCallback(async (email: string, password: string, keepSignedIn: boolean = true): Promise<{ error?: string; suspended?: boolean }> => {
-    // Check connectivity
-    if (!connectivity.isOnline()) {
-      console.log('[Auth] Login attempt failure', {
-        email: email.trim().toLowerCase(),
-        keepSignedIn,
-        reason: 'offline',
-      });
-      return { error: "You're offline. Check your connection and try again." };
+  const signIn = useCallback((
+    email: string,
+    password: string,
+    keepSignedIn: boolean = true,
+    source: AuthLoginSource = 'unknown',
+  ): Promise<SignInResult> => {
+    if (signInAttemptRef.current) {
+      return signInAttemptRef.current;
     }
 
-    try {
-      setSignInPending(true);
-      console.log('[Auth] Login attempt start', {
-        email: email.trim().toLowerCase(),
-        keepSignedIn,
-      });
-      // Step 1: Authenticate with Supabase
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const loginEmail = email.trim().toLowerCase();
+    const loginLogIdentity = {
+      email: maskAuthEmail(loginEmail),
+      emailHash: hashAuthIdentifier(loginEmail),
+    };
+    const attemptSource = source;
 
-      if (error) {
-        if (error.message === 'Supabase not configured') {
+    const attempt = (async (): Promise<SignInResult> => {
+      // Check connectivity
+      if (!connectivity.isOnline()) {
+        console.log('[Auth] Login attempt failure', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+          reason: 'offline',
+        });
+        return { error: "You're offline. Check your connection and try again." };
+      }
+
+      try {
+        setSignInPending(true);
+        console.log('[Auth] Login attempt start', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+        });
+        // Step 1: Authenticate with Supabase
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+        console.log('[Auth] Auth request response', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          ok: !error && !!data?.user,
+          error: error?.message ?? null,
+          hasUser: !!data?.user,
+        });
+
+        if (error) {
+          if (error.message === 'Supabase not configured') {
+            setSignInPending(false);
+            console.log('[Auth] Login attempt failure', {
+              source: attemptSource,
+              ...loginLogIdentity,
+              keepSignedIn,
+              reason: 'supabase_not_configured',
+            });
+            return { error: "Cloud services are initializing. Try again in a moment." };
+          }
+          // Fire-and-forget audit log
+          logLoginFailed(email).catch(() => {});
           setSignInPending(false);
           console.log('[Auth] Login attempt failure', {
-            email: email.trim().toLowerCase(),
+            source: attemptSource,
+            ...loginLogIdentity,
             keepSignedIn,
-            reason: 'supabase_not_configured',
+            reason: sanitizeAuthError(error.message),
           });
-          return { error: "Cloud services are initializing. Try again in a moment." };
-        }
-        // Fire-and-forget audit log
-        logLoginFailed(email).catch(() => {});
-        setSignInPending(false);
-        console.log('[Auth] Login attempt failure', {
-          email: email.trim().toLowerCase(),
-          keepSignedIn,
-          reason: sanitizeAuthError(error.message),
-        });
-        return { error: sanitizeAuthError(error.message) };
-      }
-
-      if (!data.user) {
-        setSignInPending(false);
-        console.log('[Auth] Login attempt failure', {
-          email: email.trim().toLowerCase(),
-          keepSignedIn,
-          reason: 'missing_user',
-        });
-        return { error: "Couldn't sign in. Please try again." };
-      }
-
-      // Step 2: Save session preferences to session store
-      setStartupSessionRestored(false);
-      sessionStore.saveLoginPreferences(keepSignedIn, data.user.id, email);
-      sessionStore.extendExpiry();
-      setAuthNotice(null);
-      console.log('[Auth] Session preferences saved:', { keepSignedIn, userId: data.user.id });
-
-      // Step 3: Post-login check (with timeout — NEVER blocks)
-      try {
-        const postResult = await postLogin(data.user.id, email);
-
-        if (postResult.suspended) {
-          await supabase.auth.signOut();
-          clearAuthenticatedRuntimeState();
-          return {
-            error: "Your account has been suspended. Contact your administrator.",
-            suspended: true,
-          };
+          return { error: sanitizeAuthError(error.message) };
         }
 
-        setOperatorInfo(mapOperatorInfoFromBackend({ ...postResult, exists: true }, email));
-      } catch (postErr) {
-        // Post-login failed — that's OK, login still succeeds
-        console.warn('[Auth] Post-login check failed (non-blocking):', postErr);
-        setOperatorInfo({
-          ...buildDefaultOperatorInfo(email),
-        });
-      }
+        if (!data?.user) {
+          setSignInPending(false);
+          console.log('[Auth] Login attempt failure', {
+            source: attemptSource,
+            ...loginLogIdentity,
+            keepSignedIn,
+            reason: 'missing_user',
+          });
+          return { error: "Couldn't sign in. Please try again." };
+        }
 
-      // Step 4: Promote the authenticated session immediately so routing does not
-      // wait on a later provider callback before leaving the login surface.
-      setSignInPending(false);
-      setUser(data.user);
-      setAuthLoading(false);
-
-      // Step 5: Clear offline mode
-      setOfflineMode(false);
-      setPersistedOfflineMode(false);
-
-      // Step 6: Return success — root auth navigation will take over.
-      console.log('[Auth] Login attempt success', {
-        email: email.trim().toLowerCase(),
-        keepSignedIn,
-        userId: data.user.id,
-      });
-      return {};
-    } catch (err: any) {
-      const msg = err?.message || 'Unknown error';
-      setSignInPending(false);
-      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
-        console.log('[Auth] Login attempt failure', {
-          email: email.trim().toLowerCase(),
+        // Step 2: Save session preferences to session store
+        setStartupSessionRestored(false);
+        sessionStore.saveLoginPreferences(keepSignedIn, data.user.id, email);
+        sessionStore.extendExpiry();
+        setAuthNotice(null);
+        console.log('[Auth] Session preferences saved:', {
           keepSignedIn,
-          reason: 'network_error',
+          userId: redactAuthUserId(data.user.id),
         });
-        return { error: "Network error. Check your connection and try again." };
+
+        // Step 3: Post-login check (with timeout — NEVER blocks)
+        try {
+          const postResult = await postLogin(data.user.id, email);
+
+          if (postResult.suspended) {
+            await supabase.auth.signOut();
+            clearAuthenticatedRuntimeState();
+            setSignInPending(false);
+            console.log('[Auth] Login attempt failure', {
+              source: attemptSource,
+              ...loginLogIdentity,
+              keepSignedIn,
+              reason: 'suspended',
+            });
+            return {
+              error: "Your account has been suspended. Contact your administrator.",
+              suspended: true,
+            };
+          }
+
+          setOperatorInfo(mapOperatorInfoFromBackend({ ...postResult, exists: true }, email));
+        } catch (postErr) {
+          // Post-login failed — that's OK, login still succeeds
+          console.warn('[Auth] Post-login check failed (non-blocking):', sanitizeAuthLogPayload(postErr));
+          setOperatorInfo({
+            ...buildDefaultOperatorInfo(email),
+          });
+        }
+
+        // Step 4: Promote the authenticated session immediately so routing does not
+        // wait on a later provider callback before leaving the login surface.
+        setSignInPending(false);
+        setUser(data.user);
+        setAuthLoading(false);
+
+        // Step 5: Clear offline mode
+        setOfflineMode(false);
+        setPersistedOfflineMode(false);
+
+        // Step 6: Return success — root auth navigation will take over.
+        console.log('[Auth] Login attempt success', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+          userId: redactAuthUserId(data.user.id),
+        });
+        return {};
+      } catch (err: any) {
+        const msg = err?.message || 'Unknown error';
+        setSignInPending(false);
+        if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
+          console.log('[Auth] Login attempt failure', {
+            source: attemptSource,
+            ...loginLogIdentity,
+            keepSignedIn,
+            reason: 'network_error',
+          });
+          return { error: "Network error. Check your connection and try again." };
+        }
+        console.log('[Auth] Login attempt failure', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+          reason: sanitizeAuthError(msg),
+        });
+        return { error: sanitizeAuthError(msg) };
       }
-      console.log('[Auth] Login attempt failure', {
-        email: email.trim().toLowerCase(),
-        keepSignedIn,
-        reason: sanitizeAuthError(msg),
-      });
-      return { error: sanitizeAuthError(msg) };
-    }
+    })().finally(() => {
+      signInAttemptRef.current = null;
+    });
+
+    signInAttemptRef.current = attempt;
+    return attempt;
   }, [clearAuthenticatedRuntimeState]);
 
 
@@ -1629,12 +1974,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     const userId = user?.id;
+    const redactedUserId = redactAuthUserId(userId ?? null);
     signOutIntentRef.current = true;
     setSignInPending(false);
     setStartupSessionRestored(false);
     setAuthNotice(null);
     console.log('[Auth] Sign-out start', {
-      userId: userId ?? null,
+      userId: redactedUserId,
       isOnline: connectivity.isOnline(),
     });
     recordAuthDiagnostic('auth_logout_started', {
@@ -1664,9 +2010,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if (isSupabaseConfigured) await supabase.auth.signOut();
+    await clearPersistedSupabaseAuthState();
     clearAuthenticatedRuntimeState();
     console.log('[Auth] Sign-out success', {
-      userId: userId ?? null,
+      userId: redactedUserId,
       isOnline: connectivity.isOnline(),
     });
     recordAuthDiagnostic('auth_logout_completed', {
@@ -1866,69 +2213,122 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshAccessState, user, verifyPurchaseProofWithBackend]);
   // ── Compute session info for UI ──────────────────────────────
-  const sessionPrefs = sessionStore.getPreferences();
-  const sessionInfo: SessionInfo = {
-    keepSignedIn: sessionPrefs.keepSignedIn,
-    expiryLabel: sessionStore.getRemainingTimeLabel(),
-    sessionCreatedAt: sessionPrefs.sessionCreatedAt,
-  };
+  const sessionInfo = useMemo<SessionInfo>(() => {
+    const sessionPrefs = sessionStore.getPreferences();
+    return {
+      keepSignedIn: sessionPrefs.keepSignedIn,
+      expiryLabel: sessionStore.getRemainingTimeLabel(),
+      sessionCreatedAt: sessionPrefs.sessionCreatedAt,
+    };
+  }, [authPhase, startupSessionRestored, user]);
+
+  const appContextValue = useMemo<AppContextValue>(() => ({
+    user,
+    authLoading,
+    authPhase,
+    startupSessionRestored,
+    operatorInfo,
+    accessState,
+    sessionInfo,
+    billingFlowState,
+    billingError,
+    ecsProProduct,
+    authNotice,
+    bootstrapError,
+    retryBootstrap,
+    isOnline,
+    connectivityStatus,
+    offlineMode,
+    queueSize,
+    syncStatus,
+    dirtyCount,
+    lastSyncAt,
+    lastSyncResult,
+    activeTrip,
+    trips,
+    loadItems,
+    riskScore,
+    fuelWaterLogs,
+    loadMapSlots,
+    waypoints,
+    userSettings,
+    loading,
+    dbReady,
+    refreshTrips,
+    refreshActiveTrip,
+    setActiveTripId,
+    triggerSync,
+    signIn,
+    signUp,
+    signOut,
+    sendPasswordReset,
+    sendCredentialSetupLink,
+    updatePassword,
+    rotateSharedAccountPassword,
+    refreshAccessState,
+    loadEcsProProduct: loadEcsProProductForUser,
+    purchaseEcsProMonthly,
+    restoreEcsProAccess,
+    enterOfflineMode,
+    exitOfflineMode,
+    showToast,
+    consumeAuthNotice,
+  }), [
+    accessState,
+    activeTrip,
+    authLoading,
+    authNotice,
+    authPhase,
+    billingError,
+    billingFlowState,
+    bootstrapError,
+    connectivityStatus,
+    consumeAuthNotice,
+    dbReady,
+    dirtyCount,
+    ecsProProduct,
+    enterOfflineMode,
+    exitOfflineMode,
+    fuelWaterLogs,
+    isOnline,
+    lastSyncAt,
+    lastSyncResult,
+    loadEcsProProductForUser,
+    loadItems,
+    loadMapSlots,
+    loading,
+    offlineMode,
+    operatorInfo,
+    purchaseEcsProMonthly,
+    queueSize,
+    refreshAccessState,
+    refreshActiveTrip,
+    refreshTrips,
+    restoreEcsProAccess,
+    retryBootstrap,
+    riskScore,
+    rotateSharedAccountPassword,
+    sendCredentialSetupLink,
+    sendPasswordReset,
+    sessionInfo,
+    setActiveTripId,
+    showToast,
+    signIn,
+    signOut,
+    signUp,
+    startupSessionRestored,
+    syncStatus,
+    triggerSync,
+    trips,
+    updatePassword,
+    user,
+    userSettings,
+    waypoints,
+  ]);
 
   return (
     <ToastContext.Provider value={toastMsg}>
-      <AppContext.Provider
-        value={{
-          user,
-          authLoading,
-          authPhase,
-          startupSessionRestored,
-          operatorInfo,
-          accessState,
-          sessionInfo,
-          billingFlowState,
-          billingError,
-          ecsProProduct,
-          authNotice,
-          bootstrapError,
-          retryBootstrap,
-          isOnline,
-          connectivityStatus,
-          offlineMode,
-          queueSize,
-          syncStatus,
-          dirtyCount,
-          lastSyncAt,
-          lastSyncResult,
-          activeTrip,
-          trips,
-          loadItems,
-          riskScore,
-          fuelWaterLogs,
-          loadMapSlots,
-          waypoints,
-          userSettings,
-          loading,
-          dbReady,
-          refreshTrips,
-          refreshActiveTrip,
-          setActiveTripId,
-          triggerSync,
-          signIn,
-          signUp,
-          signOut,
-          sendPasswordReset,
-          sendCredentialSetupLink,
-          updatePassword,
-          rotateSharedAccountPassword,
-          refreshAccessState,
-          loadEcsProProduct: loadEcsProProductForUser,
-          purchaseEcsProMonthly,
-          restoreEcsProAccess,
-          enterOfflineMode,
-          exitOfflineMode,
-          showToast,
-          consumeAuthNotice,
-        }}
-      >
+      <AppContext.Provider value={appContextValue}>
         {children}
       </AppContext.Provider>
     </ToastContext.Provider>

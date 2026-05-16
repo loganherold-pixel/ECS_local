@@ -52,6 +52,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  ImageBackground,
   Pressable,
   StyleSheet,
   Animated,
@@ -61,8 +62,6 @@ import {
   PanResponder,
   LayoutChangeEvent,
   LayoutAnimation,
-  Platform,
-  UIManager,
   useWindowDimensions,
 } from 'react-native';
 
@@ -85,7 +84,8 @@ import {
   DEPTH_TRANSITIONS,
   type DepthLevel,
 } from '../../lib/depthSystem';
-import { ECS_EASE, useReducedMotion } from '../../lib/ecsAnimations';
+import { ECS_EASE, useReducedMotion, useStableAnimatedValue, useStableAnimatedValueXY } from '../../lib/ecsAnimations';
+import { enableLegacyAndroidLayoutAnimation } from '../../lib/layoutAnimationCompat';
 
 
 
@@ -93,7 +93,6 @@ import {
   GRID_LAYOUT_CONFIG,
   WIDGET_SIZE_CONFIG,
   getAvailableSizes,
-  cycleWidgetSize,
   getSlotSize,
   getFullWidgetCatalog,
   type WidgetSlot,
@@ -102,11 +101,31 @@ import {
   type GridLayout,
   type DashboardMode,
 } from '../../lib/dashboardStore';
-import { getWidgetEntry, isRegistered } from '../../lib/widgetRegistry';
+import {
+  canResizeDashboardWidget,
+  getDashboardSupportedSizes,
+  getWidgetEntry,
+  isRegistered,
+} from '../../lib/widgetRegistry';
 import { renderWidgetContent, type WidgetRenderOptions } from './WidgetRenderers';
 import { DASHBOARD_WIDGET_GRAMMAR } from './widgetGrammar';
 import type { Trip, LoadItem, RiskScore, Waypoint, UserSettings } from '../../lib/types';
 import { ECSBadge } from '../ECSStatus';
+
+const WIDGET_CONTAINER_BACKGROUND = require('../../assets/chrome/backgrounds/popup-container-bg.png');
+
+function WidgetContainerBackground() {
+  return (
+    <View style={styles.widgetContainerBackgroundLayer} pointerEvents="none">
+      <ImageBackground
+        source={WIDGET_CONTAINER_BACKGROUND}
+        resizeMode="cover"
+        style={styles.widgetContainerBackground}
+        imageStyle={styles.widgetContainerBackgroundImage}
+      />
+    </View>
+  );
+}
 
 
 // ── Types ─────────────────────────────────────────────────
@@ -115,10 +134,8 @@ interface WidgetGridProps {
   profile: DashboardProfile;
   gridLayout: GridLayout;
   layoutMode: boolean;
-  onEnterLayoutMode: () => void;
-  onExitLayoutMode: () => void;
   onEmptySlotPress: (slotIndex: number) => void;
-  onWidgetPress: (slot: WidgetSlot) => void;
+  onWidgetLongPress: (slot: WidgetSlot) => void;
   onRemoveWidget: (slotIndex: number) => void;
   onSwapSlots: (from: number, to: number) => void;
   onResizeWidget?: (slotIndex: number, newSize: WidgetSize) => void;
@@ -133,10 +150,13 @@ interface WidgetGridProps {
   };
   dashboardMode?: DashboardMode;
   isCompact?: boolean;
-  rollDeg?: number;
-  pitchDeg?: number;
+  rollDeg?: number | null;
+  pitchDeg?: number | null;
   sensorStatus?: string;
   sampleTimestampMs?: number | null;
+  isCalibrated?: boolean;
+  onCalibrate?: () => void;
+  onResetCalibration?: () => void;
   advancedModeEnabled?: boolean;
   perWidgetAutoCollapse?: Record<string, boolean>;
   containerHeight?: number;
@@ -145,7 +165,10 @@ interface WidgetGridProps {
   gpsLongitude?: number;
   gpsSpeedMph?: number | null;
   gpsHasFix?: boolean;
+  gpsAccuracyM?: number | null;
   gpsAltitudeFt?: number | null;
+  gpsTimestampMs?: number | null;
+  onOpenCommandBrief?: () => void;
   /** Phase 6: Active expedition mode — locks layout, hides edit controls */
   isActiveMode?: boolean;
 }
@@ -223,13 +246,18 @@ function hasFixedDashboardMultiCellSlots(slots: WidgetSlot[]): boolean {
 }
 
 function trimTrailingEmptySlots(slots: WidgetSlot[]): WidgetSlot[] {
-  const lastOccupiedIndex = [...slots].reverse().findIndex((slot) => !!slot.widgetType);
-  if (lastOccupiedIndex === -1) {
+  const activeSlots = slots.filter((slot) => !!slot.widgetType);
+  if (activeSlots.length === 0) {
     return slots.slice(0, 1);
   }
 
-  const sliceEnd = slots.length - lastOccupiedIndex;
-  return slots.slice(0, sliceEnd);
+  const usedRows = activeSlots.reduce((total, slot) => total + (getSlotSize(slot) === '2x2' ? 2 : 1), 0);
+  if (usedRows >= 2) {
+    return activeSlots;
+  }
+
+  const nextEmpty = slots.find((slot) => !slot.widgetType);
+  return nextEmpty ? [...activeSlots, nextEmpty] : activeSlots;
 }
 
 function isFixedTwoByTwoDashboardMode(
@@ -242,6 +270,16 @@ function isFixedTwoByTwoDashboardMode(
     (dashboardMode === 'expedition' || dashboardMode === 'highway') &&
     !hasFixedDashboardMultiCellSlots(slots)
   );
+}
+
+function withPanelAlpha(color: string, alphaHex: string): string {
+  if (color.startsWith('#') && color.length === 7) {
+    return `${color}${alphaHex}`;
+  }
+  if (color.startsWith('#') && color.length === 9) {
+    return `${color.slice(0, 7)}${alphaHex}`;
+  }
+  return color;
 }
 
 
@@ -373,7 +411,7 @@ function countEffectiveRows(
     const sizeConfig = WIDGET_SIZE_CONFIG[sizeKey];
     let colSpan = Math.min(sizeConfig.colSpan, gridCols);
     let rowSpan = sizeConfig.rowSpan;
-    if (!slot.widgetType) { colSpan = 1; rowSpan = 1; }
+    if (!slot.widgetType) { colSpan = gridCols >= 2 ? gridCols : 1; rowSpan = 1; }
 
     let placed = false;
     for (let r = 0; r < maxRows - rowSpan + 1 && !placed; r++) {
@@ -484,7 +522,7 @@ function computePlacements(
     let rowSpan = Math.min(sizeConfig.rowSpan, gridRows);
 
     if (!slot.widgetType) {
-      colSpan = 1;
+      colSpan = gridCols >= 2 ? gridCols : 1;
       rowSpan = 1;
     }
 
@@ -585,7 +623,7 @@ function getStandardGridMaxWidth(
     case '2x1':
       return isTabletWide ? 1180 : 1040;
     case '2x2':
-      return isTabletWide ? 1280 : 1140;
+      return isTabletWide ? 1480 : 1320;
     case '2x3':
     default:
       return isTabletWide ? 1380 : 1220;
@@ -771,7 +809,7 @@ function EmptySlotPlate({
   layoutMode?: boolean;
   isDropTarget?: boolean;
 }) {
-  const pulseAnim = useRef(new Animated.Value(0.45)).current;
+  const pulseAnim = useStableAnimatedValue(0.45);
   useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([
@@ -839,15 +877,14 @@ function EmptySlotPlate({
 // ── Size Picker Badge ─────────────────────────────────────
 function SizePickerBadge({
   currentSize,
-  gridLayout,
+  availableSizes,
   onCycle,
 }: {
   currentSize: WidgetSize;
-  gridLayout: GridLayout;
+  availableSizes: WidgetSize[];
   onCycle: () => void;
 }) {
-  const available = getAvailableSizes(gridLayout);
-  if (available.length <= 1) return null;
+  if (availableSizes.length <= 1) return null;
 
   const sizeConfig = WIDGET_SIZE_CONFIG[currentSize];
 
@@ -874,6 +911,9 @@ function areRenderOptionsEqual(
     prev?.pitchDeg === next?.pitchDeg &&
     prev?.sensorStatus === next?.sensorStatus &&
     prev?.sampleTimestampMs === next?.sampleTimestampMs &&
+    prev?.isCalibrated === next?.isCalibrated &&
+    prev?.onCalibrate === next?.onCalibrate &&
+    prev?.onResetCalibration === next?.onResetCalibration &&
     prev?.stabilityData === next?.stabilityData &&
     prev?.advancedMode === next?.advancedMode &&
     prev?.viewerOverrides === next?.viewerOverrides &&
@@ -883,12 +923,14 @@ function areRenderOptionsEqual(
     prev?.gpsHasFix === next?.gpsHasFix &&
     prev?.gpsAccuracyM === next?.gpsAccuracyM &&
     prev?.gpsAltitudeFt === next?.gpsAltitudeFt &&
+    prev?.gpsTimestampMs === next?.gpsTimestampMs &&
     prev?.isFeatured === next?.isFeatured &&
-    prev?.isCompressedRow === next?.isCompressedRow
+    prev?.isCompressedRow === next?.isCompressedRow &&
+    prev?.onOpenCommandBrief === next?.onOpenCommandBrief
   );
 }
 
-function getLoadItemsSignature(loadItems?: Array<{ deleted_at?: string | null; packed?: boolean; weight_lbs?: number | null }>) {
+function getLoadItemsSignature(loadItems?: { deleted_at?: string | null; packed?: boolean; weight_lbs?: number | null }[]) {
   if (!loadItems?.length) return '0:0:0';
   let activeCount = 0;
   let packedCount = 0;
@@ -902,7 +944,7 @@ function getLoadItemsSignature(loadItems?: Array<{ deleted_at?: string | null; p
   return `${activeCount}:${packedCount}:${Math.round(totalWeight)}`;
 }
 
-function getWaypointSignature(waypoints?: Array<{ latitude?: number; longitude?: number }>) {
+function getWaypointSignature(waypoints?: { latitude?: number; longitude?: number }[]) {
   if (!waypoints?.length) return '0';
   const first = waypoints[0];
   const last = waypoints[waypoints.length - 1];
@@ -934,14 +976,18 @@ function getCompactWidgetRenderKey(
 
   switch (widgetType) {
     case 'attitude-monitor':
+    case 'attitude-command':
       return [
         renderOptions?.rollDeg ?? '',
         renderOptions?.pitchDeg ?? '',
         renderOptions?.sensorStatus ?? '',
         renderOptions?.sampleTimestampMs ?? '',
+        renderOptions?.isCalibrated ?? '',
         renderOptions?.advancedMode ?? '',
         renderOptions?.isFeatured ?? '',
         renderOptions?.isCompressedRow ?? '',
+        activeVehicleContext?.profileSignature ?? '',
+        activeVehicleContext?.activeVehicleId ?? '',
       ].join(':');
     case 'vehicle-systems':
       return [
@@ -999,6 +1045,9 @@ function getCompactWidgetRenderKey(
         data?.aiTopSignalTitle ?? '',
         data?.dashboardCommandState?.metaMode ?? '',
         data?.dashboardCommandState?.compactSummary ?? '',
+        renderOptions?.gpsLatitude ?? '',
+        renderOptions?.gpsLongitude ?? '',
+        renderOptions?.gpsSpeedMph ?? '',
         gps?.hasFix ?? renderOptions?.gpsHasFix ?? '',
       ].join(':');
     case 'hwy-forward-weather':
@@ -1013,6 +1062,8 @@ function getCompactWidgetRenderKey(
         renderOptions?.gpsLatitude ?? '',
         renderOptions?.gpsLongitude ?? '',
         renderOptions?.gpsHasFix ?? '',
+        renderOptions?.gpsAltitudeFt ?? '',
+        renderOptions?.gpsTimestampMs ?? '',
         data?.weatherSnapshot?.status?.kind ?? '',
         data?.weatherSnapshot?.current?.temp ?? '',
         data?.weatherSnapshot?.alerts?.length ?? '',
@@ -1040,6 +1091,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
   renderOptions, gridLayout, onResizeWidget,
   slotIndex,
   placement, isHighway, viewerOverrides, isVeryShortHeight, highwayWidgetPad,
+  screenWidth, screenHeight,
 }: {
   slot: WidgetSlot;
   layoutMode: boolean;
@@ -1058,8 +1110,11 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
   viewerOverrides?: ViewerStyleOverrides;
   isVeryShortHeight?: boolean;
   highwayWidgetPad?: number;
+  screenWidth?: number;
+  screenHeight?: number;
 }) {
   const registryEntry = slot.widgetType ? getWidgetEntry(slot.widgetType) : null;
+  const hasRegistryEntry = Boolean(registryEntry && slot.widgetType);
   const currentSize = getSlotSize(slot);
   const widgetName = registryEntry?.display_name ?? slot.widgetType;
   const widgetIcon = registryEntry?.icon ?? 'apps-outline';
@@ -1071,22 +1126,35 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     mode: 'compact' | 'full';
     content: React.ReactNode;
   } | null>(null);
-  const headerProgress = useRef(new Animated.Value(isCompact ? 0 : 1)).current;
-  const handoffProgress = useRef(new Animated.Value(1)).current;
+  const headerProgress = useStableAnimatedValue(isCompact ? 0 : 1);
+  const handoffProgress = useStableAnimatedValue(1);
   const headerTarget = isCompact ? 0 : 1;
   const widgetMode = isCompact ? 'compact' : 'full';
   const widgetModeDuration = isCompact ? MOTION.widgetCollapse : MOTION.widgetExpand;
   const headerMinHeight = DASHBOARD_WIDGET_GRAMMAR.headerMinHeight + 4;
   const headerMarginBottom = isHighway ? 5 : compact ? 4 : expanded ? 8 : 6;
   const headerPaddingBottom = isHighway ? 4 : compact ? 4 : expanded ? 6 : 4;
+  const widgetSupportedSizes = useMemo(() => {
+    if (!slot.widgetType) return [currentSize];
+    const layoutAvailable = getAvailableSizes(gridLayout);
+    const supported = getDashboardSupportedSizes(slot.widgetType).filter((size): size is WidgetSize =>
+      layoutAvailable.includes(size as WidgetSize)
+    );
+    return supported.length > 0 ? supported : [currentSize];
+  }, [currentSize, gridLayout, slot.widgetType]);
+  const canResizeThisWidget = !!slot.widgetType &&
+    canResizeDashboardWidget(slot.widgetType) &&
+    widgetSupportedSizes.length > 1;
   const handleCycleSize = React.useCallback(() => {
-    if (!onResizeWidget) return;
-    const newSize = cycleWidgetSize(currentSize, gridLayout);
+    if (!onResizeWidget || widgetSupportedSizes.length <= 1) return;
+    const currentIndex = widgetSupportedSizes.indexOf(currentSize);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % widgetSupportedSizes.length : 0;
+    const newSize = widgetSupportedSizes[nextIndex] ?? currentSize;
     onResizeWidget(slotIndex, newSize);
-  }, [currentSize, gridLayout, onResizeWidget, slotIndex]);
+  }, [currentSize, onResizeWidget, slotIndex, widgetSupportedSizes]);
 
   useLayoutEffect(() => {
-    if (!registryEntry || !slot.widgetType) return;
+    if (!hasRegistryEntry) return;
 
     if (reducedMotion) {
       headerProgress.stopAnimation();
@@ -1100,20 +1168,20 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
       easing: ECS_EASE.smooth,
       useNativeDriver: false,
     }).start();
-  }, [headerProgress, headerTarget, reducedMotion, registryEntry, slot.widgetType, widgetModeDuration]);
+  }, [hasRegistryEntry, headerProgress, headerTarget, reducedMotion, slot.widgetType, widgetModeDuration]);
 
   useLayoutEffect(() => {
-    if (!registryEntry || !slot.widgetType) return;
+    if (!hasRegistryEntry) return;
 
     const previous = previousModeContentRef.current;
     if (reducedMotion || !previous || previous.mode === widgetMode) {
       handoffProgress.stopAnimation();
       handoffProgress.setValue(1);
-      setTransitionSnapshot(null);
+      setTransitionSnapshot((current) => (current === null ? current : null));
       return;
     }
 
-    setTransitionSnapshot(previous);
+    setTransitionSnapshot((current) => (current === previous ? current : previous));
     handoffProgress.stopAnimation();
     handoffProgress.setValue(0);
 
@@ -1123,15 +1191,16 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
       easing: ECS_EASE.smooth,
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) setTransitionSnapshot(null);
+      if (finished) setTransitionSnapshot((current) => (current === null ? current : null));
     });
-  }, [handoffProgress, reducedMotion, registryEntry, slot.widgetType, widgetMode, widgetModeDuration]);
+  }, [handoffProgress, hasRegistryEntry, reducedMotion, slot.widgetType, widgetMode, widgetModeDuration]);
 
   useLayoutEffect(() => {
-    if (!registryEntry || !slot.widgetType) return;
+    if (!hasRegistryEntry) return;
     previousModeContentRef.current = { mode: widgetMode, content: currentRenderedContentRef.current };
   });
 
+  const isNavigateSurfaceSlot = slot.widgetType === 'navigate-surface';
   // ── Safe fallback: widget type is set but not found in catalog/registry ──
   if (slot.widgetType && !registryEntry) {
     const isInRegistry = isRegistered(slot.widgetType);
@@ -1148,6 +1217,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
           viewerOverrides?.panelBgOverride ? { backgroundColor: viewerOverrides.panelBgOverride } : null,
           viewerOverrides?.borderColorOverride ? { borderColor: viewerOverrides.borderColorOverride } : null,
         ]}>
+          <WidgetContainerBackground />
           <View style={[styles.widgetContent, styles.widgetUnavailableContent]}>
             <View style={styles.slotHeaderRow}>
               <ECSBadge label="UNAVAILABLE" tone="unavailable" compact />
@@ -1175,11 +1245,23 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
 
   const isMultiCell = placement && (placement.colSpan > 1 || placement.rowSpan > 1);
   const isFeaturedWidget = placement ? placement.colSpan > 1 : false;
-  const opts: WidgetRenderOptions = { ...renderOptions, compact: isCompact, viewerOverrides, isFeatured: isFeaturedWidget };
-  const compactRenderKey = getCompactWidgetRenderKey(slot.widgetType, widgetData, opts);
+  const opts: WidgetRenderOptions = {
+    ...renderOptions,
+    compact: isCompact,
+    viewerOverrides,
+    isFeatured: isFeaturedWidget,
+    widgetWidth: placement?.width ?? null,
+    widgetHeight: placement?.height ?? null,
+    screenWidth: screenWidth ?? null,
+    screenHeight: screenHeight ?? null,
+  };
 
   // Phase 8: Attitude Monitor primary instrument cluster detection
-  const isAttitudeMonitor = slot.widgetType === 'attitude-monitor';
+  const isAttitudeMonitor = slot.widgetType === 'attitude-monitor' || slot.widgetType === 'attitude-command';
+  const isNavigateSurface = isNavigateSurfaceSlot;
+
+  const isNavigateSurfaceFullBleed =
+    isNavigateSurface && !layoutMode;
 
   // ── Phase 11: Instrument Hierarchy tier resolution ──
   // Resolves visual weight tier (primary/secondary/support) for core instruments.
@@ -1222,10 +1304,9 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     outputRange: [0, isCompact ? -WIDGET_MODE_SETTLE_PX : WIDGET_MODE_SETTLE_PX],
     extrapolate: 'clamp',
   });
-  const renderedContent = useMemo(
-    () => renderWidgetContent(slot.widgetType ?? undefined, widgetData, opts),
-    [slot.widgetType, compactRenderKey, opts.compact, opts.dashboardMode, opts.viewerOverrides, opts.isFeatured, opts.isCompressedRow]
-  );
+  const renderedContent = slot.widgetType
+    ? renderWidgetContent(slot.widgetType, widgetData, opts)
+    : null;
   currentRenderedContentRef.current = renderedContent;
 
   return (
@@ -1237,11 +1318,11 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
 
 
       {/* Size picker badge (bottom-left in layout mode) — hidden in Highway precision */}
-      {layoutMode && !isDragging && !!onResizeWidget && !isHighway && (
+      {layoutMode && !isDragging && !!onResizeWidget && !isHighway && canResizeThisWidget && (
         <View style={styles.sizeBadgeContainer}>
           <SizePickerBadge
             currentSize={currentSize}
-            gridLayout={gridLayout}
+            availableSizes={widgetSupportedSizes}
             onCycle={handleCycleSize}
           />
         </View>
@@ -1256,7 +1337,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
         // Applied AFTER base styles so hierarchy overrides take precedence.
         // Primary: darker bg + gold border; Secondary: standard; Support: lighter bg + softer border
         hierarchyStyle && !isHighway && !layoutMode && !isLight && {
-          backgroundColor: hierarchyStyle.panelBg,
+          backgroundColor: withPanelAlpha(hierarchyStyle.panelBg, 'D8'),
           borderColor: hierarchyStyle.borderColor,
           borderWidth: hierarchyStyle.borderWidth,
           shadowOpacity: hierarchyStyle.shadowOpacity,
@@ -1270,14 +1351,19 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
       ]}>
         {/* Phase 8/9: Inset shadow simulation — top-left inner highlight, bottom-right inner shadow */}
         {/* Phase 11: Hierarchy-aware inset tinting (primary=gold, secondary=neutral, support=soft) */}
-        <View style={[
-          styles.widgetInsetTop,
-          hierarchyStyle && !isLight ? { backgroundColor: hierarchyStyle.insetTopColor } : null,
-        ]} pointerEvents="none" />
-        <View style={[
-          styles.widgetInsetBottom,
-          hierarchyStyle && !isLight ? { backgroundColor: hierarchyStyle.insetBotColor } : null,
-        ]} pointerEvents="none" />
+        <WidgetContainerBackground />
+        {!isAttitudeMonitor ? (
+          <>
+            <View style={[
+              styles.widgetInsetTop,
+              hierarchyStyle && !isLight ? { backgroundColor: hierarchyStyle.insetTopColor } : null,
+            ]} pointerEvents="none" />
+            <View style={[
+              styles.widgetInsetBottom,
+              hierarchyStyle && !isLight ? { backgroundColor: hierarchyStyle.insetBotColor } : null,
+            ]} pointerEvents="none" />
+          </>
+        ) : null}
 
 
 
@@ -1298,12 +1384,16 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
             paddingVertical: DASHBOARD_WIDGET_GRAMMAR.grid.collapsedPadY,
           },
           isVeryShortHeight && !isHighway && !expanded && !isCompact && { paddingHorizontal: 11, paddingVertical: 10 },
+          isAttitudeMonitor && !layoutMode && styles.widgetContentAttitudeStage,
+          isNavigateSurfaceFullBleed && styles.widgetContentAttitudeStage,
         ]}>
           {/* Widget Header */}
           <Animated.View
             pointerEvents={isCompact ? 'none' : 'auto'}
             style={[
               styles.widgetHeaderWrap,
+              isAttitudeMonitor && !layoutMode && styles.widgetHeaderAttitudeHidden,
+              isNavigateSurfaceFullBleed && styles.widgetHeaderAttitudeHidden,
               {
                 opacity: headerProgress,
                 maxHeight: headerProgress.interpolate({
@@ -1508,16 +1598,16 @@ function DragGhost({
 // ── Main Grid ──────────────────────────────────────────
 export default function WidgetGrid({
   slots, profile, gridLayout, layoutMode,
-  onEnterLayoutMode, onExitLayoutMode,
-  onEmptySlotPress, onWidgetPress,
+  onEmptySlotPress, onWidgetLongPress,
   onRemoveWidget, onSwapSlots, onResizeWidget, onRestoreDefaults,
   widgetData, dashboardMode, isCompact,
   rollDeg, pitchDeg, sensorStatus,
-  sampleTimestampMs,
+  sampleTimestampMs, isCalibrated, onCalibrate, onResetCalibration,
   advancedModeEnabled, perWidgetAutoCollapse,
   containerHeight,
   containerWidth: containerWidthProp,
-  gpsLatitude, gpsLongitude, gpsSpeedMph, gpsHasFix, gpsAltitudeFt,
+  gpsLatitude, gpsLongitude, gpsSpeedMph, gpsHasFix, gpsAccuracyM, gpsAltitudeFt, gpsTimestampMs,
+  onOpenCommandBrief,
 }: WidgetGridProps) {
 
   const reducedMotion = useReducedMotion();
@@ -1532,6 +1622,9 @@ export default function WidgetGrid({
       ? trimTrailingEmptySlots(slots)
       : slots;
   const isFixedTwoByTwo = isFixedTwoByTwoDashboardMode(dashboardMode, gridLayout, placementSlots);
+  const hasDominantAttitudeCommandSurface = placementSlots.some(
+    (slot) => slot.widgetType === 'attitude-command' && getSlotSize(slot) === '2x2',
+  );
 
   // ── Consumables revision counter (Phase 5: Sustainability single source of truth) ──
   // Subscribes to consumablesStore so that when Sustainability widget saves
@@ -1607,15 +1700,47 @@ export default function WidgetGrid({
   const gridPad = isHighway
     ? adaptive.dashboard.highwayGridPadding
     : adaptive.dashboard.gridPadding;
-  const gridGap = isHighway
+  const isLandscapeConstrained =
+    windowWidth > windowHeight &&
+    typeof containerHeight === 'number' &&
+    containerHeight > 0 &&
+    containerHeight < 430;
+  const isSmallSurfaceConstrained =
+    typeof containerHeight === 'number' &&
+    containerHeight > 0 &&
+    (containerHeight < 360 || containerWidth < 340);
+  const useTightWidgetFit = isLandscapeConstrained || isSmallSurfaceConstrained || isVeryShortHeight;
+  const widgetFitScale = useTightWidgetFit
+    ? containerHeight && containerHeight < 320
+      ? 0.68
+      : 0.78
+    : 1;
+  const fixedTwoByTwoGridPad = Math.max(8, Math.round(gridPad * 0.58));
+  const attitudeCommandGridPad = Math.max(
+    6,
+    Math.round(gridPad * (adaptive.isTablet ? 0.52 : 0.46)),
+  );
+  const basePlacementGridPad = hasDominantAttitudeCommandSurface
+    ? attitudeCommandGridPad
+    : isFixedTwoByTwo
+      ? fixedTwoByTwoGridPad
+      : gridPad;
+  const baseGridGap = isHighway
     ? adaptive.dashboard.highwayGridGap
     : adaptive.dashboard.gridGap;
+  const placementGridPad = useTightWidgetFit
+    ? Math.max(4, Math.round(basePlacementGridPad * widgetFitScale))
+    : basePlacementGridPad;
+  const gridGap = useTightWidgetFit
+    ? Math.max(5, Math.round(baseGridGap * widgetFitScale))
+    : baseGridGap;
   const highwayWidgetPad = Math.max(14, adaptive.dashboard.widgetPadding);
   const highwayGridMaxWidth = useMemo(
     () => getHighwayGridMaxWidth(adaptive.isTablet, adaptive.isTabletWide),
     [adaptive.isTablet, adaptive.isTabletWide],
   );
   const placementContainerWidth = useMemo(() => {
+    if (hasDominantAttitudeCommandSurface) return containerWidth;
     if (isHighway || !adaptive.isTablet) return containerWidth;
     return Math.min(
       containerWidth,
@@ -1628,6 +1753,7 @@ export default function WidgetGrid({
     adaptive.isTabletWide,
     containerWidth,
     gridLayout,
+    hasDominantAttitudeCommandSurface,
     isHighway,
   ]);
   const gridOffsetX = useMemo(
@@ -1639,26 +1765,38 @@ export default function WidgetGrid({
   const renderOptions: WidgetRenderOptions = useMemo(() => ({
     dashboardMode: dashboardMode || 'expedition',
     compact: isCompact,
-    rollDeg: rollDeg ?? 0,
-    pitchDeg: pitchDeg ?? 0,
+    rollDeg: rollDeg ?? null,
+    pitchDeg: pitchDeg ?? null,
     sensorStatus: sensorStatus || 'OFFLINE',
     sampleTimestampMs: sampleTimestampMs ?? null,
+    isCalibrated,
+    onCalibrate,
+    onResetCalibration,
     advancedMode: advancedModeEnabled,
     viewerOverrides,
     gpsLatitude,
     gpsLongitude,
     gpsSpeedMph,
     gpsHasFix,
+    gpsAccuracyM,
     gpsAltitudeFt,
+    gpsTimestampMs,
+    onOpenCommandBrief,
   }), [
     advancedModeEnabled,
     dashboardMode,
+    gpsAccuracyM,
     gpsAltitudeFt,
     gpsHasFix,
     gpsLatitude,
     gpsLongitude,
     gpsSpeedMph,
+    gpsTimestampMs,
+    isCalibrated,
     isCompact,
+    onCalibrate,
+    onOpenCommandBrief,
+    onResetCalibration,
     pitchDeg,
     rollDeg,
     sampleTimestampMs,
@@ -1680,7 +1818,7 @@ export default function WidgetGrid({
           placementSlots,
           containerHeight || 0,
           containerWidth,
-          gridPad,
+          placementGridPad,
           gridGap,
           highwayGridMaxWidth,
         ),
@@ -1695,7 +1833,7 @@ export default function WidgetGrid({
           placementSlots,
           containerHeight || 0,
           placementContainerWidth,
-          gridPad,
+          placementGridPad,
           gridGap,
         ),
         compressedRows: new Set<number>(),
@@ -1717,7 +1855,7 @@ export default function WidgetGrid({
       containerHeight,
       isCompact,
       placementContainerWidth,
-      gridPad,
+      placementGridPad,
       gridGap,
     );
 
@@ -1746,7 +1884,7 @@ export default function WidgetGrid({
       totalHeight: adjustedTotalHeight,
       cellW: baseResult.cellW,
       cellH: baseResult.cellH,
-      gridWidth: placementContainerWidth - gridPad * 2,
+      gridWidth: placementContainerWidth - placementGridPad * 2,
       offsetX: gridOffsetX,
       compressedRows,
       isLandscapeReduced,
@@ -1762,7 +1900,7 @@ export default function WidgetGrid({
     containerWidth,
     placementContainerWidth,
     gridOffsetX,
-    gridPad,
+    placementGridPad,
     gridGap,
   ]);
 
@@ -1775,9 +1913,7 @@ export default function WidgetGrid({
   const layoutTransitionRef = useRef<{ compact: boolean; signature: string } | null>(null);
 
   useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
+    enableLegacyAndroidLayoutAnimation();
   }, []);
 
   useEffect(() => {
@@ -1810,7 +1946,7 @@ export default function WidgetGrid({
   // ── Drag State ─────────────────────────────────────────
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
-  const dragPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const dragPosition = useStableAnimatedValueXY({ x: 0, y: 0 });
   const gridOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const isDraggingRef = useRef(false);
@@ -1911,7 +2047,7 @@ export default function WidgetGrid({
     const { width } = e.nativeEvent.layout;
     // Self-measure width (used as fallback if containerWidth prop not provided)
     if (width > 0 && !containerWidthProp) {
-      setMeasuredWidth(width);
+      setMeasuredWidth((prev) => (Math.abs(prev - width) < 2 ? prev : width));
     }
     const ref = e.target;
     if (ref && typeof (ref as any).measureInWindow === 'function') {
@@ -1923,7 +2059,7 @@ export default function WidgetGrid({
 
   // ── Find which slot a screen point is over ─────────────
   const findSlotAtPosition = useCallback((pageX: number, pageY: number): number | null => {
-    const gridX = pageX - gridOriginRef.current.x - gridPad - offsetX;
+    const gridX = pageX - gridOriginRef.current.x - placementGridPad - offsetX;
     const gridY = pageY - gridOriginRef.current.y;
 
     let bestSlot: number | null = null;
@@ -1947,7 +2083,7 @@ export default function WidgetGrid({
       }
     }
     return bestSlot;
-  }, [gridPad, offsetX, placements]);
+  }, [placementGridPad, offsetX, placements]);
 
   // ── Create PanResponder for a specific slot ────────────
   const createPanResponder = useCallback((slotIndex: number) => {
@@ -1971,8 +2107,8 @@ export default function WidgetGrid({
 
         const placement = placementMap.get(slotIndex);
         if (placement) {
-          dragStartRef.current = { x: placement.x + gridPad + offsetX, y: placement.y };
-          dragPosition.setValue({ x: placement.x + gridPad + offsetX, y: placement.y });
+          dragStartRef.current = { x: placement.x + placementGridPad + offsetX, y: placement.y };
+          dragPosition.setValue({ x: placement.x + placementGridPad + offsetX, y: placement.y });
         }
       },
       onPanResponderMove: (_, gs) => {
@@ -2006,7 +2142,7 @@ export default function WidgetGrid({
         dragPosition.setValue({ x: 0, y: 0 });
       },
     });
-  }, [dragPosition, findSlotAtPosition, gridPad, layoutMode, offsetX, onSwapSlots, placementMap, slots]);
+  }, [dragPosition, findSlotAtPosition, placementGridPad, layoutMode, offsetX, onSwapSlots, placementMap, slots]);
 
   // ── Memoize PanResponders per slot ─────────────────────
   const panResponders = useMemo(() => {
@@ -2078,13 +2214,14 @@ export default function WidgetGrid({
         // Check if widget can be removed
         const registryEntry = slot.widgetType ? getWidgetEntry(slot.widgetType) : null;
         const canRemove = registryEntry ? registryEntry.removable : true;
+        const widgetMenuLongPressEnabled = slot.widgetType !== 'attitude-command';
 
         // Absolute positioning with explicit pad offset for centering.
         // p.x is in content-area coordinates (0-based within the padded zone).
-        // Adding gridPad shifts widgets inward so they are visually centered.
+        // Adding placementGridPad shifts widgets inward so they are visually centered.
         const positionStyle = {
           position: 'absolute' as const,
-          left: p.x + gridPad + offsetX,
+          left: p.x + placementGridPad + offsetX,
           top: p.y,
           width: p.width,
           height: p.height,
@@ -2120,13 +2257,21 @@ export default function WidgetGrid({
                   <TouchableOpacity
                     style={{ flex: 1 }}
                     onPress={() => {
-                      if (!layoutMode) onWidgetPress(slot);
+                      if (!layoutMode && slot.widgetType === 'expedition-readiness') {
+                        onOpenCommandBrief?.();
+                        return;
+                      }
+                      if (!layoutMode && slot.widgetType === 'hwy-forward-weather') onWidgetLongPress(slot);
                     }}
-                    onLongPress={() => {
-                      if (!layoutMode) onEnterLayoutMode();
-                    }}
+                    onLongPress={
+                      widgetMenuLongPressEnabled
+                        ? () => {
+                          if (!layoutMode) onWidgetLongPress(slot);
+                        }
+                        : undefined
+                    }
                     delayLongPress={500}
-                    activeOpacity={layoutMode ? 1 : 0.7}
+                    activeOpacity={1}
                     disabled={isDragging}
                   >
                     <WidgetPlateContent
@@ -2147,6 +2292,8 @@ export default function WidgetGrid({
                       viewerOverrides={viewerOverrides}
                       isVeryShortHeight={isVeryShortHeight}
                       highwayWidgetPad={highwayWidgetPad}
+                      screenWidth={windowWidth}
+                      screenHeight={windowHeight}
                     />
 
                   </TouchableOpacity>
@@ -2354,9 +2501,9 @@ const styles = StyleSheet.create({
   widgetPlate: {
     flex: 1,
     borderRadius: 16,
-    backgroundColor: DEPTH_PANELS[2].backgroundColor,
+    backgroundColor: withPanelAlpha(DEPTH_PANELS[2].backgroundColor, 'D8'),
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.16)',
+    borderColor: 'rgba(196,138,44,0.18)',
     overflow: 'hidden',
     // Adaptive Depth Level 2 — standard widget elevation
     shadowColor: DEPTH_SHADOWS[2].shadowColor,
@@ -2367,6 +2514,16 @@ const styles = StyleSheet.create({
   },
 
   // Adaptive Depth: Inset shadow simulation — top edge highlight
+  widgetContainerBackgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  widgetContainerBackground: {
+    flex: 1,
+  },
+  widgetContainerBackgroundImage: {
+    borderRadius: 16,
+  },
+
   widgetInsetTop: {
     position: 'absolute',
     top: 0,
@@ -2392,7 +2549,7 @@ const styles = StyleSheet.create({
   widgetPlateInstrument: {
     borderWidth: 1,
     borderColor: GOLD_RAIL.instrument,
-    backgroundColor: DEPTH_PANELS[3].backgroundColor,  // #131820 — slightly elevated
+    backgroundColor: withPanelAlpha(DEPTH_PANELS[3].backgroundColor, 'DD'),
     // Depth Level 3 — primary instrument elevation
     shadowOpacity: DEPTH_SHADOWS[3].shadowOpacity,
     shadowRadius: DEPTH_SHADOWS[3].shadowRadius,
@@ -2403,7 +2560,8 @@ const styles = StyleSheet.create({
 
   widgetPlateHighway: {
     borderRadius: 16,
-    borderColor: 'rgba(196,138,44,0.12)',
+    backgroundColor: withPanelAlpha(DEPTH_PANELS[1].backgroundColor, 'D0'),
+    borderColor: 'rgba(196,138,44,0.14)',
     // Highway uses slightly reduced depth
     shadowOpacity: DEPTH_SHADOWS[1].shadowOpacity,
     shadowRadius: DEPTH_SHADOWS[1].shadowRadius,
@@ -2442,6 +2600,10 @@ const styles = StyleSheet.create({
     paddingVertical: DASHBOARD_WIDGET_GRAMMAR.grid.defaultPadY,
     zIndex: 2,                               // Above inset shadow overlays
   },
+  widgetContentAttitudeStage: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
   widgetUnavailableContent: {
     justifyContent: 'space-between',
   },
@@ -2462,6 +2624,9 @@ const styles = StyleSheet.create({
   },
   widgetHeaderWrap: {
     overflow: 'hidden',
+  },
+  widgetHeaderAttitudeHidden: {
+    display: 'none',
   },
   widgetHeaderHighway: {
     minHeight: 24,

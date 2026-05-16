@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   Alert,
   StyleSheet,
@@ -10,13 +10,20 @@ import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import TacticalPopupShell from '../TacticalPopupShell';
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
-import type { DashboardMode } from '../../lib/dashboardStore';
+import {
+  dashboardStore,
+  GRID_LAYOUT_CONFIG,
+  type DashboardMode,
+  type DashboardProfile,
+  type GridLayout,
+} from '../../lib/dashboardStore';
 import { useApp } from '../../context/AppContext';
 import {
-  CATEGORY_LABELS,
   checkRedundancy,
+  filterDashboardWidgetPickerEntriesForReplacement,
   getDashboardLibraryWidgets,
-  getLibraryCategoryOrder,
+  getDashboardWidgetPickerDisplayName,
+  getDashboardSupportedSizes,
   isDuplicate,
 } from '../../lib/widgetRegistry';
 import { hasPremiumEntitlement, isPremiumWidget } from '../../lib/subscriptionAccess';
@@ -29,6 +36,7 @@ interface WidgetLibraryProps {
   onCreateCustom: () => void;
   advancedModeEnabled?: boolean;
   dashboardMode?: DashboardMode;
+  currentLayout?: GridLayout;
   intent?: 'add' | 'replace';
   targetSlotIndex?: number;
   currentWidgetType?: string | null;
@@ -42,6 +50,7 @@ export default function WidgetLibrary({
   onCreateCustom,
   advancedModeEnabled = false,
   dashboardMode = 'expedition',
+  currentLayout = '2x2',
   intent = 'add',
   targetSlotIndex = 0,
   currentWidgetType = null,
@@ -49,16 +58,46 @@ export default function WidgetLibrary({
   void onCreateCustom;
   const router = useRouter();
   const { operatorInfo, showToast } = useApp();
+  const dashboardProfile: DashboardProfile = dashboardMode === 'highway' ? 'vehicle' : 'expedition';
+
+  const canLayoutHostWidget = useCallback((widgetId: string): boolean => {
+    const config = GRID_LAYOUT_CONFIG[currentLayout];
+    return getDashboardSupportedSizes(widgetId).some((size) => {
+      if (size === '2x2') return config.cols >= 2 && config.rows >= 2;
+      if (size === '2x1') return config.cols >= 2;
+      if (size === '1x2') return config.rows >= 2;
+      return true;
+    });
+  }, [currentLayout]);
 
   const assignedIds = assignedWidgets.filter(Boolean) as string[];
   const registryWidgets = useMemo(
-    () => getDashboardLibraryWidgets(advancedModeEnabled, dashboardMode),
-    [advancedModeEnabled, dashboardMode],
+    () => {
+      const compatibleWidgets = getDashboardLibraryWidgets(advancedModeEnabled, dashboardMode)
+        .filter((entry) =>
+          canLayoutHostWidget(entry.widget_id) &&
+          dashboardStore.canAssignWidget(dashboardProfile, targetSlotIndex, entry.widget_id)
+        );
+      return filterDashboardWidgetPickerEntriesForReplacement(
+        compatibleWidgets,
+        intent,
+        currentWidgetType,
+      );
+    },
+    [
+      advancedModeEnabled,
+      canLayoutHostWidget,
+      currentWidgetType,
+      dashboardMode,
+      dashboardProfile,
+      intent,
+      targetSlotIndex,
+    ],
   );
-  const categoryOrder = useMemo(() => getLibraryCategoryOrder(), []);
   const activeCount = assignedIds.length;
   const currentActionLabel = intent === 'replace' ? 'Replace' : 'Add';
   const currentSlotLabel = `SLOT ${targetSlotIndex + 1}`;
+  const isAttitudeCommandCenterReplacement = intent === 'replace' && currentWidgetType === 'attitude-command';
 
   const handleWidgetSelect = (widgetId: string) => {
     if (isPremiumWidget(widgetId) && !hasPremiumEntitlement(operatorInfo)) {
@@ -68,7 +107,7 @@ export default function WidgetLibrary({
       return;
     }
 
-    if (widgetId !== currentWidgetType && isDuplicate(widgetId, assignedWidgets)) {
+    if (!isAttitudeCommandCenterReplacement && widgetId !== currentWidgetType && isDuplicate(widgetId, assignedWidgets)) {
       Alert.alert(
         'Already Active',
         'This widget is already active on the current dashboard.',
@@ -77,8 +116,17 @@ export default function WidgetLibrary({
       return;
     }
 
+    if (!isAttitudeCommandCenterReplacement && !dashboardStore.canAssignWidget(dashboardProfile, targetSlotIndex, widgetId)) {
+      Alert.alert(
+        'Dashboard Region Full',
+        'This dashboard region is full or cannot host that widget size. Remove or replace a widget before adding another.',
+        [{ text: 'OK' }],
+      );
+      return;
+    }
+
     const warnings = checkRedundancy(widgetId, assignedIds);
-    if (warnings.length > 0) {
+    if (!isAttitudeCommandCenterReplacement && warnings.length > 0) {
       Alert.alert(
         'Overlapping Data',
         `${warnings[0].message}\n\n${currentActionLabel} it anyway?`,
@@ -102,22 +150,22 @@ export default function WidgetLibrary({
       eyebrow="CURATED DASHBOARD"
       title={intent === 'replace' ? 'Replace Widget' : 'Add Widget'}
       subtitle="Choose a field-ready widget for this slot without changing the rest of the layout."
-      overlayClass="editor"
+      overlayClass="workflow"
       maxWidth={900}
-      maxHeightFraction={0.78}
-      minHeightFraction={0.7}
+      maxHeightFraction={0.94}
+      minHeightFraction={0.86}
       contentContainerStyle={styles.content}
       footer={
         <View style={styles.footerRow}>
           <Text style={styles.footerText}>
-            {currentSlotLabel} • {activeCount} active • curated library limited to 10 field-ready widgets
+            {currentSlotLabel} • {activeCount} active • {registryWidgets.length} compatible field-ready widgets
           </Text>
         </View>
       }
     >
       <View style={styles.introCard}>
         <Text style={styles.introEyebrow}>
-          {dashboardMode === 'highway' ? 'HIGHWAY SET' : 'EXPEDITION SET'}
+          WIDGET SET
         </Text>
         <Text style={styles.introTitle}>
           {intent === 'replace' ? `${currentSlotLabel} replacement` : `${currentSlotLabel} ready to fill`}
@@ -129,73 +177,71 @@ export default function WidgetLibrary({
         </Text>
       </View>
 
-      {categoryOrder.map((category) => {
-        const categoryWidgets = registryWidgets.filter((widget) => widget.category === category);
-        if (categoryWidgets.length === 0) return null;
+      {registryWidgets.map((entry) => {
+        const isCurrentSlotWidget = !isAttitudeCommandCenterReplacement && currentWidgetType === entry.widget_id;
+        const isAssignedElsewhere =
+          !isAttitudeCommandCenterReplacement &&
+          !isCurrentSlotWidget &&
+          isDuplicate(entry.widget_id, assignedWidgets);
+        const warnings = checkRedundancy(entry.widget_id, assignedIds);
+        const hasRedundancy = warnings.length > 0 && !isAssignedElsewhere;
+        const displayName =
+          getDashboardWidgetPickerDisplayName(entry.widget_id, intent, currentWidgetType) ??
+          entry.display_name;
+        const actionLabel = isAttitudeCommandCenterReplacement
+          ? 'SELECT'
+          : isCurrentSlotWidget
+            ? 'CURRENT'
+            : isAssignedElsewhere
+              ? 'ACTIVE'
+              : currentActionLabel.toUpperCase();
 
         return (
-          <View key={category}>
-            <Text style={styles.categoryLabel}>{CATEGORY_LABELS[category] || category.toUpperCase()}</Text>
-            {categoryWidgets.map((entry) => {
-              const isCurrentSlotWidget = currentWidgetType === entry.widget_id;
-              const isAssignedElsewhere = !isCurrentSlotWidget && isDuplicate(entry.widget_id, assignedWidgets);
-              const warnings = checkRedundancy(entry.widget_id, assignedIds);
-              const hasRedundancy = warnings.length > 0 && !isAssignedElsewhere;
-              const actionLabel = isCurrentSlotWidget
-                ? 'CURRENT'
-                : isAssignedElsewhere
-                  ? 'ACTIVE'
-                  : currentActionLabel.toUpperCase();
+          <TouchableOpacity
+            key={entry.widget_id}
+            style={[
+              styles.widgetTile,
+              isAssignedElsewhere && styles.widgetTileAssigned,
+              isCurrentSlotWidget && styles.widgetTileCurrent,
+            ]}
+            onPress={() => handleWidgetSelect(entry.widget_id)}
+            activeOpacity={0.75}
+            disabled={isAssignedElsewhere || isCurrentSlotWidget}
+          >
+            <View style={styles.widgetIcon}>
+              <Ionicons name={entry.icon as any} size={18} color={TACTICAL.amber} />
+            </View>
 
-              return (
-                <TouchableOpacity
-                  key={entry.widget_id}
-                  style={[
-                    styles.widgetTile,
-                    isAssignedElsewhere && styles.widgetTileAssigned,
-                    isCurrentSlotWidget && styles.widgetTileCurrent,
-                  ]}
-                  onPress={() => handleWidgetSelect(entry.widget_id)}
-                  activeOpacity={0.75}
-                  disabled={isAssignedElsewhere || isCurrentSlotWidget}
-                >
-                  <View style={styles.widgetIcon}>
-                    <Ionicons name={entry.icon as any} size={18} color={TACTICAL.amber} />
+            <View style={styles.widgetInfo}>
+              <View style={styles.widgetNameRow}>
+                <Text style={styles.widgetName} numberOfLines={1}>{displayName}</Text>
+                {entry.default_size !== '1x1' ? (
+                  <View style={styles.sizeBadge}>
+                    <Text style={styles.sizeBadgeText} numberOfLines={1}>{entry.default_size.toUpperCase()}</Text>
                   </View>
+                ) : null}
+              </View>
+              <Text style={styles.widgetDesc} numberOfLines={3}>{entry.description}</Text>
+              {hasRedundancy ? (
+                <Text style={styles.redundancyText} numberOfLines={2}>{warnings[0].message}</Text>
+              ) : null}
+            </View>
 
-                  <View style={styles.widgetInfo}>
-                    <View style={styles.widgetNameRow}>
-                      <Text style={styles.widgetName}>{entry.display_name}</Text>
-                      {entry.default_size !== '1x1' ? (
-                        <View style={styles.sizeBadge}>
-                          <Text style={styles.sizeBadgeText}>{entry.default_size.toUpperCase()}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text style={styles.widgetDesc}>{entry.description}</Text>
-                    {hasRedundancy ? (
-                      <Text style={styles.redundancyText}>{warnings[0].message}</Text>
-                    ) : null}
-                  </View>
-
-                  {isAssignedElsewhere || isCurrentSlotWidget ? (
-                    <View style={styles.stateBadge}>
-                      <Text style={styles.stateBadgeText}>{actionLabel}</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.actionBadge}>
-                      <Ionicons
-                        name={intent === 'replace' ? 'swap-horizontal-outline' : 'add-circle-outline'}
-                        size={16}
-                        color={TACTICAL.amber}
-                      />
-                      <Text style={styles.actionBadgeText}>{actionLabel}</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+            {isAssignedElsewhere || isCurrentSlotWidget ? (
+              <View style={styles.stateBadge}>
+                <Text style={styles.stateBadgeText}>{actionLabel}</Text>
+              </View>
+            ) : (
+              <View style={styles.actionBadge}>
+                <Ionicons
+                  name={intent === 'replace' ? 'swap-horizontal-outline' : 'add-circle-outline'}
+                  size={16}
+                  color={TACTICAL.amber}
+                />
+                <Text style={styles.actionBadgeText}>{actionLabel}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         );
       })}
     </TacticalPopupShell>
@@ -228,12 +274,6 @@ const styles = StyleSheet.create({
     ...TYPO.B2,
     color: TACTICAL.textMuted,
     lineHeight: 16,
-  },
-  categoryLabel: {
-    ...TYPO.T4,
-    color: TACTICAL.amber,
-    marginTop: 10,
-    marginBottom: 8,
   },
   widgetTile: {
     flexDirection: 'row',
@@ -275,6 +315,7 @@ const styles = StyleSheet.create({
   widgetName: {
     ...TYPO.T3,
     color: TACTICAL.text,
+    flexShrink: 1,
   },
   widgetDesc: {
     ...TYPO.B2,

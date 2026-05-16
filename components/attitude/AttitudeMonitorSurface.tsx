@@ -1,35 +1,22 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  Animated,
-  Easing,
   LayoutChangeEvent,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
-  type ImageSourcePropType,
   type ViewStyle,
 } from 'react-native';
 
+import { SafeIcon as Ionicons } from '../SafeIcon';
 import {
-  createMotionState,
-  INSTRUMENT_EASING,
-  processAngle,
-  resetMotionState,
-} from '../../lib/attitudeMotionEngine';
-import {
-  getAttitudeMonitorHeroSource,
   resolveAttitudeMonitorVehicleVisual,
   type AttitudeMonitorVehicleVisualDescriptor,
 } from '../../lib/attitudeMonitorVehicleVisual';
-import {
-  getAttitudeMonitorBackgroundPresentation,
-  getAttitudeMonitorFallbackHeroSource,
-} from '../../lib/attitudeMonitorAssets';
-import { formatAttitudeDegrees, type AttitudeSurfaceTone } from '../../lib/attitudeMonitorModel';
-import { ATTITUDE_MONITOR_TUNING } from '../../lib/attitudeMonitorTuning';
+import { type AttitudeSurfaceTone } from '../../lib/attitudeMonitorModel';
 import { TACTICAL } from '../../lib/theme';
-import AttitudeMonitorBackgroundLayer from './AttitudeMonitorBackgroundLayer';
-import AttitudeMonitorHeroLayer from './AttitudeMonitorHeroLayer';
+import type { AttitudeTelemetryFrame } from '../../src/features/attitude/attitudeOrientation';
+import VehicleAttitudeStage from '../../src/features/attitude/components/VehicleAttitudeStage';
 
 export type AttitudeSurfaceVariant =
   | 'widgetCompact'
@@ -41,15 +28,26 @@ export type AttitudeSurfaceVariant =
 interface AttitudeMonitorSurfaceProps {
   rollDeg?: number | null;
   pitchDeg?: number | null;
+  rawRollDeg?: number | null;
+  rawPitchDeg?: number | null;
   live?: boolean;
   tone?: AttitudeSurfaceTone;
   postureLabel: string;
   postureInstruction?: string | null;
+  statusLabel?: string | null;
+  statusTone?: AttitudeSurfaceTone;
   rollColor?: string;
   pitchColor?: string;
   topLabel?: string | null;
   variant?: AttitudeSurfaceVariant;
+  vehicleId?: string | null;
   heroVehicle?: AttitudeMonitorVehicleVisualDescriptor;
+  soundEnabled?: boolean;
+  onToggleSound?: (() => void) | null;
+  onCalibrate?: (() => void) | null;
+  onResetCalibration?: (() => void) | null;
+  calibrationActive?: boolean;
+  telemetryFrame?: AttitudeTelemetryFrame;
   style?: ViewStyle;
 }
 
@@ -70,7 +68,11 @@ function heroVehicleEqual(
     left.matchedVehicleId === right.matchedVehicleId &&
     left.usesFallbackAsset === right.usesFallbackAsset &&
     left.usesFallbackFamily === right.usesFallbackFamily &&
+    left.attitudeAssets?.vehicleKey === right.attitudeAssets?.vehicleKey &&
+    left.attitudeVehicleId === right.attitudeVehicleId &&
+    left.missingVehicleId === right.missingVehicleId &&
     left.assetSource === right.assetSource &&
+    left.rearAssetSource === right.rearAssetSource &&
     left.compactAssetSource === right.compactAssetSource &&
     left.fit === right.fit
   );
@@ -83,14 +85,25 @@ function areAttitudeSurfacePropsEqual(
   return (
     previous.rollDeg === next.rollDeg &&
     previous.pitchDeg === next.pitchDeg &&
+    previous.rawRollDeg === next.rawRollDeg &&
+    previous.rawPitchDeg === next.rawPitchDeg &&
     previous.live === next.live &&
     previous.tone === next.tone &&
     previous.postureLabel === next.postureLabel &&
     previous.postureInstruction === next.postureInstruction &&
+    previous.statusLabel === next.statusLabel &&
+    previous.statusTone === next.statusTone &&
     previous.rollColor === next.rollColor &&
     previous.pitchColor === next.pitchColor &&
     previous.topLabel === next.topLabel &&
     previous.variant === next.variant &&
+    previous.vehicleId === next.vehicleId &&
+    previous.soundEnabled === next.soundEnabled &&
+    previous.onToggleSound === next.onToggleSound &&
+    previous.onCalibrate === next.onCalibrate &&
+    previous.onResetCalibration === next.onResetCalibration &&
+    previous.calibrationActive === next.calibrationActive &&
+    previous.telemetryFrame === next.telemetryFrame &&
     previous.style === next.style &&
     heroVehicleEqual(previous.heroVehicle, next.heroVehicle)
   );
@@ -99,22 +112,24 @@ function areAttitudeSurfacePropsEqual(
 function AttitudeMonitorSurface({
   rollDeg,
   pitchDeg,
+  rawRollDeg,
+  rawPitchDeg,
   live = true,
   tone = 'good',
   postureLabel,
-  postureInstruction,
-  rollColor,
-  pitchColor,
   topLabel,
   variant = 'widget',
+  vehicleId,
   heroVehicle,
+  soundEnabled = true,
+  onToggleSound,
+  onCalibrate,
+  onResetCalibration,
+  calibrationActive = false,
+  telemetryFrame = 'device',
   style,
 }: AttitudeMonitorSurfaceProps) {
   const [bounds, setBounds] = useState({ width: 0, height: 0 });
-  const rollAnim = useRef(new Animated.Value(0)).current;
-  const pitchAnim = useRef(new Animated.Value(0)).current;
-  const rollState = useRef(createMotionState());
-  const pitchState = useRef(createMotionState());
 
   const effectiveWidth =
     bounds.width ||
@@ -138,61 +153,17 @@ function AttitudeMonitorSurface({
           : variant === 'widgetCompact'
             ? 140
             : 210);
-  const ratio = effectiveWidth / Math.max(effectiveHeight, 1);
   const automotive = variant === 'automotive';
-  const compactHeight = variant === 'widgetCompact' || effectiveHeight < 152 || effectiveWidth < 250;
-  const ultraCompact = effectiveHeight < 118 || effectiveWidth < 220;
-  const wide = automotive || variant === 'vehicle' || ratio > 1.58;
-  const large = automotive || variant === 'vehicle' || variant === 'detail' || effectiveWidth >= 520;
-  const compactVariant = variant === 'widgetCompact';
-  const backgroundUsage = automotive
-    ? 'automotive'
-    : compactVariant
-      ? 'compact'
-      : variant === 'detail'
-        ? 'detail'
-        : 'standard';
+  const stageWidth = Math.max(effectiveWidth, 1);
+  const stageHeight = Math.max(effectiveHeight, 1);
+  const compactHeight = variant === 'widgetCompact' || stageHeight < 152 || stageWidth < 250;
+  const ultraCompact = stageHeight < 118 || stageWidth < 220;
+  const large = automotive || variant === 'vehicle' || variant === 'detail' || stageWidth >= 520;
   const resolvedHeroVehicle = useMemo(
     () => heroVehicle ?? resolveAttitudeMonitorVehicleVisual(null),
     [heroVehicle],
   );
-  const heroAssetSource = useMemo(
-    () => getAttitudeMonitorHeroSource(resolvedHeroVehicle, { compact: compactVariant, automotive }),
-    [automotive, compactVariant, resolvedHeroVehicle],
-  );
-  const heroFallbackSource = useMemo(
-    () => getAttitudeMonitorFallbackHeroSource({ compact: compactVariant, automotive }),
-    [automotive, compactVariant],
-  );
-  const backgroundPresentation = useMemo(
-    () => getAttitudeMonitorBackgroundPresentation(backgroundUsage),
-    [backgroundUsage],
-  );
-  const heroFit = resolvedHeroVehicle.fit;
-  const [resolvedHeroSource, setResolvedHeroSource] = useState<ImageSourcePropType>(heroAssetSource);
-  const [heroFailed, setHeroFailed] = useState(false);
-  const [backgroundEnabled, setBackgroundEnabled] = useState(
-    Boolean(backgroundPresentation.backgroundSource),
-  );
-  const [overlayEnabled, setOverlayEnabled] = useState(
-    Boolean(backgroundPresentation.overlaySource) && backgroundPresentation.overlayEnabled,
-  );
-
-  useEffect(() => {
-    setResolvedHeroSource(heroAssetSource);
-    setHeroFailed(false);
-  }, [heroAssetSource]);
-
-  useEffect(() => {
-    setBackgroundEnabled(Boolean(backgroundPresentation.backgroundSource));
-    setOverlayEnabled(
-      Boolean(backgroundPresentation.overlaySource) && backgroundPresentation.overlayEnabled,
-    );
-  }, [
-    backgroundPresentation.backgroundSource,
-    backgroundPresentation.overlayEnabled,
-    backgroundPresentation.overlaySource,
-  ]);
+  const resolvedVehicleId = vehicleId ?? resolvedHeroVehicle.attitudeVehicleId;
 
   const palette = useMemo(() => {
     if (tone === 'critical') {
@@ -239,74 +210,6 @@ function AttitudeMonitorSurface({
     };
   }, [tone]);
 
-  useEffect(() => {
-    const easing = Easing.bezier(
-      INSTRUMENT_EASING.p1x,
-      INSTRUMENT_EASING.p1y,
-      INSTRUMENT_EASING.p2x,
-      INSTRUMENT_EASING.p2y,
-    );
-
-    if (!live) {
-      resetMotionState(rollState.current);
-      resetMotionState(pitchState.current);
-      const settle = Animated.parallel([
-        Animated.timing(rollAnim, {
-          toValue: 0,
-          duration: ATTITUDE_MONITOR_TUNING.motion.animation.settleDurationMs,
-          easing,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pitchAnim, {
-          toValue: 0,
-          duration: ATTITUDE_MONITOR_TUNING.motion.animation.settleDurationMs,
-          easing,
-          useNativeDriver: true,
-        }),
-      ]);
-      settle.start();
-      return () => settle.stop();
-    }
-
-    const nextRoll = processAngle(rollState.current, rollDeg ?? 0);
-    const nextPitch = processAngle(pitchState.current, pitchDeg ?? 0);
-    const animations: Animated.CompositeAnimation[] = [];
-
-    if (nextRoll.shouldAnimate) {
-      animations.push(
-        Animated.timing(rollAnim, {
-          toValue: Math.max(
-            -ATTITUDE_MONITOR_TUNING.motion.visible.rollOutputClampDeg,
-            Math.min(ATTITUDE_MONITOR_TUNING.motion.visible.rollOutputClampDeg, nextRoll.smoothedAngle),
-          ),
-          duration: nextRoll.durationMs,
-          easing,
-          useNativeDriver: true,
-        }),
-      );
-    }
-
-    if (nextPitch.shouldAnimate) {
-      animations.push(
-        Animated.timing(pitchAnim, {
-          toValue: Math.max(
-            -ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg,
-            Math.min(ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg, nextPitch.smoothedAngle),
-          ),
-          duration: nextPitch.durationMs,
-          easing,
-          useNativeDriver: true,
-        }),
-      );
-    }
-
-    if (animations.length === 0) return;
-
-    const composite = Animated.parallel(animations);
-    composite.start();
-    return () => composite.stop();
-  }, [live, pitchAnim, pitchDeg, rollAnim, rollDeg]);
-
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
     setBounds((prev) => {
@@ -320,125 +223,28 @@ function AttitudeMonitorSurface({
   const outerPadX = automotive ? 24 : ultraCompact ? 8 : compactHeight ? 10 : large ? 20 : 14;
   const outerPadY = automotive ? 18 : ultraCompact ? 8 : compactHeight ? 10 : large ? 18 : 14;
   const topLabelTop = automotive ? 12 : ultraCompact ? 6 : compactHeight ? 8 : 10;
-  const metricWidth = Math.max(
-    automotive ? 116 : ultraCompact ? 54 : compactHeight ? 62 : 72,
-    Math.min(
-      automotive ? 172 : wide ? 136 : 108,
-      effectiveWidth * (automotive ? 0.165 : wide ? 0.16 : 0.18),
-    ),
-  );
-  const postureBlockHeight = ultraCompact
-    ? 34
-    : compactHeight
-      ? 44
-      : automotive
-        ? postureInstruction
-          ? 66
-          : 52
-      : postureInstruction
-        ? 60
-        : 48;
-  const centerGap = automotive ? 22 : ultraCompact ? 10 : compactHeight ? 12 : 16;
-  const heroAvailableWidth = Math.max(
-    92,
-    effectiveWidth - outerPadX * 2 - metricWidth * 2 - centerGap * 2,
-  );
-  const heroAvailableHeight = Math.max(
-    88,
-    effectiveHeight - outerPadY * 2 - postureBlockHeight - (compactHeight ? 12 : 18),
-  );
-  const safeHeroWidth = Math.max(
-    88,
-    heroAvailableWidth * Math.max(0.68, 1 - heroFit.cropSafeInsets.left - heroFit.cropSafeInsets.right),
-  );
-  const safeHeroHeight = Math.max(
-    74,
-    heroAvailableHeight * Math.max(0.62, 1 - heroFit.cropSafeInsets.top - heroFit.cropSafeInsets.bottom),
-  );
-  const heroWidthTarget = safeHeroWidth * (compactVariant ? heroFit.compactWidthCoverage : heroFit.widthCoverage);
-  const heroHeightTarget = safeHeroHeight * heroFit.heightCoverage;
-  const heroWidthCap = automotive ? 408 : wide ? 320 : large ? 280 : 220;
-  const heroHeightCap = automotive ? 242 : wide ? 218 : large ? 198 : 160;
-  const heroFrameWidth = Math.min(heroWidthTarget, heroHeightTarget * heroFit.aspectRatio, heroWidthCap);
-  const heroFrameHeight = Math.min(heroFrameWidth / heroFit.aspectRatio, heroHeightTarget, heroHeightCap);
-  const heroAnchorBiasX = (heroFit.anchorPoint.x - 0.5) * safeHeroWidth * 0.12;
-  const heroAnchorBiasY = (heroFit.anchorPoint.y - 0.5) * safeHeroHeight * 0.16;
-  const heroPivotBiasX = (heroFit.motionPivot.x - 0.5) * heroFrameWidth * 0.08;
-  const heroPivotBiasY = (heroFit.motionPivot.y - 0.5) * heroFrameHeight * 0.08;
-  const automotiveHeroBiasX = automotive ? Math.min(28, effectiveWidth * 0.028) : 0;
-  const heroSceneBaseY = automotive ? 8 : compactVariant ? 1 : wide ? 5 : 3;
-  const heroOffsetX =
-    heroFit.neutralOffset.x * safeHeroWidth + heroAnchorBiasX + heroPivotBiasX + automotiveHeroBiasX;
-  const heroOffsetY =
-    heroFit.neutralOffset.y * safeHeroHeight + heroAnchorBiasY + heroPivotBiasY + heroSceneBaseY;
-  const assetInsetTop = heroFrameHeight * heroFit.cropSafeInsets.top;
-  const assetInsetRight = heroFrameWidth * heroFit.cropSafeInsets.right;
-  const assetInsetBottom = heroFrameHeight * heroFit.cropSafeInsets.bottom;
-  const assetInsetLeft = heroFrameWidth * heroFit.cropSafeInsets.left;
-  const pitchTravel = Math.max(
-    automotive
-      ? ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.minPx.automotive
-      : ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.minPx.standard,
-    Math.min(
-      automotive
-        ? ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.maxPx.automotive
-        : ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.maxPx.standard,
-      heroAvailableHeight *
-        (automotive
-          ? ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.ratio.automotive
-          : wide
-            ? ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.ratio.wide
-            : ATTITUDE_MONITOR_TUNING.motion.visible.pitchTravel.ratio.standard),
-    ),
-  );
-  const rollVisualRange = automotive
-    ? ATTITUDE_MONITOR_TUNING.motion.visible.rollRotationClampDeg.automotive
-    : ATTITUDE_MONITOR_TUNING.motion.visible.rollRotationClampDeg.standard;
-  const rollVisual = rollAnim.interpolate({
-    inputRange: [
-      -ATTITUDE_MONITOR_TUNING.motion.visible.rollOutputClampDeg,
-      0,
-      ATTITUDE_MONITOR_TUNING.motion.visible.rollOutputClampDeg,
-    ],
-    outputRange: [`-${rollVisualRange}deg`, '0deg', `${rollVisualRange}deg`],
-  });
-  const pitchVisual = pitchAnim.interpolate({
-    inputRange: [
-      -ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg,
-      0,
-      ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg,
-    ],
-    outputRange: [pitchTravel, 0, -pitchTravel],
-  });
-  const shadowOffset = pitchAnim.interpolate({
-    inputRange: [
-      -ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg,
-      0,
-      ATTITUDE_MONITOR_TUNING.motion.visible.pitchOutputClampDeg,
-    ],
-    outputRange: [-4, 0, 5],
-  });
-  const shadowWidth = heroFrameWidth * heroFit.shadowWidthRatio;
-  const shadowBottom =
-    Math.max(18, heroAvailableHeight * heroFit.shadowBottomRatio) - (automotive ? 2 : 1);
-  const shadowHeight = automotive ? 24 : large ? 22 : 19;
-  const contactGlowWidth = shadowWidth * (automotive ? 1.34 : 1.24);
-  const contactGlowBottom = shadowBottom - (automotive ? 6 : 5);
-  const contactGlowOpacity = automotive ? 0.13 : compactVariant ? 0.08 : large ? 0.11 : 0.1;
-  const metricValueSize = automotive ? 37 : ultraCompact ? 17 : compactHeight ? 20 : large ? 31 : 25;
-  const metricLabelSize = automotive ? 11 : ultraCompact ? 8 : compactHeight ? 9 : large ? 11 : 9;
-  const postureValueSize = automotive ? 22 : ultraCompact ? 12 : compactHeight ? 14 : large ? 18 : 16;
-  const postureHintSize = compactHeight ? 0 : automotive ? 12 : large ? 11 : 10;
+  const postureValueSize = automotive ? 13 : ultraCompact ? 9 : compactHeight ? 10 : 11;
   const topLabelSize = automotive ? 10 : ultraCompact ? 8 : compactHeight ? 9 : 10;
-  const metricValueLineHeight = Math.max(metricValueSize + 2, Math.round(metricValueSize * 1.06));
-  const showDecor = !ultraCompact;
-  const showAutomotiveDecor = automotive && showDecor;
-  const showStandardDecor = showDecor && !automotive && !compactVariant;
-  const showInstruction = !compactHeight && !!postureInstruction;
-  const leftValue = live ? formatAttitudeDegrees(rollDeg) : formatAttitudeDegrees(null);
-  const rightValue = live ? formatAttitudeDegrees(pitchDeg) : formatAttitudeDegrees(null);
-  const postureBottom = automotive ? 12 : ultraCompact ? 6 : compactHeight ? 8 : 10;
-
+  const posturePillTop = automotive ? 14 : ultraCompact ? 7 : compactHeight ? 8 : 10;
+  const posturePillRight = automotive ? 18 : ultraCompact ? 8 : compactHeight ? 10 : 12;
+  const soundPillLeft = posturePillRight;
+  const soundPillLabel = ultraCompact
+    ? soundEnabled ? 'ON' : 'OFF'
+    : soundEnabled ? 'SOUND ON' : 'SOUND OFF';
+  const posturePillMaxWidth = Math.max(
+    automotive ? 132 : compactHeight ? 94 : 108,
+    Math.min(
+      automotive ? 220 : compactHeight ? 148 : 176,
+      stageWidth * (automotive ? 0.28 : compactHeight ? 0.34 : 0.36),
+    ),
+  );
+  const soundPillMaxWidth = Math.max(
+    automotive ? 132 : compactHeight ? 94 : 108,
+    Math.min(
+      automotive ? 210 : compactHeight ? 138 : 164,
+      stageWidth * (automotive ? 0.26 : compactHeight ? 0.32 : 0.34),
+    ),
+  );
   return (
     <View
       style={[
@@ -451,56 +257,81 @@ function AttitudeMonitorSurface({
       ]}
       onLayout={handleLayout}
     >
-      <View style={[styles.backgroundBase, { borderColor: palette.edgeSoft }]} />
-      <AttitudeMonitorBackgroundLayer
-        backgroundSource={backgroundPresentation.backgroundSource}
-        backgroundOpacity={backgroundPresentation.backgroundOpacity}
-        backgroundScale={backgroundPresentation.backgroundScale}
-        backgroundOffsetX={backgroundPresentation.backgroundOffsetX}
-        backgroundOffsetY={backgroundPresentation.backgroundOffsetY}
-        overlaySource={backgroundPresentation.overlaySource}
-        overlayOpacity={backgroundPresentation.overlayOpacity}
-        overlayScale={backgroundPresentation.overlayScale}
-        overlayOffsetY={backgroundPresentation.overlayOffsetY}
-        resizeMode={backgroundPresentation.resizeMode}
-        enabled={backgroundEnabled}
-        overlayEnabled={overlayEnabled}
-        width={effectiveWidth}
-        height={effectiveHeight}
-        onBackgroundError={() => setBackgroundEnabled(false)}
-        onOverlayError={() => setOverlayEnabled(false)}
-      />
-      <View style={[styles.backgroundLift, { backgroundColor: palette.lift }]} />
-      {showDecor ? (
-        <>
-          <View
-            style={[
-              styles.canyonGlow,
-              automotive ? styles.automotiveGlow : null,
-              { backgroundColor: palette.glow },
-            ]}
-          />
-          <View style={[styles.canyonSkyBand, automotive ? styles.automotiveSkyBand : null]} />
-          {showStandardDecor ? <View style={styles.canyonShelfFar} /> : null}
-          {showStandardDecor ? <View style={styles.canyonShelfNear} /> : null}
-          <View style={[styles.canyonFloor, automotive ? styles.automotiveFloor : null]} />
-          {showStandardDecor ? (
-            <View style={[styles.scanLine, { borderColor: palette.edgeSoft }]} />
-          ) : null}
-          {showAutomotiveDecor ? (
-            <View style={[styles.automotiveHorizonLine, { borderColor: palette.edgeSoft }]} />
-          ) : null}
-          <View style={[styles.frameInset, { borderColor: palette.edgeSoft }]} />
-        </>
+      {topLabel ? (
+        <Text
+          style={[styles.topLabelText, { top: topLabelTop, fontSize: topLabelSize }]}
+          numberOfLines={1}
+        >
+          {topLabel}
+        </Text>
       ) : null}
 
-      {topLabel ? (
-        <View style={[styles.topLabel, { top: topLabelTop, borderColor: palette.edgeSoft }]}>
-          <Text style={[styles.topLabelText, { fontSize: topLabelSize }]} numberOfLines={1}>
-            {topLabel}
+      {onToggleSound ? (
+        <TouchableOpacity
+          accessibilityLabel={soundEnabled ? 'Disable attitude monitor sound' : 'Enable attitude monitor sound'}
+          accessibilityRole="button"
+          activeOpacity={0.82}
+          onPress={onToggleSound}
+          style={[
+            styles.soundPill,
+            {
+              top: posturePillTop,
+              left: soundPillLeft,
+              maxWidth: soundPillMaxWidth,
+              backgroundColor: soundEnabled ? palette.postureBg : 'rgba(20, 24, 30, 0.9)',
+              borderColor: soundEnabled ? palette.postureBorder : 'rgba(139, 148, 158, 0.2)',
+            },
+          ]}
+        >
+          <Ionicons
+            name={soundEnabled ? 'volume-high-outline' : 'volume-mute-outline'}
+            size={ultraCompact ? 11 : compactHeight ? 12 : 13}
+            color={soundEnabled ? palette.postureText : 'rgba(197, 206, 214, 0.86)'}
+          />
+          <Text
+            style={[
+              styles.soundPillText,
+              {
+                color: soundEnabled ? palette.postureText : 'rgba(197, 206, 214, 0.86)',
+                fontSize: postureValueSize,
+              },
+            ]}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            numberOfLines={1}
+          >
+            {soundPillLabel}
           </Text>
-        </View>
+        </TouchableOpacity>
       ) : null}
+
+      <View
+        style={[
+          styles.posturePill,
+          {
+            top: posturePillTop,
+            right: posturePillRight,
+            maxWidth: posturePillMaxWidth,
+            backgroundColor: palette.postureBg,
+            borderColor: palette.postureBorder,
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.posturePillText,
+            {
+              color: palette.postureText,
+              fontSize: postureValueSize,
+            },
+          ]}
+          adjustsFontSizeToFit
+          minimumFontScale={0.82}
+          numberOfLines={1}
+        >
+          {postureLabel}
+        </Text>
+      </View>
 
       <View
         style={[
@@ -509,119 +340,28 @@ function AttitudeMonitorSurface({
           { paddingHorizontal: outerPadX, paddingVertical: outerPadY },
         ]}
       >
-        <View style={[styles.metricColumn, { width: metricWidth, alignItems: 'flex-start' }]}>
-          <Text style={[styles.metricLabel, { fontSize: metricLabelSize }]}>ROLL</Text>
-          <Text
-            style={[
-              styles.metricValue,
-              {
-                fontSize: metricValueSize,
-                lineHeight: metricValueLineHeight,
-                color: rollColor ?? (tone === 'critical' ? TACTICAL.danger : TACTICAL.text),
-              },
-            ]}
-            numberOfLines={1}
-          >
-            {leftValue}
-          </Text>
-          {!compactHeight ? (
-            <Text style={styles.metricCaption} numberOfLines={1}>
-              Side slope
-            </Text>
-          ) : null}
-        </View>
-
         <View
           style={[
             styles.heroZone,
             automotive ? styles.automotiveHeroZone : null,
-            { marginHorizontal: centerGap, paddingBottom: postureBlockHeight + 10 },
           ]}
         >
           <View style={styles.heroLane}>
-            <AttitudeMonitorHeroLayer
-              heroSource={resolvedHeroSource}
-              onHeroError={() => {
-                if (!heroFailed) {
-                  setResolvedHeroSource(heroFallbackSource);
-                  setHeroFailed(true);
-                }
-              }}
-              frameWidth={heroFrameWidth}
-              frameHeight={heroFrameHeight}
-              insetTop={assetInsetTop}
-              insetRight={assetInsetRight}
-              insetBottom={assetInsetBottom}
-              insetLeft={assetInsetLeft}
-              shadowWidth={shadowWidth}
-              shadowBottom={shadowBottom}
-              shadowOpacity={heroFit.shadowOpacity}
-              shadowHeight={shadowHeight}
-              contactGlowWidth={contactGlowWidth}
-              contactGlowBottom={contactGlowBottom}
-              contactGlowOpacity={contactGlowOpacity}
-              shadowOffset={shadowOffset}
-              pitchVisual={pitchVisual}
-              rollVisual={rollVisual}
-              offsetX={heroOffsetX}
-              offsetY={heroOffsetY}
-              scaleBias={heroFit.scaleBias}
+            <VehicleAttitudeStage
+              vehicleId={resolvedVehicleId}
+              rollDeg={live ? rollDeg ?? 0 : 0}
+              pitchDeg={live ? pitchDeg ?? 0 : 0}
+              telemetryFrame={telemetryFrame}
+              mode={variant === 'detail' || variant === 'vehicle' || variant === 'automotive' ? 'command' : 'monitor'}
+              showZeroButton={live}
+              showReadouts={live}
+              showLiveHashIndicators={live}
+              onZero={live ? onCalibrate ?? undefined : undefined}
+              onResetZero={live ? onResetCalibration ?? undefined : undefined}
+              zeroActive={live && calibrationActive}
             />
           </View>
 
-          <View
-            style={[
-              styles.postureBlock,
-              {
-                bottom: postureBottom,
-                backgroundColor: palette.postureBg,
-                borderColor: palette.postureBorder,
-                paddingHorizontal: automotive ? 16 : ultraCompact ? 10 : compactHeight ? 12 : 14,
-                paddingVertical: automotive ? 10 : ultraCompact ? 6 : compactHeight ? 7 : 9,
-              },
-            ]}
-          >
-            <Text style={styles.postureLabel}>POSTURE</Text>
-            <Text
-              style={[
-                styles.postureValue,
-                {
-                  fontSize: postureValueSize,
-                  color: palette.postureText,
-                },
-              ]}
-              numberOfLines={1}
-            >
-              {postureLabel}
-            </Text>
-            {showInstruction ? (
-              <Text style={[styles.postureInstruction, { fontSize: postureHintSize }]} numberOfLines={1}>
-                {postureInstruction}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-
-        <View style={[styles.metricColumn, { width: metricWidth, alignItems: 'flex-end' }]}>
-          <Text style={[styles.metricLabel, { fontSize: metricLabelSize }]}>PITCH</Text>
-          <Text
-            style={[
-              styles.metricValue,
-              {
-                fontSize: metricValueSize,
-                lineHeight: metricValueLineHeight,
-                color: pitchColor ?? (tone === 'critical' ? TACTICAL.danger : TACTICAL.text),
-              },
-            ]}
-            numberOfLines={1}
-          >
-            {rightValue}
-          </Text>
-          {!compactHeight ? (
-            <Text style={styles.metricCaption} numberOfLines={1}>
-              Fore / aft
-            </Text>
-          ) : null}
         </View>
       </View>
     </View>
@@ -636,95 +376,23 @@ const styles = StyleSheet.create({
     minHeight: 0,
     overflow: 'hidden',
     borderRadius: 20,
-    borderWidth: 1,
-    backgroundColor: '#0A0D10',
-    shadowOpacity: 0.18,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    shadowOpacity: 0,
     shadowOffset: { width: 0, height: 14 },
     shadowRadius: 28,
-    elevation: 10,
+    elevation: 0,
   },
-  backgroundBase: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0A0D10',
-  },
-  backgroundLift: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  canyonGlow: {
-    position: 'absolute',
-    alignSelf: 'center',
-    top: '16%',
-    width: '64%',
-    height: '44%',
-    borderRadius: 999,
-  },
-  canyonSkyBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: '48%',
-    backgroundColor: 'rgba(9,12,15,0.92)',
-  },
-  canyonShelfFar: {
-    position: 'absolute',
-    left: '-12%',
-    right: '16%',
-    bottom: '26%',
-    height: '24%',
-    borderRadius: 999,
-    backgroundColor: 'rgba(73, 49, 29, 0.26)',
-    transform: [{ rotate: '-5deg' }],
-  },
-  canyonShelfNear: {
-    position: 'absolute',
-    left: '18%',
-    right: '-10%',
-    bottom: '18%',
-    height: '22%',
-    borderRadius: 999,
-    backgroundColor: 'rgba(112, 73, 38, 0.16)',
-    transform: [{ rotate: '4deg' }],
-  },
-  canyonFloor: {
-    position: 'absolute',
-    left: '-15%',
-    right: '-15%',
-    bottom: '-6%',
-    height: '28%',
-    borderRadius: 999,
-    backgroundColor: 'rgba(46, 30, 18, 0.86)',
-  },
-  scanLine: {
-    position: 'absolute',
-    left: '14%',
-    right: '14%',
-    bottom: '23%',
-    borderTopWidth: 1,
-  },
-  frameInset: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    right: 8,
-    bottom: 8,
-    borderRadius: 16,
-    borderWidth: 1,
-  },
-  topLabel: {
+  topLabelText: {
     position: 'absolute',
     alignSelf: 'center',
     zIndex: 3,
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(9, 11, 14, 0.84)',
-  },
-  topLabelText: {
     color: 'rgba(230, 237, 243, 0.82)',
     fontWeight: '800',
     letterSpacing: 1.1,
+    textShadowColor: 'rgba(0,0,0,0.64)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
   },
   contentRow: {
     flex: 1,
@@ -734,35 +402,12 @@ const styles = StyleSheet.create({
   automotiveContentRow: {
     alignItems: 'center',
   },
-  metricColumn: {
-    justifyContent: 'center',
-    gap: 3,
-    zIndex: 2,
-  },
-  metricLabel: {
-    color: 'rgba(230, 237, 243, 0.78)',
-    fontWeight: '800',
-    letterSpacing: 1.1,
-  },
-  metricValue: {
-    fontWeight: '900',
-    letterSpacing: -0.8,
-    textShadowColor: 'rgba(0,0,0,0.46)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 8,
-  },
-  metricCaption: {
-    fontSize: 10,
-    lineHeight: 12,
-    color: 'rgba(230, 237, 243, 0.76)',
-    fontWeight: '600',
-  },
   heroZone: {
     flex: 1,
     minWidth: 0,
     minHeight: 0,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'stretch',
   },
   automotiveHeroZone: {
     paddingLeft: 10,
@@ -770,60 +415,47 @@ const styles = StyleSheet.create({
   heroLane: {
     flex: 1,
     width: '100%',
-    alignItems: 'center',
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
     justifyContent: 'center',
     minHeight: 0,
   },
-  automotiveGlow: {
-    top: '19%',
-    width: '56%',
-    height: '38%',
-  },
-  automotiveSkyBand: {
-    height: '42%',
-    backgroundColor: 'rgba(8, 11, 14, 0.95)',
-  },
-  automotiveFloor: {
-    left: '-10%',
-    right: '-10%',
-    bottom: '-8%',
-    height: '24%',
-    backgroundColor: 'rgba(39, 28, 18, 0.92)',
-  },
-  automotiveHorizonLine: {
+  posturePill: {
     position: 'absolute',
-    left: '10%',
-    right: '10%',
-    bottom: '24%',
-    borderTopWidth: 1,
-  },
-  postureBlock: {
-    position: 'absolute',
-    alignSelf: 'center',
-    maxWidth: '82%',
-    minWidth: '56%',
-    borderRadius: 16,
+    zIndex: 4,
+    borderRadius: 999,
     borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  soundPill: {
+    position: 'absolute',
+    zIndex: 4,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
+    gap: 6,
+    minHeight: 24,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  postureLabel: {
-    color: 'rgba(230, 237, 243, 0.78)',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1.1,
-  },
-  postureValue: {
+  posturePillText: {
     fontWeight: '800',
     textAlign: 'center',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
     textShadowColor: 'rgba(0,0,0,0.34)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
   },
-  postureInstruction: {
-    color: 'rgba(230, 237, 243, 0.8)',
-    lineHeight: 12,
-    fontWeight: '600',
+  soundPillText: {
+    fontWeight: '800',
     textAlign: 'center',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    textShadowColor: 'rgba(0,0,0,0.34)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
   },
 });

@@ -205,6 +205,9 @@ const styles = StyleSheet.create({
   label: {
     ...ECS_TEXT.button,
     textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    flexShrink: 1,
   } as TextStyle,
   iconButton: {
     borderWidth: 1,

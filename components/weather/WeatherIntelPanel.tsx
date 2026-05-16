@@ -19,12 +19,17 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL } from '../../lib/theme';
 import {
-  fetchWeatherWithStatus,
-  getAnyCachedWeather,
+  fetchSharedWeatherForCoordinates,
+  getAnyCachedSharedWeather,
+  getCachedSharedWeatherResult,
+} from '../../lib/weatherService';
+import {
   getWeatherAge,
   getWeatherStaleness,
+  hasUsableWeatherResponse,
   type WeatherFetchResult,
 } from '../../lib/weatherStore';
+import type { ECSWeatherSnapshot } from '../../lib/ecsWeather';
 import type { WeatherCoordinate, WaypointWeather } from '../../lib/weatherTypes';
 import { getTrailOverallColor } from '../../lib/weatherTypes';
 import { useApp } from '../../context/AppContext';
@@ -32,8 +37,16 @@ import CurrentConditionsCard from './CurrentConditionsCard';
 import ForecastTimeline from './ForecastTimeline';
 import WeatherAlerts from './WeatherAlerts';
 import TrailConditionsCard from './TrailConditionsCard';
+import { ecsLog } from '../../lib/ecsLogger';
 
 type WeatherTab = 'current' | 'forecast' | 'trail';
+
+const WEATHER_PANEL_FETCH_MEMORY_TTL_MS = 30 * 60 * 1000;
+const WEATHER_PANEL_FETCH_MEMORY_LIMIT = 48;
+const weatherPanelFetchMemory = new Map<string, {
+  coords: WeatherCoordinate[];
+  rememberedAt: number;
+}>();
 
 interface Props {
   coordinates?: WeatherCoordinate[];
@@ -43,6 +56,10 @@ interface Props {
   autoFetch?: boolean;
   compact?: boolean;
   units?: 'imperial' | 'metric';
+  weatherSnapshot?: ECSWeatherSnapshot | null;
+  onRefreshWeather?: (() => void) | null;
+  frameless?: boolean;
+  trailAssessmentActive?: boolean;
 }
 
 function coordsChanged(
@@ -69,6 +86,151 @@ function coordsChanged(
   return false;
 }
 
+function buildWeatherPanelFetchKey(
+  coords: WeatherCoordinate[],
+  units: 'imperial' | 'metric',
+): string {
+  return `${coords.map(c => `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${c.label ?? ''}`).join('|')}|${units}`;
+}
+
+function copyWeatherCoords(coords: WeatherCoordinate[]): WeatherCoordinate[] {
+  return coords.map(coord => ({
+    lat: coord.lat,
+    lng: coord.lng,
+    label: coord.label,
+    accuracyM: coord.accuracyM,
+    timestamp: coord.timestamp,
+  }));
+}
+
+function pruneWeatherPanelFetchMemory(now = Date.now()): void {
+  for (const [key, entry] of weatherPanelFetchMemory) {
+    if (now - entry.rememberedAt > WEATHER_PANEL_FETCH_MEMORY_TTL_MS) {
+      weatherPanelFetchMemory.delete(key);
+    }
+  }
+
+  while (weatherPanelFetchMemory.size > WEATHER_PANEL_FETCH_MEMORY_LIMIT) {
+    const oldestKey = weatherPanelFetchMemory.keys().next().value;
+    if (!oldestKey) break;
+    weatherPanelFetchMemory.delete(oldestKey);
+  }
+}
+
+function rememberWeatherPanelFetchKey(
+  fetchKey: string,
+  coords: WeatherCoordinate[],
+  now = Date.now(),
+): void {
+  if (!fetchKey || coords.length === 0) return;
+  pruneWeatherPanelFetchMemory(now);
+  weatherPanelFetchMemory.set(fetchKey, {
+    coords: copyWeatherCoords(coords),
+    rememberedAt: now,
+  });
+}
+
+function getRememberedWeatherPanelCoords(
+  fetchKey: string,
+  now = Date.now(),
+): WeatherCoordinate[] | null {
+  if (!fetchKey) return null;
+  const remembered = weatherPanelFetchMemory.get(fetchKey);
+  if (!remembered) return null;
+  if (now - remembered.rememberedAt > WEATHER_PANEL_FETCH_MEMORY_TTL_MS) {
+    weatherPanelFetchMemory.delete(fetchKey);
+    return null;
+  }
+  remembered.rememberedAt = now;
+  return copyWeatherCoords(remembered.coords);
+}
+
+function hasUsableWeatherRows(rows: WaypointWeather[] | null | undefined): boolean {
+  if (!rows || rows.length === 0) return false;
+  return rows.some(weather =>
+    weather.current?.temp != null ||
+    weather.current?.temperature != null ||
+    weather.current?.tempF != null ||
+    weather.current?.temperatureF != null ||
+    weather.current?.wind_speed != null ||
+    weather.current?.weather_main ||
+    weather.current?.weather_description ||
+    (weather.forecast?.length ?? 0) > 0 ||
+    (weather.alerts?.length ?? 0) > 0,
+  );
+}
+
+function logWeatherPanelRetention(event: string, payload?: Record<string, unknown>): void {
+  ecsLog.dev('WEATHER', event, payload, {
+    tag: '[WEATHER]',
+    debugFlag: 'ECS_DEBUG_WEATHER',
+    fingerprint: `${event}:${JSON.stringify(payload ?? {})}`,
+    throttleMs: 5000,
+    aggregateWindowMs: 30_000,
+  });
+}
+
+function getSnapshotError(snapshot: ECSWeatherSnapshot | null): string | null {
+  switch (snapshot?.status.kind) {
+    case 'permission_required':
+    case 'permission-blocked':
+      return 'Location permission is required to load live weather for your current position.';
+    case 'network-blocked':
+      return 'Network access is required to load live weather.';
+    case 'offline':
+      return 'Live weather is unavailable while offline.';
+    case 'error':
+    case 'provider_error':
+      return snapshot.status.error || 'Weather data unavailable.';
+    case 'unavailable':
+      return snapshot.status.error || 'No valid weather location is available.';
+    default:
+      return snapshot?.status.error ?? null;
+  }
+}
+
+function normalizeSunTimestampSeconds(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? Math.round(value / 1000) : value;
+  }
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric > 10_000_000_000 ? Math.round(numeric / 1000) : numeric;
+    }
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return Math.round(parsed / 1000);
+  }
+  return null;
+}
+
+function resolveWeatherPanelCoordinates(params: {
+  coordinates?: WeatherCoordinate[];
+  latitude?: number | null | undefined;
+  longitude?: number | null | undefined;
+  locationLabel?: string;
+}): WeatherCoordinate[] {
+  const { coordinates, latitude, longitude, locationLabel } = params;
+  if (Array.isArray(coordinates) && coordinates.length > 0) {
+    return coordinates.filter(c =>
+      c != null &&
+      Number.isFinite(c.lat) &&
+      Number.isFinite(c.lng),
+    );
+  }
+
+  if (latitude != null && longitude != null && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return [{
+      lat: latitude,
+      lng: longitude,
+      label: locationLabel || undefined,
+    }];
+  }
+
+  return [];
+}
+
 export default function WeatherIntelPanel({
   coordinates,
   latitude,
@@ -77,69 +239,354 @@ export default function WeatherIntelPanel({
   autoFetch = true,
   compact = false,
   units = 'imperial',
+  weatherSnapshot = null,
+  onRefreshWeather = null,
+  frameless = false,
+  trailAssessmentActive = true,
 }: Props) {
   const { isOnline } = useApp();
+  const initialCoords = resolveWeatherPanelCoordinates({
+    coordinates,
+    latitude,
+    longitude,
+    locationLabel,
+  });
+  const initialCachedWeatherRef = useRef<WeatherFetchResult | null>(
+    weatherSnapshot ? null : getCachedSharedWeatherResult(initialCoords, units, { allowStale: true }),
+  );
+  const initialFetchKey = buildWeatherPanelFetchKey(initialCoords, units);
+  const initialRememberedCoords = getRememberedWeatherPanelCoords(initialFetchKey);
+  const initialHasFreshCache = initialCachedWeatherRef.current?.source === 'cache_fresh';
 
   const [tab, setTab] = useState<WeatherTab>('current');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [weatherData, setWeatherData] = useState<WaypointWeather[] | null>(null);
-  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [weatherData, setWeatherData] = useState<WaypointWeather[] | null>(
+    () => initialCachedWeatherRef.current?.data.results ?? null,
+  );
+  const [fetchedAt, setFetchedAt] = useState<string | null>(
+    () => initialCachedWeatherRef.current?.data.fetched_at ?? null,
+  );
   const [expanded, setExpanded] = useState(!compact);
   const [selectedWaypointIdx, setSelectedWaypointIdx] = useState(0);
-  const [dataSource, setDataSource] = useState<'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null>(null);
-  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [dataSource, setDataSource] = useState<'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null>(
+    () => initialCachedWeatherRef.current?.source ?? null,
+  );
+  const [cachedAt, setCachedAt] = useState<number | null>(
+    () => initialCachedWeatherRef.current?.cachedAt ?? null,
+  );
 
   const mountedRef = useRef(true);
+  const lastGoodWeatherRef = useRef<{
+    rows: WaypointWeather[];
+    fetchedAt: string | null;
+    dataSource: 'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null;
+    cachedAt: number | null;
+  } | null>(
+    hasUsableWeatherResponse(initialCachedWeatherRef.current?.data)
+      ? {
+          rows: initialCachedWeatherRef.current?.data.results ?? [],
+          fetchedAt: initialCachedWeatherRef.current?.data.fetched_at ?? null,
+          dataSource: initialCachedWeatherRef.current?.source ?? null,
+          cachedAt: initialCachedWeatherRef.current?.cachedAt ?? null,
+        }
+      : null,
+  );
   const prevOnlineRef = useRef(isOnline);
-  const prevCoordsRef = useRef<WeatherCoordinate[]>([]);
-  const lastFetchKeyRef = useRef<string>('');
+  const prevCoordsRef = useRef<WeatherCoordinate[]>(
+    initialRememberedCoords ?? (initialHasFreshCache ? copyWeatherCoords(initialCoords) : []),
+  );
+  const lastFetchKeyRef = useRef<string>(
+    initialRememberedCoords || initialHasFreshCache ? initialFetchKey : '',
+  );
+  const injectedWeatherActive = weatherSnapshot != null;
 
   useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);
 
   const effectiveCoords = useMemo<WeatherCoordinate[]>(() => {
-    if (Array.isArray(coordinates) && coordinates.length > 0) {
-      return coordinates.filter(c =>
-        c != null &&
-        Number.isFinite(c.lat) &&
-        Number.isFinite(c.lng),
-      );
-    }
-
-    if (latitude != null && longitude != null && Number.isFinite(latitude) && Number.isFinite(longitude)) {
-      return [{
-        lat: latitude,
-        lng: longitude,
-        label: locationLabel || 'Current Position',
-      }];
-    }
-
-    return [];
+    return resolveWeatherPanelCoordinates({ coordinates, latitude, longitude, locationLabel });
   }, [coordinates, latitude, longitude, locationLabel]);
 
   const effectiveCoordsKey = useMemo(
-  () => effectiveCoords.map(c => `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${c.label ?? ''}`).join('|'),
-  [effectiveCoords],
-);
+    () => buildWeatherPanelFetchKey(effectiveCoords, units),
+    [effectiveCoords, units],
+  );
 
-  const selectedWeather = weatherData && weatherData.length > 0
-    ? weatherData[Math.min(selectedWaypointIdx, weatherData.length - 1)]
+  const injectedWeatherData = useMemo<WaypointWeather[] | null>(() => {
+    if (!weatherSnapshot) return null;
+    if (weatherSnapshot.status.source === 'fallback') return null;
+    const canonicalCurrent = weatherSnapshot.current;
+    const normalizedForecast = weatherSnapshot.normalized.forecast ?? [];
+    const normalizedCurrent = weatherSnapshot.normalized.current ?? null;
+    const firstNormalizedForecast = normalizedForecast[0] ?? null;
+    const rawWeather = weatherSnapshot.raw ?? (
+      canonicalCurrent.temp != null || normalizedCurrent || normalizedForecast.length > 0
+        ? {
+            lat: 0,
+            lng: 0,
+            label: weatherSnapshot.locationName ?? 'Current Position',
+            error: null,
+            current: {
+              temp: canonicalCurrent.temp ?? normalizedCurrent?.temperatureF ?? normalizedCurrent?.tempF ?? null,
+              temperature: canonicalCurrent.temp ?? normalizedCurrent?.temperatureF ?? normalizedCurrent?.tempF ?? null,
+              tempF: canonicalCurrent.temp ?? normalizedCurrent?.temperatureF ?? normalizedCurrent?.tempF ?? null,
+              temperatureF: canonicalCurrent.temp ?? normalizedCurrent?.temperatureF ?? normalizedCurrent?.tempF ?? null,
+              tempC: normalizedCurrent?.tempC ?? null,
+              temperatureC: normalizedCurrent?.tempC ?? null,
+              temp_f: canonicalCurrent.temp ?? normalizedCurrent?.temperatureF ?? normalizedCurrent?.tempF ?? null,
+              temp_c: normalizedCurrent?.tempC ?? null,
+              feels_like: canonicalCurrent.feelsLike ?? normalizedCurrent?.feelsLikeF ?? null,
+              feelsLikeF: canonicalCurrent.feelsLike ?? normalizedCurrent?.feelsLikeF ?? null,
+              feelsLikeC: null,
+              temp_min:
+                canonicalCurrent.lowTemperature ??
+                normalizedCurrent?.lowTemperatureF ??
+                firstNormalizedForecast?.lowTemperatureF ??
+                null,
+              temp_max:
+                canonicalCurrent.highTemperature ??
+                normalizedCurrent?.highTemperatureF ??
+                firstNormalizedForecast?.highTemperatureF ??
+                null,
+              humidity: canonicalCurrent.humidity ?? null,
+              pressure: canonicalCurrent.pressure ?? normalizedCurrent?.pressureHpa ?? null,
+              visibility: canonicalCurrent.visibility ?? null,
+              wind_speed: canonicalCurrent.windSpeed ?? normalizedCurrent?.windMph ?? null,
+              wind_deg: normalizedCurrent?.windDirectionDeg ?? null,
+              wind_gust: canonicalCurrent.windGust ?? normalizedCurrent?.windGustMph ?? null,
+              clouds: null,
+              weather_id: null,
+              weather_main: canonicalCurrent.condition ?? normalizedCurrent?.condition ?? null,
+              weather_description: canonicalCurrent.description ?? normalizedCurrent?.condition ?? null,
+              weather_icon: canonicalCurrent.iconCode ?? null,
+              rain_1h: null,
+              rain_3h: null,
+              snow_1h: null,
+              snow_3h: null,
+              sunrise:
+                canonicalCurrent.sunrise ??
+                normalizedCurrent?.sunrise ??
+                normalizeSunTimestampSeconds(firstNormalizedForecast?.sunrise) ??
+                null,
+              sunset:
+                canonicalCurrent.sunset ??
+                normalizedCurrent?.sunset ??
+                normalizeSunTimestampSeconds(firstNormalizedForecast?.sunset) ??
+                null,
+              location_name: weatherSnapshot.locationName ?? 'Current Position',
+              dt: weatherSnapshot.fetchedAt ? Math.floor(Date.parse(weatherSnapshot.fetchedAt) / 1000) : null,
+            },
+            forecast: null,
+            alerts: weatherSnapshot.alerts,
+            trail_conditions: null,
+          }
+        : null
+    );
+    if (!rawWeather) return null;
+    const rawForecast = Array.isArray(rawWeather.forecast) ? rawWeather.forecast : [];
+    const hydratedForecast = rawForecast.length > 0
+      ? rawForecast.map((day, index) => {
+          const normalized = normalizedForecast[index];
+          if (!normalized) return day;
+          return {
+            ...day,
+            date: day.date ?? normalized.time,
+            temp_day: day.temp_day ?? normalized.temperatureF ?? null,
+            temp_min: day.temp_min ?? normalized.lowTemperatureF ?? null,
+            temp_max: day.temp_max ?? normalized.highTemperatureF ?? null,
+            sunrise: normalizeSunTimestampSeconds(day.sunrise) ?? normalized.sunrise ?? null,
+            sunset: normalizeSunTimestampSeconds(day.sunset) ?? normalized.sunset ?? null,
+            wind_max: day.wind_max ?? normalized.windMph ?? null,
+            wind_gust_max: day.wind_gust_max ?? normalized.windGustMph ?? null,
+            wind_deg: day.wind_deg ?? normalized.windDirectionDeg ?? null,
+            pop: day.pop ?? normalized.precipitationChance ?? 0,
+            weather_main: day.weather_main ?? normalized.condition ?? null,
+            weather_description: day.weather_description ?? normalized.condition ?? null,
+          };
+        })
+      : normalizedForecast.map(day => ({
+          date: day.time,
+          temp_day: day.temperatureF ?? null,
+          temp_min: day.lowTemperatureF ?? null,
+          temp_max: day.highTemperatureF ?? null,
+          humidity: null,
+          pressure: null,
+          wind_max: day.windMph ?? null,
+          wind_gust_max: day.windGustMph ?? null,
+          wind_deg: day.windDirectionDeg ?? null,
+          pop: day.precipitationChance ?? 0,
+          rain_total: 0,
+          snow_total: 0,
+          sunrise: normalizeSunTimestampSeconds(day.sunrise) ?? null,
+          sunset: normalizeSunTimestampSeconds(day.sunset) ?? null,
+          weather_id: null,
+          weather_main: day.condition ?? 'Forecast',
+          weather_description: day.condition ?? 'Forecast',
+          weather_icon: '01d',
+        }));
+    const todayForecast = hydratedForecast[0] ?? null;
+    return [{
+      ...rawWeather,
+      label: weatherSnapshot.locationName || rawWeather.label,
+      forecast: hydratedForecast.slice(0, 16),
+      current: rawWeather.current
+        ? {
+            ...rawWeather.current,
+            temp: rawWeather.current.temp ?? canonicalCurrent.temp,
+            temperature: rawWeather.current.temperature ?? canonicalCurrent.temp,
+            tempF: rawWeather.current.tempF ?? canonicalCurrent.temp,
+            temperatureF: rawWeather.current.temperatureF ?? canonicalCurrent.temp,
+            feels_like: rawWeather.current.feels_like ?? canonicalCurrent.feelsLike,
+            feelsLikeF: rawWeather.current.feelsLikeF ?? canonicalCurrent.feelsLike,
+            wind_speed: rawWeather.current.wind_speed ?? canonicalCurrent.windSpeed,
+            wind_gust: rawWeather.current.wind_gust ?? canonicalCurrent.windGust,
+            humidity: rawWeather.current.humidity ?? canonicalCurrent.humidity,
+            pressure: rawWeather.current.pressure ?? canonicalCurrent.pressure ?? weatherSnapshot.normalized.current?.pressureHpa ?? null,
+            visibility: rawWeather.current.visibility ?? canonicalCurrent.visibility,
+            temp_min:
+              rawWeather.current.temp_min ??
+              canonicalCurrent.lowTemperature ??
+              weatherSnapshot.normalized.current?.lowTemperatureF ??
+              todayForecast?.temp_min ??
+              null,
+            temp_max:
+              rawWeather.current.temp_max ??
+              canonicalCurrent.highTemperature ??
+              weatherSnapshot.normalized.current?.highTemperatureF ??
+              todayForecast?.temp_max ??
+              null,
+            sunrise:
+              rawWeather.current.sunrise ??
+              canonicalCurrent.sunrise ??
+              weatherSnapshot.normalized.current?.sunrise ??
+              normalizeSunTimestampSeconds(todayForecast?.sunrise) ??
+              null,
+            sunset:
+              rawWeather.current.sunset ??
+              canonicalCurrent.sunset ??
+              weatherSnapshot.normalized.current?.sunset ??
+              normalizeSunTimestampSeconds(todayForecast?.sunset) ??
+              null,
+            weather_main: rawWeather.current.weather_main ?? canonicalCurrent.condition,
+            weather_description: rawWeather.current.weather_description ?? canonicalCurrent.description,
+          }
+        : rawWeather.current,
+    }];
+  }, [weatherSnapshot]);
+
+  useEffect(() => {
+    if (!injectedWeatherActive || !injectedWeatherData || !hasUsableWeatherRows(injectedWeatherData)) return;
+    lastGoodWeatherRef.current = {
+      rows: injectedWeatherData,
+      fetchedAt: weatherSnapshot?.fetchedAt ?? null,
+      dataSource: weatherSnapshot?.status.source ?? null,
+      cachedAt: weatherSnapshot?.status.cachedAt ?? null,
+    };
+  }, [
+    injectedWeatherActive,
+    injectedWeatherData,
+    weatherSnapshot?.fetchedAt,
+    weatherSnapshot?.status.cachedAt,
+    weatherSnapshot?.status.source,
+  ]);
+
+  const retainedInjectedWeatherRows =
+    injectedWeatherActive && !injectedWeatherData && lastGoodWeatherRef.current
+      ? lastGoodWeatherRef.current.rows
+      : null;
+  const effectiveWeatherData = injectedWeatherActive
+    ? injectedWeatherData ?? retainedInjectedWeatherRows
+    : weatherData;
+  const effectiveDataSource = injectedWeatherActive
+    ? weatherSnapshot?.status.source ?? lastGoodWeatherRef.current?.dataSource ?? null
+    : dataSource;
+  const effectiveStatusKind = injectedWeatherActive ? weatherSnapshot?.status.kind ?? 'error' : null;
+  const effectiveLoading =
+    injectedWeatherActive
+      ? Boolean(weatherSnapshot?.status.loading || effectiveStatusKind === 'waiting_for_gps')
+      : loading;
+  const effectiveError = injectedWeatherActive ? getSnapshotError(weatherSnapshot) : error;
+
+  const applyWeatherRows = useCallback((params: {
+    rows: WaypointWeather[] | null | undefined;
+    fetchedAt: string | null;
+    dataSource: 'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null;
+    cachedAt: number | null;
+    reason: string;
+  }) => {
+    const usable = hasUsableWeatherRows(params.rows);
+    if (usable && params.rows) {
+      lastGoodWeatherRef.current = {
+        rows: params.rows,
+        fetchedAt: params.fetchedAt,
+        dataSource: params.dataSource,
+        cachedAt: params.cachedAt,
+      };
+      setWeatherData(params.rows);
+      setFetchedAt(params.fetchedAt);
+      setDataSource(params.dataSource);
+      setCachedAt(params.cachedAt);
+      setSelectedWaypointIdx(0);
+      return true;
+    }
+
+    if (lastGoodWeatherRef.current) {
+      logWeatherPanelRetention('empty_weather_update_ignored', {
+        scope: 'weather_intel_panel',
+        reason: params.reason,
+        source: params.dataSource,
+      });
+      logWeatherPanelRetention('last_good_weather_retained', {
+        scope: 'weather_intel_panel',
+        source: lastGoodWeatherRef.current.dataSource,
+      });
+      setWeatherData(lastGoodWeatherRef.current.rows);
+      setFetchedAt(lastGoodWeatherRef.current.fetchedAt);
+      setDataSource(lastGoodWeatherRef.current.dataSource);
+      setCachedAt(lastGoodWeatherRef.current.cachedAt);
+      setSelectedWaypointIdx(0);
+      return false;
+    }
+
+    setWeatherData(params.rows ?? null);
+    setFetchedAt(params.fetchedAt);
+    setDataSource(params.dataSource);
+    setCachedAt(params.cachedAt);
+    setSelectedWaypointIdx(0);
+    return false;
+  }, []);
+
+  const selectedWeather = effectiveWeatherData && effectiveWeatherData.length > 0
+    ? effectiveWeatherData[Math.min(selectedWaypointIdx, effectiveWeatherData.length - 1)]
     : null;
+  const weatherDetailSource = injectedWeatherActive
+    ? weatherSnapshot?.normalized.source ?? weatherSnapshot?.status.source ?? lastGoodWeatherRef.current?.dataSource ?? 'unavailable'
+    : dataSource ?? 'unavailable';
+  const weatherDetailHasTemp = selectedWeather?.current?.temp != null;
+  const weatherDetailForecastCount = selectedWeather?.forecast?.length ?? 0;
 
-  const totalAlerts = weatherData
-    ? weatherData.reduce((sum, w) => sum + (w.alerts?.length || 0), 0)
+  useEffect(() => {
+    logWeatherPanelRetention('detail_render', {
+      source: weatherDetailSource,
+      hasTemp: weatherDetailHasTemp,
+      hasForecast: weatherDetailForecastCount > 0,
+    });
+  }, [weatherDetailForecastCount, weatherDetailHasTemp, weatherDetailSource]);
+
+  const totalAlerts = effectiveWeatherData
+    ? effectiveWeatherData.reduce((sum, w) => sum + (w.alerts?.length || 0), 0)
     : 0;
 
   const hasAlerts = totalAlerts > 0;
 
   const worstTrailStatus = useMemo(() => {
-    if (!weatherData || weatherData.length === 0) return null;
+    if (!effectiveWeatherData || effectiveWeatherData.length === 0) return null;
     const order = ['good', 'fair', 'poor', 'hazardous'];
     let worst = 0;
 
-    for (const w of weatherData) {
+    for (const w of effectiveWeatherData) {
       const overall = w?.trail_conditions?.overall;
       if (!overall) continue;
       const idx = order.indexOf(overall);
@@ -147,27 +594,110 @@ export default function WeatherIntelPanel({
     }
 
     return order[worst] as 'good' | 'fair' | 'poor' | 'hazardous';
-  }, [weatherData]);
+  }, [effectiveWeatherData]);
 
   const stalenessInfo = useMemo(() => {
-    if (!cachedAt) return null;
+    const referenceTimestamp =
+      injectedWeatherActive
+        ? (() => {
+            const parsed = Date.parse(weatherSnapshot?.fetchedAt ?? '');
+            return Number.isFinite(parsed) ? parsed : null;
+          })()
+        : cachedAt;
+    if (!referenceTimestamp) return null;
     return {
-      age: getWeatherAge(cachedAt),
-      level: getWeatherStaleness(cachedAt),
+      age: getWeatherAge(referenceTimestamp),
+      level: getWeatherStaleness(referenceTimestamp),
     };
-  }, [cachedAt]);
+  }, [cachedAt, injectedWeatherActive, weatherSnapshot?.fetchedAt]);
 
-  const isFallback = dataSource === 'fallback';
-  const isStale = dataSource === 'cache_stale';
-  const showOfflineBanner = !isOnline || isStale || isFallback;
+  const isFallback = effectiveDataSource === 'fallback';
+  const isStale = effectiveDataSource === 'cache_stale' || effectiveStatusKind === 'stale';
+  const trailSourceLabel = effectiveDataSource === 'live'
+    ? 'Derived from live weather'
+    : effectiveDataSource === 'cache_fresh'
+      ? 'Derived from fresh cached weather'
+      : effectiveDataSource === 'cache_stale'
+        ? 'Derived from stale cached weather'
+        : effectiveDataSource === 'fallback'
+          ? 'Weather source unavailable'
+          : null;
+  const showOfflineBanner =
+    !!effectiveWeatherData &&
+    (
+      !isOnline ||
+      isStale ||
+      isFallback ||
+      effectiveStatusKind === 'permission-blocked' ||
+      effectiveStatusKind === 'network-blocked' ||
+      effectiveStatusKind === 'error'
+    );
+  const headerStatusText = useMemo(() => {
+    if (selectedWeather?.current?.temp != null) {
+      return `${Math.round(selectedWeather.current.temp)}° ${selectedWeather.current.weather_main || ''}`.trim();
+    }
+    if (!injectedWeatherActive) {
+      return isFallback ? 'Data unavailable' : 'Awaiting conditions';
+    }
+    switch (weatherSnapshot?.status.kind) {
+      case 'permission_required':
+      case 'permission-blocked':
+        return 'Location permission required';
+      case 'network-blocked':
+        return 'Network required';
+      case 'waiting_for_gps':
+        return 'Waiting for GPS';
+      case 'loading':
+        return 'Loading weather';
+      case 'offline':
+        return 'Offline weather unavailable';
+      case 'cached':
+        return 'Cached conditions';
+      case 'error':
+      case 'provider_error':
+        return 'Weather unavailable';
+      case 'unavailable':
+        return 'Weather unavailable';
+      case 'stale':
+        return 'Cached conditions';
+      default:
+        return weatherSnapshot?.status.label || 'Awaiting conditions';
+    }
+  }, [injectedWeatherActive, isFallback, selectedWeather, weatherSnapshot]);
 
   const handleFetch = useCallback(async (force = false) => {
+    if (injectedWeatherActive) {
+      if (force) onRefreshWeather?.();
+      return;
+    }
+
     if (effectiveCoords.length === 0) {
       setError('No coordinates available for weather lookup');
       return;
     }
 
-    console.log('[WEATHER PANEL] Fetch triggered', {
+    const cached = getCachedSharedWeatherResult(effectiveCoords, units, { allowStale: true });
+    if (!force && cached) {
+      const fetchKey = buildWeatherPanelFetchKey(effectiveCoords, units);
+      applyWeatherRows({
+        rows: cached.data.results,
+        fetchedAt: cached.data.fetched_at,
+        dataSource: cached.source,
+        cachedAt: cached.cachedAt,
+        reason: 'fresh_or_stale_cache_before_fetch',
+      });
+      setError(null);
+      prevCoordsRef.current = effectiveCoords;
+      lastFetchKeyRef.current = fetchKey;
+      if (cached.source === 'cache_fresh') {
+        rememberWeatherPanelFetchKey(fetchKey, effectiveCoords);
+      }
+      if (cached.source === 'cache_fresh') {
+        return;
+      }
+    }
+
+    logWeatherPanelRetention('panel_fetch_triggered', {
       force,
       coords: effectiveCoords.length,
       first: effectiveCoords[0],
@@ -178,31 +708,43 @@ export default function WeatherIntelPanel({
     setError(null);
 
     try {
-      const result: WeatherFetchResult = await fetchWeatherWithStatus(
+      const sharedWeather = await fetchSharedWeatherForCoordinates(
         effectiveCoords,
         units,
         force,
+        effectiveCoords.length > 1 ? 'route_segment' : 'selected_coordinate',
       );
+      const result: WeatherFetchResult = sharedWeather.result;
 
       if (!mountedRef.current) return;
 
-      setWeatherData(result.data.results);
-      setFetchedAt(result.data.fetched_at);
-      setDataSource(result.source);
-      setCachedAt(result.cachedAt);
-      setSelectedWaypointIdx(0);
+      const appliedUsableWeather = applyWeatherRows({
+        rows: result.data.results,
+        fetchedAt: result.data.fetched_at,
+        dataSource: result.source,
+        cachedAt: result.cachedAt,
+        reason: 'fetch_result',
+      });
+      if (appliedUsableWeather) {
+        const fetchKey = buildWeatherPanelFetchKey(effectiveCoords, units);
+        prevCoordsRef.current = effectiveCoords;
+        lastFetchKeyRef.current = fetchKey;
+        rememberWeatherPanelFetchKey(fetchKey, effectiveCoords);
+      }
 
-      console.log('[WEATHER PANEL] Fetch completed', {
+      logWeatherPanelRetention('panel_fetch_completed', {
         source: result.source,
         results: result.data?.results?.length ?? 0,
         cachedAt: result.cachedAt,
         error: result.error,
       });
 
-      if (result.source === 'fallback') {
+      if (!appliedUsableWeather && lastGoodWeatherRef.current) {
+        setError(result.error || null);
+      } else if (result.source === 'fallback') {
         setError(result.error || 'Weather data unavailable');
       } else if (result.source === 'cache_stale') {
-        setError(result.error || 'Using cached data — unable to refresh');
+        setError(result.error || 'Using cached data - unable to refresh');
       } else {
         setError(result.error || null);
       }
@@ -213,65 +755,114 @@ export default function WeatherIntelPanel({
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [effectiveCoords, units]);
+  }, [applyWeatherRows, effectiveCoords, injectedWeatherActive, onRefreshWeather, units]);
 
   useEffect(() => {
+    if (injectedWeatherActive) return;
     if (effectiveCoords.length === 0) return;
 
-    const cached = getAnyCachedWeather(effectiveCoords);
+    const cached = getAnyCachedSharedWeather(effectiveCoords, units);
     if (cached) {
-      console.log('[WEATHER PANEL] Loaded cached weather', {
+      logWeatherPanelRetention('panel_cache_loaded', {
         coords: effectiveCoords.length,
         age: getWeatherAge(cached.cachedAt),
       });
 
-      setWeatherData(cached.data.results);
-      setFetchedAt(cached.data.fetched_at);
-      setCachedAt(cached.cachedAt);
-      setSelectedWaypointIdx(0);
-
-      const staleness = getWeatherStaleness(cached.cachedAt);
-      setDataSource(staleness === 'fresh' ? 'cache_fresh' : 'cache_stale');
+      applyWeatherRows({
+        rows: cached.data.results,
+        fetchedAt: cached.data.fetched_at,
+        dataSource: cached.source,
+        cachedAt: cached.cachedAt,
+        reason: 'cache_hydration',
+      });
     }
-  }, [effectiveCoords]);
+  }, [applyWeatherRows, effectiveCoords, injectedWeatherActive, units]);
 
   useEffect(() => {
+    if (injectedWeatherActive) return;
     if (!autoFetch) return;
     if (effectiveCoords.length === 0) return;
 
-    const coordsAreNew = coordsChanged(prevCoordsRef.current, effectiveCoords);
-    const fetchKey = `${effectiveCoordsKey}|${units}`;
+    const fetchKey = effectiveCoordsKey;
+    const rememberedCoords = getRememberedWeatherPanelCoords(fetchKey);
+    if (rememberedCoords && lastFetchKeyRef.current !== fetchKey) {
+      prevCoordsRef.current = rememberedCoords;
+      lastFetchKeyRef.current = fetchKey;
+    }
     const firstTimeForKey = lastFetchKeyRef.current !== fetchKey;
+    const cached = getCachedSharedWeatherResult(effectiveCoords, units, { allowStale: true });
+    if (cached?.source === 'cache_fresh' && firstTimeForKey) {
+      prevCoordsRef.current = effectiveCoords;
+      lastFetchKeyRef.current = fetchKey;
+      rememberWeatherPanelFetchKey(fetchKey, effectiveCoords);
+    }
+    const effectiveCoordsAreNew = cached?.source === 'cache_fresh'
+      ? false
+      : coordsChanged(prevCoordsRef.current, effectiveCoords);
+    const effectiveFirstTimeForKey = cached?.source === 'cache_fresh'
+      ? false
+      : lastFetchKeyRef.current !== fetchKey;
+    const hasWeatherData = Boolean(
+      weatherData?.some(weather =>
+        weather.current?.temp != null ||
+        weather.current?.wind_speed != null ||
+        weather.current?.weather_main ||
+        weather.current?.weather_description ||
+        (weather.forecast?.length ?? 0) > 0 ||
+        (weather.alerts?.length ?? 0) > 0,
+      ) || cached,
+    );
 
-    console.log('[WEATHER PANEL] Auto-fetch check', {
-      coordsAreNew,
-      firstTimeForKey,
+    logWeatherPanelRetention('panel_auto_fetch_check', {
+      coordsAreNew: effectiveCoordsAreNew,
+      firstTimeForKey: effectiveFirstTimeForKey,
       coords: effectiveCoords.length,
       fetchKey,
-      hasWeatherData: !!weatherData,
+      hasWeatherData,
+      cachedSource: cached?.source ?? null,
     });
 
-    if (coordsAreNew || firstTimeForKey || !weatherData) {
+    if (cached) {
+      applyWeatherRows({
+        rows: cached.data.results,
+        fetchedAt: cached.data.fetched_at,
+        dataSource: cached.source,
+        cachedAt: cached.cachedAt,
+        reason: 'auto_fetch_cache_check',
+      });
+      setError(null);
+      prevCoordsRef.current = effectiveCoords;
+      lastFetchKeyRef.current = fetchKey;
+      if (cached.source === 'cache_fresh') {
+        rememberWeatherPanelFetchKey(fetchKey, effectiveCoords);
+      }
+      if (cached.source === 'cache_fresh') {
+        return;
+      }
+    }
+
+    if (effectiveCoordsAreNew || effectiveFirstTimeForKey || !hasWeatherData || cached?.source === 'cache_stale') {
       prevCoordsRef.current = effectiveCoords;
       lastFetchKeyRef.current = fetchKey;
       handleFetch(false);
     }
-  }, [autoFetch, effectiveCoords, effectiveCoordsKey, units, handleFetch, weatherData]);
+  }, [applyWeatherRows, autoFetch, effectiveCoords, effectiveCoordsKey, units, handleFetch, weatherData, injectedWeatherActive]);
 
   useEffect(() => {
+    if (injectedWeatherActive) return;
     if (isOnline && !prevOnlineRef.current && effectiveCoords.length > 0) {
-      console.log('[WEATHER PANEL] Connectivity restored — refreshing weather');
+      logWeatherPanelRetention('panel_connectivity_restored_refreshing');
       handleFetch(true);
     }
     prevOnlineRef.current = isOnline;
-  }, [isOnline, effectiveCoords.length, handleFetch]);
+  }, [isOnline, effectiveCoords.length, handleFetch, injectedWeatherActive]);
 
-  if (effectiveCoords.length === 0) {
+  if (effectiveCoords.length === 0 && !injectedWeatherActive) {
     return (
-      <View style={styles.emptyContainer}>
+      <View style={[styles.emptyContainer, frameless ? styles.emptyContainerFrameless : null]}>
         <View style={styles.emptyHeader}>
           <Ionicons name="cloud-outline" size={14} color={TACTICAL.textMuted} />
-          <Text style={styles.emptyTitle}>WEATHER INTEL</Text>
+          <Text style={styles.emptyTitle}>CURRENT CONDITIONS</Text>
         </View>
         <Text style={styles.emptyText}>
           No location data available. Add waypoints or enable GPS to view weather intelligence.
@@ -281,9 +872,9 @@ export default function WeatherIntelPanel({
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, frameless ? styles.containerFrameless : null]}>
       <TouchableOpacity
-        style={styles.panelHeader}
+        style={[styles.panelHeader, frameless ? styles.panelHeaderFrameless : null]}
         onPress={() => setExpanded(!expanded)}
         activeOpacity={0.85}
       >
@@ -301,7 +892,6 @@ export default function WeatherIntelPanel({
 
           <View style={{ flex: 1 }}>
             <View style={styles.panelTitleRow}>
-              <Text style={styles.panelTitle}>WEATHER INTELLIGENCE</Text>
               {!isOnline && (
                 <View style={styles.offlinePill}>
                   <View style={styles.offlineDot} />
@@ -315,13 +905,9 @@ export default function WeatherIntelPanel({
                 <Text style={styles.panelTemp}>
                   {Math.round(selectedWeather.current.temp)}° {selectedWeather.current.weather_main || ''}
                 </Text>
-              ) : isFallback ? (
-                <Text style={[styles.panelTemp, { color: TACTICAL.textMuted }]}>
-                  Data unavailable
-                </Text>
               ) : (
                 <Text style={[styles.panelTemp, { color: TACTICAL.textMuted }]}>
-                  Awaiting conditions
+                  {headerStatusText}
                 </Text>
               )}
 
@@ -357,7 +943,7 @@ export default function WeatherIntelPanel({
               <Text style={styles.alertBadgeText}>{totalAlerts}</Text>
             </View>
           )}
-          {loading && <ActivityIndicator size="small" color={TACTICAL.amber} />}
+          {effectiveLoading && <ActivityIndicator size="small" color={TACTICAL.amber} />}
           <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
             size={16}
@@ -367,12 +953,13 @@ export default function WeatherIntelPanel({
       </TouchableOpacity>
 
       {expanded && (
-        <View style={styles.panelBody}>
-          {showOfflineBanner && weatherData && (
+        <View style={[styles.panelBody, frameless ? styles.panelBodyFrameless : null]}>
+          {showOfflineBanner && effectiveWeatherData && (
             <View
               style={[
                 styles.statusBanner,
                 isFallback ? styles.statusBannerError : styles.statusBannerWarn,
+                frameless ? styles.statusBannerFrameless : null,
               ]}
             >
               <Ionicons
@@ -389,19 +976,27 @@ export default function WeatherIntelPanel({
                 >
                   {isFallback
                     ? 'WEATHER UNAVAILABLE'
+                    : effectiveStatusKind === 'permission-blocked'
+                      ? 'LOCATION REQUIRED'
+                      : effectiveStatusKind === 'network-blocked'
+                        ? 'NETWORK REQUIRED'
                     : isStale
-                      ? 'CACHED DATA'
+                      ? 'WEATHER STALE'
                       : 'OFFLINE MODE'}
                 </Text>
                 <Text style={styles.statusBannerDesc}>
-                  {isFallback
-                    ? 'No cached data available. Connect to fetch weather intelligence.'
+                  {effectiveStatusKind === 'permission-blocked'
+                    ? 'Enable location access to keep weather tied to your live device position.'
+                    : effectiveStatusKind === 'network-blocked'
+                      ? 'Connect to the internet to refresh live weather.'
+                    : isFallback
+                    ? 'Connect to fetch current conditions.'
                     : isStale && stalenessInfo
-                      ? `Last updated ${stalenessInfo.age}. Connect to refresh.`
-                      : 'Showing cached data. Will refresh when online.'}
+                      ? 'Connect to refresh conditions.'
+                      : 'Weather will refresh when online.'}
                 </Text>
               </View>
-              {isOnline && (isStale || isFallback) && (
+              {isOnline && (isStale || isFallback || effectiveStatusKind === 'network-blocked') && (
                 <TouchableOpacity
                   style={styles.statusBannerRetry}
                   onPress={() => handleFetch(true)}
@@ -413,14 +1008,16 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          <View style={styles.tabBar}>
+            <View style={[styles.tabBar, frameless ? styles.tabBarFrameless : null]}>
             {([
               { key: 'current' as WeatherTab, label: 'CONDITIONS', icon: 'thermometer-outline' },
               { key: 'forecast' as WeatherTab, label: 'FORECAST', icon: 'calendar-outline' },
               { key: 'trail' as WeatherTab, label: 'TRAIL', icon: 'trail-sign-outline' },
             ]).map(t => {
               const isActive = tab === t.key;
-              const isDisabled = t.key === 'forecast' && isFallback;
+              const isDisabled =
+                (t.key === 'forecast' && (isFallback || !selectedWeather?.forecast?.length)) ||
+                (t.key === 'trail' && trailAssessmentActive && !selectedWeather?.trail_conditions);
 
               return (
                 <TouchableOpacity
@@ -458,9 +1055,9 @@ export default function WeatherIntelPanel({
             })}
           </View>
 
-          {weatherData && weatherData.length > 1 && (
-            <View style={styles.waypointSelector}>
-              {weatherData.map((w, idx) => (
+          {effectiveWeatherData && effectiveWeatherData.length > 1 && (
+              <View style={[styles.waypointSelector, frameless ? styles.waypointSelectorFrameless : null]}>
+              {effectiveWeatherData.map((w, idx) => (
                 <TouchableOpacity
                   key={`${w.label ?? 'wp'}_${idx}`}
                   style={[
@@ -489,13 +1086,14 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {error && !weatherData && (
-            <View style={styles.errorBox}>
+          {effectiveError && !effectiveWeatherData && !effectiveLoading && (
+            <View style={[styles.errorBox, frameless ? styles.errorBoxFrameless : null]}>
               <Ionicons name="alert-circle-outline" size={16} color="#EF5350" />
-              <Text style={styles.errorText}>{error}</Text>
+              <Text style={styles.errorText}>{effectiveError}</Text>
               <TouchableOpacity
                 style={styles.retryBtn}
                 onPress={() => handleFetch(true)}
+                disabled={!isOnline || effectiveStatusKind === 'permission-blocked'}
                 activeOpacity={0.85}
               >
                 <Text style={styles.retryText}>RETRY</Text>
@@ -503,15 +1101,19 @@ export default function WeatherIntelPanel({
             </View>
           )}
 
-          {loading && !weatherData && (
+          {effectiveLoading && !effectiveWeatherData && (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={TACTICAL.amber} />
-              <Text style={styles.loadingText}>FETCHING WEATHER DATA...</Text>
+              <Text style={styles.loadingText}>
+                {effectiveStatusKind === 'waiting_for_gps'
+                  ? 'WAITING FOR GPS FIX...'
+                  : 'FETCHING WEATHER DATA...'}
+              </Text>
             </View>
           )}
 
           {isFallback && selectedWeather && !selectedWeather.current?.temp && tab === 'current' && (
-            <View style={styles.fallbackBox}>
+            <View style={[styles.fallbackBox, frameless ? styles.fallbackBoxFrameless : null]}>
               <Ionicons name="cloud-offline-outline" size={28} color={TACTICAL.textMuted} />
               <Text style={styles.fallbackTitle}>NO WEATHER DATA</Text>
               <Text style={styles.fallbackDesc}>
@@ -532,7 +1134,7 @@ export default function WeatherIntelPanel({
           )}
 
           {selectedWeather && !isFallback && (
-            <View style={styles.contentArea}>
+            <View style={[styles.contentArea, frameless ? styles.contentAreaFrameless : null]}>
               {selectedWeather.alerts && selectedWeather.alerts.length > 0 && (
                 <WeatherAlerts alerts={selectedWeather.alerts} />
               )}
@@ -552,65 +1154,37 @@ export default function WeatherIntelPanel({
                 />
               )}
 
-              {tab === 'trail' && selectedWeather.trail_conditions && (
+              {tab === 'trail' && (!trailAssessmentActive || selectedWeather.trail_conditions) && (
                 <TrailConditionsCard
                   conditions={selectedWeather.trail_conditions}
+                  sourceLabel={trailSourceLabel}
+                  assessmentActive={trailAssessmentActive}
                 />
               )}
             </View>
           )}
 
-          {isFallback && tab === 'trail' && selectedWeather?.trail_conditions && (
-            <View style={styles.contentArea}>
-              <TrailConditionsCard conditions={selectedWeather.trail_conditions} />
+          {isFallback && tab === 'trail' && selectedWeather && (!trailAssessmentActive || selectedWeather.trail_conditions) && (
+            <View style={[styles.contentArea, frameless ? styles.contentAreaFrameless : null]}>
+              <TrailConditionsCard
+                conditions={selectedWeather.trail_conditions}
+                sourceLabel={trailSourceLabel}
+                assessmentActive={trailAssessmentActive}
+              />
             </View>
           )}
 
-          <View style={styles.footer}>
-            <View style={styles.footerLeft}>
-              {fetchedAt && dataSource !== 'fallback' && (
-                <Text style={styles.footerTimestamp}>
-                  {isStale && stalenessInfo
-                    ? `Cached ${stalenessInfo.age}`
-                    : `Updated ${new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                </Text>
-              )}
-
-              {dataSource === 'fallback' && (
-                <Text style={[styles.footerTimestamp, { color: '#EF5350' }]}>
-                  No data
-                </Text>
-              )}
-
-              {isStale && stalenessInfo && (
-                <View
-                  style={[
-                    styles.stalenessPill,
-                    stalenessInfo.level === 'very_stale' && styles.stalenessPillDanger,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.stalenessPillText,
-                      stalenessInfo.level === 'very_stale' && { color: '#EF5350' },
-                    ]}
-                  >
-                    {stalenessInfo.level === 'very_stale' ? 'VERY OLD' : 'STALE'}
-                  </Text>
-                </View>
-              )}
-            </View>
-
+          <View style={[styles.footer, styles.footerActionsOnly, frameless ? styles.footerFrameless : null]}>
             <TouchableOpacity
               style={[
                 styles.refreshBtn,
                 !isOnline && styles.refreshBtnDisabled,
               ]}
               onPress={() => handleFetch(true)}
-              disabled={loading || !isOnline}
+              disabled={effectiveLoading || !isOnline || effectiveStatusKind === 'permission-blocked'}
               activeOpacity={0.85}
             >
-              {loading ? (
+              {effectiveLoading ? (
                 <ActivityIndicator size="small" color={TACTICAL.amber} />
               ) : (
                 <>
@@ -646,6 +1220,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(62,79,60,0.35)',
     overflow: 'hidden',
   },
+  containerFrameless: {
+    marginTop: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    overflow: 'visible',
+  },
   emptyContainer: {
     marginTop: 12,
     borderRadius: 14,
@@ -654,6 +1235,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(62,79,60,0.25)',
     padding: 14,
     gap: 8,
+  },
+  emptyContainerFrameless: {
+    marginTop: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
   },
   emptyHeader: {
     flexDirection: 'row',
@@ -677,6 +1265,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 14,
   },
+  panelHeaderFrameless: {
+    paddingHorizontal: 0,
+    paddingTop: 2,
+    paddingBottom: 12,
+  },
   panelHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -697,12 +1290,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  panelTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    letterSpacing: 1.3,
   },
   offlinePill: {
     flexDirection: 'row',
@@ -783,6 +1370,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(62,79,60,0.20)',
   },
+  panelBodyFrameless: {
+    borderTopWidth: 0,
+  },
   statusBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -793,6 +1383,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
+  },
+  statusBannerFrameless: {
+    marginHorizontal: 0,
   },
   statusBannerWarn: {
     backgroundColor: 'rgba(255,179,0,0.06)',
@@ -832,6 +1425,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
+  tabBarFrameless: {
+    paddingHorizontal: 0,
+  },
   tabBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -870,6 +1466,9 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     flexWrap: 'wrap',
   },
+  waypointSelectorFrameless: {
+    paddingHorizontal: 0,
+  },
   waypointPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -905,6 +1504,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,83,80,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(239,83,80,0.20)',
+  },
+  errorBoxFrameless: {
+    marginHorizontal: 0,
   },
   errorText: {
     fontSize: 11,
@@ -946,6 +1548,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(62,79,60,0.20)',
   },
+  fallbackBoxFrameless: {
+    marginHorizontal: 0,
+  },
   fallbackTitle: {
     fontSize: 11,
     fontWeight: '900',
@@ -981,6 +1586,9 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 4,
   },
+  contentAreaFrameless: {
+    paddingHorizontal: 0,
+  },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -991,33 +1599,11 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(62,79,60,0.12)',
     marginTop: 8,
   },
-  footerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  footerActionsOnly: {
+    justifyContent: 'flex-end',
   },
-  footerTimestamp: {
-    fontSize: 9,
-    color: TACTICAL.textMuted,
-    fontFamily: 'Courier',
-  },
-  stalenessPill: {
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255,179,0,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,179,0,0.25)',
-  },
-  stalenessPillDanger: {
-    backgroundColor: 'rgba(239,83,80,0.12)',
-    borderColor: 'rgba(239,83,80,0.25)',
-  },
-  stalenessPillText: {
-    fontSize: 7,
-    fontWeight: '900',
-    color: '#FFB300',
-    letterSpacing: 1,
+  footerFrameless: {
+    paddingHorizontal: 0,
   },
   refreshBtn: {
     flexDirection: 'row',

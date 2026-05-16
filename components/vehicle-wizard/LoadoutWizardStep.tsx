@@ -31,6 +31,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -56,6 +57,12 @@ import {
 // ── ECS Gold Constants ──────────────────────────────────────
 const ECS_GOLD = '#C48A2C';
 const TAG = '[LoadoutWizardStep]';
+
+function logLoadoutWizardDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 // ── Props ───────────────────────────────────────────────────
 interface Props {
@@ -141,9 +148,9 @@ export default function LoadoutWizardStep({
   // ── Computed stats ────────────────────────────────────────
   const stats = useMemo(() => {
     const total = loadoutItems.length;
-    const totalWeight = getTotalLoadoutWeight(loadoutItems);
+    const totalWeight = getTotalLoadoutWeight(loadoutItems, containerZones);
     return { total, totalWeight };
-  }, [loadoutItems]);
+  }, [containerZones, loadoutItems]);
 
   // ── Initialize loadout ────────────────────────────────────
   // FIX: Uses getByVehicleId instead of getAll to find the correct loadout.
@@ -159,7 +166,7 @@ export default function LoadoutWizardStep({
         const { loadouts: vehicleLoadouts } = await loadoutStore.getByVehicleId(vehicleId, userId);
         if (vehicleLoadouts.length > 0) {
           active = vehicleLoadouts[0];
-          console.log(TAG, `Found existing loadout for vehicle ${vehicleId}: ${active.id}`);
+          logLoadoutWizardDev(TAG, `Found existing loadout for vehicle ${vehicleId}: ${active.id}`);
         }
       }
 
@@ -173,7 +180,7 @@ export default function LoadoutWizardStep({
           const matched = allLoadouts.find(l => l.vehicle_id === vehicleId);
           if (matched) {
             active = matched;
-            console.log(TAG, `Found loadout via getAll fallback: ${active.id}`);
+            logLoadoutWizardDev(TAG, `Found loadout via getAll fallback: ${active.id}`);
           }
         }
       }
@@ -191,13 +198,13 @@ export default function LoadoutWizardStep({
           vehicle_id: vehicleId,
         }, userId);
         active = loadout;
-        console.log(TAG, `Created new loadout for vehicle ${vehicleId}: ${active.id}`);
+        logLoadoutWizardDev(TAG, `Created new loadout for vehicle ${vehicleId}: ${active.id}`);
       }
 
       // FIX: Ensure the loadout is linked to the current vehicle
       // (handles case where loadout exists but vehicle_id is null or wrong)
       if (active && vehicleId && active.vehicle_id !== vehicleId) {
-        console.log(TAG, `Linking loadout ${active.id} to vehicle ${vehicleId} (was: ${active.vehicle_id})`);
+        logLoadoutWizardDev(TAG, `Linking loadout ${active.id} to vehicle ${vehicleId} (was: ${active.vehicle_id})`);
         const updated = await loadoutStore.update(active.id, { vehicle_id: vehicleId } as any, userId);
         if (updated) {
           active = updated;
@@ -249,7 +256,7 @@ export default function LoadoutWizardStep({
   // accurate values without requiring a manual SAVE or DEPLOY action.
   const reconcileLoadoutRecord = useCallback(async (freshItems: LoadoutItem[]) => {
     if (!activeLoadout) return;
-    const newWeight = getTotalLoadoutWeight(freshItems);
+    const newWeight = getTotalLoadoutWeight(freshItems, containerZones);
     const newCount = freshItems.length;
 
     // Skip update if values haven't changed
@@ -275,7 +282,7 @@ export default function LoadoutWizardStep({
     } catch (e) {
       console.warn(TAG, 'Failed to reconcile loadout stats:', e);
     }
-  }, [activeLoadout, userId]);
+  }, [activeLoadout, containerZones, userId]);
 
   // ── Container press → open detail sheet ───────────────────
   const handleContainerPress = useCallback((containerKey: string) => {
@@ -402,7 +409,7 @@ export default function LoadoutWizardStep({
 
   // ── Info box text based on mode ───────────────────────────
   const infoText = isFleetEdit
-    ? `${stats.total} item${stats.total !== 1 ? 's' : ''} configured (${stats.totalWeight.toFixed(1)} lbs). Tap SAVE to persist changes.`
+    ? `${stats.total} item${stats.total !== 1 ? 's' : ''} configured (${stats.totalWeight.toFixed(1)} lbs total). Save to persist changes.`
     : `${stats.total} item${stats.total !== 1 ? 's' : ''} added (${stats.totalWeight.toFixed(1)} lbs). Tap Deploy Vehicle when this rig is ready.`;
 
 
@@ -504,29 +511,33 @@ export default function LoadoutWizardStep({
         </View>
       ) : (
         /* ── Container Grid ─────────────────────────────────── */
-        <View style={styles.contentArea}>
-          {/* Hint */}
-          <View style={styles.hintRow}>
-            <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
-            <Text style={styles.hintText}>{hintText}</Text>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.contentArea}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.summaryStack}>
+            <View style={styles.hintRow}>
+              <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
+              <Text style={styles.hintText}>{hintText}</Text>
+            </View>
+
+            {stats.total > 0 && (
+              <View style={styles.infoBox}>
+                <Ionicons name="checkmark-circle-outline" size={16} color="#66BB6A" />
+                <Text style={styles.infoText}>{infoText}</Text>
+              </View>
+            )}
           </View>
 
-          {/* Container Grid */}
           <ContainerGrid
             containerZones={containerZones}
             items={loadoutItems}
             onContainerPress={handleContainerPress}
             columns={3}
           />
-
-          {/* Info Box */}
-          {stats.total > 0 && (
-            <View style={styles.infoBox}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#66BB6A" />
-              <Text style={styles.infoText}>{infoText}</Text>
-            </View>
-          )}
-        </View>
+        </ScrollView>
       )}
 
       {/* ── Footer ──────────────────────────────────────────── */}
@@ -740,8 +751,11 @@ const styles = StyleSheet.create({
   contentArea: {
     paddingHorizontal: 10,
     paddingTop: 6,
-    paddingBottom: 6,
+    paddingBottom: 14,
     gap: 10,
+  },
+  summaryStack: {
+    gap: 8,
   },
 
   // ── Hint ──────────────────────────────────────────────────

@@ -8,6 +8,8 @@ import { getTrailStatusColor, getTrailOverallColor } from '../../lib/weatherType
 
 interface Props {
   conditions: TrailConditions | null | undefined;
+  sourceLabel?: string | null;
+  assessmentActive?: boolean;
 }
 
 function getFactorIcon(factor?: string | null): string {
@@ -45,11 +47,14 @@ function safeUpper(value?: string | null): string {
   return (value ?? 'unknown').toUpperCase();
 }
 
-export default function TrailConditionsCard({ conditions }: Props) {
-  const overall = conditions?.overall ?? 'fair';
+export default function TrailConditionsCard({ conditions, sourceLabel, assessmentActive = true }: Props) {
+  const overall = assessmentActive ? conditions?.overall ?? null : null;
   const factors = Array.isArray(conditions?.factors) ? conditions!.factors : [];
 
-  const overallColor = getTrailOverallColor(overall as any);
+  const overallColor = assessmentActive && overall
+    ? getTrailOverallColor(overall as any)
+    : TACTICAL.textMuted;
+  const inactive = !assessmentActive;
 
   return (
     <View style={styles.container}>
@@ -70,7 +75,7 @@ export default function TrailConditionsCard({ conditions }: Props) {
         >
           <View style={[styles.overallDot, { backgroundColor: overallColor }]} />
           <Text style={[styles.overallText, { color: overallColor }]}>
-            {safeUpper(overall)}
+            {inactive ? 'OFFLINE' : safeUpper(overall)}
           </Text>
         </View>
       </View>
@@ -79,7 +84,9 @@ export default function TrailConditionsCard({ conditions }: Props) {
       <View style={[styles.overallBar, { borderColor: overallColor + '30' }]}>
         <Ionicons
           name={
-            overall === 'good'
+            inactive
+              ? 'cloud-offline-outline'
+              : overall === 'good'
               ? 'checkmark-circle-outline'
               : overall === 'hazardous'
                 ? 'alert-circle-outline'
@@ -89,12 +96,26 @@ export default function TrailConditionsCard({ conditions }: Props) {
           color={overallColor}
         />
         <Text style={[styles.overallLabel, { color: overallColor }]}>
-          {getOverallLabel(overall)}
+          {inactive ? 'TRAIL ASSESSMENT OFFLINE' : getOverallLabel(overall)}
         </Text>
       </View>
 
+      {sourceLabel && (
+        <View style={styles.sourceRow}>
+          <Ionicons name="radio-outline" size={11} color={TACTICAL.textMuted} />
+          <Text style={styles.sourceText}>{sourceLabel}</Text>
+        </View>
+      )}
+
       {/* Factor rows */}
-      {factors.length > 0 ? (
+      {inactive ? (
+        <View style={styles.emptyRow}>
+          <Ionicons name="information-circle-outline" size={13} color={TACTICAL.textMuted} />
+          <Text style={styles.emptyText}>
+            Start active guidance to evaluate route-specific trail conditions.
+          </Text>
+        </View>
+      ) : factors.length > 0 ? (
         factors.map((factor, idx) => {
           const factorName = factor?.factor ?? 'Unknown Factor';
           const factorStatus = factor?.status;
@@ -212,6 +233,19 @@ const styles = StyleSheet.create({
   factorRow: {
     paddingHorizontal: 14,
     paddingVertical: 10,
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 14,
+    marginBottom: 6,
+  },
+  sourceText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.5,
   },
   factorRowBorder: {
     borderBottomWidth: 1,

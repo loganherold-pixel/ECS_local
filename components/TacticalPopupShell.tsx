@@ -27,6 +27,8 @@ interface TacticalPopupShellProps {
   dismissOnBackdrop?: boolean;
   allowSwipeDismiss?: boolean;
   showHandle?: boolean;
+  topClearanceOverride?: number;
+  bottomClearanceOverride?: number;
   headerRight?: React.ReactNode;
   onBack?: () => void;
 }
@@ -54,6 +56,8 @@ export default function TacticalPopupShell({
   dismissOnBackdrop,
   allowSwipeDismiss,
   showHandle,
+  topClearanceOverride,
+  bottomClearanceOverride,
   headerRight,
   onBack,
 }: TacticalPopupShellProps) {
@@ -80,6 +84,8 @@ export default function TacticalPopupShell({
       dismissOnBackdrop={dismissOnBackdrop}
       allowSwipeDismiss={allowSwipeDismiss}
       showHandle={showHandle}
+      topClearanceOverride={topClearanceOverride}
+      bottomClearanceOverride={bottomClearanceOverride}
       headerRight={headerRight}
       onBack={onBack}
     >

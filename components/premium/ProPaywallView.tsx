@@ -94,7 +94,7 @@ export default function ProPaywallView({
     enterOfflineMode();
     router.replace(
       setupStore.isComplete() && resolveConfiguredVehiclePresence().hasConfiguredVehicle
-        ? '/(tabs)/dashboard'
+        ? '/dashboard'
         : '/setup'
     );
   };

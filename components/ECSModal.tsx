@@ -106,9 +106,9 @@ export default function ECSModal({
   const targetBackdropOpacity = customBackdropOpacity ?? config.backdropOpacity;
 
   // Animation values
-  const backdropAnim = useRef(new Animated.Value(0)).current;
-  const panelOpacity = useRef(new Animated.Value(0)).current;
-  const panelTranslateY = useRef(new Animated.Value(config.panelTranslateY)).current;
+  const backdropAnim = useRef(new Animated.Value(visible ? targetBackdropOpacity : 0)).current;
+  const panelOpacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const panelTranslateY = useRef(new Animated.Value(visible ? 0 : config.panelTranslateY)).current;
 
   // Internal visibility state for delayed unmount
   const [modalVisible, setModalVisible] = useState(visible);
@@ -119,18 +119,31 @@ export default function ECSModal({
   // Prevents double-close, re-open race conditions, and duplicate onClose calls.
   const isClosingRef = useRef(false);
   const isOpeningRef = useRef(false);
+  const openScheduledRef = useRef(false);
   const onCloseFiredRef = useRef(false);
   const cooldownRef = useRef(false);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const onCloseRef = useRef(onClose);
+  const onRequestCloseRef = useRef(onRequestClose);
+  const openFrameRef = useRef<number | null>(null);
 
   // Track the open/close cycle to invalidate stale animation callbacks
   const cycleRef = useRef(0);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+    onRequestCloseRef.current = onRequestClose;
+  }, [onClose, onRequestClose]);
+
+  useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (openFrameRef.current != null) {
+        cancelAnimationFrame(openFrameRef.current);
+        openFrameRef.current = null;
+      }
       if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
     };
   }, []);
@@ -139,16 +152,20 @@ export default function ECSModal({
     setOverlayVersion((version) => version + 1);
   }), []);
 
+  const dismissLatestHandler = useCallback(() => {
+    const dismissHandler = onRequestCloseRef.current ?? onCloseRef.current;
+    dismissHandler?.();
+  }, []);
+
   useEffect(() => {
     if (!visible) return undefined;
 
-    const dismissHandler = onRequestClose ?? onClose;
     return registerOverlay({
       id: overlayIdRef.current,
       stackBehavior,
-      onDismiss: dismissHandler,
+      onDismiss: dismissLatestHandler,
     });
-  }, [onClose, onRequestClose, stackBehavior, visible]);
+  }, [dismissLatestHandler, stackBehavior, visible]);
 
   // Reduced motion detection
   const reducedMotion = useRef(false);
@@ -168,9 +185,14 @@ export default function ECSModal({
   // ── OPEN animation ──────────────────────────────────────
   const animateOpen = useCallback(() => {
     const cycle = ++cycleRef.current;
+    openScheduledRef.current = false;
     isOpeningRef.current = true;
     isClosingRef.current = false;
     onCloseFiredRef.current = false;
+
+    backdropAnim.stopAnimation();
+    panelOpacity.stopAnimation();
+    panelTranslateY.stopAnimation();
 
     const rm = reducedMotion.current;
 
@@ -213,11 +235,16 @@ export default function ECSModal({
     // Guard: if already closing, don't start another close animation
     if (isClosingRef.current) return;
 
+    openScheduledRef.current = false;
     const cycle = ++cycleRef.current;
     isClosingRef.current = true;
     isOpeningRef.current = false;
 
     const rm = reducedMotion.current;
+
+    backdropAnim.stopAnimation();
+    panelOpacity.stopAnimation();
+    panelTranslateY.stopAnimation();
 
     Animated.parallel([
       Animated.timing(panelOpacity, {
@@ -244,7 +271,7 @@ export default function ECSModal({
       // Only complete if this cycle is still current (not superseded by re-open)
       if (cycle === cycleRef.current && mountedRef.current) {
         isClosingRef.current = false;
-        setModalVisible(false);
+        setModalVisible((current) => (current ? false : current));
 
         // Start cooldown to prevent immediate re-trigger
         cooldownRef.current = true;
@@ -265,6 +292,9 @@ export default function ECSModal({
       // If in cooldown after a recent dismiss, skip this open
       // (prevents the same trigger from immediately re-opening)
       if (cooldownRef.current) return;
+      if (openScheduledRef.current || (modalVisible && !isClosingRef.current)) {
+        return;
+      }
 
       // If currently closing, cancel the close and re-open
       if (isClosingRef.current) {
@@ -273,14 +303,20 @@ export default function ECSModal({
         cycleRef.current++;
       }
 
-      setModalVisible(true);
+      openScheduledRef.current = true;
+      setModalVisible((current) => (current ? current : true));
       // Small delay to ensure Modal is mounted before animating
-      requestAnimationFrame(() => {
-        if (mountedRef.current) {
+      if (openFrameRef.current != null) {
+        cancelAnimationFrame(openFrameRef.current);
+      }
+      openFrameRef.current = requestAnimationFrame(() => {
+        openFrameRef.current = null;
+        if (mountedRef.current && openScheduledRef.current) {
           animateOpen();
         }
       });
     } else if (modalVisible) {
+      openScheduledRef.current = false;
       animateClose();
     }
   }, [visible, animateClose, animateOpen, modalVisible]);
@@ -290,22 +326,19 @@ export default function ECSModal({
     if (onCloseFiredRef.current) return;
     onCloseFiredRef.current = true;
 
-    if (onRequestClose) {
-      onRequestClose();
-    } else if (onClose) {
-      onClose();
-    }
-  }, [onRequestClose, onClose]);
+    const requestHandler = onRequestCloseRef.current ?? onCloseRef.current;
+    requestHandler?.();
+  }, []);
 
   const handleBackdropPress = useCallback(() => {
-    if (!dismissOnBackdrop || !onClose) return;
+    if (!dismissOnBackdrop || !onCloseRef.current) return;
 
     // Guard: fire onClose only once per cycle
     if (onCloseFiredRef.current) return;
     onCloseFiredRef.current = true;
 
-    onClose();
-  }, [dismissOnBackdrop, onClose]);
+    onCloseRef.current();
+  }, [dismissOnBackdrop]);
 
   const overlayIsActive = isOverlayActive(overlayIdRef.current, stackBehavior);
 

@@ -33,6 +33,28 @@ type BriefPowerMeta = {
   solarWatts?: number | null;
 };
 
+type BriefWeatherMeta = {
+  source?: 'live' | 'cache' | 'none' | string | null;
+  staleness?: 'fresh' | 'aging' | 'stale' | 'very_stale' | 'unknown' | string | null;
+  severity?: 'none' | 'advisory' | 'warning' | 'extreme' | string | null;
+  ageLabel?: string | null;
+  hasPayload?: boolean | null;
+  label?: string | null;
+};
+
+type BriefRouteGuidanceMeta = {
+  requested?: boolean | null;
+  available?: boolean | null;
+  unavailable?: boolean | null;
+  reason?: string | null;
+  label?: string | null;
+};
+
+type BriefPhaseMeta = {
+  phase?: string | null;
+  label?: string | null;
+};
+
 type MissionBriefLike = {
   headline?: string | null;
   summary?: string | null;
@@ -51,6 +73,9 @@ type MissionBriefLike = {
   operatorTasks?: BriefTask[] | null;
   primaryTask?: BriefTask | null;
   powerMeta?: BriefPowerMeta | null;
+  weatherMeta?: BriefWeatherMeta | null;
+  routeGuidanceMeta?: BriefRouteGuidanceMeta | null;
+  phase?: BriefPhaseMeta | null;
   trust?: ECSTrustMetadata | null;
 };
 
@@ -127,6 +152,57 @@ function formatPowerLine(meta?: BriefPowerMeta | null): string | null {
   return parts.length ? parts.join(' • ') : null;
 }
 
+function weatherActivityLine(meta?: BriefWeatherMeta | null): string | null {
+  if (!meta) return null;
+  const explicit = clampLine(meta.label, '');
+  if (explicit) return explicit;
+
+  const severity = clampLine(meta.severity, '').toLowerCase();
+  const staleness = clampLine(meta.staleness, '').toLowerCase();
+  const source = clampLine(meta.source, '').toLowerCase();
+  const hasPayload = meta.hasPayload === true;
+
+  if (severity === 'extreme' || severity === 'warning') return 'Weather alert active';
+  if (source === 'none' && !hasPayload) return 'Weather provider unavailable';
+  if (staleness === 'stale' || staleness === 'very_stale') return 'Weather data is stale';
+  if (staleness === 'fresh' || staleness === 'aging') return 'Weather updated recently';
+  return null;
+}
+
+function routeGuidanceActivityLine(meta?: BriefRouteGuidanceMeta | null): string | null {
+  if (!meta) return null;
+  const explicit = clampLine(meta.label, '');
+  if (explicit && explicit !== 'Route guidance not active') return explicit;
+  if (meta.available === true) return 'Route guidance available';
+  if (meta.unavailable === true) return 'Route guidance unavailable';
+  return null;
+}
+
+function phaseActivityLine(
+  brief?: MissionBriefLike | null,
+  commandState?: BriefCommandState | null,
+): string | null {
+  const phase = clampLine(brief?.phase?.phase, '').toLowerCase();
+  const label = clampLine(brief?.phase?.label || commandState?.phaseLabel, '');
+  if (phase === 'staging') return 'Staging/pre-departure active';
+  if (phase === 'vehicle_setup') return 'Vehicle setup active';
+  if (label.toLowerCase().includes('staging')) return 'Staging/pre-departure active';
+  return null;
+}
+
+function sourceDrivenActivityLine(
+  brief: MissionBriefLike | null,
+  commandState: BriefCommandState | null | undefined,
+): string | null {
+  const parts = [
+    weatherActivityLine(brief?.weatherMeta),
+    routeGuidanceActivityLine(brief?.routeGuidanceMeta),
+    phaseActivityLine(brief, commandState ?? null),
+  ].filter(Boolean) as string[];
+
+  return parts.length ? parts.join('. ') : null;
+}
+
 function normalizeBrief(
   brief: MissionBriefLike | null,
   commandState: BriefCommandState | null | undefined,
@@ -180,6 +256,49 @@ function normalizeBrief(
     limitationLine: clampLine(commandState?.limitationLine, ''),
     topSignal: clampLine(commandState?.topSignal, ''),
     powerLine: formatPowerLine(brief?.powerMeta),
+  };
+}
+
+export function summarizeMissionBriefLogEntry(
+  brief: MissionBriefLike | null,
+  commandState: BriefCommandState | null | undefined,
+): { id: string; message: string } | null {
+  const normalized = normalizeBrief(brief, commandState);
+  if (!normalized) return null;
+
+  const message = clampLine(
+    [
+      normalized.headline,
+      sourceDrivenActivityLine(brief, commandState) ||
+        normalized.limitationLine ||
+        normalized.supportLine ||
+        normalized.topSignal ||
+        normalized.nextAction,
+    ]
+      .filter(Boolean)
+      .join(' — '),
+    '',
+  );
+
+  if (!message) return null;
+
+  return {
+    id: [
+      normalized.statusLabel,
+      normalized.headline,
+      normalized.summary,
+      normalized.nextAction,
+      normalized.limitationLine,
+      normalized.supportLine,
+      brief?.weatherMeta?.label,
+      brief?.weatherMeta?.staleness,
+      brief?.routeGuidanceMeta?.label,
+      brief?.phase?.phase,
+    ]
+      .filter(Boolean)
+      .join('|')
+      .toLowerCase(),
+    message,
   };
 }
 
@@ -355,19 +474,17 @@ export default function MissionBriefCard({
         </Text>
       ) : null}
 
-      <Text style={[styles.headline, { color: palette.text }]} numberOfLines={compact ? 1 : 2}>
+      <Text style={[styles.headline, { color: palette.text }]}>
         {normalized.headline}
       </Text>
       <Text
         style={[styles.summary, { color: isLight ? colors.textSecondary : 'rgba(233,237,244,0.78)' }]}
-        numberOfLines={compact ? 2 : 3}
       >
         {normalized.summary}
       </Text>
       {normalized.confidenceLine ? (
         <Text
           style={[styles.confidenceLine, { color: isLight ? colors.textSecondary : 'rgba(233,237,244,0.62)' }]}
-          numberOfLines={1}
         >
           {normalized.confidenceLine}
         </Text>
@@ -400,7 +517,6 @@ export default function MissionBriefCard({
           <Ionicons name="flash-outline" size={13} color={TACTICAL.amber} />
           <Text
             style={[styles.footerText, { color: isLight ? colors.textSecondary : 'rgba(233,237,244,0.72)' }]}
-            numberOfLines={1}
           >
             {normalized.powerLine}
           </Text>
@@ -412,7 +528,6 @@ export default function MissionBriefCard({
           <View style={[styles.signalDot, { backgroundColor: accentColor }]} />
           <Text
             style={[styles.signalText, { color: isLight ? colors.textSecondary : 'rgba(233,237,244,0.74)' }]}
-            numberOfLines={1}
           >
             {topSignal}
           </Text>

@@ -24,7 +24,7 @@ interface WidgetDetailLeadCardProps {
   summary?: string | null;
   tone?: WidgetDetailTone;
   badges?: WidgetDetailBadge[];
-  metaLines?: Array<string | null | undefined>;
+  metaLines?: (string | null | undefined)[];
   children?: React.ReactNode;
 }
 
@@ -34,7 +34,7 @@ interface WidgetDetailStateCardProps {
   tone?: WidgetDetailTone;
   badgeLabel?: string;
   icon?: React.ComponentProps<typeof Ionicons>['name'];
-  metaLines?: Array<string | null | undefined>;
+  metaLines?: (string | null | undefined)[];
   children?: React.ReactNode;
 }
 

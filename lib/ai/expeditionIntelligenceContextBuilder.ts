@@ -9,7 +9,10 @@ import type {
   ExpeditionLifecyclePhase,
 } from './expeditionIntelligenceTypes';
 import type { ExpeditionRouteConfidenceInput } from './expeditionRouteConfidenceEngine';
-import { getActiveVehicleSnapshotForEcs } from '../vehicleEcsIntegration';
+
+type ActiveVehicleSnapshotForEcs = ReturnType<
+  typeof import('../vehicleEcsIntegration').getActiveVehicleSnapshotForEcs
+>;
 
 export type ExpeditionIntelligenceContext = ExpeditionContext & {
   builtAt: string;
@@ -193,6 +196,15 @@ function normalizeVehicle(value: unknown, index: number) {
   };
 }
 
+function getOptionalActiveVehicleSnapshotForEcs(): ActiveVehicleSnapshotForEcs | null {
+  try {
+    const vehicleIntegration = require('../vehicleEcsIntegration') as typeof import('../vehicleEcsIntegration');
+    return vehicleIntegration.getActiveVehicleSnapshotForEcs();
+  } catch {
+    return null;
+  }
+}
+
 export function buildExpeditionIntelligenceContext(params: ExpeditionContextBuilderParams): ExpeditionIntelligenceContext {
   const evidence: ExpeditionEvidenceField[] = [];
   const missingData: string[] = [];
@@ -209,9 +221,9 @@ export function buildExpeditionIntelligenceContext(params: ExpeditionContextBuil
   const legalAccess = asRecord(params.legalAccess);
   const logistics = asRecord(params.campsiteLogistics);
   const convoy = asRecord(params.convoy);
-  const activeVehicleState = getActiveVehicleSnapshotForEcs();
+  const activeVehicleState = getOptionalActiveVehicleSnapshotForEcs();
   const activeVehicleProfile =
-    activeVehicleState.status === 'ready' || activeVehicleState.status === 'incomplete'
+    activeVehicleState && (activeVehicleState.status === 'ready' || activeVehicleState.status === 'incomplete')
       ? {
           id: activeVehicleState.identity.vehicleId ?? activeVehicleState.identity.activeVehicleId,
           label: activeVehicleState.identity.displayName,

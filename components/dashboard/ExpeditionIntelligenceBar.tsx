@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
 import { DEPTH_SHADOWS } from '../../lib/depthSystem';
 import { TACTICAL } from '../../lib/theme';
 import { useTheme } from '../../context/ThemeContext';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 const BAR_HEIGHT = 52;
 const FADE_IN_MS = 340;
@@ -100,7 +101,9 @@ export default function ExpeditionIntelligenceBar({
   const { palette, colors, isLight } = useTheme();
   const [state, setState] = useState<AdvisoryState>(advisoryStore.getState());
   const [reduceMotion, setReduceMotion] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useStableAnimatedValue(0);
+  const visible = !!state.current && !!state.isVisible;
+  const currentMessageId = state.current?.id ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -122,25 +125,37 @@ export default function ExpeditionIntelligenceBar({
 
   useEffect(() => {
     const unsubscribe = advisoryStore.subscribe((nextState) => {
-      setState(nextState);
+      setState((current) => (
+        current.current?.id === nextState.current?.id &&
+        current.isVisible === nextState.isVisible &&
+        current.enabled === nextState.enabled &&
+        current.simplifiedMode === nextState.simplifiedMode
+          ? current
+          : nextState
+      ));
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     const shouldAnimate = !reduceMotion && !disableAnimations;
-    const visible = !!state.current && !!state.isVisible;
+    fadeAnim.stopAnimation();
 
     if (shouldAnimate) {
-      Animated.timing(fadeAnim, {
+      const animation = Animated.timing(fadeAnim, {
         toValue: visible ? 1 : 0,
         duration: visible ? FADE_IN_MS : FADE_OUT_MS,
         useNativeDriver: true,
-      }).start();
+      });
+      animation.start();
+      return () => {
+        animation.stop();
+        fadeAnim.stopAnimation();
+      };
     } else {
       fadeAnim.setValue(visible ? 1 : 0);
     }
-  }, [state, reduceMotion, disableAnimations, fadeAnim]);
+  }, [currentMessageId, visible, reduceMotion, disableAnimations, fadeAnim]);
 
   if (!enabled || !state.enabled) {
     return <View style={[styles.reservedSpace, { backgroundColor: palette.bg, borderBottomColor: palette.border }]} />;

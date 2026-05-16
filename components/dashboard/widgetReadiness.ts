@@ -4,6 +4,7 @@ import type { ECSWeatherStatusKind } from '../../lib/ecsWeather';
 import { missionExpeditionStore } from '../../lib/missionStore';
 import { remotenessStore } from '../../lib/remotenessStore';
 import { routeStore } from '../../lib/routeStore';
+import { expeditionReadinessStore } from '../../lib/readiness/expeditionReadinessStore';
 import type { WidgetRenderOptions } from './WidgetRenderers';
 
 export type DashboardWidgetReadinessStatus =
@@ -18,7 +19,8 @@ export type DashboardWidgetActionKey =
   | 'open_power_connections'
   | 'open_telemetry_setup'
   | 'open_navigate'
-  | 'open_fleet';
+  | 'open_fleet'
+  | 'open_command_brief';
 
 export interface DashboardWidgetReadinessDescriptor {
   status: DashboardWidgetReadinessStatus;
@@ -70,25 +72,25 @@ function isTelemetryStale(telemetry: any): boolean {
 function getVehicleResourceContext() {
   const activeVehicle = getActiveVehicleContext();
   const vehicleId = activeVehicle.activeVehicleId || '';
-  const spec = activeVehicle.spec ?? null;
   const consumables = vehicleId ? consumablesStore.get(vehicleId) : null;
 
   const hasFuelContext = Boolean(
-    (spec?.fuel_tank_capacity_gal ?? 0) > 0 ||
-      activeVehicle.vehicle?.current_fuel_percent != null,
+    (activeVehicle.resourceProfile.fuelTankCapacityGal ?? 0) > 0 ||
+      activeVehicle.resourceProfile.currentFuelGallons > 0 ||
+      activeVehicle.resourceProfile.currentFuelPercent != null,
   );
   const hasWaterContext = Boolean(
     activeVehicle.resourceProfile.waterCapacityGal != null ||
-      activeVehicle.vehicle?.current_water_gal != null,
+      activeVehicle.resourceProfile.currentWaterGallons > 0,
   );
   const hasPowerProfile = Boolean(
     activeVehicle.resourceProfile.batteryUsableWh != null &&
       activeVehicle.resourceProfile.batteryUsableWh > 0,
   );
   const hasMechanicalContext = Boolean(
-    activeVehicle.tiresLift?.tireSizeInches ||
-      activeVehicle.tiresLift?.suspensionLiftInches ||
-      activeVehicle.tiresLift?.isLeveled,
+    activeVehicle.resourceProfile.tireSizeInches ||
+      activeVehicle.resourceProfile.suspensionLiftInches ||
+      activeVehicle.resourceProfile.isLeveled,
   );
   const hasLoadoutContext = Boolean(activeVehicle.loadout || activeVehicle.loadoutItemCount > 0);
   const hasAccessoryContext = Boolean(
@@ -99,7 +101,7 @@ function getVehicleResourceContext() {
   return {
     activeVehicleId: activeVehicle.activeVehicleId,
     hasActiveVehicle: Boolean(activeVehicle.activeVehicleId),
-    spec,
+    spec: activeVehicle.spec ?? null,
     consumables,
     hasFuelContext,
     hasWaterContext,
@@ -119,6 +121,7 @@ function getVehicleResourceContext() {
 
 function readinessFromWeather(kind: ECSWeatherStatusKind | null | undefined): DashboardWidgetReadinessDescriptor {
   switch (kind) {
+    case 'live':
     case 'ready':
       return createDependencyReadiness({
         status: 'live',
@@ -126,6 +129,14 @@ function readinessFromWeather(kind: ECSWeatherStatusKind | null | undefined): Da
         title: 'Live weather active',
         message: 'Current weather is updating from the active ECS location context.',
       });
+    case 'cached':
+      return createDependencyReadiness({
+        status: 'fallback',
+        badgeLabel: 'CACHED WEATHER',
+        title: 'Cached weather active',
+        message: 'Showing the latest saved weather context while ECS checks for a fresher source.',
+      });
+    case 'permission_required':
     case 'waiting_for_gps':
       return createDependencyReadiness({
         status: 'waiting',
@@ -156,12 +167,20 @@ function readinessFromWeather(kind: ECSWeatherStatusKind | null | undefined): Da
         message: 'Live weather is unavailable, so ECS is holding on the latest cached weather context.',
         stale: true,
       });
+    case 'provider_error':
     case 'error':
       return createDependencyReadiness({
         status: 'error',
         badgeLabel: 'WEATHER ERROR',
         title: 'Weather temporarily unavailable',
         message: 'The weather source did not return a usable update. ECS will retry automatically.',
+      });
+    case 'unavailable':
+      return createDependencyReadiness({
+        status: 'unavailable',
+        badgeLabel: 'UNAVAILABLE',
+        title: 'Weather unavailable',
+        message: 'No valid weather coordinate or cached forecast is currently available for this widget.',
       });
     default:
       return createDependencyReadiness({
@@ -192,6 +211,41 @@ export function getDashboardWidgetReadiness(
   const hasActiveVehicle = vehicleResources.hasActiveVehicle;
 
   switch (widgetType) {
+    case 'expedition-readiness': {
+      const readiness = expeditionReadinessStore.getSnapshot();
+      const assessment = readiness.currentAssessment;
+      const hasReadinessRoute = Boolean(readiness.activeRouteId || readiness.activeTripId || (assessment && !assessment.sourceFreshness.route.isMissing));
+      if (!hasReadinessRoute) {
+        return createDependencyReadiness({
+          status: 'waiting',
+          badgeLabel: 'NO EXPEDITION',
+          title: 'No active expedition',
+          message: 'Generate a Command Brief from Explore or Navigate before this widget can show readiness.',
+          actionLabel: 'Open Brief',
+          actionKey: 'open_command_brief',
+        });
+      }
+      if (!assessment) {
+        return createDependencyReadiness({
+          status: 'waiting',
+          badgeLabel: 'ASSESSING',
+          title: 'Readiness pending',
+          message: 'ECS is waiting for the canonical Expedition Readiness assessment.',
+          actionLabel: 'Open Brief',
+          actionKey: 'open_command_brief',
+        });
+      }
+      return createDependencyReadiness({
+        status: assessment.status === 'ready' ? 'live' : assessment.status === 'caution' ? 'fallback' : 'error',
+        badgeLabel: `${assessment.status.toUpperCase()} ${Math.round(assessment.overallScore)}`,
+        title: 'Expedition Readiness live',
+        message: assessment.explanation,
+        actionLabel: 'Open Brief',
+        actionKey: 'open_command_brief',
+        stale: Object.values(assessment.sourceFreshness).some((record) => record.isStale),
+      });
+    }
+
     case 'attitude-monitor':
       return createDependencyReadiness(
         renderOptions?.sensorStatus === 'LIVE' || renderOptions?.sensorStatus === 'CALIBRATED'
@@ -418,6 +472,8 @@ export function getDashboardWidgetReadiness(
       });
 
     case 'hwy-forward-weather':
+    case 'hwy-daylight-remaining':
+    case 'hwy-wind-monitor':
     case 'weather':
       return readinessFromWeather(weatherSnapshot?.status?.kind ?? null);
 

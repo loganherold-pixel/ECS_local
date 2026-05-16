@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
-  ImageBackground,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -11,7 +11,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ThemeToggle from '../ThemeToggle';
 import { CLOSE_BTN } from '../../lib/uiConstants';
 import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -29,29 +31,49 @@ import { routeStore } from '../../lib/routeStore';
 import { loadRoadNavigationSession } from '../../lib/roadNavigationStore';
 import { loadTrailNavigationSession } from '../../lib/trailNavigationStore';
 import {
-  ECS_TOP_SHELL_EDGE_SLOT_WIDTH,
-  ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
+  ECS_TOP_BANNER_TITLE_CENTER_PADDING,
+  ECS_TOP_BANNER_TITLE_DONE_RIGHT_SLOT_WIDTH,
+  ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH,
+  ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH,
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  ECS_TOP_SHELL_CONTROL_SLOT_WIDTH,
+  getEcsTopBannerLayoutMetrics,
   getShellHeaderAnchorTop,
-  getShellHeaderTopPadding,
 } from '../../lib/shellLayout';
 import { getTopBannerToneColor, resolveProfileCommandStatus, resolveTopBannerPresentation } from '../../lib/ui/topBannerStatusResolver';
 import type { ECSTopBannerCommandContext } from '../../lib/ui/topBannerTypes';
 import { resolveAccountUx } from '../../lib/auth/accountUXResolver';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
-import { TOP_BANNER_BG } from '../../lib/chromeAssets';
+import { bluPowerAuthority, type BluAuthoritySnapshot } from '../../lib/BluPowerAuthority';
+import { useEcsProviders } from '../../lib/useEcsProviders';
+import { ecsLog } from '../../lib/ecsLogger';
+import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
+import { VISIBILITY_THEME_CYCLE } from '../../lib/appearanceStore';
+import { resolveShellChromeTheme } from '../../lib/ui/shellChromeTheme';
+import FleetSyncModal from '../fleet/FleetSyncModal';
+import TopBannerBackground from '../TopBannerBackground';
+import { useEcsTopBannerHeight } from '../ECSGlobalBanner';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 const DHDR = {
   bar: '#1E2125',
   goldRail: '#A0813A',
   barBottomEdge: '#262A2E',
-  radialCore: 'rgba(161, 129, 58, 0.09)',
-  radialMid: 'rgba(161, 129, 58, 0.04)',
   iconMuted: '#8A7A58',
   iconActive: '#C9A24C',
   expeditionGold: '#D4A017',
 };
 
+type ShellStatusPillTone = 'neutral' | 'active' | 'sync' | 'degraded';
+
+type ShellStatusPillModel = {
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  tone: ShellStatusPillTone;
+};
+
 interface DashboardHeaderProps {
+  title?: string;
   layoutMode: boolean;
   onDone: () => void;
   onAuthPress: () => void;
@@ -59,37 +81,8 @@ interface DashboardHeaderProps {
   collapsed?: boolean;
   commandContext?: ECSTopBannerCommandContext | null;
 }
-
-function DashHeaderRadialGradient() {
-  return (
-    <View style={styles.radialContainer} pointerEvents="none">
-      <View
-        style={[
-          styles.radialRing,
-          {
-            width: '50%',
-            height: '180%',
-            backgroundColor: DHDR.radialCore,
-            borderRadius: 999,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.radialRing,
-          {
-            width: '75%',
-            height: '240%',
-            backgroundColor: DHDR.radialMid,
-            borderRadius: 999,
-          },
-        ]}
-      />
-    </View>
-  );
-}
-
 export default function DashboardHeader({
+  title,
   layoutMode,
   onDone,
   onAuthPress,
@@ -97,6 +90,7 @@ export default function DashboardHeader({
   collapsed = false,
   commandContext,
 }: DashboardHeaderProps) {
+  const router = useRouter();
   const {
     syncStatus,
     user,
@@ -107,12 +101,18 @@ export default function DashboardHeader({
     connectivityStatus,
     offlineMode,
     signOut,
+    sendPasswordReset,
     showToast,
   } = useApp();
-  const { palette, appearanceMode, setAppearanceMode } = useTheme();
+  const { palette, colors, effectiveTheme, appearanceMode, setAppearanceMode } = useTheme();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
+  const topBannerHeight = useEcsTopBannerHeight();
+  const obdScanner = useUnifiedOBD2Scanner();
+  const ecsProviders = useEcsProviders();
   const [profilePanelVisible, setProfilePanelVisible] = useState(false);
+  const [syncModalVisible, setSyncModalVisible] = useState(false);
+  const [bluSnapshot, setBluSnapshot] = useState<BluAuthoritySnapshot>(() => bluPowerAuthority.getSnapshot());
   const [operatorTrustMode, setOperatorTrustMode] = useState<ECSOperatorTrustMode>(
     () => operatorTrustModeStore.mode,
   );
@@ -123,12 +123,8 @@ export default function DashboardHeader({
   const tripleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [expeditionState, setExpeditionState] = useState<ExpeditionState>(expeditionStateStore.getState());
   const [hasRouteSelected, setHasRouteSelected] = useState(false);
-  const goldUnderlineAnim = useRef(
-    new Animated.Value(expeditionStateStore.getState() === 'active' ? 1 : 0)
-  ).current;
-  const collapseAnim = useRef(new Animated.Value(collapsed ? 1 : 0)).current;
-  const syncSpin = useRef(new Animated.Value(0)).current;
-  const prevStateRef = useRef<ExpeditionState>(expeditionStateStore.getState());
+  const collapseAnim = useStableAnimatedValue(collapsed ? 1 : 0);
+  const syncSpin = useStableAnimatedValue(0);
   const shellMessageLogKeyRef = useRef<string | null>(null);
 
   const handleTitlePress = useCallback(() => {
@@ -181,28 +177,19 @@ export default function DashboardHeader({
 
   useEffect(() => {
     const unsubscribe = expeditionStateStore.subscribe((state, _record) => {
-      const prevState = prevStateRef.current;
       setExpeditionState(state);
-
-      if (state === 'active' && prevState !== 'active') {
-        Animated.timing(goldUnderlineAnim, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: false,
-        }).start();
-      } else if (state !== 'active' && prevState === 'active') {
-        Animated.timing(goldUnderlineAnim, {
-          toValue: 0,
-          duration: 220,
-          useNativeDriver: false,
-        }).start();
-      }
-
-      prevStateRef.current = state;
     });
 
     return unsubscribe;
-  }, [goldUnderlineAnim]);
+  }, []);
+
+  useEffect(() => {
+    const off = bluPowerAuthority.subscribe((next) => {
+      setBluSnapshot(next);
+    });
+
+    return off;
+  }, []);
 
   useEffect(() => {
     return operatorTrustModeStore.subscribe((nextMode) => {
@@ -300,16 +287,21 @@ export default function DashboardHeader({
       user,
     ],
   );
+  const shellChrome = useMemo(
+    () => resolveShellChromeTheme({ effectiveTheme, palette, colors }),
+    [colors, effectiveTheme, palette],
+  );
   const toneColor = useMemo(
     () =>
       getTopBannerToneColor(bannerStatus.tone, {
-        active: DHDR.iconActive,
-        online: '#4CAF50',
-        muted: DHDR.iconMuted,
+        active: shellChrome.iconActive,
+        online: shellChrome.online,
+        muted: shellChrome.iconMuted,
         degraded: '#D6A04B',
       }),
-    [bannerStatus.tone],
+    [bannerStatus.tone, shellChrome.iconActive, shellChrome.iconMuted, shellChrome.online],
   );
+  const titleText = title ?? 'Expedition Command';
 
   useEffect(() => {
     if (!bannerStatus.processingActive) {
@@ -355,41 +347,166 @@ export default function DashboardHeader({
   }, [onExpeditionEnded]);
 
   const handleAccountAction = useCallback(async (actionId: string) => {
-    if (actionId !== 'sign_out' || accountActionBusyId) return;
+    if (accountActionBusyId) return;
 
     setAccountActionBusyId(actionId);
-    setProfilePanelVisible(false);
 
     try {
-      await signOut();
+      if (actionId === 'sign_out') {
+        setProfilePanelVisible(false);
+        await signOut();
+        return;
+      }
+      if (actionId === 'reset_password') {
+        if (!user?.email) {
+          showToast('Unable to load account details right now.');
+          return;
+        }
+        const result = await sendPasswordReset(user.email);
+        showToast(result.error ? 'Unable to send reset instructions right now.' : 'Reset instructions sent if the account exists.');
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to sign out right now.');
     } finally {
       setAccountActionBusyId(null);
     }
-  }, [accountActionBusyId, showToast, signOut]);
-
-  const goldUnderlineOpacity = goldUnderlineAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
-  const goldUnderlineHeight = goldUnderlineAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 2],
-  });
+  }, [accountActionBusyId, sendPasswordReset, showToast, signOut, user?.email]);
 
   const openProfilePanel = useCallback(() => {
     setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
     setProfilePanelVisible(true);
   }, []);
+  const openBluetoothConnections = useCallback(() => {
+    try {
+      router.push('/power/blu');
+    } catch {
+      try {
+        router.push('/power');
+      } catch {
+        showToast('Device connections unavailable');
+      }
+    }
+  }, [router, showToast]);
+  const openSyncManagement = useCallback(() => {
+    setSyncModalVisible(true);
+  }, []);
 
   const showEndExpedition = expeditionState === 'active';
-  const controlSlotWidth = layoutMode
-    ? 76
-    : Math.max(ECS_TOP_SHELL_EDGE_SLOT_WIDTH, ECS_TOP_SHELL_PROFILE_BUTTON_SIZE + 10);
+  const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
+  const useFleetMatchedTitleLayout = titleText === 'Expedition Command';
+  const leftControlSlotWidth = useFleetMatchedTitleLayout
+    ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
+    : controlSlotWidth;
+  const rightControlSlotWidth = useFleetMatchedTitleLayout
+    ? layoutMode
+      ? ECS_TOP_BANNER_TITLE_DONE_RIGHT_SLOT_WIDTH
+      : ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH
+    : controlSlotWidth;
+  const centerContentPadding = useFleetMatchedTitleLayout
+    ? ECS_TOP_BANNER_TITLE_CENTER_PADDING
+    : 8;
+  const shellStatusLabel = useMemo(() => {
+    if (bannerStatus.processingActive) return 'SYNC';
+    if (offlineMode || !isOnline) return 'OFFLINE';
+    return 'ONLINE';
+  }, [bannerStatus.processingActive, isOnline, offlineMode]);
   const syncActionLabel = useMemo(() => {
     return syncStatus === 'error' ? 'FORCE SYNC' : 'SYNC NOW';
   }, [syncStatus]);
+  const shellStatusPill = useMemo<ShellStatusPillModel>(() => ({
+    label: shellStatusLabel,
+    icon: bannerStatus.processingActive ? 'sync-outline' : isOnline && !offlineMode ? 'radio-outline' : 'cloud-offline-outline',
+    tone:
+      bannerStatus.processingActive
+        ? 'sync'
+        : offlineMode || !isOnline
+          ? 'degraded'
+          : 'active',
+  }), [bannerStatus.processingActive, isOnline, offlineMode, shellStatusLabel]);
+  const bluetoothPill = useMemo<ShellStatusPillModel>(() => {
+    const providerHasRegisteredDevices = Object.values(bluSnapshot.providers).some((provider) => provider.hasDevices);
+    const powerUnavailable = providerHasRegisteredDevices && !bluSnapshot.isConnected && bluSnapshot.freshness === 'disconnected';
+    const providerScanning = ecsProviders.providerSummaries.some((provider) => provider.isScanning);
+    const permissionMissing = /permission|permissions|denied|not supported|required/i.test(obdScanner.error ?? '');
+    const platformUnavailable = Platform.OS === 'web';
+    const hasConnectedDevice = bluSnapshot.isConnected || obdScanner.isConnected;
+    const isConnecting =
+      bluSnapshot.isReconnecting ||
+      obdScanner.isScanning ||
+      obdScanner.isConnecting ||
+      obdScanner.isReconnecting ||
+      providerScanning ||
+      ecsProviders.isAnyReconnecting;
+    const isDegraded =
+      platformUnavailable ||
+      permissionMissing ||
+      obdScanner.state === 'error' ||
+      powerUnavailable;
+
+    if (hasConnectedDevice) {
+      return {
+        label: 'BLU',
+        icon: 'bluetooth',
+        tone: 'active',
+      };
+    }
+
+    if (isConnecting) {
+      return {
+        label: 'BLU',
+        icon: 'sync-outline',
+        tone: 'sync',
+      };
+    }
+
+    if (isDegraded) {
+      return {
+        label: 'BLU',
+        icon: 'bluetooth-outline',
+        tone: 'degraded',
+      };
+    }
+
+    return {
+      label: 'BLU',
+      icon: 'bluetooth-outline',
+      tone: 'neutral',
+    };
+  }, [
+    bluSnapshot.freshness,
+    bluSnapshot.isConnected,
+    bluSnapshot.isReconnecting,
+    bluSnapshot.providers,
+    ecsProviders.isAnyReconnecting,
+    ecsProviders.providerSummaries,
+    obdScanner.error,
+    obdScanner.isConnected,
+    obdScanner.isConnecting,
+    obdScanner.isReconnecting,
+    obdScanner.isScanning,
+    obdScanner.state,
+  ]);
+  const shellStatusPillStyle = useMemo(
+    () => getStatusPillStyles(shellStatusPill.tone, shellChrome.iconMuted),
+    [shellChrome.iconMuted, shellStatusPill.tone],
+  );
+  const bluetoothPillStyle = useMemo(
+    () => getStatusPillStyles(bluetoothPill.tone, shellChrome.iconMuted),
+    [bluetoothPill.tone, shellChrome.iconMuted],
+  );
+  const bluetoothAccessibilityLabel = useMemo(() => {
+    switch (bluetoothPill.tone) {
+      case 'active':
+        return 'Bluetooth connected';
+      case 'sync':
+        return 'Bluetooth connecting';
+      case 'degraded':
+        return 'Bluetooth unavailable';
+      case 'neutral':
+      default:
+        return 'Bluetooth available';
+    }
+  }, [bluetoothPill.tone]);
   const accountUx = useMemo(
     () =>
       resolveAccountUx({
@@ -401,10 +518,15 @@ export default function DashboardHeader({
     [accessState, isOnline, operatorInfo, user],
   );
 
-  const expandedHeight = Math.max(
-    adaptive.shell.headerMinHeight,
-    getShellHeaderTopPadding(insets.top, { webPadding: 10 }) + 60,
-  );
+  const dashboardBannerLayout = getEcsTopBannerLayoutMetrics(insets.top, topBannerHeight, {
+    isTablet: adaptive.isTablet,
+    shortHeight: adaptive.shortHeight,
+  });
+  const dashboardTopPadding = dashboardBannerLayout.topPadding;
+  const dashboardHeaderVisibleHeight = dashboardBannerLayout.visibleHeight;
+  const dashboardBannerOverscan = dashboardBannerLayout.bannerOverscan;
+  const dashboardBannerOffset = dashboardBannerLayout.bannerOffset;
+  const expandedHeight = dashboardHeaderVisibleHeight;
   const collapsedHeight = 0;
   const headerHeight = collapseAnim.interpolate({
     inputRange: [0, 1],
@@ -418,19 +540,10 @@ export default function DashboardHeader({
     inputRange: [0, 1],
     outputRange: [0, -12],
   });
-  const shellDetailText =
-    bannerStatus.processingActive
-    || bannerStatus.tone !== 'online'
-    || bannerStatus.source.startsWith('gps_live')
-    || bannerStatus.source.startsWith('route_')
-      ? bannerStatus.statusDetail
-      : bannerStatus.postureDetail;
-
   useEffect(() => {
     const nextKey = [
-      bannerStatus.postureLabel,
+      titleText,
       bannerStatus.statusLabel,
-      shellDetailText,
       bannerStatus.source,
       bannerStatus.priority,
     ].join('|');
@@ -438,14 +551,13 @@ export default function DashboardHeader({
     if (shellMessageLogKeyRef.current === nextKey) return;
     shellMessageLogKeyRef.current = nextKey;
 
-    console.log('[DashboardShellMessage]', {
+    ecsLog.debug('SHELL', '[DashboardShellMessage]', {
       shellMessageSource: bannerStatus.source,
       shellMessageReason: bannerStatus.reason,
       shellMessagePriority: bannerStatus.priority,
       suppressedShellSources: bannerStatus.suppressedSources,
-      shellEyebrow: bannerStatus.postureLabel,
+      shellTitle: titleText,
       shellStatusLabel: bannerStatus.statusLabel,
-      shellStatusDetail: shellDetailText,
       gpsLive: bannerStatus.diagnostics.gpsLive,
       routeActive: bannerStatus.diagnostics.routeUsable && hasRouteSelected,
       connectivityState: connectivityStatus,
@@ -458,7 +570,7 @@ export default function DashboardHeader({
     connectivityStatus,
     hasRouteSelected,
     offlineMode,
-    shellDetailText,
+    titleText,
   ]);
 
   return (
@@ -473,29 +585,21 @@ export default function DashboardHeader({
       ]}
       pointerEvents={collapsed ? 'none' : 'auto'}
     >
-      <ImageBackground
-        source={TOP_BANNER_BG}
-        resizeMode="cover"
-        imageStyle={styles.bannerTextureImage}
+      <View
         style={[
           styles.container,
-          layoutMode && styles.containerDimmed,
           {
-            paddingTop: getShellHeaderTopPadding(insets.top, { webPadding: 10 }),
-            minHeight: adaptive.shell.headerMinHeight,
+            height: dashboardHeaderVisibleHeight,
+            paddingTop: dashboardTopPadding,
+            minHeight: dashboardHeaderVisibleHeight,
           },
         ]}
       >
-        <View style={styles.bannerTextureScrim} pointerEvents="none" />
-        <DashHeaderRadialGradient />
-        <View style={styles.barBottomEdge} />
-        <View style={styles.goldRailLine} />
-        <Animated.View
-          style={[
-            styles.expeditionGoldUnderline,
-            { opacity: goldUnderlineOpacity, height: goldUnderlineHeight },
-          ]}
-          pointerEvents="none"
+        <TopBannerBackground
+          variant="dashboard"
+          resizeMode="cover"
+          verticalOffset={dashboardBannerOffset}
+          overscan={dashboardBannerOverscan}
         />
 
         <View
@@ -507,44 +611,99 @@ export default function DashboardHeader({
             },
           ]}
         >
-          <View style={[styles.edgeSlot, { width: controlSlotWidth }]} />
-
-          <Pressable style={styles.centerContent} onPress={handleTitlePress}>
-            <View style={styles.statusRow}>
-              <Text
+          <View style={[styles.edgeSlotBase, styles.edgeSlotStart, { width: leftControlSlotWidth }]}>
+            <View style={styles.statusPillCluster}>
+              <TouchableOpacity
                 style={[
-                  styles.postureLabel,
-                  { color: hasActiveExpeditionContext ? DHDR.expeditionGold : DHDR.iconMuted },
+                  styles.statusPill,
+                  shellStatusPillStyle,
                 ]}
-                numberOfLines={1}
+                onPress={openSyncManagement}
+                activeOpacity={0.78}
+                hitSlop={CLOSE_BTN.hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel={`${shellStatusPill.label} sync controls`}
+                accessibilityHint="Opens sync management and offline readiness controls"
               >
-                {bannerStatus.postureLabel}
-              </Text>
-              <View
-                style={[
-                  styles.liveStatusPill,
-                  {
-                    borderColor: toneColor + '45',
-                    backgroundColor: toneColor + '12',
-                  },
-                ]}
-              >
-                <Text style={[styles.liveStatusText, { color: toneColor }]}>
-                  {bannerStatus.statusLabel}
+                <Ionicons
+                  name={shellStatusPill.icon}
+                  size={8}
+                  color={shellStatusPillStyle.color}
+                />
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    { color: shellStatusPillStyle.color },
+                  ]}
+                >
+                  {shellStatusPill.label}
                 </Text>
-              </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.statusPill,
+                  bluetoothPillStyle,
+                ]}
+                onPress={openBluetoothConnections}
+                activeOpacity={0.78}
+                hitSlop={CLOSE_BTN.hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel={bluetoothAccessibilityLabel}
+                accessibilityHint="Opens device connections and Bluetooth controls"
+              >
+                <Ionicons
+                  name={bluetoothPill.icon}
+                  size={8}
+                  color={bluetoothPillStyle.color}
+                  style={bluetoothPill.tone === 'sync' ? styles.statusPillSyncIcon : null}
+                />
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    { color: bluetoothPillStyle.color },
+                  ]}
+                >
+                  {bluetoothPill.label}
+                </Text>
+              </TouchableOpacity>
             </View>
+          </View>
 
-            <Text style={styles.shellTitle} numberOfLines={1}>
-              Expedition Command System
-            </Text>
-
-            <Text style={styles.shellDetail} numberOfLines={1}>
-              {shellDetailText}
-            </Text>
+          <Pressable
+            style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
+            onPress={handleTitlePress}
+            accessibilityRole="button"
+            accessibilityLabel="ECS diagnostics"
+          >
+            <View style={styles.bannerTitleStack} pointerEvents="none">
+              <Text
+                style={styles.bannerTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.74}
+              >
+                expedition command
+              </Text>
+              <Text
+                style={styles.bannerMotto}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+              >
+                explore with confidence
+              </Text>
+            </View>
           </Pressable>
 
-          <View style={[styles.edgeSlot, { width: controlSlotWidth }]}>
+          <View style={[styles.edgeSlotBase, styles.edgeSlotEnd, { width: rightControlSlotWidth }]}>
+            <View style={styles.rightControlCluster}>
+              <ThemeToggle
+                compact
+                size={30}
+                iconMode="eye"
+                cycleModes={VISIBILITY_THEME_CYCLE}
+              />
             {layoutMode ? (
               <TouchableOpacity
                 style={[
@@ -560,17 +719,31 @@ export default function DashboardHeader({
             ) : (
               <TouchableOpacity
                 onPress={openProfilePanel}
-                style={styles.authBtn}
+                style={[
+                  styles.authBtn,
+                  {
+                    backgroundColor: shellChrome.controlSurface,
+                    borderColor: shellChrome.controlBorder,
+                  },
+                ]}
                 activeOpacity={0.7}
                 hitSlop={CLOSE_BTN.hitSlop}
               >
                 <Ionicons
                   name={user ? 'person-circle' : 'person-circle-outline'}
-                  size={24}
-                  color={user ? DHDR.iconActive : DHDR.iconMuted}
+                  size={18}
+                  color={user ? shellChrome.iconActive : shellChrome.iconMuted}
                 />
-                {bannerStatus.processingActive ? (
-                  <View style={styles.syncBadge}>
+                {bannerStatus.processingActive && (
+                  <View
+                    style={[
+                      styles.syncBadge,
+                      {
+                        backgroundColor: shellChrome.syncBadgeSurface,
+                        borderColor: shellChrome.syncBadgeBorder,
+                      },
+                    ]}
+                  >
                     <Animated.View
                       style={{
                         transform: [
@@ -586,22 +759,17 @@ export default function DashboardHeader({
                       <Ionicons name="sync-outline" size={9} color={toneColor} />
                     </Animated.View>
                   </View>
-                ) : (
-                  <View
-                    style={[
-                      styles.connDot,
-                      {
-                        backgroundColor: toneColor,
-                        borderColor: DHDR.bar,
-                      },
-                    ]}
-                  />
                 )}
               </TouchableOpacity>
             )}
+            </View>
           </View>
         </View>
-      </ImageBackground>
+        <View
+          pointerEvents="none"
+          style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}
+        />
+      </View>
 
       <ProfileSettingsPanel
         visible={profilePanelVisible}
@@ -611,13 +779,22 @@ export default function DashboardHeader({
         accessLabel={accountUx.title}
         accessStatusLabel={accountUx.stateLabel}
         accessDetail={accountUx.detail}
-        accountActions={user ? [{
-          id: 'sign_out',
-          label: 'Sign Out',
-          detail: 'End this device session and return to the secure ECS login screen.',
-          icon: 'log-out-outline',
-          tone: 'danger',
-        }] : []}
+        accountActions={user ? [
+          {
+            id: 'reset_password',
+            label: 'Reset Password',
+            detail: 'Send reset instructions to your signed-in ECS email.',
+            icon: 'key-outline',
+            tone: 'default',
+          },
+          {
+            id: 'sign_out',
+            label: 'Sign Out',
+            detail: 'End this device session and return to the secure ECS login screen.',
+            icon: 'log-out-outline',
+            tone: 'danger',
+          },
+        ] : []}
         accountActionBusyId={accountActionBusyId}
         onAccountAction={user ? handleAccountAction : undefined}
         statusLabel={profileStatus.statusLabel}
@@ -645,6 +822,14 @@ export default function DashboardHeader({
         onEndAction={showEndExpedition ? handleEndExpedition : undefined}
       />
 
+      <FleetSyncModal
+        visible={syncModalVisible}
+        onClose={() => setSyncModalVisible(false)}
+        eyebrow="ECS COMMAND"
+        title="Sync Management"
+        subtitle="Queue health, pending field changes, conflicts, and offline readiness."
+      />
+
       <EcsDiagnosticsPanel
         visible={diagnosticsPanelVisible}
         onClose={() => setDiagnosticsPanelVisible(false)}
@@ -653,39 +838,57 @@ export default function DashboardHeader({
   );
 }
 
+function getStatusPillStyles(tone: ShellStatusPillTone, neutralColor: string) {
+  switch (tone) {
+    case 'active':
+      return {
+        color: '#4CAF50',
+        borderColor: '#4CAF50' + '45',
+        backgroundColor: '#4CAF50' + '12',
+      };
+    case 'sync':
+      return {
+        color: '#5AC8FA',
+        borderColor: '#5AC8FA' + '45',
+        backgroundColor: '#5AC8FA' + '12',
+      };
+    case 'degraded':
+      return {
+        color: '#D6A04B',
+        borderColor: '#D6A04B' + '45',
+        backgroundColor: '#D6A04B' + '12',
+      };
+    case 'neutral':
+    default:
+      return {
+        color: neutralColor,
+        borderColor: neutralColor + '45',
+        backgroundColor: neutralColor + '10',
+      };
+  }
+}
+
 const styles = StyleSheet.create({
   collapseShell: {
     overflow: 'hidden',
   },
   container: {
+    width: '100%',
     alignItems: 'center',
     paddingTop: 0,
-    paddingBottom: 8,
-    overflow: 'visible',
-  },
-  bannerTextureImage: {
-    width: '100%',
-    height: '100%',
-  },
-  bannerTextureScrim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(10, 13, 18, 0.20)',
-  },
-  containerDimmed: {
-    opacity: 0.85,
+    paddingBottom: 3,
+    overflow: 'hidden',
+    backgroundColor: '#020304',
   },
   goldRailLine: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 1.5,
+    height: 2,
     backgroundColor: DHDR.goldRail,
-    zIndex: 2,
+    opacity: 0.78,
+    zIndex: 4,
   },
   expeditionGoldUnderline: {
     position: 'absolute',
@@ -723,96 +926,156 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     alignSelf: 'center',
+    flex: 1,
+    minHeight: ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
   },
-  edgeSlot: {
+  edgeSlotBase: {
+    justifyContent: 'center',
+    paddingBottom: 0,
+    zIndex: 3,
+  },
+  edgeSlotStart: {
+    alignItems: 'flex-start',
+  },
+  edgeSlotEnd: {
+    alignItems: 'flex-end',
+  },
+  rightControlCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  statusPillCluster: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 3,
+    gap: 4,
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   centerContent: {
     flex: 1,
+    minWidth: 0,
     zIndex: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
+    paddingBottom: 0,
+    backgroundColor: 'transparent',
   },
-  statusRow: {
-    flexDirection: 'row',
+  bannerTitleStack: {
+    width: '100%',
     alignItems: 'center',
-    gap: 6,
     justifyContent: 'center',
-    flexWrap: 'wrap',
-    minHeight: 16,
+    minWidth: 0,
   },
-  postureLabel: {
-    fontSize: 8,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
+  bannerTitle: {
+    maxWidth: '100%',
+    color: DHDR.iconActive,
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
+    letterSpacing: 0.65,
     textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  bannerMotto: {
+    maxWidth: '100%',
+    marginTop: 1,
+    color: 'rgba(234,222,190,0.88)',
+    fontSize: 9.5,
+    lineHeight: 11,
+    fontWeight: '800',
+    letterSpacing: 0.85,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.68)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   shellTitle: {
     fontSize: 15,
-    lineHeight: 17,
+    lineHeight: 18,
     fontWeight: '700',
     letterSpacing: 0.22,
     color: DHDR.iconActive,
     textAlign: 'center',
   },
-  shellDetail: {
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '600',
-    color: '#8B949E',
-    letterSpacing: 0.2,
-    textAlign: 'center',
-    maxWidth: '100%',
+  shellTitleStack: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  liveStatusPill: {
-    paddingHorizontal: 7,
+  shellTitlePrimary: {
+    fontSize: 12.5,
+    lineHeight: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: DHDR.iconActive,
+    textAlign: 'center',
+  },
+  shellTitleSecondary: {
+    marginTop: -1,
+    fontSize: 10.5,
+    lineHeight: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    color: DHDR.iconActive,
+    textAlign: 'center',
+  },
+  statusPill: {
+    minHeight: 16,
+    paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 999,
     borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    flexShrink: 0,
   },
-  liveStatusText: {
+  statusPillSyncIcon: {
+    opacity: 0.96,
+  },
+  statusPillDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+  statusPillText: {
     fontSize: 7,
     fontWeight: '900',
-    letterSpacing: 1.1,
-    textTransform: 'uppercase',
+    letterSpacing: 0.72,
   },
   authBtn: {
-    width: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
-    height: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE,
-    borderRadius: ECS_TOP_SHELL_PROFILE_BUTTON_SIZE / 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    backgroundColor: 'rgba(255,255,255,0.035)',
+    backgroundColor: 'rgba(255,255,255,0.045)',
     borderWidth: 1,
     borderColor: 'rgba(201,162,76,0.20)',
   },
   syncBadge: {
     position: 'absolute',
-    bottom: 4,
-    right: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    right: -4,
+    top: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(17,20,24,0.92)',
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.25)',
-  },
-  connDot: {
-    position: 'absolute',
-    bottom: 6,
-    right: 6,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    borderWidth: 1.5,
   },
   doneBtn: {
     minWidth: 70,

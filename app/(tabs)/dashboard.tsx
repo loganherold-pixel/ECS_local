@@ -1,28 +1,27 @@
 /**
  * Cockpit Dashboard — /dashboard
  *
- * Tactical, clean, infrastructure-focused dashboard with Expedition/Highway tabs.
+ * Tactical, clean, infrastructure-focused dashboard with Widgets/ECS Brief/Expedition tabs.
  *
  * Features:
- * - Expedition / Highway tab toggle with smooth micro-animation
- * - Expedition default: 2x2 grid — Attitude Monitor (2x1 top) + Vehicle Systems + Remoteness (1x1 bottom row)
- * - Highway default: 2x2 grid — 4 equal awareness widgets (Forward Weather, Daylight, Cell Coverage, Wind)
+ * - Widgets / ECS Brief / Expedition tab toggle with smooth micro-animation
+ * - Widgets default: existing Expedition profile defaults and user-selected widgets
+ * - Former Highway widgets are selectable in the Widgets library
  * - Fill-height 2x2 grid with no dead space
 
  * - Smart re-expand: only on verified sustained vehicle movement
  * - "Vehicle Movement Detected" banner on re-expand
  * - Accelerometer integration for stability + attitude widgets
  * - All widgets user-replaceable and reorderable
- * - Advanced Modeling toggle (exposes advanced widgets + enhanced data)
+ * - Shared dashboard controls for layout, restore defaults, and widget governance
  * - Widget Governance: tab isolation, redundancy prevention, restore defaults
- * - Grid config hidden behind long-press Customize Mode
  * - Per-tab empty state with Customize CTA
  * - Theme-aware: uses palette from ThemeContext
  * - Adaptive brightness affects all widgets, text, icons, indicators
  * - Rotation / resize aware: useWindowDimensions listener re-measures
  *   container dimensions and recalculates widget placements automatically
  * - Expedition state integration: subscribes to expeditionStateStore,
- *   shows ExpeditionSummarySheet on completion, End Expedition in header
+ *   preserves completed expedition state for debrief/PDF flows
  * - Geofence monitor: auto-starts expedition on configurable radius exit
  *   (100m–2000m, default 400m), auto-ends on re-entry
  * - Phase 5: Context-aware auto-activation with 30s sustained conditions,
@@ -35,10 +34,8 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Pressable,
   StyleSheet,
   Animated,
-  Switch,
   Alert,
   Platform,
   LayoutChangeEvent,
@@ -50,6 +47,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
+import { DiscoverIcon } from '../../components/DockIcons';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
@@ -61,14 +59,11 @@ import {
   isDashboardHydrated,
   waitForDashboardHydration,
   GRID_LAYOUT_CONFIG,
-  EXPEDITION_TACTICAL_PRESET_ID,
   isExpeditionTacticalActive,
   WIDGET_SIZE_CONFIG,
   detectResizeCollision,
   getFullWidgetCatalog,
   getSlotSize,
-  getPresetsForLayout,
-  customPresetStore,
   type DashboardProfile,
   type WidgetSlot,
   type WidgetSize,
@@ -85,26 +80,23 @@ import DashboardHeader from '../../components/dashboard/DashboardHeader';
 import WidgetGrid from '../../components/dashboard/WidgetGrid';
 import WidgetLibrary from '../../components/dashboard/WidgetLibrary';
 import WidgetDetailModal from '../../components/dashboard/WidgetDetailModal';
+import WidgetManagePopover from '../../components/dashboard/WidgetManagePopover';
 import CreateCustomWidgetModal from '../../components/dashboard/CreateCustomWidgetModal';
 import GridLayoutPicker from '../../components/dashboard/GridLayoutPicker';
 import AuthModal from '../../components/AuthModal';
 import Toast from '../../components/Toast';
+import { ReadinessAlertToast } from '../../components/readiness';
 import { ECSStateMessage } from '../../components/ECSStateMessage';
 import CollisionWarningModal from '../../components/dashboard/CollisionWarningModal';
-import LayoutPresetsModal from '../../components/dashboard/LayoutPresetsModal';
-import ExpeditionControlPanel from '../../components/dashboard/ExpeditionControlPanel';
-import DashboardManagerOverlay from '../../components/dashboard/DashboardManagerOverlay';
-import ExpeditionSummarySheet from '../../components/expedition/ExpeditionSummarySheet';
 import ExpeditionTimelinePanel from '../../components/expedition/ExpeditionTimelinePanel';
-import WidgetLibraryManager from '../../components/dashboard/WidgetLibraryManager';
-import ModeSwitchBanner from '../../components/dashboard/ModeSwitchBanner';
-import ExpeditionIntelligenceBar from '../../components/dashboard/ExpeditionIntelligenceBar';
 import ModeActivationBanner from '../../components/dashboard/ModeActivationBanner';
 import AutoModeToggle from '../../components/dashboard/AutoModeToggle';
+import ECSIntelligenceReadout from '../../components/dashboard/ECSIntelligenceReadout';
 import OfflineStateBanner from '../../components/offline/OfflineStateBanner';
-import MissionBriefCard from '../../components/dashboard/MissionBriefCard';
-import { ECSTransientNotice, ECSWidgetSkeleton } from '../../components/ECSLoading';
+import { CommandBriefScreen } from '../../components/brief';
+import ExpeditionTab from '../../components/dashboard/ExpeditionTab';
 import type { MissionBrief } from '../../lib/missionBriefEngine';
+import { useEcsTopBannerHeight } from '../../components/ECSGlobalBanner';
 
 
 
@@ -113,16 +105,17 @@ import { dashboardModeEngine, type ModeEngineOutput } from '../../lib/dashboardM
 import { tripRecorderEngine } from '../../lib/tripRecorderEngine';
 
 import { advisoryStore } from '../../lib/advisoryStore';
+import { isLowValueTelemetryDegradedSummary } from '../../lib/ai/degradedOperationsEngine';
 import { useECSAI } from '../../lib/ai/useECSAI';
 import {
   selectBriefCommandState,
   type BriefCommandState,
 } from '../../lib/ai/briefSelectors';
+import { recordBriefCadEntry } from '../../lib/briefCadLogStore';
 import { resetIntelligence } from '../../lib/assistantIntelligenceEngine';
 import { bluPowerAuthority } from '../../lib/BluPowerAuthority';
 import {
   selectDashboardCommandState,
-  type DashboardCommandBadge,
   type DashboardCommandState,
 } from '../../lib/dashboardCommandSelectors';
 import { remotenessStore } from '../../lib/remotenessStore';
@@ -132,8 +125,10 @@ import { loadTrailNavigationSession } from '../../lib/trailNavigationStore';
 import { resolveTopBannerPresentation } from '../../lib/ui/topBannerStatusResolver';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
+import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
-import { useOBD2Scanner } from '../../src/vehicle-telemetry/useOBD2Scanner';
+import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
+import { useRouteCorridorWeather } from '../../components/navigate/RouteCorridorWeather';
 
 
 
@@ -153,23 +148,28 @@ import { useGeofenceMonitor } from '../../lib/useGeofenceMonitor';
 import ResourceAlertBanner from '../../components/ResourceAlertBanner';
 import type { LoadItem, Vehicle } from '../../lib/types';
 import { setupStore } from '../../lib/setupStore';
-import { getShellBottomClearance } from '../../lib/shellLayout';
+import { getEcsTopBannerLayoutMetrics, getShellBottomClearance } from '../../lib/shellLayout';
+import { ecsCommandModuleStore } from '../../lib/ecsCommandModuleStore';
 import { ECS_CTA_LABELS, ECS_STATE_COPY } from '../../lib/ecsStateCopy';
-import { AUTH_COPY } from '../../lib/auth/authCopy';
 import { consumeNavigationFlow, stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { saveNavigationHandoffPayload } from '../../lib/navigationHandoffStore';
 import {
-  buildRemotenessNavigationPayload,
+  buildRemotenessDestinationNavigationPayload,
   getRemotenessNavigationLabel,
   getRemotenessNavigationUnavailableMessage,
-  resolveRemotenessNavigationTarget,
   type RemotenessNavigationTargetType,
 } from '../../lib/remotenessEmergencyRouting';
+import {
+  mapRemotenessTargetToDestinationType,
+  resolveRemotenessDestination,
+} from '../../lib/remotenessDestinations';
 import {
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { ecsLog } from '../../lib/ecsLogger';
 import { EASING, MOTION } from '../../lib/motion';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 
 
@@ -189,12 +189,12 @@ const MOVEMENT_BANNER_DURATION_MS = 3000;
 const TAB_ANIM_DURATION = MOTION.screenTransition;
 
 const TAB_SLIDE_PX = MOTION.screenShiftPx;
+const DASHBOARD_WIDGET_FRAME_EDGE_MARGIN = 2;
+const DASHBOARD_EXPANDED_TOP_SAFE_GAP = 8;
+const DASHBOARD_CUSTOMIZE_STACK_ESTIMATED_HEIGHT = 38;
 
 // ── Mode Color Cues ────────────────────────────────────
-// Expedition = ECS gold accent (existing palette.amber / #D4A017)
-// Highway = muted navigation blue (complements ECS dark palette)
-const HIGHWAY_BLUE = '#5B8DEF';
-const DASHBOARD_STARTUP_SETTLE_MS = 900;
+// Dashboard tab accents come from the ECS tactical palette.
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -234,7 +234,7 @@ function condenseDashboardLaneCopy(value: string | null | undefined, maxLength =
   return `${normalized.slice(0, Math.max(32, maxLength - 1)).trimEnd()}…`;
 }
 
-function pickDashboardLaneDetail(...values: Array<string | null | undefined>): string | null {
+function pickDashboardLaneDetail(...values: (string | null | undefined)[]): string | null {
   const seen = new Set<string>();
   for (const value of values) {
     const condensed = condenseDashboardLaneCopy(value);
@@ -247,7 +247,7 @@ function pickDashboardLaneDetail(...values: Array<string | null | undefined>): s
   return null;
 }
 
-function buildDashboardAdvisoryId(...parts: Array<string | null | undefined>): string {
+function buildDashboardAdvisoryId(...parts: (string | null | undefined)[]): string {
   const slug = parts
     .map((value) =>
       String(value ?? '')
@@ -259,6 +259,36 @@ function buildDashboardAdvisoryId(...parts: Array<string | null | undefined>): s
     .filter(Boolean)
     .join(':');
   return slug ? `ecs-ai:${slug}` : 'ecs-ai:status';
+}
+
+function summarizeMissionBriefLogEntry(
+  brief: MissionBrief | null,
+  commandState: BriefCommandState | null,
+): { id: string; message: string } | null {
+  const headline = normalizeVisibleEcsCopy(commandState?.headline || brief?.headline).trim();
+  const followup = normalizeVisibleEcsCopy(
+    commandState?.limitationLine ||
+    commandState?.supportLine ||
+    commandState?.topSignal ||
+    commandState?.nextAction ||
+    brief?.priorityMessage ||
+    brief?.operatorNote ||
+    brief?.summary,
+  ).trim();
+
+  if (!headline) return null;
+
+  return {
+    id: [
+      normalizeVisibleEcsCopy(commandState?.statusLabel || brief?.compactLabel || brief?.status?.toString()),
+      headline,
+      followup,
+    ]
+      .filter(Boolean)
+      .join('|')
+      .toLowerCase(),
+    message: [headline, followup].filter(Boolean).join(' — '),
+  };
 }
 
 function mapFleetLoadoutItemsToDashboardItems(
@@ -284,40 +314,92 @@ function mapFleetLoadoutItemsToDashboardItems(
   }));
 }
 
-type DashboardTab = 'expedition' | 'highway' | 'brief';
-type OperationalDashboardTab = 'expedition' | 'highway';
+type DashboardTab = 'widgets' | 'brief' | 'expedition';
 
 type PersistedDashboardViewState = {
-  compact: boolean;
   expanded: boolean;
   dashboardTab: DashboardTab;
 };
 
+type DashboardWidgetContainerLayout = {
+  width: number;
+  height: number;
+  signature: string;
+};
+
+type DashboardBodyArea = {
+  width: number;
+  height: number;
+  safeAreaInsets: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+  bottomBannerHeight: number;
+  topBannerHeight: number;
+};
+
+function resolveDashboardBodyArea({
+  windowWidth,
+  windowHeight,
+  safeAreaInsets,
+  bottomBannerHeight,
+  topBannerHeight,
+  framePaddingTop,
+  framePaddingLeft,
+  framePaddingRight,
+}: {
+  windowWidth: number;
+  windowHeight: number;
+  safeAreaInsets: DashboardBodyArea['safeAreaInsets'];
+  bottomBannerHeight: number;
+  topBannerHeight: number;
+  framePaddingTop: number;
+  framePaddingLeft: number;
+  framePaddingRight: number;
+}): DashboardBodyArea {
+  return {
+    width: Math.max(0, windowWidth - framePaddingLeft - framePaddingRight),
+    height: Math.max(0, windowHeight - topBannerHeight - bottomBannerHeight - framePaddingTop),
+    safeAreaInsets,
+    bottomBannerHeight,
+    topBannerHeight,
+  };
+}
+
 const readPersistedDashboardViewState = (
   profile: DashboardProfile,
-  operationalTab: OperationalDashboardTab,
 ): PersistedDashboardViewState => {
   const uiState = dashboardStore.getUIState(profile);
-  const persistedDashboardTab =
-    uiState.dashboardTab === 'brief' || uiState.dashboardTab === operationalTab
-      ? uiState.dashboardTab
-      : operationalTab;
+  const persistedDashboardTab: DashboardTab =
+    uiState.dashboardTab === 'brief'
+      ? 'brief'
+      : uiState.dashboardTab === 'expedition'
+        ? 'widgets'
+        : 'widgets';
 
   return {
-    compact: uiState.compact === true,
     expanded: uiState.expanded === true,
     dashboardTab: persistedDashboardTab,
   };
 };
+
+function dashboardProfileForTab(tab: DashboardTab): DashboardProfile {
+  void tab;
+  return 'expedition';
+}
+
+function dashboardModeForTab(tab: DashboardTab): DashboardMode {
+  void tab;
+  return 'expedition';
+}
 
 
 type DashboardTabBarProps = {
   activeTab: DashboardTab;
   palette: any;
   expeditionAccent: string;
-  highwayAccent: string;
-  underlineLeft: any;
-  underlineColor: any;
   autoModeEnabled: boolean;
   autoModeInCooldown: boolean;
   autoModeManualOverride: boolean;
@@ -325,7 +407,6 @@ type DashboardTabBarProps = {
   isDashboardExpanded: boolean;
   onSelectTab: (tab: DashboardTab) => void;
   onToggleAutoMode: () => void;
-  onOpenLibraryManager: () => void;
   onToggleDashboardExpanded: () => void;
 };
 
@@ -333,9 +414,6 @@ function DashboardTabBar({
   activeTab,
   palette,
   expeditionAccent,
-  highwayAccent,
-  underlineLeft,
-  underlineColor,
   autoModeEnabled,
   autoModeInCooldown,
   autoModeManualOverride,
@@ -343,7 +421,6 @@ function DashboardTabBar({
   isDashboardExpanded,
   onSelectTab,
   onToggleAutoMode,
-  onOpenLibraryManager,
   onToggleDashboardExpanded,
 }: DashboardTabBarProps) {
   void autoModeEnabled;
@@ -356,10 +433,10 @@ function DashboardTabBar({
   const tabRowHeight = adaptive.shortHeight ? 40 : 42;
   const tabRailHeight = adaptive.shortHeight ? 32 : 34;
 
-  const tabs: Array<{ key: DashboardTab; label: string; accent: string }> = [
-    { key: 'expedition', label: 'EXPEDITION', accent: expeditionAccent },
-    { key: 'highway', label: 'HIGHWAY', accent: highwayAccent },
-    { key: 'brief', label: 'ECS BRIEF', accent: palette.amber },
+  const tabs: { key: DashboardTab; label: string; accent: string; icon?: string }[] = [
+    { key: 'widgets', label: 'WIDGETS', accent: expeditionAccent, icon: 'apps-outline' },
+    { key: 'brief', label: 'ECS BRIEF', accent: palette.amber, icon: 'document-text-outline' },
+    { key: 'expedition', label: 'EXPEDITION', accent: palette.amber },
   ];
 
   return (
@@ -378,9 +455,8 @@ function DashboardTabBar({
         style={[
           styles.tabsSection,
           {
-            backgroundColor: 'rgba(255,255,255,0.025)',
-            borderColor: palette.border,
             height: tabRailHeight,
+            gap: adaptive.isTablet ? 8 : 6,
           },
         ]}
       >
@@ -404,6 +480,11 @@ function DashboardTabBar({
               accessibilityState={{ selected: isActive }}
               testID={`dashboard-tab-${tab.key}`}
             >
+              {tab.key === 'expedition' ? (
+                <DiscoverIcon color={isActive ? tab.accent : palette.textMuted} size={13} />
+              ) : tab.icon ? (
+                <Ionicons name={tab.icon as any} size={12} color={isActive ? tab.accent : palette.textMuted} />
+              ) : null}
               <Text
                 style={[
                   styles.tabLabel,
@@ -420,29 +501,9 @@ function DashboardTabBar({
           );
         })}
 
-        <Animated.View
-          style={[
-            styles.tabUnderline,
-            {
-              left: underlineLeft,
-              backgroundColor: underlineColor,
-            },
-          ]}
-        />
       </View>
 
       <View style={styles.tabControlsSection}>
-        {activeTab !== 'brief' ? (
-          <TouchableOpacity
-            style={styles.libraryManagerBtn}
-            onPress={onOpenLibraryManager}
-            activeOpacity={0.7}
-            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-          >
-            <Ionicons name="add-circle-outline" size={18} color={palette.amber} />
-          </TouchableOpacity>
-        ) : <View style={styles.libraryManagerPlaceholder} />}
-
         <TouchableOpacity
           style={[
             styles.dashboardExpandBtn,
@@ -454,6 +515,9 @@ function DashboardTabBar({
           onPress={onToggleDashboardExpanded}
           activeOpacity={0.7}
           hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel={isDashboardExpanded ? 'Contract Dashboard widgets' : 'Expand Dashboard widgets'}
+          accessibilityHint="Toggles the expanded Dashboard widget surface while respecting device safe areas."
         >
           <Ionicons
             name={isDashboardExpanded ? 'contract-outline' : 'expand-outline'}
@@ -465,13 +529,6 @@ function DashboardTabBar({
     </View>
   );
 }
-
-type DashboardCommandSurfaceProps = {
-  activeTab: DashboardTab;
-  compact: boolean;
-  commandState: DashboardCommandState;
-  palette: any;
-};
 
 type DashboardPageSupportState = {
   visible: boolean;
@@ -485,14 +542,15 @@ type DashboardPageSupportState = {
   onAction?: () => void;
 };
 
-type DashboardStartupNotice = {
-  kind: 'loading' | 'syncing' | 'offline' | 'cached';
-  label: string;
-  message: string;
-};
-
 type DashboardLaneState = {
-  override: NonNullable<React.ComponentProps<typeof ExpeditionIntelligenceBar>['override']>;
+  override: {
+    title: string;
+    detail?: string | null;
+    badge: string;
+    icon?: React.ComponentProps<typeof Ionicons>['name'];
+    tone?: 'active' | 'ready' | 'warning' | 'unavailable' | 'info';
+    live?: boolean;
+  };
   source: string;
   reason: string;
   priority: number;
@@ -501,7 +559,7 @@ type DashboardLaneState = {
 
 function mapDashboardPageSupportTone(
   tone: DashboardPageSupportState['tone'],
-): NonNullable<React.ComponentProps<typeof ExpeditionIntelligenceBar>['override']>['tone'] {
+): DashboardLaneState['override']['tone'] {
   switch (tone) {
     case 'warning':
       return 'warning';
@@ -511,175 +569,6 @@ function mapDashboardPageSupportTone(
     default:
       return 'info';
   }
-}
-
-function DashboardCommandSurface({
-  activeTab,
-  compact,
-  commandState,
-  palette,
-}: DashboardCommandSurfaceProps) {
-  const adaptive = useAdaptiveLayout();
-
-  if (activeTab === 'brief' || !commandState.surface.visible) {
-    return null;
-  }
-
-  const surfaceEdgePadding = adaptive.dashboard.gridPadding;
-  const surfaceTopPadding = compact
-    ? adaptive.shortHeight ? 2 : 3
-    : adaptive.shortHeight ? 3 : 4;
-  const surfaceBottomPadding = adaptive.shortHeight ? 3 : 4;
-
-  const tone = commandState.banner?.tone ?? 'ready';
-  const toneAccent =
-    tone === 'warning'
-      ? '#E85B4D'
-      : tone === 'active'
-        ? palette.amber
-        : tone === 'unavailable'
-          ? palette.textMuted
-          : '#89ABF6';
-
-  const badgeStyleFor = (badge: DashboardCommandBadge) => ({
-    backgroundColor:
-      badge.tone === 'warning'
-        ? 'rgba(232, 91, 77, 0.10)'
-        : badge.tone === 'primary'
-          ? `${palette.amber}16`
-          : 'rgba(137,171,246,0.10)',
-    borderColor:
-      badge.tone === 'warning'
-        ? 'rgba(232, 91, 77, 0.28)'
-        : badge.tone === 'primary'
-          ? `${palette.amber}30`
-          : 'rgba(137,171,246,0.24)',
-    color:
-      badge.tone === 'warning'
-        ? '#F3B8B0'
-        : badge.tone === 'primary'
-          ? palette.amber
-          : palette.textMuted,
-  });
-
-  return (
-    <View
-      style={[
-        styles.dashboardSurfaceWrap,
-        compact && styles.dashboardSurfaceWrapShort,
-        {
-          paddingHorizontal: surfaceEdgePadding,
-          paddingTop: surfaceTopPadding,
-          paddingBottom: surfaceBottomPadding,
-        },
-      ]}
-    >
-      <View
-        style={[
-          styles.dashboardSurfacePanel,
-          {
-            backgroundColor: palette.panel,
-            borderColor: tone === 'warning' ? 'rgba(232, 91, 77, 0.22)' : palette.border,
-            borderRadius: 14,
-            borderWidth: 1,
-          },
-        ]}
-      >
-        <View style={styles.dashboardSurfaceHeader}>
-          <View style={styles.dashboardSurfaceCopy}>
-            {commandState.surface.eyebrow ? (
-              <Text
-                style={[
-                  styles.dashboardSurfaceEyebrow,
-                  { color: toneAccent },
-                ]}
-                numberOfLines={1}
-              >
-                {commandState.surface.eyebrow}
-              </Text>
-            ) : null}
-            <Text
-              style={[
-                styles.dashboardSurfaceTitle,
-                { color: palette.text },
-              ]}
-              numberOfLines={compact ? 1 : 2}
-            >
-              {commandState.surface.title}
-            </Text>
-            {commandState.surface.detail ? (
-              <Text
-                style={[
-                  styles.dashboardSurfaceSubtitle,
-                  { color: palette.textMuted },
-                ]}
-                numberOfLines={compact ? 1 : 2}
-              >
-                {commandState.surface.detail}
-              </Text>
-            ) : null}
-          </View>
-
-          {commandState.surface.badges.length ? (
-            <View style={styles.dashboardSurfaceBadges}>
-              {commandState.surface.badges.slice(0, compact ? 1 : 2).map((badge) => {
-                const badgeStyle = badgeStyleFor(badge);
-                return (
-                  <View
-                    key={badge.id}
-                    style={[
-                      styles.dashboardSurfaceBadge,
-                      {
-                        backgroundColor: badgeStyle.backgroundColor,
-                        borderColor: badgeStyle.borderColor,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.dashboardSurfaceBadgeText,
-                        { color: badgeStyle.color },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {badge.label}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          ) : null}
-        </View>
-
-        {commandState.surface.secondary.length ? (
-          <View style={styles.dashboardSurfaceSecondaryRow}>
-            {commandState.surface.secondary.map((item) => (
-              <View
-                key={item}
-                style={[
-                  styles.dashboardSurfaceSecondaryPill,
-                  {
-                    backgroundColor: 'rgba(255,255,255,0.03)',
-                    borderColor: palette.border,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.dashboardSurfaceSecondaryText,
-                    { color: palette.textMuted },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {item}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-      </View>
-    </View>
-  );
 }
 
 function DashboardPageSupportCard({
@@ -826,229 +715,48 @@ function DashboardPageSupportCard({
 
 type DashboardCustomizeStackProps = {
   visible: boolean;
-  showAdvancedPanel: boolean;
-  showCollapseSettings: boolean;
   gridLayout: GridLayout;
   palette: any;
-  lastUsedPresetId?: string;
-  advancedModeEnabled: boolean;
-  autoCollapseEnabled: boolean;
-  isCompact: boolean;
   onSelectLayout: (layout: GridLayout) => void;
-  onOpenPresets: () => void;
-  onToggleAdvancedPanel: () => void;
-  onToggleCollapsePanel: () => void;
   onRestoreDefaults: () => void;
-  onAdvancedModeToggle: (value: boolean) => void;
-  onAutoCollapseToggle: (value: boolean) => void;
-  onExpandNow: () => void;
 };
 
 function DashboardCustomizeStack({
   visible,
-  showAdvancedPanel,
-  showCollapseSettings,
   gridLayout,
   palette,
-  lastUsedPresetId,
-  advancedModeEnabled,
-  autoCollapseEnabled,
-  isCompact,
   onSelectLayout,
-  onOpenPresets,
-  onToggleAdvancedPanel,
-  onToggleCollapsePanel,
   onRestoreDefaults,
-  onAdvancedModeToggle,
-  onAutoCollapseToggle,
-  onExpandNow,
 }: DashboardCustomizeStackProps) {
   if (!visible) return null;
 
   return (
-    <>
-      <View
+    <View
+      style={[
+        styles.customizeBar,
+        { backgroundColor: palette.panel, borderBottomColor: GOLD_RAIL.section },
+      ]}
+    >
+      <GridLayoutPicker
+        currentLayout={gridLayout}
+        onSelect={onSelectLayout}
+        disabled={false}
+      />
+
+      <TouchableOpacity
         style={[
-          styles.customizeBar,
-          { backgroundColor: palette.panel, borderBottomColor: GOLD_RAIL.section },
+          styles.restoreDefaultsButton,
+          { backgroundColor: palette.panel, borderColor: palette.border },
         ]}
+        onPress={onRestoreDefaults}
+        activeOpacity={0.7}
       >
-        <GridLayoutPicker
-          currentLayout={gridLayout}
-          onSelect={onSelectLayout}
-          disabled={false}
-        />
-
-        <TouchableOpacity
-          style={[
-            styles.presetsBtn,
-            {
-              backgroundColor: palette.panel,
-              borderColor: lastUsedPresetId ? `${palette.amber}40` : palette.border,
-            },
-          ]}
-          onPress={onOpenPresets}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name="copy-outline"
-            size={12}
-            color={lastUsedPresetId ? palette.amber : palette.textMuted}
-          />
-          <Text
-            style={[
-              styles.presetsBtnText,
-              { color: lastUsedPresetId ? palette.amber : palette.textMuted },
-            ]}
-          >
-            Presets
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.advToggle,
-            {
-              backgroundColor: palette.panel,
-              borderColor: advancedModeEnabled ? 'rgba(156,136,255,0.25)' : palette.border,
-            },
-          ]}
-          onPress={onToggleAdvancedPanel}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name="flask-outline"
-            size={12}
-            color={advancedModeEnabled ? '#9C88FF' : palette.textMuted}
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.collapseToggle,
-            { backgroundColor: palette.panel, borderColor: palette.border },
-          ]}
-          onPress={onToggleCollapsePanel}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={isCompact ? 'contract-outline' : 'expand-outline'}
-            size={12}
-            color={isCompact ? palette.amber : palette.textMuted}
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.restoreToggle,
-            { backgroundColor: palette.panel, borderColor: palette.border },
-          ]}
-          onPress={onRestoreDefaults}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="refresh-outline" size={12} color={palette.textMuted} />
-        </TouchableOpacity>
-      </View>
-
-      {showAdvancedPanel && (
-        <View
-          style={[
-            styles.advPanel,
-            {
-              backgroundColor: 'rgba(156,136,255,0.04)',
-              borderColor: 'rgba(156,136,255,0.15)',
-            },
-          ]}
-        >
-          <View style={styles.advPanelRow}>
-            <Ionicons name="flask-outline" size={14} color="#9C88FF" />
-            <Text style={[styles.advPanelLabel, { color: palette.text }]}>
-              Advanced Modeling
-            </Text>
-            <Switch
-              value={advancedModeEnabled}
-              onValueChange={onAdvancedModeToggle}
-              trackColor={{
-                false: 'rgba(255,255,255,0.08)',
-                true: 'rgba(156,136,255,0.3)',
-              }}
-              thumbColor={advancedModeEnabled ? '#9C88FF' : palette.textMuted}
-              style={{ transform: [{ scaleX: 0.7 }, { scaleY: 0.7 }] }}
-            />
-          </View>
-
-          <Text style={[styles.advPanelHint, { color: palette.textMuted }]}>
-            {advancedModeEnabled
-              ? 'Advanced widgets visible. Dynamic thresholds active. CG modeling enabled.'
-              : 'Enable to access Mission Sustainment, CG Visualization, and dynamic stability thresholds.'}
-          </Text>
-
-          {advancedModeEnabled && (
-            <View style={styles.advBadgeRow}>
-              <View style={styles.advBadge}>
-                <Text style={styles.advBadgeText}>DYNAMIC THRESHOLDS</Text>
-              </View>
-              <View style={styles.advBadge}>
-                <Text style={styles.advBadgeText}>CG MODEL</Text>
-              </View>
-              <View style={styles.advBadge}>
-                <Text style={styles.advBadgeText}>SUSTAINMENT</Text>
-              </View>
-            </View>
-          )}
-        </View>
-      )}
-
-      {showCollapseSettings && (
-        <View
-          style={[
-            styles.collapseSettings,
-            { backgroundColor: palette.panel, borderColor: palette.border },
-          ]}
-        >
-          <View style={styles.collapseRow}>
-            <Ionicons name="pause-circle-outline" size={14} color={palette.textMuted} />
-            <Text style={[styles.collapseLabel, { color: palette.text }]}>
-              Auto-collapse when stopped
-            </Text>
-            <Switch
-              value={autoCollapseEnabled}
-              onValueChange={onAutoCollapseToggle}
-              trackColor={{
-                false: 'rgba(255,255,255,0.08)',
-                true: `${palette.amber}30`,
-              }}
-              thumbColor={autoCollapseEnabled ? palette.amber : palette.textMuted}
-              style={{ transform: [{ scaleX: 0.7 }, { scaleY: 0.7 }] }}
-            />
-          </View>
-
-          <Text style={[styles.collapseHint, { color: palette.textMuted }]}>
-            Widgets collapse after 20s stationary. Re-expands only on sustained vehicle
-            movement ({'\u2265'}3s).
-          </Text>
-
-          {isCompact && (
-            <TouchableOpacity
-              style={[
-                styles.expandBtn,
-                {
-                  backgroundColor: `${palette.amber}12`,
-                  borderColor: `${palette.amber}30`,
-                },
-              ]}
-              onPress={onExpandNow}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="expand-outline" size={12} color={palette.amber} />
-              <Text style={[styles.expandBtnText, { color: palette.amber }]}>
-                EXPAND NOW
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-    </>
+        <Ionicons name="refresh-outline" size={13} color={palette.amber} />
+        <Text style={[styles.restoreDefaultsText, { color: palette.textMuted }]}>
+          Restore Defaults
+        </Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -1056,10 +764,6 @@ type DashboardGridZoneProps = {
   layoutMode: boolean;
   palette: any;
   activeTab: DashboardTab;
-  latestMissionBrief: MissionBrief | null;
-  briefCommandState: BriefCommandState | null;
-  startupHydrating: boolean;
-  startupNotice: DashboardStartupNotice;
   allEmpty: boolean;
   accel: ReturnType<typeof useAccelerometer>;
   advancedModeEnabled: boolean;
@@ -1067,32 +771,40 @@ type DashboardGridZoneProps = {
   gridLayout: GridLayout;
   slots: WidgetSlot[];
   dashboardMode: DashboardMode;
-  isCompact: boolean;
   perWidgetAutoCollapse: Record<string, boolean>;
   widgetContainerHeight: number;
   widgetContainerWidth: number;
+  layoutSignature: string;
   tabOpacityAnim: Animated.Value;
   tabSlideAnim: Animated.Value;
-  isHighwayPrecision: boolean;
-  onOpenDashboardManager: () => void;
   onEnterCustomizeMode: () => void;
-  onEnterLayoutMode: () => void;
   onExitLayoutMode: () => void;
   onEmptySlotPress: (slotIndex: number) => void;
-  onWidgetPress: (slot: WidgetSlot) => void;
+  onWidgetLongPress: (slot: WidgetSlot) => void;
   onRemoveWidget: (slotIndex: number) => void;
   onSwapSlots: (from: number, to: number) => void;
   onResizeWidget: (slotIndex: number, newSize: WidgetSize) => void;
   onRestoreDefaults: () => void;
+  onOpenCommandBrief: () => void;
   onContainerLayout: (e: LayoutChangeEvent) => void;
   widgetData: any;
   gpsLatitude: number | null | undefined;
   gpsLongitude: number | null | undefined;
   gpsSpeedMph: number | null | undefined;
   gpsHasFix: boolean;
+  gpsAccuracyM: number | null | undefined;
   gpsAltitudeFt: number | null | undefined;
+  gpsTimestampMs: number | null | undefined;
   isShortHeight: boolean;
   isVeryShortHeight: boolean;
+  expeditionHasActiveRoute: boolean;
+  expeditionTeamMemberCount: number;
+  expeditionCampCount: number;
+  expeditionRouteCompleted: boolean;
+  expeditionId?: string;
+  expeditionRouteLabel?: string;
+  completedExpeditionRecord?: ExpeditionRecord | null;
+  expeditionEcsOnline?: boolean;
 };
 
 function areDashboardSlotsEquivalent(a: WidgetSlot[], b: WidgetSlot[]): boolean {
@@ -1119,10 +831,6 @@ function DashboardGridZone({
   layoutMode,
   palette,
   activeTab,
-  latestMissionBrief,
-  briefCommandState,
-  startupHydrating,
-  startupNotice,
   allEmpty,
   accel,
   advancedModeEnabled,
@@ -1130,60 +838,59 @@ function DashboardGridZone({
   gridLayout,
   slots,
   dashboardMode,
-  isCompact,
   perWidgetAutoCollapse,
   widgetContainerHeight,
   widgetContainerWidth,
+  layoutSignature,
   tabOpacityAnim,
   tabSlideAnim,
-  isHighwayPrecision,
-  onOpenDashboardManager,
   onEnterCustomizeMode,
-  onEnterLayoutMode,
   onExitLayoutMode,
   onEmptySlotPress,
-  onWidgetPress,
+  onWidgetLongPress,
   onRemoveWidget,
   onSwapSlots,
   onResizeWidget,
   onRestoreDefaults,
+  onOpenCommandBrief,
   onContainerLayout,
   widgetData,
   gpsLatitude,
   gpsLongitude,
   gpsSpeedMph,
   gpsHasFix,
+  gpsAccuracyM,
   gpsAltitudeFt,
+  gpsTimestampMs,
   isShortHeight,
   isVeryShortHeight,
+  expeditionHasActiveRoute,
+  expeditionTeamMemberCount,
+  expeditionCampCount,
+  expeditionRouteCompleted,
+  expeditionId,
+  expeditionRouteLabel,
+  completedExpeditionRecord,
+  expeditionEcsOnline,
 }: DashboardGridZoneProps) {
   const adaptive = useAdaptiveLayout();
-  const showLayoutHint = layoutMode && !isHighwayPrecision;
-  const showManagerHint = !layoutMode && !isCompact && !isHighwayPrecision;
-  const showMissionBriefCard = activeTab === 'brief' && (!!latestMissionBrief || !!briefCommandState);
+  const showLayoutHint = layoutMode;
   const showBriefTab = activeTab === 'brief';
+  const showExpeditionPlaceholderTab = activeTab === 'expedition';
   const contentEdgePadding = adaptive.dashboard.gridPadding;
   const hintEdgePadding = Math.max(12, contentEdgePadding);
   const emptyEdgePadding = Math.max(24, contentEdgePadding + 12);
-  const briefContentGap = adaptive.shortHeight ? 8 : 10;
   const contentStackGap = adaptive.shortHeight ? 8 : 10;
-  const missionTopPadding = adaptive.shortHeight ? 4 : 6;
   const layoutHintTop = adaptive.shortHeight ? 6 : 8;
-  const footerTop = adaptive.shortHeight ? 6 : 8;
 
   return (
     <>
       {layoutMode && <View style={styles.customizeDimOverlay} pointerEvents="none" />}
 
-      <Pressable
-        style={{ flex: 1 }}
-        onLongPress={onOpenDashboardManager}
-        delayLongPress={500}
-      >
+      <View style={styles.dashboardGridZoneFrame}>
         <Animated.View
           style={[
             styles.gridContainer,
-            isHighwayPrecision && styles.gridContainerHighway,
             isShortHeight && styles.gridContainerShort,
             isVeryShortHeight && styles.gridContainerVeryShort,
             {
@@ -1192,76 +899,41 @@ function DashboardGridZone({
             },
           ]}
         >
-          {startupHydrating ? (
-            <View style={styles.missionLayerWrap}>
-              <View
-                style={[
-                  styles.dashboardContentStack,
-                  isShortHeight && styles.dashboardContentStackShort,
-                  { gap: contentStackGap },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.dashboardStartupNoticeWrap,
-                    {
-                      paddingHorizontal: contentEdgePadding,
-                      paddingTop: missionTopPadding,
-                    },
-                  ]}
-                >
-                  <ECSTransientNotice
-                    kind={startupNotice.kind}
-                    label={startupNotice.label}
-                    message={startupNotice.message}
-                  />
-                </View>
-
-                <View
-                  style={[
-                    styles.widgetMeasureWrapper,
-                    isShortHeight && styles.widgetMeasureWrapperShort,
-                    isVeryShortHeight && styles.widgetMeasureWrapperVeryShort,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.dashboardStartupGrid,
-                      {
-                        paddingHorizontal: contentEdgePadding,
-                      },
-                    ]}
-                  >
-                    <ECSWidgetSkeleton style={styles.dashboardStartupWidget} />
-                    <ECSWidgetSkeleton style={styles.dashboardStartupWidget} />
-                  </View>
-                </View>
-              </View>
-            </View>
-          ) : showBriefTab && !layoutMode ? (
+          {showBriefTab && !layoutMode ? (
             <View
               style={[
-                styles.briefTabContent,
+                styles.briefTabSurface,
                 {
                   paddingHorizontal: contentEdgePadding,
-                  gap: briefContentGap,
                 },
               ]}
             >
-              <View style={styles.briefTabCardWrap}>
-                <MissionBriefCard
-                  brief={latestMissionBrief as MissionBrief}
-                  commandState={briefCommandState}
-                />
+              <View style={styles.briefTabCommandWrap}>
+                <CommandBriefScreen embedded />
               </View>
-              {!latestMissionBrief && !briefCommandState ? (
-                <View style={[styles.briefTabEmptyState, { backgroundColor: palette.panel, borderColor: palette.border }]}> 
-                  <Ionicons name="sparkles-outline" size={20} color={palette.amber} />
-                  <Text style={[styles.briefTabEmptyTitle, { color: palette.text }]}>ECS brief standing by</Text>
-                  <Text style={[styles.briefTabEmptyText, { color: palette.textMuted }]}>Mission context will populate here as route, vehicle, power, and expedition signals come online.</Text>
-                </View>
-              ) : null}
             </View>
+          ) : showExpeditionPlaceholderTab && !layoutMode ? (
+            <ExpeditionTab
+              hasActiveRoute={expeditionHasActiveRoute}
+              teamMemberCount={expeditionTeamMemberCount}
+              campCount={expeditionCampCount}
+              routeCompleted={expeditionRouteCompleted}
+              expeditionId={expeditionId}
+              routeLabel={expeditionRouteLabel}
+              completedExpeditionRecord={completedExpeditionRecord}
+              ecsOnline={expeditionEcsOnline}
+              gpsLocation={
+                gpsHasFix && typeof gpsLatitude === 'number' && typeof gpsLongitude === 'number'
+                  ? {
+                      latitude: gpsLatitude,
+                      longitude: gpsLongitude,
+                      accuracyMeters: gpsAccuracyM ?? null,
+                      source: 'gps' as const,
+                      capturedAt: gpsTimestampMs ? new Date(gpsTimestampMs).toISOString() : undefined,
+                    }
+                  : null
+              }
+            />
           ) : allEmpty && !layoutMode ? (
             <View
               style={[
@@ -1296,26 +968,8 @@ function DashboardGridZone({
                     { gap: contentStackGap },
                   ]}
                 >
-                  {showMissionBriefCard ? (
-                    <View
-                      style={[
-                        styles.missionBriefContainer,
-                        isShortHeight && styles.missionBriefContainerShort,
-                        {
-                          paddingHorizontal: contentEdgePadding,
-                          paddingTop: missionTopPadding,
-                        },
-                      ]}
-                    >
-                      <MissionBriefCard
-                        brief={latestMissionBrief as MissionBrief}
-                        commandState={briefCommandState}
-                        compact
-                      />
-                    </View>
-                  ) : null}
-
                   <View
+                    key={layoutSignature}
                     style={[
                       styles.widgetMeasureWrapper,
                       isShortHeight && styles.widgetMeasureWrapperShort,
@@ -1324,25 +978,27 @@ function DashboardGridZone({
                     onLayout={onContainerLayout}
                   >
                   <WidgetGrid
+                    key={`widget-grid:${layoutSignature}`}
                     slots={slots}
                     profile={activeProfile}
                     gridLayout={gridLayout}
                     layoutMode={layoutMode}
-                    onEnterLayoutMode={onEnterLayoutMode}
-                    onExitLayoutMode={onExitLayoutMode}
                     onEmptySlotPress={onEmptySlotPress}
-                    onWidgetPress={onWidgetPress}
+                    onWidgetLongPress={onWidgetLongPress}
                     onRemoveWidget={onRemoveWidget}
                     onSwapSlots={onSwapSlots}
                     onResizeWidget={onResizeWidget}
                     onRestoreDefaults={onRestoreDefaults}
+                    onOpenCommandBrief={onOpenCommandBrief}
                     widgetData={widgetData}
                     dashboardMode={dashboardMode}
-                    isCompact={isCompact}
                     rollDeg={accel.rollDeg}
                     pitchDeg={accel.pitchDeg}
                     sensorStatus={accel.sensorStatus}
                     sampleTimestampMs={accel.lastSampleAtMs}
+                    isCalibrated={accel.isCalibrated}
+                    onCalibrate={accel.calibrate}
+                    onResetCalibration={accel.resetCalibration}
                     advancedModeEnabled={advancedModeEnabled}
                     perWidgetAutoCollapse={perWidgetAutoCollapse}
                     containerHeight={widgetContainerHeight}
@@ -1351,7 +1007,9 @@ function DashboardGridZone({
                     gpsLongitude={gpsLongitude ?? undefined}
                     gpsSpeedMph={gpsSpeedMph}
                     gpsHasFix={gpsHasFix}
+                    gpsAccuracyM={gpsAccuracyM ?? undefined}
                     gpsAltitudeFt={gpsAltitudeFt ?? undefined}
+                    gpsTimestampMs={gpsTimestampMs ?? undefined}
                   />
                   </View>
                 </View>
@@ -1378,25 +1036,10 @@ function DashboardGridZone({
                 </View>
               )}
 
-              {showManagerHint && (
-                <View
-                  style={[
-                    styles.profileFooter,
-                    {
-                      paddingHorizontal: hintEdgePadding,
-                      marginTop: footerTop,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.footerText, { color: `${palette.textMuted}30` }]}>
-                    Long press to open Dashboard Manager
-                  </Text>
-                </View>
-              )}
             </>
           )}
         </Animated.View>
-      </Pressable>
+      </View>
     </>
   );
 }
@@ -1407,10 +1050,13 @@ type DashboardModalLayerProps = {
   libraryIntent: 'add' | 'replace';
   libraryTargetSlot: number;
   libraryTargetWidgetType: string | null;
+  gridLayout: GridLayout;
   advancedModeEnabled: boolean;
   createWidgetVisible: boolean;
   detailVisible: boolean;
   detailSlot: WidgetSlot | null;
+  manageVisible: boolean;
+  manageSlot: WidgetSlot | null;
   widgetData: any;
   dashboardMode: DashboardMode;
   accel: ReturnType<typeof useAccelerometer>;
@@ -1420,18 +1066,7 @@ type DashboardModalLayerProps = {
   pendingCollision: ResizeCollisionInfo | null;
   pendingResizeWidgetName: string;
   pendingResizeSize: WidgetSize;
-  presetsModalVisible: boolean;
-  gridLayout: GridLayout;
-  lastUsedPresetId?: string;
-  slots: WidgetSlot[];
-  activeProfile: DashboardProfile;
-  showExpeditionSummary: boolean;
   completedExpeditionRecord: ExpeditionRecord | null;
-  libraryManagerVisible: boolean;
-  activeTab: DashboardTab;
-  expeditionAssignedWidgets: (string | null | undefined)[];
-  highwayAssignedWidgets: (string | null | undefined)[];
-  dashboardManagerVisible: boolean;
   onSelectWidget: (type: string) => void;
   onCloseLibrary: () => void;
   onOpenCreateCustom: () => void;
@@ -1440,28 +1075,17 @@ type DashboardModalLayerProps = {
   onCloseDetail: () => void;
   onReplaceDetailWidget: () => void;
   onRemoveDetailWidget: () => void;
-  onOpenPowerConnectionsFromDetail: () => void;
-  onOpenTelemetrySetupFromDetail: () => void;
+  onCloseWidgetManager: () => void;
+  onReplaceManagedWidget: () => void;
+  onChangeManagedWidgetSurface: () => void;
+  onRemoveManagedWidget: () => void;
   onOpenNavigateFromDetail: () => void;
   onOpenFleetFromDetail: () => void;
   onRemotenessNavigateFromDetail: (target: RemotenessNavigationTargetType) => void;
+  onOpenCommandBriefFromDetail: () => void;
   onCloseAuth: () => void;
   onShrinkAndResize: () => void;
   onCancelResize: () => void;
-  onSelectPreset: (presetId: string) => void;
-  onSelectCustomPreset: (preset: { gridLayout: string; slotSizes: any[]; id: string; name: string; icon: string; createdAt: number }) => void;
-  onClosePresets: () => void;
-  onDismissExpeditionSummary: () => void;
-  onCloseLibraryManager: () => void;
-  onWidgetAddedFromManager: (_profile: DashboardProfile, _widgetType: string) => void;
-  onLayoutResetFromManager: (_profile: DashboardProfile) => void;
-  onCloseDashboardManager: () => void;
-  onExpeditionStartedFromManager: () => void;
-  onExpeditionEnded: () => void;
-  onOpenWidgetLibraryFromManager: () => void;
-  onRestoreDefaults: () => void;
-  onOpenPresetsFromManager: () => void;
-  onOpenPowerConnectionsFromManager: () => void;
 };
 
 function DashboardModalLayer({
@@ -1470,10 +1094,13 @@ function DashboardModalLayer({
   libraryIntent,
   libraryTargetSlot,
   libraryTargetWidgetType,
+  gridLayout,
   advancedModeEnabled,
   createWidgetVisible,
   detailVisible,
   detailSlot,
+  manageVisible,
+  manageSlot,
   widgetData,
   dashboardMode,
   accel,
@@ -1483,18 +1110,7 @@ function DashboardModalLayer({
   pendingCollision,
   pendingResizeWidgetName,
   pendingResizeSize,
-  presetsModalVisible,
-  gridLayout,
-  lastUsedPresetId,
-  slots,
-  activeProfile,
-  showExpeditionSummary,
   completedExpeditionRecord,
-  libraryManagerVisible,
-  activeTab,
-  expeditionAssignedWidgets,
-  highwayAssignedWidgets,
-  dashboardManagerVisible,
   onSelectWidget,
   onCloseLibrary,
   onOpenCreateCustom,
@@ -1503,28 +1119,17 @@ function DashboardModalLayer({
   onCloseDetail,
   onReplaceDetailWidget,
   onRemoveDetailWidget,
-  onOpenPowerConnectionsFromDetail,
-  onOpenTelemetrySetupFromDetail,
+  onCloseWidgetManager,
+  onReplaceManagedWidget,
+  onChangeManagedWidgetSurface,
+  onRemoveManagedWidget,
   onOpenNavigateFromDetail,
   onOpenFleetFromDetail,
   onRemotenessNavigateFromDetail,
+  onOpenCommandBriefFromDetail,
   onCloseAuth,
   onShrinkAndResize,
   onCancelResize,
-  onSelectPreset,
-  onSelectCustomPreset,
-  onClosePresets,
-  onDismissExpeditionSummary,
-  onCloseLibraryManager,
-  onWidgetAddedFromManager,
-  onLayoutResetFromManager,
-  onCloseDashboardManager,
-  onExpeditionStartedFromManager,
-  onExpeditionEnded,
-  onOpenWidgetLibraryFromManager,
-  onRestoreDefaults,
-  onOpenPresetsFromManager,
-  onOpenPowerConnectionsFromManager,
 }: DashboardModalLayerProps) {
   return (
     <>
@@ -1536,6 +1141,7 @@ function DashboardModalLayer({
         onCreateCustom={onOpenCreateCustom}
         advancedModeEnabled={advancedModeEnabled}
         dashboardMode={dashboardMode}
+        currentLayout={gridLayout}
         intent={libraryIntent}
         targetSlotIndex={libraryTargetSlot}
         currentWidgetType={libraryTargetWidgetType}
@@ -1557,21 +1163,35 @@ function DashboardModalLayer({
           pitchDeg: accel.pitchDeg,
           sensorStatus: accel.sensorStatus,
           sampleTimestampMs: accel.lastSampleAtMs,
+          isCalibrated: accel.isCalibrated,
+          onCalibrate: accel.calibrate,
+          onResetCalibration: accel.resetCalibration,
           advancedMode: advancedModeEnabled,
           gpsLatitude: gps.position?.latitude,
           gpsLongitude: gps.position?.longitude,
           gpsSpeedMph: gps.position?.speedMph ?? null,
+          gpsAccuracyM: gps.position?.accuracyM ?? null,
           gpsAltitudeFt: gps.position?.altitudeFt ?? null,
+          gpsTimestampMs: gps.position?.timestamp ?? null,
           gpsHasFix: gps.hasFix,
+          onOpenCommandBrief: onOpenCommandBriefFromDetail,
         }}
         onClose={onCloseDetail}
         onReplace={onReplaceDetailWidget}
         onRemove={onRemoveDetailWidget}
-        onOpenPowerConnections={onOpenPowerConnectionsFromDetail}
-        onOpenTelemetrySetup={onOpenTelemetrySetupFromDetail}
         onOpenNavigate={onOpenNavigateFromDetail}
         onOpenFleet={onOpenFleetFromDetail}
+        onOpenCommandBrief={onOpenCommandBriefFromDetail}
         onRemotenessNavigateToTarget={onRemotenessNavigateFromDetail}
+      />
+
+      <WidgetManagePopover
+        visible={manageVisible}
+        slot={manageSlot}
+        onClose={onCloseWidgetManager}
+        onReplace={onReplaceManagedWidget}
+        onChangeSurface={onChangeManagedWidgetSurface}
+        onRemove={onRemoveManagedWidget}
       />
 
       <AuthModal visible={authVisible} onClose={onCloseAuth} />
@@ -1585,47 +1205,12 @@ function DashboardModalLayer({
         onCancel={onCancelResize}
       />
 
-      <LayoutPresetsModal
-        visible={presetsModalVisible}
-        gridLayout={gridLayout}
-        lastUsedPresetId={lastUsedPresetId}
-        currentSlots={slots}
-        activeProfile={activeProfile}
-        onSelectPreset={onSelectPreset}
-        onSelectCustomPreset={onSelectCustomPreset}
-        onClose={onClosePresets}
+      <ReadinessAlertToast
+        onOpenCommandBrief={onOpenCommandBriefFromDetail}
       />
 
       <Toast />
 
-      <ExpeditionSummarySheet
-        visible={showExpeditionSummary}
-        record={completedExpeditionRecord}
-        onDismiss={onDismissExpeditionSummary}
-      />
-
-      <WidgetLibraryManager
-        visible={libraryManagerVisible}
-        onClose={onCloseLibraryManager}
-        activeTab={activeTab}
-        expeditionWidgets={expeditionAssignedWidgets.map((widget) => widget ?? null)}
-        highwayWidgets={highwayAssignedWidgets.map((widget) => widget ?? null)}
-        onWidgetAdded={onWidgetAddedFromManager}
-        onLayoutReset={onLayoutResetFromManager}
-        advancedModeEnabled={advancedModeEnabled}
-      />
-
-      <DashboardManagerOverlay
-        visible={dashboardManagerVisible}
-        onClose={onCloseDashboardManager}
-        onExpeditionStarted={onExpeditionStartedFromManager}
-        onExpeditionEnded={onExpeditionEnded}
-        onOpenWidgetLibrary={onOpenWidgetLibraryFromManager}
-        onRestoreDefaults={onRestoreDefaults}
-        onOpenPresets={onOpenPresetsFromManager}
-        onOpenPowerConnections={onOpenPowerConnectionsFromManager}
-        activeTab={activeTab}
-      />
     </>
   );
 }
@@ -1646,7 +1231,7 @@ function DashboardScreenInner() {
   // ── Phase 8: Welcome Banner State ─────────────────────
   // Shows once after setup completion, then auto-dismisses after 4 seconds.
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
-  const welcomeBannerAnim = useRef(new Animated.Value(0)).current;
+  const welcomeBannerAnim = useStableAnimatedValue(0);
 
   useEffect(() => {
     if (setupStore.shouldShowWelcomeBanner()) {
@@ -1671,40 +1256,19 @@ function DashboardScreenInner() {
 
   // ── Tab State ─────────────────────────────────────────
   const initialDashboardHydrated = isDashboardHydrated();
-  const initialOperationalTab: OperationalDashboardTab = initialDashboardHydrated
-    ? dashboardStore.getLastSelectedTab()
-    : 'expedition';
-
-  const resolveOperationalTab = (
-    tab: DashboardTab,
-    fallback: OperationalDashboardTab,
-  ): OperationalDashboardTab => (tab === 'brief' ? fallback : tab);
-
-  // Map dashboard view to its backing widget profile. Brief preserves the
-  // previous operational mode instead of coercing the screen back to Expedition.
-  const getProfileForTab = (
-    tab: DashboardTab,
-    fallback: OperationalDashboardTab,
-  ): DashboardProfile =>
-    resolveOperationalTab(tab, fallback) === 'expedition' ? 'expedition' : 'vehicle';
-
-  const initialDashboardProfile = getProfileForTab(initialOperationalTab, initialOperationalTab);
+  const initialDashboardProfile: DashboardProfile = 'expedition';
   const initialDashboardViewState = readPersistedDashboardViewState(
     initialDashboardProfile,
-    initialOperationalTab,
   );
   const initialDashboardTab: DashboardTab = initialDashboardViewState.dashboardTab;
-  const initialGridLayout = dashboardStore.getGridLayout(initialDashboardProfile);
-  const initialSlots = dashboardStore.getProfileSlots(initialDashboardProfile);
-  const initialLastUsedPresetId = dashboardStore.getLastUsedPreset(initialDashboardProfile);
+  const initialActiveProfile = dashboardProfileForTab(initialDashboardTab);
+  const initialGridLayout = dashboardStore.getGridLayout(initialActiveProfile);
+  const initialSlots = dashboardStore.getProfileSlots(initialActiveProfile);
 
   const [dashboardHydrated, setDashboardHydrated] = useState(initialDashboardHydrated);
-  const [dashboardStartupSettling, setDashboardStartupSettling] = useState(true);
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialDashboardTab);
-  const [previousOperationalTab, setPreviousOperationalTab] = useState<OperationalDashboardTab>(initialOperationalTab);
   const lastDashboardFocusSyncRef = useRef(0);
-  const activeOperationalTab = resolveOperationalTab(activeTab, previousOperationalTab);
-  const activeProfile = getProfileForTab(activeTab, previousOperationalTab);
+  const activeProfile: DashboardProfile = dashboardProfileForTab(activeTab);
 
   const [gridLayout, setGridLayout] = useState<GridLayout>(initialGridLayout);
   const [slots, setSlots] = useState<WidgetSlot[]>(initialSlots);
@@ -1715,10 +1279,10 @@ function DashboardScreenInner() {
   const [libraryTargetWidgetType, setLibraryTargetWidgetType] = useState<string | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailSlot, setDetailSlot] = useState<WidgetSlot | null>(null);
+  const [manageVisible, setManageVisible] = useState(false);
+  const [manageSlot, setManageSlot] = useState<WidgetSlot | null>(null);
   const [authVisible, setAuthVisible] = useState(false);
   const [createWidgetVisible, setCreateWidgetVisible] = useState(false);
-  const [libraryManagerVisible, setLibraryManagerVisible] = useState(false);
-  const [dashboardManagerVisible, setDashboardManagerVisible] = useState(false);
 
 
   // ── Collision Detection State ─────────────────────────
@@ -1728,25 +1292,14 @@ function DashboardScreenInner() {
   const [pendingResizeSize, setPendingResizeSize] = useState<WidgetSize>('1x1');
   const [pendingResizeWidgetName, setPendingResizeWidgetName] = useState('');
 
-  // ── Layout Presets State ───────────────────────────────
-  const [presetsModalVisible, setPresetsModalVisible] = useState(false);
-  const [lastUsedPresetId, setLastUsedPresetId] = useState<string | undefined>(initialLastUsedPresetId);
-
-
-
-
   // ── Dashboard Mode ──────────────────────────────────
-  const dashboardMode: DashboardMode = activeOperationalTab === 'highway' ? 'highway' : 'expedition';
-  const isHighwayPrecision = dashboardMode === 'highway' && gridLayout === '2x3';
+  const dashboardMode: DashboardMode = dashboardModeForTab(activeTab);
 
   // ── Expedition Tactical Mode ──────────────────────────
 
 
-  // ── Auto-Collapse ─────────────────────────────────────
-  const [autoCollapseEnabled, setAutoCollapseEnabled] = useState(dashboardStore.getAutoCollapseEnabled());
-  const [isCompact, setIsCompact] = useState(initialDashboardViewState.compact);
+  // ── Dashboard Expansion ───────────────────────────────
   const [isDashboardExpanded, setIsDashboardExpanded] = useState(initialDashboardViewState.expanded);
-  const [showCollapseSettings, setShowCollapseSettings] = useState(false);
 
   useLayoutEffect(() => {
     setDashboardExpanded(isDashboardExpanded);
@@ -1754,21 +1307,13 @@ function DashboardScreenInner() {
 
   // ── Advanced Mode ─────────────────────────────────────
   const [advancedModeEnabled, setAdvancedModeEnabled] = useState(dashboardStore.getAdvancedModeEnabled());
-  const [showAdvancedPanel, setShowAdvancedPanel] = useState(false);
 
-  // ── Per-Widget Auto-Collapse ──────────────────────────
+  // ── Per-Widget Display Overrides ──────────────────────
   const [perWidgetAutoCollapse, setPerWidgetAutoCollapse] = useState<Record<string, boolean>>({});
-
-  // ── Auto-Collapse Motion Tracking Refs ─────────────────
-  const lastMotionRef = useRef({ roll: 0, pitch: 0, time: Date.now() });
-  const stationaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isStationaryRef = useRef(false);
-  const sustainedMotionStartRef = useRef<number | null>(null);
 
 
   // ── Context-Aware Dashboard Mode Engine ────────────────
-  // Evaluates road type, speed, and remoteness to recommend
-  // switching between Highway and Expedition modes.
+  // Evaluates road type, speed, and remoteness for legacy dashboard mode context.
   const [modeEngineState, setModeEngineState] = useState<ModeEngineOutput>(
     dashboardModeEngine.get()
   );
@@ -1801,39 +1346,15 @@ function DashboardScreenInner() {
   // to avoid temporal dead zone issues with const declarations.
   const handleTabSwitchRef = useRef<(tab: DashboardTab) => void>(() => {});
 
-  // Handle auto-mode switch: when engine switches, trigger tab animation
+  // Keep dashboard mode engine telemetry alive without switching tabs.
   const prevAutoModeRef = useRef<'highway' | 'expedition'>(modeEngineState.currentMode);
   useEffect(() => {
-    if (activeTab === 'brief') return;
+    if (activeTab !== 'widgets') return;
     const engineMode = modeEngineState.currentMode;
     if (engineMode !== prevAutoModeRef.current) {
       prevAutoModeRef.current = engineMode;
-      if (modeEngineState.autoModeEnabled && !modeEngineState.switchRecommended) {
-        const newTab: DashboardTab = engineMode;
-        if (newTab !== activeTab) {
-          handleTabSwitchRef.current(newTab);
-        }
-      }
     }
   }, [modeEngineState.currentMode, modeEngineState.autoModeEnabled, modeEngineState.switchRecommended, activeTab]);
-
-  // Accept mode switch recommendation
-  const handleAcceptModeSwitch = useCallback(() => {
-    const recommended = modeEngineState.recommendedMode;
-    dashboardModeEngine.acceptSwitch();
-    if (recommended) {
-      const newTab: DashboardTab = recommended;
-      setPreviousOperationalTab(newTab);
-      if (newTab !== activeTab) {
-        handleTabSwitchRef.current(newTab);
-      }
-    }
-  }, [modeEngineState.recommendedMode, activeTab]);
-
-  // Dismiss mode switch recommendation
-  const handleDismissModeSwitch = useCallback(() => {
-    dashboardModeEngine.dismissSwitch();
-  }, []);
 
   // Toggle auto mode
   const handleToggleAutoMode = useCallback(() => {
@@ -1844,10 +1365,7 @@ function DashboardScreenInner() {
 
   // Sync manual tab switches with mode engine (defined after handleTabSwitch)
   const handleTabSwitchWithModeSync = useCallback((newTab: DashboardTab) => {
-    if (newTab !== 'brief') {
-      setPreviousOperationalTab(newTab);
-      dashboardModeEngine.setMode(newTab);
-    }
+    if (newTab === 'widgets') dashboardModeEngine.setMode('expedition');
     handleTabSwitchRef.current(newTab);
   }, []);
 
@@ -1857,86 +1375,45 @@ function DashboardScreenInner() {
   // ── Expedition State Integration ────────────────────────
 
   // Subscribe to expeditionStateStore for real-time state changes.
-  // When expedition ends (state → 'complete'), show ExpeditionSummarySheet.
-  // GATING: Only show the modal once per expedition ID. Track the last
-  // expedition ID that was acknowledged (dismissed) to prevent re-triggers
-  // from duplicate _notify() calls or re-renders while state === 'complete'.
-  const [showExpeditionSummary, setShowExpeditionSummary] = useState(false);
-  const [completedExpeditionRecord, setCompletedExpeditionRecord] = useState<ExpeditionRecord | null>(null);
+  // Completion data remains available for the modern Expedition Summary /
+  // debrief PDF flow; the deprecated completion popup is never opened.
+  const [completedExpeditionRecord, setCompletedExpeditionRecord] = useState<ExpeditionRecord | null>(
+    () => {
+      const record = expeditionStateStore.getCurrentExpedition();
+      return record?.state === 'complete' ? record : null;
+    },
+  );
 
   // Track which expedition IDs have already been shown/acknowledged
   // to prevent duplicate modals from re-renders or multiple _notify() calls.
-  const acknowledgedExpeditionIdsRef = useRef<Set<string>>(new Set());
   // Track the previous expedition state to detect transitions (not just current state)
-  const prevExpStateRef = useRef<string>(expeditionStateStore.getState());
   // ── Modal State Guards ──────────────────────────────────
   // Prevents duplicate summary sheets from concurrent _notify() calls.
-  const summaryShowingRef = useRef(false);
   // Cooldown after dismiss prevents immediate re-trigger from stale notifications.
-  const summaryCooldownRef = useRef(false);
-  const summaryCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // isDismissing prevents double-dismiss from backdrop + button tap simultaneously.
-  const summaryDismissingRef = useRef(false);
 
   useEffect(() => {
     const unsubscribe = expeditionStateStore.subscribe((state, record) => {
-      const prevState = prevExpStateRef.current;
-      prevExpStateRef.current = state;
-
-      // Only trigger the modal on a TRANSITION into 'complete',
-      // not on every notification where state happens to be 'complete'.
-      if (state === 'complete' && record && prevState !== 'complete') {
-        // Guard: Don't show if already showing, in cooldown, or already acknowledged
-        if (summaryShowingRef.current) return;
-        if (summaryCooldownRef.current) return;
-        if (acknowledgedExpeditionIdsRef.current.has(record.id)) return;
-
-        summaryShowingRef.current = true;
-        summaryDismissingRef.current = false;
-        setCompletedExpeditionRecord(record);
-        setShowExpeditionSummary(true);
-      }
+      setCompletedExpeditionRecord((current) => {
+        if (state === 'complete' && record) {
+          return current?.id === record.id && current?.endTime === record.endTime ? current : record;
+        }
+        return current;
+      });
     });
     return unsubscribe;
   }, []);
 
   // Cleanup cooldown timer on unmount
-  useEffect(() => {
-    return () => {
-      if (summaryCooldownTimerRef.current) clearTimeout(summaryCooldownTimerRef.current);
-    };
-  }, []);
 
   // Called by DashboardHeader when user confirms "End Expedition"
   const handleExpeditionEnded = useCallback(() => {
-    // The subscription above will handle showing the summary sheet
-    // when the state transitions to 'complete'
+    // The expedition store records completion, timeline events, and
+    // completed-route data. No legacy completion popup is opened here.
   }, []);
 
   // Dismiss expedition summary sheet — marks this expedition as acknowledged
   // so it won't re-appear on subsequent renders or _notify() calls.
-  const handleDismissExpeditionSummary = useCallback(() => {
-    // Guard: prevent double-dismiss (backdrop tap + button tap simultaneously)
-    if (summaryDismissingRef.current) return;
-    summaryDismissingRef.current = true;
-
-    // Mark this expedition ID as acknowledged BEFORE closing
-    if (completedExpeditionRecord?.id) {
-      acknowledgedExpeditionIdsRef.current.add(completedExpeditionRecord.id);
-    }
-    setShowExpeditionSummary(false);
-    setCompletedExpeditionRecord(null);
-    summaryShowingRef.current = false;
-    expeditionStateStore.dismissExpedition();
-
-    // Start cooldown to prevent immediate re-trigger from stale notifications
-    summaryCooldownRef.current = true;
-    if (summaryCooldownTimerRef.current) clearTimeout(summaryCooldownTimerRef.current);
-    summaryCooldownTimerRef.current = setTimeout(() => {
-      summaryCooldownRef.current = false;
-      summaryCooldownTimerRef.current = null;
-    }, 500);
-  }, [completedExpeditionRecord]);
 
 
 
@@ -2082,7 +1559,10 @@ function DashboardScreenInner() {
     return unsubscribe;
   }, [geofenceVehicleId, refreshActiveVehicleData]);
 
-  const activeVehicleContext = getActiveVehicleContext();
+  const activeVehicleContext = useMemo(() => {
+    void activeVehicleContextRevision;
+    return getActiveVehicleContext();
+  }, [activeVehicleContextRevision]);
 
   const baselineFleetLoadItems = useMemo(
     () =>
@@ -2138,9 +1618,11 @@ function DashboardScreenInner() {
 
   // Cleanup geofence toast timer
   useEffect(() => {
-    const toastTimer = geofenceToastTimerRef.current;
     return () => {
-      if (toastTimer) clearTimeout(toastTimer);
+      if (geofenceToastTimerRef.current) {
+        clearTimeout(geofenceToastTimerRef.current);
+        geofenceToastTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -2153,8 +1635,8 @@ function DashboardScreenInner() {
     onExpeditionEnded: () => {
       // Show 2-second toast: "Expedition ended."
       showToast('Expedition ended.');
-      // The expeditionStateStore subscription above will handle
-      // showing the ExpeditionSummarySheet when state → 'complete'
+      // Completion is retained for the Expedition Summary flow; no
+      // deprecated completion popup is opened.
     },
   }), [showToast]);
 
@@ -2172,45 +1654,92 @@ function DashboardScreenInner() {
 
 
 
-  // ── Movement Detection Banner ─────────────────────────
-  const [showMovementBanner, setShowMovementBanner] = useState(false);
-  const movementBannerAnim = useRef(new Animated.Value(0)).current;
-  const movementBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // ── Tab Animation ─────────────────────────────────────
-  const tabSlideAnim = useRef(new Animated.Value(0)).current;
-  const tabOpacityAnim = useRef(new Animated.Value(1)).current;
-  const tabIndexFor = (tab: DashboardTab): number => tab === 'expedition' ? 0 : tab === 'highway' ? 1 : 2;
-  const underlineAnim = useRef(new Animated.Value(tabIndexFor(activeTab))).current;
+  const tabSlideAnim = useStableAnimatedValue(0);
+  const tabOpacityAnim = useStableAnimatedValue(1);
+  const tabIndexFor = (tab: DashboardTab): number => {
+    if (tab === 'widgets') return 0;
+    if (tab === 'brief') return 1;
+    return 2;
+  };
+  const underlineAnim = useStableAnimatedValue(tabIndexFor(activeTab));
   const tabTransitionCycleRef = useRef(0);
 
   // ── Widget Container Dimensions ────────────────────────
-  const [widgetContainerHeight, setWidgetContainerHeight] = useState(0);
-  const [widgetContainerWidth, setWidgetContainerWidth] = useState(0);
+  const [widgetContainerLayout, setWidgetContainerLayout] = useState<DashboardWidgetContainerLayout>({
+    width: 0,
+    height: 0,
+    signature: '',
+  });
 
   // ── Window Dimensions (reactive — updates on rotation / resize) ──
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const adaptive = useAdaptiveLayout();
   const insets = useSafeAreaInsets();
+  const topBannerHeight = useEcsTopBannerHeight();
   const isLandscape = windowWidth > windowHeight;
   const isShortHeight = windowHeight < 780;
   const isVeryShortHeight = windowHeight < 700;
+  const dashboardChromeVisible = !isDashboardExpanded;
+  const dashboardFrameInsetLeft = Math.max(
+    DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
+    insets.left + DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
+  );
+  const dashboardFrameInsetRight = Math.max(
+    DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
+    insets.right + DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
+  );
+  const dashboardFrameTopPadding = isDashboardExpanded
+    ? Math.max(insets.top, 0) + DASHBOARD_EXPANDED_TOP_SAFE_GAP
+    : 0;
+  const dashboardTopBannerVisibleHeight = dashboardChromeVisible
+    ? getEcsTopBannerLayoutMetrics(insets.top, topBannerHeight, {
+      isTablet: adaptive.isTablet,
+      shortHeight: adaptive.shortHeight,
+    }).visibleHeight
+    : 0;
+  const dashboardLayoutSignature = useMemo(
+    () => [
+      Math.round(windowWidth),
+      Math.round(windowHeight),
+      Math.round(insets.top),
+      Math.round(insets.right),
+      Math.round(insets.bottom),
+      Math.round(insets.left),
+      Math.round(dashboardTopBannerVisibleHeight),
+      isDashboardExpanded ? 'expanded' : 'standard',
+      activeTab,
+    ].join(':'),
+    [
+      activeTab,
+      insets.bottom,
+      insets.left,
+      insets.right,
+      insets.top,
+      dashboardTopBannerVisibleHeight,
+      isDashboardExpanded,
+      windowHeight,
+      windowWidth,
+    ],
+  );
   const dashboardFrameStyle = useMemo(
     () => ({
       flex: 1,
+      flexGrow: 1,
+      flexBasis: 0,
       minHeight: 0,
       width: '100%' as const,
       alignSelf: 'center' as const,
-      maxWidth: adaptive.dashboard.frameMaxWidth,
-      paddingHorizontal: adaptive.horizontalPadding,
+      overflow: 'visible' as const,
+      paddingTop: dashboardFrameTopPadding,
+      paddingLeft: dashboardFrameInsetLeft,
+      paddingRight: dashboardFrameInsetRight,
     }),
-    [adaptive.dashboard.frameMaxWidth, adaptive.horizontalPadding],
+    [dashboardFrameInsetLeft, dashboardFrameInsetRight, dashboardFrameTopPadding],
   );
   const dashboardPageRhythm = useMemo(
     () => ({
       edgePadding: adaptive.dashboard.gridPadding,
-      loadingTop: adaptive.shortHeight ? 10 : 12,
-      loadingGap: adaptive.shortHeight ? 8 : 10,
       bodyGap: adaptive.shortHeight ? 6 : Math.max(8, adaptive.panelGap - 4),
       controlGap: adaptive.shortHeight ? 3 : Math.max(5, adaptive.sectionGap - 3),
       gridRegionBottom: adaptive.shortHeight ? 0 : 2,
@@ -2238,10 +1767,14 @@ function DashboardScreenInner() {
     const heightChanged = Math.abs(prev.height - windowHeight) > 2;
 
     if (widthChanged || heightChanged) {
-      // Invalidate stale container measurements — onLayout will re-fire
-      // with the new layout dimensions after React re-renders the tree
-      setWidgetContainerWidth(0);
-      setWidgetContainerHeight(0);
+      // Invalidate stale container measurements — the layout signature
+      // keeps portrait and landscape measurements from leaking into one
+      // another before the next onLayout callback arrives.
+      setWidgetContainerLayout((prevLayout) => (
+        prevLayout.width === 0 && prevLayout.height === 0 && prevLayout.signature === ''
+          ? prevLayout
+          : { width: 0, height: 0, signature: '' }
+      ));
       prevWindowDimsRef.current = { width: windowWidth, height: windowHeight };
     }
   }, [windowWidth, windowHeight]);
@@ -2249,19 +1782,82 @@ function DashboardScreenInner() {
   // ── Adaptive dock padding ─────────────────────────────
   // In landscape the CommandDock bar is shorter (less bottom safe area),
   // so we can reduce the padding to give widgets more vertical space.
-  // Portrait: 70px (standard dock + safe area)
-  // Landscape: 50px (dock is more compact, less safe area needed)
+  // Keep Dashboard reserved space aligned to the compact CommandDock
+  // layout height so widgets do not disappear behind the bottom chrome.
   const dockPadding = useMemo(() => {
     if (isDashboardExpanded) {
       return Math.max(insets.bottom, isLandscape ? 4 : 8);
     }
-    return getShellBottomClearance(insets.bottom, isLandscape ? 0 : 4);
+    return getShellBottomClearance(insets.bottom, 0);
   }, [insets.bottom, isDashboardExpanded, isLandscape]);
+
+  const dashboardAvailableBodyArea = useMemo(
+    () => resolveDashboardBodyArea({
+      windowWidth,
+      windowHeight,
+      safeAreaInsets: {
+        top: insets.top,
+        right: insets.right,
+        bottom: insets.bottom,
+        left: insets.left,
+      },
+      bottomBannerHeight: dockPadding,
+      topBannerHeight: dashboardTopBannerVisibleHeight,
+      framePaddingTop: dashboardFrameTopPadding,
+      framePaddingLeft: dashboardFrameInsetLeft,
+      framePaddingRight: dashboardFrameInsetRight,
+    }),
+    [
+      dashboardFrameInsetLeft,
+      dashboardFrameInsetRight,
+      dashboardFrameTopPadding,
+      dashboardTopBannerVisibleHeight,
+      dockPadding,
+      insets.bottom,
+      insets.left,
+      insets.right,
+      insets.top,
+      windowHeight,
+      windowWidth,
+    ],
+  );
+  const hasCurrentWidgetMeasurement = widgetContainerLayout.signature === dashboardLayoutSignature;
+  const liveWidgetContainerWidth = hasCurrentWidgetMeasurement ? widgetContainerLayout.width : 0;
+  const liveWidgetContainerHeight = hasCurrentWidgetMeasurement ? widgetContainerLayout.height : 0;
+  const dashboardControlStackEstimatedHeight =
+    (adaptive.shortHeight ? 40 : 42) +
+    (layoutMode ? Math.round(DASHBOARD_CUSTOMIZE_STACK_ESTIMATED_HEIGHT * adaptive.densityScale) : 0);
+  const estimatedExpandedWidgetHeight = Math.max(
+    0,
+    dashboardAvailableBodyArea.height -
+      dashboardPageRhythm.bodyGap -
+      dashboardPageRhythm.controlGap -
+      dashboardPageRhythm.gridRegionBottom -
+      dashboardControlStackEstimatedHeight,
+  );
+  const estimatedContractedWidgetHeight = Math.max(
+    0,
+    dashboardAvailableBodyArea.height -
+      dashboardPageRhythm.bodyGap -
+      dashboardPageRhythm.controlGap -
+      dashboardPageRhythm.gridRegionBottom -
+      dashboardControlStackEstimatedHeight,
+  );
+  const effectiveWidgetContainerWidth =
+    liveWidgetContainerWidth ||
+    dashboardAvailableBodyArea.width;
+  const effectiveWidgetContainerHeight =
+    isDashboardExpanded
+      ? Math.max(liveWidgetContainerHeight, estimatedExpandedWidgetHeight)
+      : liveWidgetContainerHeight || estimatedContractedWidgetHeight;
 
 
   // ── Accelerometer ─────────────────────────────────────
   const isFocused = useIsFocused();
-  const accel = useAccelerometer(isFocused);
+  const attitudeRecalibrationKey = isLandscape ? 'landscape' : 'portrait';
+  const accel = useAccelerometer(isFocused, {
+    recalibrationKey: attitudeRecalibrationKey,
+  });
 
   // ── ECS AI Orchestrator Feed ───────────────────────────
   // The dashboard now consumes the dedicated AI hook instead of
@@ -2270,7 +1866,7 @@ function DashboardScreenInner() {
   // orchestrator drive the brief, compact label, and activation state.
   const gps = useThrottledGPS({
     enabled: isFocused && activeTab !== 'brief',
-    highAccuracy: isFocused && activeTab === 'highway',
+    highAccuracy: false,
   });
 
   const aiTelemetry = useMemo(() => ({
@@ -2309,7 +1905,7 @@ function DashboardScreenInner() {
   const aiResources = useMemo(() => {
     const resolvedVehicleConfig = (activeVehicleData as any) ?? activeVehicleContext.vehicle ?? {};
     const waterCapacity = toFiniteNumber(activeVehicleContext.resourceProfile.waterCapacityGal);
-    const currentWater = toFiniteNumber(activeVehicleContext.consumables?.water_gal_current);
+    const currentWater = toFiniteNumber(activeVehicleContext.resourceProfile.currentWaterGallons);
     const waterPercent =
       waterCapacity && waterCapacity > 0 && currentWater != null
         ? Math.max(0, Math.min(100, Math.round((currentWater / waterCapacity) * 100)))
@@ -2317,13 +1913,19 @@ function DashboardScreenInner() {
 
     return {
       ...resolvedVehicleConfig,
-      fuelPercent: toFiniteNumber(activeVehicleContext.consumables?.fuel_percent_current),
+      fuelPercent: toFiniteNumber(activeVehicleContext.resourceProfile.currentFuelPercent),
+      fuelGallons: activeVehicleContext.resourceProfile.currentFuelGallons,
+      fuelWeightLb: activeVehicleContext.resourceProfile.currentFuelWeightLb,
+      waterGallons: activeVehicleContext.resourceProfile.currentWaterGallons,
+      waterWeightLb: activeVehicleContext.resourceProfile.currentWaterWeightLb,
       waterPercent,
       fuelTankCapacityGal: activeVehicleContext.resourceProfile.fuelTankCapacityGal,
       waterCapacityGal: activeVehicleContext.resourceProfile.waterCapacityGal,
       batteryCapacityWh: activeVehicleContext.resourceProfile.batteryUsableWh,
-      tireSizeInches: activeVehicleContext.tiresLift?.tireSizeInches ?? null,
-      suspensionLiftInches: activeVehicleContext.tiresLift?.suspensionLiftInches ?? null,
+      tireSizeInches: activeVehicleContext.resourceProfile.tireSizeInches,
+      suspensionLiftInches: activeVehicleContext.resourceProfile.suspensionLiftInches,
+      isLeveled: activeVehicleContext.resourceProfile.isLeveled,
+      frontLevelInches: activeVehicleContext.resourceProfile.frontLevelInches,
       accessoryInstalledCount: activeVehicleContext.accessoryInstalledCount,
       loadoutItemCount: activeVehicleContext.loadoutItemCount,
       loadoutWeightLbs: activeVehicleContext.loadoutTotalWeightLbs,
@@ -2368,6 +1970,22 @@ function DashboardScreenInner() {
     hazardAhead: typeof riskScore === 'number' ? riskScore >= 70 : false,
     nextHazardDistanceMiles: null,
   }), [activeTrip, riskScore, waypoints]);
+  const dashboardActiveRun = useMemo(
+    () => ((activeTrip as any)?.points && Array.isArray((activeTrip as any).points) ? (activeTrip as any) : null),
+    [activeTrip],
+  );
+  const dashboardWeatherLocation = useMemo(
+    () => (
+      gps.hasFix && gps.position?.latitude != null && gps.position?.longitude != null
+        ? {
+            lat: gps.position.latitude,
+            lng: gps.position.longitude,
+          }
+        : null
+    ),
+    [gps.hasFix, gps.position?.latitude, gps.position?.longitude],
+  );
+  const silentRouteWeatherToast = useCallback((_message: string) => {}, []);
 
   const dashboardWeather = useOperationalWeather({
     enabled: activeTab !== 'brief',
@@ -2375,37 +1993,30 @@ function DashboardScreenInner() {
       lat: gps.position?.latitude ?? null,
       lng: gps.position?.longitude ?? null,
       hasFix: gps.hasFix,
+      permissionDenied: gps.permissionDenied,
+      accuracyM: gps.position?.accuracyM ?? null,
     },
   });
+  const dashboardRouteWeather = useRouteCorridorWeather(
+    dashboardActiveRun,
+    dashboardWeatherLocation,
+    silentRouteWeatherToast,
+    {
+      forceActive: true,
+      persistPreference: false,
+      emitToasts: false,
+    },
+  );
   const dashboardTelemetry = useVehicleTelemetry();
-  const telemetryScanner = useOBD2Scanner();
+  const telemetryScanner = useUnifiedOBD2Scanner();
 
   const aiWeatherCorridor = useMemo(() => {
-    const snapshot = dashboardWeather.snapshot;
-    const alertCount = snapshot.alerts.length;
-    const severeAlert = snapshot.alerts.find(alert => alert.severity === 'extreme' || alert.severity === 'warning');
-    const weatherSeverity =
-      severeAlert?.severity === 'extreme' ? 3 :
-      severeAlert?.severity === 'warning' ? 2 :
-      alertCount > 0 ? 1 :
-      snapshot.current.windSpeed != null && snapshot.current.windSpeed >= 40 ? 2 :
-      snapshot.current.windSpeed != null && snapshot.current.windSpeed >= 25 ? 1 :
-      snapshot.current.precipChance != null && snapshot.current.precipChance >= 75 ? 1 :
-      0;
-
-    const visibilityMiles = snapshot.current.visibility != null
-      ? Number((snapshot.current.visibility / 1609.34).toFixed(1))
-      : null;
-
-    return {
-      weatherSeverity,
-      windMph: snapshot.current.windSpeed,
-      visibilityMiles,
-      precipitationIntensity: snapshot.current.precipChance,
-      temperatureF: snapshot.current.temp,
-      alertsCount: alertCount,
-    };
-  }, [dashboardWeather.snapshot]);
+    return buildUnifiedWeatherCorridor({
+      snapshot: dashboardWeather.snapshot,
+      result: dashboardWeather.result,
+      routeWeather: dashboardRouteWeather,
+    });
+  }, [dashboardRouteWeather, dashboardWeather.result, dashboardWeather.snapshot]);
 
   const aiRemoteness = useMemo(() => ({
     remotenessScore: toFiniteNumber(liveRemoteness?.score),
@@ -2433,6 +2044,7 @@ function DashboardScreenInner() {
     routeIntelligence,
     remoteness: aiRemoteness,
     resources: aiResources,
+    powerAuthority: bluPowerState,
     userPreferences: userSettings,
     enabled: true,
     options: {
@@ -2446,6 +2058,8 @@ function DashboardScreenInner() {
   const compactLineLabel = normalizeVisibleEcsCopy(compactLine);
   const topSignalTitleLabel = normalizeVisibleEcsCopy(topSignalTitle);
   const currentExpeditionState = expeditionStateStore.getState();
+  const currentExpeditionRecord = expeditionStateStore.getCurrentExpedition();
+  const latestCompletedExpeditionLog = expeditionStateStore.getLog()[0] ?? null;
   const gpsAgeMs = gps.position?.timestamp ? Math.max(0, Date.now() - gps.position.timestamp) : null;
   const [hasSharedRouteContext, setHasSharedRouteContext] = useState(false);
   const refreshDashboardRouteContext = useCallback(async () => {
@@ -2483,6 +2097,26 @@ function DashboardScreenInner() {
     routeIntelligence.distanceRemainingMiles != null ||
     routeIntelligence.etaMinutes != null;
   const hasDashboardRouteContext = hasOperationalContext || hasSharedRouteContext;
+  const dashboardActiveRoute = routeStore.getActive();
+  const expeditionId =
+    String((activeTrip as any)?.id ?? currentExpeditionRecord?.id ?? '').trim() || undefined;
+  const expeditionRouteLabel =
+    String((activeTrip as any)?.name ?? dashboardActiveRoute?.name ?? '').trim() || undefined;
+  const expeditionTeamMemberCount = Math.max(1, Number((activeTrip as any)?.team_size) || 1);
+  const expeditionCampCount = Array.isArray(waypoints)
+    ? waypoints.filter((waypoint: any) => {
+        const type = String(waypoint?.waypointType ?? waypoint?.type ?? '').toLowerCase();
+        const name = String(waypoint?.name ?? waypoint?.title ?? '').toLowerCase();
+        return type.includes('camp') || name.includes('camp');
+      }).length
+    : 0;
+  const completedExpeditionSummaryRecord =
+    completedExpeditionRecord ??
+    (currentExpeditionRecord?.state === 'complete' ? currentExpeditionRecord : null);
+  const expeditionRouteCompleted =
+    currentExpeditionState === 'complete' ||
+    Boolean(completedExpeditionRecord) ||
+    (currentExpeditionState === 'standby' && Boolean(latestCompletedExpeditionLog));
   const dashboardShellBannerStatus = useMemo(
     () =>
       resolveTopBannerPresentation({
@@ -2536,7 +2170,6 @@ function DashboardScreenInner() {
       operationalSummary: aiState?.operationalSummary,
       operations: orchestrator?.operationalState ?? latestMissionBrief?.operations ?? null,
       liveStatus,
-      isCompact,
       hasLiveGps: gps.hasFix && (gpsAgeMs == null || gpsAgeMs <= 20000),
       isOnline,
     })
@@ -2549,7 +2182,6 @@ function DashboardScreenInner() {
     dashboardView,
     gps.hasFix,
     gpsAgeMs,
-    isCompact,
     isOnline,
     latestMissionBrief,
     liveStatus,
@@ -2584,6 +2216,24 @@ function DashboardScreenInner() {
     summaryLine,
     topSignalTitle,
   ]);
+  const previousMissionBriefLogRef = useRef<{ id: string; message: string } | null>(null);
+
+  useEffect(() => {
+    const currentEntry = summarizeMissionBriefLogEntry(latestMissionBrief, briefCommandState);
+    const previousEntry = previousMissionBriefLogRef.current;
+
+    if (previousEntry && (!currentEntry || previousEntry.id !== currentEntry.id)) {
+      recordBriefCadEntry({
+        id: previousEntry.id,
+        text: previousEntry.message,
+        mode: 'advisory',
+        priority: 4,
+        queuedAt: Date.now(),
+      });
+    }
+
+    previousMissionBriefLogRef.current = currentEntry;
+  }, [briefCommandState, latestMissionBrief]);
   const latestMissionBriefLabel = activeTab === 'brief'
     ? (dashboardCommandState.metaLabel ?? compactLineLabel)
     : null;
@@ -2601,12 +2251,26 @@ function DashboardScreenInner() {
   const lastAdvisoryKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const advisoryText = condenseDashboardLaneCopy(dashboardCommandState.banner?.title || summaryLineLabel, 88);
+    const structuredAdvisory = aiState?.advisories?.[0] ?? null;
+    const advisoryText = condenseDashboardLaneCopy(
+      structuredAdvisory?.message ?? dashboardCommandState.banner?.title ?? summaryLineLabel,
+      88,
+    );
     if (!aiState || !advisoryText) return;
+    if (
+      isLowValueTelemetryDegradedSummary(advisoryText) ||
+      isLowValueTelemetryDegradedSummary(dashboardCommandState.banner?.detail) ||
+      (
+        dashboardCommandState.primary == null &&
+        isLowValueTelemetryDegradedSummary(summaryLineLabel)
+      )
+    ) {
+      return;
+    }
 
     const advisoryKey = [
       aiState.readiness,
-      dashboardCommandState.primary?.id ?? aiState.topSignal?.title ?? '',
+      structuredAdvisory?.suppressKey ?? dashboardCommandState.primary?.id ?? aiState.topSignal?.title ?? '',
       dashboardCommandState.compactSummary,
       advisoryText,
     ].join('|');
@@ -2614,20 +2278,39 @@ function DashboardScreenInner() {
     if (lastAdvisoryKeyRef.current === advisoryKey) return;
     lastAdvisoryKeyRef.current = advisoryKey;
 
-    const icon = aiState.readiness === 'critical'
-      ? 'warning-outline'
-      : aiState.readiness === 'elevated'
-        ? 'alert-circle-outline'
-        : 'sparkles-outline';
+    const icon =
+      structuredAdvisory?.severity === 'critical' || aiState.readiness === 'critical'
+        ? 'warning-outline'
+        : structuredAdvisory?.severity === 'high' ||
+            structuredAdvisory?.severity === 'moderate' ||
+            aiState.readiness === 'elevated'
+          ? 'alert-circle-outline'
+          : 'sparkles-outline';
     const advisoryId = buildDashboardAdvisoryId(
-      dashboardCommandState.primary?.source,
+      structuredAdvisory?.suppressKey ?? dashboardCommandState.primary?.source,
       dashboardCommandState.primary?.priority?.level,
-      dashboardCommandState.primary?.title,
+      structuredAdvisory?.title ?? dashboardCommandState.primary?.title,
       advisoryText,
     );
+    const structuredPriority =
+      structuredAdvisory?.severity === 'critical'
+        ? 5
+        : structuredAdvisory?.severity === 'high'
+          ? 4
+          : structuredAdvisory?.severity === 'moderate'
+            ? 3
+            : structuredAdvisory?.severity === 'low'
+              ? 2
+              : structuredAdvisory
+                ? 1
+                : null;
     const advisoryMode =
-      dashboardCommandState.primary?.priority?.rank != null &&
-      dashboardCommandState.primary.priority.rank >= 4
+      structuredPriority != null
+        ? structuredPriority >= 4
+          ? 'alert'
+          : 'advisory'
+        : dashboardCommandState.primary?.priority?.rank != null &&
+            dashboardCommandState.primary.priority.rank >= 4
         ? 'alert'
         : 'advisory';
 
@@ -2637,12 +2320,12 @@ function DashboardScreenInner() {
         text: advisoryText,
         mode: advisoryMode,
         priority:
+          structuredPriority ??
           dashboardCommandState.primary?.priority?.rank ??
           (aiState.topSignal?.severity === 3 ? 5 : aiState.topSignal?.severity === 2 ? 3 : 2),
         icon,
         displayDuration:
-          dashboardCommandState.primary?.priority?.rank != null &&
-          dashboardCommandState.primary.priority.rank >= 4
+          advisoryMode === 'alert'
             ? 6200
             : 7000,
         interruptible: true,
@@ -2650,105 +2333,22 @@ function DashboardScreenInner() {
     ]);
   }, [aiState, dashboardCommandState, summaryLineLabel]);
 
-  // ── Auto-collapse logic with smart re-expand ──────────
-
-  useEffect(() => {
-    if (!autoCollapseEnabled) {
-      if (isCompact) setIsCompact(false);
-      return;
-    }
-
-    if (!accel.isActive) {
-      return;
-    }
-
-    const now = Date.now();
-    const rollDelta = Math.abs(accel.rollDeg - lastMotionRef.current.roll);
-    const pitchDelta = Math.abs(accel.pitchDeg - lastMotionRef.current.pitch);
-    const isMoving = rollDelta > MOTION_THRESHOLD_DEG || pitchDelta > MOTION_THRESHOLD_DEG;
-    const isSustainedMotion = rollDelta > SUSTAINED_MOTION_THRESHOLD_DEG || pitchDelta > SUSTAINED_MOTION_THRESHOLD_DEG;
-
-    if (isMoving) {
-      lastMotionRef.current = { roll: accel.rollDeg, pitch: accel.pitchDeg, time: now };
-
-      if (stationaryTimerRef.current) {
-        clearTimeout(stationaryTimerRef.current);
-        stationaryTimerRef.current = null;
-      }
-
-      if (isStationaryRef.current && isCompact) {
-        if (isSustainedMotion) {
-          if (!sustainedMotionStartRef.current) {
-            sustainedMotionStartRef.current = now;
-          } else if (now - sustainedMotionStartRef.current >= SUSTAINED_MOTION_DURATION_MS) {
-            isStationaryRef.current = false;
-            sustainedMotionStartRef.current = null;
-            setIsCompact(false);
-
-            if (!drivingOverrides.disableAnimations) {
-              setShowMovementBanner(true);
-              movementBannerAnim.stopAnimation();
-              Animated.timing(movementBannerAnim, {
-                toValue: 1, duration: MOTION.screenFadeIn, easing: EASING.decelerate, useNativeDriver: true,
-              }).start();
-
-              if (movementBannerTimer.current) clearTimeout(movementBannerTimer.current);
-              movementBannerTimer.current = setTimeout(() => {
-                Animated.timing(movementBannerAnim, {
-                  toValue: 0, duration: MOTION.screenFadeOut, easing: EASING.accelerate, useNativeDriver: true,
-                }).start(() => setShowMovementBanner(false));
-              }, MOVEMENT_BANNER_DURATION_MS);
-            }
-          }
-        } else {
-          sustainedMotionStartRef.current = null;
-        }
-      } else {
-        isStationaryRef.current = false;
-        sustainedMotionStartRef.current = null;
-      }
-    } else {
-      sustainedMotionStartRef.current = null;
-
-      if (!isStationaryRef.current && !stationaryTimerRef.current) {
-        stationaryTimerRef.current = setTimeout(() => {
-          isStationaryRef.current = true;
-          setIsCompact(true);
-          stationaryTimerRef.current = null;
-        }, STATIONARY_THRESHOLD_MS);
-      }
-    }
-  }, [accel.rollDeg, accel.pitchDeg, accel.isActive, autoCollapseEnabled, isCompact, drivingOverrides.disableAnimations, movementBannerAnim]);
-
-  // Cleanup timers
-  useEffect(() => {
-    return () => {
-      if (stationaryTimerRef.current) clearTimeout(stationaryTimerRef.current);
-      if (movementBannerTimer.current) clearTimeout(movementBannerTimer.current);
-    };
-  }, []);
-
   const closeDashboardTransientOverlays = useCallback(() => {
     setLibraryVisible(false);
     setLibraryIntent('add');
     setLibraryTargetWidgetType(null);
     setDetailVisible(false);
     setDetailSlot(null);
+    setManageVisible(false);
+    setManageSlot(null);
     setCreateWidgetVisible(false);
-    setLibraryManagerVisible(false);
-    setDashboardManagerVisible(false);
     setCollisionModalVisible(false);
     setPendingCollision(null);
-    setPresetsModalVisible(false);
   }, []);
 
-  const restoreDashboardViewState = useCallback((
-    operationalTab: OperationalDashboardTab,
-  ): PersistedDashboardViewState => {
-    const profile: DashboardProfile = operationalTab === 'expedition' ? 'expedition' : 'vehicle';
-    const nextViewState = readPersistedDashboardViewState(profile, operationalTab);
-
-    setIsCompact((current) => (current === nextViewState.compact ? current : nextViewState.compact));
+  const restoreDashboardViewState = useCallback((): PersistedDashboardViewState => {
+    const restoreProfile: DashboardProfile = 'expedition';
+    const nextViewState = readPersistedDashboardViewState(restoreProfile);
     setIsDashboardExpanded((current) => (
       current === nextViewState.expanded ? current : nextViewState.expanded
     ));
@@ -2758,34 +2358,26 @@ function DashboardScreenInner() {
 
   const syncDashboardStoreState = useCallback((
     tab: DashboardTab,
-    operationalFallback: OperationalDashboardTab = previousOperationalTab,
   ) => {
-    const operationalTab = tab === 'brief' ? operationalFallback : tab;
-    const profile: DashboardProfile = operationalTab === 'expedition' ? 'expedition' : 'vehicle';
+    const profile = dashboardProfileForTab(tab);
     const nextGridLayout = dashboardStore.getGridLayout(profile);
     const nextSlots = dashboardStore.getProfileSlots(profile);
-    const nextLastUsedPresetId = dashboardStore.getLastUsedPreset(profile);
-    const nextAutoCollapseEnabled = dashboardStore.getAutoCollapseEnabled();
     const nextAdvancedModeEnabled = dashboardStore.getAdvancedModeEnabled();
 
     setGridLayout((current) => (current === nextGridLayout ? current : nextGridLayout));
     setSlots((current) => (areDashboardSlotsEquivalent(current, nextSlots) ? current : [...nextSlots]));
-    setLastUsedPresetId((current) => (current === nextLastUsedPresetId ? current : nextLastUsedPresetId));
-    setAutoCollapseEnabled((current) => (current === nextAutoCollapseEnabled ? current : nextAutoCollapseEnabled));
     setAdvancedModeEnabled((current) => (current === nextAdvancedModeEnabled ? current : nextAdvancedModeEnabled));
-  }, [previousOperationalTab]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     const finalizeHydration = () => {
       if (cancelled) return;
-      const restoredOperationalTab = dashboardStore.getLastSelectedTab();
-      const restoredViewState = restoreDashboardViewState(restoredOperationalTab);
+      const restoredViewState = restoreDashboardViewState();
       closeDashboardTransientOverlays();
-      setPreviousOperationalTab(restoredOperationalTab);
       setActiveTab(restoredViewState.dashboardTab);
-      syncDashboardStoreState(restoredViewState.dashboardTab, restoredOperationalTab);
+      syncDashboardStoreState(restoredViewState.dashboardTab);
       setDashboardHydrated(true);
     };
 
@@ -2810,40 +2402,23 @@ function DashboardScreenInner() {
   }, [closeDashboardTransientOverlays, restoreDashboardViewState, syncDashboardStoreState]);
 
   useEffect(() => {
-    if (!dashboardHydrated) {
-      setDashboardStartupSettling(true);
-      return;
-    }
-
-    if (!isFocused) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setDashboardStartupSettling(false);
-    }, DASHBOARD_STARTUP_SETTLE_MS);
-
-    return () => clearTimeout(timer);
-  }, [dashboardHydrated, isFocused]);
-
-  useEffect(() => {
     if (!dashboardHydrated) return;
+    if (activeTab === 'expedition') return;
 
-    const nextDashboardTab: DashboardTab = activeTab === 'brief' ? 'brief' : activeOperationalTab;
+    const nextDashboardTab =
+      activeTab === 'brief' ? 'brief' : 'expedition';
     const nextPersistedState = {
       ...dashboardStore.getUIState(activeProfile),
-      compact: isCompact,
       expanded: isDashboardExpanded,
       dashboardTab: nextDashboardTab,
     };
 
     dashboardStore.saveUIState(activeProfile, nextPersistedState);
+    if (activeTab === 'widgets') dashboardStore.setLastSelectedTab('expedition');
   }, [
-    activeOperationalTab,
     activeProfile,
     activeTab,
     dashboardHydrated,
-    isCompact,
     isDashboardExpanded,
   ]);
 
@@ -2859,7 +2434,7 @@ function DashboardScreenInner() {
     if (shouldRefreshShell) {
       refreshActiveTrip();
       refreshActiveVehicleData();
-      syncDashboardStoreState(activeTab, previousOperationalTab);
+      syncDashboardStoreState(activeTab);
     }
 
     void (async () => {
@@ -2874,7 +2449,7 @@ function DashboardScreenInner() {
       ) {
         refreshActiveVehicleData();
         refreshActiveTrip();
-        syncDashboardStoreState(activeTab, previousOperationalTab);
+        syncDashboardStoreState(activeTab);
       }
 
       if (flow.message) {
@@ -2891,7 +2466,6 @@ function DashboardScreenInner() {
     activeTab,
     dashboardHydrated,
     syncDashboardStoreState,
-    previousOperationalTab,
     closeDashboardTransientOverlays,
     showToast,
   ]));
@@ -2902,8 +2476,6 @@ function DashboardScreenInner() {
       return () => {
         closeDashboardTransientOverlays();
         setLayoutMode(false);
-        setShowCollapseSettings(false);
-        setShowAdvancedPanel(false);
       };
     }, [closeDashboardTransientOverlays])
   );
@@ -2921,8 +2493,6 @@ function DashboardScreenInner() {
     // Exit layout mode on tab switch
     if (layoutMode) {
       setLayoutMode(false);
-      setShowCollapseSettings(false);
-      setShowAdvancedPanel(false);
     }
 
     // ── FIX: Separate native-driven and JS-driven animations ──
@@ -2935,23 +2505,27 @@ function DashboardScreenInner() {
     tabSlideAnim.stopAnimation();
 
     const applyTabSwitch = () => {
-      const nextOperationalTab = resolveOperationalTab(
-        newTab,
-        activeTab === 'brief' ? previousOperationalTab : activeOperationalTab,
+      const persistedViewState = readPersistedDashboardViewState(
+        dashboardProfileForTab(newTab),
       );
-      const nextViewState = readPersistedDashboardViewState(
-        getProfileForTab(newTab, nextOperationalTab),
-        nextOperationalTab,
-      );
+      const nextViewState: PersistedDashboardViewState =
+        newTab === 'brief'
+          ? {
+              ...persistedViewState,
+              dashboardTab: 'brief',
+            }
+          : newTab === 'expedition'
+            ? {
+                ...persistedViewState,
+                dashboardTab: 'expedition',
+              }
+          : {
+              ...persistedViewState,
+              dashboardTab: 'widgets',
+            };
 
-      if (newTab !== 'brief') {
-        setPreviousOperationalTab(nextOperationalTab);
-        dashboardStore.setLastSelectedTab(nextOperationalTab);
-      }
-
-      setActiveTab(newTab);
-      syncDashboardStoreState(newTab, nextOperationalTab);
-      setIsCompact((current) => (current === nextViewState.compact ? current : nextViewState.compact));
+      setActiveTab(nextViewState.dashboardTab);
+      syncDashboardStoreState(newTab);
       setIsDashboardExpanded((current) => (
         current === nextViewState.expanded ? current : nextViewState.expanded
       ));
@@ -2999,7 +2573,7 @@ function DashboardScreenInner() {
       ]).start();
     });
 
-  }, [activeOperationalTab, activeTab, layoutMode, previousOperationalTab, tabOpacityAnim, tabSlideAnim, underlineAnim, syncDashboardStoreState, closeDashboardTransientOverlays]);
+  }, [activeTab, layoutMode, tabOpacityAnim, tabSlideAnim, underlineAnim, syncDashboardStoreState, closeDashboardTransientOverlays]);
 
   // ── Keep handleTabSwitchRef in sync ───────────────────
   // The ref is used by auto-mode engine and mode switch handlers
@@ -3089,17 +2663,39 @@ function DashboardScreenInner() {
 
   const handleGridLayoutChange = useCallback((layout: GridLayout) => {
     dashboardStore.setGridLayout(activeProfile, layout);
-    setGridLayout(layout);
+    setGridLayout(dashboardStore.getGridLayout(activeProfile));
     setSlots(dashboardStore.getProfileSlots(activeProfile));
+    setWidgetContainerLayout({ width: 0, height: 0, signature: '' });
   }, [activeProfile]);
 
   const handleWidgetAssign = useCallback((type: string) => {
-    dashboardStore.assignWidget(activeProfile, libraryTargetSlot, type);
+    if (libraryIntent === 'replace' && libraryTargetWidgetType === 'attitude-command') {
+      if (type === 'navigate-surface') {
+        ecsCommandModuleStore.setSelectedModule('follow3d');
+      } else {
+        ecsCommandModuleStore.setSelectedModule('attitude');
+      }
+      setSlots(dashboardStore.getProfileSlots(activeProfile));
+      setLibraryVisible(false);
+      setLibraryIntent('add');
+      setLibraryTargetWidgetType(null);
+      setManageVisible(false);
+      setManageSlot(null);
+      return;
+    }
+
+    const assigned = dashboardStore.assignWidget(activeProfile, libraryTargetSlot, type);
+    if (!assigned) {
+      showToast('Dashboard region full. Use one 2x2 widget or two stacked 2x1 widgets.');
+      return;
+    }
     setSlots(dashboardStore.getProfileSlots(activeProfile));
     setLibraryVisible(false);
     setLibraryIntent('add');
     setLibraryTargetWidgetType(null);
-  }, [activeProfile, libraryTargetSlot]);
+    setManageVisible(false);
+    setManageSlot(null);
+  }, [activeProfile, libraryIntent, libraryTargetSlot, libraryTargetWidgetType, showToast]);
 
   const handleCustomWidgetSaved = useCallback(() => {
     setCreateWidgetVisible(false);
@@ -3129,6 +2725,28 @@ function DashboardScreenInner() {
     setDetailVisible(false);
     setLibraryVisible(true);
   }, [detailSlot]);
+
+  const handleCloseWidgetManager = useCallback(() => {
+    setManageVisible(false);
+    setManageSlot(null);
+  }, []);
+
+  const handleManagedWidgetReplace = useCallback(() => {
+    if (!manageSlot) return;
+    setLibraryIntent('replace');
+    setLibraryTargetSlot(manageSlot.slotIndex);
+    setLibraryTargetWidgetType(manageSlot.widgetType ?? null);
+    setManageVisible(false);
+    setLibraryVisible(true);
+  }, [manageSlot]);
+
+  const handleManagedWidgetRemove = useCallback(() => {
+    if (!manageSlot) return;
+    dashboardStore.removeWidget(activeProfile, manageSlot.slotIndex);
+    setSlots([...dashboardStore.getProfileSlots(activeProfile)]);
+    setManageVisible(false);
+    setManageSlot(null);
+  }, [activeProfile, manageSlot]);
 
   const handleSwapSlots = useCallback((from: number, to: number) => {
     dashboardStore.swapSlots(activeProfile, from, to);
@@ -3184,77 +2802,15 @@ function DashboardScreenInner() {
   }, []);
 
   // ── Apply Layout Preset (built-in) ─────────────────────
-  const handleApplyPreset = useCallback((presetId: string) => {
-    // Apply the preset to the store (changes grid layout + slot sizes + persists)
-    const newLayout = dashboardStore.applyPreset(activeProfile, presetId);
-
-    // Force-read the new grid layout from the store (always authoritative)
-    const freshLayout = dashboardStore.getGridLayout(activeProfile);
-    setGridLayout(freshLayout);
-
-    // Force-read the new slots from the store (always authoritative)
-    const freshSlots = dashboardStore.getProfileSlots(activeProfile);
-    setSlots([...freshSlots]);
-
-    // Update preset tracking
-    setLastUsedPresetId(presetId);
-
-    // Reset container measurements to force re-layout with new grid structure
-    setWidgetContainerHeight(0);
-    setWidgetContainerWidth(0);
-
-    // Close the modal
-    setPresetsModalVisible(false);
-  }, [activeProfile]);
-
-
   // ── Apply Custom Preset (user-saved) ──────────────────
-  const handleApplyCustomPreset = useCallback((preset: { gridLayout: string; slotSizes: any[]; id: string; name: string; icon: string; createdAt: number }) => {
-    // Apply the custom preset using the store method that handles grid layout + sizes
-    const newLayout = dashboardStore.applyCustomPreset(activeProfile, preset as any);
-
-    // Force-read the new grid layout from the store
-    const freshLayout = dashboardStore.getGridLayout(activeProfile);
-    setGridLayout(freshLayout);
-
-    // Force-read the new slots from the store
-    const freshSlots = dashboardStore.getProfileSlots(activeProfile);
-    setSlots([...freshSlots]);
-
-    // Update preset tracking
-    setLastUsedPresetId(preset.id);
-
-    // Reset container measurements to force re-layout with new grid structure
-    setWidgetContainerHeight(0);
-    setWidgetContainerWidth(0);
-
-    // Close the modal
-    setPresetsModalVisible(false);
-  }, [activeProfile]);
-
-
-
-
-
-  const handleAutoCollapseToggle = useCallback((val: boolean) => {
-    setAutoCollapseEnabled(val);
-    dashboardStore.setAutoCollapseEnabled(val);
-    if (!val && isCompact) setIsCompact(false);
-  }, [isCompact]);
-
-  const handleAdvancedModeToggle = useCallback((val: boolean) => {
-    setAdvancedModeEnabled(val);
-    dashboardStore.setAdvancedModeEnabled(val);
-  }, []);
-
   const handleRestoreDefaults = useCallback(() => {
     Alert.alert(
-      'Restore Default Layout?',
+      'Restore Defaults?',
       'This will reset the dashboard to the default 2-widget stack (Vehicle Systems + Attitude Monitor).',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Restore',
+          text: 'Restore Defaults',
           onPress: () => {
             dashboardStore.restoreDefaults(activeProfile);
             setGridLayout(dashboardStore.getGridLayout(activeProfile));
@@ -3268,8 +2824,6 @@ function DashboardScreenInner() {
 
   const handleExitLayoutMode = useCallback(() => {
     setLayoutMode(false);
-    setShowCollapseSettings(false);
-    setShowAdvancedPanel(false);
   }, []);
 
   const handleEnterCustomizeMode = useCallback(() => {
@@ -3278,9 +2832,20 @@ function DashboardScreenInner() {
 
   const handleContainerLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
-    if (height > 0) setWidgetContainerHeight(height);
-    if (width > 0) setWidgetContainerWidth(width);
-  }, []);
+    if (height <= 0 || width <= 0) return;
+
+    setWidgetContainerLayout((prev) => {
+      const sameSignature = prev.signature === dashboardLayoutSignature;
+      const sameWidth = Math.abs(prev.width - width) < 2;
+      const sameHeight = Math.abs(prev.height - height) < 2;
+      if (sameSignature && sameWidth && sameHeight) return prev;
+      return {
+        width,
+        height,
+        signature: dashboardLayoutSignature,
+      };
+    });
+  }, [dashboardLayoutSignature]);
 
 
 
@@ -3288,96 +2853,20 @@ function DashboardScreenInner() {
   const allEmpty = slots.every(s => !s.widgetType);
   const assignedWidgets = slots.map(s => s.widgetType);
 
-  // ── Widget lists for Library Manager ──────────────────
-  const expeditionAssignedWidgets = dashboardStore.getProfileSlots('expedition').map(s => s.widgetType);
-  const highwayAssignedWidgets = dashboardStore.getProfileSlots('vehicle').map(s => s.widgetType);
-
-  // ── Library Manager Handlers ──────────────────────────
-  const handleLibraryManagerWidgetAdded = useCallback((_profile: DashboardProfile, _widgetType: string) => {
-    // Refresh slots for the active tab
-    const profile: DashboardProfile = activeOperationalTab === 'expedition' ? 'expedition' : 'vehicle';
-    setSlots([...dashboardStore.getProfileSlots(profile)]);
-  }, [activeOperationalTab]);
-
-  const handleLibraryManagerLayoutReset = useCallback((_profile: DashboardProfile) => {
-    // Refresh slots and grid layout for the active tab
-    const profile: DashboardProfile = activeOperationalTab === 'expedition' ? 'expedition' : 'vehicle';
-    setGridLayout(dashboardStore.getGridLayout(profile));
-    setSlots([...dashboardStore.getProfileSlots(profile)]);
-  }, [activeOperationalTab]);
-
-  // ── Underline interpolation ───────────────────────────
-  const underlineLeft = underlineAnim.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: ['0%', '33.333%', '66.666%'],
-  });
-
-  // ── Mode Color Cue: Animated underline color ──────────
-  // Expedition (0) = ECS gold accent
-  // Highway (1) = muted navigation blue
-  // Smooth 250ms transition between colors when switching tabs
-  const underlineColor = underlineAnim.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [palette.amber, HIGHWAY_BLUE, palette.amber],
-  });
-
   // ── Mode Color Cue: Active tab accent color (non-animated) ──
   const expeditionAccent = palette.amber;
-  const highwayAccent = HIGHWAY_BLUE;
 
   const showEcsBriefMeta =
     activeTab === 'brief' &&
     !!latestMissionBriefLabel &&
     (isAIActive || dashboardCommandState.surface.visible);
-  const startupHydrating = !dashboardHydrated || dashboardStartupSettling;
-  const dashboardStartupNotice = useMemo<DashboardStartupNotice>(() => {
-    if (syncStatus === 'syncing') {
-      return {
-        kind: 'syncing',
-        label: AUTH_COPY.session.preparing,
-        message: 'Restoring the dashboard layout and holding expedition context steady while live inputs reconnect.',
-      };
-    }
-
-    if (!isOnline) {
-      return {
-        kind: 'offline',
-        label: AUTH_COPY.session.loadingSystems,
-        message: 'Building the dashboard from saved vehicle, route, and expedition context while live links remain offline.',
-      };
-    }
-
-    return {
-      kind: 'loading',
-      label: AUTH_COPY.session.loadingSystems,
-      message: 'Restoring the dashboard layout and operational context before live inputs settle.',
-    };
-  }, [isOnline, syncStatus]);
-
-  const handleExpandFromCompact = useCallback(() => {
-    setIsCompact(false);
-    isStationaryRef.current = false;
-  }, []);
+  const startupHydrating = !dashboardHydrated;
 
   const handleToggleDashboardExpanded = useCallback(() => {
     setIsDashboardExpanded((current) => !current);
   }, []);
 
-  const handleOpenDashboardManager = useCallback(() => {
-    if (!layoutMode) {
-      closeDashboardTransientOverlays();
-      setDashboardManagerVisible(true);
-    }
-  }, [layoutMode, closeDashboardTransientOverlays]);
-
-  const handleOpenLibraryManager = useCallback(() => {
-    closeDashboardTransientOverlays();
-    setLibraryManagerVisible(true);
-  }, [closeDashboardTransientOverlays]);
-
   const handleOpenPowerConnections = useCallback(() => {
-      setDashboardManagerVisible(false);
-
       try {
         router.push('/power');
     } catch {
@@ -3437,29 +2926,38 @@ function DashboardScreenInner() {
       }
     }, [closeDashboardTransientOverlays, router, showToast]);
 
+  const handleOpenCommandBrief = useCallback(() => {
+    closeDashboardTransientOverlays();
+    handleTabSwitchWithModeSync('brief');
+  }, [closeDashboardTransientOverlays, handleTabSwitchWithModeSync]);
+
   const handleRemotenessNavigateFromDetail = useCallback(
     async (target: RemotenessNavigationTargetType) => {
       const latitude = gps.position?.latitude ?? null;
       const longitude = gps.position?.longitude ?? null;
 
       if (!gps.hasFix || latitude == null || longitude == null) {
+        console.warn('[REMOTENESS_NAV] failure reason=gps_unavailable');
         showToast('Current location unavailable');
         return;
       }
 
-      const resolvedTarget = resolveRemotenessNavigationTarget({
-        type: target,
-        latitude,
-        longitude,
-      });
+      const destinationType = mapRemotenessTargetToDestinationType(target);
+      const resolvedTarget = resolveRemotenessDestination(
+        remotenessStore.getIndex(),
+        destinationType,
+        { log: true },
+      );
 
       if (!resolvedTarget) {
+        console.warn(`[REMOTENESS_NAV] failure reason=destination_unavailable type=${target}`);
         showToast(getRemotenessNavigationUnavailableMessage(target));
         return;
       }
 
       try {
-        const payload = buildRemotenessNavigationPayload(resolvedTarget);
+        ecsLog.debug('MAP', '[REMOTENESS_NAV] start', { target, label: resolvedTarget.label });
+        const payload = buildRemotenessDestinationNavigationPayload(resolvedTarget);
         closeDashboardTransientOverlays();
         await saveNavigationHandoffPayload(payload);
         await stageNavigationFlow({
@@ -3476,10 +2974,11 @@ function DashboardScreenInner() {
             remotenessTargetSource: resolvedTarget.source,
           },
         });
-        router.push('/(tabs)/navigate');
-        showToast(`Routing to ${resolvedTarget.title}`);
+        ecsLog.debug('MAP', '[REMOTENESS_NAV] route_created', { target });
+        router.push('/navigate');
+        showToast(`Routing to ${resolvedTarget.label}`);
       } catch {
-        console.warn('[dashboard] Failed remoteness navigation handoff');
+        console.warn('[REMOTENESS_NAV] failure reason=handoff_failed');
         showToast(`${getRemotenessNavigationLabel(target)} unavailable`);
       }
     },
@@ -3509,17 +3008,12 @@ function DashboardScreenInner() {
     setLibraryTargetWidgetType(null);
   }, []);
 
-  const handleWidgetPress = useCallback((slot: WidgetSlot) => {
-    if (layoutMode) return;
-
-    if (slot.widgetType === 'vehicle-twin') {
-      router.push('/vehicle-twin');
-      return;
-    }
-
-    setDetailSlot(slot);
-    setDetailVisible(true);
-  }, [layoutMode, router]);
+  const handleWidgetLongPress = useCallback((slot: WidgetSlot) => {
+    if (layoutMode || !slot.widgetType) return;
+    closeDashboardTransientOverlays();
+    setManageSlot(slot);
+    setManageVisible(true);
+  }, [closeDashboardTransientOverlays, layoutMode]);
 
   const handleEmptySlotPress = useCallback((slotIndex: number) => {
     closeDashboardTransientOverlays();
@@ -3529,19 +3023,8 @@ function DashboardScreenInner() {
     setLibraryVisible(true);
   }, [closeDashboardTransientOverlays]);
 
-  const handleOpenWidgetLibraryFromManager = useCallback(() => {
-    const emptySlot = slots.find((slot) => !slot.widgetType) ?? null;
-    const fallbackSlot = slots.find((slot) => !!slot.widgetType) ?? slots[0] ?? null;
-    const targetSlot = emptySlot?.slotIndex ?? fallbackSlot?.slotIndex ?? 0;
-    closeDashboardTransientOverlays();
-    setLibraryIntent(emptySlot ? 'add' : 'replace');
-    setLibraryTargetSlot(targetSlot);
-    setLibraryTargetWidgetType(emptySlot ? null : fallbackSlot?.widgetType ?? null);
-    setLibraryVisible(true);
-  }, [slots, closeDashboardTransientOverlays]);
-
   const dashboardPageSupportState = useMemo<DashboardPageSupportState | null>(() => {
-    if (!dashboardHydrated || dashboardStartupSettling || activeTab === 'brief' || allEmpty || layoutMode) {
+    if (!dashboardHydrated || activeTab === 'brief' || allEmpty || layoutMode) {
       return null;
     }
 
@@ -3569,7 +3052,10 @@ function DashboardScreenInner() {
     const weatherKind = dashboardWeather.snapshot.status.kind;
     const weatherRecovering = weatherKind === 'loading';
     const weatherCached = weatherKind === 'offline' || weatherKind === 'stale';
-    const weatherUnavailable = weatherKind === 'error';
+    const weatherUnavailable =
+      weatherKind === 'error' ||
+      weatherKind === 'permission-blocked' ||
+      weatherKind === 'network-blocked';
 
     const chips: string[] = [];
     const pushChip = (value: string | null | undefined) => {
@@ -3587,7 +3073,7 @@ function DashboardScreenInner() {
     else if (telemetryUnavailable) pushChip('Vehicle profile only');
     if (powerRecovering) pushChip('Power reconnecting');
     else if (powerUnavailable) pushChip('No live power feed');
-    if (weatherRecovering) pushChip('Refreshing weather');
+    if (weatherRecovering) pushChip('Weather updating');
     else if (weatherCached) pushChip('Cached weather');
     else if (weatherUnavailable) pushChip('Weather limited');
 
@@ -3609,7 +3095,7 @@ function DashboardScreenInner() {
       return {
         visible: true,
         modeLabel: 'SYNCING CONTEXT',
-        title: 'Refreshing dashboard inputs',
+        title: 'Dashboard inputs updating',
         detail: 'Vehicle, route, and weather context are updating. Widgets stay available while ECS catches up.',
         icon: 'sync-outline',
         tone: 'info',
@@ -3712,7 +3198,7 @@ function DashboardScreenInner() {
     if (telemetryUnavailable) {
       return {
         visible: true,
-        modeLabel: 'PROFILE FALLBACK',
+        modeLabel: 'PROFILE CONTEXT',
         title: ECS_STATE_COPY.dashboard.liveTelemetryUnavailable.title,
         detail: 'Vehicle-aware widgets are using the active rig profile and recent saved context until telemetry returns.',
         icon: 'speedometer-outline',
@@ -3758,7 +3244,6 @@ function DashboardScreenInner() {
     activeVehicleData,
     allEmpty,
     dashboardHydrated,
-    dashboardStartupSettling,
     bluPowerState.freshness,
     bluPowerState.hasPowerData,
     bluPowerState.isReconnecting,
@@ -3900,7 +3385,7 @@ function DashboardScreenInner() {
     if (!gps.hasFix || gps.gpsStatus === 'ACQUIRING' || gps.gpsStatus === 'RETRYING') {
       return {
         override: {
-          title: gps.gpsStatus === 'RETRYING' ? 'Refreshing Location Fix' : 'Waiting for Location',
+          title: gps.gpsStatus === 'RETRYING' ? 'Updating Location Fix' : 'Waiting for Location',
           detail: 'Dashboard detail will deepen as soon as ECS has a fresh position fix.',
           badge: 'GPS',
           icon: 'locate-outline' as const,
@@ -3995,7 +3480,7 @@ function DashboardScreenInner() {
     if (dashboardLaneLogKeyRef.current === nextKey) return;
     dashboardLaneLogKeyRef.current = nextKey;
 
-    console.log('[DashboardAdvisoryLane]', {
+    ecsLog.debug('SHELL', '[DashboardAdvisoryLane]', {
       shellMessageSource: dashboardTopLaneAdvisory.source,
       shellMessageReason: dashboardTopLaneAdvisory.reason,
       shellMessagePriority: dashboardTopLaneAdvisory.priority,
@@ -4012,7 +3497,7 @@ function DashboardScreenInner() {
       connectivityState: isOnline ? 'online' : 'offline',
       hasConfiguredVehicle: Boolean(activeVehicleData || activeVehicleContext.vehicle),
       offlineMode,
-      cloudEnhancementAvailable: !['error', 'offline', 'stale'].includes(dashboardWeather.snapshot.status.kind),
+      cloudEnhancementAvailable: !['error', 'offline', 'stale', 'permission-blocked', 'network-blocked'].includes(dashboardWeather.snapshot.status.kind),
     });
   }, [
     activeVehicleContext.vehicle,
@@ -4027,21 +3512,23 @@ function DashboardScreenInner() {
   ]);
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.bg, paddingBottom: dockPadding }]}>
-      <View style={dashboardFrameStyle}>
+    <View style={[styles.container, { backgroundColor: 'transparent', paddingBottom: dockPadding }]}>
+      {dashboardChromeVisible ? (
         <DashboardHeader
+          title="Expedition Command"
           layoutMode={layoutMode}
           onDone={handleExitLayoutMode}
           onAuthPress={() => setAuthVisible(true)}
           onExpeditionEnded={handleExpeditionEnded}
-          collapsed={isDashboardExpanded}
           commandContext={{
             expeditionPhase: aiState?.expeditionPhase ?? null,
             operationalState: aiState?.operationalState ?? null,
             liveStatus: liveStatus ?? null,
           }}
         />
+      ) : null}
 
+      <View style={dashboardFrameStyle}>
         <View
           style={[
             styles.dashboardBody,
@@ -4054,10 +3541,15 @@ function DashboardScreenInner() {
               { gap: dashboardPageRhythm.controlGap },
             ]}
           >
+      {!startupHydrating && dashboardChromeVisible ? (
+        <ECSIntelligenceReadout
+          hasRouteContext={hasDashboardRouteContext}
+          isActiveExpedition={currentExpeditionState === 'active' || Boolean(activeTrip)}
+          onOpenCommandBrief={handleOpenCommandBrief}
+        />
+      ) : null}
 
-      {!startupHydrating ? <ExpeditionIntelligenceBar override={dashboardTopLaneAdvisory.override} /> : null}
-
-      {!startupHydrating && showEcsBriefMeta ? (
+      {!startupHydrating && dashboardChromeVisible && showEcsBriefMeta ? (
         <View style={styles.ecsBriefMetaRow}>
           <Ionicons name="sparkles-outline" size={12} color={palette.amber} />
           <Text style={[styles.ecsBriefMetaText, { color: palette.textMuted }]}>
@@ -4071,15 +3563,12 @@ function DashboardScreenInner() {
         </View>
       ) : null}
 
-      {!startupHydrating ? <OfflineStateBanner expanded /> : null}
+      {!startupHydrating && dashboardChromeVisible ? <OfflineStateBanner expanded /> : null}
 
       <DashboardTabBar
         activeTab={activeTab}
         palette={palette}
         expeditionAccent={expeditionAccent}
-        highwayAccent={highwayAccent}
-        underlineLeft={underlineLeft}
-        underlineColor={underlineColor}
         autoModeEnabled={modeEngineState.autoModeEnabled}
         autoModeInCooldown={modeEngineState.inCooldown}
         autoModeManualOverride={modeEngineState.isManualOverride}
@@ -4087,60 +3576,18 @@ function DashboardScreenInner() {
         isDashboardExpanded={isDashboardExpanded}
         onSelectTab={handleTabSwitchWithModeSync}
         onToggleAutoMode={handleToggleAutoMode}
-        onOpenLibraryManager={handleOpenLibraryManager}
         onToggleDashboardExpanded={handleToggleDashboardExpanded}
       />
 
       {!startupHydrating ? (
         <>
-          <ModeSwitchBanner
-            visible={modeEngineState.switchRecommended}
-            recommendedMode={modeEngineState.recommendedMode}
-            reason={modeEngineState.recommendationReason}
-            countdown={modeEngineState.bannerCountdown}
-            onAccept={handleAcceptModeSwitch}
-            onDismiss={handleDismissModeSwitch}
-          />
-
           <DashboardCustomizeStack
             visible={layoutMode}
-            showAdvancedPanel={showAdvancedPanel}
-            showCollapseSettings={showCollapseSettings}
             gridLayout={gridLayout}
             palette={palette}
-            lastUsedPresetId={lastUsedPresetId}
-            advancedModeEnabled={advancedModeEnabled}
-            autoCollapseEnabled={autoCollapseEnabled}
-            isCompact={isCompact}
             onSelectLayout={handleGridLayoutChange}
-            onOpenPresets={() => setPresetsModalVisible(true)}
-            onToggleAdvancedPanel={() => setShowAdvancedPanel(!showAdvancedPanel)}
-            onToggleCollapsePanel={() => setShowCollapseSettings(!showCollapseSettings)}
             onRestoreDefaults={handleRestoreDefaults}
-            onAdvancedModeToggle={handleAdvancedModeToggle}
-            onAutoCollapseToggle={handleAutoCollapseToggle}
-            onExpandNow={handleExpandFromCompact}
           />
-
-          {showMovementBanner && (
-            <Animated.View style={[styles.movementBanner, { opacity: movementBannerAnim }]}>
-              <View style={styles.movementBannerDot} />
-              <Text style={styles.movementBannerText}>Vehicle Movement Detected</Text>
-            </Animated.View>
-          )}
-
-          {isCompact && !showCollapseSettings && (
-            <TouchableOpacity
-              style={[styles.compactIndicator, { backgroundColor: `${palette.amber}08` }]}
-              onPress={handleExpandFromCompact}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="contract-outline" size={10} color={palette.amber} />
-              <Text style={[styles.compactIndicatorText, { color: palette.amber }]}>
-                COMPACT MODE {'\u2014'} TAP TO EXPAND
-              </Text>
-            </TouchableOpacity>
-          )}
         </>
       ) : null}
 
@@ -4157,10 +3604,6 @@ function DashboardScreenInner() {
         layoutMode={layoutMode}
         palette={palette}
         activeTab={activeTab}
-        latestMissionBrief={latestMissionBrief}
-        briefCommandState={briefCommandState}
-        startupHydrating={startupHydrating}
-        startupNotice={dashboardStartupNotice}
         allEmpty={allEmpty}
         accel={accel}
         advancedModeEnabled={advancedModeEnabled}
@@ -4168,32 +3611,40 @@ function DashboardScreenInner() {
         gridLayout={gridLayout}
         slots={slots}
         dashboardMode={dashboardMode}
-        isCompact={isCompact}
         perWidgetAutoCollapse={perWidgetAutoCollapse}
-        widgetContainerHeight={widgetContainerHeight}
-        widgetContainerWidth={widgetContainerWidth}
+        widgetContainerHeight={effectiveWidgetContainerHeight}
+        widgetContainerWidth={effectiveWidgetContainerWidth}
+        layoutSignature={dashboardLayoutSignature}
         tabOpacityAnim={tabOpacityAnim}
         tabSlideAnim={tabSlideAnim}
-        isHighwayPrecision={isHighwayPrecision}
-        onOpenDashboardManager={handleOpenDashboardManager}
         onEnterCustomizeMode={handleEnterCustomizeMode}
-        onEnterLayoutMode={() => setLayoutMode(true)}
         onExitLayoutMode={handleExitLayoutMode}
         onEmptySlotPress={handleEmptySlotPress}
-        onWidgetPress={handleWidgetPress}
+        onWidgetLongPress={handleWidgetLongPress}
         onRemoveWidget={handleWidgetRemove}
         onSwapSlots={handleSwapSlots}
         onResizeWidget={handleResizeWidget}
         onRestoreDefaults={handleRestoreDefaults}
+        onOpenCommandBrief={handleOpenCommandBrief}
         onContainerLayout={handleContainerLayout}
         widgetData={widgetData}
         gpsLatitude={gps.position?.latitude}
         gpsLongitude={gps.position?.longitude}
         gpsSpeedMph={gps.position?.speedMph ?? null}
         gpsHasFix={gps.hasFix}
+        gpsAccuracyM={gps.position?.accuracyM ?? null}
         gpsAltitudeFt={gps.position?.altitudeFt ?? null}
+        gpsTimestampMs={gps.position?.timestamp ?? null}
         isShortHeight={isShortHeight}
         isVeryShortHeight={isVeryShortHeight}
+        expeditionHasActiveRoute={hasDashboardRouteContext}
+        expeditionTeamMemberCount={expeditionTeamMemberCount}
+        expeditionCampCount={expeditionCampCount}
+        expeditionRouteCompleted={expeditionRouteCompleted}
+        expeditionId={expeditionId}
+        expeditionRouteLabel={expeditionRouteLabel}
+        completedExpeditionRecord={completedExpeditionSummaryRecord}
+        expeditionEcsOnline={isOnline}
       />
 
       {!isDashboardExpanded ? (
@@ -4215,10 +3666,13 @@ function DashboardScreenInner() {
         libraryIntent={libraryIntent}
         libraryTargetSlot={libraryTargetSlot}
         libraryTargetWidgetType={libraryTargetWidgetType}
+        gridLayout={gridLayout}
         advancedModeEnabled={advancedModeEnabled}
         createWidgetVisible={createWidgetVisible}
         detailVisible={detailVisible}
         detailSlot={detailSlot}
+        manageVisible={manageVisible}
+        manageSlot={manageSlot}
         widgetData={widgetData}
         dashboardMode={dashboardMode}
         accel={accel}
@@ -4228,18 +3682,7 @@ function DashboardScreenInner() {
         pendingCollision={pendingCollision}
         pendingResizeWidgetName={pendingResizeWidgetName}
         pendingResizeSize={pendingResizeSize}
-        presetsModalVisible={presetsModalVisible}
-        gridLayout={gridLayout}
-        lastUsedPresetId={lastUsedPresetId}
-        slots={slots}
-        activeProfile={activeProfile}
-        showExpeditionSummary={showExpeditionSummary}
         completedExpeditionRecord={completedExpeditionRecord}
-        libraryManagerVisible={libraryManagerVisible}
-        activeTab={activeTab}
-        expeditionAssignedWidgets={expeditionAssignedWidgets}
-        highwayAssignedWidgets={highwayAssignedWidgets}
-        dashboardManagerVisible={dashboardManagerVisible}
         onSelectWidget={handleWidgetAssign}
         onCloseLibrary={handleCloseLibrary}
         onOpenCreateCustom={handleOpenCreateCustomWidget}
@@ -4248,30 +3691,17 @@ function DashboardScreenInner() {
         onCloseDetail={handleCloseWidgetDetail}
         onReplaceDetailWidget={handleDetailReplace}
         onRemoveDetailWidget={handleDetailRemove}
-        onOpenPowerConnectionsFromDetail={handleOpenPowerConnections}
-        onOpenTelemetrySetupFromDetail={handleOpenTelemetrySetup}
+        onCloseWidgetManager={handleCloseWidgetManager}
+        onReplaceManagedWidget={handleManagedWidgetReplace}
+        onChangeManagedWidgetSurface={handleManagedWidgetReplace}
+        onRemoveManagedWidget={handleManagedWidgetRemove}
         onOpenNavigateFromDetail={handleOpenNavigate}
         onOpenFleetFromDetail={handleOpenFleet}
         onRemotenessNavigateFromDetail={handleRemotenessNavigateFromDetail}
+        onOpenCommandBriefFromDetail={handleOpenCommandBrief}
         onCloseAuth={() => setAuthVisible(false)}
         onShrinkAndResize={handleShrinkAndResize}
         onCancelResize={handleCancelResize}
-        onSelectPreset={handleApplyPreset}
-        onSelectCustomPreset={handleApplyCustomPreset}
-        onClosePresets={() => setPresetsModalVisible(false)}
-        onDismissExpeditionSummary={handleDismissExpeditionSummary}
-        onCloseLibraryManager={() => setLibraryManagerVisible(false)}
-        onWidgetAddedFromManager={handleLibraryManagerWidgetAdded}
-        onLayoutResetFromManager={handleLibraryManagerLayoutReset}
-        onCloseDashboardManager={() => setDashboardManagerVisible(false)}
-        onExpeditionStartedFromManager={() => {
-          showToast('Expedition started');
-        }}
-        onExpeditionEnded={handleExpeditionEnded}
-        onOpenWidgetLibraryFromManager={handleOpenWidgetLibraryFromManager}
-        onRestoreDefaults={handleRestoreDefaults}
-        onOpenPresetsFromManager={() => setPresetsModalVisible(true)}
-        onOpenPowerConnectionsFromManager={handleOpenPowerConnections}
       />
     </View>
   );
@@ -4304,7 +3734,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
-
   // ── Tab Bar ────────────────────────────────────────────
   // Structured as: [Tabs Section (flex)] | [Controls Section (auto)]
   // This prevents the AUTO toggle from overlapping tab labels.
@@ -4321,30 +3750,28 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 
-  // ── Tabs Section — holds EXPEDITION + HIGHWAY labels + underline ──
+  // ── Tabs Section — holds Widgets, ECS Brief, and Expedition labels ──
   tabsSection: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     height: 34,
-    position: 'relative',
-    borderWidth: 1,
-    borderRadius: 11,
-    paddingHorizontal: 2,
-    overflow: 'hidden',
+    paddingHorizontal: 0,
     zIndex: 1,
   },
 
   tabBtn: {
     flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 4,
     height: 28,
-    marginVertical: 2,
+    marginVertical: 0,
     borderRadius: 9,
     borderWidth: 1,
     borderColor: 'transparent',
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
   },
   tabLabel: {
     fontSize: 9,
@@ -4357,16 +3784,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.8,
   },
 
-  // ── Underline — positioned absolutely within tabsSection ──
-  tabUnderline: {
-    position: 'absolute',
-    bottom: 1,
-    width: '33.333%',
-    height: 2,
-    borderRadius: 999,
-  },
-
-  // ── Controls Section — AUTO toggle + "+" button, right-aligned ──
+  // ── Controls Section — expand/collapse button, right-aligned ──
   tabControlsSection: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4374,20 +3792,8 @@ const styles = StyleSheet.create({
     paddingLeft: 4,
     paddingRight: 2,
     height: 34,
-    width: 70,
+    width: 34,
     justifyContent: 'flex-end',
-  },
-
-  // ── Widget Library Manager "+" Button (inside controls section) ──
-  libraryManagerBtn: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: 28,
-    height: 28,
-  },
-  libraryManagerPlaceholder: {
-    width: 28,
-    height: 28,
   },
   dashboardExpandBtn: {
     width: 28,
@@ -4408,18 +3814,30 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     alignItems: 'center',
   },
+  restoreDefaultsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  restoreDefaultsText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
 
   // gridContainer: full-width, flex fill, no width constraints
   // that could cause child grids to left-lock
   gridContainer: {
     flex: 1,
+    flexBasis: 0,
+    minHeight: 0,
     width: '100%',
     alignSelf: 'stretch',
     paddingTop: 6,
-  },
-  gridContainerHighway: {
-    paddingTop: 4,
-    overflow: 'hidden',
   },
   gridContainerTactical: {
     paddingTop: 0,
@@ -4470,132 +3888,9 @@ layoutHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizont
   },
 
   // ── Advanced Mode toggle ───────────────────────────
-  advToggle: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   // ── Advanced Mode panel ────────────────────────────
-  advPanel: {
-    marginHorizontal: 12,
-    marginBottom: 4,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  advPanelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  advPanelLabel: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  advPanelHint: {
-    fontSize: 9,
-    marginTop: 4,
-    lineHeight: 13,
-  },
-  advBadgeRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginTop: 8,
-    flexWrap: 'wrap',
-  },
-  advBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(156,136,255,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(156,136,255,0.2)',
-  },
-  advBadgeText: {
-    fontSize: 7,
-    fontWeight: '800',
-    color: '#9C88FF',
-    letterSpacing: 1,
-  },
-
-  collapseToggle: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  restoreToggle: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   // ── Presets Button ─────────────────────────────────
-  presetsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 7,
-    borderWidth: 1,
-  },
-  presetsBtnText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-
-
   // ── Auto-collapse settings ─────────────────────────
-  collapseSettings: {
-    marginHorizontal: 12,
-    marginBottom: 4,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  collapseRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  collapseLabel: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  collapseHint: {
-    fontSize: 9,
-    marginTop: 4,
-    lineHeight: 13,
-  },
-  expandBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    marginTop: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  expandBtnText: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
 
   // ── Vehicle Movement Detected Banner ───────────────
   movementBanner: {
@@ -4626,22 +3921,6 @@ layoutHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizont
   },
 
   // ── Compact mode indicator ─────────────────────────
-  compactIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    marginHorizontal: 12,
-    marginBottom: 2,
-    paddingVertical: 3,
-    borderRadius: 4,
-  },
-  compactIndicatorText: {
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-
   // ── Empty State ────────────────────────────────────
   emptyStateContainer: {
     flex: 1,
@@ -4687,35 +3966,15 @@ layoutHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizont
     letterSpacing: 2,
   },
 
-  briefTabContent: {
+  briefTabSurface: {
     flex: 1,
-    paddingHorizontal: 12,
+    minHeight: 0,
     paddingTop: 4,
-    paddingBottom: 4,
-    gap: 10,
+    paddingBottom: 0,
   },
-  briefTabCardWrap: {
-    flexShrink: 0,
-  },
-  briefTabEmptyState: {
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 18,
-    alignItems: 'center',
-    gap: 8,
-  },
-  briefTabEmptyTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-  },
-  briefTabEmptyText: {
-    fontSize: 11,
-    lineHeight: 17,
-    textAlign: 'center',
-    fontWeight: '500',
+  briefTabCommandWrap: {
+    flex: 1,
+    minHeight: 0,
   },
 
   ecsBriefMetaRow: {
@@ -4756,6 +4015,7 @@ dashboardContentStackShort: {
 
 dashboardBody: {
   flex: 1,
+  flexBasis: 0,
   minHeight: 0,
 },
 dashboardTopCluster: {
@@ -4763,112 +4023,17 @@ dashboardTopCluster: {
 },
 dashboardGridRegion: {
   flex: 1,
+  flexBasis: 0,
   minHeight: 0,
+  overflow: 'visible',
+},
+dashboardGridZoneFrame: {
+  flex: 1,
+  flexBasis: 0,
+  minHeight: 0,
+  width: '100%',
 },
 
-missionBriefContainer: {
-  paddingHorizontal: 14,
-  paddingTop: 6,
-  paddingBottom: 0,
-  flexShrink: 0,
-  zIndex: 20,
-},
-missionBriefContainerShort: {
-  paddingHorizontal: 12,
-  paddingTop: 2,
-},
-
-dashboardSurfaceWrap: {
-  paddingHorizontal: 14,
-  paddingTop: 4,
-  paddingBottom: 4,
-  flexShrink: 0,
-},
-dashboardSurfaceWrapShort: {
-  paddingHorizontal: 12,
-  paddingTop: 2,
-  paddingBottom: 4,
-},
-dashboardSurfacePanel: {
-  paddingHorizontal: 14,
-  paddingVertical: 9,
-},
-dashboardSurfaceEyebrow: {
-  marginBottom: 4,
-  fontSize: 9,
-  fontWeight: '800',
-  letterSpacing: 1.2,
-  textTransform: 'uppercase',
-},
-dashboardSurfaceHeader: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-},
-dashboardSurfaceCopy: {
-  flex: 1,
-  minWidth: 0,
-},
-dashboardSurfaceTitle: {
-  fontSize: 13,
-  fontWeight: '700',
-  letterSpacing: 0.3,
-},
-dashboardSurfaceSubtitle: {
-  marginTop: 4,
-  fontSize: 11,
-  lineHeight: 15,
-  fontWeight: '500',
-},
-dashboardSurfaceBadges: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 6,
-  flexShrink: 0,
-},
-dashboardSurfaceBadge: {
-  paddingHorizontal: 8,
-  paddingVertical: 5,
-  borderRadius: 999,
-  borderWidth: 1,
-  maxWidth: 132,
-},
-dashboardSurfaceBadgeText: {
-  fontSize: 9,
-  fontWeight: '800',
-  letterSpacing: 0.6,
-  textTransform: 'uppercase',
-},
-dashboardSurfaceSecondaryRow: {
-  marginTop: 8,
-  flexDirection: 'row',
-  flexWrap: 'wrap',
-  gap: 8,
-},
-dashboardSurfaceSecondaryPill: {
-  paddingHorizontal: 10,
-  paddingVertical: 6,
-  borderRadius: 999,
-  borderWidth: 1,
-  maxWidth: '100%',
-},
-dashboardSurfaceSecondaryText: {
-  fontSize: 10,
-  fontWeight: '600',
-},
-dashboardStartupNoticeWrap: {
-  flexShrink: 0,
-},
-dashboardStartupGrid: {
-  flex: 1,
-  minHeight: 0,
-  flexDirection: 'row',
-  gap: 10,
-},
-dashboardStartupWidget: {
-  minHeight: 168,
-},
 dashboardPageSupportWrap: {
   flexShrink: 0,
 },

@@ -10,7 +10,7 @@
  * container or loadout wizard step is needed.
  *
  * UI: Non-scrolling 2-column tile grid (fit screen)
- * 10 accessory categories, each toggleable with Installed/Planned status
+ * 8 accessory categories, each toggleable with Installed/Planned status
  * Quick presets: Minimal, Standard, Full Overland
  *
  * ICONS: Each tile uses a category-specific icon from AccessoryIcons.tsx
@@ -53,16 +53,16 @@ export interface AccessoryCategory {
 
 export const ACCESSORY_CATEGORIES: AccessoryCategory[] = [
   { id: 'cab_rack', label: 'Cab Rack', icon: 'barbell-outline', color: '#FF6B6B' },
-  { id: 'cab_rack_acc', label: 'Cab Rack Acc.', icon: 'layers-outline', color: '#FF8A5B' },
-  { id: 'bed_drawer', label: 'Bed / Drawer', icon: 'server-outline', color: '#96CEB4' },
+  { id: 'bed_drawer', label: 'Drawer Storage', icon: 'server-outline', color: '#96CEB4' },
   { id: 'roof_rack', label: 'Roof / Crossbars', icon: 'resize-outline', color: '#4FC3F7' },
   { id: 'rtt', label: 'RTT', icon: 'trail-sign-outline', color: '#C77DFF' },
   { id: 'interior_storage', label: 'Interior Storage', icon: 'file-tray-stacked-outline', color: '#4ECDC4' },
-  { id: 'fridge_slide', label: 'Fridge / Slide', icon: 'snow-outline', color: '#64DFDF' },
-  { id: 'recovery_mount', label: 'Recovery Mount', icon: 'construct-outline', color: '#AB47BC' },
+  { id: 'recovery_mount', label: 'Recovery Mount Hitch System', icon: 'construct-outline', color: '#AB47BC' },
   { id: 'water_storage', label: 'Water Storage', icon: 'water-outline', color: '#26A69A' },
   { id: 'power_system', label: 'Power / Battery', icon: 'flash-outline', color: '#FFB74D' },
 ];
+
+const ACTIVE_ACCESSORY_CATEGORY_IDS = new Set(ACCESSORY_CATEGORIES.map((category) => category.id));
 
 // ── Accessory State ─────────────────────────────────────────
 export type AccessoryStatus = 'installed' | 'planned';
@@ -102,7 +102,6 @@ const PRESETS: Preset[] = [
     categories: {
       roof_rack: { enabled: true, status: 'installed' },
       interior_storage: { enabled: true, status: 'installed' },
-      fridge_slide: { enabled: true, status: 'installed' },
       recovery_mount: { enabled: true, status: 'installed' },
       water_storage: { enabled: true, status: 'installed' },
       power_system: { enabled: true, status: 'installed' },
@@ -126,6 +125,23 @@ export function getDefaultAccessorySelections(): AccessorySelections {
     result[cat.id] = { enabled: false, status: 'installed' };
   }
   return result;
+}
+
+export function normalizeAccessorySelections(raw: unknown): AccessorySelections {
+  const normalized = getDefaultAccessorySelections();
+  if (!raw || typeof raw !== 'object') return normalized;
+
+  for (const [categoryId, state] of Object.entries(raw as Record<string, unknown>)) {
+    if (!ACTIVE_ACCESSORY_CATEGORY_IDS.has(categoryId) || !state || typeof state !== 'object') continue;
+
+    const entry = state as Partial<AccessoryState>;
+    normalized[categoryId] = {
+      enabled: Boolean(entry.enabled),
+      status: entry.status === 'planned' ? 'planned' : 'installed',
+    };
+  }
+
+  return normalized;
 }
 
 // ── Props ───────────────────────────────────────────────────

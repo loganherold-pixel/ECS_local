@@ -8,9 +8,9 @@
  * - Dark: moon-outline
  * - Light: sunny-outline
  * - Driving: car-sport-outline (steering wheel equivalent)
- * - Auto: contrast-outline (half-moon)
+ * - Dynamic: contrast-outline in mode view, green car in eye view
  */
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useRef, useCallback } from 'react';
 import {
   TouchableOpacity,
   Text,
@@ -28,6 +28,8 @@ interface ThemeToggleProps {
   onLongPress?: () => void;
   showLabel?: boolean;
   compact?: boolean;
+  cycleModes?: readonly AppearanceMode[];
+  iconMode?: 'mode' | 'eye';
 }
 
 const MODE_CONFIG: Record<AppearanceMode, {
@@ -38,15 +40,27 @@ const MODE_CONFIG: Record<AppearanceMode, {
   dark: { icon: 'moon-outline', label: 'DARK', color: '#8A8AFF' },
   light: { icon: 'sunny-outline', label: 'LIGHT', color: '#FFB800' },
   driving: { icon: 'car-sport-outline', label: 'HI-VIS', color: '#E0A030' },
-  auto: { icon: 'contrast-outline', label: 'DYNAMIC', color: '#80C0FF' },
+  dynamic: { icon: 'contrast-outline', label: 'DYNAMIC', color: '#4CAF50' },
 };
 
-export default function ThemeToggle({ size = 28, onLongPress, showLabel = false, compact = false }: ThemeToggleProps) {
+export default function ThemeToggle({
+  size = 28,
+  onLongPress,
+  showLabel = false,
+  compact = false,
+  cycleModes,
+  iconMode = 'mode',
+}: ThemeToggleProps) {
   const { appearanceMode, cycleMode, palette, isDriving, isAutoDrivingActive } = useTheme();
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const [lastMode, setLastMode] = useState<AppearanceMode>(appearanceMode);
 
   const config = MODE_CONFIG[appearanceMode];
+  const displayIcon =
+    iconMode === 'eye'
+      ? appearanceMode === 'dynamic'
+        ? 'car-sport-outline'
+        : 'eye-outline'
+      : config.icon;
 
   const handlePress = useCallback(() => {
     // Animate press
@@ -56,9 +70,8 @@ export default function ThemeToggle({ size = 28, onLongPress, showLabel = false,
       Animated.timing(scaleAnim, { toValue: 1, duration: 80, useNativeDriver: true }),
     ]).start();
 
-    const next = cycleMode();
-    setLastMode(next);
-  }, [cycleMode, scaleAnim]);
+    cycleMode(cycleModes);
+  }, [cycleMode, cycleModes, scaleAnim]);
 
   const btnSize = compact ? size - 4 : size;
   const iconSize = compact ? 13 : 15;
@@ -83,7 +96,11 @@ export default function ThemeToggle({ size = 28, onLongPress, showLabel = false,
         activeOpacity={0.7}
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
-        <Ionicons name={config.icon} size={iconSize} color={config.color} />
+        <Ionicons
+          name={displayIcon}
+          size={iconSize}
+          color={config.color}
+        />
         {isAutoDrivingActive && (
           <View style={[styles.autoDot, { backgroundColor: '#50A050' }]} />
         )}

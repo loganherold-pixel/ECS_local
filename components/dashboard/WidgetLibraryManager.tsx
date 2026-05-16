@@ -15,9 +15,11 @@ import {
   dashboardStore,
   GRID_LAYOUT_CONFIG,
   type DashboardProfile,
+  type GridLayout,
 } from '../../lib/dashboardStore';
 import {
   getDashboardLibraryWidgets,
+  getDashboardSupportedSizes,
   isDuplicate,
   type WidgetRegistryEntry,
 } from '../../lib/widgetRegistry';
@@ -26,9 +28,8 @@ import { hasPremiumEntitlement, isPremiumWidget } from '../../lib/subscriptionAc
 interface WidgetLibraryManagerProps {
   visible: boolean;
   onClose: () => void;
-  activeTab: 'expedition' | 'highway' | 'brief';
+  activeTab: 'widgets' | 'brief' | 'expedition';
   expeditionWidgets: (string | null)[];
-  highwayWidgets: (string | null)[];
   onWidgetAdded: (profile: DashboardProfile, widgetType: string) => void;
   onLayoutReset: (profile: DashboardProfile) => void;
   advancedModeEnabled?: boolean;
@@ -39,24 +40,36 @@ export default function WidgetLibraryManager({
   onClose,
   activeTab,
   expeditionWidgets,
-  highwayWidgets,
   onWidgetAdded,
   onLayoutReset,
   advancedModeEnabled = false,
 }: WidgetLibraryManagerProps) {
   const router = useRouter();
   const { operatorInfo, showToast } = useApp();
-  const expeditionLibraryWidgets = useMemo(
-    () => getDashboardLibraryWidgets(advancedModeEnabled, 'expedition'),
-    [advancedModeEnabled],
-  );
-  const highwayLibraryWidgets = useMemo(
-    () => getDashboardLibraryWidgets(advancedModeEnabled, 'highway'),
-    [advancedModeEnabled],
+  const canLayoutHostWidget = useCallback((widgetId: string, layout: GridLayout): boolean => {
+    const config = GRID_LAYOUT_CONFIG[layout];
+    return getDashboardSupportedSizes(widgetId).some((size) => {
+      if (size === '2x2') return config.cols >= 2 && config.rows >= 2;
+      if (size === '2x1') return config.cols >= 2;
+      if (size === '1x2') return config.rows >= 2;
+      return true;
+    });
+  }, []);
+  const expeditionLayout = dashboardStore.getGridLayout('expedition');
+  const slots = dashboardStore.getProfileSlots('expedition');
+  const targetSlotIndex = slots.findIndex(slot => !slot.widgetType);
+  const widgetLibraryItems = useMemo(
+    () => getDashboardLibraryWidgets(advancedModeEnabled, 'expedition')
+      .filter((entry) =>
+        targetSlotIndex >= 0 &&
+        canLayoutHostWidget(entry.widget_id, expeditionLayout) &&
+        dashboardStore.canAssignWidget('expedition', targetSlotIndex, entry.widget_id)
+      ),
+    [advancedModeEnabled, canLayoutHostWidget, expeditionLayout, targetSlotIndex],
   );
 
   const handleAddWidget = useCallback(
-    (widgetId: string, targetMode: 'expedition' | 'highway') => {
+    (widgetId: string) => {
       if (isPremiumWidget(widgetId) && !hasPremiumEntitlement(operatorInfo)) {
         onClose();
         showToast('ECS Pro is required for that widget.');
@@ -64,8 +77,8 @@ export default function WidgetLibraryManager({
         return;
       }
 
-      const profile: DashboardProfile = targetMode === 'expedition' ? 'expedition' : 'vehicle';
-      const currentWidgets = targetMode === 'expedition' ? expeditionWidgets : highwayWidgets;
+      const profile: DashboardProfile = 'expedition';
+      const currentWidgets = expeditionWidgets;
 
       if (isDuplicate(widgetId, currentWidgets)) {
         Alert.alert('Already Installed', 'That widget is already active on this dashboard.', [{ text: 'OK' }]);
@@ -80,22 +93,40 @@ export default function WidgetLibraryManager({
       if (targetSlotIndex === -1 || targetSlotIndex >= maxSlots) {
         Alert.alert(
           'Dashboard Full',
-          'All current slots are in use. Remove a widget or change layout before adding another.',
+          'This dashboard region is full or cannot host that widget size. Remove or replace a widget before adding another.',
           [{ text: 'OK' }],
         );
         return;
       }
 
-      dashboardStore.assignWidget(profile, targetSlotIndex, widgetId);
+      if (!dashboardStore.canAssignWidget(profile, targetSlotIndex, widgetId)) {
+        Alert.alert(
+          'Dashboard Region Full',
+          'This dashboard region is full or cannot host that widget size. Remove or replace a widget before adding another.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+
+      const assigned = dashboardStore.assignWidget(profile, targetSlotIndex, widgetId);
+      if (!assigned) {
+        Alert.alert(
+          'Layout Incompatible',
+          'This widget requires an available dashboard region that can host its canonical size.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+
       onWidgetAdded(profile, widgetId);
     },
-    [expeditionWidgets, highwayWidgets, onClose, onWidgetAdded, operatorInfo, router, showToast],
+    [expeditionWidgets, onClose, onWidgetAdded, operatorInfo, router, showToast],
   );
 
   const handleResetLayout = useCallback(() => {
     Alert.alert(
       'Reset Dashboard Layouts?',
-      'This restores the curated Expedition and Highway defaults and keeps the library limited to the field-ready widget set.',
+      'This restores the curated Widgets defaults and keeps the library limited to the field-ready widget set.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -103,9 +134,7 @@ export default function WidgetLibraryManager({
           style: 'destructive',
           onPress: () => {
             dashboardStore.restoreDefaults('expedition');
-            dashboardStore.restoreDefaults('vehicle');
             onLayoutReset('expedition');
-            onLayoutReset('vehicle');
             onClose();
           },
         },
@@ -121,11 +150,11 @@ export default function WidgetLibraryManager({
       icon="grid-outline"
       eyebrow="DASHBOARD SYSTEM"
       title="Widget Manager"
-      subtitle="Install curated widgets for Expedition and Highway without losing the current dashboard context."
-      overlayClass="editor"
+      subtitle="Install curated field widgets in one configurable dashboard area."
+      overlayClass="workflow"
       maxWidth={980}
-      maxHeightFraction={0.8}
-      minHeightFraction={0.72}
+      maxHeightFraction={0.94}
+      minHeightFraction={0.86}
       contentContainerStyle={styles.content}
       footer={
         <View style={styles.footer}>
@@ -134,31 +163,20 @@ export default function WidgetLibraryManager({
             <Text style={styles.resetBtnText}>Restore curated defaults</Text>
           </TouchableOpacity>
           <Text style={styles.footerHint}>
-            Active tab: {activeTab === 'brief' ? 'ECS Brief' : activeTab.toUpperCase()}
+            Active tab: {activeTab === 'brief' ? 'ECS Brief' : activeTab === 'widgets' ? 'Widgets' : 'Expedition'}
           </Text>
         </View>
       }
     >
       <SectionCard
-        title="Expedition"
-        subtitle="Trail-ready essentials and live field systems"
-        icon="compass-outline"
-        count={expeditionLibraryWidgets.length}
-        widgets={expeditionLibraryWidgets}
+        title="Widgets"
+        subtitle="Trail-ready essentials, travel conditions, and live vehicle awareness"
+        icon="apps-outline"
+        count={widgetLibraryItems.length}
+        widgets={widgetLibraryItems}
         installedWidgets={expeditionWidgets}
         accentColor={TACTICAL.amber}
-        onAdd={widgetId => handleAddWidget(widgetId, 'expedition')}
-      />
-
-      <SectionCard
-        title="Highway"
-        subtitle="Travel conditions, connection health, and rolling vehicle awareness"
-        icon="car-outline"
-        count={highwayLibraryWidgets.length}
-        widgets={highwayLibraryWidgets}
-        installedWidgets={highwayWidgets}
-        accentColor="#4FC3F7"
-        onAdd={widgetId => handleAddWidget(widgetId, 'highway')}
+        onAdd={handleAddWidget}
       />
     </TacticalPopupShell>
   );
@@ -190,8 +208,8 @@ function SectionCard({
           <Ionicons name={icon} size={14} color={accentColor} />
         </View>
         <View style={styles.sectionTitleWrap}>
-          <Text style={[styles.sectionTitle, { color: accentColor }]}>{title}</Text>
-          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+          <Text style={[styles.sectionTitle, { color: accentColor }]} numberOfLines={1}>{title}</Text>
+          <Text style={styles.sectionSubtitle} numberOfLines={2}>{subtitle}</Text>
         </View>
         <View style={styles.sectionCount}>
           <Text style={styles.sectionCountText}>{count}</Text>
@@ -220,16 +238,16 @@ function SectionCard({
 
             <View style={styles.widgetInfo}>
               <View style={styles.widgetNameRow}>
-                <Text style={[styles.widgetName, isInstalled && styles.widgetNameInstalled]}>
+                <Text style={[styles.widgetName, isInstalled && styles.widgetNameInstalled]} numberOfLines={1}>
                   {entry.display_name}
                 </Text>
                 {entry.default_size !== '1x1' ? (
                   <View style={styles.sizeBadge}>
-                    <Text style={styles.sizeBadgeText}>{entry.default_size.toUpperCase()}</Text>
+                    <Text style={styles.sizeBadgeText} numberOfLines={1}>{entry.default_size.toUpperCase()}</Text>
                   </View>
                 ) : null}
               </View>
-              <Text style={styles.widgetDesc}>{entry.description}</Text>
+              <Text style={styles.widgetDesc} numberOfLines={3}>{entry.description}</Text>
             </View>
 
             {isInstalled ? (
@@ -276,6 +294,7 @@ const styles = StyleSheet.create({
   },
   sectionTitleWrap: {
     flex: 1,
+    minWidth: 0,
   },
   sectionTitle: {
     ...TYPO.T3,
@@ -332,6 +351,7 @@ const styles = StyleSheet.create({
   widgetName: {
     ...TYPO.T3,
     color: TACTICAL.text,
+    flexShrink: 1,
   },
   widgetNameInstalled: {
     color: TACTICAL.textMuted,

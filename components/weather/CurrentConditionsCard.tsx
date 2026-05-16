@@ -33,11 +33,37 @@ function MetricBox({ icon, label, value, unit, color }: {
   );
 }
 
+function formatTemperatureValue(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${Math.round(value)}°`
+    : '—';
+}
+
+function normalizeUnixTimestampMs(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value > 10_000_000_000 ? value : value * 1000;
+}
+
+function formatSunEventTime(value: number | null | undefined): string {
+  const timestampMs = normalizeUnixTimestampMs(value);
+  if (timestampMs == null) return '—';
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function normalizePressureHpa(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(value)
+    : null;
+}
+
 export default function CurrentConditionsCard({ conditions, locationName, units = 'imperial' }: Props) {
-  const tempUnit = units === 'imperial' ? 'F' : 'C';
-  const speedUnit = units === 'imperial' ? 'mph' : 'm/s';
+  const speedUnit = 'mph';
   const weatherIcon = getWeatherIcon(conditions.weather_main, conditions.weather_id);
   const windDir = getWindDirection(conditions.wind_deg);
+  const pressureHpa = normalizePressureHpa(conditions.pressure);
 
   // Determine temperature color
   const temp = conditions.temp;
@@ -51,12 +77,8 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
     }
   }
 
-  const sunriseTime = conditions.sunrise
-    ? new Date(conditions.sunrise * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '--';
-  const sunsetTime = conditions.sunset
-    ? new Date(conditions.sunset * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '--';
+  const sunriseTime = formatSunEventTime(conditions.sunrise);
+  const sunsetTime = formatSunEventTime(conditions.sunset);
 
   return (
     <View style={styles.container}>
@@ -84,7 +106,7 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
               {temp != null ? Math.round(temp) : '--'}°
             </Text>
             <Text style={styles.tempFeelsLike}>
-              Feels {conditions.feels_like != null ? `${Math.round(conditions.feels_like)}°` : '--'}
+              Feels Like {conditions.feels_like != null ? `${Math.round(conditions.feels_like)}°` : '--°'}
             </Text>
           </View>
         </View>
@@ -93,9 +115,9 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
           <Text style={styles.weatherDesc}>{conditions.weather_description || '--'}</Text>
           <View style={styles.hiLoRow}>
             <Ionicons name="arrow-up-outline" size={10} color="#FF7043" />
-            <Text style={styles.hiLoText}>{conditions.temp_max != null ? `${Math.round(conditions.temp_max)}°` : '--'}</Text>
+            <Text style={styles.hiLoText}>{formatTemperatureValue(conditions.temp_max)}</Text>
             <Ionicons name="arrow-down-outline" size={10} color="#42A5F5" />
-            <Text style={styles.hiLoText}>{conditions.temp_min != null ? `${Math.round(conditions.temp_min)}°` : '--'}</Text>
+            <Text style={styles.hiLoText}>{formatTemperatureValue(conditions.temp_min)}</Text>
           </View>
         </View>
       </View>
@@ -103,7 +125,7 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
       {/* Metrics grid */}
       <View style={styles.metricsGrid}>
         <MetricBox
-          icon="speedometer-outline"
+          icon="reorder-three-outline"
           label="WIND"
           value={conditions.wind_speed != null ? `${Math.round(conditions.wind_speed)}` : '--'}
           unit={`${speedUnit} ${windDir}`}
@@ -121,12 +143,14 @@ export default function CurrentConditionsCard({ conditions, locationName, units 
           value={conditions.visibility != null ? `${(conditions.visibility / 1000).toFixed(1)}` : '--'}
           unit="km"
         />
-        <MetricBox
-          icon="cellular-outline"
-          label="PRESSURE"
-          value={conditions.pressure != null ? `${conditions.pressure}` : '--'}
-          unit="hPa"
-        />
+        {pressureHpa != null && (
+          <MetricBox
+            icon="pulse-outline"
+            label="PRESSURE"
+            value={`${pressureHpa}`}
+            unit="hPa"
+          />
+        )}
       </View>
 
       {/* Wind gust + sun times */}
@@ -296,6 +320,4 @@ const styles = StyleSheet.create({
     fontFamily: 'Courier',
   },
 });
-
-
 

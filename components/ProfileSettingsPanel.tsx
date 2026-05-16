@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeIcon as Ionicons } from './SafeIcon';
-import { useTheme } from '../context/ThemeContext';
+import ECSShellTexture from './ECSShellTexture';
 import type { AppearanceMode } from '../lib/appearanceStore';
 import {
   ECS_OPERATOR_TRUST_DESCRIPTORS,
@@ -20,6 +20,7 @@ import type { ECSOperatorTrustMode } from '../lib/ai/operatorTrustTypes';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import type { ECSTopBannerTone } from '../lib/ui/topBannerTypes';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
+import CommandHubIntelInserts from './intel/CommandHubIntelInserts';
 
 type ThemeChoice = 'dark' | 'light' | 'dynamic';
 
@@ -32,23 +33,17 @@ interface ProfileSettingsPanelProps {
   accessStatusLabel?: string;
   accessDetail?: string;
   accountBadgeLabel?: string;
-  accountFacts?: Array<{ label: string; value: string }>;
+  accountFacts?: { label: string; value: string }[];
   accountFootnote?: string;
-  accountActions?: Array<{
+  accountActions?: {
     id: string;
     label: string;
     detail: string;
     icon: React.ComponentProps<typeof Ionicons>['name'];
     tone?: 'default' | 'primary' | 'danger';
-  }>;
+  }[];
   accountActionBusyId?: string | null;
   onAccountAction?: (actionId: string) => void;
-  utilityLinks?: Array<{
-    id: string;
-    label: string;
-    icon: React.ComponentProps<typeof Ionicons>['name'];
-  }>;
-  onUtilityPress?: (id: string) => void;
   statusLabel: string;
   statusDetail: string;
   statusTone?: ECSTopBannerTone;
@@ -122,8 +117,6 @@ export default function ProfileSettingsPanel({
   accountActions = [],
   accountActionBusyId = null,
   onAccountAction,
-  utilityLinks = [],
-  onUtilityPress,
   statusLabel,
   statusDetail,
   statusTone = 'neutral',
@@ -145,16 +138,48 @@ export default function ProfileSettingsPanel({
   onEndAction,
 }: ProfileSettingsPanelProps) {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const { palette } = useTheme();
   const adaptive = useAdaptiveLayout();
 
   const selectedTheme = getThemeChoice(appearanceMode);
   const toneColor = getToneColor(statusTone);
   const activeTrustMode = describeOperatorTrustMode(operatorTrustMode);
+  const compactProfileActions = [
+    {
+      id: '__sync__',
+      label: syncActionLabel,
+      icon: 'sync-outline' as const,
+      tone: 'primary' as const,
+      busy: processingActive,
+      disabled: syncDisabled,
+      onPress: () => {
+        if (syncDisabled) return;
+        void onManualSync();
+      },
+    },
+    ...[...accountActions]
+      .sort((left, right) => {
+        const priority: Record<string, number> = {
+          reset_password: 0,
+          sign_out: 1,
+          sign_in: 2,
+          refresh_access: 3,
+          restore_purchases: 4,
+          manage_subscription: 5,
+          start_subscription: 6,
+        };
+        return (priority[left.id] ?? 20) - (priority[right.id] ?? 20);
+      })
+      .map((action) => ({
+        ...action,
+        busy: accountActionBusyId === action.id,
+        disabled: Boolean(accountActionBusyId),
+        onPress: () => onAccountAction?.(action.id),
+      })),
+  ];
 
   const handleThemePress = (choice: ThemeChoice) => {
     if (choice === 'dynamic') {
-      onSelectTheme('auto');
+      onSelectTheme('dynamic');
       return;
     }
     onSelectTheme(choice);
@@ -200,6 +225,7 @@ export default function ProfileSettingsPanel({
             ]}
             onPress={(event) => event.stopPropagation()}
           >
+            <ECSShellTexture />
             <View style={styles.panelCap} />
             <View
               style={[
@@ -236,13 +262,7 @@ export default function ProfileSettingsPanel({
               bounces={false}
               keyboardShouldPersistTaps="handled"
             >
-            <TouchableOpacity
-              activeOpacity={onProfilePress ? 0.72 : 1}
-              onPress={() => {
-                if (!onProfilePress) return;
-                onClose();
-                onProfilePress();
-              }}
+            <View
               style={[
                 styles.identityCard,
                 {
@@ -251,92 +271,60 @@ export default function ProfileSettingsPanel({
                 },
               ]}
             >
-              <View style={[styles.identityAvatar, { backgroundColor: PANEL.goldSoft, borderColor: PANEL.border }]}>
-                <Ionicons name="person-circle-outline" size={20} color={PANEL.gold} />
-              </View>
-              <View style={styles.identityCopy}>
-                <Text style={[styles.identityEyebrow, { color: PANEL.textDim }]}>PROFILE</Text>
-                <Text style={[styles.identityEmail, { color: PANEL.text }]} numberOfLines={2}>
-                  {userEmail || 'Not signed in'}
-                </Text>
-                <View style={styles.identityStatusRow}>
-                  <View
-                    style={[
-                      styles.identityStatusPill,
-                      {
-                        borderColor: toneColor + '35',
-                        backgroundColor: toneColor + '12',
-                      },
-                    ]}
-                  >
-                    {processingActive ? (
-                      <Ionicons name="sync-outline" size={10} color={toneColor} />
-                    ) : (
-                      <View style={[styles.identityStatusDot, { backgroundColor: toneColor }]} />
-                    )}
-                    <Text style={[styles.identityStatusText, { color: toneColor }]}>{statusLabel}</Text>
-                  </View>
-                  {accessLabel ? (
-                    <View style={[styles.accountBadge, { borderColor: PANEL.border, backgroundColor: PANEL.goldSoft }]}>
-                      <Text style={[styles.accountBadgeText, { color: PANEL.gold }]}>
-                        {accountBadgeLabel || accessLabel}
-                      </Text>
-                    </View>
-                  ) : null}
+              <TouchableOpacity
+                activeOpacity={onProfilePress ? 0.72 : 1}
+                onPress={() => {
+                  if (!onProfilePress) return;
+                  onClose();
+                  onProfilePress();
+                }}
+                style={styles.identitySummaryRow}
+              >
+                <View style={[styles.identityAvatar, { backgroundColor: PANEL.goldSoft, borderColor: PANEL.border }]}>
+                  <Ionicons name="person-circle-outline" size={20} color={PANEL.gold} />
                 </View>
-                <Text style={[styles.identityStatusDetail, { color: PANEL.textMuted }]} numberOfLines={2}>
-                  {accessDetail || statusDetail}
-                </Text>
-              </View>
-              {onProfilePress ? (
-                <Ionicons name="chevron-forward" size={14} color={PANEL.textDim} />
-              ) : null}
-            </TouchableOpacity>
-
-            {(accessStatusLabel || accountFacts.length || accountFootnote) ? (
-              <View style={styles.section}>
-                <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>ACCOUNT STATUS</Text>
-                <View
-                  style={[
-                    styles.accountCard,
-                    {
-                      backgroundColor: PANEL.surface,
-                      borderColor: PANEL.borderMuted,
-                    },
-                  ]}
-                >
-                  {accessStatusLabel ? (
-                    <Text style={[styles.sectionDescription, styles.accountLead, { color: PANEL.textMuted }]}>
-                      {accessStatusLabel}
-                    </Text>
-                  ) : null}
-                  {accountFacts.length ? (
-                    <View style={[styles.accountFacts, { borderTopColor: PANEL.borderMuted }]}>
-                      {accountFacts.map((fact) => (
-                        <View key={`${fact.label}:${fact.value}`} style={styles.accountFactRow}>
-                          <Text style={[styles.accountFactLabel, { color: PANEL.textDim }]}>{fact.label}</Text>
-                          <Text style={[styles.accountFactValue, { color: PANEL.text }]} numberOfLines={2}>
-                            {fact.value}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                </View>
-                {accountFootnote ? (
-                  <Text style={[styles.sectionDescription, { color: PANEL.textMuted }]}>
-                    {accountFootnote}
+                <View style={styles.identityCopy}>
+                  <Text style={[styles.identityEyebrow, { color: PANEL.textDim }]}>PROFILE</Text>
+                  <Text style={[styles.identityEmail, { color: PANEL.text }]} numberOfLines={2}>
+                    {userEmail || 'Not signed in'}
                   </Text>
+                  <View style={styles.identityStatusRow}>
+                    <View
+                      style={[
+                        styles.identityStatusPill,
+                        {
+                          borderColor: toneColor + '35',
+                          backgroundColor: toneColor + '12',
+                        },
+                      ]}
+                    >
+                      {processingActive ? (
+                        <Ionicons name="sync-outline" size={10} color={toneColor} />
+                      ) : (
+                        <View style={[styles.identityStatusDot, { backgroundColor: toneColor }]} />
+                      )}
+                      <Text style={[styles.identityStatusText, { color: toneColor }]}>{statusLabel}</Text>
+                    </View>
+                    {accessLabel ? (
+                      <View style={[styles.accountBadge, { borderColor: PANEL.border, backgroundColor: PANEL.goldSoft }]}>
+                        <Text style={[styles.accountBadgeText, { color: PANEL.gold }]}>
+                          {accountBadgeLabel || accessLabel}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={[styles.identityStatusDetail, { color: PANEL.textMuted }]} numberOfLines={2}>
+                    {accessDetail || statusDetail}
+                  </Text>
+                </View>
+                {onProfilePress ? (
+                  <Ionicons name="chevron-forward" size={14} color={PANEL.textDim} />
                 ) : null}
-              </View>
-            ) : null}
+              </TouchableOpacity>
 
-            {accountActions.length && onAccountAction ? (
-              <View style={styles.section}>
-                <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>ACCOUNT ACTIONS</Text>
-                <View style={styles.accountActionColumn}>
-                  {accountActions.map((action) => {
-                    const busy = accountActionBusyId === action.id;
+              {compactProfileActions.length ? (
+                <View style={styles.identityActionCluster}>
+                  {compactProfileActions.map((action) => {
                     const tint =
                       action.tone === 'danger'
                         ? PANEL.danger
@@ -347,104 +335,40 @@ export default function ProfileSettingsPanel({
                       <TouchableOpacity
                         key={action.id}
                         style={[
-                          styles.actionRow,
+                          styles.identityActionPill,
                           {
-                            backgroundColor: PANEL.surface,
-                            borderColor: PANEL.borderMuted,
-                            opacity: accountActionBusyId && !busy ? 0.62 : 1,
+                            borderColor:
+                              action.tone === 'danger'
+                                ? PANEL.danger + '28'
+                                : action.tone === 'primary'
+                                  ? PANEL.border
+                                  : PANEL.borderMuted,
+                            backgroundColor:
+                              action.tone === 'danger'
+                                ? PANEL.danger + '10'
+                                : action.tone === 'primary'
+                                  ? PANEL.goldSoft
+                                  : PANEL.bg,
+                            opacity: action.disabled ? 0.56 : 1,
                           },
                         ]}
-                        onPress={() => onAccountAction(action.id)}
-                        activeOpacity={0.72}
-                        disabled={!!accountActionBusyId && !busy}
+                        onPress={action.onPress}
+                        activeOpacity={action.disabled ? 1 : 0.72}
+                        disabled={action.disabled}
                       >
-                        <View style={styles.actionLeft}>
-                          <View
-                            style={[
-                              styles.actionIcon,
-                              {
-                                backgroundColor:
-                                  action.tone === 'danger'
-                                    ? PANEL.danger + '12'
-                                    : action.tone === 'primary'
-                                      ? PANEL.goldSoft
-                                      : PANEL.surface,
-                                borderColor:
-                                  action.tone === 'danger'
-                                    ? PANEL.danger + '25'
-                                    : action.tone === 'primary'
-                                      ? PANEL.border
-                                      : PANEL.borderMuted,
-                              },
-                            ]}
-                          >
-                            <Ionicons name={action.icon} size={14} color={tint} />
-                          </View>
-                          <View style={styles.actionCopy}>
-                            <Text style={[styles.actionTitle, { color: tint }]}>{action.label}</Text>
-                            <Text style={[styles.actionSubtitle, { color: PANEL.textMuted }]}>{action.detail}</Text>
-                          </View>
-                        </View>
-                        {busy ? (
-                          <Ionicons name="sync-outline" size={14} color={PANEL.gold} />
-                        ) : (
-                          <Ionicons name="chevron-forward" size={14} color={PANEL.textDim} />
-                        )}
+                        <Ionicons
+                          name={action.busy ? 'sync-outline' : action.icon}
+                          size={11}
+                          color={tint}
+                        />
+                        <Text style={[styles.identityActionText, { color: tint }]} numberOfLines={1}>
+                          {action.label}
+                        </Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
-              </View>
-            ) : null}
-
-            {utilityLinks.length && onUtilityPress ? (
-              <View style={styles.section}>
-                <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>SUPPORT</Text>
-                <View style={styles.accountUtilityRow}>
-                  {utilityLinks.map((link) => (
-                    <TouchableOpacity
-                      key={link.id}
-                      style={[styles.accountUtilityPill, { backgroundColor: PANEL.surface, borderColor: PANEL.borderMuted }]}
-                      onPress={() => onUtilityPress(link.id)}
-                      activeOpacity={0.72}
-                    >
-                      <Ionicons name={link.icon} size={12} color={PANEL.gold} />
-                      <Text style={[styles.accountUtilityText, { color: PANEL.textMuted }]}>{link.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            ) : null}
-
-            <View style={styles.section}>
-              <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>SYNC</Text>
-              <TouchableOpacity
-                style={[
-                  styles.actionRow,
-                  {
-                    backgroundColor: PANEL.surface,
-                    borderColor: PANEL.borderMuted,
-                    opacity: syncDisabled ? 0.5 : 1,
-                  },
-                ]}
-                onPress={() => {
-                  if (syncDisabled) return;
-                  void onManualSync();
-                }}
-                activeOpacity={syncDisabled ? 1 : 0.72}
-                disabled={syncDisabled}
-              >
-                <View style={styles.actionLeft}>
-                  <View style={[styles.actionIcon, { backgroundColor: palette.amber + '14', borderColor: PANEL.border }]}>
-                    <Ionicons name="sync-outline" size={14} color={PANEL.gold} />
-                  </View>
-                  <View style={styles.actionCopy}>
-                    <Text style={[styles.actionTitle, { color: PANEL.text }]}>{syncActionLabel}</Text>
-                    <Text style={[styles.actionSubtitle, { color: PANEL.textMuted }]}>{syncLabel}</Text>
-                  </View>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={PANEL.textDim} />
-              </TouchableOpacity>
+              ) : null}
             </View>
 
             <View style={styles.section}>
@@ -558,6 +482,11 @@ export default function ProfileSettingsPanel({
               </View>
             </View>
 
+            <View style={styles.section}>
+              <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>INTEL</Text>
+              <CommandHubIntelInserts />
+            </View>
+
             {endActionLabel && onEndAction ? (
               <View style={styles.section}>
                 <TouchableOpacity
@@ -664,15 +593,18 @@ const styles = StyleSheet.create({
     padding: 12,
     paddingTop: 8,
     paddingBottom: 10,
-    gap: 8,
+    gap: 7,
   },
   identityCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
     padding: 10,
     borderRadius: 12,
     borderWidth: 1,
+    gap: 8,
+  },
+  identitySummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   identityAvatar: {
     width: 40,
@@ -727,8 +659,30 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     marginTop: 1,
   },
-  section: {
+  identityActionCluster: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingTop: 2,
+  },
+  identityActionPill: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  identityActionText: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  section: {
+    gap: 4,
   },
   sectionLabel: {
     fontSize: 8,
@@ -741,19 +695,6 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     paddingHorizontal: 2,
   },
-  accountCard: {
-    gap: 8,
-    paddingHorizontal: 11,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  accountCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
   accountBadge: {
     paddingHorizontal: 8,
     paddingVertical: 5,
@@ -764,58 +705,6 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '800',
     letterSpacing: 1.1,
-  },
-  accountLead: {
-    marginTop: 0,
-  },
-  accountFacts: {
-    borderTopWidth: 1,
-    paddingTop: 7,
-    gap: 5,
-  },
-  accountFactRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  accountFactLabel: {
-    flex: 0.92,
-    fontSize: 8,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  accountFactValue: {
-    flex: 1.3,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '600',
-    textAlign: 'right',
-  },
-  accountActionColumn: {
-    gap: 6,
-  },
-  accountUtilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  accountUtilityPill: {
-    minHeight: 38,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  accountUtilityText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.4,
   },
   actionRow: {
     flexDirection: 'row',

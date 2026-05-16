@@ -292,7 +292,7 @@ export default function EcsDiagnosticsPanel({ visible, onClose }: EcsDiagnostics
 
   // Log when opened
   useEffect(() => {
-    if (visible) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && visible) {
       console.log('[ECS_DIAGNOSTICS] Developer diagnostics panel opened');
     }
   }, [visible]);

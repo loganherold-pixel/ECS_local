@@ -71,7 +71,13 @@ function useTerrainRiskData(): TerrainRiskAssessment {
         pitchDeg: 0,
         hasSensorData: false,
       });
-      setAssessment(result);
+      setAssessment((current) => (
+        current.riskScore === result.riskScore &&
+        current.riskLevel === result.riskLevel &&
+        current.descriptor === result.descriptor
+          ? current
+          : result
+      ));
     }, 15000);
 
     return () => clearInterval(interval);
@@ -90,7 +96,7 @@ export function TerrainRiskCompact() {
   const label = getTerrainRiskLabel(data.riskLevel);
   const forecastLabel = data.forecast?.available
     ? `Ahead ${getTerrainRiskLabel(data.forecast.peakRiskLevel)}`
-    : 'Current only';
+    : 'Default profile';
   const compactTone =
     data.riskLevel === 'high'
       ? 'critical'
@@ -150,6 +156,11 @@ export function TerrainRiskCard() {
           </Text>
         </View>
       )}
+      {!data.forecast?.available ? (
+        <Text style={ws.forecastText} numberOfLines={1}>
+          Default terrain profile; live route data unavailable
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -203,6 +214,7 @@ export function TerrainRiskDetailView() {
         <View style={ds.scoreMeta}>
           <Text style={[ds.levelLabel, { color }]}>{label}</Text>
           <Text style={ds.descriptorText}>{data.descriptor}</Text>
+          <Text style={ds.descriptorText}>Source: default terrain profile, not live sensor data</Text>
         </View>
       </View>
 

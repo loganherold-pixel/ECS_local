@@ -1,15 +1,19 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import { getActiveVehicleContext } from '../../lib/activeVehicleContext';
 import {
   useUnifiedPowerDevices,
+  normalizePowerTelemetrySummary,
   getBatteryColor,
   formatRuntime,
   formatLastUpdatedTime,
   CHARGING_STATE_CONFIG,
   WARNING_STATE_CONFIG,
+  POWER_CHARGE_IN_COLOR,
+  POWER_DRAW_OUT_COLOR,
+  POWER_SOLAR_COLOR,
   type PowerDeviceReading,
 } from './PowerSystemWidget';
 import { resolvePowerWidgetPresentation } from '../../lib/resource/resourceCommandResolvers';
@@ -20,6 +24,8 @@ import {
   WidgetDetailSectionTitle,
   WidgetDetailStateCard,
 } from './WidgetDetailChrome';
+import { usePowerIntelligence } from '../../lib/powerIntelligence';
+import { usePowerTelemetryControls } from '../../src/features/power/services/powerTelemetryService';
 
 type PowerSystemDetailData = {
   aiState?: ECSAIState | null;
@@ -33,6 +39,39 @@ function MetricRow({ label, value, color }: { label: string; value: string; colo
       <Text style={[ds.metricValue, color ? { color } : null]}>{value}</Text>
     </View>
   );
+}
+
+function powerIntelligenceTone(snapshot: ReturnType<typeof usePowerIntelligence>): 'live' | 'attention' | 'critical' | 'muted' {
+  if (snapshot.dataFreshness === 'stale' || snapshot.dataFreshness === 'offline') return 'muted';
+  if (snapshot.advisoryCategory === 'critical_reserve' || snapshot.sustainabilityRating === 'critical') return 'critical';
+  if (
+    snapshot.advisoryCategory === 'charging_recovering'
+    || snapshot.advisoryCategory === 'balanced_usage'
+    || snapshot.sustainabilityRating === 'recovering'
+    || snapshot.sustainabilityRating === 'balanced'
+  ) {
+    return 'live';
+  }
+  return 'attention';
+}
+
+function powerIntelligenceBadge(snapshot: ReturnType<typeof usePowerIntelligence>): string {
+  switch (snapshot.advisoryCategory) {
+    case 'critical_reserve':
+      return 'CRITICAL RESERVE';
+    case 'unsustainable_drain':
+      return 'UNSUSTAINABLE';
+    case 'heavy_drain':
+      return 'HEAVY DRAIN';
+    case 'charging_recovering':
+      return 'RECOVERING';
+    case 'balanced_usage':
+      return 'BALANCED';
+    case 'unstable_power_state':
+      return 'POWER STABILIZING';
+    default:
+      return 'POWER INTEL';
+  }
 }
 
 function PowerFlowBar({ label, watts, maxWatts, color, icon }: { label: string; watts: number; maxWatts: number; color: string; icon: string }) {
@@ -49,6 +88,56 @@ function PowerFlowBar({ label, watts, maxWatts, color, icon }: { label: string; 
         </View>
       </View>
       <Text style={[ds.flowValue, { color: watts > 0 ? color : TACTICAL.textMuted }]}>{watts > 0 ? `${watts} W` : '\u2014'}</Text>
+    </View>
+  );
+}
+
+function PowerRefreshControl({
+  disabled,
+  state,
+  message,
+  onRefresh,
+}: {
+  disabled: boolean;
+  state: 'idle' | 'loading' | 'success' | 'error';
+  message: string | null;
+  onRefresh: () => void;
+}) {
+  const statusText =
+    message
+    ?? (state === 'loading'
+      ? 'Refreshing provider telemetry...'
+      : state === 'success'
+        ? 'Power telemetry refreshed.'
+        : state === 'error'
+          ? 'Power refresh failed.'
+          : 'Reload available power telemetry.');
+  const toneColor =
+    state === 'success'
+      ? POWER_CHARGE_IN_COLOR
+      : state === 'error'
+        ? TACTICAL.danger
+        : state === 'loading'
+          ? TACTICAL.amber
+          : TACTICAL.textMuted;
+
+  return (
+    <View style={ds.refreshCard}>
+      <View style={ds.refreshCopy}>
+        <Text style={ds.refreshTitle}>POWER TELEMETRY</Text>
+        <Text style={[ds.refreshStatus, { color: toneColor }]}>{statusText}</Text>
+      </View>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Refresh power telemetry"
+        disabled={disabled}
+        onPress={onRefresh}
+        style={[ds.refreshButton, disabled && ds.refreshButtonDisabled]}
+      >
+        <Text style={[ds.refreshButtonText, disabled && ds.refreshButtonTextDisabled]}>
+          {state === 'loading' ? 'Refreshing' : 'Refresh'}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -118,9 +207,9 @@ function DeviceCard({ device }: { device: PowerDeviceReading }) {
 
       {(inputW > 0 || outputW > 0 || solarW > 0) && (
         <View style={ds.flowSection}>
-          {solarW > 0 && <PowerFlowBar label="SOLAR" watts={solarW} maxWatts={maxW} color="#FFB300" icon="sunny-outline" />}
-          {inputW > 0 && <PowerFlowBar label="INPUT" watts={inputW} maxWatts={maxW} color="#4FC3F7" icon="flash-outline" />}
-          {outputW > 0 && <PowerFlowBar label="OUTPUT" watts={outputW} maxWatts={maxW} color={TACTICAL.amber} icon="power-outline" />}
+          {solarW > 0 && <PowerFlowBar label="SOLAR" watts={solarW} maxWatts={maxW} color={POWER_SOLAR_COLOR} icon="sunny-outline" />}
+          {inputW > 0 && <PowerFlowBar label="INPUT" watts={inputW} maxWatts={maxW} color={POWER_CHARGE_IN_COLOR} icon="flash-outline" />}
+          {outputW > 0 && <PowerFlowBar label="OUTPUT" watts={outputW} maxWatts={maxW} color={POWER_DRAW_OUT_COLOR} icon="power-outline" />}
         </View>
       )}
 
@@ -155,6 +244,12 @@ function DeviceCard({ device }: { device: PowerDeviceReading }) {
 
 export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }) {
   const power = useUnifiedPowerDevices();
+  const summary = normalizePowerTelemetrySummary(power);
+  const livePowerIntelligence = usePowerIntelligence();
+  const { refreshTelemetry, isTelemetryPolling } = usePowerTelemetryControls();
+  const [refreshState, setRefreshState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const refreshGuardRef = useRef(0);
   const { devices, totalConnected, totalInputWatts, totalOutputWatts, totalSolarWatts, aggregatedBatteryPercent, isAnyReconnecting } = power;
   const activeVehicleContext = getActiveVehicleContext();
   const configuredBatteryWh = activeVehicleContext.resourceProfile.batteryUsableWh ?? null;
@@ -165,6 +260,10 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
     ?? devices.find((device) => device.isPrimary)
     ?? devices[0]
     ?? null;
+  const powerIntelligence =
+    primaryDevice && primaryDevice.connectionState === 'connected' && !primaryDevice.isStale
+      ? data?.aiState?.richContext?.resources?.powerIntelligence ?? livePowerIntelligence
+      : null;
   const presentation = resolvePowerWidgetPresentation({
     batteryPercent: primaryDevice?.batteryPercent ?? aggregatedBatteryPercent ?? null,
     runtimeMinutes: primaryDevice?.estimatedRuntimeMinutes ?? configuredRuntimeMinutes,
@@ -172,6 +271,7 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
     outputWatts: totalOutputWatts,
     solarWatts: totalSolarWatts,
     connectedDeviceCount: totalConnected,
+    powerIntelligence,
     providerTelemetry: data?.aiState?.richContext?.resources?.providerTelemetry ?? null,
     aiState: data?.aiState ?? null,
     dashboardView: data?.aiDashboardView ?? null,
@@ -184,6 +284,30 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
         : presentation.detail.tone === 'good'
           ? 'live'
           : 'neutral';
+  const handleRefresh = useCallback(async () => {
+    const now = Date.now();
+    if (refreshState === 'loading' || now - refreshGuardRef.current < 1500) return;
+    refreshGuardRef.current = now;
+    setRefreshState('loading');
+    setRefreshMessage(null);
+
+    try {
+      await refreshTelemetry();
+      setRefreshState('success');
+      setRefreshMessage('Power telemetry refreshed from available providers.');
+    } catch (error) {
+      setRefreshState('error');
+      setRefreshMessage(error instanceof Error ? error.message : 'Power refresh failed.');
+    }
+  }, [refreshTelemetry, refreshState]);
+  const refreshControl = (
+    <PowerRefreshControl
+      disabled={refreshState === 'loading'}
+      state={refreshState}
+      message={refreshMessage ?? (isTelemetryPolling ? 'Live provider polling active; Refresh requests latest now.' : null)}
+      onRefresh={handleRefresh}
+    />
+  );
 
   if (devices.length === 0) {
     if (hasConfiguredPowerProfile) {
@@ -194,12 +318,18 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
             title={presentation.detail.title}
             summary={presentation.detail.summary}
             tone={presentationTone}
-            metaLines={[presentation.detail.sourceLine, presentation.detail.rationaleLine]}
+            metaLines={[
+              presentation.detail.sourceLine,
+              `Source: ${summary.sourceLabel}`,
+              summary.lastUpdated ? `Last updated ${formatLastUpdatedTime(summary.lastUpdated)}` : 'No live update timestamp',
+              presentation.detail.rationaleLine,
+            ]}
           />
+          {refreshControl}
           <WidgetDetailStateCard
             title="Configured power baseline"
             message="No live power device is connected. ECS is using the saved vehicle power profile from Fleet."
-            badgeLabel="PROFILE FALLBACK"
+            badgeLabel="MANUAL PROFILE"
             tone="manual"
             icon="battery-charging-outline"
           >
@@ -232,8 +362,14 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
           title={presentation.detail.title}
           summary={presentation.detail.summary}
           tone={presentationTone}
-          metaLines={[presentation.detail.sourceLine, presentation.detail.rationaleLine]}
+          metaLines={[
+            presentation.detail.sourceLine,
+            `Source: ${summary.sourceLabel}`,
+            summary.lastUpdated ? `Last updated ${formatLastUpdatedTime(summary.lastUpdated)}` : 'No live update timestamp',
+            presentation.detail.rationaleLine,
+          ]}
         />
+        {refreshControl}
         <WidgetDetailStateCard
           title="No power systems connected"
           message="Shared power authority is not reporting a connected or last-known power source."
@@ -242,7 +378,7 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
           icon="battery-dead-outline"
         >
           <View style={ds.supportedRow}>
-            <Text style={ds.supportedLabel}>SUPPORTED PROVIDERS</Text>
+            <Text style={ds.supportedLabel}>PROVIDER PATHS</Text>
             <View style={ds.brandRow}>
               {[
                 ['EcoFlow', '#00A6FF'],
@@ -268,7 +404,7 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
 
   const aggBattColor = getBatteryColor(aggregatedBatteryPercent);
   const netW = totalInputWatts - totalOutputWatts;
-  const netColor = netW > 0 ? '#4CAF50' : netW < 0 ? '#EF5350' : TACTICAL.textMuted;
+  const netColor = netW > 0 ? POWER_CHARGE_IN_COLOR : netW < 0 ? POWER_DRAW_OUT_COLOR : TACTICAL.textMuted;
   const netLabel = netW > 0 ? `+${netW} W` : netW < 0 ? `${netW} W` : '0 W';
 
   return (
@@ -278,8 +414,118 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
         title={presentation.detail.title}
         summary={presentation.detail.summary}
         tone={presentationTone}
-        metaLines={[presentation.detail.sourceLine, presentation.detail.rationaleLine]}
+        metaLines={[
+          presentation.detail.sourceLine,
+          `Source: ${summary.sourceLabel}`,
+          summary.isStale
+            ? `Stale or last-known | Updated ${formatLastUpdatedTime(summary.lastUpdated)}`
+            : `Live/current | Updated ${formatLastUpdatedTime(summary.lastUpdated)}`,
+          presentation.detail.rationaleLine,
+        ]}
       />
+      {refreshControl}
+      {powerIntelligence?.available ? (
+        <>
+          <WidgetDetailSectionTitle>ECS POWER INTELLIGENCE</WidgetDetailSectionTitle>
+          <WidgetDetailStateCard
+            title={powerIntelligence.advisoryHeadline}
+            message={
+              powerIntelligence.advisoryDetail
+              ?? 'ECS is tracking current reserve sustainability from live power telemetry.'
+            }
+            badgeLabel={powerIntelligenceBadge(powerIntelligence)}
+            tone={powerIntelligenceTone(powerIntelligence)}
+            icon={
+              powerIntelligence.advisoryCategory === 'critical_reserve'
+                ? 'battery-dead-outline'
+                : powerIntelligence.advisoryCategory === 'charging_recovering'
+                  ? 'flash-outline'
+                  : 'analytics-outline'
+            }
+          >
+            <View style={ds.summaryMetrics}>
+              <MetricRow
+                label="NET POSTURE"
+                value={
+                  powerIntelligence.netWatts == null
+                    ? '\u2014'
+                    : powerIntelligence.netWatts > 0
+                      ? `+${Math.round(powerIntelligence.netWatts)} W`
+                      : `${Math.round(powerIntelligence.netWatts)} W`
+                }
+                color={
+                  powerIntelligence.netWatts == null
+                    ? TACTICAL.textMuted
+                    : powerIntelligence.netWatts > 0
+                      ? POWER_CHARGE_IN_COLOR
+                      : powerIntelligence.netWatts < 0
+                        ? POWER_DRAW_OUT_COLOR
+                        : TACTICAL.text
+                }
+              />
+              <MetricRow
+                label="RUNTIME"
+                value={
+                  powerIntelligence.runtimeHoursRemaining != null
+                    ? `${powerIntelligence.runtimeHoursRemaining.toFixed(1)} h`
+                    : '\u2014'
+                }
+                color={
+                  powerIntelligence.runtimeHoursRemaining != null && powerIntelligence.runtimeHoursRemaining <= 2
+                    ? TACTICAL.danger
+                    : powerIntelligence.runtimeHoursRemaining != null && powerIntelligence.runtimeHoursRemaining <= 6
+                      ? POWER_SOLAR_COLOR
+                      : POWER_CHARGE_IN_COLOR
+                }
+              />
+              <MetricRow
+                label="SOLAR OFFSET"
+                value={
+                  powerIntelligence.solarOffsetRatio != null
+                    ? `${Math.round(powerIntelligence.solarOffsetRatio * 100)}%`
+                    : '\u2014'
+                }
+                color={
+                  powerIntelligence.solarOffsetRatio != null && powerIntelligence.solarOffsetRatio >= 0.75
+                    ? POWER_CHARGE_IN_COLOR
+                    : powerIntelligence.solarOffsetRatio != null && powerIntelligence.solarOffsetRatio >= 0.35
+                      ? POWER_SOLAR_COLOR
+                      : TACTICAL.textMuted
+                }
+              />
+              <MetricRow
+                label="DEPLETION"
+                value={formatLastUpdatedTime(powerIntelligence.projectedDepletionAt)}
+                color={
+                  powerIntelligence.projectedDepletionAt != null
+                    ? TACTICAL.danger
+                    : TACTICAL.textMuted
+                }
+              />
+              <MetricRow
+                label="20% THRESHOLD"
+                value={formatLastUpdatedTime(powerIntelligence.projectedThreshold20At)}
+                color={
+                  powerIntelligence.projectedThreshold20At != null
+                    ? POWER_SOLAR_COLOR
+                    : TACTICAL.textMuted
+                }
+              />
+              <MetricRow
+                label="CONFIDENCE"
+                value={powerIntelligence.confidenceLevel.toUpperCase()}
+                color={
+                  powerIntelligence.confidenceLevel === 'high'
+                    ? POWER_CHARGE_IN_COLOR
+                    : powerIntelligence.confidenceLevel === 'medium'
+                      ? POWER_SOLAR_COLOR
+                      : TACTICAL.textMuted
+                }
+              />
+            </View>
+          </WidgetDetailStateCard>
+        </>
+      ) : null}
       <WidgetDetailSectionTitle>SYSTEM SUMMARY</WidgetDetailSectionTitle>
       <View style={ds.summaryCard}>
         <View style={ds.summaryRow}>
@@ -304,13 +550,19 @@ export function PowerSystemDetailView({ data }: { data?: PowerSystemDetailData }
           </View>
         )}
         <View style={ds.summaryMetrics}>
-          <MetricRow label="INPUT" value={totalInputWatts > 0 ? `${totalInputWatts} W` : '\u2014'} color="#4FC3F7" />
-          <MetricRow label="OUTPUT" value={totalOutputWatts > 0 ? `${totalOutputWatts} W` : '\u2014'} color={TACTICAL.amber} />
-          <MetricRow label="SOLAR" value={totalSolarWatts > 0 ? `${totalSolarWatts} W` : '\u2014'} color="#FFB300" />
+          <MetricRow label="INPUT" value={totalInputWatts > 0 ? `${totalInputWatts} W` : '\u2014'} color={POWER_CHARGE_IN_COLOR} />
+          <MetricRow label="OUTPUT" value={totalOutputWatts > 0 ? `${totalOutputWatts} W` : '\u2014'} color={POWER_DRAW_OUT_COLOR} />
+          <MetricRow label="SOLAR" value={totalSolarWatts > 0 ? `${totalSolarWatts} W` : '\u2014'} color={POWER_SOLAR_COLOR} />
+          <MetricRow label="SOURCE" value={summary.sourceLabel} color={summary.isStale ? POWER_SOLAR_COLOR : TACTICAL.text} />
+          <MetricRow
+            label="STATUS"
+            value={summary.isLive ? 'LIVE' : summary.truth.isStale ? 'STALE — RECONNECT' : summary.sourceLabel === 'Last known' ? 'LAST KNOWN' : 'UNAVAILABLE'}
+            color={summary.isLive ? POWER_CHARGE_IN_COLOR : summary.isStale ? POWER_SOLAR_COLOR : TACTICAL.textMuted}
+          />
         </View>
         {isAnyReconnecting && (
           <View style={ds.reconnectingRow}>
-            <Ionicons name="sync-outline" size={10} color="#FFB300" />
+            <Ionicons name="sync-outline" size={10} color={POWER_SOLAR_COLOR} />
             <Text style={ds.reconnectingText}>Partial provider state while telemetry reconnects</Text>
           </View>
         )}
@@ -326,6 +578,58 @@ export default PowerSystemDetailView;
 
 const ds = StyleSheet.create({
   container: { gap: 10 },
+  refreshCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  refreshCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  refreshTitle: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+  },
+  refreshStatus: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    lineHeight: 13,
+  },
+  refreshButton: {
+    minHeight: 32,
+    minWidth: 84,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '55',
+    backgroundColor: TACTICAL.amber + '14',
+    paddingHorizontal: 12,
+  },
+  refreshButtonDisabled: {
+    opacity: 0.55,
+  },
+  refreshButtonText: {
+    color: TACTICAL.amber,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  refreshButtonTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
   commandBanner: { gap: 4, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(79,195,247,0.18)', backgroundColor: 'rgba(79,195,247,0.05)' },
   commandBannerWatch: { borderColor: 'rgba(255,179,0,0.28)', backgroundColor: 'rgba(255,179,0,0.06)' },
   commandBannerCritical: { borderColor: 'rgba(239,83,80,0.32)', backgroundColor: 'rgba(239,83,80,0.08)' },
