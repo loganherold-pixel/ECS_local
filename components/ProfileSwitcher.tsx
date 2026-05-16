@@ -43,12 +43,12 @@ const NAV_ITEMS: {
   route: string;
   description: string;
 }[] = [
-  { key: 'fleet', label: 'FLEET', icon: 'car-outline', route: '/(tabs)/fleet', description: 'Vehicle & loadout management' },
-  { key: 'trips', label: 'TRIPS', icon: 'map-outline', route: '/(tabs)/trips', description: 'Trip planning' },
+  { key: 'fleet', label: 'FLEET', icon: 'car-outline', route: '/fleet', description: 'Vehicle & loadout management' },
+  { key: 'trips', label: 'TRIPS', icon: 'map-outline', route: '/trips', description: 'Trip planning' },
 
-  { key: 'loadmap', label: 'LOAD MAP', icon: 'grid-outline', route: '/(tabs)/loadmap', description: 'Slot mapping' },
-  { key: 'route', label: 'ROUTE', icon: 'navigate-outline', route: '/(tabs)/route', description: 'Route tracking' },
-  { key: 'more', label: 'COMMAND OPS', icon: 'settings-outline', route: '/(tabs)/more', description: 'Risk, logs, settings' },
+  { key: 'loadmap', label: 'LOAD MAP', icon: 'grid-outline', route: '/loadmap', description: 'Slot mapping' },
+  { key: 'route', label: 'ROUTE', icon: 'navigate-outline', route: '/route', description: 'Route tracking' },
+  { key: 'more', label: 'COMMAND OPS', icon: 'settings-outline', route: '/more', description: 'Risk, logs, settings' },
 ];
 
 
@@ -80,7 +80,7 @@ export default function ProfileSwitcher({ visible, onClose }: ProfileSwitcherPro
     dashboardStore.setActiveProfile(profile);
     onClose();
     setTimeout(() => {
-      router.push('/(tabs)/dashboard');
+      router.push('/dashboard');
     }, 80);
   };
 

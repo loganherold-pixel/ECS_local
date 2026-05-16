@@ -51,6 +51,12 @@ import LoadTemplateModal from '../templates/LoadTemplateModal';
 
 const TAG = '[EXPEDITION_BUILDER]';
 
+function logExpeditionBuilderDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
+
 // ── Step definitions ─────────────────────────────────────────
 interface BuilderStep {
   key: string;
@@ -96,7 +102,7 @@ const BUILDER_STEPS: BuilderStep[] = [
     sublabel: 'Configure loadout via Fleet tab, then SET TO READY',
     icon: 'cube-outline',
     completedIcon: 'cube',
-    route: '/(tabs)/fleet',
+    route: '/fleet',
     checkField: 'loadoutReady',
   },
 
@@ -293,11 +299,11 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
           const vehicleId = currentState.vehicleId;
 
           if (!vehicleId) {
-            console.log(TAG, 'No vehicleId in builder state — skipping zone detection');
+            logExpeditionBuilderDev(TAG, 'No vehicleId in builder state — skipping zone detection');
             return;
           }
 
-          console.log(TAG, `Focus detected — checking zones for vehicle ${vehicleId}`);
+          logExpeditionBuilderDev(TAG, `Focus detected — checking zones for vehicle ${vehicleId}`);
 
           // ── Step 3: Zone detection ────────────────────────
           let cachedZones = getCachedVehicleZones(vehicleId);
@@ -320,7 +326,7 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
                 }));
 
                 setCachedVehicleZones(vehicleId, zonesFromFetch);
-                console.log(TAG, `Cached ${zonesFromFetch.length} zones from fetch for vehicle ${vehicleId}`);
+                logExpeditionBuilderDev(TAG, `Cached ${zonesFromFetch.length} zones from fetch for vehicle ${vehicleId}`);
               }
             } catch (fetchErr) {
               console.warn(TAG, 'Zone fetch failed (may be offline):', fetchErr);
@@ -343,7 +349,7 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
                 lastUpdated: new Date().toISOString(),
               }));
             }
-            console.log(TAG, `Step 3 auto-completed: ${resolvedZones.length} zones detected`);
+            logExpeditionBuilderDev(TAG, `Step 3 auto-completed: ${resolvedZones.length} zones detected`);
           }
 
           // ── Count loadout items for template save eligibility ──
@@ -427,19 +433,19 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
   const canSaveTemplate = isAllComplete && loadoutItemCount > 0;
 
   const handleStepPress = useCallback((step: BuilderStep, index: number) => {
-    console.log(TAG, `Step pressed: ${step.key} (index ${index})`);
+    logExpeditionBuilderDev(TAG, `Step pressed: ${step.key} (index ${index})`);
 
     // Bug A fix: If framework step is already complete, route to Fleet tab for loadout configuration
     if (step.key === 'framework' && builderState.frameworkConfigured === true) {
-      console.log(TAG, 'Framework already configured — routing to Fleet tab for loadout configuration');
-      router.push('/(tabs)/fleet' as any);
+      logExpeditionBuilderDev(TAG, 'Framework already configured — routing to Fleet tab for loadout configuration');
+      router.push('/fleet' as any);
       return;
     }
 
 
     // Framework step (not yet complete) → route to vehicle-config Step 3 with vehicleId
     if (step.key === 'framework' && builderState.vehicleId) {
-      console.log(TAG, `Framework step → routing to vehicle-config Step 3 for vehicle ${builderState.vehicleId}`);
+      logExpeditionBuilderDev(TAG, `Framework step → routing to vehicle-config Step 3 for vehicle ${builderState.vehicleId}`);
       router.push({
         pathname: '/(tabs)/vehicle-config',
         params: { vehicleId: builderState.vehicleId, startAtStep: 'accessoryConfiguration', referrer: 'expeditions' },
@@ -792,7 +798,7 @@ export default function ExpeditionBuilder({ userId, isOnline, activeExpeditionTi
         onClose={() => setShowSaveTemplate(false)}
         userId={userId}
         onSaved={(templateId) => {
-          console.log(TAG, `Template saved: ${templateId}`);
+          logExpeditionBuilderDev(TAG, `Template saved: ${templateId}`);
           setTemplateSaved(true);
           setTimeout(() => {
             if (mountedRef.current) setTemplateSaved(false);

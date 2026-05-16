@@ -1,8 +1,9 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus, Animated, Easing, Image, Platform, StyleSheet, View } from 'react-native';
-import { ResizeMode, Video } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 
 import { useReducedMotion } from '../../lib/ecsAnimations';
+import { ecsLog } from '../../lib/ecsLogger';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
@@ -12,21 +13,61 @@ function LoginHeroBackground() {
   const videoReadyOpacity = useRef(new Animated.Value(0)).current;
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
-  const videoRef = useRef<Video | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-  const readyLoggedRef = useRef(false);
   const failureLoggedRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const player = useVideoPlayer(LOGIN_VIDEO, (instance) => {
+    instance.loop = true;
+    instance.muted = true;
+    instance.play();
+  });
+
+  const markVideoFailed = useCallback((error?: unknown) => {
+    if (!isMountedRef.current || failureLoggedRef.current) return;
+    failureLoggedRef.current = true;
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'Unknown video error';
+    ecsLog.warn('SYSTEM', '[AuthMedia] Login background video failed', {
+      error: message,
+    });
+    setVideoFailed(true);
+  }, []);
+
+  const safePlayerAction = useCallback(
+    (action: 'play' | 'pause') => {
+      if (!isMountedRef.current) return;
+      try {
+        player[action]();
+      } catch (error) {
+        markVideoFailed(error);
+      }
+    },
+    [markVideoFailed, player],
+  );
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      try {
+        player.pause();
+      } catch {}
+    };
+  }, [player]);
 
   useEffect(() => {
     if (videoFailed || !videoReady) {
-      void videoRef.current?.pauseAsync().catch(() => {});
+      safePlayerAction('pause');
       return;
     }
 
-    void videoRef.current?.playAsync().catch(() => {
-      setVideoFailed(true);
-    });
-  }, [videoFailed, videoReady]);
+    safePlayerAction('play');
+  }, [safePlayerAction, videoFailed, videoReady]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -38,18 +79,27 @@ function LoginHeroBackground() {
       }
 
       if (nextState === 'active') {
-        void videoRef.current?.playAsync().catch(() => {
-          setVideoFailed(true);
-        });
+        safePlayerAction('play');
       } else if (wasActive) {
-        void videoRef.current?.pauseAsync().catch(() => {});
+        safePlayerAction('pause');
       }
     });
 
     return () => {
       subscription.remove();
     };
-  }, [videoFailed, videoReady]);
+  }, [safePlayerAction, videoFailed, videoReady]);
+
+  useEffect(() => {
+    const statusSubscription = player.addListener('statusChange', ({ error }) => {
+      if (!error) return;
+      markVideoFailed(error.message ?? 'Unknown video error');
+    });
+
+    return () => {
+      statusSubscription.remove();
+    };
+  }, [markVideoFailed, player]);
 
   useEffect(() => {
     if (videoFailed) {
@@ -76,11 +126,6 @@ function LoginHeroBackground() {
     }).start();
   }, [reducedMotion, videoFailed, videoReady, videoReadyOpacity]);
 
-  useEffect(() => {
-    if (!videoReady || videoFailed) return;
-    console.log('[AuthMedia] Login background video active');
-  }, [videoFailed, videoReady]);
-
   const shouldShowFallback = videoFailed;
 
   return (
@@ -91,58 +136,15 @@ function LoginHeroBackground() {
 
       {!videoFailed ? (
         <Animated.View pointerEvents="none" style={[styles.videoLayer, { opacity: videoReadyOpacity }]}>
-          <Video
-            ref={videoRef}
-            source={LOGIN_VIDEO}
+          <VideoView
+            player={player}
             style={styles.video}
-            resizeMode={ResizeMode.COVER}
-            shouldPlay
-            isLooping
-            isMuted={true}
-            useNativeControls={false}
-            onLoad={() => {
-              setVideoReady(true);
-              if (!readyLoggedRef.current) {
-                readyLoggedRef.current = true;
-                console.log('[AuthMedia] Login background video loaded');
+            contentFit="cover"
+            nativeControls={false}
+            onFirstFrameRender={() => {
+              if (isMountedRef.current) {
+                setVideoReady(true);
               }
-            }}
-            onReadyForDisplay={() => {
-              setVideoReady(true);
-              if (!readyLoggedRef.current) {
-                readyLoggedRef.current = true;
-                console.log('[AuthMedia] Login background video ready');
-              }
-            }}
-            onPlaybackStatusUpdate={(status) => {
-              if (!status.isLoaded) {
-                if (!status.error || failureLoggedRef.current) {
-                  return;
-                }
-                failureLoggedRef.current = true;
-                console.warn('[AuthMedia] Login background video failed', {
-                  status: 'error',
-                  error: status.error ?? null,
-                });
-                setVideoFailed(true);
-                return;
-              }
-
-              if (status.isLoaded && status.didJustFinish) {
-                void videoRef.current?.replayAsync().catch(() => {
-                  setVideoFailed(true);
-                });
-              }
-            }}
-            onError={(error) => {
-              if (!failureLoggedRef.current) {
-                failureLoggedRef.current = true;
-                console.warn('[AuthMedia] Login background video failed', {
-                  status: 'error',
-                  error,
-                });
-              }
-              setVideoFailed(true);
             }}
           />
           <View pointerEvents="none" style={styles.videoDimmer} />
@@ -153,7 +155,6 @@ function LoginHeroBackground() {
       <View pointerEvents="none" style={styles.bottomGradient} />
       <View pointerEvents="none" style={styles.goldWash} />
       {Platform.OS === 'android' ? <View pointerEvents="none" style={styles.androidContrast} /> : null}
-
     </View>
   );
 }

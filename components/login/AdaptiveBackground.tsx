@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useMemo, useRef } from 'react';
-import { Animated, Dimensions, StyleSheet, View } from 'react-native';
+import { Animated, Dimensions, StyleSheet, View, type DimensionValue } from 'react-native';
 import { useReducedMotion } from '../../lib/ecsAnimations';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -22,6 +22,13 @@ interface TimeTheme {
   warmGlowOpacity: number;
   warmGlowColor: string;
 }
+
+type PercentDimension = `${number}%`;
+type PositionedLine = {
+  top: PercentDimension;
+  left: PercentDimension;
+  width: PercentDimension;
+};
 
 const THEMES: Record<TimePeriod, TimeTheme> = {
   night: {
@@ -58,13 +65,13 @@ const THEMES: Record<TimePeriod, TimeTheme> = {
   },
 };
 
-const GRID_LINES = Array.from({ length: 9 }).map((_, index) => ({
+const GRID_LINES: PositionedLine[] = Array.from({ length: 9 }).map((_, index) => ({
   top: `${10 + index * 10}%`,
   left: `${-4 + (index % 2) * 2}%`,
   width: `${108 - (index % 3) * 8}%`,
 }));
 
-const CONTOUR_LINES = Array.from({ length: 11 }).map((_, index) => ({
+const CONTOUR_LINES: (PositionedLine & { rotate: `${number}deg` })[] = Array.from({ length: 11 }).map((_, index) => ({
   top: `${8 + index * 8}%`,
   left: `${4 + (index % 4) * 5}%`,
   width: `${62 + (index % 5) * 7}%`,
@@ -167,7 +174,7 @@ function AdaptiveBackground({ children }: Props) {
               {
                 top: line.top,
                 left: line.left,
-                width: line.width,
+                width: line.width as DimensionValue,
               },
             ]}
           />
@@ -192,7 +199,7 @@ function AdaptiveBackground({ children }: Props) {
               {
                 top: line.top,
                 left: line.left,
-                width: line.width,
+                width: line.width as DimensionValue,
                 opacity: theme.contourOpacity - (index % 4) * 0.01,
                 transform: [{ rotate: line.rotate }],
               },

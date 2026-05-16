@@ -271,7 +271,7 @@ function SetupScreenInner() {
       return;
     }
     // Navigate to Fleet tab where the user can use the LOADOUT button on their vehicle card
-    router.push('/(tabs)/fleet' as any);
+    router.push('/fleet' as any);
   }, [activeVehicleId, router]);
 
 

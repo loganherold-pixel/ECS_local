@@ -30,7 +30,7 @@ interface AppearanceSettingsModalProps {
 }
 
 const MODES: { key: AppearanceMode; label: string; desc: string; icon: keyof typeof Ionicons.glyphMap; color: string }[] = [
-  { key: 'auto', label: 'Dynamic', desc: 'Adaptive app surfaces', icon: 'contrast-outline', color: '#80C0FF' },
+  { key: 'dynamic', label: 'Dynamic', desc: 'Adaptive visibility from live device context', icon: 'contrast-outline', color: '#80C0FF' },
   { key: 'dark', label: 'Dark', desc: 'Night / low-light', icon: 'moon-outline', color: '#8A8AFF' },
   { key: 'light', label: 'Light', desc: 'Daylight readability', icon: 'sunny-outline', color: '#FFB800' },
   { key: 'driving', label: 'Driving (Hi-Vis)', desc: 'Max contrast, solid surfaces', icon: 'car-sport-outline', color: '#E0A030' },

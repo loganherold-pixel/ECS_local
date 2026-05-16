@@ -46,6 +46,12 @@ import LatestMomentBanner from '../components/narrative/LatestMomentBanner';
 
 import { narrativeEngine } from '../lib/narrativeEngine';
 
+function logExpeditionCommandDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
+
 
 
 
@@ -225,7 +231,7 @@ export default function ExpeditionCommandScreen() {
         await expeditionStore.update(expeditionId, {
           meta: { ...existingMeta, completion_summary: summary },
         } as any);
-        console.log('[ExpeditionCommand] Completion summary persisted to meta');
+        logExpeditionCommandDev('[ExpeditionCommand] Completion summary persisted to meta');
       } catch (err) {
         console.warn('[ExpeditionCommand] Failed to persist completion summary:', err);
       }
@@ -234,7 +240,7 @@ export default function ExpeditionCommandScreen() {
     completionLogIdRef.current = null;
     previousStartAtRef.current = null;
     completionSummaryRef.current = null;
-    router.replace('/(tabs)/fleet' as any);
+    router.replace('/fleet' as any);
 
   }, [router, expeditionId, expedition]);
 
@@ -304,7 +310,7 @@ export default function ExpeditionCommandScreen() {
 
   // ── Open the confirmation modal (replaces Alert.alert) ──
   const handleCompleteExpedition = useCallback(() => {
-    console.log('[ExpeditionCommand] handleCompleteExpedition called');
+    logExpeditionCommandDev('[ExpeditionCommand] handleCompleteExpedition called');
 
     // ── Protective validation: no silent returns ─────────
     // 1. Validate mission exists
@@ -347,7 +353,7 @@ export default function ExpeditionCommandScreen() {
     }
 
     // 6. Open the in-app confirmation modal
-    console.log('[ExpeditionCommand] Opening confirmation modal');
+    logExpeditionCommandDev('[ExpeditionCommand] Opening confirmation modal');
     setConfirmModalVisible(true);
   }, [expedition, user, completing, undoVisible, showToast, showErrorModal]);
 
@@ -362,7 +368,7 @@ export default function ExpeditionCommandScreen() {
     }
 
     if (mountedRef.current) setCompleting(true);
-    console.log('[ExpeditionCommand] executeCompletion: starting completion flow');
+    logExpeditionCommandDev('[ExpeditionCommand] executeCompletion: starting completion flow');
 
     const title = expedition.title || 'this expedition';
     const doneCount = checklist.filter(i => i.is_done).length;
@@ -399,7 +405,7 @@ export default function ExpeditionCommandScreen() {
 
       // 4. Complete the expedition (sets status='completed', end_at=now — persists to Supabase)
       const completeResult = await expeditionStore.complete(expedition.id);
-      console.log('[ExpeditionCommand] expeditionStore.complete result:', completeResult);
+      logExpeditionCommandDev('[ExpeditionCommand] expeditionStore.complete result:', completeResult);
 
       if (!mountedRef.current) return;
 
@@ -415,11 +421,11 @@ export default function ExpeditionCommandScreen() {
       try {
         if (narrativeEngine.isRunning()) {
           narrativeEngine.stop(); // stop() calls syncUnsyncedEvents() internally
-          console.log('[ExpeditionCommand] Narrative engine stopped');
+          logExpeditionCommandDev('[ExpeditionCommand] Narrative engine stopped');
         }
         // Force a final sync of any remaining narrative events
         await narrativeEngine.syncNow();
-        console.log('[ExpeditionCommand] Narrative events synced');
+        logExpeditionCommandDev('[ExpeditionCommand] Narrative events synced');
       } catch (narrativeErr) {
         console.warn('[ExpeditionCommand] Narrative engine cleanup error (non-blocking):', narrativeErr);
       }
@@ -438,7 +444,7 @@ export default function ExpeditionCommandScreen() {
         waypoints,
       );
       completionSummaryRef.current = summary;
-      console.log('[ExpeditionCommand] Completion summary generated');
+      logExpeditionCommandDev('[ExpeditionCommand] Completion summary generated');
 
       // 8. Show success toast
       showToast('EXPEDITION COMPLETED');
@@ -460,7 +466,7 @@ export default function ExpeditionCommandScreen() {
         handleUndoExpire();
       }, 5000);
 
-      console.log('[ExpeditionCommand] Completion flow finished — undo window active');
+      logExpeditionCommandDev('[ExpeditionCommand] Completion flow finished — undo window active');
 
     } catch (err: any) {
       console.error('[ExpeditionCommand] executeCompletion error:', err);
