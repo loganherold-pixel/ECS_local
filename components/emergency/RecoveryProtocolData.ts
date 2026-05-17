@@ -10,10 +10,10 @@ export type RecoveryProtocol = ProtocolDefinition & {
   image: ImageSourcePropType;
   fieldUtilityImage: ImageSourcePropType;
   beforeYouPull: string[];
-  stepCards: Array<{
+  stepCards: {
     title: string;
     instruction: string;
-  }>;
+  }[];
   doNot: string[];
   equipment: string[];
   steps: string[];
