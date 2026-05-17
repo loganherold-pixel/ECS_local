@@ -112,6 +112,7 @@
     "test:navigate-explore-routes-overlay": "node ./scripts/test-navigate-explore-routes-overlay.js",
     "test:navigate-offline-route-flow": "node ./scripts/test-navigate-offline-route-flow-regression.js",
     "test:navigate-map-style-3d": "node ./scripts/test-navigate-map-style-3d.js",
+    "test:mapbox-token-rotation": "node ./scripts/test-mapbox-token-rotation-precedence.js",
     "test:camp-layer-data-regression": "node ./scripts/test-camp-layer-data-regression.js",
     "test:camp-layer-endpoints": "node ./scripts/test-camp-layer-endpoints.mjs",
     "test:established-campsites-layer": "node ./scripts/test-established-campsites-layer.js",

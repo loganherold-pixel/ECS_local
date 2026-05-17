@@ -10,10 +10,10 @@
  *
  * Token resolution order (fastest → slowest):
  *   1. In-memory cache
- *   2. SecureStore (encrypted native keychain — iOS/Android only)
- *   3. localStorage (web only)
- *   4. Expo Constants (app.json extra / expoConfig)
- *   5. Environment variable (EXPO_PUBLIC_MAPBOX_TOKEN)
+ *   2. Expo Constants (app.json extra / expoConfig)
+ *   3. Environment variable (EXPO_PUBLIC_MAPBOX_TOKEN)
+ *   4. SecureStore (encrypted native keychain — iOS/Android only)
+ *   5. localStorage (web only)
  *   6. Supabase edge function (get-map-token)
  *   7. Empty string (graceful degradation)
  *
@@ -476,6 +476,24 @@ async function resolveMapboxToken(): Promise<string> {
 
   debugMapConfig('Resolving Mapbox token', { platform: Platform.OS });
 
+  const constantsToken = getConstantsToken();
+  if (constantsToken) {
+    debugMapConfig('Using token from Expo Constants');
+    cachedToken = constantsToken;
+    tokenFetched = true;
+    persistToken(constantsToken);
+    return constantsToken;
+  }
+
+  const envToken = getEnvToken();
+  if (envToken) {
+    debugMapConfig('Using EXPO_PUBLIC_MAPBOX_TOKEN from environment');
+    cachedToken = envToken;
+    tokenFetched = true;
+    persistToken(envToken);
+    return envToken;
+  }
+
   if (Platform.OS !== 'web') {
     const secureToken = await getSecurePersistedTokenAsync();
     if (secureToken) {
@@ -497,24 +515,6 @@ async function resolveMapboxToken(): Promise<string> {
       debugMapConfig('Migrating persisted token into SecureStore');
     }
     return webToken;
-  }
-
-  const constantsToken = getConstantsToken();
-  if (constantsToken) {
-    debugMapConfig('Using token from Expo Constants');
-    cachedToken = constantsToken;
-    tokenFetched = true;
-    persistToken(constantsToken);
-    return constantsToken;
-  }
-
-  const envToken = getEnvToken();
-  if (envToken) {
-    debugMapConfig('Using EXPO_PUBLIC_MAPBOX_TOKEN from environment');
-    cachedToken = envToken;
-    tokenFetched = true;
-    persistToken(envToken);
-    return envToken;
   }
 
   try {
@@ -642,13 +642,6 @@ export function getMapboxTokenSync(): string {
     return cachedToken;
   }
 
-  const persisted = getWebPersistedToken();
-  if (persisted) {
-    cachedToken = persisted;
-    tokenFetched = true;
-    return persisted;
-  }
-
   const constantsToken = getConstantsToken();
   if (constantsToken) {
     cachedToken = constantsToken;
@@ -663,6 +656,13 @@ export function getMapboxTokenSync(): string {
     tokenFetched = true;
     memoryStore[MAPBOX_TOKEN_STORAGE_KEY] = envToken;
     return envToken;
+  }
+
+  const persisted = getWebPersistedToken();
+  if (persisted) {
+    cachedToken = persisted;
+    tokenFetched = true;
+    return persisted;
   }
   return '';
 }
