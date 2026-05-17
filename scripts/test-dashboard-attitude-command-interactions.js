@@ -127,7 +127,7 @@ assert(
 );
 
 assert(
-  widgetRegistry.includes("slots: [\n      { widgetId: 'attitude-command', widgetSize: '2x2' },\n    ]") &&
+  /slots:\s*\[\s*\{\s*widgetId:\s*'attitude-command',\s*widgetSize:\s*'2x2'\s*\},\s*\]/.test(widgetRegistry) &&
     widgetRegistry.includes("widget_id: 'attitude-command'") &&
     widgetRegistry.includes("default_dashboard: true"),
   'Expedition dashboard must default to the locked Attitude Command widget system.',
@@ -184,16 +184,17 @@ assert(
     commandModuleStore.includes("'trailDecisionCommand'") &&
     commandModuleStore.includes("'campScoutCommand'") &&
     commandModuleStore.includes("'expeditionReadinessCommand'") &&
-    commandModuleStore.includes("'convoyCommand'") &&
+    commandModuleStore.includes("'convoy-command'") &&
     commandModuleStore.includes("label: 'Navigation Command'") &&
     commandModuleStore.includes("label: 'Recovery / Hazard Compass'") &&
     commandModuleStore.includes("label: 'Trail Decision Command'") &&
     commandModuleStore.includes("label: 'Camp Scout Command'") &&
     commandModuleStore.includes("label: 'Expedition Readiness Command'") &&
     commandModuleStore.includes("label: 'Convoy Command'") &&
-    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoyCommand',\s*\];/.test(commandModuleStore) &&
+    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoy-command',\s*\];/.test(commandModuleStore) &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'") &&
+    commandModuleStore.includes("if (value === 'convoyCommand') return 'convoy-command';") &&
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes('setSelectedModule(moduleId: ECSCommandModuleId)') &&
     commandModuleStore.includes('subscribe(listener: ECSCommandModuleListener)'),
@@ -446,7 +447,7 @@ assert(
     commandWidgetSource.includes('onPress={handleToggleSound}') &&
     commandWidgetSource.includes('<AttitudeStageHexButtonChrome muted={!soundEnabled} />') &&
     commandWidgetSource.includes("name={soundEnabled ? 'volume-high-outline' : 'volume-off-outline'}") &&
-    commandWidgetSource.includes('<AttitudeStageHexButtonChrome active={selectedCommandModule !== \'attitude\'} />') &&
+    commandWidgetSource.includes('attitudeCommandS.stageModulePillActive') &&
     commandWidgetSource.includes('<Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />') &&
     !commandWidgetSource.includes('CHANGE') &&
     commandWidgetSource.includes("selectedCommandModule !== 'attitude' ? (") &&
@@ -459,7 +460,7 @@ assert(
     !commandWidgetSource.includes('SOUND OFF') &&
     commandWidgetSource.includes('setCommandLocalZeroOffset({ rollDeg: attitudeTelemetry.rollDeg, pitchDeg: attitudeTelemetry.pitchDeg })') &&
     !commandWidgetSource.includes('<AttitudeMonitorSurface'),
-  'Attitude Command must render the connected active-vehicle attitude stage while keeping the center image clean and hex icon-only sound/module controls interactive.',
+  'Attitude Command must render the connected active-vehicle attitude stage while keeping the center image clean and icon-only sound/module controls interactive.',
 );
 
 for (const title of ['Remaining Sunlight', 'Current Weather', 'Vehicle Profile', 'Route Progress', 'Power Monitor']) {

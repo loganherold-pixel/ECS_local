@@ -4,15 +4,19 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 
+function readSource(...segments) {
+  return fs.readFileSync(path.join(root, ...segments), 'utf8').replace(/\r\n/g, '\n');
+}
+
 const sources = {
-  widget: fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8'),
-  activeRouteProgress: fs.readFileSync(path.join(root, 'lib', 'activeRouteProgress.ts'), 'utf8'),
-  weather: fs.readFileSync(path.join(root, 'lib', 'useOperationalWeather.ts'), 'utf8'),
-  routeStore: fs.readFileSync(path.join(root, 'lib', 'routeStore.ts'), 'utf8'),
-  elevation: fs.readFileSync(path.join(root, 'lib', 'dashboardElevationTerrain.ts'), 'utf8'),
-  powerWidget: fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8'),
-  riveAdapter: fs.readFileSync(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'), 'utf8'),
-  powerDetail: fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8'),
+  widget: readSource('components', 'dashboard', 'WidgetRenderers.tsx'),
+  activeRouteProgress: readSource('lib', 'activeRouteProgress.ts'),
+  weather: readSource('lib', 'useOperationalWeather.ts'),
+  routeStore: readSource('lib', 'routeStore.ts'),
+  elevation: readSource('lib', 'dashboardElevationTerrain.ts'),
+  powerWidget: readSource('components', 'dashboard', 'PowerSystemWidget.tsx'),
+  riveAdapter: readSource('lib', 'powerModuleRiveTelemetry.ts'),
+  powerDetail: readSource('components', 'dashboard', 'PowerSystemDetail.tsx'),
 };
 
 function includes(source, fragment, message) {

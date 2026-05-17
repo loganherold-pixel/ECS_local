@@ -99,12 +99,13 @@ assert.ok(
 assert.ok(
   stageSource.includes('getVehicleAttitudeAsset(vehicleId)') &&
     stageSource.includes('source={asset.attitudeImageSource}') &&
-    stageSource.includes("import AttitudeGauge from '../../../components/attitudeCommand/AttitudeGauge'") &&
-    stageSource.includes('<AttitudeGauge') &&
+    stageSource.includes("import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget'") &&
+    stageSource.includes('<AttitudeInclinationRiveWidget') &&
+    stageSource.includes('vehicle-attitude-${axis}-rive-meter') &&
     stageSource.includes('valueDeg={value}') &&
     stageSource.includes('pointerEvents="none"') &&
     stageSource.includes('vehicle-attitude-stage-missing-asset'),
-  'VehicleAttitudeStage should resolve images by vehicleId, use the reusable AttitudeGauge component, and report missing assets.',
+  'VehicleAttitudeStage should resolve images by vehicleId, use the transparent Rive ring meter, and report missing assets.',
 );
 assert.ok(
   gaugeAssetsSource.includes('export const GAUGE_COMPLETE_SRC') &&

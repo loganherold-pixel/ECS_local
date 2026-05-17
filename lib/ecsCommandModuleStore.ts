@@ -7,7 +7,7 @@ export type ECSCommandModuleId =
   | 'trailDecisionCommand'
   | 'campScoutCommand'
   | 'expeditionReadinessCommand'
-  | 'convoyCommand'
+  | 'convoy-command'
   | 'routeCommand'
   | 'powerCommand'
   | 'environmentalCommand';
@@ -35,7 +35,7 @@ export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [
   'trailDecisionCommand',
   'campScoutCommand',
   'expeditionReadinessCommand',
-  'convoyCommand',
+  'convoy-command',
 ];
 
 export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandModuleDefinition> = {
@@ -93,14 +93,14 @@ export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandM
     statusLabel: 'READY',
     description: 'Command-level synthesis of vehicle, route, power, weather, daylight, recovery, communications, and incident readiness.',
   },
-  convoyCommand: {
-    id: 'convoyCommand',
+  'convoy-command': {
+    id: 'convoy-command',
     label: 'Convoy Command',
     title: 'CONVOY COMMAND',
     subtitle: 'Group Expedition Coordination',
     icon: 'people-outline',
     statusLabel: 'CONVOY',
-    description: 'Manual convoy plan and shared check-in coordination without fake live tracking.',
+    description: 'Monitor convoy spacing, signal confidence, and regroup status.',
   },
   routeCommand: {
     id: 'routeCommand',
@@ -131,8 +131,16 @@ export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandM
   },
 };
 
+export function normalizeECSCommandModuleId(value: unknown): ECSCommandModuleId | null {
+  if (value === 'convoyCommand') return 'convoy-command';
+  if (typeof value !== 'string') return null;
+  return ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId)
+    ? (value as ECSCommandModuleId)
+    : null;
+}
+
 export function isECSCommandModuleId(value: unknown): value is ECSCommandModuleId {
-  return typeof value === 'string' && ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId);
+  return normalizeECSCommandModuleId(value) != null;
 }
 
 class ECSCommandModuleStore {
@@ -147,8 +155,12 @@ class ECSCommandModuleStore {
 
   private _load(): void {
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    if (isECSCommandModuleId(stored)) {
-      this._selectedModule = stored;
+    const normalized = normalizeECSCommandModuleId(stored);
+    if (normalized) {
+      this._selectedModule = normalized;
+      if (stored !== normalized) {
+        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized);
+      }
     } else if (stored != null) {
       commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
     }
@@ -157,11 +169,12 @@ class ECSCommandModuleStore {
   private async _hydrate(): Promise<void> {
     await commandModuleCache.waitForHydration();
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    const hydratedModule = isECSCommandModuleId(stored) ? stored : DEFAULT_ECS_COMMAND_MODULE;
+    const normalized = normalizeECSCommandModuleId(stored);
+    const hydratedModule = normalized ?? DEFAULT_ECS_COMMAND_MODULE;
     const changed = hydratedModule !== this._selectedModule;
 
-    if (!isECSCommandModuleId(stored) && stored != null) {
-      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    if (stored !== hydratedModule) {
+      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, hydratedModule);
     }
 
     this._selectedModule = hydratedModule;
@@ -205,8 +218,12 @@ class ECSCommandModuleStore {
     await commandModuleCache.waitForHydration();
     if (!this._hydrated) {
       const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-      if (isECSCommandModuleId(stored)) {
-        this._selectedModule = stored;
+      const normalized = normalizeECSCommandModuleId(stored);
+      if (normalized) {
+        this._selectedModule = normalized;
+        if (stored !== normalized) {
+          commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized);
+        }
       } else if (stored != null) {
         this._selectedModule = DEFAULT_ECS_COMMAND_MODULE;
         commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);

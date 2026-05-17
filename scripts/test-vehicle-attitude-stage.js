@@ -262,14 +262,6 @@ function hashPoints(tree) {
   });
 }
 
-function gaugeNeedleRotation(tree, axis) {
-  const pivot = findOne(tree, byTestID(`vehicle-attitude-${axis}-gauge-indicator-pivot`), `${axis} gauge needle pivot should render.`);
-  const style = flattenStyle(pivot.node.props.style);
-  const rotate = (style.transform || []).find((entry) => Object.prototype.hasOwnProperty.call(entry, 'rotate'));
-  assert.ok(rotate, `${axis} gauge needle should expose a direct rotate transform.`);
-  return Number(String(rotate.rotate).replace('deg', ''));
-}
-
 function assertNear(actual, expected, label, tolerance = 0.75) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `${label} expected ${expected}, received ${actual}`);
 }
@@ -282,17 +274,29 @@ assert.ok(String(image.node.props.source).endsWith(path.join('assets', 'vehicles
 assert.strictEqual(image.node.props.resizeMode, 'contain', 'Stage image must use aspect-fit image behavior.');
 findOne(baseTree, byTestID('vehicle-attitude-stage-gauge-overlay'), 'Stage should render the native gauge overlay.');
 for (const axis of ['pitch', 'roll']) {
-  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge`), `${axis} gauge should render.`);
-  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-ticks`), `${axis} gauge should render the reusable tick asset.`);
+  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-rive-meter`), `${axis} Rive ring meter should render.`);
+  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-rive-meter-degree-readout`), `${axis} Rive ring meter should render its centered degree readout.`);
+  assert.throws(
+    () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-ticks`)),
+    /Expected node to exist/,
+    `${axis} Rive ring should replace the old reusable tick asset.`,
+  );
+  assert.throws(
+    () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-indicator`)),
+    /Expected node to exist/,
+    `${axis} Rive ring should replace the old needle indicator asset.`,
+  );
+  assert.throws(
+    () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-indicator-pivot`)),
+    /Expected node to exist/,
+    `${axis} Rive ring should replace the old needle pivot.`,
+  );
   assert.throws(
     () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-numbers`)),
     /Expected node to exist/,
     `${axis} gauge should not render numeric tick labels.`,
   );
-  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-indicator`), `${axis} gauge should render the reusable indicator asset.`);
 }
-assertNear(gaugeNeedleRotation(baseTree, 'pitch'), 9.8, 'Pitch gauge needle should directly reflect the current telemetry value on the broader visual scale.', 0.001);
-assertNear(gaugeNeedleRotation(baseTree, 'roll'), -7, 'Roll gauge needle should directly reflect the current telemetry value on the broader visual scale.', 0.001);
 
 for (const [vehicleId, asset] of Object.entries(VEHICLE_ATTITUDE_ASSETS)) {
   const tree = renderStage({ vehicleId });
@@ -470,11 +474,10 @@ assert.strictEqual(
   '+45.0°',
   'Pitch readout should continue showing the unclamped telemetry value.',
 );
-assertNear(
-  gaugeNeedleRotation(clampedPitchTree, 'pitch'),
-  70,
-  'Pitch gauge needle visual rotation should clamp at +30° while preserving the numeric telemetry readout.',
-  0.001,
+assert.strictEqual(
+  textContent(findOne(clampedPitchTree, byTestID('vehicle-attitude-pitch-rive-meter-degree-readout')).node),
+  '+45.0°',
+  'Pitch Rive ring readout should continue showing the unclamped telemetry value.',
 );
 
 const clampedRollTree = renderStage({ pitchDeg: 0, rollDeg: -72, maxRollDeg: 18 });
@@ -494,11 +497,10 @@ assert.strictEqual(
   '-72.0°',
   'Roll readout should continue showing the unclamped telemetry value.',
 );
-assertNear(
-  gaugeNeedleRotation(clampedRollTree, 'roll'),
-  -70,
-  'Roll gauge needle visual rotation should clamp at -30° while preserving the numeric telemetry readout.',
-  0.001,
+assert.strictEqual(
+  textContent(findOne(clampedRollTree, byTestID('vehicle-attitude-roll-rive-meter-degree-readout')).node),
+  '-72.0°',
+  'Roll Rive ring readout should continue showing the unclamped telemetry value.',
 );
 
 assert.deepStrictEqual(

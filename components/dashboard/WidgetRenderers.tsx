@@ -4620,9 +4620,9 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     syncAttitudeApproachingLimitTone({
       severity: displayState.severity,
       telemetryHealth: displayState.telemetryHealth,
-      soundEnabled,
+      soundEnabled: selectedCommandModule === 'attitude' && soundEnabled,
     });
-  }, [displayState.severity, displayState.telemetryHealth, soundEnabled]);
+  }, [displayState.severity, displayState.telemetryHealth, selectedCommandModule, soundEnabled]);
 
   useEffect(() => {
     if (reduceCommandModuleMotion) {
@@ -4916,7 +4916,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
         return hasActiveRouteProgress
           ? { label: 'ROUTE READY', tone: 'good' }
           : { label: 'STANDBY', tone: 'neutral' };
-      case 'convoyCommand':
+      case 'convoy-command':
         return { label: 'CONVOY', tone: 'neutral' };
       case 'attitude':
       default:
@@ -4973,7 +4973,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
           { label: 'WEATHER', value: environmentalVisual.weatherValue, tone: environmentalVisual.weatherTone },
           { label: 'REMOTE', value: environmentalVisual.remoteness, tone: environmentalVisual.remotenessTone },
         ];
-      case 'convoyCommand':
+      case 'convoy-command':
         return [
           { label: 'MODE', value: 'Plan/check-in', tone: 'neutral' },
           { label: 'TRACKING', value: 'Not live', tone: 'neutral' },
@@ -5160,7 +5160,13 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             )
           ) : null}
           <View style={attitudeCommandS.moduleTouchTarget}>
-            <Animated.View style={[attitudeCommandS.moduleTransitionShell, { opacity: moduleTransitionOpacity }]}>
+            <Animated.View
+              style={[
+                attitudeCommandS.moduleTransitionShell,
+                commandCenterFrameSelected ? attitudeCommandS.moduleTransitionShellFramedCommand : null,
+                { opacity: moduleTransitionOpacity },
+              ]}
+            >
               {selectedCommandModule === 'attitude' ? (
                 <AttitudeCommandWidgetConnected
                   vehicleId={attitudeVehicleId}
@@ -5260,7 +5266,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 commandCenterFrameSelected ? attitudeCommandS.stageModulePillRecoveryMode : null,
               ]}
             >
-              <AttitudeStageHexButtonChrome active={selectedCommandModule !== 'attitude'} />
               <Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />
             </TouchableOpacity>
 
@@ -5356,9 +5361,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             <View pointerEvents="none" style={attitudeCommandS.powerBottomStrip}>
               <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
                 NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
-              </Text>
-              <Text style={[attitudeCommandS.powerBottomStripText, powerSummary.isLive && attitudeCommandS.powerBottomStripLive]} numberOfLines={1}>
-                {powerVisual.statusLabel}
               </Text>
               <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
                 RUN {powerVisual.runtime}
@@ -5784,6 +5786,11 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  moduleTransitionShellFramedCommand: {
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
+    width: '100%',
+  },
   moduleTouchTarget: {
     flex: 1,
     minHeight: 0,
@@ -5791,24 +5798,26 @@ const attitudeCommandS = StyleSheet.create({
   },
   stageModulePill: {
     position: 'absolute',
-    right: 12,
-    top: 4,
+    right: 10,
+    top: 8,
     zIndex: 4,
     alignItems: 'center',
     justifyContent: 'center',
     width: 34,
-    height: 30,
-    minHeight: 30,
-    borderRadius: 0,
-    borderWidth: 0,
-    backgroundColor: 'transparent',
+    height: 34,
+    minHeight: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.34)',
+    backgroundColor: 'rgba(9, 14, 17, 0.76)',
   },
   stageModulePillActive: {
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(245, 199, 73, 0.58)',
+    backgroundColor: 'rgba(42, 32, 11, 0.86)',
   },
   stageModulePillRecoveryMode: {
-    top: undefined,
-    bottom: 10,
+    top: 8,
+    bottom: undefined,
   },
   moduleHost: {
     flex: 1,
@@ -7221,7 +7230,7 @@ const attitudeCommandS = StyleSheet.create({
   powerFlowLineInput: {
     position: 'absolute',
     left: 72,
-    top: 49,
+    top: 63,
     width: 28,
     height: 3,
     borderRadius: 999,
@@ -7230,7 +7239,7 @@ const attitudeCommandS = StyleSheet.create({
   powerFlowLineOutput: {
     position: 'absolute',
     right: 72,
-    top: 49,
+    top: 63,
     width: 28,
     height: 3,
     borderRadius: 999,
@@ -7273,13 +7282,14 @@ const attitudeCommandS = StyleSheet.create({
     justifyContent: 'center',
   },
   powerRiveForegroundBlock: {
-    width: 128,
-    height: 76,
-    minWidth: 108,
-    minHeight: 62,
+    width: 236,
+    height: 142,
+    minWidth: 184,
+    minHeight: 110,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'visible',
+    transform: [{ translateY: -12 }],
   },
   powerRiveModule: {
     width: '100%',
@@ -7335,9 +7345,9 @@ const attitudeCommandS = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 3,
+    borderTopWidth: 0,
+    borderColor: 'transparent',
+    paddingTop: 0,
   },
   powerBottomStripText: {
     flex: 1,

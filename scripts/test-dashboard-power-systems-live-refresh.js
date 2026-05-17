@@ -89,13 +89,23 @@ includes(
 );
 includes(
   widgetSource,
-  'height: 118',
-  'Power Rive hero should have explicit full-widget height.',
+  "height: '100%'",
+  'Power Rive hero should fill the available widget height.',
 );
 includes(
   widgetSource,
-  'height: 86',
-  'Power Rive hero should have explicit compact-widget height.',
+  'minHeight: 86',
+  'Power Rive hero should preserve a compact minimum height.',
+);
+includes(
+  widgetSource,
+  "alignSelf: 'stretch'",
+  'Power Rive hero should stretch across the monitor container while the Rive runtime preserves aspect ratio.',
+);
+includes(
+  widgetSource,
+  "overflow: 'hidden'",
+  'Power Rive hero should clip to the monitor container instead of floating outside it.',
 );
 notIncludes(
   widgetSource,

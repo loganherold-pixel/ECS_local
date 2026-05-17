@@ -4,6 +4,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const mapperSource = fs.readFileSync(path.join(root, 'lib/bluPowerModuleRive.ts'), 'utf8');
 const adapterSource = fs.readFileSync(path.join(root, 'lib/powerModuleRiveTelemetry.ts'), 'utf8');
+const webComponentSource = fs.readFileSync(path.join(root, 'components/dashboard/PowerModuleRiveWidget.tsx'), 'utf8');
 const nativeComponentSource = fs.readFileSync(path.join(root, 'components/dashboard/PowerModuleRiveWidget.native.tsx'), 'utf8');
 const fallbackComponentSource = fs.readFileSync(path.join(root, 'components/dashboard/BluPowerModuleFallback.tsx'), 'utf8');
 const powerWidgetSource = fs.readFileSync(path.join(root, 'components/dashboard/PowerSystemWidget.tsx'), 'utf8');
@@ -21,6 +22,10 @@ function assert(condition, message) {
 assert(
   fs.existsSync(path.join(root, 'assets/power/blu_power_module.riv')),
   'blu_power_module.riv must be bundled under assets/power.',
+);
+assert(
+  fs.existsSync(path.join(root, 'public/rive/blu_power_module.riv')),
+  'blu_power_module.riv must also be available under public/rive for web static serving fallback.',
 );
 
 for (const token of [
@@ -41,6 +46,18 @@ for (const token of [
 assert(
   !mapperSource.includes('offlineopacity') && !mapperSource.includes('stringProperty'),
   'Runtime mapper must match the inspected PowerWidgetVM numeric surface and avoid obsolete/string view-model properties.',
+);
+
+assert(
+  webComponentSource.includes("require('../../assets/power/blu_power_module.riv')") &&
+    webComponentSource.includes("const PUBLIC_RIVE_SRC = '/rive/blu_power_module.riv'") &&
+    webComponentSource.includes('Image.resolveAssetSource(BLU_POWER_MODULE_ASSET)') &&
+    webComponentSource.includes('src: riveSrc') &&
+    webComponentSource.includes('onLoad: () => setLoaded(true)') &&
+    webComponentSource.includes('onLoadError: () => setLoadFailed(true)') &&
+    webComponentSource.includes('<BluPowerModuleFallback') &&
+    webComponentSource.includes("testID ? `${testID}-loading-fallback` : undefined"),
+  'Web BLU power module must resolve the bundled .riv asset first, keep public/rive as a fallback path, and render a visible fallback while loading or after Rive load failure.',
 );
 
 assert(
@@ -99,13 +116,16 @@ assert(
     powerWidgetSource.includes('inputWatts={riveTelemetry.inputWatts}') &&
     powerWidgetSource.includes('outputWatts={riveTelemetry.outputWatts}') &&
     powerWidgetSource.includes("testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}") &&
-    powerWidgetSource.includes('minWidth: 150') &&
-    powerWidgetSource.includes('maxWidth: 230') &&
-    powerWidgetSource.includes('height: 118') &&
-    powerWidgetSource.includes('height: 86') &&
+    powerWidgetSource.includes("alignItems: 'stretch'") &&
+    powerWidgetSource.includes("height: '100%'") &&
+    powerWidgetSource.includes("alignSelf: 'stretch'") &&
+    powerWidgetSource.includes("overflow: 'hidden'") &&
+    powerWidgetSource.includes('minHeight: 118') &&
+    powerWidgetSource.includes('minHeight: 86') &&
+    powerWidgetSource.includes('minHeight: 0') &&
     powerWidgetSource.includes('zIndex: 8') &&
     powerWidgetSource.includes('elevation: 8'),
-  'Standalone Power Monitor widget must render the BLU Rive module prominently with explicit foreground sizing.',
+  'Standalone Power Monitor widget must render the BLU Rive module as a centered, proportional container-filling foreground asset.',
 );
 
 assert(
@@ -128,6 +148,11 @@ assert(
     widgetRenderers.includes('attitudeCommandS.powerRiveForegroundLayer') &&
     widgetRenderers.includes('attitudeCommandS.powerRiveForegroundBlock') &&
     widgetRenderers.includes('attitudeCommandS.powerRiveModule') &&
+    widgetRenderers.includes('width: 236') &&
+    widgetRenderers.includes('height: 142') &&
+    widgetRenderers.includes('transform: [{ translateY: -12 }]') &&
+    widgetRenderers.includes('borderTopWidth: 0') &&
+    !widgetRenderers.includes('{powerVisual.statusLabel}') &&
     widgetRenderers.includes('zIndex: 12') &&
     widgetRenderers.includes('elevation: 12') &&
     widgetRenderers.includes("justifyContent: 'center'") &&

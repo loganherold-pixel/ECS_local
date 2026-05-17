@@ -77,6 +77,8 @@ export interface CommandCenterFrameProps {
   subtitle?: string;
   state: CommandCenterState;
   stateLabel?: string;
+  showStateBadge?: boolean;
+  bodyChrome?: boolean;
   mode?: CommandCenterMode;
   availableModes?: CommandCenterMode[];
   onModeChange?: (mode: CommandCenterMode) => void;

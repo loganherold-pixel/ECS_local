@@ -12,7 +12,6 @@ import {
 
 import { hapticMicro } from '../../../../lib/haptics';
 import { TACTICAL } from '../../../../lib/theme';
-import AttitudeGauge from '../../../components/attitudeCommand/AttitudeGauge';
 import AttitudeReadout from '../../../components/attitudeCommand/AttitudeReadout';
 import { formatSignedDegrees } from '../../../components/attitudeCommand/attitudeReadoutUtils';
 import {
@@ -30,6 +29,7 @@ import {
   type AttitudeTelemetryFrame,
   type EcsScreenOrientation,
 } from '../attitudeOrientation';
+import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget';
 import AttitudeLiveHashOverlay from './AttitudeLiveHashOverlay';
 
 export type VehicleAttitudeStageProps = {
@@ -555,9 +555,11 @@ function VehicleAttitudeGauge({
   const gaugeTop = toStageScalar(asset, stage, 'y', layout.topY);
 
   return (
-    <AttitudeGauge
+    <AttitudeInclinationRiveWidget
+      axis={axis}
       label={axis.toUpperCase()}
       valueDeg={value}
+      testID={`vehicle-attitude-${axis}-rive-meter`}
       style={[
         styles.gauge,
         {

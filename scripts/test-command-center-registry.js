@@ -33,7 +33,7 @@ const registry = loadTsModule('components/dashboard/commandCenter/commandCenterR
   './TrailDecisionCommand': { default: function TrailDecisionCommand() {} },
   './CampScoutCommand': { default: function CampScoutCommand() {} },
   './ExpeditionReadinessCommand': { ExpeditionReadinessCommand: function ExpeditionReadinessCommand() {} },
-  './ConvoyCommand': { default: function ConvoyCommand() {} },
+  '../command-center/widgets/ConvoyCommandWidget': { default: function ConvoyCommand() {} },
   '../../../lib/ecsCommandModuleStore': {},
 });
 
@@ -74,11 +74,11 @@ assert.strictEqual(
 );
 
 assert.strictEqual(registry.commandModuleToCenterMode('follow3d'), 'threeDNavigation');
-assert.strictEqual(registry.commandModuleToCenterMode('convoyCommand'), 'convoyCommand');
+assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'convoyCommand');
 assert.strictEqual(registry.centerModeToCommandModule('campScout'), 'campScoutCommand');
-assert.strictEqual(registry.centerModeToCommandModule('convoyCommand'), 'convoyCommand');
+assert.strictEqual(registry.centerModeToCommandModule('convoyCommand'), 'convoy-command');
 assert.strictEqual(registry.isCommandCenterModuleId('routeCommand'), false);
-assert.strictEqual(registry.isCommandCenterModuleId('convoyCommand'), true);
+assert.strictEqual(registry.isCommandCenterModuleId('convoy-command'), true);
 assert.strictEqual(registry.isCommandCenterModuleId('expeditionReadinessCommand'), true);
 
 assert.strictEqual(registry.resolveCommandCenterMode(null, {}), 'attitude');
@@ -104,6 +104,7 @@ assert.strictEqual(
 
 assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'"));
 assert(commandStoreSource.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE)'));
-assert(commandStoreSource.includes('isECSCommandModuleId(stored) ? stored : DEFAULT_ECS_COMMAND_MODULE'));
+assert(commandStoreSource.includes('normalizeECSCommandModuleId(stored)'));
+assert(commandStoreSource.includes("if (value === 'convoyCommand') return 'convoy-command';"));
 
 console.log('[command-center-registry] registry, availability, mapping, and fallback checks passed');

@@ -42,6 +42,7 @@
     "test:vehicle-attitude-assets": "node ./scripts/test-vehicle-attitude-assets.js",
     "test:attitude-vehicle-hud": "node ./scripts/test-attitude-vehicle-hud-shared.js",
     "test:attitude-calibration": "node ./scripts/test-attitude-calibration.js",
+    "test:attitude-rive-ring": "node ./scripts/test-attitude-rive-ring.js",
     "test:dashboard-attitude-active-vehicle": "node ./scripts/test-dashboard-attitude-active-vehicle-binding.js",
     "test:dashboard-attitude-command-interactions": "node ./scripts/test-dashboard-attitude-command-interactions.js",
     "test:command-module-performance": "node ./scripts/test-command-module-performance-regression.js",

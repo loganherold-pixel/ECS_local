@@ -35,6 +35,8 @@ API Weather Sources.txt
 # Native/build outputs
 .gradle-local*/
 .gradle-user-home/
+.android-local/
+ecs_attitude_rive_transparent_ring_bundle.zip
 .npm-cache/
 artifacts/
 android/.gradle/

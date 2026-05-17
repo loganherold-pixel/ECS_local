@@ -2,7 +2,7 @@ import RecoveryHazardCompassWidget from './RecoveryHazardCompass';
 import TrailDecisionCommandWidget from './TrailDecisionCommand';
 import CampScoutCommandWidget from './CampScoutCommand';
 import { ExpeditionReadinessCommand } from './ExpeditionReadinessCommand';
-import ConvoyCommandWidget from './ConvoyCommand';
+import ConvoyCommandWidget from '../command-center/widgets/ConvoyCommandWidget';
 import type { ECSCommandModuleId } from '../../../lib/ecsCommandModuleStore';
 import type {
   CommandCenterAvailabilityState,
@@ -31,7 +31,7 @@ const COMMAND_CENTER_MODULE_IDS: ECSCommandModuleId[] = [
   'trailDecisionCommand',
   'campScoutCommand',
   'expeditionReadinessCommand',
-  'convoyCommand',
+  'convoy-command',
 ];
 
 export const COMMAND_CENTER_WIDGET_REGISTRY: Record<CommandCenterWidgetId, CommandCenterWidgetDefinition> = {
@@ -123,7 +123,7 @@ export const COMMAND_CENTER_WIDGET_REGISTRY: Record<CommandCenterWidgetId, Comma
     id: 'convoyCommand',
     label: 'Convoy Command',
     shortLabel: 'Convoy',
-    description: 'Group expedition coordination for manual plans and shared check-ins.',
+    description: 'Monitor convoy spacing, signal confidence, and regroup status.',
     component: ConvoyCommandWidget,
     iconName: 'people-outline',
     defaultAvailability: 'setupNeeded',
@@ -156,7 +156,7 @@ export function commandModuleToCenterMode(moduleId: ECSCommandModuleId): Command
       return 'campScout';
     case 'expeditionReadinessCommand':
       return 'expeditionReadiness';
-    case 'convoyCommand':
+    case 'convoy-command':
       return 'convoyCommand';
     case 'attitude':
     default:
@@ -177,7 +177,7 @@ export function centerModeToCommandModule(mode: CommandCenterMode): ECSCommandMo
     case 'expeditionReadiness':
       return 'expeditionReadinessCommand';
     case 'convoyCommand':
-      return 'convoyCommand';
+      return 'convoy-command';
     case 'attitude':
     default:
       return 'attitude';

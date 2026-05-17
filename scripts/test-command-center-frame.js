@@ -137,14 +137,14 @@ assert.ok(
     commandStoreSource.includes("'trailDecisionCommand'") &&
     commandStoreSource.includes("'campScoutCommand'") &&
     commandStoreSource.includes("'expeditionReadinessCommand'") &&
-    commandStoreSource.includes("'convoyCommand'") &&
+    commandStoreSource.includes("'convoy-command'") &&
     commandStoreSource.includes('Recovery / Hazard Compass') &&
     commandStoreSource.includes('Trail Decision Command') &&
     commandStoreSource.includes('Camp Scout Command') &&
     commandStoreSource.includes('Expedition Readiness Command') &&
     commandStoreSource.includes('Convoy Command') &&
     commandStoreSource.includes('Recovery Vector Standby') &&
-    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoyCommand'/.test(commandStoreSource),
+    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoy-command'/.test(commandStoreSource),
   'Command module store should persist Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, Expedition Readiness, and Convoy command-center modes.',
 );
 
@@ -154,6 +154,8 @@ assert.ok(
     widgetRenderersSource.includes('COMMAND_CENTER_IMPLEMENTED_MODES') &&
     widgetRenderersSource.includes('commandModuleToCenterMode') &&
     widgetRenderersSource.includes('centerModeToCommandModule') &&
+    widgetRenderersSource.includes('moduleTransitionShellFramedCommand') &&
+    widgetRenderersSource.includes("width: '100%'") &&
     !widgetRenderersSource.includes('dashboard-command-center-mode-selector') &&
     widgetRenderersSource.includes('isCommandCenterModuleId') &&
     widgetRenderersSource.includes('dataContext={commandCenterDataContext}') &&
@@ -163,6 +165,12 @@ assert.ok(
     registrySource.includes("label: 'Expedition Readiness Command'") &&
     registrySource.includes("label: 'Convoy Command'"),
   'Dashboard Attitude Command renderer should use the reusable command-center host without the redundant in-widget mode selector.',
+);
+
+assert.ok(
+  widgetRenderersSource.includes("soundEnabled: selectedCommandModule === 'attitude' && soundEnabled") &&
+    widgetRenderersSource.includes('selectedCommandModule, soundEnabled'),
+  'Attitude rollover caution sound should only play while the Attitude command module is selected.',
 );
 
 console.log('CommandCenterFrame checks passed.');

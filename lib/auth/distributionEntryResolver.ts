@@ -5,6 +5,11 @@ import type {
 } from './entryStateTypes';
 import { AUTH_COPY } from './authCopy';
 
+const DEV_CONVOY_RIVE_QA =
+  typeof __DEV__ !== 'undefined' &&
+  __DEV__ &&
+  process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA === '1';
+
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
   setupRecoveryRequired?: boolean;
@@ -101,7 +106,8 @@ export function resolveDistributionEntryState(
     (currentPath === '/fleet' ||
       currentPath === '/vehicle-config' ||
       currentPath === '/more' ||
-      currentPath === '/intel');
+      currentPath === '/intel' ||
+      (DEV_CONVOY_RIVE_QA && currentPath === '/dashboard'));
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
     setupRecoveryRequired,

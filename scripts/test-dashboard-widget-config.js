@@ -2,48 +2,22 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
+function readSource(...segments) {
+  return fs.readFileSync(path.join(__dirname, '..', ...segments), 'utf8').replace(/\r\n/g, '\n');
+}
+
 const registryPath = path.join(__dirname, '..', 'lib', 'widgetRegistry.ts');
-const source = fs.readFileSync(registryPath, 'utf8');
-const navigateSurfaceSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'NavigateSurfaceWidget.tsx'),
-  'utf8',
-);
-const widgetGridSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'WidgetGrid.tsx'),
-  'utf8',
-);
-const dashboardStoreSource = fs.readFileSync(
-  path.join(__dirname, '..', 'lib', 'dashboardStore.ts'),
-  'utf8',
-);
-const widgetLibrarySource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'WidgetLibrary.tsx'),
-  'utf8',
-);
-const widgetRenderersSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'WidgetRenderers.tsx'),
-  'utf8',
-);
-const dashboardSource = fs.readFileSync(
-  path.join(__dirname, '..', 'app', '(tabs)', 'dashboard.tsx'),
-  'utf8',
-);
-const dockIconsSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'DockIcons.tsx'),
-  'utf8',
-);
-const missionBriefCadLogSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'MissionBriefCadLog.tsx'),
-  'utf8',
-);
-const widgetLibraryManagerSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'WidgetLibraryManager.tsx'),
-  'utf8',
-);
-const expeditionTabSource = fs.readFileSync(
-  path.join(__dirname, '..', 'components', 'dashboard', 'ExpeditionTab.tsx'),
-  'utf8',
-);
+const source = readSource('lib', 'widgetRegistry.ts');
+const navigateSurfaceSource = readSource('components', 'dashboard', 'NavigateSurfaceWidget.tsx');
+const widgetGridSource = readSource('components', 'dashboard', 'WidgetGrid.tsx');
+const dashboardStoreSource = readSource('lib', 'dashboardStore.ts');
+const widgetLibrarySource = readSource('components', 'dashboard', 'WidgetLibrary.tsx');
+const widgetRenderersSource = readSource('components', 'dashboard', 'WidgetRenderers.tsx');
+const dashboardSource = readSource('app', '(tabs)', 'dashboard.tsx');
+const dockIconsSource = readSource('components', 'DockIcons.tsx');
+const missionBriefCadLogSource = readSource('components', 'dashboard', 'MissionBriefCadLog.tsx');
+const widgetLibraryManagerSource = readSource('components', 'dashboard', 'WidgetLibraryManager.tsx');
+const expeditionTabSource = readSource('components', 'dashboard', 'ExpeditionTab.tsx');
 const incidentRecoveryPanelSource = fs.readFileSync(
   path.join(__dirname, '..', 'components', 'dashboard', 'IncidentRecoveryPanel.tsx'),
   'utf8',
