@@ -286,8 +286,7 @@ export default function CompletionSummaryCard({ summary, compact = false }: Prop
       {/* ── Footer ───────────────────────────────────────────── */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          SUMMARY v{summary.version}  //  {summary.expedition.terrain ? summary.expedition.terrain.toUpperCase() : 'MIXED'} TERRAIN
-          {summary.expedition.planned_duration_days ? `  //  ${summary.expedition.planned_duration_days}D PLANNED` : ''}
+          {`SUMMARY v${summary.version} | ${summary.expedition.terrain ? summary.expedition.terrain.toUpperCase() : 'MIXED'} TERRAIN${summary.expedition.planned_duration_days ? ` | ${summary.expedition.planned_duration_days}D PLANNED` : ''}`}
         </Text>
       </View>
     </View>

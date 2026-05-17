@@ -68,14 +68,14 @@ const SUPABASE_TIMEOUT_MS = 8000;
 
 // ── Timeout wrapper ─────────────────────────────────────────
 
-function withTimeout<T>(promise: Promise<T>, ms: number = SUPABASE_TIMEOUT_MS): Promise<T> {
+function withTimeout<T>(promise: PromiseLike<T>, ms: number = SUPABASE_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`Loadout sync timed out after ${ms}ms`));
     }, ms);
-    promise
+    Promise.resolve(promise)
       .then((result) => { clearTimeout(timer); resolve(result); })
-      .catch((err) => { clearTimeout(timer); reject(err); });
+      .catch((err: unknown) => { clearTimeout(timer); reject(err); });
   });
 }
 
@@ -315,6 +315,7 @@ class LoadoutSyncQueue {
             .from('loadouts')
             .update(entry.changes)
             .eq('id', entry.loadoutId)
+            .eq('owner_user_id', entry.userId)
         );
 
         if (error) {

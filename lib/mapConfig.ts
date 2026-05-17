@@ -28,11 +28,14 @@
  * Graceful degradation if token is missing.
  */
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { supabase } from './supabase';
 import type { RunPoint, RunHealthLevel } from './runStore';
+import { ecsLog } from './ecsLogger';
+import { reportRecoverableFailure } from './ecsIssueReporter';
 
 // ── Map Styles ──────────────────────────────────────────────
-export type MapStyleKey = 'ecs' | 'tactical' | 'satellite';
+export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d';
 
 export interface MapStyleDef {
   key: MapStyleKey;
@@ -49,7 +52,7 @@ export const MAP_STYLES: MapStyleDef[] = [
     key: 'ecs',
     label: 'Default Day',
     shortLabel: 'DAY',
-    url: 'mapbox://styles/expeditioncommand/cmn2jiff200ne01rn1o3shhna',
+    url: 'mapbox://styles/mapbox/streets-v12',
     icon: 'navigate-outline',
   },
   {
@@ -60,12 +63,19 @@ export const MAP_STYLES: MapStyleDef[] = [
     icon: 'moon-outline',
   },
   {
-  key: 'satellite',
-  label: 'Satellite',
-  shortLabel: 'SAT',
-  url: 'mapbox://styles/expeditioncommand/cmn2k6y89000e01r683ish0c7',
-  icon: 'earth-outline',
-},
+    key: 'satellite',
+    label: 'Satellite',
+    shortLabel: 'SAT',
+    url: 'mapbox://styles/mapbox/satellite-streets-v12',
+    icon: 'earth-outline',
+  },
+  {
+    key: '3d',
+    label: '3D',
+    shortLabel: '3D',
+    url: 'mapbox://styles/expeditioncommand/cmonsduoz000b01spgl7bepey',
+    icon: 'cube-outline',
+  },
 ];
 
 export function getMapStyleDef(key?: MapStyleKey | null): MapStyleDef {
@@ -86,6 +96,20 @@ export const HEALTH_COLORS: Record<RunHealthLevel, string> = {
 // ── Persistence Keys ────────────────────────────────────────
 const MAPBOX_TOKEN_STORAGE_KEY = 'ecs_mapbox_access_token';
 const SECURE_STORE_KEY = 'ecs_mapbox_token'; // shorter key for SecureStore (2048 char key limit)
+const SECURE_STORE_SAFE_VALUE_BYTES = 1900;
+const secureStoreSizeWarningKeys = new Set<string>();
+
+function debugMapConfig(message: string, details?: Record<string, any>): void {
+  ecsLog.debug('MAP', message, details);
+}
+
+function estimateStorageBytes(value: string): number {
+  try {
+    return new TextEncoder().encode(value).length;
+  } catch {
+    return value.length * 2;
+  }
+}
 
 // ── SecureStore Lazy Loader ─────────────────────────────────
 let _secureStoreModule: typeof import('expo-secure-store') | null = null;
@@ -98,22 +122,22 @@ async function loadSecureStore(): Promise<boolean> {
 
   if (Platform.OS === 'web') {
     _secureStoreAvailable = false;
-    console.log('[MapConfig] SecureStore: skipped (web platform — using localStorage)');
+    debugMapConfig('SecureStore skipped for web platform', { platform: Platform.OS });
     return false;
   }
 
   try {
     _secureStoreModule = await import('expo-secure-store');
     _secureStoreAvailable = true;
-    console.log('[MapConfig] SecureStore: loaded successfully (native keychain available)');
+    debugMapConfig('SecureStore loaded successfully', { platform: Platform.OS });
     return true;
   } catch (e) {
     _secureStoreModule = null;
     _secureStoreAvailable = false;
-    console.log(
-      '[MapConfig] SecureStore: not available —',
-      e instanceof Error ? e.message : String(e),
-    );
+    debugMapConfig('SecureStore unavailable', {
+      error: e instanceof Error ? e.message : String(e),
+      platform: Platform.OS,
+    });
     return false;
   }
 }
@@ -150,13 +174,22 @@ async function secureStoreSet(key: string, value: string): Promise<boolean> {
     await loadSecureStore();
   }
   if (!_secureStoreModule) return false;
+
+  const valueBytes = estimateStorageBytes(value);
+  if (valueBytes > SECURE_STORE_SAFE_VALUE_BYTES) {
+    if (!secureStoreSizeWarningKeys.has(key)) {
+      secureStoreSizeWarningKeys.add(key);
+      console.warn(
+        '[MapConfig] SecureStore write skipped: value exceeds safe size limit',
+        { key, bytes: valueBytes, limit: SECURE_STORE_SAFE_VALUE_BYTES },
+      );
+    }
+    return false;
+  }
+
   try {
     await _secureStoreModule.setItemAsync(key, value);
-    console.log(
-      '[MapConfig] SecureStore: token persisted to native keychain (length:',
-      value.length,
-      ')',
-    );
+    debugMapConfig('SecureStore token persisted', { length: value.length });
     return true;
   } catch (e) {
     console.warn(
@@ -178,7 +211,7 @@ async function secureStoreDelete(key: string): Promise<boolean> {
   if (!_secureStoreModule) return false;
   try {
     await _secureStoreModule.deleteItemAsync(key);
-    console.log('[MapConfig] SecureStore: token deleted from native keychain');
+    debugMapConfig('SecureStore token deleted');
     return true;
   } catch (e) {
     console.warn(
@@ -222,11 +255,12 @@ function webPersistSet(key: string, value: string): void {
 // ── Token Management ────────────────────────────────────────
 let cachedToken: string | null = null;
 let tokenFetched = false;
+let tokenResolutionPromise: Promise<string> | null = null;
 
 /**
  * Validate that a string looks like a valid Mapbox public token.
  */
-function isValidMapboxToken(token: string | undefined | null): token is string {
+function isValidMapboxToken(token: string | undefined | null): boolean {
   if (!token || typeof token !== 'string') return false;
   if (token.length < 10) return false;
   if (token === 'undefined' || token === 'null' || token === 'YOUR_TOKEN_HERE') return false;
@@ -242,13 +276,9 @@ function isValidMapboxToken(token: string | undefined | null): token is string {
  */
 function getEnvToken(): string {
   try {
-    const envToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
+    const envToken = String(process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '');
     if (isValidMapboxToken(envToken)) {
-      console.log(
-        '[MapConfig] Found valid EXPO_PUBLIC_MAPBOX_TOKEN from environment (length:',
-        envToken.length,
-        ')',
-      );
+      debugMapConfig('Found EXPO_PUBLIC_MAPBOX_TOKEN from environment', { length: envToken.length });
       return envToken;
     }
     if (envToken && envToken.length > 0) {
@@ -271,8 +301,6 @@ function getEnvToken(): string {
  */
 function getConstantsToken(): string {
   try {
-    const Constants = require('expo-constants').default;
-
     const extra = Constants?.expoConfig?.extra;
     if (extra) {
       const candidates = [
@@ -283,17 +311,14 @@ function getConstantsToken(): string {
       ];
       for (const candidate of candidates) {
         if (isValidMapboxToken(candidate)) {
-          console.log(
-            '[MapConfig] Found valid Mapbox token from Constants.expoConfig.extra (length:',
-            candidate.length,
-            ')',
-          );
+          debugMapConfig('Found Mapbox token from Constants.expoConfig.extra', { length: candidate.length });
           return candidate;
         }
       }
     }
 
-    const legacyExtra = Constants?.manifest?.extra;
+    const legacyManifest = Constants?.manifest as { extra?: Record<string, string | undefined> } | null | undefined;
+    const legacyExtra = legacyManifest?.extra;
     if (legacyExtra) {
       const candidates = [
         legacyExtra.MAPBOX_ACCESS_TOKEN,
@@ -301,36 +326,31 @@ function getConstantsToken(): string {
         legacyExtra.mapbox_access_token,
       ];
       for (const candidate of candidates) {
-        if (isValidMapboxToken(candidate)) {
-          console.log(
-            '[MapConfig] Found valid Mapbox token from Constants.manifest.extra (length:',
-            candidate.length,
-            ')',
-          );
+        if (typeof candidate === 'string' && isValidMapboxToken(candidate)) {
+          debugMapConfig('Found Mapbox token from Constants.manifest.extra', { length: candidate.length });
           return candidate;
         }
       }
     }
 
-    const manifest2Extra = Constants?.manifest2?.extra?.expoClient?.extra;
+    const manifest2 = Constants?.manifest2 as { extra?: { expoClient?: { extra?: Record<string, string | undefined> } } } | null | undefined;
+    const manifest2Extra = manifest2?.extra?.expoClient?.extra;
     if (manifest2Extra) {
       const candidates = [
         manifest2Extra.MAPBOX_ACCESS_TOKEN,
         manifest2Extra.mapboxAccessToken,
       ];
       for (const candidate of candidates) {
-        if (isValidMapboxToken(candidate)) {
-          console.log(
-            '[MapConfig] Found valid Mapbox token from manifest2 (length:',
-            candidate.length,
-            ')',
-          );
+        if (typeof candidate === 'string' && isValidMapboxToken(candidate)) {
+          debugMapConfig('Found Mapbox token from manifest2', { length: candidate.length });
           return candidate;
         }
       }
     }
   } catch (e) {
-    console.log('[MapConfig] expo-constants not available or failed:', e);
+    debugMapConfig('expo-constants token lookup failed', {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return '';
 }
@@ -341,7 +361,7 @@ function getConstantsToken(): string {
 function getWebPersistedToken(): string {
   const stored = webPersistGet(MAPBOX_TOKEN_STORAGE_KEY);
   if (isValidMapboxToken(stored)) {
-    console.log('[MapConfig] Found web-persisted Mapbox token (length:', stored.length, ')');
+    debugMapConfig('Found persisted Mapbox token in web storage', { length: stored.length });
     return stored;
   }
   return '';
@@ -353,12 +373,9 @@ function getWebPersistedToken(): string {
 async function getSecurePersistedTokenAsync(): Promise<string> {
   const stored = await secureStoreGet(SECURE_STORE_KEY);
   if (isValidMapboxToken(stored)) {
-    console.log(
-      '[MapConfig] Found SecureStore-persisted Mapbox token (encrypted keychain, length:',
-      stored.length,
-      ')',
-    );
-    return stored;
+    const storedToken = stored ?? '';
+    debugMapConfig('Found SecureStore-persisted Mapbox token', { length: storedToken.length });
+    return storedToken;
   }
   return '';
 }
@@ -404,13 +421,11 @@ export function setMapboxToken(token: string): void {
   tokenFetched = true;
   if (isValidMapboxToken(token)) {
     persistToken(token);
-    console.log('[MapConfig] Token manually set and persisted (length:', token.length, ')');
+    debugMapConfig('Token manually set and persisted', { length: token.length });
   } else {
-    console.log(
-      '[MapConfig] Token manually set (length:',
-      token.length,
-      ') — not persisted (invalid format)',
-    );
+    debugMapConfig('Token manually set but not persisted because format is invalid', {
+      length: token.length,
+    });
   }
 }
 
@@ -426,11 +441,9 @@ export async function setMapboxTokenAsync(token: string): Promise<{
   tokenFetched = true;
 
   if (!isValidMapboxToken(token)) {
-    console.log(
-      '[MapConfig] Token set (length:',
-      token.length,
-      ') — not persisted (invalid format)',
-    );
+    debugMapConfig('Async token set skipped persistence because format is invalid', {
+      length: token.length,
+    });
     return { persisted: false, secureStore: false, storage: 'memory' };
   }
 
@@ -439,21 +452,21 @@ export async function setMapboxTokenAsync(token: string): Promise<{
   if (Platform.OS !== 'web') {
     const secureSuccess = await secureStoreSet(SECURE_STORE_KEY, token);
     if (secureSuccess) {
-      console.log('[MapConfig] Token persisted to encrypted keychain via SecureStore');
+      debugMapConfig('Token persisted to encrypted keychain via SecureStore');
       return { persisted: true, secureStore: true, storage: 'secure-store' };
     }
-    console.log('[MapConfig] SecureStore unavailable — token persisted to memory only');
+    debugMapConfig('SecureStore unavailable; token persisted to memory only');
     return { persisted: true, secureStore: false, storage: 'memory' };
   }
 
-  console.log('[MapConfig] Token persisted to localStorage (web)');
+  debugMapConfig('Token persisted to localStorage');
   return { persisted: true, secureStore: false, storage: 'localStorage' };
 }
 
 /**
  * Retrieve the Mapbox public access token.
  */
-export async function getMapboxToken(): Promise<string> {
+async function resolveMapboxToken(): Promise<string> {
   if (cachedToken !== null && cachedToken.length > 0) {
     return cachedToken;
   }
@@ -461,13 +474,12 @@ export async function getMapboxToken(): Promise<string> {
     return cachedToken;
   }
 
-  console.log('[MapConfig] Resolving Mapbox token...');
-  console.log('[MapConfig] Platform:', Platform.OS);
+  debugMapConfig('Resolving Mapbox token', { platform: Platform.OS });
 
   if (Platform.OS !== 'web') {
     const secureToken = await getSecurePersistedTokenAsync();
     if (secureToken) {
-      console.log('[MapConfig] Using token from SecureStore (encrypted keychain)');
+      debugMapConfig('Using token from SecureStore');
       cachedToken = secureToken;
       tokenFetched = true;
       memoryStore[MAPBOX_TOKEN_STORAGE_KEY] = secureToken;
@@ -477,19 +489,19 @@ export async function getMapboxToken(): Promise<string> {
 
   const webToken = getWebPersistedToken();
   if (webToken) {
-    console.log('[MapConfig] Using web-persisted token');
+    debugMapConfig('Using web-persisted token');
     cachedToken = webToken;
     tokenFetched = true;
     if (Platform.OS !== 'web') {
       secureStoreSet(SECURE_STORE_KEY, webToken).catch(() => {});
-      console.log('[MapConfig] Migrating memory token to SecureStore for encrypted persistence');
+      debugMapConfig('Migrating persisted token into SecureStore');
     }
     return webToken;
   }
 
   const constantsToken = getConstantsToken();
   if (constantsToken) {
-    console.log('[MapConfig] Using token from Expo Constants');
+    debugMapConfig('Using token from Expo Constants');
     cachedToken = constantsToken;
     tokenFetched = true;
     persistToken(constantsToken);
@@ -498,7 +510,7 @@ export async function getMapboxToken(): Promise<string> {
 
   const envToken = getEnvToken();
   if (envToken) {
-    console.log('[MapConfig] Using EXPO_PUBLIC_MAPBOX_TOKEN from environment');
+    debugMapConfig('Using EXPO_PUBLIC_MAPBOX_TOKEN from environment');
     cachedToken = envToken;
     tokenFetched = true;
     persistToken(envToken);
@@ -506,7 +518,7 @@ export async function getMapboxToken(): Promise<string> {
   }
 
   try {
-    console.log('[MapConfig] Fetching token from edge function get-map-token...');
+    debugMapConfig('Fetching token from edge function', { source: 'get-map-token' });
 
     const edgeFunctionPromise = supabase.functions.invoke('get-map-token', {
       body: {},
@@ -520,12 +532,18 @@ export async function getMapboxToken(): Promise<string> {
 
     if (error) {
       console.warn('[MapConfig] Edge function error:', error.message || error);
+      reportRecoverableFailure({
+        severity: 'high',
+        issueTitle: 'Map token resolution failed',
+        ecsArea: 'navigate',
+        message: typeof error?.message === 'string' ? error.message : 'Map token edge function error',
+        signature: `map_token_error:${typeof error?.message === 'string' ? error.message : 'edge_error'}`,
+        metadata: {
+          source: 'get-map-token',
+        },
+      });
     } else if (data?.token && isValidMapboxToken(data.token)) {
-      console.log(
-        '[MapConfig] Valid Mapbox token received from edge function (length:',
-        data.token.length,
-        ')',
-      );
+      debugMapConfig('Valid Mapbox token received from edge function', { length: data.token.length });
       cachedToken = data.token;
       tokenFetched = true;
       persistToken(data.token);
@@ -536,9 +554,27 @@ export async function getMapboxToken(): Promise<string> {
         data?.error ? `Reason: ${data.error}` : '',
         data?.diagnostics ? `Diagnostics: ${JSON.stringify(data.diagnostics)}` : '',
       );
+      reportRecoverableFailure({
+        severity: 'high',
+        issueTitle: 'Map token unavailable',
+        ecsArea: 'navigate',
+        message: typeof data?.error === 'string' ? data.error : 'Map token edge function returned no valid token',
+        signature: `map_token_missing:${typeof data?.error === 'string' ? data.error : 'invalid_token'}`,
+        metadata: {
+          diagnostics: data?.diagnostics ?? null,
+        },
+      });
     }
   } catch (err) {
     console.warn('[MapConfig] Failed to invoke get-map-token edge function:', err);
+    reportRecoverableFailure({
+      severity: 'high',
+      issueTitle: 'Map token invocation failed',
+      ecsArea: 'navigate',
+      error: err,
+      message: err instanceof Error ? err.message : 'Failed to invoke map token edge function',
+      signature: `map_token_exception:${err instanceof Error ? err.message : 'unknown'}`,
+    });
   }
 
   console.warn(
@@ -549,9 +585,53 @@ export async function getMapboxToken(): Promise<string> {
       '  3. Set MAPBOX_ACCESS_TOKEN in Supabase Edge Function Secrets\n' +
       '  4. Enter the token manually in the Navigate tab',
   );
+  reportRecoverableFailure({
+    severity: 'high',
+    issueTitle: 'Map token missing from all sources',
+    ecsArea: 'navigate',
+    message: 'No Mapbox token available from any configured source',
+    signature: 'map_token_missing_all_sources',
+  });
   tokenFetched = true;
   cachedToken = '';
   return '';
+}
+
+export async function getMapboxToken(): Promise<string> {
+  if (cachedToken !== null && cachedToken.length > 0) {
+    return cachedToken;
+  }
+  if (tokenFetched && cachedToken !== null) {
+    return cachedToken;
+  }
+  if (tokenResolutionPromise) {
+    return tokenResolutionPromise;
+  }
+
+  const startedAt = Date.now();
+  tokenResolutionPromise = resolveMapboxToken()
+    .then((token) => {
+      debugMapConfig('Mapbox token resolution completed', {
+        resolved: token.length > 0,
+        platform: Platform.OS,
+        durationMs: Date.now() - startedAt,
+        source: token.length > 0 ? 'resolved' : 'empty',
+      });
+      return token;
+    })
+    .catch((error) => {
+      debugMapConfig('Mapbox token resolution failed', {
+        platform: Platform.OS,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    })
+    .finally(() => {
+      tokenResolutionPromise = null;
+    });
+
+  return tokenResolutionPromise;
 }
 
 /**
@@ -561,10 +641,28 @@ export function getMapboxTokenSync(): string {
   if (cachedToken !== null && cachedToken.length > 0) {
     return cachedToken;
   }
+
   const persisted = getWebPersistedToken();
   if (persisted) {
     cachedToken = persisted;
+    tokenFetched = true;
     return persisted;
+  }
+
+  const constantsToken = getConstantsToken();
+  if (constantsToken) {
+    cachedToken = constantsToken;
+    tokenFetched = true;
+    memoryStore[MAPBOX_TOKEN_STORAGE_KEY] = constantsToken;
+    return constantsToken;
+  }
+
+  const envToken = getEnvToken();
+  if (envToken) {
+    cachedToken = envToken;
+    tokenFetched = true;
+    memoryStore[MAPBOX_TOKEN_STORAGE_KEY] = envToken;
+    return envToken;
   }
   return '';
 }
@@ -576,7 +674,8 @@ export function hasMapToken(): boolean {
 export function clearTokenCache(): void {
   cachedToken = null;
   tokenFetched = false;
-  console.log('[MapConfig] Token cache cleared — next call will re-fetch from all sources');
+  tokenResolutionPromise = null;
+  debugMapConfig('Token cache cleared');
 }
 
 /**
@@ -585,9 +684,10 @@ export function clearTokenCache(): void {
 export function clearTokenFully(): void {
   cachedToken = null;
   tokenFetched = false;
+  tokenResolutionPromise = null;
   webPersistSet(MAPBOX_TOKEN_STORAGE_KEY, '');
   secureStoreDelete(SECURE_STORE_KEY).catch(() => {});
-  console.log('[MapConfig] Token fully cleared (cache + localStorage + SecureStore)');
+  debugMapConfig('Token fully cleared');
 }
 
 /**
@@ -596,9 +696,10 @@ export function clearTokenFully(): void {
 export async function clearTokenFullyAsync(): Promise<void> {
   cachedToken = null;
   tokenFetched = false;
+  tokenResolutionPromise = null;
   webPersistSet(MAPBOX_TOKEN_STORAGE_KEY, '');
   await secureStoreDelete(SECURE_STORE_KEY);
-  console.log('[MapConfig] Token fully cleared (cache + localStorage + SecureStore) — confirmed');
+  debugMapConfig('Token fully cleared and confirmed');
 }
 
 /**
@@ -723,7 +824,7 @@ export function pointsToGeoJSON(points: RunPoint[]): any {
 }
 
 export function waypointsToGeoJSON(
-  waypoints: Array<{ lat: number; lon: number; name?: string }>,
+  waypoints: { lat: number; lon: number; name?: string }[],
 ): any {
   return {
     type: 'FeatureCollection',

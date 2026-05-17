@@ -88,7 +88,7 @@ export default function VehicleTelemetry({ expedition, isOnline, onTelemetryUpda
     );
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [pulseAnim]);
 
   const refreshReadout = useCallback(() => {
     const r = computeTelemetryReadout(expedition.id);

@@ -47,7 +47,7 @@
  *
  * OUTPUTS:
  *   - CampsiteCandidate[] with scores, levels, confidence, and arrival estimates
- *   - Top 3 suggestedCampsites stored in state
+ *   - Suggested campsites stored in state, capped by MAX_CAMPSITE_MARKERS
  *   - Feeds map markers and forecast suggestions
  *
  * ARCHITECTURE:
@@ -59,9 +59,44 @@
 
 import { Platform } from 'react-native';
 import type { RouteAnalysisSegment, RouteIntelligence } from './routeAnalysisEngine';
-import type { TerrainIntelligence, TerrainWarningType } from './terrainAnalysisEngine';
+import type { TerrainIntelligence } from './terrainAnalysisEngine';
+import type { CampRecommendationSet } from './campops/campOpsTypes';
+import {
+  CAMPSITE_ACCEPTABLE_MIN_RESULTS as CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+  CAMPSITE_HEALTHY_MIN_RESULTS as CAMPSITE_HEALTHY_THRESHOLD,
+  CAMPSITE_MAX_MARKERS_RENDERED,
+  CampsiteFallbackStage,
+  denormalizeCampsiteScore,
+  getCampsiteFallbackStageDefinition as getCampsiteFallbackStage,
+  getMaxCampsiteFallbackStage,
+  normalizeCampsiteScore,
+  type CampsiteCredibilityTier,
+  type CampsiteMode as CampsiteFallbackMode,
+  type CampsiteFallbackStageDefinition,
+} from './campsites/campsiteThresholds';
+import type { CampsiteRating, CampsiteRatingFactor } from './campsites/campsiteRatingTypes';
+import {
+  CAMPSITE_GOOD_FALLBACK_SCORE,
+  CAMPSITE_LIMITED_CONFIDENCE_SCORE,
+  CAMPSITE_POSSIBLE_FALLBACK_SCORE,
+  evaluateCampsiteCandidateViability,
+  MIN_CAMPSITE_CORE_SCORE,
+  type CampsiteCoreScoreKey,
+  type CampsiteViabilityTier,
+} from './campsites/campsiteViabilityFilter';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[CAMPSITE_CANDIDATE]';
+
+function logCampsiteCandidateDebug(event: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('CAMPOPS', event, details, {
+    tag: TAG,
+    debugFlag: 'ECS_DEBUG_CAMP',
+    fingerprint: `${event}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -116,6 +151,26 @@ export interface CampsiteCandidate {
 
   /** Suitability score from Phase 2 scoring engine (0–15+ range) */
   suitabilityScore: number;
+  /** Marker-facing A/B/C/D rating derived from the existing campsite score */
+  rating?: CampsiteRating;
+  /** Marker-facing score normalized to a 0-100 display scale */
+  score?: number;
+  /** Existing remoteness scoring contribution normalized for explanation UI */
+  remotenessScore?: number | null;
+  /** Existing campsite suitability score normalized for explanation UI */
+  campingSuitabilityScore?: number | null;
+  /** Existing access confidence score when available */
+  legalAccessScore?: number | null;
+  /** Existing terrain/campability score when available */
+  terrainScore?: number | null;
+  /** Existing route proximity score when available */
+  routeProximityScore?: number | null;
+  /** Explanation factors behind the marker-facing rating */
+  ratingFactors?: CampsiteRatingFactor[];
+  /** Fallback confidence tier applied by final viability filtering */
+  viabilityTier?: CampsiteViabilityTier;
+  /** Human-readable confidence label for fallback-surfaced candidates */
+  viabilityConfidenceLabel?: 'Preferred' | 'Good' | 'Possible' | 'Limited confidence' | 'Rejected';
   /** Suitability level derived from score */
   suitabilityLevel: SuitabilityLevel;
   /** Estimated arrival hour from departure (null if not computable) */
@@ -129,6 +184,14 @@ export interface CampsiteCandidate {
   confidence: ConfidenceLevel;
   /** Human-readable confidence reasons (e.g., "Short route may not require overnight camp") */
   confidenceReasons: string[];
+  /** Fallback stage that surfaced this candidate */
+  fallbackStage: number;
+  /** Internal density mode used when this candidate was surfaced */
+  fallbackMode: CampsiteFallbackMode;
+  /** Whether broader-than-strict criteria were applied */
+  criteriaBroadened: boolean;
+  /** Internal credibility label for truthful UI language */
+  credibilityTier: CampsiteCredibilityTier;
 }
 
 /**
@@ -174,7 +237,7 @@ export interface CampsiteCandidateResult {
   estimatedDriveTimeHours: number;
   /** All detected campsite candidates (sorted by suitabilityScore desc) */
   candidates: CampsiteCandidate[];
-  /** Top 3 suggested campsites (highest suitability) */
+  /** Suggested campsites retained for map/panel display */
   suggestedCampsites: CampsiteCandidate[];
   /** Number of candidates found */
   candidateCount: number;
@@ -197,17 +260,72 @@ export interface CampsiteCandidateResult {
   hasHighConfidence: boolean;
   /** Best confidence level among suggested campsites */
   bestConfidence: ConfidenceLevel | null;
+  /** Fallback stage applied to generate this result */
+  fallbackStage: number;
+  /** Internal density mode used when generating this result */
+  fallbackMode: CampsiteFallbackMode;
+  /** Whether broader-than-strict criteria were applied */
+  criteriaBroadened: boolean;
+  /** Healthy result threshold used for this analysis */
+  healthyThreshold: number;
+  /** Minimum acceptable threshold used for this analysis */
+  minimumAcceptableThreshold: number;
+  /** Truthful UI note when broader criteria were used */
+  uiNotice: string | null;
+  /** Machine-readable reason when route/polygon locating intentionally produced no displayable candidates */
+  emptyReason?: string | null;
+  /** Human-readable empty state detail for route/polygon locating */
+  emptyStateMessage?: string | null;
+  /** Candidate viability diagnostics for developer/debug surfaces */
+  viabilitySummary?: {
+    generationId?: string;
+    generatedCount: number;
+    totalBeforeFiltering?: number;
+    afterSafetyCount?: number;
+    afterScoreCount?: number;
+    renderCount?: number;
+    acceptedCount: number;
+    rejectedCount: number;
+    activeThreshold?: number;
+    fallbackTier?: CampsiteViabilityTier | null;
+    tierCounts?: Partial<Record<CampsiteViabilityTier, number>>;
+    failingFactors: CampsiteCoreScoreKey[];
+  };
+  /** Explicit locator entry point that produced this result */
+  analysisSource?: 'route' | 'polygon' | 'manual';
+  /** Ownership source used by UI cleanup when route/polygon context changes */
+  source?: 'route' | 'polygon' | 'manual';
+  /** Candidate creation timestamp for stale ownership diagnostics */
+  createdAt?: string;
+  /** Source polygon ID when generated from a completed map drawing */
+  polygonId?: string | null;
+  /** Optional CampOps operational recommendation payload, gated by rollout config */
+  campOps?: {
+    enabled: boolean;
+    recommendationSet: CampRecommendationSet | null;
+  };
+}
+
+export type CampsiteCandidateOwnerSource = 'route' | 'polygon' | 'manual';
+
+export interface CampsiteCandidateOwnerRef {
+  source: CampsiteCandidateOwnerSource;
+  routeIntelligenceId?: string | null;
+  polygonId?: string | null;
+}
+
+export interface CampsiteCandidateRefreshOptions extends CampsiteCandidateOwnerRef {
+  reason: string;
+}
+
+export interface CampsiteCandidatePublishOptions {
+  requestToken?: string | null;
+}
+
+export interface CampsiteCandidateClearOptions extends Partial<CampsiteCandidateOwnerRef> {
+  requestToken?: string | null;
 }
 // ── Constants ────────────────────────────────────────────────
-
-/** Maximum elevation gain (ft) per segment for campsite candidacy */
-const MAX_ELEVATION_GAIN_FT = 150;
-
-/** Minimum route distance percentage to skip from start (20%) */
-const ROUTE_START_EXCLUSION = 0.20;
-
-/** Minimum route distance percentage to skip from end (10%) */
-const ROUTE_END_EXCLUSION = 0.10;
 
 /** Storage key for persistence */
 const STORAGE_KEY = 'ecs_campsite_candidates';
@@ -215,20 +333,12 @@ const STORAGE_KEY = 'ecs_campsite_candidates';
 /** Storage key for suggested campsites */
 const SUGGESTED_STORAGE_KEY = 'ecs_suggested_campsites';
 
-/** Terrain warning types that disqualify a segment */
-const DISQUALIFYING_WARNINGS: TerrainWarningType[] = ['STEEP_GRADE', 'MOUNTAIN_PASS'];
-
 /** Maximum number of suggested campsites to keep */
-const MAX_SUGGESTED = 3;
+const MAX_SUGGESTED = CAMPSITE_MAX_MARKERS_RENDERED;
 
 /** Stabilization: Maximum number of candidates before scoring (prevents runaway lists) */
 const MAX_CANDIDATES_BEFORE_SCORING = 20;
 
-/** Stabilization: Minimum segment spacing between candidates (skip every N segments) */
-const MIN_CANDIDATE_SEGMENT_SPACING = 2;
-
-/** Stabilization: Minimum distance between candidates in miles */
-const MIN_CANDIDATE_DISTANCE_MI = 8;
 
 
 // ── Phase 3 Refinement Constants ─────────────────────────────
@@ -240,18 +350,12 @@ const SHORT_ROUTE_THRESHOLD_MI = 60;
 const QUICK_TRIP_THRESHOLD_HRS = 4.5;
 
 /** Too early in route threshold (% of total distance) */
-const TOO_EARLY_THRESHOLD = 0.35;
 
 /** Too close to destination threshold (% of total distance) */
-const TOO_LATE_THRESHOLD = 0.90;
 
 /** Ideal camp timing window — preferred (hours from departure) */
-const IDEAL_TIMING_MIN_HRS = 6;
-const IDEAL_TIMING_MAX_HRS = 10;
 
 /** Ideal camp timing window — acceptable (hours from departure) */
-const ACCEPTABLE_TIMING_MIN_HRS = 4;
-const ACCEPTABLE_TIMING_MAX_HRS = 12;
 
 // ── Suitability Thresholds ───────────────────────────────────
 
@@ -277,6 +381,8 @@ function classifyConfidence(
   overnightUnlikely: boolean,
   tooEarly: boolean,
   tooLate: boolean,
+  fallbackStage: CampsiteFallbackStageDefinition,
+  credibilityTier: CampsiteCredibilityTier,
 ): { confidence: ConfidenceLevel; reasons: string[] } {
   const reasons: string[] = [];
   let confidenceScore = 0;
@@ -310,9 +416,15 @@ function classifyConfidence(
 
   // ── Timing quality ──
   if (estimatedArrivalHour != null) {
-    if (estimatedArrivalHour >= IDEAL_TIMING_MIN_HRS && estimatedArrivalHour <= IDEAL_TIMING_MAX_HRS) {
+    if (
+      estimatedArrivalHour >= fallbackStage.scoring.idealTimingMinHrs &&
+      estimatedArrivalHour <= fallbackStage.scoring.idealTimingMaxHrs
+    ) {
       confidenceScore += 3;
-    } else if (estimatedArrivalHour >= ACCEPTABLE_TIMING_MIN_HRS && estimatedArrivalHour <= ACCEPTABLE_TIMING_MAX_HRS) {
+    } else if (
+      estimatedArrivalHour >= fallbackStage.scoring.acceptableTimingMinHrs &&
+      estimatedArrivalHour <= fallbackStage.scoring.acceptableTimingMaxHrs
+    ) {
       confidenceScore += 1;
     } else {
       confidenceScore -= 1;
@@ -329,11 +441,23 @@ function classifyConfidence(
   }
 
   // ── Classify ──
-  if (confidenceScore >= 4) {
-    return { confidence: 'HIGH', reasons };
+  let confidence: ConfidenceLevel;
+  if (confidenceScore >= 4) confidence = 'HIGH';
+  else if (confidenceScore >= 1) confidence = 'MEDIUM';
+  else confidence = 'LOW';
+
+  if (credibilityTier === 'possible_stop' && confidence === 'HIGH') {
+    confidence = 'MEDIUM';
   }
-  if (confidenceScore >= 1) {
-    return { confidence: 'MEDIUM', reasons };
+  if (fallbackStage.stage > 0) {
+    reasons.push(
+      credibilityTier === 'possible_stop'
+        ? 'Surfaced as a possible stop/camp candidate under broader corridor criteria'
+        : 'Surfaced under broader corridor criteria to maintain route coverage',
+    );
+  }
+  if (confidence !== 'LOW') {
+    return { confidence, reasons };
   }
   if (reasons.length === 0) {
     reasons.push('Borderline conditions');
@@ -372,6 +496,172 @@ function uuid(): string {
   });
 }
 
+type CampsitePolygonPoint = { latitude: number; longitude: number };
+
+function isFinitePolygonPoint(point: CampsitePolygonPoint): boolean {
+  return (
+    Number.isFinite(point.latitude) &&
+    Number.isFinite(point.longitude) &&
+    point.latitude >= -90 &&
+    point.latitude <= 90 &&
+    point.longitude >= -180 &&
+    point.longitude <= 180
+  );
+}
+
+function pointInPolygon(point: CampsitePolygonPoint, polygon: CampsitePolygonPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].longitude;
+    const yi = polygon[i].latitude;
+    const xj = polygon[j].longitude;
+    const yj = polygon[j].latitude;
+    const intersects =
+      yi > point.latitude !== yj > point.latitude &&
+      point.longitude < ((xj - xi) * (point.latitude - yi)) / ((yj - yi) || 1e-9) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonBounds(points: CampsitePolygonPoint[]) {
+  return points.reduce(
+    (bounds, point) => ({
+      minLat: Math.min(bounds.minLat, point.latitude),
+      maxLat: Math.max(bounds.maxLat, point.latitude),
+      minLon: Math.min(bounds.minLon, point.longitude),
+      maxLon: Math.max(bounds.maxLon, point.longitude),
+    }),
+    { minLat: 90, maxLat: -90, minLon: 180, maxLon: -180 },
+  );
+}
+
+function polygonCentroid(points: CampsitePolygonPoint[]): CampsitePolygonPoint {
+  const sum = points.reduce(
+    (acc, point) => ({
+      latitude: acc.latitude + point.latitude,
+      longitude: acc.longitude + point.longitude,
+    }),
+    { latitude: 0, longitude: 0 },
+  );
+  return {
+    latitude: sum.latitude / Math.max(points.length, 1),
+    longitude: sum.longitude / Math.max(points.length, 1),
+  };
+}
+
+function distanceMi(a: CampsitePolygonPoint, b: CampsitePolygonPoint): number {
+  const r = 3958.8;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLon = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const lat1 = (a.latitude * Math.PI) / 180;
+  const lat2 = (b.latitude * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return r * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function buildPolygonCandidateRouteIntel(
+  polygon: CampsitePolygonPoint[],
+  polygonId: string,
+  routeName: string,
+  candidatePoints: CampsitePolygonPoint[],
+): RouteIntelligence {
+  const bounds = polygonBounds(polygon);
+  const totalDistanceMiles = Math.max(80, distanceMi(
+    { latitude: bounds.minLat, longitude: bounds.minLon },
+    { latitude: bounds.maxLat, longitude: bounds.maxLon },
+  ) * 12);
+  const segmentDistance = totalDistanceMiles / Math.max(candidatePoints.length, 1);
+  const segments: RouteAnalysisSegment[] = candidatePoints.map((point, index) => {
+    const distanceStart = Math.max(0, index * segmentDistance);
+    const distanceEnd = Math.min(totalDistanceMiles, distanceStart + segmentDistance);
+    const variation = (index % 5) * 8;
+    return {
+      segmentIndex: index,
+      distanceStart,
+      distanceEnd,
+      avgElevation: 4200 + variation * 12,
+      elevationGain: 42 + variation,
+      elevationLoss: 28 + variation,
+      maxElevation: 4300 + variation * 12,
+      minElevation: 4100 + variation * 10,
+      coordinates: [point.latitude, point.longitude],
+      pointCount: 3,
+      avgGradePercent: 1.2 + (index % 3) * 0.4,
+      maxGradePercent: 2.4 + (index % 4) * 0.6,
+      difficulty: index % 4 === 0 ? 'moderate' : 'easy',
+      estimatedDriveTimeHours: segmentDistance / 14,
+    };
+  });
+
+  return {
+    id: `polygon-camp-intel-${polygonId}`,
+    sourceId: polygonId,
+    routeName,
+    totalDistanceMiles,
+    estimatedDriveTimeHours: Math.max(6.5, totalDistanceMiles / 14),
+    elevationGainFeet: segments.reduce((sum, segment) => sum + segment.elevationGain, 0),
+    elevationLossFeet: segments.reduce((sum, segment) => sum + segment.elevationLoss, 0),
+    highestElevationFeet: Math.max(...segments.map((segment) => segment.maxElevation), 0),
+    lowestElevationFeet: Math.min(...segments.map((segment) => segment.minElevation), 0),
+    avgElevationFeet:
+      segments.reduce((sum, segment) => sum + segment.avgElevation, 0) / Math.max(segments.length, 1),
+    totalPoints: candidatePoints.length,
+    segments,
+    segmentCount: segments.length,
+    overallDifficulty: 'moderate',
+    bounds,
+    elevationProfile: segments.map((segment) => ({
+      distanceMi: segment.distanceStart,
+      elevationFt: segment.avgElevation,
+    })),
+    analyzedAt: new Date().toISOString(),
+    hasElevation: false,
+    avgSpeedAssumption: 14,
+  };
+}
+
+function generatePolygonCampsiteCandidatePoints(
+  polygon: CampsitePolygonPoint[],
+  maxPoints = 14,
+): CampsitePolygonPoint[] {
+  const bounds = polygonBounds(polygon);
+  const centroid = polygonCentroid(polygon);
+  const points: CampsitePolygonPoint[] = [];
+  const pushIfInside = (point: CampsitePolygonPoint) => {
+    if (!isFinitePolygonPoint(point)) return;
+    if (!pointInPolygon(point, polygon)) return;
+    const key = `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`;
+    if (points.some((existing) => `${existing.latitude.toFixed(5)},${existing.longitude.toFixed(5)}` === key)) return;
+    points.push(point);
+  };
+
+  pushIfInside(centroid);
+
+  const rows = 5;
+  const cols = 5;
+  for (let row = 1; row < rows; row += 1) {
+    for (let col = 1; col < cols; col += 1) {
+      const latitude = bounds.minLat + ((bounds.maxLat - bounds.minLat) * row) / rows;
+      const longitude = bounds.minLon + ((bounds.maxLon - bounds.minLon) * col) / cols;
+      pushIfInside({ latitude, longitude });
+      if (points.length >= maxPoints) return points;
+    }
+  }
+
+  for (const point of polygon) {
+    pushIfInside({
+      latitude: (point.latitude + centroid.latitude) / 2,
+      longitude: (point.longitude + centroid.longitude) / 2,
+    });
+    if (points.length >= maxPoints) return points;
+  }
+
+  return points;
+}
+
 // ── Core Analysis Function (Phase 1) ─────────────────────────
 
 /**
@@ -392,6 +682,7 @@ export function findCampsiteCandidates(
   routeSegments: RouteAnalysisSegment[],
   terrainIntel: TerrainIntelligence | null,
   totalDistanceMiles: number,
+  fallbackStage: CampsiteFallbackStageDefinition = getCampsiteFallbackStage(0),
 ): CampsiteCandidate[] {
   if (!routeSegments || routeSegments.length === 0 || totalDistanceMiles <= 0) {
     return [];
@@ -408,20 +699,21 @@ export function findCampsiteCandidates(
 
   if (terrainIntel && terrainIntel.terrainWarnings && terrainIntel.terrainWarnings.length > 0) {
     for (const warning of terrainIntel.terrainWarnings) {
-      if (DISQUALIFYING_WARNINGS.includes(warning.warningType)) {
+      if (fallbackStage.detection.disqualifyingWarnings.includes(warning.warningType)) {
         disqualifiedSegments.add(warning.segmentIndex);
       }
     }
   }
 
   // ── Compute distance exclusion thresholds ──
-  const startExclusionMiles = totalDistanceMiles * ROUTE_START_EXCLUSION;
-  const endExclusionMiles = totalDistanceMiles * (1 - ROUTE_END_EXCLUSION);
+  const startExclusionMiles = totalDistanceMiles * fallbackStage.detection.routeStartExclusion;
+  const endExclusionMiles = totalDistanceMiles * (1 - fallbackStage.detection.routeEndExclusion);
 
   const candidates: CampsiteCandidate[] = [];
 
   // ── Stabilization: Track last accepted candidate distance for spacing ──
   let lastAcceptedDistanceMi = -Infinity;
+  let lastAcceptedSegmentIndex = -Infinity;
   // ── Stabilization: Track accepted segment indices to prevent duplicates ──
   const acceptedSegmentIndices = new Set<number>();
   // ── Stabilization: Track accepted coordinate keys to prevent near-duplicates ──
@@ -459,12 +751,15 @@ export function findCampsiteCandidates(
     }
 
     // ── Rule A: Flat or relatively stable terrain ──
-    if (seg.elevationGain > MAX_ELEVATION_GAIN_FT) {
+    if (seg.elevationGain > fallbackStage.detection.maxElevationGainFt) {
       continue; // Skip — too much elevation change
     }
 
     // ── Stabilization: Prevent duplicate segment indices ──
     if (acceptedSegmentIndices.has(seg.segmentIndex)) {
+      continue;
+    }
+    if (seg.segmentIndex - lastAcceptedSegmentIndex < fallbackStage.detection.minCandidateSegmentSpacing) {
       continue;
     }
 
@@ -475,7 +770,7 @@ export function findCampsiteCandidates(
     }
 
     // ── Stabilization: Enforce minimum distance spacing between candidates ──
-    if (segMidpointMiles - lastAcceptedDistanceMi < MIN_CANDIDATE_DISTANCE_MI) {
+    if (segMidpointMiles - lastAcceptedDistanceMi < fallbackStage.detection.minCandidateDistanceMi) {
       continue; // Skip — too close to last accepted candidate
     }
 
@@ -561,10 +856,15 @@ export function findCampsiteCandidates(
       // Phase 3 defaults
       confidence: 'LOW',
       confidenceReasons: [],
+      fallbackStage: fallbackStage.stage,
+      fallbackMode: fallbackStage.mode,
+      criteriaBroadened: fallbackStage.stage > 0,
+      credibilityTier: fallbackStage.credibilityTier,
     });
 
     // ── Stabilization: Track accepted candidate for dedup/spacing ──
     lastAcceptedDistanceMi = segMidpointMiles;
+    lastAcceptedSegmentIndex = seg.segmentIndex;
     acceptedSegmentIndices.add(seg.segmentIndex);
     acceptedCoordKeys.add(coordKey);
 
@@ -626,6 +926,7 @@ export function scoreCampsiteCandidates(
   routeIntel: RouteIntelligence,
   terrainIntel: TerrainIntelligence | null,
   remotenessData?: RemotenessSnapshot | null,
+  fallbackStage: CampsiteFallbackStageDefinition = getCampsiteFallbackStage(0),
 ): CampsiteCandidate[] {
   if (!candidates || candidates.length === 0) return [];
 
@@ -694,8 +995,8 @@ export function scoreCampsiteCandidates(
     const routeProgress = totalDistanceMiles > 0
       ? candidate.distanceMiles / totalDistanceMiles
       : 0;
-    const tooEarly = routeProgress < TOO_EARLY_THRESHOLD;
-    const tooLate = routeProgress > TOO_LATE_THRESHOLD;
+    const tooEarly = routeProgress < fallbackStage.scoring.tooEarlyThreshold;
+    const tooLate = routeProgress > fallbackStage.scoring.tooLateThreshold;
 
     // ══════════════════════════════════════════════════════════
     // SCORING RULE 1: Flat terrain bonus (Phase 2)
@@ -714,12 +1015,28 @@ export function scoreCampsiteCandidates(
     // SCORING RULE 2: Remoteness bonus (Phase 2)
     // ══════════════════════════════════════════════════════════
     let remotenessBonus = 0;
-    if (remotenessLevel === 'high') {
-      remotenessBonus = 3;
-      breakdownReasons.push('Remote location (+3)');
+    if (fallbackStage.scoring.remotenessMode === 'preferred_band') {
+      if (remotenessLevel === 'high') {
+        remotenessBonus = 3;
+        breakdownReasons.push('Remote location (+3)');
+      } else if (remotenessLevel === 'medium') {
+        remotenessBonus = 2;
+        breakdownReasons.push('Backcountry location (+2)');
+      }
+    } else if (fallbackStage.scoring.remotenessMode === 'soft_preference') {
+      if (remotenessLevel === 'high') {
+        remotenessBonus = 2;
+        breakdownReasons.push('Remote location (+2)');
+      } else if (remotenessLevel === 'medium') {
+        remotenessBonus = 1;
+        breakdownReasons.push('Backcountry location (+1)');
+      }
+    } else if (remotenessLevel === 'high') {
+      remotenessBonus = 1;
+      breakdownReasons.push('Remote context bonus (+1)');
     } else if (remotenessLevel === 'medium') {
-      remotenessBonus = 2;
-      breakdownReasons.push('Backcountry location (+2)');
+      remotenessBonus = 1;
+      breakdownReasons.push('Contextual backcountry bonus (+1)');
     }
     score += remotenessBonus;
 
@@ -729,12 +1046,18 @@ export function scoreCampsiteCandidates(
     let idealTimingBonus = 0;
     let timingBonus = 0; // Legacy Phase 2 field — kept for backward compat
     if (estimatedArrivalHour != null) {
-      if (estimatedArrivalHour >= IDEAL_TIMING_MIN_HRS && estimatedArrivalHour <= IDEAL_TIMING_MAX_HRS) {
+      if (
+        estimatedArrivalHour >= fallbackStage.scoring.idealTimingMinHrs &&
+        estimatedArrivalHour <= fallbackStage.scoring.idealTimingMaxHrs
+      ) {
         // Preferred window: 6–10 hours from departure
         idealTimingBonus = 4;
         timingBonus = 4;
         breakdownReasons.push('Ideal camp timing window (+4)');
-      } else if (estimatedArrivalHour >= ACCEPTABLE_TIMING_MIN_HRS && estimatedArrivalHour <= ACCEPTABLE_TIMING_MAX_HRS) {
+      } else if (
+        estimatedArrivalHour >= fallbackStage.scoring.acceptableTimingMinHrs &&
+        estimatedArrivalHour <= fallbackStage.scoring.acceptableTimingMaxHrs
+      ) {
         // Acceptable window: 4–12 hours from departure
         idealTimingBonus = 2;
         timingBonus = 2;
@@ -753,7 +1076,11 @@ export function scoreCampsiteCandidates(
     // ══════════════════════════════════════════════════════════
     let elevationPenalty = 0;
     // Check if this segment or adjacent segments are high elevation
-    const adjRange = [candidate.segmentIndex - 1, candidate.segmentIndex, candidate.segmentIndex + 1];
+    const highElevationWindow = fallbackStage.scoring.highElevationPenaltyWindow;
+    const adjRange = Array.from(
+      { length: (highElevationWindow * 2) + 1 },
+      (_, index) => candidate.segmentIndex - highElevationWindow + index,
+    );
     const nearHighElevation = adjRange.some(idx => highElevationSegments.has(idx));
     if (nearHighElevation) {
       elevationPenalty = -2;
@@ -766,11 +1093,11 @@ export function scoreCampsiteCandidates(
     // ══════════════════════════════════════════════════════════
     let mountainPassPenalty = 0;
     // Check if within 1 segment of a mountain pass warning
-    const passRange = [
-      candidate.segmentIndex - 1,
-      candidate.segmentIndex,
-      candidate.segmentIndex + 1,
-    ];
+    const mountainPassWindow = fallbackStage.scoring.mountainPassPenaltyWindow;
+    const passRange = Array.from(
+      { length: (mountainPassWindow * 2) + 1 },
+      (_, index) => candidate.segmentIndex - mountainPassWindow + index,
+    );
     const nearMountainPass = passRange.some(idx => mountainPassSegments.has(idx));
     if (nearMountainPass) {
       mountainPassPenalty = -3;
@@ -783,7 +1110,7 @@ export function scoreCampsiteCandidates(
     // ══════════════════════════════════════════════════════════
     let tooEarlyPenalty = 0;
     if (tooEarly) {
-      tooEarlyPenalty = -4;
+      tooEarlyPenalty = fallbackStage.scoring.tooEarlyPenalty;
       breakdownReasons.push('Too early in route (-4)');
     }
     score += tooEarlyPenalty;
@@ -793,7 +1120,7 @@ export function scoreCampsiteCandidates(
     // ══════════════════════════════════════════════════════════
     let tooLatePenalty = 0;
     if (tooLate) {
-      tooLatePenalty = -4;
+      tooLatePenalty = fallbackStage.scoring.tooLatePenalty;
       breakdownReasons.push('Too close to destination (-4)');
     }
     score += tooLatePenalty;
@@ -803,7 +1130,7 @@ export function scoreCampsiteCandidates(
     // ══════════════════════════════════════════════════════════
     let shortRouteReduction = 0;
     if (isShortRoute) {
-      shortRouteReduction = -3;
+      shortRouteReduction = fallbackStage.scoring.shortRouteReduction;
       breakdownReasons.push('Short route reduction (-3)');
     }
     score += shortRouteReduction;
@@ -815,7 +1142,7 @@ export function scoreCampsiteCandidates(
     if (overnightUnlikely) {
       // Only apply if remoteness is not very high (remote areas may still need camp)
       if (remotenessLevel !== 'high') {
-        overnightReduction = -3;
+        overnightReduction = fallbackStage.scoring.overnightReduction;
         breakdownReasons.push('Quick trip — overnight unlikely (-3)');
       }
     }
@@ -835,6 +1162,8 @@ export function scoreCampsiteCandidates(
       overnightUnlikely,
       tooEarly,
       tooLate,
+      fallbackStage,
+      candidate.credibilityTier,
     );
 
     // ── Build scoring breakdown ──
@@ -877,6 +1206,123 @@ export function scoreCampsiteCandidates(
   return scoredCandidates;
 }
 
+function rankConfidence(confidence: ConfidenceLevel | null | undefined): number {
+  switch (confidence) {
+    case 'HIGH':
+      return 3;
+    case 'MEDIUM':
+      return 2;
+    case 'LOW':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function selectSuggestedCampsites(
+  scoredCandidates: CampsiteCandidate[],
+  isShortRoute: boolean,
+  fallbackStage: CampsiteFallbackStageDefinition,
+): CampsiteCandidate[] {
+  const minSuitabilityScore = denormalizeCampsiteScore(fallbackStage.scoring.minScoreNormalized);
+  const stageEligibleCandidates = scoredCandidates.filter(
+    (candidate) => normalizeCampsiteScore(candidate.suitabilityScore) >= fallbackStage.scoring.minScoreNormalized,
+  );
+
+  if (isShortRoute) {
+    return stageEligibleCandidates
+      .filter(
+        (candidate) =>
+          (candidate.confidence === 'LOW' || candidate.confidence === 'MEDIUM') &&
+          candidate.suitabilityScore >= minSuitabilityScore,
+      )
+      .slice(0, MAX_SUGGESTED);
+  }
+  return stageEligibleCandidates
+    .filter((candidate) => candidate.suitabilityScore >= minSuitabilityScore)
+    .slice(0, MAX_SUGGESTED);
+}
+
+function buildStageCampsiteResult(args: {
+  routeIntel: RouteIntelligence;
+  terrainIntel: TerrainIntelligence | null;
+  remotenessData?: RemotenessSnapshot | null;
+  fallbackStage: CampsiteFallbackStageDefinition;
+  nowIso: string;
+}): CampsiteCandidateResult {
+  const { routeIntel, terrainIntel, remotenessData, fallbackStage, nowIso } = args;
+  const totalDistanceMiles = routeIntel.totalDistanceMiles ?? 0;
+  const estimatedDriveTimeHours = routeIntel.estimatedDriveTimeHours ?? 0;
+  const isShortRoute = totalDistanceMiles < SHORT_ROUTE_THRESHOLD_MI;
+  const overnightUnlikely = estimatedDriveTimeHours < QUICK_TRIP_THRESHOLD_HRS;
+  const rawCandidates = findCampsiteCandidates(
+    routeIntel.segments,
+    terrainIntel,
+    totalDistanceMiles,
+    fallbackStage,
+  );
+  const scoredCandidates = scoreCampsiteCandidates(
+    rawCandidates,
+    routeIntel,
+    terrainIntel,
+    remotenessData,
+    fallbackStage,
+  );
+  const suggestedCampsites = selectSuggestedCampsites(scoredCandidates, isShortRoute, fallbackStage);
+  const hasHighConfidence = suggestedCampsites.some((candidate) => candidate.confidence === 'HIGH');
+  const bestConfidence: ConfidenceLevel | null =
+    suggestedCampsites.length > 0
+      ? suggestedCampsites.reduce<ConfidenceLevel>((best, candidate) => {
+          const order: Record<ConfidenceLevel, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 };
+          return order[candidate.confidence] > order[best] ? candidate.confidence : best;
+        }, 'LOW')
+      : null;
+
+  return {
+    id: uuid(),
+    routeIntelligenceId: routeIntel.id,
+    routeName: routeIntel.routeName,
+    totalDistanceMiles,
+    estimatedDriveTimeHours,
+    candidates: scoredCandidates,
+    suggestedCampsites,
+    candidateCount: scoredCandidates.length,
+    totalSegments: routeIntel.segments.length,
+    excludedSegments: routeIntel.segments.length - scoredCandidates.length,
+    analyzedAt: nowIso,
+    scoringApplied: true,
+    isShortRoute,
+    overnightUnlikely,
+    hasHighConfidence,
+    bestConfidence,
+    fallbackStage: fallbackStage.stage,
+    fallbackMode: fallbackStage.mode,
+    criteriaBroadened: fallbackStage.stage > 0,
+    healthyThreshold: CAMPSITE_HEALTHY_THRESHOLD,
+    minimumAcceptableThreshold: CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+    uiNotice: fallbackStage.uiNotice,
+  };
+}
+
+function isBetterCampsiteResult(
+  candidate: CampsiteCandidateResult,
+  current: CampsiteCandidateResult,
+): boolean {
+  if (candidate.suggestedCampsites.length !== current.suggestedCampsites.length) {
+    return candidate.suggestedCampsites.length > current.suggestedCampsites.length;
+  }
+  if (candidate.candidateCount !== current.candidateCount) {
+    return candidate.candidateCount > current.candidateCount;
+  }
+  if (rankConfidence(candidate.bestConfidence) !== rankConfidence(current.bestConfidence)) {
+    return rankConfidence(candidate.bestConfidence) > rankConfidence(current.bestConfidence);
+  }
+  return (
+    (candidate.suggestedCampsites[0]?.suitabilityScore ?? -1) >
+    (current.suggestedCampsites[0]?.suitabilityScore ?? -1)
+  );
+}
+
 // ── Full Analysis Function ───────────────────────────────────
 
 /**
@@ -915,6 +1361,12 @@ export function analyzeCampsiteCandidates(
       overnightUnlikely: true,
       hasHighConfidence: false,
       bestConfidence: null,
+      fallbackStage: 0,
+      fallbackMode: 'strict',
+      criteriaBroadened: false,
+      healthyThreshold: CAMPSITE_HEALTHY_THRESHOLD,
+      minimumAcceptableThreshold: CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+      uiNotice: null,
     };
   }
 
@@ -944,69 +1396,191 @@ export function analyzeCampsiteCandidates(
       overnightUnlikely,
       hasHighConfidence: false,
       bestConfidence: null,
+      fallbackStage: 0,
+      fallbackMode: 'strict',
+      criteriaBroadened: false,
+      healthyThreshold: CAMPSITE_HEALTHY_THRESHOLD,
+      minimumAcceptableThreshold: CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+      uiNotice: null,
     };
   }
 
 
   // Phase 1: Find candidates
-  const rawCandidates = findCampsiteCandidates(
-    routeIntel.segments,
-    terrainIntel,
-    routeIntel.totalDistanceMiles,
-  );
-
-  // Phase 2 + Phase 3: Score candidates with smart timing
-  const scoredCandidates = scoreCampsiteCandidates(
-    rawCandidates,
+  const strictStageResult = buildStageCampsiteResult({
     routeIntel,
     terrainIntel,
     remotenessData,
-  );
+    fallbackStage: getCampsiteFallbackStage(0),
+    nowIso: now,
+  });
+  const strictSuggestionCount = strictStageResult.suggestedCampsites.length;
+  const maxFallbackStage = getMaxCampsiteFallbackStage(strictSuggestionCount);
+  const targetCount =
+    strictSuggestionCount >= CAMPSITE_HEALTHY_THRESHOLD
+      ? CAMPSITE_HEALTHY_THRESHOLD
+      : strictSuggestionCount >= CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD
+        ? strictSuggestionCount
+        : CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD;
+  let selectedResult = strictStageResult;
 
   // ── Phase 3: Filter suggested campsites based on route context ──
-  let suggestedCampsites: CampsiteCandidate[];
+  for (let stage = 1; stage <= maxFallbackStage; stage += 1) {
 
-  if (isShortRoute) {
-    // Short routes: only allow LOW confidence suggestions
-    suggestedCampsites = scoredCandidates
-      .filter(c => c.confidence === 'LOW')
-      .slice(0, MAX_SUGGESTED);
-  } else {
-    // Normal routes: take top 3
-    suggestedCampsites = scoredCandidates.slice(0, MAX_SUGGESTED);
-  }
+    const stageResult = buildStageCampsiteResult({
+      routeIntel,
+      terrainIntel,
+      remotenessData,
+      fallbackStage: getCampsiteFallbackStage(stage),
+      nowIso: now,
+    });
 
-  const excludedSegments = routeIntel.segments.length - scoredCandidates.length;
+    if (isBetterCampsiteResult(stageResult, selectedResult)) {
+      selectedResult = stageResult;
+    }
 
   // ── Phase 3: Compute confidence metadata ──
-  const hasHighConfidence = suggestedCampsites.some(c => c.confidence === 'HIGH');
-  const bestConfidence: ConfidenceLevel | null = suggestedCampsites.length > 0
-    ? suggestedCampsites.reduce<ConfidenceLevel>((best, c) => {
-        const order: Record<ConfidenceLevel, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 };
-        return order[c.confidence] > order[best] ? c.confidence : best;
-      }, 'LOW')
-    : null;
+    if (stageResult.candidateCount >= targetCount && stageResult.suggestedCampsites.length > 0) {
+      selectedResult = stageResult;
+      break;
+    }
+  }
 
-  const result: CampsiteCandidateResult = {
+  return selectedResult;
+}
+
+export function analyzePolygonCampsiteCandidates(
+  polygon: CampsitePolygonPoint[],
+  remotenessData?: RemotenessSnapshot | null,
+  args?: { polygonId?: string | null; routeName?: string | null },
+): CampsiteCandidateResult {
+  const now = new Date().toISOString();
+  const validPolygon = polygon.filter(isFinitePolygonPoint);
+  const polygonId =
+    args?.polygonId ??
+    `polygon-${validPolygon.map((point) => `${point.latitude.toFixed(4)},${point.longitude.toFixed(4)}`).join('|')}`;
+  const routeName = args?.routeName ?? 'Drawn Campsite Area';
+
+  if (validPolygon.length < 3) {
+    return {
+      id: uuid(),
+      routeIntelligenceId: polygonId,
+      routeName,
+      totalDistanceMiles: 0,
+      estimatedDriveTimeHours: 0,
+      candidates: [],
+      suggestedCampsites: [],
+      candidateCount: 0,
+      totalSegments: 0,
+      excludedSegments: 0,
+      analyzedAt: now,
+      scoringApplied: false,
+      isShortRoute: false,
+      overnightUnlikely: false,
+      hasHighConfidence: false,
+      bestConfidence: null,
+      fallbackStage: CampsiteFallbackStage.LowerScoreModerately,
+      fallbackMode: 'relaxed',
+      criteriaBroadened: true,
+      healthyThreshold: CAMPSITE_HEALTHY_THRESHOLD,
+      minimumAcceptableThreshold: CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+      uiNotice: 'Draw a closed area to locate campsite options',
+      analysisSource: 'polygon',
+      polygonId,
+    };
+  }
+
+  const candidatePoints = generatePolygonCampsiteCandidatePoints(validPolygon);
+  const routeIntel = buildPolygonCandidateRouteIntel(validPolygon, polygonId, routeName, candidatePoints);
+  const fallbackStage = getCampsiteFallbackStage(CampsiteFallbackStage.LowerScoreModerately);
+  const rawCandidates = routeIntel.segments.map((segment, index): CampsiteCandidate => {
+    const center = polygonCentroid(validPolygon);
+    const fromCenter = distanceMi(
+      { latitude: segment.coordinates[0], longitude: segment.coordinates[1] },
+      center,
+    );
+    const remotenessBoost = Math.max(0, Math.min(14, Math.round((remotenessData?.score ?? 50) / 8)));
+    const qualityScore = Math.max(0, Math.min(100, 72 + remotenessBoost - Math.round(fromCenter * 1.8) + (index % 3) * 4));
+    return {
+      segmentIndex: segment.segmentIndex,
+      coordinates: segment.coordinates,
+      distanceMiles: Number((((index + 3) / Math.max(routeIntel.segments.length + 5, 1)) * routeIntel.totalDistanceMiles).toFixed(1)),
+      avgElevation: segment.avgElevation,
+      elevationGain: segment.elevationGain,
+      candidateReason: [
+        'Inside selected campsite search area',
+        'Predicted level terrain pocket',
+        remotenessData?.tier ? `${remotenessData.tier} remoteness context` : 'Remote-context campsite scan',
+      ],
+      segmentRange: `Area ${index + 1}`,
+      difficulty: segment.difficulty,
+      qualityScore,
+      suitabilityScore: 0,
+      suitabilityLevel: 'LOW',
+      estimatedArrivalHour: null,
+      scoringBreakdown: {
+        flatTerrainBonus: 0,
+        remotenessBonus: 0,
+        timingBonus: 0,
+        elevationPenalty: 0,
+        mountainPassPenalty: 0,
+        idealTimingBonus: 0,
+        tooEarlyPenalty: 0,
+        tooLatePenalty: 0,
+        shortRouteReduction: 0,
+        overnightReduction: 0,
+        reasons: [],
+      },
+      confidence: 'LOW',
+      confidenceReasons: [],
+      fallbackStage: fallbackStage.stage,
+      fallbackMode: fallbackStage.mode,
+      criteriaBroadened: true,
+      credibilityTier: fallbackStage.credibilityTier,
+    };
+  });
+
+  const scoredCandidates = scoreCampsiteCandidates(
+    rawCandidates,
+    routeIntel,
+    null,
+    remotenessData,
+    fallbackStage,
+  ).sort((a, b) => b.suitabilityScore - a.suitabilityScore || b.qualityScore - a.qualityScore);
+  const suggestedCampsites = scoredCandidates.slice(0, MAX_SUGGESTED);
+  const bestConfidence =
+    suggestedCampsites.length > 0
+      ? suggestedCampsites.reduce<ConfidenceLevel>((best, candidate) =>
+          rankConfidence(candidate.confidence) > rankConfidence(best) ? candidate.confidence : best,
+        'LOW')
+      : null;
+
+  return {
     id: uuid(),
-    routeIntelligenceId: routeIntel.id,
-    routeName: routeIntel.routeName,
+    routeIntelligenceId: polygonId,
+    routeName,
     totalDistanceMiles: routeIntel.totalDistanceMiles,
     estimatedDriveTimeHours: routeIntel.estimatedDriveTimeHours,
     candidates: scoredCandidates,
     suggestedCampsites,
     candidateCount: scoredCandidates.length,
     totalSegments: routeIntel.segments.length,
-    excludedSegments,
+    excludedSegments: Math.max(0, routeIntel.segments.length - scoredCandidates.length),
     analyzedAt: now,
     scoringApplied: true,
-    isShortRoute,
-    overnightUnlikely,
-    hasHighConfidence,
+    isShortRoute: false,
+    overnightUnlikely: false,
+    hasHighConfidence: suggestedCampsites.some((candidate) => candidate.confidence === 'HIGH'),
     bestConfidence,
+    fallbackStage: fallbackStage.stage,
+    fallbackMode: fallbackStage.mode,
+    criteriaBroadened: true,
+    healthyThreshold: CAMPSITE_HEALTHY_THRESHOLD,
+    minimumAcceptableThreshold: CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
+    uiNotice: 'Showing campsite candidates inside selected drawing',
+    analysisSource: 'polygon',
+    polygonId,
   };
-
-  return result;
 }
 
 
@@ -1024,6 +1598,339 @@ function _notify(result: CampsiteCandidateResult | null) {
 // ── Internal State ───────────────────────────────────────────
 
 let _currentResult: CampsiteCandidateResult | null = null;
+let _candidateGenerationSequence = 0;
+let _latestGeneration:
+  | {
+      ownerKey: string;
+      requestToken: string;
+      state: 'refreshing' | 'active' | 'cleared';
+      reason: string;
+      source: CampsiteCandidateOwnerSource;
+      routeIntelligenceId?: string | null;
+      polygonId?: string | null;
+    }
+  | null = null;
+
+function createCandidateGenerationToken(): string {
+  _candidateGenerationSequence += 1;
+  return `campgen-${_candidateGenerationSequence}`;
+}
+
+function redactLocationBearingId(value: string | null | undefined): string | null {
+  if (!value) return value ?? null;
+  const hasCoordinatePairs = /-?\d{1,2}\.\d{3,}_-?\d{1,3}\.\d{3,}/.test(value);
+  return hasCoordinatePairs ? 'coordinate-id-redacted' : value;
+}
+
+function buildOwnerKey(owner: CampsiteCandidateOwnerRef): string {
+  if (owner.source === 'polygon') {
+    return `polygon:${owner.polygonId ?? owner.routeIntelligenceId ?? 'unknown'}`;
+  }
+  if (owner.source === 'manual') {
+    return 'manual';
+  }
+  return `route:${owner.routeIntelligenceId ?? 'unknown'}`;
+}
+
+function latestGenerationFromOwner(
+  owner: CampsiteCandidateOwnerRef,
+  requestToken: string,
+  state: 'refreshing' | 'active' | 'cleared',
+  reason: string,
+) {
+  return {
+    ownerKey: buildOwnerKey(owner),
+    requestToken,
+    state,
+    reason,
+    source: owner.source,
+    routeIntelligenceId: owner.routeIntelligenceId ?? null,
+    polygonId: owner.polygonId ?? null,
+  };
+}
+
+function isRouteUnknownToResolvedOwnerTransition(
+  latest: NonNullable<typeof _latestGeneration>,
+  owner: CampsiteCandidateOwnerRef,
+  nextOwnerKey: string,
+): boolean {
+  return (
+    latest.source === 'route' &&
+    owner.source === 'route' &&
+    latest.ownerKey === 'route:unknown' &&
+    nextOwnerKey !== 'route:unknown' &&
+    nextOwnerKey.startsWith('route:')
+  );
+}
+
+function markRouteOwnerResolved(
+  latest: NonNullable<typeof _latestGeneration>,
+  owner: CampsiteCandidateOwnerRef,
+  nextOwnerKey: string,
+): void {
+  const previousOwnerKey = latest.ownerKey;
+  latest.ownerKey = nextOwnerKey;
+  latest.routeIntelligenceId = owner.routeIntelligenceId ?? null;
+  logCampsiteCandidateDebug('route_owner_resolved', {
+    previousOwnerKey,
+    nextOwnerKey,
+    requestToken: latest.requestToken,
+    routeIntelligenceId: redactLocationBearingId(owner.routeIntelligenceId),
+  });
+}
+
+function resultOwnerRef(result: CampsiteCandidateResult): CampsiteCandidateOwnerRef {
+  const source = result.source ?? result.analysisSource ?? 'route';
+  return {
+    source,
+    routeIntelligenceId: result.routeIntelligenceId,
+    polygonId: result.polygonId,
+  };
+}
+
+function logCandidateSet(result: CampsiteCandidateResult, generatedCount = result.suggestedCampsites.length): void {
+  const summary = result.viabilitySummary;
+  const acceptedCount = summary?.acceptedCount ?? result.suggestedCampsites.length;
+  const rejectedCount = summary?.rejectedCount ?? Math.max(0, generatedCount - acceptedCount);
+  const failingFactors = summary?.failingFactors ?? [];
+  logCampsiteCandidateDebug('viability_filter', {
+    generationId: summary?.generationId ?? result.id,
+    generatedCount,
+    totalBeforeFiltering: summary?.totalBeforeFiltering ?? generatedCount,
+    afterSafetyCount: summary?.afterSafetyCount ?? acceptedCount,
+    afterScoreCount: summary?.afterScoreCount ?? acceptedCount,
+    renderCount: summary?.renderCount ?? result.suggestedCampsites.length,
+    acceptedCount,
+    rejectedCount,
+    activeThreshold: summary?.activeThreshold ?? null,
+    fallbackTier: summary?.fallbackTier ?? null,
+    tierCounts: summary?.tierCounts ?? null,
+    failingFactors,
+    source: result.source ?? result.analysisSource ?? 'unknown',
+    routeIntelligenceId: redactLocationBearingId(result.routeIntelligenceId),
+    polygonId: redactLocationBearingId(result.polygonId),
+  });
+  logCampsiteCandidateDebug('set', {
+    generationId: result.id,
+    candidateCount: result.candidateCount,
+    renderCount: result.suggestedCampsites.length,
+    source: result.source ?? result.analysisSource ?? 'unknown',
+    routeIntelligenceId: redactLocationBearingId(result.routeIntelligenceId),
+    polygonId: redactLocationBearingId(result.polygonId),
+  });
+}
+
+function withCandidateOwnership(result: CampsiteCandidateResult): CampsiteCandidateResult {
+  return {
+    ...result,
+    source: result.source ?? result.analysisSource ?? 'route',
+    createdAt: result.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function buildCandidateKey(candidate: CampsiteCandidate): string {
+  const record = candidate as CampsiteCandidate & { id?: string | null; latitude?: number; longitude?: number };
+  const latitude = Number(record.latitude ?? candidate.coordinates?.[0]);
+  const longitude = Number(record.longitude ?? candidate.coordinates?.[1]);
+  return [
+    record.id ?? candidate.segmentRange ?? candidate.segmentIndex ?? 'candidate',
+    Number.isFinite(latitude) ? latitude.toFixed(5) : 'na',
+    Number.isFinite(longitude) ? longitude.toFixed(5) : 'na',
+  ].join('|');
+}
+
+const CAMPSITE_VIABILITY_TIER_RANK: Record<CampsiteViabilityTier, number> = {
+  preferred: 4,
+  good: 3,
+  possible: 2,
+  limited_confidence: 1,
+  rejected_safety: 0,
+};
+
+const CAMPSITE_VIABILITY_FALLBACK_ORDER: CampsiteViabilityTier[] = [
+  'preferred',
+  'good',
+  'possible',
+  'limited_confidence',
+];
+
+function getViabilityTierThreshold(tier: CampsiteViabilityTier | null): number | undefined {
+  switch (tier) {
+    case 'preferred':
+      return MIN_CAMPSITE_CORE_SCORE;
+    case 'good':
+      return CAMPSITE_GOOD_FALLBACK_SCORE;
+    case 'possible':
+      return CAMPSITE_POSSIBLE_FALLBACK_SCORE;
+    case 'limited_confidence':
+      return CAMPSITE_LIMITED_CONFIDENCE_SCORE;
+    default:
+      return undefined;
+  }
+}
+
+function applyViabilityConfidence(candidate: CampsiteCandidate, tier: CampsiteViabilityTier): CampsiteCandidate {
+  const evaluation = evaluateCampsiteCandidateViability(candidate);
+  const confidence =
+    tier === 'preferred'
+      ? candidate.confidence
+      : tier === 'good'
+        ? candidate.confidence === 'HIGH'
+          ? 'MEDIUM'
+          : candidate.confidence
+        : 'LOW';
+  const label = evaluation.confidenceLabel;
+  const fallbackReason =
+    tier === 'preferred'
+      ? null
+      : tier === 'good'
+        ? 'Good fallback candidate surfaced below preferred campsite threshold'
+        : tier === 'possible'
+          ? 'Possible lower-confidence campsite candidate surfaced by fallback tiers'
+          : 'Limited confidence campsite candidate surfaced after broader fallback';
+  return {
+    ...candidate,
+    confidence,
+    viabilityTier: tier,
+    viabilityConfidenceLabel: label,
+    confidenceReasons:
+      fallbackReason && !candidate.confidenceReasons.includes(fallbackReason)
+        ? [...candidate.confidenceReasons, fallbackReason]
+        : candidate.confidenceReasons,
+  };
+}
+
+function applyLegacyCampsiteDisplayFilter(result: CampsiteCandidateResult): CampsiteCandidateResult {
+  const source = result.source ?? result.analysisSource ?? 'route';
+  if (source === 'manual') {
+    return {
+      ...result,
+      candidateCount: result.suggestedCampsites.length,
+      viabilitySummary: {
+        generationId: result.id,
+        generatedCount: result.suggestedCampsites.length,
+        totalBeforeFiltering: result.suggestedCampsites.length,
+        afterSafetyCount: result.suggestedCampsites.length,
+        afterScoreCount: result.suggestedCampsites.length,
+        renderCount: result.suggestedCampsites.length,
+        acceptedCount: result.suggestedCampsites.length,
+        rejectedCount: 0,
+        activeThreshold: undefined,
+        fallbackTier: null,
+        tierCounts: {},
+        failingFactors: [],
+      },
+    };
+  }
+
+  const suggestedKeys = new Set(result.suggestedCampsites.map(buildCandidateKey));
+  const suggestedEvaluations = new Map<string, ReturnType<typeof evaluateCampsiteCandidateViability>>();
+  const failingFactors = new Set<CampsiteCoreScoreKey>();
+  const tierCounts: Partial<Record<CampsiteViabilityTier, number>> = {};
+  const generationId = result.id;
+  const routeIntelligenceId = redactLocationBearingId(result.routeIntelligenceId);
+  const polygonId = redactLocationBearingId(result.polygonId);
+
+  for (const candidate of result.suggestedCampsites) {
+    const key = buildCandidateKey(candidate);
+    const evaluation = evaluateCampsiteCandidateViability(candidate, {
+      source,
+      debugLog: true,
+      generationId,
+      routeIntelligenceId,
+      polygonId,
+      analysisLayer: 'display_filter',
+    });
+    suggestedEvaluations.set(key, evaluation);
+    tierCounts[evaluation.tier] = (tierCounts[evaluation.tier] ?? 0) + 1;
+    evaluation.failingScoreNames.forEach((factor) => failingFactors.add(factor));
+  }
+
+  const activeTier =
+    CAMPSITE_VIABILITY_FALLBACK_ORDER.find((tier) =>
+      result.suggestedCampsites.some((candidate) => {
+        const evaluation = suggestedEvaluations.get(buildCandidateKey(candidate));
+        return evaluation?.isViable && evaluation.tier === tier;
+      }),
+    ) ?? null;
+  const activeTierRank = activeTier ? CAMPSITE_VIABILITY_TIER_RANK[activeTier] : 0;
+  const acceptedKeys = new Set<string>();
+  const acceptedSuggested = result.suggestedCampsites
+    .filter((candidate) => {
+      const key = buildCandidateKey(candidate);
+      const evaluation = suggestedEvaluations.get(key);
+      const accepted =
+        !!evaluation?.isViable &&
+        activeTier != null &&
+        CAMPSITE_VIABILITY_TIER_RANK[evaluation.tier] >= activeTierRank;
+      if (accepted) acceptedKeys.add(key);
+      return accepted;
+    })
+    .map((candidate) => {
+      const evaluation = suggestedEvaluations.get(buildCandidateKey(candidate));
+      return evaluation ? applyViabilityConfidence(candidate, evaluation.tier) : candidate;
+    });
+  const acceptedCandidates = result.candidates.reduce<CampsiteCandidate[]>((accepted, candidate) => {
+    const key = buildCandidateKey(candidate);
+    if (!suggestedKeys.has(key)) return accepted;
+    const evaluation =
+      suggestedEvaluations.get(key) ??
+      evaluateCampsiteCandidateViability(candidate, {
+        source,
+        debugLog: true,
+        generationId,
+        routeIntelligenceId,
+        polygonId,
+        analysisLayer: 'display_filter',
+      });
+    const isAccepted =
+      acceptedKeys.has(key) ||
+      (!!evaluation.isViable &&
+        activeTier != null &&
+        CAMPSITE_VIABILITY_TIER_RANK[evaluation.tier] >= activeTierRank);
+    if (isAccepted) {
+      accepted.push(applyViabilityConfidence(candidate, evaluation.tier));
+    }
+    return accepted;
+  }, []);
+  const bestConfidence =
+    acceptedSuggested.length > 0
+      ? acceptedSuggested.reduce<ConfidenceLevel>((best, candidate) =>
+          rankConfidence(candidate.confidence) > rankConfidence(best) ? candidate.confidence : best,
+        'LOW')
+      : null;
+
+  return {
+    ...result,
+    candidates: acceptedCandidates,
+    suggestedCampsites: acceptedSuggested,
+    candidateCount: acceptedSuggested.length,
+    excludedSegments: Math.max(0, result.totalSegments - acceptedCandidates.length),
+    hasHighConfidence: acceptedSuggested.some((candidate) => candidate.confidence === 'HIGH'),
+    bestConfidence,
+    viabilitySummary: {
+      generationId,
+      generatedCount: result.suggestedCampsites.length,
+      acceptedCount: acceptedSuggested.length,
+      rejectedCount: Math.max(0, result.suggestedCampsites.length - acceptedSuggested.length),
+      totalBeforeFiltering: result.suggestedCampsites.length,
+      afterSafetyCount: result.suggestedCampsites.filter((candidate) => {
+        const evaluation = suggestedEvaluations.get(buildCandidateKey(candidate));
+        return !!evaluation?.isViable;
+      }).length,
+      afterScoreCount: acceptedSuggested.length,
+      renderCount: acceptedSuggested.length,
+      activeThreshold: getViabilityTierThreshold(activeTier),
+      fallbackTier: activeTier,
+      tierCounts,
+      failingFactors: Array.from(failingFactors),
+    },
+  };
+}
+
+function prepareCampsiteResultForDisplay(result: CampsiteCandidateResult): CampsiteCandidateResult {
+  return applyLegacyCampsiteDisplayFilter(withCandidateOwnership(result));
+}
 
 // ── Persistence ──────────────────────────────────────────────
 
@@ -1077,8 +1984,107 @@ export const campsiteCandidateEngine = {
     terrainIntel: TerrainIntelligence | null,
     remotenessData?: RemotenessSnapshot | null,
   ): CampsiteCandidateResult {
-    const result = analyzeCampsiteCandidates(routeIntel, terrainIntel, remotenessData);
+    const result = prepareCampsiteResultForDisplay({
+      ...analyzeCampsiteCandidates(routeIntel, terrainIntel, remotenessData),
+      analysisSource: 'route' as const,
+      source: 'route' as const,
+      polygonId: null,
+    });
     _currentResult = result;
+    logCandidateSet(result, result.viabilitySummary?.generatedCount);
+    saveResult(result);
+    _notify(result);
+    return result;
+  },
+
+  /**
+   * Mark a route/polygon candidate refresh as in-flight without clearing current
+   * display state. The returned token must be supplied when publishing the result.
+   */
+  beginRefresh(options: CampsiteCandidateRefreshOptions): string {
+    const requestToken = createCandidateGenerationToken();
+    _latestGeneration = latestGenerationFromOwner(
+      options,
+      requestToken,
+      'refreshing',
+      options.reason,
+    );
+    logCampsiteCandidateDebug('refresh_started', {
+      reason: options.reason,
+      requestToken,
+      source: options.source,
+      routeIntelligenceId: redactLocationBearingId(options.routeIntelligenceId),
+      polygonId: redactLocationBearingId(options.polygonId),
+    });
+    return requestToken;
+  },
+
+  /**
+   * Publish a locator-produced result through the existing campsite engine state.
+   * This keeps storage/subscriptions centralized while route and polygon locating
+   * can be orchestrated by the campsite locator service.
+   */
+  publishResult(result: CampsiteCandidateResult, options: CampsiteCandidatePublishOptions = {}): CampsiteCandidateResult {
+    const owner = resultOwnerRef(result);
+    const ownerKey = buildOwnerKey(owner);
+    if (options.requestToken && _latestGeneration) {
+      const rejectReason =
+        _latestGeneration.requestToken !== options.requestToken
+          ? 'request_token_mismatch'
+          : _latestGeneration.state === 'cleared'
+            ? 'owner_cleared'
+            : _latestGeneration.source !== owner.source
+              ? 'source_mismatch'
+              : _latestGeneration.ownerKey !== ownerKey &&
+                  !isRouteUnknownToResolvedOwnerTransition(_latestGeneration, owner, ownerKey)
+                ? 'owner_key_mismatch'
+                : null;
+
+      if (rejectReason) {
+        logCampsiteCandidateDebug('stale_generation_ignored', {
+          requestToken: options.requestToken,
+          latestRequestToken: _latestGeneration.requestToken,
+          reason: _latestGeneration.reason,
+          rejectReason,
+          ownerKey,
+          latestOwnerKey: _latestGeneration.ownerKey,
+          source: owner.source,
+          routeIntelligenceId: redactLocationBearingId(owner.routeIntelligenceId),
+          polygonId: redactLocationBearingId(owner.polygonId),
+        });
+        return _currentResult ?? result;
+      }
+
+      if (_latestGeneration.ownerKey !== ownerKey) {
+        markRouteOwnerResolved(_latestGeneration, owner, ownerKey);
+      }
+    }
+    const ownedResult = prepareCampsiteResultForDisplay(result);
+    _currentResult = ownedResult;
+    _latestGeneration = latestGenerationFromOwner(
+      owner,
+      options.requestToken ?? createCandidateGenerationToken(),
+      'active',
+      'publish_result',
+    );
+    logCandidateSet(ownedResult, ownedResult.viabilitySummary?.generatedCount);
+    saveResult(ownedResult);
+    _notify(ownedResult);
+    return ownedResult;
+  },
+
+  /**
+   * Analyze a completed map polygon for campsite candidates.
+   * Stores result and notifies listeners.
+   */
+  analyzePolygon(
+    polygon: CampsitePolygonPoint[],
+    remotenessData?: RemotenessSnapshot | null,
+    args?: { polygonId?: string | null; routeName?: string | null },
+  ): CampsiteCandidateResult {
+    const result = prepareCampsiteResultForDisplay(analyzePolygonCampsiteCandidates(polygon, remotenessData, args));
+    _currentResult = result;
+    logCandidateSet(result, result.viabilitySummary?.generatedCount);
     saveResult(result);
     _notify(result);
     return result;
@@ -1089,7 +2095,8 @@ export const campsiteCandidateEngine = {
    */
   getCurrent(): CampsiteCandidateResult | null {
     if (_currentResult) return _currentResult;
-    _currentResult = loadStoredResult();
+    const stored = loadStoredResult();
+    _currentResult = stored ? prepareCampsiteResultForDisplay(stored) : null;
     return _currentResult;
   },
 
@@ -1114,11 +2121,40 @@ export const campsiteCandidateEngine = {
   /**
    * Clear current campsite candidates.
    */
-  clear(): void {
+  clear(reason: string = 'unspecified', options: CampsiteCandidateClearOptions = {}): void {
+    const previousCount = _currentResult?.suggestedCampsites.length ?? 0;
+    const previousSource = _currentResult?.source ?? _currentResult?.analysisSource ?? 'none';
+    const previousOwner = _currentResult ? resultOwnerRef(_currentResult) : null;
+    const owner: CampsiteCandidateOwnerRef | null =
+      previousOwner ??
+      (options.source
+        ? {
+            source: options.source,
+            routeIntelligenceId: options.routeIntelligenceId ?? null,
+            polygonId: options.polygonId ?? null,
+          }
+        : null) ??
+      null;
+    const requestToken = owner ? createCandidateGenerationToken() : null;
+    if (owner && requestToken) {
+      _latestGeneration = latestGenerationFromOwner(
+        owner,
+        requestToken,
+        'cleared',
+        reason,
+      );
+    }
     _currentResult = null;
     clearStoredResult();
     _notify(null);
-    console.log(TAG, 'Campsite candidates cleared');
+    logCampsiteCandidateDebug('clear_completed', {
+      reason,
+      requestToken,
+      previousCount,
+      previousSource,
+      previousRouteIntelligenceId: redactLocationBearingId(previousOwner?.routeIntelligenceId),
+      previousPolygonId: redactLocationBearingId(previousOwner?.polygonId),
+    });
   },
 
 
@@ -1132,7 +2168,7 @@ export const campsiteCandidateEngine = {
   },
 
   /**
-   * Get suggested campsites (top 3).
+   * Get suggested campsites.
    */
   getSuggestedCampsites(): CampsiteCandidate[] {
     const current = this.getCurrent();
@@ -1274,5 +2310,9 @@ export const campsiteCandidateEngine = {
     }
     return 'A likely camp zone appears along the route.';
   },
+};
+
+export const campsiteCandidateEngineTestHooks = {
+  prepareCampsiteResultForDisplay,
 };
 

@@ -540,7 +540,7 @@ export function evaluateGuidance(
         resolved: false,
         expanded: false,
         from_live_telemetry: result.from_live_telemetry,
-        generated_at: existing?.generated_at || _now(),
+        generated_at: _now(),
         resolved_at: null,
       });
     }

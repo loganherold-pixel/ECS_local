@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": "page-1",
+      "name": "Page One Campground",
+      "latitude": 38,
+      "longitude": -120
+    }
+  ],
+  "hasMore": true,
+  "nextCursor": "page-2"
+}

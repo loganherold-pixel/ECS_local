@@ -12,7 +12,7 @@
  *
  * Categories: expedition, checklist, field_log, waypoint, loadout, route, dashboard
  */
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isDeployedEdgeFunction, isSupabaseConfigured } from './supabase';
 import {
   syncActionQueue,
   type SyncAction,
@@ -102,6 +102,14 @@ function isUnrecoverableUuidError(errorMsg: string): boolean {
 async function callSyncEdgeFunction(action: SyncAction): Promise<SyncActionResult> {
   if (!isSupabaseConfigured) {
     // No Supabase — treat as completed (local-only mode)
+    return { actionId: action.id, status: 'completed' };
+  }
+
+  if (!isDeployedEdgeFunction('sync-actions')) {
+    console.warn(
+      `[SyncProcessor] sync-actions is unavailable in the current ECS backend. ` +
+      `Treating action ${action.id} as local-only to prevent retry churn.`
+    );
     return { actionId: action.id, status: 'completed' };
   }
 

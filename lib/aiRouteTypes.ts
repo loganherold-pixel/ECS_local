@@ -59,6 +59,11 @@ export interface AIRouteResponse {
   radiusMiles: number;
   generatedAt: string;
   error?: string;
+  meta?: {
+    mode?: string;
+    reason?: string;
+    requestId?: string;
+  };
 }
 
 // ── AI Route State ───────────────────────────────────────────

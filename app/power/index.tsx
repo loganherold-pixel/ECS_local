@@ -1,24 +1,16 @@
 /**
- * Power Center — Phase 3I-3 / 4B / 8
+ * Power Center — Pass 1 simplified structure
  *
- * Displays:
- *   • Power Flow Diagram (Solar → Battery → Load) — visual widget
- *   • Power Forecast Panel — net watts, time estimates (Phase 3H-2)
- *     ↳ Now uses computed system capacity from device models (Phase 3H-3)
- *   • Power Events Panel — detected load events (Phase 3I-3)
- *   • Device Contribution Panel — per-device telemetry cards (Phase 3G-2)
- *   • Aggregated PowerTelemetry from usePowerTelemetry()
- *   • EcoFlow Live telemetry from useEcoFlowLive() (Phase 4B)
- *     ↳ Provider card shows active device name, LIVE/STANDBY status
- *     ↳ Auto-refreshes when returning from device picker via useFocusEffect
- *   • "Manage Devices" navigation button
- *   • Phase 8: "Add Power System" and "Manage Power Systems" entry points
+ * Structure:
+ *   1. System Overview
+ *   2. Energy Flow
+ *   3. Attached Devices
+ *   4. Primary Device Details
+ *   5. Actions
  *
- * Matches ECS tactical dark theme. Self-contained — no external UI deps
- * beyond SafeIcon, theme context, the power telemetry hook, PowerFlowDiagram,
- * PowerForecastPanel, PowerEventsPanel, and PowerDeviceCard.
+ * This pass keeps the existing live telemetry wiring intact while simplifying
+ * the hierarchy and reducing the stacked-card clutter.
  */
-
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
@@ -35,82 +27,63 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
-import { ECS, SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
+import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
+import { useTheme } from '../../context/ThemeContext';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 
 import { usePowerTelemetry } from '../../src/power/hooks/usePowerTelemetry';
-import type { PowerTelemetry } from '../../src/power/types/PowerTelemetry';
-
-import { useEcoFlowLive } from '../../lib/useEcoFlowLive';
+import { resolvePowerReadiness } from '../../lib/powerReadiness';
+import {
+  getEcoFlowPowerDeviceCatalog,
+  getEcoFlowPowerTelemetryDevices,
+  getSelectedEcoFlowPowerDevices,
+  setPrimaryEcoFlowPowerDevice,
+  useEcoFlowPowerLive,
+} from '../../src/features/power/services/powerTelemetryService';
 
 import PowerFlowDiagram from '../../src/components/power/PowerFlowDiagram';
-import PowerDeviceCard from '../../src/components/power/PowerDeviceCard';
-import PowerForecastPanel from '../../src/components/power/PowerForecastPanel';
-import PowerEventsPanel from '../../src/components/power/PowerEventsPanel';
 
-import { EcoFlowCloudProvider, powerDeviceStore } from '../../src/power';
-import { computeSystemCapacity } from '../../src/power/forecast/deviceCapacity';
-
-import { powerSetupStore, PROVIDER_DISPLAY } from '../../lib/powerSetupStore';
-import type { ManagedPowerDevice } from '../../lib/powerSetupStore';
-
-
-
-// ── Dev default capacity (Wh) ───────────────────────────────────────────
-// Fallback when no device models are recognised. 3600 Wh is a reasonable
-// default for a single large power station (e.g. EcoFlow DELTA Pro).
-// TODO: Remove once all devices report explicit capacityWh via the cloud API.
-const DEV_DEFAULT_CAPACITY_WH = 3600;
-
-
-
-
-// ── Module-level provider instance for diagnostics ──────────────────────
-// Same pattern as devices.tsx. In a future phase, this will be replaced
-// with a shared singleton that the polling infrastructure also uses.
-const ecoFlowProvider = new EcoFlowCloudProvider();
-
-// ── Per-device telemetry entry type ─────────────────────────────────────
 interface DeviceEntry {
   deviceId: string;
   name?: string;
   model?: string;
+  productType?: string;
+  role?: 'primary' | 'supporting';
   socPct?: number;
   wattsIn?: number;
   wattsOut?: number;
   solarWatts?: number;
+  restricted?: boolean;
+  restrictionReason?: string | null;
 }
 
-// ── Helper: format watts with unit ──────────────────────────────────────
 function fmtWatts(w: number | undefined | null): string {
   if (w === undefined || w === null) return '--';
-  if (w >= 1000) return `${(w / 1000).toFixed(1)} kW`;
+  if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(1)} kW`;
   return `${Math.round(w)} W`;
 }
 
-// ── Helper: format runtime minutes ──────────────────────────────────────
-function fmtRuntime(min: number | undefined): string {
-  if (min === undefined || min === null) return '--';
-  if (min >= 60) {
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    return `${h}h ${m}m`;
-  }
-  return `${min}m`;
-}
-
-// ── Helper: format temperature ──────────────────────────────────────────
-function fmtTemp(c: number | undefined): string {
-  if (c === undefined || c === null) return '--';
-  return `${c.toFixed(1)}°C`;
-}
-
-// ── Helper: format voltage ──────────────────────────────────────────────
-function fmtVolts(v: number | undefined): string {
+function fmtVolts(v: number | undefined | null): string {
   if (v === undefined || v === null) return '--';
   return `${v.toFixed(1)} V`;
 }
 
-// ── SOC color helper ────────────────────────────────────────────────────
+function fmtTemp(c: number | undefined | null): string {
+  if (c === undefined || c === null) return '--';
+  return `${c.toFixed(1)}°C`;
+}
+
+function fmtRuntimeMinutes(min: number | undefined | null): string {
+  if (min === undefined || min === null) return '--';
+  const whole = Math.max(0, Math.round(min));
+  if (whole >= 60) {
+    const h = Math.floor(whole / 60);
+    const m = whole % 60;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  return `${whole}m`;
+}
+
 function socColor(soc: number | undefined | null, palette: any): string {
   if (soc === undefined || soc === null) return palette.textMuted;
   if (soc >= 60) return '#34C759';
@@ -119,924 +92,629 @@ function socColor(soc: number | undefined | null, palette: any): string {
   return '#FF3B30';
 }
 
-// ── SOC bar component ───────────────────────────────────────────────────
-function SOCBar({ soc, palette }: { soc: number | undefined; palette: any }) {
-  const pct = soc !== undefined ? Math.max(0, Math.min(100, soc)) : 0;
-  const color = socColor(soc, palette);
-
-  return (
-    <View style={[socBarStyles.track, { backgroundColor: palette.border }]}>
-      <View
-        style={[
-          socBarStyles.fill,
-          {
-            width: `${pct}%`,
-            backgroundColor: color,
-          },
-        ]}
-      />
-    </View>
-  );
+function titleFromModel(model?: string | null, name?: string | null) {
+  if (model && model.trim().length > 0) return model.trim();
+  if (name && name.trim().length > 0) return name.trim();
+  return 'EcoFlow';
 }
 
-const socBarStyles = StyleSheet.create({
-  track: {
-    height: 8,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-  fill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-});
+function prettyProductType(productType?: string | null) {
+  if (!productType) return 'Power Device';
+  return productType
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-// ── Telemetry stat row ──────────────────────────────────────────────────
-function TelemetryStat({
-  icon,
+function SummaryStat({
   label,
   value,
-  valueColor,
   palette,
+  valueColor,
 }: {
-  icon: string;
   label: string;
   value: string;
+  palette: any;
   valueColor?: string;
-  palette: any;
 }) {
   return (
-    <View style={[statStyles.row, { borderBottomColor: GOLD_RAIL.subsection }]}>
-      <Ionicons name={icon} size={16} color={palette.amber} />
-      <Text style={[statStyles.label, { color: palette.textMuted }]}>{label}</Text>
-      <Text
-        style={[
-          statStyles.value,
-          { color: valueColor || palette.text },
-        ]}
-      >
-        {value}
-      </Text>
+    <View style={[styles.summaryStat, { backgroundColor: palette.border + '22' }]}>
+      <Text style={[styles.summaryStatLabel, { color: palette.textMuted }]}>{label}</Text>
+      <Text style={[styles.summaryStatValue, { color: valueColor || palette.text }]}>{value}</Text>
     </View>
   );
 }
 
-const statStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    borderBottomWidth: GOLD_RAIL.subsectionWidth,
-  },
-  label: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  value: {
-    fontSize: 17,
-    fontWeight: '800',
-    fontFamily: 'Courier',
-    letterSpacing: 0.5,
-  },
-});
-
-// ── EcoFlow Live Status Badge ───────────────────────────────────────────
-function EcoFlowStatusBadge({
-  status,
-  palette,
-}: {
-  status: string;
-  palette: any;
-}) {
-  const config: Record<string, { label: string; color: string; icon: string }> = {
-    live:     { label: 'LIVE', color: '#34C759', icon: 'radio-outline' },
-    degraded: { label: 'DEGRADED', color: '#FF9500', icon: 'warning-outline' },
-    offline:  { label: 'OFFLINE', color: '#FF3B30', icon: 'alert-circle-outline' },
-    standby:  { label: 'STANDBY', color: palette.textMuted, icon: 'moon-outline' },
-  };
-
-  const c = config[status] || config.standby;
-
-  return (
-    <View
-      style={[
-        ecoStyles.statusBadge,
-        {
-          backgroundColor: c.color + '12',
-          borderColor: c.color + '30',
-        },
-      ]}
-    >
-      <View style={[ecoStyles.statusDotLive, { backgroundColor: c.color }]} />
-      <Text style={[ecoStyles.statusLabel, { color: c.color }]}>
-        {c.label}
-      </Text>
-    </View>
-  );
-}
-
-
-// ── EcoFlow telemetry chip ──────────────────────────────────────────────
-function EcoFlowChip({
-  icon,
+function DetailRow({
   label,
   value,
-  valueColor,
   palette,
+  valueColor,
 }: {
-  icon: string;
   label: string;
   value: string;
-  valueColor?: string;
   palette: any;
+  valueColor?: string;
 }) {
   return (
-    <View style={[ecoStyles.chip, { backgroundColor: palette.border + '30' }]}>
-      <Ionicons name={icon} size={13} color={valueColor || palette.amber} />
-      <View style={ecoStyles.chipTextBlock}>
-        <Text style={[ecoStyles.chipLabel, { color: palette.textMuted }]}>{label}</Text>
-        <Text style={[ecoStyles.chipValue, { color: valueColor || palette.text }]}>{value}</Text>
-      </View>
+    <View style={[styles.detailRow, { borderBottomColor: GOLD_RAIL.subsection }]}>
+      <Text style={[styles.detailLabel, { color: palette.textMuted }]}>{label}</Text>
+      <Text style={[styles.detailValue, { color: valueColor || palette.text }]}>{value}</Text>
     </View>
   );
 }
 
-const ecoStyles = StyleSheet.create({
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  statusDotLive: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusLabel: {
-    fontSize: 8,
-    fontWeight: '800',
-    letterSpacing: 2,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    flex: 1,
-    minWidth: 90,
-  },
-  chipTextBlock: {
-    gap: 1,
-  },
-  chipLabel: {
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  chipValue: {
-    fontSize: 14,
-    fontWeight: '800',
-    fontFamily: 'Courier',
-    letterSpacing: 0.5,
-  },
-});
-
-// ── Main Screen ─────────────────────────────────────────────────────────
 export default function PowerCenterScreen() {
   const router = useRouter();
   const { palette, colors } = useTheme();
   const telemetry = usePowerTelemetry();
-  const ecoFlow = useEcoFlowLive();
+  const ecoFlow = useEcoFlowPowerLive();
+  const ecoFlowRefresh = ecoFlow.refresh;
+  const ecoFlowVersion = ecoFlow.version;
+  const selectedEcoFlowDeviceId = ecoFlow.selectedDeviceId;
+
   const [refreshing, setRefreshing] = useState(false);
+  const [deviceEntries, setDeviceEntries] = useState<DeviceEntry[]>([]);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  // ── Auto-refresh EcoFlow telemetry on screen focus ────────────────
-  // When user returns from the device picker, the persisted device ID
-  // may have changed. refresh() re-reads it and re-polls immediately.
   useFocusEffect(
     useCallback(() => {
-      ecoFlow.refresh();
-    }, [ecoFlow.refresh]),
+      ecoFlowRefresh();
+    }, [ecoFlowRefresh]),
   );
 
-  // ── Per-device state (Phase 3G-2) ─────────────────────────────────
-  const [deviceEntries, setDeviceEntries] = useState<DeviceEntry[]>([]);
-
-  // ── Load per-device data ──────────────────────────────────────────
   const loadDeviceData = useCallback(async () => {
     if (!mountedRef.current) return;
 
     try {
-      // 1. Try provider diagnostics (will have data when cloud path is active)
-      const perDevice = ecoFlowProvider.getPerDeviceTelemetry();
+      const perDevice = getEcoFlowPowerTelemetryDevices();
+      const selectedIds = await getSelectedEcoFlowPowerDevices();
+      const selectedId = ecoFlow.selectedDeviceId ?? selectedIds[0] ?? null;
 
       if (perDevice.length > 0) {
-        setDeviceEntries(
-          perDevice.map((d) => ({
+        const mapped = perDevice.map((d: any) => {
+          const restricted =
+            d?.unauthorized === true ||
+            typeof d?.error === 'string' &&
+            (d.error.toLowerCase().includes('not allowed') ||
+              d.error.toLowerCase().includes('not authorized') ||
+              d.error.toLowerCase().includes('unauthorized'));
+
+          return {
             deviceId: d.deviceId,
             name: d.name,
             model: d.model,
+            productType: d.productType,
+            role: d.deviceId === selectedId ? 'primary' : 'supporting',
             socPct: d.socPct,
             wattsIn: d.wattsIn,
             wattsOut: d.wattsOut,
             solarWatts: d.solarWatts,
-          })),
-        );
+            restricted,
+            restrictionReason: restricted ? 'Cloud access unavailable for this device.' : d.error ?? null,
+          } as DeviceEntry;
+        });
+
+        if (mountedRef.current) setDeviceEntries(mapped);
         return;
       }
 
-      // 2. Fallback: load selected devices from store (show as "awaiting")
-      const selected = await powerDeviceStore.getSelected('EcoFlow');
-      if (!mountedRef.current) return;
+      const catalog = await getEcoFlowPowerDeviceCatalog();
+      const selectedSet = new Set(selectedIds);
 
-      if (selected.length > 0) {
-        setDeviceEntries(
-          selected.map((id) => ({
-            deviceId: id,
-            name: undefined,
-            model: undefined,
-            // No telemetry values — cards will show "Idle"
-          })),
-        );
-        return;
+      const fallbackEntries: DeviceEntry[] = catalog.map((item) => ({
+        deviceId: item.id,
+        name: item.name,
+        model: item.model,
+        productType: item.productType,
+        role: item.id === selectedId ? 'primary' : selectedSet.has(item.id) ? 'supporting' : 'supporting',
+        socPct: item.id === selectedId ? ecoFlow.batteryPct ?? undefined : undefined,
+        wattsIn: item.id === selectedId ? ecoFlow.inputWatts ?? undefined : undefined,
+        wattsOut: item.id === selectedId ? ecoFlow.outputWatts ?? undefined : undefined,
+        solarWatts: item.id === selectedId ? ecoFlow.solarWatts ?? undefined : undefined,
+      }));
+
+      if (selectedId && !fallbackEntries.find((item) => item.deviceId === selectedId)) {
+        fallbackEntries.unshift({
+          deviceId: selectedId,
+          name: ecoFlow.deviceName || 'Selected EcoFlow Device',
+          model: titleFromModel(undefined, ecoFlow.deviceName || undefined),
+          role: 'primary',
+          socPct: ecoFlow.batteryPct ?? undefined,
+          wattsIn: ecoFlow.inputWatts ?? undefined,
+          wattsOut: ecoFlow.outputWatts ?? undefined,
+          solarWatts: ecoFlow.solarWatts ?? undefined,
+        });
       }
 
-      // 3. No devices at all
-      setDeviceEntries([]);
+      if (mountedRef.current) setDeviceEntries(fallbackEntries);
     } catch {
-      // Silent fail — empty state is fine
-      if (mountedRef.current) {
-        setDeviceEntries([]);
-      }
+      if (mountedRef.current) setDeviceEntries([]);
     }
-  }, []);
+  }, [
+    ecoFlow.selectedDeviceId,
+    ecoFlow.deviceName,
+    ecoFlow.batteryPct,
+    ecoFlow.inputWatts,
+    ecoFlow.outputWatts,
+    ecoFlow.solarWatts,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
-    loadDeviceData();
+    void loadDeviceData();
     return () => {
       mountedRef.current = false;
     };
   }, [loadDeviceData]);
 
-  // Refresh device data when telemetry updates (provider may have new per-device data)
   useEffect(() => {
-    loadDeviceData();
-  }, [telemetry, loadDeviceData]);
+    void loadDeviceData();
+  }, [telemetry, ecoFlowVersion, loadDeviceData]);
 
-  // Pull-to-refresh — also triggers EcoFlow re-poll
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadDeviceData();
-    ecoFlow.refresh();
+    void loadDeviceData();
+    void ecoFlowRefresh();
     setTimeout(() => setRefreshing(false), 800);
-  }, [loadDeviceData, ecoFlow.refresh]);
+  }, [loadDeviceData, ecoFlowRefresh]);
 
-  // ── Derive display values ───────────────────────────────────────────
+  const handleMakePrimary = useCallback(
+    async (entry: DeviceEntry) => {
+      if (!entry?.deviceId) return;
+
+      setPrimaryEcoFlowPowerDevice(entry.deviceId, entry.name ?? entry.model ?? null);
+
+      if (mountedRef.current) {
+        setDeviceEntries((prev) =>
+          prev.map((item) => ({
+            ...item,
+            role: item.deviceId === entry.deviceId ? 'primary' : 'supporting',
+          })),
+        );
+        setExpandedDeviceId(entry.deviceId);
+      }
+
+      await ecoFlowRefresh();
+      await loadDeviceData();
+    },
+    [ecoFlowRefresh, loadDeviceData],
+  );
+
   const bat = telemetry?.battery;
   const sol = telemetry?.solar;
   const flags = telemetry?.flags;
-  const device = telemetry?.device;
-  const source = telemetry?.source;
-  const ts = telemetry?.timestamp;
 
-  const isStale = flags?.stale === true;
-  const isCharging = flags?.charging === true;
-  const isSimulator = source === 'sim' || source === 'cloud'; // cloud includes sim mode
-  const hasTelemetry = telemetry !== null;
+  const selectedDeviceEntry = useMemo(() => {
+    if (selectedEcoFlowDeviceId) {
+      const exact = deviceEntries.find((entry) => entry.deviceId === selectedEcoFlowDeviceId);
+      if (exact) return exact;
+    }
+    return deviceEntries.find((entry) => entry.role === 'primary') ?? deviceEntries[0] ?? null;
+  }, [deviceEntries, selectedEcoFlowDeviceId]);
 
-  // ── System capacity from connected devices (Phase 3H-3) ─────────────
-  // Aggregate capacity across all device entries using model-name lookup.
-  // Falls back to DEV_DEFAULT_CAPACITY_WH when no devices have a known model.
-  const systemCapacityWh = useMemo(
-    () => computeSystemCapacity(deviceEntries) ?? DEV_DEFAULT_CAPACITY_WH,
-    [deviceEntries],
+  const attachedDevices = useMemo(() => {
+    if (!selectedDeviceEntry) return deviceEntries;
+    return [
+      selectedDeviceEntry,
+      ...deviceEntries.filter((entry) => entry.deviceId !== selectedDeviceEntry.deviceId),
+    ];
+  }, [deviceEntries, selectedDeviceEntry]);
+
+  const selectedSoc = selectedDeviceEntry?.socPct ?? ecoFlow.batteryPct ?? bat?.socPct;
+  const selectedWattsIn = selectedDeviceEntry?.wattsIn ?? ecoFlow.inputWatts ?? bat?.wattsIn;
+  const selectedWattsOut = selectedDeviceEntry?.wattsOut ?? ecoFlow.outputWatts ?? bat?.wattsOut;
+  const selectedSolarWatts = selectedDeviceEntry?.solarWatts ?? ecoFlow.solarWatts ?? sol?.watts;
+
+  const totalInput = attachedDevices.reduce((sum, entry) => sum + (entry.wattsIn ?? 0), 0) || (selectedWattsIn ?? 0);
+  const totalOutput = attachedDevices.reduce((sum, entry) => sum + (entry.wattsOut ?? 0), 0) || (selectedWattsOut ?? 0);
+  const totalSolar = attachedDevices.reduce((sum, entry) => sum + (entry.solarWatts ?? 0), 0) || (selectedSolarWatts ?? 0);
+  const netFlow = totalInput + totalSolar - totalOutput;
+
+  const ecoCfg = resolvePowerReadiness({
+    providerId: 'EcoFlow',
+    connectionMethod: 'cloud',
+    connectionState:
+      ecoFlow.status === 'live'
+        ? 'connected'
+        : ecoFlow.status === 'degraded'
+          ? 'reconnecting'
+          : ecoFlow.status === 'offline'
+            ? (attachedDevices.length > 0 ? 'disconnected' : 'unavailable')
+            : 'unavailable',
+    hasTelemetry: attachedDevices.some(
+      (entry) => entry.socPct != null || entry.wattsIn != null || entry.wattsOut != null,
+    ),
+    hasStoredSnapshot: attachedDevices.length > 0,
+  });
+  const selectedTitle = titleFromModel(
+    selectedDeviceEntry?.model ?? undefined,
+    selectedDeviceEntry?.name ?? ecoFlow.deviceName,
   );
 
-  // ── EcoFlow provider status (Phase 4B / V1.1) ────────────────────────
-  // Determine the provider card display based on useEcoFlowLive state.
-  // V1.1: status is now 'standby' | 'live' | 'degraded' | 'offline'
-  const getEcoFlowProviderDisplay = () => {
-    const isLive = ecoFlow.status === 'live';
-    const isDegraded = ecoFlow.status === 'degraded';
-    const isOffline = ecoFlow.status === 'offline';
-    const isStandbyEco = ecoFlow.status === 'standby';
-
-    // Status color for the main dot
-    const dotColor = isLive
-      ? '#34C759'
-      : isDegraded
-        ? '#FF9500'
-        : isOffline
-          ? '#FF3B30'
-          : palette.textMuted;
-
-    // Status text
-    let statusText = 'Standby';
-    if (isLive) {
-      statusText = ecoFlow.deviceName
-        ? `Live — ${ecoFlow.deviceName}`
-        : 'Live';
-    } else if (isDegraded) {
-      statusText = ecoFlow.deviceName
-        ? `Degraded — ${ecoFlow.deviceName}`
-        : 'Connection unstable';
-    } else if (isOffline) {
-      statusText = ecoFlow.error || 'Offline';
-    } else if (isStandbyEco) {
-      statusText = ecoFlow.error || 'EcoFlow not configured';
-    }
-
-    return { dotColor, statusText, isLive };
-  };
-
-  const ecoDisplay = getEcoFlowProviderDisplay();
-
-  // Determine provider status text (legacy — for non-EcoFlow providers)
-  const getProviderStatus = (): { text: string; color: string; icon: string } => {
-    if (!hasTelemetry) {
-      return { text: 'No Data', color: palette.textMuted, icon: 'radio-outline' };
-    }
-    if (isStale) {
-      return { text: 'Stale / Pending', color: '#FF9500', icon: 'time-outline' };
-    }
-    if (device?.vendor === 'EcoFlow' || device?.vendor === 'Mock') {
-      // Check if this is simulation
-      if (device?.id === 'mock-dev' || device?.firmware) {
-        return { text: 'Simulator Active', color: '#5AC8FA', icon: 'pulse-outline' };
-      }
-      if (device?.id?.includes('aggregate')) {
-        return { text: 'Multi-Device Connected', color: '#34C759', icon: 'git-merge-outline' };
-      }
-      return { text: 'Connected', color: '#34C759', icon: 'checkmark-circle-outline' };
-    }
-    return { text: 'Active', color: '#34C759', icon: 'checkmark-circle-outline' };
-  };
-
-  const providerStatus = getProviderStatus();
-
-  // Format last update time
-  const lastUpdate = ts
-    ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : '--:--:--';
-
-  // Format EcoFlow last poll time (V1.1: lastUpdatedAt replaces lastPollAt)
-  const ecoLastPoll = ecoFlow.lastUpdatedAt
-    ? new Date(ecoFlow.lastUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : null;
-
+  const heroStateText = (() => {
+    if (ecoCfg.state === 'unavailable') return 'Provider unavailable';
+    if (ecoCfg.state === 'partial') return 'Provider state limited';
+    if (netFlow > 30) return 'Charging from external source';
+    if (netFlow < -30) return 'Discharging under load';
+    return 'Power state balanced';
+  })();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* ── Header ──────────────────────────────────────────── */}
       <View style={[styles.header, { backgroundColor: palette.panel }]}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={22} color={palette.amber} />
         </TouchableOpacity>
+
         <View style={styles.headerCenter}>
-          <Text style={[styles.headerLabel, { color: palette.textMuted }]}>
-            ECS SYSTEMS
-          </Text>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>
-            POWER CENTER
-          </Text>
+          <Text style={[styles.headerLabel, { color: palette.textMuted }]}>ECS SYSTEMS</Text>
+          <Text style={[styles.headerTitle, { color: palette.text }]}>POWER CENTER</Text>
         </View>
-        <View style={styles.headerRight}>
-          {isStale && (
-            <View style={[styles.staleBadgeHeader, { backgroundColor: '#FF9500' + '20', borderColor: '#FF9500' + '40' }]}>
-              <Ionicons name="warning-outline" size={12} color="#FF9500" />
-            </View>
-          )}
-        </View>
-        {/* Gold rail */}
+
+        <TouchableOpacity
+          style={[styles.headerAction, { borderColor: palette.border, backgroundColor: palette.border + '18' }]}
+          onPress={() => router.push('/power/devices')}
+          activeOpacity={0.75}
+        >
+          <Ionicons name="hardware-chip-outline" size={16} color={palette.amber} />
+        </TouchableOpacity>
+
         <View style={[styles.goldRail, { backgroundColor: GOLD_RAIL.major }]} />
       </View>
 
-      {/* ── Content ─────────────────────────────────────────── */}
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
+            {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={palette.amber}
-            colors={[palette.amber]}
           />
         }
-        >
-          {/* ── Power Flow Diagram ──────────────────────────── */}
-          <View style={[styles.flowDiagramCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-            <Text style={[styles.flowDiagramTitle, { color: palette.amber }]}>
-              ENERGY FLOW
-            </Text>
-            <View style={[styles.flowDiagramDivider, { backgroundColor: GOLD_RAIL.section }]} />
-            <PowerFlowDiagram
-              socPct={bat?.socPct}
-              wattsIn={bat?.wattsIn}
-              wattsOut={bat?.wattsOut}
-              solarWatts={sol?.watts}
-              isStale={isStale}
-              palette={palette}
-            />
-          </View>
-
-          {/* ── Power Forecast Panel (Phase 3H-2 / 3H-3) ──────── */}
-          <PowerForecastPanel
-            socPct={bat?.socPct}
-            wattsIn={bat?.wattsIn}
-            wattsOut={bat?.wattsOut}
-            capacityWh={systemCapacityWh}
-            stale={isStale}
-            palette={palette}
-          />
-
-          {/* ── Power Events Panel (Phase 3I-3) ────────────────── */}
-          <PowerEventsPanel palette={palette} />
-
-          {/* ── Device Contribution Panel (Phase 3G-2) ──────── */}
-          <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
-            DEVICES
-          </Text>
-
-
-          {deviceEntries.length > 0 ? (
-            <View style={styles.deviceList}>
-              {deviceEntries.map((entry) => (
-                <PowerDeviceCard
-                  key={entry.deviceId}
-                  name={entry.name}
-                  model={entry.model}
-                  deviceId={entry.deviceId}
-                  socPct={entry.socPct}
-                  wattsIn={entry.wattsIn}
-                  wattsOut={entry.wattsOut}
-                  solarWatts={entry.solarWatts}
-                  palette={palette}
-                />
-              ))}
-            </View>
-          ) : (
-            <View style={[styles.deviceEmptyCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-              <Ionicons name="hardware-chip-outline" size={28} color={palette.textMuted} />
-              <Text style={[styles.deviceEmptyText, { color: palette.textMuted }]}>
-                No device telemetry available
-              </Text>
-              <Text style={[styles.deviceEmptyHint, { color: palette.textMuted }]}>
-                Select devices in Manage Devices to see per-device contributions here.
-              </Text>
-            </View>
-          )}
-
-          {/* ── SOC Hero Card ─────────────────────────────────── */}
-
+      >
         <View style={[styles.heroCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
           <View style={styles.heroTop}>
             <View style={styles.heroLeft}>
-              <Text style={[styles.heroLabel, { color: palette.textMuted }]}>
-                BATTERY
+              <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>SYSTEM OVERVIEW</Text>
+              <Text style={[styles.heroTitle, { color: palette.text }]}>{heroStateText}</Text>
+              <Text style={[styles.heroCaption, { color: palette.textMuted }]}>
+                Live, limited, or unavailable provider state with attached-device context.
               </Text>
-              <View style={styles.heroValueRow}>
-                <Text
-                  style={[
-                    styles.heroValue,
-                    { color: socColor(bat?.socPct, palette) },
-                  ]}
-                >
-                  {bat?.socPct !== undefined ? `${bat.socPct.toFixed(1)}` : '--'}
+              <View style={styles.heroStatusRow}>
+                <View style={[styles.statusPill, { backgroundColor: ecoCfg.color + '12', borderColor: ecoCfg.color + '28' }]}>
+                  <Ionicons name={ecoCfg.icon as any} size={13} color={ecoCfg.color} />
+                  <Text style={[styles.statusPillText, { color: ecoCfg.color }]}>{ecoCfg.label}</Text>
+                </View>
+                <Text style={[styles.heroSubtext, { color: palette.textMuted }]}>
+                  {attachedDevices.length} system{attachedDevices.length === 1 ? '' : 's'} · {ecoCfg.summary}
                 </Text>
-                <Text style={[styles.heroUnit, { color: palette.textMuted }]}>%</Text>
               </View>
-              <SOCBar soc={bat?.socPct} palette={palette} />
             </View>
 
             <View style={styles.heroRight}>
-              {/* Charging indicator */}
+              <Text style={[styles.heroNetLabel, { color: palette.textMuted }]}>NET FLOW</Text>
+              <Text style={[styles.heroNetValue, { color: netFlow >= 0 ? '#34C759' : '#FF9500' }]}>
+                {netFlow >= 0 ? '+' : ''}{fmtWatts(netFlow)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.summaryGrid}>
+            <SummaryStat
+              label="TOTAL INPUT"
+              value={fmtWatts(totalInput + totalSolar)}
+              valueColor={totalInput + totalSolar > 0 ? '#34C759' : undefined}
+              palette={palette}
+            />
+            <SummaryStat
+              label="TOTAL OUTPUT"
+              value={fmtWatts(totalOutput)}
+              valueColor={totalOutput > 0 ? '#FF9500' : undefined}
+              palette={palette}
+            />
+            <SummaryStat
+              label="PRIMARY SOC"
+              value={selectedSoc != null ? `${Math.round(selectedSoc)}%` : '--'}
+              valueColor={socColor(selectedSoc, palette)}
+              palette={palette}
+            />
+            <SummaryStat
+              label="PRIMARY DEVICE"
+              value={selectedTitle}
+              palette={palette}
+            />
+          </View>
+        </View>
+
+        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
+          ENERGY FLOW
+        </Text>
+
+        <View style={[styles.flowCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
+          <Text style={[styles.flowIntro, { color: palette.textMuted }]}>
+            Source → Battery → Loads
+          </Text>
+
+          <PowerFlowDiagram
+            socPct={selectedSoc}
+            wattsIn={selectedWattsIn}
+            wattsOut={selectedWattsOut}
+            solarWatts={selectedSolarWatts}
+            isStale={flags?.stale === true}
+            palette={palette}
+          />
+
+          <View style={styles.flowFooter}>
+            <View style={styles.flowCol}>
+              <Text style={[styles.flowLabel, { color: palette.textMuted }]}>SOURCE</Text>
+              <Text style={[styles.flowValue, { color: palette.text }]}>
+                {fmtWatts(totalInput + totalSolar)}
+              </Text>
+            </View>
+            <Ionicons name="arrow-forward" size={18} color={palette.amber} />
+            <View style={styles.flowCol}>
+              <Text style={[styles.flowLabel, { color: palette.textMuted }]}>BATTERY</Text>
+              <Text style={[styles.flowValue, { color: socColor(selectedSoc, palette) }]}>
+                {selectedSoc != null ? `${Math.round(selectedSoc)}%` : '--'}
+              </Text>
+            </View>
+            <Ionicons name="arrow-forward" size={18} color={palette.amber} />
+            <View style={styles.flowCol}>
+              <Text style={[styles.flowLabel, { color: palette.textMuted }]}>LOADS</Text>
+              <Text style={[styles.flowValue, { color: palette.text }]}>
+                {fmtWatts(totalOutput)}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
+          ATTACHED SYSTEMS
+        </Text>
+
+        <View style={styles.deviceList}>
+          {attachedDevices.length === 0 ? (
+            <View style={[styles.emptyCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
+              <Ionicons name="hardware-chip-outline" size={26} color={palette.textMuted} />
+              <Text style={[styles.emptyTitle, { color: palette.text }]}>No attached devices</Text>
+              <Text style={[styles.emptyHint, { color: palette.textMuted }]}>
+                Add a provider to start viewing connected, partial, or manual power state.
+              </Text>
+            </View>
+          ) : attachedDevices.map((entry) => {
+            const isPrimary = selectedDeviceEntry?.deviceId === entry.deviceId;
+            const isExpanded = expandedDeviceId === entry.deviceId;
+            const title = titleFromModel(entry.model, entry.name);
+            const restricted = entry.restricted === true;
+            const statusText = restricted ? 'Restricted' : isPrimary ? 'Primary' : 'Attached';
+            const statusColor = restricted ? '#FF9500' : isPrimary ? '#34C759' : palette.textMuted;
+
+            return (
               <View
-                style={[
-                  styles.chargingBadge,
-                  {
-                    backgroundColor: isCharging
-                      ? '#34C759' + '15'
-                      : palette.border + '40',
-                    borderColor: isCharging
-                      ? '#34C759' + '40'
-                      : palette.border,
-                  },
-                ]}
+                key={entry.deviceId}
+                style={[styles.deviceCard, { backgroundColor: palette.panel, borderColor: palette.border }]}
               >
-                <Ionicons
-                  name={isCharging ? 'flash' : 'flash-outline'}
-                  size={16}
-                  color={isCharging ? '#34C759' : palette.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.chargingText,
-                    { color: isCharging ? '#34C759' : palette.textMuted },
-                  ]}
+                <TouchableOpacity
+                  activeOpacity={0.82}
+                  onPress={() => setExpandedDeviceId((prev) => (prev === entry.deviceId ? null : entry.deviceId))}
+                  style={styles.deviceRow}
                 >
-                  {isCharging ? 'CHARGING' : 'DISCHARGING'}
-                </Text>
+                  <View style={styles.deviceLeft}>
+                    <View
+                      style={[
+                        styles.deviceIcon,
+                        { backgroundColor: isPrimary ? '#34C75914' : palette.border + '35' },
+                      ]}
+                    >
+                      <Ionicons
+                        name={restricted ? 'alert-circle-outline' : isPrimary ? 'flash-outline' : 'hardware-chip-outline'}
+                        size={18}
+                        color={restricted ? '#FF9500' : isPrimary ? '#34C759' : palette.amber}
+                      />
+                    </View>
+
+                    <View style={styles.deviceIdentity}>
+                      <View style={styles.deviceTitleRow}>
+                        <Text style={[styles.deviceTitle, { color: palette.text }]}>{title}</Text>
+                        <View
+                          style={[
+                            styles.deviceStatusPill,
+                            {
+                              backgroundColor: statusColor + '12',
+                              borderColor: statusColor + '28',
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.deviceStatusText, { color: statusColor }]}>{statusText}</Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.deviceSubtitle, { color: palette.textMuted }]}>
+                        {prettyProductType(entry.productType)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.deviceRight}>
+                    <View style={styles.deviceMetric}>
+                      <Text style={[styles.deviceMetricValue, { color: socColor(entry.socPct, palette) }]}>
+                        {entry.socPct != null ? `${Math.round(entry.socPct)}%` : '--'}
+                      </Text>
+                      <Text style={[styles.deviceMetricLabel, { color: palette.textMuted }]}>SOC</Text>
+                    </View>
+                    <View style={styles.deviceMetric}>
+                      <Text style={[styles.deviceMetricValue, { color: palette.text }]}>
+                        {fmtWatts(entry.wattsIn)}
+                      </Text>
+                      <Text style={[styles.deviceMetricLabel, { color: palette.textMuted }]}>IN</Text>
+                    </View>
+                    <View style={styles.deviceMetric}>
+                      <Text style={[styles.deviceMetricValue, { color: palette.text }]}>
+                        {fmtWatts(entry.wattsOut)}
+                      </Text>
+                      <Text style={[styles.deviceMetricLabel, { color: palette.textMuted }]}>OUT</Text>
+                    </View>
+                    <Ionicons
+                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={palette.textMuted}
+                    />
+                  </View>
+                </TouchableOpacity>
+
+                {isExpanded && (
+                  <View style={[styles.deviceExpanded, { borderTopColor: GOLD_RAIL.subsection }]}>
+                    <Text style={[styles.expandedLabel, { color: palette.textMuted }]}>DEVICE SNAPSHOT</Text>
+                    {restricted ? (
+                      <View style={[styles.restrictedBox, { backgroundColor: '#FF950012', borderColor: '#FF950030' }]}>
+                        <Ionicons name="warning-outline" size={16} color="#FF9500" />
+                        <Text style={[styles.restrictedText, { color: '#FF9500' }]}>
+                          {entry.restrictionReason || 'Cloud access unavailable for this device.'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <>
+                        <View style={styles.summaryGrid}>
+                          <SummaryStat
+                            label="INPUT"
+                            value={fmtWatts(entry.wattsIn)}
+                            valueColor={entry.wattsIn && entry.wattsIn > 0 ? '#34C759' : undefined}
+                            palette={palette}
+                          />
+                          <SummaryStat
+                            label="OUTPUT"
+                            value={fmtWatts(entry.wattsOut)}
+                            valueColor={entry.wattsOut && entry.wattsOut > 0 ? '#FF9500' : undefined}
+                            palette={palette}
+                          />
+                          <SummaryStat
+                            label="SOLAR"
+                            value={fmtWatts(entry.solarWatts)}
+                            valueColor={entry.solarWatts && entry.solarWatts > 0 ? '#FFD700' : undefined}
+                            palette={palette}
+                          />
+                          <SummaryStat
+                            label="SOC"
+                            value={entry.socPct != null ? `${Math.round(entry.socPct)}%` : '--'}
+                            valueColor={socColor(entry.socPct, palette)}
+                            palette={palette}
+                          />
+                        </View>
+
+                        {!isPrimary && (
+                          <TouchableOpacity
+                            activeOpacity={0.78}
+                            onPress={() => handleMakePrimary(entry)}
+                            style={[styles.makePrimaryBtn, { borderColor: palette.amber + '40', backgroundColor: palette.border + '20' }]}
+                          >
+                            <Ionicons name="swap-up-outline" size={14} color={palette.amber} />
+                            <Text style={[styles.makePrimaryBtnText, { color: palette.amber }]}>MAKE PRIMARY</Text>
+                          </TouchableOpacity>
+                        )}
+                      </>
+                    )}
+
+                    <Text style={[styles.deviceIdText, { color: palette.textMuted }]}>
+                      {entry.deviceId}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+
+        {selectedDeviceEntry && (
+          <>
+            <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
+              DEVICE DETAILS
+            </Text>
+
+            <View style={[styles.detailsCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
+              <View style={styles.detailsHeader}>
+                <View>
+                  <Text style={[styles.detailsTitle, { color: palette.text }]}>{selectedTitle}</Text>
+                  <Text style={[styles.detailsSubtitle, { color: palette.textMuted }]}>
+                    {selectedDeviceEntry.deviceId}
+                  </Text>
+                </View>
+
+                <View style={[styles.statusPill, { backgroundColor: ecoCfg.color + '12', borderColor: ecoCfg.color + '28' }]}>
+                  <Ionicons name={ecoCfg.icon} size={13} color={ecoCfg.color} />
+                  <Text style={[styles.statusPillText, { color: ecoCfg.color }]}>{ecoCfg.label}</Text>
+                </View>
               </View>
 
-              {/* Device model */}
-              <Text style={[styles.deviceModel, { color: palette.textMuted }]}>
-                {device?.model || device?.vendor || 'Unknown'}
+              <Text style={[styles.detailsIntro, { color: palette.textMuted }]}>
+                Focused view of the current primary asset and its live operating state.
               </Text>
 
-              {/* Last update */}
-              <Text style={[styles.lastUpdate, { color: palette.textMuted }]}>
-                {lastUpdate}
-              </Text>
-            </View>
-          </View>
-
-          {/* Stale banner */}
-          {isStale && (
-            <View style={[styles.staleBanner, { backgroundColor: '#FF9500' + '10', borderColor: '#FF9500' + '30' }]}>
-              <Ionicons name="warning-outline" size={14} color="#FF9500" />
-              <Text style={[styles.staleBannerText, { color: '#FF9500' }]}>
-                Telemetry data is stale — waiting for fresh readings
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* ── Live Telemetry Section ────────────────────────── */}
-        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
-          LIVE TELEMETRY
-        </Text>
-
-        <View style={[styles.telemetryCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-          <TelemetryStat
-            icon="battery-half-outline"
-            label="SOC"
-            value={bat?.socPct !== undefined ? `${bat.socPct.toFixed(1)}%` : '--'}
-            valueColor={socColor(bat?.socPct, palette)}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="arrow-down-outline"
-            label="Watts In"
-            value={fmtWatts(bat?.wattsIn)}
-            valueColor={bat?.wattsIn && bat.wattsIn > 0 ? '#34C759' : undefined}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="arrow-up-outline"
-            label="Watts Out"
-            value={fmtWatts(bat?.wattsOut)}
-            valueColor={bat?.wattsOut && bat.wattsOut > 50 ? '#FF9500' : undefined}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="sunny-outline"
-            label="Solar"
-            value={fmtWatts(sol?.watts)}
-            valueColor={sol?.watts && sol.watts > 0 ? '#FFD700' : undefined}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="speedometer-outline"
-            label="Voltage"
-            value={fmtVolts(bat?.volts)}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="thermometer-outline"
-            label="Temperature"
-            value={fmtTemp(bat?.tempC)}
-            palette={palette}
-          />
-          <TelemetryStat
-            icon="time-outline"
-            label="Est. Runtime"
-            value={fmtRuntime(bat?.estRuntimeMin)}
-            palette={palette}
-          />
-          {/* Last row — no bottom border */}
-          <View style={styles.lastStatRow}>
-            <Ionicons name="radio-outline" size={16} color={palette.amber} />
-            <Text style={[statStyles.label, { color: palette.textMuted }]}>SOURCE</Text>
-            <Text style={[statStyles.value, { color: palette.text, fontSize: 13 }]}>
-              {source?.toUpperCase() || '--'}
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Flags Section ─────────────────────────────────── */}
-        <View style={[styles.flagsRow]}>
-          {[
-            {
-              label: 'Charging',
-              active: flags?.charging === true,
-              icon: 'flash-outline',
-              activeColor: '#34C759',
-            },
-            {
-              label: 'Inverter',
-              active: flags?.inverterOn === true,
-              icon: 'power-outline',
-              activeColor: '#5AC8FA',
-            },
-            {
-              label: 'Low Battery',
-              active: flags?.lowBattery === true,
-              icon: 'battery-dead-outline',
-              activeColor: '#FF3B30',
-            },
-            {
-              label: 'Stale',
-              active: flags?.stale === true,
-              icon: 'time-outline',
-              activeColor: '#FF9500',
-            },
-          ].map((flag) => (
-            <View
-              key={flag.label}
-              style={[
-                styles.flagChip,
-                {
-                  backgroundColor: flag.active
-                    ? flag.activeColor + '15'
-                    : palette.panel,
-                  borderColor: flag.active
-                    ? flag.activeColor + '40'
-                    : palette.border,
-                },
-              ]}
-            >
-              <Ionicons
-                name={flag.icon}
-                size={14}
-                color={flag.active ? flag.activeColor : palette.textMuted}
+              <DetailRow
+                label="Battery"
+                value={selectedSoc != null ? `${Math.round(selectedSoc)}%` : '--'}
+                palette={palette}
+                valueColor={socColor(selectedSoc, palette)}
               />
-              <Text
-                style={[
-                  styles.flagLabel,
-                  { color: flag.active ? flag.activeColor : palette.textMuted },
-                ]}
-              >
-                {flag.label}
-              </Text>
+              <DetailRow
+                label="Input"
+                value={fmtWatts(selectedWattsIn)}
+                palette={palette}
+                valueColor={selectedWattsIn && selectedWattsIn > 0 ? '#34C759' : undefined}
+              />
+              <DetailRow
+                label="Output"
+                value={fmtWatts(selectedWattsOut)}
+                palette={palette}
+                valueColor={selectedWattsOut && selectedWattsOut > 0 ? '#FF9500' : undefined}
+              />
+              <DetailRow
+                label="Solar"
+                value={fmtWatts(selectedSolarWatts)}
+                palette={palette}
+                valueColor={selectedSolarWatts && selectedSolarWatts > 0 ? '#FFD700' : undefined}
+              />
+              <DetailRow label="Voltage" value={fmtVolts(bat?.volts)} palette={palette} />
+              <DetailRow label="Temperature" value={fmtTemp(bat?.tempC)} palette={palette} />
+              <DetailRow label="Runtime" value={fmtRuntimeMinutes(bat?.estRuntimeMin)} palette={palette} />
+              <DetailRow label="Telemetry Age" value={ecoFlow.updatedAgoText || '--'} palette={palette} />
             </View>
-          ))}
-        </View>
-
-        {/* ── Provider Section (Phase 4B — EcoFlow Live) ────── */}
-        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
-          PROVIDER
-        </Text>
-
-        <View style={[styles.providerCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-          {/* ── Main provider row ──────────────────────────────── */}
-          <View style={styles.providerRow}>
-            <View style={[styles.providerIcon, { backgroundColor: palette.amber + '12' }]}>
-              <Ionicons name="flash" size={22} color={palette.amber} />
-            </View>
-            <View style={styles.providerInfo}>
-              <Text style={[styles.providerName, { color: palette.text }]}>
-                EcoFlow
-              </Text>
-              <View style={styles.providerStatusRow}>
-                <View
-                  style={[
-                    styles.statusDot,
-                    { backgroundColor: ecoDisplay.dotColor },
-                  ]}
-                />
-                <Text
-                  style={[
-                    styles.providerStatusText,
-                    { color: ecoDisplay.dotColor },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {ecoDisplay.statusText}
-                </Text>
-              </View>
-            </View>
-            <EcoFlowStatusBadge status={ecoFlow.status} palette={palette} />
-          </View>
-
-          {/* ── EcoFlow Live Telemetry Chips (visible when LIVE) ── */}
-          {ecoDisplay.isLive && (
-            <View style={[styles.ecoLiveSection, { borderTopColor: GOLD_RAIL.subsection }]}>
-              <View style={styles.ecoChipRow}>
-                <EcoFlowChip
-                  icon="battery-half-outline"
-                  label="BATTERY"
-                  value={ecoFlow.batteryPct !== null ? `${ecoFlow.batteryPct}%` : '--'}
-                  valueColor={socColor(ecoFlow.batteryPct, palette)}
-                  palette={palette}
-                />
-                <EcoFlowChip
-                  icon="sunny-outline"
-                  label="SOLAR"
-                  value={fmtWatts(ecoFlow.solarWatts)}
-                  valueColor={ecoFlow.solarWatts && ecoFlow.solarWatts > 0 ? '#FFD700' : undefined}
-                  palette={palette}
-                />
-              </View>
-              <View style={styles.ecoChipRow}>
-                <EcoFlowChip
-                  icon="arrow-up-outline"
-                  label="OUTPUT"
-                  value={fmtWatts(ecoFlow.outputWatts)}
-                  valueColor={ecoFlow.outputWatts && ecoFlow.outputWatts > 50 ? '#FF9500' : undefined}
-                  palette={palette}
-                />
-                <EcoFlowChip
-                  icon="arrow-down-outline"
-                  label="INPUT"
-                  value={fmtWatts(ecoFlow.inputWatts)}
-                  valueColor={ecoFlow.inputWatts && ecoFlow.inputWatts > 0 ? '#34C759' : undefined}
-                  palette={palette}
-                />
-              </View>
-
-              {/* Last poll timestamp */}
-              {ecoLastPoll && (
-                <View style={styles.ecoTimestampRow}>
-                  <Ionicons name="time-outline" size={11} color={palette.textMuted} />
-                  <Text style={[styles.ecoTimestamp, { color: palette.textMuted }]}>
-                    Last poll: {ecoLastPoll}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* ── Standby / Error message ──────────────────────── */}
-          {(ecoFlow.status === 'standby' || ecoFlow.status === 'error') && (
-            <View style={[styles.ecoMessageSection, { borderTopColor: GOLD_RAIL.subsection }]}>
-              <View style={styles.ecoMessageRow}>
-                <Ionicons
-                  name={ecoFlow.status === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
-                  size={16}
-                  color={ecoFlow.status === 'error' ? '#FF3B30' : palette.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.ecoMessageText,
-                    {
-                      color: ecoFlow.status === 'error' ? '#FF3B30' : palette.textMuted,
-                    },
-                  ]}
-                >
-                  {ecoFlow.error || 'EcoFlow not configured'}
-                </Text>
-              </View>
-              {ecoFlow.status === 'standby' && (
-                <Text style={[styles.ecoMessageHint, { color: palette.textMuted }]}>
-                  Configure your EcoFlow API keys in Supabase secrets, or select a device in Manage Devices.
-                </Text>
-              )}
-            </View>
-          )}
-
-          {/* ── Legacy device info (from usePowerTelemetry) ──── */}
-          {device && !ecoDisplay.isLive && (
-            <View style={[styles.deviceInfoSection, { borderTopColor: GOLD_RAIL.subsection }]}>
-              <View style={styles.deviceInfoRow}>
-                <Text style={[styles.deviceInfoLabel, { color: palette.textMuted }]}>Device ID</Text>
-                <Text style={[styles.deviceInfoValue, { color: palette.text }]}>
-                  {device.id || '--'}
-                </Text>
-              </View>
-              {device.model && (
-                <View style={styles.deviceInfoRow}>
-                  <Text style={[styles.deviceInfoLabel, { color: palette.textMuted }]}>Model</Text>
-                  <Text style={[styles.deviceInfoValue, { color: palette.text }]}>
-                    {device.model}
-                  </Text>
-                </View>
-              )}
-              {device.firmware && (
-                <View style={styles.deviceInfoRow}>
-                  <Text style={[styles.deviceInfoLabel, { color: palette.textMuted }]}>Firmware</Text>
-                  <Text style={[styles.deviceInfoValue, { color: palette.text }]}>
-                    {device.firmware}
-                  </Text>
-                </View>
-              )}
-              {device.serial && (
-                <View style={styles.deviceInfoRow}>
-                  <Text style={[styles.deviceInfoLabel, { color: palette.textMuted }]}>Serial</Text>
-                  <Text style={[styles.deviceInfoValue, { color: palette.text }]}>
-                    {device.serial}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* ── Active device ID (when EcoFlow is live) ──────── */}
-          {ecoDisplay.isLive && ecoFlow.selectedDeviceId && (
-            <View style={[styles.ecoDeviceIdRow, { borderTopColor: GOLD_RAIL.subsection }]}>
-              <Ionicons name="finger-print-outline" size={11} color={palette.textMuted} />
-              <Text style={[styles.ecoDeviceIdText, { color: palette.textMuted }]} numberOfLines={1}>
-                {ecoFlow.selectedDeviceId}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* ── No Telemetry State ────────────────────────────── */}
-        {!hasTelemetry && ecoFlow.status !== 'live' && (
-          <View style={[styles.emptyCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
-            <Ionicons name="battery-dead-outline" size={40} color={palette.textMuted} />
-            <Text style={[styles.emptyTitle, { color: palette.text }]}>
-              No Telemetry Data
-            </Text>
-            <Text style={[styles.emptyDesc, { color: palette.textMuted }]}>
-              Waiting for power telemetry from a connected device or simulator.
-              Ensure a power connector is attached in the app configuration.
-            </Text>
-            <TouchableOpacity
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, backgroundColor: palette.amber, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 }}
-              onPress={() => router.push('/power/setup')}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add-circle-outline" size={16} color="#000" />
-              <Text style={{ color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 2 }}>ADD POWER SYSTEM</Text>
-            </TouchableOpacity>
-          </View>
+          </>
         )}
 
-        {/* ── Phase 8: Power System Management Buttons ───── */}
-        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section, marginTop: SPACING.md }]}>
-          POWER SYSTEMS
+        <Text style={[styles.sectionLabel, { color: palette.amber, borderBottomColor: GOLD_RAIL.section }]}>
+          POWER ACTIONS
         </Text>
 
-        {/* Add Power System */}
         <TouchableOpacity
-          style={[styles.manageBtn, { backgroundColor: palette.amber, marginBottom: SPACING.sm }]}
-          onPress={() => router.push('/power/setup')}
-          activeOpacity={0.7}
+          style={[styles.actionBtn, { backgroundColor: palette.amber }]}
+          onPress={() => router.push('/power/devices')}
+          activeOpacity={0.76}
         >
-          <Ionicons name="add-circle-outline" size={18} color="#000" />
-          <Text style={[styles.manageBtnText, { color: '#000' }]}>ADD POWER SYSTEM</Text>
+          <Ionicons name="hardware-chip-outline" size={18} color="#000" />
+          <Text style={[styles.actionBtnText, { color: '#000' }]}>MANAGE DEVICES</Text>
           <Ionicons name="chevron-forward" size={16} color="#000" />
         </TouchableOpacity>
 
-        {/* Manage Power Systems */}
         <TouchableOpacity
-          style={[styles.manageBtn, { backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.amber + '40', marginBottom: SPACING.sm }]}
+          style={[styles.actionBtn, { backgroundColor: palette.panel, borderColor: palette.amber + '35', borderWidth: 1 }]}
           onPress={() => router.push('/power/manage')}
-          activeOpacity={0.7}
+          activeOpacity={0.76}
         >
           <Ionicons name="settings-outline" size={18} color={palette.amber} />
-          <Text style={[styles.manageBtnText, { color: palette.amber }]}>MANAGE POWER SYSTEMS</Text>
+          <Text style={[styles.actionBtnText, { color: palette.amber }]}>MANAGE SYSTEMS</Text>
           <Ionicons name="chevron-forward" size={16} color={palette.amber} />
         </TouchableOpacity>
 
-        {/* BLU Power Sources */}
         <TouchableOpacity
-          style={[styles.manageBtn, { backgroundColor: '#2196F3', marginBottom: SPACING.md }]}
+          style={[styles.actionBtn, { backgroundColor: '#2196F3' }]}
           onPress={() => router.push('/power/blu')}
-          activeOpacity={0.7}
+          activeOpacity={0.76}
         >
           <Ionicons name="bluetooth-outline" size={18} color="#FFF" />
-          <Text style={[styles.manageBtnText, { color: '#FFF' }]}>BLU POWER SOURCES</Text>
+          <Text style={[styles.actionBtnText, { color: '#FFF' }]}>DEVICE CONNECTIONS</Text>
           <Ionicons name="chevron-forward" size={16} color="#FFF" />
         </TouchableOpacity>
-
-        {/* ── Supported Power Systems (expanded to 6 providers) ── */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: SPACING.sm, padding: SPACING.md, borderRadius: RADIUS.md, borderWidth: 1, borderColor: palette.amber + '30', backgroundColor: palette.panel }}>
-          <Ionicons name="shield-checkmark-outline" size={18} color={palette.amber} />
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: palette.text, fontSize: 13, fontWeight: '700', letterSpacing: 0.5 }}>Supported Power Systems</Text>
-            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-              {(['EcoFlow', 'Bluetti', 'AnkerSolix', 'Jackery', 'GoalZero', 'Renogy'] as const).map((pid) => {
-                const pd = PROVIDER_DISPLAY[pid];
-                return (
-                  <View key={pid} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: pd.color + '12', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
-                    <Ionicons name={pd.icon} size={10} color={pd.color} />
-                    <Text style={{ color: pd.color, fontSize: 9, fontWeight: '800', letterSpacing: 1 }}>{pd.label}</Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        </View>
 
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -1044,16 +722,11 @@ export default function PowerCenterScreen() {
   );
 }
 
-
-
-
-// ── Styles ───────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
 
-  // ── Header ────────────────────────────────────────────────
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1084,15 +757,10 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     marginTop: 2,
   },
-  headerRight: {
+  headerAction: {
     width: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  staleBadgeHeader: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    height: 36,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -1105,59 +773,24 @@ const styles = StyleSheet.create({
     height: 1.5,
   },
 
-  // ── Content ───────────────────────────────────────────────
   scroll: {
     flex: 1,
   },
   scrollContent: {
     padding: SPACING.lg,
-    paddingBottom: 100,
+    paddingBottom: SPACING.xl,
   },
 
-  // ── Flow Diagram Card ─────────────────────────────────────
-  flowDiagramCard: {
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    padding: SPACING.lg,
-    marginBottom: SPACING.xl,
-  },
-  flowDiagramTitle: {
+  sectionLabel: {
     fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 4,
+    fontWeight: '800',
+    letterSpacing: 3,
     textTransform: 'uppercase',
-    textAlign: 'center',
-  },
-  flowDiagramDivider: {
-    height: 1,
-    marginTop: SPACING.sm,
-    marginBottom: SPACING.xs,
+    borderBottomWidth: GOLD_RAIL.sectionWidth,
+    paddingBottom: 8,
+    marginBottom: SPACING.md,
   },
 
-  // ── Device Contribution Panel (Phase 3G-2) ────────────────
-  deviceList: {
-    marginBottom: SPACING.xl,
-  },
-  deviceEmptyCard: {
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    padding: SPACING.xl,
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: SPACING.xl,
-  },
-  deviceEmptyText: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  deviceEmptyHint: {
-    fontSize: 11,
-    lineHeight: 17,
-    textAlign: 'center',
-  },
-
-  // ── Hero Card ─────────────────────────────────────────────
   heroCard: {
     borderRadius: RADIUS.lg,
     borderWidth: 1,
@@ -1166,301 +799,350 @@ const styles = StyleSheet.create({
   },
   heroTop: {
     flexDirection: 'row',
-    gap: SPACING.lg,
+    alignItems: 'flex-start',
+    gap: 12,
   },
   heroLeft: {
     flex: 1,
   },
-  heroLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 4,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  heroValueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 2,
-  },
-  heroValue: {
-    fontSize: 48,
-    fontWeight: '900',
-    fontFamily: 'Courier',
-    letterSpacing: -1,
-  },
-  heroUnit: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
   heroRight: {
     alignItems: 'flex-end',
-    justifyContent: 'center',
-    gap: 8,
+    minWidth: 110,
   },
-  chargingBadge: {
+  heroEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    marginTop: 6,
+  },
+  heroCaption: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+    maxWidth: '92%',
+  },
+  heroStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    flexWrap: 'wrap',
+  },
+  heroSubtext: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  heroNetLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  heroNetValue: {
+    fontSize: 28,
+    fontWeight: '900',
+    marginTop: 6,
+    textAlign: 'right',
+  },
+
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    borderWidth: 1,
+    borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
   },
-  chargingText: {
+  statusPillText: {
     fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 2,
-  },
-  deviceModel: {
-    fontSize: 12,
-    fontWeight: '600',
-    fontFamily: 'Courier',
-  },
-  lastUpdate: {
-    fontSize: 11,
-    fontFamily: 'Courier',
+    letterSpacing: 1.3,
   },
 
-  // ── Stale banner ──────────────────────────────────────────
-  staleBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: SPACING.md,
-    padding: SPACING.sm,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-  },
-  staleBannerText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-
-  // ── Section label ─────────────────────────────────────────
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 4,
-    marginBottom: SPACING.md,
-    borderBottomWidth: GOLD_RAIL.sectionWidth,
-    paddingBottom: 8,
-    textTransform: 'uppercase',
-  },
-
-  // ── Telemetry card ────────────────────────────────────────
-  telemetryCard: {
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    paddingHorizontal: SPACING.lg,
-    paddingTop: 4,
-    paddingBottom: 4,
-    marginBottom: SPACING.lg,
-  },
-  lastStatRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-  },
-
-  // ── Flags row ─────────────────────────────────────────────
-  flagsRow: {
+  summaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: SPACING.xl,
+    gap: 10,
+    marginTop: SPACING.md,
   },
-  flagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
+  summaryStat: {
+    flexGrow: 1,
+    minWidth: '47%',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
   },
-  flagLabel: {
-    fontSize: 10,
+  summaryStatLabel: {
+    fontSize: 8,
     fontWeight: '700',
-    letterSpacing: 1,
+    letterSpacing: 2,
     textTransform: 'uppercase',
   },
+  summaryStatValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 4,
+  },
 
-  // ── Provider card ─────────────────────────────────────────
-  providerCard: {
+  flowCard: {
     borderRadius: RADIUS.lg,
     borderWidth: 1,
     padding: SPACING.lg,
     marginBottom: SPACING.xl,
   },
-  providerRow: {
+  flowIntro: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 10,
+    letterSpacing: 0.2,
+  },
+  flowFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: SPACING.md,
+  },
+  flowCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  flowLabel: {
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
+  flowValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 6,
+    textAlign: 'center',
+  },
+
+  deviceList: {
+    gap: SPACING.sm,
+    marginBottom: SPACING.xl,
+  },
+  deviceCard: {
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowOpacity: 0,
+  },
+  deviceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+  },
+  deviceLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    flex: 1,
   },
-  providerIcon: {
-    width: 44,
-    height: 44,
+  deviceRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  deviceIcon: {
+    width: 40,
+    height: 40,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  providerInfo: {
+  deviceIdentity: {
     flex: 1,
+    gap: 4,
   },
-  providerName: {
-    fontSize: 16,
+  deviceTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  deviceTitle: {
+    fontSize: 15,
     fontWeight: '800',
-    letterSpacing: 1,
-  },
-  providerStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 3,
-  },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  providerStatusText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    flex: 1,
-  },
-
-  // ── EcoFlow Live Section (Phase 4B) ───────────────────────
-  ecoLiveSection: {
-    marginTop: SPACING.md,
-    paddingTop: SPACING.md,
-    borderTopWidth: GOLD_RAIL.subsectionWidth,
-    gap: 8,
-  },
-  ecoChipRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  ecoTimestampRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 4,
-  },
-  ecoTimestamp: {
-    fontSize: 10,
-    fontWeight: '600',
-    fontFamily: 'Courier',
-    letterSpacing: 0.5,
-  },
-
-  // ── EcoFlow Message Section ───────────────────────────────
-  ecoMessageSection: {
-    marginTop: SPACING.md,
-    paddingTop: SPACING.md,
-    borderTopWidth: GOLD_RAIL.subsectionWidth,
-    gap: 6,
-  },
-  ecoMessageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  ecoMessageText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
     letterSpacing: 0.3,
   },
-  ecoMessageHint: {
-    fontSize: 11,
-    lineHeight: 16,
-    marginLeft: 24,
-  },
-
-  // ── EcoFlow Device ID Row ─────────────────────────────────
-  ecoDeviceIdRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: SPACING.sm,
-    paddingTop: SPACING.sm,
-    borderTopWidth: GOLD_RAIL.subsectionWidth,
-  },
-  ecoDeviceIdText: {
-    flex: 1,
-    fontSize: 10,
-    fontFamily: 'Courier',
-    letterSpacing: 0.5,
-  },
-
-  // ── Device info ───────────────────────────────────────────
-  deviceInfoSection: {
-    marginTop: SPACING.md,
-    paddingTop: SPACING.md,
-    borderTopWidth: GOLD_RAIL.subsectionWidth,
-  },
-  deviceInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  deviceInfoLabel: {
+  deviceSubtitle: {
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 1,
+  },
+  deviceStatusPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  deviceStatusText: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
   },
-  deviceInfoValue: {
+  deviceMetric: {
+    alignItems: 'flex-end',
+    minWidth: 48,
+  },
+  deviceMetricValue: {
     fontSize: 13,
+    fontWeight: '800',
+  },
+  deviceMetricLabel: {
+    fontSize: 8,
     fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+  deviceExpanded: {
+    borderTopWidth: GOLD_RAIL.subsectionWidth,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    gap: 10,
+  },
+  expandedLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+  },
+  restrictedBox: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  restrictedText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  makePrimaryBtn: {
+    marginTop: 2,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  makePrimaryBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+  },
+  deviceIdText: {
+    fontSize: 10,
     fontFamily: 'Courier',
+    letterSpacing: 0.4,
   },
 
-  // ── Empty state ───────────────────────────────────────────
+  detailsCard: {
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    padding: SPACING.lg,
+    marginBottom: SPACING.xl,
+  },
+  detailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: SPACING.sm,
+  },
+  detailsIntro: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+  detailsTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  detailsSubtitle: {
+    fontSize: 10,
+    fontFamily: 'Courier',
+    marginTop: 4,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: GOLD_RAIL.subsectionWidth,
+  },
+  detailLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+
   emptyCard: {
     borderRadius: RADIUS.lg,
     borderWidth: 1,
     padding: SPACING.xl,
     alignItems: 'center',
     gap: 10,
-    marginBottom: SPACING.xl,
   },
   emptyTitle: {
     fontSize: 16,
     fontWeight: '800',
-    letterSpacing: 1,
+    letterSpacing: 0.4,
   },
-  emptyDesc: {
-    fontSize: 13,
-    lineHeight: 20,
+  emptyHint: {
+    fontSize: 12,
+    lineHeight: 18,
     textAlign: 'center',
+    maxWidth: '90%',
   },
 
-  // ── Manage Devices button ─────────────────────────────────
-  manageBtn: {
+  actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
     paddingVertical: 14,
+    paddingHorizontal: 14,
     borderRadius: RADIUS.md,
+    marginBottom: SPACING.sm,
   },
-  manageBtnText: {
+  actionBtnText: {
     flex: 1,
     textAlign: 'center',
-    color: '#000',
     fontSize: 14,
     fontWeight: '800',
-    letterSpacing: 3,
+    letterSpacing: 2.2,
   },
 });
-
-
-
-

@@ -30,7 +30,6 @@
 import { Platform, NativeModules } from 'react-native';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
-import { vehicleDisplayFallback } from './vehicleDisplayFallback';
 import { breadcrumbTracker } from './breadcrumbTracker';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleCompanionManager } from './vehicleCompanionManager';
@@ -110,7 +109,6 @@ let _dataPushTimer: ReturnType<typeof setInterval> | null = null;
 let _actionPollTimer: ReturnType<typeof setInterval> | null = null;
 let _storeUnsubscribe: (() => void) | null = null;
 let _modeEngineUnsubscribe: (() => void) | null = null;
-let _fallbackUnsubscribe: (() => void) | null = null;
 let _isConnected = false;
 let _lastPushTimestamp = 0;
 
@@ -174,7 +172,7 @@ async function _pushData(): Promise<void> {
     await native.pushModeState(JSON.stringify(modeState));
 
     // Push system health
-    const healthPayload = vehicleDisplayFallback.buildNativeHealthPayload();
+    const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
     await native.pushSystemHealth(JSON.stringify(healthPayload));
 
     // Push breadcrumb data if available
@@ -373,22 +371,6 @@ function _onModeChange(): void {
   _pushMode(mode).catch(() => {});
 }
 
-/**
- * Handle fallback engine changes.
- * Pushes system health to CarPlay.
- */
-function _onFallbackChange(): void {
-  if (!_isRunning) return;
-
-  const native = getNativeModule();
-  if (!native) return;
-
-  try {
-    const healthPayload = vehicleDisplayFallback.buildNativeHealthPayload();
-    native.pushSystemHealth(JSON.stringify(healthPayload)).catch(() => {});
-  } catch {}
-}
-
 // ══════════════════════════════════════════════════════════════
 // PUBLIC API
 // ══════════════════════════════════════════════════════════════
@@ -452,7 +434,6 @@ export const carPlayBridge = {
     // Subscribe to store changes
     _storeUnsubscribe = vehicleDisplayStore.subscribe(_onStoreChange);
     _modeEngineUnsubscribe = vehicleDisplayModeEngine.subscribe(_onModeChange);
-    _fallbackUnsubscribe = vehicleDisplayFallback.subscribe(_onFallbackChange);
 
     // Start periodic data push
     _dataPushTimer = setInterval(() => {
@@ -495,10 +476,6 @@ export const carPlayBridge = {
       _modeEngineUnsubscribe = null;
     }
 
-    if (_fallbackUnsubscribe) {
-      _fallbackUnsubscribe();
-      _fallbackUnsubscribe = null;
-    }
   },
 
   /**

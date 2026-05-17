@@ -1,755 +1,923 @@
-/**
- * ═══════════════════════════════════════════════════════════
- * OBD-II SCANNER MODAL — Phase 2B
- * ═══════════════════════════════════════════════════════════
- *
- * Full-screen modal for discovering and connecting to
- * Bluetooth OBD-II adapters. Shows:
- *   - BLE scan progress
- *   - Discovered device list (OBD-II likely devices first)
- *   - Device selection and connection
- *   - Connection success confirmation
- *   - Error handling
- */
-
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  Modal,
-  TouchableOpacity,
   FlatList,
   StyleSheet,
-  ActivityIndicator,
-  Platform,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import TacticalPopupShell from '../TacticalPopupShell';
+import BluetoothScannerDeviceRow from './BluetoothScannerDeviceRow';
 import { TACTICAL } from '../../lib/theme';
-import { useOBD2Scanner } from '../../src/vehicle-telemetry/useOBD2Scanner';
-import type { OBD2DiscoveredDevice } from '../../src/vehicle-telemetry/OBD2Adapter';
+import { classifyBluetoothDevice } from '../../lib/bluetoothDevicePresentation';
+import { useUnifiedOBD2Scanner, type OBD2AdapterState, type OBD2DiscoveredDevice } from '../../lib/unifiedScanner';
 
+// OBD-only telemetry settings modal. The active Device Connections route is app/power/blu.tsx.
 interface OBD2ScannerModalProps {
   visible: boolean;
   onClose: () => void;
   onConnected?: (deviceId: string, deviceName: string) => void;
 }
 
-// ═══════════════════════════════════════════════════════════
-// SIGNAL STRENGTH INDICATOR
-// ═══════════════════════════════════════════════════════════
+type DeviceUiMode = 'idle' | 'connecting' | 'connected' | 'failed';
 
-function SignalBars({ rssi }: { rssi: number }) {
-  // Map RSSI to 0–4 bars
-  // -30 = excellent, -60 = good, -80 = fair, -90 = weak, -100 = very weak
-  const bars = rssi > -50 ? 4 : rssi > -65 ? 3 : rssi > -80 ? 2 : rssi > -90 ? 1 : 0;
-  const color = bars >= 3 ? '#4CAF50' : bars >= 2 ? '#FFB300' : '#EF5350';
+type DeviceUiState = {
+  mode: Extract<DeviceUiMode, 'connecting' | 'failed'>;
+  reason?: string;
+};
+
+type ScannerTone = 'active' | 'warning' | 'error' | 'neutral';
+
+function getFriendlyDeviceName(device: OBD2DiscoveredDevice): string {
+  const trimmed = device.name.trim();
+  return trimmed.length > 0 ? trimmed : `Bluetooth ${device.id.slice(-4)}`;
+}
+
+function getScannerTone(state: OBD2AdapterState, hasError: boolean): ScannerTone {
+  if (hasError) return 'error';
+  if (state === 'scanning' || state === 'requesting_permissions' || state === 'connecting') {
+    return 'active';
+  }
+  if (state === 'connected' || state === 'reconnecting') return 'warning';
+  return 'neutral';
+}
+
+function getToneColors(tone: ScannerTone) {
+  switch (tone) {
+    case 'active':
+      return {
+        text: '#4CAF50',
+        border: 'rgba(76,175,80,0.24)',
+        background: 'rgba(76,175,80,0.12)',
+      };
+    case 'warning':
+      return {
+        text: TACTICAL.amber,
+        border: `${TACTICAL.amber}33`,
+        background: `${TACTICAL.amber}12`,
+      };
+    case 'error':
+      return {
+        text: '#EF5350',
+        border: 'rgba(239,83,80,0.24)',
+        background: 'rgba(239,83,80,0.12)',
+      };
+    case 'neutral':
+    default:
+      return {
+        text: TACTICAL.textMuted,
+        border: 'rgba(255,255,255,0.08)',
+        background: 'rgba(255,255,255,0.04)',
+      };
+  }
+}
+
+function getScanStateLabel(state: OBD2AdapterState, isConnected: boolean, isConnecting: boolean, hasError: boolean): string {
+  if (hasError) return 'Attention Needed';
+  if (state === 'requesting_permissions') return 'Preparing Bluetooth';
+  if (state === 'scanning') return 'Scanning...';
+  if (state === 'reconnecting') return 'Reconnecting';
+  if (isConnecting) return 'Connecting...';
+  if (isConnected) return 'Connected';
+  return 'Scan Paused';
+}
+
+function getHeaderSubtitle(
+  state: OBD2AdapterState,
+  hasError: boolean,
+  deviceCount: number,
+  connectedDeviceName: string | null,
+): string {
+  if (hasError) return 'Bluetooth scanner needs attention before reconnecting.';
+  if (state === 'requesting_permissions') return 'Preparing Bluetooth access for the scanner.';
+  if (state === 'scanning') {
+    return deviceCount > 0
+      ? `${deviceCount} nearby device${deviceCount === 1 ? '' : 's'} visible right now.`
+      : 'Scanning nearby adapters and tactical peripherals.';
+  }
+  if (state === 'connecting') return 'Scan paused while ECS connects to the selected adapter.';
+  if (state === 'reconnecting') return 'Restoring the last known OBD-II session.';
+  if (state === 'connected') {
+    return connectedDeviceName
+      ? `${connectedDeviceName} is connected to vehicle telemetry.`
+      : 'A Bluetooth adapter is connected to vehicle telemetry.';
+  }
+  return deviceCount > 0
+    ? `${deviceCount} saved result${deviceCount === 1 ? '' : 's'} ready to connect.`
+    : 'Tap Scan to find nearby Bluetooth OBD-II adapters.';
+}
+
+function isPermissionIssue(error: string | null | undefined): boolean {
+  return /permission|permissions|denied|required|not granted/i.test(error ?? '');
+}
+
+function ScannerStatusChip({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: ScannerTone;
+}) {
+  const colors = getToneColors(tone);
 
   return (
-    <View style={sigStyles.container}>
-      {[0, 1, 2, 3].map(i => (
-        <View
-          key={i}
-          style={[
-            sigStyles.bar,
-            { height: 4 + i * 3 },
-            i <= bars ? { backgroundColor: color } : { backgroundColor: 'rgba(255,255,255,0.1)' },
-          ]}
-        />
-      ))}
+    <View
+      style={[
+        styles.statusChip,
+        {
+          backgroundColor: colors.background,
+          borderColor: colors.border,
+        },
+      ]}
+    >
+      <Text style={[styles.statusChipText, { color: colors.text }]}>{label}</Text>
     </View>
   );
 }
 
-const sigStyles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 1.5,
-    height: 16,
-  },
-  bar: {
-    width: 3,
-    borderRadius: 1,
-  },
-});
-
-// ═══════════════════════════════════════════════════════════
-// DEVICE ROW
-// ═══════════════════════════════════════════════════════════
-
-function DeviceRow({
-  device,
-  isConnecting,
-  connectingId,
-  onSelect,
+function ScannerBanner({
+  icon,
+  body,
+  tone,
+  actionLabel,
+  onAction,
 }: {
-  device: OBD2DiscoveredDevice;
-  isConnecting: boolean;
-  connectingId: string | null;
-  onSelect: (device: OBD2DiscoveredDevice) => void;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  body: string;
+  tone: ScannerTone;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
-  const isThisConnecting = isConnecting && connectingId === device.id;
+  const colors = getToneColors(tone);
 
   return (
-    <TouchableOpacity
+    <View
       style={[
-        styles.deviceRow,
-        device.isLikelyOBD && styles.deviceRowOBD,
-        isThisConnecting && styles.deviceRowConnecting,
+        styles.banner,
+        {
+          backgroundColor: colors.background,
+          borderColor: colors.border,
+        },
       ]}
-      onPress={() => onSelect(device)}
-      activeOpacity={0.7}
-      disabled={isConnecting}
     >
-      <View style={styles.deviceIcon}>
-        <Ionicons
-          name={device.isLikelyOBD ? 'car-outline' : 'bluetooth-outline'}
-          size={18}
-          color={device.isLikelyOBD ? TACTICAL.amber : TACTICAL.textMuted}
-        />
-      </View>
-
-      <View style={styles.deviceInfo}>
-        <View style={styles.deviceNameRow}>
-          <Text style={[
-            styles.deviceName,
-            device.isLikelyOBD && styles.deviceNameOBD,
-          ]} numberOfLines={1}>
-            {device.name}
-          </Text>
-          {device.isLikelyOBD && (
-            <View style={styles.obdBadge}>
-              <Text style={styles.obdBadgeText}>OBD-II</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.deviceMeta}>
-          <Text style={styles.deviceId} numberOfLines={1}>
-            {device.id.length > 20 ? `${device.id.slice(0, 8)}...${device.id.slice(-6)}` : device.id}
-          </Text>
-          <Text style={styles.deviceRssi}>
-            {device.rssi} dBm
-          </Text>
-        </View>
-      </View>
-
-      {isThisConnecting ? (
-        <ActivityIndicator size="small" color={TACTICAL.amber} />
-      ) : (
-        <View style={styles.deviceSignal}>
-          <SignalBars rssi={device.rssi} />
-        </View>
-      )}
-    </TouchableOpacity>
+      <Ionicons name={icon} size={16} color={colors.text} />
+      <Text style={[styles.bannerText, { color: tone === 'neutral' ? TACTICAL.text : colors.text }]}>
+        {body}
+      </Text>
+      {actionLabel && onAction ? (
+        <TouchableOpacity
+          style={[
+            styles.bannerAction,
+            {
+              borderColor: colors.border,
+              backgroundColor: colors.background,
+            },
+          ]}
+          onPress={onAction}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.bannerActionText, { color: colors.text }]}>{actionLabel}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-// MAIN MODAL
-// ═══════════════════════════════════════════════════════════
+function EmptyState({
+  icon,
+  title,
+  body,
+  actionLabel,
+  onAction,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  title: string;
+  body: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconWrap}>
+        <Ionicons name={icon} size={24} color={TACTICAL.amber} />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyBody}>{body}</Text>
+      {actionLabel && onAction ? (
+        <TouchableOpacity style={styles.emptyActionBtn} onPress={onAction} activeOpacity={0.8}>
+          <Text style={styles.emptyActionText}>{actionLabel}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
 
 export default function OBD2ScannerModal({
   visible,
   onClose,
   onConnected,
 }: OBD2ScannerModalProps) {
-  const scanner = useOBD2Scanner();
+  const {
+    state,
+    isScanning,
+    isConnected,
+    isConnecting,
+    isReconnecting,
+    devices,
+    deviceCount,
+    connectedDeviceId,
+    connectedDeviceName,
+    error,
+    reconnectAttempt,
+    connectionJustSucceeded,
+    startScan,
+    stopScan,
+    connectToDevice,
+    disconnect,
+  } = useUnifiedOBD2Scanner();
 
-  // Auto-start scan when modal opens
+  const [deviceUiState, setDeviceUiState] = useState<Record<string, DeviceUiState>>({});
+  const activeConnectTokenRef = useRef(0);
+  const mountedRef = useRef(false);
+  const visibleRef = useRef(visible);
+  const latestErrorRef = useRef<string | null>(error);
+  const stableOrderRef = useRef<Map<string, number>>(new Map());
+  const stableOrderSeedRef = useRef(0);
+
   useEffect(() => {
-    if (visible && !scanner.isScanning && !scanner.isConnected && !scanner.isConnecting) {
-      scanner.startScan(15000);
-    }
-    // Stop scan when modal closes
+    mountedRef.current = true;
     return () => {
-      if (scanner.isScanning) {
-        scanner.stopScan();
-      }
+      mountedRef.current = false;
     };
+  }, []);
+
+  useEffect(() => {
+    visibleRef.current = visible;
   }, [visible]);
 
-  // Notify parent on connection success
   useEffect(() => {
-    if (scanner.connectionJustSucceeded && scanner.connectedDeviceId && scanner.connectedDeviceName) {
-      onConnected?.(scanner.connectedDeviceId, scanner.connectedDeviceName);
+    latestErrorRef.current = error;
+  }, [error]);
+
+  useEffect(() => {
+    if (!visible) {
+      activeConnectTokenRef.current += 1;
+      stableOrderRef.current = new Map();
+      stableOrderSeedRef.current = 0;
+      setDeviceUiState({});
+      void stopScan();
     }
-  }, [scanner.connectionJustSucceeded]);
+  }, [visible, stopScan]);
+
+  useEffect(() => {
+    return () => {
+      activeConnectTokenRef.current += 1;
+      void stopScan();
+    };
+  }, [stopScan]);
+
+  useEffect(() => {
+    if (connectionJustSucceeded && connectedDeviceId && connectedDeviceName) {
+      onConnected?.(connectedDeviceId, connectedDeviceName);
+    }
+  }, [onConnected, connectionJustSucceeded, connectedDeviceId, connectedDeviceName]);
+
+  const scannerTone = getScannerTone(state, Boolean(error));
+  const scanStateLabel = getScanStateLabel(state, isConnected, isConnecting, Boolean(error));
+  const headerSubtitle = getHeaderSubtitle(state, Boolean(error), deviceCount, connectedDeviceName);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    devices.forEach((device) => {
+      if (!stableOrderRef.current.has(device.id)) {
+        stableOrderRef.current.set(device.id, stableOrderSeedRef.current);
+        stableOrderSeedRef.current += 1;
+      }
+    });
+  }, [devices, visible]);
+
+  const orderedDevices = useMemo(() => {
+    return [...devices].sort((left, right) => {
+      if (isConnected && connectedDeviceId === left.id && connectedDeviceId !== right.id) return -1;
+      if (isConnected && connectedDeviceId === right.id && connectedDeviceId !== left.id) return 1;
+      if (left.isLikelyOBD && !right.isLikelyOBD) return -1;
+      if (!left.isLikelyOBD && right.isLikelyOBD) return 1;
+
+      const leftOrder = stableOrderRef.current.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = stableOrderRef.current.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
+  }, [connectedDeviceId, devices, isConnected]);
+
+  const getDeviceMode = useCallback((device: OBD2DiscoveredDevice): DeviceUiMode => {
+    if (isConnected && connectedDeviceId === device.id) return 'connected';
+    return deviceUiState[device.id]?.mode ?? 'idle';
+  }, [connectedDeviceId, deviceUiState, isConnected]);
+
+  const getDeviceFailureReason = useCallback((device: OBD2DiscoveredDevice) => {
+    return deviceUiState[device.id]?.reason;
+  }, [deviceUiState]);
+
+  const handleRescan = useCallback(async () => {
+    activeConnectTokenRef.current += 1;
+    stableOrderRef.current = new Map();
+    stableOrderSeedRef.current = 0;
+    setDeviceUiState((previous) => {
+      const next: Record<string, DeviceUiState> = {};
+      Object.entries(previous).forEach(([deviceId, entry]) => {
+        if (entry.mode === 'connecting') return;
+        next[deviceId] = entry;
+      });
+      return next;
+    });
+
+    if (isScanning) {
+      await stopScan();
+      return;
+    }
+
+    await startScan(15000);
+  }, [isScanning, startScan, stopScan]);
+
+  const handleDismiss = useCallback(() => {
+    activeConnectTokenRef.current += 1;
+    stableOrderRef.current = new Map();
+    stableOrderSeedRef.current = 0;
+    setDeviceUiState({});
+    void stopScan();
+    onClose();
+  }, [onClose, stopScan]);
+
+  const handleDisconnect = useCallback(async () => {
+    activeConnectTokenRef.current += 1;
+    setDeviceUiState({});
+    await disconnect();
+  }, [disconnect]);
 
   const handleSelectDevice = useCallback(async (device: OBD2DiscoveredDevice) => {
-    // Stop scan before connecting
-    if (scanner.isScanning) {
-      await scanner.stopScan();
+    if (!visibleRef.current) return;
+    if (isConnected && connectedDeviceId !== device.id) return;
+    if (deviceUiState[device.id]?.mode === 'connecting') return;
+
+    const requestToken = activeConnectTokenRef.current + 1;
+    activeConnectTokenRef.current = requestToken;
+
+    setDeviceUiState((previous) => {
+      const next: Record<string, DeviceUiState> = {};
+      Object.entries(previous).forEach(([deviceId, entry]) => {
+        if (entry.mode === 'failed') {
+          next[deviceId] = entry;
+        }
+      });
+      next[device.id] = { mode: 'connecting' };
+      return next;
+    });
+
+    await stopScan();
+    const success = await connectToDevice(device.id, getFriendlyDeviceName(device));
+
+    if (!mountedRef.current || !visibleRef.current || activeConnectTokenRef.current !== requestToken) {
+      return;
     }
-    await scanner.connectToDevice(device.id, device.name);
-  }, [scanner]);
 
-  const handleRescan = useCallback(() => {
-    scanner.startScan(15000);
-  }, [scanner]);
-
-  const handleClose = useCallback(() => {
-    if (scanner.isScanning) {
-      scanner.stopScan();
+    if (success) {
+      setDeviceUiState((previous) => {
+        if (!previous[device.id]) return previous;
+        const next = { ...previous };
+        delete next[device.id];
+        return next;
+      });
+      return;
     }
-    onClose();
-  }, [scanner, onClose]);
 
-  const renderDevice = useCallback(({ item }: { item: OBD2DiscoveredDevice }) => (
-    <DeviceRow
-      device={item}
-      isConnecting={scanner.isConnecting}
-      connectingId={scanner.connectedDeviceId}
-      onSelect={handleSelectDevice}
-    />
-  ), [scanner.isConnecting, scanner.connectedDeviceId, handleSelectDevice]);
+    const fallbackReason = latestErrorRef.current ?? 'Connection failed';
+    setDeviceUiState((previous) => ({
+      ...previous,
+      [device.id]: {
+        mode: 'failed',
+        reason: fallbackReason,
+      },
+    }));
+  }, [connectToDevice, connectedDeviceId, deviceUiState, isConnected, stopScan]);
+
+  const handleSelectDeviceById = useCallback((deviceId: string) => {
+    const targetDevice = orderedDevices.find((entry) => entry.id === deviceId);
+    if (!targetDevice) return;
+    void handleSelectDevice(targetDevice);
+  }, [handleSelectDevice, orderedDevices]);
+
+  const renderDevice = useCallback(({ item }: { item: OBD2DiscoveredDevice }) => {
+    const uiMode = getDeviceMode(item);
+    const connectLocked = Boolean(isConnected && connectedDeviceId && connectedDeviceId !== item.id);
+    const presentation = classifyBluetoothDevice(item);
+
+    return (
+      <BluetoothScannerDeviceRow
+        deviceId={item.id}
+        displayName={presentation.displayName}
+        secondaryLabel={presentation.secondaryLabel}
+        providerBadge={presentation.providerBadge}
+        categoryHint={presentation.categoryHint}
+        signal={presentation.signal}
+        state={uiMode}
+        failureReason={getDeviceFailureReason(item)}
+        connectLocked={connectLocked}
+        iconName={item.isLikelyOBD ? 'car-outline' : 'bluetooth-outline'}
+        onPress={handleSelectDeviceById}
+      />
+    );
+  }, [connectedDeviceId, getDeviceFailureReason, getDeviceMode, handleSelectDeviceById, isConnected]);
 
   const keyExtractor = useCallback((item: OBD2DiscoveredDevice) => item.id, []);
 
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={handleClose}
-    >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={handleClose}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={20} color={TACTICAL.textMuted} />
-          </TouchableOpacity>
-
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>OBD-II Scanner</Text>
-            <Text style={styles.headerSubtitle}>
-              {scanner.isScanning
-                ? 'Scanning for Bluetooth devices...'
-                : scanner.isConnected
-                  ? `Connected to ${scanner.connectedDeviceName}`
-                  : scanner.isConnecting
-                    ? 'Connecting...'
-                    : `${scanner.deviceCount} device${scanner.deviceCount !== 1 ? 's' : ''} found`
-              }
-            </Text>
-          </View>
-
-          {!scanner.isScanning && !scanner.isConnected && !scanner.isConnecting && (
-            <TouchableOpacity
-              style={styles.rescanBtn}
-              onPress={handleRescan}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="refresh-outline" size={16} color={TACTICAL.amber} />
-            </TouchableOpacity>
-          )}
+  const listHeader = useMemo(() => (
+    <View style={styles.listHeader}>
+      <View style={styles.scanStatusCard}>
+        <View style={styles.scanStatusTop}>
+          <ScannerStatusChip label={scanStateLabel} tone={scannerTone} />
+          <Text style={styles.scanStatusText}>{headerSubtitle}</Text>
         </View>
 
-        {/* Scan progress bar */}
-        {scanner.isScanning && (
-          <View style={styles.progressContainer}>
-            <View style={[styles.progressBar, { width: `${scanner.scanProgress * 100}%` }]} />
-          </View>
-        )}
-
-        {/* Connection success banner */}
-        {scanner.connectionJustSucceeded && (
-          <View style={styles.successBanner}>
-            <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
-            <Text style={styles.successText}>
-              Connected to {scanner.connectedDeviceName}
-            </Text>
-          </View>
-        )}
-
-        {/* Error banner */}
-        {scanner.error && (
-          <View style={styles.errorBanner}>
-            <Ionicons name="alert-circle" size={16} color="#EF5350" />
-            <Text style={styles.errorText} numberOfLines={2}>
-              {scanner.error}
-            </Text>
-            <TouchableOpacity onPress={handleRescan} activeOpacity={0.7}>
-              <Text style={styles.errorRetry}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Reconnecting banner */}
-        {scanner.isReconnecting && (
-          <View style={styles.reconnectBanner}>
-            <ActivityIndicator size="small" color={TACTICAL.amber} />
-            <Text style={styles.reconnectText}>
-              Reconnecting... (attempt {scanner.reconnectAttempt})
-            </Text>
-          </View>
-        )}
-
-        {/* Connected state */}
-        {scanner.isConnected && !scanner.connectionJustSucceeded && (
-          <View style={styles.connectedCard}>
-            <View style={styles.connectedIcon}>
-              <Ionicons name="car-outline" size={28} color={TACTICAL.amber} />
-            </View>
-            <Text style={styles.connectedName}>{scanner.connectedDeviceName}</Text>
-            <Text style={styles.connectedStatus}>OBD-II adapter connected</Text>
-            <View style={styles.connectedActions}>
-              <TouchableOpacity
-                style={styles.disconnectBtn}
-                onPress={() => scanner.disconnect()}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="power-outline" size={14} color="#EF5350" />
-                <Text style={styles.disconnectText}>Disconnect</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.doneBtn}
-                onPress={handleClose}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.doneBtnText}>DONE</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Device list */}
-        {!scanner.isConnected && (
-          <>
-            {/* Section headers */}
-            {scanner.obdDeviceCount > 0 && scanner.deviceCount > scanner.obdDeviceCount && (
-              <View style={styles.sectionHeader}>
-                <Ionicons name="car-outline" size={12} color={TACTICAL.amber} />
-                <Text style={styles.sectionHeaderText}>
-                  {scanner.obdDeviceCount} OBD-II ADAPTER{scanner.obdDeviceCount !== 1 ? 'S' : ''} DETECTED
-                </Text>
-              </View>
+        <View style={styles.controlRow}>
+          <TouchableOpacity
+            style={styles.controlBtn}
+            onPress={handleRescan}
+            activeOpacity={0.82}
+          >
+            {isScanning ? (
+              <Ionicons name="pause-outline" size={14} color={TACTICAL.amber} />
+            ) : (
+              <Ionicons name="refresh-outline" size={14} color={TACTICAL.amber} />
             )}
+            <Text style={styles.controlBtnText}>{isScanning ? 'Pause Scan' : 'Scan'}</Text>
+          </TouchableOpacity>
 
-            <FlatList
-              data={scanner.devices}
-              renderItem={renderDevice}
-              keyExtractor={keyExtractor}
-              contentContainerStyle={styles.listContent}
-              ListEmptyComponent={
-                scanner.isScanning ? (
-                  <View style={styles.emptyState}>
-                    <ActivityIndicator size="large" color={TACTICAL.amber} />
-                    <Text style={styles.emptyTitle}>Scanning for devices...</Text>
-                    <Text style={styles.emptyDesc}>
-                      Make sure your OBD-II adapter is plugged in and Bluetooth is enabled.
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={styles.emptyState}>
-                    <Ionicons name="bluetooth-outline" size={40} color={TACTICAL.textMuted} />
-                    <Text style={styles.emptyTitle}>No Devices Found</Text>
-                    <Text style={styles.emptyDesc}>
-                      Ensure your OBD-II adapter is plugged into the vehicle's diagnostic port
-                      and Bluetooth is enabled on your device.
-                    </Text>
-                    <TouchableOpacity
-                      style={styles.rescanFullBtn}
-                      onPress={handleRescan}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="refresh-outline" size={14} color={TACTICAL.bg} />
-                      <Text style={styles.rescanFullBtnText}>SCAN AGAIN</Text>
-                    </TouchableOpacity>
-                  </View>
-                )
-              }
-            />
-          </>
-        )}
+          <View style={styles.countPill}>
+            <Text style={styles.countPillText}>
+              {deviceCount} device{deviceCount === 1 ? '' : 's'}
+            </Text>
+          </View>
+        </View>
+      </View>
 
-        {/* Tips section */}
-        {!scanner.isConnected && !scanner.isConnecting && scanner.deviceCount === 0 && !scanner.isScanning && (
-          <View style={styles.tipsCard}>
-            <Text style={styles.tipsTitle}>TROUBLESHOOTING</Text>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
-              <Text style={styles.tipText}>OBD-II adapter plugged into vehicle port</Text>
+      {connectionJustSucceeded && connectedDeviceName ? (
+        <ScannerBanner
+          icon="checkmark-circle"
+          tone="active"
+          body={`Connected to ${connectedDeviceName}. Live vehicle telemetry is ready.`}
+        />
+      ) : null}
+
+      {error ? (
+        <ScannerBanner
+          icon="alert-circle"
+          tone="error"
+          body={error}
+          actionLabel="Retry"
+          onAction={() => {
+            void handleRescan();
+          }}
+        />
+      ) : null}
+
+      {isReconnecting ? (
+        <ScannerBanner
+          icon="sync-outline"
+          tone="warning"
+          body={`Reconnecting to the last known adapter${reconnectAttempt > 0 ? ` (attempt ${reconnectAttempt})` : ''}.`}
+        />
+      ) : null}
+
+      {isConnected && connectedDeviceName ? (
+        <View style={styles.connectedCard}>
+          <View style={styles.connectedCardTop}>
+            <View style={styles.connectedIconWrap}>
+              <Ionicons name="car-sport-outline" size={20} color={TACTICAL.amber} />
             </View>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
-              <Text style={styles.tipText}>Vehicle ignition is ON (or engine running)</Text>
-            </View>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
-              <Text style={styles.tipText}>Bluetooth is enabled on your phone</Text>
-            </View>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
-              <Text style={styles.tipText}>Adapter LED is blinking (powered on)</Text>
+            <View style={styles.connectedCopy}>
+              <Text style={styles.connectedEyebrow}>ACTIVE OBD-II SESSION</Text>
+              <Text style={styles.connectedName}>{connectedDeviceName}</Text>
+              <Text style={styles.connectedBody}>
+                ECS is actively using this Bluetooth adapter for live vehicle telemetry. Disconnect here before switching to another adapter.
+              </Text>
             </View>
           </View>
-        )}
+
+          <TouchableOpacity
+            style={styles.disconnectBtn}
+            onPress={() => {
+              void handleDisconnect();
+            }}
+            activeOpacity={0.82}
+          >
+            <Ionicons name="power-outline" size={14} color="#EF5350" />
+            <Text style={styles.disconnectBtnText}>Disconnect</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionEyebrow}>NEARBY BLUETOOTH DEVICES</Text>
+        <Text style={styles.sectionBody}>
+          Discoverable adapters stay in a stable list while ECS scans or reconnects in the background.
+        </Text>
       </View>
-    </Modal>
+    </View>
+  ), [
+    connectionJustSucceeded,
+    connectedDeviceName,
+    deviceCount,
+    error,
+    handleDisconnect,
+    handleRescan,
+    headerSubtitle,
+    isConnected,
+    isReconnecting,
+    isScanning,
+    reconnectAttempt,
+    scanStateLabel,
+    scannerTone,
+  ]);
+
+  const listEmptyComponent = useMemo(() => {
+    if (state === 'requesting_permissions') {
+      return (
+        <EmptyState
+          icon="bluetooth-outline"
+          title="Preparing Bluetooth access"
+          body="ECS is checking Bluetooth permissions for the scan you started."
+        />
+      );
+    }
+
+    if (isScanning) {
+      return (
+        <EmptyState
+          icon="search-outline"
+          title="Scanning for nearby devices..."
+          body="Keep your OBD-II adapter powered and nearby. ECS will populate this panel as soon as it sees a broadcast."
+          actionLabel="Pause Scan"
+          onAction={() => {
+            void handleRescan();
+          }}
+        />
+      );
+    }
+
+    if (error) {
+      const permissionIssue = isPermissionIssue(error);
+      return (
+        <EmptyState
+          icon="warning-outline"
+          title={permissionIssue ? 'Bluetooth permission required' : 'Bluetooth scanner needs attention'}
+          body={
+            permissionIssue
+              ? error
+              : 'Bluetooth may be unavailable, blocked, or temporarily denied. Check device Bluetooth state, then retry the scan.'
+          }
+          actionLabel="Retry Scan"
+          onAction={() => {
+            void handleRescan();
+          }}
+        />
+      );
+    }
+
+    return (
+      <EmptyState
+        icon="bluetooth-outline"
+        title="No Bluetooth devices found yet"
+        body="Pull closer to the adapter, make sure the vehicle ignition is on, and start a scan when the device is broadcasting."
+        actionLabel="Scan"
+        onAction={() => {
+          void handleRescan();
+        }}
+      />
+    );
+  }, [error, handleRescan, isScanning, state]);
+
+  const listFooter = useMemo(() => (
+    <View style={styles.footerCard}>
+      <Text style={styles.footerTitle}>FIELD CHECKS</Text>
+      <View style={styles.tipRow}>
+        <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
+        <Text style={styles.tipText}>OBD-II adapter plugged into the vehicle diagnostics port</Text>
+      </View>
+      <View style={styles.tipRow}>
+        <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
+        <Text style={styles.tipText}>Vehicle ignition on so the adapter is fully powered</Text>
+      </View>
+      <View style={styles.tipRow}>
+        <Ionicons name="checkmark-outline" size={12} color={TACTICAL.amber} />
+        <Text style={styles.tipText}>Phone Bluetooth enabled and the adapter close enough to pair</Text>
+      </View>
+    </View>
+  ), []);
+
+  return (
+    <TacticalPopupShell
+      visible={visible}
+      onClose={handleDismiss}
+      title="Bluetooth Devices"
+      icon="bluetooth-outline"
+      eyebrow="Vehicle Telemetry"
+      subtitle={headerSubtitle}
+      overlayClass="editor"
+      maxWidth={760}
+      maxHeightFraction={0.76}
+      minHeightFraction={0.54}
+      scrollable={false}
+      allowSwipeDismiss
+      dismissOnBackdrop
+      showHandle
+    >
+      <FlatList
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        data={orderedDevices}
+        renderItem={renderDevice}
+        keyExtractor={keyExtractor}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmptyComponent}
+        ListFooterComponent={listFooter}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      />
+    </TacticalPopupShell>
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-// STYLES
-// ═══════════════════════════════════════════════════════════
-
 const styles = StyleSheet.create({
-  container: {
+  list: {
     flex: 1,
-    backgroundColor: TACTICAL.bg,
+    minHeight: 0,
   },
-
-  // ── Header ─────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 56 : 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: TACTICAL.border,
+  listContent: {
+    flexGrow: 1,
+    gap: 10,
+  },
+  listHeader: {
+    gap: 10,
+    paddingBottom: 10,
+  },
+  scanStatusCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: 14,
     gap: 12,
   },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  scanStatusTop: {
+    gap: 9,
   },
-  headerCenter: {
-    flex: 1,
-    gap: 2,
+  statusChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
   },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: TACTICAL.text,
-    letterSpacing: 0.5,
+  statusChipText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
-  headerSubtitle: {
-    fontSize: 10,
-    fontWeight: '600',
+  scanStatusText: {
+    fontSize: 12,
+    lineHeight: 18,
     color: TACTICAL.textMuted,
   },
-  rescanBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: TACTICAL.amber + '12',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  // ── Progress ───────────────────────────────────────────
-  progressContainer: {
-    height: 2,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-  },
-  progressBar: {
-    height: 2,
-    backgroundColor: TACTICAL.amber,
-  },
-
-  // ── Banners ────────────────────────────────────────────
-  successBanner: {
+  controlRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(76,175,80,0.08)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(76,175,80,0.15)',
-  },
-  successText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#4CAF50',
-    flex: 1,
-  },
-
-  errorBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(239,83,80,0.08)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(239,83,80,0.15)',
-  },
-  errorText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#EF5350',
-    flex: 1,
-  },
-  errorRetry: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: TACTICAL.amber,
-    paddingHorizontal: 8,
-  },
-
-  reconnectBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: TACTICAL.amber + '08',
-    borderBottomWidth: 1,
-    borderBottomColor: TACTICAL.amber + '15',
-  },
-  reconnectText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-  },
-
-  // ── Connected card ─────────────────────────────────────
-  connectedCard: {
-    alignItems: 'center',
-    paddingVertical: 40,
-    paddingHorizontal: 20,
-    gap: 8,
-  },
-  connectedIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: TACTICAL.amber + '12',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  connectedName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: TACTICAL.text,
-    textAlign: 'center',
-  },
-  connectedStatus: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#4CAF50',
-    letterSpacing: 0.5,
-  },
-  connectedActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 20,
-  },
-  disconnectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: 'rgba(239,83,80,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(239,83,80,0.20)',
-  },
-  disconnectText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#EF5350',
-  },
-  doneBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: TACTICAL.amber,
-  },
-  doneBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: TACTICAL.bg,
-    letterSpacing: 1.5,
-  },
-
-  // ── Section header ─────────────────────────────────────
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
-  },
-  sectionHeaderText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1.5,
-  },
-
-  // ── Device list ────────────────────────────────────────
-  listContent: {
-    paddingHorizontal: 12,
-    paddingTop: 4,
-    paddingBottom: 20,
-    gap: 6,
-  },
-
-  deviceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 10,
+    flexWrap: 'wrap',
+  },
+  controlBtn: {
+    minHeight: 38,
     paddingHorizontal: 12,
-    paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.02)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: `${TACTICAL.amber}33`,
+    backgroundColor: `${TACTICAL.amber}12`,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
   },
-  deviceRowOBD: {
-    borderColor: TACTICAL.amber + '25',
-    backgroundColor: 'rgba(196,138,44,0.03)',
+  controlBtnText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
-  deviceRowConnecting: {
-    opacity: 0.7,
-  },
-
-  deviceIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+  countPill: {
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
     backgroundColor: 'rgba(255,255,255,0.04)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  deviceInfo: {
-    flex: 1,
-    gap: 3,
-  },
-  deviceNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  deviceName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: TACTICAL.text,
-    flexShrink: 1,
-  },
-  deviceNameOBD: {
-    color: TACTICAL.amber,
-  },
-  obdBadge: {
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 3,
-    backgroundColor: TACTICAL.amber + '15',
-  },
-  obdBadgeText: {
-    fontSize: 7,
+  countPillText: {
+    fontSize: 10,
     fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 0.8,
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
   },
-
-  deviceMeta: {
+  banner: {
     flexDirection: 'row',
-    gap: 10,
-  },
-  deviceId: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    fontFamily: 'Courier',
-    flexShrink: 1,
-  },
-  deviceRssi: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    fontFamily: 'Courier',
-  },
-
-  deviceSignal: {
-    paddingLeft: 4,
-  },
-
-  // ── Empty state ────────────────────────────────────────
-  emptyState: {
     alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 30,
     gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  bannerText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  bannerAction: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 9,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerActionText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  connectedCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}30`,
+    backgroundColor: `${TACTICAL.amber}10`,
+    padding: 14,
+    gap: 12,
+  },
+  connectedCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  connectedIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}35`,
+    backgroundColor: `${TACTICAL.amber}16`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectedCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  connectedEyebrow: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  connectedName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TACTICAL.text,
+  },
+  connectedBody: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: TACTICAL.textMuted,
+  },
+  disconnectBtn: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(239,83,80,0.24)',
+    backgroundColor: 'rgba(239,83,80,0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  disconnectBtnText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#EF5350',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  sectionHeader: {
+    gap: 4,
+  },
+  sectionEyebrow: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  sectionBody: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+  },
+  emptyState: {
+    flex: 1,
+    minHeight: 260,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    gap: 10,
+  },
+  emptyIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}26`,
+    backgroundColor: `${TACTICAL.amber}10`,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: TACTICAL.textMuted,
-    marginTop: 4,
+    fontSize: 16,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    textAlign: 'center',
   },
-  emptyDesc: {
-    fontSize: 11,
-    fontWeight: '500',
+  emptyBody: {
+    fontSize: 12,
+    lineHeight: 18,
     color: TACTICAL.textMuted,
     textAlign: 'center',
-    lineHeight: 16,
-    opacity: 0.8,
   },
-  rescanFullBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: TACTICAL.amber,
-    marginTop: 12,
-  },
-  rescanFullBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: TACTICAL.bg,
-    letterSpacing: 1.5,
-  },
-
-  // ── Tips ───────────────────────────────────────────────
-  tipsCard: {
-    marginHorizontal: 16,
-    marginBottom: 20,
-    padding: 14,
+  emptyActionBtn: {
+    minHeight: 38,
+    paddingHorizontal: 14,
     borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.02)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    gap: 8,
+    borderColor: `${TACTICAL.amber}33`,
+    backgroundColor: `${TACTICAL.amber}14`,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
   },
-  tipsTitle: {
+  emptyActionText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  footerCard: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: 14,
+    gap: 10,
+  },
+  footerTitle: {
     fontSize: 9,
-    fontWeight: '800',
+    fontWeight: '900',
     color: TACTICAL.textMuted,
-    letterSpacing: 1.5,
-    marginBottom: 2,
+    letterSpacing: 1.7,
+    textTransform: 'uppercase',
   },
   tipRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
   },
   tipText: {
+    flex: 1,
     fontSize: 11,
-    fontWeight: '500',
+    lineHeight: 16,
     color: TACTICAL.textMuted,
-    lineHeight: 15,
   },
 });
-
-
-
-

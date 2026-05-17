@@ -66,7 +66,7 @@ export default function RouteMetadataCard({
       <View style={s.header}>
         <View style={s.headerLeft}>
           <Ionicons name="trail-sign-outline" size={16} color={TACTICAL.amber} />
-          <Text style={s.headerTitle}>ROUTE METADATA</Text>
+          <Text style={s.headerTitle}>ECS ROUTE</Text>
         </View>
         <View style={s.headerRight}>
           {saving && <ActivityIndicator size="small" color={TACTICAL.accent} />}
@@ -92,7 +92,7 @@ export default function RouteMetadataCard({
           style={s.input}
           value={name}
           onChangeText={handleNameChange}
-          placeholder="Enter route name..."
+          placeholder="Route name"
           placeholderTextColor={TACTICAL.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
@@ -106,7 +106,7 @@ export default function RouteMetadataCard({
           style={[s.input, s.multiline]}
           value={notes}
           onChangeText={handleNotesChange}
-          placeholder="Route notes, terrain conditions, access info..."
+          placeholder="Terrain, access, closures, or route notes"
           placeholderTextColor={TACTICAL.textMuted}
           multiline
           numberOfLines={4}
@@ -120,7 +120,7 @@ export default function RouteMetadataCard({
 const s = StyleSheet.create({
   card: {
     backgroundColor: TACTICAL.panel,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: TACTICAL.border,
     overflow: 'hidden',
@@ -129,7 +129,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62,79,60,0.2)',
@@ -143,7 +143,7 @@ const s = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
     color: TACTICAL.amber,
-    letterSpacing: 2,
+    letterSpacing: 1.8,
   },
   headerRight: {
     flexDirection: 'row',
@@ -181,7 +181,7 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   fieldGroup: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 10,
     gap: 6,
   },
@@ -195,15 +195,15 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
     borderWidth: 1,
     borderColor: 'rgba(62,79,60,0.3)',
-    borderRadius: 8,
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 14,
+    fontSize: 13,
     color: TACTICAL.text,
     fontFamily: 'Courier',
   },
   multiline: {
-    minHeight: 80,
+    minHeight: 88,
     paddingTop: 10,
   },
 });

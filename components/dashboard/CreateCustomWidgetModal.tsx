@@ -4,7 +4,7 @@
  * Full-screen modal for building a custom dashboard widget.
  * Steps: Name → Icon → Data Fields → Thresholds → Save
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,12 +12,11 @@ import {
   TextInput,
   StyleSheet,
   ScrollView,
-  Animated,
-  Dimensions,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import TacticalPopupShell from '../TacticalPopupShell';
 
 import { TACTICAL } from '../../lib/theme';
 import {
@@ -36,12 +35,7 @@ interface Props {
   onClose: () => void;
 }
 
-const SCREEN_H = Dimensions.get('window').height;
-
 export default function CreateCustomWidgetModal({ visible, editWidget, onSave, onClose }: Props) {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
-
   // Form state
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -69,21 +63,6 @@ export default function CreateCustomWidgetModal({ visible, editWidget, onSave, o
       resetForm();
     }
   }, [editWidget, visible]);
-
-  // Animate
-  useEffect(() => {
-    if (visible) {
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
-        Animated.spring(slideAnim, { toValue: 0, friction: 12, tension: 65, useNativeDriver: true }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
-        Animated.timing(slideAnim, { toValue: SCREEN_H, duration: 200, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [visible]);
 
   function resetForm() {
     setName('');
@@ -153,8 +132,6 @@ export default function CreateCustomWidgetModal({ visible, editWidget, onSave, o
     .map(fk => AVAILABLE_DATA_FIELDS.find(f => f.field === fk))
     .filter(f => f && f.format !== 'text');
 
-  if (!visible) return null;
-
   const sections = [
     { key: 'name' as const, label: 'NAME', icon: 'text-outline' },
     { key: 'icon' as const, label: 'ICON', icon: 'color-palette-outline' },
@@ -163,34 +140,36 @@ export default function CreateCustomWidgetModal({ visible, editWidget, onSave, o
   ];
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
-      </Animated.View>
-
-      <Animated.View style={[styles.panel, { transform: [{ translateY: slideAnim }] }]}>
-        {/* Handle */}
-        <View style={styles.handleRow}>
-          <View style={styles.handle} />
-        </View>
-
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.headerIconBox}>
-            <Ionicons name="create-outline" size={18} color={TACTICAL.amber} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>
-              {editWidget ? 'EDIT CUSTOM WIDGET' : 'CREATE CUSTOM WIDGET'}
-            </Text>
-            <Text style={styles.headerSubtitle}>Define your own dashboard metric</Text>
-          </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Ionicons name="close" size={20} color={TACTICAL.textMuted} />
+    <TacticalPopupShell
+      visible={visible}
+      onClose={onClose}
+      icon="create-outline"
+      eyebrow="CUSTOM WIDGET"
+      title={editWidget ? 'EDIT CUSTOM WIDGET' : 'CREATE CUSTOM WIDGET'}
+      subtitle="Define your own dashboard metric"
+      overlayClass="workflow"
+      maxWidth={940}
+      maxHeightFraction={0.9}
+      minHeightFraction={0.78}
+      scrollable={false}
+      keyboardAware
+      footer={
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
+            <Text style={styles.cancelText}>CANCEL</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.saveBtn, (!name.trim() || selectedFields.length === 0) && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            activeOpacity={0.7}
+            disabled={!name.trim() || selectedFields.length === 0}
+          >
+            <Ionicons name="checkmark-circle" size={16} color={TACTICAL.bg} />
+            <Text style={styles.saveText}>{editWidget ? 'UPDATE WIDGET' : 'CREATE WIDGET'}</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Section Tabs */}
+      }
+    >
         <View style={styles.sectionTabs}>
           {sections.map((sec, idx) => {
             const isActive = sec.key === activeSection;
@@ -510,85 +489,14 @@ export default function CreateCustomWidgetModal({ visible, editWidget, onSave, o
               </View>
             )}
 
-            <View style={{ height: 120 }} />
+            <View style={{ height: 32 }} />
           </ScrollView>
         </KeyboardAvoidingView>
-
-        {/* Save Button */}
-        <View style={styles.footer}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
-            <Text style={styles.cancelText}>CANCEL</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.saveBtn, (!name.trim() || selectedFields.length === 0) && styles.saveBtnDisabled]}
-            onPress={handleSave}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="checkmark-circle" size={16} color={TACTICAL.bg} />
-            <Text style={styles.saveText}>{editWidget ? 'UPDATE WIDGET' : 'CREATE WIDGET'}</Text>
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
-    </View>
+    </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-  },
-  panel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: SCREEN_H * 0.88,
-    backgroundColor: TACTICAL.panel,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderTopWidth: 1,
-    borderColor: TACTICAL.border,
-  },
-  handleRow: {
-    alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 4,
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-  },
-  headerIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: 'rgba(196,138,44,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 1.5,
-  },
-  headerSubtitle: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-    marginTop: 1,
-  },
-  closeBtn: { padding: 4 },
-
   // Section tabs
   sectionTabs: {
     flexDirection: 'row',

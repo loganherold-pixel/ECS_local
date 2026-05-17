@@ -18,6 +18,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
+import { WidgetCompactRow } from './WidgetChrome';
 import { useExpeditionRisk } from '../../lib/useExpeditionRisk';
 import type {
   RiskEvaluation,
@@ -298,38 +299,31 @@ function buildExpeditionRiskOutput(risk: ReturnType<typeof useExpeditionRisk>): 
 
 export function ExpeditionRiskCompact() {
   const risk = useExpeditionRisk();
-  const output = useMemo(() => buildExpeditionRiskOutput(risk), [risk.riskScore, risk.operationalStatus, risk.primaryRiskFactor]);
-  const levelColor = EXPEDITION_RISK_LEVEL_COLORS[output.level];
-  const forecastIndicator = output.forward_forecast.available
-    ? output.forward_forecast.trend === 'worsening' ? '\u2191' : output.forward_forecast.trend === 'improving' ? '\u2193' : '\u2192'
-    : '\u2014';
+  const output = useMemo(() => buildExpeditionRiskOutput(risk), [risk]);
+  const compactTone =
+    output.level === 'High'
+      ? 'critical'
+      : output.level === 'Elevated' || output.level === 'Moderate'
+        ? 'attention'
+        : 'good';
+  const forecastStatus = output.forward_forecast.available
+    ? output.forward_forecast.trend === 'worsening'
+      ? 'Ahead rising'
+      : output.forward_forecast.trend === 'improving'
+        ? 'Ahead easing'
+        : 'Ahead stable'
+    : output.primary_factor || 'Current only';
 
   return (
-    <View style={cs.row}>
-      <View style={cs.cell}>
-        <Text style={cs.label}>RISK</Text>
-        <Text style={[cs.value, { color: levelColor }]}>{output.level.toUpperCase()}</Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>SCORE</Text>
-        <Text style={[cs.value, { color: levelColor }]}>{output.score}</Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>AHEAD</Text>
-        <Text style={[cs.value, { color: output.forward_forecast.trend === 'worsening' ? '#E67E22' : output.forward_forecast.trend === 'improving' ? '#4CAF50' : TACTICAL.textMuted }]}>
-          {forecastIndicator}
-        </Text>
-      </View>
-    </View>
+    <WidgetCompactRow
+      title="Risk"
+      summary={`${output.level} | Score ${output.score}`}
+      tone={compactTone}
+      status={forecastStatus}
+      statusTone={compactTone}
+    />
   );
 }
-
-const cs = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  cell: { flex: 1, alignItems: 'center' },
-  label: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  value: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-});
 
 
 // ═══════════════════════════════════════════════════════════
@@ -338,7 +332,7 @@ const cs = StyleSheet.create({
 
 export function ExpeditionRiskCard() {
   const risk = useExpeditionRisk();
-  const output = useMemo(() => buildExpeditionRiskOutput(risk), [risk.riskScore, risk.operationalStatus, risk.primaryRiskFactor, risk.summaryLine]);
+  const output = useMemo(() => buildExpeditionRiskOutput(risk), [risk]);
   const levelColor = EXPEDITION_RISK_LEVEL_COLORS[output.level];
 
   return (
@@ -376,15 +370,15 @@ export function ExpeditionRiskCard() {
 }
 
 const cs2 = StyleSheet.create({
-  body: { gap: 3 },
+  body: { gap: 2 },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, alignSelf: 'flex-start' },
   dot: { width: 6, height: 6, borderRadius: 3 },
   badgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
-  scoreChip: { fontSize: 10, fontWeight: '900', fontFamily: 'Courier', marginLeft: 'auto' },
+  scoreChip: { fontSize: 9, fontWeight: '900', fontFamily: 'Courier', marginLeft: 'auto' },
   descriptor: { fontSize: 10, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.5 },
-  factor: { fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, fontStyle: 'italic' },
-  forecastRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  forecastText: { fontSize: 8, fontWeight: '700', letterSpacing: 0.5 },
+  factor: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted, fontStyle: 'italic' },
+  forecastRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  forecastText: { fontSize: 7.5, fontWeight: '700', letterSpacing: 0.4 },
 });
 
 
@@ -394,11 +388,7 @@ const cs2 = StyleSheet.create({
 
 export function ExpeditionRiskDetailView() {
   const risk = useExpeditionRisk();
-  const output = useMemo(() => buildExpeditionRiskOutput(risk), [
-    risk.riskScore, risk.operationalStatus, risk.primaryRiskFactor, risk.summaryLine,
-    risk.capabilityScore, risk.resourceReadiness, risk.connectivityRisk, risk.isolationRisk,
-    risk.routeDifficultyScore, risk.resourceRouteBalance, risk.healthScore, risk.availableInputs,
-  ]);
+  const output = useMemo(() => buildExpeditionRiskOutput(risk), [risk]);
   const levelColor = EXPEDITION_RISK_LEVEL_COLORS[output.level];
 
   return (
@@ -527,16 +517,6 @@ export function ExpeditionRiskDetailView() {
       <MetricRow label="26\u201350" value="MODERATE" color="#FFB300" />
       <MetricRow label="51\u201375" value="ELEVATED" color="#E67E22" />
       <MetricRow label="76\u2013100" value="HIGH" color="#EF5350" />
-
-      {/* ═══ ENGINE INFO ═══ */}
-      <View style={ds.divider} />
-      <Text style={ds.section}>ENGINE</Text>
-      <MetricRow label="VERSION" value="v5.0 (Phase 5)" />
-      <MetricRow label="SCORING" value="7-factor weighted composite" />
-      <MetricRow label="HYSTERESIS" value="Stabilized transitions" />
-      <MetricRow label="FORWARD FORECAST" value="4-segment route-ahead" />
-      <MetricRow label="CATEGORIES" value="7 risk categories" />
-      <MetricRow label="ADVISORIES" value="Tactical intelligence" />
 
       <View style={{ height: 32 }} />
     </ScrollView>

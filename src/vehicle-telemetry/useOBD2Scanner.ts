@@ -11,12 +11,16 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { OBD2DiscoveredDevice, OBD2AdapterState, OBD2AdapterStatus } from './OBD2Adapter';
+import type { OBD2DiscoveredDevice, OBD2AdapterState, OBD2ScanDiagnostics } from './OBD2Adapter';
 import { obd2Adapter } from './OBD2Adapter';
+import type { TelemetrySourceStatus } from './TelemetryDiscoveryControl';
 
 export interface OBD2ScannerHookResult {
   /** Current adapter state */
   state: OBD2AdapterState;
+
+  /** User-visible source status for telemetry discovery/connection */
+  sourceStatus: TelemetrySourceStatus;
 
   /** Whether the adapter is currently scanning */
   isScanning: boolean;
@@ -54,6 +58,9 @@ export interface OBD2ScannerHookResult {
   /** Reconnect attempt number */
   reconnectAttempt: number;
 
+  /** Native BLE scan diagnostics from the adapter */
+  scanDiagnostics: OBD2ScanDiagnostics;
+
   /** Whether connection just succeeded (for confirmation UI) */
   connectionJustSucceeded: boolean;
 
@@ -69,7 +76,7 @@ export interface OBD2ScannerHookResult {
   startScan: (durationMs?: number) => Promise<void>;
 
   /** Stop scanning */
-  stopScan: () => Promise<void>;
+  stopScan: (reason?: string) => Promise<void>;
 
   /** Connect to a specific device */
   connectToDevice: (deviceId: string, deviceName?: string) => Promise<boolean>;
@@ -95,7 +102,12 @@ export interface OBD2ScannerHookResult {
  */
 export function useOBD2Scanner(): OBD2ScannerHookResult {
   const [, setRev] = useState(0);
-  const bump = useCallback(() => setRev(r => r + 1), []);
+  const mountedRef = useRef(false);
+  const bump = useCallback(() => {
+    if (mountedRef.current) {
+      setRev(r => r + 1);
+    }
+  }, []);
 
   const [connectionJustSucceeded, setConnectionJustSucceeded] = useState(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +115,7 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
 
   // Subscribe to adapter state changes
   useEffect(() => {
+    mountedRef.current = true;
     const unsub = obd2Adapter.subscribe(() => {
       const status = obd2Adapter.getStatus();
 
@@ -114,7 +127,9 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
         setConnectionJustSucceeded(true);
         if (successTimerRef.current) clearTimeout(successTimerRef.current);
         successTimerRef.current = setTimeout(() => {
-          setConnectionJustSucceeded(false);
+          if (mountedRef.current) {
+            setConnectionJustSucceeded(false);
+          }
         }, 5000);
       }
 
@@ -124,6 +139,7 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
     });
 
     return () => {
+      mountedRef.current = false;
       unsub();
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
     };
@@ -132,11 +148,11 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
   const status = obd2Adapter.getStatus();
 
   const startScan = useCallback(async (durationMs?: number) => {
-    await obd2Adapter.startScan(durationMs);
+    await obd2Adapter.startScan(durationMs, 'user_open_tools');
   }, []);
 
-  const stopScan = useCallback(async () => {
-    await obd2Adapter.stopScan();
+  const stopScan = useCallback(async (reason?: string) => {
+    await obd2Adapter.stopScan(reason);
   }, []);
 
   const connectToDevice = useCallback(async (deviceId: string, deviceName?: string) => {
@@ -153,14 +169,14 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
   }, []);
 
   const clearError = useCallback(() => {
-    // Reset to idle state by triggering a notify
-    bump();
-  }, [bump]);
+    obd2Adapter.clearError();
+  }, []);
 
   const obdDeviceCount = status.discoveredDevices.filter(d => d.isLikelyOBD).length;
 
   return {
     state: status.state,
+    sourceStatus: status.sourceStatus,
     isScanning: status.state === 'scanning' || status.state === 'requesting_permissions',
     isConnected: status.state === 'connected',
     isConnecting: status.state === 'connecting',
@@ -173,6 +189,7 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
     error: status.error,
     scanProgress: status.scanProgress,
     reconnectAttempt: status.reconnectAttempt,
+    scanDiagnostics: status.scanDiagnostics,
     connectionJustSucceeded,
     autoReconnectEnabled: obd2Adapter.isAutoReconnectEnabled(),
     lastDevice: obd2Adapter.getLastDeviceInfo(),

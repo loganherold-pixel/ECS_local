@@ -27,6 +27,7 @@
  */
 
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 import type {
   RecordingState,
   TripEventType,
@@ -588,7 +589,10 @@ export const tripRecorderEngine = {
         _addEvent('trip_resumed', 'Recording resumed after app restart');
       }
 
-      console.log(TAG, `Restored active trip: ${restored.id} (${restored.state})`);
+      ecsLog.debug('SYSTEM', 'Trip recorder restored active trip', {
+        state: restored.state,
+        tripId: restored.id,
+      });
     }
 
     // Subscribe to expedition state changes
@@ -622,7 +626,7 @@ export const tripRecorderEngine = {
       console.warn(TAG, 'Failed to subscribe to expedition state:', e);
     }
 
-    console.log(TAG, 'Trip Recorder Engine initialized');
+    ecsLog.debug('SYSTEM', 'Trip recorder initialized');
     _notify();
   },
 
@@ -636,7 +640,7 @@ export const tripRecorderEngine = {
       _expeditionUnsub = null;
     }
     _initialized = false;
-    console.log(TAG, 'Trip Recorder Engine destroyed');
+    ecsLog.debug('SYSTEM', 'Trip recorder destroyed');
   },
 
   // ── Recording Control ──────────────────────────────────────

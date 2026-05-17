@@ -24,6 +24,7 @@ import {
   type PowerProviderId,
   type DeviceRole,
 } from '../../lib/powerSetupStore';
+import { resolvePowerReadiness } from '../../lib/powerReadiness';
 import { vehicleStore } from '../../lib/vehicleStore';
 import type { Vehicle } from '../../lib/types';
 
@@ -66,6 +67,12 @@ export default function DeviceConfigStep({
   onBack,
 }: Props) {
   const display = PROVIDER_DISPLAY[provider];
+  const readiness = resolvePowerReadiness({
+    providerId: provider,
+    connectionState: 'connected',
+    hasTelemetry: display.supportLevel === 'verified',
+    hasStoredSnapshot: true,
+  });
 
   const [customName, setCustomName] = useState(deviceName);
   const [selectedRole, setSelectedRole] = useState<DeviceRole>('primary_house');
@@ -114,9 +121,9 @@ export default function DeviceConfigStep({
           <Text style={[styles.deviceName, { color: palette.text }]}>{deviceName}</Text>
           <Text style={[styles.deviceModelText, { color: palette.textMuted }]}>{deviceModel}</Text>
         </View>
-        <View style={[styles.connectedBadge, { backgroundColor: '#34C759' + '12', borderColor: '#34C759' + '25' }]}>
-          <View style={[styles.connectedDot, { backgroundColor: '#34C759' }]} />
-          <Text style={[styles.connectedText, { color: '#34C759' }]}>CONNECTED</Text>
+        <View style={[styles.connectedBadge, { backgroundColor: readiness.color + '12', borderColor: readiness.color + '25' }]}>
+          <View style={[styles.connectedDot, { backgroundColor: readiness.color }]} />
+          <Text style={[styles.connectedText, { color: readiness.color }]}>{readiness.label}</Text>
         </View>
       </View>
 

@@ -13,6 +13,7 @@
 
 import { Platform } from 'react-native';
 import { parseGPX, type ImportedRoute, type RouteWaypoint } from './routeStore';
+import type { OfflineRemoteCacheManifest } from './remote/offlineRemoteCache';
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
@@ -116,6 +117,51 @@ export interface RunHealthResult {
   warnings: string[];
 }
 
+export interface RunOfflineCacheManifest {
+  cached_at: string;
+  tile_region_id?: string | null;
+  route_geometry: RunPoint[];
+  route_bounds?: {
+    minLat: number;
+    maxLat: number;
+    minLng: number;
+    maxLng: number;
+  } | null;
+  route_distance_miles?: number | null;
+  gpx_metadata: {
+    id: string;
+    title: string;
+    source: string;
+    created_at: string;
+    updated_at: string;
+    stats: RunStats;
+    final_destination?: {
+      latitude: number;
+      longitude: number;
+      label: string;
+      subtitle?: string | null;
+      source: 'waypoint' | 'run_stats' | 'route_geometry';
+    } | null;
+    route_intent?: unknown | null;
+  };
+  run_detail: {
+    build_snapshot: BuildSnapshot;
+    health: RunHealthResult;
+  };
+  waypoints: RouteWaypoint[];
+  segment_risk: unknown | null;
+  gpx_xml: string;
+  cache_route_id?: string;
+  stable_route_key?: string;
+  route_id_aliases?: string[];
+  cache_status?: 'not_cached' | 'caching' | 'cached' | 'failed';
+  cache_version?: number;
+  original_gpx_metadata?: Record<string, unknown> | null;
+  tile_cache_status?: 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable';
+  cache_groups?: string[];
+  remote_cache?: OfflineRemoteCacheManifest | null;
+}
+
 export interface ECSRun {
   id: string;
   user_id: string | null;
@@ -128,6 +174,7 @@ export interface ECSRun {
   stats: RunStats;
   points: RunPoint[];
   waypoints: RouteWaypoint[];
+  offline_cache?: RunOfflineCacheManifest | null;
   is_active: boolean;
 }
 
@@ -224,7 +271,7 @@ export function computeRunHealth(run: ECSRun): RunHealthResult {
         message: `Route uses ${Math.round(ratio * 100)}% of range`,
       };
       warnings.push(`RANGE CAUTION: ${Math.round(ratio * 100)}% of estimated range`);
-      if (overall !== 'red') overall = 'yellow';
+      overall = 'yellow';
     } else {
       range = { level: 'green', message: `${Math.round(ratio * 100)}% of range` };
     }
@@ -745,6 +792,26 @@ export const runStore = {
     return run;
   },
 
+  upsert: (run: ECSRun): ECSRun => {
+    const runs = getLocalRuns();
+    const idx = runs.findIndex((r) => r.id === run.id);
+    const updated: ECSRun = {
+      ...(idx >= 0 ? runs[idx] : run),
+      ...run,
+      updated_at: nowISO(),
+      is_active: idx >= 0 ? runs[idx].is_active : run.is_active,
+    };
+
+    if (idx >= 0) {
+      runs[idx] = updated;
+    } else {
+      runs.push(updated);
+    }
+
+    saveLocalRuns(runs);
+    return updated;
+  },
+
   setActive: (runId: string): void => {
     const runs = getLocalRuns();
     for (const r of runs) {
@@ -775,6 +842,16 @@ export const runStore = {
     const idx = runs.findIndex((r) => r.id === runId);
     if (idx === -1) return null;
     runs[idx].build_snapshot = { ...runs[idx].build_snapshot, ...snapshot };
+    runs[idx].updated_at = nowISO();
+    saveLocalRuns(runs);
+    return runs[idx];
+  },
+
+  cacheOffline: (runId: string, manifest: RunOfflineCacheManifest): ECSRun | null => {
+    const runs = getLocalRuns();
+    const idx = runs.findIndex((r) => r.id === runId);
+    if (idx === -1) return null;
+    runs[idx].offline_cache = manifest;
     runs[idx].updated_at = nowISO();
     saveLocalRuns(runs);
     return runs[idx];

@@ -9,9 +9,10 @@
  */
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, Platform,
+  View, Text, TouchableOpacity, StyleSheet, Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSConfirmDialog from '../ECSConfirmDialog';
 
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
 import { trailStore, type TrailRecordingStatus, type TrailStats } from '../../lib/trailStore';
@@ -65,10 +66,11 @@ export default function TrailControlPanel({
 
   const handleStop = useCallback(() => {
     hapticCommand();
+    const pointsBeforeStop = trailStore.getStats().point_count;
     trailStore.stop(activeExpeditionName || null);
     setConfirmStop(false);
     onStatusChange();
-    showToast('TRAIL SAVED');
+    showToast(pointsBeforeStop > 0 ? 'TRAIL SAVED' : 'TRAIL ENDED — NO GPS POINTS');
   }, [activeExpeditionName, onStatusChange, showToast]);
 
 
@@ -269,34 +271,17 @@ export default function TrailControlPanel({
         </View>
       )}
 
-      {/* ── Stop Confirmation Modal ──────────────────────── */}
-      <Modal visible={confirmStop} transparent animationType="fade">
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmContainer}>
-            <Text style={styles.confirmTitle}>STOP RECORDING?</Text>
-            <Text style={styles.confirmBody}>
-              Trail will be saved with {stats.point_count} points ({stats.distance_miles.toFixed(2)} mi).
-            </Text>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.confirmCancel}
-                onPress={() => setConfirmStop(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.confirmCancelText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.confirmStopBtn}
-                onPress={handleStop}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="stop" size={14} color="#fff" />
-                <Text style={styles.confirmStopText}>STOP & SAVE</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ECSConfirmDialog
+        visible={confirmStop}
+        title="End Recording?"
+        message={`Trail will be saved with ${stats.point_count} points (${stats.distance_miles.toFixed(2)} mi).`}
+        icon="stop-circle-outline"
+        cancelLabel="Cancel"
+        confirmLabel="Stop & Save"
+        destructive
+        onCancel={() => setConfirmStop(false)}
+        onConfirm={handleStop}
+      />
     </View>
   );
 }
@@ -574,69 +559,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: TACTICAL.textMuted,
     flex: 1,
-  },
-
-  // ── Confirm Modal ───────────────────────────────────────
-  confirmOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  confirmContainer: {
-    backgroundColor: TACTICAL.panel,
-    borderRadius: 16,
-    padding: 20,
-    width: '80%',
-    maxWidth: 340,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '30',
-    gap: 12,
-  },
-  confirmTitle: {
-    ...TYPO.T2,
-    color: TACTICAL.amber,
-  },
-  confirmBody: {
-    ...TYPO.B2,
-    color: TACTICAL.textMuted,
-    lineHeight: 18,
-  },
-  confirmActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-  },
-  confirmCancel: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 11,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: TACTICAL.border,
-  },
-  confirmCancelText: {
-    ...TYPO.U2,
-    color: TACTICAL.textMuted,
-    fontSize: 9,
-    letterSpacing: 3,
-  },
-  confirmStopBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 11,
-    borderRadius: 8,
-    backgroundColor: '#EF5350',
-  },
-  confirmStopText: {
-    ...TYPO.U1,
-    color: '#fff',
-    fontSize: 10,
-    letterSpacing: 2,
   },
 });
 

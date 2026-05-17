@@ -5,7 +5,8 @@
  *
  * Android 12+ (API 31+):
  *   BLUETOOTH_SCAN and BLUETOOTH_CONNECT are runtime permissions.
- *   ACCESS_FINE_LOCATION is still needed on older Android for BLE scanning.
+ *   ACCESS_FINE_LOCATION is still requested because some BLE stacks/OEM builds
+ *   suppress scan callbacks when location remains denied.
  *
  * iOS:
  *   The system prompts for Bluetooth access on first BLE usage; no explicit
@@ -34,6 +35,19 @@ const ANDROID_BLE_PERMISSIONS = {
   BLUETOOTH_CONNECT: "android.permission.BLUETOOTH_CONNECT",
   ACCESS_FINE_LOCATION: "android.permission.ACCESS_FINE_LOCATION",
 } as const;
+
+export function formatBlePermissionDeniedMessage(missing: string[] = []): string {
+  if (missing.includes("platform")) {
+    return "Bluetooth scanning is not available in web preview. Open ECS on a mobile device to scan and connect.";
+  }
+
+  const requiresLocation = missing.includes(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
+  if (requiresLocation) {
+    return "Bluetooth permission is required to scan. Android also requires location permission for nearby Bluetooth discovery.";
+  }
+
+  return "Bluetooth permission is required to scan.";
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -72,6 +86,7 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
   if (Platform.OS === "android") {
     try {
       // Dynamic import so the module is never resolved on web/iOS bundles.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
 
       const apiLevel = getAndroidApiLevel();
@@ -82,6 +97,7 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
         const results = await PermissionsAndroid.requestMultiple([
           ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN as any,
           ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT as any,
+          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any,
         ]);
 
         if (
@@ -96,6 +112,13 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
           PermissionsAndroid.RESULTS.GRANTED
         ) {
           missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT);
+        }
+
+        if (
+          results[ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION] !==
+          PermissionsAndroid.RESULTS.GRANTED
+        ) {
+          missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
         }
       } else {
         // ── Android < 12: ACCESS_FINE_LOCATION required for BLE scan ──
@@ -146,6 +169,7 @@ export async function checkBlePermissions(): Promise<BlePermissionResult> {
 
   if (Platform.OS === "android") {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
 
       const apiLevel = getAndroidApiLevel();
@@ -158,9 +182,13 @@ export async function checkBlePermissions(): Promise<BlePermissionResult> {
         const connectGranted = await PermissionsAndroid.check(
           ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT as any
         );
+        const locationGranted = await PermissionsAndroid.check(
+          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any
+        );
 
         if (!scanGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN);
         if (!connectGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT);
+        if (!locationGranted) missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
       } else {
         const locationGranted = await PermissionsAndroid.check(
           ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any

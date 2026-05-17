@@ -1,28 +1,69 @@
 node_modules/
 .expo/
+/.expo-*/
 dist/
+coverage/
 npm-debug.*
+*.log
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
 *.orig.*
 web-build/
-assets/
 metro-cache/
 .metro-cache-*/
 
-
-
-
-ios
-android
-
 # macOS
 .DS_Store
+Thumbs.db
 
 # Temporary files created by Metro to check the health of the file watcher
 .metro-health-check*
+
+# Local env / secrets
+.env
+.env.local
+.env*.local
+!.env.example
+!.env.sample
+!.env.template
+API Weather Sources.txt
+
+# Native/build outputs
+.gradle-local*/
+.gradle-user-home/
+.npm-cache/
+artifacts/
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+ios/build/
+ios/Pods/
+supabase/.temp/
+
+# Local tool / smoke-test outputs
+tmp/
+.tmp/
+.tmp-*
+.smoke/
+.expo-export-check/
+.expo-runtime/
+.cleanup-quarantine/
+.cleanup-safety/
+.codex-*
+.expo-*.log
+tmp_*.json
+/tmp_*.png
+/tmp-*.png
+/app.lnk
+
+# Local duplicate/generated media staging
+assets/images/recovery-protocols/
 
 expo-env.d.ts

@@ -11,7 +11,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'rea
 import { SafeIcon as Ionicons } from './SafeIcon';
 import { useTheme } from '../context/ThemeContext';
 import { SPACING, RADIUS } from '../lib/theme';
-import { supabase } from '../lib/supabase';
+import { isDeployedEdgeFunction, supabase } from '../lib/supabase';
 
 interface Stats {
   total_rows: number;
@@ -29,8 +29,8 @@ interface Props {
 }
 
 const FUNCTION_LABELS: Record<string, string> = {
-  'analyze-expedition': 'AI Analysis',
-  'cross-expedition-trends': 'AI Trends',
+  'analyze-expedition': 'ECS Analysis',
+  'cross-expedition-trends': 'ECS Trends',
   'get-weather': 'Weather',
   'dispatch-feed': 'Dispatch',
 };
@@ -48,6 +48,9 @@ export default function RateLimitCleanupPanel({ onToast }: Props) {
     setLastAction(action);
     setLastResult(null);
     try {
+      if (!isDeployedEdgeFunction('rate-limit-cleanup')) {
+        throw new Error('Rate-limit maintenance is unavailable in this ECS backend');
+      }
       const { data, error } = await supabase.functions.invoke('rate-limit-cleanup', {
         body: { action, ...(retention_hours ? { retention_hours } : {}) },
       });

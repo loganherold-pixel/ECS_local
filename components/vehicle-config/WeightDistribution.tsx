@@ -23,19 +23,15 @@ import {
   StyleSheet,
   Animated,
   LayoutAnimation,
-  Platform,
-  UIManager,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL, ZONE_ACCENT_SOLID } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
 import type { CGResult } from '../../lib/weightEngine';
+import { enableLegacyAndroidLayoutAnimation } from '../../lib/layoutAnimationCompat';
 
-// Enable LayoutAnimation on Android
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+enableLegacyAndroidLayoutAnimation();
 
 interface Props {
   cgResult: CGResult;

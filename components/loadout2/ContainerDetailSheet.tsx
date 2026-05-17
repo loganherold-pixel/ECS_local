@@ -1,58 +1,36 @@
-/**
- * ContainerDetailSheet — Loadout 2.0 Container Drill-Down
- *
- * Opens as a modal sheet when user taps a container card.
- * Shows:
- *   - Container name + icon + total weight prominently
- *   - Item list with packed toggles, qty steppers, weight
- *   - Quick Add button for pre-built item templates
- *   - Add Item button at bottom
- *   - Liquid-specific UI for water_storage container
- *
- * All item mutations are delegated to parent via callbacks.
- */
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  Modal,
-  StyleSheet,
   Alert,
   Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { SafeIcon as Ionicons } from '../SafeIcon';
+
 import { AccessoryIcon } from '../vehicle-wizard/AccessoryIcons';
+import { ECSButton } from '../ECSButton';
+import { ECSChip } from '../ECSChip';
+import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
+import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
-import type { LoadoutItem } from '../../lib/types';
 import type { ContainerZone } from '../../lib/accessoryFramework';
-import {
-  getContainerWeight,
-  getContainerItemCount,
-  LIQUID_CONTAINER_KEY,
-} from '../../lib/loadout2Types';
-import ItemRow from './ItemRow';
+import type { LoadoutItem } from '../../lib/types';
+import { LIQUID_CONTAINER_KEY, getTotalLoadoutWeight } from '../../lib/loadout2Types';
 import AddItemModal, { type AddItemPayload } from './AddItemModal';
+import ItemRow from './ItemRow';
 import QuickAddLibrary from './QuickAddLibrary';
 
-// ── Props ───────────────────────────────────────────────────
+type DetailFilter = 'all' | 'packed' | 'unpacked' | 'critical';
+
 export interface ContainerDetailSheetProps {
   visible: boolean;
   onClose: () => void;
-  /** The container zone being viewed */
   container: ContainerZone | null;
-  /** All loadout items (will be filtered to this container) */
   allItems: LoadoutItem[];
-  /** All container zones (for weight matching) */
-  allZones: ContainerZone[];
-  /** Loadout ID for new items */
-  loadoutId: string;
-  /** Called when an item is added */
   onAddItem: (payload: AddItemPayload) => Promise<void>;
-  /** Called when an item is updated */
   onUpdateItem: (itemId: string, updates: Partial<LoadoutItem>) => Promise<void>;
-  /** Called when an item is deleted */
   onDeleteItem: (itemId: string) => Promise<void>;
 }
 
@@ -61,8 +39,6 @@ export default function ContainerDetailSheet({
   onClose,
   container,
   allItems,
-  allZones,
-  loadoutId,
   onAddItem,
   onUpdateItem,
   onDeleteItem,
@@ -71,51 +47,44 @@ export default function ContainerDetailSheet({
   const [quickAddVisible, setQuickAddVisible] = useState(false);
   const [editItem, setEditItem] = useState<LoadoutItem | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // NOTE: All hooks MUST be called before any early return to satisfy
-  // React's rules of hooks (same number of hooks every render).
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<DetailFilter>('all');
 
   const isLiquid = container ? container.id === LIQUID_CONTAINER_KEY : false;
-  const color = container ? (container.color || TACTICAL.amber) : TACTICAL.amber;
+  const color = container?.color || TACTICAL.amber;
 
-  // ── Filter items for this container ────────────────────────
   const containerItems = useMemo(() => {
     if (!container) return [];
-    return allItems.filter(item => {
-      if (!item.storage_location) return false;
-      // Direct match on container key (Loadout 2.0 style)
-      if (item.storage_location === container.id) return true;
-      // Also try label match for legacy items
-      if (item.storage_location.toLowerCase() === container.label.toLowerCase()) return true;
-      return false;
+    return allItems.filter((item) => {
+      const storageLocation = (item.storage_location || '').toLowerCase();
+      return storageLocation === container.id || storageLocation === container.label.toLowerCase();
     });
   }, [allItems, container]);
 
-  // ── Compute totals ─────────────────────────────────────────
-  const totalWeight = useMemo(() => {
-    return containerItems.reduce(
-      (sum, item) => sum + ((item.weight_lbs || 0) * (item.quantity || 1)),
-      0
-    );
-  }, [containerItems]);
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return containerItems.filter((item) => {
+      if (filter === 'packed' && !item.is_packed) return false;
+      if (filter === 'unpacked' && item.is_packed) return false;
+      if (filter === 'critical' && !item.is_critical) return false;
+      if (!query) return true;
+      return [item.name, item.notes || '', item.storage_location || '']
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [containerItems, filter, search]);
 
-  const packedCount = useMemo(
-    () => containerItems.filter(i => i.is_packed).length,
-    [containerItems]
-  );
+  const totalWeight = useMemo(() => getTotalLoadoutWeight(containerItems), [containerItems]);
+  const packedCount = useMemo(() => containerItems.filter((item) => item.is_packed).length, [containerItems]);
+  const criticalCount = useMemo(() => containerItems.filter((item) => item.is_critical).length, [containerItems]);
 
-  const criticalCount = useMemo(
-    () => containerItems.filter(i => i.is_critical).length,
-    [containerItems]
-  );
-
-  // ── Handlers ───────────────────────────────────────────────
   const handleTogglePacked = useCallback(async (itemId: string, packed: boolean) => {
     await onUpdateItem(itemId, { is_packed: packed });
   }, [onUpdateItem]);
 
-  const handleUpdateQty = useCallback(async (itemId: string, qty: number) => {
-    await onUpdateItem(itemId, { quantity: qty });
+  const handleUpdateQty = useCallback(async (itemId: string, quantity: number) => {
+    await onUpdateItem(itemId, { quantity });
   }, [onUpdateItem]);
 
   const handleEdit = useCallback((item: LoadoutItem) => {
@@ -124,210 +93,189 @@ export default function ContainerDetailSheet({
   }, []);
 
   const handleDelete = useCallback((itemId: string) => {
-    const doDelete = async () => {
-      await onDeleteItem(itemId);
-    };
+    const runDelete = async () => onDeleteItem(itemId);
     if (Platform.OS === 'web') {
-      if (confirm('Remove this item from the container?')) doDelete();
-    } else {
-      Alert.alert('Remove Item', 'This item will be removed from the container.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: doDelete },
-      ]);
+      if (confirm('Remove this item from the container?')) runDelete();
+      return;
     }
+    Alert.alert('Remove Item', 'This item will be removed from the container.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: runDelete },
+    ]);
   }, [onDeleteItem]);
 
   const handleAddSave = useCallback(async (payload: AddItemPayload) => {
     setSaving(true);
     try {
       if (editItem) {
-        // Update existing item
         await onUpdateItem(editItem.id, {
           name: payload.name,
           quantity: payload.quantity,
           weight_lbs: payload.weight_lbs,
+          weight_source: payload.weight_source,
+          category: payload.category ?? editItem.category,
           is_critical: payload.is_critical,
           notes: payload.notes,
           storage_location: payload.storage_location,
         });
       } else {
-        // Add new item
         await onAddItem(payload);
       }
       setAddModalVisible(false);
       setEditItem(null);
-    } catch (e) {
-      console.error('[ContainerDetail] Save error:', e);
+    } catch (error) {
+      console.error('[ContainerDetailSheet] save failed', error);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }, [editItem, onAddItem, onUpdateItem]);
 
-  const handleCloseAddModal = useCallback(() => {
-    setAddModalVisible(false);
-    setEditItem(null);
-  }, []);
-
-  // ── Quick Add handler ─────────────────────────────────────
-  const handleQuickAdd = useCallback(async (item: { name: string; weight_lbs: number; is_critical: boolean }) => {
+  const handleQuickAdd = useCallback(async (item: {
+    name: string;
+    quantity?: number;
+    weight_lbs: number;
+    is_critical: boolean;
+    category?: LoadoutItem['category'];
+    weight_source?: LoadoutItem['weight_source'];
+  }) => {
     if (!container) return;
-    const payload: AddItemPayload = {
+    await onAddItem({
       name: item.name,
-      quantity: 1,
+      quantity: item.quantity ?? 1,
       weight_lbs: item.weight_lbs,
+      weight_source: item.weight_source,
+      category: item.category,
       is_critical: item.is_critical,
       notes: null,
       storage_location: container.id,
-    };
-    await onAddItem(payload);
+    });
   }, [container, onAddItem]);
 
-  // ── Early return AFTER all hooks ───────────────────────────
   if (!container) return null;
 
-
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View style={styles.overlay}>
-        <View style={styles.sheet}>
-          {/* ── Header ──────────────────────────────────────── */}
-          <View style={[styles.header, { borderBottomColor: `${color}25` }]}>
-            <View style={styles.headerTop}>
-              <View style={styles.headerLeft}>
-                <View style={[styles.iconWrap, { backgroundColor: `${color}18`, borderColor: `${color}40` }]}>
-                  <AccessoryIcon categoryId={container.id} size={18} color={color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.containerName}>{container.label}</Text>
-                  <View style={styles.headerMeta}>
-                    <Text style={styles.itemCountText}>
-                      {containerItems.length} item{containerItems.length !== 1 ? 's' : ''}
-                    </Text>
-                    {packedCount > 0 && (
-                      <View style={styles.packedBadge}>
-                        <Ionicons name="checkmark-circle" size={9} color="#4CAF50" />
-                        <Text style={styles.packedBadgeText}>{packedCount} PACKED</Text>
-                      </View>
-                    )}
-                    {criticalCount > 0 && (
-                      <View style={styles.critBadge}>
-                        <Ionicons name="alert-circle" size={9} color={TACTICAL.danger} />
-                        <Text style={styles.critBadgeText}>{criticalCount}</Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-              </View>
-              <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                <Ionicons name="close" size={22} color={TACTICAL.textMuted} />
-              </TouchableOpacity>
+    <>
+      <ECSModalShell
+        visible={visible}
+        onClose={onClose}
+        title={container.label}
+        subtitle={`${containerItems.length} items configured in this loadout zone`}
+        icon="cube-outline"
+        overlayClass="workflow"
+        stackBehavior="allow-stack"
+        scrollable
+        maxHeightFraction={0.98}
+        footer={(
+          <ECSOverlayFooter>
+            {!isLiquid ? (
+              <ECSButton
+                label="Quick Add"
+                icon="library-outline"
+                variant="secondary"
+                size="large"
+                onPress={() => setQuickAddVisible(true)}
+                grow
+              />
+            ) : null}
+            <ECSButton
+              label={isLiquid ? 'Add Liquid' : 'Add Item'}
+              icon={isLiquid ? 'water-outline' : 'add-circle-outline'}
+              variant="primary"
+              size="large"
+              onPress={() => {
+                setEditItem(null);
+                setAddModalVisible(true);
+              }}
+              grow
+            />
+          </ECSOverlayFooter>
+        )}
+        bodyStyle={styles.modalBody}
+        contentContainerStyle={styles.modalContent}
+      >
+        <View style={[styles.summaryCard, { borderColor: `${color}26` }]}>
+          <View style={styles.summaryRow}>
+            <View style={[styles.summaryIconWrap, { backgroundColor: `${color}14`, borderColor: `${color}30` }]}>
+              <AccessoryIcon categoryId={container.id} size={18} color={color} />
             </View>
-
-            {/* ── Weight Display ──────────────────────────────── */}
-            <View style={[styles.weightBar, { borderColor: `${color}20` }]}>
-              <View style={styles.weightBarLeft}>
-                <Ionicons name="scale-outline" size={14} color={color} />
-                <Text style={styles.weightBarLabel}>CONTAINER TOTAL</Text>
-              </View>
-              <Text style={[styles.weightBarValue, { color }]}>
-                {totalWeight > 0
-                  ? `${totalWeight >= 100 ? Math.round(totalWeight) : totalWeight.toFixed(1)} lb`
-                  : '0 lb'}
+            <View style={styles.summaryCopy}>
+              <Text style={styles.summaryTitle}>Container Summary</Text>
+              <Text style={styles.summarySubtitle}>
+                {totalWeight > 0 ? `${totalWeight.toFixed(1)} lb total` : 'No weight recorded yet'}
               </Text>
             </View>
-
-            {/* Liquid info banner */}
-            {isLiquid && (
-              <View style={styles.liquidBanner}>
-                <Ionicons name="information-circle-outline" size={14} color="#4FC3F7" />
-                <Text style={styles.liquidBannerText}>
-                  Liquid items are entered by volume (gallons/liters). Weight is auto-computed from density.
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {/* ── Item List ───────────────────────────────────── */}
-          <ScrollView
-            style={styles.itemList}
-            contentContainerStyle={styles.itemListContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {containerItems.length === 0 ? (
-              <View style={styles.emptyState}>
-                <View style={[styles.emptyIcon, { backgroundColor: `${color}10` }]}>
-                  <AccessoryIcon categoryId={container.id} size={32} color={`${color}60`} />
-                </View>
-                <Text style={styles.emptyTitle}>EMPTY CONTAINER</Text>
-                <Text style={styles.emptySubtext}>
-                  {isLiquid
-                    ? 'Add water, fuel, or other liquids to this container.'
-                    : 'Use Quick Add for common items or add custom items below.'}
-                </Text>
-              </View>
-            ) : (
-              containerItems.map(item => (
-                <ItemRow
-                  key={item.id}
-                  item={item}
-                  containerColor={color}
-                  onTogglePacked={handleTogglePacked}
-                  onUpdateQty={handleUpdateQty}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                />
-              ))
-            )}
-
-            <View style={{ height: 80 }} />
-          </ScrollView>
-
-          {/* ── Bottom Action Bar (pinned) ─────────────────────── */}
-          <View style={styles.addBar}>
-            {/* Quick Add + Add Item side by side */}
-            <View style={styles.buttonRow}>
-              {/* Quick Add Button — opens template library */}
-              {!isLiquid && (
-                <TouchableOpacity
-                  style={[styles.quickAddBtn, { borderColor: `${color}40` }]}
-                  onPress={() => setQuickAddVisible(true)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="library-outline" size={16} color={color} />
-                  <Text style={[styles.quickAddBtnText, { color }]}>QUICK ADD</Text>
-                </TouchableOpacity>
-              )}
-
-              {/* Add Item Button — opens manual form */}
-              <TouchableOpacity
-                style={[
-                  styles.addBtn,
-                  { borderColor: `${color}40` },
-                  !isLiquid && { flex: 1 },
-                ]}
-                onPress={() => {
-                  setEditItem(null);
-                  setAddModalVisible(true);
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={isLiquid ? 'water-outline' : 'add-circle-outline'}
-                  size={18}
-                  color={color}
-                />
-                <Text style={[styles.addBtnText, { color }]}>
-                  {isLiquid ? 'ADD LIQUID' : 'ADD ITEM'}
-                </Text>
-              </TouchableOpacity>
+            <View style={styles.summaryStats}>
+              <Text style={[styles.summaryStatValue, { color }]}>{containerItems.length}</Text>
+              <Text style={styles.summaryStatLabel}>Items</Text>
             </View>
           </View>
-        </View>
-      </View>
 
-      {/* ── Add/Edit Item Modal ────────────────────────────── */}
+          <View style={styles.summaryMeta}>
+            <ECSChip label={`Packed ${packedCount}`} compact selected={packedCount > 0} />
+            <ECSChip label={`Critical ${criticalCount}`} compact selected={criticalCount > 0} />
+            {isLiquid ? <ECSChip label="Liquid Zone" compact selected /> : null}
+          </View>
+        </View>
+
+        <View style={styles.toolsCard}>
+          <View style={styles.searchRow}>
+            <Ionicons name="search-outline" size={15} color={TACTICAL.textMuted} />
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search container items"
+              placeholderTextColor={TACTICAL.textMuted}
+              autoCorrect={false}
+            />
+            {search.length > 0 ? (
+              <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close-circle" size={16} color={TACTICAL.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.filterWrap}>
+            <ECSChip label="All" compact selected={filter === 'all'} onPress={() => setFilter('all')} />
+            <ECSChip label="Packed" compact selected={filter === 'packed'} onPress={() => setFilter('packed')} />
+            <ECSChip label="Unpacked" compact selected={filter === 'unpacked'} onPress={() => setFilter('unpacked')} />
+            <ECSChip label="Critical" compact selected={filter === 'critical'} onPress={() => setFilter('critical')} />
+          </View>
+        </View>
+
+        {filteredItems.length === 0 ? (
+          <View style={styles.emptyState}>
+            <AccessoryIcon categoryId={container.id} size={28} color={`${color}88`} />
+            <Text style={styles.emptyTitle}>{containerItems.length === 0 ? 'Empty Container' : 'No Items Matched'}</Text>
+            <Text style={styles.emptyBody}>
+              {containerItems.length === 0
+                ? (isLiquid ? 'Add water, fuel, or other liquids for this vehicle system.' : 'Use Quick Add or Add Item to populate this container.')
+                : 'Clear the search or change the filter to review more items.'}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.itemList}>
+            {filteredItems.map((item) => (
+              <ItemRow
+                key={item.id}
+                item={item}
+                containerColor={color}
+                onTogglePacked={handleTogglePacked}
+                onUpdateQty={handleUpdateQty}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+              />
+            ))}
+          </View>
+        )}
+      </ECSModalShell>
+
       <AddItemModal
         visible={addModalVisible}
-        onClose={handleCloseAddModal}
+        onClose={() => {
+          setAddModalVisible(false);
+          setEditItem(null);
+        }}
         onSave={handleAddSave}
         containerKey={container.id}
         containerLabel={container.label}
@@ -336,246 +284,139 @@ export default function ContainerDetailSheet({
         saving={saving}
       />
 
-      {/* ── Quick Add Library Modal ────────────────────────── */}
-      <QuickAddLibrary
-        visible={quickAddVisible}
-        onClose={() => setQuickAddVisible(false)}
-        onAddItem={handleQuickAdd}
-        containerColor={color}
-        containerLabel={container.label}
-      />
-    </Modal>
+      {!isLiquid ? (
+        <QuickAddLibrary
+          visible={quickAddVisible}
+          onClose={() => setQuickAddVisible(false)}
+          onAddItem={handleQuickAdd}
+          containerColor={color}
+          containerLabel={container.label}
+        />
+      ) : null}
+    </>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// STYLES
-// ═══════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
-  overlay: {
+  modalBody: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'flex-end',
+    minHeight: 0,
   },
-  sheet: {
-    backgroundColor: TACTICAL.bg,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    maxHeight: '92%',
-    minHeight: '50%',
-    borderTopWidth: 2,
-    borderColor: TACTICAL.border,
+  modalContent: {
+    gap: 10,
   },
-
-  // ── Header ────────────────────────────────────────────────
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    backgroundColor: TACTICAL.panel,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+  summaryCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: 'rgba(10,14,18,0.84)',
+    padding: 10,
+    gap: 8,
   },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-  },
-  headerLeft: {
+  summaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    flex: 1,
   },
-  iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 11,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  containerName: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 1,
-  },
-  headerMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 3,
-  },
-  itemCountText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-  },
-  packedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    backgroundColor: 'rgba(76,175,80,0.1)',
-    borderRadius: 3,
-  },
-  packedBadgeText: {
-    fontSize: 7,
-    fontWeight: '900',
-    color: '#4CAF50',
-    letterSpacing: 0.5,
-  },
-  critBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    backgroundColor: `${TACTICAL.danger}12`,
-    borderRadius: 3,
-  },
-  critBadgeText: {
-    fontSize: 7,
-    fontWeight: '900',
-    color: TACTICAL.danger,
-  },
-
-  // ── Weight Bar ────────────────────────────────────────────
-  weightBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  summaryIconWrap: {
+    width: 38,
+    height: 38,
     borderRadius: 10,
     borderWidth: 1,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
-  weightBarLeft: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
   },
-  weightBarLabel: {
-    fontSize: 9,
+  summaryCopy: {
+    flex: 1,
+  },
+  summaryTitle: {
+    fontSize: 11,
     fontWeight: '800',
     color: TACTICAL.textMuted,
-    letterSpacing: 1.5,
+    letterSpacing: 1.1,
   },
-  weightBarValue: {
+  summarySubtitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    marginTop: 3,
+  },
+  summaryStats: {
+    minWidth: 44,
+    alignItems: 'center',
+  },
+  summaryStatValue: {
     fontSize: 20,
     fontWeight: '900',
-    fontFamily: 'Courier',
-    letterSpacing: 0.5,
   },
-
-  // ── Liquid Banner ─────────────────────────────────────────
-  liquidBanner: {
+  summaryStatLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  summaryMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  toolsCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    backgroundColor: TACTICAL.panel,
+    padding: 10,
+    gap: 8,
+  },
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(79, 195, 247, 0.06)',
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(79, 195, 247, 0.15)',
+    borderColor: TACTICAL.border,
+    backgroundColor: 'rgba(0,0,0,0.18)',
   },
-  liquidBannerText: {
-    fontSize: 9,
-    color: '#4FC3F7',
+  searchInput: {
+    flex: 1,
+    color: TACTICAL.text,
+    fontSize: 13,
     fontWeight: '600',
-    flex: 1,
-    lineHeight: 14,
+    paddingVertical: 0,
   },
-
-  // ── Item List ─────────────────────────────────────────────
+  filterWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   itemList: {
-    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    overflow: 'hidden',
+    backgroundColor: TACTICAL.panel,
   },
-  itemListContent: {
-    padding: 12,
-    gap: 0,
-  },
-
-  // ── Empty State ───────────────────────────────────────────
   emptyState: {
+    minHeight: 260,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 40,
     gap: 10,
-  },
-  emptyIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    backgroundColor: TACTICAL.panel,
+    paddingHorizontal: 24,
   },
   emptyTitle: {
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: '800',
     color: TACTICAL.text,
-    letterSpacing: 2,
   },
-  emptySubtext: {
+  emptyBody: {
     fontSize: 11,
+    lineHeight: 16,
     color: TACTICAL.textMuted,
     textAlign: 'center',
-    paddingHorizontal: 30,
-    lineHeight: 16,
-  },
-
-  // ── Bottom Action Bar ─────────────────────────────────────
-  addBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: TACTICAL.border,
-    backgroundColor: TACTICAL.panel,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  quickAddBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 13,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
-  quickAddBtnText: {
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 13,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
-  addBtnText: {
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 2,
   },
 });
-
-
-

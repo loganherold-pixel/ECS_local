@@ -27,23 +27,17 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 
 import { useTheme } from '../../context/ThemeContext';
 import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 import {
   powerSetupStore,
   PROVIDER_DISPLAY,
   DEVICE_ROLE_LABELS,
   type ManagedPowerDevice,
-  type ConnectionState,
   type DeviceRole,
 } from '../../lib/powerSetupStore';
+import { resolvePowerReadiness } from '../../lib/powerReadiness';
 
 // ── Connection state config ─────────────────────────────────────────────
-const CONNECTION_CONFIG: Record<ConnectionState, { label: string; color: string; icon: string }> = {
-  connected: { label: 'CONNECTED', color: '#34C759', icon: 'checkmark-circle' },
-  reconnecting: { label: 'RECONNECTING', color: '#FF9500', icon: 'refresh-outline' },
-  disconnected: { label: 'DISCONNECTED', color: '#FF3B30', icon: 'alert-circle-outline' },
-  unavailable: { label: 'UNAVAILABLE', color: '#8B949E', icon: 'close-circle-outline' },
-};
-
 // ── Device Card ─────────────────────────────────────────────────────────
 function DeviceCard({
   device,
@@ -61,7 +55,15 @@ function DeviceCard({
   onEdit: () => void;
 }) {
   const display = PROVIDER_DISPLAY[device.provider];
-  const connConfig = CONNECTION_CONFIG[device.connectionState];
+  const readiness = resolvePowerReadiness({
+    providerId: device.provider,
+    connectionMethod: device.connectionMethod,
+    connectionState: device.connectionState,
+    hasTelemetry:
+      device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+    hasStoredSnapshot:
+      device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+  });
   const socPct = device.lastSocPct;
 
   const socColor =
@@ -103,12 +105,32 @@ function DeviceCard({
             <Text style={[styles.deviceBrand, { color: display.color }]}>{display.label}</Text>
             <Text style={[styles.deviceModel, { color: palette.textMuted }]}>{device.model}</Text>
           </View>
+          <View style={styles.deviceSupportRow}>
+            <View
+              style={[
+                styles.deviceSupportBadge,
+                {
+                  backgroundColor: readiness.color + '12',
+                  borderColor: readiness.color + '30',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.deviceSupportText,
+                  { color: readiness.color },
+                ]}
+              >
+                {readiness.label}
+              </Text>
+            </View>
+          </View>
         </View>
 
         {/* Connection badge */}
-        <View style={[styles.connBadge, { backgroundColor: connConfig.color + '12', borderColor: connConfig.color + '25' }]}>
-          <View style={[styles.connDot, { backgroundColor: connConfig.color }]} />
-          <Text style={[styles.connText, { color: connConfig.color }]}>{connConfig.label}</Text>
+        <View style={[styles.connBadge, { backgroundColor: readiness.color + '12', borderColor: readiness.color + '25' }]}>
+          <View style={[styles.connDot, { backgroundColor: readiness.color }]} />
+          <Text style={[styles.connText, { color: readiness.color }]}>{readiness.label}</Text>
         </View>
       </View>
 
@@ -143,11 +165,11 @@ function DeviceCard({
 
         {/* Role */}
         <View style={styles.telemetryItem}>
-          <Ionicons name="shield-outline" size={14} color={palette.amber} />
-          <Text style={[styles.telemetryValue, { color: palette.text, fontSize: 10 }]} numberOfLines={1}>
-            {DEVICE_ROLE_LABELS[device.role].split(' ')[0]}
+          <Ionicons name={readiness.icon as any} size={14} color={readiness.color} />
+          <Text style={[styles.telemetryValue, { color: readiness.color, fontSize: 10 }]} numberOfLines={1}>
+            {readiness.label}
           </Text>
-          <Text style={[styles.telemetryLabel, { color: palette.textMuted }]}>ROLE</Text>
+          <Text style={[styles.telemetryLabel, { color: palette.textMuted }]}>STATE</Text>
         </View>
       </View>
 
@@ -179,7 +201,11 @@ function DeviceCard({
           <Ionicons name="close-circle-outline" size={12} color="#FF3B30" />
 
           <Text style={[styles.actionText, { color: '#FF3B30' }]}>
-            {device.connectionState === 'disconnected' ? 'RECONNECT' : 'DISCONNECT'}
+            {device.connectionState === 'disconnected' || device.connectionState === 'unavailable'
+              ? 'OPEN SCANNER'
+              : device.connectionState === 'reconnecting'
+                ? 'CHECK SCANNER'
+                : 'DISCONNECT'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -287,20 +313,28 @@ export default function PowerManageScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadDevices = useCallback(() => {
+  const loadDevices = useCallback(async () => {
+    await powerSetupStore.waitForHydration();
     setDevices(powerSetupStore.getAll());
   }, []);
 
   useEffect(() => {
-    loadDevices();
-    const unsub = powerSetupStore.subscribe(setDevices);
-    return unsub;
-  }, []);
+    let isMounted = true;
+    void loadDevices();
+    const unsub = powerSetupStore.subscribe((nextDevices) => {
+      if (isMounted) {
+        setDevices(nextDevices);
+      }
+    });
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, [loadDevices]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadDevices();
-    setTimeout(() => setRefreshing(false), 500);
+    void loadDevices().finally(() => setRefreshing(false));
   }, [loadDevices]);
 
   const handleSetPrimary = useCallback(async (id: string) => {
@@ -308,16 +342,28 @@ export default function PowerManageScreen() {
   }, []);
 
   const handleDisconnect = useCallback(async (device: ManagedPowerDevice) => {
-    if (device.connectionState === 'disconnected') {
-      await powerSetupStore.setConnectionState(device.id, 'reconnecting');
-      // Simulate reconnection
-      setTimeout(async () => {
-        await powerSetupStore.setConnectionState(device.id, 'connected');
-      }, 2000);
-    } else {
-      await powerSetupStore.setConnectionState(device.id, 'disconnected');
+    if (device.connectionState === 'disconnected' || device.connectionState === 'reconnecting' || device.connectionState === 'unavailable') {
+      const message = `${device.customName} stays disconnected until ECS confirms a real provider session again. Open Device Connections to reconnect and verify live hardware state.`;
+      if (Platform.OS === 'web') {
+        if (confirm(message)) {
+          router.push('/power/blu');
+        }
+        return;
+      }
+
+      Alert.alert(
+        'Reconnect Requires Live Device Confirmation',
+        message,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Device Connections', onPress: () => router.push('/power/blu') },
+        ],
+      );
+      return;
     }
-  }, []);
+
+    await powerSetupStore.setConnectionState(device.id, 'disconnected');
+  }, [router]);
 
   const handleRemove = useCallback(async (device: ManagedPowerDevice) => {
     if (Platform.OS === 'web') {
@@ -345,7 +391,22 @@ export default function PowerManageScreen() {
     setEditingId(null);
   }, []);
 
-  const connectedCount = devices.filter((d) => d.connectionState === 'connected').length;
+  const readinessCounts = devices.reduce(
+    (counts, device) => {
+      const readiness = resolvePowerReadiness({
+        providerId: device.provider,
+        connectionMethod: device.connectionMethod,
+        connectionState: device.connectionState,
+        hasTelemetry:
+          device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+        hasStoredSnapshot:
+          device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+      });
+      counts[readiness.state] += 1;
+      return counts;
+    },
+    { connected: 0, partial: 0, manual: 0, unavailable: 0 },
+  );
   const totalCount = devices.length;
 
   return (
@@ -361,7 +422,7 @@ export default function PowerManageScreen() {
         </View>
         <TouchableOpacity
           style={[styles.addBtnSmall, { backgroundColor: palette.amber }]}
-          onPress={() => router.push('/power/setup')}
+          onPress={() => router.push('/power/blu')}
           activeOpacity={0.7}
         >
           <Ionicons name="add" size={18} color="#000" />
@@ -373,7 +434,11 @@ export default function PowerManageScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.amber} colors={[palette.amber]} />
+          <RefreshControl
+            {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         }
       >
         {/* Summary */}
@@ -381,20 +446,23 @@ export default function PowerManageScreen() {
           <View style={[styles.summaryCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
             <View style={styles.summaryRow}>
               <View style={styles.summaryItem}>
-                <Text style={[styles.summaryValue, { color: palette.text }]}>{totalCount}</Text>
-                <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>TOTAL</Text>
-              </View>
-              <View style={[styles.summaryDivider, { backgroundColor: palette.border }]} />
-              <View style={styles.summaryItem}>
-                <Text style={[styles.summaryValue, { color: connectedCount > 0 ? '#34C759' : palette.textMuted }]}>{connectedCount}</Text>
+                <Text style={[styles.summaryValue, { color: readinessCounts.connected > 0 ? '#34C759' : palette.textMuted }]}>{readinessCounts.connected}</Text>
                 <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>CONNECTED</Text>
               </View>
               <View style={[styles.summaryDivider, { backgroundColor: palette.border }]} />
               <View style={styles.summaryItem}>
-                <Text style={[styles.summaryValue, { color: palette.amber }]}>
-                  {devices.filter((d) => d.isPrimary).length}
-                </Text>
-                <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>PRIMARY</Text>
+                <Text style={[styles.summaryValue, { color: readinessCounts.partial > 0 ? '#FFB300' : palette.textMuted }]}>{readinessCounts.partial}</Text>
+                <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>PARTIAL</Text>
+              </View>
+              <View style={[styles.summaryDivider, { backgroundColor: palette.border }]} />
+              <View style={styles.summaryItem}>
+                <Text style={[styles.summaryValue, { color: readinessCounts.manual > 0 ? palette.amber : palette.textMuted }]}>{readinessCounts.manual}</Text>
+                <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>MANUAL</Text>
+              </View>
+              <View style={[styles.summaryDivider, { backgroundColor: palette.border }]} />
+              <View style={styles.summaryItem}>
+                <Text style={[styles.summaryValue, { color: readinessCounts.unavailable > 0 ? '#8B949E' : palette.textMuted }]}>{readinessCounts.unavailable}</Text>
+                <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>UNAVAILABLE</Text>
               </View>
             </View>
           </View>
@@ -430,14 +498,17 @@ export default function PowerManageScreen() {
               <Ionicons name="battery-dead-outline" size={40} color={palette.amber} />
             </View>
             <Text style={[styles.emptyTitle, { color: palette.text }]}>
-              No Power Systems Connected
+              No Power Systems Available
             </Text>
             <Text style={[styles.emptyDesc, { color: palette.textMuted }]}>
-              Add a supported battery system to monitor expedition power usage.
+              Add a provider to give ECS a connected, partial, manual, or unavailable power state it can present honestly.
+            </Text>
+            <Text style={[styles.emptySupportHint, { color: palette.textMuted }]}>
+              EcoFlow remains the strongest verified live path. REDARC and Dakota Lithium stay limited preview paths, and other provider cards remain visible only to show current support scope.
             </Text>
             <TouchableOpacity
               style={[styles.addBtn, { backgroundColor: palette.amber }]}
-              onPress={() => router.push('/power/setup')}
+              onPress={() => router.push('/power/blu')}
               activeOpacity={0.7}
             >
               <Ionicons name="add-outline" size={18} color="#000" />
@@ -446,10 +517,10 @@ export default function PowerManageScreen() {
 
             {/* Supported brands */}
             <View style={styles.brandsRow}>
-              {(['EcoFlow', 'Bluetti', 'AnkerSolix', 'Jackery', 'GoalZero', 'Renogy'] as const).map((p) => {
+              {(['EcoFlow', 'Redarc', 'DakotaLithium'] as const).map((p) => {
                 const d = PROVIDER_DISPLAY[p];
                 return (
-                  <View key={p} style={[styles.brandChip, { backgroundColor: d.color + '10' }]}>
+                  <View key={p} style={[styles.brandChip, { backgroundColor: d.color + '10', borderColor: d.color + '22' }]}>
                     <Ionicons name={d.icon} size={10} color={d.color} />
                     <Text style={[styles.brandChipText, { color: d.color }]}>{d.label}</Text>
                   </View>
@@ -463,7 +534,7 @@ export default function PowerManageScreen() {
         {totalCount > 0 && (
           <TouchableOpacity
             style={[styles.addMoreBtn, { borderColor: palette.amber + '40' }]}
-            onPress={() => router.push('/power/setup')}
+            onPress={() => router.push('/power/blu')}
             activeOpacity={0.7}
           >
             <Ionicons name="add-circle-outline" size={18} color={palette.amber} />
@@ -491,10 +562,10 @@ const styles = StyleSheet.create({
 
   // Summary
   summaryCard: { borderRadius: RADIUS.lg, borderWidth: 1, padding: SPACING.lg, marginBottom: SPACING.xl },
-  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
-  summaryItem: { alignItems: 'center', gap: 2 },
-  summaryValue: { fontSize: 22, fontWeight: '900', fontFamily: 'Courier' },
-  summaryLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 3 },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  summaryItem: { flex: 1, alignItems: 'center', gap: 2 },
+  summaryValue: { fontSize: 18, fontWeight: '900', fontFamily: 'Courier' },
+  summaryLabel: { fontSize: 7, fontWeight: '700', letterSpacing: 1.6, textAlign: 'center' },
   summaryDivider: { width: 1, height: 30, opacity: 0.3 },
 
   // Device card
@@ -510,6 +581,9 @@ const styles = StyleSheet.create({
   deviceSubRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   deviceBrand: { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   deviceModel: { fontSize: 11, fontWeight: '500' },
+  deviceSupportRow: { marginTop: 5, alignItems: 'flex-start' },
+  deviceSupportBadge: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  deviceSupportText: { fontSize: 7, fontWeight: '800', letterSpacing: 1.6 },
   connBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, borderWidth: 1 },
   connDot: { width: 5, height: 5, borderRadius: 3 },
   connText: { fontSize: 7, fontWeight: '800', letterSpacing: 2 },
@@ -549,10 +623,11 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   emptyTitle: { fontSize: 18, fontWeight: '800', letterSpacing: 1 },
   emptyDesc: { fontSize: 13, lineHeight: 20, textAlign: 'center' },
+  emptySupportHint: { fontSize: 11, lineHeight: 16, textAlign: 'center' },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, paddingHorizontal: 24, borderRadius: RADIUS.md, marginTop: 4 },
   addBtnText: { color: '#000', fontSize: 13, fontWeight: '800', letterSpacing: 3 },
   brandsRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 8 },
-  brandChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  brandChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, borderWidth: 1 },
   brandChipText: { fontSize: 9, fontWeight: '700', letterSpacing: 1 },
 
   // Add more

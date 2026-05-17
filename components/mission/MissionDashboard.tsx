@@ -48,11 +48,16 @@ export default function MissionDashboard({ expedition, isOnline, onRefresh, onEn
     );
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [pulseAnim]);
 
   useEffect(() => {
-    refreshData();
-  }, [expedition.id]);
+    const s = computeMissionStats(expedition.id);
+    setStats(s);
+    const items = missionItemStore.getByExpeditionId(expedition.id);
+    setCriticalIssues(items.filter(i => i.critical && (i.status === 'missing' || i.status === 'lost')));
+    setRecentEvents(missionEventStore.getByExpeditionId(expedition.id).slice(0, 8));
+    onRefresh();
+  }, [expedition.id, onRefresh]);
 
   const refreshData = useCallback(() => {
     const s = computeMissionStats(expedition.id);

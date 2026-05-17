@@ -108,7 +108,7 @@ export default function StorageDashboardModal({
   // Load data when modal opens
   useEffect(() => {
     if (!visible) return;
-    loadData();
+    loadDataRef.current();
   }, [visible]);
 
   const loadData = useCallback(async () => {
@@ -135,6 +135,10 @@ export default function StorageDashboardModal({
       setLoading(false);
     }
   }, []);
+  const loadDataRef = useRef<() => void>(() => {});
+  loadDataRef.current = () => {
+    void loadData();
+  };
 
   // Smart cleanup handler
   const handleSmartCleanup = useCallback(async () => {
@@ -361,7 +365,7 @@ export default function StorageDashboardModal({
               style={[
                 styles.stackedSegment,
                 {
-                  width: `${Math.max(slice.percent, 0.5)}%`,
+                  width: `${Math.max(slice.percent, 1)}%`,
                   backgroundColor: slice.color,
                 },
               ]}
@@ -585,10 +589,14 @@ export default function StorageDashboardModal({
   // ── Render: Overview Tab ──────────────────────────────────
   const renderOverviewTab = () => (
     <ScrollView
-      style={styles.tabContent}
-      contentContainerStyle={{ paddingBottom: contentBottomPadding }}
-      showsVerticalScrollIndicator={false}
-    >
+  style={styles.tabContent}
+  contentContainerStyle={{
+    paddingBottom: contentBottomPadding,
+    flexGrow: 1,
+  }}
+  keyboardShouldPersistTaps="handled"
+  showsVerticalScrollIndicator={false}
+>
       {renderDeviceGauge()}
       {renderBarChart()}
       {renderSmartCleanup()}
@@ -1027,7 +1035,11 @@ export default function StorageDashboardModal({
   );
 
   if (embedded) {
-    return <View style={{ paddingTop: 6 }}>{content}</View>;
+    return (
+      <View style={{ paddingTop: 6, paddingBottom: contentBottomPadding }}>
+        {content}
+      </View>
+    );
   }
 
   return (
@@ -1063,14 +1075,14 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'flex-end' },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
   sheet: {
-    backgroundColor: TACTICAL.panel,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    // maxHeight is now set dynamically via useSheetLayout
-    // paddingBottom is now set dynamically for safe area
-    borderTopWidth: 2,
-    borderColor: TACTICAL.amber + '30',
-  },
+  flexShrink: 1, // 🔥 prevents overflow expansion
+  backgroundColor: TACTICAL.panel,
+  borderTopLeftRadius: 20,
+  borderTopRightRadius: 20,
+  borderTopWidth: 2,
+  borderColor: TACTICAL.amber + '30',
+  overflow: 'hidden', // 🔥 HARD CLIP
+},
 
   handle: {
     width: 36, height: 4, borderRadius: 2,
@@ -1098,7 +1110,12 @@ const styles = StyleSheet.create({
   tabLabel: { ...TYPO.U2, fontSize: 8, color: TACTICAL.textMuted, letterSpacing: 2 },
   tabLabelActive: { color: TACTICAL.amber },
 
-  tabContent: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  tabContent: {
+  flex: 1,
+  paddingHorizontal: 16,
+  paddingTop: 12,
+  minHeight: 0, // 🔥 REQUIRED for ScrollView inside flex
+},
 
   loadingContainer: {
     flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 60,
@@ -1315,6 +1332,4 @@ const styles = StyleSheet.create({
   },
   resetBtnText: { ...TYPO.U2, fontSize: 8, color: TACTICAL.textMuted, letterSpacing: 1 },
 });
-
-
 

@@ -24,6 +24,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import { ECSSegmentedField, ECSToggleRow } from '../ECSForm';
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
 import {
   gpsDistanceTracker,
@@ -477,44 +478,27 @@ export default function LiveOdometer({ expeditionId, expeditionName, visible = t
                 <Text style={styles.sectionTitle}>TRACKING SETTINGS</Text>
               </View>
 
-              {/* Accuracy selector */}
-              <View style={styles.settingsRow}>
-                <Text style={styles.settingsLabel}>ACCURACY</Text>
-                <View style={styles.accuracyPills}>
-                  {(['high', 'balanced', 'low'] as TrackingAccuracy[]).map(acc => (
-                    <TouchableOpacity
-                      key={acc}
-                      style={[
-                        styles.accuracyPill,
-                        snapshot?.config.accuracy === acc && styles.accuracyPillActive,
-                      ]}
-                      onPress={() => handleSetAccuracy(acc)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[
-                        styles.accuracyPillText,
-                        snapshot?.config.accuracy === acc && styles.accuracyPillTextActive,
-                      ]}>
-                        {acc.toUpperCase()}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
+              <ECSSegmentedField
+                label="Tracking Accuracy"
+                helper="Choose GPS precision based on battery draw and route conditions."
+                value={snapshot?.config.accuracy || 'balanced'}
+                onChange={(next) => handleSetAccuracy(next as TrackingAccuracy)}
+                options={[
+                  { label: 'High', value: 'high' },
+                  { label: 'Balanced', value: 'balanced' },
+                  { label: 'Low', value: 'low' },
+                ]}
+                compact
+                style={styles.settingsField}
+              />
 
-              {/* Background toggle */}
-              <TouchableOpacity style={styles.settingsRow} onPress={handleToggleBackground} activeOpacity={0.7}>
-                <Text style={styles.settingsLabel}>BACKGROUND TRACKING</Text>
-                <View style={[
-                  styles.toggleSwitch,
-                  snapshot?.config.backgroundEnabled && styles.toggleSwitchActive,
-                ]}>
-                  <View style={[
-                    styles.toggleKnob,
-                    snapshot?.config.backgroundEnabled && styles.toggleKnobActive,
-                  ]} />
-                </View>
-              </TouchableOpacity>
+              <ECSToggleRow
+                label="Background Tracking"
+                value={Boolean(snapshot?.config.backgroundEnabled)}
+                onValueChange={() => handleToggleBackground()}
+                helper="Keep distance tracking active when ECS is backgrounded."
+                style={styles.settingsField}
+              />
 
               <Text style={styles.settingsHint}>
                 Background tracking uses battery-efficient settings. High accuracy recommended for off-road navigation.
@@ -1084,6 +1068,10 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 4,
     lineHeight: 15,
+  },
+  settingsField: {
+    marginHorizontal: 16,
+    marginBottom: 10,
   },
 
   // ── Action Buttons ─────────────────────────────────────────

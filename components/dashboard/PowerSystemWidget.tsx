@@ -1,37 +1,48 @@
-/**
- * ECS Power System Widget — Unified Expedition Energy Monitor
- *
- * Phase 8: Multi-Provider Power Dashboard Widget
- *
- * Displays connected power systems from all ECS providers in a single
- * unified widget. Supports compact (dashboard grid) and full (card) modes.
- *
- * Data sources:
- *   1. useEcsProviders() — unified provider registry (primary)
- *   2. useBlu() — BLE adapter fallback for live telemetry
- *   3. useEcoFlowLive() — EcoFlow cloud fallback
- *
- * Compact mode: primary device + system count
- * Full mode: primary device with SOC bar + summary
- */
-
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, View, Text, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import { TACTICAL } from '../../lib/theme';
-import { useBlu } from '../../src/power/blu/useBlu';
-import { useEcoFlowLive } from '../../lib/useEcoFlowLive';
-import { bluStateStore } from '../../src/power/blu/BluStateStore';
-import { ECS_PROVIDER_BRANDING } from '../../src/power/providers/EcsProviderRegistry';
-import type { BluProviderId } from '../../src/power/blu/BluTypes';
 
-// ── Unified Device Shape (internal) ─────────────────────────────────────
+import { TACTICAL } from '../../lib/theme';
+import {
+  resolveTelemetrySourceState,
+  type TelemetrySourceState,
+} from '../../lib/telemetrySourceState';
+import {
+  BLU_PROVIDER_TO_POWER_PROVIDER,
+  resolvePowerReadiness,
+  type PowerReadinessState,
+} from '../../lib/powerReadiness';
+import { usePowerIntelligence } from '../../lib/powerIntelligence';
+import {
+  WidgetCardShell,
+  getWidgetToneColor,
+  WidgetMetaLine,
+  type WidgetTone,
+} from './WidgetChrome';
+import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
+import { resolvePowerWidgetPresentation } from '../../lib/resource/resourceCommandResolvers';
+import type { ECSAIState } from '../../lib/ai/aiOrchestrator';
+import type { ECSOrchestratorTargetView } from '../../lib/ai/orchestratorSelectors';
+import { publishPowerBriefAdvisories } from '../../lib/powerBriefPublisher';
+import type { PowerTelemetryTruth } from '../../src/power/types/PowerTelemetry';
+import {
+  getPowerTruthLabel,
+  isPowerSimulationAllowed,
+  normalizePowerTelemetryTruth,
+} from '../../src/power/types/PowerTelemetry';
+import { normalizePowerTelemetrySnapshot } from '../../src/features/power/services/powerTruthService';
+import type { PowerTelemetrySnapshot } from '../../src/types/telemetry';
+import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
+import type { ECSPowerTelemetryDeviceReading } from '../../src/telemetry/ECSTelemetryTypes';
+import type { BluetoothTelemetrySource } from '../../lib/bluetoothLiveTelemetry';
+import PowerModuleRiveWidget from './PowerModuleRiveWidget';
+import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry';
 
 export interface PowerDeviceReading {
   deviceId: string;
   deviceName: string;
   model: string;
-  provider: BluProviderId;
+  provider: string;
   providerDisplayName: string;
   providerAccentColor: string;
   providerIcon: string;
@@ -46,13 +57,74 @@ export interface PowerDeviceReading {
   warningState: 'normal' | 'low_battery' | 'high_temp' | 'overload' | 'comm_loss' | 'error';
   isPrimary: boolean;
   isStale: boolean;
+  readinessState: PowerReadinessState;
+  readinessLabel: string;
   lastUpdated: number;
   capacityWh: number | null;
   batteryVolts: number | null;
-  role: string | null; // e.g., "Primary House Battery", "Solar Source"
+  batteryAmps: number | null;
+  signalStrength: number | null;
+  role: string | null;
+  telemetrySource: BluetoothTelemetrySource | null;
+  telemetrySourceLabel: string | null;
+  isTelemetryLive: boolean;
+  truth: PowerTelemetryTruth;
+  sourceTruthLabel: string;
 }
 
-// ── Charging State Helpers ──────────────────────────────────────────────
+type PowerWidgetContextData = {
+  aiState?: ECSAIState | null;
+  aiDashboardView?: ECSOrchestratorTargetView | null;
+};
+
+const PROVIDER_BRANDING: Record<string, { displayName: string; accentColor: string; iconName: string }> = {
+  ecoflow: { displayName: 'EcoFlow', accentColor: '#00A6FF', iconName: 'flash' },
+  bluetti: { displayName: 'Bluetti', accentColor: '#2196F3', iconName: 'battery-charging' },
+  anker_solix: { displayName: 'Anker SOLIX', accentColor: '#00C4B4', iconName: 'battery-charging' },
+  jackery: { displayName: 'Jackery', accentColor: '#FF8C00', iconName: 'sunny' },
+  goal_zero: { displayName: 'Goal Zero', accentColor: '#4CAF50', iconName: 'leaf' },
+  renogy: { displayName: 'Renogy', accentColor: '#9C27B0', iconName: 'hardware-chip' },
+  redarc: { displayName: 'REDARC', accentColor: '#C62828', iconName: 'car' },
+  dakota_lithium: { displayName: 'Dakota Lithium', accentColor: '#6FBF4B', iconName: 'shield' },
+  unknown: { displayName: 'Power', accentColor: TACTICAL.amber, iconName: 'flash' },
+};
+
+export const CHARGING_STATE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  charging: { label: 'CHARGING', color: '#4CAF50', icon: 'flash' },
+  discharging: { label: 'DISCHARGING', color: '#FF9800', icon: 'arrow-down' },
+  idle: { label: 'IDLE', color: TACTICAL.textMuted, icon: 'pause' },
+  full: { label: 'FULL', color: '#4CAF50', icon: 'checkmark-circle' },
+  unknown: { label: 'STANDBY', color: TACTICAL.textMuted, icon: 'ellipsis-horizontal' },
+};
+
+export const CONNECTION_STATE_CONFIG: Record<string, { label: string; color: string }> = {
+  connected: { label: 'CONNECTED', color: '#4CAF50' },
+  disconnected: { label: 'UNAVAILABLE', color: '#8B949E' },
+  reconnecting: { label: 'PARTIAL', color: '#FFB300' },
+  scanning: { label: 'PARTIAL', color: '#2196F3' },
+};
+
+export const WARNING_STATE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  normal: { label: 'NORMAL', color: '#4CAF50', icon: 'shield-checkmark' },
+  low_battery: { label: 'LOW BATTERY', color: '#EF5350', icon: 'battery-dead' },
+  high_temp: { label: 'HIGH TEMP', color: '#EF5350', icon: 'thermometer' },
+  overload: { label: 'OVERLOAD', color: '#EF5350', icon: 'warning' },
+  comm_loss: { label: 'COMM LOSS', color: '#FFB300', icon: 'cloud-offline' },
+  error: { label: 'ERROR', color: '#EF5350', icon: 'alert-circle' },
+};
+
+export const POWER_CHARGE_IN_COLOR = getWidgetToneColor('good');
+export const POWER_DRAW_OUT_COLOR = getWidgetToneColor('warning');
+export const POWER_SOLAR_COLOR = TACTICAL.amber;
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
 
 function deriveChargingState(
   inputW: number | null,
@@ -69,41 +141,13 @@ function deriveChargingState(
 function deriveWarningState(
   battPct: number | null,
   tempC: number | null,
-  isStale: boolean,
+  freshness: string,
 ): PowerDeviceReading['warningState'] {
-  if (isStale) return 'comm_loss';
+  if (freshness === 'stale' || freshness === 'last_known' || freshness === 'disconnected') return 'comm_loss';
   if (tempC != null && tempC > 55) return 'high_temp';
   if (battPct != null && battPct <= 10) return 'low_battery';
   return 'normal';
 }
-
-// ── State Colors & Labels ───────────────────────────────────────────────
-
-export const CHARGING_STATE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
-  charging:     { label: 'CHARGING',     color: '#4CAF50', icon: 'flash' },
-  discharging:  { label: 'DISCHARGING',  color: '#FF9800', icon: 'arrow-down' },
-  idle:         { label: 'IDLE',         color: TACTICAL.textMuted, icon: 'pause' },
-  full:         { label: 'FULL',         color: '#4CAF50', icon: 'checkmark-circle' },
-  unknown:      { label: 'STANDBY',      color: TACTICAL.textMuted, icon: 'ellipsis-horizontal' },
-};
-
-export const CONNECTION_STATE_CONFIG: Record<string, { label: string; color: string }> = {
-  connected:    { label: 'CONNECTED',    color: '#4CAF50' },
-  disconnected: { label: 'DISCONNECTED', color: '#EF5350' },
-  reconnecting: { label: 'RECONNECTING', color: '#FFB300' },
-  scanning:     { label: 'SCANNING',     color: '#2196F3' },
-};
-
-export const WARNING_STATE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
-  normal:      { label: 'NORMAL',      color: '#4CAF50', icon: 'shield-checkmark' },
-  low_battery: { label: 'LOW BATTERY', color: '#EF5350', icon: 'battery-dead' },
-  high_temp:   { label: 'HIGH TEMP',   color: '#EF5350', icon: 'thermometer' },
-  overload:    { label: 'OVERLOAD',    color: '#EF5350', icon: 'warning' },
-  comm_loss:   { label: 'COMM LOSS',   color: '#FFB300', icon: 'cloud-offline' },
-  error:       { label: 'ERROR',       color: '#EF5350', icon: 'alert-circle' },
-};
-
-// ── Battery Color Helper ────────────────────────────────────────────────
 
 export function getBatteryColor(pct: number | null): string {
   if (pct == null) return TACTICAL.textMuted;
@@ -111,8 +155,6 @@ export function getBatteryColor(pct: number | null): string {
   if (pct >= 25) return '#FFB300';
   return '#EF5350';
 }
-
-// ── Runtime Format Helper ───────────────────────────────────────────────
 
 export function formatRuntime(minutes: number | null): string {
   if (minutes == null || minutes <= 0) return '\u2014';
@@ -124,7 +166,103 @@ export function formatRuntime(minutes: number | null): string {
   return `${minutes}m`;
 }
 
-// ── Hook: Aggregate all power devices ───────────────────────────────────
+export function formatLastUpdatedTime(timestamp: number | null): string {
+  if (timestamp == null || timestamp <= 0) return '\u2014';
+  try {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '\u2014';
+  }
+}
+
+function telemetryTransportToBluetoothSource(transport: ECSPowerTelemetryDeviceReading['transport']): BluetoothTelemetrySource {
+  if (transport === 'ble') return 'ble_live';
+  if (transport === 'cloud' || transport === 'gateway' || transport === 'wifi') return 'provider_cloud';
+  return 'unavailable';
+}
+
+function buildDeviceReading(
+  telemetry: ECSPowerTelemetryDeviceReading,
+): PowerDeviceReading {
+  const providerKey = String(telemetry.provider || 'unknown').toLowerCase();
+  const branding = PROVIDER_BRANDING[providerKey] ?? PROVIDER_BRANDING.unknown;
+  const freshness = telemetry.quality;
+  const connectionState: PowerDeviceReading['connectionState'] =
+    telemetry.quality === 'live' ? 'connected' :
+    telemetry.quality === 'stale' ? 'reconnecting' :
+    'disconnected';
+
+  const battPct = asNumber(telemetry.batteryPercent);
+  const inputW = asNumber(telemetry.inputWatts);
+  const outputW = asNumber(telemetry.outputWatts);
+  const solarW = asNumber(telemetry.solarWatts);
+  const tempC = asNumber(telemetry.temperatureCelsius);
+  const runtimeMin = asNumber(telemetry.estimatedRuntimeMinutes);
+  const telemetrySource = telemetryTransportToBluetoothSource(telemetry.transport);
+  const truth = normalizePowerTelemetryTruth({
+    source: telemetry.transport === 'ble'
+      ? 'ble'
+      : telemetry.transport === 'cloud' || telemetry.transport === 'gateway' || telemetry.transport === 'wifi'
+        ? 'cloud'
+        : 'unavailable',
+    timestamp: telemetry.lastUpdated,
+    device: {
+      id: telemetry.deviceId,
+      vendor: providerKey,
+      model: telemetry.deviceName,
+    },
+  });
+  const simulationBlocked = truth.isSimulated && !isPowerSimulationAllowed();
+  const isStale =
+    simulationBlocked ||
+    truth.isStale ||
+    freshness === 'stale' ||
+    freshness === 'unavailable';
+  const powerProviderId = BLU_PROVIDER_TO_POWER_PROVIDER[providerKey] ?? null;
+  const readiness = resolvePowerReadiness({
+    providerId: powerProviderId,
+    connectionState,
+    hasTelemetry: truth.isLive,
+    hasStoredSnapshot: telemetry.lastUpdated > 0,
+  });
+
+  return {
+    deviceId: telemetry.deviceId,
+    deviceName: telemetry.deviceName || branding.displayName,
+    model: telemetry.deviceName || branding.displayName,
+    provider: providerKey,
+    providerDisplayName: telemetry.providerLabel || branding.displayName,
+    providerAccentColor: branding.accentColor,
+    providerIcon: branding.iconName,
+    batteryPercent: simulationBlocked ? null : battPct,
+    inputWatts: simulationBlocked ? null : inputW,
+    outputWatts: simulationBlocked ? null : outputW,
+    solarInputWatts: simulationBlocked ? null : solarW,
+    temperatureCelsius: simulationBlocked ? null : tempC,
+    estimatedRuntimeMinutes: simulationBlocked ? null : runtimeMin,
+    chargingState: deriveChargingState(inputW, outputW, battPct),
+    connectionState: simulationBlocked ? 'disconnected' : connectionState,
+    warningState: deriveWarningState(battPct, tempC, freshness),
+    isPrimary: false,
+    isStale,
+    readinessState: readiness.state,
+    readinessLabel: readiness.label,
+    lastUpdated: simulationBlocked ? 0 : telemetry.lastUpdated,
+    capacityWh: simulationBlocked ? null : asNumber(telemetry.capacityWh),
+    batteryVolts: simulationBlocked ? null : asNumber(telemetry.batteryVolts),
+    batteryAmps: simulationBlocked ? null : asNumber(telemetry.batteryAmps),
+    signalStrength: simulationBlocked ? null : asNumber(telemetry.signalStrength),
+    role: 'Primary House Battery',
+    telemetrySource,
+    telemetrySourceLabel: getPowerTruthLabel(truth),
+    isTelemetryLive: truth.isLive,
+    truth,
+    sourceTruthLabel: getPowerTruthLabel(truth),
+  };
+}
 
 export function useUnifiedPowerDevices(): {
   devices: PowerDeviceReading[];
@@ -138,566 +276,684 @@ export function useUnifiedPowerDevices(): {
   isAnyConnected: boolean;
   isAnyReconnecting: boolean;
 } {
-  const blu = useBlu();
-  const eco = useEcoFlowLive();
-
-  // Subscribe to bluStateStore for reactive updates
-  const [, setRev] = useState(0);
-  useEffect(() => {
-    const unsub = bluStateStore.subscribe(() => setRev((r) => r + 1));
-    return unsub;
-  }, []);
+  const telemetryReadings = useECSPowerTelemetryReadings();
 
   return useMemo(() => {
-    const devices: PowerDeviceReading[] = [];
+    const devices = telemetryReadings
+      .filter((reading) => reading.quality !== 'unavailable')
+      .map((reading, index) => ({
+        ...buildDeviceReading(reading),
+        isPrimary: index === 0,
+        role: index === 0 ? 'Primary House Battery' : 'Supporting Power Source',
+      }));
 
-    // ── EcoFlow Cloud Device ──
-    const ecoLive = eco.status === 'live' || eco.status === 'degraded';
-    if (eco.selectedDeviceId || ecoLive) {
-      const branding = ECS_PROVIDER_BRANDING.ecoflow;
-      const isStale = eco.status === 'degraded' || eco.status === 'offline';
-      const inputW = eco.inputWatts ?? 0;
-      const outputW = eco.outputWatts ?? 0;
-      const solarW = eco.solarWatts ?? 0;
-      const battPct = eco.batteryPct ?? null;
-
-      devices.push({
-        deviceId: eco.selectedDeviceId || 'ecoflow-cloud',
-        deviceName: eco.deviceName || 'EcoFlow Device',
-        model: eco.deviceName || 'EcoFlow',
-        provider: 'ecoflow',
-        providerDisplayName: branding.displayName,
-        providerAccentColor: branding.accentColor,
-        providerIcon: branding.iconName,
-        batteryPercent: battPct,
-        inputWatts: ecoLive ? inputW : null,
-        outputWatts: ecoLive ? outputW : null,
-        solarInputWatts: ecoLive ? solarW : null,
-        temperatureCelsius: null,
-        estimatedRuntimeMinutes: null,
-        chargingState: ecoLive ? deriveChargingState(inputW, outputW, battPct) : 'unknown',
-        connectionState: ecoLive ? 'connected' : eco.status === 'offline' ? 'disconnected' : 'reconnecting',
-        warningState: deriveWarningState(battPct, null, isStale && ecoLive),
-        isPrimary: false,
-        isStale: isStale && !ecoLive,
-        lastUpdated: eco.lastUpdatedAt ?? 0,
-        capacityWh: null,
-        batteryVolts: null,
-        role: null,
-      });
-    }
-
-    // ── BLU Devices (all providers) ──
-    if (blu.isAvailable && blu.summary) {
-      const bluSummary = blu.summary;
-      const bluBattPct = bluSummary.battery_percent ?? null;
-      const bluInputW = bluSummary.live_input ?? 0;
-      const bluOutputW = bluSummary.live_output ?? 0;
-      const bluSolarW = bluSummary.solar_input ?? 0;
-      const isStale = blu.isStale;
-
-      // Get connected BLU devices from state store
-      const bluState = bluStateStore.getSnapshot();
-      const connectedDevices = bluState?.connectedDevices || [];
-
-      if (connectedDevices.length > 0) {
-        for (const dev of connectedDevices) {
-          const providerId = (dev.provider_id || 'ecoflow') as BluProviderId;
-          const branding = ECS_PROVIDER_BRANDING[providerId] || ECS_PROVIDER_BRANDING.ecoflow;
-
-          devices.push({
-            deviceId: dev.device_id || `blu-${providerId}`,
-            deviceName: dev.name || dev.model || branding.displayName,
-            model: dev.model || branding.displayName,
-            provider: providerId,
-            providerDisplayName: branding.displayName,
-            providerAccentColor: branding.accentColor,
-            providerIcon: branding.iconName,
-            batteryPercent: bluBattPct,
-            inputWatts: bluInputW,
-            outputWatts: bluOutputW,
-            solarInputWatts: bluSolarW,
-            temperatureCelsius: null,
-            estimatedRuntimeMinutes: bluSummary.runtime_remaining ?? null,
-            chargingState: deriveChargingState(bluInputW, bluOutputW, bluBattPct),
-            connectionState: isStale ? 'reconnecting' : 'connected',
-            warningState: deriveWarningState(bluBattPct, null, isStale),
-            isPrimary: false,
-            isStale,
-            lastUpdated: Date.now(),
-            capacityWh: null,
-            batteryVolts: null,
-            role: null,
-          });
-        }
-      } else if (bluBattPct != null) {
-        // Fallback: no individual device info, use summary
-        devices.push({
-          deviceId: 'blu-primary',
-          deviceName: 'BLU Power System',
-          model: 'BLU Device',
-          provider: 'ecoflow',
-          providerDisplayName: 'BLU',
-          providerAccentColor: '#00A6FF',
-          providerIcon: 'flash',
-          batteryPercent: bluBattPct,
-          inputWatts: bluInputW,
-          outputWatts: bluOutputW,
-          solarInputWatts: bluSolarW,
-          temperatureCelsius: null,
-          estimatedRuntimeMinutes: bluSummary.runtime_remaining ?? null,
-          chargingState: deriveChargingState(bluInputW, bluOutputW, bluBattPct),
-          connectionState: isStale ? 'reconnecting' : 'connected',
-          warningState: deriveWarningState(bluBattPct, null, isStale),
-          isPrimary: false,
-          isStale,
-          lastUpdated: Date.now(),
-          capacityWh: null,
-          batteryVolts: null,
-          role: null,
-        });
-      }
-    }
-
-    // Deduplicate by deviceId (prefer non-stale)
-    const seen = new Map<string, PowerDeviceReading>();
-    for (const d of devices) {
-      const existing = seen.get(d.deviceId);
-      if (!existing || (!d.isStale && existing.isStale)) {
-        seen.set(d.deviceId, d);
-      }
-    }
-    const deduped = Array.from(seen.values());
-
-    // Mark primary: first connected device, or highest battery
-    if (deduped.length > 0) {
-      const connected = deduped.filter((d) => d.connectionState === 'connected');
-      const target = connected.length > 0
-        ? connected.reduce((best, d) => {
-            if (d.isPrimary) return d;
-            if ((d.capacityWh ?? 0) > (best.capacityWh ?? 0)) return d;
-            if ((d.batteryPercent ?? 0) > (best.batteryPercent ?? 0)) return d;
-            return best;
-          }, connected[0])
-        : deduped[0];
-      target.isPrimary = true;
-    }
-
-    const primary = deduped.find((d) => d.isPrimary) ?? null;
-    const secondary = deduped.filter((d) => !d.isPrimary);
-
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalSolar = 0;
-    let weightedSoc = 0;
-    let totalWeight = 0;
-
-    for (const d of deduped) {
-      if (d.connectionState === 'connected' || d.connectionState === 'reconnecting') {
-        totalInput += d.inputWatts ?? 0;
-        totalOutput += d.outputWatts ?? 0;
-        totalSolar += d.solarInputWatts ?? 0;
-        if (d.batteryPercent != null) {
-          const w = d.capacityWh ?? 1000;
-          weightedSoc += d.batteryPercent * w;
-          totalWeight += w;
-        }
-      }
-    }
-
-    const aggBatt = totalWeight > 0 ? Math.round(weightedSoc / totalWeight) : null;
-    const anyConnected = deduped.some((d) => d.connectionState === 'connected');
-    const anyReconnecting = deduped.some((d) => d.connectionState === 'reconnecting');
+    const primaryDevice = devices[0] ?? null;
+    const secondaryDevices = primaryDevice
+      ? devices.filter((device) => device.deviceId !== primaryDevice.deviceId)
+      : [];
+    const totalConnected = devices.filter((device) => device.connectionState === 'connected').length;
+    const totalInputWatts = devices.reduce((sum, device) => sum + (device.inputWatts ?? 0), 0);
+    const totalOutputWatts = devices.reduce((sum, device) => sum + (device.outputWatts ?? 0), 0);
+    const totalSolarWatts = devices.reduce((sum, device) => sum + (device.solarInputWatts ?? 0), 0);
+    const batteryDevices = devices.filter((device) => device.batteryPercent != null);
+    const weightedBattery = batteryDevices.reduce(
+      (sum, device) => sum + (device.batteryPercent ?? 0) * (device.capacityWh ?? 1000),
+      0,
+    );
+    const totalWeight = batteryDevices.reduce((sum, device) => sum + (device.capacityWh ?? 1000), 0);
+    const aggregatedBatteryPercent = totalWeight > 0 ? Math.round(weightedBattery / totalWeight) : null;
+    const isAnyConnected = totalConnected > 0;
+    const isAnyReconnecting = devices.some((device) => device.connectionState === 'reconnecting');
 
     return {
-      devices: deduped,
-      primaryDevice: primary,
-      secondaryDevices: secondary,
-      totalConnected: deduped.filter((d) => d.connectionState === 'connected').length,
-      totalInputWatts: Math.round(totalInput),
-      totalOutputWatts: Math.round(totalOutput),
-      totalSolarWatts: Math.round(totalSolar),
-      aggregatedBatteryPercent: aggBatt,
-      isAnyConnected: anyConnected,
-      isAnyReconnecting: anyReconnecting,
+      devices,
+      primaryDevice,
+      secondaryDevices,
+      totalConnected,
+      totalInputWatts,
+      totalOutputWatts,
+      totalSolarWatts,
+      aggregatedBatteryPercent,
+      isAnyConnected,
+      isAnyReconnecting,
     };
-  }, [blu.isAvailable, blu.isStale, blu.summary, eco.status, eco.batteryPct, eco.solarWatts, eco.outputWatts, eco.inputWatts, eco.lastUpdatedAt, eco.selectedDeviceId, eco.deviceName]);
+  }, [telemetryReadings]);
 }
 
-// ── MetricRow (local) ───────────────────────────────────────────────────
+export interface PowerTelemetrySummary {
+  snapshot: PowerTelemetrySnapshot;
+  sourceState: TelemetrySourceState;
+  inputWatts: number | null;
+  outputWatts: number | null;
+  solarWatts: number | null;
+  batteryPercent: number | null;
+  chargingState: PowerDeviceReading['chargingState'];
+  sourceLabel: string;
+  lastUpdated: number | null;
+  isLive: boolean;
+  isStale: boolean;
+  connectedDeviceCount: number;
+  primaryDevice: PowerDeviceReading | null;
+  truth: PowerTelemetryTruth;
+  canDisplayTelemetryValues: boolean;
+  canAnimateFlow: boolean;
+}
 
-function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={ws.metricRow}>
-      <Text style={ws.metricLabel}>{label}</Text>
-      <Text style={[ws.metricValue, color ? { color } : null]}>{value}</Text>
-    </View>
+export function normalizePowerTelemetrySummary(power: ReturnType<typeof useUnifiedPowerDevices>): PowerTelemetrySummary {
+  const connectedLiveDevice =
+    power.devices.find((device) => device.connectionState === 'connected' && device.truth.isLive) ?? null;
+  const primaryDevice = connectedLiveDevice ?? power.primaryDevice;
+  const lastUpdated = power.devices.reduce((latest, device) => {
+    if (device.lastUpdated <= 0) return latest;
+    return latest == null || device.lastUpdated > latest ? device.lastUpdated : latest;
+  }, null as number | null);
+  const hasLiveTelemetry = Boolean(connectedLiveDevice);
+  const sumKnownWatts = (
+    field: 'inputWatts' | 'outputWatts' | 'solarInputWatts',
+  ): number | null => {
+    const known = power.devices
+      .map((device) => device[field])
+      .filter((value): value is number => value != null);
+    if (known.length === 0) return null;
+    return Math.max(0, Math.round(known.reduce((sum, value) => sum + value, 0)));
+  };
+  const inputWatts = sumKnownWatts('inputWatts');
+  const outputWatts = sumKnownWatts('outputWatts');
+  const solarWatts = sumKnownWatts('solarInputWatts');
+  const batteryPercent = connectedLiveDevice?.batteryPercent ?? primaryDevice?.batteryPercent ?? power.aggregatedBatteryPercent ?? null;
+  const truth = connectedLiveDevice?.truth
+    ?? primaryDevice?.truth
+    ?? normalizePowerTelemetryTruth({
+      source: 'unavailable',
+      device: { id: 'unavailable', vendor: 'unknown' },
+    });
+  const snapshot = normalizePowerTelemetrySnapshot(
+    {
+      batteryPercent: batteryPercent ?? undefined,
+      capacityWh: primaryDevice?.capacityWh ?? undefined,
+      inputWatts: inputWatts ?? undefined,
+      outputWatts: outputWatts ?? undefined,
+      solarWatts: solarWatts ?? undefined,
+      temperatureC: primaryDevice?.temperatureCelsius ?? undefined,
+      estimatedRuntimeMinutes: primaryDevice?.estimatedRuntimeMinutes ?? undefined,
+    },
+    truth,
   );
+  const sourceState = resolveTelemetrySourceState({
+    sourceType: snapshot.sourceType,
+    freshness: snapshot.freshness,
+    updatedAt: snapshot.updatedAt,
+    isStreaming: snapshot.isLive,
+  });
+  const isStrictlyStale = truth.isStale;
+  const hasConfidentManualEstimate = truth.isManual && truth.confidence >= 0.5;
+  const hasRecentCachedTelemetry = truth.sourceTruth === 'cached' && !truth.isStale;
+  const canDisplayTelemetryValues = hasLiveTelemetry || hasConfidentManualEstimate || hasRecentCachedTelemetry;
+  const canAnimateFlow = hasLiveTelemetry || hasConfidentManualEstimate;
+
+  return {
+    snapshot,
+    sourceState,
+    inputWatts,
+    outputWatts,
+    solarWatts,
+    batteryPercent,
+    chargingState: deriveChargingState(inputWatts, outputWatts, batteryPercent),
+    sourceLabel: sourceState.label,
+    lastUpdated,
+    isLive: sourceState.isHighConfidenceLive,
+    isStale: sourceState.isStale || snapshot.isStale || isStrictlyStale,
+    connectedDeviceCount: power.totalConnected,
+    primaryDevice,
+    truth,
+    canDisplayTelemetryValues,
+    canAnimateFlow,
+  };
 }
 
-// ── Compact Mode ────────────────────────────────────────────────────────
+function usePowerFlowPulse(active: boolean, duration: number) {
+  const pulse = useStableAnimatedValue(0);
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const runningKeyRef = useRef<string | null>(null);
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 1250;
 
-export function PowerSystemCompact({ }: {}) {
-  const power = useUnifiedPowerDevices();
-  const { primaryDevice, devices, totalConnected, totalInputWatts, totalOutputWatts } = power;
+  useEffect(() => {
+    const nextKey = active ? `flow:${safeDuration}` : 'idle';
+    if (runningKeyRef.current === nextKey) {
+      return undefined;
+    }
 
-  if (!primaryDevice || devices.length === 0) {
-    return (
-      <View style={ws.compactRow}>
-        <View style={ws.compactCell}>
-          <Text style={ws.compactLabel}>POWER</Text>
-          <Text style={[ws.compactValue, { fontSize: 9, color: TACTICAL.textMuted }]}>NONE</Text>
-        </View>
-        <View style={ws.compactCell}>
-          <Text style={ws.compactLabel}>INPUT</Text>
-          <Text style={[ws.compactValue, { color: TACTICAL.textMuted }]}>{'\u2014'}</Text>
-        </View>
-        <View style={ws.compactCell}>
-          <Text style={ws.compactLabel}>OUTPUT</Text>
-          <Text style={[ws.compactValue, { color: TACTICAL.textMuted }]}>{'\u2014'}</Text>
-        </View>
-      </View>
+    loopRef.current?.stop();
+    loopRef.current = null;
+    runningKeyRef.current = nextKey;
+    pulse.stopAnimation();
+
+    if (!active) {
+      pulse.setValue(0);
+      return;
+    }
+
+    pulse.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(pulse, {
+        toValue: 1,
+        duration: safeDuration,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
     );
-  }
+    loopRef.current = loop;
+    loop.start();
 
-  const battColor = getBatteryColor(primaryDevice.batteryPercent);
-  const stateConf = CHARGING_STATE_CONFIG[primaryDevice.chargingState] || CHARGING_STATE_CONFIG.unknown;
+    return () => {
+      loop.stop();
+      if (loopRef.current === loop) {
+        loopRef.current = null;
+      }
+      if (runningKeyRef.current === nextKey) {
+        runningKeyRef.current = null;
+      }
+      pulse.stopAnimation();
+    };
+  }, [active, pulse, safeDuration]);
 
-  return (
-    <View style={ws.compactRow}>
-      <View style={ws.compactCell}>
-        <Text style={ws.compactLabel}>SOC</Text>
-        <Text style={[ws.compactValue, { color: primaryDevice.isStale ? TACTICAL.textMuted : battColor }]}>
-          {primaryDevice.batteryPercent != null ? `${primaryDevice.batteryPercent}%` : '\u2014'}
-        </Text>
-      </View>
-      <View style={ws.compactCell}>
-        <Text style={ws.compactLabel}>IN/OUT</Text>
-        <Text style={[ws.compactValue, { fontSize: 9 }]}>
-          {totalInputWatts > 0 || totalOutputWatts > 0
-            ? `${totalInputWatts}/${totalOutputWatts}`
-            : '\u2014'}
-        </Text>
-      </View>
-      <View style={ws.compactCell}>
-        <Text style={ws.compactLabel}>SYS</Text>
-        <Text style={[ws.compactValue, { color: stateConf.color, fontSize: 9 }]}>
-          {totalConnected > 1 ? `${totalConnected}` : stateConf.label.slice(0, 4)}
-        </Text>
-      </View>
-    </View>
-  );
+  return pulse;
 }
 
-// ── Full Card Mode ──────────────────────────────────────────────────────
-
-export function PowerSystemCard({ }: {}) {
-  const power = useUnifiedPowerDevices();
-  const { primaryDevice, devices, totalConnected, totalInputWatts, totalOutputWatts, totalSolarWatts } = power;
-
-  // ── Empty State ──
-  if (!primaryDevice || devices.length === 0) {
-    return (
-      <View style={ws.body}>
-        <View style={ws.emptyContainer}>
-          <Ionicons name="battery-dead-outline" size={18} color={TACTICAL.textMuted} />
-          <Text style={ws.emptyPrimary}>No power systems connected</Text>
-          <Text style={ws.emptySecondary}>Connect via Power tab</Text>
-        </View>
-      </View>
-    );
-  }
-
-  const battPct = primaryDevice.batteryPercent;
-  const battColor = getBatteryColor(battPct);
-  const stateConf = CHARGING_STATE_CONFIG[primaryDevice.chargingState] || CHARGING_STATE_CONFIG.unknown;
-  const connConf = CONNECTION_STATE_CONFIG[primaryDevice.connectionState] || CONNECTION_STATE_CONFIG.connected;
-  const warnConf = WARNING_STATE_CONFIG[primaryDevice.warningState] || WARNING_STATE_CONFIG.normal;
-  const isWarning = primaryDevice.warningState !== 'normal';
-  const secondaryCount = devices.length - 1;
+function PowerMonitorRiveHero({
+  summary,
+  compact = false,
+}: {
+  summary: PowerTelemetrySummary;
+  compact?: boolean;
+}) {
+  const riveTelemetry = adaptPowerTelemetryForRive(summary);
+  const batteryLabel = summary.batteryPercent == null ? 'battery unavailable' : `${Math.round(summary.batteryPercent)} percent battery`;
+  const sourceLabel = summary.sourceLabel ? `, ${summary.sourceLabel}` : '';
 
   return (
-    <View style={ws.body}>
-      {/* ── Status Row ── */}
-      <View style={ws.statusRow}>
-        <View style={[ws.statusBadge, { backgroundColor: `${stateConf.color}12` }]}>
-          <View style={[ws.statusDot, { backgroundColor: stateConf.color }]} />
-          <Text style={[ws.statusText, { color: stateConf.color }]}>{stateConf.label}</Text>
-        </View>
-        {primaryDevice.isStale && (
-          <View style={[ws.statusBadge, { backgroundColor: 'rgba(255,179,0,0.10)' }]}>
-            <Ionicons name="time-outline" size={8} color="#FFB300" />
-            <Text style={[ws.statusText, { color: '#FFB300' }]}>STALE</Text>
-          </View>
-        )}
-        {isWarning && (
-          <View style={[ws.statusBadge, { backgroundColor: `${warnConf.color}12` }]}>
-            <Ionicons name={warnConf.icon as any} size={8} color={warnConf.color} />
-            <Text style={[ws.statusText, { color: warnConf.color }]}>{warnConf.label}</Text>
-          </View>
-        )}
-      </View>
-
-      {/* ── Primary Device Name + Provider ── */}
-      <View style={ws.deviceHeader}>
-        <Text style={ws.deviceName} numberOfLines={1}>{primaryDevice.deviceName}</Text>
-        <View style={[ws.providerChip, { borderColor: primaryDevice.providerAccentColor + '40' }]}>
-          <View style={[ws.providerDot, { backgroundColor: primaryDevice.providerAccentColor }]} />
-          <Text style={[ws.providerLabel, { color: primaryDevice.providerAccentColor }]}>
-            {primaryDevice.providerDisplayName}
-          </Text>
-        </View>
-      </View>
-
-      {/* ── SOC Bar ── */}
-      {battPct != null && (
-        <View style={ws.socBarOuter}>
-          <View
-            style={[
-              ws.socBarFill,
-              {
-                width: `${Math.min(100, Math.max(0, battPct))}%`,
-                backgroundColor: primaryDevice.isStale ? TACTICAL.textMuted : battColor,
-              },
-            ]}
-          />
-        </View>
-      )}
-
-      {/* ── Core Metrics ── */}
-      <MetricRow
-        label="BATTERY"
-        value={battPct != null ? `${battPct}%` : '\u2014'}
-        color={primaryDevice.isStale ? TACTICAL.textMuted : battColor}
+    <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={`Power Monitor module: ${batteryLabel}${sourceLabel}`}
+      style={[ws.riveHero, compact && ws.riveHeroCompact]}
+      testID={compact ? 'power-monitor-rive-hero-compact' : 'power-monitor-rive-hero'}
+    >
+      <PowerModuleRiveWidget
+        hasEcsData={riveTelemetry.hasEcsData}
+        batteryPercent={riveTelemetry.batteryPercent}
+        inputWatts={riveTelemetry.inputWatts}
+        outputWatts={riveTelemetry.outputWatts}
+        style={[ws.riveHeroModule, compact && ws.riveHeroModuleCompact]}
+        testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}
       />
-
-      {totalInputWatts > 0 && (
-        <MetricRow
-          label="INPUT"
-          value={`${totalInputWatts} W`}
-          color={primaryDevice.isStale ? TACTICAL.textMuted : '#4FC3F7'}
-        />
-      )}
-
-      {totalOutputWatts > 0 && (
-        <MetricRow
-          label="OUTPUT"
-          value={`${totalOutputWatts} W`}
-          color={primaryDevice.isStale ? TACTICAL.textMuted : TACTICAL.amber}
-        />
-      )}
-
-      {totalSolarWatts > 0 && (
-        <MetricRow
-          label="SOLAR"
-          value={`${totalSolarWatts} W`}
-          color={primaryDevice.isStale ? TACTICAL.textMuted : '#FFB300'}
-        />
-      )}
-
-      {primaryDevice.estimatedRuntimeMinutes != null && primaryDevice.estimatedRuntimeMinutes > 0 && (
-        <MetricRow
-          label="RUNTIME"
-          value={formatRuntime(primaryDevice.estimatedRuntimeMinutes)}
-          color={
-            primaryDevice.isStale
-              ? TACTICAL.textMuted
-              : (primaryDevice.estimatedRuntimeMinutes ?? 0) < 60
-              ? '#EF5350'
-              : (primaryDevice.estimatedRuntimeMinutes ?? 0) < 180
-              ? '#FFB300'
-              : '#4CAF50'
-          }
-        />
-      )}
-
-      {/* ── Multi-System Indicator ── */}
-      {secondaryCount > 0 && (
-        <View style={ws.multiSystemRow}>
-          <View style={ws.multiDot} />
-          <Text style={ws.multiText}>
-            +{secondaryCount} connected system{secondaryCount > 1 ? 's' : ''}
-          </Text>
-        </View>
-      )}
     </View>
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────────────
+function PowerFlowGraphic({
+  inputWatts,
+  outputWatts,
+  isStale = false,
+  allowAnimation = true,
+  compact = false,
+}: {
+  inputWatts: number;
+  outputWatts: number;
+  isStale?: boolean;
+  allowAnimation?: boolean;
+  compact?: boolean;
+}) {
+  const reducedMotion = useReducedMotion();
+  const activeInput = inputWatts > 0 && !isStale && allowAnimation;
+  const activeOutput = outputWatts > 0 && !isStale && allowAnimation;
+  const hasFlow = activeInput || activeOutput;
+  const shouldAnimate = hasFlow && !reducedMotion;
+  const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);
+  const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);
+
+  const inputPulseStyle = useMemo(
+    () => ({
+      opacity: inputFlowPulse.interpolate({
+        inputRange: [0, 0.5, 1],
+        outputRange: [0.15, 0.9, 0.15],
+      }),
+      transform: [
+        {
+          translateX: inputFlowPulse.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-28, 28],
+          }),
+        },
+      ],
+    }),
+    [inputFlowPulse],
+  );
+  const outputPulseStyle = useMemo(
+    () => ({
+      opacity: outputFlowPulse.interpolate({
+        inputRange: [0, 0.5, 1],
+        outputRange: [0.15, 0.85, 0.15],
+      }),
+      transform: [
+        {
+          translateX: outputFlowPulse.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-28, 28],
+          }),
+        },
+      ],
+    }),
+    [outputFlowPulse],
+  );
+
+  return (
+    <View style={[ws.flowGraphic, compact && ws.flowGraphicCompact]}>
+      <View style={[ws.flowNode, compact && ws.flowNodeCompact, activeInput && ws.flowNodeInActive]}>
+        <Ionicons name="arrow-down-outline" size={compact ? 10 : 12} color={activeInput ? POWER_CHARGE_IN_COLOR : TACTICAL.textMuted} />
+      </View>
+      <View style={ws.flowTrackWrap}>
+        <View style={ws.flowTrackBase} />
+        <View
+          style={[
+            ws.flowTrackSegment,
+            ws.flowTrackLeft,
+            activeInput && { backgroundColor: POWER_CHARGE_IN_COLOR },
+            compact && ws.flowTrackSegmentCompact,
+          ]}
+        >
+          {activeInput && shouldAnimate ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[ws.flowPulse, { backgroundColor: POWER_CHARGE_IN_COLOR }, inputPulseStyle]}
+            />
+          ) : null}
+        </View>
+        <View
+          style={[
+            ws.flowTrackSegment,
+            ws.flowTrackRight,
+            activeOutput && { backgroundColor: POWER_DRAW_OUT_COLOR },
+            compact && ws.flowTrackSegmentCompact,
+          ]}
+        >
+          {activeOutput && shouldAnimate ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[ws.flowPulse, { backgroundColor: POWER_DRAW_OUT_COLOR }, outputPulseStyle]}
+            />
+          ) : null}
+        </View>
+        <View style={[ws.flowCore, hasFlow && ws.flowCoreActive, compact && ws.flowCoreCompact]}>
+          <Ionicons name="flash-outline" size={compact ? 11 : 13} color={hasFlow ? TACTICAL.amber : TACTICAL.textMuted} />
+        </View>
+      </View>
+      <View style={[ws.flowNode, compact && ws.flowNodeCompact, activeOutput && ws.flowNodeOutActive]}>
+        <Ionicons name="arrow-up-outline" size={compact ? 10 : 12} color={activeOutput ? POWER_DRAW_OUT_COLOR : TACTICAL.textMuted} />
+      </View>
+    </View>
+  );
+}
+
+export function PowerSystemCompact({ data }: { data?: PowerWidgetContextData }) {
+  const power = useUnifiedPowerDevices();
+  const summary = normalizePowerTelemetrySummary(power);
+  const livePowerIntelligence = usePowerIntelligence();
+  const { primaryDevice, totalConnected, totalInputWatts, totalOutputWatts } = power;
+  const connectedPrimaryDevice = summary.isLive ? summary.primaryDevice : null;
+  const hasLivePower = summary.isLive;
+  const powerIntelligence =
+    hasLivePower
+      ? data?.aiState?.richContext?.resources?.powerIntelligence ?? livePowerIntelligence
+      : null;
+  const runtimeMinutes = connectedPrimaryDevice?.estimatedRuntimeMinutes ?? primaryDevice?.estimatedRuntimeMinutes ?? null;
+  const compactFooter = summary.sourceLabel;
+  const presentation = resolvePowerWidgetPresentation({
+    batteryPercent: connectedPrimaryDevice?.batteryPercent ?? primaryDevice?.batteryPercent ?? null,
+    runtimeMinutes,
+    inputWatts: totalInputWatts,
+    outputWatts: totalOutputWatts,
+    solarWatts: power.totalSolarWatts,
+    connectedDeviceCount: totalConnected,
+    powerIntelligence,
+    providerTelemetry: data?.aiState?.richContext?.resources?.providerTelemetry ?? null,
+    aiState: data?.aiState ?? null,
+    dashboardView: data?.aiDashboardView ?? null,
+  });
+
+  useEffect(() => {
+    publishPowerBriefAdvisories({
+      batteryPercent: summary.batteryPercent,
+      outputWatts: summary.outputWatts,
+      solarWatts: summary.solarWatts,
+      estimatedRuntimeMinutes: runtimeMinutes,
+      deviceId: summary.primaryDevice?.deviceId,
+      deviceName: summary.primaryDevice?.deviceName,
+      providerId: summary.primaryDevice?.provider,
+      truth: summary.truth,
+    });
+  }, [
+    runtimeMinutes,
+    summary.batteryPercent,
+    summary.outputWatts,
+    summary.solarWatts,
+    summary.primaryDevice?.deviceId,
+    summary.primaryDevice?.deviceName,
+    summary.primaryDevice?.provider,
+    summary.truth,
+  ]);
+
+  return (
+    <WidgetCardShell
+      badge={presentation.badge}
+      footer={compactFooter ? <WidgetMetaLine text={compactFooter} tone="neutral" /> : undefined}
+    >
+      <View style={ws.riveShell}>
+        <PowerMonitorRiveHero summary={summary} compact />
+      </View>
+    </WidgetCardShell>
+  );
+}
+
+export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
+  const power = useUnifiedPowerDevices();
+  const summary = normalizePowerTelemetrySummary(power);
+  const livePowerIntelligence = usePowerIntelligence();
+  const { primaryDevice, totalConnected, totalInputWatts, totalOutputWatts, totalSolarWatts } = power;
+  const connectedPrimaryDevice = summary.isLive ? summary.primaryDevice : null;
+  const hasLivePower = summary.isLive;
+  const powerIntelligence =
+    hasLivePower
+      ? data?.aiState?.richContext?.resources?.powerIntelligence ?? livePowerIntelligence
+      : null;
+  const runtimeMinutes = connectedPrimaryDevice?.estimatedRuntimeMinutes ?? primaryDevice?.estimatedRuntimeMinutes ?? null;
+  const sourceTone: WidgetTone = summary.sourceState.tone;
+
+  const presentation = resolvePowerWidgetPresentation({
+    batteryPercent: connectedPrimaryDevice?.batteryPercent ?? primaryDevice?.batteryPercent ?? null,
+    runtimeMinutes,
+    inputWatts: totalInputWatts,
+    outputWatts: totalOutputWatts,
+    solarWatts: totalSolarWatts,
+    connectedDeviceCount: totalConnected,
+    powerIntelligence,
+    providerTelemetry: data?.aiState?.richContext?.resources?.providerTelemetry ?? null,
+    aiState: data?.aiState ?? null,
+    dashboardView: data?.aiDashboardView ?? null,
+  });
+
+  useEffect(() => {
+    publishPowerBriefAdvisories({
+      batteryPercent: summary.batteryPercent,
+      outputWatts: summary.outputWatts,
+      solarWatts: summary.solarWatts,
+      estimatedRuntimeMinutes: runtimeMinutes,
+      deviceId: summary.primaryDevice?.deviceId,
+      deviceName: summary.primaryDevice?.deviceName,
+      providerId: summary.primaryDevice?.provider,
+      truth: summary.truth,
+    });
+  }, [
+    runtimeMinutes,
+    summary.batteryPercent,
+    summary.outputWatts,
+    summary.solarWatts,
+    summary.primaryDevice?.deviceId,
+    summary.primaryDevice?.deviceName,
+    summary.primaryDevice?.provider,
+    summary.truth,
+  ]);
+
+  if (!hasLivePower) {
+    return (
+      <WidgetCardShell
+        badge={presentation.badge}
+        footer={
+          <WidgetMetaLine
+            text={summary.sourceLabel}
+            tone={sourceTone}
+          />
+        }
+      >
+        <View style={ws.riveShell}>
+          <PowerMonitorRiveHero summary={summary} />
+        </View>
+      </WidgetCardShell>
+    );
+  }
+
+  const footerBits = [
+    summary.sourceLabel,
+    totalConnected > 1 ? `${totalConnected} sources` : null,
+    totalSolarWatts > 0 ? `Solar ${Math.round(totalSolarWatts)}W` : null,
+  ].filter(Boolean);
+
+  return (
+    <WidgetCardShell
+      badge={presentation.badge}
+      footer={<WidgetMetaLine text={footerBits.join(' | ')} tone="neutral" />}
+    >
+      <View style={ws.riveShell}>
+        <PowerMonitorRiveHero summary={summary} />
+      </View>
+    </WidgetCardShell>
+  );
+}
+
+export default PowerSystemCard;
 
 const ws = StyleSheet.create({
-  body: {
-    gap: 2,
-  },
-
-  // ── Compact ──
-  compactRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  compactCell: {
+  compactShell: {
     flex: 1,
-    alignItems: 'center',
+    minHeight: 0,
+    gap: 4,
+    justifyContent: 'center',
   },
-  compactLabel: {
-    fontSize: 7,
-    fontWeight: '700',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
-    marginBottom: 1,
-  },
-  compactValue: {
-    fontSize: 12,
-    fontWeight: '900',
-    fontFamily: 'Courier',
-    color: TACTICAL.text,
-  },
-
-  // ── Status ──
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    flexWrap: 'wrap',
-    marginBottom: 2,
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 3,
-  },
-  statusDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-  },
-  statusText: {
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-  },
-
-  // ── Device Header ──
-  deviceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 3,
   },
-  deviceName: {
+  statusValue: {
     fontSize: 10,
-    fontWeight: '800',
-    color: TACTICAL.text,
-    letterSpacing: 0.5,
-    flex: 1,
-    marginRight: 6,
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
-  providerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 3,
-    borderWidth: 1,
-  },
-  providerDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  providerLabel: {
-    fontSize: 7,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-
-  // ── SOC Bar ──
-  socBarOuter: {
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 3,
-  },
-  socBarFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-
-  // ── Metrics ──
-  metricRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 3,
-  },
-  metricLabel: {
-    fontSize: 9,
-    fontWeight: '700',
+  compactLabel: {
     color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+  },
+  compactMetricRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  compactMetricCell: {
+    flex: 1,
+    gap: 2,
+  },
+  compactMetricLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '800',
     letterSpacing: 1,
   },
-  metricValue: {
-    fontSize: 11,
-    fontWeight: '800',
+  compactMetricValue: {
     color: TACTICAL.text,
-    fontFamily: 'Courier',
+    fontSize: 10,
+    fontWeight: '900',
   },
-
-  // ── Multi-System ──
-  multiSystemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  multiDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#4FC3F7',
-  },
-  multiText: {
-    fontSize: 8,
-    fontWeight: '700',
+  compactMetaText: {
     color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
+    fontSize: 7.5,
+    fontWeight: '700',
+    lineHeight: 10,
   },
-
-  // ── Empty State ──
-  emptyContainer: {
+  footerStack: {
+    gap: 3,
+  },
+  riveShell: {
+    flex: 1,
+    minHeight: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 4,
-    gap: 4,
+    position: 'relative',
+    zIndex: 4,
+    elevation: 4,
   },
-  emptyPrimary: {
-    fontSize: 10,
-    fontWeight: '700',
+  riveHero: {
+    width: '100%',
+    minWidth: 150,
+    maxWidth: 230,
+    height: 118,
+    minHeight: 100,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+    zIndex: 8,
+    elevation: 8,
+  },
+  riveHeroCompact: {
+    minWidth: 118,
+    maxWidth: 176,
+    height: 86,
+    minHeight: 76,
+  },
+  riveHeroModule: {
+    width: '100%',
+    height: '100%',
+    minWidth: 144,
+    minHeight: 94,
+    alignSelf: 'center',
+    zIndex: 9,
+    elevation: 9,
+  },
+  riveHeroModuleCompact: {
+    minWidth: 112,
+    minHeight: 70,
+  },
+  flowGraphic: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 30,
+    marginTop: 1,
+  },
+  flowGraphicCompact: {
+    minHeight: 22,
+    gap: 5,
+  },
+  flowNode: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flowNodeCompact: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+  },
+  flowNodeInActive: {
+    borderColor: 'rgba(76,175,80,0.35)',
+    backgroundColor: 'rgba(76,175,80,0.10)',
+  },
+  flowNodeOutActive: {
+    borderColor: 'rgba(239,83,80,0.35)',
+    backgroundColor: 'rgba(239,83,80,0.10)',
+  },
+  flowTrackWrap: {
+    flex: 1,
+    height: 16,
+    justifyContent: 'center',
+  },
+  flowTrackBase: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 2,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  flowTrackSegment: {
+    position: 'absolute',
+    top: 7,
+    height: 2,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  flowTrackSegmentCompact: {
+    top: 7,
+  },
+  flowTrackLeft: {
+    left: 0,
+    right: '50%',
+    marginRight: 14,
+    backgroundColor: 'rgba(76,175,80,0.18)',
+  },
+  flowTrackRight: {
+    left: '50%',
+    right: 0,
+    marginLeft: 14,
+    backgroundColor: 'rgba(239,83,80,0.18)',
+  },
+  flowPulse: {
+    width: 18,
+    height: 2,
+    borderRadius: 2,
+  },
+  flowCore: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    width: 28,
+    height: 28,
+    marginLeft: -14,
+    marginTop: -14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flowCoreCompact: {
+    width: 20,
+    height: 20,
+    marginLeft: -10,
+    marginTop: -10,
+    borderRadius: 10,
+  },
+  flowCoreActive: {
+    borderColor: 'rgba(196,138,44,0.32)',
+    backgroundColor: 'rgba(196,138,44,0.12)',
+  },
+  cardStatusRow: {
+    gap: 1,
+  },
+  metricRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 18,
+    paddingVertical: 2,
+  },
+  metricLabel: {
     color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0.9,
   },
-  emptySecondary: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.5,
-    opacity: 0.85,
+  metricValue: {
+    color: TACTICAL.text,
+    fontSize: 9.5,
+    fontWeight: '800',
   },
 });
-
-
-
 

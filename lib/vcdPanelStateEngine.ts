@@ -137,7 +137,7 @@ function computeRouteState(
   }
 
   // Route loaded with moderate+ difficulty → ACTIVE
-  if (routeIntel.overallDifficulty === 'hard' || routeIntel.overallDifficulty === 'extreme') {
+  if (routeIntel.overallDifficulty === 'difficult' || routeIntel.overallDifficulty === 'challenging') {
     return 'ACTIVE';
   }
 

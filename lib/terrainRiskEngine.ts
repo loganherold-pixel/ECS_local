@@ -36,6 +36,12 @@ import {
   levelToNumeric,
   waterCrossingToNumeric,
 } from './terrainProfile';
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import { assessRouteRiskConfidence } from './ai/confidenceEngine';
+import type { ECSPriorityResult } from './ai/priorityTypes';
+import { assessRouteRiskPriority } from './ai/priorityEngine';
+import { explainRecommendation } from './ai/recommendationExplanationEngine';
+import type { ECSExplanationResult } from './ai/recommendationExplanationTypes';
 
 
 
@@ -141,8 +147,14 @@ export interface DynamicRiskResult {
   riskScore: number;
   /** Risk level classification */
   riskLevel: RiskLevel;
+  /** Shared ECS confidence result for the risk assessment */
+  confidence: ECSConfidenceResult;
+  /** Shared ECS priority result for operational escalation */
+  priority: ECSPriorityResult;
   /** Short explanations of risk drivers (non-verbose) */
   drivers: string[];
+  /** Shared operator-facing explanation */
+  explanation?: ECSExplanationResult | null;
   /** Terrain risk modifiers used in computation */
   terrainModifiers: TerrainRiskModifiers;
   /** Individual risk component scores for transparency */
@@ -767,10 +779,38 @@ export function calculateDynamicRisk(input: DynamicRiskInput): DynamicRiskResult
     }
   }
 
+  const confidence = assessRouteRiskConfidence({
+    hasTerrainProfile: !!terrainProfile,
+    hasWeightProfile: gvwrPercent > 0 || roofLoadPercent > 0 || rearBiasPercent > 0,
+    hasRouteContext: !!routeContext || routeStatus !== 'unknown',
+    hasWeatherCoverage: false,
+  });
+  const priority = assessRouteRiskPriority({
+    riskLevel,
+    riskScore,
+    routeActive:
+      routeStatus === 'in_progress' ||
+      routeStatus === 'near_completion' ||
+      routeStatus === 'off_route',
+    remotenessScore,
+    bailoutAvailable: routeContext?.bailoutAvailable,
+    confidence,
+    driver: drivers[0] ?? null,
+  });
+  const explanation = explainRecommendation({
+    type: 'route_risk',
+    drivers,
+    confidenceLevel: confidence.level,
+    priorityLevel: priority.level,
+  });
+
   return {
     riskScore,
     riskLevel,
+    confidence,
+    priority,
     drivers,
+    explanation,
     terrainModifiers: modifiers,
     components: {
       weightRisk: Math.round(weightRisk * 10) / 10,

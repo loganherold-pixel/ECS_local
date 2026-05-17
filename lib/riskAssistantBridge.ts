@@ -165,7 +165,7 @@ export function getRiskInterpretation(): RiskInterpretation {
 
     // Use the STABILIZED status (hysteresis-protected) for display
     const displayStatus = stabilizedStatus || summary.operational_status;
-    const statusDisplay = OPERATIONAL_STATUS_DISPLAY[displayStatus];
+    const statusDisplay = OPERATIONAL_STATUS_DISPLAY[displayStatus as OperationalStatus];
 
     // Determine freshness
     const evalAge = summary.updated_at

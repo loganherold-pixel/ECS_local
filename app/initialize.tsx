@@ -1,553 +1,309 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
+  ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Animated,
-  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
-import { TACTICAL } from '../lib/theme';
+import AuthBrandLockup from '../components/login/AuthBrandLockup';
+import AuthFormSurface from '../components/login/AuthFormSurface';
+import AuthStatusBanner from '../components/login/AuthStatusBanner';
+import LoginHeroBackground from '../components/login/LoginHeroBackground';
+import { AUTH_COPY } from '../lib/auth/authCopy';
+import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
+import { AUTH_SURFACE } from '../lib/auth/authSurface';
+import { AUTH_VISUAL_SPEC } from '../lib/auth/authVisualSpec';
+import { ECS, TACTICAL } from '../lib/theme';
 import { useApp } from '../context/AppContext';
-import TopoBackground from '../components/TopoBackground';
-import TacticalInput from '../components/TacticalInput';
 
-const APP_VERSION = '2.4.0';
+const COPY = {
+  title: AUTH_COPY.signup.title,
+  supporting: AUTH_COPY.signup.supporting,
+  emailLabel: AUTH_COPY.login.emailLabel,
+  emailPlaceholder: AUTH_COPY.login.emailPlaceholder,
+  primary: AUTH_COPY.signup.primary,
+  loading: AUTH_COPY.signup.primaryLoading,
+  back: AUTH_COPY.forgotPassword.back,
+  invalidEmail: AUTH_COPY.login.invalidEmail,
+  offline: AUTH_COPY.login.offline,
+} as const;
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
 
 export default function InitializeScreen() {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const router = useRouter();
-  const { sendCredentialSetupLink } = useApp();
-
+  const { isOnline } = useApp();
+  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, height), [width, height]);
   const [email, setEmail] = useState('');
+  const [touched, setTouched] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [emailError, setEmailError] = useState('');
-  const [sent, setSent] = useState(false);
-  const [mode, setMode] = useState<'link' | 'direct'>('link');
+  const [focused, setFocused] = useState(false);
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const trimmedEmail = email.trim();
+  const emailError = touched && (!trimmedEmail || !isValidEmail(trimmedEmail)) ? COPY.invalidEmail : '';
+  const disabled = loading || !trimmedEmail || !isValidEmail(trimmedEmail) || !isOnline;
 
-  const triggerShake = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 4, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
-  }, [shakeAnim]);
-
-  const validateEmail = (val: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(val);
-  };
-
-  const isFormValid = email.trim().length > 0 && validateEmail(email.trim());
-
-  const handleSendLink = async () => {
-    setEmailError('');
-    setError('');
-
-    if (!email.trim()) {
-      setEmailError('Email is required');
-      triggerShake();
-      return;
+  const supportMessage = useMemo(() => {
+    if (!isOnline) {
+      return COPY.offline;
     }
-
-    if (!validateEmail(email.trim())) {
-      setEmailError('Invalid email format');
-      triggerShake();
-      return;
-    }
-
-    setLoading(true);
-
-    const result = await sendCredentialSetupLink(email.trim());
-    setLoading(false);
-
-    if (result.error) {
-      setError(result.error);
-      triggerShake();
-    } else {
-      setSent(true);
-    }
-  };
-
-  const handleDirectSetup = () => {
-    setEmailError('');
-    setError('');
-
-    if (!email.trim()) {
-      setEmailError('Email is required');
-      triggerShake();
-      return;
-    }
-
-    if (!validateEmail(email.trim())) {
-      setEmailError('Invalid email format');
-      triggerShake();
-      return;
-    }
-
-    router.push({ pathname: '/create-access-key', params: { email: email.trim(), mode: 'signup' } });
-  };
+    return '';
+  }, [isOnline]);
 
   const handleBack = () => {
-    router.back();
+    Keyboard.dismiss();
+    if (typeof router.canGoBack === 'function' && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace('/login');
   };
 
-  // Success state after sending link
-  if (sent) {
-    return (
-      <TopoBackground>
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.panel}>
-            <View style={styles.header}>
-              <View style={styles.successIconRow}>
-                <Ionicons name="checkmark-circle" size={40} color={TACTICAL.successText} />
-              </View>
-              <Text style={styles.title}>Email sent</Text>
-              <View style={styles.amberDivider} />
-            </View>
+  const handleContinue = async () => {
+    setTouched(true);
+    if (disabled) return;
 
-            <View style={styles.form}>
-              <View style={styles.successBox}>
-                <Ionicons name="mail" size={24} color={TACTICAL.successText} />
-                <Text style={styles.successTitle}>Check your inbox</Text>
-                <Text style={styles.successDetail}>
-                  A setup link has been sent to{'\n'}
-                  <Text style={styles.emailHighlight}>{email}</Text>
-                </Text>
-                <Text style={styles.successNote}>
-                  Click the link in your email to set up your password.
-                  You'll be redirected back to complete setup.
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={handleBack}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.primaryBtnText}>Back to sign in</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.resendLink}
-                onPress={() => { setSent(false); setError(''); }}
-                activeOpacity={0.6}
-              >
-                <Text style={styles.resendLinkText}>Resend link</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <Text style={styles.footer}>
-            Secure connection  {'\u2022'}  ECS v{APP_VERSION}
-          </Text>
-        </ScrollView>
-      </TopoBackground>
-    );
-  }
+    setLoading(true);
+    router.push({
+      pathname: '/create-access-key',
+      params: { email: trimmedEmail, mode: 'signup' },
+    });
+  };
 
   return (
-    <TopoBackground>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.flex}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Animated.View
-            style={[
-              styles.panel,
-              { transform: [{ translateX: shakeAnim }] },
-            ]}
+    <View style={styles.heroScreen}>
+      <LoginHeroBackground />
+      <View style={styles.heroContentLayer}>
+        <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+          <KeyboardAvoidingView
+            style={styles.flex}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
           >
-            {/* Back Button */}
-            <TouchableOpacity
-              style={styles.backBtn}
-              onPress={handleBack}
-              activeOpacity={0.6}
+            <ScrollView
+              contentContainerStyle={[
+                styles.scrollContent,
+                {
+                  paddingTop: insets.top + layoutMetrics.topPadding,
+                  paddingBottom: insets.bottom + layoutMetrics.bottomPadding,
+                  paddingHorizontal: layoutMetrics.horizontalPadding,
+                  justifyContent: layoutMetrics.centerContent ? 'center' : 'flex-start',
+                },
+              ]}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
+              showsVerticalScrollIndicator={false}
             >
-              <Ionicons name="chevron-back" size={20} color={TACTICAL.textMuted} />
-              <Text style={styles.backBtnText}>Back</Text>
-            </TouchableOpacity>
+              <View style={[styles.contentShell, { maxWidth: layoutMetrics.columnMaxWidth }]}>
+                <AuthBrandLockup
+                  title={COPY.title}
+                  supporting={COPY.supporting}
+                  showBrandLabel={false}
+                  animateShield={false}
+                  containerStyle={[styles.brandBlock, { marginBottom: layoutMetrics.brandGap }]}
+                />
 
-            {/* Header Section */}
-            <View style={styles.header}>
-              <View style={styles.iconRow}>
-                <Ionicons name="person-add-outline" size={26} color={TACTICAL.amber} />
-              </View>
-              <Text style={styles.title}>Set up account</Text>
-              <Text style={styles.subtitle}>
-                Enter your email to get started.
-              </Text>
-              <View style={styles.amberDivider} />
-            </View>
-
-            {/* Error Banner */}
-            {error ? (
-              <View style={styles.errorBanner}>
-                <Ionicons name="alert-circle-outline" size={16} color={TACTICAL.danger} />
-                <Text style={styles.errorBannerText}>{error}</Text>
-              </View>
-            ) : null}
-
-            {/* Form */}
-            <View style={styles.form}>
-              <TacticalInput
-                label="Email"
-                value={email}
-                onChangeText={(val) => {
-                  setEmail(val);
-                  setEmailError('');
-                  setError('');
-                }}
-                placeholder="you@example.com"
-                keyboardType="email-address"
-                error={emailError}
-                returnKeyType="done"
-                onSubmitEditing={mode === 'link' ? handleSendLink : handleDirectSetup}
-              />
-
-              {/* Mode Toggle */}
-              <View style={styles.modeToggle}>
-                <TouchableOpacity
-                  style={[styles.modeBtn, mode === 'link' && styles.modeBtnActive]}
-                  onPress={() => setMode('link')}
-                  activeOpacity={0.7}
+                <AuthFormSurface
+                  showCornerAccents={false}
+                  style={[styles.panel, { maxWidth: layoutMetrics.columnMaxWidth }]}
                 >
-                  <Ionicons
-                    name="mail-outline"
-                    size={14}
-                    color={mode === 'link' ? TACTICAL.text : TACTICAL.textMuted}
-                  />
-                  <Text style={[styles.modeBtnText, mode === 'link' && styles.modeBtnTextActive]}>
-                    Email link
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modeBtn, mode === 'direct' && styles.modeBtnActive]}
-                  onPress={() => setMode('direct')}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons
-                    name="flash-outline"
-                    size={14}
-                    color={mode === 'direct' ? TACTICAL.text : TACTICAL.textMuted}
-                  />
-                  <Text style={[styles.modeBtnText, mode === 'direct' && styles.modeBtnTextActive]}>
-                    Direct setup
-                  </Text>
-                </TouchableOpacity>
-              </View>
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>{COPY.emailLabel}</Text>
+                    <View
+                      style={[
+                        styles.inputShell,
+                        focused ? styles.inputShellFocused : null,
+                        emailError ? styles.inputShellError : null,
+                      ]}
+                    >
+                      <TextInput
+                        value={email}
+                        onChangeText={setEmail}
+                        onFocus={() => setFocused(true)}
+                        onBlur={() => {
+                          setFocused(false);
+                          setTouched(true);
+                        }}
+                        placeholder={COPY.emailPlaceholder}
+                        placeholderTextColor="rgba(139,148,158,0.62)"
+                        style={styles.input}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        autoComplete="email"
+                        textContentType="emailAddress"
+                        keyboardType="email-address"
+                        returnKeyType="go"
+                        onSubmitEditing={() => void handleContinue()}
+                        editable={!loading}
+                      />
+                    </View>
+                    <View style={styles.fieldFeedbackSlot}>
+                      {!!emailError && <Text style={styles.inlineError}>{emailError}</Text>}
+                    </View>
+                  </View>
 
-              {mode === 'link' ? (
-                <>
-                  {/* Send Setup Link Button */}
                   <TouchableOpacity
-                    style={[
-                      styles.primaryBtn,
-                      (!isFormValid || loading) && styles.primaryBtnDisabled,
-                    ]}
-                    onPress={handleSendLink}
-                    disabled={!isFormValid || loading}
-                    activeOpacity={0.7}
+                    style={[styles.primaryButton, disabled ? styles.primaryButtonDisabled : null]}
+                    activeOpacity={0.86}
+                    disabled={disabled}
+                    onPress={() => void handleContinue()}
                   >
                     {loading ? (
-                      <View style={styles.loadingRow}>
-                        <ActivityIndicator size="small" color="#0B0F12" />
-                        <Text style={styles.primaryBtnText}>Sending...</Text>
+                      <View style={styles.primaryButtonContent}>
+                        <ActivityIndicator size="small" color={ECS.bgPrimary} />
+                        <Text style={styles.primaryButtonText}>{COPY.loading}</Text>
                       </View>
                     ) : (
-                      <View style={styles.loadingRow}>
-                        <Ionicons name="send" size={16} color="#0B0F12" />
-                        <Text style={styles.primaryBtnText}>Send setup link</Text>
-                      </View>
+                      <Text style={styles.primaryButtonText}>{COPY.primary}</Text>
                     )}
                   </TouchableOpacity>
 
-                  <Text style={styles.infoText}>
-                    A secure link will be sent to your email.
-                    Click it to set up your password.
-                  </Text>
-                </>
-              ) : (
-                <>
-                  {/* Direct Setup Button */}
-                  <TouchableOpacity
-                    style={[
-                      styles.primaryBtn,
-                      !isFormValid && styles.primaryBtnDisabled,
-                    ]}
-                    onPress={handleDirectSetup}
-                    disabled={!isFormValid}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.loadingRow}>
-                      <Ionicons name="arrow-forward" size={18} color="#0B0F12" />
-                      <Text style={styles.primaryBtnText}>Continue</Text>
+                  <View style={styles.secondaryRow}>
+                    <TouchableOpacity activeOpacity={0.72} onPress={handleBack}>
+                      <Text style={styles.secondaryAction}>{COPY.back}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {!!supportMessage && (
+                    <View style={styles.messageRow}>
+                      <AuthStatusBanner text={supportMessage} />
                     </View>
-                  </TouchableOpacity>
-
-                  <Text style={styles.infoText}>
-                    Create your account and password directly.
-                    A verification email will be sent to confirm your identity.
-                  </Text>
-                </>
-              )}
-            </View>
-          </Animated.View>
-
-          {/* Footer */}
-          <Text style={styles.footer}>
-            Secure connection  {'\u2022'}  ECS v{APP_VERSION}
-          </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </TopoBackground>
+                  )}
+                </AuthFormSurface>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
+  flex: { flex: 1 },
+  heroScreen: { flex: 1, backgroundColor: '#040608' },
+  heroContentLayer: { ...StyleSheet.absoluteFillObject },
   scrollContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+  },
+  contentShell: {
+    width: '100%',
+    alignSelf: 'center',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 40,
+  },
+  brandBlock: {
+    marginBottom: AUTH_VISUAL_SPEC.spacing.brandGap.standardPhone,
   },
   panel: {
     width: '100%',
-    maxWidth: 480,
-    backgroundColor: TACTICAL.panel,
-    borderRadius: TACTICAL.radius,
-    borderWidth: 1,
-    borderColor: TACTICAL.border,
-    overflow: 'hidden',
   },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 4,
+  fieldBlock: {
+    marginBottom: AUTH_SURFACE.fieldGap,
   },
-  backBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-  },
-  header: {
-    alignItems: 'center',
-    paddingTop: 16,
-    paddingBottom: 24,
-    paddingHorizontal: 24,
-  },
-  iconRow: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(196, 138, 44, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  successIconRow: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(62, 107, 62, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(62, 107, 62, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
+  fieldLabel: {
+    marginBottom: AUTH_SURFACE.fieldLabelGap,
+    fontSize: AUTH_VISUAL_SPEC.typography.fieldLabel.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.fieldLabel.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.fieldLabel.fontWeight,
     color: TACTICAL.text,
-    textAlign: 'center',
-    letterSpacing: 0.3,
-    lineHeight: 30,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.fieldLabel.letterSpacing,
   },
-  subtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-    marginTop: 10,
-    textAlign: 'center',
-    lineHeight: 18,
+  inputShell: {
+    minHeight: AUTH_SURFACE.inputMinHeight,
+    borderRadius: AUTH_SURFACE.inputRadius,
+    borderWidth: 1,
+    borderColor: AUTH_SURFACE.inputBorder,
+    backgroundColor: AUTH_SURFACE.inputBackground,
+    paddingHorizontal: AUTH_SURFACE.inputPaddingX,
+    justifyContent: 'center',
   },
-  amberDivider: {
-    width: 60,
-    height: 2,
+  inputShellFocused: {
+    borderColor: AUTH_SURFACE.inputFocusedBorder,
+    backgroundColor: AUTH_SURFACE.inputFocusedBackground,
+  },
+  inputShellError: {
+    borderColor: AUTH_SURFACE.inputErrorBorder,
+  },
+  input: {
+    fontSize: AUTH_VISUAL_SPEC.typography.inputText.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.inputText.lineHeight,
+    color: TACTICAL.text,
+    paddingVertical: AUTH_VISUAL_SPEC.spacing.inputTextPaddingY,
+  },
+  inlineError: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.feedbackGap,
+    paddingLeft: 2,
+    fontSize: AUTH_VISUAL_SPEC.typography.inlineError.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.inlineError.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.inlineError.fontWeight,
+    color: '#E2A29A',
+  },
+  fieldFeedbackSlot: {
+    minHeight: AUTH_VISUAL_SPEC.spacing.feedbackSlotMinHeight,
+  },
+  primaryButton: {
+    minHeight: AUTH_SURFACE.primaryHeight,
+    marginTop: AUTH_VISUAL_SPEC.spacing.primaryButtonMarginTop,
+    borderRadius: AUTH_SURFACE.primaryRadius,
     backgroundColor: TACTICAL.amber,
-    marginTop: 16,
-    borderRadius: 1,
+    borderWidth: 1,
+    borderColor: AUTH_SURFACE.primaryBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: AUTH_SURFACE.primaryShadowColor,
+    shadowOffset: AUTH_SURFACE.primaryShadowOffset,
+    shadowOpacity: AUTH_SURFACE.primaryShadowOpacity,
+    shadowRadius: AUTH_SURFACE.primaryShadowRadius,
+    elevation: AUTH_SURFACE.primaryElevation,
   },
-  errorBanner: {
+  primaryButtonDisabled: {
+    opacity: 0.46,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  primaryButtonContent: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(229, 115, 115, 0.08)',
+  },
+  primaryButtonText: {
+    fontSize: AUTH_VISUAL_SPEC.typography.primaryButton.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.primaryButton.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.primaryButton.fontWeight,
+    color: AUTH_SURFACE.primaryText,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.primaryButton.letterSpacing,
+  },
+  secondaryRow: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.secondaryRowMarginTop,
+    paddingTop: AUTH_VISUAL_SPEC.spacing.secondaryRowPaddingTop,
     borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: 'rgba(229, 115, 115, 0.2)',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-  },
-  errorBannerText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#E57373',
-    letterSpacing: 0.2,
-    flex: 1,
-    lineHeight: 18,
-  },
-  form: {
-    paddingHorizontal: 24,
-    paddingBottom: 28,
-    paddingTop: 8,
-  },
-  modeToggle: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 20,
-  },
-  modeBtn: {
-    flex: 1,
+    borderTopColor: AUTH_SURFACE.divider,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.3)',
-    backgroundColor: 'transparent',
   },
-  modeBtnActive: {
-    backgroundColor: TACTICAL.accent,
-    borderColor: TACTICAL.accent,
-  },
-  modeBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
+  secondaryAction: {
+    fontSize: AUTH_VISUAL_SPEC.typography.secondaryAction.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.secondaryAction.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.secondaryAction.fontWeight,
     color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
   },
-  modeBtnTextActive: {
-    color: TACTICAL.text,
-  },
-  primaryBtn: {
-    backgroundColor: TACTICAL.amber,
-    borderRadius: 10,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  primaryBtnDisabled: {
-    opacity: 0.45,
-  },
-  primaryBtnText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0B0F12',
-    letterSpacing: 0.3,
-  },
-  loadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  successBox: {
-    backgroundColor: 'rgba(62, 107, 62, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(62, 107, 62, 0.3)',
-    borderRadius: 10,
-    padding: 24,
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  successTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: TACTICAL.successText,
-    letterSpacing: 0.3,
-  },
-  successDetail: {
-    fontSize: 13,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  successNote: {
-    fontSize: 12,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 17,
-    opacity: 0.7,
-    marginTop: 4,
-  },
-  emailHighlight: {
-    color: TACTICAL.amber,
-    fontWeight: '700',
-  },
-  resendLink: {
-    alignItems: 'center',
-    paddingVertical: 14,
-  },
-  resendLinkText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.2,
-  },
-  infoText: {
-    fontSize: 12,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    marginTop: 16,
-    lineHeight: 17,
-    opacity: 0.7,
-  },
-  footer: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
-    textAlign: 'center',
-    marginTop: 28,
-    opacity: 0.4,
+  messageRow: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.messageRowMarginTop,
   },
 });
-
-
-
-

@@ -1,636 +1,700 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
+  ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Animated,
-  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { SafeIcon as Ionicons } from '../components/SafeIcon';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
-import { TACTICAL } from '../lib/theme';
+import AdaptiveBackground from '../components/login/AdaptiveBackground';
+import AuthBrandLockup from '../components/login/AuthBrandLockup';
+import AuthFooterStack from '../components/login/AuthFooterStack';
+import AuthFormSurface from '../components/login/AuthFormSurface';
+import AuthStatusBanner from '../components/login/AuthStatusBanner';
+import PasswordVisibilityToggle from '../components/login/PasswordVisibilityToggle';
+import { SafeIcon as Ionicons } from '../components/SafeIcon';
+import { AUTH_COPY } from '../lib/auth/authCopy';
+import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
+import { AUTH_SURFACE } from '../lib/auth/authSurface';
+import { AUTH_VISUAL_SPEC } from '../lib/auth/authVisualSpec';
+import { ECS, TACTICAL } from '../lib/theme';
 import { useApp } from '../context/AppContext';
-import TopoBackground from '../components/TopoBackground';
-import TacticalInput from '../components/TacticalInput';
 
 const APP_VERSION = '2.4.0';
 
-interface ValidationRule {
-  label: string;
-  test: (val: string) => boolean;
-}
+const RULES = [
+  { label: 'At least 10 characters', test: (value: string) => value.length >= 10 },
+  { label: 'Upper and lowercase letters', test: (value: string) => /[a-z]/.test(value) && /[A-Z]/.test(value) },
+  { label: 'At least one number', test: (value: string) => /\d/.test(value) },
+  { label: 'At least one symbol', test: (value: string) => /[^a-zA-Z0-9]/.test(value) },
+] as const;
 
-const RULES: ValidationRule[] = [
-  { label: 'At least 10 characters', test: (v) => v.length >= 10 },
-  { label: 'Upper and lowercase letters', test: (v) => /[a-z]/.test(v) && /[A-Z]/.test(v) },
-  { label: 'At least one number', test: (v) => /\d/.test(v) },
-  { label: 'At least one symbol', test: (v) => /[^a-zA-Z0-9]/.test(v) },
-];
+type SetupMode = 'signup' | 'reset' | 'activate';
 
 export default function CreateAccessKeyScreen() {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const router = useRouter();
   const params = useLocalSearchParams<{ email?: string; mode?: string }>();
-  const email = params.email || '';
-  // mode: 'signup' = direct new account creation
-  // mode: 'recovery' or undefined = password update (from email link)
-  const isSignupMode = params.mode === 'signup';
+  const { signUp, signOut, updatePassword, user, authLoading, isOnline } = useApp();
+  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, height), [width, height]);
 
-  const { signUp, updatePassword, user } = useApp();
+  const setupMode: SetupMode =
+    params.mode === 'signup'
+      ? 'signup'
+      : params.mode === 'reset'
+        ? 'reset'
+        : 'activate';
+
+  const email = typeof params.email === 'string' ? params.email : user?.email ?? '';
+  const isSignupMode = setupMode === 'signup';
+  const isResetMode = setupMode === 'reset';
+  const isActivationMode = setupMode === 'activate';
+  const hasCredentialSession = !!user;
+  const verificationPending = !isSignupMode && authLoading;
+  const linkUnavailable = !isSignupMode && !authLoading && !hasCredentialSession && isOnline;
+  const linkVerificationFailed = !isSignupMode && !authLoading && !hasCredentialSession && !isOnline;
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmPasswordRef = useRef<TextInput>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [completionState, setCompletionState] = useState<'idle' | 'signup_success' | 'password_updated'>('idle');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState<'error' | 'success' | 'neutral'>('neutral');
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const rules = useMemo(
+    () => RULES.map((rule) => ({ ...rule, passed: rule.test(password) })),
+    [password],
+  );
+  const allRulesPassed = rules.every((rule) => rule.passed);
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+  const passwordError =
+    submitAttempted && !password
+      ? isSignupMode
+        ? AUTH_COPY.login.missingPassword
+        : isResetMode
+          ? AUTH_COPY.resetPassword.missingPassword
+          : 'Enter a password.'
+      : '';
+  const confirmError = !confirmPassword
+    ? submitAttempted
+      ? isSignupMode
+        ? 'Confirm your password.'
+        : isResetMode
+          ? AUTH_COPY.resetPassword.missingConfirmation
+          : 'Confirm your password.'
+      : ''
+    : !passwordsMatch
+      ? AUTH_COPY.resetPassword.mismatch
+      : '';
 
-  // Detect if user arrived via email recovery link (user is set but no email param)
-  const isRecoveryFlow = !isSignupMode && !!user && !email;
+  const title = isSignupMode
+    ? AUTH_COPY.signup.title
+    : isResetMode
+      ? AUTH_COPY.resetPassword.title
+      : AUTH_COPY.activation.setupTitle;
+  const supporting = isSignupMode
+    ? AUTH_COPY.signup.supporting
+    : isResetMode
+      ? AUTH_COPY.resetPassword.supporting
+      : AUTH_COPY.activation.setupSupporting;
+  const primaryAction = isSignupMode
+    ? AUTH_COPY.signup.primary
+    : isResetMode
+      ? AUTH_COPY.resetPassword.primary
+      : AUTH_COPY.activation.setupPrimary;
+  const loadingAction = isSignupMode
+    ? AUTH_COPY.signup.primaryLoading
+    : isResetMode
+      ? AUTH_COPY.resetPassword.primaryLoading
+      : AUTH_COPY.activation.setupLoading;
 
-  const triggerShake = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 4, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
-  }, [shakeAnim]);
-
-  const ruleResults = useMemo(() => {
-    return RULES.map((rule) => ({
-      ...rule,
-      passed: rule.test(password),
-    }));
-  }, [password]);
-
-  const allRulesPassed = ruleResults.every((r) => r.passed);
-  const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
-  const isFormValid = allRulesPassed && passwordsMatch;
-
-  const confirmError = useMemo(() => {
-    if (confirmPassword.length === 0) return '';
-    if (!passwordsMatch) return "Passwords don't match";
-    return '';
-  }, [confirmPassword, passwordsMatch]);
-
-  const handleActivate = async () => {
-    setError('');
-
-    if (!isFormValid) {
-      triggerShake();
-      return;
-    }
-
-    setLoading(true);
-
-    if (isSignupMode) {
-      // Direct signup flow: create new account with email + password
-      if (!email) {
-        setError('Email is missing. Please go back and enter your email.');
-        setLoading(false);
-        triggerShake();
-        return;
-      }
-
-      const result = await signUp(email, password);
-      setLoading(false);
-
-      if (result.error) {
-        setError(result.error);
-        triggerShake();
-      } else {
-        setSuccess(true);
-      }
-    } else {
-      // Recovery/update flow: update password for authenticated user
-      const result = await updatePassword(password);
-      setLoading(false);
-
-      if (result.error) {
-        setError(result.error);
-        triggerShake();
-      } else {
-        setSuccess(true);
-      }
-    }
-  };
+  const disabled =
+    loading ||
+    verificationPending ||
+    linkUnavailable ||
+    linkVerificationFailed ||
+    !allRulesPassed ||
+    !password ||
+    !confirmPassword ||
+    !passwordsMatch;
 
   const handleBack = () => {
-    router.back();
-  };
-
-  const handleGoToApp = () => {
-    router.replace('/(tabs)/trips');
-  };
-
-  const handleReturnToLogin = () => {
+    Keyboard.dismiss();
     router.replace('/login');
   };
 
-  // Determine display email
-  const displayEmail = email || user?.email || '';
+  const togglePasswordVisibility = () => {
+    setShowPassword((current) => !current);
+    requestAnimationFrame(() => {
+      passwordRef.current?.focus();
+    });
+  };
 
-  // Button label depends on flow
-  const submitLabel = isSignupMode ? 'Create account' : 'Update password';
-  const loadingLabel = isSignupMode ? 'Creating account...' : 'Updating...';
+  const toggleConfirmPasswordVisibility = () => {
+    setShowConfirmPassword((current) => !current);
+    requestAnimationFrame(() => {
+      confirmPasswordRef.current?.focus();
+    });
+  };
 
-  if (success) {
-    return (
-      <TopoBackground>
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.panel}>
-            <View style={styles.header}>
-              <View style={styles.successIconRow}>
-                <Ionicons name="checkmark-circle" size={40} color={TACTICAL.successText} />
-              </View>
-              <Text style={styles.title}>
-                {isSignupMode ? "You're almost there" : "You're all set"}
-              </Text>
-              <View style={styles.amberDivider} />
-            </View>
+  const handleRequestNewLink = () => {
+    Keyboard.dismiss();
+    router.replace({
+      pathname: '/login',
+      params: {
+        mode: 'forgot',
+        ...(email ? { email } : {}),
+      },
+    });
+  };
 
-            <View style={styles.form}>
-              {isSignupMode ? (
-                <View style={styles.successBox}>
-                  <Ionicons name="mail" size={24} color={TACTICAL.successText} />
-                  <Text style={styles.successTitle}>Verification sent</Text>
-                  <Text style={styles.successSubtitle}>
-                    Check your inbox to continue
-                  </Text>
-                  <Text style={styles.successDetail}>
-                    A verification link has been sent to{'\n'}
-                    <Text style={styles.emailHighlight}>{displayEmail}</Text>
-                  </Text>
-                  <Text style={styles.successNote}>
-                    Verify your email, then sign in.
-                  </Text>
-                </View>
-              ) : (
-                <View style={styles.successBox}>
-                  <Ionicons name="shield-checkmark" size={24} color={TACTICAL.successText} />
-                  <Text style={styles.successTitle}>Password updated</Text>
-                  <Text style={styles.successSubtitle}>
-                    Your new password is ready to use
-                  </Text>
-                  {displayEmail ? (
-                    <Text style={styles.successDetail}>
-                      Account: <Text style={styles.emailHighlight}>{displayEmail}</Text>
-                    </Text>
-                  ) : null}
-                </View>
-              )}
+  const handleContinueToSignIn = async () => {
+    Keyboard.dismiss();
+    await signOut();
+    router.replace({
+      pathname: '/login',
+      params: { reason: isActivationMode ? 'access-ready' : 'password-updated' },
+    });
+  };
 
-              {isSignupMode ? (
-                <TouchableOpacity
-                  style={styles.primaryBtn}
-                  onPress={handleReturnToLogin}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.primaryBtnText}>Back to sign in</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.primaryBtn}
-                  onPress={handleGoToApp}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.loadingRow}>
-                    <Ionicons name="arrow-forward" size={16} color="#0B0F12" />
-                    <Text style={styles.primaryBtnText}>Continue to app</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
+  const handleSubmit = async () => {
+    setStatusMessage('');
+    setStatusTone('neutral');
+    setSubmitAttempted(true);
+    if (disabled) return;
 
-          <Text style={styles.footer}>
-            Secure connection  {'\u2022'}  ECS v{APP_VERSION}
+    setLoading(true);
+    const result = isSignupMode ? await signUp(email, password) : await updatePassword(password);
+    setLoading(false);
+
+    if (result.error) {
+      setStatusMessage(
+        isSignupMode
+          ? AUTH_COPY.signup.failure
+          : isResetMode
+            ? AUTH_COPY.resetPassword.failure
+            : AUTH_COPY.activation.setupFailure,
+      );
+      setStatusTone('error');
+      return;
+    }
+
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setSubmitAttempted(false);
+
+    if (isSignupMode) {
+      setCompletionState('signup_success');
+      return;
+    }
+
+    setCompletionState('password_updated');
+  };
+
+  const renderTopSupporting = () => {
+    if (completionState === 'signup_success') {
+      return AUTH_COPY.signup.successLine;
+    }
+    if (completionState === 'password_updated') {
+      return isActivationMode
+        ? AUTH_COPY.activation.successLine
+        : AUTH_COPY.resetPassword.successLine;
+    }
+    if (verificationPending) {
+      return isResetMode
+        ? AUTH_COPY.resetPassword.verifying
+        : AUTH_COPY.activation.verifying;
+    }
+    if (linkUnavailable) {
+      return isResetMode
+        ? AUTH_COPY.resetPassword.invalidLink
+        : AUTH_COPY.activation.invalid;
+    }
+    if (linkVerificationFailed) {
+      return isResetMode
+        ? AUTH_COPY.resetPassword.verifyFailure
+        : AUTH_COPY.activation.verifyFailure;
+    }
+    return supporting;
+  };
+
+  const renderStateBlock = () => {
+    if (verificationPending) {
+      return (
+        <View style={styles.stateBlock}>
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.stateLead}>{isResetMode ? AUTH_COPY.resetPassword.verifying : AUTH_COPY.activation.verifying}</Text>
+          <Text style={styles.stateSupporting}>
+            {isResetMode
+              ? 'Checking password recovery state and preparing a secure return to ECS.'
+              : 'Checking authorized access and preparing first-time ECS setup.'}
           </Text>
-        </ScrollView>
-      </TopoBackground>
-    );
-  }
-
-  return (
-    <TopoBackground>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.flex}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Animated.View
-            style={[
-              styles.panel,
-              { transform: [{ translateX: shakeAnim }] },
-            ]}
-          >
-            {/* Back Button */}
-            <TouchableOpacity
-              style={styles.backBtn}
-              onPress={handleBack}
-              activeOpacity={0.6}
-            >
-              <Ionicons name="chevron-back" size={20} color={TACTICAL.textMuted} />
-              <Text style={styles.backBtnText}>Back</Text>
+          <View style={styles.secondaryRow}>
+            <TouchableOpacity activeOpacity={0.72} onPress={handleBack}>
+                <Text style={styles.secondaryAction}>{AUTH_COPY.forgotPassword.back}</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
 
-            {/* Header */}
-            <View style={styles.header}>
-              <View style={styles.iconRow}>
-                <Ionicons name="lock-closed-outline" size={26} color={TACTICAL.amber} />
-              </View>
-              <Text style={styles.title}>
-                {isSignupMode ? 'Create password' : 'Set new password'}
-              </Text>
-              {displayEmail ? (
-                <Text style={styles.emailLabel}>
-                  <Text style={styles.emailHighlight}>{displayEmail}</Text>
-                </Text>
-              ) : null}
-              {isRecoveryFlow && (
-                <View style={styles.recoveryBadge}>
-                  <Ionicons name="link" size={12} color={TACTICAL.amber} />
-                  <Text style={styles.recoveryBadgeText}>Via email link</Text>
-                </View>
-              )}
-              <View style={styles.amberDivider} />
-            </View>
+    if (completionState === 'signup_success') {
+      return (
+        <View style={styles.stateBlock}>
+          <Text style={styles.stateLead}>{AUTH_COPY.signup.successTitle}</Text>
+          <Text style={styles.stateSupporting}>
+            {AUTH_COPY.signup.successLine}
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            activeOpacity={0.86}
+            onPress={handleBack}
+          >
+            <Text style={styles.primaryButtonText}>{AUTH_COPY.resetPassword.successCta}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
 
-            {/* Error Banner */}
-            {error ? (
-              <View style={styles.errorBanner}>
-                <Ionicons name="alert-circle-outline" size={16} color="#E57373" />
-                <Text style={styles.errorBannerText}>{error}</Text>
-              </View>
-            ) : null}
+    if (completionState === 'password_updated') {
+      return (
+        <View style={styles.stateBlock}>
+          <Text style={styles.stateLead}>{isActivationMode ? AUTH_COPY.activation.successTitle : AUTH_COPY.resetPassword.successTitle}</Text>
+          <Text style={styles.stateSupporting}>
+            {isActivationMode
+              ? AUTH_COPY.activation.successLine
+              : AUTH_COPY.resetPassword.successLine}
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            activeOpacity={0.86}
+            onPress={() => void handleContinueToSignIn()}
+          >
+            <Text style={styles.primaryButtonText}>{AUTH_COPY.resetPassword.successCta}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
 
-            {/* Form */}
-            <View style={styles.form}>
-              <TacticalInput
-                label="Password"
-                value={password}
-                onChangeText={(val) => {
-                  setPassword(val);
-                  setError('');
-                }}
-                placeholder="Create a password"
-                isPassword
-                returnKeyType="next"
-              />
-
-              {/* Validation Checklist */}
-              <View style={styles.checklist}>
-                {ruleResults.map((rule, idx) => (
-                  <View key={idx} style={styles.checkItem}>
-                    <View
-                      style={[
-                        styles.checkIcon,
-                        rule.passed ? styles.checkIconPassed : styles.checkIconFailed,
-                      ]}
-                    >
-                      <Ionicons
-                        name={rule.passed ? 'checkmark' : 'close'}
-                        size={12}
-                        color={rule.passed ? TACTICAL.successText : TACTICAL.textMuted}
-                      />
-                    </View>
-                    <Text
-                      style={[
-                        styles.checkLabel,
-                        rule.passed ? styles.checkLabelPassed : styles.checkLabelFailed,
-                      ]}
-                    >
-                      {rule.label}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-
-              <TacticalInput
-                label="Confirm password"
-                value={confirmPassword}
-                onChangeText={(val) => {
-                  setConfirmPassword(val);
-                  setError('');
-                }}
-                placeholder="Re-enter your password"
-                isPassword
-                error={confirmError}
-                returnKeyType="done"
-                onSubmitEditing={handleActivate}
-              />
-
-              {/* Match indicator */}
-              {confirmPassword.length > 0 && passwordsMatch && (
-                <View style={styles.matchRow}>
-                  <Ionicons name="checkmark-circle" size={14} color={TACTICAL.successText} />
-                  <Text style={styles.matchText}>Passwords match</Text>
-                </View>
-              )}
-
-              {/* Primary Button */}
+    if (linkUnavailable || linkVerificationFailed) {
+      return (
+        <View style={styles.stateBlock}>
+          <Text style={styles.stateLead}>
+            {isResetMode ? 'Reset link unavailable' : 'Activation unavailable'}
+          </Text>
+          <Text style={styles.stateSupporting}>
+            {linkUnavailable
+              ? isResetMode
+                ? AUTH_COPY.resetPassword.invalidLink
+                : AUTH_COPY.activation.invalid
+              : isResetMode
+                ? AUTH_COPY.resetPassword.verifyFailure
+                : AUTH_COPY.activation.verifyFailure}
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            activeOpacity={0.86}
+            onPress={isResetMode && linkUnavailable ? handleRequestNewLink : handleBack}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isResetMode && linkUnavailable ? AUTH_COPY.resetPassword.requestNewLink : AUTH_COPY.forgotPassword.back}
+            </Text>
+          </TouchableOpacity>
+          {isResetMode ? (
+            <View style={styles.secondaryRow}>
               <TouchableOpacity
-                style={[
-                  styles.primaryBtn,
-                  (!isFormValid || loading) && styles.primaryBtnDisabled,
-                ]}
-                onPress={handleActivate}
-                disabled={!isFormValid || loading}
-                activeOpacity={0.7}
+                activeOpacity={0.72}
+                onPress={linkUnavailable ? handleBack : handleRequestNewLink}
               >
-                {loading ? (
-                  <View style={styles.loadingRow}>
-                    <ActivityIndicator size="small" color="#0B0F12" />
-                    <Text style={styles.primaryBtnText}>{loadingLabel}</Text>
-                  </View>
-                ) : (
-                  <View style={styles.loadingRow}>
-                    <Ionicons name="arrow-forward" size={18} color="#0B0F12" />
-                    <Text style={styles.primaryBtnText}>{submitLabel}</Text>
-                  </View>
-                )}
+                <Text style={styles.secondaryAction}>
+                  {linkUnavailable ? AUTH_COPY.forgotPassword.back : AUTH_COPY.resetPassword.requestNewLink}
+                </Text>
               </TouchableOpacity>
             </View>
-          </Animated.View>
+          ) : null}
+        </View>
+      );
+    }
 
-          {/* Footer */}
-          <Text style={styles.footer}>
-            Secure connection  {'\u2022'}  ECS v{APP_VERSION}
+    return (
+      <>
+        <View style={styles.fieldBlock}>
+          <Text style={styles.fieldLabel}>
+            {isSignupMode
+              ? AUTH_COPY.login.passwordLabel
+              : isResetMode
+              ? AUTH_COPY.resetPassword.passwordLabel
+              : AUTH_COPY.login.passwordLabel}
           </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </TopoBackground>
+          <View style={[styles.inputShell, passwordError ? styles.inputShellError : null]}>
+            <TextInput
+              ref={passwordRef}
+              value={password}
+              onChangeText={setPassword}
+              placeholder={isResetMode ? AUTH_COPY.resetPassword.passwordPlaceholder : AUTH_COPY.login.passwordPlaceholder}
+              placeholderTextColor="rgba(139,148,158,0.62)"
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              secureTextEntry={!showPassword}
+              autoComplete="new-password"
+              textContentType="newPassword"
+              importantForAutofill="yes"
+              keyboardAppearance="dark"
+              enablesReturnKeyAutomatically
+              selectionColor={TACTICAL.amber}
+              cursorColor={TACTICAL.amber}
+              returnKeyType="next"
+              onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+            />
+            <PasswordVisibilityToggle
+              visible={showPassword}
+              onPress={togglePasswordVisibility}
+              style={styles.trailingAction}
+              textStyle={styles.trailingActionText}
+            />
+          </View>
+          <View style={styles.fieldFeedbackSlot}>
+            {!!passwordError && <Text style={styles.inlineError}>{passwordError}</Text>}
+          </View>
+        </View>
+
+        <View style={styles.rulesCard}>
+          {rules.map((rule) => (
+            <View key={rule.label} style={styles.ruleRow}>
+              <Ionicons
+                name={rule.passed ? 'checkmark-circle-outline' : 'ellipse-outline'}
+                size={14}
+                color={rule.passed ? TACTICAL.amber : TACTICAL.textMuted}
+              />
+              <Text style={[styles.ruleText, rule.passed ? styles.ruleTextPassed : null]}>
+                {rule.label}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.fieldBlock}>
+          <Text style={styles.fieldLabel}>{AUTH_COPY.resetPassword.confirmLabel}</Text>
+          <View style={[styles.inputShell, confirmError ? styles.inputShellError : null]}>
+            <TextInput
+              ref={confirmPasswordRef}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder={
+                isResetMode
+                  ? AUTH_COPY.resetPassword.confirmPlaceholder
+                  : AUTH_COPY.resetPassword.confirmLabel
+              }
+              placeholderTextColor="rgba(139,148,158,0.62)"
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              secureTextEntry={!showConfirmPassword}
+              autoComplete="new-password"
+              textContentType="newPassword"
+              importantForAutofill="yes"
+              keyboardAppearance="dark"
+              enablesReturnKeyAutomatically
+              selectionColor={TACTICAL.amber}
+              cursorColor={TACTICAL.amber}
+              returnKeyType="go"
+              onSubmitEditing={() => void handleSubmit()}
+            />
+            <PasswordVisibilityToggle
+              visible={showConfirmPassword}
+              onPress={toggleConfirmPasswordVisibility}
+              style={styles.trailingAction}
+              textStyle={styles.trailingActionText}
+            />
+          </View>
+          <View style={styles.fieldFeedbackSlot}>
+            {!!confirmError && <Text style={styles.inlineError}>{confirmError}</Text>}
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.primaryButton, disabled ? styles.primaryButtonDisabled : null]}
+          activeOpacity={0.86}
+          disabled={disabled}
+          onPress={() => void handleSubmit()}
+        >
+          {loading ? (
+            <View style={styles.primaryButtonContent}>
+              <ActivityIndicator size="small" color={ECS.bgPrimary} />
+              <Text style={styles.primaryButtonText}>{loadingAction}</Text>
+            </View>
+          ) : (
+            <Text style={styles.primaryButtonText}>{primaryAction}</Text>
+          )}
+        </TouchableOpacity>
+
+        <View style={styles.secondaryRow}>
+          <TouchableOpacity activeOpacity={0.72} onPress={handleBack}>
+            <Text style={styles.secondaryAction}>{AUTH_COPY.forgotPassword.back}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {!!statusMessage && (
+          <View
+            style={[
+              styles.messageRow,
+            ]}
+          >
+            <AuthStatusBanner text={statusMessage} tone={statusTone} />
+          </View>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <AdaptiveBackground>
+      <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+        >
+          <ScrollView
+            contentContainerStyle={[
+              styles.scrollContent,
+              {
+                paddingTop: insets.top + layoutMetrics.topPadding,
+                paddingBottom: insets.bottom + layoutMetrics.bottomPadding,
+                paddingHorizontal: layoutMetrics.horizontalPadding,
+                justifyContent: layoutMetrics.centerContent ? 'center' : 'flex-start',
+              },
+            ]}
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={[styles.contentShell, { maxWidth: layoutMetrics.columnMaxWidth }]}>
+              <View style={[styles.brandBlock, { marginBottom: layoutMetrics.brandGap }]}>
+                <AuthBrandLockup
+                  title={
+                    completionState === 'signup_success'
+                      ? AUTH_COPY.signup.successTitle
+                      : completionState === 'password_updated'
+                        ? isActivationMode
+                          ? AUTH_COPY.activation.successTitle
+                          : AUTH_COPY.resetPassword.successTitle
+                        : verificationPending || linkUnavailable || linkVerificationFailed
+                          ? isResetMode
+                            ? AUTH_COPY.forgotPassword.title
+                            : AUTH_COPY.activation.title
+                          : title
+                  }
+                  supporting={renderTopSupporting()}
+                />
+                {!!email && <Text style={styles.emailBadge}>{email}</Text>}
+              </View>
+
+              <AuthFormSurface style={[styles.panel, { maxWidth: layoutMetrics.columnMaxWidth }]}>
+                {renderStateBlock()}
+              </AuthFormSurface>
+
+              <AuthFooterStack
+                version={APP_VERSION}
+                containerStyle={[
+                  styles.footerBlock,
+                  { marginTop: layoutMetrics.footerGap, maxWidth: layoutMetrics.footerMaxWidth },
+                ]}
+              />
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Pressable>
+    </AdaptiveBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
+  flex: { flex: 1 },
   scrollContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+  },
+  contentShell: {
+    width: '100%',
+    alignSelf: 'center',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 40,
+  },
+  brandBlock: {
+    marginBottom: AUTH_VISUAL_SPEC.spacing.brandGap.standardPhone,
+  },
+  footerBlock: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.footerGap.standardPhone,
+  },
+  emailBadge: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.emailBadgeMarginTop,
+    fontSize: AUTH_VISUAL_SPEC.typography.emailBadge.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.emailBadge.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.emailBadge.fontWeight,
+    color: TACTICAL.amber,
   },
   panel: {
     width: '100%',
-    maxWidth: 480,
-    backgroundColor: TACTICAL.panel,
-    borderRadius: TACTICAL.radius,
-    borderWidth: 1,
-    borderColor: TACTICAL.border,
-    overflow: 'hidden',
   },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 4,
+  fieldBlock: {
+    marginBottom: AUTH_SURFACE.fieldGap,
   },
-  backBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-  },
-  header: {
-    alignItems: 'center',
-    paddingTop: 16,
-    paddingBottom: 24,
-    paddingHorizontal: 24,
-  },
-  iconRow: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(196, 138, 44, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  successIconRow: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(62, 107, 62, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(62, 107, 62, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
+  fieldLabel: {
+    marginBottom: AUTH_SURFACE.fieldLabelGap,
+    fontSize: AUTH_VISUAL_SPEC.typography.fieldLabel.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.fieldLabel.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.fieldLabel.fontWeight,
     color: TACTICAL.text,
-    textAlign: 'center',
-    letterSpacing: 0.3,
-    lineHeight: 30,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.fieldLabel.letterSpacing,
   },
-  emailLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-    marginTop: 10,
-  },
-  emailHighlight: {
-    color: TACTICAL.amber,
-    fontWeight: '600',
-  },
-  recoveryBadge: {
+  inputShell: {
+    minHeight: AUTH_SURFACE.inputMinHeight,
+    borderRadius: AUTH_SURFACE.inputRadius,
+    borderWidth: 1,
+    borderColor: AUTH_SURFACE.inputBorder,
+    backgroundColor: AUTH_SURFACE.inputBackground,
+    paddingHorizontal: AUTH_SURFACE.inputPaddingX,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 10,
-    backgroundColor: 'rgba(196, 138, 44, 0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
+  },
+  inputShellError: {
+    borderColor: AUTH_SURFACE.inputErrorBorder,
+  },
+  input: {
+    flex: 1,
+    fontSize: AUTH_VISUAL_SPEC.typography.inputText.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.inputText.lineHeight,
+    color: TACTICAL.text,
+    paddingVertical: AUTH_VISUAL_SPEC.spacing.inputTextPaddingY,
+  },
+  trailingAction: {},
+  trailingActionText: {
+  },
+  rulesCard: {
+    borderRadius: AUTH_SURFACE.subSurfaceRadius,
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 44, 0.25)',
+    borderColor: AUTH_SURFACE.subSurfaceBorder,
+    backgroundColor: AUTH_SURFACE.subSurfaceBackground,
+    paddingHorizontal: AUTH_SURFACE.inputPaddingX,
+    paddingVertical: AUTH_VISUAL_SPEC.spacing.rulesCardPaddingY,
+    marginBottom: AUTH_SURFACE.fieldGap,
+    gap: AUTH_VISUAL_SPEC.spacing.rulesCardGap,
   },
-  recoveryBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.3,
-  },
-  amberDivider: {
-    width: 60,
-    height: 2,
-    backgroundColor: TACTICAL.amber,
-    marginTop: 16,
-    borderRadius: 1,
-  },
-  errorBanner: {
+  ruleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(229, 115, 115, 0.08)',
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: 'rgba(229, 115, 115, 0.2)',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
   },
-  errorBannerText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#E57373',
-    letterSpacing: 0.2,
-    flex: 1,
-    lineHeight: 18,
-  },
-  form: {
-    paddingHorizontal: 24,
-    paddingBottom: 28,
-    paddingTop: 8,
-  },
-  checklist: {
-    backgroundColor: 'rgba(11, 15, 18, 0.5)',
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 24,
-    gap: 10,
-  },
-  checkItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  checkIcon: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  checkIconPassed: {
-    backgroundColor: 'rgba(62, 107, 62, 0.25)',
-    borderColor: TACTICAL.successText,
-  },
-  checkIconFailed: {
-    backgroundColor: 'rgba(138, 138, 133, 0.1)',
-    borderColor: 'rgba(138, 138, 133, 0.3)',
-  },
-  checkLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-    letterSpacing: 0.2,
-  },
-  checkLabelPassed: {
-    color: TACTICAL.successText,
-  },
-  checkLabelFailed: {
+  ruleText: {
+    fontSize: AUTH_VISUAL_SPEC.typography.ruleText.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.ruleText.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.ruleText.fontWeight,
     color: TACTICAL.textMuted,
   },
-  matchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: -16,
-    marginBottom: 16,
+  ruleTextPassed: {
+    color: TACTICAL.amber,
   },
-  matchText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: TACTICAL.successText,
-    letterSpacing: 0.2,
+  inlineError: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.feedbackGap,
+    paddingLeft: 2,
+    fontSize: AUTH_VISUAL_SPEC.typography.inlineError.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.inlineError.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.inlineError.fontWeight,
+    color: '#E2A29A',
   },
-  primaryBtn: {
+  fieldFeedbackSlot: {
+    minHeight: AUTH_VISUAL_SPEC.spacing.feedbackSlotMinHeight,
+  },
+  primaryButton: {
+    minHeight: AUTH_SURFACE.primaryHeight,
+    marginTop: AUTH_VISUAL_SPEC.spacing.primaryButtonMarginTop,
+    borderRadius: AUTH_SURFACE.primaryRadius,
     backgroundColor: TACTICAL.amber,
-    borderRadius: 10,
-    paddingVertical: 15,
+    borderWidth: 1,
+    borderColor: AUTH_SURFACE.primaryBorder,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    shadowColor: AUTH_SURFACE.primaryShadowColor,
+    shadowOffset: AUTH_SURFACE.primaryShadowOffset,
+    shadowOpacity: AUTH_SURFACE.primaryShadowOpacity,
+    shadowRadius: AUTH_SURFACE.primaryShadowRadius,
+    elevation: AUTH_SURFACE.primaryElevation,
+    alignSelf: 'stretch',
   },
-  primaryBtnDisabled: {
-    opacity: 0.45,
+  primaryButtonDisabled: {
+    opacity: 0.46,
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  primaryBtnText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0B0F12',
-    letterSpacing: 0.3,
-  },
-  loadingRow: {
+  primaryButtonContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
-  successBox: {
-    backgroundColor: 'rgba(62, 107, 62, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(62, 107, 62, 0.3)',
-    borderRadius: 10,
-    padding: 24,
+  primaryButtonText: {
+    fontSize: AUTH_VISUAL_SPEC.typography.primaryButton.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.primaryButton.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.primaryButton.fontWeight,
+    color: AUTH_SURFACE.primaryText,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.primaryButton.letterSpacing,
+  },
+  secondaryRow: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.secondaryRowMarginTop,
+    paddingTop: AUTH_VISUAL_SPEC.spacing.secondaryRowPaddingTop,
+    borderTopWidth: 1,
+    borderTopColor: AUTH_SURFACE.divider,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 20,
+    justifyContent: 'center',
   },
-  successTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: TACTICAL.successText,
-    letterSpacing: 0.3,
-  },
-  successSubtitle: {
-    fontSize: 13,
-    fontWeight: '500',
+  secondaryAction: {
+    fontSize: AUTH_VISUAL_SPEC.typography.secondaryAction.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.secondaryAction.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.secondaryAction.fontWeight,
     color: TACTICAL.textMuted,
-    letterSpacing: 0.2,
-    textAlign: 'center',
   },
-  successDetail: {
-    fontSize: 13,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginTop: 4,
+  stateBlock: {
+    alignItems: 'center',
+    gap: AUTH_VISUAL_SPEC.spacing.stateBlockGap,
+    paddingVertical: AUTH_VISUAL_SPEC.spacing.stateBlockPaddingY,
   },
-  successNote: {
-    fontSize: 12,
-    color: TACTICAL.textMuted,
+  stateLead: {
+    fontSize: AUTH_VISUAL_SPEC.typography.stateLead.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.stateLead.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.stateLead.fontWeight,
     textAlign: 'center',
-    lineHeight: 17,
-    opacity: 0.7,
-    marginTop: 4,
+    color: TACTICAL.text,
+    letterSpacing: AUTH_VISUAL_SPEC.typography.stateLead.letterSpacing,
   },
-  footer: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.5,
+  stateSupporting: {
+    maxWidth: AUTH_VISUAL_SPEC.state.supportingMaxWidth,
+    fontSize: AUTH_VISUAL_SPEC.typography.stateSupporting.fontSize,
+    lineHeight: AUTH_VISUAL_SPEC.typography.stateSupporting.lineHeight,
+    fontWeight: AUTH_VISUAL_SPEC.typography.stateSupporting.fontWeight,
     textAlign: 'center',
-    marginTop: 28,
-    opacity: 0.4,
+    color: TACTICAL.textMuted,
+  },
+  messageRow: {
+    marginTop: AUTH_VISUAL_SPEC.spacing.messageRowMarginTop,
   },
 });
-
-
-
-

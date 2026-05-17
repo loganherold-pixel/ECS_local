@@ -95,7 +95,7 @@ export default function PreLaunchTelemetry({
     );
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [scanAnim]);
 
   const scanTranslate = scanAnim.interpolate({
     inputRange: [0, 1],
@@ -206,12 +206,12 @@ export default function PreLaunchTelemetry({
         <Text style={styles.navControlsTitle}>QUICK ACCESS</Text>
         <View style={styles.navControlsRow}>
           {[
-            { icon: 'navigate-outline', label: 'NAV', route: '/(tabs)/navigate', color: '#4FC3F7' },
+            { icon: 'navigate-outline', label: 'NAV', route: '/navigate', color: '#4FC3F7' },
             { icon: 'map-outline', label: 'ROUTE', route: '/(tabs)/route', color: TACTICAL.amber },
-            { icon: 'cube-outline', label: 'LOADOUT', route: '/(tabs)/fleet', color: '#7C4DFF' },
+            { icon: 'cube-outline', label: 'LOADOUT', route: '/fleet', color: '#7C4DFF' },
 
             { icon: 'car-sport-outline', label: 'VEHICLE', route: '/(tabs)/vehicle-config', color: '#FF9500' },
-            { icon: 'cloud-outline', label: 'WEATHER', route: '/(tabs)/alert', color: '#4CAF50' },
+            { icon: 'cloud-outline', label: 'WEATHER', route: '/alert', color: '#4CAF50' },
 
           ].map((nav) => (
             <TouchableOpacity

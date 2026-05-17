@@ -39,12 +39,15 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { MOTION, EASING } from '../../lib/motion';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 import { useTheme } from '../../context/ThemeContext';
 import { useApp } from '../../context/AppContext';
 import {
   vehicleSpecStore,
   VEHICLE_SPEC_PRESETS,
+  getVehiclePresetId,
+  resolveVehicleSpecPreset,
   type VehicleSpec,
   type VehicleSpecPreset,
   type FuelType,
@@ -54,17 +57,26 @@ import { setupStore } from '../../lib/setupStore';
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import AccessoryConfigStep, {
   getDefaultAccessorySelections,
+  normalizeAccessorySelections,
   type AccessorySelections,
 } from '../vehicle-wizard/AccessoryConfigStep';
 import {
   buildAccessoryFramework,
   generateContainerZonesFromAccessories,
+  normalizeAccessoryFramework,
+  sanitizeContainerZones,
 } from '../../lib/accessoryFramework';
 import {
   generateContainerAllocations,
   allocationsToZonePayload,
   getTotalSlots,
 } from '../../lib/accessoryContainerMapping';
+
+function logSetupTakeoverDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 // ── Step definitions (2-step + intercept) ───────────────
 type TakeoverStep = 'intercept' | 'vehicle-spec' | 'accessories';
@@ -114,13 +126,14 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
           const vAny = v as any;
 
           // Check accessoryFramework (has at least one enabled entry)
-          if (vAny.accessoryFramework && typeof vAny.accessoryFramework === 'object') {
-            const hasEnabled = Object.values(vAny.accessoryFramework).some(
+          const normalizedFramework = normalizeAccessoryFramework(vAny.accessoryFramework);
+          if (normalizedFramework) {
+            const hasEnabled = Object.values(normalizedFramework).some(
               (entry: any) => entry && entry.enabled
             );
             if (hasEnabled) {
               autoDismissedRef.current = true;
-              console.log('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has accessoryFramework');
+              logSetupTakeoverDev('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has accessoryFramework');
               setupStore.markComplete(v.id);
               vehicleSetupStore.setActiveVehicleId(v.id);
               if (!cancelled) onComplete(v.id);
@@ -129,9 +142,9 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
           }
 
           // Check containerZones (non-empty array)
-          if (Array.isArray(vAny.containerZones) && vAny.containerZones.length > 0) {
+          if (sanitizeContainerZones(vAny.containerZones).length > 0) {
             autoDismissedRef.current = true;
-            console.log('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has containerZones');
+            logSetupTakeoverDev('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has containerZones');
             setupStore.markComplete(v.id);
             vehicleSetupStore.setActiveVehicleId(v.id);
             if (!cancelled) onComplete(v.id);
@@ -142,7 +155,7 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
           const spec = vehicleSpecStore.get(v.id);
           if (spec && spec.gvwr_lb > 0 && spec.base_weight_lb > 0) {
             autoDismissedRef.current = true;
-            console.log('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has valid vehicleSpec');
+            logSetupTakeoverDev('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has valid vehicleSpec');
             setupStore.markComplete(v.id);
             vehicleSetupStore.setActiveVehicleId(v.id);
             if (!cancelled) onComplete(v.id);
@@ -152,7 +165,7 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
           // Check wizard_config (legacy setup indicator)
           if (vAny.wizard_config && typeof vAny.wizard_config === 'object') {
             autoDismissedRef.current = true;
-            console.log('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has wizard_config');
+            logSetupTakeoverDev('[SetupTakeover] Auto-dismiss: vehicle', v.id, 'has wizard_config');
             setupStore.markComplete(v.id);
             vehicleSetupStore.setActiveVehicleId(v.id);
             if (!cancelled) onComplete(v.id);
@@ -170,8 +183,8 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
 
 
   // ── Animation ─────────────────────────────────────────
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useStableAnimatedValue(1);
+  const slideAnim = useStableAnimatedValue(0);
 
   // ── Vehicle Spec State ────────────────────────────────
   const [gvwr, setGvwr] = useState('');
@@ -204,6 +217,28 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
     if (!selectedPresetCategory) return [];
     return VEHICLE_SPEC_PRESETS[selectedPresetCategory] || [];
   }, [selectedPresetCategory]);
+
+  const applyResolvedPreset = useCallback((preset: VehicleSpecPreset, nextFuelType?: FuelType | null) => {
+    const resolvedSpec = resolveVehicleSpecPreset(preset, nextFuelType);
+    setGvwr(String(resolvedSpec.gvwr_lb));
+    setBaseWeight(String(resolvedSpec.base_weight_lb));
+    setFuelCapacity(String(resolvedSpec.fuel_tank_capacity_gal));
+    setFuelType(resolvedSpec.fuel_type);
+    setGvwrError('');
+    setBaseWeightError('');
+  }, []);
+
+  const handleFuelTypeChange = useCallback((nextFuelType: FuelType) => {
+    setFuelType(nextFuelType);
+    if (!selectedPreset) return;
+
+    const resolvedSpec = resolveVehicleSpecPreset(selectedPreset, nextFuelType);
+    setGvwr(String(resolvedSpec.gvwr_lb));
+    setBaseWeight(String(resolvedSpec.base_weight_lb));
+    setFuelCapacity(String(resolvedSpec.fuel_tank_capacity_gal));
+    setGvwrError('');
+    setBaseWeightError('');
+  }, [selectedPreset]);
 
   // ── Step transition animation ─────────────────────────
   const animateToStep = useCallback((newStep: TakeoverStep) => {
@@ -244,13 +279,8 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
   // ── Apply preset ──────────────────────────────────────
   const handleApplyPreset = useCallback((preset: VehicleSpecPreset) => {
     setSelectedPreset(preset);
-    setGvwr(String(preset.gvwr_lb));
-    setBaseWeight(String(preset.base_weight_lb));
-    setFuelType(preset.fuel_type);
-    setFuelCapacity(String(preset.fuel_tank_capacity_gal));
-    setGvwrError('');
-    setBaseWeightError('');
-  }, []);
+    applyResolvedPreset(preset);
+  }, [applyResolvedPreset]);
 
   // ── Validate vehicle spec ─────────────────────────────
   const validateVehicleSpec = useCallback((): boolean => {
@@ -330,22 +360,23 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
 
     try {
       // Build the structured accessory framework from UI selections
-      const framework = buildAccessoryFramework(accessorySelections);
-      const containerZones = generateContainerZonesFromAccessories(framework);
+      const normalizedSelections = normalizeAccessorySelections(accessorySelections);
+      const framework = buildAccessoryFramework(normalizedSelections);
+      const containerZones = sanitizeContainerZones(generateContainerZonesFromAccessories(framework));
 
       // Auto-generate container allocations from accessory selections
       // This makes the vehicle loadout-ready without a separate container step
-      const containerAllocations = generateContainerAllocations(accessorySelections, []);
-      const zonesPayload = allocationsToZonePayload(containerAllocations);
+      const containerAllocations = generateContainerAllocations(normalizedSelections, []);
+      const zonesPayload = sanitizeContainerZones(allocationsToZonePayload(containerAllocations));
       const totalSlots = getTotalSlots(containerAllocations);
 
-      console.log('[SetupTakeover] Accessories configured:', containerZones.length, 'zones,', totalSlots, 'slots');
+      logSetupTakeoverDev('[SetupTakeover] Accessories configured:', containerZones.length, 'zones,', totalSlots, 'slots');
 
       // Persist accessory framework + auto-generated containers
       vehicleStore.finalizeConfig(
         vId,
         zonesPayload,
-        { _accessories: JSON.stringify(accessorySelections) },
+        { _accessories: JSON.stringify(normalizedSelections) },
         user?.id || null,
         { accessoryFramework: framework, containerZones },
       ).catch((e: any) => console.warn('[SetupTakeover] Failed to save accessories:', e));
@@ -509,16 +540,16 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
             nestedScrollEnabled
             showsVerticalScrollIndicator={false}
           >
-            {availablePresets.map((preset, i) => (
+            {availablePresets.map((preset) => (
               <TouchableOpacity
-                key={`${preset.label}-${i}`}
+                key={getVehiclePresetId(preset)}
                 style={[
                   styles.presetItem,
                   {
-                    backgroundColor: selectedPreset?.label === preset.label
+                    backgroundColor: selectedPreset && getVehiclePresetId(selectedPreset) === getVehiclePresetId(preset)
                       ? palette.amber + '10'
                       : 'transparent',
-                    borderColor: selectedPreset?.label === preset.label
+                    borderColor: selectedPreset && getVehiclePresetId(selectedPreset) === getVehiclePresetId(preset)
                       ? palette.amber + '30'
                       : palette.border + '40',
                   },
@@ -577,7 +608,7 @@ export default function SetupTakeover({ onComplete, onConfigureNow }: SetupTakeo
                   borderColor: fuelType === ft ? palette.amber + '40' : palette.border,
                 },
               ]}
-              onPress={() => setFuelType(ft)}
+              onPress={() => handleFuelTypeChange(ft)}
               activeOpacity={0.7}
             >
               <Text style={[

@@ -24,9 +24,20 @@
  *
  * Deduplication:
  *   • Suppresses repeated identical messages
- *   • Same message ID cannot appear within 60s
+ *   • Same alert/advisory cannot appear within 10 minutes
  *   • Overexposure penalty for frequently shown messages
  */
+
+import { recordBriefCadEntryFromAdvisory } from './briefCadLogStore';
+import type {
+  ECSBriefSeverity,
+  RemoteWeatherBriefEvent,
+} from './ai/ecsBriefTypes';
+import {
+  ECS_ALERT_DEDUPE_WINDOW_MS,
+  shouldSuppressECSUpdateInRegistry,
+  type ECSUpdateDedupeEvent,
+} from './ecsUpdateDedupe';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -49,6 +60,20 @@ export interface AdvisoryMessage {
   displayDuration?: number;
   /** Whether this message can be overridden by urgent messages */
   interruptible?: boolean;
+  /** Source tag for downstream ECS Brief/CAD activity logging */
+  source?: 'dashboard_advisory' | 'ecs-remote-weather' | string;
+  /** Optional typed event identifier for downstream stores */
+  eventType?: string;
+  /** Optional route identifier for route-scoped predictive advisories */
+  routeId?: string;
+  /** Optional route segment identifier for route-scoped predictive advisories */
+  segmentId?: string;
+  /** Optional source severity label for ECS Brief event metadata */
+  severity?: ECSBriefSeverity;
+  /** Optional confidence score for ECS Brief event metadata */
+  confidence?: number;
+  /** Optional expiry timestamp for time-bounded predictive advisories */
+  expiresAt?: number;
 }
 
 export interface AdvisoryState {
@@ -66,12 +91,71 @@ type Listener = (state: AdvisoryState) => void;
 
 // ── Constants ────────────────────────────────────────────────
 
-const MIN_INTERVAL_MS = 10_000;       // 10s minimum between messages
-const DEFAULT_DISPLAY_MS = 5_000;     // 5s default display duration
-const DEDUP_WINDOW_MS = 60_000;       // 60s dedup window for same message
+const MIN_INTERVAL_MS = 8_500;        // 8.5s minimum between messages
+const DEFAULT_DISPLAY_MS = 6_500;     // 6.5s default display duration
+const DEDUP_WINDOW_MS = ECS_ALERT_DEDUPE_WINDOW_MS; // 10min dedup window for same ECS alert/update
 const MAX_QUEUE_SIZE = 12;            // Max pending messages
 const OVEREXPOSURE_LIMIT = 3;         // Max times a message can show per 5min
 const OVEREXPOSURE_WINDOW_MS = 300_000; // 5 minute overexposure window
+
+function normalizeAdvisoryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s]/g, '')
+    .trim();
+}
+
+function advisoryFingerprint(message: Pick<AdvisoryMessage, 'mode' | 'text'>): string {
+  return `${message.mode}:${normalizeAdvisoryText(message.text)}`;
+}
+
+function advisoryDedupeEvent(message: AdvisoryMessage): ECSUpdateDedupeEvent {
+  return {
+    id: message.id,
+    type: message.eventType ?? message.mode,
+    category: message.severity,
+    severity: message.priority,
+    source: message.source ?? 'dashboard_advisory',
+    title: message.mode,
+    message: message.text,
+    timestamp: message.queuedAt,
+    routeSegmentId: message.segmentId,
+  };
+}
+
+function remoteWeatherSeverityToMode(severity: ECSBriefSeverity): AdvisoryMode {
+  return severity === 'critical' || severity === 'warning' ? 'alert' : 'advisory';
+}
+
+function remoteWeatherSeverityToPriority(severity: ECSBriefSeverity): number {
+  switch (severity) {
+    case 'critical':
+      return 1;
+    case 'warning':
+      return 2;
+    case 'watch':
+      return 3;
+    case 'info':
+    default:
+      return 4;
+  }
+}
+
+function formatRemoteWeatherAdvisoryText(event: RemoteWeatherBriefEvent): string {
+  const action = String(event.recommendedAction ?? '').trim();
+  const base = `${event.title}. ${event.message}`.replace(/\s+/g, ' ').trim();
+  return action ? `${base} Recommended action: ${action}` : base;
+}
+
+function isEscalation(
+  next: Pick<AdvisoryMessage, 'priority' | 'mode'>,
+  previous: Pick<AdvisoryMessage, 'priority' | 'mode'> | null | undefined,
+): boolean {
+  if (!previous) return false;
+  if (next.mode === 'alert' && previous.mode !== 'alert') return true;
+  return next.priority < previous.priority;
+}
 
 // ── Advisory Store Singleton ─────────────────────────────────
 
@@ -92,6 +176,9 @@ class AdvisoryStore {
 
   /** Track recent message IDs for deduplication */
   private recentMessages: Map<string, number> = new Map();
+
+  /** Track semantic message fingerprints for cooldown and escalation */
+  private recentFingerprints: Map<string, { shownAt: number; priority: number; mode: AdvisoryMode }> = new Map();
 
   /** Track message show counts for overexposure penalty */
   private showCounts: Map<string, { count: number; firstShown: number }> = new Map();
@@ -139,15 +226,55 @@ class AdvisoryStore {
       displayDuration: message.displayDuration ?? DEFAULT_DISPLAY_MS,
       interruptible: message.interruptible ?? true,
     };
+    const fingerprint = advisoryFingerprint(fullMessage);
+    const dedupeEvent = advisoryDedupeEvent(fullMessage);
+    if (
+      shouldSuppressECSUpdateInRegistry({
+        nextEvent: dedupeEvent,
+        windowMs: DEDUP_WINDOW_MS,
+      })
+    ) {
+      return;
+    }
+    const currentFingerprint = this.state.current ? advisoryFingerprint(this.state.current) : null;
+    const recentFingerprint = this.recentFingerprints.get(fingerprint);
+    const queuedIndex = this.queue.findIndex((entry) => advisoryFingerprint(entry) === fingerprint);
 
     // ── Deduplication check ──
     const lastSeen = this.recentMessages.get(message.id);
-    if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS) {
+    const fingerprintShownRecently =
+      recentFingerprint && Date.now() - recentFingerprint.shownAt < DEDUP_WINDOW_MS;
+    const escalatedFingerprint = isEscalation(fullMessage, recentFingerprint ?? null);
+    if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS && !escalatedFingerprint) {
       return; // Suppress duplicate
+    }
+    if (fingerprintShownRecently && !escalatedFingerprint) {
+      return; // Suppress semantic duplicate
+    }
+
+    if (currentFingerprint === fingerprint) {
+      if (
+        isEscalation(fullMessage, this.state.current) &&
+        ((this.state.current?.interruptible ?? false) || fullMessage.mode === 'alert')
+      ) {
+        recordBriefCadEntryFromAdvisory(fullMessage, { dedupeAlreadyAccepted: true });
+        this.clearTimers();
+        this.showMessage(fullMessage);
+      }
+      return;
+    }
+
+    if (queuedIndex >= 0) {
+      const queuedMessage = this.queue[queuedIndex];
+      if (isEscalation(fullMessage, queuedMessage)) {
+        recordBriefCadEntryFromAdvisory(fullMessage, { dedupeAlreadyAccepted: true });
+        this.queue.splice(queuedIndex, 1, fullMessage);
+      }
+      return;
     }
 
     // ── Overexposure check ──
-    const exposure = this.showCounts.get(message.id);
+    const exposure = this.showCounts.get(fingerprint);
     if (exposure) {
       if (Date.now() - exposure.firstShown < OVEREXPOSURE_WINDOW_MS &&
           exposure.count >= OVEREXPOSURE_LIMIT) {
@@ -160,6 +287,7 @@ class AdvisoryStore {
       const current = this.state.current;
       if (current && current.interruptible && current.mode !== 'alert') {
         // Interrupt current message with urgent alert
+        recordBriefCadEntryFromAdvisory(fullMessage, { dedupeAlreadyAccepted: true });
         this.clearTimers();
         this.showMessage(fullMessage);
         return;
@@ -168,6 +296,7 @@ class AdvisoryStore {
 
     // ── Add to priority queue ──
     this.queue.push(fullMessage);
+    recordBriefCadEntryFromAdvisory(fullMessage, { dedupeAlreadyAccepted: true });
 
     // Sort by priority (lower number = higher priority), then by queuedAt
     this.queue.sort((a, b) => {
@@ -200,6 +329,9 @@ class AdvisoryStore {
   clear(): void {
     this.clearTimers();
     this.queue = [];
+    this.recentMessages.clear();
+    this.recentFingerprints.clear();
+    this.showCounts.clear();
     this.clearCurrent();
   }
 
@@ -208,6 +340,9 @@ class AdvisoryStore {
     this.clearTimers();
     this.listeners.clear();
     this.queue = [];
+    this.recentMessages.clear();
+    this.recentFingerprints.clear();
+    this.showCounts.clear();
   }
 
   // ── Internal Engine ──────────────────────────────────────
@@ -233,7 +368,11 @@ class AdvisoryStore {
         this.recentMessages.delete(id);
       }
     }
-
+    for (const [fingerprint, data] of this.recentFingerprints) {
+      if (now - data.shownAt > DEDUP_WINDOW_MS) {
+        this.recentFingerprints.delete(fingerprint);
+      }
+    }
     // Clean up stale overexposure entries
     for (const [id, data] of this.showCounts) {
       if (now - data.firstShown > OVEREXPOSURE_WINDOW_MS) {
@@ -251,16 +390,22 @@ class AdvisoryStore {
 
   private showMessage(message: AdvisoryMessage): void {
     const now = Date.now();
+    const fingerprint = advisoryFingerprint(message);
 
     // Record in dedup map
     this.recentMessages.set(message.id, now);
+    this.recentFingerprints.set(fingerprint, {
+      shownAt: now,
+      priority: message.priority,
+      mode: message.mode,
+    });
 
     // Record in overexposure map
-    const existing = this.showCounts.get(message.id);
+    const existing = this.showCounts.get(fingerprint);
     if (existing) {
       existing.count++;
     } else {
-      this.showCounts.set(message.id, { count: 1, firstShown: now });
+      this.showCounts.set(fingerprint, { count: 1, firstShown: now });
     }
 
     // Update state
@@ -377,6 +522,33 @@ export function createStandbyMessage(
     displayDuration: opts?.displayDuration ?? 4000,
     interruptible: true,
   };
+}
+
+export function createRemoteWeatherBriefAdvisory(
+  event: RemoteWeatherBriefEvent,
+): Omit<AdvisoryMessage, 'queuedAt'> {
+  return {
+    id: event.id,
+    text: formatRemoteWeatherAdvisoryText(event),
+    mode: remoteWeatherSeverityToMode(event.severity),
+    priority: remoteWeatherSeverityToPriority(event.severity),
+    icon: event.severity === 'critical' || event.severity === 'warning'
+      ? 'warning-outline'
+      : 'cloudy-outline',
+    displayDuration: event.severity === 'critical' ? 7000 : 5500,
+    interruptible: event.severity !== 'info',
+    source: event.source,
+    eventType: event.type,
+    routeId: event.routeId,
+    segmentId: event.segmentId,
+    severity: event.severity,
+    confidence: event.confidence,
+    expiresAt: event.expiresAt,
+  };
+}
+
+export function pushRemoteWeatherBriefEvent(event: RemoteWeatherBriefEvent): void {
+  advisoryStore.push(createRemoteWeatherBriefAdvisory(event));
 }
 
 

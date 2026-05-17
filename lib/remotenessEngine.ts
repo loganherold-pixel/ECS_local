@@ -41,6 +41,9 @@ import type {
   RouteRemotenessClass,
 } from './remotenessTypes';
 import { REMOTENESS_LEVELS, DEFAULT_SCORING_WEIGHTS } from './remotenessTypes';
+import { assessRemotenessConfidence } from './ai/confidenceEngine';
+import { assessRemotenessPriority } from './ai/priorityEngine';
+import { explainRecommendation } from './ai/recommendationExplanationEngine';
 
 // ══════════════════════════════════════════════════════════
 // LEVEL RESOLUTION
@@ -600,6 +603,22 @@ export interface RemotenessEngineInput {
   cacheReady: boolean;
   gpsLat: number | null;
   gpsLon: number | null;
+  infrastructureOverride?: Partial<InfrastructureProximity> | null;
+}
+
+function mergeInfrastructureProximity(
+  base: InfrastructureProximity,
+  override?: Partial<InfrastructureProximity> | null,
+): InfrastructureProximity {
+  if (!override) return base;
+
+  return {
+    nearestPavedRoad: override.nearestPavedRoad ?? base.nearestPavedRoad,
+    nearestTown: override.nearestTown ?? base.nearestTown,
+    nearestFuelStation: override.nearestFuelStation ?? base.nearestFuelStation,
+    nearestEmergencyServices: override.nearestEmergencyServices ?? base.nearestEmergencyServices,
+    nearestServices: override.nearestServices ?? base.nearestServices,
+  };
 }
 
 export function computeFullRemoteness(input: RemotenessEngineInput): {
@@ -612,15 +631,23 @@ export function computeFullRemoteness(input: RemotenessEngineInput): {
   advisories: RemotenessAdvisory[];
   reason: string;
   description: string;
+  confidence: RemotenessIndexOutput['confidence'];
+  priority: RemotenessIndexOutput['priority'];
 } {
-  // 1. Estimate infrastructure proximity
-  const proximity = estimateInfrastructureProximity(
+  // 1. Estimate infrastructure proximity, then overlay any live GPS-derived
+  // lookups so road / town / fuel can stay truthful without rewriting the
+  // rest of the remoteness model.
+  const estimatedProximity = estimateInfrastructureProximity(
     input.speedMph,
     input.connectivityState,
     input.elevationFt,
     input.hasActiveRoute,
     input.terrainComplexity,
     input.cacheReady,
+  );
+  const proximity = mergeInfrastructureProximity(
+    estimatedProximity,
+    input.infrastructureOverride,
   );
 
   // 2. Assess connectivity
@@ -665,8 +692,57 @@ export function computeFullRemoteness(input: RemotenessEngineInput): {
   // 8. Generate reason and description
   const reason = generateReason(score, connectivity, terrain, proximity);
   const description = getLevelDescription(level);
+  const confidence = assessRemotenessConfidence({
+    hasGpsFix: typeof input.gpsLat === 'number' && typeof input.gpsLon === 'number',
+    hasSpeedSignal: typeof input.speedMph === 'number',
+    hasElevationSignal: typeof input.elevationFt === 'number',
+    hasRouteContext: !!input.hasActiveRoute,
+    connectivityFreshness:
+      input.connectivityState === 'online'
+        ? 'fresh'
+        : input.connectivityState === 'degraded'
+          ? 'aging'
+          : input.connectivityState === 'offline'
+            ? 'aging'
+            : 'unknown',
+    availableFactors: factors.filter((factor) => factor.available).length,
+    totalFactors: factors.length,
+    offline: input.connectivityState === 'offline',
+  });
+  const priority = assessRemotenessPriority({
+    score,
+    level,
+    routeActive: input.hasActiveRoute,
+    noSignal: connectivity.isOffline || connectivity.signal === 'no_signal',
+    forecastIncreasing: forecast.isIncreasing,
+    confidence,
+  });
+  const explanation = explainRecommendation({
+    type: 'remoteness',
+    drivers: [
+      factors.find((factor) => factor.available)?.label ?? '',
+      proximity.nearestEmergencyServices.distanceMi != null
+        ? `emergency services ~${proximity.nearestEmergencyServices.distanceMi}mi`
+        : '',
+      connectivity.signal === 'no_signal' ? 'weak signal' : terrain.isBackcountry ? 'route isolation' : '',
+    ],
+    confidenceLevel: confidence.level,
+    priorityLevel: priority.level,
+  });
 
-  return { score, factors, proximity, connectivity, terrain, forecast, advisories, reason, description };
+  return {
+    score,
+    factors,
+    proximity,
+    connectivity,
+    terrain,
+    forecast,
+    advisories,
+    reason,
+    description,
+    confidence,
+    priority,
+  };
 }
 
 function generateReason(

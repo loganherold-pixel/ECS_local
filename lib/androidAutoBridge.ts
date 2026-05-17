@@ -28,10 +28,10 @@
 import { Platform, NativeModules } from 'react-native';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
-import { vehicleDisplayFallback } from './vehicleDisplayFallback';
 import { breadcrumbTracker } from './breadcrumbTracker';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleCompanionManager } from './vehicleCompanionManager';
+import { ecsLog } from './ecsLogger';
 import type {
   VehicleDisplayMode,
   VehicleMapData,
@@ -110,6 +110,7 @@ let _modeEngineUnsubscribe: (() => void) | null = null;
 let _isConnected = false;
 let _lastPushTimestamp = 0;
 let _wasConnected = false;
+let _lastInactiveLogKey: string | null = null;
 
 // Push intervals
 const DATA_PUSH_INTERVAL_MS = 2_000;   // Push data every 2 seconds
@@ -123,6 +124,33 @@ function _notify(): void {
   for (const fn of _listeners) {
     try { fn(); } catch {}
   }
+}
+
+function _isDevRuntime(): boolean {
+  return typeof __DEV__ !== 'undefined' ? __DEV__ : false;
+}
+
+function _logInactive(reason: 'not_android' | 'missing_native_module'): void {
+  if (_lastInactiveLogKey === reason) return;
+  _lastInactiveLogKey = reason;
+
+  const details = {
+    platform: Platform.OS,
+    dev: _isDevRuntime(),
+  };
+
+  if (reason === 'missing_native_module' && Platform.OS === 'android' && !_isDevRuntime()) {
+    ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Native module unavailable; bridge inactive', details);
+    return;
+  }
+
+  ecsLog.debug(
+    'SYSTEM',
+    reason === 'not_android'
+      ? '[AndroidAutoBridge] Non-Android runtime; bridge inactive'
+      : '[AndroidAutoBridge] Native module unavailable in optional/dev runtime; bridge inactive',
+    details,
+  );
 }
 
 // ── Data Push ───────────────────────────────────────────────
@@ -157,7 +185,7 @@ async function _pushData(): Promise<void> {
 
     // Push system health
     try {
-      const healthPayload = vehicleDisplayFallback.buildNativeHealthPayload();
+      const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
       await native.pushSystemHealth(JSON.stringify(healthPayload));
     } catch {}
 
@@ -428,13 +456,13 @@ export const androidAutoBridge = {
   start(): void {
     if (_isRunning) return;
     if (Platform.OS !== 'android') {
-      console.log('[AndroidAutoBridge] Not on Android — bridge inactive');
+      _logInactive('not_android');
       return;
     }
 
     const native = getNativeModule();
     if (!native) {
-      console.log('[AndroidAutoBridge] NativeModule not available — bridge inactive');
+      _logInactive('missing_native_module');
       return;
     }
 

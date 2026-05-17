@@ -1,62 +1,57 @@
 // ============================================================
-// SAFE ICON — Crash-proof Ionicons wrapper
+// SAFE ICON - Crash-proof Ionicons wrapper
 // ============================================================
-// Wraps @expo/vector-icons/Ionicons with a try/catch so that
-// if the icon library fails to resolve at runtime the app
-// renders a small placeholder instead of crashing the entire
-// screen / error boundary.
-//
-// Usage:
-//   import { SafeIcon } from '../components/SafeIcon';
-//   <SafeIcon name="alert-circle-outline" size={24} color="#E6E6E1" />
+// Wraps @expo/vector-icons/Ionicons with a fallback so screens
+// do not crash when the icon module fails to resolve.
 
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View } from 'react-native';
 
-// ── Attempt to load Ionicons ─────────────────────────────────
 let IoniconsComponent: any = null;
 
 try {
-  // Try the named export first (pre-v15 style)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const mod = require('@expo/vector-icons');
   if (mod && mod.Ionicons) {
     IoniconsComponent = mod.Ionicons;
   }
 } catch {
-  // Silently fail
+  // Silently fail.
 }
 
 if (!IoniconsComponent) {
   try {
-    // Try the default export from the sub-path (v15 style)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@expo/vector-icons/Ionicons');
     if (mod && (mod.default || mod)) {
       IoniconsComponent = mod.default || mod;
     }
   } catch {
-    // Silently fail
+    // Silently fail.
   }
 }
 
-// ── Props ────────────────────────────────────────────────────
-interface SafeIconProps {
+export interface SafeIconProps {
   name: string;
   size?: number;
   color?: string;
   style?: any;
 }
 
-// ── Component ────────────────────────────────────────────────
-export function SafeIcon({ name, size = 24, color = '#8A8A85', style }: SafeIconProps) {
+const SAFE_ICON_GLYPH_MAP: Record<string, string> =
+  IoniconsComponent && typeof IoniconsComponent.glyphMap === 'object'
+    ? IoniconsComponent.glyphMap
+    : {};
+
+function SafeIconInner({ name, size = 24, color = '#8A8A85', style }: SafeIconProps) {
   if (IoniconsComponent) {
     try {
       return <IoniconsComponent name={name} size={size} color={color} style={style} />;
     } catch {
-      // Fall through to placeholder
+      // Fall through to placeholder.
     }
   }
 
-  // Fallback: a small colored square / dot as a placeholder
   const dim = Math.max(size * 0.45, 6);
   return (
     <View
@@ -84,7 +79,12 @@ export function SafeIcon({ name, size = 24, color = '#8A8A85', style }: SafeIcon
   );
 }
 
+type SafeIconComponent = ((props: SafeIconProps) => React.ReactElement) & {
+  glyphMap: Record<string, string>;
+};
+
+export const SafeIcon = Object.assign(SafeIconInner, {
+  glyphMap: SAFE_ICON_GLYPH_MAP,
+}) as SafeIconComponent;
+
 export default SafeIcon;
-
-
-

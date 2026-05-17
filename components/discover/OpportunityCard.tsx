@@ -160,7 +160,7 @@ export default function OpportunityCard({
     // Otherwise, detect on-the-fly (memoized per opportunity)
     const result = detectLocalHighlights(opportunity);
     return result.cardHighlights;
-  }, [opportunity.id, opportunity.highlights, opportunity.regionGroup]);
+  }, [opportunity]);
 
   // ── Phase 13: Completed card styling ───────────────────────
   const completedAccentColor = '#66BB6A';

@@ -29,7 +29,7 @@ export default function AttitudeSettingsPanel({ advancedEnabled, onToggle, hasSu
             <View style={[styles.gearTooth, { right: -2, top: 5.5 }]} />
           </View>
         </View>
-        <Text style={styles.headerTitle}>STABILITY SETTINGS</Text>
+        <Text style={styles.headerTitle}>ECS STABILITY MODEL</Text>
       </View>
 
       <TouchableOpacity
@@ -38,11 +38,11 @@ export default function AttitudeSettingsPanel({ advancedEnabled, onToggle, hasSu
         activeOpacity={0.7}
       >
         <View style={styles.toggleInfo}>
-          <Text style={styles.toggleLabel}>Enable Advanced Stability Modeling</Text>
+          <Text style={styles.toggleLabel}>Advanced stability model</Text>
           <Text style={styles.toggleDesc}>
             {advancedEnabled
-              ? 'Using dynamic CG from load zone weights'
-              : 'Using simplified CG estimate (default thresholds)'}
+              ? 'Live load-zone weighting and dynamic CG are active'
+              : 'Using the standard ECS attitude model'}
           </Text>
         </View>
 
@@ -60,7 +60,7 @@ export default function AttitudeSettingsPanel({ advancedEnabled, onToggle, hasSu
             <View style={styles.warningDot} />
           </View>
           <Text style={styles.warningText}>
-            Insufficient Load Data — Using Default Model
+            Limited load data — standard ECS model in use
           </Text>
         </View>
       )}
@@ -70,11 +70,11 @@ export default function AttitudeSettingsPanel({ advancedEnabled, onToggle, hasSu
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: 'rgba(0,0,0,0.18)',
-    borderRadius: 14,
+    backgroundColor: 'rgba(10,14,18,0.92)',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.35)',
-    padding: 14,
+    borderColor: 'rgba(196,138,44,0.18)',
+    padding: 16,
     marginBottom: 14,
   },
   headerRow: {
@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900',
     color: TACTICAL.amber,
-    letterSpacing: 1.5,
+    letterSpacing: 1.8,
   },
   toggleRow: {
     flexDirection: 'row',

@@ -45,9 +45,14 @@ import { calculateRouteStats, calculateSegmentDistance, formatCoord, formatDurat
 import { routeStore, type ImportedRoute } from '../../lib/routeStore';
 import { generateGPX, generateGPXFilename, getExportSummary } from '../../lib/gpxExport';
 import { generateGeoJSON, generateGeoJSONFilename } from '../../lib/geojsonExport';
-import { generateKML, generateKMLFilename } from '../../lib/kmlExport';
-import { generateKMZ, generateKMZFilename, uint8ArrayToBase64 } from '../../lib/kmlExport';
-import { getDocumentDirectory, fsWriteString } from '../../lib/fsCompat';
+import {
+  generateKML,
+  generateKMLFilename,
+  generateKMZ,
+  generateKMZFilename,
+  uint8ArrayToBase64,
+} from '../../lib/kmlExport';
+import { getDocumentDirectory, fsReadFileFromPickerUri, fsWriteString } from '../../lib/fsCompat';
 
 
 import Header from '../../components/Header';
@@ -57,11 +62,16 @@ import KPICard from '../../components/KPICard';
 import RouteMapPreview from '../../components/route/RouteMapPreview';
 import FuelRangeCalculator from '../../components/route/FuelRangeCalculator';
 import WaypointEditor from '../../components/route/WaypointEditor';
-import { fsReadFileFromPickerUri } from '../../lib/fsCompat';
 
 
 // ── Export format type ──────────────────────────────────
 type ExportFormat = 'gpx' | 'geojson' | 'kml' | 'kmz';
+
+function logRouteDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 
 
@@ -317,7 +327,7 @@ function RouteScreenInner() {
 
       if (Platform.OS === 'web') {
         // Web: trigger binary file download via Blob + anchor
-        const blob = new Blob([kmzBytes], { type: 'application/vnd.google-earth.kmz' });
+        const blob = new Blob([new Uint8Array(Array.from(kmzBytes))], { type: 'application/vnd.google-earth.kmz' });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = url;
@@ -456,7 +466,7 @@ function RouteScreenInner() {
 
     // ── Native (Android/iOS): Use expo-document-picker + fsReadFileFromPickerUri ──
     try {
-      console.log('[Route] Attempting expo-document-picker import...');
+      logRouteDev('[Route] Attempting expo-document-picker import...');
       const DocumentPicker = await import('expo-document-picker' as any);
 
       const result = await DocumentPicker.getDocumentAsync({
@@ -473,7 +483,7 @@ function RouteScreenInner() {
         copyToCacheDirectory: true,
       });
 
-      console.log('[Route] Document picker result:', JSON.stringify(result, null, 2));
+      logRouteDev('[Route] Document picker result:', JSON.stringify(result, null, 2));
 
       // Handle cancellation
       if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -497,7 +507,7 @@ function RouteScreenInner() {
       // (fetch-first with fsReadString fallback — consistent with all import modals)
       try {
         const fileUri = asset.uri;
-        console.log('[Route] Reading file from:', fileUri);
+        logRouteDev('[Route] Reading file from:', fileUri);
 
         const text = await fsReadFileFromPickerUri(fileUri);
 
@@ -507,7 +517,7 @@ function RouteScreenInner() {
           return;
         }
 
-        console.log('[Route] File read successfully, length:', text.length);
+        logRouteDev('[Route] File read successfully, length:', text.length);
 
         // Branch: GeoJSON files → routeStore.importGeoJSON (uses geojsonParser)
         if (ext === 'geojson' || ext === 'json') {
@@ -746,9 +756,9 @@ function RouteScreenInner() {
             <View style={styles.noRouteIcon}>
               <RouteGlyph size={36} color={TACTICAL.textMuted} />
             </View>
-            <Text style={styles.noRouteTitle}>NO ACTIVE ROUTE</Text>
+            <Text style={styles.noRouteTitle}>No route staged</Text>
             <Text style={styles.noRouteBody}>
-              Import a route (GPX/KML/GeoJSON) from OnX, Garmin, Gaia, Google Earth, Mapbox, QGIS, or similar tools to enable expedition tracking.
+              Import a route file or reopen a saved route to bring expedition tracking and route tools online.
             </Text>
 
 
@@ -776,7 +786,7 @@ function RouteScreenInner() {
               </TouchableOpacity>
             </View>
             <Text style={styles.tipText}>
-              Build routes in OnX/Garmin/Gaia and import here for vehicle-aware expedition analytics.
+              Build routes in any GPX-capable planner and import here for vehicle-aware expedition analytics.
             </Text>
           </View>
         )}
@@ -1002,7 +1012,7 @@ function RouteScreenInner() {
                       ]}>GPX 1.1</Text>
                     </View>
                     <Text style={styles.formatOptionDesc}>
-                      Standard XML format for Garmin, OnX, Gaia GPS, CalTopo
+                      Standard XML format for common GPX navigation apps
                     </Text>
                     <Text style={styles.formatOptionMime}>application/gpx+xml</Text>
                   </TouchableOpacity>
@@ -1183,7 +1193,7 @@ function RouteScreenInner() {
                         ? 'RFC 7946 GeoJSON — FeatureCollection with Point + LineString features, simplestyle-spec properties, and ECS metadata'
                         : exportFormat === 'kml'
                           ? 'KML 2.2 — Placemarks with styled icons, LineString tracks, LookAt viewpoint, and ECS ExtendedData'
-                          : 'GPX 1.1 — Standard format compatible with Garmin, OnX, Gaia GPS, CalTopo'}
+                          : 'GPX 1.1 - standard format compatible with common GPX navigation apps'}
                     </Text>
                   </View>
                 </View>
@@ -1258,7 +1268,7 @@ export default function RouteScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TACTICAL.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   scrollContent: { padding: DENSITY.screenPad, paddingBottom: 100 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: DENSITY.iconTextGap, marginBottom: DENSITY.sectionGap },
@@ -1664,7 +1674,7 @@ const styles = StyleSheet.create({
   formatOptionTitle: {
     fontSize: 13,
     fontWeight: '700' as const,
-    color: TACTICAL.textSecondary,
+    color: TACTICAL.text,
   },
   formatOptionTitleActive: {
     color: TACTICAL.amber,

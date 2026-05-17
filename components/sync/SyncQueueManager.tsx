@@ -139,10 +139,13 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 // ── Realtime status helpers ───────────────────────────────────
 const RT_STATUS_CONFIG: Record<RealtimeStatus, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
-  connected: { label: 'CONNECTED', color: '#34C759', icon: 'radio-outline' },
+  subscribed: { label: 'SUBSCRIBED', color: '#34C759', icon: 'radio-outline' },
   connecting: { label: 'CONNECTING', color: '#FF9500', icon: 'sync-outline' },
-  disconnected: { label: 'DISCONNECTED', color: '#8E8E93', icon: 'radio-button-off-outline' },
-  error: { label: 'ERROR', color: '#FF3B30', icon: 'alert-circle-outline' },
+  retrying: { label: 'RETRYING', color: '#FF9500', icon: 'sync-outline' },
+  timed_out: { label: 'TIMED OUT', color: '#FF9500', icon: 'time-outline' },
+  degraded: { label: 'DEGRADED', color: '#FF3B30', icon: 'alert-circle-outline' },
+  offline_available: { label: 'OFFLINE', color: '#8E8E93', icon: 'cloud-offline-outline' },
+  idle: { label: 'IDLE', color: '#8E8E93', icon: 'radio-button-off-outline' },
 };
 
 const RT_EVENT_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -380,7 +383,7 @@ export default function SyncQueueManager() {
   useEffect(() => {
     loadDirtyRows();
     loadQueueItems();
-  }, [syncStatus, dirtyCount, queueSize]);
+  }, [syncStatus, dirtyCount, queueSize, loadDirtyRows, loadQueueItems]);
 
   // ── Listen for queue changes ────────────────────────────────
   useEffect(() => {
@@ -388,7 +391,7 @@ export default function SyncQueueManager() {
       loadQueueItems();
     });
     return unsub;
-  }, []);
+  }, [loadQueueItems]);
 
   // ── Sync Now handler ────────────────────────────────────────
   const handleSyncNow = useCallback(async () => {
@@ -615,13 +618,19 @@ export default function SyncQueueManager() {
             </View>
             <Text style={[s.liveSyncDesc, { color: colors.textMuted }]}>
               {liveSyncEnabled
-                ? rtStatus === 'connected'
+                ? rtStatus === 'subscribed'
                   ? 'Receiving real-time changes from 6 tables'
                   : rtStatus === 'connecting'
                     ? 'Establishing realtime connection...'
-                    : rtStatus === 'error'
-                      ? 'Connection error — will auto-reconnect'
-                      : 'Waiting for connection...'
+                    : rtStatus === 'retrying'
+                      ? 'Realtime connection retry scheduled...'
+                      : rtStatus === 'timed_out'
+                        ? 'Realtime subscribe timed out — retrying'
+                        : rtStatus === 'degraded'
+                          ? 'Realtime degraded — offline sync remains available'
+                          : rtStatus === 'offline_available'
+                            ? 'Offline sync available — realtime paused'
+                            : 'Waiting for connection...'
                 : 'Disabled — toggle to receive live updates'
               }
             </Text>

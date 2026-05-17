@@ -1,35 +1,4 @@
-/**
- * ExpeditionIntelligenceBar — Tactical Expedition Intelligence Strip
- * ═══════════════════════════════════════════════════════════════════
- *
- * Fixed-height horizontal container that surfaces short, important,
- * readable expedition advisories in a calm and premium way.
- *
- * Placement: Above dashboard widget containers, below header.
- * This is NOT a chat box or scrolling notification feed.
- * It is a tactical intelligence strip — one message at a time.
- *
- * Three modes:
- *   ALERT    — Red/amber accent, safety-critical
- *   ADVISORY — Gold accent, informational
- *   STANDBY  — Muted, neutral reassurance
- *
- * Animation:
- *   • 300ms fade-in (gentle)
- *   • 300ms fade-out (gentle)
- *   • No sliding, bouncing, or ticker effects
- *
- * The bar always reserves the same height whether or not
- * a message is displayed — no layout shift.
- *
- * Readability / Driving UI:
- *   • Large font size (14px semibold)
- *   • High contrast text
- *   • Clean, glanceable layout
- *   • Minimal visual clutter
- */
-
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -39,25 +8,19 @@ import {
   Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import { useTheme } from '../../context/ThemeContext';
 import {
   advisoryStore,
   type AdvisoryState,
   type AdvisoryMode,
 } from '../../lib/advisoryStore';
 import { DEPTH_SHADOWS } from '../../lib/depthSystem';
+import { TACTICAL } from '../../lib/theme';
+import { useTheme } from '../../context/ThemeContext';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
-// ── Bar Height ───────────────────────────────────────────
-// Fixed height that never changes — prevents layout shift.
-const BAR_HEIGHT = 48;
-
-// ── Fade Durations ───────────────────────────────────────
-const FADE_IN_MS = 300;
-const FADE_OUT_MS = 300;
-
-// ── Mode Visual Configurations ───────────────────────────
-// Each mode has a distinct visual treatment that is immediately
-// recognizable at a glance while maintaining ECS design language.
+const BAR_HEIGHT = 52;
+const FADE_IN_MS = 340;
+const FADE_OUT_MS = 360;
 
 interface ModeVisual {
   bg: string;
@@ -67,39 +30,42 @@ interface ModeVisual {
   indicator: string;
   label: string;
   accent: string;
+  badgeBg: string;
 }
 
 const MODE_VISUALS: Record<AdvisoryMode, ModeVisual> = {
   alert: {
-    bg: 'rgba(192, 57, 43, 0.10)',
+    bg: 'rgba(192, 57, 43, 0.12)',
     border: 'rgba(192, 57, 43, 0.30)',
-    text: '#F5B7B1',
-    icon: '#E74C3C',
-    indicator: '#E74C3C',
+    text: '#F6C2BC',
+    icon: '#E85B4D',
+    indicator: '#E85B4D',
     label: 'ALERT',
-    accent: '#E74C3C',
+    accent: '#E85B4D',
+    badgeBg: 'rgba(232, 91, 77, 0.10)',
   },
   advisory: {
-    bg: 'rgba(212, 160, 23, 0.07)',
-    border: 'rgba(212, 160, 23, 0.20)',
-    text: '#E8D5A0',
+    bg: 'rgba(196, 138, 44, 0.09)',
+    border: 'rgba(196, 138, 44, 0.24)',
+    text: '#E8D7A9',
     icon: '#D4A017',
     indicator: '#D4A017',
     label: 'ADVISORY',
     accent: '#D4A017',
+    badgeBg: 'rgba(212, 160, 23, 0.09)',
   },
   standby: {
-    bg: 'rgba(139, 148, 158, 0.04)',
-    border: 'rgba(139, 148, 158, 0.10)',
-    text: '#8B949E',
-    icon: '#6B7580',
-    indicator: '#555E68',
+    bg: 'rgba(139, 148, 158, 0.045)',
+    border: 'rgba(139, 148, 158, 0.11)',
+    text: '#93A0AB',
+    icon: '#69737D',
+    indicator: '#59626B',
     label: 'STANDBY',
-    accent: '#555E68',
+    accent: '#59626B',
+    badgeBg: 'rgba(89, 98, 107, 0.10)',
   },
 };
 
-// ── Mode Icons ───────────────────────────────────────────
 const MODE_ICONS: Record<AdvisoryMode, string> = {
   alert: 'alert-circle',
   advisory: 'radio',
@@ -108,74 +74,166 @@ const MODE_ICONS: Record<AdvisoryMode, string> = {
 
 interface ExpeditionIntelligenceBarProps {
   enabled?: boolean;
+  disableAnimations?: boolean;
+  override?: {
+    title: string;
+    detail?: string | null;
+    badge: string;
+    icon?: React.ComponentProps<typeof Ionicons>['name'];
+    tone?: 'active' | 'ready' | 'warning' | 'unavailable' | 'info';
+    live?: boolean;
+  } | null;
 }
 
-export default function ExpeditionIntelligenceBar({ enabled = true }: ExpeditionIntelligenceBarProps) {
-  const { drivingOverrides } = useTheme();
-  const [state, setState] = useState<AdvisoryState>(advisoryStore.getState());
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const [reduceMotion, setReduceMotion] = useState(false);
+const depthShadow4 = DEPTH_SHADOWS?.[4] ?? {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.2,
+  shadowRadius: 8,
+  elevation: 6,
+};
 
-  // ── Reduced Motion ─────────────────────────────────────
+export default function ExpeditionIntelligenceBar({
+  enabled = true,
+  disableAnimations = false,
+  override = null,
+}: ExpeditionIntelligenceBarProps) {
+  const { palette, colors, isLight } = useTheme();
+  const [state, setState] = useState<AdvisoryState>(advisoryStore.getState());
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const fadeAnim = useStableAnimatedValue(0);
+  const visible = !!state.current && !!state.isVisible;
+  const currentMessageId = state.current?.id ?? null;
+
   useEffect(() => {
-    if (Platform.OS !== 'web') {
-      AccessibilityInfo.isReduceMotionEnabled?.()?.then?.(setReduceMotion);
+    let cancelled = false;
+
+    if (Platform.OS !== 'web' && AccessibilityInfo.isReduceMotionEnabled) {
+      AccessibilityInfo.isReduceMotionEnabled()
+        .then((value) => {
+          if (!cancelled) setReduceMotion(!!value);
+        })
+        .catch(() => {
+          if (!cancelled) setReduceMotion(false);
+        });
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // ── Subscribe to advisory store ────────────────────────
   useEffect(() => {
-    const unsubscribe = advisoryStore.subscribe((newState) => {
-      setState(newState);
+    const unsubscribe = advisoryStore.subscribe((nextState) => {
+      setState((current) => (
+        current.current?.id === nextState.current?.id &&
+        current.isVisible === nextState.isVisible &&
+        current.enabled === nextState.enabled &&
+        current.simplifiedMode === nextState.simplifiedMode
+          ? current
+          : nextState
+      ));
     });
     return unsubscribe;
   }, []);
 
-  // ── Animate fade based on visibility state ─────────────
   useEffect(() => {
-    const shouldAnimate = !reduceMotion && !drivingOverrides.disableAnimations;
+    const shouldAnimate = !reduceMotion && !disableAnimations;
+    fadeAnim.stopAnimation();
 
-    if (!state.current) {
-      if (shouldAnimate) {
-        Animated.timing(fadeAnim, {
-          toValue: 0, duration: FADE_OUT_MS, useNativeDriver: true,
-        }).start();
-      } else {
-        fadeAnim.setValue(0);
-      }
-      return;
-    }
-
-    if (state.isVisible) {
-      if (shouldAnimate) {
-        Animated.timing(fadeAnim, {
-          toValue: 1, duration: FADE_IN_MS, useNativeDriver: true,
-        }).start();
-      } else {
-        fadeAnim.setValue(1);
-      }
+    if (shouldAnimate) {
+      const animation = Animated.timing(fadeAnim, {
+        toValue: visible ? 1 : 0,
+        duration: visible ? FADE_IN_MS : FADE_OUT_MS,
+        useNativeDriver: true,
+      });
+      animation.start();
+      return () => {
+        animation.stop();
+        fadeAnim.stopAnimation();
+      };
     } else {
-      if (shouldAnimate) {
-        Animated.timing(fadeAnim, {
-          toValue: 0, duration: FADE_OUT_MS, useNativeDriver: true,
-        }).start();
-      } else {
-        fadeAnim.setValue(0);
-      }
+      fadeAnim.setValue(visible ? 1 : 0);
     }
-  }, [state.isVisible, state.current, reduceMotion, drivingOverrides.disableAnimations]);
+  }, [currentMessageId, visible, reduceMotion, disableAnimations, fadeAnim]);
 
-  // ── Don't render if feature is disabled ────────────────
   if (!enabled || !state.enabled) {
-    return <View style={styles.reservedSpace} />;
+    return <View style={[styles.reservedSpace, { backgroundColor: palette.bg, borderBottomColor: palette.border }]} />;
   }
 
   const message = state.current;
   const mode: AdvisoryMode = message?.mode ?? 'standby';
-  const visual = MODE_VISUALS[mode];
+  const fallbackVisual = MODE_VISUALS[mode] ?? MODE_VISUALS.standby;
+  const overrideVisual = (() => {
+    switch (override?.tone) {
+      case 'active':
+        return {
+          bg: 'rgba(196, 138, 44, 0.12)',
+          border: 'rgba(196, 138, 44, 0.28)',
+          text: '#F0DEB1',
+          icon: '#D4A017',
+          indicator: '#D4A017',
+          accent: '#D4A017',
+          badgeBg: 'rgba(212,160,23,0.11)',
+        };
+      case 'ready':
+        return {
+          bg: 'rgba(76, 175, 80, 0.10)',
+          border: 'rgba(76, 175, 80, 0.24)',
+          text: '#C8E6C9',
+          icon: '#7BC67E',
+          indicator: '#7BC67E',
+          accent: '#7BC67E',
+          badgeBg: 'rgba(123,198,126,0.12)',
+        };
+      case 'warning':
+        return MODE_VISUALS.alert;
+      case 'unavailable':
+        return {
+          bg: 'rgba(111, 119, 131, 0.08)',
+          border: 'rgba(111, 119, 131, 0.18)',
+          text: '#A3AFBA',
+          icon: '#8D99A6',
+          indicator: '#8D99A6',
+          accent: '#8D99A6',
+          badgeBg: 'rgba(141,153,166,0.10)',
+        };
+      case 'info':
+      default:
+        return {
+          bg: 'rgba(91, 141, 239, 0.10)',
+          border: 'rgba(91, 141, 239, 0.22)',
+          text: '#D5E2FF',
+          icon: '#89ABF6',
+          indicator: '#89ABF6',
+          accent: '#89ABF6',
+          badgeBg: 'rgba(137,171,246,0.11)',
+        };
+    }
+  })();
+
+  const visualBase = override ? overrideVisual : fallbackVisual;
+  const visual = isLight
+    ? {
+        ...visualBase,
+        bg: palette.panel,
+        border: palette.border,
+        text: palette.text,
+        badgeBg: colors.bgInput,
+      }
+    : visualBase;
+
+  const renderedIcon = override?.icon || (message?.icon as any) || (MODE_ICONS[mode] as any) || 'sparkles-outline';
+  const renderedTitle = override ? override.title : message?.text ?? '';
+  const renderedDetail = override?.detail?.trim() || null;
+  const accessibilityLabel = override
+    ? `${override.badge}: ${[renderedTitle, renderedDetail].filter(Boolean).join('. ')}`
+    : message
+      ? `${fallbackVisual.label}: ${message.text}`
+      : 'Expedition intelligence standing by';
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.bg, borderBottomColor: palette.border }]}>
       <Animated.View
         style={[
           styles.bar,
@@ -187,54 +245,77 @@ export default function ExpeditionIntelligenceBar({ enabled = true }: Expedition
         ]}
         accessibilityRole="alert"
         accessibilityLiveRegion="polite"
-        accessibilityLabel={
-          message
-            ? `${visual.label}: ${message.text}`
-            : 'Expedition Intelligence — no advisories'
-        }
+        accessibilityLabel={accessibilityLabel}
       >
-        {message ? (
+        {override || message ? (
           <View style={styles.content}>
-            {/* ── Left Accent Strip — mode identification ── */}
             <View style={[styles.accentStrip, { backgroundColor: visual.accent }]} />
 
-            {/* ── Mode Indicator + Icon ── */}
             <View style={styles.indicatorGroup}>
               <View style={[styles.modeDot, { backgroundColor: visual.indicator }]} />
+              {override?.live ? (
+                <View style={[styles.liveDot, { backgroundColor: visual.indicator }]} />
+              ) : null}
               <Ionicons
-                name={message.icon || MODE_ICONS[mode]}
+                name={renderedIcon as any}
                 size={17}
                 color={visual.icon}
               />
             </View>
 
-            {/* ── Message Text — large, bold, glanceable ── */}
-            <Text
-              style={[styles.messageText, { color: visual.text }]}
-              numberOfLines={2}
-              ellipsizeMode="tail"
-            >
-              {message.text}
-            </Text>
+            <View style={styles.messageBlock}>
+              <Text
+                style={[styles.messageTitle, { color: visual.text }]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {renderedTitle}
+              </Text>
+              {renderedDetail ? (
+                <Text
+                  style={[styles.messageDetail, { color: isLight ? colors.textSecondary : TACTICAL.textMuted }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {renderedDetail}
+                </Text>
+              ) : null}
+            </View>
 
-            {/* ── Mode Badge ── */}
-            <View style={[styles.modeBadge, { borderColor: visual.accent + '40' }]}>
+            <View
+              style={[
+                styles.modeBadge,
+                {
+                  borderColor: `${visual.accent}40`,
+                  backgroundColor: visual.badgeBg,
+                },
+              ]}
+            >
               <Text style={[styles.modeBadgeText, { color: visual.accent }]}>
-                {visual.label}
+                {override?.badge ?? fallbackVisual.label}
               </Text>
             </View>
           </View>
         ) : (
-          /* ── Empty state: subtle intelligence indicator ── */
           <View style={styles.emptyContent}>
-            <View style={[styles.emptyAccent, { backgroundColor: MODE_VISUALS.standby.accent }]} />
-            <View style={[styles.emptyDot, { backgroundColor: MODE_VISUALS.standby.indicator }]} />
+            <View
+              style={[
+                styles.emptyAccent,
+                { backgroundColor: MODE_VISUALS.standby.accent },
+              ]}
+            />
+            <View
+              style={[
+                styles.emptyDot,
+                { backgroundColor: MODE_VISUALS.standby.indicator },
+              ]}
+            />
             <Ionicons
               name="radio-outline"
               size={13}
               color={MODE_VISUALS.standby.icon}
             />
-            <Text style={[styles.emptyText, { color: MODE_VISUALS.standby.text }]}>
+            <Text style={[styles.emptyText, { color: isLight ? colors.textSecondary : TACTICAL.textMuted }]}>
               EXPEDITION INTELLIGENCE
             </Text>
           </View>
@@ -244,20 +325,23 @@ export default function ExpeditionIntelligenceBar({ enabled = true }: Expedition
   );
 }
 
-// ── Depth Level 4 shadow for Intelligence Bar ───────────
-const depthShadow4 = DEPTH_SHADOWS[4];
-
 const styles = StyleSheet.create({
   reservedSpace: {
     height: BAR_HEIGHT,
+    borderBottomWidth: 1,
+    backgroundColor: TACTICAL.bg,
+    borderBottomColor: TACTICAL.border,
   },
 
   container: {
     height: BAR_HEIGHT,
     paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingTop: 4,
+    paddingBottom: 4,
     justifyContent: 'center',
-    // Depth Level 4 — Intelligence bar floats above widgets
+    borderBottomWidth: 1,
+    backgroundColor: TACTICAL.bg,
+    borderBottomColor: TACTICAL.border,
     zIndex: 4,
   },
 
@@ -267,7 +351,6 @@ const styles = StyleSheet.create({
     borderWidth: 0.75,
     justifyContent: 'center',
     overflow: 'hidden',
-    // Adaptive Depth: Level 4 shadow for prominent elevation
     shadowColor: depthShadow4.shadowColor,
     shadowOffset: depthShadow4.shadowOffset,
     shadowOpacity: depthShadow4.shadowOpacity,
@@ -300,19 +383,39 @@ const styles = StyleSheet.create({
     borderRadius: 2.5,
   },
 
-  messageText: {
+  liveDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    opacity: 0.85,
+  },
+
+  messageBlock: {
     flex: 1,
-    fontSize: 14,
+    justifyContent: 'center',
+    gap: 1,
+  },
+
+  messageTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.22,
+    lineHeight: 16,
+  },
+
+  messageDetail: {
+    fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.2,
-    lineHeight: 19,
+    lineHeight: 14,
+    letterSpacing: 0.12,
   },
 
   modeBadge: {
     paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 4,
     borderWidth: 0.75,
+    alignSelf: 'center',
   },
 
   modeBadgeText: {
@@ -326,7 +429,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    opacity: 0.35,
+    opacity: 0.42,
   },
 
   emptyAccent: {
@@ -337,7 +440,7 @@ const styles = StyleSheet.create({
     width: 3,
     borderTopLeftRadius: 10,
     borderBottomLeftRadius: 10,
-    opacity: 0.4,
+    opacity: 0.45,
   },
 
   emptyDot: {
@@ -352,7 +455,3 @@ const styles = StyleSheet.create({
     letterSpacing: 2.5,
   },
 });
-
-
-
-

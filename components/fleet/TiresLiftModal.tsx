@@ -16,10 +16,11 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal,
+  View, Text, TouchableOpacity, StyleSheet,
   ScrollView, TextInput, Platform, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import TacticalPopupShell from '../TacticalPopupShell';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import {
   tiresLiftStore,
@@ -29,8 +30,6 @@ import {
   type TiresLiftConfig,
 } from '../../lib/tiresLiftStore';
 import type { Vehicle } from '../../lib/types';
-
-const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
 
 interface Props {
   visible: boolean;
@@ -147,28 +146,41 @@ export default function TiresLiftModal({ visible, vehicle, onClose, onSaved, sho
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
+    <TacticalPopupShell
+      visible={visible}
+      onClose={onClose}
+      icon="construct-outline"
+      eyebrow="ECS VEHICLE SETUP"
+      title="TIRES / LIFT"
+      subtitle={vehicle.name}
+      overlayClass="workflow"
+      maxWidth={940}
+      maxHeightFraction={0.9}
+      minHeightFraction={0.76}
+      scrollable={false}
+      keyboardAware
+      footer={
+        <View style={s.footerRow}>
+          <TouchableOpacity style={s.footerCancelBtn} onPress={onClose} activeOpacity={0.7}>
+            <Text style={s.footerCancelText}>CANCEL</Text>
+          </TouchableOpacity>
+          {hasConfig ? (
+            <TouchableOpacity style={s.footerResetBtn} onPress={handleReset} activeOpacity={0.7}>
+              <Ionicons name="refresh-outline" size={14} color={TACTICAL.danger} />
+              <Text style={s.footerResetText}>RESET</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={handleSave} style={s.footerSaveBtn} activeOpacity={0.8}>
+            <Ionicons name="checkmark" size={16} color="#0B0F12" />
+            <Text style={s.footerSaveText}>SAVE</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
       <KeyboardAvoidingView
         style={s.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Header */}
-        <View style={s.header}>
-          <View style={s.headerLeft}>
-            <TouchableOpacity onPress={onClose} style={s.backBtn} activeOpacity={0.7}>
-              <Ionicons name="chevron-back" size={20} color={TACTICAL.amber} />
-            </TouchableOpacity>
-            <View>
-              <Text style={s.headerBrand}>ECS VEHICLE SETUP</Text>
-              <Text style={s.headerTitle}>TIRES / LIFT</Text>
-            </View>
-          </View>
-          <TouchableOpacity onPress={handleSave} style={s.saveBtn} activeOpacity={0.8}>
-            <Ionicons name="checkmark" size={16} color="#0B0F12" />
-            <Text style={s.saveBtnText}>SAVE</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Vehicle name bar */}
         <View style={s.vehicleBar}>
           <Ionicons name="car-sport-outline" size={14} color={TACTICAL.textMuted} />
@@ -330,7 +342,7 @@ export default function TiresLiftModal({ visible, vehicle, onClose, onSaved, sho
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
-    </Modal>
+    </TacticalPopupShell>
   );
 }
 
@@ -342,61 +354,6 @@ const s = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: TACTICAL.bg,
-  },
-
-  // Header
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: TOP_PAD,
-    paddingBottom: 12,
-    borderBottomWidth: GOLD_RAIL.sectionWidth,
-    borderBottomColor: GOLD_RAIL.section,
-    backgroundColor: 'rgba(11, 15, 18, 0.98)',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: 'rgba(212, 160, 23, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(212, 160, 23, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerBrand: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    letterSpacing: 2,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1.5,
-  },
-  saveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: TACTICAL.amber,
-    borderRadius: 8,
-  },
-  saveBtnText: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#0B0F12',
-    letterSpacing: 1,
   },
 
   // Vehicle bar
@@ -654,6 +611,58 @@ const s = StyleSheet.create({
     color: TACTICAL.textMuted,
     lineHeight: 15,
     letterSpacing: 0.3,
+  },
+  footerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  footerCancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(138, 148, 158, 0.28)',
+    backgroundColor: 'rgba(138, 148, 158, 0.08)',
+  },
+  footerCancelText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  footerResetBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(192, 57, 43, 0.28)',
+    backgroundColor: 'rgba(192, 57, 43, 0.08)',
+  },
+  footerResetText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.danger,
+    letterSpacing: 1,
+  },
+  footerSaveBtn: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    backgroundColor: TACTICAL.amber,
+    borderRadius: 10,
+  },
+  footerSaveText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 1,
   },
 });
 

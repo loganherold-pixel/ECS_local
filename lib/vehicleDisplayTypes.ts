@@ -1,38 +1,15 @@
 /**
- * VehicleDisplayMode — Type Definitions
+ * Vehicle display type contract for ECS in-vehicle surfaces.
  *
- * Defines the data structures for vehicle display integration
- * (Android Auto / Apple CarPlay).
- *
- * Vehicle displays present a reduced, driver-safe interface while
- * the mobile device remains the full ECS command console.
- *
- * Two operating modes:
- *   - HighwayDrive: paved-road travel
- *   - ExpeditionDrive: off-road and remote travel
- *
- * Four display screens:
- *   - Map: navigation and route display
- *   - Status: trip/expedition summary
- *   - Weather: conditions and forecasts
- *   - Actions: large driver-safe action buttons
- *
- * Mode Override Settings:
- *   - auto: automatic switching based on context signals
- *   - highway: force HighwayDrive regardless of context
- *   - expedition: force ExpeditionDrive regardless of context
+ * The vehicle experience is intentionally route-first and low-distraction.
+ * We keep legacy map/status/weather payloads alive for bridge/native
+ * compatibility while exposing richer ECS-specific surfaces for the JS UI.
  */
 
-// ── Operating Modes ─────────────────────────────────────────
+import type { ECSAutomotiveSurfaceState } from './automotive/automotiveSurfaceTypes';
 
 export type VehicleDisplayMode = 'highway_drive' | 'expedition_drive';
 
-/**
- * Mode override setting for manual control.
- *   - auto: automatic context-based switching
- *   - highway: force HighwayDrive
- *   - expedition: force ExpeditionDrive
- */
 export type ModeOverrideSetting = 'auto' | 'highway' | 'expedition';
 
 export const MODE_OVERRIDE_LABELS: Record<ModeOverrideSetting, string> = {
@@ -52,83 +29,84 @@ export const VEHICLE_DISPLAY_MODE_SHORT_LABELS: Record<VehicleDisplayMode, strin
 };
 
 export const VEHICLE_DISPLAY_MODE_COLORS: Record<VehicleDisplayMode, string> = {
-  highway_drive: '#5B8DEF',      // navigation blue
-  expedition_drive: '#D4A017',   // ECS gold
+  highway_drive: '#5B8DEF',
+  expedition_drive: '#D4A017',
 };
 
-// ── Mode Transition Notice ──────────────────────────────────
-
-/**
- * A brief, non-blocking notification shown when the vehicle
- * display mode changes automatically.
- */
 export interface ModeTransitionNotice {
-  /** The new mode that was switched to */
   newMode: VehicleDisplayMode;
-  /** The previous mode */
   previousMode: VehicleDisplayMode;
-  /** Human-readable message */
   message: string;
-  /** Timestamp of the transition */
   timestamp: number;
-  /** Whether this was an automatic switch (vs manual) */
   isAutomatic: boolean;
-  /** How long to display the notice (ms) */
   displayDurationMs: number;
 }
 
-// ── Display Screens ─────────────────────────────────────────
-
-export type VehicleDisplayScreen = 'map' | 'status' | 'weather' | 'actions';
+export type VehicleDisplayScreen =
+  | 'navigation'
+  | 'attitude'
+  | 'resources'
+  | 'weather_hazard'
+  | 'exit_plan';
 
 export const VEHICLE_DISPLAY_SCREENS: VehicleDisplayScreen[] = [
-  'map',
-  'status',
-  'weather',
-  'actions',
+  'navigation',
+  'attitude',
+  'resources',
+  'weather_hazard',
+  'exit_plan',
 ];
 
 export const VEHICLE_SCREEN_LABELS: Record<VehicleDisplayScreen, string> = {
-  map: 'MAP',
-  status: 'STATUS',
-  weather: 'WEATHER',
-  actions: 'ACTIONS',
+  navigation: 'NAV',
+  attitude: 'ATT',
+  resources: 'RES',
+  weather_hazard: 'WX',
+  exit_plan: 'EXIT',
 };
 
 export const VEHICLE_SCREEN_ICONS: Record<VehicleDisplayScreen, string> = {
-  map: 'map-outline',
-  status: 'speedometer-outline',
-  weather: 'cloud-outline',
-  actions: 'apps-outline',
+  navigation: 'navigate-outline',
+  attitude: 'car-sport-outline',
+  resources: 'battery-half-outline',
+  weather_hazard: 'thunderstorm-outline',
+  exit_plan: 'trail-sign-outline',
 };
 
-// ── Map Screen Data ─────────────────────────────────────────
+export type VehicleRouteSessionState =
+  | 'inactive'
+  | 'route_selected'
+  | 'route_active'
+  | 'alerting_or_degraded'
+  | 'completed';
 
-export interface VehicleMapData {
-  mode: VehicleDisplayMode;
+export type VehicleSurfaceStatus = 'live' | 'fallback' | 'unavailable';
 
-  // Common
-  currentLat: number | null;
-  currentLon: number | null;
-  headingDeg: number | null;
-  speedMph: number | null;
+export type ECSVehicleSessionState =
+  | 'idle'
+  | 'route_preview'
+  | 'guidance_active'
+  | 'degraded'
+  | 'rerouting'
+  | 'paused'
+  | 'completed';
 
-  // HighwayDrive
-  routeLine: boolean;
-  nextManeuver: string | null;
-  distanceRemainingMiles: number | null;
-  etaMinutes: number | null;
-  nearbyFuelServices: VehicleNearbyPOI[];
+export type VehicleSurfaceAvailability =
+  | 'available_live'
+  | 'available_fallback'
+  | 'stale'
+  | 'unavailable';
 
-  // ExpeditionDrive
-  breadcrumbTrail: boolean;
-  importedGpxRoute: boolean;
-  offRouteAlert: boolean;
-  offRouteDistanceFt: number | null;
-  elevationShading: boolean;
-  offlineMapIndicator: boolean;
-  offlineMapRegion: string | null;
-}
+export type VehicleDataSource =
+  | 'live_telemetry'
+  | 'bluetooth'
+  | 'gps_live'
+  | 'ai_navigation'
+  | 'manual'
+  | 'cached'
+  | 'none';
+
+export type VehicleHazardState = 'normal' | 'caution' | 'warning' | 'critical';
 
 export interface VehicleNearbyPOI {
   id: string;
@@ -138,24 +116,136 @@ export interface VehicleNearbyPOI {
   bearing: string;
 }
 
-// ── Status Screen Data ──────────────────────────────────────
+export interface VehicleNavigationData {
+  mode: VehicleDisplayMode;
+  routePhase: VehicleRouteSessionState;
+  currentLat: number | null;
+  currentLon: number | null;
+  headingDeg: number | null;
+  speedMph: number | null;
+  routeLine: boolean;
+  nextManeuver: string | null;
+  distanceRemainingMiles: number | null;
+  etaMinutes: number | null;
+  nearbyFuelServices: VehicleNearbyPOI[];
+  breadcrumbTrail: boolean;
+  importedGpxRoute: boolean;
+  offRouteAlert: boolean;
+  offRouteDistanceFt: number | null;
+  elevationShading: boolean;
+  offlineMapIndicator: boolean;
+  offlineMapRegion: string | null;
+  routeName: string | null;
+  destinationName: string | null;
+  statusLabel: string;
+  progressPct: number | null;
+  etaLabel: string | null;
+  hazardState: VehicleHazardState;
+  hazardLabel: string | null;
+  offRouteDetected: boolean;
+  unavailableReason: string | null;
+}
+
+export interface VehicleAttitudeData {
+  status: VehicleSurfaceStatus;
+  rollDeg: number | null;
+  pitchDeg: number | null;
+  sideSlopeState: 'normal' | 'caution' | 'critical' | 'unavailable';
+  tiltState: 'stable' | 'caution' | 'critical' | 'unavailable';
+  supportLabel: string;
+  source: VehicleDataSource;
+  unavailableReason: string | null;
+}
+
+export interface VehicleResourceData {
+  status: VehicleSurfaceStatus;
+  fuelPercent: number | null;
+  fuelRangeMiles: number | null;
+  waterRemaining: number | null;
+  waterUnit: string;
+  batteryPercent: number | null;
+  powerInputWatts: number | null;
+  powerOutputWatts: number | null;
+  chargeState: 'charging' | 'discharging' | 'balanced' | 'inactive';
+  alternateFluidLabel: string | null;
+  alternateFluidValue: number | null;
+  alternateFluidUnit: string | null;
+  fuelSource: VehicleDataSource;
+  waterSource: VehicleDataSource;
+  powerSource: VehicleDataSource;
+  alternateFluidSource: VehicleDataSource;
+  supportLabel: string;
+  unavailableReason: string | null;
+}
+
+export interface VehicleWeatherHazardData {
+  status: VehicleSurfaceStatus;
+  condition: string | null;
+  weatherSummary: string | null;
+  alertSummary: string | null;
+  windMph: number | null;
+  precipitationChance: number | null;
+  temperatureF: number | null;
+  hazardState: VehicleHazardState;
+  routeHazard: string | null;
+  source: VehicleDataSource;
+  unavailableReason: string | null;
+}
+
+export interface VehicleExitPlanData {
+  status: VehicleSurfaceStatus;
+  remotenessScore: number | null;
+  remotenessTier: string | null;
+  nearestBailoutLabel: string | null;
+  nearestBailoutDistanceMiles: number | null;
+  exitToPavementMiles: number | null;
+  exitEtaMinutes: number | null;
+  offlineConfidence: 'high' | 'medium' | 'low' | 'unknown';
+  connectivityLabel: string | null;
+  fuelSupportLabel: string | null;
+  supportLabel: string;
+  source: VehicleDataSource;
+  unavailableReason: string | null;
+}
+
+export interface VehicleSurfacePresentationSummary {
+  availability: VehicleSurfaceAvailability;
+  source: VehicleDataSource;
+  title: string | null;
+  detail: string | null;
+  stale: boolean;
+  fallbackUsed: boolean;
+}
+
+export interface ECSVehiclePresentationModel {
+  generatedAt: string;
+  sessionState: ECSVehicleSessionState;
+  routePhase: VehicleRouteSessionState;
+  activeScreen: VehicleDisplayScreen;
+  fallbackUsed: boolean;
+  degradedReasons: string[];
+  navigation: VehicleSurfacePresentationSummary;
+  attitude: VehicleSurfacePresentationSummary;
+  resources: VehicleSurfacePresentationSummary;
+  weatherHazard: VehicleSurfacePresentationSummary;
+  exitPlan: VehicleSurfacePresentationSummary;
+}
 
 export interface VehicleStatusData {
   mode: VehicleDisplayMode;
-
-  // HighwayDrive
+  routePhase: VehicleRouteSessionState;
   tripDistanceMiles: number | null;
   tripDurationHours: number | null;
   daylightRemainingHours: number | null;
   connectivityForecast: 'strong' | 'moderate' | 'weak' | 'none' | 'unknown';
-
-  // ExpeditionDrive
   remotenessIndex: number | null;
   remotenessTier: string | null;
   distanceFromStartMiles: number | null;
   elevationGainFt: number | null;
   vehicleSystemsSummary: VehicleSystemStatus[];
   weatherRisk: 'low' | 'moderate' | 'high' | 'severe' | 'unknown';
+  statusHeadline: string | null;
+  statusSupport: string | null;
 }
 
 export interface VehicleSystemStatus {
@@ -165,12 +255,16 @@ export interface VehicleSystemStatus {
   value: string | null;
 }
 
-// ── Weather Screen Data ─────────────────────────────────────
+export interface VehicleWeatherAlert {
+  id: string;
+  title: string;
+  severity: 'advisory' | 'watch' | 'warning' | 'emergency';
+  description: string;
+  expiresAt: string | null;
+}
 
 export interface VehicleWeatherData {
   mode: VehicleDisplayMode;
-
-  // Common
   radarOverlay: boolean;
   stormMovement: string | null;
   windSpeedMph: number | null;
@@ -182,47 +276,173 @@ export interface VehicleWeatherData {
   weatherDescription: string | null;
   humidity: number | null;
   feelsLikeF: number | null;
-
-  // ExpeditionDrive extras
   lightningRisk: 'low' | 'moderate' | 'high' | 'unknown';
   windExposure: 'sheltered' | 'moderate' | 'exposed' | 'unknown';
   temperatureDropForecastF: number | null;
+  hazardState: VehicleHazardState;
+  alertSummary: string | null;
+  routeHazard: string | null;
+  unavailableReason: string | null;
 }
 
-export interface VehicleWeatherAlert {
-  id: string;
-  title: string;
-  severity: 'advisory' | 'watch' | 'warning' | 'emergency';
-  description: string;
-  expiresAt: string | null;
+export interface VehicleIndicators {
+  gpsSignal: 'strong' | 'moderate' | 'weak' | 'none';
+  connectivity: 'online' | 'limited' | 'offline' | 'unknown';
+  offlineMaps: boolean;
+  batteryPercent: number | null;
+  batteryCharging: boolean;
 }
 
-// ── Actions Screen Data ─────────────────────────────────────
+export interface VehicleSystemHealth {
+  gps: VehicleSubsystemStatus;
+  connectivity: VehicleSubsystemStatus;
+  weather: VehicleSubsystemStatus;
+  offlineMaps: VehicleSubsystemStatus;
+  route: VehicleSubsystemStatus;
+  expedition: VehicleSubsystemStatus;
+  breadcrumb: VehicleSubsystemStatus;
+  overallStatus: 'nominal' | 'degraded' | 'critical';
+  statusLine: string;
+  lastEvaluatedAt: number;
+}
+
+export interface VehicleSubsystemStatus {
+  available: boolean;
+  label: string;
+  severity: 'ok' | 'warning' | 'error' | 'unknown';
+  detail: string | null;
+  lastGoodDataAt: number | null;
+  isStale: boolean;
+  staleSinceMinutes: number | null;
+}
+
+export interface VehicleFallbackLabels {
+  tripDistance: string;
+  tripDuration: string;
+  daylight: string;
+  connectivity: string;
+  remoteness: string;
+  distanceFromStart: string;
+  elevationGain: string;
+  vehicleSystems: string;
+  weatherRisk: string;
+  temperature: string;
+  wind: string;
+  stormMovement: string;
+  alerts: string;
+  gpsPosition: string;
+  offlineMap: string;
+}
+
+export const DEFAULT_FALLBACK_LABELS: VehicleFallbackLabels = {
+  tripDistance: 'Trip data unavailable',
+  tripDuration: 'Duration unavailable',
+  daylight: 'Daylight data unavailable',
+  connectivity: 'Connectivity unknown',
+  remoteness: 'Remoteness unavailable',
+  distanceFromStart: 'Distance unavailable',
+  elevationGain: 'Elevation unavailable',
+  vehicleSystems: 'Vehicle systems unavailable',
+  weatherRisk: 'Weather risk unknown',
+  temperature: 'Temperature unavailable',
+  wind: 'Wind data unavailable',
+  stormMovement: 'Storm data unavailable',
+  alerts: 'Alert status unknown',
+  gpsPosition: 'GPS signal lost',
+  offlineMap: 'Offline map unavailable',
+};
+
+export const STALE_DATA_THRESHOLDS = {
+  weatherMinutes: 15,
+  gpsMinutes: 2,
+  statusMinutes: 5,
+} as const;
+
+export type VehicleSessionLogEvent =
+  | 'car_session_started'
+  | 'car_session_ended'
+  | 'car_session_connected'
+  | 'car_session_disconnected'
+  | 'surface_changed'
+  | 'route_phase_changed'
+  | 'gps_degraded'
+  | 'telemetry_unavailable'
+  | 'presentation_model_generated'
+  | 'fallback_triggered'
+  | 'unavailable_state_triggered'
+  | 'template_render_failure'
+  | 'weather_unavailable';
+
+export interface VehicleSessionLogEntry {
+  event: VehicleSessionLogEvent;
+  timestamp: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface VehicleDisplayState {
+  mode: VehicleDisplayMode;
+  activeScreen: VehicleDisplayScreen;
+  isConnected: boolean;
+  isManualOverride: boolean;
+  modeOverride: ModeOverrideSetting;
+  indicators: VehicleIndicators;
+  systemHealth: VehicleSystemHealth;
+  routePhase: VehicleRouteSessionState;
+  sessionState: ECSVehicleSessionState;
+  navigationData: VehicleNavigationData;
+  attitudeData: VehicleAttitudeData;
+  resourceData: VehicleResourceData;
+  weatherHazardData: VehicleWeatherHazardData;
+  exitPlanData: VehicleExitPlanData;
+  automotiveSurface: ECSAutomotiveSurfaceState;
+  presentationModel: ECSVehiclePresentationModel;
+  mapData: VehicleMapData;
+  statusData: VehicleStatusData;
+  weatherData: VehicleWeatherData;
+  actions: VehicleAction[];
+  lastUpdatedAt: string;
+  transitionNotice: ModeTransitionNotice | null;
+}
+
+export interface VehicleDisplaySignals {
+  roadClassification: string | null;
+  speedMph: number | null;
+  remotenessIndex: number | null;
+  activeExpedition: boolean;
+  hasGpsFix: boolean;
+}
+
+export const VEHICLE_DISPLAY_THRESHOLDS = {
+  highwaySpeedMph: 35,
+  expeditionSpeedMph: 20,
+  expeditionRemotenessThreshold: 40,
+  highwayRemotenessThreshold: 15,
+  highwayRoadTypes: ['motorway', 'primary', 'secondary', 'trunk'] as string[],
+  expeditionRoadTypes: ['track', 'trail', 'unclassified', 'path'] as string[],
+  confirmationWindowMs: 15_000,
+  switchCooldownMs: 45_000,
+  transitionNoticeDurationMs: 5_000,
+} as const;
 
 export interface VehicleAction {
   id: string;
   label: string;
   icon: string;
   color: string;
-  /** Whether this action is available in the current context */
   enabled: boolean;
-  /** Action type for dispatch */
   actionType: VehicleActionType;
 }
 
 export type VehicleActionType =
-  // HighwayDrive actions
   | 'add_waypoint'
   | 'quick_note'
   | 'find_fuel'
   | 'report_hazard'
   | 'navigate_home'
-  // ExpeditionDrive actions
   | 'drop_waypoint'
   | 'incident_marker'
   | 'return_to_start'
   | 'emergency_comms'
-  // Mode override actions
   | 'set_mode_auto'
   | 'set_mode_highway'
   | 'set_mode_expedition';
@@ -313,171 +533,5 @@ export const EXPEDITION_ACTIONS: VehicleAction[] = [
   },
 ];
 
-// ── Shared Vehicle Indicators ───────────────────────────────
-
-export interface VehicleIndicators {
-  gpsSignal: 'strong' | 'moderate' | 'weak' | 'none';
-  connectivity: 'online' | 'limited' | 'offline' | 'unknown';
-  offlineMaps: boolean;
-  batteryPercent: number | null;
-  batteryCharging: boolean;
-}
-
-// ── System Health (Fallback Layer) ──────────────────────────
-
-/**
- * System health status for the vehicle display fallback layer.
- * Each subsystem reports its availability so screens can degrade gracefully.
- */
-export interface VehicleSystemHealth {
-  /** GPS fix status */
-  gps: VehicleSubsystemStatus;
-  /** Network connectivity status */
-  connectivity: VehicleSubsystemStatus;
-  /** Weather data availability */
-  weather: VehicleSubsystemStatus;
-  /** Offline map availability */
-  offlineMaps: VehicleSubsystemStatus;
-  /** Active route availability */
-  route: VehicleSubsystemStatus;
-  /** Active expedition status */
-  expedition: VehicleSubsystemStatus;
-  /** Breadcrumb trail status */
-  breadcrumb: VehicleSubsystemStatus;
-  /** Overall system health summary */
-  overallStatus: 'nominal' | 'degraded' | 'critical';
-  /** Compact status line for display */
-  statusLine: string;
-  /** Timestamp of last health evaluation */
-  lastEvaluatedAt: number;
-}
-
-export interface VehicleSubsystemStatus {
-  /** Whether the subsystem is available */
-  available: boolean;
-  /** Short label for display (e.g., "GPS OK", "No Weather") */
-  label: string;
-  /** Severity level */
-  severity: 'ok' | 'warning' | 'error' | 'unknown';
-  /** Optional detail message */
-  detail: string | null;
-  /** Timestamp of last known good data (for stale detection) */
-  lastGoodDataAt: number | null;
-  /** Whether data is stale (available but outdated) */
-  isStale: boolean;
-  /** How many minutes since last good data (null if never had data) */
-  staleSinceMinutes: number | null;
-}
-
-/**
- * Fallback display values for screens when data is unavailable.
- * Each field contains the placeholder text to show.
- */
-export interface VehicleFallbackLabels {
-  tripDistance: string;
-  tripDuration: string;
-  daylight: string;
-  connectivity: string;
-  remoteness: string;
-  distanceFromStart: string;
-  elevationGain: string;
-  vehicleSystems: string;
-  weatherRisk: string;
-  temperature: string;
-  wind: string;
-  stormMovement: string;
-  alerts: string;
-  gpsPosition: string;
-  offlineMap: string;
-}
-
-export const DEFAULT_FALLBACK_LABELS: VehicleFallbackLabels = {
-  tripDistance: 'Trip data unavailable',
-  tripDuration: 'Duration unavailable',
-  daylight: 'Daylight data unavailable',
-  connectivity: 'Connectivity unknown',
-  remoteness: 'Remoteness unavailable',
-  distanceFromStart: 'Distance unavailable',
-  elevationGain: 'Elevation unavailable',
-  vehicleSystems: 'Vehicle systems unavailable',
-  weatherRisk: 'Weather risk unknown',
-  temperature: 'Temperature unavailable',
-  wind: 'Wind data unavailable',
-  stormMovement: 'Storm data unavailable',
-  alerts: 'Alert status unknown',
-  gpsPosition: 'GPS signal lost',
-  offlineMap: 'Offline map unavailable',
-};
-
-/**
- * Thresholds for stale data detection (in minutes).
- */
-export const STALE_DATA_THRESHOLDS = {
-  /** Weather data older than this is considered stale */
-  weatherMinutes: 15,
-  /** GPS data older than this is considered stale */
-  gpsMinutes: 2,
-  /** Status data older than this is considered stale */
-  statusMinutes: 5,
-} as const;
-
-// ── Combined Vehicle Display State ──────────────────────────
-
-export interface VehicleDisplayState {
-  /** Current operating mode */
-  mode: VehicleDisplayMode;
-  /** Active screen */
-  activeScreen: VehicleDisplayScreen;
-  /** Whether vehicle display is connected/active */
-  isConnected: boolean;
-  /** Whether manual mode override is active */
-  isManualOverride: boolean;
-  /** Current mode override setting */
-  modeOverride: ModeOverrideSetting;
-  /** Shared indicators */
-  indicators: VehicleIndicators;
-  /** System health for fallback handling */
-  systemHealth: VehicleSystemHealth;
-  /** Screen data (computed on demand) */
-  mapData: VehicleMapData;
-  statusData: VehicleStatusData;
-  weatherData: VehicleWeatherData;
-  /** Actions for current mode */
-  actions: VehicleAction[];
-  /** Last updated timestamp */
-  lastUpdatedAt: string;
-  /** Active transition notice (null when no notice) */
-  transitionNotice: ModeTransitionNotice | null;
-}
-
-// ── Mode Detection Signals ──────────────────────────────────
-
-export interface VehicleDisplaySignals {
-  roadClassification: string | null;
-  speedMph: number | null;
-  remotenessIndex: number | null;
-  activeExpedition: boolean;
-  hasGpsFix: boolean;
-}
-
-export const VEHICLE_DISPLAY_THRESHOLDS = {
-  /** Speed above this favors HighwayDrive */
-  highwaySpeedMph: 35,
-  /** Speed below this favors ExpeditionDrive */
-  expeditionSpeedMph: 20,
-  /** Remoteness above this favors ExpeditionDrive */
-  expeditionRemotenessThreshold: 40,
-  /** Remoteness below this favors HighwayDrive */
-  highwayRemotenessThreshold: 15,
-  /** Road types that favor HighwayDrive */
-  highwayRoadTypes: ['motorway', 'primary', 'secondary', 'trunk'] as string[],
-  /** Road types that favor ExpeditionDrive */
-  expeditionRoadTypes: ['track', 'trail', 'unclassified', 'path'] as string[],
-  /** Confirmation window before switching (ms) */
-  confirmationWindowMs: 15_000,
-  /** Cooldown after switching (ms) */
-  switchCooldownMs: 45_000,
-  /** Transition notice display duration (ms) */
-  transitionNoticeDurationMs: 5_000,
-} as const;
-
+// Legacy aliases kept to minimize churn in bridge/native fallbacks.
+export type VehicleMapData = VehicleNavigationData;

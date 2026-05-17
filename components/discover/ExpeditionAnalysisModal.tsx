@@ -7,19 +7,23 @@
 // and RIG UPGRADE SUGGESTIONS when compatibility < 85%.
 // ============================================================
 
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
-  Modal,
   Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
+import {
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  getShellBottomClearance,
+  getShellHeaderTopPadding,
+} from '../../lib/shellLayout';
 import {
   getTerrainColor,
   getRemotenessLabel,
@@ -33,6 +37,7 @@ import {
   getCompatibilityColor,
   getDifficultyColor,
   type CompatibilityResult,
+  type CompatibilityFactors,
   type DifficultyRating,
   type VehicleProfile,
 } from '../../lib/rigCompatibilityEngine';
@@ -41,6 +46,10 @@ import {
   UPGRADE_THRESHOLD,
   type UpgradeSuggestion,
 } from '../../lib/rigUpgradeEngine';
+import TacticalPopupShell from '../TacticalPopupShell';
+import { ECSOverlayFooter } from '../ECSModalShell';
+import { ExpeditionReadinessCard } from '../readiness';
+import { buildExploreRouteReadinessAssessment } from '../../lib/readiness/exploreRouteReadiness';
 
 interface ExpeditionAnalysisModalProps {
   visible: boolean;
@@ -49,6 +58,12 @@ interface ExpeditionAnalysisModalProps {
   vehicleProfile: VehicleProfile | null;
   hasVehicle: boolean;
   onClose: () => void;
+  onBuildRoute?: () => void;
+  buildRouteDisabled?: boolean;
+  buildRouteDisabledReason?: string | null;
+  onViewCamps?: () => void;
+  campsActionAvailable?: boolean;
+  footerExtra?: React.ReactNode;
 }
 
 // ── Factor Bar ──────────────────────────────────────────────
@@ -71,16 +86,20 @@ function AnalysisStat({
   value,
   unit,
   accentColor,
+  onPress,
+  accessibilityLabel,
 }: {
   icon: string;
   label: string;
   value: string;
   unit?: string;
   accentColor?: string;
+  onPress?: () => void;
+  accessibilityLabel?: string;
 }) {
   const color = accentColor || TACTICAL.amber;
-  return (
-    <View style={s.analysisStat}>
+  const content = (
+    <>
       <View style={[s.analysisStatIcon, { backgroundColor: color + '14', borderColor: color + '25' }]}>
         <Ionicons name={icon as any} size={14} color={color} />
       </View>
@@ -89,6 +108,26 @@ function AnalysisStat({
         <Text style={[s.analysisStatValue, { color }]}>{value}</Text>
         {unit && <Text style={s.analysisStatUnit}>{unit}</Text>}
       </View>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={[s.analysisStat, s.analysisStatAction, { borderColor: color + '45' }]}
+        activeOpacity={0.82}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel ?? `${label} details`}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <View style={s.analysisStat}>
+      {content}
     </View>
   );
 }
@@ -186,6 +225,92 @@ function formatFactorName(factor: string): string {
   }
 }
 
+type RigFactorKey = keyof CompatibilityFactors;
+
+const RIG_FACTOR_LABELS: Record<RigFactorKey, string> = {
+  terrainMatch: 'terrain match',
+  fuelRangeCoverage: 'fuel range',
+  vehicleCapability: 'vehicle capability',
+  tireSizeMatch: 'tire setup',
+  suspensionLiftMatch: 'suspension clearance',
+};
+
+function getRigFactorStrengthLine(
+  factor: RigFactorKey,
+  opportunity: ExpeditionOpportunity,
+  vehicleProfile: VehicleProfile | null,
+): string {
+  switch (factor) {
+    case 'terrainMatch':
+      return `Terrain match is helping: ${opportunity.terrainType.toLowerCase()} conditions fit your current rig profile.`;
+    case 'fuelRangeCoverage':
+      return `Fuel margin is helping: estimated range covers the ${opportunity.distanceMiles} mi route demand.`;
+    case 'vehicleCapability':
+      return vehicleProfile
+        ? `${vehicleProfile.vehicleName} is carrying the score with solid payload and platform capability.`
+        : 'Vehicle capability is one of the stronger parts of this match.';
+    case 'tireSizeMatch':
+      return 'Tire setup is improving the score against this route requirement.';
+    case 'suspensionLiftMatch':
+      return 'Suspension clearance is improving confidence for uneven trail sections.';
+    default:
+      return `${RIG_FACTOR_LABELS[factor]} is supporting the route compatibility score.`;
+  }
+}
+
+function getRigFactorImprovementLine(factor: RigFactorKey): string {
+  switch (factor) {
+    case 'terrainMatch':
+      return 'Scout terrain notes before departure; route surface is the main uncertainty.';
+    case 'fuelRangeCoverage':
+      return 'Carry extra fuel or confirm resupply to improve the route margin.';
+    case 'vehicleCapability':
+      return 'Reduce payload or confirm recovery gear to improve platform margin.';
+    case 'tireSizeMatch':
+      return 'Larger all-terrain tires would improve the weakest route-fit margin.';
+    case 'suspensionLiftMatch':
+      return 'Additional clearance would improve confidence on rougher sections.';
+    default:
+      return 'Complete the lowest scoring rig detail to improve this match.';
+  }
+}
+
+function buildRigReadoutLines(
+  compatResult: CompatibilityResult,
+  opportunity: ExpeditionOpportunity,
+  vehicleProfile: VehicleProfile | null,
+): string[] {
+  const factors = (Object.entries(compatResult.factors) as [RigFactorKey, number][])
+    .sort((a, b) => b[1] - a[1]);
+  const strongest = factors.filter(([, value]) => value >= 80);
+  const weakest = factors.slice().sort((a, b) => a[1] - b[1]).find(([, value]) => value < 82);
+  const lines: string[] = [];
+
+  if (compatResult.score >= 85) {
+    const strongLabels = strongest
+      .slice(0, 2)
+      .map(([factor]) => RIG_FACTOR_LABELS[factor])
+      .join(' and ');
+    lines.push(
+      `Your rig is scoring above the route difficulty because ${strongLabels || 'the core fit factors'} are carrying the match.`,
+    );
+  } else if (compatResult.score >= 70) {
+    lines.push('This route is workable, but the lower factors below are worth checking before departure.');
+  } else {
+    lines.push('This route is challenging for the current rig setup; use the lowest factors as the first improvement targets.');
+  }
+
+  strongest.slice(0, 2).forEach(([factor]) => {
+    lines.push(getRigFactorStrengthLine(factor, opportunity, vehicleProfile));
+  });
+
+  if (weakest) {
+    lines.push(getRigFactorImprovementLine(weakest[0]));
+  }
+
+  return Array.from(new Set(lines)).slice(0, 4);
+}
+
 
 // ============================================================
 // MAIN MODAL
@@ -198,12 +323,29 @@ export default function ExpeditionAnalysisModal({
   vehicleProfile,
   hasVehicle,
   onClose,
+  onBuildRoute,
+  buildRouteDisabled = false,
+  buildRouteDisabledReason = null,
+  onViewCamps,
+  campsActionAvailable = false,
+  footerExtra,
 }: ExpeditionAnalysisModalProps) {
+  const insets = useSafeAreaInsets();
+
   if (!opportunity) return null;
 
+  const shellTopClearance =
+    getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
+  const shellBottomClearance = getShellBottomClearance(insets.bottom, 2);
   const terrainColor = getTerrainColor(opportunity.terrainType);
   const remotenessColor = getRemotenessColor(opportunity.remotenessScore);
   const remotenessLabel = getRemotenessLabel(opportunity.remotenessScore);
+  const terrainValue =
+    typeof opportunity.terrainType === 'string' && opportunity.terrainType.trim().length > 0
+      ? opportunity.terrainType.trim()
+      : 'Mixed';
+  const remotenessValue =
+    Number.isFinite(opportunity.remotenessScore) ? remotenessLabel : 'Unknown';
 
   const compatScore = opportunity.rigCompatibility ?? null;
   const diffRating = (opportunity.difficultyRating as DifficultyRating) ?? null;
@@ -214,41 +356,72 @@ export default function ExpeditionAnalysisModal({
   const matchColor = matchScore != null ? getMatchScoreColor(matchScore) : TACTICAL.amber;
   const matchLabel = matchScore != null ? getMatchScoreLabel(matchScore) : null;
 
-
-  // Generate upgrade suggestions
-  const upgradeSuggestions = useMemo<UpgradeSuggestion[]>(() => {
-    if (!vehicleProfile || !compatResult) return [];
-    return generateUpgradeSuggestions(vehicleProfile, opportunity, compatResult);
-  }, [vehicleProfile, compatResult, opportunity]);
+  const upgradeSuggestions: UpgradeSuggestion[] =
+    !vehicleProfile || !compatResult
+      ? []
+      : generateUpgradeSuggestions(vehicleProfile, opportunity, compatResult);
+  const rigExplanationText =
+    compatResult?.explanation?.shortText ?? compatResult?.explanation?.text ?? null;
+  const rigReadoutLines = compatResult
+    ? buildRigReadoutLines(compatResult, opportunity, vehicleProfile)
+    : [];
+  const readinessAssessment = buildExploreRouteReadinessAssessment(opportunity, { hasVehicle });
 
   return (
-    <Modal
+    <TacticalPopupShell
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      transparent={false}
-      onRequestClose={onClose}
-    >
-      <View style={s.modalContainer}>
-        {/* Header */}
-        <View style={s.modalHeader}>
-          <View style={s.modalHeaderLeft}>
-            <Text style={s.modalHeaderLabel}>EXPEDITION ANALYSIS</Text>
-            <Text style={s.modalHeaderName}>{opportunity.name}</Text>
-          </View>
-          <TouchableOpacity style={s.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Ionicons name="close" size={18} color={ECS.text} />
+      onClose={onClose}
+      title="Expedition Analysis"
+      subtitle={opportunity.name}
+      eyebrow={opportunity.region.toUpperCase()}
+      icon="compass-outline"
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={1}
+      minHeightFraction={1}
+      showHandle={false}
+      topClearanceOverride={shellTopClearance}
+      bottomClearanceOverride={shellBottomClearance}
+      contentContainerStyle={s.fullHeightContent}
+      scrollable
+      footer={(
+        <ECSOverlayFooter>
+          <TouchableOpacity style={s.footerSecondaryBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={s.footerSecondaryText}>CLOSE</Text>
           </TouchableOpacity>
-        </View>
-
-        {/* Gold rail */}
-        <View style={s.goldRail} />
-
-        <ScrollView
-          style={s.scrollArea}
-          contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
+          {onBuildRoute ? (
+            <TouchableOpacity
+              style={[s.footerPrimaryBtn, buildRouteDisabled && s.footerPrimaryBtnDisabled]}
+              activeOpacity={buildRouteDisabled ? 1 : 0.84}
+              disabled={buildRouteDisabled}
+              onPress={() => {
+                if (buildRouteDisabled) return;
+                hapticMicro();
+                onBuildRoute();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Build Route"
+              accessibilityHint={buildRouteDisabledReason ?? undefined}
+              accessibilityState={{ disabled: buildRouteDisabled }}
+            >
+              <Ionicons
+                name="navigate-outline"
+                size={14}
+                color={buildRouteDisabled ? TACTICAL.textMuted : TACTICAL.amber}
+              />
+              <Text
+                style={[s.footerPrimaryText, buildRouteDisabled && s.footerPrimaryTextDisabled]}
+                numberOfLines={2}
+              >
+                BUILD{'\n'}ROUTE
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          {footerExtra}
+        </ECSOverlayFooter>
+      )}
+    >
+      <View style={s.scrollContent}>
           {/* Region + Description + Distance */}
 
           <View style={s.section}>
@@ -268,8 +441,13 @@ export default function ExpeditionAnalysisModal({
               </View>
             )}
             <Text style={s.description}>{opportunity.description}</Text>
+            {buildRouteDisabled && buildRouteDisabledReason ? (
+              <View style={s.routeUnavailableNotice}>
+                <Ionicons name="alert-circle-outline" size={12} color={TACTICAL.textMuted} />
+                <Text style={s.routeUnavailableText}>{buildRouteDisabledReason}</Text>
+              </View>
+            ) : null}
           </View>
-
 
           {/* Rig Compatibility Panel */}
           <View style={s.section}>
@@ -298,6 +476,24 @@ export default function ExpeditionAnalysisModal({
                 <View style={s.scoreBarRow}>
                   <View style={s.scoreBarBg}>
                     <View style={[s.scoreBarFill, { width: `${compatResult.score}%`, backgroundColor: compatColor }]} />
+                  </View>
+                </View>
+
+                <View style={s.rigReadoutBlock}>
+                  <View style={s.rigReadoutHeader}>
+                    <Ionicons name="sparkles-outline" size={12} color={TACTICAL.amber} />
+                    <Text style={s.rigReadoutTitle}>ECS RIG READOUT</Text>
+                  </View>
+                  {rigExplanationText ? (
+                    <Text style={s.rigReadoutSummary}>{rigExplanationText}</Text>
+                  ) : null}
+                  <View style={s.rigReadoutList}>
+                    {rigReadoutLines.map((line, index) => (
+                      <View key={`${line}-${index}`} style={s.rigReadoutRow}>
+                        <View style={s.rigReadoutDot} />
+                        <Text style={s.rigReadoutText}>{line}</Text>
+                      </View>
+                    ))}
                   </View>
                 </View>
 
@@ -397,6 +593,15 @@ export default function ExpeditionAnalysisModal({
             </View>
           )}
 
+          <ExpeditionReadinessCard
+            assessment={readinessAssessment}
+            title="Explore Readiness Preview"
+            categoryLimit={6}
+            concernLimit={3}
+            compactCategories
+            interactive={false}
+          />
+
           {/* Expedition Stats */}
           <View style={s.section}>
             <View style={s.sectionHeader}>
@@ -409,44 +614,17 @@ export default function ExpeditionAnalysisModal({
               <AnalysisStat icon="trending-up-outline" label="ELEV GAIN" value={`${opportunity.elevationGainFt.toLocaleString()}`} unit="FT" accentColor="#5AC8FA" />
               <AnalysisStat icon="calendar-outline" label="EST. DAYS" value={`${opportunity.estimatedDays}`} />
               <AnalysisStat icon="flame-outline" label="FUEL EST." value={`${opportunity.estimatedFuelRequired}`} unit="GAL" accentColor="#E67E22" />
-              <AnalysisStat icon="bonfire-outline" label="CAMPS" value={`${opportunity.suggestedCamps}`} accentColor="#66BB6A" />
+              <AnalysisStat
+                icon="bonfire-outline"
+                label={campsActionAvailable ? 'VIEW CAMPS' : 'CAMPS'}
+                value={`${opportunity.suggestedCamps}`}
+                accentColor="#66BB6A"
+                onPress={campsActionAvailable ? onViewCamps : undefined}
+                accessibilityLabel="View route camp pins in Navigate"
+              />
               <AnalysisStat icon="sunny-outline" label="BEST SEASON" value={opportunity.bestSeason} />
-            </View>
-          </View>
-
-          {/* Terrain & Remoteness */}
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Ionicons name="map-outline" size={12} color={TACTICAL.amber} />
-              <Text style={s.sectionTitle}>TERRAIN & REMOTENESS</Text>
-            </View>
-
-            <View style={s.terrainRow}>
-              <View style={[s.terrainBlock, { borderColor: terrainColor + '30' }]}>
-                <Ionicons name="trail-sign-outline" size={16} color={terrainColor} />
-                <Text style={s.terrainLabel}>TERRAIN TYPE</Text>
-                <Text style={[s.terrainValue, { color: terrainColor }]}>{opportunity.terrainType}</Text>
-              </View>
-              <View style={[s.terrainBlock, { borderColor: remotenessColor + '30' }]}>
-                <Ionicons name="radio-outline" size={16} color={remotenessColor} />
-                <Text style={s.terrainLabel}>REMOTENESS</Text>
-                <Text style={[s.terrainValue, { color: remotenessColor }]}>{remotenessLabel}</Text>
-                <View style={s.remotenessBar}>
-                  {Array.from({ length: 10 }).map((_, i) => (
-                    <View
-                      key={i}
-                      style={[
-                        s.remotenessDot,
-                        {
-                          backgroundColor: i < opportunity.remotenessScore
-                            ? remotenessColor
-                            : 'rgba(30,35,43,0.6)',
-                        },
-                      ]}
-                    />
-                  ))}
-                </View>
-              </View>
+              <AnalysisStat icon="trail-sign-outline" label="TERRAIN" value={terrainValue} accentColor={terrainColor} />
+              <AnalysisStat icon="radio-outline" label="REMOTE" value={remotenessValue} accentColor={remotenessColor} />
             </View>
           </View>
 
@@ -480,10 +658,9 @@ export default function ExpeditionAnalysisModal({
             </View>
           )}
 
-          <View style={{ height: 30 }} />
-        </ScrollView>
+          <View style={{ height: 12 }} />
       </View>
-    </Modal>
+    </TacticalPopupShell>
   );
 }
 
@@ -541,7 +718,101 @@ const s = StyleSheet.create({
 
   // ── Scroll ────────────────────────────────────────────
   scrollArea: { flex: 1 },
-  scrollContent: { padding: 16 },
+  fullHeightContent: {
+    flexGrow: 1,
+    minHeight: '100%',
+    justifyContent: 'flex-start',
+  },
+  scrollContent: {
+    padding: 16,
+    flexGrow: 1,
+  },
+  footerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 14,
+    borderTopWidth: 1,
+    borderTopColor: ECS.stroke,
+    backgroundColor: ECS.bgPrimary,
+  },
+  footerSecondaryBtn: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  footerSecondaryText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.8,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
+  footerPrimaryBtn: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+  },
+  footerPrimaryBtnDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    opacity: 0.56,
+  },
+  footerPrimaryText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.8,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
+  footerPrimaryTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  routeUnavailableNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  routeUnavailableText: {
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
 
   // ── Section ───────────────────────────────────────────
   section: {
@@ -686,6 +957,54 @@ const s = StyleSheet.create({
   },
 
   // ── Factors ───────────────────────────────────────────
+  rigReadoutBlock: {
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '22',
+    backgroundColor: TACTICAL.amber + '07',
+  },
+  rigReadoutHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rigReadoutTitle: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 2,
+  },
+  rigReadoutSummary: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: ECS.text,
+    lineHeight: 15,
+  },
+  rigReadoutList: {
+    gap: 5,
+  },
+  rigReadoutRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+  },
+  rigReadoutDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: TACTICAL.amber,
+    marginTop: 5,
+  },
+  rigReadoutText: {
+    flex: 1,
+    fontSize: 9,
+    fontWeight: '500',
+    color: TACTICAL.textMuted,
+    lineHeight: 14,
+    letterSpacing: 0.15,
+  },
   factorsBlock: {
     gap: 6,
     paddingTop: 8,
@@ -986,23 +1305,28 @@ const s = StyleSheet.create({
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 6,
   },
   analysisStat: {
-    width: '30%',
+    flexBasis: '23.5%',
+    flexGrow: 1,
+    minWidth: 118,
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 4,
+    paddingVertical: 9,
+    paddingHorizontal: 6,
     backgroundColor: ECS.bgElev,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: ECS.stroke,
-    gap: 4,
+    gap: 3,
+  },
+  analysisStatAction: {
+    backgroundColor: '#66BB6A12',
   },
   analysisStatIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
+    width: 24,
+    height: 24,
+    borderRadius: 6,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1011,7 +1335,7 @@ const s = StyleSheet.create({
     fontSize: 6,
     fontWeight: '800',
     color: TACTICAL.textMuted,
-    letterSpacing: 1.5,
+    letterSpacing: 1.1,
     textAlign: 'center',
   },
   analysisStatValueRow: {
@@ -1020,7 +1344,7 @@ const s = StyleSheet.create({
     gap: 2,
   },
   analysisStatValue: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '800',
     fontFamily: 'Courier',
     color: TACTICAL.amber,
@@ -1031,45 +1355,6 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,
-  },
-
-  // ── Terrain & Remoteness ──────────────────────────────
-  terrainRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  terrainBlock: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    backgroundColor: ECS.bgElev,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    gap: 6,
-  },
-  terrainLabel: {
-    fontSize: 7,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 2,
-  },
-  terrainValue: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    textAlign: 'center',
-  },
-  remotenessBar: {
-    flexDirection: 'row',
-    gap: 3,
-    marginTop: 4,
-  },
-  remotenessDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
   },
 
   // ── Highlights ────────────────────────────────────────

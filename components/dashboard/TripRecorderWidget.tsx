@@ -10,6 +10,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
+import { WidgetCompactRow } from './WidgetChrome';
 import { tripRecorderEngine, formatDuration, formatDistance, formatSpeed, formatElevation, formatBytes } from '../../lib/tripRecorderEngine';
 import type { ActiveRecordingState, TripSummary, TripRecord, ResourceSnapshot } from '../../lib/tripRecorderTypes';
 import { TRIP_EVENT_META } from '../../lib/tripRecorderTypes';
@@ -33,39 +34,22 @@ export function TripRecorderCompact() {
   const isRecording = state.state === 'recording';
   const isPaused = state.state === 'paused';
   const isActive = isRecording || isPaused;
+  const summary = isActive
+    ? `${formatDuration(state.elapsedSec)} | ${formatDistance(state.distanceMi)}`
+    : 'Trip recorder idle';
+  const status = isRecording ? 'REC' : isPaused ? 'PAUSED' : 'IDLE';
+  const tone = isRecording ? 'live' : isPaused ? 'attention' : 'unavailable';
 
   return (
-    <View style={cs.row}>
-      <View style={cs.cell}>
-        <Text style={cs.label}>TRIP</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-          <View style={[cs.dot, isRecording && cs.dotRec, isPaused && cs.dotPause]} />
-          <Text style={[cs.value, { fontSize: 9, color: isRecording ? '#EF5350' : isPaused ? '#FFB74D' : TACTICAL.textMuted }]}>
-            {isRecording ? 'REC' : isPaused ? 'PAUSE' : 'IDLE'}
-          </Text>
-        </View>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>TIME</Text>
-        <Text style={cs.value}>{isActive ? formatDuration(state.elapsedSec) : '\u2014'}</Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>DIST</Text>
-        <Text style={cs.value}>{isActive ? formatDistance(state.distanceMi) : '\u2014'}</Text>
-      </View>
-    </View>
+    <WidgetCompactRow
+      title="Recorder"
+      summary={summary}
+      tone={tone}
+      status={status}
+      statusTone={tone}
+    />
   );
 }
-
-const cs = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  cell: { flex: 1, alignItems: 'center' },
-  label: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  value: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-  dot: { width: 5, height: 5, borderRadius: 3, backgroundColor: TACTICAL.textMuted },
-  dotRec: { backgroundColor: '#EF5350' },
-  dotPause: { backgroundColor: '#FFB74D' },
-});
 
 // ═══════════════════════════════════════════════════════════
 // CARD VIEW — Recording status + live stats + controls
@@ -93,7 +77,7 @@ export function TripRecorderCard() {
   const handleStop = useCallback(() => tripRecorderEngine.stopRecording(), []);
 
   // Past trips count
-  const tripCount = useMemo(() => tripRecorderEngine.getTripCount(), [state]);
+  const tripCount = useMemo(() => tripRecorderEngine.getTripCount(), []);
 
   if (!isActive) {
     return (
@@ -166,32 +150,32 @@ export function TripRecorderCard() {
 }
 
 const cardS = StyleSheet.create({
-  body: { gap: 2 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  body: { gap: 1 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusDotRec: { backgroundColor: '#EF5350' },
   statusDotPause: { backgroundColor: '#FFB74D' },
-  statusLabel: { fontSize: 8, fontWeight: '800', letterSpacing: 1.5 },
+  statusLabel: { fontSize: 7, fontWeight: '800', letterSpacing: 1.3 },
   linkedBadge: { marginLeft: 'auto', padding: 2, borderRadius: 3, backgroundColor: 'rgba(212,160,23,0.08)' },
-  metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 2 },
-  metricLabel: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1 },
-  metricValue: { fontSize: 11, fontWeight: '800', color: TACTICAL.text, fontFamily: 'Courier' },
+  metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 1 },
+  metricLabel: { fontSize: 8, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.9 },
+  metricValue: { fontSize: 10, fontWeight: '800', color: TACTICAL.text, fontFamily: 'Courier' },
   startBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    paddingVertical: 6, borderRadius: 6, backgroundColor: TACTICAL.amber, marginTop: 4,
+    paddingVertical: 5, borderRadius: 6, backgroundColor: TACTICAL.amber, marginTop: 2,
   },
-  startBtnText: { fontSize: 9, fontWeight: '900', color: '#0B0F12', letterSpacing: 1.5 },
-  controlRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  startBtnText: { fontSize: 8, fontWeight: '900', color: '#0B0F12', letterSpacing: 1.3 },
+  controlRow: { flexDirection: 'row', gap: 5, marginTop: 2 },
   pauseBtn: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6,
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 5,
     borderRadius: 6, backgroundColor: 'rgba(0,0,0,0.2)', borderWidth: 1, borderColor: TACTICAL.border,
   },
   resumeBtn: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6,
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 5,
     borderRadius: 6, backgroundColor: TACTICAL.amber,
   },
   stopBtn: {
-    width: 36, alignItems: 'center', justifyContent: 'center', paddingVertical: 6,
+    width: 32, alignItems: 'center', justifyContent: 'center', paddingVertical: 5,
     borderRadius: 6, backgroundColor: 'rgba(239,83,80,0.08)', borderWidth: 1, borderColor: 'rgba(239,83,80,0.3)',
   },
 });
@@ -204,7 +188,6 @@ export function TripRecorderDetailView() {
   const [state, setState] = useState<ActiveRecordingState>(tripRecorderEngine.getActiveState());
   const [trips, setTrips] = useState<TripSummary[]>(tripRecorderEngine.getTripSummaries());
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
-  const [config, setConfig] = useState(tripRecorderEngine.getConfig());
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -247,7 +230,7 @@ export function TripRecorderDetailView() {
   const selectedTrip: TripRecord | null = useMemo(() => {
     if (!selectedTripId) return null;
     return tripRecorderEngine.getTripById(selectedTripId);
-  }, [selectedTripId, trips]);
+  }, [selectedTripId]);
 
   return (
     <ScrollView style={detS.container} showsVerticalScrollIndicator={false}>
@@ -323,7 +306,6 @@ export function TripRecorderDetailView() {
       </View>
 
       {/* ═══ PAST TRIPS ═══ */}
-      <View style={detS.divider} />
       <Text style={detS.section}>TRIP LOG ({trips.length})</Text>
 
       {trips.length === 0 ? (
@@ -478,31 +460,9 @@ export function TripRecorderDetailView() {
 
       {/* ═══ RECORDER SETTINGS ═══ */}
       <View style={detS.divider} />
-      <Text style={detS.section}>RECORDER SETTINGS</Text>
 
-      <View style={detS.settingsCard}>
-        <SettingRow label="Auto-Start on Expedition" value={config.autoStartOnExpedition ? 'ON' : 'OFF'} color={config.autoStartOnExpedition ? '#4CAF50' : TACTICAL.textMuted} />
-        <SettingRow label="Auto-Stop on Expedition" value={config.autoStopOnExpedition ? 'ON' : 'OFF'} color={config.autoStopOnExpedition ? '#4CAF50' : TACTICAL.textMuted} />
-        <SettingRow label="GPS Interval" value={`${config.gpsIntervalSec}s`} />
-        <SettingRow label="Min GPS Distance" value={`${config.minDistanceM}m`} />
-        <SettingRow label="Resource Snapshot" value={`${config.resourceSnapshotIntervalSec}s`} />
-        <SettingRow label="Max Route Points" value={`${config.maxRoutePoints.toLocaleString()}`} />
-        <SettingRow label="Max Stored Trips" value={`${config.maxStoredTrips}`} />
-        <SettingRow label="Distance Milestones" value={config.distanceMilestones.join(', ') + ' mi'} />
-        <SettingRow label="Elevation Milestones" value={config.elevationMilestones.map(m => `${(m / 1000).toFixed(0)}k`).join(', ') + ' ft'} />
-      </View>
 
       {/* ═══ ENGINE INFO ═══ */}
-      <View style={detS.divider} />
-      <Text style={detS.section}>ENGINE</Text>
-      <SettingRow label="Version" value="v1.0" />
-      <SettingRow label="Storage" value="localStorage (offline-first)" />
-      <SettingRow label="GPS Source" value="gpsUIState (throttled)" />
-      <SettingRow label="Telemetry" value="telemetryConfigStore + OBD + Power" />
-      <SettingRow label="Expedition Link" value="expeditionStateStore" />
-      <SettingRow label="Downsampling" value="Half-window on overflow" />
-      <SettingRow label="Persistence" value="Session restore on restart" />
-
       <View style={{ height: 40 }} />
     </ScrollView>
   );
@@ -515,15 +475,6 @@ function StatBlock({ label, value, color }: { label: string; value: string; colo
     <View style={detS.statBlock}>
       <Text style={detS.statBlockLabel}>{label}</Text>
       <Text style={[detS.statBlockValue, { color }]}>{value}</Text>
-    </View>
-  );
-}
-
-function SettingRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={detS.settingRow}>
-      <Text style={detS.settingLabel}>{label}</Text>
-      <Text style={[detS.settingValue, color ? { color } : null]}>{value}</Text>
     </View>
   );
 }
@@ -624,11 +575,6 @@ const detS = StyleSheet.create({
   // Notes
   notesText: { fontSize: 11, color: TACTICAL.text, lineHeight: 17 },
 
-  // Settings
-  settingsCard: { backgroundColor: 'rgba(0,0,0,0.06)', borderRadius: 8, padding: 10, borderWidth: 1, borderColor: TACTICAL.border },
-  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
-  settingLabel: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.5 },
-  settingValue: { fontSize: 10, fontWeight: '800', color: TACTICAL.text, fontFamily: 'Courier' },
 });
 
 

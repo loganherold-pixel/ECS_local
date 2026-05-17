@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "id": "cf-page-1",
+      "name": "Page One Campground",
+      "latitude": 38,
+      "longitude": -120,
+      "availabilityStatus": "available",
+      "lastCheckedAt": "2026-05-14T12:00:00.000Z",
+      "expiresAt": "2026-05-14T12:15:00.000Z"
+    }
+  ],
+  "hasMore": true,
+  "nextCursor": "next-page"
+}

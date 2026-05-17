@@ -30,6 +30,7 @@
  *   connectivity.stopMonitoring()
  */
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 export type ConnectivityStatus = 'online' | 'offline' | 'reconnecting';
 
@@ -82,7 +83,9 @@ const PING_URL_NATIVE = 'https://www.google.com/generate_204';
 const PING_URL_WEB = 'https://ppqcqigdxdofsvpiyial.databasepad.com/rest/v1/';
 const PING_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 15000; // 15s polling when offline to detect reconnect
-const ONLINE_CHECK_INTERVAL_MS = 60000; // 60s periodic check when online
+const ONLINE_CHECK_INTERVAL_MS_WEB = 60000; // 60s periodic check when online
+const ONLINE_CHECK_INTERVAL_MS_NATIVE = 15000; // 15s online verification on native
+const NATIVE_FAILURES_BEFORE_OFFLINE = 2;
 
 
 /**
@@ -103,6 +106,7 @@ class ConnectivityMonitor {
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
   private _onlineCheckTimer: ReturnType<typeof setInterval> | null = null;
   private _initialized = false;
+  private _monitoringStarted = false;
   private _lastOnlineAt: string | null = null;
   private _lastOfflineAt: string | null = null;
   private _reconnectCount = 0;
@@ -113,6 +117,8 @@ class ConnectivityMonitor {
   private _latencyMs: number | null = null;
   private _isInternetReachable = false;
   private _lastNetworkTypeCheck = 0;
+  private _consecutiveReachabilityFailures = 0;
+  private _checkInFlight: Promise<boolean> | null = null;
 
   /** Current connectivity status */
   get status(): ConnectivityStatus {
@@ -349,13 +355,7 @@ class ConnectivityMonitor {
       } else {
         // Native platform — return unknown until NetInfo is integrated
         // The CI service can still derive useful data from ping results
-        if (this._status === 'offline') {
-          this._networkType = 'none';
-        } else if (this._status === 'online') {
-          this._networkType = 'unknown';
-        } else {
-          this._networkType = 'unknown';
-        }
+        this._networkType = 'unknown';
         this._cellularGeneration = null;
       }
     } catch {
@@ -376,14 +376,12 @@ class ConnectivityMonitor {
 
   /** Start monitoring connectivity */
   startMonitoring(): void {
-    if (this._initialized) return;
-    this._initialized = true;
+    if (this._monitoringStarted) return;
+    this._monitoringStarted = true;
+    this._initialized = false;
 
     // Initial network type detection
     this._detectNetworkType();
-
-    // Initial check
-    this._checkConnectivity();
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       // Web: use native events + polling fallback
@@ -398,19 +396,29 @@ class ConnectivityMonitor {
         }
       } catch {}
 
-      // Set initial state from navigator
-      if (typeof navigator !== 'undefined' && 'onLine' in navigator) {
-        this._updateStatus(navigator.onLine ? 'online' : 'offline');
+      // Seed only the authoritative no-transport case immediately.
+      // Avoid optimistic "online" publishes until the first reachability
+      // check reconciles transport + internet access together.
+      if (typeof navigator !== 'undefined' && 'onLine' in navigator && !navigator.onLine) {
+        this._networkType = 'none';
+        this._cellularGeneration = null;
+        this._initialized = true;
+        this._updateStatus('offline');
       }
     }
 
     // Start offline polling (checks more frequently when offline)
     this._startPolling();
+
+    // Initial reconciliation happens after listeners are attached so every
+    // downstream consumer sees the same first authoritative state.
+    void this._checkConnectivity();
   }
 
   /** Stop monitoring connectivity */
   stopMonitoring(): void {
     this._initialized = false;
+    this._monitoringStarted = false;
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.removeEventListener('online', this._handleOnlineEvent);
@@ -439,7 +447,9 @@ class ConnectivityMonitor {
   private _handleOnlineEvent = (): void => {
     // Browser says we're online, verify with a ping
     this._detectNetworkType();
-    this._updateStatus('reconnecting');
+    if (this._initialized && this._status !== 'online' && !this._checkInFlight) {
+      this._updateStatus('reconnecting');
+    }
     this._checkConnectivity();
   };
 
@@ -462,7 +472,10 @@ class ConnectivityMonitor {
     this._detectNetworkType();
 
     if (prevType !== this._networkType) {
-      console.log(`[Connectivity] Network type changed: ${prevType} → ${this._networkType}`);
+      ecsLog.debug('SYSTEM', 'Connectivity network type changed', {
+        nextType: this._networkType,
+        previousType: prevType,
+      });
       // Trigger a full connectivity check to update reachability
       this._checkConnectivity();
     }
@@ -476,22 +489,40 @@ class ConnectivityMonitor {
 
     this._status = newStatus;
 
-    // Phase 3B: Log status transitions
-    console.log(`[Connectivity] Status: ${oldStatus} → ${newStatus} (type: ${this._networkType})`);
+    const transitionDetails = {
+      networkType: this._networkType,
+      nextStatus: newStatus,
+      previousStatus: oldStatus,
+    };
+    if (newStatus === 'offline' || newStatus === 'reconnecting') {
+      ecsLog.warn('SYSTEM', `Connectivity ${oldStatus} → ${newStatus}`, transitionDetails);
+    } else {
+      ecsLog.debug('SYSTEM', 'Connectivity status changed', transitionDetails);
+    }
 
     if (newStatus === 'online') {
       this._lastOnlineAt = new Date().toISOString();
       this._isInternetReachable = true;
+      this._consecutiveReachabilityFailures = 0;
       if (wasOffline) {
         this._reconnectCount++;
       }
       // Switch to less frequent online checks
       this._stopPolling();
       this._startOnlineCheck();
+    } else if (newStatus === 'reconnecting') {
+      this._isInternetReachable = false;
+      this._latencyMs = null;
+      this._stopOnlineCheck();
+      this._startPolling();
     } else if (newStatus === 'offline') {
       this._lastOfflineAt = new Date().toISOString();
       this._isInternetReachable = false;
       this._latencyMs = null;
+      this._consecutiveReachabilityFailures = Math.max(
+        this._consecutiveReachabilityFailures,
+        NATIVE_FAILURES_BEFORE_OFFLINE,
+      );
       // Switch to faster polling to detect reconnect
       this._stopOnlineCheck();
       this._startPolling();
@@ -507,13 +538,28 @@ class ConnectivityMonitor {
     });
   }
 
-  private async _checkConnectivity(): Promise<boolean> {
+  private _checkConnectivity(): Promise<boolean> {
+    if (this._checkInFlight) {
+      return this._checkInFlight;
+    }
+
+    this._checkInFlight = this._performConnectivityCheck().finally(() => {
+      this._checkInFlight = null;
+    });
+
+    return this._checkInFlight;
+  }
+
+  private async _performConnectivityCheck(): Promise<boolean> {
+    const isWeb = Platform.OS === 'web';
+
     try {
       // Quick navigator check first (web only)
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (isWeb && typeof navigator !== 'undefined' && !navigator.onLine) {
         this._networkType = 'none';
         this._isInternetReachable = false;
         this._latencyMs = null;
+        this._initialized = true;
         this._updateStatus('offline');
         return false;
       }
@@ -521,12 +567,21 @@ class ConnectivityMonitor {
       // Phase 3B: Detect network type before ping
       this._detectNetworkType();
 
+      // Transport type is authoritative. Never allow stale reachability or
+      // cached truthiness to publish "online" when transport is none.
+      if (this._networkType === 'none') {
+        this._isInternetReachable = false;
+        this._latencyMs = null;
+        this._initialized = true;
+        this._updateStatus('offline');
+        return false;
+      }
+
       // ── Platform-aware ping strategy ──
       // On web: Use same-origin Supabase endpoint to avoid CORS/CSP blocks.
       //         If the ping fails (e.g. in restricted preview environments),
       //         fall back to navigator.onLine — never throw.
       // On native: Use google.com/generate_204 (no CORS restrictions).
-      const isWeb = Platform.OS === 'web';
       const pingUrl = isWeb ? PING_URL_WEB : PING_URL_NATIVE;
 
       const controller = new AbortController();
@@ -550,7 +605,9 @@ class ConnectivityMonitor {
         // Phase 3B: Record latency
         this._latencyMs = pingEnd - pingStart;
         this._isInternetReachable = true;
+        this._consecutiveReachabilityFailures = 0;
 
+        this._initialized = true;
         this._updateStatus('online');
         return true;
       } catch (pingError) {
@@ -562,6 +619,7 @@ class ConnectivityMonitor {
         if (isWeb && typeof navigator !== 'undefined' && navigator.onLine) {
           this._isInternetReachable = true;
           this._latencyMs = null; // Can't measure latency without a successful ping
+          this._initialized = true;
           this._updateStatus('online');
           return true;
         }
@@ -574,6 +632,20 @@ class ConnectivityMonitor {
       // even if the device has a network connection
       this._isInternetReachable = false;
       this._latencyMs = null;
+      this._initialized = true;
+      this._consecutiveReachabilityFailures += 1;
+
+      if (!isWeb) {
+        if (this._consecutiveReachabilityFailures >= NATIVE_FAILURES_BEFORE_OFFLINE) {
+          this._networkType = 'none';
+          this._updateStatus('offline');
+        } else if (this._status === 'online' || this._status === 'reconnecting') {
+          this._updateStatus('reconnecting');
+        } else {
+          this._updateStatus('offline');
+        }
+        return false;
+      }
 
       // If we were reconnecting, go back to offline
       if (this._status === 'reconnecting') {
@@ -604,7 +676,6 @@ class ConnectivityMonitor {
     this._stopPolling();
     this._pollTimer = setInterval(() => {
       if (this._status === 'offline' || this._status === 'reconnecting') {
-        this._updateStatus('reconnecting');
         this._checkConnectivity();
       }
     }, POLL_INTERVAL_MS);
@@ -621,7 +692,7 @@ class ConnectivityMonitor {
     this._stopOnlineCheck();
     this._onlineCheckTimer = setInterval(() => {
       this._checkConnectivity();
-    }, ONLINE_CHECK_INTERVAL_MS);
+    }, Platform.OS === 'web' ? ONLINE_CHECK_INTERVAL_MS_WEB : ONLINE_CHECK_INTERVAL_MS_NATIVE);
   }
 
   private _stopOnlineCheck(): void {

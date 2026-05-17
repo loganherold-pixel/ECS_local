@@ -8,8 +8,7 @@
  *
  * Local persistence via localStorage for offline resilience.
  */
-
-import { supabase } from './supabase';
+import { isDeployedEdgeFunction, supabase } from './supabase';
 import { Platform } from 'react-native';
 
 // ── Types ────────────────────────────────────────────────────
@@ -161,6 +160,24 @@ class ExpeditionEventStore {
     this.persist();
     this.notify();
 
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      const unavailableEvent: ExpeditionEvent = {
+        ...optimisticEvent,
+        _optimistic: false,
+        _failed: true,
+      };
+      const idx = this.events[input.expedition_id].findIndex(e => e.id === tempId);
+      if (idx >= 0) {
+        this.events[input.expedition_id][idx] = unavailableEvent;
+      }
+      this.persist();
+      this.notify();
+      if (onFail) {
+        onFail('Event saved locally. Cloud event sync is unavailable in this ECS backend.');
+      }
+      return unavailableEvent;
+    }
+
     // Background sync
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
@@ -217,6 +234,9 @@ class ExpeditionEventStore {
     expeditionId: string,
     options?: { event_type?: EventType | 'ALL'; limit?: number },
   ): Promise<ExpeditionEvent[]> {
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      return this.events[expeditionId] || [];
+    }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
         body: {

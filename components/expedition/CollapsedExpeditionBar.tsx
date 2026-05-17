@@ -58,7 +58,7 @@ export default function CollapsedExpeditionBar({
     pulse.start();
     glow.start();
     return () => { pulse.stop(); glow.stop(); };
-  }, []);
+  }, [glowAnim, pulseAnim]);
 
   const displayName = expeditionTitle || vehicleName || 'Expedition';
   const isAllComplete = completedSteps >= stepCount;

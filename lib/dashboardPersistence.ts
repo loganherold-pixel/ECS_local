@@ -167,7 +167,7 @@ export async function readDashboardState(): Promise<string | null> {
   return readPersisted(DASHBOARD_STATE_KEY);
 }
 
-export async function writeDashboardState(data: string): void {
+export async function writeDashboardState(data: string): Promise<void> {
   scheduleDebouncedWrite(DASHBOARD_STATE_KEY, data);
 }
 
@@ -175,7 +175,7 @@ export async function readCustomPresets(): Promise<string | null> {
   return readPersisted(CUSTOM_PRESETS_KEY);
 }
 
-export async function writeCustomPresets(data: string): void {
+export async function writeCustomPresets(data: string): Promise<void> {
   scheduleDebouncedWrite(CUSTOM_PRESETS_KEY, data);
 }
 

@@ -49,15 +49,17 @@ function biasLongLabel(bias: string): string {
   }
 }
 
-function ZoneBar({ zone, warning, maxWeight, containerZone }: {
+function ZoneBar({ zone, warning, maxWeight, totalLoadoutWeight, containerZone }: {
   zone: ZoneWeightSummary;
   warning: ZoneWarning | undefined;
   maxWeight: number;
+  totalLoadoutWeight: number;
   containerZone?: ContainerZone;
 }) {
   const hasWeight = zone.totalWeightLbs > 0;
   const fillPct = maxWeight > 0 ? Math.min(100, (zone.totalWeightLbs / maxWeight) * 100) : 0;
   const capacityPct = maxWeight > 0 ? Math.min(100, (zone.capacityLbs / maxWeight) * 100) : 100;
+  const loadSharePct = totalLoadoutWeight > 0 ? Math.round((zone.totalWeightLbs / totalLoadoutWeight) * 100) : 0;
   const statusColor = warning?.color || '#66BB6A';
   const severity = warning?.severity || 'ok';
 
@@ -125,12 +127,23 @@ function ZoneBar({ zone, warning, maxWeight, containerZone }: {
             {hasWeight ? `${zone.totalWeightLbs}` : '0'}
           </Text>
           <Text style={styles.zoneWeightUnit}>lbs</Text>
+          <Text style={[styles.zoneSharePct, { color: hasWeight ? statusColor : TACTICAL.textMuted }]}>
+            {loadSharePct}%
+          </Text>
         </View>
       </View>
 
       {/* Weight bar */}
       <View style={styles.barContainer}>
         <View style={styles.barTrack}>
+          <View
+            style={[
+              styles.barCapacityFill,
+              {
+                width: `${capacityPct}%`,
+              },
+            ]}
+          />
           {/* Capacity marker */}
           <View style={[styles.capacityMarker, { left: `${capacityPct}%` }]} />
           {/* Fill — use container zone color when available */}
@@ -148,9 +161,14 @@ function ZoneBar({ zone, warning, maxWeight, containerZone }: {
           <Text style={styles.barCapacity}>
             {zone.capacityLbs} lbs max
           </Text>
-          <Text style={[styles.barPct, { color: statusColor }]}>
-            {zone.utilizationPct}%
-          </Text>
+          <View style={styles.barPctGroup}>
+            <Text style={[styles.barSharePct, { color: hasWeight ? statusColor : TACTICAL.textMuted }]}>
+              {loadSharePct}% load
+            </Text>
+            <Text style={[styles.barPct, { color: statusColor }]}>
+              {zone.utilizationPct}% cap
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -231,6 +249,7 @@ export default function ZoneWeightBars({ zones, warnings, totalLoadoutWeight, co
               zone={zone}
               warning={warningMap.get(zone.zoneId)}
               maxWeight={maxWeight}
+              totalLoadoutWeight={totalLoadoutWeight}
               containerZone={containerZoneMap.get(zone.zoneId) || containerZoneMap.get(zone.zoneName)}
             />
           ))
@@ -355,9 +374,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   zoneIndicator: {
-    width: 3,
-    height: 16,
-    borderRadius: 1.5,
+    width: 5,
+    height: 18,
+    borderRadius: 2.5,
   },
   zoneName: {
     fontSize: 11,
@@ -379,6 +398,12 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '600',
     color: TACTICAL.textMuted,
+  },
+  zoneSharePct: {
+    fontSize: 10,
+    fontWeight: '800',
+    fontFamily: 'Courier',
+    marginLeft: 6,
   },
 
   // Bias micro badges (Phase 6)
@@ -450,22 +475,29 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   barTrack: {
-    height: 6,
+    height: 10,
     backgroundColor: 'rgba(62, 79, 60, 0.15)',
-    borderRadius: 3,
+    borderRadius: 5,
     overflow: 'hidden',
     position: 'relative',
   },
+  barCapacityFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
   barFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 5,
   },
   capacityMarker: {
     position: 'absolute',
     top: 0,
     bottom: 0,
-    width: 2,
-    backgroundColor: 'rgba(138, 138, 133, 0.4)',
+    width: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
     zIndex: 1,
   },
   barMeta: {
@@ -477,6 +509,16 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '600',
     color: TACTICAL.textMuted,
+  },
+  barPctGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  barSharePct: {
+    fontSize: 9,
+    fontWeight: '800',
+    fontFamily: 'Courier',
   },
   barPct: {
     fontSize: 9,

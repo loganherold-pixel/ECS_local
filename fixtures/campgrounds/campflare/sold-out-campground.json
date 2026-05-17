@@ -1,0 +1,13 @@
+{
+  "id": "cf-sold-out-1002",
+  "campgroundName": "Pine Basin Campground",
+  "lat": 39.1001,
+  "lng": -120.2002,
+  "url": "https://campflare.com/campgrounds/cf-sold-out-1002",
+  "status": "sold out",
+  "available_sites": 0,
+  "reservable": true,
+  "first_come_first_served": false,
+  "checkedAt": "2026-05-14T12:00:00.000Z",
+  "expires_at": "2026-05-14T12:12:00.000Z"
+}

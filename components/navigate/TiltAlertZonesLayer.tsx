@@ -18,6 +18,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO } from '../../lib/theme';
 import { hapticMicro, hapticCommand } from '../../lib/haptics';
 import {
@@ -173,7 +174,7 @@ export function TiltAlertDetailModal({ visible, event, cluster, onClose }: Detai
   if (events.length === 0) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <ECSModal visible={visible} onClose={onClose} dismissOnBackdrop={false} stackBehavior="replace">
       <View style={sty.modalOverlay}>
         <View style={sty.modalContainer}>
           {/* Header */}
@@ -323,7 +324,7 @@ export function TiltAlertDetailModal({ visible, event, cluster, onClose }: Detai
           </View>
         </View>
       </View>
-    </Modal>
+    </ECSModal>
   );
 }
 

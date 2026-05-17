@@ -52,6 +52,7 @@
  */
 
 import type { AdvisoryMessage, AdvisoryMode } from './advisoryStore';
+import { buildEnvironmentSnapshot } from './environmentSnapshotService';
 import {
   evaluatePredictive,
   buildRouteSegmentsAhead,
@@ -1160,31 +1161,31 @@ export function getTimeOfDay(): 'morning' | 'afternoon' | 'evening' | 'night' {
 }
 
 /**
- * Estimate hours until sunset (rough approximation).
- * Uses a simple model based on latitude and time of year.
- * Returns null if insufficient data.
+ * Estimate hours until sunset from a coordinate-aware environment snapshot.
+ * Longitude is required so ECS can resolve the coordinate timezone instead of
+ * silently using the device timezone for another region.
  */
-export function estimateHoursUntilSunset(latDeg?: number | null): number | null {
-  if (latDeg == null) return null;
+export function estimateHoursUntilSunset(
+  latDeg?: number | null,
+  lonDeg?: number | null,
+  nowMs: number = Date.now(),
+  deviceTimezoneId?: string | null,
+): number | null {
+  if (latDeg == null || lonDeg == null) return null;
 
-  const now = new Date();
-  const dayOfYear = Math.floor(
-    (now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const snapshot = buildEnvironmentSnapshot({
+    coordinate: {
+      latitude: latDeg,
+      longitude: lonDeg,
+      source: 'gps',
+      updatedAt: nowMs,
+    },
+    deviceTimezoneId,
+    nowMs,
+  });
 
-  // Approximate sunset hour (very rough — for advisory purposes only)
-  // Summer: ~20:00, Winter: ~17:00 at mid-latitudes
-  const seasonalOffset = Math.sin((dayOfYear - 80) * (2 * Math.PI / 365)) * 1.5;
-  const baseSunsetHour = 18.5 + seasonalOffset;
-
-  // Latitude adjustment (higher latitudes = more variation)
-  const latFactor = Math.abs(latDeg) / 90;
-  const latAdjust = latFactor * seasonalOffset * 0.5;
-
-  const sunsetHour = baseSunsetHour + latAdjust;
-  const currentHour = now.getHours() + now.getMinutes() / 60;
-
-  const hoursUntil = sunsetHour - currentHour;
-  return hoursUntil > 0 ? hoursUntil : null;
+  return snapshot.sunlight.remainingMinutes == null || snapshot.sunlight.nextEvent !== 'sunset'
+    ? null
+    : Math.round((snapshot.sunlight.remainingMinutes / 60) * 10) / 10;
 }
 

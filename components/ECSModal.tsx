@@ -26,39 +26,45 @@ import React, { useEffect, useRef, useCallback, useState } from 'react';
 import {
   Modal,
   Animated,
-  Easing,
   StyleSheet,
   TouchableWithoutFeedback,
   View,
   AccessibilityInfo,
   Platform,
 } from 'react-native';
+import {
+  isOverlayActive,
+  registerOverlay,
+  subscribeOverlayChanges,
+  type OverlayStackBehavior,
+} from '../lib/overlayCoordinator';
+import { EASING, MOTION } from '../lib/motion';
 
 // ── Motion Tier Configuration ──────────────────────────────
 const TIER_A = {
   // OPEN
   backdropOpacity: 0.35,
-  backdropDuration: 120,
-  panelDuration: 180,
+  backdropDuration: MOTION.stateTransition,
+  panelDuration: MOTION.modalSlide,
   panelTranslateY: 12,
   // CLOSE
-  closeBackdropDuration: 120,
-  closePanelDuration: 140,
+  closeBackdropDuration: MOTION.screenFadeOut,
+  closePanelDuration: MOTION.modalDismiss,
   closePanelTranslateY: 8,
   // REDUCED MOTION
-  reducedOpenDuration: 120,
-  reducedCloseDuration: 100,
+  reducedOpenDuration: MOTION.stateTransition,
+  reducedCloseDuration: MOTION.screenFadeOut,
 };
 
 const TIER_S = {
   // OPEN (FAST)
   backdropOpacity: 0.28,
   backdropDuration: 80,
-  panelDuration: 120,
+  panelDuration: 140,
   panelTranslateY: 8,
   // CLOSE (FAST)
   closeBackdropDuration: 90,
-  closePanelDuration: 100,
+  closePanelDuration: 110,
   closePanelTranslateY: 6,
   // REDUCED MOTION
   reducedOpenDuration: 90,
@@ -74,6 +80,8 @@ interface ECSModalProps {
   visible: boolean;
   onClose?: () => void;
   tier?: OverlayTier;
+  /** Major overlays replace one another; lightweight overlays may stack. */
+  stackBehavior?: OverlayStackBehavior;
   /** Whether tapping the backdrop closes the modal (default: true) */
   dismissOnBackdrop?: boolean;
   /** Custom backdrop opacity override */
@@ -88,6 +96,7 @@ export default function ECSModal({
   visible,
   onClose,
   tier = 'global',
+  stackBehavior = 'allow-stack',
   dismissOnBackdrop = true,
   backdropOpacity: customBackdropOpacity,
   onRequestClose,
@@ -97,32 +106,66 @@ export default function ECSModal({
   const targetBackdropOpacity = customBackdropOpacity ?? config.backdropOpacity;
 
   // Animation values
-  const backdropAnim = useRef(new Animated.Value(0)).current;
-  const panelOpacity = useRef(new Animated.Value(0)).current;
-  const panelTranslateY = useRef(new Animated.Value(config.panelTranslateY)).current;
+  const backdropAnim = useRef(new Animated.Value(visible ? targetBackdropOpacity : 0)).current;
+  const panelOpacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const panelTranslateY = useRef(new Animated.Value(visible ? 0 : config.panelTranslateY)).current;
 
   // Internal visibility state for delayed unmount
   const [modalVisible, setModalVisible] = useState(visible);
+  const overlayIdRef = useRef(`ecs-overlay-${Math.random().toString(36).slice(2)}`);
+  const [, setOverlayVersion] = useState(0);
 
   // ── Modal State Guards ──────────────────────────────────
   // Prevents double-close, re-open race conditions, and duplicate onClose calls.
   const isClosingRef = useRef(false);
   const isOpeningRef = useRef(false);
+  const openScheduledRef = useRef(false);
   const onCloseFiredRef = useRef(false);
   const cooldownRef = useRef(false);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const onCloseRef = useRef(onClose);
+  const onRequestCloseRef = useRef(onRequestClose);
+  const openFrameRef = useRef<number | null>(null);
 
   // Track the open/close cycle to invalidate stale animation callbacks
   const cycleRef = useRef(0);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+    onRequestCloseRef.current = onRequestClose;
+  }, [onClose, onRequestClose]);
+
+  useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (openFrameRef.current != null) {
+        cancelAnimationFrame(openFrameRef.current);
+        openFrameRef.current = null;
+      }
       if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
     };
   }, []);
+
+  useEffect(() => subscribeOverlayChanges(() => {
+    setOverlayVersion((version) => version + 1);
+  }), []);
+
+  const dismissLatestHandler = useCallback(() => {
+    const dismissHandler = onRequestCloseRef.current ?? onCloseRef.current;
+    dismissHandler?.();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+
+    return registerOverlay({
+      id: overlayIdRef.current,
+      stackBehavior,
+      onDismiss: dismissLatestHandler,
+    });
+  }, [dismissLatestHandler, stackBehavior, visible]);
 
   // Reduced motion detection
   const reducedMotion = useRef(false);
@@ -142,9 +185,14 @@ export default function ECSModal({
   // ── OPEN animation ──────────────────────────────────────
   const animateOpen = useCallback(() => {
     const cycle = ++cycleRef.current;
+    openScheduledRef.current = false;
     isOpeningRef.current = true;
     isClosingRef.current = false;
     onCloseFiredRef.current = false;
+
+    backdropAnim.stopAnimation();
+    panelOpacity.stopAnimation();
+    panelTranslateY.stopAnimation();
 
     const rm = reducedMotion.current;
 
@@ -157,20 +205,20 @@ export default function ECSModal({
       Animated.timing(backdropAnim, {
         toValue: targetBackdropOpacity,
         duration: rm ? config.reducedOpenDuration : config.backdropDuration,
-        easing: Easing.out(Easing.cubic),
+        easing: EASING.decelerate,
         useNativeDriver: true,
       }),
       Animated.timing(panelOpacity, {
         toValue: 1,
         duration: rm ? config.reducedOpenDuration : config.panelDuration,
-        easing: Easing.out(Easing.cubic),
+        easing: EASING.decelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: 0,
           duration: config.panelDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
       ]),
@@ -180,45 +228,50 @@ export default function ECSModal({
         isOpeningRef.current = false;
       }
     });
-  }, [config, targetBackdropOpacity]);
+  }, [backdropAnim, config, panelOpacity, panelTranslateY, targetBackdropOpacity]);
 
   // ── CLOSE animation ─────────────────────────────────────
   const animateClose = useCallback((callback?: () => void) => {
     // Guard: if already closing, don't start another close animation
     if (isClosingRef.current) return;
 
+    openScheduledRef.current = false;
     const cycle = ++cycleRef.current;
     isClosingRef.current = true;
     isOpeningRef.current = false;
 
     const rm = reducedMotion.current;
 
+    backdropAnim.stopAnimation();
+    panelOpacity.stopAnimation();
+    panelTranslateY.stopAnimation();
+
     Animated.parallel([
       Animated.timing(panelOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closePanelDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: config.closePanelTranslateY,
           duration: config.closePanelDuration,
-          easing: Easing.in(Easing.cubic),
+          easing: EASING.accelerate,
           useNativeDriver: true,
         }),
       ]),
       Animated.timing(backdropAnim, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closeBackdropDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
     ]).start(() => {
       // Only complete if this cycle is still current (not superseded by re-open)
       if (cycle === cycleRef.current && mountedRef.current) {
         isClosingRef.current = false;
-        setModalVisible(false);
+        setModalVisible((current) => (current ? false : current));
 
         // Start cooldown to prevent immediate re-trigger
         cooldownRef.current = true;
@@ -231,7 +284,7 @@ export default function ECSModal({
         callback?.();
       }
     });
-  }, [config]);
+  }, [backdropAnim, config, panelOpacity, panelTranslateY]);
 
   // ── Visibility state management ─────────────────────────
   useEffect(() => {
@@ -239,6 +292,9 @@ export default function ECSModal({
       // If in cooldown after a recent dismiss, skip this open
       // (prevents the same trigger from immediately re-opening)
       if (cooldownRef.current) return;
+      if (openScheduledRef.current || (modalVisible && !isClosingRef.current)) {
+        return;
+      }
 
       // If currently closing, cancel the close and re-open
       if (isClosingRef.current) {
@@ -247,41 +303,47 @@ export default function ECSModal({
         cycleRef.current++;
       }
 
-      setModalVisible(true);
+      openScheduledRef.current = true;
+      setModalVisible((current) => (current ? current : true));
       // Small delay to ensure Modal is mounted before animating
-      requestAnimationFrame(() => {
-        if (mountedRef.current) {
+      if (openFrameRef.current != null) {
+        cancelAnimationFrame(openFrameRef.current);
+      }
+      openFrameRef.current = requestAnimationFrame(() => {
+        openFrameRef.current = null;
+        if (mountedRef.current && openScheduledRef.current) {
           animateOpen();
         }
       });
     } else if (modalVisible) {
+      openScheduledRef.current = false;
       animateClose();
     }
-  }, [visible]);
+  }, [visible, animateClose, animateOpen, modalVisible]);
 
   const handleRequestClose = useCallback(() => {
     // Guard: fire onClose/onRequestClose only once per cycle
     if (onCloseFiredRef.current) return;
     onCloseFiredRef.current = true;
 
-    if (onRequestClose) {
-      onRequestClose();
-    } else if (onClose) {
-      onClose();
-    }
-  }, [onRequestClose, onClose]);
+    const requestHandler = onRequestCloseRef.current ?? onCloseRef.current;
+    requestHandler?.();
+  }, []);
 
   const handleBackdropPress = useCallback(() => {
-    if (!dismissOnBackdrop || !onClose) return;
+    if (!dismissOnBackdrop || !onCloseRef.current) return;
 
     // Guard: fire onClose only once per cycle
     if (onCloseFiredRef.current) return;
     onCloseFiredRef.current = true;
 
-    onClose();
-  }, [dismissOnBackdrop, onClose]);
+    onCloseRef.current();
+  }, [dismissOnBackdrop]);
+
+  const overlayIsActive = isOverlayActive(overlayIdRef.current, stackBehavior);
 
   if (!modalVisible && !visible) return null;
+  if (visible && !overlayIsActive) return null;
 
   return (
     <Modal
@@ -380,26 +442,26 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
         Animated.timing(backdropOpacity, {
           toValue: config.backdropOpacity,
           duration: rm ? config.reducedOpenDuration : config.backdropDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
         Animated.timing(panelOpacity, {
           toValue: 1,
           duration: rm ? config.reducedOpenDuration : config.panelDuration,
-          easing: Easing.out(Easing.cubic),
+          easing: EASING.decelerate,
           useNativeDriver: true,
         }),
         ...(rm ? [] : [
           Animated.timing(panelTranslateY, {
             toValue: 0,
             duration: config.panelDuration,
-            easing: Easing.out(Easing.cubic),
+            easing: EASING.decelerate,
             useNativeDriver: true,
           }),
         ]),
       ]).start();
     }
-  }, [visible]);
+  }, [backdropOpacity, config.backdropDuration, config.backdropOpacity, config.panelDuration, config.panelTranslateY, config.reducedOpenDuration, panelOpacity, panelTranslateY, visible]);
 
   const startClose = useCallback((callback?: () => void) => {
     // Guard: prevent double-close
@@ -413,21 +475,21 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
       Animated.timing(panelOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closePanelDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
       ...(rm ? [] : [
         Animated.timing(panelTranslateY, {
           toValue: config.closePanelTranslateY,
           duration: config.closePanelDuration,
-          easing: Easing.in(Easing.cubic),
+          easing: EASING.accelerate,
           useNativeDriver: true,
         }),
       ]),
       Animated.timing(backdropOpacity, {
         toValue: 0,
         duration: rm ? config.reducedCloseDuration : config.closeBackdropDuration,
-        easing: Easing.in(Easing.cubic),
+        easing: EASING.accelerate,
         useNativeDriver: true,
       }),
     ]).start(() => {
@@ -442,7 +504,7 @@ export function useOverlayMotion(tier: OverlayTier, visible: boolean, onCloseCom
         }
       }
     });
-  }, [config, onCloseComplete]);
+  }, [backdropOpacity, config, onCloseComplete, panelOpacity, panelTranslateY]);
 
   return {
     backdropOpacity,

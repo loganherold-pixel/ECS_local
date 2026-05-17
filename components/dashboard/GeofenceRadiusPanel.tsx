@@ -37,6 +37,7 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import { expeditionStateStore } from '../../lib/expeditionStateStore';
 import { hapticMicro } from '../../lib/haptics';
 import GeofenceMapPreview from './GeofenceMapPreview';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 // ── Constants ──────────────────────────────────────────────
 const MIN_RADIUS = 100;
@@ -101,7 +102,7 @@ export default function GeofenceRadiusPanel({ visible, onClose }: GeofenceRadius
   const [trackWidth, setTrackWidth] = useState(0);
   const isDragging = useRef(false);
   const radiusRef = useRef(radius);
-  const thumbAnim = useRef(new Animated.Value(1)).current;
+  const thumbAnim = useStableAnimatedValue(1);
 
   // Keep ref in sync for PanResponder release handler
   useEffect(() => {

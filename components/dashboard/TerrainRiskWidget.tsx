@@ -21,6 +21,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
+import { WidgetCompactRow } from './WidgetChrome';
 import {
   buildVehicleCapabilityProfile,
   computeTerrainRiskAssessment,
@@ -70,7 +71,13 @@ function useTerrainRiskData(): TerrainRiskAssessment {
         pitchDeg: 0,
         hasSensorData: false,
       });
-      setAssessment(result);
+      setAssessment((current) => (
+        current.riskScore === result.riskScore &&
+        current.riskLevel === result.riskLevel &&
+        current.descriptor === result.descriptor
+          ? current
+          : result
+      ));
     }, 15000);
 
     return () => clearInterval(interval);
@@ -87,38 +94,26 @@ export function TerrainRiskCompact() {
   const data = useTerrainRiskData();
   const color = getTerrainRiskColor(data.riskLevel);
   const label = getTerrainRiskLabel(data.riskLevel);
-
   const forecastLabel = data.forecast?.available
-    ? getTerrainRiskLabel(data.forecast.peakRiskLevel)
-    : '\u2014';
-  const forecastColor = data.forecast?.available
-    ? getTerrainRiskColor(data.forecast.peakRiskLevel)
-    : TACTICAL.textMuted;
+    ? `Ahead ${getTerrainRiskLabel(data.forecast.peakRiskLevel)}`
+    : 'Default profile';
+  const compactTone =
+    data.riskLevel === 'high'
+      ? 'critical'
+      : data.riskLevel === 'elevated' || data.riskLevel === 'caution'
+        ? 'attention'
+      : 'good';
 
   return (
-    <View style={cs.row}>
-      <View style={cs.cell}>
-        <Text style={cs.label}>TERRAIN</Text>
-        <Text style={[cs.value, { color, fontSize: 9 }]}>{label}</Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>SCORE</Text>
-        <Text style={[cs.value, { color }]}>{data.riskScore}</Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>AHEAD</Text>
-        <Text style={[cs.value, { color: forecastColor, fontSize: 9 }]}>{forecastLabel}</Text>
-      </View>
-    </View>
+    <WidgetCompactRow
+      title="Terrain"
+      summary={`${label} | Score ${data.riskScore}`}
+      tone={compactTone}
+      status={forecastLabel}
+      statusTone={compactTone}
+    />
   );
 }
-
-const cs = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  cell: { flex: 1, alignItems: 'center' },
-  label: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  value: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-});
 
 // ═══════════════════════════════════════════════════════════
 // CARD MODE (full widget card)
@@ -161,6 +156,11 @@ export function TerrainRiskCard() {
           </Text>
         </View>
       )}
+      {!data.forecast?.available ? (
+        <Text style={ws.forecastText} numberOfLines={1}>
+          Default terrain profile; live route data unavailable
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -214,6 +214,7 @@ export function TerrainRiskDetailView() {
         <View style={ds.scoreMeta}>
           <Text style={[ds.levelLabel, { color }]}>{label}</Text>
           <Text style={ds.descriptorText}>{data.descriptor}</Text>
+          <Text style={ds.descriptorText}>Source: default terrain profile, not live sensor data</Text>
         </View>
       </View>
 
@@ -337,16 +338,6 @@ export function TerrainRiskDetailView() {
       <MetricRow label="21\u201345" value="CAUTION" color="#FFB74D" />
       <MetricRow label="46\u201370" value="ELEVATED" color="#E67E22" />
       <MetricRow label="71\u2013100" value="HIGH" color="#C0392B" />
-
-      {/* ═══ ENGINE INFO ═══ */}
-      <View style={ds.divider} />
-      <Text style={ds.section}>ENGINE</Text>
-      <MetricRow label="VERSION" value="v1.0 (Prediction)" />
-      <MetricRow label="FACTORS" value="7 weighted" />
-      <MetricRow label="SMOOTHING" value="EMA 0.25" />
-      <MetricRow label="HOLD TIME" value="30s downgrade" />
-      <MetricRow label="ADVISORY COOLDOWN" value="5 min" />
-      <MetricRow label="INTERVAL" value="~15s" />
 
       {/* Disclaimer */}
       <View style={ds.disclaimer}>

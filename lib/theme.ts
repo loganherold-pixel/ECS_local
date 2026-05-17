@@ -114,6 +114,18 @@ export const GOLD_RAIL = {
   subsectionWidth: 0.75,
 };
 
+export const ECS_POPUP_SURFACE_DARK = {
+  shellBg: 'rgba(8,12,15,0.985)',
+  shellBorder: 'rgba(196,138,44,0.28)',
+  headerBg: 'rgba(12,16,20,0.98)',
+  handleBg: 'rgba(10,13,16,0.98)',
+  handleBar: 'rgba(255,255,255,0.16)',
+  controlBg: 'rgba(0,0,0,0.26)',
+  controlBorder: 'rgba(62,79,60,0.24)',
+  divider: 'rgba(196,138,44,0.16)',
+  footerBg: 'rgba(10,13,16,0.94)',
+} as const;
+
 
 // ============================================================
 // INSTRUMENT HIERARCHY — Visual Weight Tiers

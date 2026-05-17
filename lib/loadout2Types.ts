@@ -17,7 +17,7 @@
  *   getContainerItemCount()  — count items in a container
  */
 
-import type { ContainerZone } from './accessoryFramework';
+import { getContainerFrameworkWeightLbs, type ContainerZone } from './accessoryFramework';
 import type { LoadoutItem } from './types';
 import { matchStorageLocationToZone } from './containerZoneLoader';
 
@@ -185,7 +185,7 @@ export function getContainerWeight(
   containerZones: ContainerZone[],
   containerKey: string,
 ): number {
-  let total = 0;
+  let total = getContainerFrameworkWeightLbs(containerKey);
   for (const item of items) {
     if (!item.storage_location) continue;
     const matched = matchStorageLocationToZone(containerZones, item.storage_location);
@@ -199,10 +199,19 @@ export function getContainerWeight(
 /**
  * Get total weight across all containers from existing LoadoutItems.
  */
-export function getTotalLoadoutWeight(items: LoadoutItem[]): number {
-  return Math.round(
-    items.reduce((sum, item) => sum + ((item.weight_lbs || 0) * (item.quantity || 1)), 0) * 100
-  ) / 100;
+export function getTotalLoadoutWeight(
+  items: LoadoutItem[],
+  containerZones?: ContainerZone[],
+): number {
+  const itemWeight = items.reduce(
+    (sum, item) => sum + ((item.weight_lbs || 0) * (item.quantity || 1)),
+    0,
+  );
+  const frameworkWeight = containerZones
+    ? containerZones.reduce((sum, zone) => sum + getContainerFrameworkWeightLbs(zone.id), 0)
+    : 0;
+
+  return Math.round((itemWeight + frameworkWeight) * 100) / 100;
 }
 
 /**

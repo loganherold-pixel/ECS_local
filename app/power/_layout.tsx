@@ -3,8 +3,8 @@
  * Routes:
  *   /power        → Power Center (index)
  *   /power/devices → Manage Devices (Phase 3F-2: full device list + multi-select)
- *   /power/blu    → BLU Power Sources (Phase 1A: universal power telemetry)
- *   /power/setup  → Power Setup Wizard (Phase 8: guided multi-provider setup)
+ *   /power/blu    → Device Connections (manual Bluetooth scan + device routing)
+ *   /power/setup  → Redirects to Device Connections; legacy wizard UI is not production-facing
  *   /power/manage → Power Systems Management (Phase 8: view/edit connected devices)
  */
 

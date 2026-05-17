@@ -33,6 +33,7 @@
  */
 
 import { Platform } from 'react-native';
+import { isDeployedEdgeFunction, isEdgeFunctionUnavailableError } from './supabase';
 
 import type {
   CollaborativeObservation,
@@ -55,6 +56,48 @@ import {
 } from './collaborativeIntelTypes';
 
 const TAG = '[COLLAB_INTEL]';
+const EDGE_WARNING_COOLDOWN_MS = 5 * 60 * 1000;
+const edgeWarningCache = new Map<string, number>();
+
+function warnEdgeIssue(signature: string, message: string, detail?: Record<string, unknown>) {
+  const now = Date.now();
+  const last = edgeWarningCache.get(signature) ?? 0;
+  if (now - last < EDGE_WARNING_COOLDOWN_MS) return;
+  edgeWarningCache.set(signature, now);
+  console.warn(TAG, message, detail ?? {});
+}
+
+function classifyCollaborativeError(error: unknown): {
+  kind: 'unavailable' | 'request' | 'server';
+  message: string;
+} {
+  if (isEdgeFunctionUnavailableError(error)) {
+    return {
+      kind: 'unavailable',
+      message: 'Collaborative expedition intelligence is not deployed in the current ECS backend',
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      kind: 'request',
+      message: error.message || 'Collaborative expedition intelligence request failed',
+    };
+  }
+
+  if (typeof error === 'object' && error) {
+    const maybeError = error as { message?: string; status?: number; context?: { status?: number } };
+    return {
+      kind: (maybeError.context?.status ?? maybeError.status ?? 0) >= 500 ? 'server' : 'request',
+      message: maybeError.message || 'Collaborative expedition intelligence request failed',
+    };
+  }
+
+  return {
+    kind: 'request',
+    message: String(error || 'Collaborative expedition intelligence request failed'),
+  };
+}
 
 // ── Storage Helpers ─────────────────────────────────────────
 
@@ -218,6 +261,11 @@ function createDefaultOutput(): CollaborativeIntelOutput {
 async function _fetchNearbyObservations(
   lat: number, lng: number, radiusKm: number,
 ): Promise<CollaborativeObservation[]> {
+  if (!isDeployedEdgeFunction('collaborative-intel')) {
+    warnEdgeIssue('collaborative-intel:missing', 'Collaborative expedition intelligence is gated because the Edge Function is not deployed');
+    return [];
+  }
+
   try {
     const { supabase } = require('./supabase');
     const { data, error } = await supabase.functions.invoke('collaborative-intel', {
@@ -225,7 +273,8 @@ async function _fetchNearbyObservations(
     });
 
     if (error) {
-      console.warn(TAG, 'Fetch error:', error.message);
+      const classified = classifyCollaborativeError(error);
+      warnEdgeIssue(`collaborative-intel:nearby:${classified.kind}:${classified.message}`, 'Nearby collaborative intel fetch failed', classified);
       return [];
     }
 
@@ -235,7 +284,8 @@ async function _fetchNearbyObservations(
 
     return [];
   } catch (err) {
-    console.warn(TAG, 'Fetch exception:', err);
+    const classified = classifyCollaborativeError(err);
+    warnEdgeIssue(`collaborative-intel:nearby:exception:${classified.message}`, 'Nearby collaborative intel exception', classified);
     return [];
   }
 }
@@ -244,6 +294,10 @@ async function _fetchRouteObservations(
   waypoints: Array<{ lat: number; lng: number }>,
   radiusKm: number,
 ): Promise<CollaborativeObservation[]> {
+  if (!isDeployedEdgeFunction('collaborative-intel')) {
+    return [];
+  }
+
   try {
     const { supabase } = require('./supabase');
     const { data, error } = await supabase.functions.invoke('collaborative-intel', {
@@ -251,7 +305,8 @@ async function _fetchRouteObservations(
     });
 
     if (error) {
-      console.warn(TAG, 'Route fetch error:', error.message);
+      const classified = classifyCollaborativeError(error);
+      warnEdgeIssue(`collaborative-intel:route:${classified.kind}:${classified.message}`, 'Route collaborative intel fetch failed', classified);
       return [];
     }
 
@@ -261,12 +316,18 @@ async function _fetchRouteObservations(
 
     return [];
   } catch (err) {
-    console.warn(TAG, 'Route fetch exception:', err);
+    const classified = classifyCollaborativeError(err);
+    warnEdgeIssue(`collaborative-intel:route:exception:${classified.message}`, 'Route collaborative intel exception', classified);
     return [];
   }
 }
 
 async function _submitObservation(obs: PendingObservation): Promise<boolean> {
+  if (!isDeployedEdgeFunction('collaborative-intel')) {
+    warnEdgeIssue('collaborative-intel:submit:missing', 'Collaborative expedition upload is gated because the Edge Function is not deployed');
+    return false;
+  }
+
   try {
     const { supabase } = require('./supabase');
     const { data, error } = await supabase.functions.invoke('collaborative-intel', {
@@ -284,27 +345,41 @@ async function _submitObservation(obs: PendingObservation): Promise<boolean> {
     });
 
     if (error) {
-      console.warn(TAG, 'Submit error:', error.message);
+      const classified = classifyCollaborativeError(error);
+      warnEdgeIssue(`collaborative-intel:submit:${classified.kind}:${classified.message}`, 'Collaborative observation submit failed', classified);
       return false;
     }
 
     return data?.success === true;
   } catch (err) {
-    console.warn(TAG, 'Submit exception:', err);
+    const classified = classifyCollaborativeError(err);
+    warnEdgeIssue(`collaborative-intel:submit:exception:${classified.message}`, 'Collaborative observation submit exception', classified);
     return false;
   }
 }
 
 async function _confirmObservation(observationId: string): Promise<boolean> {
+  if (!isDeployedEdgeFunction('collaborative-intel')) {
+    return false;
+  }
+
   try {
     const { supabase } = require('./supabase');
     const { data, error } = await supabase.functions.invoke('collaborative-intel', {
       body: { action: 'confirm', observationId },
     });
 
-    if (error) return false;
+    if (error) {
+      const classified = classifyCollaborativeError(error);
+      warnEdgeIssue(`collaborative-intel:confirm:${classified.kind}:${classified.message}`, 'Collaborative observation confirm failed', classified);
+      return false;
+    }
     return data?.success === true;
-  } catch { return false; }
+  } catch (err) {
+    const classified = classifyCollaborativeError(err);
+    warnEdgeIssue(`collaborative-intel:confirm:exception:${classified.message}`, 'Collaborative observation confirm exception', classified);
+    return false;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════

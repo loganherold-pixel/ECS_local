@@ -10,8 +10,8 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as rateLimitStore from '../app/lib/rateLimitStore';
-import type { RateLimitInfo } from '../app/lib/rateLimitStore';
+import * as rateLimitStore from '../lib/rateLimitStore';
+import type { RateLimitInfo } from '../lib/rateLimitStore';
 
 export default function RateLimitBanner() {
   const [activeItems, setActiveItems] = useState<RateLimitInfo[]>([]);
@@ -31,7 +31,7 @@ export default function RateLimitBanner() {
       duration: 250,
       useNativeDriver: true,
     }).start();
-  }, [activeItems.length]);
+  }, [activeItems.length, opacity]);
 
   if (activeItems.length === 0) return null;
 

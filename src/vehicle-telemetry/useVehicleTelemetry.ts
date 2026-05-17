@@ -18,11 +18,11 @@ import type {
   VehicleTelemetryDevice,
   VehicleTelemetryProviderId,
   NormalizedVehicleTelemetry,
+  VehicleTelemetrySnapshot,
   EngineStatus,
   TelemetryFreshnessLabel,
   SessionRecoveryStatus,
 } from './VehicleTelemetryTypes';
-import { EMPTY_SUMMARY } from './VehicleTelemetryTypes';
 import { vehicleTelemetryStore } from './VehicleTelemetryStore';
 import { vehicleTelemetryDeviceRegistry } from './VehicleTelemetryDeviceRegistry';
 import { vehicleTelemetryService } from './VehicleTelemetryService';
@@ -30,6 +30,9 @@ import { vehicleTelemetryService } from './VehicleTelemetryService';
 export interface VehicleTelemetryHookResult {
   /** Current telemetry summary */
   summary: VehicleTelemetrySummary;
+
+  /** Normalized source-aware telemetry snapshot for truthful UI rendering */
+  snapshot: VehicleTelemetrySnapshot;
 
   /** Whether any telemetry data is available */
   hasData: boolean;
@@ -107,7 +110,7 @@ export interface VehicleTelemetryHookResult {
   lastUpdatedText: string | null;
 
   /** Connection state string including reconnecting */
-  connectionDisplayState: 'connected' | 'connecting' | 'reconnecting' | 'disconnected' | 'error';
+  connectionDisplayState: 'connected' | 'connecting' | 'reconnecting' | 'disconnected' | 'error' | 'unsupported';
 }
 
 /**
@@ -134,7 +137,7 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
     const unsubs = [
       vehicleTelemetryStore.subscribe(bump),
       vehicleTelemetryDeviceRegistry.subscribe(bump),
-      vehicleTelemetryService.subscribe(bump),
+      vehicleTelemetryService.subscribe('state', bump),
     ];
     return () => unsubs.forEach(fn => fn());
   }, [bump]);
@@ -146,9 +149,13 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
   }, [bump]);
 
   const summary = vehicleTelemetryStore.getSummary();
+  const ecsState = vehicleTelemetryStore.getECSVehicleTelemetryState();
   const primaryDevice = vehicleTelemetryDeviceRegistry.getPrimary();
   const devices = vehicleTelemetryDeviceRegistry.getAll();
-  const serviceState = vehicleTelemetryService.getState();
+  const serviceState = vehicleTelemetryService.getSnapshot();
+  const activeProvider =
+    primaryDevice?.provider ??
+    ((serviceState.currentDevice?.provider as VehicleTelemetryProviderId | undefined) ?? null);
 
   const changePrimary = useCallback((deviceId: string) => {
     vehicleTelemetryService.changePrimaryDevice(deviceId);
@@ -161,6 +168,7 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
       vehicleTelemetryService.stopPolling();
 
       // Disconnect OBD-II adapter
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { obd2Adapter } = require('./OBD2Adapter');
       await obd2Adapter.disconnect();
 
@@ -168,7 +176,7 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
       const allDevices = vehicleTelemetryDeviceRegistry.getAll();
       for (const device of allDevices) {
         if (device.connection_state === 'disconnected' || device.connection_state === 'error') {
-          vehicleTelemetryDeviceRegistry.removeDevice(device.device_id);
+          vehicleTelemetryService.removeDevice(device.device_id);
         }
       }
 
@@ -178,7 +186,9 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
         vehicleTelemetryStore.clear();
       }
 
-      console.log('[VT-Hook] Provider disconnected and cleaned up');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[VT-Hook] Provider disconnected and cleaned up');
+      }
     } catch (err: any) {
       console.warn('[VT-Hook] Disconnect error:', err?.message);
     }
@@ -197,15 +207,17 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
 
   // Phase 2E: Connection display state (includes reconnecting)
   const connectionDisplayState = (() => {
-    if (serviceState.isReconnecting) return 'reconnecting' as const;
+    if (ecsState.isReconnecting) return 'reconnecting' as const;
     if (summary.connection_state === 'connected') return 'connected' as const;
     if (summary.connection_state === 'connecting') return 'connecting' as const;
+    if (summary.connection_state === 'unsupported') return 'unsupported' as const;
     if (summary.connection_state === 'error') return 'error' as const;
     return 'disconnected' as const;
   })();
 
   return {
     summary,
+    snapshot: ecsState.snapshot,
     hasData: summary.has_data,
     isFresh: vehicleTelemetryStore.isFresh(),
     isStale: vehicleTelemetryStore.isStale(),
@@ -213,10 +225,10 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
     primaryDevice,
     devices,
     deviceCount: devices.length,
-    activeProvider: serviceState.activeProvider,
-    isPolling: serviceState.isPolling,
-    isConnected: summary.connection_state === 'connected',
-    obd2WasConnected: serviceState.obd2WasConnected,
+    activeProvider,
+    isPolling: serviceState.pollerStatus.running || serviceState.pollerStatus.enabled,
+    isConnected: ecsState.isConnected,
+    obd2WasConnected: devices.some(device => device.provider === 'obd2'),
     changePrimary,
 
     // Phase 2C
@@ -227,9 +239,13 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
     pollerStatus: vehicleTelemetryService.getPollerStatus(),
 
     // Phase 2D
-    freshnessLabel: serviceState.freshnessLabel,
-    recoveryStatus: serviceState.recoveryStatus,
-    isReconnecting: serviceState.isReconnecting,
+    freshnessLabel: ecsState.freshnessLabel,
+    recoveryStatus: ecsState.isReconnecting
+      ? 'restoring'
+      : devices.length > 0
+        ? 'restored'
+        : 'idle',
+    isReconnecting: ecsState.isReconnecting,
     isShowingLastKnown: vehicleTelemetryStore.isShowingLastKnown(),
 
     // Phase 2E

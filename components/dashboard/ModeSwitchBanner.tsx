@@ -19,7 +19,7 @@
  * - Minimal visual noise for highway driving safety
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -29,6 +29,7 @@ import {
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { useTheme } from '../../context/ThemeContext';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 interface ModeSwitchBannerProps {
   visible: boolean;
@@ -48,8 +49,8 @@ export default function ModeSwitchBanner({
   onDismiss,
 }: ModeSwitchBannerProps) {
   const { palette } = useTheme();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(-20)).current;
+  const fadeAnim = useStableAnimatedValue(0);
+  const slideAnim = useStableAnimatedValue(-20);
 
   useEffect(() => {
     if (visible) {

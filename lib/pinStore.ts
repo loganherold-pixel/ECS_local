@@ -10,6 +10,8 @@ import { getPinTypeMeta } from '../components/navigate/PinTypes';
 
 const TAG = '[PIN_STORE]';
 const STORAGE_KEY = 'ecs_navigate_pins';
+type PinStoreListener = () => void;
+const listeners = new Set<PinStoreListener>();
 
 // ── Storage helpers ──────────────────────────────────────────
 const mem: Record<string, string> = {};
@@ -53,8 +55,22 @@ function getAllPins(): ECSPin[] {
   } catch { return []; }
 }
 
+function notifyPinStoreListeners(): void {
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn(TAG, 'Pin store listener failed', error);
+    }
+  }
+}
+
 function savePins(pins: ECSPin[]): void {
-  sSet(STORAGE_KEY, JSON.stringify(pins));
+  const previous = sGet(STORAGE_KEY);
+  const next = JSON.stringify(pins);
+  if (previous === next) return;
+  sSet(STORAGE_KEY, next);
+  notifyPinStoreListeners();
 }
 
 // ── Distance calculation ─────────────────────────────────────
@@ -70,6 +86,13 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 
 // ── Pin Store API ────────────────────────────────────────────
 export const pinStore = {
+  subscribe: (listener: PinStoreListener): (() => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  },
+
   getAll: (): ECSPin[] => getAllPins(),
 
   getById: (id: string): ECSPin | null => {

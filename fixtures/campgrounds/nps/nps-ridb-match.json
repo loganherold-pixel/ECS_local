@@ -1,0 +1,11 @@
+{
+  "id": "nps-cg-ridb-match",
+  "parkCode": "yose",
+  "name": "Juniper Flats Campground",
+  "latLong": "lat:38.71231, long:-119.81230",
+  "url": "https://www.nps.gov/yose/planyourvisit/juniper-flats.htm",
+  "description": "National Park Service context for an existing RIDB campground.",
+  "campsites": {
+    "totalSites": "24"
+  }
+}

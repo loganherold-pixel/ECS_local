@@ -13,19 +13,19 @@
  *   - Supports lifting above custom dock/system nav via containerStyle
  *   - Preserves existing ECS compass visuals and behavior
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Platform,
   Animated,
-  Easing,
   TouchableOpacity,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 import { TACTICAL } from '../../lib/theme';
+import { ECS_EASE, ECS_MOTION } from '../../lib/ecsAnimations';
 import type { HeadingAccuracy } from '../../lib/useVehicleHeading';
 
 // ── Constants ────────────────────────────────────────────────
@@ -34,6 +34,9 @@ const DIAL_SIZE = 62;
 const INNER_SIZE = 34;
 const TICK_COUNT = 36; // every 10°
 const CARDINAL_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+const RECENTER_HINT_VISIBLE_MS = 3400;
+const RECENTER_HINT_FADE_MS = ECS_MOTION.intelBarFadeOut;
+let recenterHintSeenThisSession = false;
 
 function getCardinal(degrees: number): string {
   const idx = Math.round((((degrees % 360) + 360) % 360) / 45) % 8;
@@ -55,23 +58,11 @@ function getAccuracyColor(accuracy: HeadingAccuracy): string {
   }
 }
 
-function getSourceLabel(source: 'compass' | 'gps' | 'none', isStationaryLocked: boolean): string {
-  if (isStationaryLocked) return 'LOCK';
-  switch (source) {
-    case 'compass':
-      return 'MAG';
-    case 'gps':
-      return 'GPS';
-    default:
-      return 'HDG';
-  }
-}
 
 // ── Props ────────────────────────────────────────────────────
 interface CompassRoseProps {
   heading?: number | null;
   followUser?: boolean;
-  userLocation?: { lat: number; lng: number } | null;
   visible?: boolean;
   onPress?: () => void;
   accuracy?: HeadingAccuracy;
@@ -79,25 +70,26 @@ interface CompassRoseProps {
   isStationaryLocked?: boolean;
   source?: 'compass' | 'gps' | 'none';
   containerStyle?: StyleProp<ViewStyle>;
+  paused?: boolean;
 }
 
-export default function CompassRose({
+const CompassRose = React.memo(function CompassRose({
   heading: externalHeading,
   followUser = false,
-  userLocation,
   visible = true,
   onPress,
   accuracy = 'medium',
   needsRecalibration = false,
   isStationaryLocked = false,
-  source = 'none',
   containerStyle,
+  paused = false,
 }: CompassRoseProps) {
   const [internalHeading, setInternalHeading] = useState<number | null>(null);
-  const [internalSource, setInternalSource] = useState<'MAG' | 'GPS' | 'NONE'>('NONE');
+  const [tapHintVisible, setTapHintVisible] = useState(() => !recenterHintSeenThisSession);
 
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const hintFadeAnim = useRef(new Animated.Value(recenterHintSeenThisSession ? 0 : 1)).current;
   const recalPulseAnim = useRef(new Animated.Value(0)).current;
   const prevHeadingRef = useRef<number>(0);
   const mountedRef = useRef(true);
@@ -108,6 +100,18 @@ export default function CompassRose({
     };
   }, []);
 
+  const dismissTapHint = useCallback(() => {
+    recenterHintSeenThisSession = true;
+    Animated.timing(hintFadeAnim, {
+      toValue: 0,
+      duration: RECENTER_HINT_FADE_MS,
+      easing: ECS_EASE.accelerate,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished && mountedRef.current) setTapHintVisible(false);
+    });
+  }, [hintFadeAnim]);
+
   // ── Fade in/out ────────────────────────────────────────────
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -116,6 +120,24 @@ export default function CompassRose({
       useNativeDriver: true,
     }).start();
   }, [visible, fadeAnim]);
+
+  useEffect(() => {
+    if (paused || isStationaryLocked) {
+      hintFadeAnim.setValue(1);
+      return undefined;
+    }
+
+    if (recenterHintSeenThisSession || !tapHintVisible) {
+      hintFadeAnim.setValue(0);
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      dismissTapHint();
+    }, RECENTER_HINT_VISIBLE_MS);
+
+    return () => clearTimeout(timer);
+  }, [dismissTapHint, hintFadeAnim, isStationaryLocked, paused, tapHintVisible]);
 
   // ── Recalibration pulse animation ─────────────────────────
   useEffect(() => {
@@ -165,7 +187,6 @@ export default function CompassRose({
           heading = ((heading % 360) + 360) % 360;
 
           setInternalHeading(Math.round(heading));
-          setInternalSource('MAG');
         });
       } catch {
         // ignore
@@ -194,7 +215,6 @@ export default function CompassRose({
         const { heading: gpsHeading } = pos.coords;
         if (gpsHeading != null && gpsHeading >= 0) {
           setInternalHeading(Math.round(gpsHeading));
-          setInternalSource('GPS');
         }
       },
       () => {},
@@ -223,8 +243,8 @@ export default function CompassRose({
 
     Animated.timing(rotateAnim, {
       toValue: smoothTarget,
-      duration: 300,
-      easing: Easing.out(Easing.quad),
+      duration: ECS_MOTION.compassRotationDuration,
+      easing: ECS_EASE.linear,
       useNativeDriver: true,
     }).start();
 
@@ -242,25 +262,32 @@ export default function CompassRose({
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
 
-  const effectiveSource =
-    externalHeading != null
-      ? source
-      : internalSource === 'MAG'
-        ? 'compass'
-        : internalSource === 'GPS'
-          ? 'gps'
-          : 'none';
-
-  const sourceLabel = getSourceLabel(effectiveSource as any, isStationaryLocked);
   const accuracyColor = getAccuracyColor(accuracy);
-  const sourceBadgeColor = isStationaryLocked ? '#4A90D9' : accuracyColor;
 
   const Wrapper = onPress ? TouchableOpacity : View;
-  const wrapperProps = onPress ? { onPress, activeOpacity: 0.85 } : {};
+  const handlePress = () => {
+    if (tapHintVisible) {
+      dismissTapHint();
+    }
+    onPress?.();
+  };
+  const wrapperProps = onPress
+    ? {
+        onPress: handlePress,
+        activeOpacity: 0.85,
+        hitSlop: { top: 10, bottom: 10, left: 10, right: 10 },
+        accessibilityRole: 'button' as const,
+        accessibilityLabel: 'Recenter map on current location',
+        accessibilityHint: 'Centers the map on your current GPS location.',
+      }
+    : {};
 
   return (
     <Animated.View style={[styles.container, containerStyle, { opacity: fadeAnim }]}>
-      <Wrapper style={styles.compassOuter} {...(wrapperProps as any)}>
+      <Wrapper
+        style={[styles.compassOuter, paused && styles.compassOuterPaused]}
+        {...(wrapperProps as any)}
+      >
         <View style={styles.outerGlow} />
 
         {needsRecalibration && (
@@ -321,7 +348,7 @@ export default function CompassRose({
           </View>
         </Animated.View>
 
-        <View style={styles.centerHub}>
+        <View style={[styles.centerHub, paused && styles.centerHubPaused]}>
           <Text style={styles.headingDegrees}>
             {displayDeg != null ? `${displayDeg}°` : '—'}
           </Text>
@@ -333,19 +360,28 @@ export default function CompassRose({
           <View style={styles.headingDot} />
         </View>
 
-        <View style={[styles.sourceBadge, { borderColor: sourceBadgeColor + '60' }]}>
-          <Text style={[styles.sourceText, { color: sourceBadgeColor }]}>
-            {sourceLabel}
+        <Animated.View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no"
+          style={[styles.recenterHint, { opacity: hintFadeAnim }]}
+        >
+          <Text style={styles.recenterHintText}>
+            {paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER'}
           </Text>
-        </View>
+        </Animated.View>
 
-        {hasHeading && (
-          <View style={[styles.accuracyDot, { backgroundColor: accuracyColor }]} />
-        )}
+        {hasHeading && !paused ? (
+          <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
+        ) : null}
       </Wrapper>
     </Animated.View>
   );
-}
+});
+
+CompassRose.displayName = 'CompassRose';
+
+export default CompassRose;
 
 const styles = StyleSheet.create({
   container: {
@@ -369,6 +405,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 6,
     elevation: 8,
+  },
+  compassOuterPaused: {
+    borderColor: 'rgba(196,138,44,0.2)',
+    backgroundColor: 'rgba(11,15,18,0.82)',
   },
 
   outerGlow: {
@@ -508,22 +548,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 5,
   },
+  centerHubPaused: {
+    borderColor: 'rgba(196,138,44,0.2)',
+    backgroundColor: 'rgba(11,15,18,0.88)',
+  },
 
   headingDegrees: {
-    fontFamily: 'Courier',
-    fontSize: 10,
-    fontWeight: '800',
-    color: TACTICAL.text,
-    letterSpacing: 0.3,
-    lineHeight: 12,
+    display: 'none',
+    width: 0,
+    height: 0,
+    fontSize: 0,
+    lineHeight: 0,
+    opacity: 0,
   },
 
   headingCardinal: {
-    fontSize: 6,
-    fontWeight: '700',
-    color: TACTICAL.amber,
-    letterSpacing: 2,
-    lineHeight: 8,
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 1.2,
+    lineHeight: 13,
     textTransform: 'uppercase',
   },
 
@@ -551,32 +595,33 @@ const styles = StyleSheet.create({
     marginTop: -1,
   },
 
-  sourceBadge: {
+  recenterHint: {
     position: 'absolute',
-    bottom: -2,
-    left: COMPASS_SIZE / 2 - 12,
-    width: 24,
-    height: 10,
-    borderRadius: 3,
-    backgroundColor: 'rgba(11,15,18,0.95)',
-    borderWidth: 0.5,
-    borderColor: 'rgba(62,79,60,0.4)',
+    top: COMPASS_SIZE + 6,
+    alignSelf: 'center',
+    minWidth: 64,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 7,
+    backgroundColor: 'rgba(11,15,18,0.56)',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 6,
+    zIndex: 1,
   },
 
-  sourceText: {
-    fontSize: 5,
+  recenterHintText: {
+    fontSize: 6,
     fontWeight: '800',
-    color: 'rgba(138,138,133,0.5)',
-    letterSpacing: 1.5,
+    color: 'rgba(214,208,190,0.58)',
+    letterSpacing: 0.7,
   },
 
-  accuracyDot: {
+  headingQualityAccent: {
     position: 'absolute',
-    top: 2,
-    left: 2,
+    top: 6,
+    right: 6,
     width: 5,
     height: 5,
     borderRadius: 3,

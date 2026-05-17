@@ -145,7 +145,7 @@ export default function ExpeditionLiveLogScreen() {
     if (!loading && expeditionId) {
       loadEvents();
     }
-  }, [filterType]);
+  }, [expeditionId, filterType, loadEvents, loading]);
 
   // ── ACT_InsertExpeditionEvent ──────────────────────────────
   const handleAddEvent = useCallback(async () => {
@@ -201,7 +201,7 @@ export default function ExpeditionLiveLogScreen() {
   // ── Total event count ──────────────────────────────────────
   const totalCount = useMemo(() => {
     return expeditionEventStore.getEvents(expeditionId).length;
-  }, [expeditionId, events]);
+  }, [expeditionId]);
 
   // ── Derived state ──────────────────────────────────────────
   const isClosed = expedition?.status === 'completed' || expedition?.status === 'archived';

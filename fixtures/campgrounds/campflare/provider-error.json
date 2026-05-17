@@ -1,0 +1,4 @@
+{
+  "error": "rate_limit",
+  "message": "Too many requests for CAMPFLARE_API_KEY"
+}

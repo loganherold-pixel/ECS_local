@@ -29,6 +29,7 @@
  */
 
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ class IDBQueueManager {
 
     if (!this._useIDB) {
       // No IndexedDB — resolve immediately, will use localStorage fallback
-      console.log('[IDBQueue] IndexedDB unavailable — using localStorage fallback');
+      ecsLog.debug('SYSTEM', 'IndexedDB unavailable; using localStorage fallback');
       this._readyResolve();
       return;
     }
@@ -164,7 +165,7 @@ class IDBQueueManager {
         // Migrate data from localStorage to IndexedDB on first use
         this._migrateFromLocalStorage();
 
-        console.log('[IDBQueue] IndexedDB ready');
+        ecsLog.debug('SYSTEM', 'IndexedDB ready');
         this._readyResolve();
       };
 
@@ -219,7 +220,11 @@ class IDBQueueManager {
         if (existing.length > 0) continue; // Don't overwrite existing IDB data
 
         await this._idbSaveAll(storeName as IDBStoreName, items);
-        console.log(`[IDBQueue] Migrated ${items.length} items from localStorage (${lsKey}) → IDB (${storeName})`);
+        ecsLog.debug('SYSTEM', 'IndexedDB migration completed', {
+          count: items.length,
+          localStorageKey: lsKey,
+          storeName,
+        });
       } catch (e) {
         console.warn(`[IDBQueue] Migration failed for ${storeName}:`, e);
       }
@@ -517,7 +522,7 @@ class IDBQueueManager {
       try {
         const request = indexedDB.deleteDatabase(DB_NAME);
         request.onsuccess = () => {
-          console.log('[IDBQueue] Database deleted');
+      ecsLog.debug('SYSTEM', 'IndexedDB database deleted');
           resolve();
         };
         request.onerror = () => reject(request.error);

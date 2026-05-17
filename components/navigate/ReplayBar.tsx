@@ -191,7 +191,14 @@ export default function ReplayBar({
         {/* Play/Pause */}
         <TouchableOpacity
           style={styles.playBtn}
-          onPress={() => { hapticMicro(); isPlaying ? onPause() : onPlay(); }}
+          onPress={() => {
+            hapticMicro();
+            if (isPlaying) {
+              onPause();
+            } else {
+              onPlay();
+            }
+          }}
           activeOpacity={0.8}
         >
           <Ionicons

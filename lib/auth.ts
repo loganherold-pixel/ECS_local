@@ -8,18 +8,28 @@
  */
 
 import { supabase, isSupabaseConfigured } from './supabase';
+import { AUTH_COPY } from './auth/authCopy';
+import { sanitizeAuthLogPayload } from './auth/authLogRedaction';
+import {
+  buildSharedAccountAccessState,
+  type AccountRole,
+  type EntitlementStatus,
+  type InternalAccountType,
+  type SharedAccountAccessLevel,
+  type SharedAccountKind,
+} from './sharedAccountPolicy';
 
 // ── Clean error message mapping ──────────────────────────────
 const ERROR_MAP: Record<string, string> = {
-  'Invalid login credentials': "Couldn't sign in. Check your email and password.",
-  'Email not confirmed': "Your email hasn't been verified yet. Check your inbox.",
+  'Invalid login credentials': AUTH_COPY.login.invalidCredentials,
+  'Email not confirmed': AUTH_COPY.session.reauth,
   'User already registered': 'An account with this email already exists.',
   'Password should be at least 6 characters': 'Password must be at least 6 characters.',
   'Signup requires a valid password': 'Please enter a valid password.',
-  'User not found': 'No account found with that email.',
-  'Email rate limit exceeded': 'Too many attempts. Please wait a moment and try again.',
+  'User not found': AUTH_COPY.login.invalidCredentials,
+  'Email rate limit exceeded': AUTH_COPY.login.rateLimited,
   'For security purposes, you can only request this once every 60 seconds':
-    'Please wait 60 seconds before trying again.',
+    AUTH_COPY.login.rateLimited,
 };
 
 const AUTH_HANDLER_NAME = 'auth-handler';
@@ -36,6 +46,12 @@ type EdgeInvokeFallback = {
   status?: number | null;
 };
 
+function logOptionalAuditFailure(label: string, error: unknown): void {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.debug(label, sanitizeAuthLogPayload(error));
+  }
+}
+
 /**
  * Sanitize Supabase error messages into clean, user-friendly copy
  */
@@ -47,35 +63,150 @@ export function sanitizeAuthError(rawError: string): string {
   }
 
   if (rawError.toLowerCase().includes('password')) {
-    return 'There was a problem with your password. Please try again.';
+    return AUTH_COPY.login.genericFailure;
   }
   if (rawError.toLowerCase().includes('email')) {
-    return 'There was a problem with your email. Please check and try again.';
+    return AUTH_COPY.login.genericFailure;
   }
   if (rawError.toLowerCase().includes('rate') || rawError.toLowerCase().includes('limit')) {
-    return 'Too many attempts. Please wait a moment and try again.';
+    return AUTH_COPY.login.rateLimited;
   }
   if (rawError.toLowerCase().includes('network') || rawError.toLowerCase().includes('fetch')) {
-    return 'Network error. Check your connection and try again.';
+    return AUTH_COPY.login.offline;
+  }
+  if (rawError.toLowerCase().includes('not authorized') || rawError.toLowerCase().includes('forbidden')) {
+    return 'This account is not authorized to manage shared access.';
   }
 
-  return "Couldn't sign in. Please try again or contact support.";
+  return AUTH_COPY.login.genericFailure;
 }
 
 export interface OperatorInfo {
-  role: string;
+  role: AccountRole;
   status: string;
   display_name: string | null;
   email: string | null;
   exists: boolean;
+  access_level: SharedAccountAccessLevel;
+  account_kind: SharedAccountKind;
+  entitlement_status: EntitlementStatus;
+  is_shared_internal: boolean;
+  is_shared_account: boolean;
+  internal_account_type: InternalAccountType;
+  is_admin: boolean;
+  has_full_app_access: boolean;
+  allow_password_rotation: boolean;
+  account_note?: string | null;
+  internal_tag?: string | null;
+  can_rotate_shared_password: boolean;
+  can_revoke_shared_sessions: boolean;
+  revoke_sessions_supported: boolean;
+  last_login_at?: string | null;
+  last_seen_at?: string | null;
+  last_seen_platform?: string | null;
+  last_seen_device?: string | null;
+  subscription_provider?: string | null;
+  subscription_product_id?: string | null;
+  subscription_environment?: string | null;
+  current_period_end_at?: string | null;
+  current_period_start_at?: string | null;
+  grace_expires_at?: string | null;
+  revoked_at?: string | null;
+  last_verified_at?: string | null;
 }
 
 export interface PostLoginResult {
   success: boolean;
   suspended: boolean;
-  role: string;
+  role: AccountRole;
   status: string;
+  access_level: SharedAccountAccessLevel;
+  account_kind: SharedAccountKind;
+  entitlement_status: EntitlementStatus;
+  is_shared_internal: boolean;
+  is_shared_account: boolean;
+  internal_account_type: InternalAccountType;
+  is_admin: boolean;
+  has_full_app_access: boolean;
+  allow_password_rotation: boolean;
+  account_note?: string | null;
+  internal_tag?: string | null;
+  can_rotate_shared_password: boolean;
+  can_revoke_shared_sessions: boolean;
+  revoke_sessions_supported: boolean;
+  last_login_at?: string | null;
+  last_seen_at?: string | null;
+  last_seen_platform?: string | null;
+  last_seen_device?: string | null;
+  subscription_provider?: string | null;
+  subscription_product_id?: string | null;
+  subscription_environment?: string | null;
+  current_period_end_at?: string | null;
+  current_period_start_at?: string | null;
+  grace_expires_at?: string | null;
+  revoked_at?: string | null;
+  last_verified_at?: string | null;
   error?: string;
+}
+
+export interface SharedAccountPasswordRotationResult {
+  success: boolean;
+  sessions_revoked: boolean;
+  revoke_supported: boolean;
+  error?: string;
+}
+
+type SafeFallbackAccessState = Pick<
+  OperatorInfo,
+  | 'role'
+  | 'status'
+  | 'access_level'
+  | 'account_kind'
+  | 'entitlement_status'
+  | 'is_shared_internal'
+  | 'is_shared_account'
+  | 'internal_account_type'
+  | 'is_admin'
+  | 'has_full_app_access'
+  | 'allow_password_rotation'
+  | 'can_rotate_shared_password'
+  | 'can_revoke_shared_sessions'
+  | 'revoke_sessions_supported'
+  | 'subscription_provider'
+  | 'subscription_product_id'
+  | 'subscription_environment'
+  | 'current_period_end_at'
+  | 'current_period_start_at'
+  | 'grace_expires_at'
+  | 'revoked_at'
+  | 'last_verified_at'
+>;
+
+function buildSafeFallbackAccessState(): SafeFallbackAccessState {
+  return {
+    role: 'user',
+    status: 'active',
+    access_level: 'standard',
+    account_kind: 'standard',
+    entitlement_status: 'free',
+    is_shared_internal: false,
+    is_shared_account: false,
+    internal_account_type: null,
+    is_admin: false,
+    has_full_app_access: false,
+    allow_password_rotation: false,
+    can_rotate_shared_password: false,
+    can_revoke_shared_sessions: false,
+    revoke_sessions_supported: false,
+    subscription_provider: null,
+    subscription_product_id: null,
+    subscription_environment: null,
+    current_period_end_at: null,
+    current_period_start_at: null,
+    grace_expires_at: null,
+    revoked_at: null,
+    last_verified_at: null,
+  };
 }
 
 /**
@@ -167,7 +298,7 @@ async function callAuthHandler(
           action: body?.action ?? 'unknown',
           status,
           message,
-          error: errorObj,
+          error: sanitizeAuthLogPayload(errorObj),
         });
       }
 
@@ -188,7 +319,7 @@ async function callAuthHandler(
         functionName: AUTH_HANDLER_NAME,
         action: body?.action ?? 'unknown',
         message,
-        error: e,
+        error: sanitizeAuthLogPayload(e),
       });
     }
 
@@ -202,7 +333,33 @@ async function callAuthHandler(
  */
 export async function postLogin(userId: string, email: string): Promise<PostLoginResult> {
   if (!userId || !email) {
-    return { success: true, suspended: false, role: 'operator', status: 'active' };
+    const access = buildSafeFallbackAccessState();
+    return {
+      success: true,
+      suspended: false,
+      role: access.role,
+      status: 'active',
+      access_level: access.access_level,
+      account_kind: access.account_kind,
+      entitlement_status: access.entitlement_status,
+      is_shared_internal: access.is_shared_internal,
+      is_shared_account: access.is_shared_account,
+      internal_account_type: access.internal_account_type,
+      is_admin: access.is_admin,
+      has_full_app_access: access.has_full_app_access,
+      allow_password_rotation: false,
+      can_rotate_shared_password: access.can_rotate_shared_password,
+      can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+      revoke_sessions_supported: access.can_revoke_shared_sessions,
+      subscription_provider: null,
+      subscription_product_id: null,
+      subscription_environment: null,
+      current_period_end_at: null,
+      current_period_start_at: null,
+      grace_expires_at: null,
+      revoked_at: null,
+      last_verified_at: null,
+    };
   }
 
   const { data, error } = await callAuthHandler(
@@ -215,20 +372,80 @@ export async function postLogin(userId: string, email: string): Promise<PostLogi
   );
 
   if (error || !data) {
+    const access = buildSafeFallbackAccessState();
     if (!error || isAuthHandlerOptionalFailure(error)) {
-      console.warn('[Auth] Post-login handler unavailable (non-blocking):', error || 'No data');
+      console.warn('[Auth] Post-login handler unavailable (non-blocking):', sanitizeAuthLogPayload(error || 'No data'));
     } else {
-      console.warn('[Auth] Post-login handler failed (non-blocking):', error);
+      console.warn('[Auth] Post-login handler failed (non-blocking):', sanitizeAuthLogPayload(error));
     }
 
-    return { success: true, suspended: false, role: 'operator', status: 'active' };
+    return {
+      success: true,
+      suspended: false,
+      role: access.role,
+      status: 'active',
+      access_level: access.access_level,
+      account_kind: access.account_kind,
+      entitlement_status: access.entitlement_status,
+      is_shared_internal: access.is_shared_internal,
+      is_shared_account: access.is_shared_account,
+      internal_account_type: access.internal_account_type,
+      is_admin: access.is_admin,
+      has_full_app_access: access.has_full_app_access,
+      allow_password_rotation: false,
+      can_rotate_shared_password: access.can_rotate_shared_password,
+      can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+      revoke_sessions_supported: false,
+      subscription_provider: null,
+      subscription_product_id: null,
+      subscription_environment: null,
+      current_period_end_at: null,
+      current_period_start_at: null,
+      grace_expires_at: null,
+      revoked_at: null,
+      last_verified_at: null,
+    };
   }
+
+  const access = buildSharedAccountAccessState({
+    email: data.email || email,
+    role: data.role || 'user',
+    status: data.status || 'active',
+    entitlementStatus: data.entitlement_status || 'free',
+    revokeSupported: data.revoke_sessions_supported !== false,
+  });
 
   return {
     success: data.success !== false,
     suspended: data.suspended === true,
-    role: data.role || 'operator',
+    role: data.role || access.role,
     status: data.status || 'active',
+    access_level: access.access_level,
+    account_kind: access.account_kind,
+    entitlement_status: data.entitlement_status || access.entitlement_status,
+    is_shared_internal: access.is_shared_internal,
+    is_shared_account: data.is_shared_account === true || access.is_shared_account,
+    internal_account_type: data.internal_account_type || access.internal_account_type,
+    is_admin: access.is_admin,
+    has_full_app_access: data.has_full_app_access === true || access.has_full_app_access,
+    allow_password_rotation: data.allow_password_rotation === true,
+    account_note: data.account_note || null,
+    internal_tag: data.internal_tag || null,
+    can_rotate_shared_password: access.can_rotate_shared_password,
+    can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+    revoke_sessions_supported: data.revoke_sessions_supported !== false,
+    last_login_at: data.last_login_at || null,
+    last_seen_at: data.last_seen_at || null,
+    last_seen_platform: data.last_seen_platform || null,
+    last_seen_device: data.last_seen_device || null,
+    subscription_provider: data.subscription_provider || null,
+    subscription_product_id: data.subscription_product_id || null,
+    subscription_environment: data.subscription_environment || null,
+    current_period_end_at: data.current_period_end_at || null,
+    current_period_start_at: data.current_period_start_at || null,
+    grace_expires_at: data.grace_expires_at || null,
+    revoked_at: data.revoked_at || null,
+    last_verified_at: data.last_verified_at || null,
   };
 }
 
@@ -237,12 +454,33 @@ export async function postLogin(userId: string, email: string): Promise<PostLogi
  */
 export async function checkOperatorStatus(userId: string): Promise<OperatorInfo> {
   if (!userId) {
+    const access = buildSafeFallbackAccessState();
     return {
-      role: 'operator',
+      role: access.role,
       status: 'active',
       display_name: null,
       email: null,
       exists: false,
+      access_level: access.access_level,
+      account_kind: access.account_kind,
+      entitlement_status: access.entitlement_status,
+      is_shared_internal: access.is_shared_internal,
+      is_shared_account: access.is_shared_account,
+      internal_account_type: access.internal_account_type,
+      is_admin: access.is_admin,
+      has_full_app_access: access.has_full_app_access,
+      allow_password_rotation: false,
+      can_rotate_shared_password: access.can_rotate_shared_password,
+      can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+      revoke_sessions_supported: false,
+      subscription_provider: null,
+      subscription_product_id: null,
+      subscription_environment: null,
+      current_period_end_at: null,
+      current_period_start_at: null,
+      grace_expires_at: null,
+      revoked_at: null,
+      last_verified_at: null,
     };
   }
 
@@ -255,21 +493,76 @@ export async function checkOperatorStatus(userId: string): Promise<OperatorInfo>
   );
 
   if (error || !data) {
+    const access = buildSafeFallbackAccessState();
     return {
-      role: 'operator',
+      role: access.role,
       status: 'active',
       display_name: null,
       email: null,
       exists: false,
+      access_level: access.access_level,
+      account_kind: access.account_kind,
+      entitlement_status: access.entitlement_status,
+      is_shared_internal: access.is_shared_internal,
+      is_shared_account: access.is_shared_account,
+      internal_account_type: access.internal_account_type,
+      is_admin: access.is_admin,
+      has_full_app_access: access.has_full_app_access,
+      allow_password_rotation: false,
+      can_rotate_shared_password: access.can_rotate_shared_password,
+      can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+      revoke_sessions_supported: false,
+      subscription_provider: null,
+      subscription_product_id: null,
+      subscription_environment: null,
+      current_period_end_at: null,
+      current_period_start_at: null,
+      grace_expires_at: null,
+      revoked_at: null,
+      last_verified_at: null,
     };
   }
 
+  const access = buildSharedAccountAccessState({
+    email: data.email || null,
+    role: data.role || 'user',
+    status: data.status || 'active',
+    entitlementStatus: data.entitlement_status || 'free',
+    revokeSupported: data.revoke_sessions_supported !== false,
+  });
+
   return {
-    role: data.role || 'operator',
+    role: data.role || access.role,
     status: data.status || 'active',
     display_name: data.display_name || null,
     email: data.email || null,
     exists: data.exists !== false,
+    access_level: access.access_level,
+    account_kind: access.account_kind,
+    entitlement_status: data.entitlement_status || access.entitlement_status,
+    is_shared_internal: access.is_shared_internal,
+    is_shared_account: data.is_shared_account === true || access.is_shared_account,
+    internal_account_type: data.internal_account_type || access.internal_account_type,
+    is_admin: access.is_admin,
+    has_full_app_access: data.has_full_app_access === true || access.has_full_app_access,
+    allow_password_rotation: data.allow_password_rotation === true,
+    account_note: data.account_note || null,
+    internal_tag: data.internal_tag || null,
+    can_rotate_shared_password: access.can_rotate_shared_password,
+    can_revoke_shared_sessions: access.can_revoke_shared_sessions,
+    revoke_sessions_supported: data.revoke_sessions_supported !== false,
+    last_login_at: data.last_login_at || null,
+    last_seen_at: data.last_seen_at || null,
+    last_seen_platform: data.last_seen_platform || null,
+    last_seen_device: data.last_seen_device || null,
+    subscription_provider: data.subscription_provider || null,
+    subscription_product_id: data.subscription_product_id || null,
+    subscription_environment: data.subscription_environment || null,
+    current_period_end_at: data.current_period_end_at || null,
+    current_period_start_at: data.current_period_start_at || null,
+    grace_expires_at: data.grace_expires_at || null,
+    revoked_at: data.revoked_at || null,
+    last_verified_at: data.last_verified_at || null,
   };
 }
 
@@ -311,12 +604,12 @@ export async function logAuditEvent(
         action: 'log_event',
         user_id: userId || 'anonymous',
         event,
-        metadata: metadata || {},
+        metadata: sanitizeAuthLogPayload(metadata || {}),
       },
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Audit log failed:', e);
+    logOptionalAuditFailure('[Auth] Optional audit log skipped:', e);
   }
 }
 
@@ -333,7 +626,7 @@ export async function logPasswordUpdate(userId: string | null): Promise<void> {
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Password update audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional password audit skipped:', e);
   }
 }
 
@@ -350,7 +643,7 @@ export async function logLogout(userId: string | null): Promise<void> {
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Logout audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional logout audit skipped:', e);
   }
 }
 
@@ -364,11 +657,56 @@ export async function logLoginFailed(email: string): Promise<void> {
         action: 'log_event',
         user_id: 'anonymous',
         event: 'login_failed',
-        metadata: { email },
+        metadata: sanitizeAuthLogPayload({ email }),
       },
       3000
     );
   } catch (e) {
-    console.warn('[Auth] Login failed audit failed:', e);
+    logOptionalAuditFailure('[Auth] Optional login-failed audit skipped:', e);
   }
+}
+
+export async function rotateSharedAccountPassword(
+  newPassword: string,
+  revokeSessions: boolean,
+): Promise<SharedAccountPasswordRotationResult> {
+  const password = newPassword.trim();
+  if (password.length < 8) {
+    return {
+      success: false,
+      sessions_revoked: false,
+      revoke_supported: false,
+      error: 'Use at least 8 characters for the shared password.',
+    };
+  }
+
+  const { data, error } = await callAuthHandler({
+    action: 'rotate_shared_account_password',
+    new_password: password,
+    revoke_sessions: revokeSessions,
+  });
+
+  if (error) {
+    return {
+      success: false,
+      sessions_revoked: false,
+      revoke_supported: false,
+      error: sanitizeAuthError(error),
+    };
+  }
+
+  if (data?.error) {
+    return {
+      success: false,
+      sessions_revoked: false,
+      revoke_supported: data.revoke_supported !== false,
+      error: sanitizeAuthError(String(data.error)),
+    };
+  }
+
+  return {
+    success: data?.success !== false,
+    sessions_revoked: data?.sessions_revoked === true,
+    revoke_supported: data?.revoke_supported !== false,
+  };
 }

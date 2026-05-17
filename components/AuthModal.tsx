@@ -9,15 +9,14 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from './SafeIcon';
 
+import { AUTH_COPY } from '../lib/auth/authCopy';
 import { TACTICAL } from '../lib/theme';
 import { useApp } from '../context/AppContext';
-
-import ECSModal from './ECSModal';
+import TacticalPopupShell from './TacticalPopupShell';
 
 interface AuthModalProps {
   visible: boolean;
@@ -42,7 +41,6 @@ export default function AuthModal({ visible, onClose }: AuthModalProps) {
   const handleSignOut = async () => {
     await signOut();
     onClose();
-    router.replace('/login');
   };
 
   const handleSignIn = () => {
@@ -54,162 +52,146 @@ export default function AuthModal({ visible, onClose }: AuthModalProps) {
   };
 
   return (
-    <ECSModal
+    <TacticalPopupShell
       visible={visible}
       onClose={onClose}
       tier="global"
+      title={AUTH_COPY.account.header}
+      subtitle="Connection state, account profile, and sync readiness."
+      eyebrow="ACCOUNT"
+      icon="person-circle-outline"
+      overlayClass="dialog"
+      scrollable
     >
-      <View style={styles.overlay}>
-        <Pressable style={styles.panel} onPress={(e) => e.stopPropagation()}>
-
-          {/* Connectivity Status */}
-          <View style={styles.connectivitySection}>
-            <View style={styles.connectRow}>
-              <Ionicons
-                name={isOnline ? 'wifi' : connectivityStatus === 'reconnecting' ? 'wifi-outline' : 'cloud-offline-outline'}
-                size={16}
-                color={isOnline ? '#4CAF50' : connectivityStatus === 'reconnecting' ? TACTICAL.amber : TACTICAL.textMuted}
-              />
-              <Text style={[
-                styles.connectText,
-                { color: isOnline ? '#4CAF50' : connectivityStatus === 'reconnecting' ? TACTICAL.amber : TACTICAL.textMuted },
-              ]}>
-                {isOnline ? 'ONLINE' : connectivityStatus === 'reconnecting' ? 'SEARCHING...' : 'NO SIGNAL'}
-              </Text>
-            </View>
-            {!isOnline && (
-              <Text style={styles.connectNote}>
-                All features work offline. Data syncs automatically when signal returns.
-              </Text>
-            )}
+      <View style={styles.panel}>
+        <View style={styles.connectivitySection}>
+          <View style={styles.connectRow}>
+            <Ionicons
+              name={isOnline ? 'wifi' : connectivityStatus === 'reconnecting' ? 'wifi-outline' : 'cloud-offline-outline'}
+              size={16}
+              color={isOnline ? '#4CAF50' : connectivityStatus === 'reconnecting' ? TACTICAL.amber : TACTICAL.textMuted}
+            />
+            <Text style={[
+              styles.connectText,
+              { color: isOnline ? '#4CAF50' : connectivityStatus === 'reconnecting' ? TACTICAL.amber : TACTICAL.textMuted },
+            ]}>
+              {isOnline ? 'ONLINE' : connectivityStatus === 'reconnecting' ? 'SYNCING' : 'OFFLINE'}
+            </Text>
           </View>
+          {!isOnline ? (
+            <Text style={styles.connectNote}>
+              Core features stay available with saved data. Sync resumes automatically when signal returns.
+            </Text>
+          ) : null}
+        </View>
 
-          <View style={styles.divider} />
+        <View style={styles.divider} />
 
-          {user ? (
-            <>
-              {/* Authenticated User Info */}
-              <View style={styles.userSection}>
-                <View style={styles.avatarCircle}>
-                  <Ionicons name="person" size={20} color={TACTICAL.amber} />
-                </View>
-                <View style={styles.userInfo}>
-                  <Text style={styles.userEmail} numberOfLines={2}>
-
-                    {operatorInfo?.email || user.email || 'Operator'}
-                  </Text>
-                  <View style={styles.roleRow}>
-                    <View style={[
-                      styles.roleBadge,
-                      { backgroundColor: operatorInfo?.role === 'admin' ? 'rgba(196,138,44,0.15)' : 'rgba(62,79,60,0.3)' },
+        {user ? (
+          <>
+            <View style={styles.userSection}>
+              <View style={styles.avatarCircle}>
+                <Ionicons name="person" size={20} color={TACTICAL.amber} />
+              </View>
+              <View style={styles.userInfo}>
+                <Text style={styles.userEmail} numberOfLines={2}>
+                  {operatorInfo?.email || user.email || 'Operator'}
+                </Text>
+                <View style={styles.roleRow}>
+                  <View style={[
+                    styles.roleBadge,
+                    { backgroundColor: operatorInfo?.is_admin ? 'rgba(196,138,44,0.15)' : 'rgba(62,79,60,0.3)' },
+                  ]}>
+                    <Text style={[
+                      styles.roleText,
+                      { color: operatorInfo?.is_admin ? TACTICAL.amber : TACTICAL.text },
                     ]}>
-                      <Text style={[
-                        styles.roleText,
-                        { color: operatorInfo?.role === 'admin' ? TACTICAL.amber : TACTICAL.text },
-                      ]}>
-                        {(operatorInfo?.role || 'operator').toUpperCase()}
-                      </Text>
-                    </View>
+                      {(operatorInfo?.role || 'user').toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={[
+                    styles.statusBadge,
+                    { backgroundColor: operatorInfo?.status === 'active' ? 'rgba(62,107,62,0.2)' : 'rgba(192,57,43,0.2)' },
+                  ]}>
                     <View style={[
-                      styles.statusBadge,
-                      { backgroundColor: operatorInfo?.status === 'active' ? 'rgba(62,107,62,0.2)' : 'rgba(192,57,43,0.2)' },
+                      styles.statusDot,
+                      { backgroundColor: operatorInfo?.status === 'active' ? TACTICAL.success : TACTICAL.danger },
+                    ]} />
+                    <Text style={[
+                      styles.statusText,
+                      { color: operatorInfo?.status === 'active' ? TACTICAL.successText : TACTICAL.danger },
                     ]}>
-                      <View style={[
-                        styles.statusDot,
-                        { backgroundColor: operatorInfo?.status === 'active' ? TACTICAL.success : TACTICAL.danger },
-                      ]} />
-                      <Text style={[
-                        styles.statusText,
-                        { color: operatorInfo?.status === 'active' ? TACTICAL.successText : TACTICAL.danger },
-                      ]}>
-                        {(operatorInfo?.status || 'active').toUpperCase()}
-                      </Text>
-                    </View>
+                      {(operatorInfo?.status || 'active').toUpperCase()}
+                    </Text>
                   </View>
                 </View>
               </View>
+            </View>
 
-              {/* Sync Stats */}
-              <View style={styles.statsRow}>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{dirtyCount}</Text>
-                  <Text style={styles.statLabel}>PENDING</Text>
-                </View>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{queueSize}</Text>
-                  <Text style={styles.statLabel}>QUEUED</Text>
-                </View>
-                <View style={styles.statItem}>
-                  <Text style={[styles.statValue, { color: isOnline ? '#4CAF50' : TACTICAL.textMuted }]}>
-                    {syncStatus.toUpperCase()}
-                  </Text>
-                  <Text style={styles.statLabel}>SYNC</Text>
-                </View>
+            <View style={styles.statsRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{dirtyCount}</Text>
+                <Text style={styles.statLabel}>PENDING</Text>
               </View>
-
-              <View style={styles.divider} />
-
-              {/* Sign Out */}
-              <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
-                <Ionicons name="log-out-outline" size={18} color={TACTICAL.danger} />
-                <Text style={styles.signOutText}>SIGN OUT</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              {/* Unauthenticated */}
-              <View style={styles.noAuthSection}>
-                <Ionicons name="person-circle-outline" size={40} color={TACTICAL.textMuted} />
-                <Text style={styles.noAuthTitle}>
-                  {offlineMode ? 'Local Mode' : 'Not Signed In'}
-
-                </Text>
-                <Text style={styles.noAuthDesc}>
-                  {offlineMode
-                    ? 'Working with local data. Sign in to enable cloud sync, backup, and multi-device access.'
-                    : 'Sign in with your credentials to access cloud features.'}
-                </Text>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{queueSize}</Text>
+                <Text style={styles.statLabel}>QUEUED</Text>
               </View>
-
-              <TouchableOpacity style={styles.signInBtn} onPress={handleSignIn} activeOpacity={0.7}>
-                <Ionicons name="lock-open-outline" size={16} color={TACTICAL.text} />
-                <Text style={styles.signInText}>SIGN IN</Text>
-              </TouchableOpacity>
-
-              {offlineMode && (
-                <Text style={styles.offlineNote}>
-                  All app features are available offline. Your data is stored locally and will sync when you sign in.
+              <View style={styles.statItem}>
+                <Text style={[styles.statValue, { color: isOnline ? '#4CAF50' : TACTICAL.textMuted }]}>
+                  {syncStatus.toUpperCase()}
                 </Text>
-              )}
-            </>
-          )}
+                <Text style={styles.statLabel}>SYNC</Text>
+              </View>
+            </View>
 
-          {/* Close */}
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-            <Text style={styles.closeBtnText}>CLOSE</Text>
-          </TouchableOpacity>
-        </Pressable>
+            <View style={styles.divider} />
+
+            <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
+              <Ionicons name="log-out-outline" size={18} color={TACTICAL.danger} />
+              <Text style={styles.signOutText}>{AUTH_COPY.logout.primary.toUpperCase()}</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <View style={styles.noAuthSection}>
+              <Ionicons name="person-circle-outline" size={40} color={TACTICAL.textMuted} />
+              <Text style={styles.noAuthTitle}>{offlineMode ? 'Local Mode' : 'Not signed in'}</Text>
+              <Text style={styles.noAuthDesc}>
+                {offlineMode
+                  ? 'Working with saved local data. Sign in when available to restore cloud sync, backup, and multi-device access.'
+                  : AUTH_COPY.utility.publicAccessLine}
+              </Text>
+            </View>
+
+            <TouchableOpacity style={styles.signInBtn} onPress={handleSignIn} activeOpacity={0.7}>
+              <Ionicons name="lock-open-outline" size={16} color={TACTICAL.text} />
+              <Text style={styles.signInText}>{AUTH_COPY.account.signIn.toUpperCase()}</Text>
+            </TouchableOpacity>
+
+            {offlineMode ? (
+              <Text style={styles.offlineNote}>
+                ECS is keeping your saved local data available offline and will resume sync after sign-in.
+              </Text>
+            ) : null}
+          </>
+        )}
+
+        <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
+          <Text style={styles.closeBtnText}>CLOSE</Text>
+        </TouchableOpacity>
       </View>
-    </ECSModal>
+    </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
   panel: {
-    width: '100%',
-    maxWidth: 400,
     backgroundColor: TACTICAL.panel,
-    borderRadius: TACTICAL.radius,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: TACTICAL.border,
-    padding: 20,
+    padding: 18,
   },
   connectivitySection: {
     marginBottom: 4,

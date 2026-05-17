@@ -55,7 +55,7 @@ export default function PinDetailsModal({
 }: Props) {
 
   // 🚨 DO NOT RENDER if not embedded + not visible
-  if (!embedded && !visible) return null;
+  const shouldRender = embedded || visible;
 
   const [selectedType, setSelectedType] = useState<PinType>('poi');
   const [title, setTitle] = useState('');
@@ -97,6 +97,8 @@ export default function PinDetailsModal({
   const waypointTypes = getWaypointTypes();
   const incidentTypes = getIncidentTypes();
   const displayTypes = categoryTab === 'waypoint' ? waypointTypes : incidentTypes;
+
+  if (!shouldRender) return null;
 
   const content = (
     <View style={styles.container}>

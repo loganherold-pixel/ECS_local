@@ -6,11 +6,6 @@
  * Phase 7A: Architecture hardening — universal provider contract, registry, diagnostics.
  */
 
-
-
-
-
-
 // ── Types ───────────────────────────────────────────────────────────────
 export type {
   PowerTelemetry,
@@ -65,9 +60,6 @@ export {
 // ── BLE Connector ───────────────────────────────────────────────────────
 export { BleConnector } from "./connectors/BleConnector";
 
-// ── Mock Connector (dev / demo) ─────────────────────────────────────────
-export { MockPowerConnector } from "./connectors/MockPowerConnector";
-
 // ── BLE Backoff Utility ─────────────────────────────────────────────────
 export { createBackoff } from "./ble/backoff";
 export type { Backoff, BackoffConfig } from "./ble/backoff";
@@ -112,7 +104,6 @@ export type {
 export { powerDeviceStore } from "./devices/PowerDeviceStore";
 export type { SelectedDevicesState } from "./devices/PowerDeviceStore";
 
-
 // ── Power Forecast Engine (Phase 3H-1) ──────────────────────────────────
 export { computePowerForecast } from "./forecast/powerForecast";
 export type {
@@ -144,12 +135,11 @@ export type {
 export { powerEventsStore } from "./detect/powerEventsStore";
 export type { PowerEventsSubscriber } from "./detect/powerEventsStore";
 
-
 // ── BLU — Battery Link Utility (Phase 1A + 1B + 1C + 1D + 2A) ──────────
 //
 // Universal power telemetry abstraction layer for ECS.
 // Normalises data from multiple power ecosystems (EcoFlow, Bluetti, Anker SOLIX,
-// Jackery, Goal Zero, Renogy, Victron) into a single schema.
+// Jackery, Goal Zero, Renogy, REDARC, Dakota Lithium, Victron) into a single schema.
 //
 export type {
   BluProviderId,
@@ -161,13 +151,13 @@ export type {
   BluSummary,
   BluSystemStatus,
   BluSessionSnapshot,
-} from "./blu/BluTypes";
+} from "../../lib/BluTypes";
 
 export {
   EMPTY_BLU_SUMMARY,
   DEFAULT_BLU_CAPABILITIES,
   EMPTY_BLU_SESSION,
-} from "./blu/BluTypes";
+} from "../../lib/BluTypes";
 
 export {
   getAllProviders as getAllBluProviders,
@@ -177,31 +167,29 @@ export {
   isProviderActive as isBluProviderActive,
   getProviderCount as getBluProviderCount,
   getActiveProviderCount as getActiveBluProviderCount,
-} from "./blu/BluProviderRegistry";
+} from "../../lib/BluProviderRegistry";
 
-export { bluDeviceRegistry } from "./blu/BluDeviceRegistry";
-export { bluStateStore } from "./blu/BluStateStore";
-export { useBlu } from "./blu/useBlu";
-export type { BluHookResult } from "./blu/useBlu";
+export { bluDeviceRegistry } from "../../lib/BluDeviceRegistry";
+export { bluStateStore } from "../../lib/BluStateStore";
+export { useBlu } from "../../lib/useBlu";
+export type { BluHookResult } from "../../lib/useBlu";
 
 // ── BLU Phase 1B — EcoFlow Adapter + Connection Hook ────────────────────
-export { useBluConnection } from "./blu/useBluConnection";
-export type { BluConnectionState_Hook } from "./blu/useBluConnection";
-export { ecoFlowBluAdapter } from "./blu/adapters/EcoFlowBluAdapter";
+export { ecoFlowBluAdapter } from "../../lib/EcoFlowBluAdapter";
 export type {
   EcoFlowConnectResult,
   EcoFlowPollResult,
   EcoFlowAdapterState,
-} from "./blu/adapters/EcoFlowBluAdapter";
+} from "../../lib/EcoFlowBluAdapter";
 
 // ── BLU Phase 2A — Bluetti Adapter ──────────────────────────────────────
-export { bluettiBluAdapter } from "./blu/adapters/BluettiBluAdapter";
+export { bluettiBluAdapter } from "../../lib/BluettiBluAdapter";
 export type {
   BluettiConnectResult,
   BluettiPollResult,
   BluettiAdapterState,
   BluettiDiscoveredDevice,
-} from "./blu/adapters/BluettiBluAdapter";
+} from "../../lib/BluettiBluAdapter";
 
 export {
   BLUETTI_SERVICE_UUID,
@@ -213,18 +201,18 @@ export {
   extractModelFromName,
   BLUETTI_MODEL_DB,
   BLUETTI_REGISTERS,
-} from "./blu/BluettiConstants";
+} from "../../lib/BluettiConstants";
 
-export type { BluettiModelSpec } from "./blu/BluettiConstants";
+export type { BluettiModelSpec } from "../../lib/BluettiConstants";
 
 // ── BLU Phase 3A — Anker SOLIX Adapter ──────────────────────────────────
-export { ankerSolixBluAdapter } from "./blu/adapters/AnkerSolixBluAdapter";
+export { ankerSolixBluAdapter } from "../../lib/AnkerSolixBluAdapter";
 export type {
   AnkerSolixConnectResult,
   AnkerSolixPollResult,
   AnkerSolixAdapterState,
   AnkerSolixDiscoveredDevice,
-} from "./blu/adapters/AnkerSolixBluAdapter";
+} from "../../lib/AnkerSolixBluAdapter";
 
 export {
   ANKER_SOLIX_SERVICE_UUID,
@@ -236,18 +224,18 @@ export {
   extractAnkerModelFromName,
   ANKER_SOLIX_MODEL_DB,
   ANKER_SOLIX_REGISTERS,
-} from "./blu/AnkerSolixConstants";
+} from "../../lib/AnkerSolixConstants";
 
-export type { AnkerSolixModelSpec } from "./blu/AnkerSolixConstants";
+export type { AnkerSolixModelSpec } from "../../lib/AnkerSolixConstants";
 
 // ── BLU Phase 4A — Jackery Adapter ──────────────────────────────────────
-export { jackeryBluAdapter } from "./blu/adapters/JackeryBluAdapter";
+export { jackeryBluAdapter } from "../../lib/JackeryBluAdapter";
 export type {
   JackeryConnectResult,
   JackeryPollResult,
   JackeryAdapterState,
   JackeryDiscoveredDevice,
-} from "./blu/adapters/JackeryBluAdapter";
+} from "../../lib/JackeryBluAdapter";
 
 export {
   JACKERY_SERVICE_UUID,
@@ -259,18 +247,18 @@ export {
   extractJackeryModelFromName,
   JACKERY_MODEL_DB,
   JACKERY_REGISTERS,
-} from "./blu/JackeryConstants";
+} from "../../lib/JackeryConstants";
 
-export type { JackeryModelSpec } from "./blu/JackeryConstants";
+export type { JackeryModelSpec } from "../../lib/JackeryConstants";
 
 // ── BLU Phase 5A — Goal Zero Adapter ────────────────────────────────────
-export { goalZeroBluAdapter } from "./blu/adapters/GoalZeroBluAdapter";
+export { goalZeroBluAdapter } from "../../lib/GoalZeroBluAdapter";
 export type {
   GoalZeroConnectResult,
   GoalZeroPollResult,
   GoalZeroAdapterState,
   GoalZeroDiscoveredDevice,
-} from "./blu/adapters/GoalZeroBluAdapter";
+} from "../../lib/GoalZeroBluAdapter";
 
 export {
   GOAL_ZERO_SERVICE_UUID,
@@ -282,18 +270,34 @@ export {
   extractGoalZeroModelFromName,
   GOAL_ZERO_MODEL_DB,
   GOAL_ZERO_REGISTERS,
-} from "./blu/GoalZeroConstants";
+} from "../../lib/GoalZeroConstants";
 
-export type { GoalZeroModelSpec } from "./blu/GoalZeroConstants";
+export type { GoalZeroModelSpec } from "../../lib/GoalZeroConstants";
 
-// ── BLU Phase 6A — Renogy Adapter ──────────────────────────────────────
-export { renogyBluAdapter } from "./blu/adapters/RenogyBluAdapter";
+// ── BLU Phase 6A — Renogy Adapter ───────────────────────────────────────
+export { renogyBluAdapter } from "../../lib/RenogyBluAdapter";
 export type {
   RenogyConnectResult,
   RenogyPollResult,
   RenogyAdapterState,
   RenogyDiscoveredDevice,
-} from "./blu/adapters/RenogyBluAdapter";
+} from "../../lib/RenogyBluAdapter";
+
+export { redarcBluAdapter } from "../../lib/RedarcBluAdapter";
+export type {
+  RedarcConnectResult,
+  RedarcPollResult,
+  RedarcAdapterState,
+  RedarcDiscoveredDevice,
+} from "../../lib/RedarcBluAdapter";
+
+export { dakotaLithiumBluAdapter } from "../../lib/DakotaLithiumBluAdapter";
+export type {
+  DakotaLithiumConnectResult,
+  DakotaLithiumPollResult,
+  DakotaLithiumAdapterState,
+  DakotaLithiumDiscoveredDevice,
+} from "../../lib/DakotaLithiumBluAdapter";
 
 export {
   RENOGY_SERVICE_UUID,
@@ -309,12 +313,12 @@ export {
   RENOGY_REGISTERS,
   RENOGY_CHARGING_STATUS,
   getChargingStatusLabel,
-} from "./blu/RenogyConstants";
+} from "../../lib/RenogyConstants";
 
-export type { RenogyModelSpec, RenogyDeviceCategory } from "./blu/RenogyConstants";
+export type { RenogyModelSpec, RenogyDeviceCategory } from "../../lib/RenogyConstants";
 
 // ── BLU Phase 1D — Session Store ────────────────────────────────────────
-export { bluSessionStore } from "./blu/BluSessionStore";
+export { bluSessionStore } from "../../lib/BluSessionStore";
 
 // ── Phase 7A: BLU Extended Types ────────────────────────────────────────
 export type {
@@ -323,9 +327,9 @@ export type {
   BluWarningState,
   BluTelemetryExtended,
   BluProviderCapabilities,
-} from "./blu/BluTypes";
+} from "../../lib/BluTypes";
 
-export { DEFAULT_PROVIDER_CAPABILITIES } from "./blu/BluTypes";
+export { DEFAULT_PROVIDER_CAPABILITIES } from "../../lib/BluTypes";
 
 // ── Phase 7A: Universal Provider Contract ───────────────────────────────
 export type {
@@ -343,15 +347,15 @@ export type {
   EcsOutputState,
   EcsWarningState,
   EcsConnectResult,
-} from "./providers/IEcsPowerProvider";
+} from "../../lib/IEcsPowerProvider";
 
 // ── Phase 7A: Provider Registry + Orchestrator ──────────────────────────
 export {
   ecsProviderRegistry,
   ECS_PROVIDER_BRANDING,
-} from "./providers/EcsProviderRegistry";
+} from "../../lib/EcsProviderRegistry";
 
-export type { EcsSystemPowerState } from "./providers/EcsProviderRegistry";
+export type { EcsSystemPowerState } from "../../lib/EcsProviderRegistry";
 
 // ── Phase 7A: Provider Diagnostics + Health Monitoring ──────────────────
 export {
@@ -367,20 +371,19 @@ export {
   shouldPreserveReading,
   DEFAULT_OFFLINE_TOLERANCE,
   computeSystemHealthSummary,
-} from "./providers/EcsProviderDiagnostics";
+} from "../../lib/EcsProviderDiagnostics";
 
 export type {
   TelemetryFreshness,
   ProviderHealthScore,
   OfflineToleranceConfig,
   SystemHealthSummary,
-} from "./providers/EcsProviderDiagnostics";
+} from "../../lib/EcsProviderDiagnostics";
 
 // ── Phase 7A: Unified Provider Hook ─────────────────────────────────────
-export { useEcsProviders } from "./providers/useEcsProviders";
+export { useEcsProviders } from "../../lib/useEcsProviders";
 export type {
   EcsProviderSummary,
   EcsDeviceSummary,
   EcsProvidersHookResult,
-} from "./providers/useEcsProviders";
-
+} from "../../lib/useEcsProviders";

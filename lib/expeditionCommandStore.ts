@@ -140,6 +140,7 @@ export const expeditionStore = {
       const local: EcsExpedition = {
         id: uuid(),
         ...record,
+        meta: {},
         loadout_snapshot_id: null,
         end_at: null,
         readiness_score: null,

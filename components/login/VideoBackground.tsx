@@ -36,6 +36,7 @@ import { VideoView, useVideoPlayer } from 'expo-video';
 // ── Video source (Supabase public URL — no token needed) ──────
 const VIDEO_URI =
   'https://fklgdugvoczmotoubroz.supabase.co/storage/v1/object/public/ECS/Intro_Login_Video.mp4';
+const NATIVE_VIDEO_SOURCE = { uri: VIDEO_URI };
 
 // ── Branded fallback image — cinematic terrain/landscape ──────
 // This shows while video loads AND if video fails to play.
@@ -45,6 +46,12 @@ const FALLBACK_IMAGE_URI =
 // ── Platform flags ─────────────────────────────────────────────
 const IS_WEB = Platform.OS === 'web';
 const IS_NATIVE = !IS_WEB;
+
+function logVideoBackgroundDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 // ── Web-only HTML5 video element ──────────────────────────────
 const WebVideo = memo(function WebVideo({
@@ -106,18 +113,19 @@ const NativeVideo = memo(function NativeVideo({
   onLoad: () => void;
 }) {
   const hasSignalled = useRef(false);
+  const isMountedRef = useRef(true);
 
   const player = useVideoPlayer(
-    { uri: VIDEO_URI },
+    NATIVE_VIDEO_SOURCE,
     (playerInstance) => {
       try {
         playerInstance.loop = true;
         playerInstance.muted = true;
         playerInstance.play();
       } catch (e) {
-        if (!hasSignalled.current) {
+        if (isMountedRef.current && !hasSignalled.current) {
           hasSignalled.current = true;
-          console.log('[ECS] Video player init error:', e);
+          logVideoBackgroundDev('[ECS] Video player init error:', e);
           onError();
         }
       }
@@ -125,8 +133,19 @@ const NativeVideo = memo(function NativeVideo({
   );
 
   useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      try {
+        player.pause();
+      } catch {}
+    };
+  }, [player]);
+
+  useEffect(() => {
     const statusSub = player.addListener('statusChange', ({ status, error }) => {
-      if (hasSignalled.current) return;
+      if (!isMountedRef.current || hasSignalled.current) return;
 
       if (status === 'readyToPlay') {
         hasSignalled.current = true;
@@ -136,7 +155,7 @@ const NativeVideo = memo(function NativeVideo({
 
       if (status === 'error' || error) {
         hasSignalled.current = true;
-        console.log('[ECS] Video playback error:', error);
+        logVideoBackgroundDev('[ECS] Video playback error:', error);
         onError();
       }
     });
@@ -148,12 +167,12 @@ const NativeVideo = memo(function NativeVideo({
 
   return (
     <VideoView
-  player={player}
-  style={StyleSheet.absoluteFillObject}
-  contentFit="cover"
-  nativeControls={false}
-  fullscreenOptions={{ enabled: false }}
-/>
+      player={player}
+      style={StyleSheet.absoluteFillObject}
+      contentFit="cover"
+      nativeControls={false}
+      fullscreenOptions={{ enable: false }}
+    />
   );
 });
 
@@ -220,7 +239,7 @@ function VideoBackground({ children }: Props) {
   }, [fadeAnim]);
 
   const handleError = useCallback(() => {
-    console.log('[ECS] Video background failed — using branded fallback image');
+    logVideoBackgroundDev('[ECS] Video background failed — using branded fallback image');
     setVideoFailed(true);
   }, []);
 

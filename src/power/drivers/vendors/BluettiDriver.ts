@@ -19,7 +19,7 @@ import {
   isBluettiDeviceName,
   extractModelFromName,
   lookupBluettiModel,
-} from "../../blu/BluettiConstants";
+} from "../../../../lib/BluettiConstants";
 
 const BLUETTI_CAPABILITIES: PowerCapabilities = {
   hasSOC: true,

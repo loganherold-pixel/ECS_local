@@ -56,7 +56,7 @@
  */
 
 import { gpsUIState } from './gpsUIState';
-import { remotenessStore } from './remotenessStore';
+import { getRemotenessRuntimeSnapshot } from './remotenessRuntime';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -267,9 +267,9 @@ function _gatherSignals(): GatheredSignals {
   let remotenessScore = 0;
   let remotenessTier = 'NEAR CIVILIZATION';
   try {
-    const remoteness = remotenessStore.get();
+    const remoteness = getRemotenessRuntimeSnapshot();
     remotenessScore = remoteness.score;
-    remotenessTier = remoteness.tier;
+    remotenessTier = remoteness.tier ?? 'NEAR CIVILIZATION';
   } catch {
     // Remoteness unavailable — fail gracefully
   }

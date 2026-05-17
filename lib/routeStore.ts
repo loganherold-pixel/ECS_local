@@ -71,15 +71,21 @@ export interface RouteSegment {
   points: { lat: number; lon: number; ele: number | null }[];
 }
 
+export type RouteSourceFormat = 'gpx' | 'kml' | 'kmz' | 'fit' | 'geojson' | 'custom';
+
+export type RouteCategory = 'imported' | 'custom';
+
 export interface ImportedRoute {
   id: string;
   user_id: string | null;
   device_id: string;
   name: string;
   description: string | null;
-  source_format: 'gpx' | 'kml' | 'kmz' | 'fit' | 'geojson';
+  source_format: RouteSourceFormat;
 
   source_app: string | null;
+  route_category?: RouteCategory;
+  linked_run_id?: string | null;
   total_distance_miles: number;
   elevation_gain_ft: number | null;
   waypoint_count: number;
@@ -92,8 +98,33 @@ export interface ImportedRoute {
   updated_at: string;
 }
 
+export type CustomRouteSegmentInput = {
+  coordinates: [number, number][] | { latitude: number; longitude: number }[];
+};
+
 // ── Storage keys ────────────────────────────────────────
 const LS_ROUTES = 'ecs_local_routes';
+
+export type RouteStoreListener = () => void;
+
+const routeStoreListeners = new Set<RouteStoreListener>();
+
+function notifyRouteStoreListeners(): void {
+  for (const listener of Array.from(routeStoreListeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn('[routeStore] route listener failed', error);
+    }
+  }
+}
+
+function subscribeRouteStore(listener: RouteStoreListener): () => void {
+  routeStoreListeners.add(listener);
+  return () => {
+    routeStoreListeners.delete(listener);
+  };
+}
 
 function getLocalRoutes(): ImportedRoute[] {
   const raw = lsGet(LS_ROUTES);
@@ -102,7 +133,72 @@ function getLocalRoutes(): ImportedRoute[] {
 }
 
 function saveLocalRoutes(routes: ImportedRoute[]): void {
-  lsSet(LS_ROUTES, JSON.stringify(routes));
+  const nextValue = JSON.stringify(routes);
+  const previousValue = lsGet(LS_ROUTES);
+  lsSet(LS_ROUTES, nextValue);
+  if (previousValue !== nextValue) {
+    notifyRouteStoreListeners();
+  }
+}
+
+function isValidLatLon(lat: number, lon: number): boolean {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180
+  );
+}
+
+function normalizeCustomRouteSegment(input: CustomRouteSegmentInput): RouteSegment | null {
+  const points: RouteSegment['points'] = [];
+  for (const raw of input.coordinates || []) {
+    const lon = Array.isArray(raw) ? Number(raw[0]) : Number(raw.longitude);
+    const lat = Array.isArray(raw) ? Number(raw[1]) : Number(raw.latitude);
+    if (!isValidLatLon(lat, lon)) continue;
+
+    const previous = points[points.length - 1];
+    if (previous && previous.lat === lat && previous.lon === lon) continue;
+
+    points.push({ lat, lon, ele: null });
+  }
+
+  return points.length > 1 ? { points } : null;
+}
+
+function countRoutePoints(segments: RouteSegment[]): number {
+  return segments.reduce((count, segment) => count + segment.points.length, 0);
+}
+
+function computeRouteDistanceMiles(segments: RouteSegment[]): number {
+  let totalDistanceMiles = 0;
+  for (const segment of segments) {
+    for (let index = 1; index < segment.points.length; index += 1) {
+      const previous = segment.points[index - 1];
+      const next = segment.points[index];
+      totalDistanceMiles += haversineDistance(previous.lat, previous.lon, next.lat, next.lon);
+    }
+  }
+  return Math.round(totalDistanceMiles * 100) / 100;
+}
+
+function nextCustomRouteName(): string {
+  const existingNames = new Set(
+    getLocalRoutes()
+      .filter((route) => route.route_category === 'custom' || route.source_format === 'custom')
+      .map((route) => route.name.trim().toLowerCase()),
+  );
+
+  let index = 1;
+  while (index < 1000) {
+    const candidate = `Custom Route ${String(index).padStart(2, '0')}`;
+    if (!existingNames.has(candidate.toLowerCase())) return candidate;
+    index += 1;
+  }
+
+  return `Custom Route ${new Date().toISOString().slice(0, 10)}`;
 }
 
 // ── GPX Parser ──────────────────────────────────────────
@@ -228,10 +324,18 @@ export function parseGPX(xmlString: string): {
 // ── Route Store ─────────────────────────────────────────
 
 export const routeStore = {
+  subscribe: subscribeRouteStore,
+
   getAll: (): ImportedRoute[] => {
     return getLocalRoutes().sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
     );
+  },
+
+  getCustomRoutes: (): ImportedRoute[] => {
+    return getLocalRoutes()
+      .filter((route) => route.route_category === 'custom' || route.source_format === 'custom')
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
   },
 
   getActive: (): ImportedRoute | null => {
@@ -240,6 +344,49 @@ export const routeStore = {
 
   getById: (id: string): ImportedRoute | null => {
     return getLocalRoutes().find(r => r.id === id) || null;
+  },
+
+  createCustomRoute: (
+    segmentsInput: CustomRouteSegmentInput[],
+    options?: { name?: string; description?: string | null },
+  ): ImportedRoute => {
+    const segments = segmentsInput
+      .map(normalizeCustomRouteSegment)
+      .filter((segment): segment is RouteSegment => !!segment);
+
+    if (segments.length === 0 || countRoutePoints(segments) < 2) {
+      throw new Error('Custom route requires at least two valid points.');
+    }
+
+    const now = nowISO();
+    const deviceId = getDeviceId();
+    const route: ImportedRoute = {
+      id: generateId(),
+      user_id: null,
+      device_id: deviceId,
+      name: options?.name?.trim() || nextCustomRouteName(),
+      description: options?.description ?? 'User-built route traced in ECS Build Route.',
+      source_format: 'custom',
+      source_app: 'ecs_route_builder',
+      route_category: 'custom',
+      linked_run_id: null,
+      total_distance_miles: computeRouteDistanceMiles(segments),
+      elevation_gain_ft: null,
+      waypoint_count: 0,
+      segment_count: segments.length,
+      waypoints: [],
+      segments,
+      is_active: false,
+      sync_status: 'local',
+      created_at: now,
+      updated_at: now,
+    };
+
+    const routes = getLocalRoutes();
+    routes.push(route);
+    saveLocalRoutes(routes);
+
+    return route;
   },
 
   /**
@@ -555,6 +702,17 @@ export const routeStore = {
     routes[idx].updated_at = nowISO();
     routes[idx].sync_status = routes[idx].sync_status === 'synced' ? 'pending' : routes[idx].sync_status;
 
+    saveLocalRoutes(routes);
+    return routes[idx];
+  },
+
+  attachRun: (routeId: string, runId: string): ImportedRoute | null => {
+    const routes = getLocalRoutes();
+    const idx = routes.findIndex(r => r.id === routeId);
+    if (idx === -1) return null;
+
+    routes[idx].linked_run_id = runId;
+    routes[idx].updated_at = nowISO();
     saveLocalRoutes(routes);
     return routes[idx];
   },

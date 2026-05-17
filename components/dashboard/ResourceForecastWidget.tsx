@@ -14,6 +14,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
+import { WidgetCompactRow } from './WidgetChrome';
 import {
   type ResourceForecast,
   type ForecastStatus,
@@ -84,15 +85,15 @@ function ResourceBar({
 }
 
 const barS = StyleSheet.create({
-  container: { marginBottom: 6 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 3 },
+  container: { marginBottom: 4 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
   label: { fontSize: 8, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1.5, flex: 1 },
   statusDot: { width: 5, height: 5, borderRadius: 3 },
-  marginText: { fontSize: 10, fontWeight: '800', fontFamily: 'Courier', minWidth: 60, textAlign: 'right' },
-  track: { height: 4, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', position: 'relative' },
+  marginText: { fontSize: 9, fontWeight: '800', fontFamily: 'Courier', minWidth: 52, textAlign: 'right' },
+  track: { height: 3, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', position: 'relative' },
   fill: { height: '100%', borderRadius: 2, opacity: 0.7 },
-  marker: { position: 'absolute', top: -1, right: 0, width: 2, height: 6, backgroundColor: TACTICAL.text, opacity: 0.3 },
-  valuesRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 },
+  marker: { position: 'absolute', top: -1, right: 0, width: 2, height: 5, backgroundColor: TACTICAL.text, opacity: 0.3 },
+  valuesRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 1 },
   valueText: { fontSize: 7, fontWeight: '600', color: TACTICAL.textMuted, fontFamily: 'Courier', letterSpacing: 0.3 },
 });
 
@@ -110,45 +111,39 @@ export function ResourceForecastCompact() {
   const forecast = resourceForecastEngine.getCurrent();
 
   if (!forecast || forecast.routeMiles <= 0) {
-    return (
-      <View style={compS.row}>
-        <View style={compS.cell}>
-          <Text style={[compS.value, { fontSize: 9, color: TACTICAL.textMuted }]}>NO ROUTE</Text>
-        </View>
-      </View>
-    );
+    return <WidgetCompactRow title="Forecast" summary="No route forecast" tone="unavailable" />;
   }
 
   const config = SUFFICIENCY_CONFIGS[forecast.sufficiencyLevel];
+  const limitingResource =
+    [
+      { label: 'Fuel', status: forecast.fuel.status },
+      { label: 'Water', status: forecast.water.status },
+      { label: 'Power', status: forecast.power.status },
+    ].find((item) => item.status !== 'OK') ?? null;
+  const compactTone =
+    forecast.sufficiencyLevel === 'Resources Insufficient'
+      ? 'critical'
+      : forecast.sufficiencyLevel === 'Resources Limited'
+        ? 'attention'
+        : forecast.sufficiencyLevel === 'Watch Consumption'
+          ? 'warning'
+          : 'good';
+  const compactSummary = `${config.shortLabel} | ${forecast.routeMiles} mi route`;
+  const compactStatus = limitingResource
+    ? `${limitingResource.label} ${limitingResource.status}`
+    : 'Balanced';
 
   return (
-    <View style={compS.row}>
-      <View style={compS.cell}>
-        <Text style={compS.label}>STATUS</Text>
-        <Text style={[compS.value, { fontSize: 9, color: config.color }]}>{config.shortLabel}</Text>
-      </View>
-      <View style={compS.cell}>
-        <Text style={compS.label}>FUEL</Text>
-        <Text style={[compS.value, { color: resourceForecastEngine.getStatusColor(forecast.fuel.status) }]}>
-          {forecast.fuel.status}
-        </Text>
-      </View>
-      <View style={compS.cell}>
-        <Text style={compS.label}>WATER</Text>
-        <Text style={[compS.value, { color: resourceForecastEngine.getStatusColor(forecast.water.status) }]}>
-          {forecast.water.status}
-        </Text>
-      </View>
-    </View>
+    <WidgetCompactRow
+      title="Forecast"
+      summary={compactSummary}
+      tone={compactTone}
+      status={compactStatus}
+      statusTone={compactTone}
+    />
   );
 }
-
-const compS = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  cell: { flex: 1, alignItems: 'center' },
-  label: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  value: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-});
 
 // ═══════════════════════════════════════════════════════════
 // CARD VIEW — For expanded dashboard widget
@@ -219,13 +214,13 @@ export function ResourceForecastCard() {
 }
 
 const cardS = StyleSheet.create({
-  body: { gap: 2 },
+  body: { gap: 1 },
   emptyPrimary: { fontSize: 10, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 0.8 },
   emptySecondary: { fontSize: 9, fontWeight: '600', color: TACTICAL.amber, letterSpacing: 0.5, marginTop: 2, opacity: 0.85 },
   suffBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
-    marginBottom: 4, alignSelf: 'flex-start',
+    marginBottom: 3, alignSelf: 'flex-start',
   },
   suffLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   routeChip: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted, fontFamily: 'Courier', marginLeft: 'auto' },
@@ -350,12 +345,6 @@ export function ResourceForecastDetailView() {
         </>
       )}
 
-      {/* Engine Info */}
-      <View style={detS.divider} />
-      <Text style={detS.section}>ENGINE</Text>
-      <MetricRow label="VERSION" value="v2.0 (Full)" />
-      <MetricRow label="COMPUTED" value={new Date(forecast.computedAt).toLocaleTimeString()} />
-      <MetricRow label="REAL DATA" value={forecast.hasRealData ? 'YES' : 'DEFAULTS ONLY'} color={forecast.hasRealData ? '#4CAF50' : '#FFB74D'} />
     </View>
   );
 }

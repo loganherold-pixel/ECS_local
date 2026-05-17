@@ -1,0 +1,13 @@
+{
+  "id": "cf-expired-1004",
+  "name": "Expired Meadow Campground",
+  "latitude": 36.5001,
+  "longitude": -117.2001,
+  "sourceUrl": "https://campflare.com/campgrounds/cf-expired-1004",
+  "availabilityStatus": "available",
+  "availableSiteCount": 2,
+  "reservable": true,
+  "firstComeFirstServed": false,
+  "lastCheckedAt": "2026-05-14T10:00:00.000Z",
+  "expiresAt": "2026-05-14T10:15:00.000Z"
+}

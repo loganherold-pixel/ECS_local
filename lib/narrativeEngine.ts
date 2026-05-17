@@ -101,7 +101,7 @@
  */
 
 import { Platform } from 'react-native';
-import { supabase } from './supabase';
+import { isDeployedEdgeFunction, supabase } from './supabase';
 import { remotenessStore, type RemotenessTier } from './remotenessStore';
 import { connectivity, type ConnectivityStatus } from './connectivity';
 import { routeStore } from './routeStore';
@@ -920,6 +920,7 @@ function checkRouteStarted(): void {
  */
 async function syncUnsyncedEvents(): Promise<void> {
   if (!_expeditionId) return;
+  if (!isDeployedEdgeFunction('expedition-events')) return;
 
   const events = _events[_expeditionId] || [];
   const unsynced = events.filter(e => !e._synced);
@@ -1192,6 +1193,9 @@ export const narrativeEngine = {
    * to local latitude, longitude, elevationFt fields.
    */
   async loadFromServer(expeditionId: string): Promise<NarrativeEvent[]> {
+    if (!isDeployedEdgeFunction('expedition-events')) {
+      return _events[expeditionId] || [];
+    }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
         body: {

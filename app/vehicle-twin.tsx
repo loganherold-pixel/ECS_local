@@ -62,17 +62,7 @@ import { analyzeTilt, type ContainerWeightMap, type TiltAnalysis } from '../lib/
 import { useVehicleTwinData } from '../lib/useVehicleTwinData';
 import { useGPSLocation } from '../lib/useGPSLocation';
 import { useEcoFlowLive } from '../lib/useEcoFlowLive';
-
-import BlueprintCanvas, { type ImbalanceFlags } from '../components/vehicle-twin/BlueprintCanvas';
-import { CONTAINER_ZONES } from '../components/vehicle-twin/SmartContainerZones';
-import { StabilityStrip, computeStability } from '../components/vehicle-twin/StabilityStrip';
-import StabilityAssistPanel from '../components/vehicle-twin/StabilityAssistPanel';
-import QuickFixPanel from '../components/vehicle-twin/QuickFixPanel';
-import NextSegmentRiskPanel from '../components/vehicle-twin/NextSegmentRiskPanel';
-import EcoFlowPickerModal from '../components/vehicle-twin/EcoFlowPickerModal';
-
 import { vehicleSetupStore } from '../lib/vehicleSetupStore';
-
 import {
   generateQuickFixes,
   simulateSuggestion,
@@ -81,6 +71,46 @@ import {
   type SimulatedImpact,
   type ZoneWeights,
 } from '../lib/quickFixEngine';
+
+import { BlueprintCanvas, type ImbalanceFlags } from '../components/vehicle-twin/BlueprintCanvas';
+import { CONTAINER_ZONES } from '../components/vehicle-twin/SmartContainerZones';
+import { StabilityStrip, computeStability } from '../components/vehicle-twin/StabilityStrip';
+import { StabilityAssistPanel } from '../components/vehicle-twin/StabilityAssistPanel';
+import { QuickFixPanel } from '../components/vehicle-twin/QuickFixPanel';
+import { NextSegmentRiskPanel } from '../components/vehicle-twin/NextSegmentRiskPanel';
+import EcoFlowPickerModal from '../components/vehicle-twin/EcoFlowPickerModal';
+
+
+/* ── Safe component fallbacks (guards against export/import mismatches) ── */
+function FallbackPanel({ title }: { title: string }) {
+  return (
+    <View style={{
+      backgroundColor: ECS.bgPanel,
+      borderWidth: 1,
+      borderColor: ECS.stroke,
+      borderRadius: ECS.radius,
+      padding: 12,
+      marginBottom: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <Ionicons name="construct-outline" size={16} color={ECS.accent} />
+      <Text style={{ marginTop: 6, color: ECS.accent, fontSize: 10, fontWeight: '700', letterSpacing: 2 }}>
+        {title}
+      </Text>
+      <Text style={{ marginTop: 4, color: ECS.muted, fontSize: 8 }}>
+        Component unavailable
+      </Text>
+    </View>
+  );
+}
+
+const SafeBlueprintCanvas: any = BlueprintCanvas ?? ((props: any) => <FallbackPanel title="BLUEPRINT CANVAS" />);
+const SafeStabilityStrip: any = StabilityStrip ?? ((props: any) => <FallbackPanel title="STABILITY STRIP" />);
+const SafeStabilityAssistPanel: any = StabilityAssistPanel ?? ((props: any) => <FallbackPanel title="STABILITY ASSIST" />);
+const SafeQuickFixPanel: any = QuickFixPanel ?? ((props: any) => <FallbackPanel title="QUICK FIX" />);
+const SafeNextSegmentRiskPanel: any = NextSegmentRiskPanel ?? ((props: any) => <FallbackPanel title="NEXT SEGMENT RISK" />);
+const SafeEcoFlowPickerModal: any = EcoFlowPickerModal ?? (() => null);
 
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -236,7 +266,7 @@ export default function VehicleTwinScreen() {
   const handleEcoFlowDeviceSelected = useCallback((_deviceId: string) => {
     // Trigger the hook to re-read persisted selection and poll immediately
     ecoflow.refresh();
-  }, [ecoflow.refresh]);
+  }, [ecoflow]);
 
   const handleZonePress = useCallback((zoneId: string) => {
     setActiveZone((prev) => (prev === zoneId ? null : zoneId));
@@ -281,7 +311,7 @@ export default function VehicleTwinScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [twin.rollDeg, twin.pitchDeg]);
+  }, [animPitch, animRoll, twin.rollDeg, twin.pitchDeg]);
 
   const schematicTransform = {
     transform: [
@@ -584,7 +614,7 @@ export default function VehicleTwinScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Blueprint Canvas (centerpiece — top half) ── */}
-        <BlueprintCanvas
+        <SafeBlueprintCanvas
           weights={blueprintWeights}
           activeZone={previewActiveZone}
           onZonePress={handleZonePress}
@@ -757,13 +787,13 @@ export default function VehicleTwinScreen() {
         {/* ── Stability Strip (immediately below vehicle) ── */}
         {stability && (
           <View style={s.stabilityWrap}>
-            <StabilityStrip stability={stability} />
+            <SafeStabilityStrip stability={stability} />
           </View>
         )}
 
         {/* ── Next Segment Risk (predictive terrain) ───── */}
         <View style={s.predictionWrap}>
-          <NextSegmentRiskPanel
+          <SafeNextSegmentRiskPanel
             stability={stability}
             currentLat={gps.position?.latitude ?? null}
             currentLon={gps.position?.longitude ?? null}
@@ -772,13 +802,13 @@ export default function VehicleTwinScreen() {
 
         {/* ── Stability Assist (actionable recommendations) ── */}
         <View style={s.assistWrap}>
-          <StabilityAssistPanel stability={stability} twin={twin} />
+          <SafeStabilityAssistPanel stability={stability} twin={twin} />
         </View>
 
 
         {/* ── Quick Fix Recommendations ────────────────── */}
         <View style={s.quickFixWrap}>
-          <QuickFixPanel
+          <SafeQuickFixPanel
             suggestions={suggestions}
             isOptimal={isOptimal}
             activePreviewId={activePreviewId}
@@ -870,7 +900,7 @@ export default function VehicleTwinScreen() {
                     : ecoflow.status === 'degraded' ? '#FF9500'
                     : ecoflow.status === 'offline' ? '#FF3B30'
                     : powerLive ? '#66BB6A'
-                    : ECS.textMuted
+                    : ECS.muted
                 }
               />
             </View>
@@ -879,8 +909,8 @@ export default function VehicleTwinScreen() {
             {/* EcoFlow device name + updated ago */}
             {ecoflow.selectedDeviceId ? (
               <View style={s.ecoDeviceRow}>
-                <Ionicons name="flash" size={10} color={ecoIsLive ? '#66BB6A' : ecoflow.status === 'degraded' ? '#FF9500' : ECS.textMuted} />
-                <Text style={[s.ecoDeviceName, { color: ecoIsLive ? ECS.text : ECS.textMuted }]} numberOfLines={1}>
+                <Ionicons name="flash" size={10} color={ecoIsLive ? '#66BB6A' : ecoflow.status === 'degraded' ? '#FF9500' : ECS.muted} />
+                <Text style={[s.ecoDeviceName, { color: ecoIsLive ? ECS.text : ECS.muted }]} numberOfLines={1}>
                   {ecoflow.deviceName}
                 </Text>
                 {ecoflow.updatedAgoText ? (
@@ -908,20 +938,20 @@ export default function VehicleTwinScreen() {
                 </View>
                 <View style={s.ecoTelCell}>
                   <Text style={s.ecoTelLabel}>SOLAR</Text>
-                  <Text style={[s.ecoTelValue, { color: (ecoflow.solarWatts ?? 0) > 0 ? '#FFB300' : ECS.textMuted }]}>
+                  <Text style={[s.ecoTelValue, { color: (ecoflow.solarWatts ?? 0) > 0 ? '#FFB300' : ECS.muted }]}>
                     {ecoflow.solarWatts != null ? `${ecoflow.solarWatts}W` : '\u2014'}
                   </Text>
                 </View>
                 <View style={s.ecoTelCell}>
                   <Text style={s.ecoTelLabel}>DRAW</Text>
-                  <Text style={[s.ecoTelValue, { color: (ecoflow.outputWatts ?? 0) > 0 ? ECS.accent : ECS.textMuted }]}>
+                  <Text style={[s.ecoTelValue, { color: (ecoflow.outputWatts ?? 0) > 0 ? ECS.accent : ECS.muted }]}>
                     {ecoflow.outputWatts != null ? `${ecoflow.outputWatts}W` : '\u2014'}
                   </Text>
                 </View>
                 {ecoIsLive && ecoflow.inputWatts != null ? (
                   <View style={s.ecoTelCell}>
                     <Text style={s.ecoTelLabel}>INPUT</Text>
-                    <Text style={[s.ecoTelValue, { color: ecoflow.inputWatts > 0 ? '#4FC3F7' : ECS.textMuted }]}>
+                    <Text style={[s.ecoTelValue, { color: ecoflow.inputWatts > 0 ? '#4FC3F7' : ECS.muted }]}>
                       {`${ecoflow.inputWatts}W`}
                     </Text>
                   </View>
@@ -931,15 +961,15 @@ export default function VehicleTwinScreen() {
               <View style={s.ecoTelemetryGrid}>
                 <View style={s.ecoTelCell}>
                   <Text style={s.ecoTelLabel}>SOC</Text>
-                  <Text style={[s.ecoTelValue, { color: ECS.textMuted }]}>{'\u2014'}</Text>
+                  <Text style={[s.ecoTelValue, { color: ECS.muted }]}>{'\u2014'}</Text>
                 </View>
                 <View style={s.ecoTelCell}>
                   <Text style={s.ecoTelLabel}>SOLAR</Text>
-                  <Text style={[s.ecoTelValue, { color: ECS.textMuted }]}>{'\u2014'}</Text>
+                  <Text style={[s.ecoTelValue, { color: ECS.muted }]}>{'\u2014'}</Text>
                 </View>
                 <View style={s.ecoTelCell}>
                   <Text style={s.ecoTelLabel}>DRAW</Text>
-                  <Text style={[s.ecoTelValue, { color: ECS.textMuted }]}>{'\u2014'}</Text>
+                  <Text style={[s.ecoTelValue, { color: ECS.muted }]}>{'\u2014'}</Text>
                 </View>
               </View>
             )}
@@ -1044,9 +1074,9 @@ export default function VehicleTwinScreen() {
                 <Text style={[s.ecoConnectBtnText, { color: '#FF3B30' }]}>RECONNECT</Text>
               </TouchableOpacity>
             ) : (ecoIsLive || ecoflow.status === 'degraded') ? (
-              <TouchableOpacity style={[s.ecoConnectBtn, { borderColor: ECS.textMuted + '20' }]} onPress={() => setShowEcoFlowPicker(true)} activeOpacity={0.7}>
-                <Ionicons name="swap-horizontal-outline" size={12} color={ECS.textMuted} />
-                <Text style={[s.ecoConnectBtnText, { color: ECS.textMuted }]}>CHANGE DEVICE</Text>
+              <TouchableOpacity style={[s.ecoConnectBtn, { borderColor: ECS.muted + '20' }]} onPress={() => setShowEcoFlowPicker(true)} activeOpacity={0.7}>
+                <Ionicons name="swap-horizontal-outline" size={12} color={ECS.muted} />
+                <Text style={[s.ecoConnectBtnText, { color: ECS.muted }]}>CHANGE DEVICE</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -1058,7 +1088,7 @@ export default function VehicleTwinScreen() {
       </ScrollView>
 
       {/* ── EcoFlow Device Picker Modal ───────────────── */}
-      <EcoFlowPickerModal
+      <SafeEcoFlowPickerModal
         visible={showEcoFlowPicker}
         onClose={() => setShowEcoFlowPicker(false)}
         onDeviceSelected={handleEcoFlowDeviceSelected}
