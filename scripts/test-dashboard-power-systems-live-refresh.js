@@ -1,0 +1,145 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const root = path.join(__dirname, '..');
+const widgetSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8');
+const riveAdapterSource = fs.readFileSync(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'), 'utf8');
+const detailSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8');
+
+function includes(source, fragment, message) {
+  assert.ok(source.includes(fragment), message);
+}
+
+function notIncludes(source, fragment, message) {
+  assert.ok(!source.includes(fragment), message);
+}
+
+[
+  'export interface PowerTelemetrySummary',
+  'export function normalizePowerTelemetrySummary',
+  'sourceLabel:',
+  'lastUpdated:',
+  'isLive:',
+  'isStale:',
+  'telemetrySourceLabel',
+  'isTelemetryLive',
+].forEach((fragment) => {
+  includes(widgetSource, fragment, `Power widget should normalize telemetry field ${fragment}`);
+});
+
+[
+  'POWER_CHARGE_IN_COLOR',
+  'POWER_DRAW_OUT_COLOR',
+  'POWER_SOLAR_COLOR',
+  "getWidgetToneColor('good')",
+  "getWidgetToneColor('warning')",
+].forEach((fragment) => {
+  includes(widgetSource, fragment, `Power widget should use semantic flow token ${fragment}`);
+});
+
+[
+  'useReducedMotion()',
+  'Animated.loop',
+  'Easing.inOut(Easing.quad)',
+  'useNativeDriver: true',
+  'const shouldAnimate = hasFlow && !reducedMotion;',
+  'pulse.stopAnimation()',
+  'const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);',
+  'const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);',
+  'isStale?: boolean;',
+].forEach((fragment) => {
+  includes(widgetSource, fragment, `Power flow animation should include ${fragment}`);
+});
+
+includes(
+  widgetSource,
+  "import PowerModuleRiveWidget from './PowerModuleRiveWidget'",
+  'Power card should use the shared reusable Rive module.',
+);
+includes(
+  riveAdapterSource,
+  'export function adaptPowerTelemetryForRive',
+  'Power Rive module should use a small adapter from normalized ECS telemetry.',
+);
+includes(
+  riveAdapterSource,
+  'const hasFreshTelemetry =',
+  'Power Rive adapter should centralize freshness gating.',
+);
+includes(
+  widgetSource,
+  'hasEcsData={riveTelemetry.hasEcsData}',
+  'Power Rive module should receive adapted ECS data availability.',
+);
+includes(
+  widgetSource,
+  'inputWatts={riveTelemetry.inputWatts}',
+  'Power Rive module should receive adapted input watts.',
+);
+includes(
+  widgetSource,
+  'outputWatts={riveTelemetry.outputWatts}',
+  'Power Rive module should receive adapted output watts.',
+);
+includes(
+  widgetSource,
+  "testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}",
+  'Power Rive module should be directly testable in compact and full widgets.',
+);
+includes(
+  widgetSource,
+  'height: 118',
+  'Power Rive hero should have explicit full-widget height.',
+);
+includes(
+  widgetSource,
+  'height: 86',
+  'Power Rive hero should have explicit compact-widget height.',
+);
+notIncludes(
+  widgetSource,
+  '<PowerFlowGraphic inputWatts={totalInputWatts} outputWatts={totalOutputWatts} />',
+  'Power card should not animate raw totals without stale/live gating.',
+);
+notIncludes(
+  widgetSource,
+  "tone: totalOutputWatts > 0 ? 'critical' : 'neutral'",
+  'Output/draw watts should use warning semantics, not critical semantics.',
+);
+
+[
+  'usePowerTelemetryControls',
+  'refreshTelemetry',
+  'refreshState',
+  'refreshGuardRef',
+  'handleRefresh',
+  'PowerRefreshControl',
+  'accessibilityLabel="Refresh power telemetry"',
+  'Power telemetry refreshed from available providers.',
+  'Power refresh failed.',
+  'Live provider polling active; Refresh requests latest now.',
+].forEach((fragment) => {
+  includes(detailSource, fragment, `Power detail refresh should include ${fragment}`);
+});
+
+[
+  'normalizePowerTelemetrySummary(power)',
+  "label=\"SOURCE\"",
+  "label=\"STATUS\"",
+  "'STALE — RECONNECT'",
+  "'LAST KNOWN'",
+  "summary.isLive ? 'LIVE'",
+].forEach((fragment) => {
+  includes(detailSource, fragment, `Power detail should disclose live/stale/source state with ${fragment}`);
+});
+
+[
+  'color={POWER_CHARGE_IN_COLOR}',
+  'color={POWER_DRAW_OUT_COLOR}',
+  'color={POWER_SOLAR_COLOR}',
+].forEach((fragment) => {
+  includes(detailSource, fragment, `Power detail flow bars should use shared semantic color ${fragment}`);
+});
+
+console.log('Dashboard power systems live/refresh checks passed.');
