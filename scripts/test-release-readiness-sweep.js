@@ -173,4 +173,88 @@ assert(
   'package.json should expose a release-readiness sweep test script.',
 );
 
+assert(
+  packageSource.includes('"test:pre-closed-field-gate"') &&
+    packageSource.includes('"gate:release-approval-overrides"'),
+  'package.json should expose aggregate pre-closed-field and release override gate regressions.',
+);
+
+assert(
+  packageSource.includes('"gate:dispatch-convoy-production"') &&
+    packageSource.includes('"test:dispatch-convoy-production"'),
+  'package.json should expose Dispatch/Convoy production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:established-campgrounds-production"') &&
+    packageSource.includes('"test:established-campgrounds-production"'),
+  'package.json should expose established campgrounds production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:bluetooth-power-obd2-production"') &&
+    packageSource.includes('"test:bluetooth-power-obd2-production"'),
+  'package.json should expose Bluetooth/Power/OBD2 production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:offline-navigation-production"') &&
+    packageSource.includes('"test:offline-navigation-production"'),
+  'package.json should expose Offline Navigation production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:weather-production"') &&
+    packageSource.includes('"test:weather-production"'),
+  'package.json should expose Weather production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:garmin-inreach-production"') &&
+    packageSource.includes('"test:garmin-inreach-production"'),
+  'package.json should expose Garmin/inReach production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:auth-production"') &&
+    packageSource.includes('"test:auth-production"'),
+  'package.json should expose Auth/session production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:ecs-brief-production"') &&
+    packageSource.includes('"test:ecs-brief-production"'),
+  'package.json should expose ECS Brief production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:incident-recovery-production"') &&
+    packageSource.includes('"test:incident-recovery-production"'),
+  'package.json should expose Incident & Recovery production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:field-utilities-production"') &&
+    packageSource.includes('"test:field-utilities-production"'),
+  'package.json should expose Field Utilities production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:explore-trail-packs-production"') &&
+    packageSource.includes('"test:explore-trail-packs-production"'),
+  'package.json should expose Explore Trail Packs production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:fleet-production"') &&
+    packageSource.includes('"test:fleet-production"'),
+  'package.json should expose Fleet production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"gate:dashboard-production"') &&
+    packageSource.includes('"test:dashboard-production"'),
+  'package.json should expose Dashboard production gate and regression scripts.',
+);
+
 console.log('release-readiness sweep checks passed');

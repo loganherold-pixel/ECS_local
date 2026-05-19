@@ -55,6 +55,23 @@ function assertNotIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
+function assertConnectionControls(source, label) {
+  const leftSlotIndex = source.indexOf('styles.edgeSlotStart');
+  const connectionIndex = source.indexOf('styles.connectionWordmark', leftSlotIndex);
+  const rightClusterIndex = source.indexOf('<View style={styles.rightControlCluster}>');
+  const bluetoothIndex = source.indexOf('accessibilityHint="Opens device connections and Bluetooth controls"', rightClusterIndex);
+  const themeToggleIndex = source.indexOf('<ThemeToggle', rightClusterIndex);
+
+  assert.ok(leftSlotIndex >= 0, `${label} should render a left-side control slot.`);
+  assert.ok(connectionIndex > leftSlotIndex, `${label} should seat the online/offline wordmark in the left slot.`);
+  assert.ok(rightClusterIndex >= 0, `${label} should render a right-side control cluster.`);
+  assert.ok(bluetoothIndex > rightClusterIndex, `${label} should seat Bluetooth in the right control cluster.`);
+  assert.ok(
+    themeToggleIndex > bluetoothIndex,
+    `${label} should place Bluetooth adjacent to the eye/profile control group.`,
+  );
+}
+
 function readPngSize(relativePath) {
   const buffer = fs.readFileSync(path.join(root, relativePath));
   return {
@@ -239,6 +256,16 @@ assertIncludes(
 );
 assertIncludes(
   header,
+  "android: 'sans-serif-condensed'",
+  'Shared tab banner titles should use a polished condensed system title font.',
+);
+assertIncludes(
+  header,
+  'letterSpacing: 0',
+  'Shared tab banner titles should avoid loose tracking so the titles read as deliberate headings.',
+);
+assertIncludes(
+  header,
   "resizeMode={useBannerTitleLayout ? 'cover' : undefined}",
   'Shared tab headers should use the Dashboard edge-to-edge cover treatment for the five main tab banners.',
 );
@@ -256,6 +283,27 @@ assertIncludes(
   header,
   'style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}',
   'Shared headers should render the global gold separator rail under image banners.',
+);
+assertConnectionControls(header, 'Shared tab headers');
+assertIncludes(
+  shellLayout,
+  'ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH = 144',
+  'Top banner left title slot should mirror the right slot so tab titles stay centered.',
+);
+assertIncludes(
+  shellLayout,
+  'ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH = 144',
+  'Top banner right title slot should mirror the left slot so tab titles stay centered.',
+);
+assertIncludes(
+  header,
+  'width: 30,\n    height: 30,\n    minHeight: 30',
+  'Bluetooth should use the same 30px square footprint as the eye/profile controls.',
+);
+assertIncludes(
+  dashboardHeader,
+  'width: 30,\n    height: 30,\n    minHeight: 30',
+  'Dashboard Bluetooth should use the same 30px square footprint as the eye/profile controls.',
 );
 
 assertIncludes(
@@ -295,6 +343,16 @@ assertIncludes(
 );
 assertIncludes(
   dashboardHeader,
+  "android: 'sans-serif-condensed'",
+  'Dashboard banner title should use the same polished condensed system title font.',
+);
+assertIncludes(
+  dashboardHeader,
+  "android: 'sans-serif-medium'",
+  'Dashboard motto should use a refined companion system font.',
+);
+assertIncludes(
+  dashboardHeader,
   'adjustsFontSizeToFit',
   'Dashboard banner text should avoid wrapping and clipping on phone widths.',
 );
@@ -313,6 +371,7 @@ assertIncludes(
   'style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}',
   'Dashboard should render the global gold separator rail under the Expedition Command banner.',
 );
+assertConnectionControls(dashboardHeader, 'Dashboard header');
 assertNotIncludes(
   dashboardHeader,
   'styles.expeditionGoldUnderline',
@@ -456,23 +515,28 @@ assertNotIncludes(
 );
 assertIncludes(
   tabsLayout,
-  "title: 'Fleet'",
-  'Fleet tab navigation label should remain Fleet.',
+  '<Slot />',
+  'Shell route layout should render the active child route directly.',
 );
 assertIncludes(
-  tabsLayout,
-  "title: 'Navigate'",
-  'Navigate tab navigation label should remain Navigate.',
+  commandDock,
+  "label: 'FLEET'",
+  'Fleet command dock navigation label should remain Fleet.',
 );
 assertIncludes(
-  tabsLayout,
-  "title: 'Explore'",
-  'Explore tab navigation label should remain Explore.',
+  commandDock,
+  "label: 'NAVIGATE'",
+  'Navigate command dock navigation label should remain Navigate.',
 );
 assertIncludes(
-  tabsLayout,
-  "title: 'Dispatch'",
-  'Dispatch tab navigation label should remain Dispatch for the legacy alert route.',
+  commandDock,
+  "label: 'EXPLORE'",
+  'Explore command dock navigation label should remain Explore.',
+);
+assertIncludes(
+  commandDock,
+  "label: 'DISPATCH'",
+  'Dispatch command dock navigation label should remain Dispatch for the legacy alert route.',
 );
 
 console.log('global banner image shell acceptance checks passed');

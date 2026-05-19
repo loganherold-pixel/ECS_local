@@ -7,6 +7,10 @@ import {
   DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES,
   findEstablishedCampsitesNearRoute,
 } from '../../lib/map/establishedCampsiteRouteSearch';
+import {
+  ESTABLISHED_CAMPSITES_MIN_ZOOM,
+  isCampLayerZoomEligible,
+} from '../../lib/map/campLayerZoom';
 
 const root = path.resolve(__dirname, '..', '..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -134,6 +138,23 @@ assert.ok(
     mapRendererSource.includes('clusterMaxZoom') &&
     mapRendererSource.includes('clusterRadius'),
   'Established campsite Mapbox source should cluster pins.',
+);
+
+assert.strictEqual(ESTABLISHED_CAMPSITES_MIN_ZOOM, 8);
+assert.strictEqual(isCampLayerZoomEligible('established_campgrounds', 3), false);
+assert.strictEqual(isCampLayerZoomEligible('established_campgrounds', ESTABLISHED_CAMPSITES_MIN_ZOOM), true);
+assert.ok(
+  navigateSource.includes('establishedCampsitesZoomReady') &&
+    navigateSource.includes("isCampLayerZoomEligible('established_campgrounds', mapZoom)") &&
+    navigateSource.includes('establishedCampsitesZoomPrompt') &&
+    navigateSource.includes('setCampLayerZoomDeferred') &&
+    navigateSource.includes("reason: 'zoom_too_low'"),
+  'Navigate should defer established campground fetch/render work until users zoom into campground planning scale.',
+);
+assert.ok(
+  mapRendererSource.includes('ESTABLISHED_CAMPSITES_MIN_ZOOM') &&
+    mapRendererSource.includes('minzoom: ${ESTABLISHED_CAMPSITES_MIN_ZOOM}'),
+  'Established campground Mapbox layers should also have a minzoom safety net.',
 );
 
 assert.ok(

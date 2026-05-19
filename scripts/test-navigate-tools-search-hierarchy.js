@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const navigatePath = path.join(process.cwd(), 'app/(tabs)/navigate.tsx');
-const source = fs.readFileSync(navigatePath, 'utf8');
+const source = fs.readFileSync(navigatePath, 'utf8').replace(/\r\n/g, '\n');
 
 function assert(condition, message) {
   if (!condition) {
@@ -45,6 +45,10 @@ const toolsPopupStart = source.indexOf("renderMapPopup(\n    toolsPopupVisible")
 const toolsPopupEnd = source.indexOf("renderMapPopup(\n    campScoutIntroVisible", toolsPopupStart);
 assert(toolsPopupStart >= 0 && toolsPopupEnd > toolsPopupStart, 'Navigate should render Tools and Camp Scout popup sections.');
 const toolsPopupSource = source.slice(toolsPopupStart, toolsPopupEnd);
+const savedRoutesPopupStart = source.indexOf("renderMapPopup(\n    savedRoutesModalVisible");
+const savedRoutesPopupEnd = source.indexOf("renderMapPopup(\n    preflightPacketModalVisible", savedRoutesPopupStart);
+assert(savedRoutesPopupStart >= 0 && savedRoutesPopupEnd > savedRoutesPopupStart, 'Navigate should render the Saved Routes popup.');
+const savedRoutesPopupSource = source.slice(savedRoutesPopupStart, savedRoutesPopupEnd);
 
 assert(
   !toolsPopupSource.includes('Established Campgrounds') &&
@@ -60,6 +64,60 @@ assert(
     source.includes('name="bonfire-outline"') &&
     source.includes('bottom: TOOLS_TRIGGER_BOTTOM, right: TOOLS_TRIGGER_RIGHT'),
   'Camp layers should be exposed through a dedicated camp icon button above the Tools icon.',
+);
+
+assert(
+  !toolsPopupSource.includes('toolsMetricRow') &&
+    !toolsPopupSource.includes('SPEED</Text>') &&
+    !toolsPopupSource.includes('GPS</Text>') &&
+    !toolsPopupSource.includes('MAP</Text>'),
+  'Tools popup should not show duplicate Speed/GPS/Map metric cards.',
+);
+
+assert(
+  !toolsPopupSource.includes('CAMPING') &&
+    !toolsPopupSource.includes('Community</Text>') &&
+    !toolsPopupSource.includes('Private</Text>') &&
+    !toolsPopupSource.includes('Pending</Text>'),
+  'Campsite layer buttons should not be followed by redundant legend pills.',
+);
+
+assert(
+  !toolsPopupSource.includes('>INTEL</Text>') &&
+    !toolsPopupSource.includes('REMOTE ON') &&
+    !toolsPopupSource.includes('REMOTE UNAVAILABLE') &&
+    source.includes('accessibilityLabel="Remoteness map overlay"'),
+  'Intel should be removed from Tools and Remoteness should live on the map control rail.',
+);
+
+assert(
+  toolsPopupSource.includes('STITCH ROUTES') &&
+    toolsPopupSource.includes('DRAW CAMP POTENTIAL AREA') &&
+    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('DRAW CAMP POTENTIAL AREA'),
+  'Stitch routes should replace the old Draw Area position, with Draw Camp Potential Area moved lower.',
+);
+
+assert(
+  toolsPopupSource.indexOf('RECENT SEARCHES') < toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') &&
+    toolsPopupSource.indexOf('IMPORT') < toolsPopupSource.indexOf('OFFLINE'),
+  'Recent Searches should swap with Submit as Trail Pack, and Import should swap with Offline.',
+);
+
+assert(
+  source.includes('autoStoppedTrailRecordingRef') &&
+    source.includes("trailNavigation.uiMode !== 'arrived'") &&
+    source.includes("trailStore.getStatus()") &&
+    source.includes('trailStore.stop(activeExpeditionName || trailSession.payload?.title || null)') &&
+    source.includes('Trail complete. ECS saved the recording in Trail Status.'),
+  'Trail recording should auto-stop and save when trail navigation reaches arrival.',
+);
+
+assert(
+  !savedRoutesPopupSource.includes('savedRouteAssetCounts.imported} imported') &&
+    !savedRoutesPopupSource.includes('savedRouteAssetCounts.custom} custom') &&
+    !savedRoutesPopupSource.includes('savedRouteAssetCounts.stitched} stitched') &&
+    !savedRoutesPopupSource.includes('savedRouteAssetCounts.bookmarked} saved'),
+  'Saved Routes command center should not repeat imported/custom/stitched/saved pills above the filter row.',
 );
 
 assert(

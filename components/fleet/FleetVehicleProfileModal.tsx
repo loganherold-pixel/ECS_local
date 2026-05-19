@@ -150,6 +150,7 @@ function ProfileField({
   placeholder,
   keyboardType = 'default',
   optional = false,
+  required = false,
 }: {
   label: string;
   value: string;
@@ -157,10 +158,14 @@ function ProfileField({
   placeholder?: string;
   keyboardType?: 'default' | 'numeric';
   optional?: boolean;
+  required?: boolean;
 }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}{optional ? ' OPTIONAL' : ''}</Text>
+      <View style={styles.fieldLabelRow}>
+        <Text style={styles.fieldLabel}>{label}{optional ? ' OPTIONAL' : ''}</Text>
+        {required ? <Text style={styles.requiredMark}>*</Text> : null}
+      </View>
       <TextInput
         value={value}
         onChangeText={onChangeText}
@@ -582,10 +587,10 @@ export default function FleetVehicleProfileModal({
 
           <ECSPanel variant="secondary" style={styles.fieldPanel}>
             <View style={styles.fieldGrid}>
-              <ProfileField label="Nickname" value={draft.nickname} onChangeText={(value) => updateDraft('nickname', value)} placeholder="Trail Lead" />
-              <ProfileField label="Year" value={draft.year} onChangeText={(value) => updateDraft('year', value)} placeholder="2024" keyboardType="numeric" />
-              <ProfileField label="Make" value={draft.make} onChangeText={(value) => updateDraft('make', value)} placeholder="RAM" />
-              <ProfileField label="Model" value={draft.model} onChangeText={(value) => updateDraft('model', value)} placeholder="2500" />
+              <ProfileField label="Nickname" value={draft.nickname} onChangeText={(value) => updateDraft('nickname', value)} placeholder="Trail Lead" required />
+              <ProfileField label="Year" value={draft.year} onChangeText={(value) => updateDraft('year', value)} placeholder="2024" keyboardType="numeric" required />
+              <ProfileField label="Make" value={draft.make} onChangeText={(value) => updateDraft('make', value)} placeholder="RAM" required />
+              <ProfileField label="Model" value={draft.model} onChangeText={(value) => updateDraft('model', value)} placeholder="2500" required />
               <ProfileField label="Trim" value={draft.trim} onChangeText={(value) => updateDraft('trim', value)} placeholder="Laramie" optional />
               <ProfileField label="Engine" value={draft.engine} onChangeText={(value) => updateDraft('engine', value)} placeholder="Cummins" />
               <ProfileField label="Drivetrain" value={draft.drivetrain} onChangeText={(value) => updateDraft('drivetrain', value)} placeholder="4x4" />
@@ -804,8 +809,19 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 5,
   },
+  fieldLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
   fieldLabel: {
     ...ECS_TEXT.statLabel,
+  },
+  requiredMark: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.danger,
+    fontSize: 11,
+    lineHeight: 11,
   },
   input: {
     minHeight: 42,

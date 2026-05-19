@@ -20,7 +20,6 @@ const MODE_LABEL: Record<CommandCenterMode, string> = {
   trailDecision: 'TRAIL',
   campScout: 'CAMP',
   expeditionReadiness: 'READY',
-  convoyCommand: 'CONVOY',
 };
 
 function getModeIcon(mode: CommandCenterMode) {
@@ -35,8 +34,6 @@ function getModeIcon(mode: CommandCenterMode) {
       return 'bonfire-outline';
     case 'expeditionReadiness':
       return 'shield-checkmark-outline';
-    case 'convoyCommand':
-      return 'people-outline';
     case 'attitude':
     default:
       return 'speedometer-outline';

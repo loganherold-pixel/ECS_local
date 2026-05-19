@@ -13,6 +13,9 @@ import {
 
 export const BRIEF_CAD_LOG_LIMIT = 100;
 export const AI_GUIDANCE_DUPLICATE_SUPPRESSION_MINUTES = 15;
+export const ECS_BRIEF_TOP_BANNER_DEFAULT_MS = 16_000;
+export const ECS_BRIEF_TOP_BANNER_RESOLVED_MS = 10_000;
+export const ECS_BRIEF_TOP_BANNER_MAX_DETAIL_LENGTH = 214;
 const AI_GUIDANCE_DUPLICATE_SUPPRESSION_MS = AI_GUIDANCE_DUPLICATE_SUPPRESSION_MINUTES * 60 * 1000;
 const AI_GUIDANCE_HISTORY_LIMIT = 160;
 
@@ -49,6 +52,17 @@ export type BriefCadLogEntry = {
   segmentId?: string;
   confidence?: number;
   expiresAt?: number;
+};
+
+export type BriefCadTopBannerMessage = {
+  key: string;
+  eyebrow: 'ECS INTELLIGENCE';
+  title: string;
+  detail: string;
+  tone: ECSBriefSeverity;
+  expiresAt: number;
+  resolved: boolean;
+  entry: BriefCadLogEntry;
 };
 
 type Listener = () => void;
@@ -161,6 +175,91 @@ function severityToCadPriority(severity: ECSBriefSeverity): number {
   }
 }
 
+function clampBriefBannerDetail(value: string): string {
+  const normalized = clampText(value);
+  if (normalized.length <= ECS_BRIEF_TOP_BANNER_MAX_DETAIL_LENGTH) return normalized;
+  return `${normalized.slice(0, ECS_BRIEF_TOP_BANNER_MAX_DETAIL_LENGTH - 3).trimEnd()}...`;
+}
+
+function isResolvedBriefCadEntry(entry: BriefCadLogEntry): boolean {
+  const statusText = normalizeGuidanceText([
+    entry.eventType,
+    entry.title,
+    entry.message,
+  ].filter(Boolean).join(' '));
+  return /\b(resolved|cleared|recovered|restored|back online|no longer active)\b/.test(statusText);
+}
+
+function isResolvedBriefCadMessage(message: BriefCadSourceMessage, normalizedText: string): boolean {
+  return isResolvedGuidance(message, normalizedText);
+}
+
+function formatBriefBannerTitle(entry: BriefCadLogEntry): string {
+  const title = clampText(entry.title ?? '');
+  if (title) return title.toUpperCase();
+
+  switch (entry.source) {
+    case 'ecs-remote-weather':
+      return 'ROUTE WEATHER';
+    case 'ecs-telemetry':
+      return 'VEHICLE TELEMETRY';
+    case 'ecs-power':
+      return 'POWER SYSTEM';
+    case 'dashboard_advisory':
+      return 'COMMAND ADVISORY';
+    default:
+      return 'COMMAND BRIEF';
+  }
+}
+
+function formatBriefBannerDetail(entry: BriefCadLogEntry): string {
+  const message = clampText(entry.message);
+  const action = clampText(entry.recommendedAction ?? '');
+  if (!message) return action;
+  if (!action) return message;
+
+  const normalizedMessage = normalizeGuidanceText(message);
+  const normalizedAction = normalizeGuidanceText(action);
+  if (!normalizedAction || normalizedMessage.includes(normalizedAction)) {
+    return message;
+  }
+
+  const actionLead = /^(recommended|try|check|review|verify|prepare|reduce|open|start|keep|use)\b/i.test(action)
+    ? action
+    : `Recommended next step: ${action}`;
+  return `${message} ${actionLead}`;
+}
+
+function buildBriefCadTopBannerMessage(
+  entry: BriefCadLogEntry,
+  now: number,
+): BriefCadTopBannerMessage | null {
+  if (entry.expiresAt != null && entry.expiresAt <= now) return null;
+
+  const resolved = isResolvedBriefCadEntry(entry);
+  const visibleMs = resolved ? ECS_BRIEF_TOP_BANNER_RESOLVED_MS : ECS_BRIEF_TOP_BANNER_DEFAULT_MS;
+  const transientExpiresAt = entry.timestamp + visibleMs;
+  const expiresAt = entry.expiresAt != null
+    ? Math.min(entry.expiresAt, transientExpiresAt)
+    : transientExpiresAt;
+
+  if (expiresAt <= now) return null;
+
+  const detail = clampBriefBannerDetail(formatBriefBannerDetail(entry));
+  if (!detail) return null;
+
+  return {
+    key: `${entry.eventKey}:${entry.dedupeFingerprint}:${entry.timestamp}`,
+    eyebrow: 'ECS INTELLIGENCE',
+    title: formatBriefBannerTitle(entry),
+    detail,
+    tone: entry.severity ?? 'info',
+    expiresAt,
+    resolved,
+    entry,
+  };
+}
+
 class BriefCadLogStore {
   private entries: BriefCadLogEntry[] = [];
   private listeners = new Set<Listener>();
@@ -187,7 +286,6 @@ class BriefCadLogStore {
     const normalizedGuidanceText = normalizeGuidanceText(normalizedText);
     const guidanceFingerprint = buildGuidanceSemanticFingerprint(message, normalizedGuidanceText);
     const queuedAt = Number.isFinite(message.queuedAt) ? message.queuedAt : Date.now();
-    const resolvedGuidance = isResolvedGuidance(message, normalizedGuidanceText);
     if (this.shouldSuppressDuplicateGuidance(message, guidanceFingerprint, queuedAt)) {
       return;
     }
@@ -211,7 +309,7 @@ class BriefCadLogStore {
         : null,
     };
     const fingerprint = createECSUpdateFingerprint(dedupeEvent);
-    if (options?.dedupeAlreadyAccepted || resolvedGuidance) {
+    if (options?.dedupeAlreadyAccepted) {
       rememberECSUpdateInRegistry(dedupeEvent);
     } else {
       if (
@@ -274,12 +372,14 @@ class BriefCadLogStore {
     fingerprint: string,
     queuedAt: number,
   ): boolean {
-    if (isResolvedGuidance(message, normalizeGuidanceText(message.text))) return false;
+    const normalizedText = normalizeGuidanceText(message.text);
+    const resolved = isResolvedBriefCadMessage(message, normalizedText);
     this.pruneGuidanceHistory(queuedAt);
     const previous = this.recentGuidanceByFingerprint.get(fingerprint);
     if (!previous) return false;
     const insideSuppressionWindow = queuedAt - previous.lastSeenAt < AI_GUIDANCE_DUPLICATE_SUPPRESSION_MS;
     if (!insideSuppressionWindow) return false;
+    if (resolved) return true;
     return !isGuidanceEscalation(message, previous);
   }
 
@@ -325,6 +425,18 @@ class BriefCadLogStore {
 }
 
 export const briefCadLogStore = new BriefCadLogStore();
+
+export function getCurrentBriefCadTopBannerMessage(
+  now: number = Date.now(),
+): BriefCadTopBannerMessage | null {
+  const entries = briefCadLogStore.getEntries();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const bannerMessage = buildBriefCadTopBannerMessage(entries[index], now);
+    if (bannerMessage) return bannerMessage;
+  }
+
+  return null;
+}
 
 export function recordBriefCadEntryFromAdvisory(
   message: BriefCadSourceMessage,

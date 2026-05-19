@@ -25,7 +25,7 @@ export namespace GeoJSON {
   };
 }
 
-export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom';
 
 export type DispersedCampingConfidence = 'high' | 'medium' | 'verify' | 'restricted';
 

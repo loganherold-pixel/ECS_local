@@ -331,19 +331,26 @@ export function detectProviderReadinessStatus(markdown) {
 
 export function detectPrivacyStorageApprovalStatus(markdown) {
   if (!markdown) return 'incomplete';
-  const negative = textMatches(markdown, [
-    /\bnot fully approved\b/i,
-    /\bnot approved\b/i,
+  const approvalSection = extractSection(markdown, 'Closed Field-Test Privacy/Storage Approval Packet') ||
+    extractSection(markdown, 'Closed Field-Test Privacy/Storage Approval') ||
+    extractSection(markdown, 'Closed Field-Test Data Posture Approval');
+  const source = approvalSection || markdown;
+  const negative = textMatches(source, [
+    /^-\s*Status:\s*(?:not fully approved|not approved|incomplete|pending|tbd)\b/im,
+    /^-\s*Owner approval status:\s*(?:not fully approved|not approved|incomplete|pending|tbd)\b/im,
+    /^-\s*Private debrief owner approval:\s*(?:not fully approved|not approved|incomplete|pending|tbd)\b/im,
     /\bowner(?:ship)?(?: \/ decision)? status:\s*TBD\b/i,
     /\bowner decisions?[^.\n]*TBD\b/i,
     /\bowners? are still TBD\b/i,
     /\bapproval remains incomplete\b/i,
     /\bapproval remains\b/i,
   ]);
-  const approved = textMatches(markdown, [
+  const approved = textMatches(source, [
+    /^-\s*Status:\s*approved\b/im,
     /\bPrivacy\/storage owner approval:\s*approved\b/i,
     /\bOwner approval status:\s*approved\b/i,
     /\bapproved for closed field-test data posture\b/i,
+    /\bPrivate debrief owner approval:\s*approved\b/i,
   ]);
   return approved && !negative ? 'approved' : 'incomplete';
 }
@@ -501,7 +508,14 @@ export function buildClosedFieldTestReadinessResult(options = {}) {
     notes.push('Closed field-test risk acceptance is present but not accepted; it does not override incomplete evidence gates.');
   }
   if (riskAcceptance.accepted) {
-    notes.push('Closed field testing is risk-accepted for a restricted field test; missing evidence remains unapproved and must stay documented.');
+    const unresolvedRiskAcceptedEvidence = [];
+    if (evidenceStatus.providerReadiness !== 'approved') unresolvedRiskAcceptedEvidence.push('provider readiness remains unapproved for influence');
+    if (evidenceStatus.androidDeviceQa !== 'complete') unresolvedRiskAcceptedEvidence.push('Android/device QA remains incomplete');
+    if (evidenceStatus.privacyStorageApproval !== 'approved') unresolvedRiskAcceptedEvidence.push('privacy/storage approval remains incomplete');
+    if (!liveReadiness.closedFieldTestReady) unresolvedRiskAcceptedEvidence.push('CampOps live-readiness is not fully approved without risk acceptance');
+    notes.push(unresolvedRiskAcceptedEvidence.length > 0
+      ? `Closed field testing is risk-accepted for a restricted field test; ${unresolvedRiskAcceptedEvidence.join('; ')}.`
+      : 'Closed field testing is risk-accepted for a restricted field test; this does not approve broader rollout, provider influence, AI assist, telemetry, or community publishing.');
   }
   if (!liveReadiness.closedFieldTestReady) {
     notes.push(`CampOps live-readiness gate reports: ${liveReadiness.statusLabel}.`);

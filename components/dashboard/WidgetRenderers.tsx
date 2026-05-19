@@ -151,7 +151,7 @@ import {
   useUnifiedPowerDevices,
 } from './PowerSystemWidget';
 import PowerModuleRiveWidget from './PowerModuleRiveWidget';
-import RouteGuidanceProgressRive from './RouteGuidanceProgressRive';
+import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';
 import { PowerSystemDetailView } from './PowerSystemDetail';
 import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
 
@@ -336,35 +336,7 @@ const VEHICLE_PROFILE_IMAGE_KEY_BY_ATTITUDE_KEY: Record<VehicleAttitudeKey, Vehi
 const VEHICLE_PROFILE_IMAGE_FADE_MS = 540;
 
 const POWER_MANAGEMENT_BACKGROUND = require('../../assets/power/Power_Management_Background.png');
-const ROUTE_PROGRESS_MAP_BACKGROUND = require('../../assets/route/Route_Progress_Map_Background.png');
-const ROUTE_PROGRESS_PATH = 'M 88 332 C 184 270 238 364 346 292 C 454 220 500 284 598 204 C 696 124 728 212 818 142 C 872 100 904 92 932 84';
-const ROUTE_PROGRESS_SEGMENTS = [
-  {
-    start: { x: 88, y: 332 },
-    c1: { x: 184, y: 270 },
-    c2: { x: 238, y: 364 },
-    end: { x: 346, y: 292 },
-  },
-  {
-    start: { x: 346, y: 292 },
-    c1: { x: 454, y: 220 },
-    c2: { x: 500, y: 284 },
-    end: { x: 598, y: 204 },
-  },
-  {
-    start: { x: 598, y: 204 },
-    c1: { x: 696, y: 124 },
-    c2: { x: 728, y: 212 },
-    end: { x: 818, y: 142 },
-  },
-  {
-    start: { x: 818, y: 142 },
-    c1: { x: 872, y: 100 },
-    c2: { x: 904, y: 92 },
-    end: { x: 932, y: 84 },
-  },
-] as const;
-const ROUTE_PROGRESS_PATH_LENGTH = 1040;
+const ROUTE_PROGRESS_PLACEHOLDER = require('../../assets/dashboard/route-progress-placeholder.png');
 
 function areAttitudeVehicleContextsEqual(
   left?: WidgetData['activeVehicleContext'],
@@ -2293,46 +2265,6 @@ type CommandWeatherVisualData = {
   live: boolean;
 };
 
-function AttitudeStageHexButtonChrome({
-  active = false,
-  muted = false,
-}: {
-  active?: boolean;
-  muted?: boolean;
-}) {
-  const borderColor = muted
-    ? 'rgba(139, 148, 158, 0.24)'
-    : active
-      ? 'rgba(245, 199, 73, 0.58)'
-      : 'rgba(212, 160, 23, 0.34)';
-  const fillColor = muted
-    ? 'rgba(2, 5, 7, 0.46)'
-    : active
-      ? 'rgba(42, 32, 11, 0.86)'
-      : 'rgba(9, 14, 17, 0.76)';
-
-  return (
-    <Svg
-      pointerEvents="none"
-      viewBox="0 0 34 30"
-      style={attitudeCommandS.stageHexButtonChrome}
-    >
-      <Path
-        d="M17 1.2 L31.2 8.6 L31.2 21.4 L17 28.8 L2.8 21.4 L2.8 8.6 Z"
-        fill={fillColor}
-        stroke={borderColor}
-        strokeWidth={1.25}
-      />
-      <Path
-        d="M17 4 L28.2 9.9 L28.2 20.1 L17 26 L5.8 20.1 L5.8 9.9 Z"
-        fill="transparent"
-        stroke="rgba(255, 220, 132, 0.12)"
-        strokeWidth={0.8}
-      />
-    </Svg>
-  );
-}
-
 type CommandVehicleVisualData = {
   imageKey: VehicleProfileImageKey;
   name: string;
@@ -2350,6 +2282,10 @@ type CommandRouteVisualData = {
   isOffline: boolean;
   hasGeometry: boolean;
   progressPercent: number;
+  routeGeoJson: ReturnType<typeof buildRouteProgressFeatureFromPoints> | null;
+  currentLocation: { latitude: number; longitude: number } | null;
+  originLocation: { latitude: number; longitude: number } | null;
+  destinationLocation: { latitude: number; longitude: number } | null;
   remaining: string;
   eta: string;
   total: string;
@@ -2359,8 +2295,6 @@ type CommandRouteVisualData = {
   status: string;
   geometryStatus: string;
 };
-
-type RouteProgressPoint = { x: number; y: number };
 
 type CommandPowerVisualData = {
   live: boolean;
@@ -2766,72 +2700,11 @@ function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
   return 'day';
 }
 
-function getRouteProgressPercent(input: { progressPercent?: number | null }): number {
-  const raw = Number(input.progressPercent ?? 0);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(100, raw));
-}
-
 function hasRenderableRouteProgressGeometry(routeProgress: RouteProgressSnapshot | null | undefined): boolean {
   if (!routeProgress?.isActive) return false;
   const geometryStatus = routeProgress.geometryStatus.toLowerCase();
   if (!geometryStatus.trim()) return false;
   return !geometryStatus.includes('unavailable') && !geometryStatus.includes('limited');
-}
-
-function getCubicBezierPoint(
-  start: RouteProgressPoint,
-  c1: RouteProgressPoint,
-  c2: RouteProgressPoint,
-  end: RouteProgressPoint,
-  t: number,
-): RouteProgressPoint {
-  const clamped = Math.max(0, Math.min(1, t));
-  const inv = 1 - clamped;
-  const inv2 = inv * inv;
-  const t2 = clamped * clamped;
-  return {
-    x: inv2 * inv * start.x + 3 * inv2 * clamped * c1.x + 3 * inv * t2 * c2.x + t2 * clamped * end.x,
-    y: inv2 * inv * start.y + 3 * inv2 * clamped * c1.y + 3 * inv * t2 * c2.y + t2 * clamped * end.y,
-  };
-}
-
-function getRouteMarkerPoint(progressPercent: number): RouteProgressPoint {
-  const targetRatio = Math.max(0, Math.min(100, progressPercent)) / 100;
-  const samples: { point: RouteProgressPoint; length: number }[] = [];
-  let totalLength = 0;
-  let previousPoint: RouteProgressPoint | null = null;
-
-  for (const segment of ROUTE_PROGRESS_SEGMENTS) {
-    for (let step = 0; step <= 20; step += 1) {
-      const point = getCubicBezierPoint(segment.start, segment.c1, segment.c2, segment.end, step / 20);
-      if (previousPoint) {
-        totalLength += Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
-      }
-      samples.push({ point, length: totalLength });
-      previousPoint = point;
-    }
-  }
-
-  if (samples.length === 0 || totalLength <= 0) {
-    return { x: 88, y: 332 };
-  }
-
-  const targetLength = totalLength * targetRatio;
-  for (let index = 1; index < samples.length; index += 1) {
-    const previous = samples[index - 1];
-    const current = samples[index];
-    if (current.length >= targetLength) {
-      const span = current.length - previous.length;
-      const localRatio = span > 0 ? (targetLength - previous.length) / span : 0;
-      return {
-        x: previous.point.x + (current.point.x - previous.point.x) * localRatio,
-        y: previous.point.y + (current.point.y - previous.point.y) * localRatio,
-      };
-    }
-  }
-
-  return samples[samples.length - 1].point;
 }
 
 function useAppForegroundState(): boolean {
@@ -3433,7 +3306,7 @@ function AttitudeCommandPanel({
               </Text>
             </View>
           </View>
-        ) : !isVehiclePanel && !isPowerPanel ? (
+        ) : !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelTitle,
@@ -3448,7 +3321,7 @@ function AttitudeCommandPanel({
             {title}
           </Text>
         ) : null}
-        {detail && !isSunlightPanel && !isVehiclePanel && !isPowerPanel ? (
+        {detail && !isSunlightPanel && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelDetail,
@@ -4537,7 +4410,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const commandStagePitchDeg = commandSensorLive
     ? (hasExternalZeroAction ? commandDisplayPitchDeg : (attitudeTelemetry.pitchDeg ?? 0) - (commandLocalZeroOffset?.pitchDeg ?? 0))
     : 0;
-  const commandStageStatusLabel = commandSensorLive ? displayState.postureLabel : attitudeTelemetry.sourceLabel;
+  const commandStageStatusLabel = commandSensorLive ? 'LIVE' : attitudeTelemetry.sourceLabel;
   const commandStageStatusColor =
     displayState.tone === 'critical'
       ? TACTICAL.danger
@@ -4682,11 +4555,19 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const routeProgress = useRouteProgressCommandSnapshot(options);
   const hasActiveRouteProgress = Boolean(routeProgress?.isActive);
   const hasRouteProgressGeometry = hasRenderableRouteProgressGeometry(routeProgress);
+  const routeProgressPoints = (routeProgress?.routePoints ?? []).map((point) => ({
+    latitude: point.lat,
+    longitude: point.lng,
+  }));
   const routeVisual: CommandRouteVisualData = {
     active: hasActiveRouteProgress,
     isOffline: hasActiveRouteProgress && !hasRouteProgressGeometry,
     hasGeometry: hasRouteProgressGeometry,
     progressPercent: routeProgress?.progressPercent ?? 0,
+    routeGeoJson: buildRouteProgressFeatureFromPoints(routeProgressPoints),
+    currentLocation: routeProgress?.currentLocation ?? null,
+    originLocation: routeProgress?.originLocation ?? routeProgressPoints[0] ?? null,
+    destinationLocation: routeProgress?.destinationLocation ?? routeProgressPoints[routeProgressPoints.length - 1] ?? null,
     remaining: routeProgress?.remainingMilesText ?? '--',
     eta: routeProgress?.etaLabel ?? '--',
     total: routeProgress?.totalMilesText ?? '--',
@@ -4916,8 +4797,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
         return hasActiveRouteProgress
           ? { label: 'ROUTE READY', tone: 'good' }
           : { label: 'STANDBY', tone: 'neutral' };
-      case 'convoy-command':
-        return { label: 'CONVOY', tone: 'neutral' };
       case 'attitude':
       default:
         return { label: commandStageStatusLabel, tone: displayState.tone };
@@ -4972,12 +4851,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
           { label: 'DAYLIGHT', value: environmentalVisual.daylight, tone: environmentalVisual.daylightTone },
           { label: 'WEATHER', value: environmentalVisual.weatherValue, tone: environmentalVisual.weatherTone },
           { label: 'REMOTE', value: environmentalVisual.remoteness, tone: environmentalVisual.remotenessTone },
-        ];
-      case 'convoy-command':
-        return [
-          { label: 'MODE', value: 'Plan/check-in', tone: 'neutral' },
-          { label: 'TRACKING', value: 'Not live', tone: 'neutral' },
-          { label: 'SOURCE', value: 'Convoy setup', tone: 'neutral' },
         ];
       case 'attitude':
       default:
@@ -5109,15 +4982,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               >
                 {vehicleVisual.name}
               </Text>
-              <Text
-                style={attitudeCommandS.vehicleBaseIdentityText}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-                adjustsFontSizeToFit
-                minimumFontScale={0.82}
-              >
-                {vehicleVisual.identity}
-              </Text>
             </View>
             <View pointerEvents="none" style={attitudeCommandS.vehicleBaseTelemetryRow}>
               <Text
@@ -5176,8 +5040,12 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                   activeVehicleName={activeVehicleContext.vehicle?.name ?? undefined}
                   telemetryFrame="device"
                   mode="command"
+                  fitMode="cover"
+                  showGaugeOverlay
                   showZeroButton={false}
-                  showReadouts={commandSensorLive}
+                  showReadouts={false}
+                  showDegreeReadouts={false}
+                  showLevelReadout={false}
                   showLiveHashIndicators={false}
                   onZero={undefined}
                 />
@@ -5236,7 +5104,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                   !soundEnabled ? attitudeCommandS.stageSoundPillOff : null,
                 ]}
               >
-                <AttitudeStageHexButtonChrome muted={!soundEnabled} />
                 <Ionicons
                   name={soundEnabled ? 'volume-high-outline' : 'volume-off-outline'}
                   size={15}
@@ -5246,11 +5113,16 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             ) : null}
 
             {selectedCommandModule === 'attitude' ? (
-              <View pointerEvents="none" style={attitudeCommandS.stageZeroLabelSlot}>
-                <Text style={attitudeCommandS.stageZeroLabel} numberOfLines={1}>
-                  zero
-                </Text>
-              </View>
+              <TouchableOpacity
+                accessibilityLabel="Zero pitch and roll"
+                accessibilityRole="button"
+                activeOpacity={0.82}
+                hitSlop={{ top: 4, right: 4, bottom: 4, left: 4 }}
+                onPress={handleZeroCommandStage}
+                style={attitudeCommandS.stageZeroButton}
+              >
+                <Ionicons name="locate-outline" size={16} color={TACTICAL.text} />
+              </TouchableOpacity>
             ) : null}
 
             <TouchableOpacity
@@ -5269,26 +5141,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               <Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />
             </TouchableOpacity>
 
-            {selectedCommandModule === 'attitude' ? (
-              <View pointerEvents="none" style={attitudeCommandS.stageStatusPillCenterSlot}>
-                <View
-                  style={[
-                    attitudeCommandS.stageStatusPillBase,
-                    attitudeCommandS.stageStatusPillCentered,
-                    { borderColor: selectedCommandModuleStatusBorderColor },
-                  ]}
-                >
-                  <Text
-                    style={[attitudeCommandS.stageStatusPillText, { color: selectedCommandModuleStatusColor }]}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.78}
-                    numberOfLines={1}
-                  >
-                    {selectedCommandModuleStatus.label}
-                  </Text>
-                </View>
-              </View>
-            ) : selectedCommandModule !== 'follow3d' && !commandCenterFrameSelected ? (
+            {selectedCommandModule !== 'attitude' && selectedCommandModule !== 'follow3d' && !commandCenterFrameSelected ? (
               <View
                 pointerEvents="none"
                 style={[
@@ -5319,33 +5172,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             onPress={() => openFocusPanel('route')}
             accessibilityLabel="Open route progress details"
             routeVisual={routeVisual}
-          >
-            {hasActiveRouteProgress ? (
-              <View pointerEvents="none" style={attitudeCommandS.routeMetricStrip}>
-                <Text style={attitudeCommandS.routeMetricName} numberOfLines={1}>
-                  {routeVisual.routeLabel}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  ETA {routeVisual.eta}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  TIME {routeVisual.estimatedTime}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  TOTAL {routeVisual.total}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  DONE {routeVisual.completed}
-                </Text>
-              </View>
-            ) : (
-              <View pointerEvents="none" style={attitudeCommandS.routeStandbyStrip}>
-                <Text style={attitudeCommandS.routeStandbyText} numberOfLines={1}>
-                  Guidance standby
-                </Text>
-              </View>
-            )}
-          </AttitudeCommandPanel>
+          />
           <AttitudeCommandPanel
             eyebrow="POWER MONITOR"
             title="Power Monitor"
@@ -5645,7 +5472,8 @@ const attitudeCommandS = StyleSheet.create({
     flex: 1,
     alignSelf: 'stretch',
     minHeight: 206,
-    marginVertical: 4,
+    marginTop: 0,
+    marginBottom: -2,
     position: 'relative',
     zIndex: 2,
     overflow: 'hidden',
@@ -5690,44 +5518,36 @@ const attitudeCommandS = StyleSheet.create({
   stageSoundPill: {
     position: 'absolute',
     top: 4,
-    left: 12,
+    right: 82,
     zIndex: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 34,
+    width: 30,
     height: 30,
     minHeight: 30,
-    borderRadius: 0,
-    borderWidth: 0,
-    backgroundColor: 'transparent',
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.34)',
+    backgroundColor: 'rgba(9, 14, 17, 0.76)',
   },
   stageSoundPillOff: {
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(139, 148, 158, 0.24)',
+    backgroundColor: 'rgba(2, 5, 7, 0.46)',
   },
-  stageHexButtonChrome: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  stageZeroLabelSlot: {
+  stageZeroButton: {
     position: 'absolute',
-    top: 9,
-    left: 52,
-    right: 52,
+    right: 46,
+    top: 4,
     zIndex: 4,
-    minHeight: 18,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  stageZeroLabel: {
-    color: 'rgba(230, 237, 243, 0.48)',
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '800',
-    letterSpacing: 1.15,
-    textTransform: 'uppercase',
-    includeFontPadding: false,
-    textShadowColor: 'rgba(0, 0, 0, 0.72)',
-    textShadowRadius: 5,
-    textShadowOffset: { width: 0, height: 1 },
+    width: 30,
+    height: 30,
+    minHeight: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.34)',
+    backgroundColor: 'rgba(9, 14, 17, 0.76)',
   },
   stageStatusPillBase: {
     zIndex: 1,
@@ -5756,23 +5576,6 @@ const attitudeCommandS = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 4,
   },
-  stageStatusPillCenterSlot: {
-    position: 'absolute',
-    bottom: '18%',
-    left: 0,
-    right: 0,
-    zIndex: 4,
-    alignItems: 'center',
-  },
-  stageStatusPillCentered: {
-    alignSelf: 'center',
-    maxWidth: 150,
-    minHeight: 18,
-    paddingHorizontal: 9,
-    paddingVertical: 2,
-    alignItems: 'center',
-    backgroundColor: 'rgba(28, 23, 14, 0.78)',
-  },
   stageStatusPillText: {
     fontSize: 7.8,
     lineHeight: 10,
@@ -5799,14 +5602,14 @@ const attitudeCommandS = StyleSheet.create({
   stageModulePill: {
     position: 'absolute',
     right: 10,
-    top: 8,
+    top: 4,
     zIndex: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 34,
-    height: 34,
-    minHeight: 34,
-    borderRadius: 17,
+    width: 30,
+    height: 30,
+    minHeight: 30,
+    borderRadius: 15,
     borderWidth: 1,
     borderColor: 'rgba(212, 160, 23, 0.34)',
     backgroundColor: 'rgba(9, 14, 17, 0.76)',
@@ -6835,15 +6638,16 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+    marginTop: -2,
   },
   vehicleBaseIdentityBlock: {
-    alignSelf: 'flex-end',
-    width: '58%',
-    maxWidth: '58%',
+    alignSelf: 'flex-start',
+    width: '78%',
+    maxWidth: '78%',
     minHeight: 0,
-    gap: 1,
-    paddingRight: 2,
-    alignItems: 'flex-end',
+    marginTop: -7,
+    paddingLeft: 0,
+    alignItems: 'flex-start',
   },
   vehicleBaseNameText: {
     maxWidth: '100%',
@@ -6853,22 +6657,9 @@ const attitudeCommandS = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.28,
     textTransform: 'uppercase',
-    textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.86)',
+    textAlign: 'left',
+    textShadowColor: 'rgba(0, 0, 0, 0.9)',
     textShadowRadius: 6,
-    textShadowOffset: { width: 0, height: 1 },
-  },
-  vehicleBaseIdentityText: {
-    maxWidth: '100%',
-    color: 'rgba(230, 237, 243, 0.72)',
-    fontSize: 5.6,
-    lineHeight: 7,
-    fontWeight: '800',
-    letterSpacing: 0.24,
-    textTransform: 'uppercase',
-    textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.82)',
-    textShadowRadius: 5,
     textShadowOffset: { width: 0, height: 1 },
   },
   vehicleBaseTelemetryText: {
@@ -6898,209 +6689,10 @@ const attitudeCommandS = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(1, 7, 10, 0.38)',
   },
-  routeProgressMapBackground: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
+  routeProgressMiniMap: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
-    opacity: 0.9,
-  },
-  routeProgressRiveBackground: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-    opacity: 0.92,
-  },
-  routeProgressMapScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(1, 6, 8, 0.24)',
-    borderRadius: 12,
-  },
-  routeProgressOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-  },
-  routeTopoLineA: {
-    position: 'absolute',
-    left: -12,
-    top: 13,
-    width: 120,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.12)',
-    transform: [{ rotate: '-9deg' }],
-  },
-  routeTopoLineB: {
-    position: 'absolute',
-    right: -18,
-    top: 31,
-    width: 136,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.1)',
-    transform: [{ rotate: '8deg' }],
-  },
-  routeTopoLineC: {
-    position: 'absolute',
-    left: 18,
-    bottom: 12,
-    width: 96,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.08)',
-    transform: [{ rotate: '5deg' }],
-  },
-  routePathShadow: {
-    position: 'absolute',
-    left: 18,
-    right: 20,
-    top: 29,
-    height: 5,
-    borderRadius: 999,
-    opacity: 0.75,
-    shadowOpacity: 0.72,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routePath: {
-    position: 'absolute',
-    left: 18,
-    right: 20,
-    top: 18,
-    height: 26,
-    borderTopWidth: 2,
-    borderRightWidth: 2,
-    borderBottomWidth: 2,
-    borderTopRightRadius: 22,
-    borderBottomRightRadius: 22,
-    borderBottomLeftRadius: 16,
-    transform: [{ rotate: '-5deg' }],
-  },
-  routePathCompleted: {
-    position: 'absolute',
-    left: 21,
-    top: 30,
-    height: 3,
-    borderRadius: 999,
-    opacity: 0.82,
-    shadowOpacity: 0.72,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerStart: {
-    position: 'absolute',
-    left: 17,
-    bottom: 20,
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    shadowOpacity: 0.86,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerCheckpoint: {
-    position: 'absolute',
-    left: 76,
-    top: 18,
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    shadowOpacity: 0.72,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerEnd: {
-    position: 'absolute',
-    right: 18,
-    top: 14,
-    width: 9,
-    height: 9,
-    borderRadius: 999,
-    shadowOpacity: 0.8,
-    shadowRadius: 9,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeProgressPill: {
-    position: 'absolute',
-    right: 8,
-    top: 6,
-    minHeight: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.48)',
-    backgroundColor: 'rgba(28, 20, 7, 0.68)',
-    paddingHorizontal: 5,
-    justifyContent: 'center',
-  },
-  routeProgressPillText: {
-    fontSize: 6,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.7,
-  },
-  routeMetricStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    columnGap: 5,
-    rowGap: 2,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 3,
-  },
-  routeMetricName: {
-    flexBasis: '100%',
-    color: 'rgba(247, 201, 104, 0.8)',
-    fontSize: 6.9,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.55,
-    textTransform: 'uppercase',
-  },
-  routeMetricText: {
-    flex: 1,
-    minWidth: 0,
-    color: 'rgba(230, 237, 243, 0.68)',
-    fontSize: 6.8,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.45,
-    textTransform: 'uppercase',
-  },
-  routeStandbyStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.12)',
-    paddingTop: 3,
-  },
-  routeStandbyText: {
-    color: 'rgba(230, 237, 243, 0.58)',
-    fontSize: 6.8,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.7,
-    textTransform: 'uppercase',
   },
   powerGlyphLayer: {
     position: 'absolute',
@@ -7297,6 +6889,33 @@ const attitudeCommandS = StyleSheet.create({
     minWidth: 96,
     minHeight: 56,
     alignSelf: 'center',
+  },
+  powerLiveIndicator: {
+    position: 'absolute',
+    left: 8,
+    top: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(85, 220, 185, 0.42)',
+    backgroundColor: 'rgba(3, 15, 17, 0.72)',
+  },
+  powerLiveDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#55DCB9',
+  },
+  powerLiveText: {
+    color: '#BDF4E8',
+    fontSize: 6.2,
+    lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0.72,
   },
   powerModuleLabel: {
     color: 'rgba(245, 199, 73, 0.72)',
@@ -8300,11 +7919,11 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
     const shellPaddingHorizontal = 8;
     return {
       viewportClass,
-      shell: { gap: 6, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 8 },
+      shell: { gap: 4, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 8 },
       topRow: { gap: 9, minHeight: topHeight, flexBasis: topHeight },
       bottomRow: { gap: 9, minHeight: bottomHeight, flexBasis: bottomHeight },
       attitudeStage: {
-        minHeight: clampCommandLayoutValue(height * 0.4, 214, 330),
+        minHeight: clampCommandLayoutValue(height * 0.48, 276, 398),
         marginHorizontal: 1 - shellPaddingHorizontal,
       },
       commandTitleBlock: { left: 150, right: 150, top: 9 },
@@ -8317,11 +7936,11 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
     const shellPaddingHorizontal = 7;
     return {
       viewportClass,
-      shell: { gap: 6, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 7 },
+      shell: { gap: 4, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 7 },
       topRow: { gap: 8, minHeight: topHeight, flexBasis: topHeight },
       bottomRow: { gap: 8, minHeight: bottomHeight, flexBasis: bottomHeight },
       attitudeStage: {
-        minHeight: clampCommandLayoutValue(height * 0.4, 210, 320),
+        minHeight: clampCommandLayoutValue(height * 0.48, 270, 388),
         marginHorizontal: 1 - shellPaddingHorizontal,
       },
       commandTitleBlock: { left: 128, right: 128, top: 8 },
@@ -8333,11 +7952,11 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
   const shellPaddingHorizontal = 5;
   return {
     viewportClass,
-    shell: { gap: 5, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 6 },
+    shell: { gap: 3, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 6 },
     topRow: { gap: 5, minHeight: topHeight, flexBasis: topHeight },
     bottomRow: { gap: 6, minHeight: bottomHeight, flexBasis: bottomHeight },
     attitudeStage: {
-      minHeight: clampCommandLayoutValue(height * 0.38, 186, 270),
+      minHeight: clampCommandLayoutValue(height * 0.46, 238, 328),
       marginHorizontal: 1 - shellPaddingHorizontal,
     },
     commandTitleBlock: { left: 88, right: 88, top: 7 },
@@ -8387,71 +8006,30 @@ function ProgressWidget({ data: _data, options }: { data: WidgetData; options?: 
     );
   }
 
-  // Ã¢-ÂÃ¢-ÂÃ¢-Â FALLBACK: No active route Ã¢-ÂÃ¢-ÂÃ¢-Â
-  if (!progressSummary) {
-    return (
-      <WidgetCardShell badge={{ label: 'NO ROUTE', tone: 'unavailable' }}>
-        <View style={progS.summaryBody}>
-          <WidgetPrimaryValue
-            label="ROUTE STATUS"
-            value="INACTIVE"
-            tone="neutral"
-          />
-          <WidgetSecondaryRow
-            items={[
-              { label: 'REMAINING', value: '--', tone: 'neutral' },
-              { label: 'TIME', value: '--', tone: 'neutral' },
-            ]}
-          />
-          <WidgetMetaLine text="Open Navigate to stage a route." tone="neutral" />
-        </View>
-      </WidgetCardShell>
-    );
-  }
-
-  const progressTone: WidgetTone = progressSummary.stateTone;
+  const routeProgressPoints = (progressSummary?.routePoints ?? []).map((point) => ({
+    latitude: point.lat,
+    longitude: point.lng,
+  }));
 
   return (
-    <WidgetCardShell badge={{
-      label: progressSummary.stateLabel,
-      tone: progressSummary.stateTone,
-    }}>
-      <View style={progS.summaryBody}>
-        <WidgetPrimaryValue
-          label="COMPLETE"
-          value={`${progressSummary.progressPercent}%`}
-          tone={progressTone}
-        />
-        <WidgetMetaLine
-          text={[
-            progressSummary.routeLabel,
-            progressSummary.destinationLabel && progressSummary.destinationLabel !== progressSummary.routeLabel
-              ? `to ${progressSummary.destinationLabel}`
-              : null,
-          ].filter(Boolean).join(' ')}
-          tone="neutral"
-        />
-        <WidgetSecondaryRow
-          items={[
-            { label: 'REMAINING', value: progressSummary.remainingMilesText, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-            { label: 'DONE', value: progressSummary.completedMilesText, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-          ]}
-        />
-        <WidgetSecondaryRow
-          items={[
-            { label: 'ETA', value: progressSummary.etaLabel, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-            { label: 'LEFT', value: `${Math.max(0, 100 - progressSummary.progressPercent)}%`, tone: progressSummary.stateTone },
-          ]}
-        />
-        {progressSummary.nextInstruction ? (
-          <WidgetMetaLine text={progressSummary.nextInstruction} tone="neutral" />
-        ) : null}
-        <WidgetMetaLine
-          text={progressSummary.footerText}
-          tone={progressSummary.isComplete ? 'good' : progressSummary.isActive ? 'neutral' : 'attention'}
-        />
-      </View>
-    </WidgetCardShell>
+    <RouteProgressMiniMap
+      isGuidanceActive={Boolean(progressSummary?.isActive)}
+      routeGeoJson={buildRouteProgressFeatureFromPoints(routeProgressPoints)}
+      currentLocation={progressSummary?.currentLocation ?? null}
+      progressPercent={progressSummary?.progressPercent ?? null}
+      destinationLocation={
+        progressSummary?.destinationLocation ??
+        routeProgressPoints[routeProgressPoints.length - 1] ??
+        null
+      }
+      originLocation={progressSummary?.originLocation ?? routeProgressPoints[0] ?? null}
+      remainingDistanceText={progressSummary?.remainingMilesText ?? null}
+      etaText={progressSummary?.etaLabel ?? null}
+      ecsGold={TACTICAL.amber}
+      inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+      testID="dashboard-route-progress-mini-map"
+      style={progS.routeProgressMiniMap}
+    />
   );
 }
 
@@ -10874,159 +10452,24 @@ function AttitudeCommandVehicleProfileBackgroundVisual({
 }
 
 function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRouteVisualData }) {
-  const targetProgress = getRouteProgressPercent({ progressPercent: route?.progressPercent });
-  const reducedMotion = useReducedMotion();
-  const animatedProgress = useStableAnimatedValue(targetProgress);
-  const [displayProgress, setDisplayProgress] = useState(targetProgress);
-  const displayProgressRef = useRef(targetProgress);
-
-  useEffect(() => {
-    const listenerId = animatedProgress.addListener(({ value }) => {
-      const nextProgress = getRouteProgressPercent({ progressPercent: value });
-      if (Math.abs(nextProgress - displayProgressRef.current) >= 0.3) {
-        displayProgressRef.current = nextProgress;
-        setDisplayProgress(nextProgress);
-      }
-    });
-
-    return () => {
-      animatedProgress.removeListener(listenerId);
-    };
-  }, [animatedProgress]);
-
-  useEffect(() => {
-    if (reducedMotion) {
-      animatedProgress.stopAnimation();
-      animatedProgress.setValue(targetProgress);
-      displayProgressRef.current = targetProgress;
-      setDisplayProgress(targetProgress);
-      return undefined;
-    }
-
-    const animation = Animated.timing(animatedProgress, {
-      toValue: targetProgress,
-      duration: 780,
-      easing: Easing.inOut(Easing.quad),
-      useNativeDriver: false,
-    });
-
-    animation.start(({ finished }) => {
-      if (finished) {
-        displayProgressRef.current = targetProgress;
-        setDisplayProgress(targetProgress);
-      }
-    });
-
-    return () => {
-      animation.stop();
-    };
-  }, [animatedProgress, reducedMotion, targetProgress]);
-
-  const progress = displayProgress;
-  const progressRatio = progress / 100;
-  const marker = getRouteMarkerPoint(progress);
-  const routeActive = Boolean(route?.active);
-  const routeCanRenderPath = routeActive && route?.hasGeometry === true;
-  const glowOpacity = routeActive ? 0.35 + progressRatio * 0.55 : 0.28;
-  const glowStrokeWidth = 9 + progressRatio * 4;
-  const baseRouteColor = routeActive ? 'rgba(245, 199, 73, 0.26)' : 'rgba(139,148,158,0.34)';
-  const progressRouteColor = routeActive ? '#F2B93F' : 'rgba(139,148,158,0.66)';
-  const markerColor = routeActive ? TACTICAL.amber : 'rgba(139,148,158,0.74)';
-  const legacyRouteVisual = (
-    <>
-      <Image
-        source={ROUTE_PROGRESS_MAP_BACKGROUND}
-        resizeMode="cover"
-        style={attitudeCommandS.routeProgressMapBackground}
-      />
-      {routeCanRenderPath ? (
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox="0 0 1000 420"
-          preserveAspectRatio="none"
-          style={attitudeCommandS.routeProgressOverlay}
-        >
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={baseRouteColor}
-            strokeWidth={22}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.34}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={baseRouteColor}
-            strokeWidth={8}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.82}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={progressRouteColor}
-            strokeWidth={glowStrokeWidth}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray={ROUTE_PROGRESS_PATH_LENGTH}
-            strokeDashoffset={ROUTE_PROGRESS_PATH_LENGTH * (1 - progressRatio)}
-            opacity={glowOpacity}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={progressRouteColor}
-            strokeWidth={5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray={ROUTE_PROGRESS_PATH_LENGTH}
-            strokeDashoffset={ROUTE_PROGRESS_PATH_LENGTH * (1 - progressRatio)}
-            opacity={0.94}
-          />
-          <Circle cx={88} cy={332} r={13} fill={TACTICAL.success} opacity={0.92} />
-          <Circle cx={932} cy={84} r={13} fill={TACTICAL.amber} opacity={0.88} />
-          <Circle cx={598} cy={204} r={8} fill="rgba(245, 199, 73, 0.72)" opacity={0.82} />
-          <Circle
-            cx={marker.x}
-            cy={marker.y}
-            r={17}
-            fill={markerColor}
-            opacity={0.28 + progressRatio * 0.26}
-          />
-          <Circle
-            cx={marker.x}
-            cy={marker.y}
-            r={8}
-            fill={markerColor}
-            stroke="rgba(255, 238, 180, 0.9)"
-            strokeWidth={2}
-            opacity={1}
-          />
-        </Svg>
-      ) : null}
-    </>
-  );
-
   return (
     <View pointerEvents="none" style={attitudeCommandS.routeGlyphLayer}>
-      <RouteGuidanceProgressRive
-        progressPercent={routeActive ? targetProgress : 0}
-        isActive={routeActive}
-        isOffline={route?.isOffline ?? false}
-        style={attitudeCommandS.routeProgressRiveBackground}
-        testID="attitude-command-route-guidance-progress-rive"
-        fallback={legacyRouteVisual}
+      <RouteProgressMiniMap
+        isGuidanceActive={Boolean(route?.active)}
+        routeGeoJson={route?.routeGeoJson ?? null}
+        currentLocation={route?.currentLocation ?? null}
+        progressPercent={route?.progressPercent ?? null}
+        destinationLocation={route?.destinationLocation ?? null}
+        originLocation={route?.originLocation ?? null}
+        remainingDistanceText={route?.remaining ?? null}
+        etaText={route?.eta ?? null}
+        statusText={route?.active ? 'Guidance active' : null}
+        ecsGold={TACTICAL.amber}
+        borderRadius={12}
+        inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+        testID="attitude-command-route-progress-mini-map"
+        style={attitudeCommandS.routeProgressMiniMap}
       />
-      <View style={attitudeCommandS.routeProgressMapScrim} />
-      <View style={attitudeCommandS.routeProgressPill}>
-        <Text style={[attitudeCommandS.routeProgressPillText, { color: routeActive ? TACTICAL.amber : TACTICAL.textMuted }]} numberOfLines={1}>
-          {routeActive ? 'ACTIVE' : 'STANDBY'}
-        </Text>
-      </View>
     </View>
   );
 }
@@ -11044,6 +10487,14 @@ function AttitudeCommandPowerRiveForeground({ power }: { power?: CommandPowerVis
           testID="attitude-command-blu-power-module-rive"
         />
       </View>
+      {power?.live ? (
+        <View style={attitudeCommandS.powerLiveIndicator}>
+          <View style={attitudeCommandS.powerLiveDot} />
+          <Text style={attitudeCommandS.powerLiveText} numberOfLines={1}>
+            LIVE
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -13985,11 +13436,9 @@ const sustS = StyleSheet.create({
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Progress Widget Styles (Phase 4) Ã¢â€â‚¬Ã¢â€â‚¬
 const progS = StyleSheet.create({
-  summaryBody: {
+  routeProgressMiniMap: {
     flex: 1,
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 2,
+    minHeight: 118,
   },
 });
 

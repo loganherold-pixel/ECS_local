@@ -372,6 +372,23 @@ function aiRecommendationSet() {
   assert.ok(!prompt.includes('Private Convoy Name'));
   assert.ok(!prompt.includes('medicalOrAccessibilityConstraint'));
 
+  const privacyReviewPath = path.join(root, 'docs', 'campops', 'privacy_storage_review.md');
+  const privacyReview = fs.readFileSync(privacyReviewPath, 'utf8');
+  const requiredRiskCopy = [
+    'CampOps does not provide encryption for `localStorage` debrief persistence.',
+    'No dedicated durable source cache exists yet.',
+    'If another app layer persists recommendation sets, endpoint outputs, or AI summaries',
+    'Broad community pipelines still require a separate privacy review.',
+    'Draft, pending-review, rejected, and removed records are not public-visible.',
+    'Retention, encryption, deletion, and access-control owners are still TBD for broad real trip/debrief field data.',
+  ];
+  for (const expected of requiredRiskCopy) {
+    assert.ok(
+      privacyReview.includes(expected),
+      `Privacy storage review must retain remaining-risk copy: ${expected}`,
+    );
+  }
+
   console.log('CampOps privacy storage checks passed.');
 })().catch((error) => {
   console.error(error);

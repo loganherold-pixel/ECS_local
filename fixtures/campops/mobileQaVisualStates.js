@@ -5,8 +5,10 @@ const CAMP_OPS_MOBILE_QA_DEV_ENTRY_POINT = {
   component: 'components/campops/CampOpsVisualQaScreen.tsx',
   requiresLiveProviders: false,
   requiresAiOutput: false,
+  supportsCandidateProducingViewport: true,
   notes: [
     'Use the dev-only route to stage manual visual QA states without real users, real routes, live providers, telemetry, community publishing, or AI output.',
+    'The route includes a candidate-producing fixture viewport with visible CampOps pins, the Camp Intel popup, and QA-local action capture for Save Camp, Navigate Here, and Report Unusable.',
     'The route redirects away outside development builds and must remain hidden from production navigation.',
   ],
 };
@@ -33,6 +35,28 @@ const CAMP_OPS_MOBILE_QA_VIEWPORTS = [
 ];
 
 const CAMP_OPS_MOBILE_QA_VISUAL_STATE_MATRIX = [
+  {
+    id: 'candidate_producing_viewport',
+    title: 'Candidate-producing QA viewport',
+    fixtureRefs: ['components/campops/CampOpsVisualQaScreen.tsx', 'scripts/test-route-camp-pins.js'],
+    setup: ['Open /dev/campops-visual-qa in a development build.', 'Use the QA-only fixture viewport.'],
+    expected: [
+      'Visible CampOps pins render without provider APIs or live data.',
+      'Fixture labeling says the viewport is non-live QA data.',
+      'Tapping a pin opens the Camp Intel popup.',
+    ],
+  },
+  {
+    id: 'camp_intel_popup_actions',
+    title: 'Camp Intel popup actions',
+    fixtureRefs: ['components/navigate/CampScoutIntelCard.tsx', 'scripts/test-campops-camp-intel-popup.js'],
+    setup: ['Tap a CampOps fixture pin in the dev visual QA viewport.', 'Press Save Camp, Navigate Here, and Report Unusable.'],
+    expected: [
+      'Camp Intel uses the real popup component.',
+      'Save Camp, Navigate Here, and Report Unusable are visible and tappable.',
+      'Actions are captured locally for QA and do not publish community data.',
+    ],
+  },
   {
     id: 'feature_flag_off',
     title: 'Feature flag off',

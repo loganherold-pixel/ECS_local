@@ -8,9 +8,17 @@ import { buildAndroidQaEvidenceResult, writeAndroidQaEvidenceResult } from './ch
 import { buildProviderReadinessResult, writeProviderReadinessResult } from './check-provider-readiness.mjs';
 import { buildPrivacyStorageApprovalResult, writePrivacyStorageApprovalResult } from './check-privacy-storage-approval.mjs';
 import { buildAiAssistApprovalResult, writeAiAssistApprovalResult } from './check-ai-assist-approval.mjs';
+import {
+  buildCampOpsPublishingTelemetryApprovalResult,
+  writeCampOpsPublishingTelemetryApprovalResult,
+} from './check-campops-publishing-telemetry-approval.mjs';
 import { buildNoRuntimeMockImportResult, writeNoRuntimeMockImportResult } from './check-no-runtime-mock-imports.mjs';
 import { buildCampOpsLiveReadinessResult, writeCampOpsLiveReadinessResult } from './check-campops-live-readiness.mjs';
 import { buildClosedFieldTestReadinessResult, writeClosedFieldTestReadinessResult } from './check-closed-field-test-readiness.mjs';
+import {
+  buildReleaseApprovalOverrideGuardResult,
+  writeReleaseApprovalOverrideGuardResult,
+} from './check-release-approval-overrides.mjs';
 import {
   buildClosedFieldTestRiskAcceptanceResult,
   writeClosedFieldTestRiskAcceptanceResult,
@@ -74,6 +82,16 @@ export async function buildPreClosedFieldTestGateResult(options = {}) {
     stages.push(await runStage('provider-readiness', 'npm run gate:provider-readiness', () => {
       const result = buildProviderReadinessResult({ rootDir: root });
       writeProviderReadinessResult(result, { rootDir: root });
+      if (result.shadowOnlyAllowed && !result.influenceRequested) {
+        return {
+          ...result,
+          passed: true,
+          status: 'shadow_only_acceptable_not_approved_for_influence',
+          providerInfluenceApproved: false,
+          blockers: [],
+          shadowOnlyPassed: true,
+        };
+      }
       return result;
     }));
     stages.push(await runStage('privacy-storage', 'npm run gate:privacy-storage', () => {
@@ -85,6 +103,16 @@ export async function buildPreClosedFieldTestGateResult(options = {}) {
   stages.push(await runStage('ai-assist', 'npm run gate:ai-assist', () => {
     const result = buildAiAssistApprovalResult({ rootDir: root });
     writeAiAssistApprovalResult(result, { rootDir: root });
+    return result;
+  }));
+  stages.push(await runStage('campops-publishing-telemetry', 'npm run gate:campops-publishing-telemetry', () => {
+    const result = buildCampOpsPublishingTelemetryApprovalResult({ rootDir: root });
+    writeCampOpsPublishingTelemetryApprovalResult(result, { rootDir: root });
+    return result;
+  }));
+  stages.push(await runStage('release-approval-overrides', 'npm run gate:release-approval-overrides', () => {
+    const result = buildReleaseApprovalOverrideGuardResult({ rootDir: root });
+    writeReleaseApprovalOverrideGuardResult(result, { rootDir: root });
     return result;
   }));
   stages.push(await runStage('no-runtime-mocks', 'npm run gate:no-runtime-mocks', () => {

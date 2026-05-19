@@ -30,6 +30,10 @@ import type {
   EstablishedCampsiteSelectionPayload,
 } from '../../lib/map/establishedCampsiteTypes';
 import {
+  DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM,
+  ESTABLISHED_CAMPSITES_MIN_ZOOM,
+} from '../../lib/map/campLayerZoom';
+import {
   DISPERSED_CAMPING_REGION_SELECTED,
   ESTABLISHED_CAMPSITE_SELECTED,
   SET_ESTABLISHED_CAMPSITES_LAYER_ENABLED,
@@ -2518,6 +2522,7 @@ function makeMapHtml(
             id: DISPERSED_CAMPING_FILL_LAYER_ID,
             type: 'fill',
             source: DISPERSED_CAMPING_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
             paint: {
               'fill-color': [
                 'match',
@@ -2559,6 +2564,7 @@ function makeMapHtml(
             id: DISPERSED_CAMPING_OUTLINE_LAYER_ID,
             type: 'line',
             source: DISPERSED_CAMPING_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
             layout: {
               'line-cap': 'round',
               'line-join': 'round'
@@ -2676,6 +2682,7 @@ function makeMapHtml(
             id: ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID,
             type: 'circle',
             source: ESTABLISHED_CAMPSITES_SOURCE_ID,
+            minzoom: ${ESTABLISHED_CAMPSITES_MIN_ZOOM},
             paint: {
               'circle-color': [
                 'case',
@@ -2708,6 +2715,7 @@ function makeMapHtml(
             id: ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID,
             type: 'symbol',
             source: ESTABLISHED_CAMPSITES_SOURCE_ID,
+            minzoom: ${ESTABLISHED_CAMPSITES_MIN_ZOOM},
             layout: {
               'icon-image': [
                 'case',
@@ -3232,14 +3240,15 @@ function makeMapHtml(
           'ecs-remote-heatmap-fill',
           'ecs-remote-v1',
           ['match', ['get', 'label'], 'A', '#C66A4A', 'B', '#F2C24D', 'C', '#65C97A', 'D', '#5FD1FF', '#5FD1FF'],
-          0.42
+          0.5
         );
         ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
+        ensureLineLayer('route-progress-glow-layer', 'route-progress-source', ['get', 'color'], 14, 0.22);
         ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
         ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
         ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
         ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
-        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 4, 0.96, [1.4, 1.2]);
+        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 7.5, 0.92, [1.4, 1.2]);
         ensureLineLayer('route-builder-halo-layer', 'route-builder-source', ['get', 'color'], 12, 0.22);
         ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);

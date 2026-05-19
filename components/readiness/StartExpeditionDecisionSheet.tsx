@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ECSOverlayFooter } from '../ECSModalShell';
@@ -32,6 +32,11 @@ export type StartExpeditionDecisionSheetProps = {
   onReviewCommandBrief: () => void;
   onConfirmStart: (options: { acknowledgedOverride: boolean }) => void;
   overridePolicy?: StartExpeditionOverridePolicy;
+  presentation?: 'modal' | 'routePreviewMask';
+  topOffset?: number;
+  bottomOffset?: number;
+  horizontalInset?: number;
+  rightInset?: number;
 };
 
 function cleanReadinessCopy(value: string): string {
@@ -65,6 +70,11 @@ export default function StartExpeditionDecisionSheet({
   onReviewCommandBrief,
   onConfirmStart,
   overridePolicy = DEFAULT_START_EXPEDITION_OVERRIDE_POLICY,
+  presentation = 'modal',
+  topOffset = 0,
+  bottomOffset = 0,
+  horizontalInset = 16,
+  rightInset = 0,
 }: StartExpeditionDecisionSheetProps) {
   const insets = useSafeAreaInsets();
   const model = useMemo(() => {
@@ -86,6 +96,157 @@ export default function StartExpeditionDecisionSheet({
 
   const showConcerns = assessment.status !== 'ready';
   const acknowledgedOverride = assessment.status !== 'ready';
+  const footer = (
+    <ECSOverlayFooter style={presentation === 'routePreviewMask' ? styles.maskFooter : undefined}>
+      <ECSButton
+        label="Review Command Brief"
+        icon="document-text-outline"
+        variant="secondary"
+        size={presentation === 'routePreviewMask' ? 'compact' : 'medium'}
+        onPress={onReviewCommandBrief}
+        numberOfLines={2}
+        grow
+      />
+      {model.primaryActionLabel && model.canOverride ? (
+        <ECSButton
+          label={model.primaryActionLabel}
+          icon="play"
+          variant={assessment.status === 'ready' ? 'primary' : 'secondary'}
+          size={presentation === 'routePreviewMask' ? 'compact' : 'medium'}
+          onPress={() => onConfirmStart({ acknowledgedOverride })}
+          numberOfLines={2}
+          grow
+        />
+      ) : null}
+    </ECSOverlayFooter>
+  );
+  const body = (
+    <View style={styles.root}>
+      <View style={styles.summaryRow}>
+        <ReadinessScoreRing
+          score={assessment.overallScore}
+          status={assessment.status}
+          size={presentation === 'routePreviewMask' ? 68 : 82}
+          strokeWidth={presentation === 'routePreviewMask' ? 6 : 7}
+          compact
+        />
+        <View style={styles.summaryCopy}>
+          <ReadinessDecisionBadge status={assessment.status} score={assessment.overallScore} compact />
+          <Text style={styles.explanation} numberOfLines={presentation === 'routePreviewMask' ? 3 : 4}>
+            {cleanReadinessCopy(assessment.explanation)}
+          </Text>
+          <View style={styles.badgeRow}>
+            <ECSBadge label={`Confidence ${assessment.confidence}`} tone={assessment.confidence === 'high' ? 'ready' : assessment.confidence === 'medium' ? 'warning' : 'unavailable'} compact />
+            {assessment.dataIntegrity.usesDemoData || assessment.dataIntegrity.usesMockData ? (
+              <ECSBadge label="ECS-inferred" tone="warning" compact />
+            ) : null}
+          </View>
+        </View>
+      </View>
+
+      {model.reviewReasons.length > 0 ? (
+        <View style={styles.reviewReasonPanel}>
+          <Text style={styles.reviewReasonText}>
+            ECS detected readiness items worth reviewing before departure.
+          </Text>
+          <View style={styles.badgeRow}>
+            {model.reviewReasons.map((reason) => (
+              <ECSBadge
+                key={reason.id}
+                label={reason.label}
+                tone={reason.id === 'hold_pattern' ? 'unavailable' : 'warning'}
+                compact
+              />
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {model.notes.length > 0 ? (
+        <View style={styles.notePanel}>
+          <Text style={styles.panelTitle}>
+            {assessment.status === 'ready' ? 'Pre-start notes' : assessment.status === 'caution' ? 'Recommended review' : 'Blockers to review'}
+          </Text>
+          {model.notes.slice(0, presentation === 'routePreviewMask' ? 2 : assessment.status === 'ready' ? 2 : 3).map((note, index) => (
+            <View key={`${note}-${index}`} style={styles.noteRow}>
+              <View style={styles.noteDot} />
+              <Text style={styles.noteText} numberOfLines={presentation === 'routePreviewMask' ? 2 : 3}>
+                {note}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {showConcerns && presentation !== 'routePreviewMask' ? (
+        <ReadinessConcernList
+          assessment={assessment}
+          limit={assessment.status === 'hold' ? 5 : 4}
+          showRecommendations
+          style={styles.concerns}
+        />
+      ) : null}
+
+      {assessment.status === 'hold' ? (
+        <Text style={styles.overrideCopy} numberOfLines={presentation === 'routePreviewMask' ? 2 : 4}>
+          ECS recommends review before departure. Continuing keeps live warnings visible and records a local acknowledgement.
+        </Text>
+      ) : assessment.status === 'caution' ? (
+        <Text style={styles.overrideCopy} numberOfLines={presentation === 'routePreviewMask' ? 2 : 3}>
+          ECS will continue active assessment updates if you start with caution-level items still open.
+        </Text>
+      ) : null}
+    </View>
+  );
+
+  if (presentation === 'routePreviewMask') {
+    if (!visible) return null;
+    return (
+      <View
+        pointerEvents="box-none"
+        style={[
+          StyleSheet.absoluteFill,
+          styles.maskOverlay,
+          {
+            top: topOffset,
+            bottom: bottomOffset,
+            left: horizontalInset,
+            right: horizontalInset,
+            paddingRight: rightInset,
+          },
+        ]}
+      >
+        <View style={styles.maskCard}>
+          <View style={styles.maskHeader}>
+            <View style={styles.maskHeaderText}>
+              <Text style={styles.maskEyebrow}>ECS EXPEDITION READINESS</Text>
+              <Text style={styles.maskTitle} numberOfLines={1}>Start Expedition</Text>
+              <Text style={styles.maskSubtitle} numberOfLines={2}>{model.title}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              activeOpacity={0.82}
+              hitSlop={10}
+              style={styles.maskCloseButton}
+              accessibilityRole="button"
+              accessibilityLabel="Close start expedition review"
+            >
+              <Text style={styles.maskCloseText}>X</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={styles.maskScroll}
+            contentContainerStyle={styles.maskScrollContent}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+          >
+            {body}
+          </ScrollView>
+          {footer}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <TacticalPopupShell
@@ -96,116 +257,97 @@ export default function StartExpeditionDecisionSheet({
       subtitle={model.title}
       icon={assessment.status === 'ready' ? 'shield-checkmark-outline' : assessment.status === 'caution' ? 'alert-circle-outline' : 'hand-left-outline'}
       overlayClass="action"
-      stackBehavior="allow-stack"
+      stackBehavior="replace"
       maxWidth={560}
       maxHeightFraction={0.72}
       minHeightFraction={0.38}
       topClearanceOverride={getShellHeaderTopPadding(insets.top) + 52}
       bottomClearanceOverride={getShellBottomClearance(insets.bottom, 2) + 12}
-      footer={(
-        <ECSOverlayFooter>
-          <ECSButton
-            label="Review Command Brief"
-            icon="document-text-outline"
-            variant="secondary"
-            size="medium"
-            onPress={onReviewCommandBrief}
-            grow
-          />
-          {model.primaryActionLabel && model.canOverride ? (
-            <ECSButton
-              label={model.primaryActionLabel}
-              icon="play"
-              variant={assessment.status === 'ready' ? 'primary' : 'secondary'}
-              size="medium"
-              onPress={() => onConfirmStart({ acknowledgedOverride })}
-              grow
-            />
-          ) : null}
-        </ECSOverlayFooter>
-      )}
+      footer={footer}
     >
-      <View style={styles.root}>
-        <View style={styles.summaryRow}>
-          <ReadinessScoreRing
-            score={assessment.overallScore}
-            status={assessment.status}
-            size={82}
-            strokeWidth={7}
-            compact
-          />
-          <View style={styles.summaryCopy}>
-            <ReadinessDecisionBadge status={assessment.status} score={assessment.overallScore} compact />
-            <Text style={styles.explanation} numberOfLines={4}>
-              {cleanReadinessCopy(assessment.explanation)}
-            </Text>
-            <View style={styles.badgeRow}>
-              <ECSBadge label={`Confidence ${assessment.confidence}`} tone={assessment.confidence === 'high' ? 'ready' : assessment.confidence === 'medium' ? 'warning' : 'unavailable'} compact />
-              {assessment.dataIntegrity.usesDemoData || assessment.dataIntegrity.usesMockData ? (
-                <ECSBadge label="ECS-inferred" tone="warning" compact />
-              ) : null}
-            </View>
-          </View>
-        </View>
-
-        {model.reviewReasons.length > 0 ? (
-          <View style={styles.reviewReasonPanel}>
-            <Text style={styles.reviewReasonText}>
-              ECS detected readiness items worth reviewing before departure.
-            </Text>
-            <View style={styles.badgeRow}>
-              {model.reviewReasons.map((reason) => (
-                <ECSBadge
-                  key={reason.id}
-                  label={reason.label}
-                  tone={reason.id === 'hold_pattern' ? 'unavailable' : 'warning'}
-                  compact
-                />
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {model.notes.length > 0 ? (
-          <View style={styles.notePanel}>
-            <Text style={styles.panelTitle}>
-              {assessment.status === 'ready' ? 'Pre-start notes' : assessment.status === 'caution' ? 'Recommended review' : 'Blockers to review'}
-            </Text>
-            {model.notes.slice(0, assessment.status === 'ready' ? 2 : 3).map((note, index) => (
-              <View key={`${note}-${index}`} style={styles.noteRow}>
-                <View style={styles.noteDot} />
-                <Text style={styles.noteText} numberOfLines={3}>
-                  {note}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        {showConcerns ? (
-          <ReadinessConcernList
-            assessment={assessment}
-            limit={assessment.status === 'hold' ? 5 : 4}
-            showRecommendations
-            style={styles.concerns}
-          />
-        ) : null}
-
-        {assessment.status === 'hold' ? (
-          <Text style={styles.overrideCopy} numberOfLines={4}>
-            ECS recommends review before departure. Continuing keeps live warnings visible and records a local acknowledgement.
-          </Text>
-        ) : assessment.status === 'caution' ? (
-          <Text style={styles.overrideCopy} numberOfLines={3}>
-            ECS will continue active assessment updates if you start with caution-level items still open.
-          </Text>
-        ) : null}
-      </View>
+      {body}
     </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
+  maskOverlay: {
+    zIndex: 118,
+    elevation: 118,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
+  },
+  maskCard: {
+    width: '100%',
+    maxWidth: 392,
+    maxHeight: '100%',
+    flexShrink: 1,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(8,12,15,0.97)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.36,
+    shadowRadius: 16,
+    elevation: 118,
+  },
+  maskHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 10,
+  },
+  maskHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  maskEyebrow: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.amber,
+    fontSize: 8,
+    letterSpacing: 0,
+    marginBottom: 4,
+  },
+  maskTitle: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+  },
+  maskSubtitle: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  maskCloseButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  maskCloseText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+  },
+  maskScroll: {
+    width: '100%',
+    flexShrink: 1,
+  },
+  maskScrollContent: {
+    paddingBottom: 8,
+  },
+  maskFooter: {
+    paddingHorizontal: 0,
+    paddingBottom: 0,
+  },
   root: {
     gap: 12,
   },

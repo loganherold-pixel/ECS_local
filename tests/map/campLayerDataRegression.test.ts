@@ -633,6 +633,7 @@ const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 const dispersedSearchClientSource = read('lib/map/dispersedCampingSearchClient.ts');
 const establishedSearchClientSource = read('lib/map/establishedCampgroundSearchClient.ts');
 const fetchDiagnosticsSource = read('lib/map/campLayerFetchDiagnostics.ts');
+const offlineCacheSource = read('lib/map/campLayerOfflineCache.ts');
 const dispersedEdgeSource = read('supabase/functions/dispersed-camping-eligibility/index.ts');
 const campgroundSearchSource = read('supabase/functions/campgrounds-search/index.ts');
 const supabaseConfigSource = read('supabase/config.toml');
@@ -711,10 +712,13 @@ assert.ok(
   'Dispersed camping edge source should query public land managers, parse polygon rings, and preserve restricted states.',
 );
 assert.ok(
-  campgroundSearchSource.includes('fetchOsmFallbackCampgrounds') &&
-    campgroundSearchSource.includes('cache_empty') &&
-    campgroundSearchSource.includes('buildCampgroundSearchFeatureCollection(records)'),
-  'Established campground endpoint should have a real upstream fallback and return frontend-ready GeoJSON.',
+  campgroundSearchSource.includes("from('campgrounds')") &&
+    campgroundSearchSource.includes("from('campground_availability')") &&
+    campgroundSearchSource.includes('buildCampgroundSearchFeatureCollection(records)') &&
+    !campgroundSearchSource.includes('fetchOsmFallbackCampgrounds') &&
+    !campgroundSearchSource.includes('OSM_USER_AGENT') &&
+    !campgroundSearchSource.includes('OSM_OVERPASS_URL'),
+  'Established campground endpoint should return cached canonical GeoJSON without fetching providers from mobile map requests.',
 );
 assert.ok(
     supabaseConfigSource.includes('[functions.campgrounds-search]') &&
@@ -732,11 +736,30 @@ assert.ok(
   'Camp layer Edge Functions should handle CORS preflight and GET/POST consistently.',
 );
 assert.ok(
-  campgroundSearchSource.includes('return jsonResponse({\n      ok: true') &&
-    campgroundSearchSource.includes('count: records.length') &&
-    dispersedEdgeSource.includes('return jsonResponse({\n      ok: true') &&
-    dispersedEdgeSource.includes('count: regions.length'),
+  /return\s+jsonResponse\(\{\s*ok:\s*true[\s\S]*count:\s*records\.length/.test(campgroundSearchSource) &&
+    /return\s+jsonResponse\(\{\s*ok:\s*true[\s\S]*count:\s*regions\.length/.test(dispersedEdgeSource),
   'Camp layer Edge Functions should return HTTP 200 ok=true for successful empty FeatureCollections.',
+);
+assert.ok(
+  offlineCacheSource.includes("'ecs_camp_layer_offline_cache_v1'") &&
+    offlineCacheSource.includes('createPersistedKeyValueCache(CAMP_LAYER_OFFLINE_CACHE_FILE_KEY)') &&
+    offlineCacheSource.includes('resolveCampLayerOfflineCacheLookup') &&
+    offlineCacheSource.includes('readDispersedCampingOfflineCache') &&
+    offlineCacheSource.includes('readEstablishedCampgroundsOfflineCache') &&
+    offlineCacheSource.includes('writeDispersedCampingOfflineCache') &&
+    offlineCacheSource.includes('writeEstablishedCampgroundsOfflineCache'),
+  'Camp layers should persist established/dispersed map data for later offline rendering.',
+);
+assert.ok(
+  navigateSource.includes("resolveCampLayerOfflineCacheLookup('dispersed_camping'") &&
+    navigateSource.includes('readDispersedCampingOfflineCache(lookup.cacheKey)') &&
+    navigateSource.includes('writeDispersedCampingOfflineCache({') &&
+    navigateSource.includes("resolveCampLayerOfflineCacheLookup('established_campgrounds'") &&
+    navigateSource.includes('readEstablishedCampgroundsOfflineCache(lookup.cacheKey)') &&
+    navigateSource.includes('writeEstablishedCampgroundsOfflineCache({') &&
+    navigateSource.includes('cached established campground') &&
+    navigateSource.includes('cached public-land eligibility area'),
+  'Navigate should use persisted camp layer cache while offline and label cached camp data honestly.',
 );
 assert.ok(
   envExampleSource.includes('ECS_SERVICE_ROLE_KEY=') &&

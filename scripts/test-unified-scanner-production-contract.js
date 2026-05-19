@@ -34,6 +34,9 @@ const deviceConnectionsScreen = read('app/power/blu.tsx');
 const quickActions = read('components/QuickActionsSheet.tsx');
 const connectionStep = read('components/power-setup/ConnectionStep.tsx');
 const powerSetupScreen = read('app/power/setup.tsx');
+const obdSetupScreen = read('app/obd-setup.tsx');
+const vehicleTelemetrySettingsScreen = read('app/vehicle-telemetry-settings.tsx');
+const vehicleTelemetryWidget = read('components/dashboard/VehicleTelemetryWidget.tsx');
 const ecoFlowCloudDevicesScreen = read('app/power/devices.tsx');
 const powerDiscovery = read('src/features/power/services/powerDiscoveryService.ts');
 const powerScanner = read('src/features/power/components/PowerDeviceScanner.tsx');
@@ -167,9 +170,9 @@ assert(!aggregator.includes("| 'mock'"), 'UnifiedDiscoverySource must not includ
 
 assert(
   deviceConnectionsScreen.includes('useUnifiedDeviceConnections') &&
-    deviceConnectionsScreen.includes('isRealNearbyPowerDevice') &&
-    deviceConnectionsScreen.includes('connections.nearbyDevices.filter(isRealNearbyPowerDevice)') &&
-    deviceConnectionsScreen.includes('Real nearby Bluetooth advertisements only') &&
+    deviceConnectionsScreen.includes('isRealNearbyReleaseDevice') &&
+    deviceConnectionsScreen.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
+    deviceConnectionsScreen.includes('Real nearby power and OBD2 advertisements only') &&
     !deviceConnectionsScreen.includes('Saved / Known') &&
     !deviceConnectionsScreen.includes('Saved and known devices') &&
     !deviceConnectionsScreen.includes('Failed / Needs Attention') &&
@@ -179,18 +182,22 @@ assert(
     !deviceConnectionsScreen.includes('connections.knownDevices') &&
     !deviceConnectionsScreen.includes('SectionFilterButton') &&
     !deviceConnectionsScreen.includes('label="Known"'),
-  'Device Connections screen must use the unified scanner nearby power list without saved/known/failed production containers',
+  'Device Connections screen must use the unified scanner nearby power/OBD2 list without saved/known/failed production containers',
 );
 assert(
-  quickActions.includes('useUnifiedDeviceConnections') &&
-    !quickActions.includes('label="Known"') &&
-    !quickActions.includes("case 'known'") &&
-    !quickActions.includes('BluetoothFilterButton') &&
-    !quickActions.includes('label="Attention"') &&
-    !quickActions.includes('connections.attentionDevices.length') &&
-    quickActions.includes('const visibleDevices = connections.nearbyDevices') &&
-    quickActions.includes('Saved, known, failed, and cloud-only records stay out of this actionable scan list.'),
-  'Field Utilities Bluetooth panel must use unified scanner nearby state and omit known/attention/failed filters',
+  quickActions.includes('const openDeviceConnections = useCallback') &&
+    quickActions.includes("router.push('/power/blu')") &&
+    quickActions.includes("key: 'bluetooth'") &&
+    quickActions.includes("label: 'Bluetooth'") &&
+    quickActions.includes('onPress: openDeviceConnections') &&
+    !quickActions.includes('FieldUtilitiesBluetoothPanel') &&
+    !quickActions.includes('BluetoothDeviceMiniRow') &&
+    !quickActions.includes('BluetoothSourceSummary') &&
+    !quickActions.includes('useUnifiedDeviceConnections') &&
+    !quickActions.includes('connections.nearbyDevices') &&
+    !quickActions.includes('getSourceStatusDetail') &&
+    !quickActions.includes('getSourceStatusLabel'),
+  'Field Utilities Bluetooth tile must launch the canonical Device Connections route instead of embedding a second scanner UI',
 );
 assert(
   connectionStep.includes('useUnifiedDeviceConnections') &&
@@ -203,6 +210,29 @@ assert(
     !powerSetupScreen.includes('ProviderSelectionStep') &&
     !powerSetupScreen.includes('ConnectionStep'),
   'legacy power setup route must redirect to the canonical Device Connections scanner',
+);
+assert(
+  obdSetupScreen.includes("router.replace('/power/blu')") &&
+    !obdSetupScreen.includes('scanner.startScan') &&
+    !obdSetupScreen.includes('OBD2ScannerModal'),
+  'legacy OBD setup route must redirect to the canonical Device Connections scanner',
+);
+assert(
+  vehicleTelemetrySettingsScreen.includes("router.push('/power/blu' as any)") &&
+    !vehicleTelemetrySettingsScreen.includes('OBD2ScannerModal') &&
+    !vehicleTelemetrySettingsScreen.includes('setScannerVisible'),
+  'Vehicle Telemetry settings must launch Device Connections instead of embedding a second scanner UI',
+);
+assert(
+  vehicleTelemetryWidget.includes("router.push('/power/blu' as any)") &&
+    vehicleTelemetryWidget.includes('label="Device Connections"') &&
+    !vehicleTelemetryWidget.includes('OBD2ScannerModal') &&
+    !vehicleTelemetryWidget.includes('setScannerVisible'),
+  'Vehicle Systems detail must launch Device Connections instead of embedding a second scanner UI',
+);
+assert(
+  !fs.existsSync(path.join(root, 'components', 'vehicle-telemetry', 'OBD2ScannerModal.tsx')),
+  'old OBD-only scanner modal must not remain as a production UI surface',
 );
 assert(
   ecoFlowCloudDevicesScreen.includes('This is a cloud catalog selector, not a Bluetooth scanner.') &&
@@ -243,6 +273,7 @@ for (const file of productionFiles) {
     assert(!/from ['"].*useOBD2Scanner['"]/.test(source), `${rel} must not import raw OBD scanner hook`);
     assert(!/useOBD2Scanner\(/.test(source), `${rel} must not call raw OBD scanner hook`);
   }
+  assert(!/OBD2ScannerModal/.test(source), `${rel} must not embed the old OBD-only scanner modal`);
   assert(!/discoverMockDevicesForUnifiedScanner/.test(source), `${rel} must not import mock scanner discovery`);
   assert(!/from ['"].*createSimulatedBluAdapter['"]/.test(source), `${rel} must not import simulated BLU adapters`);
   assert(!/from ['"].*MockPowerConnector['"]/.test(source), `${rel} must not import mock power connector`);

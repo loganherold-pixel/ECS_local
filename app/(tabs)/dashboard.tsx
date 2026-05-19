@@ -85,7 +85,6 @@ import CreateCustomWidgetModal from '../../components/dashboard/CreateCustomWidg
 import GridLayoutPicker from '../../components/dashboard/GridLayoutPicker';
 import AuthModal from '../../components/AuthModal';
 import Toast from '../../components/Toast';
-import { ReadinessAlertToast } from '../../components/readiness';
 import { ECSStateMessage } from '../../components/ECSStateMessage';
 import CollisionWarningModal from '../../components/dashboard/CollisionWarningModal';
 import ExpeditionTimelinePanel from '../../components/expedition/ExpeditionTimelinePanel';
@@ -1203,10 +1202,6 @@ function DashboardModalLayer({
         targetNewSize={pendingResizeSize}
         onShrinkAndResize={onShrinkAndResize}
         onCancel={onCancelResize}
-      />
-
-      <ReadinessAlertToast
-        onOpenCommandBrief={onOpenCommandBriefFromDetail}
       />
 
       <Toast />
@@ -3714,9 +3709,11 @@ function DashboardScreenInner() {
 
 // ── Exported with Error Boundary ────────────────────────
 export default function DashboardScreen() {
+  const isFocused = useIsFocused();
+
   return (
     <TabErrorBoundary tabName="DASHBOARD">
-      <DashboardScreenInner />
+      {isFocused ? <DashboardScreenInner /> : <View style={styles.inactiveDashboardScreen} />}
     </TabErrorBoundary>
   );
 }
@@ -3724,6 +3721,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
 
   container: { flex: 1, paddingTop: 0, paddingBottom: 70, overflow: 'visible' },
+  inactiveDashboardScreen: { flex: 1, backgroundColor: 'transparent' },
   dashboardLoadingShell: {
     flex: 1,
     paddingHorizontal: 14,

@@ -125,4 +125,4 @@ $env:OPENAI_API_KEY='<dev/test key>'
 node scripts/campops-ai-real-output-review.js --write-report
 ```
 
-Do not run the real-output path with production user data. Do not enable `campopsAiAssistEnabled` for field testers until `docs/campops/ai_real_output_review.md` records a configured real-model run with no critical post-parser failures and product/privacy approves the model/config path.
+Do not run the real-output path with production user data. Do not enable `campopsAiAssistEnabled` for field testers until `docs/campops/ai_real_output_review.md` records a configured real-model run, `Real model executed in this report: yes`, no critical post-parser failures, an exact active model/config, a current-or-past approval date, and product/privacy approval for that same model/config path.

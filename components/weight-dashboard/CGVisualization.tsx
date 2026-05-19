@@ -20,6 +20,7 @@ interface Props {
   rearAxlePercent: number;
   totalWeight: number;
   vehicleType?: string | null;
+  showVehicleProfile?: boolean;
 }
 
 const FRONT_AXLE_X = 0.22;
@@ -128,6 +129,7 @@ export default function CGVisualization({
   rearAxlePercent,
   totalWeight,
   vehicleType,
+  showVehicleProfile = true,
 }: Props) {
   const profileKind = useMemo(() => resolveVehicleProfileKind(vehicleType), [vehicleType]);
   const cgLongitudinalPercent = clampPercent(cgResult.xCG, 0.45);
@@ -156,61 +158,62 @@ export default function CGVisualization({
         </View>
       </View>
 
-      {/* Vehicle Outline */}
-      <View style={styles.vehicleContainer}>
-        <View style={styles.profileLegend}>
-          <Text style={styles.profileLabel}>{vehicleProfileLabel(profileKind)}</Text>
-          <View style={styles.sideLegend}>
-            <Text style={styles.sideLegendText}>DRIVER</Text>
-            <View style={styles.sideLegendLine} />
-            <Text style={styles.sideLegendText}>PASSENGER</Text>
+      {showVehicleProfile ? (
+        <View style={styles.vehicleContainer}>
+          <View style={styles.profileLegend}>
+            <Text style={styles.profileLabel}>{vehicleProfileLabel(profileKind)}</Text>
+            <View style={styles.sideLegend}>
+              <Text style={styles.sideLegendText}>DRIVER</Text>
+              <View style={styles.sideLegendLine} />
+              <Text style={styles.sideLegendText}>PASSENGER</Text>
+            </View>
+          </View>
+
+          <View style={styles.profileFrame}>
+            <TopDownVehicleProfile kind={profileKind} />
+
+            <View style={[styles.axleLine, { top: `${FRONT_AXLE_X * 100}%` }]}>
+              <View style={styles.axleEnd} />
+              <View style={styles.axleDash} />
+              <View style={styles.axleEnd} />
+            </View>
+
+            <View style={[styles.axleLine, { top: `${REAR_AXLE_X * 100}%` }]}>
+              <View style={styles.axleEnd} />
+              <View style={styles.axleDash} />
+              <View style={styles.axleEnd} />
+            </View>
+
+            <View
+              style={[
+                styles.cgDot,
+                {
+                  left: `${cgLateralPercent}%`,
+                  top: `${cgLongitudinalPercent}%`,
+                  backgroundColor: cgColor,
+                  shadowColor: cgColor,
+                },
+              ]}
+            >
+              <View style={[styles.cgDotInner, { backgroundColor: cgColor }]} />
+            </View>
+
+            <View style={[styles.cgLineH, { top: `${cgLongitudinalPercent}%`, left: '18%', width: '64%' }]} />
+            <View style={[styles.cgLineV, { left: `${cgLateralPercent}%`, top: `${Math.max(0, cgLongitudinalPercent - 8)}%`, height: '16%' }]} />
+          </View>
+
+          {markerClamped ? (
+            <Text style={styles.markerWarning}>COG marker clamped to visible vehicle profile bounds</Text>
+          ) : null}
+
+          <View style={styles.directionArrow}>
+            <Text style={styles.arrowLabel}>FWD</Text>
+            <View style={styles.arrowLine} />
+            <View style={styles.arrowHeadDown} />
+            <Text style={styles.arrowLabel}>REAR</Text>
           </View>
         </View>
-
-        <View style={styles.profileFrame}>
-          <TopDownVehicleProfile kind={profileKind} />
-
-          <View style={[styles.axleLine, { top: `${FRONT_AXLE_X * 100}%` }]}>
-            <View style={styles.axleEnd} />
-            <View style={styles.axleDash} />
-            <View style={styles.axleEnd} />
-          </View>
-
-          <View style={[styles.axleLine, { top: `${REAR_AXLE_X * 100}%` }]}>
-            <View style={styles.axleEnd} />
-            <View style={styles.axleDash} />
-            <View style={styles.axleEnd} />
-          </View>
-
-          <View
-            style={[
-              styles.cgDot,
-              {
-                left: `${cgLateralPercent}%`,
-                top: `${cgLongitudinalPercent}%`,
-                backgroundColor: cgColor,
-                shadowColor: cgColor,
-              },
-            ]}
-          >
-            <View style={[styles.cgDotInner, { backgroundColor: cgColor }]} />
-          </View>
-
-          <View style={[styles.cgLineH, { top: `${cgLongitudinalPercent}%`, left: '18%', width: '64%' }]} />
-          <View style={[styles.cgLineV, { left: `${cgLateralPercent}%`, top: `${Math.max(0, cgLongitudinalPercent - 8)}%`, height: '16%' }]} />
-        </View>
-
-        {markerClamped ? (
-          <Text style={styles.markerWarning}>COG marker clamped to visible vehicle profile bounds</Text>
-        ) : null}
-
-        <View style={styles.directionArrow}>
-          <Text style={styles.arrowLabel}>FWD</Text>
-          <View style={styles.arrowLine} />
-          <View style={styles.arrowHeadDown} />
-          <Text style={styles.arrowLabel}>REAR</Text>
-        </View>
-      </View>
+      ) : null}
 
       {/* Axle Load Bars */}
       <View style={styles.axleRow}>

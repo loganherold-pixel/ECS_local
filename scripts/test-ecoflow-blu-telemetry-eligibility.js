@@ -126,6 +126,19 @@ assert(
   'EcoFlow cloud provider should filter telemetry devices using catalog productType.',
 );
 assert(
+  cloudProviderSource.includes('import { ecsLog } from "../../../../lib/ecsLogger";') &&
+    cloudProviderSource.includes('function logEcoFlowDebug') &&
+    cloudProviderSource.includes('debugFlag: "ECS_DEBUG_ECOFLOW_CLOUD"') &&
+    cloudProviderSource.includes('function logEcoFlowWarn'),
+  'EcoFlow cloud provider diagnostics should route through ecsLog with an explicit debug flag.',
+);
+assert(
+  !cloudProviderSource.includes('console.log(') &&
+    !cloudProviderSource.includes('console.warn(') &&
+    !cloudProviderSource.includes('console.error('),
+  'EcoFlow cloud provider must not emit direct production console output.',
+);
+assert(
   cloudProviderSource.includes('unsupported_product_type') &&
     cloudProviderSource.includes('selected telemetry primary'),
   'EcoFlow cloud logs should distinguish unsupported product types from selected telemetry devices.',

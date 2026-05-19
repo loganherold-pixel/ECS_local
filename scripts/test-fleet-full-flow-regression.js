@@ -166,7 +166,7 @@ assert.notStrictEqual(
   'Winch must not render with a radio or signal icon.',
 );
 assert.strictEqual(accessoryIcons.roof_rack_platform, 'grid-outline', 'Roof rack should use a platform/grid icon.');
-assert.strictEqual(accessoryIcons.cab_rack, 'file-tray-stacked-outline', 'Cab rack should use a cargo/rack icon.');
+assert.strictEqual(accessoryIcons.cab_rack, 'car-sport-outline', 'Cab rack should use a vehicle-mounted accessory icon.');
 assert.strictEqual(accessoryIcons.toolbox, 'hammer-outline', 'Toolbox should use a tool icon.');
 assert.strictEqual(accessoryIcons.custom_accessory, 'cube-outline', 'Custom accessory should use a package/container icon.');
 assert.deepStrictEqual(

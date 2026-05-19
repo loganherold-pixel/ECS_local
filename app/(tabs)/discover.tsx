@@ -83,6 +83,14 @@ import { vehicleStore } from '../../lib/vehicleStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
 import { hapticMicro } from '../../lib/haptics';
 import {
+  clearTripBuilderRouteHandoff,
+  saveTripBuilderRouteHandoff,
+} from '../../lib/tripBuilder/tripBuilderRouteHandoffStore';
+import {
+  clearOfflinePrepPackHandoff,
+  saveOfflinePrepPackHandoff,
+} from '../../lib/offlinePrepPack';
+import {
   explorationProgressStore,
   type ExplorationStats,
 } from '../../lib/explorationProgressStore';
@@ -149,6 +157,13 @@ import {
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
 import {
+  getVisibleExploreFeatures,
+  type ExploreFeatureId,
+} from '../../lib/explore/exploreFeatureRegistry';
+import {
+  saveExplorePlanningRouteContext,
+} from '../../lib/explore/explorePlanningRouteContextStore';
+import {
   buildExploreRouteOverlaySegmentsFromRoutes,
   type ExploreRouteOverlayCategory,
 } from '../../lib/navigateExploreRoutesOverlay';
@@ -190,6 +205,8 @@ type PopularTrailEnrichedRoute = EnrichedDiscoveryRoute & {
   discoveryScore?: number;
   sourceMetadata?: ExploreRouteSourceMetadata;
 };
+
+type ExplorePrimaryTab = Extract<ExploreFeatureId, 'suggested_routes' | 'trip_builder' | 'offline_prep_pack'>;
 
 
 
@@ -548,16 +565,42 @@ function buildValidatedExploreNavigationPayload(route: ExpeditionOpportunity | n
   return { payload, unavailableReason };
 }
 
-function getExploreRouteBuildUnavailableReason(route: ExpeditionOpportunity | null | undefined): string | null {
-  return buildValidatedExploreNavigationPayload(route).unavailableReason;
-}
-
 function formatStackedPlanLabel(plan: FavoriteTrailPlan): string {
   if (plan.items.length === 0) return 'Empty plan';
   if (plan.items.length === 1) return plan.items[0].title;
   const preview = plan.items.slice(0, 2).map((item) => item.title).join(' -> ');
   if (plan.items.length === 2) return preview;
   return `${preview} + ${plan.items.length - 2}`;
+}
+
+function favoriteTrailToExpeditionRoute(favorite: FavoriteTrailRecord): ExpeditionOpportunity {
+  const payload = favorite.navigationPayload;
+  const payloadRecord = payload as NavigationHandoffPayload & { region?: unknown };
+  const region =
+    typeof payloadRecord.region === 'string' && payloadRecord.region.trim()
+      ? payloadRecord.region
+      : favorite.subtitle ?? 'Saved Explorer route';
+  return ({
+    id: favorite.sourceTrailId,
+    name: favorite.title,
+    region,
+    distanceMiles: favorite.trailLengthMiles ?? payload.trailLengthMiles ?? 0,
+    estimatedDays: 1,
+    difficulty: 'moderate',
+    terrainType: favorite.trailCategory ?? 'trail',
+    bestSeason: 'Unknown',
+    highlights: [],
+    requirements: [],
+    coordinate: payload.coordinate ?? favorite.coordinate ?? null,
+    destinationCoordinate: payload.roadDestinationCoordinate ?? favorite.roadDestinationCoordinate ?? null,
+    trailGeometry: favorite.trailGeometry ?? payload.trailGeometry ?? [],
+    routeGeometry: payload.trailGeometry ?? favorite.trailGeometry ?? [],
+    routeMetadata: {
+      ...(payload.routeMetadata ?? {}),
+      identityKey: favorite.sourceTrailId,
+      source: 'favorite',
+    },
+  } as unknown) as ExpeditionOpportunity;
 }
 
 // ============================================================
@@ -592,6 +635,8 @@ function DiscoverScreenInner() {
   const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(
     initialExploreFilterStateRef.current.refinement,
   );
+  const [activeExplorePrimaryTab, setActiveExplorePrimaryTab] = useState<ExplorePrimaryTab>('suggested_routes');
+  const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
 
   // ── User location state ───────────────────────────────────
   const [userLat, setUserLat] = useState<number>(DEFAULT_USER_LOCATION.latitude);
@@ -1220,6 +1265,54 @@ function DiscoverScreenInner() {
     [router, stageExploreReadinessPreview],
   );
 
+  const handleBuildTripFromRoute = useCallback(
+    (route: ExpeditionOpportunity) => {
+      hapticMicro();
+      stageExploreReadinessPreview(route);
+      saveTripBuilderRouteHandoff(route as any);
+      setAnalysisVisible(false);
+      setSelectedOpportunity(null);
+      setAiPreviewVisible(false);
+      setAiPreviewRoute(null);
+      setTrailPackPreview(null);
+      router.push({
+        pathname: '/explore-trip-builder',
+        params: { routeId: route.id },
+      } as any);
+    },
+    [router, stageExploreReadinessPreview],
+  );
+
+  const handlePrepareOfflineFromRoute = useCallback(
+    (route: ExpeditionOpportunity) => {
+      hapticMicro();
+      stageExploreReadinessPreview(route);
+      saveOfflinePrepPackHandoff({
+        route: route as any,
+        campsiteCandidates: extractExploreRouteCampMarkers(route).map((marker) => ({
+          id: marker.id,
+          name: marker.title,
+          location: { latitude: marker.latitude, longitude: marker.longitude },
+          score: marker.score,
+          legalConfidence: marker.confidence,
+          accessConfidence: marker.confidence,
+          source: marker.source ?? 'explore_route_camp_marker',
+          notes: [marker.subtitle],
+        })),
+      }, 'route_details');
+      setAnalysisVisible(false);
+      setSelectedOpportunity(null);
+      setAiPreviewVisible(false);
+      setAiPreviewRoute(null);
+      setTrailPackPreview(null);
+      router.push({
+        pathname: '/explore-offline-prep-pack',
+        params: { routeId: route.id },
+      } as any);
+    },
+    [router, stageExploreReadinessPreview],
+  );
+
   const handleViewRouteCamps = useCallback(
     async (route: ExpeditionOpportunity) => {
       const campMarkers = extractExploreRouteCampMarkers(route);
@@ -1357,18 +1450,13 @@ function DiscoverScreenInner() {
   }, []);
 
   // ── Phase 18: Enriched routes with discovery intelligence ──
-  const selectedOpportunityBuildUnavailableReason = useMemo(
-    () => getExploreRouteBuildUnavailableReason(selectedOpportunity),
-    [selectedOpportunity],
-  );
   const selectedOpportunityCampMarkers = useMemo(
     () => extractExploreRouteCampMarkers(selectedOpportunity),
     [selectedOpportunity],
   );
-
-  const aiPreviewBuildUnavailableReason = useMemo(
-    () => getExploreRouteBuildUnavailableReason(aiPreviewRoute),
-    [aiPreviewRoute],
+  const selectedOpportunityBuildUnavailableReason = useMemo(
+    () => buildValidatedExploreNavigationPayload(selectedOpportunity).unavailableReason,
+    [selectedOpportunity],
   );
 
   const enrichedKnown = useMemo<EnrichedDiscoveryRoute[]>(() => {
@@ -1868,20 +1956,54 @@ function DiscoverScreenInner() {
     [radiusFilteredAIRoutes, exploreRefinement],
   );
 
+  const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
+    const hiddenGemRoutes = hiddenGemExploreOrchestration.items
+      .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
+      .filter(routePassesExploreMapLength);
+    const popularTrailRoutes = popularTrailExploreOrchestration.routes.filter(routePassesExploreMapLength);
+    const trailPackRoutes = discoverableTrailPacks
+      .map((pack) => trailPackToExpeditionOpportunity(pack))
+      .filter(routePassesExploreMapLength);
+    const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
+    const seen = new Set<string>();
+    return [
+      ...hiddenGemRoutes,
+      ...popularTrailRoutes,
+      ...trailPackRoutes,
+      ...ecsRouteIdeaRoutes,
+    ].filter((route) => {
+      const key = String(route.id ?? route.name).trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [
+    discoverableTrailPacks,
+    hiddenGemExploreOrchestration.items,
+    hiddenGemExploreOrchestration.routeMap,
+    popularTrailExploreOrchestration.routes,
+    refinedAIRoutes,
+  ]);
+
   const exploreMapHandoffBuild = useMemo(() => {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
       .filter(routePassesExploreMapLength);
     const popularTrailRoutes = popularTrailExploreOrchestration.routes.filter(routePassesExploreMapLength);
+    const trailPackRoutes = discoverableTrailPacks
+      .map((pack) => trailPackToExpeditionOpportunity(pack))
+      .filter(routePassesExploreMapLength);
     const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
 
     return buildExploreRouteOverlaySegmentsFromRoutes({
       hiddenGemRoutes,
       popularTrailRoutes,
+      trailPackRoutes,
       ecsRouteIdeaRoutes,
       maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES,
     });
   }, [
+    discoverableTrailPacks,
     hiddenGemExploreOrchestration.items,
     hiddenGemExploreOrchestration.routeMap,
     popularTrailExploreOrchestration.routes,
@@ -1918,6 +2040,21 @@ function DiscoverScreenInner() {
     exploreRefinement,
   ]);
 
+  useEffect(() => {
+    if (!exploreFilterHydrated) return;
+    saveExplorePlanningRouteContext({
+      routes: exploreSuggestedRouteOptions as any,
+      radiusMiles: activeDistanceRadius,
+      refinementLabel: selectedExploreRefinementLabel,
+      source: 'suggested_routes',
+    });
+  }, [
+    activeDistanceRadius,
+    exploreFilterHydrated,
+    exploreSuggestedRouteOptions,
+    selectedExploreRefinementLabel,
+  ]);
+
   const handleDisplayExploreRoutesOnMap = useCallback(async () => {
     hapticMicro();
     setExploreMapHandoffNotice(null);
@@ -1925,7 +2062,7 @@ function DiscoverScreenInner() {
     if (exploreMapHandoffBuild.segments.length === 0) {
       setExploreMapHandoffNotice(
         exploreMapHandoffBuild.candidateCount > 0
-          ? 'No map-ready route geometry is available for the current Explore filters.'
+          ? `${exploreMapHandoffBuild.candidateCount} matching Explorer route${exploreMapHandoffBuild.candidateCount === 1 ? '' : 's'} found, but none include map-ready route geometry yet.`
           : 'No Explorer routes match the current filters yet.',
       );
       return;
@@ -2728,6 +2865,149 @@ function DiscoverScreenInner() {
   const activeExplorerCategoryConfig = explorerCategoryTiles.find(
     (category) => category.key === activeExplorerCategoryPanel,
   ) ?? null;
+  const exploreTopLevelFeatures = useMemo(() => getVisibleExploreFeatures(), []);
+  const exploreFeatureBadges = useMemo<Record<ExploreFeatureId, string | number | null>>(
+    () => ({
+      suggested_routes: Math.max(
+        hiddenGemPage.eligibleCount +
+          popularTrailPage.eligibleCount +
+          trailPackPage.eligibleCount +
+          aiRouteIdeaPage.eligibleCount,
+        refinedCanonicalRoutes.length,
+      ),
+      route_filters: selectedExploreRefinementLabel ?? `${activeDistanceRadius} mi`,
+      trip_builder: 'STAGED',
+      offline_prep_pack: 'STAGED',
+    }),
+    [
+      activeDistanceRadius,
+      aiRouteIdeaPage.eligibleCount,
+      hiddenGemPage.eligibleCount,
+      popularTrailPage.eligibleCount,
+      refinedCanonicalRoutes.length,
+      selectedExploreRefinementLabel,
+      trailPackPage.eligibleCount,
+    ],
+  );
+
+  const handleOpenExploreFeature = useCallback(
+    (featureId: ExplorePrimaryTab) => {
+      const feature = exploreTopLevelFeatures.find((item) => item.id === featureId);
+      if (!feature?.enabled) return;
+
+      hapticMicro();
+      setActiveExplorePrimaryTab(featureId);
+      setActiveExplorerCategoryPanel(null);
+      saveExplorePlanningRouteContext({
+        routes: exploreSuggestedRouteOptions as any,
+        radiusMiles: activeDistanceRadius,
+        refinementLabel: selectedExploreRefinementLabel,
+        source: featureId === 'trip_builder' ? 'trip_builder_tab' : featureId === 'offline_prep_pack' ? 'offline_prep_tab' : 'suggested_routes',
+      });
+      ecsLog.info('DISCOVERY', '[EXPLORE_FEATURE] selected', {
+        featureId,
+        featureTitle: feature.title,
+        featureStatus: feature.status,
+        featureCategory: feature.category,
+        event: 'explore_feature_selected',
+      });
+
+      switch (featureId) {
+        case 'suggested_routes':
+          setActiveExplorerCategoryPanel(null);
+          return;
+        case 'trip_builder':
+          clearTripBuilderRouteHandoff();
+          return;
+        case 'offline_prep_pack':
+          clearOfflinePrepPackHandoff();
+          return;
+        default:
+          return;
+      }
+    },
+    [
+      activeDistanceRadius,
+      exploreSuggestedRouteOptions,
+      exploreTopLevelFeatures,
+      selectedExploreRefinementLabel,
+    ],
+  );
+
+  useEffect(() => {
+    if (activeExplorePrimaryTab === 'suggested_routes') return;
+    if (exploreSuggestedRouteOptions.length === 0) {
+      setExplorePlanningSelectedRouteId(null);
+      return;
+    }
+    if (!exploreSuggestedRouteOptions.some((route) => String(route.id) === explorePlanningSelectedRouteId)) {
+      setExplorePlanningSelectedRouteId(String(exploreSuggestedRouteOptions[0].id));
+    }
+  }, [activeExplorePrimaryTab, explorePlanningSelectedRouteId, exploreSuggestedRouteOptions]);
+
+  const selectedExplorePlanningRoute = useMemo(
+    () =>
+      exploreSuggestedRouteOptions.find((route) => String(route.id) === explorePlanningSelectedRouteId) ??
+      exploreSuggestedRouteOptions[0] ??
+      null,
+    [explorePlanningSelectedRouteId, exploreSuggestedRouteOptions],
+  );
+
+  const handleOpenActivePlanningFlow = useCallback(() => {
+    if (activeExplorePrimaryTab === 'suggested_routes') return;
+    hapticMicro();
+    saveExplorePlanningRouteContext({
+      routes: exploreSuggestedRouteOptions as any,
+      radiusMiles: activeDistanceRadius,
+      refinementLabel: selectedExploreRefinementLabel,
+      source: activeExplorePrimaryTab === 'trip_builder' ? 'trip_builder_tab' : 'offline_prep_tab',
+    });
+    if (activeExplorePrimaryTab === 'trip_builder') {
+      if (selectedExplorePlanningRoute) saveTripBuilderRouteHandoff(selectedExplorePlanningRoute as any);
+      router.push({
+        pathname: '/explore-trip-builder',
+        params: selectedExplorePlanningRoute ? { routeId: selectedExplorePlanningRoute.id } : undefined,
+      } as any);
+      return;
+    }
+    if (selectedExplorePlanningRoute) {
+      saveOfflinePrepPackHandoff({
+        route: selectedExplorePlanningRoute as any,
+        campsiteCandidates: extractExploreRouteCampMarkers(selectedExplorePlanningRoute).map((marker) => ({
+          id: marker.id,
+          name: marker.title,
+          location: { latitude: marker.latitude, longitude: marker.longitude },
+          score: marker.score,
+          legalConfidence: marker.confidence,
+          accessConfidence: marker.confidence,
+          source: marker.source ?? 'explore_route_camp_marker',
+          notes: [marker.subtitle],
+        })),
+      }, 'explore');
+    }
+    router.push({
+      pathname: '/explore-offline-prep-pack',
+      params: selectedExplorePlanningRoute ? { routeId: selectedExplorePlanningRoute.id } : undefined,
+    } as any);
+  }, [
+    activeDistanceRadius,
+    activeExplorePrimaryTab,
+    exploreSuggestedRouteOptions,
+    router,
+    selectedExplorePlanningRoute,
+    selectedExploreRefinementLabel,
+  ]);
+
+  const explorePrimaryTabOptions = useMemo(
+    () =>
+      exploreTopLevelFeatures.map((feature) => ({
+        key: feature.id,
+        label: feature.title,
+        icon: feature.icon as any,
+        badge: exploreFeatureBadges[feature.id],
+      })),
+    [exploreFeatureBadges, exploreTopLevelFeatures],
+  );
 
   const activeExplorerPanelPage = useMemo(() => {
     switch (activeExplorerCategoryPanel) {
@@ -3073,7 +3353,7 @@ function DiscoverScreenInner() {
                 }}
                 onToggleFavorite={() => handleToggleFavorite(route)}
                 onBuildRoute={() => {
-                  void handleNavigateToRoute(route);
+                  handleBuildTripFromRoute(route);
                 }}
                 compactPreview
               />
@@ -3188,6 +3468,16 @@ function DiscoverScreenInner() {
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
 
+          <View style={s.explorePrimaryTabs} testID="explore-primary-tab-control">
+            <ECSSegmentedControl
+              options={explorePrimaryTabOptions}
+              value={activeExplorePrimaryTab}
+              onChange={(key) => handleOpenExploreFeature(key as ExplorePrimaryTab)}
+            />
+          </View>
+
+          {activeExplorePrimaryTab === 'suggested_routes' ? (
+            <>
           {(!showInitialLoading && (opportunities.length > 0 || showSectionLoading)) && (
             <View style={s.discoveryControlsWrap}>
               <DistanceRadiusFilter
@@ -3205,11 +3495,11 @@ function DiscoverScreenInner() {
 
               <View style={s.exploreMapHandoffCard}>
                 <View style={s.exploreMapHandoffCopy}>
-                  <Text style={s.exploreMapHandoffTitle}>Map the current Explore filter</Text>
+                  <Text style={s.exploreMapHandoffTitle}>Map Active Trails</Text>
                   <Text style={s.exploreMapHandoffSubtitle} numberOfLines={2}>
                     {exploreMapHandoffBuild.segments.length > 0
                       ? `${exploreMapHandoffBuild.segments.length} map-ready trail line${exploreMapHandoffBuild.segments.length === 1 ? '' : 's'} from the current radius${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
-                      : 'Open matching Explorer routes on Navigate when map geometry is available.'}
+                      : 'Open Matching Explorer.'}
                   </Text>
                   {exploreMapHandoffNotice ? (
                     <Text style={s.exploreMapHandoffNotice} numberOfLines={2}>
@@ -3375,7 +3665,7 @@ function DiscoverScreenInner() {
                       }}
                       onToggleFavorite={() => handleToggleFavorite(route)}
                       onBuildRoute={() => {
-                        void handleNavigateToRoute(route);
+                        handleBuildTripFromRoute(route);
                       }}
                       compactPreview
                     />
@@ -3824,7 +4114,7 @@ function DiscoverScreenInner() {
                           }}
                           onToggleFavorite={() => handleToggleFavorite(route)}
                           onBuildRoute={() => {
-                            void handleNavigateToRoute(route);
+                            handleBuildTripFromRoute(route);
                           }}
                           compactPreview
                         />
@@ -4035,6 +4325,122 @@ function DiscoverScreenInner() {
             </>
           )}
 
+            </>
+          ) : (
+            <View style={s.explorePlanningPanel} testID={`explore-${activeExplorePrimaryTab}-tab-panel`}>
+              <View style={s.explorePlanningHero}>
+                <View
+                  style={[
+                    s.explorePlanningHeroIcon,
+                    {
+                      borderColor: activeExplorePrimaryTab === 'trip_builder' ? `${TACTICAL.amber}38` : '#5AC8FA38',
+                      backgroundColor: activeExplorePrimaryTab === 'trip_builder' ? `${TACTICAL.amber}10` : '#5AC8FA10',
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={activeExplorePrimaryTab === 'trip_builder' ? 'git-merge-outline' : 'download-outline'}
+                    size={18}
+                    color={activeExplorePrimaryTab === 'trip_builder' ? TACTICAL.amber : '#5AC8FA'}
+                  />
+                </View>
+                <View style={s.explorePlanningHeroCopy}>
+                  <Text style={s.explorePlanningEyebrow}>EXPLORER PLANNING</Text>
+                  <Text style={s.explorePlanningTitle}>
+                    {activeExplorePrimaryTab === 'trip_builder' ? 'Trip Builder' : 'Offline Prep Pack'}
+                  </Text>
+                  <Text style={s.explorePlanningText}>
+                    {activeExplorePrimaryTab === 'trip_builder'
+                      ? 'Choose from the active Suggested Routes filter, then turn the route into a field plan.'
+                      : 'Choose from the active Suggested Routes filter, then save route essentials for low-service travel.'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={s.explorePlanningContextRow}>
+                <View style={s.explorePlanningContextPill}>
+                  <Ionicons name="locate-outline" size={10} color={TACTICAL.textMuted} />
+                  <Text style={s.explorePlanningContextText}>{distanceRadiusFooterLabel}</Text>
+                </View>
+                {selectedExploreRefinementLabel ? (
+                  <View style={s.explorePlanningContextPill}>
+                    <Ionicons name="options-outline" size={10} color={TACTICAL.textMuted} />
+                    <Text style={s.explorePlanningContextText}>{selectedExploreRefinementLabel}</Text>
+                  </View>
+                ) : null}
+                <View style={s.explorePlanningContextPill}>
+                  <Ionicons name="trail-sign-outline" size={10} color={TACTICAL.textMuted} />
+                  <Text style={s.explorePlanningContextText}>
+                    {exploreSuggestedRouteOptions.length} ROUTE{exploreSuggestedRouteOptions.length === 1 ? '' : 'S'}
+                  </Text>
+                </View>
+              </View>
+
+              {exploreSuggestedRouteOptions.length === 0 ? (
+                <ECSResultsEmptyState
+                  style={s.explorePlanningEmpty}
+                  title="No Routes In Current Context"
+                  message="Adjust Suggested Routes range or refinements, then return here to build a trip plan."
+                  icon="map-outline"
+                  variant="compact"
+                />
+              ) : (
+                <>
+                  <View style={s.explorePlanningRouteList}>
+                    {exploreSuggestedRouteOptions.slice(0, 7).map((route) => {
+                      const selected = String(route.id) === String(selectedExplorePlanningRoute?.id);
+                      return (
+                        <TouchableOpacity
+                          key={route.id}
+                          style={[s.explorePlanningRouteOption, selected && s.explorePlanningRouteOptionSelected]}
+                          activeOpacity={0.82}
+                          onPress={() => {
+                            hapticMicro();
+                            setExplorePlanningSelectedRouteId(String(route.id));
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Select ${route.name}`}
+                          accessibilityState={{ selected }}
+                          testID={`explore-planning-route-option-${route.id}`}
+                        >
+                          <Ionicons
+                            name={selected ? 'checkmark-circle' : 'map-outline'}
+                            size={14}
+                            color={selected ? TACTICAL.amber : TACTICAL.textMuted}
+                          />
+                          <View style={s.explorePlanningRouteCopy}>
+                            <Text style={s.explorePlanningRouteTitle} numberOfLines={1}>{route.name}</Text>
+                            <Text style={s.explorePlanningRouteMeta} numberOfLines={1}>
+                              {route.region} | {Number.isFinite(Number(route.distanceMiles)) ? `${Math.round(Number(route.distanceMiles))} mi` : 'Distance unknown'}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <TouchableOpacity
+                    style={s.explorePlanningPrimaryButton}
+                    activeOpacity={0.84}
+                    onPress={handleOpenActivePlanningFlow}
+                    accessibilityRole="button"
+                    accessibilityLabel={activeExplorePrimaryTab === 'trip_builder' ? 'Open Trip Builder' : 'Open Offline Prep Pack'}
+                    testID={activeExplorePrimaryTab === 'trip_builder' ? 'explore-open-trip-builder' : 'explore-open-offline-prep-pack'}
+                  >
+                    <Ionicons
+                      name={activeExplorePrimaryTab === 'trip_builder' ? 'git-merge-outline' : 'download-outline'}
+                      size={14}
+                      color="#081014"
+                    />
+                    <Text style={s.explorePlanningPrimaryText}>
+                      {activeExplorePrimaryTab === 'trip_builder' ? 'Open Trip Builder' : 'Open Offline Prep Pack'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+
           <View style={s.footerNote}>
             <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
             <View style={s.footerNoteCopy}>
@@ -4176,6 +4582,34 @@ function DiscoverScreenInner() {
             selectedOpportunity && selectedOpportunityCampMarkers.length > 0
               ? () => { void handleViewRouteCamps(selectedOpportunity); }
               : undefined
+          }
+          footerExtra={
+            selectedOpportunity ? (
+              <>
+                <TouchableOpacity
+                  style={s.offlinePrepFooterBtn}
+                  activeOpacity={0.84}
+                  onPress={() => { handleBuildTripFromRoute(selectedOpportunity); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Build Trip"
+                  testID="selected-route-build-trip"
+                >
+                  <Ionicons name="git-merge-outline" size={14} color={TACTICAL.amber} />
+                  <Text style={s.offlinePrepFooterText} numberOfLines={2}>BUILD{'\n'}TRIP</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.offlinePrepFooterBtn}
+                  activeOpacity={0.84}
+                  onPress={() => { handlePrepareOfflineFromRoute(selectedOpportunity); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Prepare Offline Pack"
+                  testID="selected-route-prepare-offline-pack"
+                >
+                  <Ionicons name="download-outline" size={14} color={TACTICAL.amber} />
+                  <Text style={s.offlinePrepFooterText} numberOfLines={2}>PREP{'\n'}OFFLINE</Text>
+                </TouchableOpacity>
+              </>
+            ) : null
           }
         />
 
@@ -4355,12 +4789,12 @@ function DiscoverScreenInner() {
           onBuildRoute={
             aiPreviewRoute
               ? () => {
-                  void handleNavigateToRoute(aiPreviewRoute);
+                  handleBuildTripFromRoute(aiPreviewRoute);
                 }
               : undefined
           }
-          buildRouteDisabled={!!aiPreviewBuildUnavailableReason}
-          buildRouteDisabledReason={aiPreviewBuildUnavailableReason}
+          buildRouteDisabled={false}
+          buildRouteDisabledReason={null}
         />
 
       </View>
@@ -4388,6 +4822,30 @@ const s = StyleSheet.create({
   safeContainer: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  offlinePrepFooterBtn: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+  },
+  offlinePrepFooterText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.8,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
 
@@ -4453,6 +4911,182 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 14,
     flexGrow: 1,
+  },
+  explorePrimaryTabs: {
+    marginBottom: 8,
+  },
+  explorePlanningPanel: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(230,184,76,0.22)',
+    backgroundColor: ECS.bgPanel,
+    padding: 12,
+    gap: 10,
+  },
+  explorePlanningHero: {
+    flexDirection: 'row',
+    gap: 11,
+    alignItems: 'flex-start',
+  },
+  explorePlanningHeroIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  explorePlanningHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  explorePlanningEyebrow: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+  },
+  explorePlanningTitle: {
+    color: TACTICAL.text,
+    fontSize: 16,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  explorePlanningText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  explorePlanningContextRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  explorePlanningContextPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  explorePlanningContextText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  explorePlanningEmpty: {
+    marginTop: 4,
+  },
+  explorePlanningRouteList: {
+    gap: 7,
+  },
+  explorePlanningRouteOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    padding: 9,
+  },
+  explorePlanningRouteOptionSelected: {
+    borderColor: `${TACTICAL.amber}50`,
+    backgroundColor: `${TACTICAL.amber}0E`,
+  },
+  explorePlanningRouteCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  explorePlanningRouteTitle: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  explorePlanningRouteMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  explorePlanningPrimaryButton: {
+    minHeight: 40,
+    borderRadius: 12,
+    backgroundColor: TACTICAL.amber,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  explorePlanningPrimaryText: {
+    color: '#081014',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  exploreFeatureGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  exploreFeatureTile: {
+    width: '48.7%',
+    minHeight: 88,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 7,
+  },
+  exploreFeatureIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exploreFeatureCopy: {
+    gap: 2,
+    flex: 1,
+  },
+  exploreFeatureTitle: {
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+  },
+  exploreFeatureDescription: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
+  exploreFeatureBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  exploreFeatureBadgeText: {
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
   },
   discoveryControlsWrap: {
     marginTop: 3,

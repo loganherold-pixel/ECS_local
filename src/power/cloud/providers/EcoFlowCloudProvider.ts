@@ -44,6 +44,7 @@ import {
 import {
   describeEcoFlowBluEligibility,
 } from "../../../../lib/ecoflowBluTelemetryEligibility";
+import { ecsLog } from "../../../../lib/ecsLogger";
 
 // ── Supabase import (lazy to avoid hard crash if unavailable) ────────────
 let _supabase: any = null;
@@ -57,24 +58,43 @@ function isEcoFlowTelemetryDebugEnabled(): boolean {
   }
 }
 
+const ECOFLOW_LOG_TAG = "[EcoFlowCloudProvider]";
+
+function ecoFlowErrorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+    };
+  }
+  return { errorMessage: String(error) };
+}
+
+function logEcoFlowDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev("POWER", message, details, {
+    tag: ECOFLOW_LOG_TAG,
+    debugFlag: "ECS_DEBUG_ECOFLOW_CLOUD",
+    fingerprint: `${message}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
+
+function logEcoFlowWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn("POWER", `${ECOFLOW_LOG_TAG} ${message}`, details);
+}
+
 async function getSupabase(): Promise<any> {
   if (_supabase) return _supabase;
   if (!_supabasePromise) {
     _supabasePromise = import("../../../../lib/supabase")
       .then((mod) => {
         _supabase = mod.supabase;
-        if (__DEV__) {
-          console.log("[EcoFlowCloudProvider] Supabase client loaded from ../../../../lib/supabase");
-        }
+        if (__DEV__) logEcoFlowDebug("Supabase client loaded");
         return _supabase;
       })
       .catch((err) => {
-        if (__DEV__) {
-          console.warn(
-            "[EcoFlowCloudProvider] Failed to import Supabase client from ../../../../lib/supabase:",
-            err instanceof Error ? err.message : err,
-          );
-        }
+        if (__DEV__) logEcoFlowDebug("Failed to import Supabase client", ecoFlowErrorDetails(err));
         return null;
       })
       .finally(() => {
@@ -387,9 +407,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this.inverterOn = true;
 
     if (__DEV__) {
-      console.log(
-        `[EcoFlowCloudProvider] Connected — mode: ${this.pollMode}, activeDevices: [${this.activeDeviceIds.join(", ")}]`,
-      );
+      logEcoFlowDebug("connected", {
+        pollMode: this.pollMode,
+        activeDeviceIds: [...this.activeDeviceIds],
+      });
     }
   }
 
@@ -409,9 +430,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this.unauthorizedWarningDeviceIds.clear();
     this.fallbackInfoDeviceIds.clear();
 
-    if (__DEV__) {
-      console.log("[EcoFlowCloudProvider] Disconnected.");
-    }
+    if (__DEV__) logEcoFlowDebug("disconnected");
   }
 
   // ── ICloudProvider: pollOnce ────────────────────────────────────────
@@ -478,11 +497,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
   async listDevices(): Promise<CatalogPowerDevice[]> {
     const supabase = await getSupabase();
     if (!supabase) {
-      if (__DEV__) {
-        console.warn(
-          "[EcoFlowCloudProvider] listDevices(): Supabase unavailable — returning [].",
-        );
-      }
+      if (__DEV__) logEcoFlowDebug("listDevices: Supabase unavailable; returning empty list");
       return [];
     }
 
@@ -496,17 +511,13 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       if (error) {
         const parsed = this.tryParseEdgeResponse(data, error);
         if (parsed && parsed.code === "pending_approval") {
-          if (__DEV__) {
-            console.log(
-              "[EcoFlowCloudProvider] listDevices(): pending_approval — returning [].",
-            );
-          }
+          if (__DEV__) logEcoFlowDebug("listDevices: pending approval; returning empty list");
           return [];
         }
         if (__DEV__) {
-          console.warn(
-            `[EcoFlowCloudProvider] listDevices() error: ${parsed?.message ?? error?.message ?? "unknown"}`,
-          );
+          logEcoFlowDebug("listDevices: edge error", {
+            errorMessage: parsed?.message ?? error?.message ?? "unknown",
+          });
         }
         return [];
       }
@@ -522,9 +533,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           return [];
         }
         if (__DEV__) {
-          console.warn(
-            `[EcoFlowCloudProvider] listDevices() failed: ${errResp?.message ?? "empty response"}`,
-          );
+          logEcoFlowDebug("listDevices: invalid response", {
+            errorMessage: errResp?.message ?? "empty response",
+          });
         }
         return [];
       }
@@ -572,24 +583,21 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       );
 
       if (__DEV__) {
-        console.log(
-          `[EcoFlowCloudProvider] listedDevices: received ${listedDevices.length} EcoFlow device(s) from ${DEVICE_LIST_FUNCTION}.`,
-        );
-        for (const device of listedDevices) {
-          console.log(
-            `[EcoFlowCloudProvider] listed device | id=${device.deviceId} | name=${device.name} | model=${device.model} | productType=${device.productType ?? 'unknown'}`,
-          );
-        }
+        logEcoFlowDebug("listDevices: catalog received", {
+          count: listedDevices.length,
+          source: DEVICE_LIST_FUNCTION,
+          devices: listedDevices.map((device: CatalogPowerDevice) => ({
+            deviceId: device.deviceId,
+            name: device.name,
+            model: device.model,
+            productType: device.productType ?? "unknown",
+          })),
+        });
       }
 
       return listedDevices;
     } catch (err) {
-      if (__DEV__) {
-        console.warn(
-          "[EcoFlowCloudProvider] listDevices() unexpected error:",
-          err instanceof Error ? err.message : err,
-        );
-      }
+      if (__DEV__) logEcoFlowDebug("listDevices: unexpected error", ecoFlowErrorDetails(err));
       return [];
     }
   }
@@ -771,9 +779,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     try {
       const catalogDevices = await this.listDevices();
       if (__DEV__) {
-        console.log(
-          `[EcoFlowCloudProvider] resolveActiveDevices(): listedDevices=${catalogDevices.length}.`,
-        );
+        logEcoFlowDebug("resolveActiveDevices: catalog listed", {
+          listedDeviceCount: catalogDevices.length,
+        });
       }
 
       // Step 1: check the selection store
@@ -781,50 +789,40 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       if (selected.length > 0) {
         this.activeDeviceIds = this.filterTelemetryCandidateIds(selected);
         if (__DEV__) {
-          console.log(
-            `[EcoFlowCloudProvider] selectableDevices: ${selected.length} selected, telemetryDevices=${this.activeDeviceIds.length}.`,
-          );
+          logEcoFlowDebug("resolveActiveDevices: selected devices filtered", {
+            selectedDeviceCount: selected.length,
+            telemetryDeviceCount: this.activeDeviceIds.length,
+          });
         }
         if (this.activeDeviceIds.length > 0) return;
       }
 
       // Step 2: no usable selection → use eligible devices from cloud catalog
       if (__DEV__) {
-        console.log(
-          "[EcoFlowCloudProvider] No eligible selected devices — resolving telemetry devices from catalog.",
-        );
+        logEcoFlowDebug("resolveActiveDevices: resolving telemetry devices from catalog");
       }
       if (catalogDevices.length > 0) {
         this.activeDeviceIds = this.filterTelemetryCandidateIds(
           catalogDevices.map((d) => d.deviceId),
         );
         if (__DEV__) {
-          console.log(
-            `[EcoFlowCloudProvider] telemetryDevices: using ${this.activeDeviceIds.length} eligible EcoFlow power station device(s) from cloud catalog.`,
-          );
+          logEcoFlowDebug("resolveActiveDevices: catalog telemetry devices selected", {
+            telemetryDeviceCount: this.activeDeviceIds.length,
+          });
         }
         if (this.activeDeviceIds.length > 0) return;
       }
     } catch (err) {
-      if (__DEV__) {
-        console.warn(
-          "[EcoFlowCloudProvider] resolveActiveDevices() error — falling back to single device.",
-          err instanceof Error ? err.message : err,
-        );
-      }
+      if (__DEV__) logEcoFlowDebug("resolveActiveDevices: falling back after error", ecoFlowErrorDetails(err));
     }
 
     // Step 3: only use the single connect() device if catalog metadata proves it is telemetry-capable.
     this.activeDeviceIds = this.filterTelemetryCandidateIds([fallbackDeviceId]);
     if (__DEV__) {
       if (this.activeDeviceIds.length > 0) {
-        console.log(
-          `[EcoFlowCloudProvider] telemetryDevices: using verified single-device candidate ${fallbackDeviceId}.`,
-        );
+        logEcoFlowDebug("resolveActiveDevices: using verified fallback device", { fallbackDeviceId });
       } else {
-        console.warn(
-          `[EcoFlowCloudProvider] no eligible telemetry device available; refused unverified fallback device ${fallbackDeviceId}.`,
-        );
+        logEcoFlowDebug("resolveActiveDevices: refused unverified fallback device", { fallbackDeviceId });
       }
     }
   }
@@ -847,9 +845,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         : describeEcoFlowBluEligibility({ deviceId, productType: null });
       if (!eligibility.telemetryCapable) {
         if (__DEV__) {
-          console.log(
-            `[EcoFlowCloudProvider] filtered EcoFlow device | id=${deviceId} | productType=${eligibility.productType} | reason=unsupported_product_type`,
-          );
+          logEcoFlowDebug("filtered EcoFlow device", {
+            deviceId,
+            productType: eligibility.productType,
+            reason: "unsupported_product_type",
+          });
         }
         continue;
       }
@@ -857,9 +857,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       candidates.push(deviceId);
     }
     if (__DEV__ && candidates.length > 0) {
-      console.log(
-        `[EcoFlowCloudProvider] selected telemetry primary: ${candidates[0]} (${candidates.length} telemetry device${candidates.length === 1 ? '' : 's'} eligible).`,
-      );
+      logEcoFlowDebug("selected telemetry primary", {
+        primaryDeviceId: candidates[0],
+        telemetryDeviceCount: candidates.length,
+      });
     }
     return candidates;
   }
@@ -884,10 +885,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
 
     if (!this.unauthorizedWarningDeviceIds.has(deviceId)) {
       this.unauthorizedWarningDeviceIds.add(deviceId);
-      console.warn(
-        `[EcoFlowCloudProvider] filtered EcoFlow device | id=${deviceId} | reason=unauthorized for cloud telemetry; excluding it for this session.` +
-          (error ? ` Reason: ${error}` : ''),
-      );
+      logEcoFlowWarn("filtered EcoFlow device: unauthorized for cloud telemetry", {
+        deviceId,
+        reason: "unauthorized",
+        errorMessage: error,
+      });
     }
   }
 
@@ -902,9 +904,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
   private logFallbackPrimary(deviceId: string): void {
     if (this.fallbackInfoDeviceIds.has(deviceId)) return;
     this.fallbackInfoDeviceIds.add(deviceId);
-    console.log(
-      `[EcoFlowCloudProvider] selected telemetry primary after unauthorized device: ${deviceId}.`,
-    );
+    logEcoFlowDebug("selected telemetry primary after unauthorized device", { deviceId });
   }
 
   private async resolveFallbackDeviceIdsAfterUnauthorized(): Promise<string[]> {
@@ -914,9 +914,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       this.activeDeviceIds = candidates;
       this.logFallbackPrimary(candidates[0]);
     } else if (__DEV__) {
-      console.warn(
-        "[EcoFlowCloudProvider] no eligible telemetry device available after unauthorized EcoFlow power station.",
-      );
+      logEcoFlowDebug("no eligible telemetry device available after unauthorized EcoFlow power station");
     }
     return candidates;
   }
@@ -937,19 +935,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     const supabase = await getSupabase();
     if (!supabase) {
       if (isPowerSimulationAllowed()) {
-        if (__DEV__) {
-          console.warn(
-            "[EcoFlowCloudProvider] Supabase client unavailable — using demo simulation.",
-          );
-        }
+        if (__DEV__) logEcoFlowDebug("pollCloudMulti: Supabase unavailable; using demo simulation");
         this._lastStatus = "simulating";
         return this.pollSimulation();
       }
-      if (__DEV__) {
-        console.warn(
-          "[EcoFlowCloudProvider] Supabase client unavailable — returning unavailable telemetry.",
-        );
-      }
+      if (__DEV__) logEcoFlowDebug("pollCloudMulti: Supabase unavailable; returning unavailable telemetry");
       this._lastStatus = "cloud_error";
       this._lastCloudError = "Supabase client unavailable.";
       return this.buildUnavailableTelemetry("EcoFlow cloud provider unavailable.");
@@ -960,19 +950,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
 
     if (initialDeviceIds.length === 0) {
       if (isPowerSimulationAllowed()) {
-        if (__DEV__) {
-          console.warn(
-            "[EcoFlowCloudProvider] No active devices — using demo simulation.",
-          );
-        }
+        if (__DEV__) logEcoFlowDebug("pollCloudMulti: no active devices; using demo simulation");
         this._lastStatus = "simulating";
         return this.pollSimulation();
       }
-      if (__DEV__) {
-        console.warn(
-          "[EcoFlowCloudProvider] No active devices — returning unavailable telemetry.",
-        );
-      }
+      if (__DEV__) logEcoFlowDebug("pollCloudMulti: no active devices; returning unavailable telemetry");
       this._lastStatus = "cloud_error";
       this._lastCloudError = "No active EcoFlow devices selected.";
       return this.buildUnavailableTelemetry("No active EcoFlow device selected.");
@@ -1031,9 +1013,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       this._lastCloudError = errorMsgs;
 
       if (__DEV__) {
-        console.warn(
-          `[EcoFlowCloudProvider] All ${failedResults.length} device(s) failed: ${errorMsgs}`,
-        );
+        logEcoFlowDebug("pollCloudMulti: all devices failed", {
+          failedDeviceCount: failedResults.length,
+          errorMessage: errorMsgs,
+        });
       }
 
       throw new Error(
@@ -1043,9 +1026,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
 
     // ── At least one success → aggregate ────────────────────────
     if (hardErrors.length > 0 && __DEV__) {
-      console.warn(
-        `[EcoFlowCloudProvider] Partial success: ${successes.length} ok, ${hardErrors.length} failed, ${pendingApprovals.length} pending.`,
-      );
+      logEcoFlowDebug("pollCloudMulti: partial success", {
+        successCount: successes.length,
+        hardErrorCount: hardErrors.length,
+        pendingApprovalCount: pendingApprovals.length,
+      });
     }
 
     return this.aggregateTelemetry(successes, pendingApprovals.length > 0);
@@ -1341,9 +1326,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this._lastCloudError = null; // Not an error — it's a known pending state
 
     if (__DEV__ && this._pendingApprovalCount <= 3) {
-      console.log(
-        `[EcoFlowCloudProvider] Received pending_approval (count: ${this._pendingApprovalCount}) — returning stale telemetry.`,
-      );
+      logEcoFlowDebug("pending approval received; returning stale telemetry", {
+        pendingApprovalCount: this._pendingApprovalCount,
+      });
     }
 
     const now = Date.now();
@@ -1467,7 +1452,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       (this.deviceId?.startsWith("BX") ? "GLACIER" : this.profile.model);
 
     if (__DEV__ && isEcoFlowTelemetryDebugEnabled()) {
-      console.log("[EcoFlowCloudProvider] mapped telemetry snapshot", {
+      logEcoFlowDebug("mapped telemetry snapshot", {
         deviceId: this.deviceId || "unknown",
         model,
         socPct: glacierSoc,

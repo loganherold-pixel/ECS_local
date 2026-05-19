@@ -15,7 +15,7 @@ export type ConvoyMemberSummary = {
   isLostSignal: boolean;
 };
 
-export type ConvoyCommandWidgetViewModel = {
+export type ConvoyCommandPanelViewModel = {
   visualState: ConvoyCommandVisualState;
   statusLabel: ConvoyCommandStatusLabel;
   groupName: string;

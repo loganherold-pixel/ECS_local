@@ -65,7 +65,7 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /router\.push\('\/navigate'\)/,
+  /setTimeout\(\(\) => \{[\s\S]*router\.push\('\/navigate' as any\);[\s\S]*\}, 0\)/,
   'Navigate Assist should transition to the Navigate tab after staging the handoff.',
 );
 

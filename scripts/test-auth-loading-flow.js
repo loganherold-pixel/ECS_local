@@ -231,33 +231,28 @@ assertIncludes(
 );
 assertIncludes(
   tabsLayoutSource,
-  'const tabScreenOptions = useMemo<BottomTabNavigationOptions>(',
-  'Tabs layout should memoize screenOptions so React Navigation does not receive fresh options every commit.',
+  "import { Slot } from 'expo-router';",
+  'Shell route layout should render the active tab group child directly.',
 );
 assertIncludes(
   tabsLayoutSource,
-  'lazy: true,',
-  'Tabs should lazy-mount non-active tabs so Dispatch/connectivity effects cannot run during Dashboard boot.',
+  '<Slot />',
+  'Shell route layout should avoid hidden native tab screens during Android tab switches.',
 );
 assertNotIncludes(
   tabsLayoutSource,
-  'lazy: false,',
-  'Tabs must not eagerly mount every tab during startup.',
+  "import { Tabs } from 'expo-router';",
+  'Shell route layout must not reintroduce the hidden native Tabs wrapper.',
+);
+assertNotIncludes(
+  tabsLayoutSource,
+  '<Tabs',
+  'Shell route layout must not mount hidden tab screens that can reparent native views on Android.',
 );
 assertIncludes(
   tabsLayoutSource,
-  'const hiddenOptions = useMemo<BottomTabNavigationOptions & { href: null }>(',
-  'Hidden tab route options should be memoized to avoid navigation layout-effect update loops.',
-);
-assertNotIncludes(
-  tabsLayoutSource,
-  'screenOptions={{\n        ...primaryScreenOptions,',
-  'Tabs layout must not create a fresh screenOptions object inline.',
-);
-assertNotIncludes(
-  tabsLayoutSource,
-  'options={{ ...hiddenRouteOptions, sceneStyle:',
-  'Hidden tab routes must not create fresh options objects inline.',
+  'avoids Android/Fabric native tab reparenting faults',
+  'Shell route layout should document why native Tabs are intentionally avoided.',
 );
 assertIncludes(
   layoutSource,
@@ -338,8 +333,8 @@ assertIncludes(
 );
 assertIncludes(
   layoutSource,
-  'if (postAuthRedirectHoldingScreenActive) {\n    return <LoadingTransitionVideo />;\n  }',
-  'Authenticated redirects pending from /login should render the loading video instead of the sign-in screen.',
+  "if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {\n    return <LoadingTransitionVideo />;\n  }",
+  'Root authenticated redirects should render the loading video while auth-screen redirects keep the shell stack mounted.',
 );
 assertIncludes(
   redirectEffect,
@@ -353,7 +348,7 @@ assertIncludes(
 );
 assertIncludes(
   redirectEffect,
-  'router.replace(redirectTarget as any);',
+  'router.replace(toExpoRouterShellTarget(target) as any);',
   'AuthGate should use route replacement for the final dashboard transition.',
 );
 

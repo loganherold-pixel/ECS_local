@@ -2,7 +2,6 @@ import RecoveryHazardCompassWidget from './RecoveryHazardCompass';
 import TrailDecisionCommandWidget from './TrailDecisionCommand';
 import CampScoutCommandWidget from './CampScoutCommand';
 import { ExpeditionReadinessCommand } from './ExpeditionReadinessCommand';
-import ConvoyCommandWidget from '../command-center/widgets/ConvoyCommandWidget';
 import type { ECSCommandModuleId } from '../../../lib/ecsCommandModuleStore';
 import type {
   CommandCenterAvailabilityState,
@@ -21,7 +20,6 @@ export const COMMAND_CENTER_IMPLEMENTED_MODES: CommandCenterMode[] = [
   'trailDecision',
   'campScout',
   'expeditionReadiness',
-  'convoyCommand',
 ];
 
 const COMMAND_CENTER_MODULE_IDS: ECSCommandModuleId[] = [
@@ -31,7 +29,6 @@ const COMMAND_CENTER_MODULE_IDS: ECSCommandModuleId[] = [
   'trailDecisionCommand',
   'campScoutCommand',
   'expeditionReadinessCommand',
-  'convoy-command',
 ];
 
 export const COMMAND_CENTER_WIDGET_REGISTRY: Record<CommandCenterWidgetId, CommandCenterWidgetDefinition> = {
@@ -119,25 +116,6 @@ export const COMMAND_CENTER_WIDGET_REGISTRY: Record<CommandCenterWidgetId, Comma
     order: 60,
     fallbackId: 'attitude',
   },
-  convoyCommand: {
-    id: 'convoyCommand',
-    label: 'Convoy Command',
-    shortLabel: 'Convoy',
-    description: 'Monitor convoy spacing, signal confidence, and regroup status.',
-    component: ConvoyCommandWidget,
-    iconName: 'people-outline',
-    defaultAvailability: 'setupNeeded',
-    requiredCapabilities: ['convoy'],
-    getAvailability: (context) => {
-      if (context.isOffline && (context.hasConvoy || context.hasConvoyMembers || context.hasConvoyCheckIns)) {
-        return 'partial';
-      }
-      if (context.hasConvoyCheckIns || context.hasConvoyMembers) return 'partial';
-      return context.hasConvoy ? 'partial' : 'setupNeeded';
-    },
-    order: 90,
-    fallbackId: 'attitude',
-  },
 };
 
 export function isCommandCenterModuleId(moduleId: ECSCommandModuleId): boolean {
@@ -156,8 +134,6 @@ export function commandModuleToCenterMode(moduleId: ECSCommandModuleId): Command
       return 'campScout';
     case 'expeditionReadinessCommand':
       return 'expeditionReadiness';
-    case 'convoy-command':
-      return 'convoyCommand';
     case 'attitude':
     default:
       return 'attitude';
@@ -176,8 +152,6 @@ export function centerModeToCommandModule(mode: CommandCenterMode): ECSCommandMo
       return 'campScoutCommand';
     case 'expeditionReadiness':
       return 'expeditionReadinessCommand';
-    case 'convoyCommand':
-      return 'convoy-command';
     case 'attitude':
     default:
       return 'attitude';

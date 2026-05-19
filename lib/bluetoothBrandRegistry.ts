@@ -9,6 +9,7 @@ export type BluetoothBrandConnectionType = 'ble' | 'classic_bluetooth' | 'api' |
 export type BluetoothBrandDeviceCategory =
   | 'power_station'
   | 'fridge'
+  | 'air_conditioner'
   | 'battery_monitor'
   | 'solar_controller'
   | 'dc_dc_charger'
@@ -66,7 +67,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     id: 'ecoflow',
     displayName: 'EcoFlow',
     providerBadge: 'EcoFlow',
-    nameFragments: [/eco\s*flow/i, /ecoflow/i, /glacier/i, /delta\s*(mini|pro|max|2)?/i, /river\s*(mini|pro|max|2)?/i],
+    nameFragments: [/eco\s*flow/i, /ecoflow/i, /\bglacier\b/i, /\bwave\b/i, /\bdelta\s*(mini|pro|max|2)?\b/i, /\briver\s*(mini|pro|max|2)?\b/i],
     manufacturerHints: [/eco\s*flow/i, /ecoflow/i],
     serviceUUIDs: [],
     connectionType: 'hybrid',
@@ -121,8 +122,8 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     id: 'renogy',
     displayName: 'Renogy',
     providerBadge: 'Renogy',
-    nameFragments: [/renogy/i],
-    manufacturerHints: [/renogy/i],
+    nameFragments: [/renogy/i, /renology/i],
+    manufacturerHints: [/renogy/i, /renology/i],
     serviceUUIDs: [],
     connectionType: 'ble',
     deviceCategory: 'solar_controller',
@@ -151,11 +152,54 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     categoryHint: 'Lithium battery system',
   },
   {
+    id: 'victron',
+    displayName: 'Victron Energy',
+    providerBadge: 'Victron Energy',
+    nameFragments: [/victron/i, /smart\s*shunt/i, /\bbmv\b/i, /smart\s*solar/i, /blue\s*smart/i],
+    manufacturerHints: [/victron/i],
+    serviceUUIDs: [],
+    connectionType: 'ble',
+    deviceCategory: 'battery_monitor',
+    categoryHint: 'Power monitor',
+  },
+  {
     id: 'veepeak_obd2',
     displayName: 'V Peak / Veepeak OBD2',
     providerBadge: 'OBD',
-    nameFragments: [/vee\s*peak/i, /veepeak/i, /v\s*peak/i, /v[\-\s]*link/i, /obd/i, /elm\s*327/i, /elm327/i],
-    manufacturerHints: [/vee\s*peak/i, /veepeak/i, /obd/i, /elm\s*327/i],
+    nameFragments: [
+      /vee\s*peak/i,
+      /veepeak/i,
+      /v\s*peak/i,
+      /v[\-\s]*link/i,
+      /vlinker/i,
+      /obd\s*(2|ii)?/i,
+      /elm\s*327/i,
+      /elm327/i,
+      /obdlink/i,
+      /obd\s*link/i,
+      /vgate/i,
+      /\bicar\b/i,
+      /bafx/i,
+      /carista/i,
+      /blue\s*driver/i,
+      /bluedriver/i,
+      /konnwei/i,
+      /\bkw\s*902\b/i,
+      /viecar/i,
+    ],
+    manufacturerHints: [
+      /vee\s*peak/i,
+      /veepeak/i,
+      /obd\s*(2|ii)?/i,
+      /elm\s*327/i,
+      /obdlink/i,
+      /vgate/i,
+      /bafx/i,
+      /carista/i,
+      /blue\s*driver/i,
+      /konnwei/i,
+      /viecar/i,
+    ],
     serviceUUIDs: ['00001101-0000-1000-8000-00805f9b34fb', '1101', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'],
     connectionType: 'hybrid',
     deviceCategory: 'obd2',
@@ -216,6 +260,7 @@ export function isLikelyPowerBluetoothAdvertisement(device: BluetoothBrandMatchI
   if (
     matchedCategory === 'power_station' ||
     matchedCategory === 'fridge' ||
+    matchedCategory === 'air_conditioner' ||
     matchedCategory === 'battery_monitor' ||
     matchedCategory === 'solar_controller' ||
     matchedCategory === 'dc_dc_charger'
@@ -243,6 +288,8 @@ export function isLikelyPowerBluetoothAdvertisement(device: BluetoothBrandMatchI
     /\bdc\s*-\s*dc\b/,
     /\binverter\b/,
     /\bportable\s*power\b/,
+    /\bsmart\s*shunt\b/,
+    /\bsmart\s*solar\b/,
   ].some((pattern) => pattern.test(searchableText));
 }
 

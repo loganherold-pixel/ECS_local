@@ -50,10 +50,10 @@ import { ecsLog } from '../../lib/ecsLogger';
 import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
 import { VISIBILITY_THEME_CYCLE } from '../../lib/appearanceStore';
 import { resolveShellChromeTheme } from '../../lib/ui/shellChromeTheme';
-import FleetSyncModal from '../fleet/FleetSyncModal';
 import TopBannerBackground from '../TopBannerBackground';
 import { useEcsTopBannerHeight } from '../ECSGlobalBanner';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
+import { useEcsBriefTopBannerMessage } from '../../lib/useEcsBriefTopBannerMessage';
 
 const DHDR = {
   bar: '#1E2125',
@@ -111,7 +111,6 @@ export default function DashboardHeader({
   const obdScanner = useUnifiedOBD2Scanner();
   const ecsProviders = useEcsProviders();
   const [profilePanelVisible, setProfilePanelVisible] = useState(false);
-  const [syncModalVisible, setSyncModalVisible] = useState(false);
   const [bluSnapshot, setBluSnapshot] = useState<BluAuthoritySnapshot>(() => bluPowerAuthority.getSnapshot());
   const [operatorTrustMode, setOperatorTrustMode] = useState<ECSOperatorTrustMode>(
     () => operatorTrustModeStore.mode,
@@ -125,6 +124,9 @@ export default function DashboardHeader({
   const [hasRouteSelected, setHasRouteSelected] = useState(false);
   const collapseAnim = useStableAnimatedValue(collapsed ? 1 : 0);
   const syncSpin = useStableAnimatedValue(0);
+  const briefBannerAnim = useStableAnimatedValue(0);
+  const briefTopBanner = useEcsBriefTopBannerMessage();
+  const [displayBriefBanner, setDisplayBriefBanner] = useState(briefTopBanner);
   const shellMessageLogKeyRef = useRef<string | null>(null);
 
   const handleTitlePress = useCallback(() => {
@@ -222,6 +224,28 @@ export default function DashboardHeader({
       useNativeDriver: false,
     }).start();
   }, [collapseAnim, collapsed]);
+
+  useEffect(() => {
+    if (briefTopBanner) {
+      setDisplayBriefBanner(briefTopBanner);
+      Animated.timing(briefBannerAnim, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }).start();
+      return;
+    }
+
+    Animated.timing(briefBannerAnim, {
+      toValue: 0,
+      duration: 320,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setDisplayBriefBanner(null);
+      }
+    });
+  }, [briefBannerAnim, briefTopBanner]);
 
   const hasActiveExpeditionContext = useMemo(() => {
     if (expeditionState === 'active' || hasRouteSelected) return true;
@@ -387,9 +411,6 @@ export default function DashboardHeader({
       }
     }
   }, [router, showToast]);
-  const openSyncManagement = useCallback(() => {
-    setSyncModalVisible(true);
-  }, []);
 
   const showEndExpedition = expeditionState === 'active';
   const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
@@ -405,24 +426,11 @@ export default function DashboardHeader({
   const centerContentPadding = useFleetMatchedTitleLayout
     ? ECS_TOP_BANNER_TITLE_CENTER_PADDING
     : 8;
-  const shellStatusLabel = useMemo(() => {
-    if (bannerStatus.processingActive) return 'SYNC';
-    if (offlineMode || !isOnline) return 'OFFLINE';
-    return 'ONLINE';
-  }, [bannerStatus.processingActive, isOnline, offlineMode]);
+  const connectionLabel = offlineMode || !isOnline ? 'OFFLINE' : 'ONLINE';
+  const connectionTone = offlineMode || !isOnline ? shellChrome.iconMuted : shellChrome.online;
   const syncActionLabel = useMemo(() => {
     return syncStatus === 'error' ? 'FORCE SYNC' : 'SYNC NOW';
   }, [syncStatus]);
-  const shellStatusPill = useMemo<ShellStatusPillModel>(() => ({
-    label: shellStatusLabel,
-    icon: bannerStatus.processingActive ? 'sync-outline' : isOnline && !offlineMode ? 'radio-outline' : 'cloud-offline-outline',
-    tone:
-      bannerStatus.processingActive
-        ? 'sync'
-        : offlineMode || !isOnline
-          ? 'degraded'
-          : 'active',
-  }), [bannerStatus.processingActive, isOnline, offlineMode, shellStatusLabel]);
   const bluetoothPill = useMemo<ShellStatusPillModel>(() => {
     const providerHasRegisteredDevices = Object.values(bluSnapshot.providers).some((provider) => provider.hasDevices);
     const powerUnavailable = providerHasRegisteredDevices && !bluSnapshot.isConnected && bluSnapshot.freshness === 'disconnected';
@@ -486,10 +494,6 @@ export default function DashboardHeader({
     obdScanner.isScanning,
     obdScanner.state,
   ]);
-  const shellStatusPillStyle = useMemo(
-    () => getStatusPillStyles(shellStatusPill.tone, shellChrome.iconMuted),
-    [shellChrome.iconMuted, shellStatusPill.tone],
-  );
   const bluetoothPillStyle = useMemo(
     () => getStatusPillStyles(bluetoothPill.tone, shellChrome.iconMuted),
     [bluetoothPill.tone, shellChrome.iconMuted],
@@ -539,6 +543,14 @@ export default function DashboardHeader({
   const headerTranslateY = collapseAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, -12],
+  });
+  const briefDefaultOpacity = briefBannerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+  });
+  const briefBannerTranslateY = briefBannerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [5, 0],
   });
   useEffect(() => {
     const nextKey = [
@@ -612,34 +624,65 @@ export default function DashboardHeader({
           ]}
         >
           <View style={[styles.edgeSlotBase, styles.edgeSlotStart, { width: leftControlSlotWidth }]}>
-            <View style={styles.statusPillCluster}>
-              <TouchableOpacity
-                style={[
-                  styles.statusPill,
-                  shellStatusPillStyle,
-                ]}
-                onPress={openSyncManagement}
-                activeOpacity={0.78}
-                hitSlop={CLOSE_BTN.hitSlop}
-                accessibilityRole="button"
-                accessibilityLabel={`${shellStatusPill.label} sync controls`}
-                accessibilityHint="Opens sync management and offline readiness controls"
-              >
-                <Ionicons
-                  name={shellStatusPill.icon}
-                  size={8}
-                  color={shellStatusPillStyle.color}
-                />
+            <View style={styles.connectionWordmark} pointerEvents="none">
+              <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
+              <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
+            </View>
+          </View>
+
+          <Pressable
+            style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
+            onPress={handleTitlePress}
+            accessibilityRole="button"
+            accessibilityLabel="ECS diagnostics"
+          >
+            <View style={styles.bannerTitleStack} pointerEvents="none">
+              <Animated.View style={[styles.bannerDefaultCopy, { opacity: briefDefaultOpacity }]}>
                 <Text
+                  style={styles.bannerTitle}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.74}
+                >
+                  expedition command
+                </Text>
+                <Text
+                  style={styles.bannerMotto}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.78}
+                >
+                  explore with confidence
+                </Text>
+              </Animated.View>
+              {displayBriefBanner ? (
+                <Animated.View
                   style={[
-                    styles.statusPillText,
-                    { color: shellStatusPillStyle.color },
+                    styles.briefBannerCopy,
+                    {
+                      opacity: briefBannerAnim,
+                      transform: [{ translateY: briefBannerTranslateY }],
+                    },
                   ]}
                 >
-                  {shellStatusPill.label}
-                </Text>
-              </TouchableOpacity>
+                  <Text style={styles.briefBannerEyebrow} numberOfLines={1}>
+                    {displayBriefBanner.eyebrow}
+                  </Text>
+                  <Text
+                    style={styles.briefBannerDetail}
+                    numberOfLines={3}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                  >
+                    {displayBriefBanner.detail}
+                  </Text>
+                </Animated.View>
+              ) : null}
+            </View>
+          </Pressable>
 
+          <View style={[styles.edgeSlotBase, styles.edgeSlotEnd, { width: rightControlSlotWidth }]}>
+            <View style={styles.rightControlCluster}>
               <TouchableOpacity
                 style={[
                   styles.statusPill,
@@ -654,50 +697,11 @@ export default function DashboardHeader({
               >
                 <Ionicons
                   name={bluetoothPill.icon}
-                  size={8}
+                  size={16}
                   color={bluetoothPillStyle.color}
                   style={bluetoothPill.tone === 'sync' ? styles.statusPillSyncIcon : null}
                 />
-                <Text
-                  style={[
-                    styles.statusPillText,
-                    { color: bluetoothPillStyle.color },
-                  ]}
-                >
-                  {bluetoothPill.label}
-                </Text>
               </TouchableOpacity>
-            </View>
-          </View>
-
-          <Pressable
-            style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
-            onPress={handleTitlePress}
-            accessibilityRole="button"
-            accessibilityLabel="ECS diagnostics"
-          >
-            <View style={styles.bannerTitleStack} pointerEvents="none">
-              <Text
-                style={styles.bannerTitle}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.74}
-              >
-                expedition command
-              </Text>
-              <Text
-                style={styles.bannerMotto}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.78}
-              >
-                explore with confidence
-              </Text>
-            </View>
-          </Pressable>
-
-          <View style={[styles.edgeSlotBase, styles.edgeSlotEnd, { width: rightControlSlotWidth }]}>
-            <View style={styles.rightControlCluster}>
               <ThemeToggle
                 compact
                 size={30}
@@ -822,14 +826,6 @@ export default function DashboardHeader({
         onEndAction={showEndExpedition ? handleEndExpedition : undefined}
       />
 
-      <FleetSyncModal
-        visible={syncModalVisible}
-        onClose={() => setSyncModalVisible(false)}
-        eyebrow="ECS COMMAND"
-        title="Sync Management"
-        subtitle="Queue health, pending field changes, conflicts, and offline readiness."
-      />
-
       <EcsDiagnosticsPanel
         visible={diagnosticsPanelVisible}
         onClose={() => setDiagnosticsPanelVisible(false)}
@@ -944,15 +940,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: 6,
+    gap: 5,
   },
-  statusPillCluster: {
+  connectionWordmark: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
+    gap: 5,
     maxWidth: '100%',
-    flexShrink: 1,
+    paddingHorizontal: 2,
+  },
+  connectionDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  connectionText: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
   centerContent: {
     flex: 1,
@@ -969,29 +974,80 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minWidth: 0,
+    minHeight: 30,
+    position: 'relative',
+  },
+  bannerDefaultCopy: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  briefBannerCopy: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  briefBannerEyebrow: {
+    maxWidth: '100%',
+    color: DHDR.iconActive,
+    fontSize: 8,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.82,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  briefBannerDetail: {
+    maxWidth: '100%',
+    marginTop: 1,
+    color: 'rgba(248,242,226,0.94)',
+    fontSize: 8.8,
+    lineHeight: 9.6,
+    fontWeight: '800',
+    letterSpacing: 0.18,
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.76)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   bannerTitle: {
     maxWidth: '100%',
     color: DHDR.iconActive,
-    fontSize: 16,
+    fontFamily: Platform.select({
+      ios: 'Avenir Next Condensed',
+      android: 'sans-serif-condensed',
+      default: 'System',
+    }),
+    fontSize: 17,
     lineHeight: 18,
-    fontWeight: '900',
-    letterSpacing: 0.65,
+    fontWeight: '800',
+    letterSpacing: 0,
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowColor: 'rgba(0,0,0,0.82)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    textShadowRadius: 4,
   },
   bannerMotto: {
     maxWidth: '100%',
     marginTop: 1,
     color: 'rgba(234,222,190,0.88)',
+    fontFamily: Platform.select({
+      ios: 'Avenir Next',
+      android: 'sans-serif-medium',
+      default: 'System',
+    }),
     fontSize: 9.5,
     lineHeight: 11,
-    fontWeight: '800',
-    letterSpacing: 0.85,
+    fontWeight: '700',
+    letterSpacing: 0,
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
@@ -1029,29 +1085,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   statusPill: {
-    minHeight: 16,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
+    width: 30,
+    height: 30,
+    minHeight: 30,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    borderRadius: 15,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     flexShrink: 0,
+    overflow: 'hidden',
   },
   statusPillSyncIcon: {
     opacity: 0.96,
-  },
-  statusPillDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  statusPillText: {
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 0.72,
   },
   authBtn: {
     width: 30,

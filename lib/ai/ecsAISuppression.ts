@@ -1,6 +1,6 @@
 import type { ECSAIAdvisory, ECSAISeverity } from './ecsAITypes';
 
-export const ECS_AI_ADVISORY_SUPPRESSION_MS = 10 * 60 * 1000;
+export const ECS_AI_ADVISORY_SUPPRESSION_MS = 15 * 60 * 1000;
 
 const SEVERITY_RANK: Record<ECSAISeverity, number> = {
   info: 1,

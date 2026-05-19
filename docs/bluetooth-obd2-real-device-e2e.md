@@ -5,7 +5,7 @@ This plan validates the production unified scanner and telemetry pipeline with r
 ## Scope
 
 - Power-device discovery uses the unified scanner only.
-- The power-device UI shows one actionable list: **Found nearby power devices**.
+- The Device Connections UI shows one actionable list: **Found nearby power and OBD2 devices**.
 - Saved, known, failed, and cloud-only records do not appear as connectable nearby devices.
 - EcoFlow cloud authorization is separate from local BLE discovery/connection.
 - OBD2 connected means native transport plus OBD initialization/handshake succeeded.
@@ -33,6 +33,44 @@ This plan validates the production unified scanner and telemetry pipeline with r
 4. Confirm iOS Bluetooth usage description exists for iOS builds.
 5. Start with Bluetooth on and app permissions reset if testing permission prompts.
 6. Open Power > Device Connections and expand dev diagnostics when needed.
+
+## Current Automation Evidence
+
+Last focused static/contract pass: 2026-05-17 local.
+
+Preflight evidence:
+
+- `react-native-ble-plx` is present in `package.json`.
+- Android declares `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION` in `app.json` and the generated Android manifest.
+- iOS Bluetooth usage strings are present in `app.json`.
+- Device Connections copy now targets one actionable list: **Found nearby power and OBD2 devices**.
+
+Automated contract status:
+
+| Check | Status | Notes |
+| --- | --- | --- |
+| Unified scanner production contract | Pass | Production scanner uses the unified list, blocks mock production rows, and keeps saved/known/failed containers out of the connectable nearby UI. |
+| Bluetooth scanner unsupported/runtime behavior | Pass | Unsupported runtime is classified without fake rows. |
+| Bluetooth live truthfulness | Pass | Live/connected states remain truth-gated. |
+| Scanner device state | Pass | Real advertisements dedupe and unsupported/noisy rows are filtered. |
+| Unified scanner disconnect | Pass | Disconnect routes through provider/native cleanup and marks live telemetry unavailable. |
+| Device connection diagnostics | Pass | Diagnostics expose scanner state, permission/native support, Bluetooth power, nearby count, connection, and latest errors. |
+| EcoFlow cloud/BLE separation | Pass | Cloud auth failure is separated from nearby BLE discovery. |
+| Power provider phases | Pass | Connected/streaming phases are separated from discovery and handshake. |
+| OBD2 live pipeline | Pass | OBD2 connection is gated by native transport plus initialization/PID data. |
+| Unified telemetry pipeline | Pass | Power and OBD2 telemetry flow through normalized ECS telemetry events and disconnect aging. |
+
+Real-hardware evidence status:
+
+| Area | Status | Required follow-up |
+| --- | --- | --- |
+| Android native BLE discovery | Not run in this pass | Run scenarios 2-5 on a development/native build with real nearby hardware. |
+| Power station connect/stream/disconnect | Not run in this pass | Run scenarios 6, 8, and 9 with a supported or likely-supported BLE power station. |
+| EcoFlow cloud unauthorized plus BLE nearby | Not run in this pass | Run scenario 7 with an advertising EcoFlow unit and unauthorized/unavailable cloud access. |
+| OBD2 no-data and live-data paths | Not run in this pass | Run scenarios 10-12 with a BLE ELM327 adapter and a vehicle. |
+| iOS Bluetooth permission/runtime parity | Not run in this pass | Optional iOS development build check remains open. |
+
+Do not mark the real-device plan complete until the real-hardware rows above have dated device/build evidence, screenshots or diagnostics copy, and pass/fail notes.
 
 ## Scenario 1: Unsupported Native BLE Environment
 
@@ -79,7 +117,7 @@ This plan validates the production unified scanner and telemetry pipeline with r
 1. Power on a BLE-capable power station and place it near the phone.
 2. Press scan.
 3. Expected:
-   - Device appears under **Found nearby power devices** only if currently advertising.
+   - Device appears under **Found nearby power and OBD2 devices** only if currently advertising.
    - Brand/provider appears only when advertisement evidence supports it.
    - RSSI/last-seen update as advertisements arrive.
    - Repeated advertisements dedupe into one row.

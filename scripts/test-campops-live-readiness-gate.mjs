@@ -159,6 +159,11 @@ function writeProviderDocs(root, approved) {
   const rows = providerCategories.map((category) => (
     `| ${category} | ${approved ? 'approved' : 'not approved'} | ${approved ? 'approved' : 'real-shadow'} | ${approved ? 'yes' : 'no'} | Owner | 2026-05-04 | none |`
   ));
+  const realEvidenceRows = providerCategories.map((category) => (
+    approved
+      ? `| ${category} | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |`
+      : `| ${category} | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |`
+  ));
   writeFile(root, 'docs/campops/provider_readiness_region_001.md', [
     '# Provider Readiness Region 001',
     '- Region label: region-001',
@@ -169,6 +174,12 @@ function writeProviderDocs(root, approved) {
     '| Category | Approval status | Validation mode | Recommendation influence allowed | Approver | Approval date | Remaining issues |',
     '| --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
+    '',
+    '## Real Upstream Provider Evidence Ledger',
+    '',
+    '| Category | Provider/source | Real shadow status | Coverage rate | Freshness rate | Unknown rate | Stale rate | Conflict rate | Accepted for influence |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+    ...realEvidenceRows,
   ].join('\n'));
 }
 
@@ -383,6 +394,23 @@ test('accepted risk acceptance waives missing closed-field evidence without mark
   assert.deepEqual(result.blockers, []);
   assert.ok(result.riskAcceptedBlockers.includes('campops_android_device_qa_gate_failed'));
   assert.equal(result.evidence.androidQa.passed, false);
+});
+
+test('risk acceptance note only names evidence gates that remain unresolved', () => {
+  const root = makeTempRepo();
+  writeFixture(root, {
+    providerApproved: false,
+    privacyApproved: true,
+    androidComplete: true,
+    riskAccepted: true,
+  });
+
+  const result = buildCampOpsLiveReadinessResult({ rootDir: root, now: fixedNow });
+  const riskNote = result.notes.find((note) => note.startsWith('Risk acceptance permits only a restricted closed field test'));
+
+  assert.match(riskNote, /provider\/source approval/);
+  assert.doesNotMatch(riskNote, /Android\/device QA/);
+  assert.doesNotMatch(riskNote, /privacy\/storage approval/);
 });
 
 test('--json emits parseable JSON and writes the live readiness artifact', () => {

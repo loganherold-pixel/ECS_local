@@ -5,7 +5,6 @@ export { default as RecoveryHazardCompass } from './RecoveryHazardCompass';
 export { default as TrailDecisionCommand } from './TrailDecisionCommand';
 export { default as CampScoutCommand } from './CampScoutCommand';
 export { default as ExpeditionReadinessCommand } from './ExpeditionReadinessCommand';
-export { default as ConvoyCommand } from './ConvoyCommand';
 export {
   COMMAND_CENTER_DEFAULT_MODE,
   COMMAND_CENTER_IMPLEMENTED_MODES,

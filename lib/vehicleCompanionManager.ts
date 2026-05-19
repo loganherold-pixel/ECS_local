@@ -31,6 +31,7 @@ import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
 import { breadcrumbTracker } from './breadcrumbTracker';
+import { ecsLog } from './ecsLogger';
 import type {
   CompanionPlatform,
   CompanionManagerConfig,
@@ -61,6 +62,20 @@ let _lastSyncedExpeditionId: string | null = null;
 let _lastSyncedRouteId: string | null = null;
 let _lastBreadcrumbPointCount = 0;
 let _lastCompanionConnected = false;
+
+function logCompanionDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('SYSTEM', message, details, {
+    tag: '[VehicleCompanionManager]',
+    debugFlag: 'ECS_DEBUG_VEHICLE_COMPANION',
+    fingerprint: `${message}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
+
+function logCompanionWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn('SYSTEM', `[VehicleCompanionManager] ${message}`, details);
+}
 
 // Listeners
 type Listener = () => void;
@@ -379,7 +394,7 @@ function _onCompanionDisconnected(): void {
   _graceTimer = setTimeout(() => {
     vehicleSessionState.clearReconnectGrace();
     _graceTimer = null;
-    console.log('[VehicleCompanionManager] Reconnect grace period expired');
+    logCompanionDebug('reconnect_grace_expired');
   }, _config.reconnectGracePeriodMs);
 
   _lastCompanionConnected = false;
@@ -392,11 +407,13 @@ function _onCompanionDisconnected(): void {
  */
 function _restoreCompanionState(platform: CompanionPlatform): void {
   const payload = vehicleSessionState.buildRestorePayload();
-  console.log(
-    `[VehicleCompanionManager] Restoring ${platform} state: ` +
-    `mode=${payload.mode}, expedition=${payload.hasExpedition}, ` +
-    `route=${payload.hasRoute}, breadcrumb=${payload.breadcrumb.pointCount}pts`
-  );
+  logCompanionDebug('restore_companion_state', {
+    platform,
+    mode: payload.mode,
+    hasExpedition: payload.hasExpedition,
+    hasRoute: payload.hasRoute,
+    breadcrumbPointCount: payload.breadcrumb.pointCount,
+  });
 
   // Apply the restore payload to the vehicle display store
   vehicleDisplayStore.setMode(payload.mode);
@@ -418,7 +435,7 @@ function _handleVehicleAction(
   actionType: VehicleActionType,
   source: CompanionPlatform,
 ): void {
-  console.log(`[VehicleCompanionManager] Action from ${source}: ${actionType}`);
+  logCompanionDebug('vehicle_action_received', { source, actionType });
 
   vehicleSessionState.recordActionReceived();
 
@@ -469,7 +486,7 @@ function _handleVehicleAction(
       break;
 
     default:
-      console.warn(`[VehicleCompanionManager] Unknown action: ${actionType}`);
+      logCompanionWarn('Unknown action', { actionType, source });
       break;
   }
 
@@ -479,7 +496,7 @@ function _handleVehicleAction(
 function _handleAddWaypoint(source: CompanionPlatform): void {
   const location = vehicleSessionState.getVehicleLocation();
   if (!location.latitude || !location.longitude) {
-    console.warn('[VehicleCompanionManager] Cannot add waypoint — no GPS');
+    logCompanionWarn('Cannot add waypoint: no GPS fix', { source });
     return;
   }
 
@@ -506,7 +523,10 @@ function _handleAddWaypoint(source: CompanionPlatform): void {
       expeditionId: pin.expedition_id,
     }, source === 'android_auto' ? 'android_auto' : source === 'carplay' ? 'carplay' : 'mobile');
   } catch (err) {
-    console.warn('[VehicleCompanionManager] Failed to add waypoint:', err);
+    logCompanionWarn('Failed to add waypoint', {
+      source,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -572,23 +592,23 @@ function _handleReturnToStart(): void {
   try {
     const route = breadcrumbTracker.returnToStart();
     if (route) {
-      console.log(
-        `[VehicleCompanionManager] Return to start activated: ` +
-        `${route.straightLineDistanceMi} mi straight, ${route.trailDistanceMi} mi trail`
-      );
+      logCompanionDebug('return_to_start_activated', {
+        straightLineDistanceMi: route.straightLineDistanceMi,
+        trailDistanceMi: route.trailDistanceMi,
+      });
     } else {
-      console.warn('[VehicleCompanionManager] Cannot return to start — insufficient breadcrumbs');
+      logCompanionWarn('Cannot return to start: insufficient breadcrumbs');
     }
   } catch {}
 }
 
 function _handleNavigateHome(): void {
   // Navigate home uses the route store's home waypoint if available
-  console.log('[VehicleCompanionManager] Navigate home requested');
+  logCompanionDebug('navigate_home_requested');
 }
 
 function _handleFindFuel(): void {
-  console.log('[VehicleCompanionManager] Find fuel requested');
+  logCompanionDebug('find_fuel_requested');
 }
 
 function _handleReportHazard(source: CompanionPlatform): void {
@@ -620,7 +640,7 @@ function _handleReportHazard(source: CompanionPlatform): void {
 }
 
 function _handleEmergencyComms(): void {
-  console.log('[VehicleCompanionManager] Emergency comms activated');
+  logCompanionDebug('emergency_comms_activated');
   // Emergency comms are handled by the emergency system
 }
 
@@ -697,7 +717,7 @@ export const vehicleCompanionManager = {
     if (_isRunning) return;
     _isRunning = true;
 
-    console.log('[VehicleCompanionManager] Starting companion manager');
+    logCompanionDebug('manager_started', { syncIntervalMs: _config.syncIntervalMs });
 
     // Subscribe to ECS stores for reactive updates
     _displayStoreUnsub = vehicleDisplayStore.subscribe(_onDisplayStoreChange);
@@ -720,7 +740,7 @@ export const vehicleCompanionManager = {
     if (!_isRunning) return;
     _isRunning = false;
 
-    console.log('[VehicleCompanionManager] Stopping companion manager');
+    logCompanionDebug('manager_stopped');
 
     // Stop sync timer
     if (_syncTimer) {
@@ -812,7 +832,7 @@ export const vehicleCompanionManager = {
     _lastBreadcrumbPointCount = 0;
     _lastCompanionConnected = false;
     _notify();
-    console.log('[VehicleCompanionManager] Companion manager reset');
+    logCompanionDebug('manager_reset');
   },
 
   /**

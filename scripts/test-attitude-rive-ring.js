@@ -1,8 +1,6 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const Module = require('module');
-const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
 
@@ -10,79 +8,105 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-function compileTypeScriptModule(mod, filename) {
-  const source = fs.readFileSync(filename, 'utf8');
-  const output = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-      jsx: ts.JsxEmit.React,
-    },
-    fileName: filename,
-  });
-  mod._compile(output.outputText, filename);
-}
-
-function loadTypeScriptModule(relativePath) {
-  const fullPath = path.join(root, relativePath);
-  const mod = new Module(fullPath, module);
-  mod.filename = fullPath;
-  mod.paths = Module._nodeModulePaths(path.dirname(fullPath));
-  compileTypeScriptModule(mod, fullPath);
-  return mod.exports;
-}
-
-require.extensions['.ts'] = compileTypeScriptModule;
-
-const runtime = loadTypeScriptModule('src/features/attitude/attitudeInclinationRive.ts');
-const webWidget = read('src/features/attitude/components/AttitudeInclinationRiveWidget.tsx');
-const nativeWidget = read('src/features/attitude/components/AttitudeInclinationRiveWidget.native.tsx');
+const dial = read('src/features/attitude/components/AttitudeDial.tsx');
+const monitor = read('src/features/attitude/components/AttitudeMonitor.tsx');
 const stage = read('src/features/attitude/components/VehicleAttitudeStage.tsx');
+const commandWidget = read('src/components/attitudeCommand/AttitudeCommandWidget.tsx');
 const packageJson = JSON.parse(read('package.json'));
 
-const nativeAsset = path.join(root, 'assets/attitude/inclination_widget.riv');
-const publicAsset = path.join(root, 'public/rive/inclination_widget.riv');
+assert.ok(
+  dial.includes("from 'react-native-svg'") &&
+    dial.includes('Circle') &&
+    dial.includes('Line') &&
+    dial.includes('Path'),
+  'AttitudeDial should use react-native-svg for the dial, ticks, glow trail, and indicators.',
+);
+assert.ok(
+  dial.includes("from 'react-native-reanimated'") &&
+    dial.includes('useSharedValue') &&
+    dial.includes('withTiming') &&
+    dial.includes('useAnimatedStyle'),
+  'AttitudeDial should use Reanimated for smooth indicator motion.',
+);
+assert.ok(
+  dial.includes('indicatorAnimatedStyle') &&
+    dial.includes('transform: [{ rotate: `${animatedAngle.value}deg` }]') &&
+    !dial.includes('animatedProps={indicatorAnimatedProps}'),
+  'AttitudeDial should animate indicators through a React Native transform array for Android native compatibility.',
+);
+assert.ok(
+  dial.includes("label: AttitudeDialLabel") &&
+    dial.includes("valueDeg: number") &&
+    dial.includes("minDeg?: number") &&
+    dial.includes("maxDeg?: number") &&
+    dial.includes("size: number") &&
+    dial.includes("ecsGold: string") &&
+    dial.includes("warningThresholdDeg?: number") &&
+    dial.includes("criticalThresholdDeg?: number"),
+  'AttitudeDial should expose the required reusable meter props.',
+);
+assert.ok(
+  dial.includes('for (let degree = min; degree <= max') &&
+    dial.includes('TICK_STEP_DEG') &&
+    dial.includes('degreeToDialAngle') &&
+    dial.includes('polarPoint'),
+  'AttitudeDial should generate tick geometry from math and props.',
+);
+assert.ok(
+  dial.includes('vehicle-attitude') === false ||
+    dial.includes('testID ? `${testID}-degree-readout`'),
+  'AttitudeDial should render a crisp React Native text degree readout.',
+);
+assert.ok(
+  !dial.toLowerCase().includes('rive') &&
+    !dial.includes('.riv') &&
+    !dial.includes('Image'),
+  'AttitudeDial should not depend on Rive, images, or external animation files.',
+);
 
-assert.strictEqual(runtime.ATTITUDE_INCLINATION_RIVE_ARTBOARD, 'Artboard');
-assert.strictEqual(runtime.ATTITUDE_INCLINATION_RIVE_STATE_MACHINE, 'State Machine 1');
-assert.strictEqual(runtime.ATTITUDE_INCLINATION_NUMBER_INPUT, 'slider');
-assert.ok(fs.existsSync(nativeAsset) && fs.statSync(nativeAsset).size > 0, 'Native inclination_widget.riv asset should exist.');
-assert.ok(fs.existsSync(publicAsset) && fs.statSync(publicAsset).size > 0, 'Public inclination_widget.riv asset should exist.');
+assert.ok(
+  monitor.includes("label=\"ROLL\"") &&
+    monitor.includes("label=\"PITCH\"") &&
+    monitor.indexOf("label=\"PITCH\"") < monitor.indexOf("label=\"ROLL\""),
+  'AttitudeMonitor should render PITCH on the left side-profile position and ROLL on the right rear-profile position.',
+);
+assert.ok(
+  monitor.includes('valueDeg={rollDeg}') &&
+    monitor.includes('valueDeg={pitchDeg}') &&
+    monitor.includes('vehicle-attitude-roll-dial-meter') &&
+    monitor.includes('vehicle-attitude-pitch-dial-meter'),
+  'AttitudeMonitor should wire live roll and pitch values into the dial meters.',
+);
 
 assert.ok(
-  nativeWidget.includes("require('../../../../assets/attitude/inclination_widget.riv')"),
-  'Native attitude Rive widget should statically require the bundled .riv asset.',
+  stage.includes("import AttitudeMonitor from './AttitudeMonitor'") &&
+    stage.includes('<AttitudeMonitor') &&
+    stage.includes('rollDeg={rollDeg}') &&
+    stage.includes('pitchDeg={pitchDeg}') &&
+    stage.includes('rollMinDeg={-maxRollDeg}') &&
+    stage.includes('pitchMinDeg={-maxPitchDeg}'),
+  'VehicleAttitudeStage should render the native attitude monitor with the existing live attitude values.',
 );
 assert.ok(
-  nativeWidget.includes('setNumberInputValue?.(') &&
-    nativeWidget.includes('ATTITUDE_INCLINATION_NUMBER_INPUT') &&
-    nativeWidget.includes('runtime.inputValue'),
-  'Native attitude Rive widget should write the real state-machine number input.',
-);
-assert.ok(
-  nativeWidget.includes('pointerEvents="none"') &&
-    webWidget.includes("pointerEvents: 'none'"),
-  'Native and web attitude Rive surfaces should be non-interactive.',
-);
-assert.ok(
-  webWidget.includes("const RIVE_SRC = '/rive/inclination_widget.riv'") &&
-    webWidget.includes('useStateMachineInput') &&
-    webWidget.includes('ATTITUDE_INCLINATION_NUMBER_INPUT'),
-  'Web attitude Rive widget should load the public Rive asset and bind the number input.',
-);
-assert.ok(
-  stage.includes("import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget'") &&
-    stage.includes('<AttitudeInclinationRiveWidget') &&
-    stage.includes('testID={`vehicle-attitude-${axis}-rive-meter`}') &&
+  !stage.includes("import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget'") &&
+    !stage.includes('<AttitudeInclinationRiveWidget') &&
+    !stage.includes('rive-meter') &&
     !stage.includes("import AttitudeGauge from '../../../components/attitudeCommand/AttitudeGauge'") &&
     !stage.includes('<AttitudeGauge'),
-  'VehicleAttitudeStage should render the Rive ring widget instead of the old AttitudeGauge.',
+  'VehicleAttitudeStage should not render the Rive widget or the old gauge.',
+);
+assert.ok(
+  commandWidget.includes("import AttitudeDial from '../../features/attitude/components/AttitudeDial'") &&
+    commandWidget.includes('testID="attitude-command-pitch-dial-meter"') &&
+    commandWidget.includes('testID="attitude-command-roll-dial-meter"') &&
+    !commandWidget.includes('AttitudeInclinationRiveWidget') &&
+    !commandWidget.includes('rive-meter'),
+  'AttitudeCommandWidget should use the native dial instead of the Rive inclination widget.',
 );
 assert.strictEqual(
   packageJson.scripts['test:attitude-rive-ring'],
   'node ./scripts/test-attitude-rive-ring.js',
-  'package.json should expose the attitude Rive ring regression script.',
+  'The existing attitude regression command should remain available.',
 );
 
-console.log('[attitude-rive-ring] transparent Rive ring integration contract passed');
+console.log('[attitude-dial] native attitude dial integration contract passed');

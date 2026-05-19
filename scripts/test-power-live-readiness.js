@@ -282,9 +282,9 @@ briefEntries.length = 0;
 const firstPublish = publishPowerBriefAdvisories(advisoryInput, { now });
 const secondPublish = publishPowerBriefAdvisories(advisoryInput, { now: now + 60_000 });
 assert.ok(firstPublish.length > 0, 'first power advisory publish should emit');
-assert.strictEqual(secondPublish.length, 0, 'duplicate power advisories should be suppressed within 10 minutes');
+assert.strictEqual(secondPublish.length, 0, 'duplicate power advisories should be suppressed within 15 minutes');
 assert.strictEqual(briefEntries.length, firstPublish.length, 'suppressed advisories should not enter ECS Brief');
-assert.strictEqual(POWER_BRIEF_SUPPRESSION_MS, 10 * 60_000, 'power brief suppression window should be ten minutes');
+assert.strictEqual(POWER_BRIEF_SUPPRESSION_MS, 15 * 60_000, 'power brief suppression window should be 15 minutes');
 assert.ok(briefEntries.some((entry) => /Source: EcoFlow DELTA 2/.test(entry.text)), 'published power brief entries should include source freshness');
 
 resetPowerBriefPublisherForTests();
@@ -415,8 +415,8 @@ assert.ok(hookSource.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS'), 'scanner hook 
 assert.ok(hookSource.includes('DEBUG_DEVICE_CONNECTIONS'), 'scanner source-search logging should be behind explicit debug gating');
 assert.ok(hookSource.includes("reason: 'debounced_scan_window'"), 'scanner should suppress repeated scan button presses');
 assert.ok(hookSource.includes('requireBrandAllowlistMatch: true'), 'power scanner should require brand allowlist matches by default');
-assert.ok(scannerScreenSource.includes('Found nearby power devices'), 'user-facing scanner should label nearby power findings clearly');
-assert.ok(scannerScreenSource.includes('Real nearby Bluetooth advertisements only'), 'scanner copy should explain real nearby advertisement filtering');
+assert.ok(scannerScreenSource.includes('Found nearby power and OBD2 devices'), 'user-facing scanner should label nearby power and OBD2 findings clearly');
+assert.ok(scannerScreenSource.includes('Real nearby power and OBD2 advertisements only'), 'scanner copy should explain real nearby advertisement filtering');
 assert.strictEqual(typeof SCANNER_SCAN_WINDOW_DEBOUNCE_MS, 'number', 'scanner debounce constant should be exported');
 
 console.log('Power live-readiness checks passed.');

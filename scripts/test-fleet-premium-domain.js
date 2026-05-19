@@ -585,6 +585,7 @@ const ramProfileDraft = profile.applyFleetProfilePreset(
   profile.createEmptyFleetVehicleProfileDraft(),
   'ram-2500-cummins-crew-4x4-short-bed',
 );
+ramProfileDraft.year = '2024';
 const ramProfileSuggestion = profile.resolveFleetVehicleProfileSuggestion(ramProfileDraft);
 assert.ok(Math.abs(ramProfileSuggestion.baseNetWeight.lbs - 7742) <= 5);
 assert.ok(Math.abs(ramProfileSuggestion.gvwr.lbs - 10190) <= 5);
@@ -593,6 +594,10 @@ assert.ok(
   'Profile flow should explain ECS configuration confidence.',
 );
 assert.strictEqual(profile.validateFleetVehicleProfileDraft(ramProfileDraft).length, 0);
+assert.ok(
+  profile.validateFleetVehicleProfileDraft({ ...ramProfileDraft, year: '' }).includes('Year is required.'),
+  'Fleet profile validation should make year visibly required before confirming specs.',
+);
 assert.strictEqual(profile.calculateConfirmedPayloadRemaining(ramProfileDraft), 2448);
 assert.ok(
   profile.validateFleetVehicleProfileDraft({
@@ -690,6 +695,29 @@ assert.strictEqual(buildSummary.accessoryWeightLb, 393);
 assert.strictEqual(buildSummary.activeCompartmentCount, 7);
 assert.strictEqual(buildSummary.scoringEffects.payload, 2);
 assert.ok(buildSummary.weightResult.payloadRemaining.lbs < legacy.weightResult.payloadRemaining.lbs);
+
+const cabRackState = buildLoadout.upsertFleetAccessoryInstall(
+  buildLoadout.createEmptyFleetBuildLoadoutState(),
+  buildLoadout.buildFleetAccessoryInstall({
+    accessoryId: 'cab_rack',
+    vehicleId: legacy.vehicle.id,
+    knowledgeMode: 'estimate',
+  }),
+);
+const cabRackSummary = buildLoadout.calculateFleetBuildLoadoutSummary(legacy.vehicle, cabRackState);
+const emptyVehicleWeightResult = fleet.calculateFleetWeightResult(legacy.vehicle);
+assert.strictEqual(cabRackSummary.accessoryWeightLb, 85);
+assert.strictEqual(cabRackSummary.scoringEffects.payload, 0);
+assert.strictEqual(
+  cabRackSummary.weightResult.payloadRemaining.lbs,
+  emptyVehicleWeightResult.payloadRemaining.lbs,
+  'Cab rack fit hardware should not reduce displayed payload remaining.',
+);
+assert.strictEqual(
+  cabRackSummary.weightResult.zoneWeights.cab.accessoryWeight.lbs,
+  85,
+  'Cab rack should remain available to the balance/CG model even when excluded from payload remaining.',
+);
 
 let customAccessoryState = buildLoadout.createEmptyFleetBuildLoadoutState();
 const customAccessory = buildLoadout.buildFleetAccessoryInstall({

@@ -1,7 +1,11 @@
-import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import CampScoutIntelCard from '../navigate/CampScoutIntelCard';
+import { buildCampOpsCampIntelViewModel } from '../../lib/campops/campOpsCampIntelViewModel';
+import { buildCampOpsCampScoutMapPins } from '../../lib/campops/campOpsMapPins';
+import type { CampCandidate, CampRecommendationSet } from '../../lib/campops/campOpsTypes';
 
 type QaStatus = 'available' | 'disabled' | 'shadow' | 'unknown' | 'stale' | 'cached' | 'missing';
 
@@ -21,6 +25,190 @@ type CampOpsVisualQaScenario = {
   warnings: string[];
   reasons: string[];
   chips: { label: string; value: string; status: QaStatus }[];
+};
+
+type QaMapPinPosition = {
+  leftPct: number;
+  topPct: number;
+};
+
+const QA_CANDIDATE_POSITIONS: Record<string, QaMapPinPosition> = {
+  qa_ridge_bench: { leftPct: 24, topPct: 34 },
+  qa_basin_pullout: { leftPct: 58, topPct: 49 },
+  qa_exit_staging: { leftPct: 76, topPct: 70 },
+};
+
+const QA_CAMPS: CampCandidate[] = [
+  {
+    id: 'qa_ridge_bench',
+    name: 'QA Ridge Bench',
+    location: { latitude: 39.21, longitude: -119.82, label: 'Internal QA cell' },
+    source: 'inferred',
+    sourceConfidence: 'medium',
+    legalConfidence: 'unknown',
+    accessDifficulty: 'moderate',
+    score: 82,
+    tags: ['Closer endpoint with lower late-arrival risk in this fixture.'],
+  },
+  {
+    id: 'qa_basin_pullout',
+    name: 'QA Basin Pullout',
+    location: { latitude: 39.24, longitude: -119.77, label: 'Internal QA cell' },
+    source: 'inferred',
+    sourceConfidence: 'low',
+    legalConfidence: 'unknown',
+    accessDifficulty: 'unknown',
+    score: 74,
+    tags: ['Backup candidate retained for comparison and verification.'],
+  },
+  {
+    id: 'qa_exit_staging',
+    name: 'QA Exit Staging',
+    location: { latitude: 39.18, longitude: -119.71, label: 'Internal QA cell' },
+    source: 'route_candidate',
+    sourceConfidence: 'low',
+    legalConfidence: 'unknown',
+    accessDifficulty: 'easy',
+    score: 69,
+    tags: ['Emergency fallback role only; verify posted rules before relying on it.'],
+  },
+];
+
+const QA_RECOMMENDATION_SET: CampRecommendationSet = {
+  recommendedCamp: QA_CAMPS[0],
+  backupCamp: QA_CAMPS[1],
+  emergencyCamp: QA_CAMPS[2],
+  rankedCandidates: QA_CAMPS,
+  rejectedCandidates: [],
+  warnings: [
+    'QA-only fixture pins. Not live data.',
+    'Legal status, closures, fire restrictions, and overnight permission remain unverified.',
+  ],
+  assumptions: ['Dev visual QA uses local fixture candidates only.'],
+  confidenceSummary: {
+    level: 'medium',
+    score: 78,
+    reasons: ['Fixture route geometry produces a candidate viewport for Android visual QA.'],
+    missingDataFields: ['live provider data', 'current closure status', 'current fire restrictions'],
+  },
+  rolesByCandidateId: {
+    qa_ridge_bench: ['primary'],
+    qa_basin_pullout: ['backup'],
+    qa_exit_staging: ['emergency'],
+  },
+  scoresByCandidateId: {
+    qa_ridge_bench: {
+      overall: 82,
+      legal: null,
+      access: 76,
+      time: 84,
+      resources: 80,
+      terrain: 74,
+      weather: null,
+      groupFit: 72,
+      trailerFit: 64,
+      lateArrival: 82,
+      privacy: 66,
+      dataConfidence: 62,
+    },
+    qa_basin_pullout: {
+      overall: 74,
+      legal: null,
+      access: 64,
+      time: 78,
+      resources: 70,
+      terrain: 68,
+      weather: null,
+      groupFit: 70,
+      trailerFit: 58,
+      lateArrival: 72,
+      privacy: 62,
+      dataConfidence: 55,
+    },
+    qa_exit_staging: {
+      overall: 69,
+      legal: null,
+      access: 78,
+      time: 70,
+      resources: 75,
+      terrain: 70,
+      weather: null,
+      groupFit: 60,
+      trailerFit: 70,
+      lateArrival: 68,
+      privacy: 40,
+      dataConfidence: 50,
+    },
+  },
+  enrichmentsByCandidateId: {
+    qa_ridge_bench: {
+      candidateId: 'qa_ridge_bench',
+      legalStatus: 'unknown',
+      legalConfidence: 'unknown',
+      closureStatus: 'unknown',
+      accessDifficulty: 'moderate',
+      vehicleFit: 'fit',
+      trailerSuitability: 'limited',
+      routeDistanceToCampMiles: 1.8,
+      terrainSlopeEstimate: { value: 4, unit: 'degrees', confidence: 'medium', source: 'inferred' },
+      weatherExposure: 'watch',
+      weatherExposureLevel: 'medium',
+      fireRestrictionStatus: 'unknown',
+      privacyLikelihood: 'moderate',
+      occupancyLikelihood: 'moderate',
+      lateArrivalRisk: 'watch',
+      dataConfidence: 'medium',
+      dataLimitations: ['Fixture data only. Verify current access and posted rules.'],
+    },
+    qa_basin_pullout: {
+      candidateId: 'qa_basin_pullout',
+      legalStatus: 'unknown',
+      legalConfidence: 'unknown',
+      closureStatus: 'unknown',
+      accessDifficulty: 'unknown',
+      vehicleFit: 'unknown',
+      trailerSuitability: 'unknown',
+      routeDistanceToCampMiles: 3.4,
+      terrainSlopeEstimate: { value: null, unit: 'unknown', confidence: 'unknown', source: 'inferred' },
+      weatherExposure: 'unknown',
+      weatherExposureLevel: 'unknown',
+      fireRestrictionStatus: 'unknown',
+      privacyLikelihood: 'unknown',
+      occupancyLikelihood: 'unknown',
+      lateArrivalRisk: 'caution',
+      dataConfidence: 'low',
+      dataLimitations: ['Backup role is available for action-button QA, not legal approval.'],
+    },
+    qa_exit_staging: {
+      candidateId: 'qa_exit_staging',
+      legalStatus: 'unknown',
+      legalConfidence: 'unknown',
+      closureStatus: 'unknown',
+      accessDifficulty: 'easy',
+      vehicleFit: 'fit',
+      trailerSuitability: 'fit',
+      routeDistanceToCampMiles: 0.3,
+      terrainSlopeEstimate: { value: 2, unit: 'degrees', confidence: 'low', source: 'inferred' },
+      weatherExposure: 'watch',
+      weatherExposureLevel: 'medium',
+      fireRestrictionStatus: 'unknown',
+      privacyLikelihood: 'low',
+      occupancyLikelihood: 'high',
+      lateArrivalRisk: 'watch',
+      dataConfidence: 'low',
+      dataLimitations: ['Emergency fallback role only; not a confirmed campsite.'],
+    },
+  },
+  explanations: {
+    whyRecommended:
+      'QA Ridge Bench is the primary fixture candidate because it has the highest available suitability score.',
+    whyBackup: 'QA Basin Pullout remains a backup candidate with lower source confidence.',
+    whyEmergency: 'QA Exit Staging is only an emergency fallback in this fixture.',
+    keyTradeoffs: [
+      'This viewport exists to test visible CampOps pins, Camp Intel popup actions, and cramped-screen layout with non-live fixture data.',
+    ],
+  },
+  decisionPoint: null,
 };
 
 const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
@@ -255,6 +443,30 @@ function chipColor(status: QaStatus): string {
 }
 
 export function CampOpsVisualQaScreen() {
+  const pins = useMemo(
+    () =>
+      buildCampOpsCampScoutMapPins(QA_RECOMMENDATION_SET, {
+        minimumConfidenceScore: null,
+        selectedCampOpsCandidateId: null,
+      }),
+    [],
+  );
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    QA_RECOMMENDATION_SET.recommendedCamp?.id ?? null,
+  );
+  const [qaActionLog, setQaActionLog] = useState(
+    'No popup action captured yet. Actions are QA-local only.',
+  );
+  const selectedCampIntel = useMemo(
+    () => buildCampOpsCampIntelViewModel(QA_RECOMMENDATION_SET, selectedCandidateId),
+    [selectedCandidateId],
+  );
+
+  const captureQaAction = (action: string) => {
+    const campName = selectedCampIntel?.campName ?? 'selected candidate';
+    setQaActionLog(`${action} action captured locally for QA only: ${campName}`);
+  };
+
   return (
     <View style={styles.root}>
       <Stack.Screen options={{ title: 'CampOps Visual QA' }} />
@@ -282,6 +494,73 @@ export function CampOpsVisualQaScreen() {
               <Text style={styles.guardrailValue}>{value}</Text>
             </View>
           ))}
+        </View>
+
+        <View style={styles.qaViewportCard}>
+          <View style={styles.qaViewportHeader}>
+            <View style={styles.iconShell}>
+              <Ionicons name="map-outline" size={14} color="#8BC34A" />
+            </View>
+            <View style={styles.cardTitleGroup}>
+              <Text style={styles.cardIndex}>CANDIDATE-PRODUCING QA VIEWPORT</Text>
+              <Text style={styles.cardTitle}>Visible CampOps pins and Camp Intel actions</Text>
+            </View>
+          </View>
+          <Text style={styles.body}>
+            QA-only fixture pins. Not live data. No providers, telemetry, AI output, or community publishing
+            are enabled. Tap a pin to open Camp Intel, then exercise SAVE CAMP, NAVIGATE HERE, and REPORT UNUSABLE.
+          </Text>
+          <View style={styles.qaMapViewport}>
+            <View style={styles.qaRouteLine} />
+            <Text style={styles.qaMapWatermark}>QA VIEWPORT - NON-LIVE</Text>
+            {pins.map((pin) => {
+              const position = QA_CANDIDATE_POSITIONS[pin.campOpsCandidateId] ?? { leftPct: 50, topPct: 50 };
+              const isSelected = selectedCandidateId === pin.campOpsCandidateId;
+              return (
+                <TouchableOpacity
+                  key={pin.id}
+                  style={[
+                    styles.qaPin,
+                    {
+                      left: `${position.leftPct}%`,
+                      top: `${position.topPct}%`,
+                    },
+                    isSelected && styles.qaPinSelected,
+                  ]}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel={pin.accessibilityLabel}
+                  onPress={() => setSelectedCandidateId(pin.campOpsCandidateId)}
+                >
+                  <Text style={styles.qaPinRank}>{pin.rankLabel}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <CampScoutIntelCard
+              visible={!!selectedCampIntel}
+              candidate={null}
+              campOpsDetail={selectedCampIntel}
+              topOffset={10}
+              bottomOffset={10}
+              maxWidth={420}
+              navigateSafe
+              saveSupported
+              feedbackSupported
+              onNavigateHere={() => captureQaAction('Navigate Here')}
+              onSaveCandidate={() => captureQaAction('Save Camp')}
+              onReportNotViable={() => captureQaAction('Report Unusable')}
+              onCompareNearby={() => captureQaAction('Compare Nearby')}
+              onMarkUsed={() => captureQaAction('Mark Used')}
+              onDismiss={() => {
+                captureQaAction('Dismiss');
+                setSelectedCandidateId(null);
+              }}
+            />
+          </View>
+          <View style={styles.qaActionLog}>
+            <Text style={styles.guardrailLabel}>QA action log</Text>
+            <Text style={styles.qaActionLogText}>{qaActionLog}</Text>
+          </View>
         </View>
 
         {QA_SCENARIOS.map((scenario, index) => (
@@ -424,6 +703,82 @@ const styles = StyleSheet.create({
     color: '#F4F7F1',
     fontSize: 12,
     fontWeight: '800',
+  },
+  qaViewportCard: {
+    marginBottom: 12,
+    padding: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(139,195,74,0.24)',
+    backgroundColor: '#0E140F',
+  },
+  qaViewportHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 10,
+  },
+  qaMapViewport: {
+    position: 'relative',
+    minHeight: 430,
+    marginTop: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(139,195,74,0.24)',
+    backgroundColor: '#07100D',
+  },
+  qaRouteLine: {
+    position: 'absolute',
+    left: '12%',
+    right: '10%',
+    top: '54%',
+    height: 2,
+    backgroundColor: 'rgba(139,195,74,0.28)',
+    transform: [{ rotate: '-13deg' }],
+  },
+  qaMapWatermark: {
+    position: 'absolute',
+    left: 10,
+    top: 9,
+    color: 'rgba(244,247,241,0.42)',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  qaPin: {
+    position: 'absolute',
+    width: 34,
+    height: 34,
+    marginLeft: -17,
+    marginTop: -17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: 'rgba(139,195,74,0.85)',
+    backgroundColor: 'rgba(10,21,13,0.95)',
+    zIndex: 4,
+  },
+  qaPinSelected: {
+    borderColor: '#FFB74D',
+    backgroundColor: 'rgba(255,183,77,0.22)',
+  },
+  qaPinRank: {
+    color: '#F4F7F1',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  qaActionLog: {
+    marginTop: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  qaActionLogText: {
+    marginTop: 4,
+    color: '#CFD8C8',
+    fontSize: 12,
+    lineHeight: 17,
   },
   card: {
     marginBottom: 12,

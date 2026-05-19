@@ -77,7 +77,8 @@ const resolverSource = read('lib/vehicles/vehicleAttitudeAssets.ts');
 const activeBackdropResolverSource = read('lib/attitudeMonitorVehicleVisual.ts');
 const surfaceSource = read('components/attitude/AttitudeMonitorSurface.tsx');
 const stageSource = read('src/features/attitude/components/VehicleAttitudeStage.tsx');
-const gaugeAssetsSource = read('src/features/attitude/attitudeGaugeAssets.ts');
+const attitudeDialSource = read('src/features/attitude/components/AttitudeDial.tsx');
+const attitudeMonitorSource = read('src/features/attitude/components/AttitudeMonitor.tsx');
 const monitorWidgetSource = read('components/detail/AttitudeMonitorWidget.tsx');
 const widgetRenderersSource = read('components/dashboard/WidgetRenderers.tsx');
 
@@ -99,26 +100,24 @@ assert.ok(
 assert.ok(
   stageSource.includes('getVehicleAttitudeAsset(vehicleId)') &&
     stageSource.includes('source={asset.attitudeImageSource}') &&
-    stageSource.includes("import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget'") &&
-    stageSource.includes('<AttitudeInclinationRiveWidget') &&
-    stageSource.includes('vehicle-attitude-${axis}-rive-meter') &&
-    stageSource.includes('valueDeg={value}') &&
+    stageSource.includes("import AttitudeMonitor from './AttitudeMonitor'") &&
+    stageSource.includes('<AttitudeMonitor') &&
+    stageSource.includes('rollDeg={rollDeg}') &&
+    stageSource.includes('pitchDeg={pitchDeg}') &&
     stageSource.includes('pointerEvents="none"') &&
     stageSource.includes('vehicle-attitude-stage-missing-asset'),
-  'VehicleAttitudeStage should resolve images by vehicleId, use the transparent Rive ring meter, and report missing assets.',
+  'VehicleAttitudeStage should resolve images by vehicleId, use the native attitude dial monitor, and report missing assets.',
 );
 assert.ok(
-  gaugeAssetsSource.includes('export const GAUGE_COMPLETE_SRC') &&
-    gaugeAssetsSource.includes('export const GAUGE_TICKS_SRC') &&
-    gaugeAssetsSource.includes('export const GAUGE_NUMBERS_SRC') &&
-    gaugeAssetsSource.includes('export const GAUGE_INDICATOR_SRC') &&
-    gaugeAssetsSource.includes("require('../../../assets/ecs/attitude/gauge-complete.png')") &&
-    gaugeAssetsSource.includes("require('../../../assets/ecs/attitude/gauge-ticks.png')") &&
-    gaugeAssetsSource.includes("require('../../../assets/ecs/attitude/gauge-numbers.png')") &&
-    gaugeAssetsSource.includes("require('../../../assets/ecs/attitude/gauge-indicator.png')") &&
-    !gaugeAssetsSource.includes('Ram_2500_3500') &&
-    !gaugeAssetsSource.includes('FALLBACK_ATTITUDE_BACKDROP_SRC'),
-  'Gauge asset constants should expose only the static reusable gauge layers and no production vehicle backdrop.',
+  attitudeDialSource.includes("from 'react-native-svg'") &&
+    attitudeDialSource.includes("from 'react-native-reanimated'") &&
+    attitudeDialSource.includes('degreeToDialAngle') &&
+    attitudeDialSource.includes('polarPoint') &&
+    attitudeMonitorSource.includes("label=\"ROLL\"") &&
+    attitudeMonitorSource.includes("label=\"PITCH\"") &&
+    !attitudeDialSource.includes('<Image') &&
+    !attitudeDialSource.includes('.riv'),
+  'Native attitude dial should be math-drawn with SVG/Reanimated and no image or Rive gauge assets.',
 );
 
 const {
@@ -165,17 +164,6 @@ assert.strictEqual(safeDeg(Number.NaN), 0, 'safeDeg should normalize NaN telemet
 assert.strictEqual(safeDeg(Number.POSITIVE_INFINITY), 0, 'safeDeg should normalize infinite telemetry.');
 assert.strictEqual(safeDeg('4.2'), 4.2, 'safeDeg should accept finite numeric telemetry strings.');
 
-const expectedGaugeAssets = {
-  'gauge-complete.png': { width: 1288, height: 395 },
-  'gauge-ticks.png': { width: 1316, height: 422 },
-  'gauge-numbers.png': { width: 1298, height: 282 },
-  'gauge-indicator.png': { width: 142, height: 644 },
-};
-for (const [filename, dimensions] of Object.entries(expectedGaugeAssets)) {
-  const assetPath = path.join(root, 'assets', 'ecs', 'attitude', filename);
-  assert.ok(fs.existsSync(assetPath), `${filename} should exist as a local offline attitude gauge asset.`);
-  assert.deepStrictEqual(readPngDimensions(assetPath), dimensions, `${filename} should keep its expected transparent PNG dimensions.`);
-}
 assert.deepStrictEqual(
   Object.keys(VEHICLE_ATTITUDE_ASSET_MANIFEST).sort(),
   Object.keys(EXPECTED_MANIFEST).sort(),

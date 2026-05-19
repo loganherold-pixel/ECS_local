@@ -9,6 +9,12 @@ const routeStoreSource = fs.readFileSync(path.join(root, 'lib', 'routeStore.ts')
 const navigateSessionSource = fs.readFileSync(path.join(root, 'lib', 'navigateRouteSessionStore.ts'), 'utf8');
 const roadSource = fs.readFileSync(path.join(root, 'lib', 'useRoadNavigation.ts'), 'utf8');
 const trailSource = fs.readFileSync(path.join(root, 'lib', 'useTrailNavigation.ts'), 'utf8');
+const progressWidgetStart = widgetSource.indexOf('function ProgressWidget');
+const progressWidgetEnd = widgetSource.indexOf('const RemotenessWidget', progressWidgetStart);
+const progressWidgetSource =
+  progressWidgetStart >= 0 && progressWidgetEnd > progressWidgetStart
+    ? widgetSource.slice(progressWidgetStart, progressWidgetEnd)
+    : '';
 
 function includes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
@@ -130,10 +136,10 @@ notIncludes(
   'waypointProgressStore.advance(',
   'Dashboard Route Progress widget must not mutate active route or waypoint progress.',
 );
-notIncludes(
+includes(
   widgetSource,
-  '<MapRenderer',
-  '1x1 Route Progress widget must not embed a mini-map.',
+  '<RouteProgressMiniMap',
+  'Route Progress widget should render the in-house mini-map.',
 );
 
 includes(
@@ -185,13 +191,20 @@ includes(
   includes(progressSource, fragment, `Route Progress normalized model should include ${fragment}`);
 });
 
-includes(widgetSource, "label: 'ETA'", 'Route Progress should render ETA.');
-includes(widgetSource, "label: 'DONE'", 'Route Progress should render completed miles.');
-includes(widgetSource, "label: 'LEFT'", 'Route Progress should render percent remaining.');
 includes(
   widgetSource,
-  'progressSummary.nextInstruction ?',
-  'Route Progress should hide the next-instruction row when turn text is unavailable.',
+  'remainingDistanceText={progressSummary?.remainingMilesText ?? null}',
+  'Route Progress should pass remaining distance to the mini-map overlay.',
+);
+includes(
+  widgetSource,
+  'etaText={progressSummary?.etaLabel ?? null}',
+  'Route Progress should pass ETA to the mini-map overlay.',
+);
+includes(
+  widgetSource,
+  'inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}',
+  'Route Progress should use the topo placeholder when guidance is unavailable.',
 );
 includes(
   progressSource,
@@ -244,13 +257,13 @@ assert.ok(
 );
 includes(
   widgetSource,
-  'routeCanRenderPath ? (',
-  'Route Progress visual should render the route line only when active guidance and geometry exist.',
+  'isGuidanceActive={Boolean(progressSummary?.isActive)}',
+  'Route Progress visual should render active guidance only when the shared snapshot is active.',
 );
 includes(
   widgetSource,
   'function hasRenderableRouteProgressGeometry',
-  'Route Progress visual should avoid drawing a fake route line when geometry is unavailable.',
+  'Attitude Command Route Progress should avoid drawing active geometry when route geometry is unavailable.',
 );
 notIncludes(
   widgetSource,
@@ -262,20 +275,15 @@ includes(
   'isSunlightPanel || isWeatherPanel || isRoutePanel',
   'Route Progress should suppress the shell status pill so only one Active pill remains.',
 );
-includes(
-  widgetSource,
+notIncludes(
+  progressWidgetSource,
   'routeMetricName',
-  'Route Progress should place the trail name in the bottom metadata strip.',
+  'Route Progress should not render the removed bottom metadata strip.',
 );
-includes(
-  widgetSource,
-  'TIME {routeVisual.estimatedTime}',
-  'Route Progress should place estimated time in the bottom metadata strip.',
-);
-includes(
-  widgetSource,
+notIncludes(
+  progressWidgetSource,
   'Guidance standby',
-  'No-active-route state should show truthful standby copy instead of fake ETA or distance.',
+  'No-active-route state should rely on the topo placeholder, not standby copy.',
 );
 
 console.log('Dashboard Route Progress active navigation checks passed.');

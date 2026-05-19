@@ -1751,7 +1751,9 @@ function FleetScreenInner() {
     };
   }, [selectedPreviewVehicle, supportDataRevision]);
   const selectedVehicleBaseline = useMemo(() => {
-    if (!selectedPreviewVehicle) {
+    void supportDataRevision;
+    const commandVehicle = activeVehicle;
+    if (!commandVehicle) {
       return {
         hasSelectedVehicle: false,
         hasVehicleProfile: false,
@@ -1767,22 +1769,20 @@ function FleetScreenInner() {
       };
     }
 
-    const selectedAny = selectedPreviewVehicle as any;
+    const selectedAny = commandVehicle as any;
     const accessoryData = buildVehicleAccessorySummary(selectedAny, {
       maxPills: 6,
       maxAccessorySummaryItems: 4,
     });
     const wizardConfig = accessoryData.wizardConfig ?? null;
-    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
-    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
-    const consumables = consumablesStore.get(selectedPreviewVehicle.id);
-    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any, { spec, consumables, tiresLift });
+    const spec = vehicleSpecStore.get(commandVehicle.id);
+    const tiresLift = tiresLiftStore.get(commandVehicle.id);
+    const consumables = consumablesStore.get(commandVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(commandVehicle as any, { spec, consumables, tiresLift });
     const accessoryCount = accessoryData.containerZones.length;
-    const loadoutReady = isLoadoutReadyForBuild(selectedPreviewVehicle.id, null);
+    const loadoutReady = isLoadoutReadyForBuild(commandVehicle.id, null);
     const activeTripAny = activeTrip as any;
-    const selectedVehicleIsActive = !activeVehicleId || activeVehicleId === selectedPreviewVehicle.id;
     const hasLiveTelemetry = Boolean(
-      selectedVehicleIsActive &&
       activeTripAny &&
       (
         activeTripAny.fuelPercent != null ||
@@ -1796,15 +1796,15 @@ function FleetScreenInner() {
       hasSelectedVehicle: true,
       hasVehicleProfile:
         Boolean(wizardConfig) ||
-        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+        [commandVehicle.make, commandVehicle.model, commandVehicle.year]
           .filter(Boolean)
           .length >= 2,
       hasConfiguredIdentity:
-        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+        [commandVehicle.make, commandVehicle.model, commandVehicle.year]
           .filter(Boolean)
           .length >= 2 ||
         typeof wizardConfig?.vehicle_type === 'string',
-      hasFuelCapacity: Number(spec?.fuel_tank_capacity_gal ?? selectedPreviewVehicle.fuel_tank_capacity_gal ?? 0) > 0,
+      hasFuelCapacity: Number(resourceProfile.fuelTankCapacityGal ?? 0) > 0,
       hasWaterCapacity: resourceProfile.waterCapacityGal != null && resourceProfile.waterCapacityGal >= 0,
       hasPowerStorage: resourceProfile.batteryUsableWh != null && resourceProfile.batteryUsableWh >= 0,
       hasTireSize: Number(resourceProfile.tireSizeInches ?? 0) > 0,
@@ -1813,14 +1813,15 @@ function FleetScreenInner() {
       hasLoadout: loadoutReady,
       hasLiveTelemetry,
     };
-  }, [selectedPreviewVehicle, activeTrip, activeVehicleId]);
+  }, [activeVehicle, activeTrip, supportDataRevision]);
 
   const fleetAIResources = useMemo(() => {
-    if (!selectedPreviewVehicle) return null;
-    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
-    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
-    const consumables = consumablesStore.get(selectedPreviewVehicle.id);
-    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any, { spec, consumables, tiresLift });
+    void supportDataRevision;
+    if (!activeVehicle) return null;
+    const spec = vehicleSpecStore.get(activeVehicle.id);
+    const tiresLift = tiresLiftStore.get(activeVehicle.id);
+    const consumables = consumablesStore.get(activeVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(activeVehicle as any, { spec, consumables, tiresLift });
     return {
       fuelTankCapacityGal: resourceProfile.fuelTankCapacityGal,
       fuelPercent: resourceProfile.currentFuelPercent,
@@ -1838,7 +1839,7 @@ function FleetScreenInner() {
       accessoryInstalledCount: selectedVehicleBaseline.hasAccessoriesConfigured ? 1 : 0,
       connectivityLevel: isOnline ? 'live' : 'offline',
     };
-  }, [selectedPreviewVehicle, selectedVehicleBaseline.hasAccessoriesConfigured, selectedVehicleBaseline.hasLoadout, isOnline]);
+  }, [activeVehicle, selectedVehicleBaseline.hasAccessoriesConfigured, selectedVehicleBaseline.hasLoadout, isOnline, supportDataRevision]);
 
   const fleetAITelemetry = useMemo(() => {
     const activeTripAny = activeTrip as any;
@@ -1853,14 +1854,14 @@ function FleetScreenInner() {
   const selectedFleetFabricPayload = useMemo(() => {
     void supportDataRevision;
     void loadoutRefreshKey;
-    return selectedPreviewVehicle ? buildFleetVehicleCardModel(selectedPreviewVehicle).fabricPayload : null;
-  }, [loadoutRefreshKey, selectedPreviewVehicle, supportDataRevision]);
+    return activeVehicle ? buildFleetVehicleCardModel(activeVehicle).fabricPayload : null;
+  }, [activeVehicle, loadoutRefreshKey, supportDataRevision]);
 
   const { aiState, fleetView } = useECSAIHook({
     activeRun: activeTrip,
     vehicleConfig: selectedFleetFabricPayload
-      ? { ...(selectedPreviewVehicle as any), fleetFabric: selectedFleetFabricPayload }
-      : selectedPreviewVehicle,
+      ? { ...(activeVehicle as any), fleetFabric: selectedFleetFabricPayload }
+      : activeVehicle,
     telemetry: fleetAITelemetry,
     resources: fleetAIResources,
     userPreferences: userSettings,
@@ -2115,8 +2116,8 @@ function FleetScreenInner() {
                 <FleetVehicleCardIcon active={isActive} />
               </View>
               <View style={s.vehicleIdentityText}>
-                <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
-                <Text style={s.vehicleMeta} numberOfLines={1}>{vehicleDescriptor}</Text>
+                <Text style={s.vehicleName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>{v.name}</Text>
+                <Text style={s.vehicleMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.84}>{vehicleDescriptor}</Text>
               </View>
             </View>
             {isActive ? (
@@ -2517,8 +2518,8 @@ function FleetScreenInner() {
                       <FleetVehicleCardIcon active={isActive} />
                     </View>
                     <View style={s.vehicleIdentityText}>
-                      <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
-                      <Text style={s.vehicleMeta} numberOfLines={1}>{vehicleDescriptor}</Text>
+                      <Text style={s.vehicleName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>{v.name}</Text>
+                      <Text style={s.vehicleMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.84}>{vehicleDescriptor}</Text>
                     </View>
                   </View>
                   {isActive ? (
@@ -2807,6 +2808,7 @@ function FleetScreenInner() {
         <WeightDashboardPanel
           vehicleId={weightSummaryModalVehicle?.id ?? null}
           compact={false}
+          hideVehicleProfile
         />
       </ECSModalShell>
 

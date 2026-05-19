@@ -3,7 +3,7 @@ import type { ECSBriefSeverity } from './ai/ecsBriefTypes';
 import type { PowerTelemetryTruth } from '../src/power/types/PowerTelemetry';
 import { resolveTelemetrySourceState } from './telemetrySourceState';
 
-export const POWER_BRIEF_SUPPRESSION_MS = 10 * 60 * 1000;
+export const POWER_BRIEF_SUPPRESSION_MS = 15 * 60 * 1000;
 export const POWER_BATTERY_RESERVE_PERCENT = 20;
 export const POWER_RUNTIME_RESERVE_MINUTES = 120;
 export const POWER_HIGH_DRAW_WATTS = 1500;

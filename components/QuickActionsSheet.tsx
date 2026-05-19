@@ -10,6 +10,7 @@ import {
   Platform,
   useWindowDimensions,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSModalShell from './ECSModalShell';
@@ -24,16 +25,6 @@ import { missionEventStore, missionNoteStore } from '../lib/missionStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { dispatchStore } from '../lib/dispatchStore';
 import { commsStore, type CustomCommsData } from '../lib/commsStore';
-import {
-  type ECSDeviceConnectionModel,
-  type ECSDiscoverySourceUiStatus,
-  type ECSScanSummary,
-  useUnifiedDeviceConnections,
-} from '../lib/unifiedScanner';
-import {
-  getSourceStatusDetail,
-  getSourceStatusLabel,
-} from '../lib/deviceConnectionScanMessaging';
 import { hapticCommand, hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
@@ -53,8 +44,7 @@ type FieldUtilitiesView =
   | 'protocolDetail'
   | 'recoveryProtocols'
   | 'recoveryProtocolDetail'
-  | 'team'
-  | 'bluetooth';
+  | 'team';
 
 type FieldUtilitiesReturnTarget = 'dashboard' | 'quickActions' | 'map' | string;
 type FieldUtilityActionView = Exclude<FieldUtilitiesView, 'menu' | 'protocolDetail' | 'recoveryProtocolDetail'>;
@@ -186,6 +176,7 @@ interface Props {
 }
 
 export default function QuickActionsSheet({ visible, onClose, returnTarget = 'dashboard' }: Props) {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { height: viewportHeight } = useWindowDimensions();
   const { showToast, activeTrip, user } = useApp();
@@ -335,6 +326,16 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
     closeFieldUtilityAction();
   }, [activeView, closeFieldUtilities, closeFieldUtilityAction, openFieldUtilityAction]);
+
+  const openDeviceConnections = useCallback(() => {
+    void hapticCommand();
+    closeFieldUtilities();
+    try {
+      router.push('/power/blu');
+    } catch {
+      showToast('Device connections unavailable');
+    }
+  }, [closeFieldUtilities, router, showToast]);
 
   useEffect(() => {
     if (!visible) {
@@ -567,7 +568,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       subtitle: 'Open device connections',
       icon: 'bluetooth-outline',
       color: '#5AC8FA',
-      onPress: () => openFieldUtilityAction('bluetooth'),
+      onPress: openDeviceConnections,
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -973,13 +974,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     );
   };
 
-  const renderBluetoothPanel = () => (
-    <View style={styles.panelBody}>
-      {renderPanelIntro('Device Connections', 'Identify, select, connect, retry, or clear local Bluetooth device sessions.')}
-      <FieldUtilitiesBluetoothPanel />
-    </View>
-  );
-
   const panelContent = (() => {
     switch (activeView) {
       case 'quickNote':
@@ -998,8 +992,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         return renderRecoveryProtocolDetailPanel();
       case 'team':
         return renderTeamPanel();
-      case 'bluetooth':
-        return renderBluetoothPanel();
       default:
         return renderMainPanel();
     }
@@ -1127,294 +1119,6 @@ function getProtocolFallbackIconName(protocolId: string): React.ComponentProps<t
   return 'shield-checkmark-outline';
 }
 
-function getBluetoothSourceTone(status: ECSDiscoverySourceUiStatus): string {
-  switch (status) {
-    case 'success':
-      return '#4CAF50';
-    case 'scanning':
-      return '#5AC8FA';
-    case 'failed':
-      return '#FF6B6B';
-    case 'unsupported':
-    case 'disabled':
-      return TACTICAL.amber;
-    case 'pending':
-    default:
-      return TACTICAL.textMuted;
-  }
-}
-
-function BluetoothSourceSummary({ summary }: { summary: ECSScanSummary }) {
-  const hasStarted = summary.startedAt != null;
-  if (!hasStarted) return null;
-
-  return (
-    <View style={styles.bluetoothSourceSummary}>
-      {summary.sourceStatuses
-        .map((source) => {
-          const tone = getBluetoothSourceTone(source.status);
-          return (
-            <View key={source.key} style={styles.bluetoothSourceRow}>
-              <View style={[styles.bluetoothSourceDot, { backgroundColor: tone }]} />
-              <View style={styles.bluetoothSourceCopy}>
-                <Text style={styles.bluetoothSourceLabel}>{source.label}</Text>
-                <Text style={styles.bluetoothSourceDetail} numberOfLines={2}>
-                  {getSourceStatusDetail(source)}
-                </Text>
-              </View>
-              <Text style={[styles.bluetoothSourceStatus, { color: tone }]} numberOfLines={2}>
-                {getSourceStatusLabel(source)}
-              </Text>
-            </View>
-          );
-        })}
-    </View>
-  );
-}
-
-function FieldUtilitiesBluetoothPanel() {
-  const connections = useUnifiedDeviceConnections();
-
-  useEffect(() => {
-    if (__DEV__) {
-      console.log('[BT_SOURCE] field_utilities_device_connections_panel', {
-        file: 'components/QuickActionsSheet.tsx',
-        component: 'FieldUtilitiesBluetoothPanel',
-        hook: 'lib/useUnifiedDeviceConnections.ts',
-        buttonText: 'Scan for Device Connections',
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!connections.routeIntent) return;
-    connections.consumeRouteIntent(connections.routeIntent.id);
-  }, [connections]);
-
-  const visibleDevices = connections.nearbyDevices;
-
-  const handlePrimaryAction = useCallback(async (device: ECSDeviceConnectionModel) => {
-    void hapticCommand();
-    if (device.isConnected) {
-      await connections.disconnectDevice(device.id);
-      return;
-    }
-    if (device.actionKind === 'retry') {
-      await connections.retryDevice(device.id, 'user_retry');
-      return;
-    }
-    await connections.connectDevice(device.id, 'user_device_action');
-  }, [connections]);
-
-  const handleScanAgain = useCallback(() => {
-    void hapticCommand();
-    void connections.rescan();
-  }, [connections]);
-
-  const handleConnectSelected = useCallback(() => {
-    void hapticCommand();
-    void connections.connectSelected('user_selected_batch');
-  }, [connections]);
-
-  return (
-    <View style={styles.bluetoothPanel}>
-      <View style={styles.bluetoothHero}>
-        <View style={styles.bluetoothHeroTop}>
-          <View style={styles.bluetoothIconWrap}>
-            <Ionicons name="bluetooth-outline" size={20} color="#5AC8FA" />
-          </View>
-          <View style={styles.bluetoothHeroCopy}>
-            <Text style={styles.bluetoothEyebrow}>UNIFIED SCANNER</Text>
-            <Text style={styles.bluetoothTitle}>{connections.globalSummaryLabel}</Text>
-            <Text style={styles.bluetoothBody}>
-              Device discovery uses the same unified scanner as Device Connections. Only currently discovered nearby devices appear here.
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.bluetoothStatsRow}>
-          <BluetoothStat label="Connected" value={connections.connectedCount} />
-          <BluetoothStat label="Nearby" value={connections.nearbyDevices.length} />
-          <BluetoothStat label="Live" value={connections.liveCount} />
-        </View>
-
-        {connections.degradedMessage ? (
-          <Text style={styles.bluetoothNotice}>{connections.degradedMessage}</Text>
-        ) : connections.infoMessage ? (
-          <Text style={styles.bluetoothNotice}>{connections.infoMessage}</Text>
-        ) : null}
-
-        {__DEV__ ? <BluetoothSourceSummary summary={connections.lastScanSummary} /> : null}
-
-        <View style={styles.bluetoothActionRow}>
-          <TouchableOpacity
-            style={styles.bluetoothSecondaryBtn}
-            onPress={handleScanAgain}
-            activeOpacity={0.78}
-            disabled={connections.isScanning}
-            accessibilityState={{ disabled: connections.isScanning }}
-          >
-            {connections.isScanning ? (
-              <ActivityIndicator size={13} color={TACTICAL.textMuted} />
-            ) : (
-              <Ionicons name="refresh-outline" size={14} color={TACTICAL.textMuted} />
-            )}
-            <Text style={styles.bluetoothSecondaryText} numberOfLines={2}>
-              {connections.isScanning ? 'Scanning...' : 'Scan for Device Connections'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.bluetoothPrimaryBtn,
-              !connections.canConnectSelected ? styles.bluetoothPrimaryBtnDisabled : null,
-            ]}
-            onPress={handleConnectSelected}
-            activeOpacity={0.78}
-            disabled={!connections.canConnectSelected || connections.isBusy}
-          >
-            {connections.isBusy ? <ActivityIndicator size={13} color="#0B0F12" /> : null}
-            <Text style={[
-              styles.bluetoothPrimaryText,
-              !connections.canConnectSelected ? styles.bluetoothPrimaryTextDisabled : null,
-            ]}>
-              Connect Selected
-            </Text>
-          </TouchableOpacity>
-          {connections.selectedCount > 0 ? (
-            <TouchableOpacity
-              style={styles.bluetoothSecondaryBtn}
-              onPress={() => {
-                void hapticMicro();
-                connections.clearSelection();
-              }}
-              activeOpacity={0.78}
-            >
-              <Ionicons name="close-outline" size={14} color={TACTICAL.textMuted} />
-              <Text style={styles.bluetoothSecondaryText}>Clear</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        <View style={styles.bluetoothNearbyHeader}>
-          <Text style={styles.bluetoothNearbyTitle}>Found nearby devices</Text>
-          <Text style={styles.bluetoothNearbyBody}>
-            Saved, known, failed, and cloud-only records stay out of this actionable scan list.
-          </Text>
-        </View>
-      </View>
-
-      {visibleDevices.length > 0 ? (
-        <View style={styles.bluetoothDeviceList}>
-          {visibleDevices.map((device) => (
-            <BluetoothDeviceMiniRow
-              key={device.id}
-              device={device}
-              busy={connections.isBatchBusy || device.isConnecting}
-              onToggleSelection={connections.toggleSelection}
-              onPrimaryAction={handlePrimaryAction}
-            />
-          ))}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Ionicons name="bluetooth-outline" size={22} color={TACTICAL.textMuted} />
-          <Text style={styles.emptyStateText}>{connections.scanAreaMessage}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function BluetoothStat({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.bluetoothStat}>
-      <Text style={styles.bluetoothStatValue}>{value}</Text>
-      <Text style={styles.bluetoothStatLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function BluetoothDeviceMiniRow({
-  device,
-  busy,
-  onToggleSelection,
-  onPrimaryAction,
-}: {
-  device: ECSDeviceConnectionModel;
-  busy: boolean;
-  onToggleSelection: (deviceId: string) => void;
-  onPrimaryAction: (device: ECSDeviceConnectionModel) => void;
-}) {
-  const selectable = !device.isConnected && !device.isConnecting && (device.actionKind === 'connect' || device.actionKind === 'retry');
-  const actionDisabled =
-    busy ||
-    device.actionKind === 'none' ||
-    device.actionKind === 'connected' ||
-    device.actionKind === 'selected' ||
-    device.actionKind === 'disconnecting' ||
-    device.actionKind === 'connecting';
-
-  return (
-    <View style={[styles.bluetoothDeviceRow, device.isSelected ? styles.bluetoothDeviceRowSelected : null]}>
-      <TouchableOpacity
-        style={[styles.bluetoothSelect, device.isSelected ? styles.bluetoothSelectActive : null]}
-        onPress={() => {
-          if (!selectable) return;
-          void hapticMicro();
-          onToggleSelection(device.id);
-        }}
-        activeOpacity={selectable ? 0.78 : 1}
-        disabled={!selectable}
-      >
-        {device.isSelected ? <Ionicons name="checkmark" size={12} color="#0B0F12" /> : null}
-      </TouchableOpacity>
-
-      <View style={styles.bluetoothDeviceCopy}>
-        <Text style={styles.bluetoothDeviceName} numberOfLines={1}>{device.name}</Text>
-        <Text style={styles.bluetoothDeviceMeta} numberOfLines={1}>
-          {[device.provider, device.category, device.stateLabel].filter(Boolean).join(' / ')}
-        </Text>
-        <Text style={styles.bluetoothDeviceDetail} numberOfLines={2}>{device.detailLabel}</Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.bluetoothDeviceAction, actionDisabled ? styles.bluetoothDeviceActionDisabled : null]}
-        onPress={() => onPrimaryAction(device)}
-        disabled={actionDisabled}
-        activeOpacity={0.78}
-      >
-        {device.isConnecting || device.actionKind === 'disconnecting' ? (
-          <ActivityIndicator size={12} color={TACTICAL.amber} />
-        ) : (
-          <Text style={[styles.bluetoothDeviceActionText, actionDisabled ? styles.bluetoothDeviceActionTextDisabled : null]}>
-            {getBluetoothActionLabel(device)}
-          </Text>
-        )}
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function getBluetoothActionLabel(device: ECSDeviceConnectionModel): string {
-  switch (device.actionKind) {
-    case 'disconnect':
-      return 'Disconnect';
-    case 'disconnecting':
-      return 'Disconnecting';
-    case 'retry':
-      return 'Retry';
-    case 'connect':
-      return 'Connect';
-    case 'connecting':
-      return 'Connecting';
-    case 'connected':
-      return 'Connected';
-    case 'selected':
-      return 'Selected';
-    default:
-      return 'Unavailable';
-  }
-}
-
 const styles = StyleSheet.create({
   sheetScrollContentMain: {
     justifyContent: 'flex-start',
@@ -1495,8 +1199,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,83,80,0.055)',
   },
   recoveryProtocolTile: {
-    borderColor: 'rgba(76,175,80,0.22)',
-    backgroundColor: 'rgba(76,175,80,0.05)',
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.06)',
   },
   tileIconWrap: {
     width: 34,
@@ -1853,8 +1557,12 @@ const styles = StyleSheet.create({
   },
   protocolActionImage: {
     ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
+    top: -2,
+    right: -2,
+    bottom: -2,
+    left: -2,
+    width: undefined,
+    height: undefined,
     opacity: 0.88,
   },
   protocolActionFallback: {
@@ -1952,282 +1660,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: TACTICAL.textMuted,
     textAlign: 'center',
-  },
-  bluetoothPanel: {
-    gap: 12,
-  },
-  bluetoothHero: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    padding: 12,
-    gap: 12,
-  },
-  bluetoothHeroTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  bluetoothIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(90,200,250,0.3)',
-    backgroundColor: 'rgba(90,200,250,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bluetoothHeroCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  bluetoothEyebrow: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1.8,
-  },
-  bluetoothTitle: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: TACTICAL.text,
-  },
-  bluetoothBody: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothStatsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  bluetoothStat: {
-    flex: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  bluetoothStatValue: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
-  },
-  bluetoothStatLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  bluetoothNotice: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.22)',
-    backgroundColor: 'rgba(196,138,44,0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 11,
-    lineHeight: 16,
-    color: TACTICAL.text,
-  },
-  bluetoothSourceSummary: {
-    gap: 6,
-  },
-  bluetoothSourceRow: {
-    minHeight: 42,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  bluetoothSourceDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  bluetoothSourceCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  bluetoothSourceLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  bluetoothSourceDetail: {
-    marginTop: 2,
-    fontSize: 9,
-    lineHeight: 13,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothSourceStatus: {
-    maxWidth: 96,
-    fontSize: 8,
-    lineHeight: 11,
-    fontWeight: '900',
-    textAlign: 'right',
-    textTransform: 'uppercase',
-  },
-  bluetoothActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  bluetoothSecondaryBtn: {
-    minHeight: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bluetoothSecondaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-    flexShrink: 1,
-  },
-  bluetoothPrimaryBtn: {
-    minHeight: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber,
-    backgroundColor: TACTICAL.amber,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bluetoothPrimaryBtnDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  bluetoothPrimaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#0B0F12',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  bluetoothPrimaryTextDisabled: {
-    color: TACTICAL.textMuted,
-  },
-  bluetoothNearbyHeader: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
-  },
-  bluetoothNearbyTitle: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#5AC8FA',
-    letterSpacing: 1.3,
-    textTransform: 'uppercase',
-  },
-  bluetoothNearbyBody: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    lineHeight: 15,
-  },
-  bluetoothDeviceList: {
-    gap: 8,
-  },
-  bluetoothDeviceRow: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  bluetoothDeviceRowSelected: {
-    borderColor: 'rgba(90,200,250,0.46)',
-    backgroundColor: 'rgba(90,200,250,0.08)',
-  },
-  bluetoothSelect: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bluetoothSelectActive: {
-    borderColor: '#5AC8FA',
-    backgroundColor: '#5AC8FA',
-  },
-  bluetoothDeviceCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  bluetoothDeviceName: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: TACTICAL.text,
-  },
-  bluetoothDeviceMeta: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#5AC8FA',
-    textTransform: 'uppercase',
-  },
-  bluetoothDeviceDetail: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothDeviceAction: {
-    minHeight: 34,
-    minWidth: 82,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: 'rgba(90,200,250,0.34)',
-    backgroundColor: 'rgba(90,200,250,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-  bluetoothDeviceActionDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-  },
-  bluetoothDeviceActionText: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: '#5AC8FA',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  bluetoothDeviceActionTextDisabled: {
-    color: TACTICAL.textMuted,
   },
   optionList: {
     gap: 10,

@@ -69,6 +69,7 @@ export type FleetBuildAccessoryInstall = {
   name: string;
   brandModel?: string | null;
   installedWeightLb: number;
+  affectsPayload?: boolean;
   mountZone: FleetLoadZone;
   permanence: FleetAccessoryPermanence;
   source: FleetWeightSource;
@@ -156,6 +157,7 @@ export type FleetAccessoryCatalogItem = {
   label: string;
   icon: string;
   defaultWeightLb: number;
+  affectsPayload?: boolean;
   mountZone: FleetLoadZone;
   permanence: FleetAccessoryPermanence;
   scoringEffects: FleetAccessoryScoringEffect[];
@@ -178,7 +180,7 @@ export const FLEET_ACCESSORY_KNOWLEDGE_OPTIONS: Array<{
 
 export const FLEET_ACCESSORY_CATALOG: readonly FleetAccessoryCatalogItem[] = [
   { id: 'roof_rack_platform', label: 'Roof Rack / Platform', icon: 'grid-outline', defaultWeightLb: 85, mountZone: 'roof', permanence: 'permanent', scoringEffects: ['payload', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [{ id: 'roof_platform', name: 'Roof Platform', loadZone: 'roof' }] },
-  { id: 'cab_rack', label: 'Cab Rack', icon: 'file-tray-stacked-outline', defaultWeightLb: 85, mountZone: 'cab', permanence: 'permanent', scoringEffects: ['payload', 'front_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'cab_rack_zone', name: 'Cab Rack Zone', loadZone: 'cab' }] },
+  { id: 'cab_rack', label: 'Cab Rack', icon: 'car-sport-outline', defaultWeightLb: 85, affectsPayload: false, mountZone: 'cab', permanence: 'permanent', scoringEffects: ['front_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'cab_rack_zone', name: 'Cab Rack Zone', loadZone: 'cab' }] },
   { id: 'bed_rack', label: 'Bed Rack', icon: 'layers-outline', defaultWeightLb: 125, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'bed_rack_deck', name: 'Bed Rack Deck', loadZone: 'bedHigh' }] },
   { id: 'truck_cap_smartcap', label: 'Truck Cap / SmartCap', icon: 'archive-outline', defaultWeightLb: 213, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [
     { id: 'side_bin_driver', name: 'Driver Side Bin', loadZone: 'bedLow' },
@@ -186,14 +188,14 @@ export const FLEET_ACCESSORY_CATALOG: readonly FleetAccessoryCatalogItem[] = [
     { id: 'cap_roof', name: 'Cap Roof Zone', loadZone: 'bedHigh' },
     { id: 'enclosed_bed', name: 'Enclosed Bed', loadZone: 'bedLow' },
   ] },
-  { id: 'bed_drawers_storage', label: 'Bed Drawers / Storage System', icon: 'server-outline', defaultWeightLb: 180, mountZone: 'bedLow', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'maintenance'], defaultCompartments: [
+  { id: 'bed_drawers_storage', label: 'Bed Drawers / Storage System', icon: 'file-tray-full-outline', defaultWeightLb: 180, mountZone: 'bedLow', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'maintenance'], defaultCompartments: [
     { id: 'driver_drawer', name: 'Driver Drawer', loadZone: 'bedLow' },
     { id: 'passenger_drawer', name: 'Passenger Drawer', loadZone: 'bedLow' },
     { id: 'deck_surface', name: 'Deck Surface', loadZone: 'bedHigh' },
   ] },
   { id: 'toolbox', label: 'Toolbox', icon: 'hammer-outline', defaultWeightLb: 95, mountZone: 'bedLow', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'maintenance'], defaultCompartments: [{ id: 'toolbox_main', name: 'Toolbox', loadZone: 'bedLow' }] },
-  { id: 'front_bumper', label: 'Front Bumper', icon: 'shield-outline', defaultWeightLb: 155, mountZone: 'frontLow', permanence: 'permanent', scoringEffects: ['payload', 'front_axle', 'maintenance'], defaultCompartments: [] },
-  { id: 'rear_bumper', label: 'Rear Bumper', icon: 'shield-half-outline', defaultWeightLb: 145, mountZone: 'rearLow', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'maintenance', 'recovery'], defaultCompartments: [] },
+  { id: 'front_bumper', label: 'Front Bumper', icon: 'shield-checkmark-outline', defaultWeightLb: 155, mountZone: 'frontLow', permanence: 'permanent', scoringEffects: ['payload', 'front_axle', 'maintenance'], defaultCompartments: [] },
+  { id: 'rear_bumper', label: 'Rear Bumper', icon: 'shield-checkmark-outline', defaultWeightLb: 145, mountZone: 'rearLow', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'maintenance', 'recovery'], defaultCompartments: [] },
   { id: 'winch', label: 'Winch', icon: 'link-outline', defaultWeightLb: 85, mountZone: 'frontLow', permanence: 'permanent', scoringEffects: ['payload', 'front_axle', 'maintenance', 'recovery'], defaultCompartments: [] },
   { id: 'aux_fuel_water_tank', label: 'Auxiliary Fuel / Water Tank', icon: 'water-outline', defaultWeightLb: 120, mountZone: 'bedLow', permanence: 'seasonal', scoringEffects: ['payload', 'rear_axle', 'maintenance'], defaultCompartments: [{ id: 'aux_tank_zone', name: 'Aux Tank Zone', loadZone: 'bedLow' }] },
   { id: 'ladder_rack', label: 'Ladder Rack', icon: 'albums-outline', defaultWeightLb: 110, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'ladder_rack_zone', name: 'Ladder Rack Zone', loadZone: 'bedHigh' }] },
@@ -362,6 +364,7 @@ export function normalizeFleetBuildLoadoutState(raw: unknown): FleetBuildLoadout
             accessoryId: catalog.id,
             name: typeof item.name === 'string' && item.name.trim() ? item.name : catalog.label,
             brandModel: item.brandModel ?? null,
+            affectsPayload: item.affectsPayload ?? (catalog.affectsPayload !== false),
             mountZone: toFleetLoadZone(item.mountZone, catalog.mountZone),
             permanence: normalizeAccessoryPermanence(item.permanence, catalog.permanence),
             installedWeightLb: Number.isFinite(installedWeight) ? Math.max(0, installedWeight) : catalog.defaultWeightLb,
@@ -385,8 +388,8 @@ export function normalizeFleetBuildLoadoutState(raw: unknown): FleetBuildLoadout
       loadZone: accessory.mountZone,
       display: {
         ...item.display,
-        classLabel: accessory.mountZone,
-        chips: [accessory.mountZone],
+        classLabel: 'custom placement',
+        chips: [],
       },
       placement: placementFromDescriptor(accessory.mountZone, `${item.name} ${item.id}`, 'assigned'),
     };
@@ -480,6 +483,7 @@ export function buildFleetAccessoryInstall(input: {
     source: sourceForMode(input.knowledgeMode),
     confidence: confidenceForMode(input.knowledgeMode),
     knowledgeMode: input.knowledgeMode,
+    affectsPayload: catalog.affectsPayload !== false,
     scoringEffects: [...catalog.scoringEffects],
   };
 }
@@ -503,8 +507,8 @@ export function generateFleetAccessoryCompartments(
         iconKey: catalog.icon,
         title: compartment.name,
         subtitle: catalog.label,
-        classLabel: loadZone,
-        chips: [loadZone],
+        classLabel: catalog.label,
+        chips: [],
         accentTone: 'category',
       },
       placement: placementFromDescriptor(loadZone, `${compartment.name} ${compartment.id}`, 'assigned'),
@@ -735,8 +739,8 @@ export function toFleetCompartmentLoadoutItems(
       iconKey: 'cube-outline',
       title: item.name,
       subtitle: item.category,
-      classLabel: item.loadZone,
-      chips: [item.permanence, item.loadZone],
+      classLabel: item.permanence,
+      chips: [item.permanence],
       accentTone: (item.confidence >= 80 ? 'ready' : 'category') as FleetDisplayMetadata['accentTone'],
     },
   }));
@@ -767,14 +771,15 @@ export function toFleetAccessoryInstalls(state: FleetBuildLoadoutState, vehicleI
         ? `ECS estimated this at ${Math.round(install.installedWeightLb)} lb`
         : install.name,
     }),
+    affectsPayload: install.affectsPayload !== false,
     loadZone: install.mountZone,
     placement: placementFromDescriptor(install.mountZone, install.name, 'assigned'),
     display: {
       iconKey: getFleetAccessoryCatalogItem(install.accessoryId).icon,
       title: install.name,
-      subtitle: install.brandModel ?? install.source,
-      classLabel: install.mountZone,
-      chips: [install.mountZone, install.permanence],
+      subtitle: install.brandModel ?? (install.affectsPayload === false ? 'fit reference' : install.source),
+      classLabel: install.affectsPayload === false ? 'fit reference' : 'payload tracked',
+      chips: [install.affectsPayload === false ? 'fit reference' : 'payload tracked', install.permanence],
       accentTone: install.confidence >= 80 ? 'ready' : 'warning',
     },
   }));

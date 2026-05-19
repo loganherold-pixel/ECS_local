@@ -1,37 +1,37 @@
 # CampOps Internal Beta Evidence Report
 
-Date: 2026-05-01
+Date: 2026-05-17
 
 ## Decision Summary
 
-Closed-field-test readiness recommendation: **not ready**.
+Closed-field-test readiness recommendation: **risk-accepted restricted closed field test**.
 
-CampOps has enough implementation, fixture coverage, privacy defaults, and controlled activation gates to continue internal beta evaluation. It is not ready for closed field testing because provider readiness is not approved for a real target region, Android/device visual-state QA is incomplete, and real field evidence has not been captured.
+CampOps has enough implementation coverage, fixture coverage, Android visual QA evidence, privacy defaults, and controlled activation gates to proceed only inside the restricted closed-field scope recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
 
-Do not proceed to closed field test until the unresolved blockers in this report are resolved or formally risk-accepted by product, safety, privacy, and engineering.
+This is not public release approval. Provider influence remains unapproved outside accepted shadow-only validation, AI assist remains disabled unless separately approved, telemetry remains disabled unless separately approved, and community publishing remains disabled.
 
 ## Beta Evidence Snapshot
 
 | Evidence area | Current status |
 | --- | --- |
-| Beta dates | No completed internal beta run recorded yet. Internal beta preparation and controlled enablement artifacts are dated 2026-05-01. |
-| Tester count | 0 completed tester sessions recorded in this repo. |
-| Device coverage | Android hardware was detected, but CampOps visual-state execution was blocked by missing runtime fixture/dev route. No CampOps card screenshots were captured. |
-| Region labels tested | `Region 001 - Northern Nevada controlled provider shadow cell`, fixture-backed only. |
-| Provider mode used | Shadow validation only; provider output was not allowed to affect production recommendations. |
-| Flags enabled | Fixture/test runs used explicit CampOps flags as needed. Defaults remain off. Internal beta activation is controlled by tester/cohort gate. |
-| AI assist mode | Fixture/adversarial tests pass. Real-output review harness exists, but AI assist should remain off unless the active model/config has approved real-output behavior. |
-| Offline/cached scenarios tested | Fixture and contract tests cover offline/stale behavior. No on-device offline visual-state evidence captured. |
-| Endpoint recommendation scenarios tested | Fixture tests cover endpoint recommendation generation and decision points. No real route field session recorded. |
-| Two-hour delay scenarios tested | Automated two-hour delay acceptance fixture passes. No real field/device session recorded. |
-| Privacy issues found | No P0 privacy leak found in current tests. Community publishing and telemetry remain disabled/gated. Offline storage encryption/ownership remains a broader rollout concern. |
+| Beta dates | Internal beta preparation and controlled enablement artifacts are recorded. Restricted closed-field risk acceptance expires 2026-06-16. |
+| Tester count | No completed real-world closed-field tester sessions recorded in this repo yet. |
+| Device coverage | Android evidence captured on `SM-X230`, including tablet portrait, phone-size portrait, and phone landscape validation where applicable. |
+| Region labels tested | `Region 001 - Northern Nevada controlled provider shadow cell`, fixture-backed/shadow-only unless future real provider evidence is accepted. |
+| Provider mode used | Shadow validation only; provider output is not approved to influence recommendations. |
+| Flags enabled | Fixture/test runs used explicit CampOps flags as needed. Closed-field activation must use the approved risk-accepted restricted scope, not broad raw rollout flags. |
+| AI assist mode | Fixture/adversarial tests pass. Real-output review remains incomplete for enabling AI assist, so AI assist remains off. |
+| Offline/cached scenarios tested | Fixture and contract tests cover offline/stale behavior. Navigate camp-layer smoke confirms zoom-gated/no-result behavior without broad-area pin loading. |
+| Endpoint recommendation scenarios tested | Fixture tests cover endpoint recommendation generation and decision points. Real route field sessions remain follow-up. |
+| Two-hour delay scenarios tested | Automated two-hour delay acceptance fixture passes. Real route/provider/mobile two-hour delay field evidence remains follow-up. |
+| Privacy issues found | No P0 privacy leak found in current tests. Community publishing and telemetry remain disabled/gated. CampOps local debrief `localStorage` is treated as unencrypted. |
 | Source confidence issues found | No fixture conflict failure found. Real provider confidence, unknown, stale, and conflict rates remain unproven. |
-| Mobile UI issues found | No on-device CampOps UI issue found because visual-state execution was blocked. This remains an evidence gap. |
-| Legacy coexistence issues found | No new blocker from fixture tests. Legacy coexistence remains a known P2/P1 risk until mobile review confirms no contradictory copy/ranking. |
+| Mobile UI issues found | Dev visual QA route, candidate-producing QA pins, Camp Intel popup actions, Save Camp, Navigate Here, Report Unusable, Dismiss, and phone-size popup action layout were captured. Real provider-backed Navigate candidate pins/actions remain follow-up. |
+| Legacy coexistence issues found | No new blocker from fixture tests. Continue watching for contradictory copy/ranking during field review. |
 
 ## Flags And Modes
 
-Internal beta must use `resolveCampOpsInternalBetaActivation()` and approved tester/cohort gates.
+Internal beta and restricted closed-field activation must use the approved activation helpers and tester/cohort gates.
 
 Allowed controlled internal beta surfaces:
 
@@ -58,18 +58,18 @@ Must remain off unless explicitly approved for the exact test cell:
 | Scenario | Evidence | Status |
 | --- | --- | --- |
 | Feature flag off legacy behavior | Rollout/search integration tests | Pass |
-| Feature flag on CampOps cards | UI contract tests and fixtures | Partial; no device screenshot evidence |
-| Recommended/backup/emergency cards | UI contract tests | Partial; no device screenshot evidence |
-| Offline cached data | Offline/stale source tests and fixture states | Partial; no device visual evidence |
-| Offline no cached data | Offline/stale source tests and fixture states | Partial; no device visual evidence |
+| Feature flag on CampOps cards | UI contract tests, fixtures, Android dev visual QA | Pass with restricted QA-only evidence |
+| Recommended/backup/emergency cards | UI contract tests and Android visual QA route | Pass with QA-only evidence |
+| Offline cached data | Offline/stale source tests and fixture states | Pass in fixtures |
+| Offline no cached data | Offline/stale source tests and fixture states | Pass in fixtures |
 | Endpoint recommendation | Safe endpoint tests | Pass in fixtures |
 | Decision point | Safe endpoint tests | Pass in fixtures |
 | Two-hour delay | Acceptance fixture test | Pass in fixtures |
 | Trailer convoy | Convoy/scoring/recommendation tests | Pass in fixtures |
 | Low fuel/water | Resource debt/recommendation tests | Pass in fixtures |
 | Stale/conflicting source transparency | Source conflict/offline tests | Pass in fixtures |
-| AI explanation | AI assist/adversarial tests | Pass in fixtures; real model use remains gated |
-| Debrief privacy | Debrief/privacy tests | Pass |
+| AI explanation | AI assist/adversarial tests | Pass in fixtures; real model use remains gated/off |
+| Debrief privacy | Debrief/privacy tests | Pass for guarded closed-field posture |
 | Internal beta feedback privacy | Feedback tests | Pass |
 
 ## Issue Summary
@@ -77,88 +77,88 @@ Must remain off unless explicitly approved for the exact test cell:
 | Severity | Count | Summary |
 | --- | ---: | --- |
 | P0 | 0 known open | No current test evidence of unsafe recommendation, privacy leak, telemetry leak, AI hard-gate override, or provider flag bypass. |
-| P1 | 0 known open from fixtures | No fixture evidence of recommendation trust failure. Real provider and real model evidence remains incomplete. |
-| P2 | 3 evidence gaps | Mobile visual-state execution blocked; real provider confidence unknown; legacy coexistence not reviewed on-device. |
-| P3 | TBD | Copy/layout polish must be collected during internal beta sessions. |
-| P4 | TBD | Enhancements deferred until after internal beta evidence exists. |
+| P1 | 0 known open from fixtures | No fixture evidence of recommendation trust failure. Real provider and real model evidence remain incomplete. |
+| P2 | 3 evidence gaps | Real provider-backed candidate validation, real tester sessions, and real route/provider/mobile two-hour delay evidence remain incomplete. |
+| P3 | TBD | Copy/layout polish must continue during restricted sessions. |
+| P4 | TBD | Enhancements deferred until after restricted evidence expands. |
 
 Severity definitions live in `docs/campops/internal_beta_issue_rubric.md`.
 
-## Unresolved Blockers
+## Unresolved Blockers And Restrictions
 
-| Blocker | Severity | Why it blocks closed field test | Required follow-up |
+| Item | Severity | Current effect | Required follow-up |
 | --- | --- | --- | --- |
-| Real provider readiness not approved for target region | P1 risk / rollout blocker | Fixture-backed Region 001 shadow validation proves the harness, not real legal/access, closure, fire, weather, or service quality. | Run shadow validation with real provider outputs for the target region label; approve coverage/freshness/conflict/unknown thresholds. |
-| Android/device CampOps visual-state QA incomplete | P2 evidence gap / rollout blocker | Hardware was available, but no runtime fixture route rendered CampOps cards on-device. Critical warning visibility is not proven. | Add dev-only fixture route or equivalent, run `mobile_qa.md` matrix, capture screenshots/evidence. |
-| No completed internal beta tester sessions | P2 evidence gap | Tester count is zero, so user comprehension, source-warning clarity, and endpoint usefulness are not validated. | Run controlled internal tester sessions and capture feedback using `campOpsInternalBetaFeedback`. |
-| Real field two-hour delay evidence absent | P1/P2 risk | Fixture test passes, but real route/provider/mobile behavior has not been exercised. | Run delayed-day scenario in controlled internal beta with labels only, no precise private coordinates in shared reports. |
-| AI assist real-output acceptance is incomplete for tester enablement | P1 risk if AI is enabled | Fixture/parser guardrails pass, but broad AI assist must remain off without approved active model/config review. | Keep AI off or complete `ai_real_output_review.md` for the active model/config. |
-| Privacy/storage owner review remains broader rollout concern | P2/P1 risk depending data use | Current defaults are conservative, but encryption/retention/deletion ownership must be accepted before broader real trip/debrief data use. | Complete owner decisions in `privacy_storage_review.md`; keep community publishing and telemetry off. |
+| Real provider readiness not approved for target region/category influence | P1 risk / rollout blocker | Blocks provider influence and broad rollout. Allowed only as shadow-only under the restricted risk-accepted scope. | Run shadow validation with real provider outputs for the target region label; approve coverage/freshness/conflict/unknown thresholds. |
+| Real provider-backed Navigate candidate pins/actions incomplete | P2 evidence gap / rollout blocker | Does not block the restricted QA-only evidence packet, but blocks broad provider-backed rollout. | Re-run Navigate with a real provider-backed candidate-producing route/viewport and capture pin, popup, Save Camp, Navigate Here, and Report Unusable evidence. |
+| No completed real-world closed-field tester sessions | P2 evidence gap | Restricted test may begin only inside accepted scope; public release remains blocked. | Run controlled closed-field sessions and capture privacy-safe feedback using labels only. |
+| Real field two-hour delay evidence absent | P1/P2 risk | Fixture test passes, but real route/provider/mobile behavior has not been exercised. | Run delayed-day scenario in controlled closed-field scope with labels only, no precise private coordinates in shared reports. |
+| AI assist real-output acceptance incomplete | P1 risk if AI is enabled | AI assist must remain off. | Keep AI off or complete `ai_real_output_review.md` for the active model/config. |
+| Broad privacy/storage owner review remains incomplete | P2/P1 risk depending data use | Guarded private/local closed-field posture is accepted; broad real trip/debrief rollout remains blocked. | Complete owner decisions for encryption-backed storage, durable provider/source caches, telemetry sinks, public-safe export workflows, retention, deletion, and access controls. |
 
 ## Privacy Review Notes
 
-Current evidence supports controlled internal beta preparation:
+Current evidence supports guarded restricted closed-field execution:
 
 - Debriefs default private.
 - Internal beta feedback defaults private and redacts coordinate-like notes.
 - Community publishing remains off.
 - Telemetry remains off and sink approval is required.
 - AI prompt construction tests exclude unnecessary private fields.
+- CampOps local debrief `localStorage` must be treated as unencrypted.
 
-Closed field test should not use broad real trip/debrief data until retention, deletion, encryption, and owner decisions are accepted.
+Broad real trip/debrief data use remains blocked until retention, deletion, encryption, and owner decisions are accepted.
 
 ## Source Confidence Notes
 
-Current provider readiness evidence is fixture-backed:
+Current provider readiness evidence is fixture-backed or shadow-only:
 
-- Region 001 used shadow mode only.
-- Provider output did not affect recommendations.
-- Coverage/freshness/confidence was high in fixtures.
-- Standalone access provider coverage remains missing.
+- Region 001 uses shadow mode unless future real upstream evidence is accepted.
+- Provider output must not affect recommendations where provider influence is not approved.
+- Coverage/freshness/confidence was high in fixtures only.
+- Standalone access provider coverage remains combined/documented rather than independently approved.
 - Real upstream source quality is unproven.
 
 Provider influence must remain off until real target-region evidence is accepted.
 
 ## Mobile UI Notes
 
-Current mobile evidence:
+Current Android evidence:
 
-- Android target was detected.
-- Expo Go was present.
-- No ECS native package was detected.
-- No dev route or Storybook-like entry point exists to render CampOps fixture states on-device.
-- No screenshots were captured.
+- Dev-only CampOps visual QA route opened on device.
+- QA-only non-live pins were visible and clearly labeled.
+- Camp Intel popup actions were exercised: Save Camp, Navigate Here, Report Unusable, and Dismiss.
+- Phone-size cramped-screen popup layout was validated.
+- Navigate camp-layer smoke opened with Mapbox stable and zoom-gated/no-result behavior when no candidates were available.
 
-This blocks closed field-test readiness because stale/missing/source warnings and compact card behavior must be visible in field-mode UI.
+Remaining Android follow-up:
+
+- Exercise a real provider-backed candidate-producing route or viewport.
+- Capture active route-line plus provider-candidate context.
+- Validate provider-backed Camp Intel actions without fake live camp data.
 
 ## Closed Field-Test Readiness Recommendation
 
-Recommendation: **not ready**.
+Recommendation: **risk-accepted restricted closed field test**.
 
-Reasons:
+CampOps may proceed only with:
 
-- Provider readiness is not approved for the target region.
-- Android/device QA is incomplete.
-- No internal beta tester sessions are recorded.
-- No real route/provider/mobile two-hour delay evidence is recorded.
-- AI assist must remain off unless active real-output behavior is approved.
-
-CampOps may continue controlled internal beta execution with:
-
-- approved tester/cohort gates
-- provider validation shadow mode only
-- telemetry off
+- approved tester/cohort/build scope
+- approved region/route/scenario labels
+- provider validation shadow mode unless provider influence is separately approved
+- source transparency visible
+- telemetry off unless separately approved
 - community publishing off
-- provider influence off unless explicitly approved
 - AI assist off unless the active model/config has approved real-output review
+- private/local guarded data posture only
+- no precise private coordinates in shared evidence
 
 ## Required Next Evidence
 
-1. Add a dev-only CampOps visual QA route or equivalent fixture entry point.
-2. Re-run Android/device QA and attach screenshot references for core states.
-3. Run real provider shadow validation for the target region label.
-4. Run at least one internal beta tester session for delayed-day endpoint recommendation.
-5. Capture internal beta feedback and classify issues using `internal_beta_issue_rubric.md`.
-6. Update this report with tester count, device evidence, region/provider evidence, and P0/P1/P2 status before reconsidering closed field test.
+1. Run real provider-backed Navigate candidate validation for the target region/category.
+2. Capture provider-specific coverage, freshness, unknown, stale, and conflict rates from real upstream data.
+3. Run at least one controlled closed-field tester session for delayed-day endpoint recommendation.
+4. Capture privacy-safe feedback and classify issues using `internal_beta_issue_rubric.md`.
+5. Update this report with tester count, provider evidence, route labels, issue summary, and revised recommendation.
+6. Re-run `npm run gate:closed-field-test:json` before each closed-field promotion checkpoint.
 
 Future evidence updates can use `docs/campops/closed_field_test_evidence_template.md`. Template placeholders must remain placeholders until real tester, device, provider, privacy, AI, rollback, and issue evidence is collected and reviewed.

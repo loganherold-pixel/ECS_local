@@ -89,6 +89,15 @@ function writeEvidenceDocs(root, options = {}) {
         '| fire restriction | approved | approved | yes | Owner | 2026-05-01 | none |',
         '| weather | approved | approved | yes | Owner | 2026-05-01 | none |',
         '| service/resupply | approved | approved | yes | Owner | 2026-05-01 | none |',
+        '',
+        '## Real Upstream Provider Evidence Ledger',
+        '| Category | Provider/source | Real shadow status | Coverage rate | Freshness rate | Unknown rate | Stale rate | Conflict rate | Accepted for influence |',
+        '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+        '| legal/access | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |',
+        '| closure/seasonal restriction | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |',
+        '| fire restriction | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |',
+        '| weather | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |',
+        '| service/resupply | accepted real provider set | real-shadow accepted | 92% | 91% | 3% | 1% | 0% | yes |',
       ].join('\n')
     : '# provider_readiness_region_001.md\n\n- Region label: region-001\n- Raw provider payloads excluded: yes\n- Precise private coordinates excluded: yes\n\nOverall readiness decision: not ready.\nValidation mode: shadow only.\n');
   writeFile(root, 'docs/campops/provider_readiness.md', 'source confidence distribution provider limitations provider influence region/category readiness Keep `campopsProviderAdaptersEnabled` off.\n');
@@ -443,6 +452,73 @@ test('ready-with-restrictions fixture passes only with all sections and approved
   assert.equal(blockedByEvidence.passed, false);
   assert.ok(blockedByEvidence.blockers.includes('android_device_qa_incomplete'));
   assert.ok(blockedByEvidence.blockers.includes('provider_readiness_not_approved'));
+});
+
+test('closed-field privacy approval ignores broad-rollout caveats outside approval packet', () => {
+  const root = makeTempRepo();
+  writeCampOpsLiveReadinessFixtures(root);
+  writeEvidenceDocs(root, { approved: true });
+  writeFile(root, 'docs/campops/rollout.md', rolloutWithGate());
+  writeFile(root, 'docs/campops/closed_field_test_readiness.md', readinessDoc('ready_with_restrictions'));
+  writeFile(root, 'docs/campops/closed_field_test_risk_acceptance.md', riskAcceptanceDoc('accepted'));
+  writeFile(root, 'docs/campops/privacy_storage_review.md', [
+    '# privacy_storage_review.md',
+    '',
+    '## Closed Field-Test Privacy/Storage Approval Packet',
+    '- Status: approved',
+    '- Owner: Privacy',
+    '- Approval date: 2026-05-01',
+    '- Approved data categories: saved camp pins and private debriefs',
+    '- Retention period: documented',
+    '- Deletion path: deleteStoredCampOpsDebrief(recordId) and clearStoredCampOpsDebriefs()',
+    '- Storage location: LocalCampOpsDebriefBackend',
+    '- Encryption status: platform storage only',
+    '- Access controls: internal tester only',
+    '- Private debrief data posture: private only; no community/public use',
+    '- Private debrief owner approval: approved',
+    '- Telemetry posture: disabled',
+    '- Telemetry sink: disabled',
+    '- Community publishing: disabled',
+    '- Raw provider payloads stored: no',
+    '- Raw AI prompts stored: no',
+    '- Private coordinates in shared evidence: no',
+    '- Remaining issues: none for restricted closed-field testing',
+    '',
+    '## Remaining Risks',
+    '',
+    '- Retention, encryption, deletion, and access-control owners are still TBD for broad real trip/debrief field data.',
+    '- Broad rollout approval remains incomplete.',
+  ].join('\n'));
+
+  const result = buildClosedFieldTestReadinessResult({ rootDir: root, now: fixedNow });
+
+  assert.equal(result.evidenceStatus.privacyStorageApproval, 'approved');
+  assert.equal(result.passed, true);
+});
+
+test('risk-accepted readiness note only names unresolved evidence', () => {
+  const root = makeTempRepo();
+  writeCampOpsLiveReadinessFixtures(root);
+  writeEvidenceDocs(root, { approved: true });
+  writeFile(root, 'docs/campops/rollout.md', rolloutWithGate());
+  writeFile(root, 'docs/campops/closed_field_test_readiness.md', readinessDoc('ready_with_restrictions'));
+  writeFile(root, 'docs/campops/closed_field_test_risk_acceptance.md', riskAcceptanceDoc('accepted'));
+  writeFile(root, 'docs/campops/provider_readiness_region_001.md', [
+    '# provider_readiness_region_001.md',
+    '- Region label: Region 001',
+    '- Raw provider payloads excluded: yes',
+    '- Precise private coordinates excluded: yes',
+    '',
+    'Overall readiness decision: not ready.',
+    'Validation mode: shadow only.',
+  ].join('\n'));
+
+  const result = buildClosedFieldTestReadinessResult({ rootDir: root, now: fixedNow });
+  const riskNote = result.notes.find((note) => note.startsWith('Closed field testing is risk-accepted'));
+
+  assert.match(riskNote, /provider readiness remains unapproved for influence/);
+  assert.doesNotMatch(riskNote, /Android\/device QA remains incomplete/);
+  assert.doesNotMatch(riskNote, /privacy\/storage approval remains incomplete/);
 });
 
 test('risk acceptance can pass blocked evidence only with explicit accepted sign-offs', () => {

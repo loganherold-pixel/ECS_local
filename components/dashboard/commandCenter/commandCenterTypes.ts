@@ -15,8 +15,7 @@ export type CommandCenterMode =
   | 'recoveryHazardCompass'
   | 'trailDecision'
   | 'campScout'
-  | 'expeditionReadiness'
-  | 'convoyCommand';
+  | 'expeditionReadiness';
 
 export type CommandCenterWidgetId = CommandCenterMode;
 

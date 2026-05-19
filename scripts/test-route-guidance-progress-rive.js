@@ -3,10 +3,10 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const widgetSource = fs.readFileSync(path.join(root, 'components/dashboard/WidgetRenderers.tsx'), 'utf8');
-const nativeSource = fs.readFileSync(path.join(root, 'components/dashboard/RouteGuidanceProgressRive.native.tsx'), 'utf8');
-const webSource = fs.readFileSync(path.join(root, 'components/dashboard/RouteGuidanceProgressRive.tsx'), 'utf8');
-const runtimeSource = fs.readFileSync(path.join(root, 'lib/routeGuidanceProgressRive.ts'), 'utf8');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+}
 
 function includes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
@@ -16,52 +16,75 @@ function notIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
+const widgetSource = read('components/dashboard/WidgetRenderers.tsx');
+const miniMapSource = read('components/dashboard/RouteProgressMiniMap.tsx');
+const geometrySource = read('components/dashboard/routeGeometryUtils.ts');
+const activeRouteProgressSource = read('lib/activeRouteProgress.ts');
+const mapConfigSource = read('lib/mapConfig.ts');
+const packageJson = JSON.parse(read('package.json'));
+
 assert.ok(
-  fs.existsSync(path.join(root, 'assets/route/guide_progress_map.riv')),
-  'guide_progress_map.riv must be bundled under assets/route.',
+  fs.existsSync(path.join(root, 'assets/dashboard/route-progress-placeholder.png')),
+  'route-progress-placeholder.png must be bundled under assets/dashboard.',
 );
 
 includes(
-  runtimeSource,
-  "ROUTE_GUIDANCE_PROGRESS_STATE_MACHINE = 'RouteGuidanceState'",
-  'Route Guidance Rive contract should use the actual state machine discovered from the .riv file.',
+  miniMapSource,
+  "ROUTE_PROGRESS_MINI_MAP_STYLE_URL =\n  'mapbox://styles/expeditioncommand/cmpax1px3005a01sq5doe9xml'",
+  'RouteProgressMiniMap should document the ECS route-progress Mapbox style URL.',
 );
+includes(miniMapSource, "mapStyle=\"route-progress\"", 'RouteProgressMiniMap should render the ECS route-progress Mapbox style.');
+includes(mapConfigSource, "key: 'route-progress'", 'Map config should expose the route-progress style key.');
+includes(mapConfigSource, "mapbox://styles/expeditioncommand/cmpax1px3005a01sq5doe9xml", 'Map config should use the requested style URL.');
+includes(miniMapSource, 'getMapboxTokenSync()', 'RouteProgressMiniMap should use the existing ECS Mapbox token config.');
+includes(miniMapSource, 'void getMapboxToken()', 'RouteProgressMiniMap should resolve Mapbox tokens asynchronously when needed.');
+notIncludes(miniMapSource, 'pk.', 'RouteProgressMiniMap must not hardcode a public Mapbox token.');
+
+includes(miniMapSource, '<Image', 'Inactive RouteProgressMiniMap should render an image placeholder.');
+includes(miniMapSource, 'resizeMode="cover"', 'Inactive placeholder must preserve aspect ratio with cover behavior.');
+includes(miniMapSource, '<MapRenderer', 'Active RouteProgressMiniMap should render the existing ECS Mapbox renderer.');
 includes(
-  runtimeSource,
-  "ROUTE_GUIDANCE_PROGRESS_VIEW_MODEL = 'RouteGuidanceVM'",
-  'Route Guidance Rive contract should use the actual view model discovered from the .riv file.',
+  miniMapSource,
+  'const hasActiveMap = Boolean(isGuidanceActive && routeFeature && mapToken)',
+  'Active RouteProgressMiniMap should not fall back to the static placeholder solely because GPS/currentLocation is temporarily missing.',
 );
-includes(runtimeSource, 'routeProgress: isActive ? clampProgressPercent', 'Inactive routes must drive zero progress.');
-includes(runtimeSource, 'Math.max(0, Math.min(100, Math.round(value)))', 'Route progress sent to Rive must be clamped 0-100.');
+includes(miniMapSource, 'interactive={false}', 'Dashboard mini-map should disable user interaction.');
+includes(miniMapSource, 'points={routePoints}', 'Mini-map should pass remaining route geometry to Mapbox.');
+includes(miniMapSource, 'progressPoints={progressPoints}', 'Mini-map should pass completed route geometry to Mapbox.');
+includes(miniMapSource, 'showUserLocation={Boolean(markerLocation)}', 'Mini-map should render a real current-location marker when available.');
+includes(miniMapSource, 'cameraCommand={cameraCommand}', 'Mini-map should fit and orient the active route with a camera command.');
 
-notIncludes(
-  nativeSource,
-  "from '@rive-app/react-native'",
-  'Native Route Guidance Rive component must lazy-load Rive so Expo Go does not crash on NitroModules.',
-);
-includes(nativeSource, "Constants.appOwnership === 'expo'", 'Expo Go should use the existing fallback visual.');
-includes(nativeSource, "require('@rive-app/react-native')", 'Native builds should load the existing Rive runtime.');
-includes(nativeSource, "require('../../assets/route/guide_progress_map.riv')", 'Native component should load the bundled .riv asset.');
-includes(nativeSource, "viewModelName: ROUTE_GUIDANCE_PROGRESS_VIEW_MODEL", 'Native component should bind RouteGuidanceVM.');
-includes(nativeSource, "stateMachineName={ROUTE_GUIDANCE_PROGRESS_STATE_MACHINE}", 'Native component should play RouteGuidanceState.');
-includes(nativeSource, "instance.numberProperty('routeProgress')?.set(runtime.routeProgress)", 'Native component should write routeProgress.');
-includes(nativeSource, "instance.booleanProperty('isActive')?.set(runtime.isActive)", 'Native component should write isActive.');
-includes(nativeSource, "instance.booleanProperty('isOffline')?.set(runtime.isOffline)", 'Native component should write isOffline.');
-includes(nativeSource, 'fallback ?? null', 'Native component must preserve a safe fallback if Rive fails.');
-includes(nativeSource, 'console.warn(`[RouteGuidanceProgressRive]', 'Development failures should log a helpful warning.');
+includes(geometrySource, 'normalizeRouteFeature', 'Route geometry utilities should normalize LineString inputs.');
+includes(geometrySource, 'getRouteDistance', 'Route geometry utilities should calculate route distance.');
+includes(geometrySource, 'splitRouteAtProgress', 'Route geometry utilities should split completed and remaining route segments.');
+includes(geometrySource, 'projectLocationToRouteProgress', 'Route geometry utilities should derive progress from current location.');
+includes(geometrySource, 'getRouteCameraBearing', 'Route geometry utilities should calculate left-to-right camera bearing.');
+includes(geometrySource, 'getRouteBounds', 'Route geometry utilities should calculate fit bounds.');
+includes(geometrySource, 'getCurrentPointOnRoute', 'Route geometry utilities should expose current point by progress.');
 
-includes(webSource, 'fallback ?? null', 'Web/Expo fallback should preserve the existing route guidance background.');
-
-includes(widgetSource, "import RouteGuidanceProgressRive from './RouteGuidanceProgressRive'", 'Route widget should use the shared Rive background wrapper.');
-includes(widgetSource, '<RouteGuidanceProgressRive', 'Route Progress visual should mount the Rive background.');
-includes(widgetSource, 'progressPercent={routeActive ? targetProgress : 0}', 'No-active-route state must send zero progress to Rive.');
-includes(widgetSource, 'isActive={routeActive}', 'Rive active state must follow the real route activity flag.');
-includes(widgetSource, 'isOffline={route?.isOffline ?? false}', 'Rive offline state should follow the derived route visual state.');
-includes(widgetSource, 'isOffline: hasActiveRouteProgress && !hasRouteProgressGeometry', 'Route visual offline state should come from limited active route geometry.');
-includes(widgetSource, 'fallback={legacyRouteVisual}', 'Existing SVG/image route visual must remain as the fallback.');
-includes(widgetSource, 'routeProgress?.progressPercent ?? 0', 'Route visual progress should come from the shared active route progress snapshot.');
+includes(widgetSource, "import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap'", 'Dashboard should import RouteProgressMiniMap.');
+includes(widgetSource, "require('../../assets/dashboard/route-progress-placeholder.png')", 'Dashboard should use the dark topographical placeholder asset.');
+includes(widgetSource, '<RouteProgressMiniMap', 'Route Progress visual should mount RouteProgressMiniMap.');
+includes(widgetSource, 'routeGeoJson={route?.routeGeoJson ?? null}', 'Route Progress mini-map should receive real route geometry.');
+includes(widgetSource, 'currentLocation={route?.currentLocation ?? null}', 'Route Progress mini-map should receive current location.');
+includes(widgetSource, 'progressPercent={route?.progressPercent ?? null}', 'Route Progress mini-map should receive route progress.');
+includes(widgetSource, 'inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}', 'Route Progress mini-map should use the provided inactive placeholder image.');
 includes(widgetSource, 'useActiveRouteProgressSnapshot(options)', 'Route progress must come from ECS route state, not mock data.');
-notIncludes(widgetSource, 'mockRouteProgress', 'Route Guidance Rive must not introduce mock route progress.');
-notIncludes(widgetSource, 'Math.random()', 'Route Guidance Rive must not animate progress from random values.');
+notIncludes(widgetSource, "import RouteGuidanceProgressRive from './RouteGuidanceProgressRive'", 'Dashboard route progress should not import the old Rive wrapper.');
+notIncludes(widgetSource, '<RouteGuidanceProgressRive', 'Dashboard route progress should not mount Rive.');
+notIncludes(widgetSource, 'attitude-command-route-guidance-progress-rive', 'Dashboard route progress should not expose Rive test IDs.');
+notIncludes(widgetSource, 'ROUTE_PROGRESS_PATH', 'Dashboard route progress should not use fake SVG route paths.');
+notIncludes(widgetSource, 'Math.random()', 'Route progress must not animate from random values.');
 
-console.log('[route-guidance-progress-rive] contract passed');
+includes(activeRouteProgressSource, 'routePoints?: NavigateRouteMapPoint[]', 'Active route progress snapshots should expose route geometry.');
+includes(activeRouteProgressSource, 'currentLocation?: { latitude: number; longitude: number } | null', 'Active route progress snapshots should expose current location.');
+includes(activeRouteProgressSource, 'originLocation?: { latitude: number; longitude: number } | null', 'Active route progress snapshots should expose origin.');
+includes(activeRouteProgressSource, 'destinationLocation?: { latitude: number; longitude: number } | null', 'Active route progress snapshots should expose destination.');
+
+assert.strictEqual(
+  packageJson.scripts['test:route-progress-minimap'],
+  'node ./scripts/test-route-guidance-progress-rive.js',
+  'package.json should expose the route-progress mini-map regression script.',
+);
+
+console.log('[route-progress-minimap] contract passed');

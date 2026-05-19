@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import '../lib/androidScreensBootstrap';
 import { Stack, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
@@ -240,7 +241,12 @@ function toRestorableShellRoute(path: string | null | undefined): string | null 
     return '/dashboard';
   }
 
-  if (normalized === '/discover' || normalized === '/explore') {
+  if (
+    normalized === '/discover' ||
+    normalized === '/explore' ||
+    normalized === '/explore-trip-builder' ||
+    normalized === '/explore-offline-prep-pack'
+  ) {
     return '/discover';
   }
 
@@ -274,6 +280,24 @@ function getPreferredShellRoute(): string {
     return '/fleet';
   }
   return getStoredShellRoute() ?? '/dashboard';
+}
+
+function toExpoRouterShellTarget(path: string): string {
+  switch (normalizeRoutePath(path)) {
+    case '/fleet':
+      return '/fleet';
+    case '/navigate':
+      return '/navigate';
+    case '/dashboard':
+      return '/dashboard';
+    case '/discover':
+    case '/explore':
+      return '/discover';
+    case '/alert':
+      return '/alert';
+    default:
+      return path;
+  }
 }
 
 function getPersistedSetupComplete(): boolean {
@@ -979,7 +1003,7 @@ function AuthGate() {
     !entryResolution.shellAccessReady;
   const inPreAuthTree =
     normalizedPathname === '/' ||
-    inAuthScreen ||
+    (inAuthScreen && !entryResolution.shellAccessReady) ||
     isResetCompletionScreen ||
     (inSetup && !entryResolution.shellAccessReady);
   const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;
@@ -992,6 +1016,8 @@ function AuthGate() {
       normalizedPathname === '/dashboard' ||
       normalizedPathname === '/discover' ||
       normalizedPathname === '/explore' ||
+      normalizedPathname === '/explore-trip-builder' ||
+      normalizedPathname === '/explore-offline-prep-pack' ||
       normalizedPathname === '/alert' ||
       normalizedPathname === '/vehicle-config' ||
       normalizedPathname === '/route' ||
@@ -1476,8 +1502,11 @@ function AuthGate() {
     if (isLoading || suppressRedirect) return;
 
     const replaceWithRedirectTarget = () => {
+      const target = redirectTarget;
+      if (!target) return;
+
       const run = async () => {
-        if (legacyFleetSetupRoute && redirectTarget === '/fleet') {
+        if (legacyFleetSetupRoute && target === '/fleet') {
           const legacyRedirectKey = `${setupRouteMode}:${setupRouteVehicleId ?? 'new'}`;
           if (legacyFleetSetupRedirectRef.current !== legacyRedirectKey) {
             legacyFleetSetupRedirectRef.current = legacyRedirectKey;
@@ -1499,7 +1528,7 @@ function AuthGate() {
             }
           }
         }
-        router.replace(redirectTarget as any);
+        router.replace(toExpoRouterShellTarget(target) as any);
       };
       void run();
     };
@@ -1621,7 +1650,7 @@ function AuthGate() {
     );
   }
 
-  if (postAuthRedirectHoldingScreenActive) {
+  if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {
     return <LoadingTransitionVideo />;
   }
 

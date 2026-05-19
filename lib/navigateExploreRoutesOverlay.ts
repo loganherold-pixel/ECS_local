@@ -9,7 +9,12 @@ import type { AIGeneratedRoute } from './aiRouteTypes';
 
 export const EXPLORE_ROUTES_AI_CATEGORY = 'all-drivable-trails';
 
-export type ExploreRouteOverlayCategory = 'hidden_gem' | 'popular_trail' | 'ecs_route_idea';
+export type ExploreRouteOverlayCategory =
+  | 'hidden_gem'
+  | 'popular_trail'
+  | 'trail_pack'
+  | 'favorite'
+  | 'ecs_route_idea';
 
 export type ExploreRouteOverlayCoordinate = {
   latitude: number;
@@ -39,14 +44,18 @@ type ExploreRouteCandidate = {
 };
 
 const CATEGORY_COLORS: Record<ExploreRouteOverlayCategory, string> = {
-  hidden_gem: '#66BB6A',
-  popular_trail: '#F2C24D',
+  hidden_gem: '#65D4FF',
+  popular_trail: '#65D4FF',
+  trail_pack: '#65D4FF',
+  favorite: '#65D4FF',
   ecs_route_idea: '#65D4FF',
 };
 
 const CATEGORY_LABELS: Record<ExploreRouteOverlayCategory, string> = {
   hidden_gem: 'Hidden Gem',
   popular_trail: 'Popular Trail',
+  trail_pack: 'Trail Pack',
+  favorite: 'Favorite',
   ecs_route_idea: 'ECS Route Idea',
 };
 
@@ -126,6 +135,8 @@ export function buildExploreRouteOverlaySegments(args: {
 export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
   hiddenGemRoutes?: ExpeditionOpportunity[];
   popularTrailRoutes?: ExpeditionOpportunity[];
+  trailPackRoutes?: ExpeditionOpportunity[];
+  favoriteRoutes?: ExpeditionOpportunity[];
   ecsRouteIdeaRoutes?: ExpeditionOpportunity[];
   maxRenderedRoutes?: number;
 }): ExploreRouteOverlayBuildResult {
@@ -133,6 +144,8 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
   const candidates: ExploreRouteCandidate[] = [
     ...(args.hiddenGemRoutes ?? []).map((route) => ({ route, category: 'hidden_gem' as const })),
     ...(args.popularTrailRoutes ?? []).map((route) => ({ route, category: 'popular_trail' as const })),
+    ...(args.trailPackRoutes ?? []).map((route) => ({ route, category: 'trail_pack' as const })),
+    ...(args.favoriteRoutes ?? []).map((route) => ({ route, category: 'favorite' as const })),
     ...(args.ecsRouteIdeaRoutes ?? []).map((route) => ({ route, category: 'ecs_route_idea' as const })),
   ];
   const seen = new Set<string>();

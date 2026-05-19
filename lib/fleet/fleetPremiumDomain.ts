@@ -186,6 +186,7 @@ export interface FleetAccessoryInstall {
   catalogItemId?: string | null;
   name: string;
   installedWeight: FleetWeightValue;
+  affectsPayload?: boolean;
   loadZone: FleetLoadZone;
   compartmentId?: string | null;
   placement?: FleetPlacementMetadata | null;
@@ -1199,9 +1200,14 @@ export function calculateFleetWeightResult(
     vehicle.buildProfile.emptyWeight ??
     createFleetWeightValue(0, 'unknown', { confidence: 0, sourceLabel: 'Missing base vehicle weight' });
 
+  const payloadAffectingAccessories = accessories.filter((accessory) => accessory.affectsPayload !== false);
   const installedAccessoryWeight = sumFleetWeightValues(
+    payloadAffectingAccessories.map((accessory) => accessory.installedWeight),
+    'Payload-bearing installed accessory weight',
+  );
+  const allInstalledAccessoryWeight = sumFleetWeightValues(
     accessories.map((accessory) => accessory.installedWeight),
-    'Installed accessory weight',
+    'Installed accessory weight for balance model',
   );
   const activeLoadoutWeight = sumFleetWeightValues(
     loadoutItems.map((item) =>
@@ -1264,7 +1270,7 @@ export function calculateFleetWeightResult(
     };
   }
 
-  const loadedWeight = Math.max(1, installedAccessoryWeight.lbs + activeLoadoutWeight.lbs);
+  const loadedWeight = Math.max(1, allInstalledAccessoryWeight.lbs + activeLoadoutWeight.lbs);
   const topShare = (zoneWeights.roof.totalWeight.lbs + zoneWeights.bedHigh.totalWeight.lbs) / loadedWeight;
   const frontShare = zoneWeights.frontLow.totalWeight.lbs / loadedWeight;
   const rearShare =

@@ -11,7 +11,6 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
-import PremiumAccessGate from '../../components/premium/PremiumAccessGate';
 import { useTheme } from '../../context/ThemeContext';
 import { hapticCommand, hapticMicro } from '../../lib/haptics';
 import { GOLD_RAIL, RADIUS, SPACING } from '../../lib/theme';
@@ -49,8 +48,8 @@ async function copyDiagnosticsText(value: string): Promise<boolean> {
   return false;
 }
 
-function isRealNearbyPowerDevice(device: ECSDeviceConnectionModel): boolean {
-  if (device.kind !== 'power') return false;
+function isRealNearbyReleaseDevice(device: ECSDeviceConnectionModel): boolean {
+  if (device.kind !== 'power' && device.kind !== 'telemetry') return false;
   if (!device.isDiscoverable) return false;
 
   const hasNativeAdvertisement =
@@ -794,8 +793,8 @@ export default function BluPowerSourcesScreen() {
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const diagnosticsCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopScanning = connections.stopScanning;
-  const nearbyPowerDevices = useMemo(
-    () => connections.nearbyDevices.filter(isRealNearbyPowerDevice),
+  const nearbyReleaseDevices = useMemo(
+    () => connections.nearbyDevices.filter(isRealNearbyReleaseDevice),
     [connections.nearbyDevices],
   );
 
@@ -880,7 +879,7 @@ export default function BluPowerSourcesScreen() {
   }, [diagnosticsSnapshot]);
 
   const nearbyPowerScanState =
-    connections.scanAreaState === 'results' && nearbyPowerDevices.length === 0
+    connections.scanAreaState === 'results' && nearbyReleaseDevices.length === 0
       ? 'empty'
       : connections.scanAreaState;
   const nearbyEmptyTitle = (() => {
@@ -904,7 +903,7 @@ export default function BluPowerSourcesScreen() {
       case 'scanning':
         return 'Scanning nearby devices';
       case 'empty':
-        return 'No nearby power devices found';
+        return 'No nearby power or OBD2 devices found';
       case 'idle':
       default:
         return 'Ready to scan';
@@ -913,13 +912,13 @@ export default function BluPowerSourcesScreen() {
   const nearbyEmptyBody = (() => {
     switch (nearbyPowerScanState) {
       case 'runtime_unsupported':
-        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan real power devices.';
+        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan real power and OBD2 devices.';
       case 'permission_denied':
-        return 'Bluetooth permissions are required before ECS can scan nearby power-device advertisements.';
+        return 'Bluetooth permissions are required before ECS can scan nearby power and OBD2 advertisements.';
       case 'bluetooth_unavailable':
-        return 'Turn Bluetooth on, then scan again for nearby power-device advertisements.';
+        return 'Turn Bluetooth on, then scan again for nearby power and OBD2 advertisements.';
       case 'empty':
-        return 'No nearby power-device advertisements were found. Make sure the power station is on, nearby, and advertising over Bluetooth.';
+        return 'No nearby power or OBD2 advertisements were found. Make sure the device is on, nearby, and advertising over Bluetooth.';
       default:
         return connections.scanAreaMessage;
     }
@@ -944,8 +943,7 @@ export default function BluPowerSourcesScreen() {
         <View style={styles.headerRight} />
       </View>
 
-      <PremiumAccessGate featureLabel="Device connections">
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
           <View
             style={[
               styles.heroCard,
@@ -972,7 +970,7 @@ export default function BluPowerSourcesScreen() {
                 <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>UNIFIED SCANNER</Text>
                 <Text style={[styles.heroTitle, { color: palette.text }]}>{connections.globalSummaryLabel}</Text>
                 <Text style={[styles.heroBody, { color: palette.textMuted }]}>
-                  Scan for real nearby Bluetooth advertisements from supported power devices. The list below is populated only by devices currently advertising to ECS.
+                  Scan for real nearby Bluetooth advertisements from supported power devices and likely OBD2 telemetry adapters. Consumer Bluetooth noise stays hidden.
                 </Text>
               </View>
             </View>
@@ -980,7 +978,7 @@ export default function BluPowerSourcesScreen() {
             <View style={styles.heroStatsRow}>
               <SummaryStat
                 label="Nearby"
-                value={nearbyPowerDevices.length}
+                value={nearbyReleaseDevices.length}
                 color={palette.text}
                 mutedColor={palette.textMuted}
               />
@@ -1131,22 +1129,22 @@ export default function BluPowerSourcesScreen() {
           ) : null}
 
           <SectionBlock
-            title="Found nearby power devices"
-            subtitle="Real nearby Bluetooth advertisements only. Cloud catalog entries and unavailable devices are kept out of this action list."
-            count={nearbyPowerDevices.length}
+            title="Found nearby power and OBD2 devices"
+            subtitle="Real nearby power and OBD2 advertisements only. TVs, headsets, and unrelated Bluetooth devices stay out of this action list."
+            count={nearbyReleaseDevices.length}
             palette={palette}
           >
-            {nearbyPowerDevices.length === 0 ? (
+            {nearbyReleaseDevices.length === 0 ? (
               <EmptySection
                 title={nearbyEmptyTitle}
                 body={nearbyEmptyBody}
                 onRescan={connections.rescan}
-                actionLabel="Scan for Power Devices"
+                actionLabel="Scan for Devices"
                 actionDisabled={connections.isScanning}
                 palette={palette}
               />
             ) : (
-              nearbyPowerDevices.map((device) => (
+              nearbyReleaseDevices.map((device) => (
                 <DeviceRow
                   key={device.id}
                   device={device}
@@ -1173,17 +1171,16 @@ export default function BluPowerSourcesScreen() {
             <View style={styles.infoCopy}>
               <Text style={[styles.infoTitle, { color: palette.text }]}>Connection Truth</Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                This screen only lists currently discovered nearby power-device advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
+                This screen only lists currently discovered nearby power-device and likely OBD2 telemetry advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
               </Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                OBD2 telemetry adapters and generic Bluetooth accessories remain routed through their own ECS connection surfaces.
+                Generic Bluetooth accessories, TVs, headsets, and other consumer devices are suppressed unless ECS can classify them as power or OBD2 candidates.
               </Text>
             </View>
           </View>
 
           <View style={{ height: 72 }} />
-        </ScrollView>
-      </PremiumAccessGate>
+      </ScrollView>
     </View>
   );
 }

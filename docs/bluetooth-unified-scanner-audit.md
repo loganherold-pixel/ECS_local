@@ -53,13 +53,12 @@ These are the current canonical files for the unified Device Connections experie
 
 - `app/power/blu.tsx`
   - Primary Device Connections screen.
-  - Renders connected, nearby, known, and attention device sections.
+  - Renders one production action list for currently discovered nearby power and OBD2 devices; saved, known, failed, cloud-only, generic, TV, headset, and unrelated Bluetooth rows stay out of the connectable list.
   - Uses `useUnifiedDeviceConnections`.
 
 - `components/QuickActionsSheet.tsx`
-  - Field Utilities Bluetooth panel.
-  - Uses `useUnifiedDeviceConnections` in `FieldUtilitiesBluetoothPanel`.
-  - Shows connected/nearby/known/attention stats and source summaries.
+  - Field Utilities Bluetooth entry point.
+  - Routes to the canonical Device Connections screen instead of embedding a second scanner UI.
 
 - `lib/useUnifiedDeviceConnections.ts`
   - Main orchestration hook for scan, connect, retry, clear/dismiss, and disconnect.
@@ -67,9 +66,8 @@ These are the current canonical files for the unified Device Connections experie
   - Owns user-visible scan area states such as `idle`, `checking`, `scanning`, `results`, `empty`, `permission_denied`, `bluetooth_unavailable`, `runtime_unsupported`, `api_failed`, `ble_failed`, `classic_unsupported`, and `scan_failed`.
 
 - `lib/unifiedDeviceDiscoveryAggregator.ts`
-  - Normalizes and merges discovered devices across `ble`, `classic_bluetooth`, `api`, `cached`, and `mock`.
+  - Normalizes and merges discovered devices across supported discovery lanes. Mock discovery is not a production lane.
   - `discoverClassicBluetoothDevicesForUnifiedScanner()` currently returns unsupported.
-  - `discoverMockDevicesForUnifiedScanner()` returns disabled unless mock telemetry is explicitly enabled; even then it returns no fixture devices.
 
 - `lib/scannerDeviceListState.ts`
   - Stable keys, dedupe, RSSI filtering, power-brand allowlist, dismiss cooldowns, and list upsert logic.
@@ -129,7 +127,7 @@ Preserve these during cleanup because they are real scanner, real telemetry, can
 - `src/vehicle-telemetry/VehicleTelemetryDeviceRegistry.ts`
 - `src/vehicle-telemetry/useVehicleTelemetry.ts`
 - `components/vehicle-telemetry/BluetoothScannerDeviceRow.tsx`
-- `components/vehicle-telemetry/OBD2ScannerModal.tsx` until its UI entry points are migrated to Device Connections.
+- Vehicle Telemetry scanner entry points now route to `app/power/blu.tsx`; the old OBD-only scanner modal was removed.
 - `lib/BluDeviceRegistry.ts`
 - `lib/BluSessionStore.ts`
 - `lib/BluStateStore.ts`
@@ -240,20 +238,20 @@ These files are not acceptable as production-facing Bluetooth scanner paths with
 - `components/power-setup/ConnectionStep.tsx`
   - Legacy setup UI with Bluetooth attention and provider notes.
 
-- `components/vehicle-telemetry/OBD2ScannerModal.tsx`
-  - OBD scanner modal.
+- Vehicle Telemetry scan actions
+  - Route to canonical Device Connections instead of opening a separate OBD scanner modal.
 
 - `components/vehicle-telemetry/BluetoothScannerDeviceRow.tsx`
   - Row component for Bluetooth scanner devices.
 
 - `app/obd-setup.tsx`
-  - OBD setup flow.
+  - OBD setup route redirects to canonical Device Connections.
 
 - `app/vehicle-telemetry-settings.tsx`
-  - Telemetry settings screen with OBD scanner modal.
+  - Telemetry settings screen routes scanner actions to canonical Device Connections.
 
 - `components/dashboard/VehicleTelemetryWidget.tsx`
-  - Dashboard telemetry widget with embedded OBD scanner modal.
+  - Dashboard telemetry widget routes scanner actions to canonical Device Connections.
 
 - `components/dashboard/DashboardHeader.tsx`
   - Dashboard header consumes `useOBD2Scanner`.
@@ -367,7 +365,7 @@ Hooks and UI:
 
 - `src/vehicle-telemetry/useOBD2Scanner.ts`
 - `src/vehicle-telemetry/useVehicleTelemetry.ts`
-- `components/vehicle-telemetry/OBD2ScannerModal.tsx`
+- `app/power/blu.tsx`
 - `components/vehicle-telemetry/BluetoothScannerDeviceRow.tsx`
 - `components/dashboard/VehicleTelemetryWidget.tsx`
 - `components/dashboard/WidgetRenderers.tsx`

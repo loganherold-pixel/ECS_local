@@ -534,9 +534,7 @@ function PreviewCard({
                       const onPress =
                         action.id === 'prepare_offline'
                           ? onPrepareOffline
-                          : action.id === 'review_route'
-                            ? onRouteOverview
-                            : undefined;
+                          : undefined;
                       if (!onPress) return null;
                       return (
                         <TouchableOpacity

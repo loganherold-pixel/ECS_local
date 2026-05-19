@@ -148,7 +148,7 @@ function AttitudeInclinationWebRuntime({
       style={style}
       testID={testID}
     >
-      <View style={styles.riveFocusLayer}>
+      <View pointerEvents="none" style={styles.riveFocusLayer}>
         <RiveComponent style={riveCanvasStyle} />
       </View>
     </AttitudeInclinationRingFrame>
@@ -167,8 +167,6 @@ function AttitudeInclinationFallback({
   testID,
 }: AttitudeInclinationRiveWidgetProps) {
   const runtime = resolveAttitudeInclinationRuntime({ axis, valueDeg, minDeg, maxDeg });
-  const markerRotation = (runtime.inputValue / Math.max(1, Math.abs(maxDeg))) * 42;
-
   return (
     <AttitudeInclinationRingFrame
       axis={axis}
@@ -179,15 +177,7 @@ function AttitudeInclinationFallback({
       style={style}
       testID={testID}
     >
-      <View style={styles.fallbackCircle}>
-        <View style={styles.fallbackDial} />
-        <View
-          style={[
-            styles.fallbackNeedle,
-            { transform: [{ rotate: `${markerRotation}deg` }] },
-          ]}
-        />
-      </View>
+      <View pointerEvents="none" style={styles.transparentRiveFallback} />
     </AttitudeInclinationRingFrame>
   );
 }
@@ -246,13 +236,17 @@ const styles = StyleSheet.create({
     minHeight: 58,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
     overflow: 'visible',
   },
   axisLabel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: -18,
+    zIndex: 4,
     color: TACTICAL.amber,
-    fontSize: 12,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '900',
     letterSpacing: 1.6,
     textAlign: 'center',
@@ -262,20 +256,16 @@ const styles = StyleSheet.create({
     textShadowRadius: 7,
   },
   ringSlot: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     minHeight: 0,
-    aspectRatio: 1,
-    maxHeight: '100%',
-    maxWidth: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
     backgroundColor: 'transparent',
   },
-  // The revised Rive file uses transparency for non-ring artwork. This layer is
-  // a focus zoom, not a hide/crop workaround. Set the scale constant to 1 if the
-  // artboard is resized tightly around the ring in a future Rive export.
+  // Transparent Rive artboard: no old crop mask. Keep this layer neutral by
+  // default so ECS does not draw or clip an extra exterior circle.
   riveFocusLayer: {
     ...StyleSheet.absoluteFillObject,
     width: '100%',
@@ -291,8 +281,8 @@ const styles = StyleSheet.create({
     zIndex: 3,
     alignSelf: 'center',
     color: TACTICAL.text,
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 17,
+    lineHeight: 21,
     fontWeight: '900',
     letterSpacing: 0.4,
     textAlign: 'center',
@@ -301,26 +291,9 @@ const styles = StyleSheet.create({
     textShadowRadius: 8,
     paddingHorizontal: 6,
   },
-  fallbackCircle: {
+  transparentRiveFallback: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.32)',
-    backgroundColor: 'rgba(4, 7, 10, 0.36)',
-  },
-  fallbackDial: {
-    width: '74%',
-    height: 1,
-    backgroundColor: 'rgba(230,237,243,0.34)',
-  },
-  fallbackNeedle: {
-    position: 'absolute',
-    width: '38%',
-    height: 2,
-    borderRadius: 999,
-    backgroundColor: 'rgba(212,160,23,0.9)',
+    backgroundColor: 'transparent',
   },
 });
 

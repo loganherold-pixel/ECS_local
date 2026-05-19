@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -49,6 +49,7 @@ type RiveNativeRefLike = {
 
 type OptionalRiveRuntime = {
   Alignment: { Center: unknown };
+  DataBindMode: { None: unknown };
   Fit: { Contain: unknown };
   RiveView: React.ComponentType<Record<string, unknown>>;
   useRive: () => {
@@ -62,6 +63,15 @@ type OptionalRiveRuntime = {
 };
 
 let cachedRiveRuntime: OptionalRiveRuntime | null | undefined;
+let warnedAttitudeRive = false;
+
+function warnAttitudeRive(message: string, error?: unknown) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && !warnedAttitudeRive) {
+    warnedAttitudeRive = true;
+    const detail = error instanceof Error ? error.message : '';
+    console.warn(`[AttitudeInclinationRiveWidget] ${message}`, detail);
+  }
+}
 
 function getOptionalRiveRuntime(): OptionalRiveRuntime | null {
   if (Constants.appOwnership === 'expo') {
@@ -105,53 +115,80 @@ function AttitudeInclinationNativeRuntime({
   style,
   testID,
 }: AttitudeInclinationRiveWidgetProps & { riveRuntime: OptionalRiveRuntime }) {
-  const { Alignment, Fit, RiveView, useRive, useRiveFile } = riveRuntime;
-  const [hasRuntimeError, setHasRuntimeError] = useState(false);
+  const { Alignment, DataBindMode, Fit, RiveView, useRive, useRiveFile } = riveRuntime;
   const { riveViewRef, setHybridRef } = useRive();
   const { riveFile, error: riveFileError } = useRiveFile(ATTITUDE_INCLINATION_ASSET);
   const runtime = useMemo(
     () => resolveAttitudeInclinationRuntime({ axis, valueDeg, minDeg, maxDeg }),
     [axis, maxDeg, minDeg, valueDeg],
   );
+  const latestInputValueRef = useRef(runtime.inputValue);
+
+  useEffect(() => {
+    latestInputValueRef.current = runtime.inputValue;
+  }, [runtime.inputValue]);
 
   useEffect(() => {
     if (riveFileError) {
-      setHasRuntimeError(true);
+      warnAttitudeRive('Rive file failed to load; using transparent fallback.', riveFileError);
     }
   }, [riveFileError]);
 
   useEffect(() => {
     let cancelled = false;
+    let retryHandle: ReturnType<typeof setTimeout> | null = null;
+    const refreshHandles: ReturnType<typeof setTimeout>[] = [];
+    let attempt = 0;
 
     async function applyAngle() {
-      if (!riveViewRef || !riveFile || hasRuntimeError) return;
+      if (!riveViewRef || !riveFile) return;
 
       try {
-        await riveViewRef.awaitViewReady?.();
+        const ready = await riveViewRef.awaitViewReady?.();
+        if (ready === false) {
+          throw new Error('Rive view ready check returned false');
+        }
         if (cancelled) return;
         riveViewRef.setNumberInputValue?.(
           ATTITUDE_INCLINATION_NUMBER_INPUT,
-          runtime.inputValue,
+          latestInputValueRef.current,
         );
         riveViewRef.playIfNeeded?.();
-      } catch {
-        if (!cancelled) {
-          setHasRuntimeError(true);
+      } catch (error) {
+        if (cancelled) return;
+        if (attempt < 8) {
+          attempt += 1;
+          retryHandle = setTimeout(() => {
+            void applyAngle();
+          }, attempt * 75);
+          return;
         }
+        warnAttitudeRive('Rive input write failed after retries; keeping the Rive surface mounted.', error);
       }
     }
 
     void applyAngle();
+    for (const delay of [90, 240, 520]) {
+      refreshHandles.push(setTimeout(() => {
+        void applyAngle();
+      }, delay));
+    }
     return () => {
       cancelled = true;
+      if (retryHandle) {
+        clearTimeout(retryHandle);
+      }
+      for (const handle of refreshHandles) {
+        clearTimeout(handle);
+      }
     };
-  }, [hasRuntimeError, riveFile, riveViewRef, runtime.inputValue]);
+  }, [riveFile, riveViewRef, runtime.inputValue]);
 
   useEffect(() => () => {
     void riveViewRef?.pause?.();
   }, [riveViewRef]);
 
-  if (!riveFile || hasRuntimeError) {
+  if (!riveFile) {
     return (
       <AttitudeInclinationFallback
         axis={axis}
@@ -177,7 +214,7 @@ function AttitudeInclinationNativeRuntime({
       style={style}
       testID={testID}
     >
-      <View style={styles.riveFocusLayer}>
+      <View pointerEvents="none" style={styles.riveFocusLayer}>
         <RiveView
           file={riveFile}
           hybridRef={setHybridRef}
@@ -185,10 +222,14 @@ function AttitudeInclinationNativeRuntime({
           pointerEvents="none"
           autoPlay
           stateMachineName={ATTITUDE_INCLINATION_STATE_MACHINE}
+          dataBind={DataBindMode.None}
           fit={Fit.Contain}
           alignment={Alignment.Center}
           style={styles.riveCanvas}
-          onError={() => setHasRuntimeError(true)}
+          onError={(error: unknown) => {
+            warnAttitudeRive('Rive view reported an error; keeping the Rive surface mounted.', error);
+            riveViewRef?.playIfNeeded?.();
+          }}
         />
       </View>
     </AttitudeInclinationRingFrame>
@@ -207,8 +248,6 @@ function AttitudeInclinationFallback({
   testID,
 }: AttitudeInclinationRiveWidgetProps) {
   const runtime = resolveAttitudeInclinationRuntime({ axis, valueDeg, minDeg, maxDeg });
-  const markerRotation = (runtime.inputValue / Math.max(1, Math.abs(maxDeg))) * 42;
-
   return (
     <AttitudeInclinationRingFrame
       axis={axis}
@@ -219,15 +258,7 @@ function AttitudeInclinationFallback({
       style={style}
       testID={testID}
     >
-      <View style={styles.fallbackCircle}>
-        <View style={styles.fallbackDial} />
-        <View
-          style={[
-            styles.fallbackNeedle,
-            { transform: [{ rotate: `${markerRotation}deg` }] },
-          ]}
-        />
-      </View>
+      <View pointerEvents="none" style={styles.transparentRiveFallback} />
     </AttitudeInclinationRingFrame>
   );
 }
@@ -286,13 +317,17 @@ const styles = StyleSheet.create({
     minHeight: 58,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
     overflow: 'visible',
   },
   axisLabel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: -18,
+    zIndex: 4,
     color: TACTICAL.amber,
-    fontSize: 12,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '900',
     letterSpacing: 1.6,
     textAlign: 'center',
@@ -302,20 +337,16 @@ const styles = StyleSheet.create({
     textShadowRadius: 7,
   },
   ringSlot: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     minHeight: 0,
-    aspectRatio: 1,
-    maxHeight: '100%',
-    maxWidth: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
     backgroundColor: 'transparent',
   },
-  // The revised Rive file uses transparency for non-ring artwork. This layer is
-  // a focus zoom, not a hide/crop workaround. Set the scale constant to 1 if the
-  // artboard is resized tightly around the ring in a future Rive export.
+  // Transparent Rive artboard: no old crop mask. Keep this layer neutral by
+  // default so ECS does not draw or clip an extra exterior circle.
   riveFocusLayer: {
     ...StyleSheet.absoluteFillObject,
     width: '100%',
@@ -335,8 +366,8 @@ const styles = StyleSheet.create({
     zIndex: 3,
     alignSelf: 'center',
     color: TACTICAL.text,
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 17,
+    lineHeight: 21,
     fontWeight: '900',
     letterSpacing: 0.4,
     textAlign: 'center',
@@ -345,26 +376,9 @@ const styles = StyleSheet.create({
     textShadowRadius: 8,
     paddingHorizontal: 6,
   },
-  fallbackCircle: {
+  transparentRiveFallback: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.32)',
-    backgroundColor: 'rgba(4, 7, 10, 0.36)',
-  },
-  fallbackDial: {
-    width: '74%',
-    height: 1,
-    backgroundColor: 'rgba(230,237,243,0.34)',
-  },
-  fallbackNeedle: {
-    position: 'absolute',
-    width: '38%',
-    height: 2,
-    borderRadius: 999,
-    backgroundColor: 'rgba(212,160,23,0.9)',
+    backgroundColor: 'transparent',
   },
 });
 

@@ -140,7 +140,7 @@ assert(
     screen.includes('serializeBluetoothDiagnostics') &&
     screen.includes('subscribeBluetoothDiagnostics') &&
     screen.includes('__DEV__ && debugExpanded') &&
-    screen.includes('Found nearby power devices') &&
+    screen.includes('Found nearby power and OBD2 devices') &&
     !screen.includes('Saved and known devices') &&
     !screen.includes('Failed and needs attention') &&
     !screen.includes('Not Nearby') &&

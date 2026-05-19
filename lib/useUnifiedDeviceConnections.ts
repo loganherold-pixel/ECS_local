@@ -19,6 +19,7 @@ import {
 } from './bluetoothLiveTelemetry';
 import { bluetoothAccessoryRegistry } from './bluetoothAccessoryRegistry';
 import {
+  isReleaseScannerBluetoothRoute,
   type BluetoothOwnerDomain,
   routeBluetoothDevice,
 } from './bluetoothDeviceRouting';
@@ -1435,7 +1436,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
 
   const routedPowerDiscoveries = useMemo(
     () => routedBluetoothDiscoveries
-      .filter((entry) => entry.routing.owner === 'power')
+      .filter((entry) => isReleaseScannerBluetoothRoute(entry.routing) && entry.routing.owner === 'power')
       .map((entry) => normalizeDiscoveredPowerDevice(
         entry.routing.providerId as BluProviderId,
         {
@@ -1459,14 +1460,12 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   );
 
   const routedTelemetryDiscoveries = useMemo(
-    () => routedBluetoothDiscoveries.filter((entry) => entry.routing.owner === 'telemetry'),
+    () => routedBluetoothDiscoveries.filter((entry) => isReleaseScannerBluetoothRoute(entry.routing) && entry.routing.owner === 'telemetry'),
     [routedBluetoothDiscoveries],
   );
 
   const routedAccessoryDiscoveries = useMemo(
-    () => routedBluetoothDiscoveries.filter((entry) => (
-      entry.routing.owner === 'sensor' || entry.routing.owner === 'generic'
-    )),
+    () => routedBluetoothDiscoveries.filter((entry) => !isReleaseScannerBluetoothRoute(entry.routing)),
     [routedBluetoothDiscoveries],
   );
 
@@ -2623,8 +2622,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   ]);
 
   const devices = useMemo(
-    () => sortDevices([...powerDevices, ...telemetryDevices, ...accessoryDevices]),
-    [accessoryDevices, powerDevices, telemetryDevices],
+    () => sortDevices([...powerDevices, ...telemetryDevices]),
+    [powerDevices, telemetryDevices],
   );
 
   useEffect(() => {
@@ -3566,10 +3565,12 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       routedPower: routedPowerDiscoveries.length,
       routedTelemetry: routedTelemetryDiscoveries.length,
       routedAccessories: routedAccessoryDiscoveries.length,
+      hiddenAccessoryModels: accessoryDevices.length,
       isScanning,
       obdError: obdError ?? null,
     });
   }, [
+    accessoryDevices.length,
     attentionDevices.length,
     connectedDevices.length,
     discoveredTelemetryDevices.length,
@@ -3682,7 +3683,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       case 'empty':
         return 'No nearby devices found. Make sure the device is powered on, nearby, and discoverable.';
       case 'results':
-        return `Found nearby power devices. Unknown BLE devices stay hidden unless advanced scan is enabled.`;
+        return `Found nearby power or OBD2 devices. Unknown BLE devices stay hidden unless advanced scan is enabled.`;
       case 'idle':
       default:
         return 'Tap Scan for Device Connections to search nearby Bluetooth devices.';
@@ -3712,6 +3713,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     if (filteredDevicesCount > 0) {
       filterReasons.add('duplicate_or_unsupported_rows_collapsed');
     }
+    if (routedAccessoryDiscoveries.length > 0) {
+      filterReasons.add('unsupported_bluetooth_noise_hidden');
+    }
     if (attentionDevices.some((device) => device.status === 'unsupported' || device.status === 'partial')) {
       filterReasons.add('some_devices_have_limited_connection_support');
     }
@@ -3735,6 +3739,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     scanDurationMs,
     scanBeganAt,
     sourceStatuses,
+    routedAccessoryDiscoveries.length,
   ]);
 
   const globalSummaryLabel = useMemo(() => {

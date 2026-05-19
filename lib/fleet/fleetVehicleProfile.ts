@@ -151,6 +151,8 @@ export function validateFleetVehicleProfileDraft(draft: FleetVehicleProfileDraft
   const rearGawr = parseFleetProfileNumber(draft.rearGawr);
 
   if (!draft.nickname.trim()) errors.push('Nickname is required.');
+  if (!draft.year.trim()) errors.push('Year is required.');
+  else if (year == null) errors.push('Year must be numeric.');
   if (!draft.make.trim()) errors.push('Make is required.');
   if (!draft.model.trim()) errors.push('Model is required.');
   if (year != null && (year < 1900 || year > new Date().getFullYear() + 2)) {

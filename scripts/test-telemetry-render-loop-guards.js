@@ -40,7 +40,7 @@ assert(unifiedConnections.includes('scanInFlightRef.current'), 'Unified device c
 assert(unifiedConnections.includes('mountedRef.current') && unifiedConnections.includes("obd2Adapter.stopScan('unified_panel_unmount')"), 'Unified device connections must cancel scans on unmount');
 
 const briefPublisher = read('lib/telemetryBriefPublisher.ts');
-assert(briefPublisher.includes('TELEMETRY_BRIEF_SUPPRESSION_MS = 10 * 60 * 1000'), 'Telemetry Brief publisher must keep ten-minute suppression');
+assert(briefPublisher.includes('TELEMETRY_BRIEF_SUPPRESSION_MS = 15 * 60 * 1000'), 'Telemetry Brief publisher must keep 15-minute suppression');
 assert(briefPublisher.includes('recentTelemetryAdvisories'), 'Telemetry Brief publisher must keep dedupe state outside React render paths');
 assert(briefPublisher.includes('lastGlobalVehicleTelemetryState'), 'Telemetry Brief transition memory should stay separate from attitude sensor state');
 

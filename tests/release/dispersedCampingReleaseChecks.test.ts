@@ -12,7 +12,7 @@ import { classifyDispersedCampingRegion } from '../../lib/map/dispersedCampingEl
 const root = path.resolve(__dirname, '..', '..');
 
 function read(relativePath: string): string {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function countOccurrences(haystack: string, needle: string): number {

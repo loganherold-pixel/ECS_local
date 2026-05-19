@@ -24,7 +24,7 @@
  *
  * Deduplication:
  *   • Suppresses repeated identical messages
- *   • Same alert/advisory cannot appear within 10 minutes
+ *   • Same alert/advisory cannot appear within 15 minutes
  *   • Overexposure penalty for frequently shown messages
  */
 
@@ -93,7 +93,7 @@ type Listener = (state: AdvisoryState) => void;
 
 const MIN_INTERVAL_MS = 8_500;        // 8.5s minimum between messages
 const DEFAULT_DISPLAY_MS = 6_500;     // 6.5s default display duration
-const DEDUP_WINDOW_MS = ECS_ALERT_DEDUPE_WINDOW_MS; // 10min dedup window for same ECS alert/update
+const DEDUP_WINDOW_MS = ECS_ALERT_DEDUPE_WINDOW_MS; // 15min dedup window for same ECS alert/update
 const MAX_QUEUE_SIZE = 12;            // Max pending messages
 const OVEREXPOSURE_LIMIT = 3;         // Max times a message can show per 5min
 const OVEREXPOSURE_WINDOW_MS = 300_000; // 5 minute overexposure window

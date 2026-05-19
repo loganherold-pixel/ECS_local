@@ -15,6 +15,7 @@ export type BluetoothProviderBadge =
   | 'Renogy'
   | 'Redarc'
   | 'Dakota Lithium'
+  | 'Victron Energy'
   | 'Sensor';
 
 export type BluetoothSignalBucket = 'strong' | 'good' | 'fair' | 'weak' | 'unknown';

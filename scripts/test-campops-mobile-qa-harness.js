@@ -9,6 +9,7 @@ const devRoutePath = path.join(root, 'app', 'dev', 'campops-visual-qa.tsx');
 const visualQaScreenPath = path.join(root, 'components', 'campops', 'CampOpsVisualQaScreen.tsx');
 
 const requiredScenarioIds = [
+  'candidate_viewport_popup_actions',
   'feature_flag_off_legacy_results',
   'feature_flag_on_cards',
   'recommended_backup_emergency_cards',
@@ -21,6 +22,8 @@ const requiredScenarioIds = [
   'offline_cached_warning',
 ];
 const requiredVisualStateIds = [
+  'candidate_producing_viewport',
+  'camp_intel_popup_actions',
   'feature_flag_off',
   'feature_flag_on',
   'recommended_endpoint',
@@ -74,6 +77,11 @@ assert.strictEqual(
   harness.CAMP_OPS_MOBILE_QA_DEV_ENTRY_POINT.requiresAiOutput,
   false,
   'Mobile QA visual states must not require AI output.',
+);
+assert.strictEqual(
+  harness.CAMP_OPS_MOBILE_QA_DEV_ENTRY_POINT.supportsCandidateProducingViewport,
+  true,
+  'Mobile QA visual states should include a candidate-producing viewport for pin/popup/action QA.',
 );
 assert.ok(
   harness.CAMP_OPS_MOBILE_QA_VIEWPORTS.some((viewport) => viewport.id === 'android_small_portrait'),
@@ -129,6 +137,17 @@ for (const text of [
   'Stale closure/weather/fire/service',
   'Legacy result differs from CampOps endpoint',
   'Private debrief without community publishing',
+  'CANDIDATE-PRODUCING QA VIEWPORT',
+  'QA-only fixture pins',
+  'Not live data',
+  'Tap a pin to open Camp Intel',
+  'CampScoutIntelCard',
+  'buildCampOpsCampScoutMapPins',
+  'buildCampOpsCampIntelViewModel',
+  'SAVE CAMP',
+  'NAVIGATE HERE',
+  'REPORT UNUSABLE',
+  'qaActionLog',
 ]) {
   assert.ok(visualQaScreen.includes(text), `Visual QA screen should include: ${text}`);
 }
@@ -170,6 +189,12 @@ for (const text of [
   'long warning lists',
   'missing data fields',
   'action buttons',
+  'candidate-producing',
+  'visible CampOps pins',
+  'Camp Intel popup',
+  'Save Camp',
+  'Navigate Here',
+  'Report Unusable',
 ]) {
   assert.ok(docs.includes(text), `CampOps mobile QA docs should include: ${text}`);
 }

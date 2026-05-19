@@ -133,17 +133,41 @@ const reactNativeStub = {
 const svgStub = {
   __esModule: true,
   default: 'Svg',
+  Circle: 'Circle',
   Defs: 'Defs',
   FeDropShadow: 'FeDropShadow',
   Filter: 'Filter',
   G: 'G',
   Line: 'Line',
+  Path: 'Path',
+};
+
+const reanimatedStub = {
+  __esModule: true,
+  default: {
+    createAnimatedComponent(component) {
+      return component;
+    },
+  },
+  useAnimatedProps(factory) {
+    return factory();
+  },
+  useAnimatedStyle(factory) {
+    return factory();
+  },
+  useSharedValue(initialValue) {
+    return { value: initialValue };
+  },
+  withTiming(value) {
+    return value;
+  },
 };
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react') return reactStub;
   if (request === 'react-native') return reactNativeStub;
+  if (request === 'react-native-reanimated') return reanimatedStub;
   if (request === 'react-native-svg') return svgStub;
   if (request.includes('ecsAnimations')) return { useReducedMotion: () => reducedMotion };
   if (request.includes('haptics')) return { hapticMicro: () => undefined };
@@ -273,23 +297,24 @@ assert.strictEqual(image.node.props.source, baseAsset.attitudeImageSource, 'Stag
 assert.ok(String(image.node.props.source).endsWith(path.join('assets', 'vehicles', 'attitude', 'clean', baseAsset.sourceFilename)));
 assert.strictEqual(image.node.props.resizeMode, 'contain', 'Stage image must use aspect-fit image behavior.');
 findOne(baseTree, byTestID('vehicle-attitude-stage-gauge-overlay'), 'Stage should render the native gauge overlay.');
+findOne(baseTree, byTestID('vehicle-attitude-monitor'), 'Stage should render the paired native attitude monitor.');
 for (const axis of ['pitch', 'roll']) {
-  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-rive-meter`), `${axis} Rive ring meter should render.`);
-  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-rive-meter-degree-readout`), `${axis} Rive ring meter should render its centered degree readout.`);
+  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-dial-meter`), `${axis} native dial meter should render.`);
+  findOne(baseTree, byTestID(`vehicle-attitude-${axis}-dial-meter-degree-readout`), `${axis} native dial should render its centered degree readout.`);
   assert.throws(
     () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-ticks`)),
     /Expected node to exist/,
-    `${axis} Rive ring should replace the old reusable tick asset.`,
+    `${axis} native dial should replace the old reusable tick asset.`,
   );
   assert.throws(
     () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-indicator`)),
     /Expected node to exist/,
-    `${axis} Rive ring should replace the old needle indicator asset.`,
+    `${axis} native dial should replace the old needle indicator asset.`,
   );
   assert.throws(
     () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-indicator-pivot`)),
     /Expected node to exist/,
-    `${axis} Rive ring should replace the old needle pivot.`,
+    `${axis} native dial should replace the old needle pivot.`,
   );
   assert.throws(
     () => findOne(baseTree, byTestID(`vehicle-attitude-${axis}-gauge-numbers`)),
@@ -313,11 +338,11 @@ const stageRootStyle = flattenStyle(stageRoot.node.props.style);
 assert.strictEqual(stageRoot.node.props.pointerEvents, 'box-none', 'Stage root should not block widget controls.');
 assert.strictEqual(stageRootStyle.alignItems, 'center', 'Stage root should center the fitted image horizontally.');
 assert.strictEqual(stageRootStyle.justifyContent, 'center', 'Stage root should center the fitted image vertically.');
+assert.strictEqual(stageRootStyle.overflow, 'hidden', 'Stage root should clip cover-fitted command artwork without distorting it.');
 const fittedStage = findOne(baseTree, byTestID('vehicle-attitude-stage-viewbox'), 'Fitted image stage should render.');
 const fittedStageStyle = flattenStyle(fittedStage.node.props.style);
 assert.strictEqual(fittedStage.node.props.pointerEvents, 'box-none', 'Fitted stage should allow child controls to remain interactive.');
-assert.strictEqual(fittedStageStyle.maxWidth, '100%', 'Fitted image stage should stay inside the widget width.');
-assert.strictEqual(fittedStageStyle.maxHeight, '100%', 'Fitted image stage should stay inside the widget height.');
+assert.strictEqual(fittedStageStyle.overflow, 'hidden', 'Fitted image stage should crop overlay layers to the vehicle artwork.');
 assertNear(fittedStageStyle.width, stageWidth, 'Default fitted stage should preserve full image width.');
 assertNear(fittedStageStyle.height, stageHeight, 'Default fitted stage should preserve the image aspect ratio.');
 
@@ -475,9 +500,9 @@ assert.strictEqual(
   'Pitch readout should continue showing the unclamped telemetry value.',
 );
 assert.strictEqual(
-  textContent(findOne(clampedPitchTree, byTestID('vehicle-attitude-pitch-rive-meter-degree-readout')).node),
-  '+45.0°',
-  'Pitch Rive ring readout should continue showing the unclamped telemetry value.',
+  textContent(findOne(clampedPitchTree, byTestID('vehicle-attitude-pitch-dial-meter-degree-readout')).node),
+  '+45°',
+  'Pitch native dial readout should continue showing the unclamped telemetry value.',
 );
 
 const clampedRollTree = renderStage({ pitchDeg: 0, rollDeg: -72, maxRollDeg: 18 });
@@ -498,9 +523,9 @@ assert.strictEqual(
   'Roll readout should continue showing the unclamped telemetry value.',
 );
 assert.strictEqual(
-  textContent(findOne(clampedRollTree, byTestID('vehicle-attitude-roll-rive-meter-degree-readout')).node),
-  '-72.0°',
-  'Roll Rive ring readout should continue showing the unclamped telemetry value.',
+  textContent(findOne(clampedRollTree, byTestID('vehicle-attitude-roll-dial-meter-degree-readout')).node),
+  '-72°',
+  'Roll native dial readout should continue showing the unclamped telemetry value.',
 );
 
 assert.deepStrictEqual(
@@ -717,6 +742,28 @@ assert.strictEqual(
   findAll(hiddenReadoutsTree, byTestID('vehicle-attitude-stage-level-readout')).length,
   0,
   'showReadouts=false should hide the bottom level readout.',
+);
+
+const riveOnlyTree = renderStage({
+  showReadouts: false,
+  showGaugeOverlay: true,
+  showDegreeReadouts: false,
+  showLevelReadout: false,
+});
+assert.strictEqual(
+  findAll(riveOnlyTree, byTestID('vehicle-attitude-stage-gauge-overlay')).length,
+  1,
+  'showGaugeOverlay=true should keep the native dial layer mounted when legacy readouts are hidden.',
+);
+assert.strictEqual(
+  findAll(riveOnlyTree, byTestID('vehicle-attitude-stage-readout-overlay')).length,
+  0,
+  'showDegreeReadouts=false should keep the bottom pitch/roll readouts hidden.',
+);
+assert.strictEqual(
+  findAll(riveOnlyTree, byTestID('vehicle-attitude-stage-level-readout')).length,
+  0,
+  'showLevelReadout=false should keep the lean/incline status hidden.',
 );
 
 const hiddenHashTree = renderStage({ showLiveHashIndicators: false });

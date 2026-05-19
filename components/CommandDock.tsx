@@ -11,8 +11,8 @@
  *   • QuickActionsSheet long-press preserved
  *
  * Startup fix:
- *   • Uses router.replace instead of router.push so dock navigation
- *     does not create a visible Fleet → Dashboard transition.
+ *   • Uses router.navigate instead of router.push so dock navigation
+ *     selects the existing tab route without stacking screens.
  *
  * Hook-order fix:
  *   • All hooks are declared before any conditional return.
@@ -506,7 +506,7 @@ export default function CommandDock() {
         return;
       }
       if (pathname === route) return;
-      router.replace(route as any);
+      router.navigate(route as any);
     },
     [pathname, quickActionsVisible, router]
   );

@@ -121,11 +121,11 @@ assertNavigateIncludes(
 );
 
 assertNavigateIncludes(
-  "accessibilityLabel=\"Draw area to search for campsites\"",
+  "accessibilityLabel=\"Draw camp potential area\"",
   'Draw area control should have a clear campsite-search accessibility label.',
 );
 assertNavigateIncludes(
-  'DRAW AREA',
+  'DRAW CAMP POTENTIAL AREA',
   'Draw area control should use a clear visible label.',
 );
 assertNavigateIncludes(

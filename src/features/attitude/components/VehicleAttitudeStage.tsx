@@ -29,8 +29,8 @@ import {
   type AttitudeTelemetryFrame,
   type EcsScreenOrientation,
 } from '../attitudeOrientation';
-import AttitudeInclinationRiveWidget from './AttitudeInclinationRiveWidget';
 import AttitudeLiveHashOverlay from './AttitudeLiveHashOverlay';
+import AttitudeMonitor from './AttitudeMonitor';
 
 export type VehicleAttitudeStageProps = {
   vehicleId: string;
@@ -46,6 +46,9 @@ export type VehicleAttitudeStageProps = {
   fitMode?: 'contain' | 'cover';
 
   showReadouts?: boolean;
+  showGaugeOverlay?: boolean;
+  showDegreeReadouts?: boolean;
+  showLevelReadout?: boolean;
   showZeroButton?: boolean;
   showLiveHashIndicators?: boolean;
 
@@ -71,14 +74,13 @@ const DEFAULT_LEVEL_READOUT_Y = 900;
 const ATTITUDE_GAUGE_LAYOUT = {
   pitch: {
     centerX: 438.25,
-    topY: 214,
+    centerY: 324,
   },
   roll: {
     centerX: 1314.75,
-    topY: 214,
+    centerY: 324,
   },
-  gaugeWidth: 650,
-  gaugeHeight: 208,
+  gaugeSize: 260,
 } as const;
 
 function formatStageDegrees(value: number): string {
@@ -176,6 +178,9 @@ function VehicleAttitudeStage({
   maxRollDeg = DEFAULT_MAX_ROLL_DEG,
   fitMode = 'contain',
   showReadouts = true,
+  showGaugeOverlay,
+  showDegreeReadouts,
+  showLevelReadout,
   showZeroButton = true,
   showLiveHashIndicators = true,
   onZero,
@@ -259,6 +264,9 @@ function VehicleAttitudeStage({
   const rollLabel = formatStageDegrees(safeRoll);
   const pitchStatusLabel = getAxisStatusLabel('pitch', safePitch);
   const rollStatusLabel = getAxisStatusLabel('roll', safeRoll);
+  const renderGaugeOverlay = showGaugeOverlay ?? showReadouts;
+  const renderDegreeReadouts = showDegreeReadouts ?? showReadouts;
+  const renderLevelReadout = showLevelReadout ?? showReadouts;
   const stageLevelLabel =
     pitchStatusLabel === 'LEVEL' && rollStatusLabel === 'LEVEL'
       ? 'LEVEL'
@@ -409,21 +417,17 @@ function VehicleAttitudeStage({
           />
         </View>
 
-        {showReadouts ? (
+        {renderGaugeOverlay ? (
           <View
             testID="vehicle-attitude-stage-gauge-overlay"
             pointerEvents="none"
             style={styles.gaugeOverlay}
           >
             <VehicleAttitudeGauge
-              axis="pitch"
-              value={safePitch}
-              asset={asset}
-              stage={stage}
-            />
-            <VehicleAttitudeGauge
-              axis="roll"
-              value={safeRoll}
+              pitchDeg={safePitch}
+              rollDeg={safeRoll}
+              maxPitchDeg={maxPitchDeg}
+              maxRollDeg={maxRollDeg}
               asset={asset}
               stage={stage}
             />
@@ -446,7 +450,7 @@ function VehicleAttitudeStage({
           </View>
         ) : null}
 
-        {showReadouts ? (
+        {renderDegreeReadouts ? (
           <View
             testID="vehicle-attitude-stage-readout-overlay"
             pointerEvents="none"
@@ -471,7 +475,7 @@ function VehicleAttitudeStage({
           </View>
         ) : null}
 
-        {showReadouts ? (
+        {renderLevelReadout ? (
           <View
             testID="vehicle-attitude-stage-level-readout"
             pointerEvents="none"
@@ -538,35 +542,49 @@ function VehicleAttitudeStage({
 }
 
 function VehicleAttitudeGauge({
-  axis,
-  value,
   asset,
+  maxPitchDeg,
+  maxRollDeg,
+  pitchDeg,
+  rollDeg,
   stage,
 }: {
-  axis: AttitudeAxis;
-  value: number;
   asset: VehicleAttitudeAsset;
+  maxPitchDeg: number;
+  maxRollDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
   stage: StageSize;
 }) {
-  const layout = ATTITUDE_GAUGE_LAYOUT[axis];
-  const gaugeWidth = toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.gaugeWidth);
-  const gaugeHeight = toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.gaugeHeight);
-  const gaugeLeft = toStageScalar(asset, stage, 'x', layout.centerX) - gaugeWidth / 2;
-  const gaugeTop = toStageScalar(asset, stage, 'y', layout.topY);
+  const gaugeSize = Math.min(
+    toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.gaugeSize),
+    toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.gaugeSize),
+  );
+  const pitchCenterX = toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.pitch.centerX);
+  const rollCenterX = toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.roll.centerX);
+  const pitchCenterY = toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.pitch.centerY);
+  const rollCenterY = toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.roll.centerY);
+  const gaugeLeft = Math.min(pitchCenterX, rollCenterX) - gaugeSize / 2;
+  const gaugeTop = (pitchCenterY + rollCenterY) / 2 - gaugeSize / 2;
+  const monitorWidth = Math.abs(rollCenterX - pitchCenterX) + gaugeSize;
 
   return (
-    <AttitudeInclinationRiveWidget
-      axis={axis}
-      label={axis.toUpperCase()}
-      valueDeg={value}
-      testID={`vehicle-attitude-${axis}-rive-meter`}
+    <AttitudeMonitor
+      rollDeg={rollDeg}
+      pitchDeg={pitchDeg}
+      rollMinDeg={-maxRollDeg}
+      rollMaxDeg={maxRollDeg}
+      pitchMinDeg={-maxPitchDeg}
+      pitchMaxDeg={maxPitchDeg}
+      size={gaugeSize}
+      ecsGold={TACTICAL.amber}
       style={[
         styles.gauge,
         {
           left: gaugeLeft,
           top: gaugeTop,
-          width: gaugeWidth,
-          height: gaugeHeight,
+          width: monitorWidth,
+          height: gaugeSize,
         },
       ]}
     />
@@ -627,8 +645,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     minHeight: 0,
     minWidth: 0,
-    maxWidth: '100%',
-    maxHeight: '100%',
     overflow: 'hidden',
   },
   vehicleImageLayer: {

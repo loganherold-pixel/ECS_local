@@ -81,6 +81,7 @@ import {
 } from '../../lib/expeditionPreflightRoutePacket';
 import { expeditionLaunchHandoffStore } from '../../lib/expeditionLaunchHandoffStore';
 import { expeditionStateStore } from '../../lib/expeditionStateStore';
+import { recordBriefCadEntry } from '../../lib/briefCadLogStore';
 import {
   getExploreFavoritesSnapshot,
   hydrateExploreFavoritesStore,
@@ -112,12 +113,17 @@ import {
 import { fetchDispersedCampingEligibilityForMap } from '../../lib/map/dispersedCampingSearchClient';
 import { CampLayerFetchCoordinator } from '../../lib/map/campLayerFetchScheduler';
 import {
+  getCampLayerZoomPrompt,
+  isCampLayerZoomEligible,
+} from '../../lib/map/campLayerZoom';
+import {
   createCampLayerUiState,
   setCampLayerEnabled,
   setCampLayerFetchFailed,
   setCampLayerFetchSkipped,
   setCampLayerFetchSucceeded,
   setCampLayerLoading,
+  setCampLayerZoomDeferred,
   type CampLayerUiState,
 } from '../../lib/map/campLayerUiState';
 import {
@@ -131,6 +137,13 @@ import {
   mapCampgroundSearchRecordsToEstablishedCampsites,
 } from '../../lib/map/establishedCampgroundMobile';
 import { fetchEstablishedCampgroundsForMap } from '../../lib/map/establishedCampgroundSearchClient';
+import {
+  readDispersedCampingOfflineCache,
+  readEstablishedCampgroundsOfflineCache,
+  resolveCampLayerOfflineCacheLookup,
+  writeDispersedCampingOfflineCache,
+  writeEstablishedCampgroundsOfflineCache,
+} from '../../lib/map/campLayerOfflineCache';
 import {
   DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES,
   findEstablishedCampsitesNearRoute,
@@ -272,7 +285,6 @@ import StorageWarningBanner from '../../components/navigate/StorageWarningBanner
 import StorageDashboardModal from '../../components/offline-maps/StorageDashboardModal';
 import RoadNavigationOverlay from '../../components/navigate/RoadNavigationOverlay';
 import NavigateReadinessStrip from '../../components/navigate/NavigateReadinessStrip';
-import { ReadinessAlertToast } from '../../components/readiness';
 import StartExpeditionDecisionSheet from '../../components/readiness/StartExpeditionDecisionSheet';
 import { ECSTransientNotice } from '../../components/ECSLoading';
 
@@ -2853,8 +2865,7 @@ function getRouteGuidanceStartReviewReasons(
   const reasons: StartExpeditionReviewReason[] = [];
   const hasLowConfidence =
     readinessStack.routeConfidenceSummary?.status === 'red' ||
-    readinessStack.routeConfidenceDisplay.tone === 'warning' ||
-    readinessStack.recommendedActions.some((action) => action.id === 'review_route');
+    readinessStack.routeConfidenceDisplay.tone === 'warning';
   const hasWarnings =
     readinessStack.recommendedActions.length > 0 ||
     readinessStack.rows.some((row) => row.tone === 'warning' || row.tone === 'caution');
@@ -3393,6 +3404,7 @@ const queueMapCameraCommand = useCallback((
   const [trailStyle, setTrailStyle] = useState<'normal' | 'speed'>('normal');
   const trailUpdateTimer = useRef<any>(null);
   const lastTrailGpsTimestampRef = useRef<number | null>(null);
+  const autoStoppedTrailRecordingRef = useRef<string | null>(null);
 
   // -- Phase 2.8.2: Trail replay state -----------------------
   const [isReplayActive, setIsReplayActive] = useState(false);
@@ -3490,6 +3502,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const lastKnownHeadingRef = useRef<number | null>(null);
   const [showTiltAlertZones, setShowTiltAlertZones] = useState(false);
   const [showRemotenessOverlay, setShowRemotenessOverlay] = useState(false);
+  const [remotenessLegendMounted, setRemotenessLegendMounted] = useState(false);
+  const [remotenessLegendDisclosure, setRemotenessLegendDisclosure] = useState<'on' | 'off' | null>(null);
+  const remotenessLegendOpacity = useRef(new Animated.Value(0)).current;
+  const remotenessLegendDisclosureOpacity = useRef(new Animated.Value(0)).current;
+  const remotenessLegendDisclosureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [exploreRoutesEnabled, setExploreRoutesEnabled] = useState(false);
   const [exploreRoutesHandoff, setExploreRoutesHandoff] = useState<ExploreRoutesMapHandoff | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
@@ -3850,6 +3867,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const dispersedCampingEligibilityEnabled = dispersedCampingUiState.enabled;
   const dispersedCampingStatus = dispersedCampingUiState.status;
   const dispersedCampingError = dispersedCampingUiState.errorMessage ?? null;
+  const dispersedCampingEligibilityZoomReady = isCampLayerZoomEligible('dispersed_camping', mapZoom);
+  const dispersedCampingZoomPrompt = getCampLayerZoomPrompt('dispersed_camping');
   const dispersedCampingCacheRef = useRef<
     Map<string, { expiresAt: number; regions: DispersedCampingRegion[] }>
   >(new Map());
@@ -3869,6 +3888,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const establishedCampsitesEnabled = establishedCampgroundsUiState.enabled;
   const establishedCampgroundsStatus = establishedCampgroundsUiState.status;
   const establishedCampgroundsError = establishedCampgroundsUiState.errorMessage ?? null;
+  const establishedCampsitesZoomReady = isCampLayerZoomEligible('established_campgrounds', mapZoom);
+  const establishedCampsitesZoomPrompt = getCampLayerZoomPrompt('established_campgrounds');
   const establishedCampgroundsCacheRef = useRef<
     Map<string, { expiresAt: number; campsites: EstablishedCampsite[] }>
   >(new Map());
@@ -3921,7 +3942,13 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   }, []);
 
   useEffect(() => {
-    if (!dispersedCampingEligibilityEnabled || !dispersedCampingEligibilityLayerAvailable) return;
+    if (
+      !dispersedCampingEligibilityEnabled ||
+      !dispersedCampingEligibilityLayerAvailable ||
+      !dispersedCampingEligibilityZoomReady
+    ) {
+      return;
+    }
     if (!mapBounds) {
       logCampLayerDebug('bounds_request', {
         layer: 'dispersed_camping',
@@ -3930,11 +3957,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       setDispersedCampingUiState(setCampLayerLoading);
       setRequestBoundsTrigger((prev) => prev + 1);
     }
-  }, [dispersedCampingEligibilityEnabled, dispersedCampingEligibilityLayerAvailable, mapBounds]);
+  }, [
+    dispersedCampingEligibilityEnabled,
+    dispersedCampingEligibilityLayerAvailable,
+    dispersedCampingEligibilityZoomReady,
+    mapBounds,
+  ]);
 
   useEffect(() => {
-    const active = dispersedCampingEligibilityEnabled && dispersedCampingEligibilityLayerAvailable;
-    if (!active) {
+    const layerAvailable = dispersedCampingEligibilityEnabled && dispersedCampingEligibilityLayerAvailable;
+    if (!layerAvailable) {
       dispersedCampingFetchCoordinatorRef.current.cancel();
       if (dispersedCampingFetchTimerRef.current) {
         clearTimeout(dispersedCampingFetchTimerRef.current);
@@ -3945,13 +3977,29 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       );
       return;
     }
+    if (!dispersedCampingEligibilityZoomReady) {
+      dispersedCampingFetchCoordinatorRef.current.cancel();
+      if (dispersedCampingFetchTimerRef.current) {
+        clearTimeout(dispersedCampingFetchTimerRef.current);
+        dispersedCampingFetchTimerRef.current = null;
+      }
+      logCampLayerDebug('frontend_fetch_skipped', {
+        layer: 'dispersed_camping',
+        bbox: sanitizeCampLayerBbox(mapBounds),
+        reason: 'zoom_too_low',
+        zoom: mapZoom,
+        message: dispersedCampingZoomPrompt,
+      });
+      setDispersedCampingUiState(setCampLayerZoomDeferred);
+      return;
+    }
 
     const planBbox = dispersedCampingRetryBboxRef.current ?? mapBounds;
     dispersedCampingRetryBboxRef.current = null;
     const plan = dispersedCampingFetchCoordinatorRef.current.plan({
       layer: 'dispersed_camping',
       bbox: planBbox,
-      enabled: active,
+      enabled: layerAvailable,
       online: campLayerFetchOnline,
       now: Date.now(),
     });
@@ -3963,6 +4011,41 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           reason: plan.reason,
           cacheKey: plan.cacheKey ?? null,
         });
+        if (plan.reason === 'offline') {
+          const lookup = resolveCampLayerOfflineCacheLookup('dispersed_camping', planBbox);
+          if (lookup) {
+            let cancelled = false;
+            void readDispersedCampingOfflineCache(lookup.cacheKey).then((cached) => {
+              if (cancelled) return;
+              if (!cached) {
+                setDispersedCampingUiState(setCampLayerFetchSkipped);
+                return;
+              }
+              logCampLayerDebug('frontend_offline_cache_hit', {
+                layer: 'dispersed_camping',
+                bbox: sanitizeCampLayerBbox(lookup.bbox),
+                cacheKey: lookup.cacheKey,
+                regionCount: cached.regions.length,
+                cachedAt: cached.cachedAt,
+              });
+              dispersedCampingCacheRef.current.set(lookup.cacheKey, {
+                expiresAt: Date.now() + DISPERSED_CAMPING_CACHE_TTL_MS,
+                regions: cached.regions,
+              });
+              setDispersedCampingRegions(cached.regions);
+              setDispersedCampingUiState((current) =>
+                setCampLayerFetchSucceeded(current, {
+                  bbox: lookup.bbox,
+                  cacheKey: lookup.cacheKey,
+                  featureCount: cached.regions.length,
+                }),
+              );
+            });
+            return () => {
+              cancelled = true;
+            };
+          }
+        }
         setDispersedCampingUiState(setCampLayerFetchSkipped);
       }
       return;
@@ -4093,6 +4176,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           expiresAt: Date.now() + DISPERSED_CAMPING_CACHE_TTL_MS,
           regions,
         });
+        writeDispersedCampingOfflineCache({
+          lookup: {
+            layer: 'dispersed_camping',
+            bbox: request.bbox,
+            cacheKey: request.cacheKey,
+          },
+          regions,
+        });
         dispersedCampingFailedCacheKeysRef.current.delete(request.cacheKey);
         setDispersedCampingRegions(regions);
         setDispersedCampingUiState((current) =>
@@ -4149,12 +4240,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     campLayerFetchOnline,
     dispersedCampingEligibilityEnabled,
     dispersedCampingEligibilityLayerAvailable,
+    dispersedCampingEligibilityZoomReady,
     dispersedCampingRetryNonce,
+    dispersedCampingZoomPrompt,
     mapBounds,
+    mapZoom,
   ]);
 
   useEffect(() => {
-    if (!establishedCampsitesEnabled || !establishedCampsitesLayerAvailable) return;
+    if (
+      !establishedCampsitesEnabled ||
+      !establishedCampsitesLayerAvailable ||
+      !establishedCampsitesZoomReady
+    ) {
+      return;
+    }
     if (!mapBounds) {
       logCampLayerDebug('bounds_request', {
         layer: 'established_campgrounds',
@@ -4163,11 +4263,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       setEstablishedCampgroundsUiState(setCampLayerLoading);
       setRequestBoundsTrigger((prev) => prev + 1);
     }
-  }, [establishedCampsitesEnabled, establishedCampsitesLayerAvailable, mapBounds]);
+  }, [
+    establishedCampsitesEnabled,
+    establishedCampsitesLayerAvailable,
+    establishedCampsitesZoomReady,
+    mapBounds,
+  ]);
 
   useEffect(() => {
-    const active = establishedCampsitesEnabled && establishedCampsitesLayerAvailable;
-    if (!active) {
+    const layerAvailable = establishedCampsitesEnabled && establishedCampsitesLayerAvailable;
+    if (!layerAvailable) {
       establishedCampgroundsFetchCoordinatorRef.current.cancel();
       if (establishedCampgroundsFetchTimerRef.current) {
         clearTimeout(establishedCampgroundsFetchTimerRef.current);
@@ -4178,13 +4283,29 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       );
       return;
     }
+    if (!establishedCampsitesZoomReady) {
+      establishedCampgroundsFetchCoordinatorRef.current.cancel();
+      if (establishedCampgroundsFetchTimerRef.current) {
+        clearTimeout(establishedCampgroundsFetchTimerRef.current);
+        establishedCampgroundsFetchTimerRef.current = null;
+      }
+      logCampLayerDebug('frontend_fetch_skipped', {
+        layer: 'established_campgrounds',
+        bbox: sanitizeCampLayerBbox(mapBounds),
+        reason: 'zoom_too_low',
+        zoom: mapZoom,
+        message: establishedCampsitesZoomPrompt,
+      });
+      setEstablishedCampgroundsUiState(setCampLayerZoomDeferred);
+      return;
+    }
 
     const planBbox = establishedCampgroundsRetryBboxRef.current ?? mapBounds;
     establishedCampgroundsRetryBboxRef.current = null;
     const plan = establishedCampgroundsFetchCoordinatorRef.current.plan({
       layer: 'established_campgrounds',
       bbox: planBbox,
-      enabled: active,
+      enabled: layerAvailable,
       online: campLayerFetchOnline,
       now: Date.now(),
     });
@@ -4196,6 +4317,41 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           reason: plan.reason,
           cacheKey: plan.cacheKey ?? null,
         });
+        if (plan.reason === 'offline') {
+          const lookup = resolveCampLayerOfflineCacheLookup('established_campgrounds', planBbox);
+          if (lookup) {
+            let cancelled = false;
+            void readEstablishedCampgroundsOfflineCache(lookup.cacheKey).then((cached) => {
+              if (cancelled) return;
+              if (!cached) {
+                setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
+                return;
+              }
+              logCampLayerDebug('frontend_offline_cache_hit', {
+                layer: 'established_campgrounds',
+                bbox: sanitizeCampLayerBbox(lookup.bbox),
+                cacheKey: lookup.cacheKey,
+                campsiteCount: cached.campsites.length,
+                cachedAt: cached.cachedAt,
+              });
+              establishedCampgroundsCacheRef.current.set(lookup.cacheKey, {
+                expiresAt: Date.now() + ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
+                campsites: cached.campsites,
+              });
+              setEstablishedCampgrounds(cached.campsites);
+              setEstablishedCampgroundsUiState((current) =>
+                setCampLayerFetchSucceeded(current, {
+                  bbox: lookup.bbox,
+                  cacheKey: lookup.cacheKey,
+                  featureCount: cached.campsites.length,
+                }),
+              );
+            });
+            return () => {
+              cancelled = true;
+            };
+          }
+        }
         setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
       }
       return;
@@ -4326,6 +4482,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           expiresAt: Date.now() + ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
           campsites,
         });
+        writeEstablishedCampgroundsOfflineCache({
+          lookup: {
+            layer: 'established_campgrounds',
+            bbox: request.bbox,
+            cacheKey: request.cacheKey,
+          },
+          campsites,
+        });
         establishedCampgroundsFailedCacheKeysRef.current.delete(request.cacheKey);
         setEstablishedCampgrounds(campsites);
         setEstablishedCampgroundsUiState((current) =>
@@ -4382,8 +4546,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     campLayerFetchOnline,
     establishedCampsitesEnabled,
     establishedCampsitesLayerAvailable,
+    establishedCampsitesZoomPrompt,
+    establishedCampsitesZoomReady,
     establishedCampgroundsRetryNonce,
     mapBounds,
+    mapZoom,
   ]);
 
   const [
@@ -9527,9 +9694,13 @@ const handleCreateRun = useCallback(() => {
   }, [displayedRoutePoints.length, navigationOverlayMode]);
 
   const dispersedCampingEligibilityActive =
-    dispersedCampingEligibilityLayerAvailable && dispersedCampingEligibilityEnabled;
+    dispersedCampingEligibilityLayerAvailable &&
+    dispersedCampingEligibilityEnabled &&
+    dispersedCampingEligibilityZoomReady;
   const establishedCampsitesActive =
-    establishedCampsitesLayerAvailable && establishedCampsitesEnabled;
+    establishedCampsitesLayerAvailable &&
+    establishedCampsitesEnabled &&
+    establishedCampsitesZoomReady;
   const establishedCampsitesRouteHasRoute = useMemo(
     () => hasRouteGeometryForEstablishedCampsiteSearch(displayedRoutePoints),
     [displayedRoutePoints],
@@ -10116,6 +10287,7 @@ const handleCreateRun = useCallback(() => {
   ]);
 
   const cachedRemoteRemotenessScore = getRemoteCacheFallbackScore(activeRun?.offline_cache?.remote_cache);
+  const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;
   const remotenessOverlaySegmentDataAvailable = (displayedSegmentFeatures ?? []).some((segment) => {
     const hasCoordinates = (segment.coordinates?.length ?? 0) > 1;
     const hasScore =
@@ -10124,6 +10296,7 @@ const handleCreateRun = useCallback(() => {
     return hasCoordinates && (hasScore || hasLevel);
   });
   const remotenessOverlayDataAvailable =
+    remotenessOverlayRouteAvailable ||
     remotenessOverlaySegmentDataAvailable ||
     Number.isFinite(remotenessIndex?.score ?? cachedRemoteRemotenessScore);
   const remotenessOverlayCandidate = useMemo(
@@ -10482,20 +10655,25 @@ const handleCreateRun = useCallback(() => {
     TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 12,
   );
   const bottomLeftMapOverlayStackBottom = routeBuilderControlBottomOffset;
-  const remotenessLegendVisible = showRemotenessOverlay && remotenessOverlayHasVisibleLayer;
+  const remotenessLegendVisible =
+    remotenessOverlayHasVisibleLayer && (showRemotenessOverlay || remotenessLegendMounted);
+  const remotenessLegendTopOffset =
+    topRouteSurfaceVisible
+      ? roadNavigationSurfaceTopOffset +
+        (routeActiveVisualMode && activeGuidanceMinimized ? 46 : routeSurfaceHeight) +
+        OVERLAY_GAP
+      : MAP_TOP_CONTROL_ROW;
   const establishedCampsitesRouteSummaryVisible =
     establishedCampsitesLayer.enabled && establishedCampsitesRouteHasRoute;
   const establishedCampsitesRouteSummaryBottom =
-    lowerMapOverlayStackBottom + (remotenessLegendVisible ? 72 : 0);
+    lowerMapOverlayStackBottom;
   const dispersedCampingRouteSummaryVisible =
     dispersedCampingEligibilityLayer.enabled && dispersedCampingRouteHasRoute;
   const dispersedCampingRouteSummaryBottom =
     lowerMapOverlayStackBottom +
-    (remotenessLegendVisible ? 72 : 0) +
     (establishedCampsitesRouteSummaryVisible ? 156 : 0);
   const dispersedCampingLegendBottom =
     bottomLeftMapOverlayStackBottom +
-    (remotenessLegendVisible ? 72 : 0) +
     (establishedCampsitesRouteSummaryVisible ? 156 : 0) +
     (dispersedCampingRouteSummaryVisible ? 126 : 0);
   const campOpsRouteLifecycleNotice =
@@ -11908,6 +12086,41 @@ useEffect(() => {
   refreshTrailState();
   try { trailHistoryStore.autoCleanup(); } catch {}
 }, [refreshTrailState]);
+
+useEffect(() => {
+  if (trailNavigation.uiMode !== 'arrived') {
+    autoStoppedTrailRecordingRef.current = null;
+    return;
+  }
+
+  const trailRecordingStatus = trailStore.getStatus();
+  if (trailRecordingStatus !== 'recording' && trailRecordingStatus !== 'paused') return;
+
+  const sessionKey =
+    trailSession.payload?.id ??
+    trailSession.status ??
+    'arrived-trail';
+  if (autoStoppedTrailRecordingRef.current === sessionKey) return;
+
+  autoStoppedTrailRecordingRef.current = sessionKey;
+  const pointsBeforeStop = trailStore.getStats().point_count;
+  trailStore.stop(activeExpeditionName || trailSession.payload?.title || null);
+  refreshTrailState();
+  setTrailHistoryRefreshKey((key) => key + 1);
+  showToast(
+    pointsBeforeStop > 0
+      ? 'Trail complete. ECS saved the recording in Trail Status.'
+      : 'Trail complete. Recording ended with no GPS points saved.',
+  );
+}, [
+  activeExpeditionName,
+  refreshTrailState,
+  showToast,
+  trailNavigation.uiMode,
+  trailSession.payload?.id,
+  trailSession.payload?.title,
+  trailSession.status,
+]);
 
 // GPS-based trail recording
 useEffect(() => {
@@ -13934,16 +14147,66 @@ const toggleRecentSearches = useCallback(() => {
   setRecentSearchesVisible((prev) => !prev);
 }, []);
 
-  const toggleRemotenessOverlay = useCallback(() => {
-    hapticMicro();
-    if (!showRemotenessOverlay && !remotenessOverlayAvailable) {
-      showToast('REMOTENESS OVERLAY UNAVAILABLE: BUILD OR SELECT A ROUTE FIRST');
+const presentRemotenessLegendDisclosure = useCallback((mode: 'on' | 'off') => {
+  if (remotenessLegendDisclosureTimerRef.current) {
+    clearTimeout(remotenessLegendDisclosureTimerRef.current);
+    remotenessLegendDisclosureTimerRef.current = null;
+  }
+
+  setRemotenessLegendMounted(true);
+  setRemotenessLegendDisclosure(mode);
+  remotenessLegendDisclosureOpacity.setValue(0);
+  Animated.timing(remotenessLegendOpacity, {
+    toValue: 1,
+    duration: 220,
+    easing: Easing.out(Easing.cubic),
+    useNativeDriver: true,
+  }).start();
+  Animated.timing(remotenessLegendDisclosureOpacity, {
+    toValue: 1,
+    duration: 220,
+    easing: Easing.out(Easing.cubic),
+    useNativeDriver: true,
+  }).start();
+
+  remotenessLegendDisclosureTimerRef.current = setTimeout(() => {
+    remotenessLegendDisclosureTimerRef.current = null;
+    if (mode === 'off') {
+      Animated.timing(remotenessLegendOpacity, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) {
+          setRemotenessLegendDisclosure(null);
+          setRemotenessLegendMounted(false);
+        }
+      });
+      return;
+    }
+    Animated.timing(remotenessLegendDisclosureOpacity, {
+      toValue: 0,
+      duration: 280,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setRemotenessLegendDisclosure(null);
+    });
+  }, mode === 'on' ? 4200 : 3000);
+}, [remotenessLegendDisclosureOpacity, remotenessLegendOpacity]);
+
+const toggleRemotenessOverlay = useCallback(() => {
+  hapticMicro();
+  if (!showRemotenessOverlay && !remotenessOverlayAvailable) {
+    showToast('Remoteness needs an active or selected route before ECS can shade the corridor.');
     return;
   }
+
   const next = !showRemotenessOverlay;
-    setShowRemotenessOverlay(next);
-    showToast(next ? 'REMOTENESS ROUTE CORRIDOR ON' : 'REMOTENESS OVERLAY OFF');
-  }, [remotenessOverlayAvailable, showRemotenessOverlay, showToast]);
+  setShowRemotenessOverlay(next);
+  presentRemotenessLegendDisclosure(next ? 'on' : 'off');
+}, [presentRemotenessLegendDisclosure, remotenessOverlayAvailable, showRemotenessOverlay, showToast]);
 
   const toggleExploreRoutesOverlay = useCallback(() => {
     hapticMicro();
@@ -13996,12 +14259,20 @@ const toggleRecentSearches = useCallback(() => {
       status: dispersedCampingStatus,
     });
     setDispersedCampingUiState((current) => setCampLayerEnabled(current, next));
-    showToast(next ? 'DISPERSED CAMPING ELIGIBILITY ON' : 'DISPERSED CAMPING ELIGIBILITY OFF');
+    showToast(
+      next
+        ? dispersedCampingEligibilityZoomReady
+          ? 'DISPERSED CAMPING ELIGIBILITY ON'
+          : dispersedCampingZoomPrompt.toUpperCase()
+        : 'DISPERSED CAMPING ELIGIBILITY OFF',
+    );
   }, [
     dispersedCampingEligibilityEnabled,
     dispersedCampingEligibilityLayerAvailable,
+    dispersedCampingEligibilityZoomReady,
     dispersedCampingRegions.length,
     dispersedCampingStatus,
+    dispersedCampingZoomPrompt,
     showToast,
   ]);
 
@@ -14017,17 +14288,30 @@ const toggleRecentSearches = useCallback(() => {
     });
     setEstablishedCampgroundsUiState((current) => setCampLayerEnabled(current, next));
     if (!next) setSelectedEstablishedCampsite(null);
-    if (next) setRequestBoundsTrigger((prev) => prev + 1);
-    showToast(next ? 'ESTABLISHED CAMPGROUNDS ON' : 'ESTABLISHED CAMPGROUNDS OFF');
+    if (next && establishedCampsitesZoomReady) setRequestBoundsTrigger((prev) => prev + 1);
+    showToast(
+      next
+        ? establishedCampsitesZoomReady
+          ? 'ESTABLISHED CAMPGROUNDS ON'
+          : establishedCampsitesZoomPrompt.toUpperCase()
+        : 'ESTABLISHED CAMPGROUNDS OFF',
+    );
   }, [
     establishedCampgrounds.length,
     establishedCampgroundsStatus,
     establishedCampsitesEnabled,
     establishedCampsitesLayerAvailable,
+    establishedCampsitesZoomPrompt,
+    establishedCampsitesZoomReady,
     showToast,
   ]);
 
   const retryDispersedCampingEligibility = useCallback(() => {
+    if (!dispersedCampingEligibilityZoomReady) {
+      showToast(dispersedCampingZoomPrompt.toUpperCase());
+      setDispersedCampingUiState(setCampLayerZoomDeferred);
+      return;
+    }
     const retryBbox = dispersedCampingUiState.lastAttemptedBbox ?? dispersedCampingUiState.lastSuccessfulBbox ?? mapBounds;
     if (!retryBbox) {
       setRequestBoundsTrigger((prev) => prev + 1);
@@ -14056,11 +14340,18 @@ const toggleRecentSearches = useCallback(() => {
     dispersedCampingUiState.lastAttemptedCacheKey,
     dispersedCampingUiState.lastSuccessfulBbox,
     dispersedCampingUiState.lastSuccessfulCacheKey,
+    dispersedCampingEligibilityZoomReady,
+    dispersedCampingZoomPrompt,
     mapBounds,
     showToast,
   ]);
 
   const retryEstablishedCampgrounds = useCallback(() => {
+    if (!establishedCampsitesZoomReady) {
+      showToast(establishedCampsitesZoomPrompt.toUpperCase());
+      setEstablishedCampgroundsUiState(setCampLayerZoomDeferred);
+      return;
+    }
     const retryBbox = establishedCampgroundsUiState.lastAttemptedBbox ?? establishedCampgroundsUiState.lastSuccessfulBbox ?? mapBounds;
     if (!retryBbox) {
       setRequestBoundsTrigger((prev) => prev + 1);
@@ -14089,6 +14380,8 @@ const toggleRecentSearches = useCallback(() => {
     establishedCampgroundsUiState.lastAttemptedCacheKey,
     establishedCampgroundsUiState.lastSuccessfulBbox,
     establishedCampgroundsUiState.lastSuccessfulCacheKey,
+    establishedCampsitesZoomPrompt,
+    establishedCampsitesZoomReady,
     mapBounds,
     showToast,
   ]);
@@ -14195,11 +14488,24 @@ const toggleRecentSearches = useCallback(() => {
     }
   }, [dispersedCampingRouteHasRoute]);
 
-useEffect(() => {
-  if (showRemotenessOverlay && !remotenessOverlayAvailable) {
-    setShowRemotenessOverlay(false);
-  }
+  useEffect(() => {
+    if (showRemotenessOverlay && !remotenessOverlayAvailable) {
+      setShowRemotenessOverlay(false);
+      setRemotenessLegendDisclosure(null);
+      setRemotenessLegendMounted(false);
+    }
 }, [remotenessOverlayAvailable, showRemotenessOverlay]);
+
+useEffect(() => {
+  return () => {
+    if (remotenessLegendDisclosureTimerRef.current) {
+      clearTimeout(remotenessLegendDisclosureTimerRef.current);
+      remotenessLegendDisclosureTimerRef.current = null;
+    }
+    remotenessLegendOpacity.stopAnimation();
+    remotenessLegendDisclosureOpacity.stopAnimation();
+  };
+}, [remotenessLegendDisclosureOpacity, remotenessLegendOpacity]);
 
 const executeAssistSurfaceAction = useCallback((surface: AssistSurface, rule?: AutonomousAssistRule | null) => {
   switch (surface) {
@@ -14294,7 +14600,6 @@ const recentSearchesSectionVisible =
   !roadNavigation.searchLoading;
 
 const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
-const briefBannerBottomOffset = commandDockHeight + 6;
 
 const gpsStatusOverlayMaxWidth = Math.max(
   adaptive.isExpanded ? 232 : 196,
@@ -14592,6 +14897,11 @@ const stableMapSurface = useMemo(() => {
         visible={startDecisionVisible}
         assessment={currentExpeditionReadiness}
         reviewReasons={pendingStartReviewReasons}
+        presentation="routePreviewMask"
+        topOffset={roadNavigationSurfaceTopOffset}
+        bottomOffset={routeSurfaceBottomOffset}
+        horizontalInset={OVERLAY_EDGE}
+        rightInset={routeBottomRightInset}
         onClose={() => {
           setStartDecisionVisible(false);
           setPendingStartMode(null);
@@ -14606,14 +14916,6 @@ const stableMapSurface = useMemo(() => {
         onConfirmStart={({ acknowledgedOverride }) => {
           executeStartExpeditionNow(pendingStartMode ?? (explorePreviewMode === 'trail' ? 'trail' : 'road'), acknowledgedOverride);
         }}
-      />
-
-      <ReadinessAlertToast
-        placement="top"
-        topOffset={mapToastTopOffset + 58}
-        horizontalInset={adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE}
-        onOpenCommandBrief={handleOpenCommandBriefFromNavigate}
-        style={{ zIndex: 86 }}
       />
 
       <Toast
@@ -14918,14 +15220,18 @@ const stableMapSurface = useMemo(() => {
                   {establishedCampsitesEnabled ? (
                     <View style={styles.campLayerStatusBlock}>
                       <Text style={styles.dispersedCampingDisclaimer}>
-                        {establishedCampgroundsStatus === 'loading'
+                        {establishedCampgroundsStatus === 'zoom'
+                          ? establishedCampsitesZoomPrompt
+                          : establishedCampgroundsStatus === 'loading'
                           ? 'Loading established campgrounds from ECS cache.'
                           : establishedCampgroundsStatus === 'empty'
                             ? 'No results in this map area.'
                             : establishedCampgroundsStatus === 'error'
                               ? establishedCampgroundsError || 'Temporarily unavailable.'
                               : establishedCampgroundsStatus === 'ready'
-                                ? `${establishedCampgrounds.length} established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded.`
+                                ? campLayerFetchOnline
+                                  ? `${establishedCampgrounds.length} established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded.`
+                                  : `${establishedCampgrounds.length} cached established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded for offline reference. Verify status and availability when connected.`
                                 : 'Map bounds updating.'}
                       </Text>
                       {establishedCampgroundsStatus === 'error' ? (
@@ -14952,14 +15258,18 @@ const stableMapSurface = useMemo(() => {
                     <View style={styles.campLayerStatusBlock}>
                       <Text style={styles.dispersedCampingDisclaimer}>
                         {dispersedCampingEligibilityEnabled
-                          ? dispersedCampingStatus === 'loading'
+                          ? dispersedCampingStatus === 'zoom'
+                            ? dispersedCampingZoomPrompt
+                            : dispersedCampingStatus === 'loading'
                             ? 'Loading public-land eligibility polygons for this map view.'
                             : dispersedCampingStatus === 'empty'
                               ? 'No results in this map area.'
                               : dispersedCampingStatus === 'error'
                                 ? dispersedCampingError || 'Temporarily unavailable.'
                                 : dispersedCampingStatus === 'ready'
-                                  ? `${dispersedCampingRegions.length} public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded. Verify before camping.`
+                                  ? campLayerFetchOnline
+                                    ? `${dispersedCampingRegions.length} public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded. Verify before camping.`
+                                    : `${dispersedCampingRegions.length} cached public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded for offline reference. Verify before camping.`
                                   : 'Map bounds updating.'
                           : 'ECS shows areas where dispersed camping may be allowed based on available public-land and access data. Always verify current local rules, posted closures, fire restrictions, permits, and agency guidance before camping.'}
                       </Text>
@@ -14986,6 +15296,41 @@ const stableMapSurface = useMemo(() => {
                 </View>
               </View>
             ) : null}
+
+            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
+              <TouchableOpacity
+                style={[
+                  styles.quickActionsTrigger,
+                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
+                  showRemotenessOverlay && styles.quickActionsTriggerActive,
+                  !showRemotenessOverlay &&
+                    !remotenessOverlayAvailable &&
+                    styles.quickActionsTriggerDisabled,
+                ]}
+                onPress={toggleRemotenessOverlay}
+                activeOpacity={0.85}
+                hitSlop={EDGE_CONTROL_HIT_SLOP}
+                accessibilityRole="switch"
+                accessibilityState={{
+                  checked: showRemotenessOverlay,
+                  disabled: !showRemotenessOverlay && !remotenessOverlayAvailable,
+                }}
+                accessibilityLabel="Remoteness map overlay"
+                accessibilityHint="Toggles cell service and remoteness guidance over the active route corridor."
+              >
+                <Ionicons
+                  name="radio-outline"
+                  size={17}
+                  color={
+                    showRemotenessOverlay
+                      ? '#091014'
+                      : remotenessOverlayAvailable
+                        ? TACTICAL.amber
+                        : TACTICAL.textMuted
+                  }
+                />
+              </TouchableOpacity>
+            </View>
 
             {campLayerControlsAvailable ? (
               <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
@@ -15298,7 +15643,6 @@ const stableMapSurface = useMemo(() => {
   dispersedCampingEligibilityLayer,
   dispersedCampingError,
   dispersedCampingRegions.length,
-  dispersedCampingStatus,
   establishedCampsitesLayer,
   campsiteDrawingPoints,
   campsiteDrawingClosed,
@@ -15435,9 +15779,13 @@ const stableMapSurface = useMemo(() => {
   clearRouteBuilderDraft,
   cancelRouteBuilder,
   toolsMenuOpen,
+  showRemotenessOverlay,
+  remotenessOverlayAvailable,
+  toggleRemotenessOverlay,
   campLayerMenuOpen,
   campLayerControlsAvailable,
   campLayerControlActive,
+  campLayerFetchOnline,
   mapOverlayStartupReady,
   toggleToolsPopup,
   toggleCampLayerMenu,
@@ -15486,10 +15834,13 @@ const stableMapSurface = useMemo(() => {
   dispersedCampingEligibilityLayerAvailable,
   dispersedCampingEligibilityEnabled,
   dispersedCampingDiagnostic,
+  dispersedCampingStatus,
+  dispersedCampingZoomPrompt,
   toggleDispersedCampingEligibility,
   retryDispersedCampingEligibility,
   establishedCampsitesLayerAvailable,
   establishedCampsitesEnabled,
+  establishedCampsitesZoomPrompt,
   establishedCampgroundsDiagnostic,
   establishedCampgrounds.length,
   establishedCampgroundsStatus,
@@ -15813,11 +16164,21 @@ const stableMapSurface = useMemo(() => {
     if (!shouldRefire) return;
 
     assistCooldownRef.current = { eventKey: assist.eventKey, firedAt: now };
-    setAiAssistBanner({
-      title: replaceVisibleAIWithECS(rule.title),
-      message: replaceVisibleAIWithECS(rule.message),
-      surface: rule.surface,
-      rule,
+    setAiAssistBanner(null);
+    const title = replaceVisibleAIWithECS(rule.title);
+    const message = replaceVisibleAIWithECS(rule.message);
+    const severity = rule.priority <= 1 ? 'warning' : 'info';
+    recordBriefCadEntry({
+      id: `navigate-assist:${assist.eventKey}`,
+      text: message,
+      mode: severity === 'warning' ? 'alert' : 'advisory',
+      priority: Number.isFinite(rule.priority) ? rule.priority : 4,
+      queuedAt: now,
+      title,
+      recommendedAction: getAssistSurfaceActionLabel(rule.surface) ?? undefined,
+      source: 'navigate-mission-brief',
+      severity,
+      eventType: `navigate_assist_${rule.surface}`,
     });
 
     if (rule.mode === 'auto_open' && !rule.requiresConfirmation) {
@@ -16026,66 +16387,7 @@ const stableMapSurface = useMemo(() => {
           </View>
         ) : null}
 
-        {mapOverlayStartupReady && renderedAiAssistBanner ? (
-          <Animated.View
-            pointerEvents="box-none"
-            style={[
-              styles.aiAssistBannerWrap,
-              { opacity: aiAssistBannerOpacity },
-              {
-                left: OVERLAY_EDGE,
-                right: OVERLAY_EDGE,
-                bottom: briefBannerBottomOffset,
-              },
-            ]}
-          >
-            <View style={styles.aiAssistBanner}>
-              <View style={styles.aiAssistBannerIcon}>
-                <Ionicons
-                  name={(renderedAiAssistBanner.rule?.icon as React.ComponentProps<typeof Ionicons>['name']) ?? 'document-text-outline'}
-                  size={15}
-                  color={TACTICAL.amber}
-                />
-              </View>
-              <View style={styles.aiAssistBannerTextWrap}>
-                <Text style={styles.aiAssistBannerEyebrow} numberOfLines={1}>
-                  ECS BRIEF
-                </Text>
-                <Text style={styles.aiAssistBannerTitle} numberOfLines={1}>
-                  {renderedAiAssistBanner.title}
-                </Text>
-                <Text style={styles.aiAssistBannerText} numberOfLines={2}>
-                  {renderedAiAssistBanner.message}
-                </Text>
-              </View>
-              <View style={styles.aiAssistBannerActions}>
-                {aiAssistBannerActionLabel ? (
-                  <TouchableOpacity
-                    style={styles.aiAssistBannerActionButton}
-                    onPress={handleAiAssistBannerAction}
-                    activeOpacity={0.78}
-                    accessibilityRole="button"
-                    accessibilityLabel={aiAssistBannerActionLabel}
-                  >
-                    <Text style={styles.aiAssistBannerActionText} numberOfLines={1}>
-                      {aiAssistBannerActionLabel}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.aiAssistBannerDismissButton}
-                  onPress={handleDismissAiAssistBanner}
-                  activeOpacity={0.78}
-                  hitSlop={CLOSE_CONTROL_HIT_SLOP}
-                  accessibilityRole="button"
-                  accessibilityLabel="Dismiss ECS Brief banner"
-                >
-                  <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Animated.View>
-        ) : null}
+        {/* ECS command brief updates now route through the top ECS Intelligence banner. */}
 
         {/* GPS Status Overlay - non-blocking, fades when fix acquired */}
         {gpsStatusOverlayVisible && (
@@ -16202,14 +16504,15 @@ const stableMapSurface = useMemo(() => {
     scoutStatusText={dispersedCampingCampScoutStatus}
   />
 
-  {showRemotenessOverlay && remotenessOverlayHasVisibleLayer && isMapUIReady ? (
-    <View
+  {remotenessLegendVisible && isMapUIReady ? (
+    <Animated.View
       pointerEvents="none"
       style={[
         styles.remotenessOverlayLegend,
         {
           left: OVERLAY_EDGE,
-          bottom: lowerMapOverlayStackBottom,
+          top: remotenessLegendTopOffset,
+          opacity: remotenessLegendOpacity,
         },
       ]}
     >
@@ -16230,7 +16533,21 @@ const stableMapSurface = useMemo(() => {
           </View>
         ))}
       </View>
-    </View>
+      {remotenessLegendDisclosure ? (
+        <Animated.View
+          style={[
+            styles.remotenessOverlayLegendDisclosure,
+            { opacity: remotenessLegendDisclosureOpacity },
+          ]}
+        >
+          <Text style={styles.remotenessOverlayLegendDisclosureText}>
+            {remotenessLegendDisclosure === 'on'
+              ? 'ECS is shading the active route corridor by expected signal confidence and isolation. Use the wider bands to spot areas where offline prep and check-ins matter most.'
+              : 'Remoteness corridor is turning off. Route shading and signal confidence bands are being removed from the map.'}
+          </Text>
+        </Animated.View>
+      ) : null}
+    </Animated.View>
   ) : null}
 
   {dispersedCampingEligibilityLayer.enabled && isMapUIReady ? (
@@ -16356,27 +16673,6 @@ const stableMapSurface = useMemo(() => {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.toolsMetricRow}>
-          <View style={styles.toolsMetricCard}>
-            <Text style={styles.toolsMetricLabel}>SPEED</Text>
-            <Text style={styles.toolsMetricValue}>
-              {gps.position?.speedMph != null ? `${Math.round(gps.position.speedMph)} MPH` : '--'}
-            </Text>
-          </View>
-          <View style={styles.toolsMetricCard}>
-            <Text style={styles.toolsMetricLabel}>GPS</Text>
-            <Text style={styles.toolsMetricValue}>
-              {gps.hasFix ? 'FIXED' : 'SEARCHING'}
-            </Text>
-          </View>
-          <View style={styles.toolsMetricCard}>
-            <Text style={styles.toolsMetricLabel}>MAP</Text>
-            <Text style={styles.toolsMetricValue}>
-              {toolsMapAvailabilityLabel}
-            </Text>
-          </View>
-        </View>
-
         <View style={styles.toolsResultsBlock}>
           <View style={styles.navigateWeatherToolHeader}>
             <View style={styles.navigateWeatherToolTitleRow}>
@@ -16619,21 +16915,6 @@ const stableMapSurface = useMemo(() => {
             <Text style={styles.toolsSuggestionSubtitle}>
               ECS Community Campsites are approved public records. Pending review markers are not public.
             </Text>
-            <View style={styles.campsiteLayerLegend}>
-              {[
-                { label: 'Camping', color: '#65C97A' },
-                { label: 'Community', color: '#65C97A' },
-                { label: 'Private', color: '#5EA1FF' },
-                { label: 'Group', color: '#B18CFF' },
-                { label: 'Pending', color: '#FFCA5A' },
-                { label: 'Review', color: '#66BB6A' },
-              ].map((item) => (
-                <View key={item.label} style={styles.campsiteLayerLegendItem}>
-                  <View style={[styles.campsiteLayerLegendDot, { backgroundColor: item.color }]} />
-                  <Text style={styles.campsiteLayerLegendText}>{item.label}</Text>
-                </View>
-              ))}
-            </View>
             {campsiteLayerVisibility.group && groupCampsiteGroups.length > 1 ? (
               <View style={styles.quickActionsStyleRow}>
                 {groupCampsiteGroups.map((item) => {
@@ -16728,97 +17009,57 @@ const stableMapSurface = useMemo(() => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.quickActionButton,
-                campScoutAreaMode !== 'idle' && styles.quickActionButtonActive,
-              ]}
-              onPress={() => runToolsAction(handleOpenCampScoutIntro)}
+              style={styles.quickActionButton}
+              onPress={handleOpenStitch}
               activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Draw area to search for campsites"
             >
               <Ionicons
-                name="shapes-outline"
+                name="git-merge-outline"
                 size={15}
-                color={campScoutAreaMode !== 'idle' ? '#091014' : TACTICAL.amber}
+                color={TACTICAL.amber}
+              />
+              <Text style={styles.quickActionButtonText}>STITCH ROUTES</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.quickActionButton,
+                recentSearchesVisible && styles.quickActionButtonActive,
+              ]}
+              onPress={toggleRecentSearches}
+              activeOpacity={0.85}
+            >
+              <Ionicons
+                name="time-outline"
+                size={15}
+                color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
               />
               <Text
                 style={[
                   styles.quickActionButtonText,
-                  campScoutAreaMode !== 'idle' && styles.quickActionButtonTextActive,
+                  recentSearchesVisible && styles.quickActionButtonTextActive,
                 ]}
               >
-                DRAW AREA
+                RECENT SEARCHES
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Submit staged route as Trail Pack"
-            >
-              <Ionicons name="trail-sign-outline" size={15} color={TACTICAL.amber} />
-              <Text style={styles.quickActionButtonText}>SUBMIT AS TRAIL PACK</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => {
-                hapticCommand();
-                setRequestBoundsTrigger((prev) => prev + 1);
-                openToolsChildPopup('offlineCache');
-              }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
-              <Text style={styles.quickActionButtonText}>OFFLINE</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => {
-                hapticCommand();
-                openToolsChildPopup('intel');
-              }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="analytics-outline" size={15} color={TACTICAL.amber} />
-              <Text style={styles.quickActionButtonText}>INTEL</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
               style={[
                 styles.quickActionButton,
-                showRemotenessOverlay && styles.quickActionButtonActive,
-                !showRemotenessOverlay && !remotenessOverlayAvailable && styles.quickActionButtonDisabled,
+                isImportPending && styles.quickActionButtonDisabled,
               ]}
-              onPress={toggleRemotenessOverlay}
+              onPress={handleOpenImportRoute}
+              disabled={isImportPending}
               activeOpacity={0.85}
             >
               <Ionicons
-                name="map-outline"
+                name="cloud-upload-outline"
                 size={15}
-                color={
-                  showRemotenessOverlay
-                    ? '#091014'
-                    : remotenessOverlayAvailable
-                      ? TACTICAL.amber
-                      : TACTICAL.textMuted
-                }
+                color={isImportPending ? TACTICAL.textMuted : TACTICAL.amber}
               />
-              <Text
-                style={[
-                  styles.quickActionButtonText,
-                  showRemotenessOverlay && styles.quickActionButtonTextActive,
-                ]}
-              >
-                {showRemotenessOverlay
-                  ? 'REMOTE ON'
-                  : remotenessOverlayAvailable
-                    ? 'REMOTENESS'
-                    : 'REMOTE UNAVAILABLE'}
+              <Text style={styles.quickActionButtonText}>
+                {isImportPending ? 'IMPORTING' : 'IMPORT'}
               </Text>
             </TouchableOpacity>
 
@@ -16897,13 +17138,30 @@ const stableMapSurface = useMemo(() => {
             ) : null}
 
             <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={handleOpenStitch}
+              style={[
+                styles.quickActionButton,
+                campScoutAreaMode !== 'idle' && styles.quickActionButtonActive,
+              ]}
+              onPress={() => runToolsAction(handleOpenCampScoutIntro)}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Draw camp potential area"
             >
-              <Ionicons name="git-merge-outline" size={15} color={TACTICAL.amber} />
-              <Text style={styles.quickActionButtonText}>STITCH</Text>
+              <Ionicons
+                name="shapes-outline"
+                size={15}
+                color={campScoutAreaMode !== 'idle' ? '#091014' : TACTICAL.amber}
+              />
+              <Text
+                style={[
+                  styles.quickActionButtonText,
+                  campScoutAreaMode !== 'idle' && styles.quickActionButtonTextActive,
+                ]}
+              >
+                DRAW CAMP POTENTIAL AREA
+              </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.quickActionButton}
               onPress={() => {
@@ -16917,26 +17175,14 @@ const stableMapSurface = useMemo(() => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.quickActionButton,
-                recentSearchesVisible && styles.quickActionButtonActive,
-              ]}
-              onPress={toggleRecentSearches}
+              style={styles.quickActionButton}
+              onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Submit staged route as Trail Pack"
             >
-              <Ionicons
-                name="time-outline"
-                size={15}
-                color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
-              />
-              <Text
-                style={[
-                  styles.quickActionButtonText,
-                  recentSearchesVisible && styles.quickActionButtonTextActive,
-                ]}
-              >
-                Recent Searches
-              </Text>
+              <Ionicons name="trail-sign-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.quickActionButtonText}>SUBMIT AS TRAIL PACK</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -16971,22 +17217,16 @@ const stableMapSurface = useMemo(() => {
             ) : null}
 
             <TouchableOpacity
-              style={[
-                styles.quickActionButton,
-                isImportPending && styles.quickActionButtonDisabled,
-              ]}
-              onPress={handleOpenImportRoute}
-              disabled={isImportPending}
+              style={styles.quickActionButton}
+              onPress={() => {
+                hapticCommand();
+                setRequestBoundsTrigger((prev) => prev + 1);
+                openToolsChildPopup('offlineCache');
+              }}
               activeOpacity={0.85}
             >
-              <Ionicons
-                name="cloud-upload-outline"
-                size={15}
-                color={isImportPending ? TACTICAL.textMuted : TACTICAL.amber}
-              />
-              <Text style={styles.quickActionButtonText}>
-                {isImportPending ? 'IMPORTING' : 'IMPORT'}
-              </Text>
+              <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.quickActionButtonText}>OFFLINE</Text>
             </TouchableOpacity>
           </View>
           {exploreRoutesEnabled ? (
@@ -17474,12 +17714,6 @@ const stableMapSurface = useMemo(() => {
           <Text style={styles.stitchHeroText}>
             Review imported, custom-built, stitched, and bookmarked routes without hunting through separate route silos.
           </Text>
-          <View style={styles.savedRoutesCountRow}>
-            <Text style={styles.savedRoutesCountText}>{savedRouteAssetCounts.imported} imported</Text>
-            <Text style={styles.savedRoutesCountText}>{savedRouteAssetCounts.custom} custom</Text>
-            <Text style={styles.savedRoutesCountText}>{savedRouteAssetCounts.stitched} stitched</Text>
-            <Text style={styles.savedRoutesCountText}>{savedRouteAssetCounts.bookmarked} saved</Text>
-          </View>
         </View>
 
         <View style={styles.stitchSection}>
@@ -18487,11 +18721,7 @@ const stableMapSurface = useMemo(() => {
   'OFFLINE CACHE',
   'cloud-download-outline',
   () => closeTopPopup('offlineCache'),
-  <ScrollView
-    style={styles.mapPopupScroll}
-    contentContainerStyle={styles.mapPopupScrollContent}
-    showsVerticalScrollIndicator={false}
-  >
+  <View style={styles.mapPopupStaticContent}>
     <OfflineCacheModal
       embedded
       mapBounds={mapBounds}
@@ -18501,7 +18731,7 @@ const stableMapSurface = useMemo(() => {
       onRequestMapBounds={handleRequestMapBounds}
       onOpenDownloadedSync={handleOpenDownloadedSync}
     />
-  </ScrollView>,
+  </View>,
   MAP_POPUP_WIDTH,
   { fullBody: true, showBackdrop: false }
 )}
@@ -19004,6 +19234,10 @@ quickActionsTrigger: {
 quickActionsTriggerActive: {
   backgroundColor: 'rgba(196,138,44,0.95)',
   borderColor: 'rgba(255,220,140,0.35)',
+},
+
+quickActionsTriggerDisabled: {
+  opacity: 0.45,
 },
 
 routeBuilderTrigger: {
@@ -19823,6 +20057,19 @@ remotenessOverlayLegend: {
   gap: 7,
 },
 
+remotenessOverlayLegendDisclosure: {
+  borderTopWidth: 1,
+  borderTopColor: 'rgba(242,194,77,0.16)',
+  paddingTop: 7,
+},
+
+remotenessOverlayLegendDisclosureText: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 9,
+  lineHeight: 13,
+},
+
 remotenessOverlayLegendHeader: {
   flexDirection: 'row',
   alignItems: 'center',
@@ -20210,6 +20457,11 @@ mapPopupScroll: {
 mapPopupScrollContent: {
   padding: 16,
   paddingBottom: 30,
+},
+
+mapPopupStaticContent: {
+  flex: 1,
+  padding: 14,
 },
 
 mapPopupSimpleStack: {

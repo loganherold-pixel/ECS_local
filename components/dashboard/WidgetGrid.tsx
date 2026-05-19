@@ -2353,6 +2353,7 @@ export default function WidgetGrid({
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        removeClippedSubviews={false}
         scrollEnabled={dragIndex === null}
       >
         {gridContent}

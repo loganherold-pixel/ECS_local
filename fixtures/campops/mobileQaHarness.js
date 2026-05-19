@@ -33,6 +33,26 @@ const CAMP_OPS_MOBILE_QA_TEST_DATA = {
 
 const campOpsMobileQaScenarios = [
   {
+    id: 'candidate_viewport_popup_actions',
+    title: 'Dev-only candidate viewport: CampOps pins and Camp Intel actions',
+    setup: [
+      'Open /dev/campops-visual-qa in a development build.',
+      'Use the candidate-producing QA viewport.',
+      'Tap each visible CampOps fixture pin and exercise Camp Intel actions.',
+    ],
+    expected: [
+      'Visible CampOps pins appear from local fixture data only.',
+      'Camp Intel opens from pin tap and remains labeled as non-live QA data.',
+      'Save Camp, Navigate Here, and Report Unusable buttons are visible and captured locally for QA only.',
+      'No provider APIs, telemetry, AI output, or community publishing are enabled.',
+    ],
+    fixtureRefs: [
+      'components/campops/CampOpsVisualQaScreen.tsx',
+      'scripts/test-route-camp-pins.js',
+      'scripts/test-campops-camp-intel-popup.js',
+    ],
+  },
+  {
     id: 'feature_flag_off_legacy_results',
     title: 'Feature flag off: legacy campsite results remain unchanged',
     setup: [

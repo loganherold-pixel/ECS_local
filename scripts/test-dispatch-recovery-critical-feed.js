@@ -62,8 +62,13 @@ assert.match(
 );
 assert.match(
   source,
-  /Clear CAD/,
-  'Running CAD feed should expose a Clear CAD button.',
+  /presentation="feed"/,
+  'Running CAD feed surface should host the Convoy Command Rive panel in feed mode.',
+);
+assert.doesNotMatch(
+  source,
+  /<Text[\s\S]*Clear CAD[\s\S]*<\/Text>/,
+  'The visible lower CAD feed surface should no longer expose the old Clear CAD button after the Rive feed replacement.',
 );
 assert.match(
   source,

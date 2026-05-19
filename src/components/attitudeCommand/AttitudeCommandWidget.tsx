@@ -11,8 +11,7 @@ import {
 } from 'react-native';
 
 import { TACTICAL } from '../../../lib/theme';
-import AttitudeGauge from './AttitudeGauge';
-import AttitudeReadout from './AttitudeReadout';
+import AttitudeDial from '../../features/attitude/components/AttitudeDial';
 import { formatSignedDegrees } from './attitudeReadoutUtils';
 
 export type AttitudeCommandWidgetProps = {
@@ -98,6 +97,9 @@ function AttitudeCommandWidget({
   const rollAccessibility = formatDegreesForAccessibility(rollDeg);
   const accessibleTitle = formatTitleForAccessibility(title);
   const containedStageSize = getContainedAttitudeCommandStageSize(bounds);
+  const dialSize = containedStageSize
+    ? Math.max(82, Math.min(containedStageSize.width * 0.31, containedStageSize.height * 0.42))
+    : 118;
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -148,28 +150,41 @@ function AttitudeCommandWidget({
 
         <View
           testID="attitude-command-pitch-gauge-slot"
-          style={[styles.overlaySlot, styles.pitchGaugeSlot]}
+          style={[
+            styles.overlaySlot,
+            styles.pitchGaugeSlot,
+            {
+              width: dialSize,
+              height: dialSize,
+            },
+          ]}
         >
-          <AttitudeGauge label="PITCH" valueDeg={pitchDeg} />
+          <AttitudeDial
+            label="PITCH"
+            valueDeg={pitchDeg}
+            size={dialSize}
+            ecsGold={TACTICAL.amber}
+            testID="attitude-command-pitch-dial-meter"
+          />
         </View>
         <View
           testID="attitude-command-roll-gauge-slot"
-          style={[styles.overlaySlot, styles.rollGaugeSlot]}
+          style={[
+            styles.overlaySlot,
+            styles.rollGaugeSlot,
+            {
+              width: dialSize,
+              height: dialSize,
+            },
+          ]}
         >
-          <AttitudeGauge label="ROLL" valueDeg={rollDeg} />
-        </View>
-
-        <View
-          testID="attitude-command-pitch-readout-slot"
-          style={[styles.overlaySlot, styles.pitchReadoutSlot]}
-        >
-          <AttitudeReadout label="PITCH" valueDeg={pitchDeg} style={styles.readout} />
-        </View>
-        <View
-          testID="attitude-command-roll-readout-slot"
-          style={[styles.overlaySlot, styles.rollReadoutSlot]}
-        >
-          <AttitudeReadout label="ROLL" valueDeg={rollDeg} style={styles.readout} />
+          <AttitudeDial
+            label="ROLL"
+            valueDeg={rollDeg}
+            size={dialSize}
+            ecsGold={TACTICAL.amber}
+            testID="attitude-command-roll-dial-meter"
+          />
         </View>
       </View>
     </View>
@@ -215,31 +230,9 @@ const styles = StyleSheet.create({
   pitchGaugeSlot: {
     left: '8%',
     top: '17%',
-    width: '39%',
   },
   rollGaugeSlot: {
     left: '53%',
     top: '17%',
-    width: '39%',
-  },
-  pitchReadoutSlot: {
-    left: '17%',
-    top: '83%',
-    width: '24%',
-    height: '9%',
-  },
-  rollReadoutSlot: {
-    left: '61%',
-    top: '83%',
-    width: '24%',
-    height: '9%',
-  },
-  readout: {
-    width: '100%',
-    height: '100%',
-    minWidth: 0,
-    minHeight: 0,
-    paddingHorizontal: 0,
-    paddingVertical: 0,
   },
 });

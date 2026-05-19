@@ -7,7 +7,6 @@ export type ECSCommandModuleId =
   | 'trailDecisionCommand'
   | 'campScoutCommand'
   | 'expeditionReadinessCommand'
-  | 'convoy-command'
   | 'routeCommand'
   | 'powerCommand'
   | 'environmentalCommand';
@@ -35,7 +34,6 @@ export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [
   'trailDecisionCommand',
   'campScoutCommand',
   'expeditionReadinessCommand',
-  'convoy-command',
 ];
 
 export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandModuleDefinition> = {
@@ -93,15 +91,6 @@ export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandM
     statusLabel: 'READY',
     description: 'Command-level synthesis of vehicle, route, power, weather, daylight, recovery, communications, and incident readiness.',
   },
-  'convoy-command': {
-    id: 'convoy-command',
-    label: 'Convoy Command',
-    title: 'CONVOY COMMAND',
-    subtitle: 'Group Expedition Coordination',
-    icon: 'people-outline',
-    statusLabel: 'CONVOY',
-    description: 'Monitor convoy spacing, signal confidence, and regroup status.',
-  },
   routeCommand: {
     id: 'routeCommand',
     label: 'Route Command',
@@ -132,7 +121,7 @@ export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandM
 };
 
 export function normalizeECSCommandModuleId(value: unknown): ECSCommandModuleId | null {
-  if (value === 'convoyCommand') return 'convoy-command';
+  if (value === 'convoyCommand' || value === 'convoy-command') return null;
   if (typeof value !== 'string') return null;
   return ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId)
     ? (value as ECSCommandModuleId)

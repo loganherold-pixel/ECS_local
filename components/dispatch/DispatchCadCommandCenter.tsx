@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import ECSModalShell from '../ECSModalShell';
 import ECSShellTexture from '../ECSShellTexture';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
 import DispatchReadinessContextCard from './DispatchReadinessContextCard';
 import { useApp } from '../../context/AppContext';
 import {
@@ -98,11 +99,19 @@ import {
   type DispatchPersistenceDefaults,
 } from '../../lib/dispatchPersistenceAdapter';
 import {
-  getDispatchRolloutDisabledCopy,
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
   type DispatchRolloutFeature,
 } from '../../lib/dispatchRolloutConfig';
+
+const DISPATCH_ROLLOUT_NOTICE_LABELS: Partial<Record<DispatchRolloutFeature, string>> = {
+  teamPositionSharing: 'team sharing',
+  agencyDataIngestion: 'agency feeds',
+  externalDispatchIntegration: 'external dispatch',
+  publicHazardPublishing: 'public publishing',
+  automatedSosTransmission: 'automated SOS',
+  liveRadioNetworkIntegrations: 'radio integrations',
+};
 
 function isDispatchCadDebugEnabled(): boolean {
   if (typeof __DEV__ === 'undefined' || !__DEV__) return false;
@@ -2204,9 +2213,12 @@ export default function DispatchCadCommandCenter() {
       return null;
     }
 
-    return `Internal beta: local CAD and Recovery reports are enabled. ${disabledFeatures
-      .map((feature) => getDispatchRolloutDisabledCopy(feature))
-      .join(' ')}`;
+    const disabledLabels = disabledFeatures
+      .map((feature) => DISPATCH_ROLLOUT_NOTICE_LABELS[feature])
+      .filter(Boolean)
+      .join(', ');
+
+    return `Internal beta: local CAD and Recovery reports stay local. Disabled until QA approval: ${disabledLabels}.`;
   }, [
     agencyDataIngestionEnabled,
     automatedSosTransmissionEnabled,
@@ -2405,6 +2417,10 @@ export default function DispatchCadCommandCenter() {
   );
   const clearableCadEventCount = useMemo(
     () => visibleEvents.filter(isClearableRoutineCadEvent).length,
+    [visibleEvents],
+  );
+  const emergencyCoordinatePingEvents = useMemo(
+    () => visibleEvents.filter(isRecoveryCriticalEvent),
     [visibleEvents],
   );
   const selectedEvent = useMemo(
@@ -2887,7 +2903,9 @@ export default function DispatchCadCommandCenter() {
       setSelectedEventId(null);
       setDrilldownEventId(null);
       showToast?.('Recovery assist route starting.');
-      router.push('/navigate');
+      setTimeout(() => {
+        router.push('/navigate' as any);
+      }, 0);
     } catch (error) {
       showToast?.(error instanceof Error ? error.message : 'Recovery assist route unavailable.');
     } finally {
@@ -3010,6 +3028,27 @@ export default function DispatchCadCommandCenter() {
         </View>
       </View>
 
+      {dispatchSensitiveGateNotice ? (
+        <View style={styles.rolloutNotice}>
+          <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.amber} />
+          <Text style={styles.rolloutNoticeText}>
+            {dispatchSensitiveGateNotice}
+          </Text>
+        </View>
+      ) : null}
+
+      <DispatchConvoyTeamSetupCard
+        connectionLabel={connectionState.label}
+        connectionTone={connectionState.tone}
+        teamStatusLabel={teamStatusLabel}
+        teamMemberCount={teamMemberCount}
+        hasActiveTeam={hasActiveTeam}
+        emergencyCount={emergencyCoordinatePingEvents.length}
+        canConnect={teamPositionSharingEnabled || externalDispatchIntegrationEnabled}
+        onConnect={() => setInviteVisible(true)}
+        onProfile={() => setProfileVisible(true)}
+      />
+
       <View style={styles.liveStrip}>
         {channelSnapshots.map((channel) => (
           <DispatchChannelButton
@@ -3025,15 +3064,6 @@ export default function DispatchCadCommandCenter() {
           />
         ))}
       </View>
-
-      {dispatchSensitiveGateNotice ? (
-        <View style={styles.rolloutNotice}>
-          <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.rolloutNoticeText} numberOfLines={3}>
-            {dispatchSensitiveGateNotice}
-          </Text>
-        </View>
-      ) : null}
 
       {advisory ? (
         <View style={styles.advisoryLine}>
@@ -3058,93 +3088,36 @@ export default function DispatchCadCommandCenter() {
         <ECSShellTexture />
         <View style={styles.feedHeader}>
           <View>
-            <Text style={styles.feedTitle}>Running CAD Feed</Text>
-            <Text style={styles.feedSource}>{getSourceStateLabel(sourceState)}</Text>
+            <Text style={styles.feedTitle}>Convoy Command</Text>
+            <Text style={styles.feedSource}>CAD FEED SURFACE</Text>
           </View>
           <View style={styles.feedHeaderActions}>
-            <Text style={styles.feedCount}>{visibleEvents.length} events</Text>
+            <Text style={styles.feedCount}>{emergencyCoordinatePingEvents.length} emergency</Text>
             <TouchableOpacity
-              style={[
-                styles.clearCadButton,
-                clearableCadEventCount === 0 ? styles.clearCadButtonDisabled : null,
-              ]}
+              style={[styles.clearCadButton, styles.recoveryFeedButton]}
               accessibilityRole="button"
-              accessibilityLabel="Clear routine CAD feed items"
-              accessibilityState={{ disabled: clearableCadEventCount === 0 }}
-              activeOpacity={clearableCadEventCount === 0 ? 1 : 0.78}
-              disabled={clearableCadEventCount === 0}
-              onPress={handleClearCadFeed}
+              accessibilityLabel="Create recovery or hazard CAD event"
+              activeOpacity={0.78}
+              onPress={() => openCommand('hazard')}
             >
-              <Text
-                style={[
-                  styles.clearCadButtonText,
-                  clearableCadEventCount === 0 ? styles.clearCadButtonTextDisabled : null,
-                ]}
-                numberOfLines={1}
-              >
-                Clear CAD
+              <Text style={[styles.clearCadButtonText, styles.recoveryFeedButtonText]} numberOfLines={1}>
+                Recovery
               </Text>
             </TouchableOpacity>
           </View>
         </View>
-        <FlatList
-          style={styles.feedList}
-          contentContainerStyle={[
-            styles.feedContent,
-            visibleEvents.length === 0 ? styles.feedContentEmpty : null,
-          ]}
-          data={visibleEvents}
-          keyExtractor={(event) => event.id}
-          renderItem={renderEvent}
-          ItemSeparatorComponent={FeedSeparator}
-          ListEmptyComponent={EmptyFeed}
-          showsVerticalScrollIndicator={false}
+        <DispatchConvoyCommandPanel
+          connectionLabel={connectionState.label}
+          teamStatusLabel={teamStatusLabel}
+          teamMemberCount={teamMemberCount}
+          hasActiveTeam={hasActiveTeam}
+          emergencyEvents={emergencyCoordinatePingEvents}
+          emergencySubmitting={recoveryAssistSubmitting}
+          onEmergencyPing={handleRecoveryAssist}
+          onOpenEmergencyEvent={(event) => setSelectedEventId(event.id)}
+          presentation="feed"
+          testID="dispatch-convoy-command-feed-panel"
         />
-      </View>
-
-      <View style={styles.commandRail}>
-        <ECSShellTexture />
-        {[
-          { label: 'Check In', command: 'check_in', requiresTeam: true },
-          { label: 'Ping', command: 'ping', requiresTeam: true },
-          { label: 'Assist', command: 'assist', requiresTeam: false },
-          { label: 'Rally', command: 'rally', requiresTeam: true },
-        ].map((item) => {
-          const teamCommandInactive = item.requiresTeam && !hasActiveTeam;
-
-          return (
-            <TouchableOpacity
-              key={item.command}
-              style={[styles.commandButton, teamCommandInactive ? styles.commandButtonInactive : null]}
-              accessibilityRole="button"
-              accessibilityLabel={teamCommandInactive ? `${item.label}. Team channel inactive.` : item.label}
-              accessibilityState={{ disabled: teamCommandInactive }}
-              disabled={teamCommandInactive}
-              activeOpacity={teamCommandInactive ? 1 : 0.78}
-              onPress={() => openCommand(item.command as DispatchCommandType)}
-            >
-              <Text
-                style={[styles.commandButtonText, teamCommandInactive ? styles.commandButtonTextInactive : null]}
-                numberOfLines={1}
-              >
-                {item.label}
-              </Text>
-              {teamCommandInactive ? (
-                <Text style={styles.commandButtonReason} numberOfLines={1}>Team inactive</Text>
-              ) : null}
-            </TouchableOpacity>
-          );
-        })}
-        <TouchableOpacity
-          style={[styles.commandButton, styles.recoveryCommandButton]}
-          accessibilityRole="button"
-          accessibilityLabel="Create recovery or hazard CAD event"
-          onPress={() => openCommand('hazard')}
-        >
-          <Text style={[styles.commandButtonText, styles.recoveryCommandButtonText]} numberOfLines={1}>
-            Recovery
-          </Text>
-        </TouchableOpacity>
       </View>
 
       <EventDetailModal
@@ -3238,6 +3211,88 @@ export default function DispatchCadCommandCenter() {
         showToast={showToast}
         onClose={() => setInviteVisible(false)}
       />
+    </View>
+  );
+}
+
+function DispatchConvoyTeamSetupCard({
+  canConnect,
+  connectionLabel,
+  connectionTone,
+  emergencyCount,
+  hasActiveTeam,
+  onConnect,
+  onProfile,
+  teamMemberCount,
+  teamStatusLabel,
+}: {
+  canConnect: boolean;
+  connectionLabel: string;
+  connectionTone: string;
+  emergencyCount: number;
+  hasActiveTeam: boolean;
+  onConnect: () => void;
+  onProfile: () => void;
+  teamMemberCount: number;
+  teamStatusLabel: string;
+}) {
+  return (
+    <View style={styles.convoyTeamCard} testID="dispatch-convoy-team-setup-card">
+      <ECSShellTexture />
+      <View style={styles.convoyTeamHeader}>
+        <View style={styles.convoyTeamTitleBlock}>
+          <Text style={styles.convoyTeamEyebrow}>CONVOY SETUP / TEAM</Text>
+          <Text style={styles.convoyTeamTitle} numberOfLines={1}>
+            {hasActiveTeam ? 'Team channel staged' : 'Team channel not configured'}
+          </Text>
+        </View>
+        <View style={[styles.convoyTeamStatusPill, { borderColor: `${connectionTone}66` }]}>
+          <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
+          <Text style={styles.convoyTeamStatusText} numberOfLines={1}>{connectionLabel}</Text>
+        </View>
+      </View>
+      <View style={styles.convoyTeamMetaRow}>
+        <View style={styles.convoyTeamMetaCell}>
+          <Text style={styles.convoyTeamMetaLabel}>Team</Text>
+          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
+            {hasActiveTeam ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}` : 'Inactive'}
+          </Text>
+        </View>
+        <View style={styles.convoyTeamMetaCell}>
+          <Text style={styles.convoyTeamMetaLabel}>Sync</Text>
+          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>{teamStatusLabel}</Text>
+        </View>
+        <View style={styles.convoyTeamMetaCell}>
+          <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
+          <Text style={[styles.convoyTeamMetaValue, emergencyCount > 0 ? styles.convoyTeamMetaValueAlert : null]} numberOfLines={1}>
+            {emergencyCount} active
+          </Text>
+        </View>
+      </View>
+      <View style={styles.convoyTeamActions}>
+        {canConnect ? (
+          <TouchableOpacity
+            style={styles.convoyTeamActionButton}
+            accessibilityRole="button"
+            accessibilityLabel="Connect team"
+            activeOpacity={0.82}
+            onPress={onConnect}
+          >
+            <Ionicons name="person-add-outline" size={13} color={TACTICAL.amber} />
+            <Text style={styles.convoyTeamActionText}>Connect</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={styles.convoyTeamActionButton}
+          accessibilityRole="button"
+          accessibilityLabel="Open Dispatch profile"
+          activeOpacity={0.82}
+          onPress={onProfile}
+        >
+          <Ionicons name="person-circle-outline" size={13} color={TACTICAL.amber} />
+          <Text style={styles.convoyTeamActionText}>Profile</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -3428,16 +3483,18 @@ function EventDetailModal({
   const recoverySyncLabel = event ? getRecoveryCadSyncLabel(event) : null;
 
   return (
-    <ECSModalShell
-      visible={!!event}
-      onClose={onClose}
-      title={detail?.title ?? 'CAD Event'}
-      subtitle={detailSubtitle}
-      icon={event ? EVENT_ICON[event.type] : 'radio-outline'}
-      overlayClass="info"
-      stackBehavior="replace"
-      maxWidth={520}
-    >
+      <ECSModalShell
+        visible={!!event}
+        onClose={onClose}
+        title={detail?.title ?? 'CAD Event'}
+        subtitle={detailSubtitle}
+        icon={event ? EVENT_ICON[event.type] : 'radio-outline'}
+        overlayClass="info"
+        stackBehavior="replace"
+        maxWidth={520}
+        maxHeightFraction={0.82}
+        minHeightFraction={0.62}
+      >
       {event && meta && detail ? (
         <View style={styles.modalStack}>
           <View style={styles.modalMetaGrid}>
@@ -5265,6 +5322,116 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 13,
   },
+  convoyPanelSlot: {
+    flex: 1,
+    minHeight: 0,
+  },
+  convoyTeamCard: {
+    position: 'relative',
+    minHeight: 104,
+    borderWidth: 1,
+    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
+    borderRadius: 9,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    overflow: 'hidden',
+    gap: 8,
+  },
+  convoyTeamHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  convoyTeamTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  convoyTeamEyebrow: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  convoyTeamTitle: {
+    color: TACTICAL.text,
+    fontSize: 14,
+    lineHeight: 17,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  convoyTeamStatusPill: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 999,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    paddingHorizontal: 9,
+  },
+  convoyTeamStatusText: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  convoyTeamMetaRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  convoyTeamMetaCell: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: ECS_POPUP_SURFACE_DARK.divider,
+    borderRadius: 7,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  convoyTeamMetaLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  convoyTeamMetaValue: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  convoyTeamMetaValueAlert: {
+    color: TACTICAL.danger,
+  },
+  convoyTeamActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 7,
+  },
+  convoyTeamActionButton: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderRadius: 7,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    paddingHorizontal: 8,
+  },
+  convoyTeamActionText: {
+    color: TACTICAL.text,
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
   liveChip: {
     width: '32%',
     minHeight: 62,
@@ -5421,6 +5588,13 @@ const styles = StyleSheet.create({
   },
   clearCadButtonTextDisabled: {
     color: TACTICAL.textMuted,
+  },
+  recoveryFeedButton: {
+    borderColor: `${TACTICAL.danger}55`,
+    backgroundColor: `${TACTICAL.danger}12`,
+  },
+  recoveryFeedButtonText: {
+    color: TACTICAL.danger,
   },
   feedList: {
     flex: 1,

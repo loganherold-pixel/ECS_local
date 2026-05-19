@@ -34,7 +34,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   "'trailDecision'",
   "'campScout'",
   "'expeditionReadiness'",
-  "'convoyCommand'",
 ].forEach((token) => {
   assert.ok(typesSource.includes(token), `Command center types missing ${token}`);
 });
@@ -43,8 +42,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   'COMMAND_CENTER_WIDGET_REGISTRY',
   'COMMAND_CENTER_IMPLEMENTED_MODES',
   'COMMAND_CENTER_DEFAULT_MODE',
-  'convoyCommand',
-  "defaultAvailability: 'setupNeeded'",
   'getCommandCenterAvailability',
   'getSelectableCommandCenterModes',
   'resolveCommandCenterMode',
@@ -93,7 +90,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   'TRAIL',
   'CAMP',
   'READY',
-  'CONVOY',
   'modeButtonSelected',
   'TACTICAL.amber',
   'TACTICAL.textMuted',
@@ -137,15 +133,13 @@ assert.ok(
     commandStoreSource.includes("'trailDecisionCommand'") &&
     commandStoreSource.includes("'campScoutCommand'") &&
     commandStoreSource.includes("'expeditionReadinessCommand'") &&
-    commandStoreSource.includes("'convoy-command'") &&
     commandStoreSource.includes('Recovery / Hazard Compass') &&
     commandStoreSource.includes('Trail Decision Command') &&
     commandStoreSource.includes('Camp Scout Command') &&
     commandStoreSource.includes('Expedition Readiness Command') &&
-    commandStoreSource.includes('Convoy Command') &&
     commandStoreSource.includes('Recovery Vector Standby') &&
-    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoy-command'/.test(commandStoreSource),
-  'Command module store should persist Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, Expedition Readiness, and Convoy command-center modes.',
+    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand'/.test(commandStoreSource),
+  'Command module store should persist Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, and Expedition Readiness command-center modes.',
 );
 
 assert.ok(
@@ -163,7 +157,7 @@ assert.ok(
     registrySource.includes("label: 'Trail Decision Command'") &&
     registrySource.includes("label: 'Camp Scout Command'") &&
     registrySource.includes("label: 'Expedition Readiness Command'") &&
-    registrySource.includes("label: 'Convoy Command'"),
+    !registrySource.includes("label: 'Convoy Command'"),
   'Dashboard Attitude Command renderer should use the reusable command-center host without the redundant in-widget mode selector.',
 );
 

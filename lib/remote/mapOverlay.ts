@@ -43,7 +43,7 @@ export type BuildRemoteMapOverlayInput = {
 
 const MAX_HEATMAP_AREAS = 48;
 const MAX_FORECAST_SEGMENTS = 12;
-const BUFFER_DEGREES = 0.00055;
+const BUFFER_DEGREES = 0.00125;
 
 const FORECAST_COLORS: Record<RemoteForecastSignal, string> = {
   good: '#66BB6A',

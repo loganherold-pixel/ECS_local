@@ -82,6 +82,56 @@ function formatDate(value?: string): string | null {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function resolveEstablishedCampScore(campsite: EstablishedCampsite): {
+  score: number;
+  label: string;
+  explanation: string;
+} {
+  let score = typeof campsite.sourceConfidence === 'number'
+    ? Math.round(campsite.sourceConfidence)
+    : 64;
+  const reasons: string[] = [];
+  const status = String(campsite.status ?? '').toLowerCase();
+  const availability = String(campsite.availabilityStatus ?? '').toLowerCase();
+
+  if (status.includes('open') || status.includes('active')) {
+    score += 8;
+    reasons.push('the campground record appears open');
+  } else if (status.includes('closed') || status.includes('removed')) {
+    score -= 24;
+    reasons.push('the record may be closed or inactive');
+  }
+
+  if (availability.includes('available')) {
+    score += 8;
+    reasons.push('recent availability looks favorable');
+  } else if (availability.includes('full') || availability.includes('unavailable')) {
+    score -= 14;
+    reasons.push('availability may be limited');
+  }
+
+  if (campsite.lastAvailabilityCheckedAt || campsite.lastVerifiedAt) {
+    score += 6;
+    reasons.push('ECS has a recent check or verification timestamp');
+  }
+
+  if (campsite.attribution || campsite.primaryProvider || campsite.source !== 'UNKNOWN') {
+    score += 4;
+    reasons.push('the source is attributed');
+  }
+
+  score = Math.max(20, Math.min(96, score));
+
+  return {
+    score,
+    label: score >= 80 ? 'Strong' : score >= 65 ? 'Good' : score >= 50 ? 'Verify' : 'Caution',
+    explanation:
+      reasons.length > 0
+        ? `ECS scores this from source confidence, operating status, availability freshness, and attribution because ${reasons.join(', ')}.`
+        : 'ECS has limited supporting data for this campground, so verify status, access, and availability before relying on it.',
+  };
+}
+
 function DetailRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <View style={styles.detailRow}>
@@ -112,6 +162,7 @@ export default function EstablishedCampsiteSheet({
     campsite.availabilityStatus,
     campsite.lastAvailabilityCheckedAt,
   );
+  const scoreSummary = resolveEstablishedCampScore(campsite);
   const scrollContentStyle = WEB_SCROLL_CONTAINMENT_STYLE
     ? [styles.bodyContent, WEB_SCROLL_CONTAINMENT_STYLE]
     : styles.bodyContent;
@@ -164,6 +215,10 @@ export default function EstablishedCampsiteSheet({
           >
             <View style={styles.badgeRow}>
               <View style={styles.badge}>
+                <Text style={styles.badgeLabel}>ECS SCORE</Text>
+                <Text style={styles.badgeValue}>{scoreSummary.score}/100</Text>
+              </View>
+              <View style={styles.badge}>
                 <Text style={styles.badgeLabel}>Campground type</Text>
                 <Text style={styles.badgeValue}>{words(campsite.campsiteType)}</Text>
               </View>
@@ -175,6 +230,14 @@ export default function EstablishedCampsiteSheet({
                 <Text style={styles.badgeLabel}>AVAILABILITY</Text>
                 <Text style={styles.badgeValue}>{availabilityLabel}</Text>
               </View>
+            </View>
+
+            <View style={styles.scoreCard}>
+              <View style={styles.scoreCardHeader}>
+                <Ionicons name="sparkles-outline" size={13} color={TACTICAL.amber} />
+                <Text style={styles.scoreCardTitle}>{scoreSummary.label} camp confidence</Text>
+              </View>
+              <Text style={styles.scoreCardText}>{scoreSummary.explanation}</Text>
             </View>
 
             <View style={styles.section}>
@@ -311,6 +374,7 @@ const styles = StyleSheet.create({
   badgeRow: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   badge: {
     flex: 1,
@@ -334,6 +398,33 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     marginTop: 3,
     fontSize: 13,
+  },
+  scoreCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.07)',
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  scoreCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  scoreCardTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 9,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  scoreCardText: {
+    ...TYPO.B2,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 16,
   },
   section: {
     gap: 8,

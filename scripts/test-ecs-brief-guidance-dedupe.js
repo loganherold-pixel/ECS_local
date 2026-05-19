@@ -37,12 +37,18 @@ function loadTypeScriptModule(relPath) {
 
 const {
   AI_GUIDANCE_DUPLICATE_SUPPRESSION_MINUTES,
+  ECS_BRIEF_TOP_BANNER_DEFAULT_MS,
+  ECS_BRIEF_TOP_BANNER_RESOLVED_MS,
   briefCadLogStore,
+  getCurrentBriefCadTopBannerMessage,
   recordBriefCadEntry,
 } = loadTypeScriptModule('lib/briefCadLogStore.ts');
 const { ecsUpdateDedupeTestHooks } = loadTypeScriptModule('lib/ecsUpdateDedupe.ts');
 const packageSource = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8');
 const storeSource = fs.readFileSync(path.join(process.cwd(), 'lib', 'briefCadLogStore.ts'), 'utf8');
+const hookSource = fs.readFileSync(path.join(process.cwd(), 'lib', 'useEcsBriefTopBannerMessage.ts'), 'utf8');
+const dashboardHeaderSource = fs.readFileSync(path.join(process.cwd(), 'components', 'dashboard', 'DashboardHeader.tsx'), 'utf8');
+const shellHeaderSource = fs.readFileSync(path.join(process.cwd(), 'components', 'Header.tsx'), 'utf8');
 
 const baseTime = Date.parse('2026-05-01T16:00:00.000Z');
 const minutes = (value) => value * 60 * 1000;
@@ -77,6 +83,34 @@ assert(
   storeSource.includes('AI_GUIDANCE_HISTORY_LIMIT'),
   'Brief guidance duplicate history should be bounded.',
 );
+assert.strictEqual(
+  ECS_BRIEF_TOP_BANNER_DEFAULT_MS,
+  16_000,
+  'ECS Brief top intelligence banner should use a short, gentle transient duration.',
+);
+assert.strictEqual(
+  ECS_BRIEF_TOP_BANNER_RESOLVED_MS,
+  10_000,
+  'Resolved ECS Brief updates should leave the top intelligence banner quickly.',
+);
+assert(
+  hookSource.includes('useEcsBriefTopBannerMessage') &&
+    hookSource.includes('getCurrentBriefCadTopBannerMessage') &&
+    hookSource.includes('setInterval(refresh, tickMs)'),
+  'ECS Brief top banner hook should subscribe to the central brief CAD store.',
+);
+assert(
+  dashboardHeaderSource.includes('useEcsBriefTopBannerMessage') &&
+    dashboardHeaderSource.includes('briefBannerCopy') &&
+    dashboardHeaderSource.includes('displayBriefBanner.eyebrow'),
+  'Dashboard header should present ECS Brief updates through the top intelligence banner.',
+);
+assert(
+  shellHeaderSource.includes('useEcsBriefTopBannerMessage') &&
+    shellHeaderSource.includes('briefBannerCopy') &&
+    shellHeaderSource.includes('displayBriefBanner.eyebrow'),
+  'Shared shell header should present ECS Brief updates through the top intelligence banner.',
+);
 assert(
   packageSource.includes('"test:ecs-brief-guidance-dedupe": "node ./scripts/test-ecs-brief-guidance-dedupe.js"'),
   'package.json should expose the ECS Brief guidance dedupe regression test.',
@@ -84,6 +118,16 @@ assert(
 
 resetStores();
 recordBrief();
+const activeBanner = getCurrentBriefCadTopBannerMessage(baseTime + 1000);
+assert(activeBanner, 'Fresh accepted ECS Brief guidance should produce a top intelligence banner message.');
+assert.strictEqual(activeBanner.eyebrow, 'ECS INTELLIGENCE');
+assert.strictEqual(activeBanner.detail, 'Weather data is stale. Route guidance available.');
+assert.strictEqual(activeBanner.tone, 'watch');
+assert.strictEqual(
+  getCurrentBriefCadTopBannerMessage(baseTime + ECS_BRIEF_TOP_BANNER_DEFAULT_MS + 1),
+  null,
+  'Top intelligence banner should gently exit after its transient display window.',
+);
 recordBrief({
   id: 'ecs-brief-weather-guidance-refresh',
   text: ' weather data is stale.   route guidance available. ',
@@ -169,8 +213,19 @@ recordBrief({
 });
 assert.strictEqual(
   briefCadLogStore.getEntries().length,
+  1,
+  'Repeated identical resolved-state guidance should not re-enter the top banner inside 15 minutes.',
+);
+recordBrief({
+  id: 'ecs-brief-weather-resolved-later',
+  text: 'Weather alert resolved. Route guidance remains available.',
+  eventType: 'weather_resolved',
+  queuedAt: baseTime + minutes(15) + 1,
+});
+assert.strictEqual(
+  briefCadLogStore.getEntries().length,
   2,
-  'Resolved-state guidance should remain visible when emitted.',
+  'Resolved-state guidance may appear again after the duplicate suppression window.',
 );
 
 console.log('ECS Brief guidance duplicate suppression checks passed.');

@@ -172,11 +172,26 @@ const offlineConnectivity = normalizeConvoyCommandData({
 assert.strictEqual(offlineConnectivity.dataState, 'offline');
 assert.strictEqual(offlineConnectivity.isOffline, true);
 
-const source = fs.readFileSync(path.join(repoRoot, 'components/dashboard/commandCenter/ConvoyCommand.tsx'), 'utf8');
-assert(source.includes('CommandCenterFrame'), 'Convoy Command should use CommandCenterFrame');
-assert(source.includes('No continuous live tracking in this mode'), 'Convoy Command must label non-live modes honestly');
-assert(source.includes('CHECK-IN'), 'Convoy Command should expose check-in status copy');
-assert(source.includes('PLANNED'), 'Convoy Command should expose planned status copy');
+assert(
+  !fs.existsSync(path.join(repoRoot, 'components/dashboard/commandCenter/ConvoyCommand.tsx')),
+  'Dashboard Convoy Command component should be removed now that Convoy Command lives in Dispatch.',
+);
+assert(
+  !fs.existsSync(path.join(repoRoot, 'components/dashboard/command-center/widgets/ConvoyCommandWidget.tsx')),
+  'Dashboard Convoy Command widget should be removed from the command-center widget menu.',
+);
+assert(
+  !fs.existsSync(path.join(repoRoot, 'components/rive/ECSConvoyCommandRive.tsx')),
+  'Old dashboard Convoy Command Rive wrapper should be removed.',
+);
+assert(
+  !fs.existsSync(path.join(repoRoot, 'assets/rive/ConvoyCommand.riv')),
+  'Old dashboard Convoy Command Rive asset should be removed.',
+);
+assert(
+  !fs.existsSync(path.join(repoRoot, 'docs/rive/convoy-command-rive-contract.md')),
+  'Old dashboard Convoy Command Rive contract should be removed.',
+);
 
 const hookSource = fs.readFileSync(
   path.join(repoRoot, 'components/dashboard/commandCenter/useConvoyCommandData.ts'),
@@ -190,84 +205,78 @@ assert(
   'Convoy adapter hook must not label current team/check-in data as live sharing',
 );
 
-const riveWidgetSource = fs.readFileSync(
-  path.join(repoRoot, 'components/dashboard/command-center/widgets/ConvoyCommandWidget.tsx'),
+const dispatchPanelSource = fs.readFileSync(
+  path.join(repoRoot, 'components/dispatch/DispatchConvoyCommandPanel.tsx'),
   'utf8',
 );
-assert(riveWidgetSource.includes('ECSConvoyCommandRive'), 'Dashboard Convoy Command should render the Rive wrapper');
+const dispatchCommandCenterSource = fs.readFileSync(
+  path.join(repoRoot, 'components/dispatch/DispatchCadCommandCenter.tsx'),
+  'utf8',
+);
+assert(dispatchPanelSource.includes('ECSConvoyCommandPanelRive'), 'Dispatch Convoy Command should render the full-panel Rive wrapper');
 assert(
-  !riveWidgetSource.includes('mode={mode}') &&
-    !riveWidgetSource.includes('availableModes={availableModes}') &&
-    !riveWidgetSource.includes('onModeChange={onModeChange}'),
-  'Dashboard Convoy Command should rely on the dashboard three-dot selector instead of rendering an internal mode strip',
+  dispatchPanelSource.includes('DISPATCH CONVOY COMMAND') &&
+    dispatchPanelSource.includes('EMERGENCY COORDINATE PING'),
+  'Dispatch Convoy Command should retain the convoy panel and emergency ping action',
 );
 assert(
-  riveWidgetSource.includes('showStateBadge={false}') &&
-    riveWidgetSource.includes('bodyChrome={false}') &&
-    !riveWidgetSource.includes('footer={footer}'),
-  'Dashboard Convoy Command should let the Rive panel own status/footer containers instead of duplicating outer frame chrome',
+  dispatchPanelSource.includes("presentation?: 'full' | 'feed'") &&
+    dispatchPanelSource.includes("presentation = 'full'") &&
+    dispatchPanelSource.includes('isFeedPresentation') &&
+    dispatchPanelSource.includes('feedPanelStage') &&
+    dispatchPanelSource.includes('!isFeedPresentation ?'),
+  'Dispatch Convoy Command should support a feed-only presentation for the lower CAD feed surface.',
 );
 assert(
-  riveWidgetSource.includes('style={styles.riveLayer}') &&
-    riveWidgetSource.includes('style={styles.overlay}') &&
-    riveWidgetSource.includes("position: 'relative'") &&
-    riveWidgetSource.includes("left: '74.08%'"),
-  'Dashboard Convoy Command overlays should share the same locked surface as the Rive background and final alert container placement',
+  dispatchCommandCenterSource.includes('DispatchConvoyTeamSetupCard') &&
+    dispatchCommandCenterSource.includes('dispatch-convoy-team-setup-card') &&
+    dispatchCommandCenterSource.includes('CONVOY SETUP / TEAM') &&
+    dispatchCommandCenterSource.includes('<DispatchReadinessContextCard />') &&
+    dispatchCommandCenterSource.includes('<View style={styles.liveStrip}>') &&
+    dispatchCommandCenterSource.includes('<View style={styles.feedPanel}>') &&
+    dispatchCommandCenterSource.includes('presentation="feed"'),
+  'Dispatch CAD screen should keep convoy/team setup and existing upper status sections while placing the Rive panel in the lower feed area.',
 );
 assert(
-  riveWidgetSource.includes('selectConvoyCommandWidgetViewModel'),
-  'Dashboard Convoy Command should use the truthful convoy view-model selector',
+  dispatchPanelSource.includes('No active convoy. Live convoy tracking is not being simulated.') &&
+    dispatchPanelSource.includes('Live convoy telemetry is active.'),
+  'Dispatch Convoy Command should truthfully distinguish live telemetry from inactive convoy state',
 );
 assert(
-  riveWidgetSource.includes('No Active Convoy') === false,
-  'Dashboard Convoy Command should use selector copy instead of hardcoding fake no-data state',
+  dispatchPanelSource.includes('formatConvoyDistanceMiles') &&
+    dispatchPanelSource.includes('selectConvoyCommandPanelViewModel') &&
+    dispatchPanelSource.includes('useConvoyCommandData'),
+  'Dispatch Convoy Command should use the existing convoy command data selectors',
 );
 assert(
-  !/mock|fixture/i.test(riveWidgetSource),
-  'Dashboard Convoy Command widget must not wire mock or fixture convoy data',
-);
-assert(riveWidgetSource.includes('ConvoyRiveErrorBoundary'), 'Dashboard Convoy Command should isolate Rive render errors');
-assert(riveWidgetSource.includes('reducedMotion={reducedMotion}'), 'Dashboard Convoy Command should pass reduced motion to Rive');
-assert(riveWidgetSource.includes('ellipsizeMode="tail"'), 'Dashboard Convoy Command should protect long alert text');
-assert(
-  riveWidgetSource.includes("process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA === '1'"),
-  'Dashboard Convoy Command visual-state QA controls must be gated behind an explicit dev flag',
+  dispatchPanelSource.includes('onEmergencyPing') &&
+    dispatchPanelSource.includes('onOpenEmergencyEvent') &&
+    dispatchPanelSource.includes('It does not contact emergency services.'),
+  'Dispatch Convoy Command should retain only the emergency coordinate ping/map action from CAD',
 );
 assert(
-  riveWidgetSource.includes('DEV VISUAL QA ONLY - no live convoy data.'),
-  'Dashboard Convoy Command visual-state QA must visibly avoid claiming live convoy data',
-);
-assert(
-  riveWidgetSource.includes('members: []'),
-  'Dashboard Convoy Command visual-state QA must not create fake convoy members',
-);
-assert(
-  riveWidgetSource.includes('DEV_VISUAL_STATES') &&
-    riveWidgetSource.includes("'live'") &&
-    riveWidgetSource.includes("'partial'") &&
-    riveWidgetSource.includes("'estimated'") &&
-    riveWidgetSource.includes("'alert'") &&
-    riveWidgetSource.includes("'offline'"),
-  'Dashboard Convoy Command should expose dev-only visual paths for all Rive states',
+  !/mock|fake live/i.test(dispatchPanelSource),
+  'Dispatch Convoy Command should avoid mock/fake live convoy claims',
 );
 
 const riveWrapperSource = fs.readFileSync(
-  path.join(repoRoot, 'components/rive/ECSConvoyCommandRive.tsx'),
+  path.join(repoRoot, 'components/rive/ECSConvoyCommandPanelRive.native.tsx'),
   'utf8',
 );
-assert(riveWrapperSource.includes('try {'), 'Convoy Rive wrapper should guard the asset require path');
-assert(riveWrapperSource.includes('ConvoyCommand.riv asset unavailable'), 'Convoy Rive wrapper should fall back when the asset is unavailable');
-assert(riveWrapperSource.includes('reducedMotion !== true'), 'Convoy Rive wrapper should disable autoplay under reduced motion');
-assert(riveWrapperSource.includes('warnMissingProperty'), 'Convoy Rive wrapper should warn but continue when Rive input names differ');
+assert(riveWrapperSource.includes('ConvoyCommand_Panel.riv'), 'Convoy panel Rive wrapper should bundle the panel asset');
+assert(riveWrapperSource.includes('dashboard_no_exterior_border'), 'Convoy panel Rive wrapper should target the provided panel artboard');
+assert(riveWrapperSource.includes('reducedMotion !== true'), 'Convoy panel Rive wrapper should disable autoplay under reduced motion');
+assert(riveWrapperSource.includes("Constants.appOwnership === 'expo'"), 'Convoy panel Rive wrapper should fall back cleanly in Expo Go');
 
 const registrySource = fs.readFileSync(
   path.join(repoRoot, 'components/dashboard/commandCenter/commandCenterRegistry.ts'),
   'utf8',
 );
 assert(
-  registrySource.includes("../command-center/widgets/ConvoyCommandWidget") ||
-    registrySource.includes("'../command-center/widgets/ConvoyCommandWidget'"),
-  'Command center registry should point convoyCommand to the Rive-backed widget',
+  !registrySource.includes('ConvoyCommandWidget') &&
+    !registrySource.includes("id: 'convoyCommand'") &&
+    !registrySource.includes("label: 'Convoy Command'"),
+  'Dashboard command center registry should no longer expose Convoy Command as a widget category',
 );
 
-console.log('[convoy-command] normalization, non-live staging, Rive widget, and UI contract checks passed');
+console.log('[convoy-command] normalization, Dispatch panel Rive, emergency ping, and dashboard removal checks passed');

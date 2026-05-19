@@ -157,9 +157,9 @@ const suppressedPublish = publishTelemetryBriefAdvisories({
   snapshot: snapshot({ batteryVoltage: 11.4 }),
 }, { now: now + 60_000 });
 assert.ok(firstPublish.length > 0, 'first telemetry advisory publish should emit');
-assert.strictEqual(suppressedPublish.length, 0, 'duplicate telemetry advisories should be suppressed within 10 minutes');
+assert.strictEqual(suppressedPublish.length, 0, 'duplicate telemetry advisories should be suppressed within 15 minutes');
 assert.strictEqual(briefEntries.length, firstPublish.length, 'suppressed telemetry advisories should not enter ECS Brief');
-assert.strictEqual(TELEMETRY_BRIEF_SUPPRESSION_MS, 10 * 60_000, 'telemetry suppression window should be ten minutes');
+assert.strictEqual(TELEMETRY_BRIEF_SUPPRESSION_MS, 15 * 60_000, 'telemetry suppression window should be 15 minutes');
 assert.ok(briefEntries.every((entry) => entry.source === 'ecs-telemetry'), 'published telemetry entries should stay in the telemetry advisory lane');
 
 const escalationPublish = publishTelemetryBriefAdvisories({

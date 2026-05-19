@@ -60,15 +60,27 @@ assert(
 );
 
 assert(
-  overlay.includes("hidden_gem") && overlay.includes("popular_trail") && overlay.includes("ecs_route_idea"),
-  'Explore route overlay builder must support Hidden Gems, Popular Trails, and ECS Route Ideas.',
+  overlay.includes("hidden_gem") &&
+    overlay.includes("popular_trail") &&
+    overlay.includes("trail_pack") &&
+    overlay.includes("favorite") &&
+    overlay.includes("ecs_route_idea"),
+  'Explore route overlay builder must support Hidden Gems, Popular Trails, Trail Packs, Favorites, and ECS Route Ideas.',
 );
 assert(
   overlay.includes('CATEGORY_LABELS') &&
     overlay.includes('Hidden Gem') &&
     overlay.includes('Popular Trail') &&
+    overlay.includes('Trail Pack') &&
+    overlay.includes('Favorite') &&
     overlay.includes('ECS Route Idea'),
   'Explore route overlay segments must carry readable category labels.',
+);
+assert(
+  overlay.includes("hidden_gem: '#65D4FF'") &&
+    overlay.includes("popular_trail: '#65D4FF'") &&
+    overlay.includes("trail_pack: '#65D4FF'"),
+  'Mapped active Explorer trails should render with one consistent ECS blue line style.',
 );
 assert(
   overlay.includes("kind: 'explore_route'") && overlay.includes('categoryLabel: CATEGORY_LABELS'),
@@ -108,6 +120,14 @@ assert(
 assert(
   discover.includes('Display on Map'),
   'Explorer must expose a Display on Map action near the result controls.',
+);
+assert(
+  discover.includes('Map Active Trails') && discover.includes('Open Matching Explorer.'),
+  'Explorer map handoff copy should use the production Map Active Trails labels.',
+);
+assert(
+  discover.includes('exploreSuggestedRouteOptions') && discover.includes('trailPackRoutes'),
+  'Explorer Display on Map should use the current filtered Suggested Routes universe, including Trail Packs.',
 );
 assert(
   discover.includes('saveExploreRoutesMapHandoff') &&

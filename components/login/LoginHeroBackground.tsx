@@ -7,9 +7,29 @@ import { ecsLog } from '../../lib/ecsLogger';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
+const LOGIN_HERO_VIDEO_ENABLED = Platform.OS !== 'android';
 
 function LoginHeroBackground() {
   const reducedMotion = useReducedMotion();
+  const shouldShowFallback = !LOGIN_HERO_VIDEO_ENABLED;
+
+  return (
+    <View style={styles.container}>
+      {shouldShowFallback ? (
+        <Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
+      ) : (
+        <LoginHeroVideoLayer reducedMotion={reducedMotion} />
+      )}
+
+      <View pointerEvents="none" style={styles.darkTint} />
+      <View pointerEvents="none" style={styles.bottomGradient} />
+      <View pointerEvents="none" style={styles.goldWash} />
+      {Platform.OS === 'android' ? <View pointerEvents="none" style={styles.androidContrast} /> : null}
+    </View>
+  );
+}
+
+function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
   const videoReadyOpacity = useRef(new Animated.Value(0)).current;
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
@@ -129,7 +149,7 @@ function LoginHeroBackground() {
   const shouldShowFallback = videoFailed;
 
   return (
-    <View style={styles.container}>
+    <>
       {shouldShowFallback ? (
         <Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
       ) : null}
@@ -150,12 +170,7 @@ function LoginHeroBackground() {
           <View pointerEvents="none" style={styles.videoDimmer} />
         </Animated.View>
       ) : null}
-
-      <View pointerEvents="none" style={styles.darkTint} />
-      <View pointerEvents="none" style={styles.bottomGradient} />
-      <View pointerEvents="none" style={styles.goldWash} />
-      {Platform.OS === 'android' ? <View pointerEvents="none" style={styles.androidContrast} /> : null}
-    </View>
+    </>
   );
 }
 

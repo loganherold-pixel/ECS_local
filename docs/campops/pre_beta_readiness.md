@@ -2,13 +2,19 @@
 
 Date: 2026-05-01
 
+## Historical Status
+
+This is a historical pre-beta report. The current release packet is tracked in `docs/campops/closed_field_test_readiness.md`, `docs/campops/internal_beta_evidence.md`, `docs/campops/live_readiness_gates.md`, and `docs/release/qa-system-checkoffs.md`.
+
+Current status as of 2026-05-17: CampOps is risk-accepted for a restricted closed field test only. Public rollout, provider influence, AI assist, telemetry, community publishing, and broad privacy/storage rollout remain blocked unless separately approved.
+
 ## Recommendation
 
 CampOps is ready for internal beta preparation and controlled internal tester evaluation, with feature flags off by default and with provider influence, AI assist, telemetry, and community publishing kept gated.
 
-CampOps is not ready for closed field test, limited regional rollout, or public rollout until the blockers below are resolved.
+At the time of this 2026-05-01 report, CampOps was not ready for closed field test, limited regional rollout, or public rollout until the blockers below were resolved or explicitly risk-accepted.
 
-Recommended rollout stage: internal beta preparation only.
+Historical recommended rollout stage: internal beta preparation only.
 
 Internal beta enablement package: `docs/campops/internal_beta_enablement.md`.
 
@@ -29,7 +35,7 @@ Internal beta enablement package: `docs/campops/internal_beta_enablement.md`.
 
 | Area | Status | Reason |
 | --- | --- | --- |
-| Mobile QA | Partial | Fixture/dev-state docs and contract tests exist, but no Android emulator or physical-device QA evidence is recorded. |
+| Mobile QA | Partial | Fixture/dev-state docs and contract tests existed, but no Android emulator or physical-device QA evidence was recorded at the time of this report. Current guarded Android QA evidence is tracked in `mobile_qa_evidence.md`. |
 | Provider quality | Partial | Harness and fixtures pass, but real legal/access, closure, fire, weather, and service provider quality has not been validated by region. |
 | Offline/stale UX | Partial | Source metadata and tests pass, but stale/offline copy still needs Android field-mode visual QA. |
 | AI production behavior | Partial | Parser and fixture tests pass; real model outputs still need adversarial review before AI assist is enabled for field testers. |
@@ -41,7 +47,7 @@ Internal beta enablement package: `docs/campops/internal_beta_enablement.md`.
 | Blocker | Severity | Blocks | Current state | Required action |
 | --- | --- | --- | --- | --- |
 | Real provider readiness unproven | Critical | Closed field test influence, limited region rollout, public rollout | Only fixture/shadow tooling evidence exists. | Run provider validation shadow mode by region and approve readiness thresholds for legal/access, closure, fire, weather, and service data. |
-| Android/device QA incomplete | High | Closed field test, public confidence in UI | Mobile QA docs and fixtures exist; device evidence is absent. | Run `docs/campops/mobile_qa.md` and visual state matrix on Android emulator/physical device. |
+| Android/device QA incomplete | High | Closed field test, public confidence in UI | Historical blocker. Current guarded Android QA evidence exists, but real provider-backed route-line candidate validation remains follow-up. | Continue Android QA with provider-backed candidate routes before provider-influenced rollout. |
 | Full repo test sweep has non-CampOps failures | High | App-wide release confidence | CampOps suite passes, but broad script sweep failed nine existing/non-CampOps scripts. | Triage and fix or intentionally update the failing string-contract/snapshot tests before app-wide release. |
 | Field evidence absent | High | Closed field test completion, limited rollout | Field-test plan exists, but no real route/test-cell evidence is recorded. | Execute closed field-test plan using region labels and privacy-safe feedback. |
 | Community debrief governance incomplete | Critical | Any community-visible debrief release | Guardrails exist, but policy/moderation/tooling approval is not complete. | Keep `campopsDebriefCommunityPublishingEnabled` off until product/privacy/moderation approval. |
@@ -121,9 +127,9 @@ Assessment: these failures are outside the current CampOps modules and appear to
 ## Known Limitations
 
 - No live provider quality evidence is recorded for real regions.
-- No Android emulator or physical-device visual QA evidence is recorded for CampOps cards.
+- At the time of this report, no Android emulator or physical-device visual QA evidence was recorded for CampOps cards. Current guarded QA evidence is now tracked separately.
 - Field-test package exists, but no closed field-test feedback has been captured.
-- Internal beta enablement exists, but it does not mark closed field test ready.
+- Internal beta enablement exists, but it does not by itself mark closed field test ready. Current restricted test readiness depends on accepted risk scope and current evidence docs.
 - AI assist has fixture/adversarial coverage, not real model-output acceptance evidence for every target prompt/model path.
 - Community debrief publishing must remain disabled.
 - Telemetry must remain disabled unless a sink is explicitly approved.
@@ -133,7 +139,7 @@ Assessment: these failures are outside the current CampOps modules and appear to
 ## Recommended Next PRs
 
 1. Triage the nine non-CampOps broad-suite failures and either fix code or update stale contract tests intentionally.
-2. Run Android emulator/physical-device CampOps mobile QA and attach evidence by visual state.
+2. Continue Android emulator/physical-device CampOps mobile QA with real provider-backed route-line candidate validation.
 3. Run provider validation shadow mode for one closed field-test region label and generate readiness reports.
 4. Execute the closed field-test plan with privacy-safe feedback capture.
 5. Continue AI adversarial evals against real model outputs for stale, missing, conflict, rejected-camp, and low-legal-confidence cases.

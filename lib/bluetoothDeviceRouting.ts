@@ -54,6 +54,7 @@ const POWER_BADGE_TO_PROVIDER_ID: Partial<Record<BluetoothProviderBadge, BluProv
   Renogy: 'renogy',
   Redarc: 'redarc',
   'Dakota Lithium': 'dakota_lithium',
+  'Victron Energy': 'victron',
 };
 
 function getPowerSupport(providerId: BluProviderId): Pick<
@@ -249,4 +250,10 @@ export function routeBluetoothDevice(
     displayName: presentation.displayName,
     secondaryLabel: presentation.secondaryLabel,
   };
+}
+
+export function isReleaseScannerBluetoothRoute(
+  routing: Pick<BluetoothRoutingDecision, 'owner'>,
+): boolean {
+  return routing.owner === 'power' || routing.owner === 'telemetry';
 }

@@ -79,6 +79,7 @@ export default function LoginScreen() {
     authNotice,
     consumeAuthNotice,
     enterOfflineMode,
+    offlineMode,
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
@@ -102,6 +103,7 @@ export default function LoginScreen() {
   const [exportingLocalData, setExportingLocalData] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
+  const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
   const loginCtaRenderedRef = useRef(false);
   const loginSubmitInFlightRef = useRef(false);
 
@@ -246,8 +248,16 @@ export default function LoginScreen() {
       needsFreshGuestSetup,
     });
     enterOfflineMode();
-    router.replace(destination as any);
+    if (needsFreshGuestSetup) {
+      setPendingFreeDestination(destination);
+    }
   }, [clearStatus, enterOfflineMode, router]);
+
+  useEffect(() => {
+    if (!offlineMode || !pendingFreeDestination) return;
+    router.replace(pendingFreeDestination as any);
+    setPendingFreeDestination(null);
+  }, [offlineMode, pendingFreeDestination, router]);
 
   const handleViewPro = useCallback(() => {
     Keyboard.dismiss();

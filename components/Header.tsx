@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
@@ -32,9 +32,9 @@ import TacticalPopupShell from './TacticalPopupShell';
 import { openManageSubscription } from '../lib/subscriptionAccess';
 import { VISIBILITY_THEME_CYCLE } from '../lib/appearanceStore';
 import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
-import FleetSyncModal from './fleet/FleetSyncModal';
 import TopBannerBackground, { resolveTopBannerVariant } from './TopBannerBackground';
 import { useEcsTopBannerHeight } from './ECSGlobalBanner';
+import { useEcsBriefTopBannerMessage } from '../lib/useEcsBriefTopBannerMessage';
 
 const HEADER = {
   bar: '#1E2125',
@@ -105,7 +105,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
   const adaptive = useAdaptiveLayout();
   const topBannerHeight = useEcsTopBannerHeight();
   const [profilePanelVisible, setProfilePanelVisible] = useState(false);
-  const [syncModalVisible, setSyncModalVisible] = useState(false);
   const [signOutConfirmVisible, setSignOutConfirmVisible] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [accountActionBusyId, setAccountActionBusyId] = useState<string | null>(null);
@@ -116,6 +115,9 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
   const [expeditionState, setExpeditionState] = useState(() => expeditionStateStore.getState());
   const shellMessageLogKeyRef = useRef<string | null>(null);
   const syncSpin = useRef(new Animated.Value(0)).current;
+  const briefBannerAnim = useRef(new Animated.Value(0)).current;
+  const briefTopBanner = useEcsBriefTopBannerMessage();
+  const [displayBriefBanner, setDisplayBriefBanner] = useState(briefTopBanner);
   const processingActive = syncStatus === 'syncing' || connectivityStatus === 'reconnecting';
 
   useEffect(() => {
@@ -153,6 +155,28 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
       syncSpin.setValue(0);
     };
   }, [processingActive, syncSpin]);
+
+  useEffect(() => {
+    if (briefTopBanner) {
+      setDisplayBriefBanner(briefTopBanner);
+      Animated.timing(briefBannerAnim, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }).start();
+      return;
+    }
+
+    Animated.timing(briefBannerAnim, {
+      toValue: 0,
+      duration: 320,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setDisplayBriefBanner(null);
+      }
+    });
+  }, [briefBannerAnim, briefTopBanner]);
 
   const hasActiveExpeditionContext = useMemo(
     () => expeditionState === 'active' || Boolean(activeTrip),
@@ -270,6 +294,14 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
       }),
     [syncSpin],
   );
+  const briefDefaultOpacity = briefBannerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+  });
+  const briefBannerTranslateY = briefBannerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [5, 0],
+  });
 
   const openProfilePanel = useCallback(() => {
     setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
@@ -385,9 +417,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
       }
     }
   }, [router, showToast]);
-  const openSyncManagement = useCallback(() => {
-    setSyncModalVisible(true);
-  }, []);
 
   const syncActionLabel = useMemo(() => {
     if (syncStatus === 'error') return 'RETRY SYNC';
@@ -396,7 +425,7 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
     return 'SYNC NOW';
   }, [bannerStatus.processingActive, bannerStatus.processingLabel, isOnline, syncStatus]);
   const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
-  const useBannerTitleLayout = Boolean(bannerSubject);
+  const useBannerTitleLayout = Boolean(bannerSubject || displayBriefBanner);
   const leftControlSlotWidth = useBannerTitleLayout
     ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
     : controlSlotWidth;
@@ -416,19 +445,8 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
   const sharedHeaderTopPadding = useBannerTitleLayout
     ? topBannerLayout.topPadding
     : getShellHeaderTopPadding(insets.top);
-  const shellStatusLabel = useMemo(() => {
-    if (bannerStatus.processingActive) return 'SYNC';
-    if (offlineMode || !isOnline) return 'OFFLINE';
-    return 'ONLINE';
-  }, [bannerStatus.processingActive, isOnline, offlineMode]);
-  const shellStatusPillStyle = useMemo(
-    () => ({
-      borderColor: toneColor + '45',
-      backgroundColor: toneColor + '12',
-      color: toneColor,
-    }),
-    [toneColor],
-  );
+  const connectionLabel = offlineMode || !isOnline ? 'OFFLINE' : 'ONLINE';
+  const connectionTone = offlineMode || !isOnline ? shellChrome.iconMuted : shellChrome.online;
   const bluetoothPillStyle = useMemo(
     () => ({
       borderColor: shellChrome.iconMuted + '45',
@@ -605,33 +623,9 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
             { width: leftControlSlotWidth },
           ]}
         >
-          <View style={styles.statusPillCluster}>
-            <TouchableOpacity
-              style={[styles.statusPill, shellStatusPillStyle]}
-              onPress={openSyncManagement}
-              activeOpacity={0.78}
-              hitSlop={CLOSE_BTN.hitSlop}
-              accessibilityRole="button"
-              accessibilityLabel={`${shellStatusLabel} sync controls`}
-              accessibilityHint="Opens sync management and offline readiness controls"
-            >
-              <View style={[styles.statusPillDot, { backgroundColor: shellStatusPillStyle.color }]} />
-              <Text style={[styles.statusPillText, { color: shellStatusPillStyle.color }]}>
-                {shellStatusLabel}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.statusPill, bluetoothPillStyle]}
-              onPress={openBluetoothConnections}
-              activeOpacity={0.78}
-              hitSlop={CLOSE_BTN.hitSlop}
-              accessibilityRole="button"
-              accessibilityLabel="Bluetooth controls"
-              accessibilityHint="Opens device connections and Bluetooth controls"
-            >
-              <Ionicons name="bluetooth-outline" size={8} color={bluetoothPillStyle.color} />
-              <Text style={[styles.statusPillText, { color: bluetoothPillStyle.color }]}>BLU</Text>
-            </TouchableOpacity>
+          <View style={styles.connectionWordmark} pointerEvents="none">
+            <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
+            <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
           </View>
         </View>
 
@@ -639,16 +633,43 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
           style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
           pointerEvents="none"
         >
-          {bannerSubject ? (
+          {bannerSubject || displayBriefBanner ? (
             <View style={styles.bannerTitleStack}>
-              <Text
-                style={styles.bannerTitle}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.74}
-              >
-                {bannerSubject}
-              </Text>
+              {bannerSubject ? (
+                <Animated.View style={[styles.bannerDefaultCopy, { opacity: briefDefaultOpacity }]}>
+                  <Text
+                    style={styles.bannerTitle}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.74}
+                  >
+                    {bannerSubject}
+                  </Text>
+                </Animated.View>
+              ) : null}
+              {displayBriefBanner ? (
+                <Animated.View
+                  style={[
+                    styles.briefBannerCopy,
+                    {
+                      opacity: briefBannerAnim,
+                      transform: [{ translateY: briefBannerTranslateY }],
+                    },
+                  ]}
+                >
+                  <Text style={styles.briefBannerEyebrow} numberOfLines={1}>
+                    {displayBriefBanner.eyebrow}
+                  </Text>
+                  <Text
+                    style={styles.briefBannerDetail}
+                    numberOfLines={2}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.78}
+                  >
+                    {displayBriefBanner.detail}
+                  </Text>
+                </Animated.View>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -662,6 +683,17 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
           ]}
         >
           <View style={styles.rightControlCluster}>
+            <TouchableOpacity
+              style={[styles.statusPill, bluetoothPillStyle]}
+              onPress={openBluetoothConnections}
+              activeOpacity={0.78}
+              hitSlop={CLOSE_BTN.hitSlop}
+              accessibilityRole="button"
+              accessibilityLabel="Bluetooth controls"
+              accessibilityHint="Opens device connections and Bluetooth controls"
+            >
+              <Ionicons name="bluetooth-outline" size={16} color={bluetoothPillStyle.color} />
+            </TouchableOpacity>
             <ThemeToggle
               compact
               size={30}
@@ -740,14 +772,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
           operatorTrustModeStore.setMode(mode);
         }}
         onProfilePress={!user ? handleOpenAuthEntry : undefined}
-      />
-
-      <FleetSyncModal
-        visible={syncModalVisible}
-        onClose={() => setSyncModalVisible(false)}
-        eyebrow="ECS COMMAND"
-        title="Sync Management"
-        subtitle="Queue health, pending field changes, conflicts, and offline readiness."
       />
 
       <TacticalPopupShell
@@ -863,14 +887,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: 6,
+    gap: 5,
   },
-  statusPillCluster: {
+  connectionWordmark: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
     maxWidth: '100%',
-    flexShrink: 1,
+    paddingHorizontal: 2,
+  },
+  connectionDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  connectionText: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
   centerContent: {
     flex: 1,
@@ -887,20 +921,66 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minWidth: 0,
+    minHeight: 30,
+    position: 'relative',
+  },
+  bannerDefaultCopy: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  briefBannerCopy: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  briefBannerEyebrow: {
+    maxWidth: '100%',
+    color: HEADER.iconActive,
+    fontSize: 8,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.82,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  briefBannerDetail: {
+    maxWidth: '100%',
+    marginTop: 1,
+    color: 'rgba(248,242,226,0.94)',
+    fontSize: 9.5,
+    lineHeight: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.18,
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.76)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   bannerTitle: {
     maxWidth: '100%',
     color: HEADER.iconActive,
-    fontSize: 16,
+    fontFamily: Platform.select({
+      ios: 'Avenir Next Condensed',
+      android: 'sans-serif-condensed',
+      default: 'System',
+    }),
+    fontSize: 17,
     lineHeight: 18,
-    fontWeight: '900',
-    letterSpacing: 0.65,
+    fontWeight: '800',
+    letterSpacing: 0,
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowColor: 'rgba(0,0,0,0.82)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    textShadowRadius: 4,
   },
   product: {
     ...TYPO.T1,
@@ -916,26 +996,19 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   statusPill: {
-    minHeight: 16,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 999,
+    width: 30,
+    height: 30,
+    minHeight: 30,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    borderRadius: 15,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     flexShrink: 0,
-  },
-  statusPillDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  statusPillText: {
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 0.72,
+    overflow: 'hidden',
   },
   authBtn: {
     width: 30,

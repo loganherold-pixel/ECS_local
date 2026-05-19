@@ -4,7 +4,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function assert(condition, message) {
@@ -60,7 +60,7 @@ assert(
   'Unified scanner error source contract must distinguish cloud and native BLE failures.',
 );
 assert(
-  powerScreen.includes('connections.nearbyDevices.filter(isRealNearbyPowerDevice)') &&
+  powerScreen.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
     powerScreen.includes('EcoFlow cloud authorization problems do not create Bluetooth failure rows') &&
     !powerScreen.includes('connections.attentionDevices.map'),
   'Power-device Bluetooth UI must show nearby BLE advertisements without failed/needs-attention cloud rows.',

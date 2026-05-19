@@ -35,7 +35,7 @@ import { ecsLog } from './ecsLogger';
 import { reportRecoverableFailure } from './ecsIssueReporter';
 
 // ── Map Styles ──────────────────────────────────────────────
-export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d';
+export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d' | 'route-progress';
 
 export interface MapStyleDef {
   key: MapStyleKey;
@@ -75,6 +75,13 @@ export const MAP_STYLES: MapStyleDef[] = [
     shortLabel: '3D',
     url: 'mapbox://styles/expeditioncommand/cmonsduoz000b01spgl7bepey',
     icon: 'cube-outline',
+  },
+  {
+    key: 'route-progress',
+    label: 'Route Progress',
+    shortLabel: 'RTE',
+    url: 'mapbox://styles/expeditioncommand/cmpax1px3005a01sq5doe9xml',
+    icon: 'git-branch-outline',
   },
 ];
 

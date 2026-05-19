@@ -22,6 +22,7 @@
  */
 
 import type { NormalizedVehicleTelemetry, VehicleTelemetryProviderId } from './VehicleTelemetryTypes';
+import { ecsLog } from '../../lib/ecsLogger';
 
 export type VehicleTelemetryBridgeLifecycleEvent =
   | 'telemetry'
@@ -228,10 +229,23 @@ export class VehicleTelemetryAdapterBridge {
     this.tag = options.tag || DEFAULT_TAG;
   }
 
-  private log(...args: any[]): void {
+  private log(message: string, details?: Record<string, unknown>): void {
     if (!this.debug) return;
-     
-    console.log(this.tag, ...args);
+    ecsLog.debug('TELEMETRY', `${this.tag} ${message}`, details);
+  }
+
+  private warn(message: string, details?: Record<string, unknown>): void {
+    ecsLog.warn('TELEMETRY', `${this.tag} ${message}`, details);
+  }
+
+  private errorDetails(error: unknown): Record<string, unknown> {
+    if (error instanceof Error) {
+      return {
+        errorName: error.name,
+        errorMessage: error.message,
+      };
+    }
+    return { errorMessage: String(error) };
   }
 
   private setConnectionState(state: VehicleTelemetryBridgeConnectionState): void {
@@ -248,8 +262,7 @@ export class VehicleTelemetryAdapterBridge {
       try {
         listener(payload);
       } catch (error) {
-         
-        console.warn(this.tag, `Listener failure for ${String(event)}`, error);
+        this.warn(`Listener failure for ${String(event)}`, this.errorDetails(error));
       }
     }
   }
@@ -390,8 +403,7 @@ export class VehicleTelemetryAdapterBridge {
         };
       }
     } catch (error) {
-       
-      console.warn(this.tag, `Failed attaching adapter listener for ${eventName}`, error);
+      this.warn(`Failed attaching adapter listener for ${eventName}`, this.errorDetails(error));
     }
     return null;
   }

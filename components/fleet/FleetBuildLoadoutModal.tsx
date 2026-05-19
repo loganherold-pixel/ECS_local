@@ -5,7 +5,6 @@ import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
 import { ECSButton } from '../ECSButton';
 import { ECSBadge } from '../ECSStatus';
 import { ECSCard, ECSPanel } from '../ECSSurface';
-import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import { ECS_TEXT } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
@@ -298,7 +297,7 @@ export default function FleetBuildLoadoutModal({
         title="Build & Loadout"
         subtitle="Add installed accessories, let ECS estimate weight, and create compartments for load planning."
         eyebrow="FLEET ACCESSORY FRAMEWORK"
-        icon="cube-outline"
+        icon="car-sport-outline"
         overlayClass="workflow"
         maxWidth={1040}
         minHeightFraction={0.88}
@@ -348,9 +347,6 @@ export default function FleetBuildLoadoutModal({
                 >
                   <ECSCard variant={install ? 'secondary' : 'compact'} selected={Boolean(install)} style={styles.accessoryTile}>
                     <View style={styles.tileHeader}>
-                      <View style={styles.tileIcon}>
-                        <Ionicons name={catalog.icon as any} size={17} color={install ? TACTICAL.amber : TACTICAL.textMuted} />
-                      </View>
                       <ECSBadge label={install ? 'INSTALLED' : 'ADD'} tone={install ? 'ready' : 'info'} compact />
                     </View>
                     <Text style={styles.tileTitle} numberOfLines={2}>{catalog.label}</Text>
@@ -359,7 +355,7 @@ export default function FleetBuildLoadoutModal({
                         ? `ECS estimated this at ${Math.round(install.installedWeightLb)} lb`
                         : `Default ${Math.round(catalog.defaultWeightLb)} lb`}
                     </Text>
-                    <Text style={styles.tileMeta} numberOfLines={1}>{install ? `${install.confidence}% confidence` : catalog.mountZone}</Text>
+                    {install ? <Text style={styles.tileMeta} numberOfLines={1}>{`${install.confidence}% confidence`}</Text> : null}
                   </ECSCard>
                 </TouchableOpacity>
               );
@@ -505,7 +501,7 @@ export default function FleetBuildLoadoutModal({
         title={editingLoadoutItem ? 'Edit Loadout Item' : 'Add Loadout Item'}
         subtitle="What is normally carried, and where does it live?"
         eyebrow="COMPARTMENT LOADOUT"
-        icon="cube-outline"
+        icon="briefcase-outline"
         stackBehavior="allow-stack"
         overlayClass="editor"
         maxWidth={720}
@@ -573,7 +569,6 @@ export default function FleetBuildLoadoutModal({
                     accessibilityLabel={`Place item in ${compartment.name}`}
                   >
                     <Text style={[styles.compartmentPickerText, loadoutDraft.compartmentId === compartment.id && styles.optionTextActive]}>{compartment.name}</Text>
-                    <Text style={styles.compartmentPickerMeta}>{compartment.loadZone}</Text>
                   </TouchableOpacity>
                 )) : (
                   <Text style={styles.tileMeta}>Add an accessory with compartments before assigning loadout placement.</Text>
@@ -608,7 +603,7 @@ export default function FleetBuildLoadoutModal({
 
 const styles = StyleSheet.create({
   stack: {
-    gap: 12,
+    gap: 10,
   },
   summaryPanel: {
     flexDirection: 'row',
@@ -617,7 +612,7 @@ const styles = StyleSheet.create({
   },
   summaryTile: {
     flexGrow: 1,
-    flexBasis: 150,
+    flexBasis: 132,
     gap: 3,
   },
   metricLabel: {
@@ -629,30 +624,22 @@ const styles = StyleSheet.create({
   tileGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 8,
   },
   tilePressable: {
     flexGrow: 1,
-    flexBasis: 210,
+    flexBasis: 182,
     minWidth: 0,
   },
   accessoryTile: {
-    minHeight: 142,
-    gap: 9,
+    minHeight: 116,
+    gap: 7,
   },
   tileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: 8,
-  },
-  tileIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: ECS_SURFACE.background.compact,
   },
   tileTitle: {
     ...ECS_TEXT.cardTitle,
@@ -690,7 +677,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
   },
   loadoutPanel: {
-    gap: 12,
+    gap: 10,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -701,10 +688,10 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.cardTitle,
   },
   compartmentGroupStack: {
-    gap: 8,
+    gap: 7,
   },
   compartmentGroup: {
-    gap: 8,
+    gap: 7,
   },
   groupTitle: {
     ...ECS_TEXT.sectionTitle,
@@ -718,15 +705,15 @@ const styles = StyleSheet.create({
     gap: 10,
     borderTopWidth: 1,
     borderTopColor: ECS_SURFACE.border.quiet,
-    paddingTop: 8,
+    paddingTop: 7,
   },
   customCompartmentRow: {
     borderWidth: 1,
     borderTopWidth: 1,
     borderColor: ECS_STATUS.tone.selected.border,
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingBottom: 9,
+    paddingHorizontal: 9,
+    paddingBottom: 8,
     backgroundColor: ECS_STATUS.tone.selected.background,
   },
   compartmentCopy: {
@@ -794,11 +781,6 @@ const styles = StyleSheet.create({
   compartmentPickerText: {
     ...ECS_TEXT.chip,
     color: TACTICAL.text,
-  },
-  compartmentPickerMeta: {
-    ...ECS_TEXT.helper,
-    color: TACTICAL.textMuted,
-    marginTop: 2,
   },
   field: {
     flexGrow: 1,

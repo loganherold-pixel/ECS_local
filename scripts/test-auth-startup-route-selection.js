@@ -125,6 +125,31 @@ assert.strictEqual(
 assert.strictEqual(
   resolve({
     currentPath: '/',
+    guestOfflineAccess: true,
+    offlineMode: true,
+    setupComplete: true,
+    isAuthScreen: true,
+  }).redirectTarget,
+  '/dashboard',
+  'Guest offline startup with completed setup should route directly to /dashboard.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/login',
+    guestOfflineAccess: true,
+    offlineMode: true,
+    setupComplete: true,
+    isAuthScreen: true,
+    isLoginScreen: true,
+  }).redirectTarget,
+  '/dashboard',
+  'Guest offline users found on /login should route directly to /dashboard.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/',
     rememberedOfflineAccess: true,
     offlineMode: true,
     setupComplete: true,
@@ -182,6 +207,83 @@ assert.strictEqual(
   }).redirectTarget,
   null,
   'Vehicle recovery should settle on Fleet instead of redirecting again.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/alert',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Vehicle recovery should still allow Dispatch because emergency coordinate ping is safety-critical.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/navigate',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Vehicle recovery should allow Navigate so Recovery Assist coordinate handoffs can open the map.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/navigate',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: false,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Navigate should remain available as a safety-critical pre-setup shell route for recovery handoffs.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/',
+    authenticated: true,
+    setupComplete: false,
+    requestedEntryRoute: '/dev/campops-visual-qa',
+    isAuthScreen: true,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  '/dev/campops-visual-qa',
+  'Dev-only CampOps visual QA should be reachable before setup so Android pin/popup evidence can be captured.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/dev/campops-visual-qa',
+    authenticated: true,
+    setupComplete: false,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Dev-only CampOps visual QA should stay mounted once opened before setup.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/safety',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Vehicle recovery should still allow the Dispatch safety surface.',
 );
 
 assert.strictEqual(

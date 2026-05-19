@@ -37,8 +37,8 @@ assertNotIncludes(
 );
 assertIncludes(
   rootLayout,
-  'if (postAuthRedirectHoldingScreenActive) {',
-  'The shared root shell should keep the post-auth loading video isolated to the pre-shell holding branch.',
+  "if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {",
+  'The shared root shell should keep the post-auth loading video isolated to the root pre-shell holding branch.',
 );
 assertIncludes(
   rootLayout,

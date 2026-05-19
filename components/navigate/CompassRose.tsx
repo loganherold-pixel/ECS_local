@@ -81,6 +81,7 @@ const CompassRose = React.memo(function CompassRose({
   accuracy = 'medium',
   needsRecalibration = false,
   isStationaryLocked = false,
+  source = 'none',
   containerStyle,
   paused = false,
 }: CompassRoseProps) {
@@ -261,6 +262,7 @@ const CompassRose = React.memo(function CompassRose({
   const hasHeading = effectiveHeading != null;
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
+  const displaySource = source === 'gps' ? 'GPS' : source === 'compass' ? 'MAG' : 'NO FIX';
 
   const accuracyColor = getAccuracyColor(accuracy);
 
@@ -374,6 +376,12 @@ const CompassRose = React.memo(function CompassRose({
         {hasHeading && !paused ? (
           <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
         ) : null}
+
+        <View style={styles.headingSourceBadge}>
+          <Text style={[styles.headingSourceText, { color: accuracyColor }]}>
+            {paused ? 'PAUSED' : displaySource}
+          </Text>
+        </View>
       </Wrapper>
     </Animated.View>
   );
@@ -631,5 +639,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 2,
     elevation: 2,
+  },
+  headingSourceBadge: {
+    position: 'absolute',
+    bottom: 6,
+    alignSelf: 'center',
+    minWidth: 28,
+    minHeight: 10,
+    paddingHorizontal: 4,
+    borderRadius: 5,
+    backgroundColor: 'rgba(11,15,18,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headingSourceText: {
+    fontSize: 5.5,
+    lineHeight: 7,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    includeFontPadding: false,
   },
 });

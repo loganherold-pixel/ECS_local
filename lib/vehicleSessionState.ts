@@ -42,6 +42,7 @@ import type {
   CompanionRestorePayload,
 } from './vehicleCompanionTypes';
 import type { VehicleDisplayMode, ModeOverrideSetting } from './vehicleDisplayTypes';
+import { ecsLog } from './ecsLogger';
 
 // ── Storage helpers ──────────────────────────────────────────
 const STORAGE_KEY = 'ecs_vehicle_session_state';
@@ -137,6 +138,16 @@ function createDefaultSessionState(): VehicleSessionState {
 let _state: VehicleSessionState = createDefaultSessionState();
 let _eventHistory: CompanionSyncEventRecord[] = [];
 const MAX_EVENT_HISTORY = 200;
+
+function logVehicleSessionDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.dev('SYSTEM', message, details, {
+    tag: '[VehicleSessionState]',
+    debugFlag: 'ECS_DEBUG_VEHICLE_SESSION',
+    fingerprint: `${message}:${JSON.stringify(details ?? {})}`,
+    throttleMs: 2500,
+    aggregateWindowMs: 30_000,
+  });
+}
 
 // Listeners
 type Listener = () => void;
@@ -364,7 +375,7 @@ export const vehicleSessionState = {
     _recordEvent('mode_changed', source, { previousMode, newMode: mode });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Mode changed: ${previousMode} → ${mode} (source: ${source})`);
+    logVehicleSessionDebug('mode_changed', { previousMode, mode, source });
   },
 
   /**
@@ -398,7 +409,7 @@ export const vehicleSessionState = {
     _recordEvent('expedition_started', source, { expeditionId, expeditionName });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Expedition started: ${expeditionId} "${expeditionName}"`);
+    logVehicleSessionDebug('expedition_started', { expeditionId, expeditionName, source });
   },
 
   /**
@@ -415,7 +426,7 @@ export const vehicleSessionState = {
     _recordEvent('expedition_ended', source, { expeditionId: prevId });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Expedition ended: ${prevId}`);
+    logVehicleSessionDebug('expedition_ended', { expeditionId: prevId, source });
   },
 
   // ── Route Sync ────────────────────────────────────────
@@ -435,7 +446,7 @@ export const vehicleSessionState = {
     _recordEvent('route_activated', source, { routeId, routeName });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Route activated: ${routeId} "${routeName}"`);
+    logVehicleSessionDebug('route_activated', { routeId, routeName, source });
   },
 
   /**
@@ -452,7 +463,7 @@ export const vehicleSessionState = {
     _recordEvent('route_deactivated', source, { routeId: prevId });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Route deactivated: ${prevId}`);
+    logVehicleSessionDebug('route_deactivated', { routeId: prevId, source });
   },
 
   // ── Breadcrumb Sync ───────────────────────────────────
@@ -545,7 +556,12 @@ export const vehicleSessionState = {
     });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Waypoint added: ${waypoint.id} "${waypoint.title}" (source: ${source})`);
+    logVehicleSessionDebug('waypoint_added', {
+      waypointId: waypoint.id,
+      type: waypoint.type,
+      title: waypoint.title,
+      source,
+    });
   },
 
   /**
@@ -565,7 +581,12 @@ export const vehicleSessionState = {
     });
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Waypoint removed: ${waypointId} (source: ${source})`);
+    logVehicleSessionDebug('waypoint_removed', {
+      waypointId,
+      type: removed.type,
+      title: removed.title,
+      source,
+    });
   },
 
   /**
@@ -630,14 +651,17 @@ export const vehicleSessionState = {
         platform,
         reconnectCount: _state.companionConnection.reconnectCount,
       });
-      console.log(`[VehicleSessionState] Companion reconnected: ${platform} (count: ${_state.companionConnection.reconnectCount})`);
+      logVehicleSessionDebug('companion_reconnected', {
+        platform,
+        reconnectCount: _state.companionConnection.reconnectCount,
+      });
     } else {
       // Fresh connection
       _state.companionConnection.reconnectCount = 0;
       _recordEvent('companion_connected', platform === 'android_auto' ? 'android_auto' : 'carplay', {
         platform,
       });
-      console.log(`[VehicleSessionState] Companion connected: ${platform}`);
+      logVehicleSessionDebug('companion_connected', { platform });
     }
 
     _persistState();
@@ -661,7 +685,7 @@ export const vehicleSessionState = {
 
     _persistState();
     _notify();
-    console.log(`[VehicleSessionState] Companion disconnected: ${platform} (grace period active)`);
+    logVehicleSessionDebug('companion_disconnected', { platform, reconnectGrace: true });
   },
 
   /**
@@ -673,7 +697,7 @@ export const vehicleSessionState = {
     _state.companionConnection.isInReconnectGrace = false;
     _state.companionConnection.platform = 'none';
     _notify();
-    console.log('[VehicleSessionState] Reconnect grace period expired');
+    logVehicleSessionDebug('reconnect_grace_expired');
   },
 
   /**
@@ -728,7 +752,7 @@ export const vehicleSessionState = {
     _eventHistory = [];
     _persistState();
     _notify();
-    console.log('[VehicleSessionState] Session state reset');
+    logVehicleSessionDebug('session_state_reset');
   },
 
   /**

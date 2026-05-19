@@ -132,10 +132,13 @@ assert.ok(
     widgetRenderers.includes('showLiveHashIndicators={sensorLive}') &&
     widgetRenderers.includes('showReadouts={sensorLive}') &&
     widgetRenderers.includes('showLiveHashIndicators={false}') &&
-    widgetRenderers.includes('showReadouts={commandSensorLive}') &&
+    widgetRenderers.includes('showGaugeOverlay') &&
+    widgetRenderers.includes('showReadouts={false}') &&
+    widgetRenderers.includes('showDegreeReadouts={false}') &&
+    widgetRenderers.includes('showLevelReadout={false}') &&
     widgetRenderers.includes('showZeroButton={false}') &&
     !widgetRenderers.includes('heroVehicle={heroVisual}'),
-  'Dashboard Attitude Monitor should animate live device samples, while Attitude Command center mode should show the active Fleet vehicle with live gauge readouts but without hash overlays.',
+  'Dashboard Attitude Monitor should animate live device samples, while Attitude Command center mode should keep the active Fleet vehicle rings mounted without legacy hash/readout overlays.',
 );
 assert.ok(
   deviceAttitudeTelemetry.includes("sourceType: 'device_attitude'") &&
@@ -178,6 +181,9 @@ assert.ok(stage.includes('telemetryFrame?: AttitudeTelemetryFrame'), 'VehicleAtt
 assert.ok(stage.includes('screenOrientation?: EcsScreenOrientation'), 'VehicleAttitudeStage should accept an explicit screen orientation override.');
 assert.ok(stage.includes("fitMode?: 'contain' | 'cover'"), 'VehicleAttitudeStage should let command surfaces opt into background-style cover fitting.');
 assert.ok(stage.includes('showReadouts?: boolean'), 'VehicleAttitudeStage should allow monitor/command callers to toggle degree readouts.');
+assert.ok(stage.includes('showGaugeOverlay?: boolean'), 'VehicleAttitudeStage should allow command callers to keep the Rive rings mounted without legacy readouts.');
+assert.ok(stage.includes('showDegreeReadouts?: boolean'), 'VehicleAttitudeStage should allow command callers to hide bottom degree readouts independently.');
+assert.ok(stage.includes('showLevelReadout?: boolean'), 'VehicleAttitudeStage should allow command callers to hide the lean/incline readout independently.');
 assert.ok(stage.includes('showZeroButton?: boolean'), 'VehicleAttitudeStage should allow monitor/command callers to toggle the Zero button.');
 assert.ok(stage.includes('showLiveHashIndicators?: boolean'), 'VehicleAttitudeStage should allow monitor/command callers to toggle live hash indicators.');
 assert.ok(stage.includes('className?: string'), 'VehicleAttitudeStage should accept className.');
@@ -200,7 +206,9 @@ assert.ok(
     stage.includes('<AttitudeReadout') &&
     stage.includes('AttitudeLiveHashOverlay') &&
     stage.includes('mapAttitudeInputForTelemetryFrame') &&
-    stage.includes('{showReadouts ? (') &&
+    stage.includes('{renderGaugeOverlay ? (') &&
+    stage.includes('{renderDegreeReadouts ? (') &&
+    stage.includes('{renderLevelReadout ? (') &&
     stage.includes('{showLiveHashIndicators ? (') &&
     stage.includes('valueDeg={safePitch}') &&
     stage.includes('valueDeg={safeRoll}') &&

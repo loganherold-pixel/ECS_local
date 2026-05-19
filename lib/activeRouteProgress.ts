@@ -76,6 +76,11 @@ export type ActiveRouteProgressSnapshot = ActiveRouteProgress & {
   stateTone: RouteProgressTone;
   footerText: string;
   sourceDetail: string;
+  routePoints?: NavigateRouteMapPoint[];
+  progressPoints?: NavigateRouteMapPoint[];
+  currentLocation?: { latitude: number; longitude: number } | null;
+  originLocation?: { latitude: number; longitude: number } | null;
+  destinationLocation?: { latitude: number; longitude: number } | null;
 };
 
 export type ActiveRouteProgressOptions = {
@@ -274,6 +279,8 @@ export function getNavigateSessionProgressSnapshot(
             : ''
         }`
       : 'Route geometry unavailable';
+  const routeOrigin = navigateSession.routePoints[0] ?? null;
+  const routeDestination = navigateSession.routePoints[navigateSession.routePoints.length - 1] ?? null;
 
   return withContractFields({
     source: getNavigateRouteProgressSource(navigateSession),
@@ -326,6 +333,11 @@ export function getNavigateSessionProgressSnapshot(
     stateTone: isComplete ? 'good' : isActive ? 'live' : 'attention',
     footerText: statusLabel,
     sourceDetail: 'Navigate map route session',
+    routePoints: navigateSession.routePoints,
+    progressPoints: navigateSession.progressPoints,
+    currentLocation: navigateSession.currentLocation,
+    originLocation: toRouteLocation(routeOrigin),
+    destinationLocation: toRouteLocation(routeDestination),
   });
 }
 
@@ -422,6 +434,18 @@ function withContractFields(
   };
 }
 
+function toNavigateMapPoint(point: { lat: number; lng?: number; lon?: number } | null | undefined): NavigateRouteMapPoint | null {
+  const lng = point?.lng ?? point?.lon;
+  if (typeof point?.lat !== 'number' || !Number.isFinite(point.lat)) return null;
+  if (typeof lng !== 'number' || !Number.isFinite(lng)) return null;
+  return { lat: point.lat, lng };
+}
+
+function toRouteLocation(point: NavigateRouteMapPoint | null | undefined): { latitude: number; longitude: number } | null {
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return null;
+  return { latitude: point.lat, longitude: point.lng };
+}
+
 export function getRoadProgressSnapshot(
   session: RoadNavigationSessionState,
   gpsSpeedMph?: number | null,
@@ -470,6 +494,14 @@ export function getRoadProgressSnapshot(
   const statusLabel =
     session.routeStatusLabel?.trim() ||
     (isComplete ? 'Arrived' : isActive ? 'Route active' : 'Route staged');
+  const routePoints = (session.route?.geometry ?? [])
+    .map(toNavigateMapPoint)
+    .filter((point): point is NavigateRouteMapPoint => !!point);
+  const progressPoints = (session.progressGeometry ?? [])
+    .map(toNavigateMapPoint)
+    .filter((point): point is NavigateRouteMapPoint => !!point);
+  const originPoint = routePoints[0] ?? null;
+  const destinationPoint = routePoints[routePoints.length - 1] ?? null;
 
   return withContractFields({
     source: 'road-guidance',
@@ -519,6 +551,11 @@ export function getRoadProgressSnapshot(
     stateTone: isComplete ? 'good' : isActive ? 'live' : 'attention',
     footerText: statusLabel,
     sourceDetail: 'Navigate road guidance',
+    routePoints,
+    progressPoints,
+    currentLocation: progressPoints.length > 0 ? toRouteLocation(progressPoints[progressPoints.length - 1]) : null,
+    originLocation: toRouteLocation(originPoint),
+    destinationLocation: toRouteLocation(destinationPoint),
   });
 }
 
@@ -564,6 +601,11 @@ export function getTrailProgressSnapshot(
     (totalTrailWaypoints > 0
       ? `Trail waypoint ${Math.min(session.currentRouteIndex + 1, totalTrailWaypoints)} of ${totalTrailWaypoints}`
       : 'Current trail leg unavailable');
+  const progressPoints = (session.progressGeometry ?? [])
+    .map(toNavigateMapPoint)
+    .filter((point): point is NavigateRouteMapPoint => !!point);
+  const originPoint = progressPoints[0] ?? null;
+  const destinationPoint = progressPoints[progressPoints.length - 1] ?? null;
 
   return withContractFields({
     source: 'trail-guidance',
@@ -615,6 +657,11 @@ export function getTrailProgressSnapshot(
     stateTone: isComplete ? 'good' : isActive ? 'live' : 'attention',
     footerText: statusLabel,
     sourceDetail: 'Navigate trail guidance',
+    routePoints: progressPoints,
+    progressPoints,
+    currentLocation: progressPoints.length > 0 ? toRouteLocation(progressPoints[progressPoints.length - 1]) : null,
+    originLocation: toRouteLocation(originPoint),
+    destinationLocation: toRouteLocation(destinationPoint),
   });
 }
 
@@ -692,6 +739,19 @@ export function getImportedRouteProgressSnapshot(params: {
       : hasGps
         ? 'Tracking live route progress'
         : 'Awaiting GPS to begin live progress';
+  const segmentRoutePoints = activeRoute.segments
+    .flatMap((segment) => segment.points)
+    .map(toNavigateMapPoint)
+    .filter((point): point is NavigateRouteMapPoint => !!point);
+  const waypointRoutePoints = routeWaypoints
+    .map(toNavigateMapPoint)
+    .filter((point): point is NavigateRouteMapPoint => !!point);
+  const routePoints = segmentRoutePoints.length > 1 ? segmentRoutePoints : waypointRoutePoints;
+  const currentLocation = hasGps && gpsLat != null && gpsLon != null
+    ? { latitude: gpsLat, longitude: gpsLon }
+    : null;
+  const originPoint = routePoints[0] ?? null;
+  const destinationPoint = routePoints[routePoints.length - 1] ?? null;
 
   return withContractFields({
     source: 'imported-route',
@@ -740,6 +800,11 @@ export function getImportedRouteProgressSnapshot(params: {
     stateTone: isComplete ? 'good' : hasGps ? 'live' : 'attention',
     footerText,
     sourceDetail: hasGps ? 'Imported route progress' : 'Route plan context',
+    routePoints,
+    progressPoints: currentLocation ? [...routePoints.slice(0, safeWpIndex + 1), { lat: currentLocation.latitude, lng: currentLocation.longitude }] : [],
+    currentLocation,
+    originLocation: toRouteLocation(originPoint),
+    destinationLocation: toRouteLocation(destinationPoint),
   });
 }
 

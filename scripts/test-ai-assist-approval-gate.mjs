@@ -41,6 +41,10 @@ function reviewDoc(overrides = {}) {
     '',
     overrides.extraText ?? 'Raw model output is not written to shared docs.',
     '',
+    '## Model / Config Path',
+    '',
+    `- Real model executed in this report: ${overrides.realModelExecuted ?? 'no'}`,
+    '',
   ].join('\n');
 }
 
@@ -148,6 +152,7 @@ test('approved exact model/config can pass when AI is enabled', () => {
       approvalDate: '2026-05-01',
       approver: 'Product Safety Owner',
       aiEnabled: 'yes',
+      realModelExecuted: 'yes',
     },
   });
 
@@ -158,6 +163,50 @@ test('approved exact model/config can pass when AI is enabled', () => {
   assert.equal(result.aiAssistEnabled, true);
   assert.equal(result.realOutputReviewApproved, true);
   assert.equal(result.activeModelConfigApproved, true);
+});
+
+test('AI assist enabled with approval fields but no real model execution evidence fails', () => {
+  const root = makeTempRepo();
+  writeFixtureRepo(root, {
+    review: {
+      status: 'complete',
+      activeModelConfig: 'campops-fixture-model-v1 / field-summary-config-v1',
+      approvalStatus: 'approved',
+      approvalDate: '2026-05-01',
+      approver: 'Product Safety Owner',
+      aiEnabled: 'yes',
+      realModelExecuted: 'no',
+    },
+  });
+
+  const result = buildAiAssistApprovalResult({ rootDir: root, now: fixedNow });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.realOutputReviewApproved, false);
+  assert.ok(result.blockers.includes('ai_assist_enabled_without_real_model_execution_evidence'));
+  assert.ok(result.blockers.includes('ai_assist_enabled_without_exact_model_config_real_output_approval'));
+});
+
+test('AI assist enabled with a future approval date fails', () => {
+  const root = makeTempRepo();
+  writeFixtureRepo(root, {
+    review: {
+      status: 'complete',
+      activeModelConfig: 'campops-fixture-model-v1 / field-summary-config-v1',
+      approvalStatus: 'approved',
+      approvalDate: '2026-06-01',
+      approver: 'Product Safety Owner',
+      aiEnabled: 'yes',
+      realModelExecuted: 'yes',
+    },
+  });
+
+  const result = buildAiAssistApprovalResult({ rootDir: root, now: fixedNow });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.realOutputReviewApproved, false);
+  assert.ok(result.blockers.includes('ai_assist_enabled_without_current_or_past_approval_date'));
+  assert.ok(result.blockers.includes('ai_assist_enabled_without_exact_model_config_real_output_approval'));
 });
 
 test('--json emits parseable JSON only and writes result artifact', () => {

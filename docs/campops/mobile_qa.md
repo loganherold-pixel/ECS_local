@@ -78,6 +78,8 @@ Use `fixtures/campops/mobileQaHarness.js` as the QA manifest. It lists:
 
 Use `/dev/campops-visual-qa` as the lightweight dev-only runtime entry point for visual states. The route is implemented in `app/dev/campops-visual-qa.tsx`, is gated by `__DEV__`, and redirects away outside development builds. It renders label-only scenarios from `components/campops/CampOpsVisualQaScreen.tsx`.
 
+The route also includes a candidate-producing QA viewport with visible CampOps pins. The viewport uses local fixture candidates only, opens the real Camp Intel popup, and lets QA press Save Camp, Navigate Here, and Report Unusable. Those actions are captured locally in the QA screen only; they do not enable provider APIs, telemetry, AI output, community publishing, or fake live camp data.
+
 The route exists to unblock Android/device QA evidence collection. It does not complete Android/device QA by itself.
 
 Guardrails:
@@ -100,6 +102,8 @@ The full matrix lives in `docs/campops/mobile_visual_state_matrix.md` and is bac
 
 Required visual states:
 
+- candidate-producing viewport
+- Camp Intel popup action buttons
 - feature flag off
 - feature flag on
 - recommended endpoint
@@ -139,6 +143,10 @@ Run the visual state matrix on:
 
 For each state, verify:
 
+- visible CampOps pins render in the candidate-producing viewport.
+- tapping a pin opens the Camp Intel popup.
+- Save Camp, Navigate Here, and Report Unusable are visible and tappable in the popup.
+- the popup and viewport are clearly labeled as non-live QA data.
 - long camp names wrap cleanly.
 - long warning lists remain readable and do not overlap controls.
 - missing data fields show `Unknown` or `Unknown confidence`.

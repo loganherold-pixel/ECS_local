@@ -7,6 +7,7 @@ const ts = require('typescript');
 const root = path.join(__dirname, '..');
 const viewModelPath = path.join(root, 'lib', 'campops', 'campOpsCampIntelViewModel.ts');
 const popupPath = path.join(root, 'components', 'navigate', 'CampScoutIntelCard.tsx');
+const establishedPopupPath = path.join(root, 'components', 'navigate', 'EstablishedCampsiteSheet.tsx');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 
 const originalLoad = Module._load;
@@ -146,6 +147,7 @@ assert(
 );
 
 const popupSource = fs.readFileSync(popupPath, 'utf8');
+const establishedPopupSource = fs.readFileSync(establishedPopupPath, 'utf8');
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 const combinedSource = `${popupSource}\n${navigateSource}`;
 
@@ -168,11 +170,32 @@ assert(
   'CampOps popup should fade in/out instead of flickering closed.',
 );
 assert(
+  popupSource.includes('numberOfLines={2}') &&
+    popupSource.includes('minimumFontScale={0.86}') &&
+    !popupSource.includes('styles.title} numberOfLines={1}'),
+  'CampOps popup title/subtitle should wrap on cramped Android screens instead of clipping long camp names.',
+);
+assert(
+  popupSource.includes("flexBasis: '30%'") &&
+    popupSource.includes('minWidth: 96') &&
+    popupSource.includes('adjustsFontSizeToFit') &&
+    popupSource.includes('minimumFontScale={0.7}'),
+  'CampOps popup actions should stay tappable and fit labels on small screens.',
+);
+assert(
   navigateSource.includes('selectedCampOpsIntel') &&
     navigateSource.includes('handleCampOpsNavigateHere') &&
     navigateSource.includes('previewCampsiteDestination') &&
     navigateSource.includes('campOpsLocalReportsRef'),
   'Navigate should wire CampOps popup actions into route preview, persistence, and local reports.',
+);
+
+assert(
+  establishedPopupSource.includes('resolveEstablishedCampScore') &&
+    establishedPopupSource.includes('ECS SCORE') &&
+    establishedPopupSource.includes('camp confidence') &&
+    establishedPopupSource.includes('source confidence, operating status, availability freshness, and attribution'),
+  'Established campground popups should explain ECS scoring in layman terms without claiming live availability.',
 );
 
 const forbiddenCopy = [

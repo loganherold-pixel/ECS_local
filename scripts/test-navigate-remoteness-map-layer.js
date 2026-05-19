@@ -30,6 +30,11 @@ assert(
   mapRenderer.includes("'ecs-remote-forecast-line'") && mapRenderer.includes('[1.4, 1.2]'),
   'MapRenderer should add a dashed forecast line layer.',
 );
+assert(
+  mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 7.5") &&
+    overlayBuilder.includes('const BUFFER_DEGREES = 0.00125'),
+  'Remoteness route corridor should render as a wider, readable corridor at full-route zoom.',
+);
 ['#C66A4A', '#F2C24D', '#65C97A', '#5FD1FF'].forEach((color) => {
   assert(mapRenderer.includes(color), `MapRenderer should include heatmap color stop ${color}.`);
 });
@@ -42,8 +47,10 @@ assert(
   'Navigate remoteness overlay toggle should default OFF.',
 );
 assert(
-  navigate.includes('toggleRemotenessOverlay') && navigate.includes('REMOTENESS'),
-  'Navigate Tools should expose a Remoteness toggle.',
+  navigate.includes('toggleRemotenessOverlay') &&
+    navigate.includes('accessibilityLabel="Remoteness map overlay"') &&
+    navigate.includes("name=\"radio-outline\""),
+  'Navigate should expose Remoteness as a dedicated floating map toggle.',
 );
 assert(
   navigate.includes('buildRemoteMapOverlay') && navigate.includes('remoteOverlay={remotenessMapOverlay}'),
@@ -51,9 +58,20 @@ assert(
 );
 assert(
   navigate.includes('remotenessOverlayHasVisibleLayer') &&
+    navigate.includes('const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;') &&
+    navigate.includes('remotenessOverlayRouteAvailable ||') &&
     navigate.includes('REMOTENESS CORRIDOR') &&
-    navigate.includes('REMOTENESS OVERLAY UNAVAILABLE'),
-  'Navigate should only report the remoteness overlay active when a visible layer can render.',
+    navigate.includes('Remoteness needs an active or selected route'),
+  'Navigate should enable the remoteness overlay for active route geometry and report when a visible layer can render.',
+);
+assert(
+  navigate.includes('presentRemotenessLegendDisclosure') &&
+    navigate.includes('remotenessLegendTopOffset') &&
+    navigate.includes('top: remotenessLegendTopOffset') &&
+    navigate.includes('remotenessLegendDisclosureOpacity') &&
+    navigate.includes('ECS is shading the active route corridor by expected signal confidence and isolation') &&
+    navigate.includes('Remoteness corridor is turning off'),
+  'Navigate should place the Remoteness Corridor key below active navigation and use it for the soft on/off explanation.',
 );
 assert(
   overlayBuilder.includes('MAX_HEATMAP_AREAS = 48') &&

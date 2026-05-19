@@ -49,8 +49,8 @@ const advisoryStoreSource = fs.readFileSync(path.join(process.cwd(), 'lib/adviso
 
 assert.strictEqual(
   ECS_ALERT_DEDUPE_WINDOW_MS,
-  10 * 60 * 1000,
-  'ECS alert duplicate window should be ten minutes.',
+  15 * 60 * 1000,
+  'ECS alert duplicate window should be 15 minutes.',
 );
 
 const baseEvent = {
@@ -75,7 +75,7 @@ assert.strictEqual(
 assert.strictEqual(
   shouldSuppressECSUpdate({ lastEvent: baseEvent, nextEvent: repeatedEvent }),
   true,
-  'Repeated same alert inside ten minutes should be suppressed.',
+  'Repeated same alert inside 15 minutes should be suppressed.',
 );
 ecsUpdateDedupeTestHooks.clearRegistry();
 assert.strictEqual(
@@ -144,7 +144,7 @@ assert.strictEqual(
     nextEvent: { ...baseEvent, timestamp: baseEvent.timestamp + ECS_ALERT_DEDUPE_WINDOW_MS },
   }),
   true,
-  'Same alert exactly at the ten-minute boundary should still be suppressed.',
+  'Same alert exactly at the 15-minute boundary should still be suppressed.',
 );
 assert.strictEqual(
   shouldSuppressECSUpdate({
@@ -200,7 +200,7 @@ assert.strictEqual(
     nextEvent: repeatedFingerprintEvent,
   }),
   true,
-  'Missing stable IDs should still suppress same alert fingerprints inside ten minutes.',
+  'Missing stable IDs should still suppress same alert fingerprints inside 15 minutes.',
 );
 assert.strictEqual(
   shouldSuppressECSUpdate({
@@ -243,7 +243,7 @@ recordBriefCadEntry({
 assert.strictEqual(
   briefCadLogStore.getEntries().length,
   1,
-  'Brief Activity Log should suppress same alert repeats within ten minutes.',
+  'Brief Activity Log should suppress same alert repeats within 15 minutes.',
 );
 recordBriefCadEntry({
   id: 'route-brief-3',

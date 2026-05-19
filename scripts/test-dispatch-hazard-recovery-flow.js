@@ -46,8 +46,8 @@ assert.match(
 );
 assert.match(
   source,
-  /onPress=\{\(\) => openCommand\('hazard'\)\}/,
-  'Recovery row action should open the hazard/recovery form directly.',
+  /onEmergencyPing=\{handleRecoveryAssist\}/,
+  'Dispatch Convoy panel should retain the direct emergency coordinate ping action.',
 );
 assert.ok(!/>\s*More\s*<\/Text>/.test(source), 'Dispatch primary action row should not render a More button.');
 

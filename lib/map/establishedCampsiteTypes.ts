@@ -97,7 +97,7 @@ export type EstablishedCampsiteFeatureCollection = {
   features: EstablishedCampsiteFeature[];
 };
 
-export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom';
 
 export type EstablishedCampsiteLayerState = {
   enabled: boolean;

@@ -46,6 +46,9 @@ const {
   matchBluetoothBrands,
 } = loadTypeScriptModule('lib/bluetoothBrandRegistry.ts');
 const { routeBluetoothDevice } = loadTypeScriptModule('lib/bluetoothDeviceRouting.ts');
+const {
+  isReleaseScannerBluetoothRoute,
+} = loadTypeScriptModule('lib/bluetoothDeviceRouting.ts');
 
 for (const brandId of [
   'ecoflow',
@@ -56,6 +59,7 @@ for (const brandId of [
   'renogy',
   'redarc',
   'dakota_lithium',
+  'victron',
   'veepeak_obd2',
 ]) {
   assert(
@@ -143,6 +147,14 @@ const renogyByManufacturer = classifyBluetoothDevice({
 });
 assert.strictEqual(renogyByManufacturer.providerBadge, 'Renogy');
 
+const renologyTypoByName = classifyBluetoothDevice({
+  id: 'renology-1',
+  name: 'Renology BT-2 Solar Controller',
+  isLikelyOBD: false,
+  rssi: -66,
+});
+assert.strictEqual(renologyTypoByName.providerBadge, 'Renogy');
+
 const redarcByName = classifyBluetoothDevice({
   id: 'redarc-1',
   name: 'REDARC Manager30',
@@ -160,6 +172,22 @@ const dakotaByName = classifyBluetoothDevice({
 assert.strictEqual(dakotaByName.providerBadge, 'Dakota Lithium');
 assert.strictEqual(dakotaByName.categoryHint, 'Lithium battery system');
 
+const victronByName = classifyBluetoothDevice({
+  id: 'victron-1',
+  name: 'Victron SmartShunt',
+  isLikelyOBD: false,
+  rssi: -60,
+});
+assert.strictEqual(victronByName.providerBadge, 'Victron Energy');
+const victronRoute = routeBluetoothDevice({
+  id: 'victron-route',
+  name: 'Victron SmartSolar',
+  isLikelyOBD: false,
+  rssi: -62,
+});
+assert.strictEqual(victronRoute.owner, 'power');
+assert.strictEqual(victronRoute.providerId, 'victron');
+
 const veepeakByName = classifyBluetoothDevice({
   id: 'veepeak-1',
   name: 'Veepeak BLE+ OBD2',
@@ -168,6 +196,23 @@ const veepeakByName = classifyBluetoothDevice({
 });
 assert.strictEqual(veepeakByName.providerBadge, 'OBD');
 assert.strictEqual(veepeakByName.brandLabel, 'V Peak / Veepeak OBD2');
+
+for (const [id, name] of [
+  ['obdlink', 'OBDLink MX+'],
+  ['vgate', 'Vgate iCar Pro'],
+  ['bluedriver', 'BlueDriver OBDII'],
+  ['konnwei', 'KONNWEI KW902'],
+]) {
+  const route = routeBluetoothDevice({
+    id,
+    name,
+    isLikelyOBD: false,
+    rssi: -64,
+  });
+  assert.strictEqual(route.owner, 'telemetry', `${name} should route to OBD2 telemetry`);
+  assert.strictEqual(route.providerId, 'obd2');
+  assert.strictEqual(isReleaseScannerBluetoothRoute(route), true);
+}
 
 const vPeakByName = classifyBluetoothDevice({
   id: 'vpeak-1',
@@ -218,6 +263,7 @@ const bluettiRoute = routeBluetoothDevice({
 });
 assert.strictEqual(bluettiRoute.owner, 'power');
 assert.strictEqual(bluettiRoute.providerId, 'bluetti');
+assert.strictEqual(isReleaseScannerBluetoothRoute(bluettiRoute), true);
 
 const dakotaRoute = routeBluetoothDevice({
   id: 'dakota-route',
@@ -227,6 +273,7 @@ const dakotaRoute = routeBluetoothDevice({
 });
 assert.strictEqual(dakotaRoute.owner, 'power');
 assert.strictEqual(dakotaRoute.providerId, 'dakota_lithium');
+assert.strictEqual(isReleaseScannerBluetoothRoute(dakotaRoute), true);
 
 const unknownPowerRoute = routeBluetoothDevice({
   id: 'unknown-power-route',
@@ -238,6 +285,7 @@ assert.strictEqual(unknownPowerRoute.owner, 'power');
 assert.strictEqual(unknownPowerRoute.providerId, 'unknown_power');
 assert.strictEqual(unknownPowerRoute.providerLabel, 'Unknown power device');
 assert.strictEqual(unknownPowerRoute.supportLabel, 'Needs Identification');
+assert.strictEqual(isReleaseScannerBluetoothRoute(unknownPowerRoute), true);
 
 const ambiguousMatch = classifyBluetoothDevice({
   id: 'ambiguous-route',
@@ -259,6 +307,11 @@ const ambiguousRoute = routeBluetoothDevice({
 assert.strictEqual(ambiguousRoute.owner, 'generic');
 assert.strictEqual(ambiguousRoute.providerId, 'brand_confirmation');
 assert.strictEqual(ambiguousRoute.needsUserConfirmation, true);
+assert.strictEqual(
+  isReleaseScannerBluetoothRoute(ambiguousRoute),
+  false,
+  'ambiguous or noisy Bluetooth rows should not be visible in release scanner results',
+);
 
 const providerServiceWins = routeBluetoothDevice({
   id: 'provider-service-wins',
@@ -278,6 +331,25 @@ const genericRoute = routeBluetoothDevice({
 });
 assert.strictEqual(genericRoute.owner, 'generic');
 assert.strictEqual(genericRoute.displayName, 'Unknown device OUTE');
+assert.strictEqual(isReleaseScannerBluetoothRoute(genericRoute), false);
+
+const headsetRoute = routeBluetoothDevice({
+  id: 'consumer-headset',
+  name: 'Logan Headphones',
+  isLikelyOBD: false,
+  rssi: -50,
+});
+assert.strictEqual(headsetRoute.owner, 'generic');
+assert.strictEqual(isReleaseScannerBluetoothRoute(headsetRoute), false);
+
+const tvRoute = routeBluetoothDevice({
+  id: 'living-room-tv',
+  name: 'Living Room TV',
+  isLikelyOBD: false,
+  rssi: -52,
+});
+assert.strictEqual(tvRoute.owner, 'generic');
+assert.strictEqual(isReleaseScannerBluetoothRoute(tvRoute), false);
 
 const unknownBrandMatch = matchBluetoothBrands({
   id: 'unknown',

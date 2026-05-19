@@ -139,7 +139,7 @@ assert(
   'Campsite recommendation errors should avoid approved-campsite live claims.',
 );
 
-assert.strictEqual(ECS_AI_ADVISORY_SUPPRESSION_MS, 10 * 60 * 1000);
+assert.strictEqual(ECS_AI_ADVISORY_SUPPRESSION_MS, 15 * 60 * 1000);
 
 const truthInput = makeECSAIInput(42, 'manual', {
   confidence: 143,

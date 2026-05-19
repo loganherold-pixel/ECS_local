@@ -182,8 +182,10 @@ for (const protocolId of ['hypothermia', 'altitude-sickness']) {
 }
 const protocolImageStyle = styleBlock(quickActionsSource, 'protocolActionImage');
 assertIncludes(protocolImageStyle, '...StyleSheet.absoluteFillObject', 'Protocol image should fill the card.');
-assertIncludes(protocolImageStyle, "width: '100%'", 'Protocol image should fill card width.');
-assertIncludes(protocolImageStyle, "height: '100%'", 'Protocol image should fill card height.');
+assertIncludes(protocolImageStyle, 'top: -2', 'Protocol image should overscan the top edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'left: -2', 'Protocol image should overscan the left edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'bottom: -2', 'Protocol image should overscan the bottom edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'right: -2', 'Protocol image should overscan the right edge to avoid exposed card background.');
 const protocolCardStyle = styleBlock(quickActionsSource, 'protocolActionCard');
 assertIncludes(protocolCardStyle, "overflow: 'hidden'", 'Protocol card should clip the full-card image to the container.');
 assertIncludes(
@@ -273,7 +275,7 @@ assertIncludes(
   );
 });
 assertIncludes(recoveryDataSource, 'beforeYouPull: string[];', 'Recovery protocol data should expose compact before-pull chips.');
-assertIncludes(recoveryDataSource, 'stepCards: Array<{', 'Recovery protocol data should expose concise numbered step cards.');
+assertIncludes(recoveryDataSource, 'stepCards:', 'Recovery protocol data should expose concise numbered step cards.');
 [
   ['Winch Recovery', 'Fixed-anchor self-recovery'],
   ['Vehicle-Assisted Pull', 'Recover using a second vehicle'],
@@ -575,7 +577,7 @@ assertIncludes(
 );
 
 // Redundant Back row removal and remaining shell controls.
-['Quick Note', 'Emergency Comms', 'Weather', 'Team Ping', 'Device Connections'].forEach((title) => {
+['Quick Note', 'Emergency Comms', 'Weather', 'Team Ping'].forEach((title) => {
   assertIncludes(
     quickActionsSource,
     `renderPanelIntro('${title}'`,
@@ -618,11 +620,30 @@ assertNotIncludes(quickActionsSource, 'setActivePanel', 'Field Utilities should 
   "openFieldUtilityAction('emergencyComms')",
   "openFieldUtilityAction('intel')",
   "openFieldUtilityAction('team')",
-  "openFieldUtilityAction('bluetooth')",
   "openFieldUtilityAction('protocols')",
 ].forEach((transition) => {
   assertIncludes(quickActionsSource, transition, `Action card should use shared transition ${transition}.`);
 });
+assertIncludes(
+  quickActionsSource,
+  'const openDeviceConnections = useCallback',
+  'Bluetooth action should use a dedicated launcher for the canonical Device Connections screen.',
+);
+assertIncludes(
+  quickActionsSource,
+  "router.push('/power/blu')",
+  'Bluetooth action should route to the canonical Device Connections screen.',
+);
+assertIncludes(
+  quickActionsSource,
+  'onPress: openDeviceConnections',
+  'Bluetooth action card should launch Device Connections instead of opening an embedded panel.',
+);
+assertNotIncludes(
+  quickActionsSource,
+  "openFieldUtilityAction('bluetooth')",
+  'Bluetooth should not use the old embedded Field Utilities scanner transition.',
+);
 
 const shellCloseBlock = blockBetween(
   quickActionsSource,

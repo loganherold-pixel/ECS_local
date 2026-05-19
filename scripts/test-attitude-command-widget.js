@@ -51,6 +51,12 @@ const reactStub = {
   memo(component) {
     return component;
   },
+  useEffect() {
+    return undefined;
+  },
+  useMemo(factory) {
+    return factory();
+  },
   useState(initialValue) {
     let value = typeof initialValue === 'function' ? initialValue() : initialValue;
     return [
@@ -81,10 +87,42 @@ const reactNativeStub = {
   View: 'View',
 };
 
+const svgStub = {
+  __esModule: true,
+  default: 'Svg',
+  Circle: 'Circle',
+  G: 'G',
+  Line: 'Line',
+  Path: 'Path',
+};
+
+const reanimatedStub = {
+  __esModule: true,
+  default: {
+    createAnimatedComponent(component) {
+      return component;
+    },
+  },
+  useAnimatedProps(factory) {
+    return factory();
+  },
+  useEffect() {
+    return undefined;
+  },
+  useSharedValue(initialValue) {
+    return { value: initialValue };
+  },
+  withTiming(value) {
+    return value;
+  },
+};
+
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react') return reactStub;
   if (request === 'react-native') return reactNativeStub;
+  if (request === 'react-native-reanimated') return reanimatedStub;
+  if (request === 'react-native-svg') return svgStub;
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -134,14 +172,6 @@ function flattenStyle(style) {
 
 function textContent(node) {
   return childrenOf(node).join('');
-}
-
-function gaugeNeedleRotation(tree, axis) {
-  const pivot = findOne(tree, byTestID(`vehicle-attitude-${axis}-gauge-indicator-pivot`), `${axis} gauge needle pivot should render.`);
-  const style = flattenStyle(pivot.node.props.style);
-  const rotate = (style.transform || []).find((entry) => Object.prototype.hasOwnProperty.call(entry, 'rotate'));
-  assert.ok(rotate, `${axis} gauge needle should expose a direct rotate transform.`);
-  return Number(String(rotate.rotate).replace('deg', ''));
 }
 
 const {
@@ -214,57 +244,31 @@ assert.throws(
   /Expected node to exist/,
   'Attitude Command title should remain accessible through the summary label, not visible inside the widget.',
 );
-assert.strictEqual(textContent(findOne(tree, byTestID('vehicle-attitude-pitch-degree-readout')).node), '+6.4°');
-assert.strictEqual(textContent(findOne(tree, byTestID('vehicle-attitude-roll-degree-readout')).node), '-3.2°');
-assert.strictEqual(textContent(findOne(tree, byTestID('vehicle-attitude-pitch-gauge-label')).node), 'PITCH');
-assert.strictEqual(textContent(findOne(tree, byTestID('vehicle-attitude-roll-gauge-label')).node), 'ROLL');
-assert.strictEqual(gaugeNeedleRotation(AttitudeCommandWidget({
-  backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-  pitchDeg: 0,
-  rollDeg: 0,
-}), 'pitch'), 0);
-assert.strictEqual(gaugeNeedleRotation(AttitudeCommandWidget({
-  backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-  pitchDeg: 15,
-  rollDeg: -15,
-}), 'pitch'), 35);
-assert.strictEqual(gaugeNeedleRotation(AttitudeCommandWidget({
-  backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-  pitchDeg: 30,
-  rollDeg: -30,
-}), 'pitch'), 70);
-assert.strictEqual(gaugeNeedleRotation(AttitudeCommandWidget({
-  backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-  pitchDeg: 15,
-  rollDeg: -15,
-}), 'roll'), -35);
-assert.strictEqual(gaugeNeedleRotation(AttitudeCommandWidget({
-  backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-  pitchDeg: 30,
-  rollDeg: -30,
-}), 'roll'), -70);
-assert.notStrictEqual(
-  gaugeNeedleRotation(tree, 'pitch'),
-  gaugeNeedleRotation(AttitudeCommandWidget({
-    backdropSrc: 'assets/vehicles/attitude/clean/Jeep_Wrangler.png',
-    pitchDeg: -4.7,
-    rollDeg: 8.1,
-  }), 'pitch'),
-  'Different input values should produce different needle rotations.',
-);
+assert.strictEqual(textContent(findOne(tree, byTestID('attitude-command-pitch-dial-meter-degree-readout')).node), '+6°');
+assert.strictEqual(textContent(findOne(tree, byTestID('attitude-command-roll-dial-meter-degree-readout')).node), '-3°');
+assert.strictEqual(textContent(findOne(tree, (node) => childrenOf(node).includes('PITCH'), 'Pitch dial label should render.').node), 'PITCH');
+assert.strictEqual(textContent(findOne(tree, (node) => childrenOf(node).includes('ROLL'), 'Roll dial label should render.').node), 'ROLL');
 
 assert.deepStrictEqual(
   flattenStyle(findOne(tree, byTestID('attitude-command-pitch-gauge-slot')).node.props.style),
-  { position: 'absolute', overflow: 'visible', alignItems: 'center', justifyContent: 'center', left: '8%', top: '17%', width: '39%' },
+  { position: 'absolute', overflow: 'visible', alignItems: 'center', justifyContent: 'center', left: '8%', top: '17%', width: 118, height: 118 },
   'Pitch gauge should use normalized template positioning.',
 );
 assert.deepStrictEqual(
   flattenStyle(findOne(tree, byTestID('attitude-command-roll-gauge-slot')).node.props.style),
-  { position: 'absolute', overflow: 'visible', alignItems: 'center', justifyContent: 'center', left: '53%', top: '17%', width: '39%' },
+  { position: 'absolute', overflow: 'visible', alignItems: 'center', justifyContent: 'center', left: '53%', top: '17%', width: 118, height: 118 },
   'Roll gauge should use normalized template positioning.',
 );
-assert.strictEqual(flattenStyle(findOne(tree, byTestID('attitude-command-pitch-readout-slot')).node.props.style).top, '83%');
-assert.strictEqual(flattenStyle(findOne(tree, byTestID('attitude-command-roll-readout-slot')).node.props.style).top, '83%');
+assert.throws(
+  () => findOne(tree, byTestID('attitude-command-pitch-readout-slot')),
+  /Expected node to exist/,
+  'The native dial should own the centered pitch readout.',
+);
+assert.throws(
+  () => findOne(tree, byTestID('attitude-command-roll-readout-slot')),
+  /Expected node to exist/,
+  'The native dial should own the centered roll readout.',
+);
 
 const widgetSource = fs.readFileSync(
   path.join(root, 'src', 'components', 'attitudeCommand', 'AttitudeCommandWidget.tsx'),
@@ -272,6 +276,7 @@ const widgetSource = fs.readFileSync(
 );
 assert.ok(!widgetSource.includes('Ram_2500_3500'), 'Widget must not hardcode the Ram reference image.');
 assert.ok(!widgetSource.includes('Rive'), 'Widget must not use Rive.');
+assert.ok(widgetSource.includes("import AttitudeDial from '../../features/attitude/components/AttitudeDial'"), 'Widget should use the native attitude dial.');
 assert.ok(widgetSource.includes('backdropSrc'), 'Widget should be driven by the backdropSrc prop.');
 assert.ok(widgetSource.includes('getContainedAttitudeCommandStageSize'), 'Widget should compute a contained 4:3 stage from measured bounds.');
 assert.ok(widgetSource.includes('onLayout={handleLayout}'), 'Widget should respond to portrait and landscape layout changes.');

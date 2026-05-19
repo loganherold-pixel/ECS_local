@@ -33,7 +33,6 @@ const registry = loadTsModule('components/dashboard/commandCenter/commandCenterR
   './TrailDecisionCommand': { default: function TrailDecisionCommand() {} },
   './CampScoutCommand': { default: function CampScoutCommand() {} },
   './ExpeditionReadinessCommand': { ExpeditionReadinessCommand: function ExpeditionReadinessCommand() {} },
-  '../command-center/widgets/ConvoyCommandWidget': { default: function ConvoyCommand() {} },
   '../../../lib/ecsCommandModuleStore': {},
 });
 
@@ -45,7 +44,6 @@ assert.deepStrictEqual(registry.COMMAND_CENTER_IMPLEMENTED_MODES, [
   'trailDecision',
   'campScout',
   'expeditionReadiness',
-  'convoyCommand',
 ]);
 
 for (const id of [
@@ -55,34 +53,25 @@ for (const id of [
   'trailDecision',
   'campScout',
   'expeditionReadiness',
-  'convoyCommand',
 ]) {
   assert(registry.COMMAND_CENTER_WIDGET_REGISTRY[id], `Registry missing ${id}`);
 }
 
 assert.strictEqual(
-  registry.getCommandCenterAvailability(registry.COMMAND_CENTER_WIDGET_REGISTRY.convoyCommand, {}),
-  'setupNeeded',
+  registry.COMMAND_CENTER_WIDGET_REGISTRY.convoyCommand,
+  undefined,
 );
-assert(registry.getSelectableCommandCenterModes({}).includes('convoyCommand'));
-assert.strictEqual(
-  registry.getCommandCenterAvailability(
-    registry.COMMAND_CENTER_WIDGET_REGISTRY.convoyCommand,
-    { hasConvoyMembers: true },
-  ),
-  'partial',
-);
+assert(!registry.getSelectableCommandCenterModes({}).includes('convoyCommand'));
 
 assert.strictEqual(registry.commandModuleToCenterMode('follow3d'), 'threeDNavigation');
-assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'convoyCommand');
+assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'attitude');
 assert.strictEqual(registry.centerModeToCommandModule('campScout'), 'campScoutCommand');
-assert.strictEqual(registry.centerModeToCommandModule('convoyCommand'), 'convoy-command');
 assert.strictEqual(registry.isCommandCenterModuleId('routeCommand'), false);
-assert.strictEqual(registry.isCommandCenterModuleId('convoy-command'), true);
+assert.strictEqual(registry.isCommandCenterModuleId('convoy-command'), false);
 assert.strictEqual(registry.isCommandCenterModuleId('expeditionReadinessCommand'), true);
 
 assert.strictEqual(registry.resolveCommandCenterMode(null, {}), 'attitude');
-assert.strictEqual(registry.resolveCommandCenterMode('convoyCommand', {}), 'convoyCommand');
+assert.strictEqual(registry.resolveCommandCenterMode('convoyCommand', {}), 'attitude');
 assert.strictEqual(registry.resolveCommandCenterMode('trailDecision', { hasLocation: false }), 'trailDecision');
 assert.strictEqual(registry.resolveCommandCenterMode('campScout', { hasLocation: false }), 'campScout');
 assert.strictEqual(registry.resolveCommandCenterMode('threeDNavigation', { hasActiveRoute: false }), 'threeDNavigation');
@@ -105,6 +94,6 @@ assert.strictEqual(
 assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'"));
 assert(commandStoreSource.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE)'));
 assert(commandStoreSource.includes('normalizeECSCommandModuleId(stored)'));
-assert(commandStoreSource.includes("if (value === 'convoyCommand') return 'convoy-command';"));
+assert(commandStoreSource.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;"));
 
 console.log('[command-center-registry] registry, availability, mapping, and fallback checks passed');

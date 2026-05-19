@@ -39,6 +39,8 @@ export type CampOpsInternalBetaActivationInput = {
   allowedCohorts?: string[] | null;
   providerInfluenceApproved?: boolean | null;
   aiAssistRealOutputReviewApproved?: boolean | null;
+  telemetrySinkPrivacyApproved?: boolean | null;
+  communityPublishingApproved?: boolean | null;
 };
 
 export type CampOpsInternalBetaActivationResult = {
@@ -66,6 +68,7 @@ export type CampOpsRestrictedFieldTestActivationInput = {
   providerInfluenceApprovedForExactCategoryRegion?: boolean | null;
   aiAssistApprovedForExactModelConfig?: boolean | null;
   telemetrySinkPrivacyApproved?: boolean | null;
+  communityPublishingApprovedForExactGovernance?: boolean | null;
 };
 
 export type CampOpsRestrictedFieldTestActivationResult = {
@@ -188,9 +191,12 @@ export function resolveCampOpsInternalBetaActivation(
   if (input.aiAssistRealOutputReviewApproved === true && requestedFlag(requested, 'campopsAiAssistEnabled')) {
     safeRequested.campopsAiAssistEnabled = true;
   }
-
-  safeRequested.campopsDebriefCommunityPublishingEnabled = false;
-  safeRequested.campopsTelemetryEnabled = false;
+  safeRequested.campopsTelemetryEnabled =
+    input.telemetrySinkPrivacyApproved === true &&
+    requestedFlag(requested, 'campopsTelemetryEnabled');
+  safeRequested.campopsDebriefCommunityPublishingEnabled =
+    input.communityPublishingApproved === true &&
+    requestedFlag(requested, 'campopsDebriefCommunityPublishingEnabled');
 
   const rolloutConfig = resolveCampOpsRecommendationRolloutConfig(safeRequested);
   return {
@@ -296,7 +302,9 @@ export function resolveCampOpsRiskAcceptedRestrictedFieldTestActivation(
     campopsTelemetryEnabled:
       input.telemetrySinkPrivacyApproved === true &&
       requestedFlag(requested, 'campopsTelemetryEnabled'),
-    campopsDebriefCommunityPublishingEnabled: false,
+    campopsDebriefCommunityPublishingEnabled:
+      input.communityPublishingApprovedForExactGovernance === true &&
+      requestedFlag(requested, 'campopsDebriefCommunityPublishingEnabled'),
   };
 
   const rolloutConfig = resolveCampOpsRecommendationRolloutConfig(safeRequested);

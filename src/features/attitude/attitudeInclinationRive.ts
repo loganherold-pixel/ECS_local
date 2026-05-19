@@ -13,13 +13,12 @@ export const ATTITUDE_INCLINATION_NUMBER_INPUT = 'slider';
 export const ATTITUDE_INCLINATION_DEFAULT_MIN_DEG = -30;
 export const ATTITUDE_INCLINATION_DEFAULT_MAX_DEG = 30;
 
-// The new asset hides non-ring artwork through Rive transparency. Keep this
-// focus scale if the artboard geometry is still the original wide widget and
-// the visible ring needs to fill the ECS meter slot. If the artboard was later
-// resized to a tight square around the ring, set this to 1.
-export const ATTITUDE_INCLINATION_RIVE_FOCUS_SCALE = 2.34;
+// The transparent inclination_widget.riv should define the visible ring.
+// Do not apply the old circle-only crop/zoom by default; tune these only after
+// confirming the real Rive artboard bounds in-app.
+export const ATTITUDE_INCLINATION_RIVE_FOCUS_SCALE = 1;
 export const ATTITUDE_INCLINATION_RIVE_FOCUS_TRANSLATE_X = 0;
-export const ATTITUDE_INCLINATION_RIVE_FOCUS_TRANSLATE_Y = -2;
+export const ATTITUDE_INCLINATION_RIVE_FOCUS_TRANSLATE_Y = 0;
 
 export type AttitudeInclinationAxis = 'pitch' | 'roll';
 

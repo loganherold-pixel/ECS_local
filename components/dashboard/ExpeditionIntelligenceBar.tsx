@@ -18,7 +18,7 @@ import { TACTICAL } from '../../lib/theme';
 import { useTheme } from '../../context/ThemeContext';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
-const BAR_HEIGHT = 52;
+const BAR_HEIGHT = 68;
 const FADE_IN_MS = 340;
 const FADE_OUT_MS = 360;
 
@@ -266,7 +266,7 @@ export default function ExpeditionIntelligenceBar({
             <View style={styles.messageBlock}>
               <Text
                 style={[styles.messageTitle, { color: visual.text }]}
-                numberOfLines={1}
+                numberOfLines={2}
                 ellipsizeMode="tail"
               >
                 {renderedTitle}
@@ -274,7 +274,7 @@ export default function ExpeditionIntelligenceBar({
               {renderedDetail ? (
                 <Text
                   style={[styles.messageDetail, { color: isLight ? colors.textSecondary : TACTICAL.textMuted }]}
-                  numberOfLines={1}
+                  numberOfLines={2}
                   ellipsizeMode="tail"
                 >
                   {renderedDetail}
@@ -336,8 +336,8 @@ const styles = StyleSheet.create({
   container: {
     height: BAR_HEIGHT,
     paddingHorizontal: 12,
-    paddingTop: 4,
-    paddingBottom: 4,
+    paddingTop: 5,
+    paddingBottom: 5,
     justifyContent: 'center',
     borderBottomWidth: 1,
     backgroundColor: TACTICAL.bg,
@@ -397,16 +397,16 @@ const styles = StyleSheet.create({
   },
 
   messageTitle: {
-    fontSize: 13,
+    fontSize: 12.2,
     fontWeight: '700',
     letterSpacing: 0.22,
-    lineHeight: 16,
+    lineHeight: 14.5,
   },
 
   messageDetail: {
-    fontSize: 11,
+    fontSize: 10.2,
     fontWeight: '600',
-    lineHeight: 14,
+    lineHeight: 12.5,
     letterSpacing: 0.12,
   },
 

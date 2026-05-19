@@ -1,15 +1,16 @@
 # ECS Final Full-App Smoke Test Matrix
 
-Date: 2026-05-03
+Date: 2026-05-17
 
 ## Summary
 
-Automated release smoke coverage is green after two stale source-contract checks were corrected. Closed field testing remains **blocked** by the existing release readiness gate; this matrix does not mark ECS ready for field testing.
+Automated release smoke coverage is green for the static/source-contract checks captured here. Closed field testing is now **risk-accepted for a restricted scope only** through the release readiness gate; this matrix does not mark ECS ready for public release, broad rollout, provider influence, AI assist, telemetry, or community publishing.
 
 Status key:
 
 - Passed: Covered by an automated check or static config/source check in this audit.
-- Blocked: The check ran and correctly reports a release gate blocker.
+- Restricted: The check ran and permits only the approved restricted closed-field scope.
+- Blocked: The check ran and correctly reports a production or broader rollout blocker.
 - Needs Device: Requires Android device/emulator runtime, live auth/session state, Mapbox WebView rendering, or physical offline/network toggling.
 - Failed: Currently failing and requiring a code fix. No scenario remains failed after this pass.
 
@@ -43,7 +44,7 @@ Status key:
 | 24 | App survives reload | Needs Device | `npm run smoke`, `npm run test:startup-warning-hygiene` | Headless project smoke and startup warning checks pass; actual app reload must be confirmed on Android runtime. |
 | 25 | TypeScript passes | Passed | `npx tsc --noEmit --pretty false` | Direct TypeScript check passes. |
 | 26 | Lint passes | Passed | `npm run lint` | Expo lint passes. |
-| 27 | Release readiness checks run | Blocked | `npm run test:release-readiness`, `npm run gate:closed-field-test` | Diagnostic sweep passes, but closed field testing remains blocked by Android/device QA, provider readiness, privacy/storage approval, and unaccepted risk acceptance. |
+| 27 | Release readiness checks run | Restricted | `npm run test:release-readiness`, `npm run gate:closed-field-test:json` | Diagnostic sweep passes, and the closed-field gate reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`. Provider influence, AI assist, telemetry, community publishing, broad privacy/storage rollout, and public release remain blocked unless separately approved. |
 
 ## Checks Run
 
@@ -106,7 +107,7 @@ Dispatch:
 Release gates:
 
 - `npm run test:release-readiness` - passed.
-- `npm run gate:closed-field-test` - blocked as expected.
+- `npm run gate:closed-field-test:json` - passed with `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`.
 - `npx tsc --noEmit --pretty false` - passed.
 - `npm run lint` - passed.
 
@@ -136,13 +137,15 @@ These require Android device/emulator runtime and should be run before release c
 
 ## Release Readiness
 
-Current release readiness remains **blocked for closed field testing**.
+Current release readiness is **risk-accepted for restricted closed field testing only**.
 
-The blocked state is intentional and honest. The latest gate reports:
+The restricted state is intentional and honest. The latest gate reports:
 
-- Android/device QA evidence incomplete.
-- Provider readiness not approved for real target-region/category influence.
-- Privacy/storage owner approval incomplete.
-- Risk acceptance present but not accepted.
+- Closed-field status: `ready_with_restrictions`.
+- Effective status: `risk_accepted_restricted_closed_field_test`.
+- Android/device QA evidence: complete for the current restricted QA packet, with real provider-backed route candidate validation still required before broader rollout.
+- Provider readiness: not approved for real target-region/category influence.
+- Privacy/storage: approved for guarded closed-field posture only; broad real trip/debrief rollout remains blocked.
+- AI assist, telemetry, and community publishing: disabled unless separately approved.
 
-Passing this smoke matrix does not waive those release gates.
+Passing this smoke matrix does not waive public release, provider influence, AI assist, telemetry, community publishing, or broad privacy/storage gates.

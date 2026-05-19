@@ -2,7 +2,7 @@ import type { RemoteWeatherBriefEvent, RemoteWeatherHazardType } from '../ai/ecs
 import { recordRemoteWeatherBriefEvent } from '../briefCadLogStore';
 import type { RemoteWeatherHazardOutput } from './remoteWeatherHazardEngine';
 
-export const REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+export const REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
 
 export type RemoteWeatherBriefPublisherInput = {
   hazard: RemoteWeatherHazardOutput;

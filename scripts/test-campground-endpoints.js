@@ -49,11 +49,11 @@ assert.ok(search.includes('filterCampgroundSearchRows'), 'Search endpoint should
 assert.ok(search.includes('buildCampgroundSearchFeatureCollection'), 'Search endpoint should return marker-ready GeoJSON features.');
 assert.ok(search.includes('routeFilterApplied: false'), 'Search endpoint should not pretend route-aware filtering exists before route geometry wiring.');
 assert.ok(
-  search.includes('fetchOsmFallbackCampgrounds') &&
-    search.includes('OSM_USER_AGENT') &&
-    search.includes('cache_empty') &&
-    search.includes('cache_error'),
-  'Search endpoint should use a real OSM viewport fallback when cached canonical data is unavailable.',
+  !search.includes('fetchOsmFallbackCampgrounds') &&
+    !search.includes('OSM_USER_AGENT') &&
+    !search.includes('OSM_OVERPASS_URL') &&
+    !search.includes('fetch('),
+  'Search endpoint should use cached canonical records only and must not fetch providers from mobile map requests.',
 );
 assert.ok(!search.includes('requireAdmin'), 'Search endpoint should be mobile-facing, not admin-only.');
 
@@ -83,7 +83,7 @@ for (const forbidden of [
 }
 
 assert.ok(!shared.includes('OSM_USER_AGENT'), 'Shared endpoint module should not require provider runtime env.');
-assert.ok(search.includes('OSM_USER_AGENT'), 'Search endpoint may use OSM_USER_AGENT for non-secret Overpass attribution.');
+assert.ok(!search.includes('OSM_USER_AGENT'), 'Search endpoint should not require OSM fallback config.');
 assert.ok(!detail.includes('OSM_USER_AGENT'), 'Detail endpoint should not require OSM fallback config.');
 
 assert.ok(searchDeno.includes('@supabase/functions-js'), 'Search endpoint should include standard Supabase deno config.');

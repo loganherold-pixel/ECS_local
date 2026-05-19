@@ -78,12 +78,12 @@ for (const fileName of [
 }
 
 assert(
-  fs.existsSync(path.join(root, 'assets', 'route', 'Route_Progress_Map_Background.png')),
-  'Route Progress map background asset must be bundled under assets/route.',
+  fs.existsSync(path.join(root, 'assets', 'dashboard', 'route-progress-placeholder.png')),
+  'Route Progress topo placeholder asset must be bundled under assets/dashboard.',
 );
 assert(
-  widgetRenderers.includes('Route_Progress_Map_Background.png'),
-  'Route Progress map background asset must be statically required by WidgetRenderers.',
+  widgetRenderers.includes('route-progress-placeholder.png'),
+  'Route Progress topo placeholder asset must be statically required by WidgetRenderers.',
 );
 
 assert(
@@ -184,17 +184,16 @@ assert(
     commandModuleStore.includes("'trailDecisionCommand'") &&
     commandModuleStore.includes("'campScoutCommand'") &&
     commandModuleStore.includes("'expeditionReadinessCommand'") &&
-    commandModuleStore.includes("'convoy-command'") &&
     commandModuleStore.includes("label: 'Navigation Command'") &&
     commandModuleStore.includes("label: 'Recovery / Hazard Compass'") &&
     commandModuleStore.includes("label: 'Trail Decision Command'") &&
     commandModuleStore.includes("label: 'Camp Scout Command'") &&
     commandModuleStore.includes("label: 'Expedition Readiness Command'") &&
-    commandModuleStore.includes("label: 'Convoy Command'") &&
-    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoy-command',\s*\];/.test(commandModuleStore) &&
+    !commandModuleStore.includes("label: 'Convoy Command'") &&
+    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*\];/.test(commandModuleStore) &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'") &&
-    commandModuleStore.includes("if (value === 'convoyCommand') return 'convoy-command';") &&
+    commandModuleStore.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;") &&
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes('setSelectedModule(moduleId: ECSCommandModuleId)') &&
     commandModuleStore.includes('subscribe(listener: ECSCommandModuleListener)'),
@@ -214,7 +213,7 @@ assert(
     commandCenterRegistry.includes("label: 'Trail Decision Command'") &&
     commandCenterRegistry.includes("label: 'Camp Scout Command'") &&
     commandCenterRegistry.includes("label: 'Expedition Readiness Command'") &&
-    commandCenterRegistry.includes("label: 'Convoy Command'") &&
+    !commandCenterRegistry.includes("label: 'Convoy Command'") &&
     widgetRenderers.includes('<CommandCenterHost') &&
     widgetRenderers.includes('dataContext={commandCenterDataContext}') &&
     widgetRenderers.includes('externalRenderers={{') &&
@@ -372,6 +371,9 @@ assert(
     widgetRenderers.includes('vehicleBaseTelemetryRow') &&
     widgetRenderers.includes('vehicleBaseTelemetryText') &&
     widgetRenderers.includes('vehicleBaseTelemetryTextRight') &&
+    widgetRenderers.includes('vehicleBaseNameText') &&
+    !widgetRenderers.includes('vehicleBaseIdentityText') &&
+    !widgetRenderers.includes('{vehicleVisual.identity}') &&
     !widgetRenderers.includes('vehicleHeroSilhouette') &&
     !widgetRenderers.includes('vehicleReadinessRail') &&
     !widgetRenderers.includes('vehicleMetricStrip') &&
@@ -380,21 +382,21 @@ assert(
     !widgetRenderers.includes('vehicleBaseMetricRow') &&
     widgetRenderers.includes('CommandRouteVisualData') &&
     widgetRenderers.includes('routeGlyphLayer') &&
-    widgetRenderers.includes('ROUTE_PROGRESS_MAP_BACKGROUND') &&
-    widgetRenderers.includes('ROUTE_PROGRESS_PATH') &&
-    widgetRenderers.includes('ROUTE_PROGRESS_PATH_LENGTH') &&
-    widgetRenderers.includes('function getRouteProgressPercent') &&
-    widgetRenderers.includes('function getRouteMarkerPoint') &&
+    widgetRenderers.includes("import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap'") &&
+    widgetRenderers.includes("const ROUTE_PROGRESS_PLACEHOLDER = require('../../assets/dashboard/route-progress-placeholder.png')") &&
     widgetRenderers.includes('AttitudeCommandRouteProgressMapVisual') &&
-    widgetRenderers.includes('Animated.timing(animatedProgress') &&
-    widgetRenderers.includes('strokeDasharray={ROUTE_PROGRESS_PATH_LENGTH}') &&
-    widgetRenderers.includes('strokeDashoffset={ROUTE_PROGRESS_PATH_LENGTH * (1 - progressRatio)}') &&
-    widgetRenderers.includes('routeProgressMapBackground') &&
-    widgetRenderers.includes('routeProgressOverlay') &&
-    widgetRenderers.includes('routeTopoLineA') &&
-    widgetRenderers.includes('routePathCompleted') &&
-    widgetRenderers.includes('routeMarkerCheckpoint') &&
-    widgetRenderers.includes('routeMetricStrip') &&
+    widgetRenderers.includes('<RouteProgressMiniMap') &&
+    widgetRenderers.includes('routeGeoJson={route?.routeGeoJson ?? null}') &&
+    widgetRenderers.includes('currentLocation={route?.currentLocation ?? null}') &&
+    widgetRenderers.includes('progressPercent={route?.progressPercent ?? null}') &&
+    widgetRenderers.includes('inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}') &&
+    widgetRenderers.includes('routeProgressMiniMap') &&
+    !widgetRenderers.includes('ROUTE_PROGRESS_MAP_BACKGROUND') &&
+    !widgetRenderers.includes('ROUTE_PROGRESS_PATH') &&
+    !widgetRenderers.includes('ROUTE_PROGRESS_PATH_LENGTH') &&
+    !widgetRenderers.includes('function getRouteProgressPercent') &&
+    !widgetRenderers.includes('function getRouteMarkerPoint') &&
+    !widgetRenderers.includes('routeMetricStrip') &&
     widgetRenderers.includes('CommandPowerVisualData') &&
     widgetRenderers.includes('background={(') &&
     widgetRenderers.includes('<AttitudeCommandPanelVisual') &&
@@ -428,6 +430,7 @@ assert(
 assert(
   widgetRenderers.includes('const topHeight = clampCommandLayoutValue(height * 0.19, 82, 108)') &&
     widgetRenderers.includes('const bottomHeight = clampCommandLayoutValue(height * 0.2, 90, 118)') &&
+    widgetRenderers.includes('minHeight: clampCommandLayoutValue(height * 0.46, 238, 328)') &&
     widgetRenderers.includes("return '--';") &&
     vehicleAttitudeStage.includes('testID="vehicle-attitude-stage-level-readout"') &&
     vehicleAttitudeStage.includes('const accessibilityLabel = `Vehicle attitude. Pitch ${pitchLabel}. Roll ${rollLabel}.`;') &&
@@ -445,16 +448,17 @@ assert(
     commandWidgetSource.includes('activeVehicleName={activeVehicleContext.vehicle?.name ?? undefined}') &&
     commandWidgetSource.includes('pointerEvents="box-none"') &&
     commandWidgetSource.includes('onPress={handleToggleSound}') &&
-    commandWidgetSource.includes('<AttitudeStageHexButtonChrome muted={!soundEnabled} />') &&
+    !commandWidgetSource.includes('<AttitudeStageHexButtonChrome') &&
     commandWidgetSource.includes("name={soundEnabled ? 'volume-high-outline' : 'volume-off-outline'}") &&
+    commandWidgetSource.includes('onPress={handleZeroCommandStage}') &&
+    commandWidgetSource.includes('accessibilityLabel="Zero pitch and roll"') &&
     commandWidgetSource.includes('attitudeCommandS.stageModulePillActive') &&
     commandWidgetSource.includes('<Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />') &&
     !commandWidgetSource.includes('CHANGE') &&
     commandWidgetSource.includes("selectedCommandModule !== 'attitude' ? (") &&
     commandWidgetSource.includes("selectedCommandModule === 'attitude' ? (") &&
-    commandWidgetSource.includes('attitudeCommandS.stageStatusPillCenterSlot') &&
-    commandWidgetSource.includes('attitudeCommandS.stageStatusPillBase') &&
-    commandWidgetSource.includes('attitudeCommandS.stageStatusPillCentered') &&
+    !commandWidgetSource.includes('attitudeCommandS.stageStatusPillCenterSlot') &&
+    !commandWidgetSource.includes('attitudeCommandS.stageStatusPillCentered') &&
     commandWidgetSource.includes('showActiveEdge={false}') &&
     !commandWidgetSource.includes('SOUND ON') &&
     !commandWidgetSource.includes('SOUND OFF') &&

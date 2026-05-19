@@ -17,6 +17,7 @@ const messagesSource = read('lib/map/mapboxLayerMessages.ts');
 const routeSearchSource = read('lib/map/dispersedCampingRouteSearch.ts');
 const searchClientSource = read('lib/map/dispersedCampingSearchClient.ts');
 const mobileSource = read('lib/map/dispersedCampingMobile.ts');
+const zoomSource = read('lib/map/campLayerZoom.ts');
 const edgeSource = read('supabase/functions/dispersed-camping-eligibility/index.ts');
 const supabaseSource = read('lib/supabase.ts');
 const envExampleSource = read('.env.example');
@@ -71,6 +72,17 @@ assert.ok(
     navigateSource.includes('setDispersedCampingUiState') &&
     navigateSource.includes('setCampLayerEnabled'),
   'Navigate should own the local dispersed-camping eligibility toggle state.',
+);
+
+assert.ok(
+  zoomSource.includes('DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM = 9') &&
+    zoomSource.includes("isCampLayerZoomEligible(layer: CampLayerFetchLayer, zoom: unknown)") &&
+    navigateSource.includes('dispersedCampingEligibilityZoomReady') &&
+    navigateSource.includes("isCampLayerZoomEligible('dispersed_camping', mapZoom)") &&
+    navigateSource.includes('dispersedCampingZoomPrompt') &&
+    navigateSource.includes('setCampLayerZoomDeferred') &&
+    navigateSource.includes("reason: 'zoom_too_low'"),
+  'Navigate should defer dispersed-camping fetch/render work until users zoom into public-land planning scale.',
 );
 
 assert.ok(
@@ -176,6 +188,12 @@ assert.ok(
     mapRendererSource.includes('map.removeLayer') &&
     mapRendererSource.includes('map.removeSource'),
   'MapRenderer should remove dispersed-camping layers and source when disabled.',
+);
+
+assert.ok(
+  mapRendererSource.includes('DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM') &&
+    mapRendererSource.includes('minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM}'),
+  'Dispersed camping Mapbox layers should also have a minzoom safety net.',
 );
 
 assert.ok(

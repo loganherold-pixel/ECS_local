@@ -9,12 +9,12 @@ import {
 import type {
   ConvoyCommandStatusLabel,
   ConvoyCommandVisualState,
-  ConvoyCommandWidgetViewModel,
+  ConvoyCommandPanelViewModel,
   ConvoyMemberSummary,
   ConvoyMemberSummaryRole,
 } from './convoyCommandTypes';
 
-export type ConvoyCommandWidgetSelectorInput = ConvoyCommandInput & {
+export type ConvoyCommandPanelSelectorInput = ConvoyCommandInput & {
   commandData?: ConvoyCommandData | null;
   staleAfterMinutes?: number | null;
   lostSignalAfterMinutes?: number | null;
@@ -25,7 +25,7 @@ const DEFAULT_STALE_AFTER_MINUTES = 15;
 const DEFAULT_LOST_SIGNAL_AFTER_MINUTES = 45;
 const DEFAULT_REGROUP_GAP_MILES = 5;
 
-export const NO_ACTIVE_CONVOY_COMMAND_VIEW_MODEL: ConvoyCommandWidgetViewModel = {
+export const NO_ACTIVE_CONVOY_COMMAND_PANEL_VIEW_MODEL: ConvoyCommandPanelViewModel = {
   visualState: 'offline',
   statusLabel: 'OFFLINE',
   groupName: 'No Active Convoy',
@@ -217,9 +217,9 @@ function resolveCautionLevel(params: {
   return 0;
 }
 
-export function selectConvoyCommandWidgetViewModel(
-  input: ConvoyCommandWidgetSelectorInput = {},
-): ConvoyCommandWidgetViewModel {
+export function selectConvoyCommandPanelViewModel(
+  input: ConvoyCommandPanelSelectorInput = {},
+): ConvoyCommandPanelViewModel {
   const nowMs = input.nowMs ?? Date.now();
   const staleAfterMinutes = positiveFinite(input.staleAfterMinutes) ?? DEFAULT_STALE_AFTER_MINUTES;
   const lostSignalAfterMinutes = positiveFinite(input.lostSignalAfterMinutes) ?? DEFAULT_LOST_SIGNAL_AFTER_MINUTES;
@@ -227,7 +227,7 @@ export function selectConvoyCommandWidgetViewModel(
   const data = input.commandData ?? normalizeConvoyCommandData(input);
 
   if (!hasActiveConvoy(data)) {
-    return { ...NO_ACTIVE_CONVOY_COMMAND_VIEW_MODEL };
+    return { ...NO_ACTIVE_CONVOY_COMMAND_PANEL_VIEW_MODEL };
   }
 
   const members = data.members.map((member) =>
@@ -265,7 +265,7 @@ export function selectConvoyCommandWidgetViewModel(
   return {
     visualState,
     statusLabel: statusLabelForVisualState(visualState),
-    groupName: data.convoyName || NO_ACTIVE_CONVOY_COMMAND_VIEW_MODEL.groupName,
+    groupName: data.convoyName || NO_ACTIVE_CONVOY_COMMAND_PANEL_VIEW_MODEL.groupName,
     vehicleCount,
     reportingCount,
     widestGapMiles,

@@ -553,8 +553,8 @@ assertIncludes(
   'Root layout should own the bottom command dock.',
 );
 assertIncludes(rootLayout, "normalizedPathname === '/fleet'", 'Fleet should be covered by shell background routing.');
-assertIncludes(tabsLayout, "name=\"fleet\"", 'Fleet tab route should remain registered.');
-assertIncludes(tabsLayout, "title: 'Fleet'", 'Fleet tab label should remain Fleet.');
+assertIncludes(tabsLayout, '<Slot />', 'Shell route layout should render the active Fleet route through expo-router Slot.');
 assertIncludes(commandDock, "route: '/fleet'", 'Command dock should own the Fleet navigation target.');
+assertIncludes(commandDock, "label: 'FLEET'", 'Command dock should keep the visible Fleet navigation label.');
 
 console.log('Fleet tactical UI contract checks passed.');
