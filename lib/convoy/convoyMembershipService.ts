@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import { isEdgeFunctionUnavailableError, isSupabaseConfigured, supabase } from '../supabase';
+import {
+  formatConvoyBackendOperatorDetails,
+  formatConvoyBackendUserMessage,
+  getConvoyBackendReadinessGuidance,
+} from './convoyBackendReadiness';
 import { stopConvoyLocationSharing } from './convoyLocationPublisher';
 
 const CONVOYS_TABLE = 'convoys';
@@ -216,21 +221,8 @@ function normalizeRole(role: ConvoyRole | undefined): ConvoyRole {
 
 function mapBackendError(error: unknown, fallback: string): ConvoyMembershipServiceResult<never> {
   const maybe = error as { message?: string; code?: ConvoyMembershipServiceErrorCode } | null;
-  const message = maybe?.message ?? '';
-  if (
-    /schema cache/i.test(message) &&
-    /\bconvoys\b|\bconvoy_members\b|\bconvoy_invites\b|\bconvoy_member_locations\b/i.test(message)
-  ) {
-    return toError(
-      'backend_unavailable',
-      'Convoy tracking tables are not available on the connected Supabase backend yet.',
-      [
-        'Apply supabase/migrations/022_convoy_team_tracking.sql to the target Supabase project.',
-        'Deploy supabase/functions/convoy-membership and set CONVOY_INVITE_HASH_PEPPER. ECS_SUPABASE_URL and ECS_SERVICE_ROLE_KEY are optional overrides when Supabase built-in runtime variables are unavailable.',
-        "Refresh the PostgREST schema cache after migration with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
-      ],
-    );
-  }
+  const userMessage = formatConvoyBackendUserMessage(error);
+  if (userMessage) return toError('backend_unavailable', userMessage, formatConvoyBackendOperatorDetails(error) ?? undefined);
   return toError(maybe?.code ?? 'backend_error', maybe?.message ?? fallback);
 }
 
@@ -238,7 +230,8 @@ async function requireUser(
   backend: ConvoyMembershipBackend,
 ): Promise<ConvoyMembershipServiceResult<AuthenticatedConvoyUser>> {
   if (!backend.isAvailable()) {
-    return toError('backend_unavailable', 'Convoy membership backend is not configured.');
+    const guidance = getConvoyBackendReadinessGuidance('supabase_unconfigured');
+    return toError('backend_unavailable', guidance.userMessage, guidance.operatorSteps);
   }
 
   const user = await backend.getCurrentUser();
@@ -254,14 +247,16 @@ function mapFunctionError(data: unknown, error: unknown): ConvoyMembershipServic
   const supabaseError = error as { message?: string } | null;
 
   if (isEdgeFunctionUnavailableError(error)) {
+    const guidance = getConvoyBackendReadinessGuidance('edge_function_missing');
+    return toError('backend_unavailable', guidance.userMessage, guidance.operatorSteps);
+  }
+
+  const readinessMessage = formatConvoyBackendUserMessage(body?.error ?? data ?? error);
+  if (readinessMessage) {
     return toError(
       'backend_unavailable',
-      'Convoy membership actions are not deployed on the connected Supabase backend yet.',
-      [
-        'Deploy supabase/functions/convoy-membership to the target Supabase project.',
-        'Set CONVOY_INVITE_HASH_PEPPER as an Edge Function secret.',
-        'Apply supabase/migrations/022_convoy_team_tracking.sql and refresh the PostgREST schema cache.',
-      ],
+      readinessMessage,
+      formatConvoyBackendOperatorDetails(body?.error ?? data ?? error) ?? body?.details,
     );
   }
 

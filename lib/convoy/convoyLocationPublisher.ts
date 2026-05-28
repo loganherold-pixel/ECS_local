@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import { isSupabaseConfigured, supabase } from '../supabase';
+import {
+  formatConvoyBackendUserMessage,
+  getConvoyBackendReadinessGuidance,
+} from './convoyBackendReadiness';
 
 const CONVOY_MEMBER_LOCATIONS_TABLE = 'convoy_member_locations';
 const STATE_CACHE_KEY = 'state';
@@ -132,15 +136,8 @@ function toError(
 
 function convoyLocationBackendError(error: unknown, fallback: string): ConvoyLocationPublisherResult<never> {
   const message = (error as { message?: string } | null)?.message ?? fallback;
-  if (
-    /schema cache|relation .* does not exist|Could not find the table/i.test(message) &&
-    /\bconvoys\b|\bconvoy_members\b|\bconvoy_member_locations\b/i.test(message)
-  ) {
-    return toError(
-      'backend_unavailable',
-      'Convoy location tracking is not deployed on the connected Supabase backend yet. Apply migration 022_convoy_team_tracking.sql, deploy convoy-membership, then refresh the Supabase schema cache.',
-    );
-  }
+  const readinessMessage = formatConvoyBackendUserMessage(error);
+  if (readinessMessage) return toError('backend_unavailable', readinessMessage);
   return toError('backend_error', message || fallback);
 }
 
@@ -204,15 +201,16 @@ export class ConvoyLocationPublisher {
     }
 
     if (!this.backend.isAvailable()) {
+      const guidance = getConvoyBackendReadinessGuidance('supabase_unconfigured');
       await this.setState({
         ...this.state,
         status: 'error',
         enabled: false,
         convoyId,
         memberId,
-        lastError: 'Convoy location backend is not configured.',
+        lastError: guidance.userMessage,
       });
-      return toError('backend_unavailable', 'Convoy location backend is not configured.');
+      return toError('backend_unavailable', guidance.userMessage);
     }
 
     let user: { id: string } | null = null;
@@ -387,7 +385,7 @@ export class ConvoyLocationPublisher {
       return toError('validation_error', 'Active convoy and member identifiers are required.');
     }
     if (!this.backend.isAvailable()) {
-      return toError('backend_unavailable', 'Convoy location backend is not configured.');
+      return toError('backend_unavailable', getConvoyBackendReadinessGuidance('supabase_unconfigured').userMessage);
     }
 
     const now = Date.now();

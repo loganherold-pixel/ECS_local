@@ -17,6 +17,7 @@ import { ECSCopyButton } from '../components/ECSCopyButton';
 import { ECSButton } from '../components/ECSButton';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import { useApp } from '../context/AppContext';
+import { formatConvoyBackendUserMessage } from '../lib/convoy/convoyBackendReadiness';
 import { formatConvoyInviteCode, normalizeConvoyInviteCodeForSubmit } from '../lib/convoy/convoyInviteCodeFormat';
 import {
   convoyMembershipService,
@@ -41,14 +42,13 @@ const EXPIRATION_OPTIONS: { label: string; value: ExpirationPreset; hours: numbe
 ];
 
 function normalizeError(error: string): string {
+  const backendMessage = formatConvoyBackendUserMessage(error);
+  if (backendMessage) return backendMessage;
   if (/invalid|not valid/i.test(error)) return 'Invite code is invalid. Check the code and ask the convoy leader for a fresh invite if needed.';
   if (/expired/i.test(error)) return 'Invite expired. Ask the convoy leader for a new code.';
   if (/revoked/i.test(error)) return 'Invite revoked. Ask the convoy leader to reissue access.';
   if (/used|max/i.test(error)) return 'Invite has reached its use limit.';
   if (/sign in|auth/i.test(error)) return 'Sign in before creating or joining a convoy.';
-  if (/convoy tracking tables are not available|schema cache|public\.convoys/i.test(error)) {
-    return 'Convoy tracking is not deployed on this backend yet. Apply migration 022_convoy_team_tracking.sql, deploy the convoy-membership Edge Function, then refresh the Supabase schema cache.';
-  }
   return error;
 }
 
