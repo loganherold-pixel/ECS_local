@@ -213,7 +213,7 @@ async function main() {
   updateBackend.lastHandlers.onStatusChange('degraded');
   assert.strictEqual(store.getSnapshot().connectionStatus, 'degraded');
   assert.strictEqual(store.getSnapshot().members[0].latitude, 38.555, 'degraded realtime should preserve last known data.');
-  assert.ok(store.getSnapshot().error.includes('last known locations'));
+  assert.ok(store.getSnapshot().error.includes('last known or manual convoy state'));
 
   store.stopConvoyLocationSubscription();
   assert.strictEqual(updateBackend.unsubscribed, true, 'store cleanup should unsubscribe realtime channel.');

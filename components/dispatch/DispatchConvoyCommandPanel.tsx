@@ -468,6 +468,11 @@ export default function DispatchConvoyCommandPanel({
     showEmergencyOverlay ?? (!isFeedPresentation && !isMapOnlyPresentation && !isSummaryOnlyPresentation);
   const canShareLiveLocation = Boolean(activeContext?.convoyId && activeContext?.memberId);
   const isSharingLiveLocation = Boolean(sharingState?.enabled);
+  const visibleTrackingNote =
+    trackingNote ??
+    sharingState?.lastStopReason ??
+    sharingState?.lastError ??
+    (hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId ? trackingSnapshot.error : null);
 
   const refreshLiveSharingControls = useCallback(async () => {
     const [context, state] = await Promise.all([
@@ -715,9 +720,9 @@ export default function DispatchConvoyCommandPanel({
             </Text>
           </TouchableOpacity>
         </View>
-        {trackingNote || sharingState?.lastError ? (
+        {visibleTrackingNote ? (
           <Text style={styles.trackingNote} numberOfLines={2}>
-            {trackingNote ?? sharingState?.lastStopReason ?? sharingState?.lastError}
+            {visibleTrackingNote}
           </Text>
         ) : null}
 

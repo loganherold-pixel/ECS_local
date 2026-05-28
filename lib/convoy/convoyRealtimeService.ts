@@ -1,4 +1,8 @@
 import { isSupabaseConfigured, supabase } from '../supabase';
+import {
+  formatConvoyBackendUserMessage,
+  getConvoyBackendReadinessGuidance,
+} from './convoyBackendReadiness';
 import { classifyConvoyLocationStaleness, type ConvoyLocationStaleness } from './convoyTrackingThresholds';
 export {
   CONVOY_LOCATION_FRESH_UNDER_MS,
@@ -111,12 +115,8 @@ function toError(
 
 function convoyRealtimeBackendError(message: string | null | undefined): string | null {
   if (!message) return null;
-  if (
-    /schema cache|relation .* does not exist|Could not find the table/i.test(message) &&
-    /\bconvoy_members\b|\bconvoy_member_locations\b/i.test(message)
-  ) {
-    return 'Convoy realtime tracking is not deployed on the connected Supabase backend yet. Apply migration 022_convoy_team_tracking.sql, enable Realtime for convoy_member_locations, then refresh the Supabase schema cache.';
-  }
+  const readinessMessage = formatConvoyBackendUserMessage(message);
+  if (readinessMessage) return readinessMessage;
   return message;
 }
 
@@ -218,7 +218,7 @@ export class ConvoyRealtimeService {
     const normalizedConvoyId = normalizeId(convoyId);
     if (!normalizedConvoyId) return toError('validation_error', 'convoyId is required.');
     if (!this.backend.isAvailable()) {
-      return toError('backend_unavailable', 'Convoy realtime backend is not configured.');
+      return toError('backend_unavailable', getConvoyBackendReadinessGuidance('supabase_unconfigured').userMessage);
     }
 
     const [members, locations] = await Promise.all([

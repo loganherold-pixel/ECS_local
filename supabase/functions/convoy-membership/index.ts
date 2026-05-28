@@ -59,6 +59,76 @@ function fail(code: string, error: string, status = 400, details?: string[]): Re
   return jsonResponse({ ok: false, code, error, details }, status);
 }
 
+function backendErrorText(error: unknown): string {
+  const maybe = error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown } | null;
+  return [maybe?.message, maybe?.details, maybe?.hint, maybe?.code]
+    .filter((part) => part != null)
+    .map(String)
+    .join(' ');
+}
+
+function backendReadinessFailure(error: unknown): Response | null {
+  const text = backendErrorText(error).toLowerCase();
+  if (!text) return null;
+
+  if (
+    (text.includes('schema cache') || text.includes('pgrst202') || text.includes('pgrst205')) &&
+    (text.includes('convoy') || text.includes('claim_convoy_invite'))
+  ) {
+    return fail(
+      'backend_unavailable',
+      'Convoy tracking tables or helpers are not visible through the Supabase API yet.',
+      503,
+      [
+        'Apply supabase/migrations/022_convoy_team_tracking.sql.',
+        'Apply supabase/migrations/023_convoy_location_retention_cleanup.sql.',
+        "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
+      ],
+    );
+  }
+
+  if (
+    ((text.includes('relation') && text.includes('does not exist')) ||
+      text.includes('undefined_table') ||
+      text.includes('42p01')) &&
+    text.includes('convoy')
+  ) {
+    return fail(
+      'backend_unavailable',
+      'Convoy tracking schema is not deployed on this Supabase database yet.',
+      503,
+      [
+        'Apply supabase/migrations/022_convoy_team_tracking.sql.',
+        'Apply supabase/migrations/023_convoy_location_retention_cleanup.sql.',
+        "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
+      ],
+    );
+  }
+
+  if (
+    ((text.includes('function') && text.includes('does not exist')) ||
+      text.includes('undefined_function') ||
+      text.includes('42883')) &&
+    text.includes('claim_convoy_invite')
+  ) {
+    return fail(
+      'backend_unavailable',
+      'Convoy invite claim helper is not deployed on this Supabase database yet.',
+      503,
+      [
+        'Apply supabase/migrations/022_convoy_team_tracking.sql.',
+        "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
+      ],
+    );
+  }
+
+  return null;
+}
+
+function failBackend(error: unknown, fallback: string): Response {
+  return backendReadinessFailure(error) ?? fail('backend_error', fallback, 500);
+}
+
 function getEnv(name: string, fallbackName?: string): string {
   const value = Deno.env.get(name) ?? (fallbackName ? Deno.env.get(fallbackName) : undefined);
   if (!value?.trim()) throw new Error(`Missing environment variable: ${name}`);
@@ -164,7 +234,7 @@ async function requireLeader(admin: ReturnType<typeof createAdminClient>, convoy
     .in('status', ['planned', 'active', 'paused'])
     .maybeSingle();
 
-  if (error) return { ok: false as const, response: fail('backend_error', 'Unable to validate convoy leader.', 500) };
+  if (error) return { ok: false as const, response: failBackend(error, 'Unable to validate convoy leader.') };
   if (!data) return { ok: false as const, response: fail('permission_denied', 'Convoy leader access required.', 403) };
   return { ok: true as const, convoy: data };
 }
@@ -195,7 +265,7 @@ async function createInvite(admin: ReturnType<typeof createAdminClient>, body: A
     .select('id, convoy_id, role, max_uses, used_count, expires_at, revoked_at, created_by, created_at')
     .single();
 
-  if (error || !data) return fail('backend_error', 'Unable to create convoy invite.', 500);
+  if (error || !data) return failBackend(error, 'Unable to create convoy invite.');
   return ok({ invite: publicInvite(data as ConvoyInviteRow), rawCode });
 }
 
@@ -213,7 +283,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
     .eq('code_hash', codeHash)
     .maybeSingle();
 
-  if (inviteError) return fail('backend_error', 'Unable to validate invite.', 500);
+  if (inviteError) return failBackend(inviteError, 'Unable to validate invite.');
   if (!invite) return fail('invalid_invite', 'Invite code is not valid.', 404);
   if (invite.revoked_at) return fail('invite_revoked', 'Invite has been revoked.', 403);
   if (new Date(invite.expires_at).getTime() <= Date.now()) {
@@ -227,7 +297,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
     .eq('id', invite.convoy_id)
     .in('status', ['planned', 'active', 'paused'])
     .maybeSingle();
-  if (convoyError) return fail('backend_error', 'Unable to load convoy.', 500);
+  if (convoyError) return failBackend(convoyError, 'Unable to load convoy.');
   if (!convoy) return fail('not_found', 'Convoy is not active.', 404);
 
   const { data: existing } = await admin
@@ -245,7 +315,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
     .rpc('claim_convoy_invite', { target_invite_id: invite.id })
     .maybeSingle<ClaimedInviteRow>();
 
-  if (claimError) return fail('backend_error', 'Unable to claim invite.', 500);
+  if (claimError) return failBackend(claimError, 'Unable to claim invite.');
   if (!claimedInvite) return fail('invite_maxed', 'Invite is no longer available.', 409);
 
   if (existing) {
@@ -261,7 +331,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
       .eq('id', existing.id)
       .select('*')
       .single();
-    if (updateError || !member) return fail('backend_error', 'Unable to reactivate convoy membership.', 500);
+    if (updateError || !member) return failBackend(updateError, 'Unable to reactivate convoy membership.');
     return ok({ convoy, member });
   }
 
@@ -277,7 +347,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
     .select('*')
     .single();
 
-  if (memberError || !member) return fail('backend_error', 'Unable to join convoy.', 500);
+  if (memberError || !member) return failBackend(memberError, 'Unable to join convoy.');
   return ok({ convoy, member });
 }
 
@@ -298,7 +368,7 @@ async function revokeMember(admin: ReturnType<typeof createAdminClient>, body: A
     .select('*')
     .maybeSingle();
 
-  if (error) return fail('backend_error', 'Unable to revoke convoy member.', 500);
+  if (error) return failBackend(error, 'Unable to revoke convoy member.');
   if (!data) return fail('not_found', 'Convoy member was not found or cannot be revoked.', 404);
   return ok(data);
 }
@@ -316,7 +386,7 @@ async function leaveConvoy(admin: ReturnType<typeof createAdminClient>, body: Ac
     .select('*')
     .maybeSingle();
 
-  if (error) return fail('backend_error', 'Unable to leave convoy.', 500);
+  if (error) return failBackend(error, 'Unable to leave convoy.');
   if (!data) return fail('not_found', 'Active convoy membership was not found.', 404);
 
   const { error: locationError } = await admin
@@ -325,7 +395,7 @@ async function leaveConvoy(admin: ReturnType<typeof createAdminClient>, body: Ac
     .eq('convoy_id', convoyId)
     .eq('member_id', data.id);
 
-  if (locationError) return fail('backend_error', 'You left the convoy, but location cleanup failed.', 500);
+  if (locationError) return failBackend(locationError, 'You left the convoy, but location cleanup failed.');
 
   return ok(data);
 }
@@ -347,7 +417,7 @@ async function endConvoy(admin: ReturnType<typeof createAdminClient>, body: Acti
     .select('*')
     .maybeSingle();
 
-  if (convoyError) return fail('backend_error', 'Unable to end convoy.', 500);
+  if (convoyError) return failBackend(convoyError, 'Unable to end convoy.');
   if (!convoy) return fail('not_found', 'Active convoy was not found.', 404);
 
   const { error: memberError } = await admin
@@ -356,7 +426,7 @@ async function endConvoy(admin: ReturnType<typeof createAdminClient>, body: Acti
     .eq('convoy_id', convoyId)
     .is('revoked_at', null);
 
-  if (memberError) return fail('backend_error', 'Convoy ended, but member cleanup failed.', 500);
+  if (memberError) return failBackend(memberError, 'Convoy ended, but member cleanup failed.');
 
   const { error: inviteError } = await admin
     .from('convoy_invites')
@@ -364,14 +434,14 @@ async function endConvoy(admin: ReturnType<typeof createAdminClient>, body: Acti
     .eq('convoy_id', convoyId)
     .is('revoked_at', null);
 
-  if (inviteError) return fail('backend_error', 'Convoy ended, but invite cleanup failed.', 500);
+  if (inviteError) return failBackend(inviteError, 'Convoy ended, but invite cleanup failed.');
 
   const { error: locationError } = await admin
     .from('convoy_member_locations')
     .delete()
     .eq('convoy_id', convoyId);
 
-  if (locationError) return fail('backend_error', 'Convoy ended, but location cleanup failed.', 500);
+  if (locationError) return failBackend(locationError, 'Convoy ended, but location cleanup failed.');
 
   return ok(convoy);
 }

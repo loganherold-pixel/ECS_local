@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
+import { getConvoyBackendReadinessGuidance } from '../lib/convoy/convoyBackendReadiness';
 import {
   ConvoyRealtimeService,
   convoyRealtimeService,
@@ -141,7 +142,7 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
           loading: false,
           error:
             connectionStatus === 'degraded'
-              ? 'Realtime convoy tracking is degraded. Showing last known locations.'
+              ? getConvoyBackendReadinessGuidance('realtime_unavailable').userMessage
               : state.error,
         });
       },

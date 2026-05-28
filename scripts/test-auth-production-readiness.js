@@ -18,6 +18,7 @@ async function main() {
     'auth_logs_and_audits_are_sanitized',
     'distribution_entry_and_offline_restore_are_explicit',
     'subscription_and_access_fallbacks_are_non_privileged',
+    'branded_password_reset_email_is_owned_by_ecs',
   ].forEach((id) => {
     assert.equal(checks.get(id)?.passed, true, `${id} should pass before provider/device evidence blockers remain`);
   });

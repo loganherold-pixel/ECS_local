@@ -174,7 +174,8 @@ Password reset:
 - Route gating owner: [app/_layout.tsx](/C:/Users/logan/Desktop/ECS_local/app/_layout.tsx)
 - Email template owner: [supabase/templates/recovery.html](/C:/Users/logan/Desktop/ECS_local/supabase/templates/recovery.html)
 - Local template config: [supabase/config.toml](/C:/Users/logan/Desktop/ECS_local/supabase/config.toml) under `[auth.email.template.recovery]`
-- Production sender requirement: Supabase Auth custom SMTP must send from `admin@expeditioncommand.com` with sender name `Expedition Command`. SMTP credentials must be configured in Supabase project settings or secrets, never committed.
+- Production sender requirement: Supabase Auth custom SMTP must send from `admin@expeditioncommand.com` with sender name `Expedition Command` and subject `Reset your ECS password`. SMTP credentials must be configured in Supabase project settings or secrets, never committed.
+- Password reset safety contract: hosted Supabase must allow the ECS app reset redirect, preserve the 1-hour recovery expiry unless explicitly approved, and keep the password policy aligned with the app reset screen.
 
 Invite or activation:
 

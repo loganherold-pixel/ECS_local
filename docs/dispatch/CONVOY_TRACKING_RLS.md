@@ -18,6 +18,71 @@ Required backend steps for the field-test project:
 
 The app should never query `public.convois`; that spelling is invalid. The runtime table name is `public.convoys`.
 
+## Backend Runbook
+
+These steps still happen outside the mobile repo for each target Supabase project. Do not place service-role keys or provider secrets in React Native code.
+
+1. Link/select the target project:
+
+   ```bash
+   supabase link --project-ref <project-ref>
+   ```
+
+2. Apply the convoy database migrations:
+
+   ```bash
+   supabase db push --linked
+   ```
+
+   Confirm these migrations are present on the target database:
+
+   - `022_convoy_team_tracking.sql`
+   - `023_convoy_location_retention_cleanup.sql`
+   - `024_legacy_core_rls.sql`
+
+3. Reload PostgREST schema cache after the migrations:
+
+   ```sql
+   NOTIFY pgrst, 'reload schema';
+   ```
+
+4. Deploy the Edge Function:
+
+   ```bash
+   supabase functions deploy convoy-membership --project-ref <project-ref>
+   ```
+
+5. Set the invite hashing secret:
+
+   ```bash
+   supabase secrets set CONVOY_INVITE_HASH_PEPPER=<strong-random-secret> --project-ref <project-ref>
+   ```
+
+   `ECS_SUPABASE_URL` and `ECS_SERVICE_ROLE_KEY` are optional overrides. Normal Supabase Edge Runtime deployments provide `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+
+6. Enable Realtime for live convoy locations. Use the dashboard Postgres Changes controls or SQL equivalent:
+
+   ```sql
+   alter publication supabase_realtime add table public.convoy_member_locations;
+   alter table public.convoy_member_locations replica identity full;
+   ```
+
+7. Smoke-check the target backend:
+
+   ```bash
+   scripts/supabase-rls-smoke.sh
+   ```
+
+   Also run `supabase/smoke/rls_catalog_check.sql` in staging SQL tooling. The check must show convoy tables with RLS enabled, `convoy_member_locations` in `supabase_realtime`, replica identity full, and no authenticated execute privilege on the service-role-only cleanup/claim helpers.
+
+Expected app recovery copy by failure case:
+
+- Missing migration: convoy roster/live tracking are not deployed on this backend yet.
+- Stale schema cache: convoy tables or helpers are not visible through Supabase API yet; reload PostgREST schema cache.
+- Missing Edge Function: creating and joining convoys are blocked until `convoy-membership` is deployed.
+- Missing invite secret: invite creation/join are blocked until `CONVOY_INVITE_HASH_PEPPER` is set.
+- Missing Realtime publication: roster can load, but live location updates show last-known/manual state until Realtime is enabled.
+
 ## Security Model
 
 - Raw invite codes are never stored. Only `convoy_invites.code_hash` is persisted.

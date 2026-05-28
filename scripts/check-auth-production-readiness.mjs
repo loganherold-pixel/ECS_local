@@ -55,10 +55,14 @@ export function buildAuthProductionReadinessResult(options = {}) {
     appContext: path.join(root, 'context', 'AppContext.tsx'),
     auth: path.join(root, 'lib', 'auth.ts'),
     authLogRedaction: path.join(root, 'lib', 'auth', 'authLogRedaction.ts'),
+    authEmailDelivery: path.join(root, 'docs', 'auth-email-delivery.md'),
     distributionEntryResolver: path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'),
     offlineAccessPolicy: path.join(root, 'lib', 'auth', 'offlineAccessPolicy.ts'),
     subscriptionAccess: path.join(root, 'lib', 'subscriptionAccess.ts'),
     ecsProPurchase: path.join(root, 'lib', 'ecsProPurchase.ts'),
+    supabaseConfig: path.join(root, 'supabase', 'config.toml'),
+    recoveryTemplate: path.join(root, 'supabase', 'templates', 'recovery.html'),
+    authEmailTemplateTest: path.join(root, 'scripts', 'test-auth-email-template.js'),
   };
 
   const evidence = readJsonIfExists(paths.evidence);
@@ -68,10 +72,14 @@ export function buildAuthProductionReadinessResult(options = {}) {
   const appContext = readIfExists(paths.appContext);
   const auth = readIfExists(paths.auth);
   const authLogRedaction = readIfExists(paths.authLogRedaction);
+  const authEmailDelivery = readIfExists(paths.authEmailDelivery);
   const distributionEntryResolver = readIfExists(paths.distributionEntryResolver);
   const offlineAccessPolicy = readIfExists(paths.offlineAccessPolicy);
   const subscriptionAccess = readIfExists(paths.subscriptionAccess);
   const ecsProPurchase = readIfExists(paths.ecsProPurchase);
+  const supabaseConfig = readIfExists(paths.supabaseConfig);
+  const recoveryTemplate = readIfExists(paths.recoveryTemplate);
+  const authEmailTemplateTest = readIfExists(paths.authEmailTemplateTest);
   const normalizedAppContext = normalize(appContext);
 
   const checks = [
@@ -157,6 +165,34 @@ export function buildAuthProductionReadinessResult(options = {}) {
         appContext.includes('canReuseOperatorInfoSnapshot'),
       [relPath(root, paths.auth), relPath(root, paths.subscriptionAccess), relPath(root, paths.offlineAccessPolicy), relPath(root, paths.ecsProPurchase), relPath(root, paths.appContext)],
       ['Keep failed network/provider entitlement refreshes from granting privileged access or using unrelated purchases.'],
+    ),
+    check(
+      'branded_password_reset_email_is_owned_by_ecs',
+      'Password reset email subject, template, sender guidance, redirect allow-list, and safety rules are owned by ECS without committed secrets.',
+      supabaseConfig.includes('[auth.email.template.recovery]') &&
+        supabaseConfig.includes('subject = "Reset your ECS password"') &&
+        supabaseConfig.includes('content_path = "./supabase/templates/recovery.html"') &&
+        supabaseConfig.includes('# admin_email = "admin@expeditioncommand.com"') &&
+        supabaseConfig.includes('# sender_name = "Expedition Command"') &&
+        supabaseConfig.includes('# pass = "env(SENDGRID_API_KEY)"') &&
+        supabaseConfig.includes('minimum_password_length = 10') &&
+        supabaseConfig.includes('password_requirements = "lower_upper_letters_digits_symbols"') &&
+        supabaseConfig.includes('otp_expiry = 3600') &&
+        supabaseConfig.includes('planning-offline-sync://create-access-key?mode=reset') &&
+        recoveryTemplate.includes('Reset your ECS password') &&
+        recoveryTemplate.includes('{{ .ConfirmationURL }}') &&
+        recoveryTemplate.includes('{{ .Email }}') &&
+        recoveryTemplate.includes('This link expires after 1 hour') &&
+        recoveryTemplate.includes('will never ask for your password, one-time codes, or recovery tokens by email') &&
+        !/powered by supabase|application powered by supabase|supabase auth/i.test(recoveryTemplate) &&
+        !/{{\s*\.(Token|TokenHash)\s*}}/.test(recoveryTemplate) &&
+        authEmailDelivery.includes('admin@expeditioncommand.com') &&
+        authEmailDelivery.includes('Reset your ECS password') &&
+        authEmailDelivery.includes('cannot verify hosted Supabase SMTP domain validation') &&
+        authEmailTemplateTest.includes('RECOVERY_SUBJECT') &&
+        authEmailTemplateTest.includes('minimum_password_length = 10'),
+      [relPath(root, paths.supabaseConfig), relPath(root, paths.recoveryTemplate), relPath(root, paths.authEmailDelivery), relPath(root, paths.authEmailTemplateTest)],
+      ['Keep ECS recovery email branding, sender guidance, redirect allow-list, and password safety policy in repo-owned config/docs/tests without adding SMTP or service secrets.'],
     ),
     check(
       'real_provider_signup_signin_signout_evidence_present',
