@@ -55,8 +55,8 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /Navigate to Recovery Request/,
-  'Recovery drilldown should expose the recovery request navigation action.',
+  /Proceed to Active Ping/,
+  'Recovery drilldown should expose the active GPS ping navigation action.',
 );
 assert.match(
   dispatchSource,

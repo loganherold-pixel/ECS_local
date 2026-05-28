@@ -47,6 +47,58 @@ function offlinePackageSummary(input: ExpeditionReadinessInput): string {
   return 'Offline package confidence is limited.';
 }
 
+function fuelRangeAuditStatus(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): ExpeditionDepartureAuditItemStatus {
+  if (!input.fuel) return categoryStatus(category);
+  if (input.fuel.rangeRemainingMiles != null || input.fuel.fuelPercent != null) {
+    return category?.status === 'hold' ? 'missing' : 'complete';
+  }
+  return categoryStatus(category);
+}
+
+function vehicleProfileAuditStatus(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): ExpeditionDepartureAuditItemStatus {
+  const vehicle = input.activeVehicle;
+  if (!vehicle?.vehicleId && !vehicle?.label) return categoryStatus(category);
+  const hasWeightProfile =
+    typeof vehicle.operatingWeightLbs === 'number' ||
+    typeof vehicle.gvwrUsagePct === 'number' ||
+    typeof vehicle.payloadRemainingLbs === 'number';
+  if (hasWeightProfile && category?.status !== 'hold') return 'complete';
+  return categoryStatus(category);
+}
+
+function emergencyCommsAuditStatus(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): ExpeditionDepartureAuditItemStatus {
+  const offline = input.offline;
+  if (offline?.emergencyPacketAvailable === true || offline?.emergencyDocsAvailable === true) {
+    return 'complete';
+  }
+  if (category?.status === 'ready') return 'complete';
+  if (input.communications) return category?.status === 'hold' ? 'missing' : 'caution';
+  return 'caution';
+}
+
+function emergencyCommsSummary(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): string {
+  const offline = input.offline;
+  if (offline?.emergencyPacketAvailable === true || offline?.emergencyDocsAvailable === true) {
+    return 'Emergency packet is available from local inputs.';
+  }
+  if (category?.status === 'ready') {
+    return 'Communications plan is ready. Review or edit frequencies, signals, and emergency numbers from the Comms section.';
+  }
+  return category?.summary ?? 'Emergency communications can be completed by reviewing Comms references and adding personal frequencies, signals, or emergency numbers.';
+}
+
 export function buildDepartureAudit(
   input: ExpeditionReadinessInput,
   categories: ExpeditionReadinessCategory[],
@@ -72,19 +124,7 @@ export function buildDepartureAudit(
             : 'unavailable',
       offlinePackageSummary(input),
       offline?.packageStatus === 'ready' ? null : 'Download Route Package',
-      offline?.packageStatus === 'ready' ? null : '/navigate-offline',
-    ),
-    item(
-      'route-geometry',
-      'Route geometry',
-      statusFromBoolean(offline?.routeGeometryCached ?? offline?.routeDownloaded),
-      offline?.routeGeometryCached || offline?.routeDownloaded
-        ? 'Route geometry is available for offline review.'
-        : offline
-          ? 'Route geometry is not confirmed in the offline package.'
-          : 'Route geometry cache state is unavailable.',
-      'Open Navigate',
-      '/navigate',
+      offline?.packageStatus === 'ready' ? null : '/navigate',
     ),
     item(
       'camp-candidates',
@@ -119,7 +159,7 @@ export function buildDepartureAudit(
     item(
       'fuel-range-plan',
       'Fuel/range plan',
-      categoryStatus(fuel),
+      fuelRangeAuditStatus(input, fuel),
       fuel?.summary ?? 'Fuel/range plan is unavailable.',
       'Open Fleet',
       '/fleet',
@@ -127,7 +167,7 @@ export function buildDepartureAudit(
     item(
       'vehicle-profile',
       'Vehicle profile',
-      categoryStatus(vehicle),
+      vehicleProfileAuditStatus(input, vehicle),
       vehicle?.summary ?? 'Vehicle profile is unavailable.',
       'Select Vehicle',
       '/fleet',
@@ -143,18 +183,10 @@ export function buildDepartureAudit(
     item(
       'emergency-communications-packet',
       'Emergency/communications packet',
-      offline?.emergencyPacketAvailable === true || offline?.emergencyDocsAvailable === true
-        ? 'complete'
-        : communications?.status === 'ready'
-          ? 'caution'
-          : offline?.emergencyPacketAvailable === false || offline?.emergencyDocsAvailable === false
-            ? 'missing'
-            : 'unavailable',
-      offline?.emergencyPacketAvailable === true || offline?.emergencyDocsAvailable === true
-        ? 'Emergency packet is available from local inputs.'
-        : communications?.summary ?? 'Emergency packet availability is not connected yet.',
+      emergencyCommsAuditStatus(input, communications),
+      emergencyCommsSummary(input, communications),
       'Confirm Comms Plan',
-      null,
+      '/safety',
     ),
     item(
       'recovery-plan',

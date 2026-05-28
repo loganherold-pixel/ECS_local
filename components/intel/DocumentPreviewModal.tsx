@@ -16,8 +16,8 @@ import TacticalPopupShell from '../TacticalPopupShell';
 
 const ECS_WATERMARK_SOURCE = require('../../assets/ecs/nav/ecs-center.png');
 
-export const ECS_VERSION = 'v1.4.2';
-export const ECS_BUILD = '2026.02.22';
+export const ECS_VERSION = 'v5.0';
+export const ECS_BUILD = '2026.05.23';
 export const ECS_PRODUCT = 'Expedition Command System';
 export const ECS_ORG = 'Expedition Command System';
 
@@ -25,27 +25,30 @@ export const SYSTEM_DOC_CONTENT: Record<string, string> = {
   privacy: `PRIVACY POLICY
 Expedition Command System — ${ECS_ORG}
 
-Last Updated: February 2026
+Last Updated: May 2026
 
 1. DATA COLLECTION
-ECS collects and stores expedition planning data including vehicle configurations, loadout inventories, route data, waypoints, risk assessments, and consumable projections. All data is created by the user and stored locally on the device by default.
+ECS collects and stores expedition planning data created by the operator, including vehicle profiles, OEM or manually entered vehicle specifications, loadout inventories, route geometry, waypoints, trip builder plans, offline prep packs, field notes, dispatch events, convoy membership, and device telemetry when a user connects supported hardware.
 
 2. LOCAL STORAGE
-All expedition data is stored locally using device storage (IndexedDB on web, AsyncStorage on mobile). No data leaves your device unless you explicitly enable cloud sync by signing in.
+ECS is local-first. Core trip, fleet, loadout, note, and route context can remain on the device so field workflows continue when signal is limited. Signing in does not intentionally clear local setup data.
 
 3. CLOUD SYNC
-When signed in, data syncs to encrypted cloud storage via Supabase with row-level security. Data is encrypted in transit using TLS 1.3. Each user can only access their own data.
+When signed in, eligible ECS records sync through ECS-owned Supabase services with row-level security. Provider secrets and service-role credentials are kept server-side. Mobile code should call ECS-owned endpoints rather than provider APIs directly.
 
 4. LOCATION DATA
-Location data is only collected when the user explicitly enables GPS tracking for route recording. Location data is never shared with third parties and is stored only within the user's expedition records.
+Location is used for navigation, route progress, offline map preparation, weather context, camp scouting, bailout awareness, and convoy tracking. Convoy live sharing is opt-in and should only be visible to active convoy members. A user can stop sharing when the control is available.
 
-5. THIRD-PARTY SHARING
-ECS does not share, sell, or distribute user data to any third parties. No advertising networks, analytics services, or data brokers receive any user information.
+5. CONNECTED DEVICES
+Bluetooth, BLE, OBD2, and power-device connections are user initiated. ECS may display decoded telemetry such as state of charge, input/output watts, vehicle telemetry, or utility-sensor readings when supported. Unsupported or unauthorized devices should remain visible with a clear status instead of disappearing.
 
-6. DATA EXPORT & DELETION
-Users may export all data at any time via the Intel > Documentation Center. Deleting your account removes all cloud-stored data permanently. Local data remains on the device until manually cleared.
+6. THIRD-PARTY SHARING
+ECS does not sell user data. External services such as Mapbox, OpenWeather, Supabase, or device-provider APIs may be used only for the specific ECS function requested or enabled by the user.
 
-7. CONTACT
+7. DATA EXPORT & DELETION
+Users may export documents through Documentation Center. Deleting an account affects cloud records according to account policy. Local records remain on the device until removed by the user, app settings, or operating-system storage controls.
+
+8. CONTACT
 For privacy inquiries, contact the system administrator or visit the Expedition Command System support portal.`,
 
   disclaimer: `ACCURACY DISCLAIMER
@@ -53,15 +56,16 @@ Expedition Command System — ${ECS_ORG}
 
 IMPORTANT: READ BEFORE USE
 
-ECS is a planning and awareness tool designed to assist with expedition preparation, loadout management, and route planning. It is NOT a substitute for professional navigation, medical, emergency, or survival services.
+ECS is a planning, awareness, and field-command tool designed to assist with expedition preparation, navigation context, offline readiness, convoy awareness, vehicle fit, logistics, camp scouting, bailout planning, and incident recovery. It is NOT a substitute for professional navigation, medical, rescue, legal, land-management, or emergency services.
 
 LIMITATIONS:
-- All risk assessments are algorithmic estimates based on user-provided inputs
-- Fuel projections depend on user-entered vehicle specifications and may not reflect real-world conditions
-- Water and consumable calculations are estimates and should include safety margins
-- Route distances and elevation data are derived from imported GPS data and may contain inaccuracies
-- Weather data, when available, is informational only and should be verified independently
-- Emergency protocols are reference guides, not professional medical or rescue advice
+- ECS readiness, route, camp, bailout, and vehicle-fit assessments are deterministic estimates based on visible input data
+- AI-generated language must be treated as explanation, not independent authority
+- Fuel, water, power, payload, and range projections depend on manual entries, OEM estimates, or connected telemetry and may not reflect real-world usage
+- Route geometry, offline tiles, campground data, dispersed camping eligibility, bailout points, and resupply locations may be incomplete or stale
+- Weather data is informational and can change rapidly; verify critical forecasts independently
+- Mapbox, GPS, device sensors, OBD2 scanners, and Bluetooth power devices can fail, drift, lose permission, or provide partial telemetry
+- Emergency and recovery protocols are reference guides, not professional medical, mechanical, rescue, or legal advice
 
 LIABILITY:
 The developers, operators, and distributors of ECS accept no liability for decisions made based on information provided by this system. Users are solely responsible for verifying all critical information independently before and during any expedition.
@@ -74,40 +78,37 @@ Expedition Command System — ${ECS_ORG}
 
 GETTING STARTED:
 
-1. EXPEDITION TAB (Build Mode)
-   - Configure your vehicle profile with specifications
-   - Set up framework and zone containers
-   - Build loadout with categorized gear items
-   - Assign items to vehicle zones
-   - Set expedition to ready state
+1. FLEET
+   - Create or select the active vehicle
+   - Confirm OEM or manually entered fuel, water, payload, clearance, and fit data
+   - Add accessories, load zones, and loadout context
+   - Review ECS readiness concerns and recommendations
 
-2. DASHBOARD TAB (Live Mode)
-   - Monitor real-time consumable projections
-   - View customizable widget grid
-   - Track trip duration and distance
-   - Monitor vehicle systems data
+2. EXPLORE
+   - Review suggested routes, Trip Builder, and Offline Prep
+   - Build trip plans with itinerary, camp, bailout, and resupply context
+   - Prepare offline packs after route geometry is available
+   - Use Trip Builder map previews to review route stops before committing
 
-3. NAVIGATE TAB (Input Mode)
-   - Import GPX/KML route files
-   - Create and edit waypoints
-   - View elevation profiles
-   - Calculate terrain distances
-   - Export route data
+3. NAVIGATE
+   - Start or preview guidance
+   - Use Mapbox route surfaces, dropped pins, camp scouting, remoteness corridor, weather overlays, and offline map context
+   - End active guidance only when intentionally selecting the navigation control
 
-4. SAFETY TAB (Response Mode)
-   - Access emergency protocols offline
-   - Review medical quick-reference guides
-   - Score route risk factors
-   - Check build readiness vs terrain
+4. DASHBOARD
+   - Monitor ECS Intelligence, route progress, power, weather, vehicle profile, sunlight, and attitude command widgets
+   - Long press the Dashboard button to open Field Utilities
+   - Field Utilities contains Weather, Quick Note, Comms, Team Ping, Recovery Protocol, Emergency Protocol, Permits & Access, Trip Summaries, and Documentation
 
-5. INTEL TAB (Awareness Mode)
-   - Review environmental intelligence
-   - Manage operational access data
-   - Generate trip summaries
-   - Export official documents
+5. DISPATCH
+   - Review convoy setup, roster, command surface, live tracking state, team events, and dispatch advisories
+   - Convoy live location sharing is opt-in and intended for active members only
+
+6. ECS BRIEF
+   - Review departure audit, go/caution/hold decisioning, route intelligence, vehicle fit, camp ops, weather, offline preparedness, fuel/power range, recovery/bailout, and communication confidence
 
 OFFLINE CAPABILITY:
-All core features work without internet connectivity. Data syncs automatically when connection is restored.`,
+Core planning and field-reference features are designed to remain useful without internet connectivity. Live weather, cloud sync, Mapbox tile downloads, provider data, and connected device telemetry depend on permissions, signal, provider availability, and supported hardware.`,
 
   'data-handling': `DATA HANDLING POLICY
 Expedition Command System — ${ECS_ORG}
@@ -116,12 +117,16 @@ Expedition Command System — ${ECS_ORG}
    - Primary: Local device storage (IndexedDB / AsyncStorage)
    - Secondary: Encrypted cloud storage (Supabase PostgreSQL)
    - Transit: TLS 1.3 encryption for all network requests
+   - Edge functions: Provider keys and service-role credentials remain server-side
 
 2. DATA CATEGORIES
    - Vehicle Profiles: Specifications, configurations, zone layouts
    - Loadout Data: Items, weights, zones, packing status
-   - Route Data: GPX/KML imports, waypoints, segments
-   - Expedition Records: Trip plans, risk scores, checklists
+   - Route Data: route geometry, GPX/KML imports, waypoints, pins, offline-prep metadata
+   - Expedition Records: Trip plans, risk scores, checklists, itinerary, camp, bailout, resupply context
+   - Convoy Records: convoy names, membership, invite status, callsigns, roles, and opt-in location rows
+   - Device Telemetry: OBD2, BLE, Bluetooth, and cloud power snapshots when supported and connected
+   - Weather Data: current, hourly, daily, alert, and route-corridor weather snapshots
    - User Settings: Preferences, display options, thresholds
 
 3. SYNC BEHAVIOR
@@ -129,17 +134,20 @@ Expedition Command System — ${ECS_ORG}
    - Automatic sync on reconnection
    - Conflict resolution: Last-write-wins with device tracking
    - Dirty tracking: Only modified records sync
+   - Sign-in navigation should not clear saved local fleet, route, or field setup
 
 4. DATA RETENTION
    - Local data persists until user clears app data
    - Cloud data persists until account deletion
-   - No automatic data expiration or purging
+   - Convoy location rows should be expired, deleted, or anonymized after expedition completion according to backend retention policy
 
 5. SECURITY
    - Row-level security on all cloud tables
    - User authentication required for cloud access
    - No shared data between user accounts
-   - Audit logging for authentication events`,
+   - Convoy members should only read active convoy data while membership remains active
+   - Invite codes should be stored as hashes, not raw codes
+   - Audit logging for authentication and access events`,
 };
 
 interface DocumentPreviewModalProps {

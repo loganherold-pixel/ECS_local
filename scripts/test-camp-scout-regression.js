@@ -32,6 +32,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView: function WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -205,6 +216,36 @@ async function run() {
   );
   assert.deepEqual(
     rankCampScoutCandidates([
+      candidate('lake-hidden', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        isWaterBody: true,
+      }),
+      candidate('building-hidden', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        nearBuildings: true,
+      }),
+      candidate('highway-hidden', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        nearHighway: true,
+      }),
+    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
+    [],
+    'Camp Scout must hard-hide water, building, and highway conflict pins even with fallback enabled.',
+  );
+  assert.deepEqual(
+    rankCampScoutCandidates([
       candidate('restricted-hidden', {
         sourceType: 'ecs_inferred',
         legalityStatus: 'restricted_or_not_allowed',
@@ -310,9 +351,16 @@ async function run() {
   );
   assert.equal(renderedCampScout.length, 10);
   assert.equal(renderedCampScout[0].sourceType, 'ecs_inferred');
-  assert.equal(renderedCampScout[1].rankLabel, 'COM');
+  assert.equal(renderedCampScout[1].rankLabel, undefined);
 
   const navigate = read(path.join('app', '(tabs)', 'navigate.tsx'));
+  const mapRenderer = read(path.join('components', 'navigate', 'MapRenderer.tsx'));
+  assert.ok(
+    mapRenderer.includes("tent.textContent = '\\u26FA';") &&
+      mapRenderer.includes('.camp-scout-tent::before') &&
+      mapRenderer.includes('content: none;'),
+    'Camp Scout DOM markers should use a camp symbol inside the yellow dot instead of a bare triangle.',
+  );
   assert.ok(
     navigate.includes('campIntelMarkers={combinedCampMarkers}'),
     'MapRenderer should keep existing campsite marker layer wired.',
@@ -351,6 +399,61 @@ async function run() {
       navigate.includes('CAMP_SCOUT_EXPANDED_VISIBLE_PIN_LIMIT = 10'),
     'Navigate should keep Camp Scout pin count constants at 5 default and 10 expanded.',
   );
+  const campScoutMarkerStart = navigate.indexOf('const campScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>');
+  const dispersedScoutMarkerStart = navigate.indexOf(
+    'const dispersedCampingCampScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>',
+    campScoutMarkerStart,
+  );
+  const sharedCampMarkerStart = navigate.indexOf(
+    'const campOpsMapMarkers = useMemo<CampScoutMapMarkerPayload[]>',
+    dispersedScoutMarkerStart,
+  );
+  const campScoutMarkerBlock = navigate.slice(campScoutMarkerStart, dispersedScoutMarkerStart);
+  const dispersedScoutMarkerBlock = navigate.slice(dispersedScoutMarkerStart, sharedCampMarkerStart);
+  assert.ok(
+    campScoutMarkerStart >= 0 && dispersedScoutMarkerStart > campScoutMarkerStart && sharedCampMarkerStart > dispersedScoutMarkerStart,
+    'Navigate should expose dedicated Camp Scout and dispersed Camp Scout marker mappings.',
+  );
+  assert.ok(
+    !campScoutMarkerBlock.includes('rankLabel') &&
+      !dispersedScoutMarkerBlock.includes('rankLabel'),
+    'Generated Camp Scout map pins should not display numeric viability rank labels.',
+  );
+  assert.ok(
+    navigate.includes('selectFirstCandidate: false') &&
+      navigate.includes('setSelectedEstablishedCampsite(null);') &&
+      navigate.includes('setSelectedDispersedCampingRegion(null);'),
+    'Route Scout pin generation and camp pin taps should not leave stacked camp detail popups fighting for touch priority.',
+  );
+  assert.ok(
+    !campScoutMarkerBlock.includes("'OFF'") &&
+      !campScoutMarkerBlock.includes("'COM'") &&
+      !campScoutMarkerBlock.includes('gradeCounts') &&
+      !dispersedScoutMarkerBlock.includes("rankLabel: 'ECS'"),
+    'Generated Camp Scout pins should not replace viability ranks with source or confidence labels.',
+  );
+  assert.ok(
+    campScoutMarkerBlock.includes('confidenceScore: candidate.confidenceScore') &&
+      navigate.includes('minimumConfidenceScore: CAMP_SCOUT_MIN_DISPLAY_SCORE') &&
+      navigate.includes('minimumRemotenessScore: officialOnly ? undefined : CAMP_SCOUT_MIN_REMOTENESS_SCORE') &&
+      navigate.includes('maximumSlopeEstimate: CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE'),
+    'Camp Scout map pins should be gated at 70+ with remoteness and slope criteria before rendering.',
+  );
+  assert.ok(
+    navigate.includes('CAMP_SCOUT_DRAW_AREA_FALLBACK_MIN_SCORE = 50') &&
+      navigate.includes('minimumConfidenceScore: CAMP_SCOUT_DRAW_AREA_FALLBACK_MIN_SCORE') &&
+      navigate.includes('minimumRemotenessScore: undefined') &&
+      navigate.includes('maximumSlopeEstimate: CAMP_SCOUT_DRAW_AREA_FALLBACK_MAX_SLOPE'),
+    'Draw-area Camp Scout fallback should render lower-confidence scouting leads after hard safety exclusions.',
+  );
+  assert.ok(
+    navigate.includes('numberOfLines={4}') &&
+      navigate.includes('adaptive.windowWidth - OVERLAY_EDGE * 2') &&
+      navigate.includes('shown in or near the drawn area') &&
+      !navigate.includes("showToast(`CAMP SCOUT: ${cappedCount} PIN") &&
+      !navigate.includes("showToast('NO CAMP SCOUT PINS FOUND')"),
+    'Camp Scout scan results should use the readable bottom status bar instead of conflicting top toasts.',
+  );
   assert.ok(
     navigate.includes('No official campsite records found in this area.') &&
       navigate.includes('No candidate campsites passed the current filters.') &&
@@ -369,6 +472,16 @@ async function run() {
       navigate.includes('mapboxSourceContainsFeatures') &&
       navigate.includes('mapboxLayerContainsFeatures'),
     'Camp Scout should expose debug-safe empty-state diagnostics for candidate counts and Mapbox pin feature state.',
+  );
+
+  const campScoutCardSource = read(path.join('components', 'navigate', 'CampScoutIntelCard.tsx'));
+  assert.ok(
+    campScoutCardSource.includes('pointerEvents="box-none"') &&
+      campScoutCardSource.includes('<View style={styles.card} pointerEvents="auto">') &&
+      campScoutCardSource.includes('maxHeight: 420') &&
+      campScoutCardSource.includes('This pin is not an exact campsite location') &&
+      !campScoutCardSource.includes('card: {\n    flex: 1,'),
+    'Camp Scout detail should only capture touches on the visible card instead of becoming a hidden full-height blocker.',
   );
 
   const campScoutSources = [

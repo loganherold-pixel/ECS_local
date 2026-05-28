@@ -10,6 +10,12 @@ import type {
 
 export const CAMP_SCOUT_DEFAULT_PIN_LIMIT = 5;
 export const CAMP_SCOUT_EXPANDED_PIN_LIMIT = 10;
+export const CAMP_SCOUT_MIN_DISPLAY_SCORE = 70;
+export const CAMP_SCOUT_MIN_ACCESS_CONFIDENCE = 70;
+export const CAMP_SCOUT_MIN_LEGALITY_CONFIDENCE = 70;
+export const CAMP_SCOUT_MIN_REMOTENESS_SCORE = 70;
+export const CAMP_SCOUT_MIN_TERRAIN_CONFIDENCE = 70;
+export const CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE = 8;
 
 export type CampScoutScoringWeights = {
   flatnessTerrain: number;
@@ -268,8 +274,45 @@ function inferLegalityStatus(candidate: CampScoutCandidate): CampScoutLegalitySt
   return "unknown_needs_verification";
 }
 
-function isHardExcluded(candidate: CampScoutCandidate): boolean {
-  return inferLegalityStatus(candidate) === "restricted_or_not_allowed";
+function candidateSignalText(candidate: CampScoutCandidate): string {
+  return [
+    candidate.title,
+    candidate.accessNotes,
+    candidate.terrainType,
+    candidate.surfaceType,
+    candidate.landUse,
+    ...(candidate.sourceNotes ?? []),
+    ...(candidate.reasons ?? []),
+    ...(candidate.cautions ?? []),
+    ...(candidate.warnings ?? []),
+    ...(candidate.accessBasis ?? []),
+    ...(candidate.terrainBasis ?? []),
+    ...(candidate.restrictions ?? []),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function hasExcludedSurfaceSignal(candidate: CampScoutCandidate): boolean {
+  if (candidate.isWaterBody || candidate.nearBuildings || candidate.nearHighway) return true;
+  const text = candidateSignalText(candidate);
+  return (
+    /\b(lake|reservoir|pond|wetland|marsh|river|stream|creek|water body|open water|shoreline)\b/.test(text) ||
+    /\b(building|structure|residential|subdivision|industrial|developed lot|parking lot)\b/.test(text) ||
+    /\b(near|beside|adjacent to|on|inside)\s+(a\s+)?(highway|freeway|interstate|major road|arterial|primary road|paved highway)\b/.test(text) ||
+    /\b(highway|freeway|interstate|major road|arterial|primary road|paved highway)\s+(shoulder|corridor|edge|right of way)\b/.test(text)
+  );
+}
+
+export function isCampScoutHardExcluded(candidate: CampScoutCandidate): boolean {
+  if (inferLegalityStatus(candidate) === "restricted_or_not_allowed") return true;
+  if (hasExcludedSurfaceSignal(candidate)) return true;
+  return (
+    typeof candidate.slopeEstimate === "number" &&
+    Number.isFinite(candidate.slopeEstimate) &&
+    candidate.slopeEstimate > CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE
+  );
 }
 
 function buildBreakdown(
@@ -452,7 +495,7 @@ function passesFilters(
   candidate: CampScoutCandidate,
   options: CampScoutRankingOptions,
 ): boolean {
-  if (isHardExcluded(candidate)) {
+  if (isCampScoutHardExcluded(candidate)) {
     return false;
   }
 

@@ -15,6 +15,10 @@ const modalSource = fs.readFileSync(
   path.join(root, 'components', 'dashboard', 'ExpeditionAssessmentDetailModal.tsx'),
   'utf8',
 );
+const popupLayoutSource = fs.readFileSync(
+  path.join(root, 'components', 'dashboard', 'expeditionPopupLayout.ts'),
+  'utf8',
+);
 
 assert.ok(
   tabSource.includes("import ExpeditionAssessmentDetailModal from './ExpeditionAssessmentDetailModal'"),
@@ -75,13 +79,25 @@ for (const expectedText of [
   'Recommended Action',
   'To Improve Status',
   'Data Used',
-  'Related Actions',
 ]) {
   assert.ok(
     detailViewSource.includes(expectedText),
     `Assessment detail view should render ${expectedText}.`,
   );
 }
+
+assert.ok(
+  detailViewSource.includes('DataUsedSection') &&
+    detailViewSource.includes('assessment?.dataUsed') &&
+    detailViewSource.includes('formatSourceLabel') &&
+    detailViewSource.includes('MISSING') &&
+    detailViewSource.includes('STALE'),
+  'Assessment detail view should render compact Data Used provenance with source and stale/missing markers.',
+);
+assert.ok(
+  !detailViewSource.includes('Related Actions'),
+  'Assessment detail view should not render the noisy Related Actions section.',
+);
 
 assert.ok(
   detailViewSource.includes('escalationRecommended') &&
@@ -92,5 +108,34 @@ assert.ok(
   modalSource.includes('TacticalPopupShell'),
   'Assessment detail should use the existing tactical modal pattern.',
 );
+assert.ok(
+  popupLayoutSource.includes('useExpeditionFullBodyPopupProps') &&
+    popupLayoutSource.includes('getEcsTopBannerLayoutMetrics') &&
+    popupLayoutSource.includes('topClearanceOverride') &&
+    popupLayoutSource.includes('bottomClearanceOverride') &&
+    popupLayoutSource.includes('maxHeightFraction: 1') &&
+    popupLayoutSource.includes('minHeightFraction: 1'),
+  'Expedition popups should use a banner-anchored full-body shell layout.',
+);
+
+for (const modalFile of [
+  'ExpeditionPlaceholderModal.tsx',
+  'ExpeditionAssessmentDetailModal.tsx',
+  'ExpeditionDebriefModal.tsx',
+  'ReportIncidentModal.tsx',
+  'SafetyChecklistModal.tsx',
+  'ECSAssessmentModal.tsx',
+  'CommunicationPacketModal.tsx',
+  'IncidentTimelineModal.tsx',
+  'ResolveDebriefModal.tsx',
+]) {
+  const source = fs.readFileSync(path.join(root, 'components', 'dashboard', modalFile), 'utf8');
+  assert.ok(
+    source.includes('useExpeditionFullBodyPopupProps') &&
+      source.includes('const fullBodyPopupProps = useExpeditionFullBodyPopupProps()') &&
+      source.includes('{...fullBodyPopupProps}'),
+    `${modalFile} should use the shared Expedition full-body popup layout.`,
+  );
+}
 
 console.log('Expedition assessment UI wiring checks passed.');

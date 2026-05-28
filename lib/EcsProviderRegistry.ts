@@ -33,6 +33,8 @@ import {
   normalizeBluetoothTelemetrySource,
   shouldAcceptBluetoothTelemetry,
 } from './bluetoothLiveTelemetry';
+import { getBluestackParserDecision } from './bluestack';
+import { buildPowerBluTelemetryEnvelope } from './bluTelemetryEnvelope';
 
 // ── Provider Branding Constants ─────────────────────────────────────────
 
@@ -147,6 +149,10 @@ export interface EcsSystemPowerState {
 type SystemStateCallback = (state: EcsSystemPowerState) => void;
 type AllReadingsCallback = (readings: EcsNormalizedReading[]) => void;
 
+function makeReadingKey(provider: BluProviderId, deviceId: string): string {
+  return `${provider}:${deviceId}`;
+}
+
 // ── Registry Implementation ─────────────────────────────────────────────
 
 class EcsProviderRegistryImpl {
@@ -155,10 +161,15 @@ class EcsProviderRegistryImpl {
   private stateSubscribers: Set<SystemStateCallback> = new Set();
   private warningSubscribers: Set<EcsWarningCallback> = new Set();
   private providerUnsubscribers: Map<BluProviderId, (() => void)[]> = new Map();
-  private cachedReadings: Map<string, EcsNormalizedReading> = new Map(); // deviceId -> latest reading
+  private cachedReadings: Map<string, EcsNormalizedReading> = new Map(); // `${provider}:${deviceId}` -> latest reading
   private lastSystemState: EcsSystemPowerState | null = null;
 
   private normalizeReadingSource(reading: EcsNormalizedReading): EcsNormalizedReading | null {
+    const parserDecision = getBluestackParserDecision(reading.provider);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      return null;
+    }
+
     const fallback = reading.provider === 'ecoflow'
       ? 'provider_cloud'
       : reading.isStale
@@ -172,12 +183,20 @@ class EcsProviderRegistryImpl {
       });
       return null;
     }
-    return {
+    const normalizedReading: EcsNormalizedReading = {
       ...reading,
       telemetrySource: source,
       telemetrySourceLabel: reading.telemetrySourceLabel ?? getBluetoothTelemetrySourceLabel(source),
-      isLive: source === 'ble_live' && reading.isLive !== false && !reading.telemetryUnsupported && !reading.isStale,
+      isLive:
+        (source === 'ble_live' || source === 'provider_cloud') &&
+        reading.isLive !== false &&
+        !reading.telemetryUnsupported &&
+        !reading.isStale,
       updatedAt: reading.updatedAt ?? reading.lastUpdated,
+    };
+    return {
+      ...normalizedReading,
+      bluTelemetryEnvelope: reading.bluTelemetryEnvelope ?? buildPowerBluTelemetryEnvelope(normalizedReading),
     };
   }
 
@@ -189,6 +208,14 @@ class EcsProviderRegistryImpl {
    */
   registerProvider(provider: IEcsPowerProvider): void {
     const id = provider.providerId;
+    const parserDecision = getBluestackParserDecision(id);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      if (this.providers.has(id)) {
+        this.unregisterProvider(id);
+      }
+      return;
+    }
+
     if (this.providers.has(id)) {
       console.warn(`[EcsProviderRegistry] Provider ${id} already registered, replacing.`);
       this.unregisterProvider(id);
@@ -202,7 +229,10 @@ class EcsProviderRegistryImpl {
     unsubs.push(provider.onTelemetry((reading) => {
       const normalizedReading = this.normalizeReadingSource(reading);
       if (!normalizedReading) return;
-      this.cachedReadings.set(normalizedReading.deviceId, normalizedReading);
+      this.cachedReadings.set(
+        makeReadingKey(normalizedReading.provider, normalizedReading.deviceId),
+        normalizedReading,
+      );
       this.notifyTelemetrySubscribers();
       this.notifyStateSubscribers();
     }));
@@ -236,9 +266,9 @@ class EcsProviderRegistryImpl {
     }
 
     // Remove cached readings for this provider's devices
-    for (const [deviceId, reading] of this.cachedReadings) {
+    for (const [readingKey, reading] of this.cachedReadings) {
       if (reading.provider === id) {
-        this.cachedReadings.delete(deviceId);
+        this.cachedReadings.delete(readingKey);
       }
     }
 
@@ -309,8 +339,13 @@ class EcsProviderRegistryImpl {
   /**
    * Get the latest reading for a specific device.
    */
-  getDeviceReading(deviceId: string): EcsNormalizedReading | null {
-    return this.cachedReadings.get(deviceId) ?? null;
+  getDeviceReading(deviceId: string, providerId?: BluProviderId): EcsNormalizedReading | null {
+    if (providerId) {
+      return this.cachedReadings.get(makeReadingKey(providerId, deviceId)) ?? null;
+    }
+    return this.getAllLatestReadings()
+      .filter((reading) => reading.deviceId === deviceId)
+      .sort((a, b) => (b.lastUpdated ?? 0) - (a.lastUpdated ?? 0))[0] ?? null;
   }
 
   /**
@@ -335,7 +370,10 @@ class EcsProviderRegistryImpl {
         for (const reading of result.value) {
           const normalizedReading = this.normalizeReadingSource(reading);
           if (!normalizedReading) continue;
-          this.cachedReadings.set(normalizedReading.deviceId, normalizedReading);
+          this.cachedReadings.set(
+            makeReadingKey(normalizedReading.provider, normalizedReading.deviceId),
+            normalizedReading,
+          );
           allReadings.push(normalizedReading);
         }
       }
@@ -594,12 +632,12 @@ class EcsProviderRegistryImpl {
         .map((device) => [device.device_id, device] as const),
     );
 
-    for (const [deviceId, reading] of Array.from(this.cachedReadings.entries())) {
+    for (const [readingKey, reading] of Array.from(this.cachedReadings.entries())) {
       if (reading.provider !== provider.providerId) continue;
 
-      const connectedDevice = connectedById.get(deviceId);
+      const connectedDevice = connectedById.get(reading.deviceId);
       if (!connectedDevice || connectedDevice.connection_state !== 'connected') {
-        this.cachedReadings.delete(deviceId);
+        this.cachedReadings.delete(readingKey);
         continue;
       }
 
@@ -608,7 +646,7 @@ class EcsProviderRegistryImpl {
         reading.isDisconnected ||
         reading.isPrimary !== connectedDevice.is_primary
       ) {
-        this.cachedReadings.set(deviceId, {
+        this.cachedReadings.set(readingKey, {
           ...reading,
           connectionState: connectedDevice.connection_state,
           isDisconnected: false,

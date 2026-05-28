@@ -149,15 +149,25 @@ function normalizeManualMember(member: ConvoyMemberSnapshot): ConvoyMember {
   const lastCheckInAt = dateFrom(valueOf(member.lastCheckInAt));
   const status = normalizeManualStatus(member);
   const locationLabel = valueOf(member.lastKnownLocationLabel);
+  const location = valueOf(member.lastKnownLocation);
+  const latitude = finite(location?.latitude);
+  const longitude = finite(location?.longitude);
+  const locationUpdatedAt = dateFrom(member.lastKnownLocation?.updatedAt);
   return {
     id: member.id,
     displayName: member.callsign || 'Convoy member',
     role: normalizeManualRole(member.role),
     vehicleName: member.callsign || 'Vehicle not assigned',
     status,
-    coordinates: null,
+    coordinates:
+      latitude != null && longitude != null
+        ? {
+            latitude,
+            longitude,
+          }
+        : null,
     lastCheckInAt,
-    lastPingAt: null,
+    lastPingAt: locationUpdatedAt,
     spacingFromPrevious: finite(valueOf(member.distanceBehindLeadMiles)),
     distanceFromRoute: null,
     note: hasText(locationLabel) ? `Last known: ${locationLabel}` : null,

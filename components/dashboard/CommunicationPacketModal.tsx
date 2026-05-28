@@ -10,9 +10,11 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type { IncidentContext } from '../../lib/types/incidentRecovery';
 import type { IncidentCommunicationPacketAudience } from '../../lib/incidentCommunicationPacket';
+import { exportIncidentCommunicationPacketPdf } from '../../lib/incidentCommunicationPacketPdfExport';
+import { copyTextToClipboard } from '../../lib/clipboard';
 
 type PacketAudience = IncidentCommunicationPacketAudience | 'all';
 
@@ -23,25 +25,21 @@ type CommunicationPacketModalProps = {
   onCopyPacket: (audience: PacketAudience) => void;
 };
 
-function copyTextIfAvailable(text: string): void {
-  const nav = typeof navigator !== 'undefined' ? navigator : null;
-  const clipboard = nav && 'clipboard' in nav ? (nav as any).clipboard : null;
-  if (clipboard?.writeText) {
-    clipboard.writeText(text).catch(() => undefined);
-  }
-}
-
 export default function CommunicationPacketModal({
   visible,
   onClose,
   incident,
   onCopyPacket,
 }: CommunicationPacketModalProps) {
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const packets = useMemo(
     () => incident?.communicationPacket?.audiencePackets ?? [],
     [incident?.communicationPacket?.audiencePackets],
   );
   const [selectedAudience, setSelectedAudience] = useState<PacketAudience>('all');
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [packetCopied, setPacketCopied] = useState(false);
   const selectedText = useMemo(() => {
     if (!incident?.communicationPacket) return '';
     if (selectedAudience === 'all') return incident.communicationPacket.packetText ?? '';
@@ -54,16 +52,37 @@ export default function CommunicationPacketModal({
         <Text style={styles.secondaryButtonText}>Close</Text>
       </TouchableOpacity>
       <TouchableOpacity
+        style={[styles.footerButton, styles.secondaryButton, (!incident?.communicationPacket || exportingPdf) && styles.buttonDisabled]}
+        disabled={!incident?.communicationPacket || exportingPdf}
+        onPress={async () => {
+          if (!incident?.communicationPacket) return;
+          setExportingPdf(true);
+          setExportMessage(null);
+          const result = await exportIncidentCommunicationPacketPdf(incident, selectedAudience);
+          setExportingPdf(false);
+          setExportMessage(result.success ? 'PDF ready to save or share.' : result.error ?? 'PDF export failed.');
+        }}
+        activeOpacity={0.78}
+      >
+        <Ionicons name="document-text-outline" size={15} color={TACTICAL.text} />
+        <Text style={styles.secondaryButtonText} numberOfLines={1}>
+          {exportingPdf ? 'Exporting...' : 'Download PDF'}
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
         style={[styles.footerButton, styles.primaryButton, !selectedText && styles.buttonDisabled]}
         disabled={!selectedText}
-        onPress={() => {
-          copyTextIfAvailable(selectedText);
+        onPress={async () => {
+          const copied = await copyTextToClipboard(selectedText);
+          if (!copied) return;
+          setPacketCopied(true);
+          setTimeout(() => setPacketCopied(false), 1700);
           onCopyPacket(selectedAudience);
         }}
         activeOpacity={0.78}
       >
-        <Ionicons name="copy-outline" size={15} color="#050608" />
-        <Text style={styles.primaryButtonText}>Copy Packet</Text>
+        <Ionicons name={packetCopied ? 'checkmark-circle-outline' : 'copy-outline'} size={15} color="#050608" />
+        <Text style={styles.primaryButtonText}>{packetCopied ? 'Copied' : 'Copy Packet'}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -77,7 +96,7 @@ export default function CommunicationPacketModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Concise copyable incident packet. Sending this does not replace emergency services or local authorities."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -131,6 +150,9 @@ export default function CommunicationPacketModal({
             <View style={styles.packetBox}>
               <Text selectable style={styles.packetText}>{selectedText}</Text>
             </View>
+            {exportMessage ? (
+              <Text style={styles.exportMessage}>{exportMessage}</Text>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -243,6 +265,13 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     fontSize: 11,
     fontWeight: '900',
+  },
+  exportMessage: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   primaryButton: {
     backgroundColor: TACTICAL.amber,

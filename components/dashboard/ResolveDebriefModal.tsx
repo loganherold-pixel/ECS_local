@@ -12,7 +12,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type { IncidentContext } from '../../lib/types/incidentRecovery';
 import type {
   IncidentDebriefInput,
@@ -92,6 +92,7 @@ export default function ResolveDebriefModal({
   onResolveIncident,
   onSaveDebrief,
 }: ResolveDebriefModalProps) {
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const [resolvedHow, setResolvedHow] = useState('');
   const [anyoneInjured, setAnyoneInjured] = useState<boolean | null>(null);
   const [vehicleDamaged, setVehicleDamaged] = useState<boolean | null>(null);
@@ -206,7 +207,7 @@ export default function ResolveDebriefModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Close the incident intentionally, then capture lessons for debrief intelligence review."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView

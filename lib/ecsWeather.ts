@@ -1,5 +1,5 @@
 import type { WeatherFetchResult } from './weatherStore';
-import type { DailyForecast, WaypointWeather, WeatherAlert } from './weatherTypes';
+import type { DailyForecast, HourlyForecast, WaypointWeather, WeatherAlert } from './weatherTypes';
 import {
   formatWeatherDegrees,
   normalizeTemperatureF,
@@ -99,7 +99,7 @@ export interface ECSWeatherSnapshot {
   normalized: ECSNormalizedWeatherSnapshot;
   current: ECSWeatherCurrent;
   alerts: ECSWeatherAlert[];
-  hourly: DailyForecast[];
+  hourly: HourlyForecast[];
   daily: DailyForecast[];
   status: {
     kind: ECSWeatherStatusKind;
@@ -170,10 +170,10 @@ function getAgeMinutes(iso: string | null | undefined): number | null {
 function getPrecipChance(raw: WaypointWeather | null): number | null {
   if (!raw) return null;
   const immediatePrecip =
-    safeNumber(raw.current?.rain_1h) != null ||
-    safeNumber(raw.current?.rain_3h) != null ||
-    safeNumber(raw.current?.snow_1h) != null ||
-    safeNumber(raw.current?.snow_3h) != null;
+    (safeNumber(raw.current?.rain_1h) ?? 0) > 0 ||
+    (safeNumber(raw.current?.rain_3h) ?? 0) > 0 ||
+    (safeNumber(raw.current?.snow_1h) ?? 0) > 0 ||
+    (safeNumber(raw.current?.snow_3h) ?? 0) > 0;
 
   if (immediatePrecip) return 100;
 
@@ -680,7 +680,7 @@ export function buildECSWeatherSnapshot(params: {
           description: alert.description,
         }))
       : [],
-    hourly: [],
+    hourly: Array.isArray(raw?.hourly) ? raw.hourly.slice(0, 48) : [],
     daily: Array.isArray(raw?.forecast) ? raw.forecast.slice(0, 16) : [],
     status: {
       kind: statusKind,

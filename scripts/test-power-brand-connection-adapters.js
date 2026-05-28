@@ -46,6 +46,17 @@ assert(adapters.includes('ApiRequiredPowerAdapter'), 'EcoFlow must remain routed
 assert(adapters.includes("'api_required'"), 'adapter layer must expose API-required capability');
 assert(adapters.includes("'capability_error'"), 'adapter layer must expose provider capability errors');
 assert(adapters.includes("'connection_support_pending'"), 'adapter layer must expose connection-support-pending capability');
+assert(adapters.includes("? 'Parser Pending'"), 'connection-support-pending rows must use the Bluestack parser-pending label');
+assert(adapters.includes('getBluestackParserDecision'), 'adapter layer must read Bluestack parser promotion decisions');
+assert(adapters.includes("errorCode: 'PARSER_PENDING'"), 'parser-pending brands must fail before provider handshakes');
+assert(adapters.includes('parserAction: parserDecision.action'), 'parser-pending diagnostics must include parser action');
+assert(adapters.includes('supportsLiveTelemetry: parserDecision.canDecodeLiveTelemetry'), 'adapter capabilities must follow parser decisions');
+assert(adapters.includes('if (!parserDecision.canDecodeLiveTelemetry) return null;'), 'parser-pending brands must not normalize raw payloads into live telemetry');
+assert(adapters.includes("parserDecision.action !== 'use_ecoflow_cloud'"), 'scanner normalization must only allow parser-pending bypass for the EcoFlow cloud path');
+assert(adapters.includes("source !== 'cloud' && source !== 'api' && source !== 'ecoflow_cloud'"), 'EcoFlow scanner normalization must not treat local raw BLE payloads as cloud telemetry');
+assert(adapters.includes('telemetryUnsupportedReason: parserDecision.reason'), 'pending telemetry rows must expose the parser decision reason');
+assert(adapters.includes('parserId: parserDecision.parserId'), 'pending telemetry rows must include parser identity metadata');
+assert(adapters.includes('parserStatus: parserDecision.status'), 'pending telemetry rows must include parser status metadata');
 assert(adapters.includes("errorCode: 'TELEMETRY_UNAVAILABLE'"), 'adapter layer must fail connection when telemetry setup does not produce live readings');
 assert(adapters.includes('Cloud authorization is not Bluetooth proof'), 'EcoFlow cloud auth must not be presented as local Bluetooth proof');
 
@@ -77,6 +88,11 @@ assert(
   hook.includes("actionKind = 'none';") &&
     hook.includes('actionLabel = support.supportLabel'),
   'unsupported power brands must render a clear non-connectable state instead of crashing',
+);
+assert(
+  hook.includes('connect_blocked_by_bluestack_policy') &&
+    hook.includes('getBluestackConnectionPolicy(device).canAttemptConnection'),
+  'Bluestack readiness policy must block parser-pending rows from connect/batch selection',
 );
 assert(
   hook.includes("'Telemetry Active'"),

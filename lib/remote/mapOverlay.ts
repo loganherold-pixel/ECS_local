@@ -88,22 +88,55 @@ function normalizeRouteCoordinates(points?: RemoteRoutePoint[]): [number, number
     .map((point) => [point.lng, point.lat]);
 }
 
+function normalizeLineCoordinates(coordinates: [number, number][]): [number, number][] {
+  return (coordinates ?? [])
+    .filter((coordinate): coordinate is [number, number] =>
+      Array.isArray(coordinate) &&
+      coordinate.length >= 2 &&
+      isFiniteNumber(coordinate[0]) &&
+      isFiniteNumber(coordinate[1]),
+    )
+    .map((coordinate) => [coordinate[0], coordinate[1]]);
+}
+
 function closedSegmentCorridor(coordinates: [number, number][]): [number, number][] {
-  if (coordinates.length < 2) return [];
-  const first = coordinates[0];
-  const last = coordinates[coordinates.length - 1];
-  const dx = last[0] - first[0];
-  const dy = last[1] - first[1];
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  const offX = (-dy / len) * BUFFER_DEGREES;
-  const offY = (dx / len) * BUFFER_DEGREES;
-  return [
-    [first[0] + offX, first[1] + offY],
-    [last[0] + offX, last[1] + offY],
-    [last[0] - offX, last[1] - offY],
-    [first[0] - offX, first[1] - offY],
-    [first[0] + offX, first[1] + offY],
-  ];
+  const line = normalizeLineCoordinates(coordinates);
+  if (line.length < 2) return [];
+
+  const segmentNormals = line.slice(0, -1).map((coord, index) => {
+    const next = line[index + 1];
+    const dx = next[0] - coord[0];
+    const dy = next[1] - coord[1];
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    return {
+      x: (-dy / len) * BUFFER_DEGREES,
+      y: (dx / len) * BUFFER_DEGREES,
+    };
+  });
+
+  const left: [number, number][] = [];
+  const right: [number, number][] = [];
+
+  line.forEach((coord, index) => {
+    const previous = segmentNormals[Math.max(0, index - 1)];
+    const next = segmentNormals[Math.min(segmentNormals.length - 1, index)];
+    let offsetX = ((previous?.x ?? 0) + (next?.x ?? 0)) / 2;
+    let offsetY = ((previous?.y ?? 0) + (next?.y ?? 0)) / 2;
+    const offsetLen = Math.sqrt(offsetX * offsetX + offsetY * offsetY);
+
+    if (offsetLen > 0) {
+      const limitedOffset = Math.min(BUFFER_DEGREES * 1.8, Math.max(BUFFER_DEGREES, offsetLen));
+      offsetX = (offsetX / offsetLen) * limitedOffset;
+      offsetY = (offsetY / offsetLen) * limitedOffset;
+    }
+
+    left.push([coord[0] + offsetX, coord[1] + offsetY]);
+    right.push([coord[0] - offsetX, coord[1] - offsetY]);
+  });
+
+  const polygon = [...left, ...right.reverse()];
+  polygon.push(polygon[0]);
+  return polygon;
 }
 
 function chunkCoordinates(coordinates: [number, number][], maxChunks: number): [number, number][][] {
@@ -148,9 +181,12 @@ export function buildRemoteMapOverlay(input: BuildRemoteMapOverlayInput): Remote
   const fallbackScore = isFiniteNumber(input.remotenessScore) ? input.remotenessScore : 35;
   const routeCoords = normalizeRouteCoordinates(input.routePoints);
   const progressCoords = normalizeRouteCoordinates(input.progressPoints);
-  const segmentFeatures = (input.segmentFeatures ?? []).filter(
-    (segment) => (segment.coordinates ?? []).length > 1,
-  );
+  const segmentFeatures = (input.segmentFeatures ?? [])
+    .map((segment) => ({
+      ...segment,
+      coordinates: normalizeLineCoordinates(segment.coordinates ?? []),
+    }))
+    .filter((segment) => segment.coordinates.length > 1);
 
   const heatmapAreas: RemoteHeatmapArea[] = segmentFeatures.length > 0
     ? segmentFeatures.slice(0, MAX_HEATMAP_AREAS).map((segment, index) => ({
@@ -168,19 +204,33 @@ export function buildRemoteMapOverlay(input: BuildRemoteMapOverlayInput): Remote
         };
       }).filter((area) => area.coordinates.length >= 4);
 
-  const forecastStart = findForecastStartIndex(routeCoords, progressCoords);
-  const forecastRoute = routeCoords.slice(forecastStart);
-  const forecastSegments = chunkCoordinates(forecastRoute, MAX_FORECAST_SEGMENTS).map((chunk, index) => {
-    const matchingArea = heatmapAreas[Math.min(heatmapAreas.length - 1, index)] ?? null;
-    const label = matchingArea?.label ?? remoteLabelForScore(fallbackScore);
-    const signal = forecastSignalForLabel(label);
-    return {
-      id: `remote-forecast-${index}`,
-      signal,
-      coordinates: chunk,
-      color: FORECAST_COLORS[signal],
-    };
-  });
+  const forecastSegments =
+    segmentFeatures.length > 0
+      ? segmentFeatures.slice(0, MAX_HEATMAP_AREAS).map((segment, index) => {
+          const label = labelForSegmentFeature(segment, fallbackScore);
+          const signal = forecastSignalForLabel(label);
+          return {
+            id: `remote-forecast-segment-${index}`,
+            signal,
+            coordinates: segment.coordinates,
+            color: FORECAST_COLORS[signal],
+          };
+        })
+      : (() => {
+          const forecastStart = findForecastStartIndex(routeCoords, progressCoords);
+          const forecastRoute = routeCoords.slice(forecastStart);
+          return chunkCoordinates(forecastRoute, MAX_FORECAST_SEGMENTS).map((chunk, index) => {
+            const matchingArea = heatmapAreas[Math.min(heatmapAreas.length - 1, index)] ?? null;
+            const label = matchingArea?.label ?? remoteLabelForScore(fallbackScore);
+            const signal = forecastSignalForLabel(label);
+            return {
+              id: `remote-forecast-${index}`,
+              signal,
+              coordinates: chunk,
+              color: FORECAST_COLORS[signal],
+            };
+          });
+        })();
 
   return {
     enabled: true,

@@ -252,6 +252,54 @@ export const loadoutStore = {
     return loadoutStore.getLocalByVehicleIdSync(vehicleId)[0] ?? null;
   },
 
+  getLocalSnapshot: (): LocalLoadout[] => {
+    try {
+      return sortLoadoutsByUpdatedAtDesc(getLocalLoadouts());
+    } catch {
+      return [];
+    }
+  },
+
+  importLocalSnapshot: async (incomingLoadouts: LocalLoadout[]): Promise<{ imported: number; skipped: number }> => {
+    await ensureLoadoutStorageHydrated();
+    const localLoadouts = getLocalLoadouts();
+    const byId = new Map(localLoadouts.map((loadout) => [loadout.id, loadout]));
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of incomingLoadouts) {
+      if (!incoming?.id) {
+        skipped++;
+        continue;
+      }
+
+      const existing = byId.get(incoming.id);
+      if (
+        existing?.updated_at &&
+        incoming.updated_at &&
+        new Date(existing.updated_at).getTime() > new Date(incoming.updated_at).getTime()
+      ) {
+        skipped++;
+        continue;
+      }
+
+      byId.set(incoming.id, {
+        ...incoming,
+        device_id: incoming.device_id || getDeviceId(),
+        sync_status: incoming.sync_status || 'local',
+      });
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveLocalLoadouts(Array.from(byId.values()));
+      await flushLoadoutStorage();
+      notifyLoadoutListeners();
+    }
+
+    return { imported, skipped };
+  },
+
   subscribe: (listener: LoadoutListener): (() => void) => {
     loadoutListeners.add(listener);
     return () => {
@@ -908,6 +956,59 @@ function autoUpdateWeightCache(loadoutId: string): void {
 // ── Loadout Item Store ──────────────────────────────────
 
 export const loadoutItemStore = {
+  getLocalSnapshot: (): LocalLoadoutItem[] => {
+    try {
+      return sortLoadoutItemsByOrder(getLocalLoadoutItems());
+    } catch {
+      return [];
+    }
+  },
+
+  importLocalSnapshot: async (incomingItems: LocalLoadoutItem[]): Promise<{ imported: number; skipped: number }> => {
+    await ensureLoadoutStorageHydrated();
+    const localItems = getLocalLoadoutItems();
+    const byId = new Map(localItems.map((item) => [item.id, item]));
+    const affectedLoadoutIds = new Set<string>();
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of incomingItems) {
+      if (!incoming?.id || !incoming.loadout_id) {
+        skipped++;
+        continue;
+      }
+
+      const existing = byId.get(incoming.id);
+      if (
+        existing?.updated_at &&
+        incoming.updated_at &&
+        new Date(existing.updated_at).getTime() > new Date(incoming.updated_at).getTime()
+      ) {
+        skipped++;
+        continue;
+      }
+
+      byId.set(incoming.id, {
+        ...incoming,
+        device_id: incoming.device_id || getDeviceId(),
+        sync_status: incoming.sync_status || 'local',
+      });
+      affectedLoadoutIds.add(incoming.loadout_id);
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveLocalLoadoutItems(Array.from(byId.values()));
+      for (const loadoutId of affectedLoadoutIds) {
+        autoUpdateWeightCache(loadoutId);
+        notifyLoadoutItemListeners(loadoutId);
+      }
+      await flushLoadoutStorage();
+    }
+
+    return { imported, skipped };
+  },
+
   getLocalByLoadoutIdSync: (loadoutId: string): LocalLoadoutItem[] => {
     if (!loadoutId) return [];
     try {

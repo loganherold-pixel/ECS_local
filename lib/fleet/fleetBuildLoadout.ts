@@ -83,6 +83,7 @@ export type FleetBuildLoadoutState = {
   compartments: FleetBuildCompartment[];
   loadoutItems?: FleetCompartmentLoadoutItem[];
   activePreset?: FleetLoadoutPresetId;
+  acknowledgedRiskIds?: string[];
 };
 
 export type FleetCompartmentGroupId =
@@ -177,6 +178,8 @@ export const FLEET_ACCESSORY_KNOWLEDGE_OPTIONS: Array<{
   { id: 'manual_weight', label: 'Enter weight manually' },
   { id: 'unsure', label: "I'm not sure" },
 ];
+
+export const FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID = 'high-mounted-load-risk';
 
 export const FLEET_ACCESSORY_CATALOG: readonly FleetAccessoryCatalogItem[] = [
   { id: 'roof_rack_platform', label: 'Roof Rack / Platform', icon: 'grid-outline', defaultWeightLb: 85, mountZone: 'roof', permanence: 'permanent', scoringEffects: ['payload', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [{ id: 'roof_platform', name: 'Roof Platform', loadZone: 'roof' }] },
@@ -326,7 +329,7 @@ function normalizeLoadoutPreset(value: unknown): FleetLoadoutPresetId {
 }
 
 export function createEmptyFleetBuildLoadoutState(): FleetBuildLoadoutState {
-  return { accessories: [], compartments: [], loadoutItems: [], activePreset: 'empty' };
+  return { accessories: [], compartments: [], loadoutItems: [], activePreset: 'empty', acknowledgedRiskIds: [] };
 }
 
 export function normalizeFleetBuildLoadoutState(raw: unknown): FleetBuildLoadoutState {
@@ -428,6 +431,9 @@ export function normalizeFleetBuildLoadoutState(raw: unknown): FleetBuildLoadout
           })
       : [],
     activePreset: normalizeLoadoutPreset(value.activePreset),
+    acknowledgedRiskIds: Array.isArray(value.acknowledgedRiskIds)
+      ? Array.from(new Set(value.acknowledgedRiskIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)))
+      : [],
   };
 }
 
@@ -546,6 +552,7 @@ export function removeFleetAccessoryInstall(
       .map((item) => item.id),
   );
   return {
+    ...state,
     accessories: state.accessories.filter((item) => item.id !== installId),
     compartments: state.compartments
       .filter((item) => item.accessoryInstallId !== installId || item.status !== 'active')

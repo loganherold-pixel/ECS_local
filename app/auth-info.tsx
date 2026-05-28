@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,11 +7,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import LoginHeroBackground from '../components/login/LoginHeroBackground';
 import LegalFooter from '../components/legal/LegalFooter';
+import ECSShellTexture from '../components/ECSShellTexture';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { TACTICAL } from '../lib/theme';
 
 type AuthInfoSheet = 'terms' | 'privacy' | 'support';
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
+const LOGIN_LOGO_ASPECT_RATIO = 1536 / 1024;
 
 function logAuthInfoDev(...args: unknown[]) {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -44,11 +46,16 @@ function isAuthInfoSheet(value: string | string[] | undefined): value is AuthInf
 export default function AuthInfoScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const params = useLocalSearchParams<{ sheet?: string }>();
 
   const sheetKey: AuthInfoSheet = isAuthInfoSheet(params.sheet) ? params.sheet : 'terms';
   const sheetContent = AUTH_COPY.utility.sheets[sheetKey];
   const meta = SHEET_META[sheetKey];
+  const sheetMaxWidth = Math.min(520, Math.max(320, width - 40));
+  const logoHeight = sheetMaxWidth / LOGIN_LOGO_ASPECT_RATIO;
+  const sheetMaxHeight = Math.max(300, height - insets.top - insets.bottom - logoHeight - 74);
+  const bodyMaxHeight = Math.max(220, sheetMaxHeight - 132);
 
   const paragraphs = useMemo(
     () => sheetContent.body.split('\n\n').map((item) => item.trim()).filter(Boolean),
@@ -76,50 +83,57 @@ export default function AuthInfoScreen() {
           },
         ]}
       >
-        <View style={styles.heroBlock}>
-          <Image source={LOGIN_LOGO} resizeMode="contain" style={styles.logo} />
+        <View style={[styles.heroBlock, { maxWidth: sheetMaxWidth }]}>
+          <Image
+            source={LOGIN_LOGO}
+            resizeMode="contain"
+            style={[styles.logo, { maxWidth: sheetMaxWidth }]}
+          />
           <Text style={styles.heroTitle}>Expedition Command System</Text>
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Pressable
-              onPress={() => {
-                logAuthInfoDev('[Auth] Legal/support route close', { sheet: sheetKey, source: 'back_button' });
-                router.back();
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Back"
-              style={({ pressed }) => [styles.backButton, pressed ? styles.backButtonPressed : null]}
-            >
-              <Ionicons name="chevron-back" size={16} color={TACTICAL.amber} />
-              <Text style={styles.backText}>Back</Text>
-            </Pressable>
-            <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-              <View style={styles.titleRow}>
-                <Ionicons name={meta.icon} size={16} color={TACTICAL.amber} />
-                <Text style={styles.title}>{sheetContent.title}</Text>
+        <View style={[styles.card, { maxWidth: sheetMaxWidth, maxHeight: sheetMaxHeight }]}>
+          <ECSShellTexture />
+          <View style={styles.cardInner}>
+            <View style={styles.cardHeader}>
+              <Pressable
+                onPress={() => {
+                  logAuthInfoDev('[Auth] Legal/support route close', { sheet: sheetKey, source: 'back_button' });
+                  router.back();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                style={({ pressed }) => [styles.backButton, pressed ? styles.backButtonPressed : null]}
+              >
+                <Ionicons name="chevron-back" size={16} color={TACTICAL.amber} />
+                <Text style={styles.backText}>Back</Text>
+              </Pressable>
+              <View style={styles.headerCopy}>
+                <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
+                <View style={styles.titleRow}>
+                  <Ionicons name={meta.icon} size={16} color={TACTICAL.amber} />
+                  <Text style={styles.title}>{sheetContent.title}</Text>
+                </View>
+                <Text style={styles.subtitle}>{meta.subtitle}</Text>
               </View>
-              <Text style={styles.subtitle}>{meta.subtitle}</Text>
             </View>
-          </View>
 
-          <ScrollView
-            style={styles.bodyScroll}
-            contentContainerStyle={styles.bodyContent}
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-          >
-            {paragraphs.map((paragraph, index) => (
-              <Text key={`${sheetKey}:${index}`} style={styles.bodyText}>
-                {paragraph}
-              </Text>
-            ))}
-            <LegalFooter style={styles.legalFooter} />
-          </ScrollView>
+            <ScrollView
+              style={[styles.bodyScroll, { maxHeight: bodyMaxHeight }]}
+              contentContainerStyle={styles.bodyContent}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              {paragraphs.map((paragraph, index) => (
+                <Text key={`${sheetKey}:${index}`} style={styles.bodyText}>
+                  {paragraph}
+                </Text>
+              ))}
+              <LegalFooter style={styles.legalFooter} />
+            </ScrollView>
           </View>
         </View>
+      </View>
     </View>
   );
 }
@@ -132,17 +146,19 @@ const styles = StyleSheet.create({
   screen: {
     ...StyleSheet.absoluteFillObject,
     flex: 1,
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
   },
   heroBlock: {
     flexShrink: 0,
     alignItems: 'center',
-    marginBottom: 12,
+    alignSelf: 'center',
+    width: '100%',
+    marginBottom: 10,
   },
   logo: {
-    width: 132,
-    height: 106,
-    marginBottom: 2,
+    width: '100%',
+    aspectRatio: LOGIN_LOGO_ASPECT_RATIO,
+    marginBottom: -4,
   },
   heroTitle: {
     color: TACTICAL.text,
@@ -153,21 +169,24 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxWidth: 520,
     alignSelf: 'center',
-    flex: 1,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(18,22,27,0.96)',
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 14,
+    backgroundColor: 'rgba(10,14,18,0.84)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.32,
     shadowRadius: 28,
     elevation: 8,
+    overflow: 'hidden',
+  },
+  cardInner: {
+    position: 'relative',
+    zIndex: 1,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 14,
   },
   cardHeader: {
     gap: 12,
@@ -222,7 +241,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   bodyScroll: {
-    flex: 1,
+    flexGrow: 0,
   },
   bodyContent: {
     paddingTop: 8,

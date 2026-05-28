@@ -5,7 +5,7 @@
     "slug": "planning-offline-sync",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon-safe.png",
     "scheme": "planning-offline-sync",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -20,7 +20,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
         "backgroundColor": "#0B0E12"
       },
       "edgeToEdgeEnabled": true,
@@ -31,7 +31,9 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION"
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
       ],
       "package": "com.expeditioncommand.planningofflinesync"
     },
@@ -69,7 +71,8 @@
       "./plugins/android-auto/withAndroidAuto",
       "./plugins/carplay/withCarPlay",
       "expo-secure-store",
-      "expo-video"
+      "expo-video",
+      "@rnmapbox/maps"
     ],
     "experiments": {
       "typedRoutes": true

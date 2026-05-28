@@ -11,6 +11,7 @@ import type {
 
 export type OfflinePrepPackItemType =
   | 'offline_map'
+  | 'critical_offline_segments'
   | 'route_line'
   | 'waypoints'
   | 'campsites'
@@ -38,6 +39,7 @@ export type OfflinePrepPackItemAvailability =
   | 'unavailable'
   | 'already_cached'
   | 'pending_download'
+  | 'not_set'
   | 'failed';
 
 export type OfflinePrepPackError = {
@@ -78,6 +80,20 @@ export type OfflinePrepPackItem = {
   cacheKey?: string | null;
   error?: OfflinePrepPackError | null;
   metadata?: Record<string, unknown> | null;
+};
+
+export type OfflinePrepCriticalMapSegment = {
+  id: string;
+  label: string;
+  signal: 'dead' | 'weak';
+  reason: string;
+  bounds: OfflinePrepPackBounds;
+  coordinates: Array<{ latitude: number; longitude: number }>;
+  routePointCount: number;
+  tileCount: number;
+  estimatedSizeMB: number;
+  zoomMin: number;
+  zoomMax: number;
 };
 
 export type OfflinePrepPackManifest = {

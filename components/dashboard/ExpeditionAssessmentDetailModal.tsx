@@ -8,7 +8,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type {
   AssessmentCategory,
   ExpeditionAssessment,
@@ -49,6 +49,7 @@ export default function ExpeditionAssessmentDetailModal({
   onClose,
 }: ExpeditionAssessmentDetailModalProps) {
   const resolvedTitle = category ? EXPEDITION_ASSESSMENT_CATEGORY_LABELS[category] : 'Assessment';
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
 
   return (
     <TacticalPopupShell
@@ -59,7 +60,7 @@ export default function ExpeditionAssessmentDetailModal({
       eyebrow="EXPEDITION ASSESSMENT"
       subtitle={narrative?.plainLanguageSummary ?? assessment?.summary ?? 'Operational assessment loading.'}
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       contentContainerStyle={styles.content}
       footer={
         <TouchableOpacity style={styles.closeButton} activeOpacity={0.78} onPress={onClose}>

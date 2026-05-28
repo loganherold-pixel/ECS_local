@@ -12,6 +12,19 @@ import { terrainAnalysisEngine } from './terrainAnalysisEngine';
 import { resourceForecastEngine } from './resourceForecastEngine';
 import { connectivity } from './connectivity';
 import { resolveCanonicalConnectivityState } from './connectivityState';
+import {
+  navigateRouteSessionStore,
+  type NavigateRouteMapPoint,
+  type NavigateRouteSessionSnapshot,
+} from './navigateRouteSessionStore';
+import { routeStore, type ImportedRoute, type RouteSegment } from './routeStore';
+import {
+  buildTerrainRiskCommandRoute,
+  formatTerrainRiskLabel,
+  type TerrainRiskRoute,
+  type TerrainRiskRoutePoint,
+  type TerrainRiskRouteSegment,
+} from './terrainRiskCommandProfile';
 import { vehicleTelemetryStore } from '../src/vehicle-telemetry/VehicleTelemetryStore';
 import type { LiveDispatchEventInput } from './dispatchLiveAggregator';
 import type { TeamStoreSnapshot } from './teamStore';
@@ -52,8 +65,11 @@ const CHANNEL_ACTION: Record<DispatchChannelId, string> = {
   terrain: 'Mark Hazard',
   vehicle: 'Request Check',
   resources: 'Request Supply',
-  sync: 'Report Comms Issue',
+  sync: 'Sync Dispatch',
 };
+
+const METERS_TO_MILES = 0.000621371;
+const EARTH_RADIUS_MI = 3958.8;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -153,13 +169,223 @@ function severityFromConnectivity(context: DispatchChannelContext): DispatchEven
 
 function sourceStateFromWeather(): DispatchLiveSourceState {
   const { snapshot } = getSharedOperationalWeatherState();
-  if (snapshot.status.source === 'live') {
+  if (
+    snapshot.status.source === 'live' ||
+    (snapshot.status.source === 'cache_fresh' && !snapshot.status.stale)
+  ) {
     return 'live_systems';
   }
-  if (snapshot.status.source === 'cache_fresh' || snapshot.status.source === 'cache_stale') {
+  if (snapshot.status.source === 'cache_stale' || snapshot.status.stale) {
     return 'cached_last_known';
   }
   return 'unavailable';
+}
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return EARTH_RADIUS_MI * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatMiles(value: number | null | undefined): string | null {
+  if (!isFiniteNumber(value) || value <= 0) return null;
+  return `${value.toFixed(value >= 10 ? 0 : 1)} mi`;
+}
+
+function routeSessionLifecycleLabel(lifecycle: NavigateRouteSessionSnapshot['lifecycle']): string {
+  switch (lifecycle) {
+    case 'active':
+      return 'GUIDANCE ACTIVE';
+    case 'arrived':
+      return 'ARRIVED';
+    case 'preview':
+      return 'ROUTE STAGED';
+    case 'inactive':
+    default:
+      return 'ROUTE READY';
+  }
+}
+
+function getRouteSessionDistanceMiles(snapshot: NavigateRouteSessionSnapshot): number | null {
+  if (isFiniteNumber(snapshot.remainingDistanceM) && snapshot.remainingDistanceM > 0) {
+    return snapshot.remainingDistanceM * METERS_TO_MILES;
+  }
+  return computePointDistanceMiles(snapshot.routePoints);
+}
+
+function computePointDistanceMiles(points: Array<{ lat?: number | null; lng?: number | null; lon?: number | null }>): number | null {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let distanceMiles = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const next = points[index];
+    const previousLng = previous.lng ?? previous.lon;
+    const nextLng = next.lng ?? next.lon;
+    if (
+      !isFiniteNumber(previous.lat) ||
+      !isFiniteNumber(previousLng) ||
+      !isFiniteNumber(next.lat) ||
+      !isFiniteNumber(nextLng)
+    ) {
+      continue;
+    }
+    distanceMiles += haversineMiles(previous.lat, previousLng, next.lat, nextLng);
+  }
+  return distanceMiles > 0 ? distanceMiles : null;
+}
+
+function getSessionRoutePoints(snapshot: NavigateRouteSessionSnapshot): TerrainRiskRoutePoint[] {
+  return snapshot.routePoints.map((point: NavigateRouteMapPoint) => ({
+    lat: point.lat,
+    lng: point.lng,
+    ele: point.ele ?? point.ele_m ?? null,
+    ele_m: point.ele_m ?? point.ele ?? null,
+    elevationFeet: point.elevationFeet ?? null,
+  }));
+}
+
+function getImportedRouteSegments(route: ImportedRoute): TerrainRiskRouteSegment[] {
+  return route.segments.map((segment: RouteSegment) => ({
+    points: segment.points.map((point) => ({
+      lat: point.lat,
+      lon: point.lon,
+      ele: point.ele,
+      ele_m: point.ele,
+    })),
+  }));
+}
+
+function getRouteSessionFallback(): {
+  id: string | null;
+  name: string;
+  statusLabel: string;
+  detail: string;
+  sourceLabel: string;
+  updatedAt: string | null;
+  distanceMiles: number | null;
+  pointCount: number;
+  routePoints: TerrainRiskRoutePoint[];
+} | null {
+  const snapshot = navigateRouteSessionStore.getSnapshot();
+  const hasRouteGeometry = snapshot.routePoints.length >= 2;
+  const hasRouteIdentity = !!(snapshot.routeId || snapshot.routeTitle);
+  if (snapshot.lifecycle === 'inactive' || (!hasRouteGeometry && !hasRouteIdentity)) {
+    return null;
+  }
+
+  const distanceMiles = getRouteSessionDistanceMiles(snapshot);
+  const routePoints = getSessionRoutePoints(snapshot);
+  const pointCount = snapshot.routePoints.length;
+  const detail = [
+    snapshot.routeTitle ?? 'Loaded route',
+    formatMiles(distanceMiles),
+    pointCount > 0 ? `${pointCount} pts` : null,
+    snapshot.statusLabel,
+  ].filter(Boolean).join(' / ');
+
+  return {
+    id: snapshot.routeId ?? snapshot.sessionId,
+    name: snapshot.routeTitle ?? 'Loaded route',
+    statusLabel: routeSessionLifecycleLabel(snapshot.lifecycle),
+    detail,
+    sourceLabel: 'Navigate Route Session',
+    updatedAt: snapshot.updatedAt,
+    distanceMiles,
+    pointCount,
+    routePoints,
+  };
+}
+
+function getLocalActiveRouteFallback(): {
+  id: string | null;
+  name: string;
+  statusLabel: string;
+  detail: string;
+  sourceLabel: string;
+  updatedAt: string | null;
+  distanceMiles: number | null;
+  pointCount: number;
+  routeSegments: TerrainRiskRouteSegment[];
+} | null {
+  const route = routeStore.getActive();
+  if (!route) return null;
+
+  const pointCount = route.segments.reduce((sum, segment) => sum + segment.points.length, 0);
+  const distanceMiles = isFiniteNumber(route.total_distance_miles) && route.total_distance_miles > 0
+    ? route.total_distance_miles
+    : computePointDistanceMiles(route.segments.flatMap((segment) => segment.points));
+  const detail = [
+    route.name,
+    formatMiles(distanceMiles),
+    pointCount > 0 ? `${pointCount} pts` : null,
+    titleCase(route.source_format),
+  ].filter(Boolean).join(' / ');
+
+  return {
+    id: route.id,
+    name: route.name,
+    statusLabel: 'ROUTE READY',
+    detail,
+    sourceLabel: 'Local Active Route',
+    updatedAt: route.updated_at,
+    distanceMiles,
+    pointCount,
+    routeSegments: getImportedRouteSegments(route),
+  };
+}
+
+function getRouteFallback() {
+  return getRouteSessionFallback() ?? getLocalActiveRouteFallback();
+}
+
+type TerrainRiskFallback = {
+  route: TerrainRiskRoute;
+  updatedAt: string | null;
+};
+
+function buildTerrainRiskFromRouteFallback(): TerrainRiskFallback | null {
+  const sessionRoute = getRouteSessionFallback();
+  if (sessionRoute && sessionRoute.routePoints.length >= 2) {
+    const route = buildTerrainRiskCommandRoute({
+      active: true,
+      routeId: sessionRoute.id,
+      routeName: sessionRoute.name,
+      totalDistanceMiles: sessionRoute.distanceMiles,
+      sourceLabel: 'Live guidance elevation profile',
+      routePoints: sessionRoute.routePoints,
+      currentElevationFeet: null,
+    });
+    return route ? { route, updatedAt: sessionRoute.updatedAt } : null;
+  }
+
+  const localRoute = getLocalActiveRouteFallback();
+  if (localRoute?.routeSegments.length) {
+    const route = buildTerrainRiskCommandRoute({
+      active: true,
+      routeId: localRoute.id,
+      routeName: localRoute.name,
+      totalDistanceMiles: localRoute.distanceMiles,
+      sourceLabel: 'Local active route elevation profile',
+      routeSegments: localRoute.routeSegments,
+      currentElevationFeet: null,
+    });
+    return route ? { route, updatedAt: localRoute.updatedAt } : null;
+  }
+
+  return null;
+}
+
+function terrainRiskToLegacyRiskLabel(level: TerrainRiskRoute['overallRiskLabel']): 'LOW' | 'MODERATE' | 'HIGH' {
+  return formatTerrainRiskLabel(level).toUpperCase() as 'LOW' | 'MODERATE' | 'HIGH';
 }
 
 function buildWeatherChannel(): DispatchChannelSnapshot {
@@ -170,7 +396,15 @@ function buildWeatherChannel(): DispatchChannelSnapshot {
   const temp = typeof snapshot.current.temp === 'number' ? `${Math.round(snapshot.current.temp)}F` : null;
   const wind = typeof snapshot.current.windSpeed === 'number' ? `${Math.round(snapshot.current.windSpeed)} mph wind` : null;
   const condition = snapshot.current.condition ?? snapshot.current.description ?? snapshot.status.label ?? 'Weather unavailable';
-  const statusLabel = strongestAlert ? 'ALERT' : sourceState === 'live_systems' ? 'LIVE' : sourceState === 'cached_last_known' ? 'LAST KNOWN' : 'NO LIVE DATA';
+  const statusLabel = strongestAlert
+    ? 'ALERT'
+    : sourceState === 'live_systems'
+      ? 'LIVE'
+      : sourceState === 'cached_last_known'
+        ? snapshot.status.stale || snapshot.status.source === 'cache_stale'
+          ? 'STALE'
+          : 'RECENT'
+        : 'NO LIVE DATA';
   const freshness = snapshot.status.source === 'live'
     ? 'live'
     : snapshot.status.source === 'cache_fresh' || snapshot.status.source === 'cache_stale'
@@ -201,6 +435,23 @@ function buildWeatherChannel(): DispatchChannelSnapshot {
 function buildRouteChannel(): DispatchChannelSnapshot {
   const route = routeAnalysisEngine.getCurrent();
   if (!route) {
+    const routeFallback = getRouteFallback();
+    if (routeFallback) {
+      return {
+        id: 'route',
+        label: 'Route',
+        statusLabel: routeFallback.statusLabel,
+        detail: routeFallback.detail,
+        actionLabel: CHANNEL_ACTION.route,
+        sourceLabel: routeFallback.sourceLabel,
+        sourceState: 'live_systems',
+        severity: 'info',
+        eventType: 'route',
+        eventSource: 'route_engine',
+        updatedAt: routeFallback.updatedAt,
+      };
+    }
+
     return {
       id: 'route',
       label: 'Route',
@@ -234,6 +485,34 @@ function buildRouteChannel(): DispatchChannelSnapshot {
 function buildTerrainChannel(): DispatchChannelSnapshot {
   const terrain = terrainAnalysisEngine.getCurrent();
   if (!terrain) {
+    const terrainRiskFallback = buildTerrainRiskFromRouteFallback();
+    if (terrainRiskFallback) {
+      const routeTerrainRisk = terrainRiskFallback.route;
+      const riskLabel = terrainRiskToLegacyRiskLabel(routeTerrainRisk.overallRiskLabel);
+      const spotCount = routeTerrainRisk.hotSpotCount + routeTerrainRisk.warmSpotCount;
+      const detail = [
+        routeTerrainRisk.name,
+        formatMiles(routeTerrainRisk.totalDistanceMiles),
+        routeTerrainRisk.nextHazard.label,
+        spotCount > 0 ? `${spotCount} warm/hot` : 'no elevated spots',
+        routeTerrainRisk.dataState === 'estimated-route' ? 'GPS altitude estimate' : 'elevation profile',
+      ].filter(Boolean).join(' / ');
+
+      return {
+        id: 'terrain',
+        label: 'Terrain',
+        statusLabel: `${riskLabel} ${routeTerrainRisk.overallRiskScore}`,
+        detail,
+        actionLabel: CHANNEL_ACTION.terrain,
+        sourceLabel: 'Route Terrain Risk',
+        sourceState: routeTerrainRisk.dataState === 'live-route' ? 'live_systems' : 'cached_last_known',
+        severity: severityFromTerrain(riskLabel),
+        eventType: 'terrain',
+        eventSource: 'terrain_engine',
+        updatedAt: terrainRiskFallback.updatedAt,
+      };
+    }
+
     return {
       id: 'terrain',
       label: 'Terrain',
@@ -378,10 +657,12 @@ export function getLiveDispatchEventInput(
   teamState: TeamStoreSnapshot | null,
 ): LiveDispatchEventInput {
   const weatherState = getDispatchWeatherStateFromShared();
+  const activeRouteState = routeAnalysisEngine.getCurrent() ?? getLiveRouteStateFromFallback();
+  const terrainRiskState = terrainAnalysisEngine.getCurrent() ?? getLiveTerrainStateFromFallback();
   return {
     weatherState,
-    activeRouteState: routeAnalysisEngine.getCurrent(),
-    terrainRiskState: terrainAnalysisEngine.getCurrent(),
+    activeRouteState,
+    terrainRiskState,
     vehicleTelemetryState: vehicleTelemetryStore.getECSVehicleTelemetryState(),
     resourceState: resourceForecastEngine.getCurrent(),
     syncState: {
@@ -394,6 +675,44 @@ export function getLiveDispatchEventInput(
     },
     teamState,
     recoveryState: null,
+  };
+}
+
+function getLiveRouteStateFromFallback(): LiveDispatchEventInput['activeRouteState'] {
+  const route = getRouteFallback();
+  if (!route) return null;
+  return {
+    id: route.id ?? undefined,
+    sourceId: route.id ?? undefined,
+    routeName: route.name,
+    totalDistanceMiles: route.distanceMiles ?? undefined,
+    segmentCount: route.pointCount > 1 ? Math.max(1, route.pointCount - 1) : undefined,
+    segments: [],
+    overallDifficulty: 'easy',
+    analyzedAt: route.updatedAt ?? nowIso(),
+  };
+}
+
+function getLiveTerrainStateFromFallback(): LiveDispatchEventInput['terrainRiskState'] {
+  const terrainRiskFallback = buildTerrainRiskFromRouteFallback();
+  if (!terrainRiskFallback) return null;
+  const routeTerrainRisk = terrainRiskFallback.route;
+  const overallRisk = terrainRiskToLegacyRiskLabel(routeTerrainRisk.overallRiskLabel);
+  return {
+    id: routeTerrainRisk.id,
+    routeIntelligenceId: routeTerrainRisk.id,
+    routeName: routeTerrainRisk.name,
+    overallRisk,
+    analyzedAt: terrainRiskFallback.updatedAt ?? nowIso(),
+    terrainWarnings: routeTerrainRisk.terrainSegments
+      .filter((segment) => segment.riskLevel === 'high' || segment.hazardKinds.length > 0)
+      .slice(0, 3)
+      .map((segment, index) => ({
+        segmentIndex: index,
+        warningType: segment.hazardKinds[0] ?? segment.riskLevel,
+        message: `${segment.label} ${segment.riskLevel} terrain risk.`,
+        segmentRange: `${segment.startDistanceMiles.toFixed(1)}-${segment.endDistanceMiles.toFixed(1)} mi`,
+      })),
   };
 }
 
@@ -438,6 +757,8 @@ export function subscribeDispatchChannels(listener: () => void): () => void {
     subscribeSharedOperationalWeather(listener),
     routeAnalysisEngine.subscribe(() => listener()),
     terrainAnalysisEngine.subscribe(() => listener()),
+    navigateRouteSessionStore.subscribe(() => listener()),
+    routeStore.subscribe(() => listener()),
     resourceForecastEngine.subscribe(() => listener()),
     vehicleTelemetryStore.subscribe(listener),
     connectivity.onStatusChange(() => listener()),

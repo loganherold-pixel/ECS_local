@@ -14,6 +14,8 @@ export type BluetoothBrandDeviceCategory =
   | 'solar_controller'
   | 'dc_dc_charger'
   | 'obd2'
+  | 'propane_monitor'
+  | 'water_tank_monitor'
   | 'sensor'
   | 'unknown';
 
@@ -67,7 +69,16 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     id: 'ecoflow',
     displayName: 'EcoFlow',
     providerBadge: 'EcoFlow',
-    nameFragments: [/eco\s*flow/i, /ecoflow/i, /\bglacier\b/i, /\bwave\b/i, /\bdelta\s*(mini|pro|max|2)?\b/i, /\briver\s*(mini|pro|max|2)?\b/i],
+    nameFragments: [
+      /eco\s*flow/i,
+      /ecoflow/i,
+      /\bglacier\b/i,
+      /\bwave\b/i,
+      /\bdelta\s*(mini|pro|max|2|3|3\s*1500)?\b/i,
+      /\briver\s*(mini|pro|max|2)?\b/i,
+      /\balternator\s*charger\b/i,
+      /\b800\s*w\s*alternator\b/i,
+    ],
     manufacturerHints: [/eco\s*flow/i, /ecoflow/i],
     serviceUUIDs: [],
     connectionType: 'hybrid',
@@ -169,9 +180,16 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     nameFragments: [
       /vee\s*peak/i,
       /veepeak/i,
+      /ve\s*peak/i,
       /v\s*peak/i,
+      /\bvpake\b/i,
       /v[\-\s]*link/i,
       /vlinker/i,
+      /obd\s*check/i,
+      /\bvp\s*11\b/i,
+      /\bvp11\b/i,
+      /ios\s*v[\-\s]*link/i,
+      /android\s*v[\-\s]*link/i,
       /obd\s*(2|ii)?/i,
       /elm\s*327/i,
       /elm327/i,
@@ -186,10 +204,18 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
       /konnwei/i,
       /\bkw\s*902\b/i,
       /viecar/i,
+      /panlong/i,
+      /micro\s*mechanic/i,
+      /car\s*scanner/i,
     ],
     manufacturerHints: [
       /vee\s*peak/i,
       /veepeak/i,
+      /ve\s*peak/i,
+      /\bvpake\b/i,
+      /obd\s*check/i,
+      /\bvp\s*11\b/i,
+      /\bvp11\b/i,
       /obd\s*(2|ii)?/i,
       /elm\s*327/i,
       /obdlink/i,
@@ -199,11 +225,59 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
       /blue\s*driver/i,
       /konnwei/i,
       /viecar/i,
+      /panlong/i,
+      /micro\s*mechanic/i,
     ],
     serviceUUIDs: ['00001101-0000-1000-8000-00805f9b34fb', '1101', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'],
     connectionType: 'hybrid',
     deviceCategory: 'obd2',
     categoryHint: 'Vehicle telemetry adapter',
+  },
+  {
+    id: 'mopeka_propane',
+    displayName: 'Mopeka / Propane Level',
+    providerBadge: 'Propane',
+    nameFragments: [
+      /\bmopeka\b/i,
+      /\bpropane\b/i,
+      /\blpg\b/i,
+      /\btank\s*check\b/i,
+      /\bpro\s*check\b/i,
+    ],
+    manufacturerHints: [
+      /\bmopeka\b/i,
+      /\bpropane\b/i,
+      /\blpg\b/i,
+      /\btank\s*check\b/i,
+    ],
+    serviceUUIDs: [],
+    connectionType: 'ble',
+    deviceCategory: 'propane_monitor',
+    categoryHint: 'Propane level monitor',
+  },
+  {
+    id: 'water_level_monitor',
+    displayName: 'Water / Fluid Level Monitor',
+    providerBadge: 'Water',
+    nameFragments: [
+      /\bsee\s*level\b/i,
+      /\bseelevel\b/i,
+      /\bgarnet\b/i,
+      /\bwater\s*(tank|level|monitor|sensor)\b/i,
+      /\bfresh\s*water\b/i,
+      /\bfluid\s*(level|monitor|sensor)\b/i,
+    ],
+    manufacturerHints: [
+      /\bsee\s*level\b/i,
+      /\bseelevel\b/i,
+      /\bgarnet\b/i,
+      /\bwater\s*(tank|level|monitor|sensor)\b/i,
+      /\bfluid\s*(level|monitor|sensor)\b/i,
+    ],
+    serviceUUIDs: [],
+    connectionType: 'ble',
+    deviceCategory: 'water_tank_monitor',
+    categoryHint: 'Water / fluid level monitor',
   },
   {
     id: 'sensor_accessory',
@@ -247,10 +321,13 @@ export function matchBluetoothBrands(device: BluetoothBrandMatchInput): Bluetoot
     }
   }
 
+  const specificMatches = matches.filter((match) => match.brand.id !== 'sensor_accessory');
+  const resolvedMatches = specificMatches.length > 0 ? specificMatches : matches;
+
   return {
-    primaryMatch: matches.length === 1 ? matches[0] : null,
-    matches,
-    needsUserConfirmation: matches.length > 1,
+    primaryMatch: resolvedMatches.length === 1 ? resolvedMatches[0] : null,
+    matches: resolvedMatches,
+    needsUserConfirmation: resolvedMatches.length > 1,
   };
 }
 

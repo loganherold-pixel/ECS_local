@@ -13,7 +13,6 @@ import { useRouter } from 'expo-router';
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
 import {
-  ExpeditionReadinessCard,
   DepartureAuditChecklist,
   ReadinessCategoryRow,
   ReadinessConcernList,
@@ -42,8 +41,6 @@ import {
   useCanStartExpedition,
   useCurrentExpeditionReadiness,
   useExpeditionReadinessState,
-  useReadinessBriefPayload,
-  useReadinessConcerns,
   useReadinessDecision,
 } from '../../lib/readiness';
 import { buildReadinessExplanationPayload } from '../../lib/ai/readinessExplanationGuardrails';
@@ -57,6 +54,7 @@ import {
   subscribeActiveVehicleState,
 } from '../../lib/fleet/activeVehicleState';
 import { useApp } from '../../context/AppContext';
+import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 
 type CommandBriefScreenProps = {
   embedded?: boolean;
@@ -172,11 +170,6 @@ function getCategoryMap(assessment: ExpeditionReadinessAssessment | null) {
   return map;
 }
 
-function categoryNeedsReview(category: ExpeditionReadinessCategory | undefined): boolean {
-  if (!category) return true;
-  return category.status !== 'ready' || category.missingInputs.length > 0;
-}
-
 function getBriefModeLabel(hasRoute: boolean, lifecycle: string) {
   if (!hasRoute) return 'No active expedition brief';
   if (lifecycle === 'active' || lifecycle === 'arrived') return 'Active Expedition Brief';
@@ -218,128 +211,6 @@ function getBriefFreshnessCopy(assessment: ExpeditionReadinessAssessment | null)
     inferred > 0 ? `${inferred} ECS-inferred` : null,
   ].filter(Boolean);
   return `Limited confidence: ${parts.join(', ')} readiness inputs.`;
-}
-
-function buildBriefActions(
-  assessment: ExpeditionReadinessAssessment | null,
-  categories: Map<ExpeditionReadinessCategoryId, ExpeditionReadinessCategory>,
-  pushRoute: (route: string) => void,
-): BriefAction[] {
-  const actions: BriefAction[] = [];
-  const add = (action: BriefAction) => {
-    if (!actions.some((item) => item.id === action.id)) actions.push(action);
-  };
-
-  if (!assessment || categoryNeedsReview(categories.get('route_risk'))) {
-    add({
-      id: 'open-navigate',
-      label: 'Open Navigate',
-      detail: 'Stage or review the active route before generating a full Command Brief.',
-      icon: 'navigate-outline',
-      onPress: () => pushRoute('/navigate'),
-    });
-    add({
-      id: 'open-explore',
-      label: 'Open Explore',
-      detail: 'Find a route candidate and generate a planning brief.',
-      icon: 'map-outline',
-      onPress: () => pushRoute('/discover'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('vehicle_fit'))) {
-    add({
-      id: 'select-vehicle',
-      label: 'Select active vehicle',
-      detail: 'Vehicle fit and payload confidence improve when an active vehicle profile is available.',
-      icon: 'car-sport-outline',
-      onPress: () => pushRoute('/fleet'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('offline_preparedness'))) {
-    add({
-      id: 'download-offline',
-      label: 'Download offline route package',
-      detail: 'Offline package state is part of readiness and should be reviewed before departure.',
-      icon: 'download-outline',
-      onPress: () => pushRoute('/navigate-offline'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('camp_legality_confidence'))) {
-    add({
-      id: 'open-campops',
-      label: 'Review campsite access confidence',
-      detail: 'Review CampOps candidates, dispersed filters, and campsite access confidence from the route map.',
-      icon: 'trail-sign-outline',
-      onPress: () => pushRoute('/navigate'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('weather_window'))) {
-    add({
-      id: 'refresh-weather',
-      label: 'Refresh weather',
-      detail: 'Weather confidence should be current before relying on a planning or active expedition brief.',
-      icon: 'cloudy-night-outline',
-      disabled: true,
-      disabledLabel: 'Coming soon',
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('fuel_range_margin'))) {
-    add({
-      id: 'fuel-range',
-      label: 'Add fuel range estimate',
-      detail: 'Range margin improves when fuel level and route distance are available.',
-      icon: 'speedometer-outline',
-      onPress: () => pushRoute('/fleet'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('power_runtime'))) {
-    add({
-      id: 'power-runtime',
-      label: 'Review power runtime',
-      detail: 'Power margin remains limited until battery state or manual runtime estimates are available.',
-      icon: 'battery-charging-outline',
-      onPress: () => pushRoute('/power'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('recovery_bailout_access'))) {
-    add({
-      id: 'bailouts',
-      label: 'Review bailout options',
-      detail: 'Bailout and recovery access should be visible before committing to the route.',
-      icon: 'git-branch-outline',
-      onPress: () => pushRoute('/navigate-bailouts'),
-    });
-  }
-
-  if (categoryNeedsReview(categories.get('communications_signal_confidence'))) {
-    add({
-      id: 'comms-plan',
-      label: 'Confirm communications plan',
-      detail: 'Signal confidence is limited without cellular, satellite, or team check-in inputs.',
-      icon: 'radio-outline',
-      disabled: true,
-      disabledLabel: 'Coming soon',
-    });
-  }
-
-  if (actions.length === 0) {
-    add({
-      id: 'continue-navigate',
-      label: 'Open Navigate',
-      detail: 'Continue route review with readiness visible from the command layer.',
-      icon: 'navigate-outline',
-      onPress: () => pushRoute('/navigate'),
-    });
-  }
-
-  return actions.slice(0, 7);
 }
 
 function CommandBriefEmptyState({ onNavigate, onExplore }: { onNavigate: () => void; onExplore: () => void }) {
@@ -386,6 +257,43 @@ function CommandBriefActionButton({
   );
 }
 
+function CollapsibleBriefSection({
+  title,
+  badge,
+  children,
+  defaultExpanded = false,
+}: {
+  title: string;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  return (
+    <View style={[styles.section, readinessSurfaceStyle, !expanded && styles.collapsedSection]}>
+      <Pressable
+        onPress={() => setExpanded((value) => !value)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        style={({ pressed }) => [styles.collapsibleHeader, pressed && styles.pressed]}
+      >
+        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
+          {title}
+        </ECSText>
+        <View style={styles.collapsibleHeaderMeta}>
+          {expanded ? badge : null}
+          <ECSIcon
+            name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+            tier="compact"
+            tone="info"
+          />
+        </View>
+      </Pressable>
+      {expanded ? children : null}
+    </View>
+  );
+}
+
 function CommandBriefSection({
   title,
   categories,
@@ -395,16 +303,12 @@ function CommandBriefSection({
   categories: ExpeditionReadinessCategory[];
   emptyCopy: string;
 }) {
+  const hasMissingInputs = categories.some((category) => category.missingInputs.length > 0);
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          {title}
-        </ECSText>
-        {categories.some((category) => category.missingInputs.length > 0) ? (
-          <ECSBadge label="Limited confidence" tone="warning" compact />
-        ) : null}
-      </View>
+    <CollapsibleBriefSection
+      title={title}
+      badge={hasMissingInputs ? <ECSBadge label="Limited confidence" tone="warning" compact /> : undefined}
+    >
       {categories.length > 0 ? (
         <View style={styles.sectionRows}>
           {categories.map((category) => (
@@ -416,7 +320,7 @@ function CommandBriefSection({
           {emptyCopy}
         </ECSText>
       )}
-    </View>
+    </CollapsibleBriefSection>
   );
 }
 
@@ -479,17 +383,16 @@ function CampOpsBriefSection({
   category?: ExpeditionReadinessCategory;
 }) {
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          CampOps / Camp Legality Confidence
-        </ECSText>
+    <CollapsibleBriefSection
+      title="CampOps / Camp Legality Confidence"
+      badge={(
         <ECSBadge
           label={category?.confidence === 'high' ? 'Confidence visible' : 'Limited confidence'}
           tone={category?.confidence === 'high' ? 'ready' : 'warning'}
           compact
         />
-      </View>
+      )}
+    >
       {category ? (
         <View style={styles.sectionRows}>
           <ReadinessCategoryRow category={category} initiallyExpanded={category.status === 'hold'} />
@@ -548,7 +451,7 @@ function CampOpsBriefSection({
           No CampOps candidates are attached to readiness yet. Legal confidence limited; check official agency rules before treating any dispersed area as usable overnight.
         </ECSText>
       )}
-    </View>
+    </CollapsibleBriefSection>
   );
 }
 
@@ -564,17 +467,16 @@ function VehicleFitBriefSection({
   const missingSpecs = vehicle?.missingSpecs ?? [];
   const recommendations = vehicle?.recommendations ?? [];
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          Vehicle Fit
-        </ECSText>
+    <CollapsibleBriefSection
+      title="Vehicle Fit"
+      badge={(
         <ECSBadge
           label={vehicle ? (category?.status === 'ready' ? 'Fit visible' : 'Review fit') : 'Limited confidence'}
           tone={vehicle && category?.status === 'ready' ? 'ready' : 'warning'}
           compact
         />
-      </View>
+      )}
+    >
       <View style={styles.vehicleHeroRow}>
         <ECSIcon name="car-sport-outline" tier="action" tone={vehicle ? 'warning' : 'info'} />
         <View style={styles.vehicleHeroCopy}>
@@ -601,7 +503,7 @@ function VehicleFitBriefSection({
         <VehicleBriefList title="Missing specs" items={missingSpecs} emptyCopy="Core Fleet specs are present." />
         <VehicleBriefList title="Recommendations" items={recommendations} emptyCopy="No vehicle-specific recommendations." />
       </View>
-    </View>
+    </CollapsibleBriefSection>
   );
 }
 
@@ -649,17 +551,16 @@ function RecoveryBriefSection({
     : 'Current coordinates unavailable';
 
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          Recovery + Bailout Plan
-        </ECSText>
+    <CollapsibleBriefSection
+      title="Recovery + Bailout Plan"
+      badge={(
         <ECSBadge
           label={category?.status === 'ready' ? 'Plan visible' : 'Limited confidence'}
           tone={category?.status === 'ready' ? 'ready' : 'warning'}
           compact
         />
-      </View>
+      )}
+    >
       {category ? (
         <View style={styles.sectionRows}>
           <ReadinessCategoryRow category={category} initiallyExpanded={category.status === 'hold'} />
@@ -692,7 +593,7 @@ function RecoveryBriefSection({
         ))}
       </View>
       <CommandBriefActionButton label="Open Dispatch" icon="radio-outline" onPress={onOpenDispatch} />
-    </View>
+    </CollapsibleBriefSection>
   );
 }
 
@@ -728,17 +629,16 @@ function FuelPowerRangeBriefSection({
 }) {
   const power = assessment?.powerBrief;
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          Fuel / Power / Range
-        </ECSText>
+    <CollapsibleBriefSection
+      title="Fuel / Power / Range"
+      badge={(
         <ECSBadge
           label={power?.statusLabel ?? 'Unknown'}
           tone={power?.status === 'ready' ? 'ready' : power?.status === 'caution' ? 'warning' : 'info'}
           compact
         />
-      </View>
+      )}
+    >
       {fuelCategory || powerCategory ? (
         <View style={styles.sectionRows}>
           {fuelCategory ? <ReadinessCategoryRow category={fuelCategory} initiallyExpanded={fuelCategory.status === 'hold'} /> : null}
@@ -747,7 +647,10 @@ function FuelPowerRangeBriefSection({
       ) : null}
       <View style={styles.powerBriefGrid}>
         <RecoveryBriefMetric label="Power status" value={power?.sourceSummary ?? 'No power system connected.'} />
+        <RecoveryBriefMetric label="Battery" value={power?.stateOfChargeSummary ?? 'State of charge unavailable.'} />
         <RecoveryBriefMetric label="Runtime" value={power?.runtimeSummary ?? 'Runtime unknown.'} />
+        <RecoveryBriefMetric label="Power flow" value={power?.flowSummary ?? 'Power flow unavailable.'} />
+        <RecoveryBriefMetric label="Solar" value={power?.solarSummary ?? 'Solar input unavailable.'} />
         <RecoveryBriefMetric label="Freshness" value={power?.freshnessSummary ?? 'Power data freshness: unknown.'} />
         <RecoveryBriefMetric label="Recommendation" value={power?.recommendation ?? 'Connect or update power only if powered loads matter.'} />
       </View>
@@ -759,7 +662,7 @@ function FuelPowerRangeBriefSection({
           </ECSText>
         </View>
       ) : null}
-    </View>
+    </CollapsibleBriefSection>
   );
 }
 
@@ -804,10 +707,8 @@ export default function CommandBriefScreen({
   const { showToast } = useApp();
   const assessment = useCurrentExpeditionReadiness();
   const readinessState = useExpeditionReadinessState();
-  const briefPayload = useReadinessBriefPayload(5);
   const decision = useReadinessDecision();
   const canStart = useCanStartExpedition();
-  const concerns = useReadinessConcerns(4);
   const routeSession = useRouteSessionSnapshot();
   const activeVehicleReadiness = useActiveVehicleReadinessInput();
   const [briefExportAction, setBriefExportAction] = useState<CommandBriefExportAction | null>(null);
@@ -839,6 +740,22 @@ export default function CommandBriefScreen({
   }, []);
   const handleAuditAction = useCallback(
     (item: ExpeditionDepartureAuditItem) => {
+      if (item.itemId === 'offline-map-package') {
+        void stageNavigationFlow({
+          source: 'dashboard',
+          target: 'navigate',
+          intent: 'prepare_offline_route_package',
+          label: 'Prepare active route offline package',
+          message: 'ECS is opening the active route offline package.',
+          context: {
+            sourceSurface: 'command_brief_departure_audit',
+            actionItemId: item.itemId,
+          },
+        }).finally(() => {
+          pushRoute('/navigate');
+        });
+        return;
+      }
       if (item.actionTarget) pushRoute(item.actionTarget);
     },
     [pushRoute],
@@ -925,10 +842,6 @@ export default function CommandBriefScreen({
       onPress: () => void handleBriefExport('save'),
     },
   ]), [briefExportAction, handleBriefExport]);
-  const actions = useMemo(
-    () => buildBriefActions(assessment, categoryMap, pushRoute),
-    [assessment, categoryMap, pushRoute],
-  );
   const campCandidates = useMemo(
     () => (readinessState.inputPatch.campCandidates ?? []).slice(0, 5),
     [readinessState.inputPatch.campCandidates],
@@ -989,13 +902,28 @@ export default function CommandBriefScreen({
         ) : null}
 
         <View style={styles.sectionStack}>
-          <ExpeditionReadinessCard
-            assessment={assessment}
-            title="Expedition Readiness Summary"
-            categoryLimit={3}
-            concernLimit={3}
-            compactCategories
-          />
+          <View style={[styles.decisionCard, readinessSurfaceStyle]}>
+            <View style={styles.decisionHeader}>
+              <View style={styles.decisionCopyBlock}>
+                <ECSText variant="cardTitle" style={styles.sectionTitle}>
+                  Go / Caution / Hold Decision
+                </ECSText>
+                <ECSText variant="body" style={styles.decisionCopy} numberOfLines={4}>
+                  {getDecisionCopy(assessment, canStart.reason, readinessExplanation?.groundedSummary)}
+                </ECSText>
+                <ECSText variant="helper" style={styles.confidenceCopy} numberOfLines={3}>
+                  Confidence: {assessment?.confidence ?? 'low'}. {readinessExplanation?.limitedConfidence ? 'ECS Intelligence is using limited-confidence guardrails. ' : ''}{getBriefFreshnessCopy(assessment)}
+                </ECSText>
+              </View>
+              <ReadinessScoreRing
+                score={assessment?.overallScore ?? 0}
+                status={assessment?.status ?? 'hold'}
+                size={92}
+                compact
+              />
+            </View>
+            {assessment ? <ReadinessFreshnessLine assessment={assessment} /> : null}
+          </View>
 
           {assessment?.departureAudit?.length ? (
             <DepartureAuditSection
@@ -1031,29 +959,6 @@ export default function CommandBriefScreen({
               ))}
             </View>
           ) : null}
-
-          <View style={[styles.decisionCard, readinessSurfaceStyle]}>
-            <View style={styles.decisionHeader}>
-              <View style={styles.decisionCopyBlock}>
-                <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                  Go / Caution / Hold Decision
-                </ECSText>
-                <ECSText variant="body" style={styles.decisionCopy} numberOfLines={4}>
-                  {getDecisionCopy(assessment, canStart.reason, readinessExplanation?.groundedSummary)}
-                </ECSText>
-                <ECSText variant="helper" style={styles.confidenceCopy} numberOfLines={3}>
-                  Confidence: {assessment?.confidence ?? 'low'}. {readinessExplanation?.limitedConfidence ? 'ECS Intelligence is using limited-confidence guardrails. ' : ''}{getBriefFreshnessCopy(assessment)}
-                </ECSText>
-              </View>
-              <ReadinessScoreRing
-                score={assessment?.overallScore ?? 0}
-                status={assessment?.status ?? 'hold'}
-                size={92}
-                compact
-              />
-            </View>
-            {assessment ? <ReadinessFreshnessLine assessment={assessment} /> : null}
-          </View>
 
           {SECTION_DEFINITION.map((section) => (
             section.id === 'vehicle' ? (
@@ -1124,39 +1029,6 @@ export default function CommandBriefScreen({
               </ECSText>
             ) : null}
           </View>
-
-          <View style={[styles.actionsCard, readinessSurfaceStyle]}>
-            <View style={styles.sectionHeader}>
-              <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                Recommended Actions
-              </ECSText>
-              {briefPayload?.isUsingDemoData ? <ECSBadge label="Demo data" tone="warning" compact /> : null}
-            </View>
-            {assessment?.recommendations.length ? (
-              <View style={styles.recommendationStrip}>
-                <ECSIcon name="list-outline" tier="compact" tone="warning" />
-                <ECSText variant="helper" style={styles.recommendationCopy} numberOfLines={3}>
-                  {assessment.recommendations[0]}
-                </ECSText>
-              </View>
-            ) : null}
-            <View style={styles.actionList}>
-              {actions.map((action) => (
-                <CommandBriefActionRow key={action.id} action={action} />
-              ))}
-            </View>
-          </View>
-
-          {concerns.length > 0 ? (
-            <View style={[styles.concernSummary, readinessInnerSurfaceStyle]}>
-              <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                Watch Items
-              </ECSText>
-              {concerns.map((category) => (
-                <ReadinessCategoryRow key={category.id} category={category} expandable={false} />
-              ))}
-            </View>
-          ) : null}
         </View>
       </ScrollView>
       {!embedded ? (
@@ -1327,6 +1199,24 @@ const styles = StyleSheet.create({
   section: {
     padding: 14,
     gap: 8,
+  },
+  collapsedSection: {
+    gap: 0,
+  },
+  collapsibleHeader: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    minWidth: 0,
+  },
+  collapsibleHeaderMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexShrink: 0,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -1518,10 +1408,6 @@ const styles = StyleSheet.create({
     color: ECS.muted,
     lineHeight: 16,
   } as TextStyle,
-  actionsCard: {
-    padding: 14,
-    gap: 10,
-  },
   exportCard: {
     padding: 14,
     gap: 10,
@@ -1533,17 +1419,6 @@ const styles = StyleSheet.create({
   exportStatus: {
     color: ECS.accent,
     lineHeight: 15,
-  } as TextStyle,
-  recommendationStrip: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingBottom: 2,
-  },
-  recommendationCopy: {
-    flex: 1,
-    color: ECS.muted,
-    lineHeight: 16,
   } as TextStyle,
   actionList: {
     gap: 8,
@@ -1585,8 +1460,4 @@ const styles = StyleSheet.create({
     color: ECS.muted,
     lineHeight: 15,
   } as TextStyle,
-  concernSummary: {
-    padding: 14,
-    gap: 4,
-  },
 });

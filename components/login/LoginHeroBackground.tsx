@@ -7,22 +7,21 @@ import { ecsLog } from '../../lib/ecsLogger';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
-const LOGIN_HERO_VIDEO_ENABLED = Platform.OS !== 'android';
+const LOGIN_HERO_VIDEO_ENABLED = true;
 
 function LoginHeroBackground() {
   const reducedMotion = useReducedMotion();
-  const shouldShowFallback = !LOGIN_HERO_VIDEO_ENABLED;
+  const shouldUseVideo = LOGIN_HERO_VIDEO_ENABLED && !reducedMotion;
 
   return (
     <View style={styles.container}>
-      {shouldShowFallback ? (
-        <Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
-      ) : (
+      <Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
+      {shouldUseVideo ? (
         <LoginHeroVideoLayer reducedMotion={reducedMotion} />
-      )}
+      ) : null}
 
       <View pointerEvents="none" style={styles.darkTint} />
-      <View pointerEvents="none" style={styles.bottomGradient} />
+      <View pointerEvents="none" style={styles.screenTint} />
       <View pointerEvents="none" style={styles.goldWash} />
       {Platform.OS === 'android' ? <View pointerEvents="none" style={styles.androidContrast} /> : null}
     </View>
@@ -36,12 +35,6 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const failureLoggedRef = useRef(false);
   const isMountedRef = useRef(true);
-  const player = useVideoPlayer(LOGIN_VIDEO, (instance) => {
-    instance.loop = true;
-    instance.muted = true;
-    instance.play();
-  });
-
   const markVideoFailed = useCallback((error?: unknown) => {
     if (!isMountedRef.current || failureLoggedRef.current) return;
     failureLoggedRef.current = true;
@@ -56,6 +49,15 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
     });
     setVideoFailed(true);
   }, []);
+  const player = useVideoPlayer(LOGIN_VIDEO, (instance) => {
+    try {
+      instance.loop = true;
+      instance.muted = true;
+      instance.play();
+    } catch (error) {
+      markVideoFailed(error);
+    }
+  });
 
   const safePlayerAction = useCallback(
     (action: 'play' | 'pause') => {
@@ -81,13 +83,13 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
   }, [player]);
 
   useEffect(() => {
-    if (videoFailed || !videoReady) {
+    if (videoFailed) {
       safePlayerAction('pause');
       return;
     }
 
     safePlayerAction('play');
-  }, [safePlayerAction, videoFailed, videoReady]);
+  }, [safePlayerAction, videoFailed]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -111,7 +113,15 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
   }, [safePlayerAction, videoFailed, videoReady]);
 
   useEffect(() => {
-    const statusSubscription = player.addListener('statusChange', ({ error }) => {
+    const statusSubscription = player.addListener('statusChange', ({ status, error }) => {
+      if (!isMountedRef.current) return;
+
+      if (status === 'readyToPlay') {
+        setVideoReady(true);
+        safePlayerAction('play');
+        return;
+      }
+
       if (!error) return;
       markVideoFailed(error.message ?? 'Unknown video error');
     });
@@ -119,7 +129,7 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
     return () => {
       statusSubscription.remove();
     };
-  }, [markVideoFailed, player]);
+  }, [markVideoFailed, player, safePlayerAction]);
 
   useEffect(() => {
     if (videoFailed) {
@@ -146,14 +156,8 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
     }).start();
   }, [reducedMotion, videoFailed, videoReady, videoReadyOpacity]);
 
-  const shouldShowFallback = videoFailed;
-
   return (
     <>
-      {shouldShowFallback ? (
-        <Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
-      ) : null}
-
       {!videoFailed ? (
         <Animated.View pointerEvents="none" style={[styles.videoLayer, { opacity: videoReadyOpacity }]}>
           <VideoView
@@ -161,9 +165,13 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
             style={styles.video}
             contentFit="cover"
             nativeControls={false}
+            fullscreenOptions={{ enable: false }}
+            allowsPictureInPicture={false}
+            playsInline
             onFirstFrameRender={() => {
               if (isMountedRef.current) {
                 setVideoReady(true);
+                safePlayerAction('play');
               }
             }}
           />
@@ -202,12 +210,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(7,8,11,0.32)',
   },
-  bottomGradient: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '36%',
+  screenTint: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(4,6,9,0.42)',
   },
   goldWash: {

@@ -19,10 +19,13 @@ function assertNotIncludes(source, fragment, message) {
 }
 
 for (const fileName of [
-  'Weather_Clear_Sun.png',
-  'Weather_Overcast_Cloud.png',
-  'Weather_Rain.png',
-  'Weather_Snow.png',
+  'atmosphere.png',
+  'Clear.png',
+  'Drizzle.png',
+  'Rain.png',
+  'Scattered_clouds.png',
+  'Snow.png',
+  'Thunderstorms.png',
 ]) {
   assert.ok(
     fs.existsSync(path.join(root, 'assets', 'weather', fileName)),
@@ -47,13 +50,28 @@ assertIncludes(
 );
 assertIncludes(
   widgetRenderers,
-  "'clearNight'",
-  'Weather background selection should distinguish clear night from clear day.',
+  "'clear'",
+  'Weather background selection should include the OpenWeather clear group.',
 );
 assertIncludes(
   widgetRenderers,
-  'Remaining_Sunlight_Night.png',
-  'Weather background selection should reuse a bundled nighttime asset for night conditions.',
+  "'clouds'",
+  'Weather background selection should include the OpenWeather clouds group.',
+);
+assertIncludes(
+  widgetRenderers,
+  "'thunderstorm'",
+  'Weather background selection should include the OpenWeather thunderstorm group.',
+);
+assertIncludes(
+  widgetRenderers,
+  "'atmosphere'",
+  'Weather background selection should include the OpenWeather atmosphere group.',
+);
+assertIncludes(
+  widgetRenderers,
+  "weatherCode >= 700 && weatherCode < 800) return 'atmosphere'",
+  'Weather background selection should route fog, haze, smoke, dust, sand, ash, squalls, and tornado-style 7xx codes to atmosphere.',
 );
 assertIncludes(
   widgetRenderers,
@@ -69,6 +87,26 @@ assertIncludes(
   widgetRenderers,
   'readWeatherCloudCover',
   'Weather background selection should account for cloud cover when available.',
+);
+assertIncludes(
+  widgetRenderers,
+  "weatherCode >= 200 && weatherCode < 300) return 'thunderstorm'",
+  'Weather background selection should route OpenWeather 2xx codes to thunderstorms.',
+);
+assertIncludes(
+  widgetRenderers,
+  "weatherCode >= 300 && weatherCode < 400) return 'drizzle'",
+  'Weather background selection should route OpenWeather 3xx codes to drizzle.',
+);
+assertIncludes(
+  widgetRenderers,
+  "weatherCode >= 500 && weatherCode < 600) return 'rain'",
+  'Weather background selection should route OpenWeather 5xx codes to rain.',
+);
+assertIncludes(
+  widgetRenderers,
+  "weatherCode >= 600 && weatherCode < 700) return 'snow'",
+  'Weather background selection should route OpenWeather 6xx codes to snow.',
 );
 assertIncludes(
   widgetRenderers,

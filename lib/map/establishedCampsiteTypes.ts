@@ -77,6 +77,12 @@ export type EstablishedCampsite = {
   rvAllowed?: boolean;
   trailersAllowed?: boolean;
   sourceUpdatedAt?: string;
+  nearbyCampgroundCount?: number;
+  nearbyCampgroundIds?: string[];
+  nearbyCampgroundNames?: string[];
+  liveDetailFetchedAt?: string;
+  sourceRecordCount?: number;
+  availabilityRecordCount?: number;
   requiresVerification: true;
 };
 

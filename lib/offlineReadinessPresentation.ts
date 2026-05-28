@@ -281,20 +281,6 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
     ? regions.find((region) => region.id === input.runCacheManifest?.tile_region_id) ?? null
     : null;
 
-  if (matchingJob?.status === 'running' || matchingJob?.status === 'pending') {
-    return {
-      level: 'partial',
-      label: progress ? `${progress} Cached` : 'Downloading',
-      readyAssets: matchingRoute ? ['route geometry'] : [],
-      missingAssets: ['offline data incomplete'],
-      staleAssets: [],
-      reason: progress
-        ? `Offline data incomplete (${progress} downloaded).`
-        : 'Offline data incomplete; route sync is still downloading.',
-      recommendedAction: ACTION_PREPARE_OFFLINE,
-    };
-  }
-
   if (!matchingRoute && manifestMatches) {
     const manifestTilesComplete =
       input.runCacheManifest?.tile_cache_status === 'complete' || manifestRegion?.status === 'complete';
@@ -335,6 +321,61 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
       missingAssets: [],
       staleAssets: [],
       reason: 'Route corridor and active map style are cached for this preview.',
+    };
+  }
+
+  const regionComplete = matchingRegion?.status === 'complete';
+  const routeTilesComplete = matchingRoute?.tileCacheStatus === 'complete' || regionComplete;
+  if (matchingRoute && routeTilesComplete) {
+    const cachedStyle = matchingRoute.routeIntent?.mapContext?.styleKey ?? matchingRegion?.styleKey ?? null;
+    if (current.mapStyle && cachedStyle && current.mapStyle !== cachedStyle) {
+      return {
+        level: 'partial',
+        label: 'Style Not Cached',
+        readyAssets: ['route geometry', 'route corridor tiles'],
+        missingAssets: ['active map style'],
+        staleAssets: [],
+        reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+        recommendedAction: ACTION_PREPARE_OFFLINE,
+      };
+    }
+
+    const cachedLayers = routeIntentLayerSet(matchingRoute, matchingRegion);
+    const missingLayers = (current.requiredLayers ?? [])
+      .filter((layer) => cachedLayers.size > 0 && !cachedLayers.has(layer.trim().toLowerCase()));
+    if (missingLayers.length > 0) {
+      return {
+        level: 'partial',
+        label: 'Layer Not Cached',
+        readyAssets: ['route geometry', 'route corridor tiles'],
+        missingAssets: missingLayers.map((layer) => `${layer} layer`),
+        staleAssets: [],
+        reason: `${missingLayers[0]} layer is not cached for this route.`,
+        recommendedAction: ACTION_PREPARE_OFFLINE,
+      };
+    }
+
+    return {
+      level: 'ready',
+      label: 'Ready',
+      readyAssets: ['route geometry', 'route corridor tiles', 'active map style'],
+      missingAssets: [],
+      staleAssets: [],
+      reason: 'Route corridor and active map style are cached for this preview.',
+    };
+  }
+
+  if (matchingJob?.status === 'running' || matchingJob?.status === 'pending') {
+    return {
+      level: 'partial',
+      label: progress ? `${progress} Cached` : 'Downloading',
+      readyAssets: matchingRoute ? ['route geometry'] : [],
+      missingAssets: ['offline data incomplete'],
+      staleAssets: [],
+      reason: progress
+        ? `Offline data incomplete (${progress} downloaded).`
+        : 'Offline data incomplete; route sync is still downloading.',
+      recommendedAction: ACTION_PREPARE_OFFLINE,
     };
   }
 
@@ -379,8 +420,6 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
     };
   }
 
-  const regionComplete = matchingRegion?.status === 'complete';
-  const routeTilesComplete = matchingRoute.tileCacheStatus === 'complete' || regionComplete;
   if (!routeTilesComplete) {
     return {
       level: 'partial',

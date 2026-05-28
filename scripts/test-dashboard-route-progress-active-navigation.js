@@ -88,6 +88,16 @@ includes(
 );
 includes(
   progressSource,
+  'withRouteGeometryFallback(navigateProgressSummary, importedProgressSummary)',
+  'Active Navigate progress should reuse saved active-route geometry when the live guidance session has no drawable route line.',
+);
+includes(
+  progressSource,
+  'route geometry from saved active route',
+  'Route Progress should label geometry borrowed from the saved active route instead of pretending it came from live guidance.',
+);
+includes(
+  progressSource,
   'rawProgressPercent',
   'Route Progress should prefer live progress percent from the existing Navigate map session.',
 );
@@ -161,6 +171,26 @@ includes(
   navigateSessionSource,
   'export const navigateRouteSessionStore',
   'Navigate map route session store should expose the singular map route session source used by the dashboard.',
+);
+includes(
+  navigateSessionSource,
+  "NAVIGATE_ROUTE_SESSION_KEY = 'ecs_navigate_route_session_v1'",
+  'Navigate map route session should persist its active lightweight snapshot for dashboard tab restores.',
+);
+includes(
+  navigateSessionSource,
+  'routePoints: downsamplePoints(snapshot.routePoints)',
+  'Navigate map route session persistence should keep drawable route geometry without storing an uncontrolled full trace.',
+);
+includes(
+  navigateSessionSource,
+  'const persistedNavigateSession = await loadPersistedNavigateRouteSession()',
+  'Dashboard route progress hydration should prefer the persisted Navigate route session before lossy road/trail fallbacks.',
+);
+includes(
+  navigateSessionSource,
+  "currentSnapshot.lifecycle !== 'inactive'",
+  'Navigate route progress hydration should not overwrite a live in-memory route session with stale persisted data.',
 );
 includes(
   navigateSessionSource,
@@ -272,7 +302,7 @@ notIncludes(
 );
 includes(
   widgetSource,
-  'isSunlightPanel || isWeatherPanel || isRoutePanel',
+  'isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel',
   'Route Progress should suppress the shell status pill so only one Active pill remains.',
 );
 notIncludes(

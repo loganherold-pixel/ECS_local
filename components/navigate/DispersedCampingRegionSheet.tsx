@@ -18,6 +18,11 @@ type Props = {
   topOffset: number;
   bottomOffset: number;
   onClose: () => void;
+  onScoutNearbyPins?: () => void;
+  onClearScoutPins?: () => void;
+  scoutNearbyDisabled?: boolean;
+  scoutNearbyStatusText?: string | null;
+  scoutPinsVisible?: boolean;
 };
 
 const VERIFY_WARNING =
@@ -93,6 +98,12 @@ function formatSourceDate(value?: string): string | null {
   });
 }
 
+function formatMiles(value?: number): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (value < 0.1) return '<0.1 mi';
+  return `${value.toFixed(value < 10 ? 1 : 0)} mi`;
+}
+
 function BulletList({ items, tone = 'default' }: { items: string[]; tone?: 'default' | 'warning' }) {
   return (
     <View style={styles.bulletList}>
@@ -112,6 +123,11 @@ export default function DispersedCampingRegionSheet({
   topOffset,
   bottomOffset,
   onClose,
+  onScoutNearbyPins,
+  onClearScoutPins,
+  scoutNearbyDisabled = false,
+  scoutNearbyStatusText = null,
+  scoutPinsVisible = false,
 }: Props) {
   if (!visible || !region) return null;
 
@@ -120,6 +136,7 @@ export default function DispersedCampingRegionSheet({
   const restrictions = uniqueStrings(region.restrictions, 'Current local restrictions not confirmed.');
   const sources = uniqueStrings(region.sourceNames, 'Source name unavailable.');
   const sourceDate = formatSourceDate(region.sourceUpdatedAt);
+  const routeDistance = formatMiles(region.distanceFromRouteMiles);
   const restricted = String(region.confidence).toLowerCase() === 'restricted';
   const scrollContentStyle = WEB_SCROLL_CONTAINMENT_STYLE
     ? [styles.bodyContent, WEB_SCROLL_CONTAINMENT_STYLE]
@@ -195,7 +212,17 @@ export default function DispersedCampingRegionSheet({
                   </View>
                 ))}
               </View>
-              {sourceDate ? <Text style={styles.sourceDate}>Updated {sourceDate}</Text> : null}
+              <Text style={styles.sourceDate}>
+                {[
+                  region.sourceProvider || region.source ? `Live source: ${region.sourceProvider || region.source}` : 'Live source: ECS map layer',
+                  sourceDate ? `Updated ${sourceDate}` : 'Update time unavailable',
+                  region.routeNearby
+                    ? routeDistance
+                      ? `${routeDistance} from active route`
+                      : 'Inside active route corridor'
+                    : null,
+                ].filter(Boolean).join(' | ')}
+              </Text>
             </View>
 
             <View style={styles.warningBox}>
@@ -205,10 +232,45 @@ export default function DispersedCampingRegionSheet({
           </ScrollView>
 
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.secondaryButton} activeOpacity={0.78} disabled>
-              <Text style={styles.secondaryButtonText}>Scout nearby pins</Text>
-              <Text style={styles.comingSoonText}>Coming later</Text>
-            </TouchableOpacity>
+            <View style={styles.secondaryActionWrap}>
+              <View style={styles.secondaryButtonRow}>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, scoutNearbyDisabled && styles.secondaryButtonDisabled]}
+                  activeOpacity={0.78}
+                  disabled={!onScoutNearbyPins || scoutNearbyDisabled}
+                  onPress={onScoutNearbyPins}
+                  accessibilityRole="button"
+                  accessibilityLabel="Scout nearby dispersed camping pins"
+                >
+                  <Ionicons
+                    name="search-outline"
+                    size={12}
+                    color={!onScoutNearbyPins || scoutNearbyDisabled ? TACTICAL.textMuted : TACTICAL.amber}
+                  />
+                  <Text
+                    style={[
+                      styles.secondaryButtonText,
+                      (!onScoutNearbyPins || scoutNearbyDisabled) && styles.secondaryButtonTextDisabled,
+                    ]}
+                  >
+                    Scout nearby pins
+                  </Text>
+                </TouchableOpacity>
+                {scoutPinsVisible && onClearScoutPins ? (
+                  <TouchableOpacity
+                    style={styles.clearPinsButton}
+                    activeOpacity={0.78}
+                    onPress={onClearScoutPins}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear dispersed camping scout pins"
+                  >
+                    <Ionicons name="close-circle-outline" size={12} color="#F07D71" />
+                    <Text style={styles.clearPinsButtonText}>Clear pins</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {scoutNearbyStatusText ? <Text style={styles.scoutStatusText}>{scoutNearbyStatusText}</Text> : null}
+            </View>
             <TouchableOpacity style={styles.primaryButton} onPress={onClose} activeOpacity={0.84}>
               <Text style={styles.primaryButtonText}>Close</Text>
             </TouchableOpacity>
@@ -406,11 +468,23 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'flex-end',
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: 'rgba(242,194,77,0.14)',
+  },
+  secondaryActionWrap: {
+    flex: 1,
+    gap: 5,
+    alignItems: 'flex-start',
+  },
+  secondaryButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 7,
   },
   secondaryButton: {
     minHeight: 38,
@@ -419,18 +493,46 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(242,194,77,0.13)',
     backgroundColor: 'rgba(18,24,29,0.58)',
     paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     justifyContent: 'center',
   },
-  secondaryButtonText: {
+  clearPinsButton: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(240,125,113,0.26)',
+    backgroundColor: 'rgba(240,125,113,0.08)',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    justifyContent: 'center',
+  },
+  clearPinsButtonText: {
     ...TYPO.U2,
-    color: TACTICAL.textMuted,
+    color: '#F07D71',
     fontSize: 8,
     letterSpacing: 0.8,
   },
-  comingSoonText: {
+  secondaryButtonDisabled: {
+    opacity: 0.6,
+  },
+  secondaryButtonText: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
+  secondaryButtonTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  scoutStatusText: {
     ...TYPO.B2,
     color: TACTICAL.textMuted,
     fontSize: 8,
+    lineHeight: 11,
   },
   primaryButton: {
     minHeight: 38,

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -12,7 +12,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type {
   IncidentContext,
   IncidentCoordinate,
@@ -174,6 +174,7 @@ export default function SafetyChecklistModal({
   gpsLocation,
   contextSnapshot,
 }: SafetyChecklistModalProps) {
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const [items, setItems] = useState<Record<SafetyChecklistItemKey, SafetyChecklistItemValue>>(() =>
     getInitialItems(activeIncident),
   );
@@ -181,6 +182,7 @@ export default function SafetyChecklistModal({
   const [createIncidentIfRiskFound, setCreateIncidentIfRiskFound] = useState(true);
 
   const riskFound = hasRisk(items);
+  const checklistComplete = Object.values(items).every((value) => value === 'checked');
   const gpsAvailable = !!gpsLocation;
   const unresolvedEscalations = CHECKLIST_ITEMS
     .filter((item) => item.escalation && items[item.key] !== 'checked')
@@ -189,6 +191,11 @@ export default function SafetyChecklistModal({
   const updateItem = (key: SafetyChecklistItemKey, value: SafetyChecklistItemValue) => {
     setItems((current) => ({ ...current, [key]: value }));
   };
+
+  useEffect(() => {
+    if (!visible) return;
+    setItems(getInitialItems(activeIncident));
+  }, [activeIncident, visible]);
 
   const footer = useMemo(() => (
     <View style={styles.footer}>
@@ -243,7 +250,7 @@ export default function SafetyChecklistModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Stabilize people, location, communication, and hazards before assessment or recovery planning."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView
@@ -262,6 +269,16 @@ export default function SafetyChecklistModal({
               </Text>
               <Text style={styles.contextMeta}>
                 {gpsAvailable ? 'GPS available for location capture' : 'GPS unavailable; confirm location manually if needed'}
+              </Text>
+            </View>
+            <View style={[styles.checklistStatusPill, checklistComplete ? styles.checklistStatusComplete : styles.checklistStatusAttention]}>
+              {checklistComplete ? (
+                <Ionicons name="checkmark-circle-outline" size={13} color={TACTICAL.successText} />
+              ) : (
+                <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.amber} />
+              )}
+              <Text style={[styles.checklistStatusText, checklistComplete ? styles.checklistStatusTextComplete : styles.checklistStatusTextAttention]}>
+                {checklistComplete ? 'Complete' : 'Attention needed'}
               </Text>
             </View>
             {!activeIncident ? (
@@ -365,6 +382,35 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 10,
     fontWeight: '700',
+  },
+  checklistStatusPill: {
+    minHeight: 28,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  checklistStatusComplete: {
+    borderColor: 'rgba(76,175,80,0.34)',
+    backgroundColor: 'rgba(76,175,80,0.10)',
+  },
+  checklistStatusAttention: {
+    borderColor: 'rgba(212,160,23,0.34)',
+    backgroundColor: 'rgba(212,160,23,0.08)',
+  },
+  checklistStatusText: {
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  checklistStatusTextComplete: {
+    color: TACTICAL.successText,
+  },
+  checklistStatusTextAttention: {
+    color: TACTICAL.amber,
   },
   createSwitch: {
     width: 150,

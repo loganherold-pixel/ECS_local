@@ -21,6 +21,15 @@ export interface BluetoothAccessoryRecord {
   supportLabel: string;
   supportNote: string | null;
   signalStrength: number | null;
+  serviceUuids?: string[];
+  manufacturerData?: string | null;
+  localName?: string | null;
+  utilitySensorTelemetry?: {
+    levelPercent: number | null;
+    parserStatus: 'live' | 'awaiting_level' | 'unsupported';
+    decodedAt: number | null;
+    source: string | null;
+  } | null;
   lastSeenAt: string;
   connectedAt: string | null;
   lastError: string | null;
@@ -169,6 +178,10 @@ class BluetoothAccessoryRegistryImpl {
         supportLabel: input.supportLabel,
         supportNote: input.supportNote,
         signalStrength: input.signalStrength,
+        serviceUuids: input.serviceUuids ?? existing?.serviceUuids ?? [],
+        manufacturerData: input.manufacturerData ?? existing?.manufacturerData ?? null,
+        localName: input.localName ?? existing?.localName ?? null,
+        utilitySensorTelemetry: input.utilitySensorTelemetry ?? existing?.utilitySensorTelemetry ?? null,
         lastSeenAt: input.lastSeenAt ?? now,
         connectedAt:
           input.connectionState === 'connected'

@@ -26,6 +26,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -150,12 +161,13 @@ assert.deepStrictEqual(
 
 const mapRendererSource = fs.readFileSync(mapRendererPath, 'utf8');
 assert(
-  mapRendererSource.includes('camp-scout-marker camp-scout-grade-') &&
+    mapRendererSource.includes('camp-scout-marker camp-scout-grade-') &&
     mapRendererSource.includes('camp-scout-tent') &&
     mapRendererSource.includes('camp-scout-rank') &&
-    mapRendererSource.includes('camp-scout-label') &&
-    mapRendererSource.includes("label.textContent = 'camp'"),
-  'Route camp pins should reuse the remote camp scout tent/rank/camp label style.',
+    mapRendererSource.includes('root.appendChild(rank)') &&
+    !mapRendererSource.includes('camp-scout-label') &&
+    !mapRendererSource.includes("label.textContent = 'camp'"),
+  'Route camp pins should reuse the remote camp scout tent style with the rank hovering above the pin.',
 );
 assert(
   mapRendererSource.includes("send('pinTap', Object.assign({ kind: 'campScout' }, item))"),

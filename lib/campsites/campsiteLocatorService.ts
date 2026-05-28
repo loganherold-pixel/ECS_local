@@ -33,7 +33,7 @@ export const MAJOR_ROADWAY_EXCLUSION_MILES = 1;
 export const ROUTE_CAMPSITE_BUFFER_MILES = 0.5;
 export const ROUTE_CAMPSITE_MIN_CONFIDENCE_SCORE = 55;
 export const POLYGON_ADJACENT_CAMP_BUFFER_MILES = 0.5;
-export const DRAW_AREA_CAMPSITE_MIN_CONFIDENCE_SCORE = 55;
+export const DRAW_AREA_CAMPSITE_MIN_CONFIDENCE_SCORE = 70;
 const DRIVABLE_TRAIL_ACCESS_SCORE_BONUS = 8;
 
 function logCampsiteLocatorDebug(event: string, details?: Record<string, unknown>): void {
@@ -98,6 +98,13 @@ export interface CampsiteCandidate {
   confidenceLabel?: string | null;
   distanceFromRoadOrTrail?: number | null;
   slope?: number | null;
+  terrainType?: string | null;
+  surfaceType?: string | null;
+  landUse?: string | null;
+  isPrivateLand?: boolean | null;
+  isWaterBody?: boolean | null;
+  nearBuildings?: boolean | null;
+  nearHighway?: boolean | null;
   accessNotes?: string | null;
   explanation?: string | null;
   reason?: string | null;
@@ -142,7 +149,10 @@ type CampsiteHardExclusionReason =
   | 'private_land'
   | 'protected_restricted_closed'
   | 'legal_status_restricted'
-  | 'unsafe_terrain';
+  | 'unsafe_terrain'
+  | 'water_body'
+  | 'building_proximity'
+  | 'highway_proximity';
 
 function isFiniteLatitude(value: number): boolean {
   return Number.isFinite(value) && value >= -90 && value <= 90;
@@ -446,10 +456,71 @@ function isKnownUnsafeTerrain(candidate: unknown): boolean {
   return slope != null && slope > 30;
 }
 
-function getHardCampsiteExclusionReason(candidate: unknown): CampsiteHardExclusionReason | null {
+function readSafetyContextText(candidate: unknown): string {
+  if (!candidate || typeof candidate !== 'object') return '';
+  const record = candidate as Record<string, unknown>;
+  return [
+    readStringField(record, ['terrainType', 'surfaceType', 'landUse', 'landcover', 'landCover', 'surface', 'category']),
+    readStringField(record, ['accessType', 'roadClass', 'source', 'sourceType']),
+    readStringField(record, ['warning', 'reason', 'explanation', 'accessNotes']),
+    Array.isArray(record.warnings) ? record.warnings.join(' ') : null,
+    Array.isArray(record.reasons) ? record.reasons.join(' ') : null,
+    Array.isArray(record.candidateReason) ? record.candidateReason.join(' ') : null,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function isKnownWaterBody(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== 'object') return false;
+  const record = candidate as Record<string, unknown>;
+  if (
+    record.isWaterBody === true ||
+    record.inWaterBody === true ||
+    record.waterBody === true ||
+    record.overWater === true
+  ) {
+    return true;
+  }
+  const text = readSafetyContextText(candidate);
+  return /\b(lake|reservoir|pond|wetland|marsh|river|stream|creek|water body|open water)\b/.test(text);
+}
+
+function isNearBuildingOrDevelopment(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== 'object') return false;
+  const record = candidate as Record<string, unknown>;
+  if (record.nearBuildings === true || record.nearBuilding === true || record.buildingProximity === true) {
+    return true;
+  }
+  const buildingDistance = readFiniteNumber(record, [
+    'nearestBuildingMiles',
+    'buildingDistanceMiles',
+    'distanceToBuildingMiles',
+    'distanceFromBuildingMiles',
+  ]);
+  if (buildingDistance != null && buildingDistance <= 0.1) return true;
+  const text = readSafetyContextText(candidate);
+  return /\b(building|structure|residential|subdivision|industrial|developed lot|parking lot)\b/.test(text);
+}
+
+function isKnownHighwayProximity(candidate: unknown, options: { routeSourceType?: string | null } = {}): boolean {
+  if (!candidate || typeof candidate !== 'object') return false;
+  const record = candidate as Record<string, unknown>;
+  if (record.nearHighway === true || record.highwayProximity === true) return true;
+  return isExcludedByMajorRoadway(candidate, options);
+}
+
+function getHardCampsiteExclusionReason(
+  candidate: unknown,
+  options: { routeSourceType?: string | null } = {},
+): CampsiteHardExclusionReason | null {
   if (isKnownPrivateLand(candidate)) return 'private_land';
   if (isKnownProtectedRestrictedClosed(candidate)) return 'protected_restricted_closed';
   if (isRestrictedByLegalStatus(candidate)) return 'legal_status_restricted';
+  if (isKnownWaterBody(candidate)) return 'water_body';
+  if (isNearBuildingOrDevelopment(candidate)) return 'building_proximity';
+  if (isKnownHighwayProximity(candidate, options)) return 'highway_proximity';
   if (isKnownUnsafeTerrain(candidate)) return 'unsafe_terrain';
   return null;
 }
@@ -922,7 +993,7 @@ export function rankAndLimitCampsites<T>(
 
   const hardExclusionCounts = validCoordinateCandidates.reduce(
     (counts, candidate) => {
-      const reason = getHardCampsiteExclusionReason(candidate);
+      const reason = getHardCampsiteExclusionReason(candidate, options);
       if (reason) counts[reason] += 1;
       return counts;
     },
@@ -931,10 +1002,13 @@ export function rankAndLimitCampsites<T>(
       protected_restricted_closed: 0,
       legal_status_restricted: 0,
       unsafe_terrain: 0,
+      water_body: 0,
+      building_proximity: 0,
+      highway_proximity: 0,
     } as Record<CampsiteHardExclusionReason, number>,
   );
   const hardPassCandidates = validCoordinateCandidates.filter(
-    (candidate) => !getHardCampsiteExclusionReason(candidate),
+    (candidate) => !getHardCampsiteExclusionReason(candidate, options),
   );
 
   const eligible = hardPassCandidates.filter((candidate) => {
@@ -965,41 +1039,7 @@ export function rankAndLimitCampsites<T>(
     }
     return true;
   });
-  const fallbackEligible =
-    mode === 'polygon' && eligible.length === 0 && polygonCoordinates.length >= 3
-      ? hardPassCandidates
-          .filter((candidate) => {
-            const coordinate = getCandidateCoordinate(candidate);
-            return !!coordinate && pointInPolygon(coordinate, polygonCoordinates);
-          })
-          .map((candidate) => {
-            if (!candidate || typeof candidate !== 'object') return candidate;
-            const record = candidate as Record<string, unknown>;
-            const reasons = Array.isArray(record.candidateReason)
-              ? record.candidateReason.filter((reason): reason is string => typeof reason === 'string')
-              : [];
-            return {
-              ...record,
-              source: typeof record.source === 'string' ? record.source : 'draw_area_soft_fallback',
-              sourceType: typeof record.sourceType === 'string' ? record.sourceType : 'fallback',
-              legalityStatus: record.legalityStatus ?? 'unknown_needs_verification',
-              warnings: [
-                ...((Array.isArray(record.warnings) ? record.warnings : []) as unknown[]).filter(
-                  (warning): warning is string => typeof warning === 'string',
-                ),
-                'Potential campsite: verify local rules, permits, closures, and land ownership.',
-              ],
-              candidateReason: [
-                ...reasons,
-                'Soft filter fallback: hard exclusions passed but confidence thresholds were relaxed.',
-                'Legal/access status requires verification.',
-              ],
-              viabilityTier: record.viabilityTier ?? 'possible',
-              viabilityConfidenceLabel: record.viabilityConfidenceLabel ?? 'Possible',
-              criteriaBroadened: true,
-            } as T;
-          })
-      : eligible;
+  const fallbackEligible = eligible;
 
   const ranked = dedupeCandidates(
     fallbackEligible.sort((a, b) => {
@@ -1027,7 +1067,7 @@ export function rankAndLimitCampsites<T>(
     .slice(0, MAX_CAMPSITE_MARKERS);
 
   const insideHardPassCandidates = insideAreaCandidates.filter(
-    (candidate) => !getHardCampsiteExclusionReason(candidate),
+    (candidate) => !getHardCampsiteExclusionReason(candidate, options),
   );
   const scoreThresholdRemovedCount =
     mode === 'polygon'
@@ -1057,8 +1097,11 @@ export function rankAndLimitCampsites<T>(
     privateLandRemoved: hardExclusionCounts.private_land,
     protectedRestrictedClosedRemoved: hardExclusionCounts.protected_restricted_closed,
     slopeTerrainRemoved: hardExclusionCounts.unsafe_terrain,
-    accessRemotenessRemoved: scoreThresholdRemovedCount,
+    accessRemotenessRemoved: scoreThresholdRemovedCount + hardExclusionCounts.highway_proximity,
     legalStatusRemoved: hardExclusionCounts.legal_status_restricted,
+    waterBodyRemoved: hardExclusionCounts.water_body,
+    buildingProximityRemoved: hardExclusionCounts.building_proximity,
+    highwayProximityRemoved: hardExclusionCounts.highway_proximity,
     finalCandidates: ranked.length,
     softFallbackUsed: fallbackEligible !== eligible,
   });
@@ -1133,6 +1176,13 @@ function toPublicCandidate(candidate: unknown, index: number): CampsiteCandidate
             : 'Lower confidence',
     distanceFromRoadOrTrail: getMajorRoadwayDistance(candidate),
     slope: readFiniteNumber(record, ['slope', 'slopeEstimate']),
+    terrainType: readStringField(record, ['terrainType']) ?? null,
+    surfaceType: readStringField(record, ['surfaceType', 'surface', 'landcover', 'landCover']) ?? null,
+    landUse: readStringField(record, ['landUse', 'category']) ?? null,
+    isPrivateLand: isKnownPrivateLand(candidate),
+    isWaterBody: isKnownWaterBody(candidate),
+    nearBuildings: isNearBuildingOrDevelopment(candidate),
+    nearHighway: isKnownHighwayProximity(candidate),
     accessNotes: typeof record.accessNotes === 'string' ? record.accessNotes : null,
     explanation:
       typeof record.explanation === 'string'

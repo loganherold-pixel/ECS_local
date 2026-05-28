@@ -27,6 +27,7 @@ function walk(dir, results = []) {
 }
 
 const contract = read('lib/unifiedScannerContract.ts');
+const bluestackAdapter = read('lib/bluestack/bluestackScannerAdapter.ts');
 const unifiedExport = read('lib/unifiedScanner.ts');
 const hook = read('lib/useUnifiedDeviceConnections.ts');
 const aggregator = read('lib/unifiedDeviceDiscoveryAggregator.ts');
@@ -62,11 +63,11 @@ for (const state of [
   assert(contract.includes(`| '${state}'`), `scanner contract must include ${state} state`);
 }
 
-for (const category of ['power_device', 'obd2', 'unknown_supported', 'unsupported']) {
+for (const category of ['power_device', 'obd2', 'propane_monitor', 'water_tank_monitor', 'utility_sensor', 'unknown_supported', 'unsupported']) {
   assert(contract.includes(`| '${category}'`), `scanner contract must include ${category} category`);
 }
 
-for (const provider of ['ecoflow', 'bluetti', 'jackery', 'anker', 'goalzero', 'generic_obd2', 'unknown']) {
+for (const provider of ['ecoflow', 'bluetti', 'jackery', 'anker', 'anker_solix', 'goalzero', 'renogy', 'redarc', 'dakota_lithium', 'generic_obd2', 'propane_monitor', 'water_monitor', 'unknown']) {
   assert(contract.includes(`| '${provider}'`), `scanner contract must include ${provider} provider`);
 }
 
@@ -85,19 +86,39 @@ assert(
   'lib/unifiedScanner.ts must be the canonical exported scanner API',
 );
 assert(
-  hook.includes('scannerDevices: UnifiedScannerDevice[]') &&
+    hook.includes('scannerDevices: UnifiedScannerDevice[]') &&
     hook.includes('scannerSnapshot: UnifiedScannerSnapshot') &&
-    hook.includes('createUnifiedScannerSnapshot'),
-  'unified hook must expose normalized scanner devices and snapshot',
+    hook.includes('bluestackSummary: BluestackScannerSummary') &&
+    hook.includes('createUnifiedScannerSnapshot') &&
+    hook.includes('createBluestackScannerSummary') &&
+    hook.includes('releaseAccessoryDevices'),
+  'unified hook must expose normalized scanner devices, snapshot, Bluestack summary, and utility sensors',
+);
+assert(
+  contract.includes('bluestack: BluestackDeviceIdentity') &&
+    contract.includes('bluestackLane: BluestackConnectionLane') &&
+    contract.includes('bluestackTelemetryTruthLabel: string') &&
+    contract.includes('parserId: string') &&
+    contract.includes('parserAction: BluestackParserDecisionAction') &&
+    contract.includes('classifyBluestackDevice') &&
+    contract.includes('getBluestackConnectionPolicy') &&
+    contract.includes('getBluestackProviderReadiness'),
+  'scanner contract must include Bluestack identity, runtime policy, and parser metadata',
+);
+assert(
+  contract.includes("lane === 'linked_no_parser' || lane === 'pending_protocol' || lane === 'sensor_linked'") &&
+    contract.includes("? 'unavailable'") &&
+    contract.includes(": 'error'"),
+  'parser-pending telemetry must normalize as unavailable, not as a scanner error',
 );
 assert(
   hook.indexOf("if (manualScanStatus !== 'idle' && isPermissionIssue(obdError))") <
     hook.indexOf('if (visibleScanResultCount > 0)') &&
-    hook.indexOf("if (manualScanStatus !== 'idle' && hasRuntimeUnsupportedSource)") <
-      hook.indexOf('if (visibleScanResultCount > 0)') &&
-    hook.indexOf("if (manualScanStatus !== 'idle' && isBluetoothUnavailable(obdError))") <
-      hook.indexOf('if (visibleScanResultCount > 0)'),
-  'native BLE permission/runtime/powered-off states must take priority over cloud/API result rows',
+    hook.indexOf('if (visibleScanResultCount > 0)') <
+      hook.indexOf("if (manualScanStatus !== 'idle' && hasRuntimeUnsupportedSource)") &&
+    hook.indexOf('if (visibleScanResultCount > 0)') <
+      hook.indexOf("if (manualScanStatus !== 'idle' && isBluetoothUnavailable(obdError))"),
+  'permission denials must win, but native runtime/powered-off states must not hide cloud/API result rows',
 );
 assert(
   contract.includes("transport === 'cloud'") &&
@@ -169,27 +190,60 @@ for (const [label, source] of [
 assert(!aggregator.includes("| 'mock'"), 'UnifiedDiscoverySource must not include a production mock lane');
 
 assert(
-  deviceConnectionsScreen.includes('useUnifiedDeviceConnections') &&
-    deviceConnectionsScreen.includes('isRealNearbyReleaseDevice') &&
-    deviceConnectionsScreen.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
-    deviceConnectionsScreen.includes('Real nearby power and OBD2 advertisements only') &&
-    !deviceConnectionsScreen.includes('Saved / Known') &&
-    !deviceConnectionsScreen.includes('Saved and known devices') &&
+    deviceConnectionsScreen.includes('useUnifiedDeviceConnections') &&
+    deviceConnectionsScreen.includes('isVisibleReleaseDevice') &&
+    deviceConnectionsScreen.includes('visibleReleaseDevices') &&
+    deviceConnectionsScreen.includes('connectedReleaseDevices') &&
+    deviceConnectionsScreen.includes('isBluestackReleaseDeviceModel') &&
+    deviceConnectionsScreen.includes('getBluestackVisibleDeviceListLabel') &&
+    deviceConnectionsScreen.includes('for (const device of connections.devices)') &&
+    deviceConnectionsScreen.includes('for (const device of connections.connectedDevices)') &&
+    deviceConnectionsScreen.includes('for (const device of connections.knownDevices)') &&
+    deviceConnectionsScreen.includes('connections.nearbyDevices, connections.attentionDevices') &&
+    !deviceConnectionsScreen.includes('onRescan={handleRescanPress}') &&
+    !deviceConnectionsScreen.includes('actionLabel="Scan for Device Connections"') &&
+    !deviceConnectionsScreen.includes('actionLabel="Scan for Devices"') &&
+    deviceConnectionsScreen.includes('Bluestack Scanner') &&
+    deviceConnectionsScreen.includes('title="Connected devices"') &&
+    deviceConnectionsScreen.includes('Live and attached Bluestack devices') &&
+    deviceConnectionsScreen.includes('Remembered Devices ({rememberedReleaseDevices.length})') &&
+    deviceConnectionsScreen.includes('title="Remembered devices"') &&
+    deviceConnectionsScreen.includes('title="Available devices"') &&
+    deviceConnectionsScreen.includes('Verified Connection Set') &&
+    deviceConnectionsScreen.includes('Tested live telemetry') &&
+    deviceConnectionsScreen.includes('EcoFlow cloud/API') &&
+    deviceConnectionsScreen.includes('Native BLE power systems') &&
+    deviceConnectionsScreen.includes('OBD2 ELM327 telemetry') &&
+    deviceConnectionsScreen.includes('Utility tank sensors') &&
+    deviceConnectionsScreen.includes('propane, and water') &&
+    bluestackAdapter.includes('device.connectableViaCloud === true') &&
+    bluestackAdapter.includes('device.requiresNativeBluetooth === false') &&
+    bluestackAdapter.includes('Available cloud/API power devices plus nearby Bluetooth power, OBD2, propane, and water monitor advertisements') &&
     !deviceConnectionsScreen.includes('Failed / Needs Attention') &&
     !deviceConnectionsScreen.includes('Failed and needs attention') &&
     !deviceConnectionsScreen.includes('connections.attentionDevices.map') &&
-    !deviceConnectionsScreen.includes('connections.connectedDevices.map') &&
-    !deviceConnectionsScreen.includes('connections.knownDevices') &&
     !deviceConnectionsScreen.includes('SectionFilterButton') &&
     !deviceConnectionsScreen.includes('label="Known"'),
-  'Device Connections screen must use the unified scanner nearby power/OBD2 list without saved/known/failed production containers',
+  'Device Connections screen must show connected, remembered, and unified available Bluestack rows without failed production containers',
 );
 assert(
-  quickActions.includes('const openDeviceConnections = useCallback') &&
-    quickActions.includes("router.push('/power/blu')") &&
-    quickActions.includes("key: 'bluetooth'") &&
-    quickActions.includes("label: 'Bluetooth'") &&
-    quickActions.includes('onPress: openDeviceConnections') &&
+  deviceConnectionsScreen.includes("return device.actionLabel || 'Unavailable'") &&
+    deviceConnectionsScreen.includes("policy.telemetryTruthLabel || 'Parser Pending'"),
+  'Device Connections rows must show Bluestack parser-pending labels instead of generic unavailable/unsupported copy',
+);
+assert(
+  hook.indexOf('if (visibleScanResultCount > 0)') > -1 &&
+    hook.indexOf('if (visibleScanResultCount > 0)') <
+      hook.indexOf("return 'runtime_unsupported'") &&
+    hook.includes('Found selectable Bluestack devices. Cloud/API devices remain available when native Bluetooth is unavailable.'),
+  'Unified scanner must keep cloud/API results selectable instead of replacing them with the runtime-unsupported empty state',
+);
+assert(
+  !quickActions.includes('const openDeviceConnections = useCallback') &&
+    !quickActions.includes('openUnifiedBluetoothCommand(router') &&
+    !quickActions.includes("key: 'bluetooth'") &&
+    !quickActions.includes("label: 'Bluetooth'") &&
+    !quickActions.includes('onPress: openDeviceConnections') &&
     !quickActions.includes('FieldUtilitiesBluetoothPanel') &&
     !quickActions.includes('BluetoothDeviceMiniRow') &&
     !quickActions.includes('BluetoothSourceSummary') &&
@@ -197,7 +251,7 @@ assert(
     !quickActions.includes('connections.nearbyDevices') &&
     !quickActions.includes('getSourceStatusDetail') &&
     !quickActions.includes('getSourceStatusLabel'),
-  'Field Utilities Bluetooth tile must launch the canonical Device Connections route instead of embedding a second scanner UI',
+  'Field Utilities must not duplicate Bluetooth because the global banner launches canonical Device Connections',
 );
 assert(
   connectionStep.includes('useUnifiedDeviceConnections') &&

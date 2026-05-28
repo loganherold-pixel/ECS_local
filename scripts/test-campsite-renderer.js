@@ -30,6 +30,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView: function WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -211,7 +222,6 @@ const campScoutMarkers = normalizeRenderedCampScoutMarkers([
     sourceType: 'ecs_inferred',
     confidenceGrade: 'C',
     confidenceScore: 54,
-    rankLabel: 'C1',
     legalityStatus: 'unknown_needs_verification',
     warnings: ['Potential campsite: verify local rules, permits, closures, and land ownership.'],
     reasons: ['Inside selected campsite search area.'],
@@ -231,6 +241,11 @@ assert.deepStrictEqual(
   ['Potential campsite: verify local rules, permits, closures, and land ownership.'],
   'Camp Scout marker payloads should preserve source warnings.',
 );
+assert.strictEqual(
+  campScoutMarkers[0].rankLabel,
+  undefined,
+  'Camp Scout marker payloads should not synthesize visible rank labels.',
+);
 
 const campScoutGeoJson = buildCampScoutPinFeatureCollection([
   {
@@ -241,7 +256,6 @@ const campScoutGeoJson = buildCampScoutPinFeatureCollection([
     sourceType: 'ecs_inferred',
     confidenceGrade: 'B',
     confidenceScore: 76,
-    rankLabel: 'B1',
   },
 ]);
 assert.strictEqual(campScoutGeoJson.features.length, 1, 'Camp Scout GeoJSON feature collection should be non-empty.');
@@ -320,6 +334,30 @@ assertSourceIncludes(
 assertSourceIncludes(
   '[CAMP_SCOUT_DEBUG] rendered_marker_count=',
   'Camp Scout diagnostics should report rendered marker counts behind the debug flag.',
+);
+assertSourceIncludes(
+  'createDroppedPinMarkerElement(item)',
+  'Dropped map pins should render through a typed marker element instead of a plain colored dot.',
+);
+assertSourceIncludes(
+  'pin-type-camp',
+  'Dropped camp pins should include an inside camp symbol.',
+);
+assertSourceIncludes(
+  'pin-type-fuel',
+  'Dropped fuel pins should include an inside fuel symbol.',
+);
+assertSourceIncludes(
+  'pin-type-water',
+  'Dropped water pins should include an inside water symbol.',
+);
+assertSourceIncludes(
+  'pin-type-poi',
+  'Dropped POI pins should include an inside location symbol.',
+);
+assertSourceIncludes(
+  'mapChar: typeof m.mapChar ===',
+  'Dropped pin payloads should preserve mapChar fallback metadata for unknown pin types.',
 );
 assertSourceIncludes(
   'height: 42px;',

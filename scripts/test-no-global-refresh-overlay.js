@@ -37,13 +37,23 @@ assertNotIncludes(
 );
 assertIncludes(
   rootLayout,
-  "if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {",
-  'The shared root shell should keep the post-auth loading video isolated to the root pre-shell holding branch.',
+  "(postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||\n    authScreenLoadingHandoffActive",
+  'The shared root shell should keep the post-auth loading video isolated to pre-shell auth/root handoff branches.',
 );
 assertIncludes(
   rootLayout,
   'return <LoadingTransitionVideo />;',
   'The post-auth holding branch should return the loading video before app chrome mounts.',
+);
+assertIncludes(
+  rootLayout,
+  'POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS = 6500',
+  'Post-auth handoff should have a bounded fallback route timeout so a media/loading surface cannot stall indefinitely.',
+);
+assertIncludes(
+  rootLayout,
+  "markStartupPhase('post_auth_handoff_fallback_route'",
+  'The bounded post-auth fallback should be diagnostic-visible.',
 );
 
 assertNotIncludes(
@@ -60,6 +70,11 @@ assertNotIncludes(
   dashboard,
   '<LoadingTransitionVideo />',
   'Dashboard hydration must not render a full-screen loading video over app chrome.',
+);
+assertNotIncludes(
+  discover,
+  'Route Data Refreshing...',
+  'Explorer should not show a top route-data refresh banner while background scans update results.',
 );
 
 for (const [name, source] of [
@@ -93,6 +108,9 @@ for (const [name, source] of [
   ['Expedition Dispatch', read('app', 'expedition-dispatch.tsx')],
   ['Weight Dashboard', read('components', 'weight-dashboard', 'WeightDashboardPanel.tsx')],
 ]) {
+  if (!source.includes('RefreshControl')) {
+    continue;
+  }
   assertIncludes(
     source,
     'NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS',

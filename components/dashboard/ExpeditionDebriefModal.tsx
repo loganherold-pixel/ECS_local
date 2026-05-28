@@ -17,7 +17,7 @@ import {
   exportExpeditionDebriefPdf,
   type ExpeditionDebrief,
 } from '../../lib/expedition/expeditionDebrief';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 
 type ExpeditionDebriefModalProps = {
   visible: boolean;
@@ -37,6 +37,7 @@ export default function ExpeditionDebriefModal({
   const [debrief, setDebrief] = useState<ExpeditionDebrief | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
 
   useEffect(() => {
     if (!visible) return;
@@ -81,7 +82,7 @@ export default function ExpeditionDebriefModal({
       eyebrow="COMPLETED ROUTE DEBRIEF"
       subtitle={debrief?.routeName ?? 'Generate a completed-route debrief from saved ECS data.'}
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

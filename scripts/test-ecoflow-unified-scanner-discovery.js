@@ -95,6 +95,18 @@ assert.strictEqual(unnamedPowerStation.requiresNativeBluetooth, false);
 assert.strictEqual(unnamedPowerStation.connectableViaCloud, true);
 assert.strictEqual(unnamedPowerStation.isOnline, false);
 
+const renamedPowerStation = normalizeEcoFlowScannerDevice({
+  provider: 'EcoFlow',
+  deviceId: 'RENAMED_DELTA',
+  name: 'Camp Power',
+  model: 'DELTA 3 1500',
+  productType: 'DELTA 3 1500',
+  online: true,
+});
+
+assert(renamedPowerStation, 'EcoFlow model/product labels should normalize even when the user renamed the device');
+assert.strictEqual(renamedPowerStation.productType, 'power_station');
+
 const missingId = normalizeEcoFlowScannerDevice({
   provider: 'EcoFlow',
   deviceId: '',

@@ -346,6 +346,39 @@ export const routeStore = {
     return getLocalRoutes().find(r => r.id === id) || null;
   },
 
+  bulkUpsert: (incomingRoutes: ImportedRoute[]): { imported: number; skipped: number } => {
+    const routes = getLocalRoutes();
+    const byId = new Map(routes.map((route) => [route.id, route]));
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of incomingRoutes) {
+      if (!incoming?.id) {
+        skipped++;
+        continue;
+      }
+
+      const existing = byId.get(incoming.id);
+      if (
+        existing?.updated_at &&
+        incoming.updated_at &&
+        new Date(existing.updated_at).getTime() > new Date(incoming.updated_at).getTime()
+      ) {
+        skipped++;
+        continue;
+      }
+
+      byId.set(incoming.id, incoming);
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveLocalRoutes(Array.from(byId.values()));
+    }
+
+    return { imported, skipped };
+  },
+
   createCustomRoute: (
     segmentsInput: CustomRouteSegmentInput[],
     options?: { name?: string; description?: string | null },

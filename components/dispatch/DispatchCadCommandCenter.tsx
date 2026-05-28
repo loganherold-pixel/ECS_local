@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
+  Easing,
   FlatList,
   Platform,
   Share,
@@ -9,16 +12,17 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
   type ListRenderItem,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useRouter } from 'expo-router';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
 import ECSShellTexture from '../ECSShellTexture';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
-import DispatchReadinessContextCard from './DispatchReadinessContextCard';
 import { useApp } from '../../context/AppContext';
 import {
   getDispatchEventTypeLabel,
@@ -37,6 +41,7 @@ import {
 import { createDispatchEventDetailPresentation } from '../../lib/dispatchEventDetailPresentation';
 import { createDispatchCoordinateFingerprint } from '../../lib/dispatchEventDedupe';
 import { dispatchEventStore } from '../../lib/dispatchEventStore';
+import { playDispatchRecoveryPingAlert } from '../../lib/dispatchRecoveryPingAlert';
 import {
   buildLiveDispatchEvents,
   createLiveDispatchEventListFingerprint,
@@ -69,6 +74,18 @@ import {
   saveNavigationHandoffPayload,
   type NavigationHandoffPayload,
 } from '../../lib/navigationHandoffStore';
+import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
+import {
+  hideDashboardDockReveal,
+  revealDashboardDock,
+  setDashboardExpanded,
+} from '../../lib/dashboardChromeStore';
+import {
+  convoyMembershipService,
+  type ActiveConvoyContext,
+  type ConvoyListItem,
+} from '../../lib/convoy/convoyMembershipService';
+import { stopConvoyLocationSubscription } from '../../stores/convoyTrackingStore';
 import {
   recordExpeditionChannelApprovalRequiredChanged,
   recordExpeditionChannelInviteActive,
@@ -98,6 +115,7 @@ import {
   dispatchPersistenceAdapter,
   type DispatchPersistenceDefaults,
 } from '../../lib/dispatchPersistenceAdapter';
+import { replayQueuedDispatchActions } from '../../lib/dispatchOfflineReplayAdapter';
 import {
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
@@ -234,6 +252,13 @@ type DispatchCommandIdentity = {
 type DispatchChannelAvailability = {
   enabled: boolean;
   reason: string | null;
+};
+
+type ConvoyLifecycleControlState = {
+  convoyId: string;
+  role: ActiveConvoyContext['role'];
+  isLeader: boolean;
+  memberUserIds: string[];
 };
 
 const FALLBACK_DISPATCH_OPERATOR_NAME = 'ECS Operator';
@@ -443,7 +468,44 @@ type ThreatMapGeometry = {
 
 const RECOVERY_GPS_MAX_AGE_MS = 30_000;
 const RECOVERY_CAD_RETRY_COOLDOWN_MS = 10_000;
+const RECOVERY_PING_ALERT_WINDOW_MS = 120_000;
+const RECOVERY_ADVISORY_PULSE_MS = 5_000;
 const LOCAL_DISPATCH_PERSISTENCE_ID = 'local-dispatch-channel';
+
+function useDispatchPulse(active: boolean, lowOpacity = 0.38) {
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!active) {
+      opacity.setValue(1);
+      return undefined;
+    }
+
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: lowOpacity,
+          duration: 620,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 620,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+    return () => {
+      pulse.stop();
+      opacity.setValue(1);
+    };
+  }, [active, lowOpacity, opacity]);
+
+  return opacity;
+}
 
 function formatEventTime(iso: string): string {
   const date = new Date(iso);
@@ -610,6 +672,12 @@ function getRecoveryCadSyncLabel(event: DispatchEvent): string | null {
   }
 }
 
+function isRecentRecoveryPingForAlert(event: DispatchEvent, nowMs = Date.now()): boolean {
+  const createdAtMs = Date.parse(event.createdAt);
+  if (!Number.isFinite(createdAtMs)) return false;
+  return createdAtMs <= nowMs + 5_000 && nowMs - createdAtMs <= RECOVERY_PING_ALERT_WINDOW_MS;
+}
+
 function getRecoveryCriticalSummary(event: DispatchEvent): string {
   const displayCopy = getRecoveryCriticalDisplayCopy(event);
   const messagePreview = event.message
@@ -700,12 +768,13 @@ function buildRecoveryAssistNavigationPayload(event: DispatchEvent): NavigationH
   };
   const hazardType = getRecoveryHazardTypeLabel(event);
   const displayCopy = getRecoveryCriticalDisplayCopy(event);
+  const title = event.title?.trim() || 'Active GPS Ping';
 
   return {
     id: `dispatch-recovery-${event.id}-${Date.now()}`,
     source: 'dispatch',
     type: 'place',
-    title: event.title?.trim() || 'Recovery Assist',
+    title,
     subtitle: displayCopy,
     coordinate,
     trailheadCoordinate: null,
@@ -721,6 +790,7 @@ function buildRecoveryAssistNavigationPayload(event: DispatchEvent): NavigationH
     routeMetadata: {
       navigationMode: 'recovery_assist',
       recoveryAssist: true,
+      activePing: true,
       recoveryAssistEventId: event.id,
       dispatchEventId: event.id,
       cadReferenceId: event.cadReferenceId ?? null,
@@ -942,7 +1012,7 @@ function getSourceStateLabel(sourceState: DispatchLiveSourceState): string {
     case 'live_systems':
       return 'LIVE SYSTEMS';
     case 'cached_last_known':
-      return 'LAST KNOWN';
+      return 'RECENT DATA';
     case 'unavailable':
     default:
       return 'UNAVAILABLE';
@@ -1110,10 +1180,12 @@ function getHazardTypeKey(hazardType: CommandFormState['hazardType']): DispatchE
 function getRecoveryCadEventContext(
   teamSnapshot: TeamStoreSnapshot,
   expedition: ExpeditionRecord | null,
+  convoyContext?: ConvoyLifecycleControlState | null,
 ): RecoveryCadEventContext {
-  const teamId = teamSnapshot.activeTeam?.id;
-  const sessionId = expedition?.cloudSessionId ?? expedition?.id;
-  const channelId = expedition?.cloudSessionId ?? expedition?.id ?? teamId;
+  const convoyId = convoyContext?.convoyId;
+  const teamId = teamSnapshot.activeTeam?.id ?? convoyId;
+  const sessionId = expedition?.cloudSessionId ?? expedition?.id ?? convoyId;
+  const channelId = expedition?.cloudSessionId ?? expedition?.id ?? teamId ?? convoyId;
 
   return {
     teamId,
@@ -1122,15 +1194,22 @@ function getRecoveryCadEventContext(
   };
 }
 
-function getRecoveryCadSessionIds(expedition: ExpeditionRecord | null): string[] {
+function getRecoveryCadSessionIds(
+  expedition: ExpeditionRecord | null,
+  convoyContext?: ConvoyLifecycleControlState | null,
+): string[] {
   return [
     expedition?.cloudSessionId,
     expedition?.id,
+    convoyContext?.convoyId,
   ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
 }
 
-function getLocalDispatchPersistenceId(expedition: ExpeditionRecord | null): string {
-  return expedition?.cloudSessionId ?? expedition?.id ?? LOCAL_DISPATCH_PERSISTENCE_ID;
+function getLocalDispatchPersistenceId(
+  expedition: ExpeditionRecord | null,
+  convoyContext?: ConvoyLifecycleControlState | null,
+): string {
+  return expedition?.cloudSessionId ?? expedition?.id ?? convoyContext?.convoyId ?? LOCAL_DISPATCH_PERSISTENCE_ID;
 }
 
 function getRecoveryCadPersistenceDefaults(): DispatchPersistenceDefaults {
@@ -1146,10 +1225,12 @@ function getRecoveryCadPersistenceDefaults(): DispatchPersistenceDefaults {
 function getRecoveryCadAuthorizedUserIds(
   teamSnapshot: TeamStoreSnapshot,
   identity: DispatchCommandIdentity,
+  convoyContext?: ConvoyLifecycleControlState | null,
 ): string[] {
   return [
     identity.userId,
     teamSnapshot.activeTeam?.ownerId,
+    ...(convoyContext?.memberUserIds ?? []),
     ...teamSnapshot.members
       .filter((member) => member.teamId === teamSnapshot.activeTeam?.id)
       .map((member) => member.userId),
@@ -1160,8 +1241,9 @@ function getRecoveryCadBackendContext(
   teamSnapshot: TeamStoreSnapshot,
   expedition: ExpeditionRecord | null,
   identity: DispatchCommandIdentity,
+  convoyContext?: ConvoyLifecycleControlState | null,
 ): DispatchCadEventBackendContext | null {
-  const context = getRecoveryCadEventContext(teamSnapshot, expedition);
+  const context = getRecoveryCadEventContext(teamSnapshot, expedition, convoyContext);
   if (!context.teamId || !context.sessionId) {
     return null;
   }
@@ -1170,23 +1252,28 @@ function getRecoveryCadBackendContext(
     teamId: context.teamId,
     sessionId: context.sessionId,
     channelId: context.channelId,
-    authorizedUserIds: getRecoveryCadAuthorizedUserIds(teamSnapshot, identity),
+    authorizedUserIds: getRecoveryCadAuthorizedUserIds(teamSnapshot, identity, convoyContext),
   };
 }
 
 function isAuthorizedRecoveryCadMember(
   teamSnapshot: TeamStoreSnapshot,
   identity: DispatchCommandIdentity,
+  convoyContext?: ConvoyLifecycleControlState | null,
 ): boolean {
-  const team = teamSnapshot.activeTeam;
-  if (!team) return false;
   const actorId = identity.userId ?? identity.email ?? identity.callsign ?? null;
   if (!actorId) return false;
+
+  const team = teamSnapshot.activeTeam;
+  if (!team) {
+    return Boolean(identity.userId && convoyContext?.memberUserIds.includes(identity.userId));
+  }
+
   if (team.ownerId === actorId) return true;
   return teamSnapshot.members.some((member) => (
     member.teamId === team.id &&
     (member.userId === actorId || member.id === actorId)
-  ));
+  )) || Boolean(identity.userId && convoyContext?.memberUserIds.includes(identity.userId));
 }
 
 function isRecoveryCadEventInAuthorizedContext({
@@ -1194,11 +1281,13 @@ function isRecoveryCadEventInAuthorizedContext({
   teamSnapshot,
   expedition,
   identity,
+  convoyContext,
 }: {
   event: DispatchEvent;
   teamSnapshot: TeamStoreSnapshot;
   expedition: ExpeditionRecord | null;
   identity: DispatchCommandIdentity;
+  convoyContext?: ConvoyLifecycleControlState | null;
 }): boolean {
   if (event.source === 'user_report') {
     return false;
@@ -1209,19 +1298,24 @@ function isRecoveryCadEventInAuthorizedContext({
   }
 
   const team = teamSnapshot.activeTeam;
-  if (!team || event.teamId !== team.id) {
+  if (team && event.teamId === team.id) {
+    if (!isAuthorizedRecoveryCadMember(teamSnapshot, identity, convoyContext)) {
+      return false;
+    }
+
+    const sessionIds = getRecoveryCadSessionIds(expedition, convoyContext);
+    return !!event.sessionId && sessionIds.includes(event.sessionId);
+  }
+
+  if (!convoyContext || event.teamId !== convoyContext.convoyId) {
     return false;
   }
 
-  if (!isAuthorizedRecoveryCadMember(teamSnapshot, identity)) {
+  if (!identity.userId || !convoyContext.memberUserIds.includes(identity.userId)) {
     return false;
   }
 
-  const sessionIds = getRecoveryCadSessionIds(expedition);
-  if (sessionIds.length === 0) {
-    return false;
-  }
-
+  const sessionIds = getRecoveryCadSessionIds(expedition, convoyContext);
   return !!event.sessionId && sessionIds.includes(event.sessionId);
 }
 
@@ -1358,9 +1452,7 @@ function getDispatchChannelAvailability({
   hasActiveVehicle: boolean;
 }): DispatchChannelAvailability {
   if (channel.id === 'sync') {
-    return channel.sourceState === 'unavailable'
-      ? { enabled: false, reason: 'Awaiting sync' }
-      : { enabled: true, reason: null };
+    return { enabled: true, reason: null };
   }
 
   if (!isOnline || offlineMode) {
@@ -1386,10 +1478,6 @@ function getDispatchChannelAvailability({
       default:
         return { enabled: false, reason: 'Unavailable' };
     }
-  }
-
-  if (channel.sourceState === 'cached_last_known') {
-    return { enabled: false, reason: 'Last known' };
   }
 
   return { enabled: true, reason: null };
@@ -1482,6 +1570,22 @@ function sourceFromCommand(command: DispatchCommandType): DispatchEventSource {
 
 function getDispatchActorDedupeId(identity: DispatchCommandIdentity): string {
   return identity.userId ?? identity.callsign ?? identity.email ?? identity.displayName;
+}
+
+function isDispatchEventCreatedByIdentity(event: DispatchEvent, identity: DispatchCommandIdentity): boolean {
+  const createdBy = event.createdBy;
+  if (!createdBy) return false;
+
+  return Boolean(
+    (identity.userId && createdBy.userId === identity.userId) ||
+    (identity.email && createdBy.email === identity.email) ||
+    (identity.callsign && createdBy.callsign === identity.callsign) ||
+    (!identity.userId && !identity.email && !identity.callsign && createdBy.displayName === identity.displayName)
+  );
+}
+
+function isEmergencyPingUnviewed(meta: EventUiMeta): boolean {
+  return meta.state === 'active' || meta.state === 'queued';
 }
 
 function normalizeDedupeText(value: string): string {
@@ -1943,8 +2047,36 @@ function applyEventAction(meta: EventUiMeta, actionId: EventActionId): EventUiMe
   };
 }
 
+function resolveConvoyLifecycleControl(
+  context: ActiveConvoyContext | null,
+  convoys: ConvoyListItem[],
+  userId?: string,
+  memberUserIds: string[] = [],
+): ConvoyLifecycleControlState | null {
+  if (!context?.convoyId) return null;
+  const activeItem = convoys.find((item) => item.convoy.id === context.convoyId);
+  if (!activeItem || activeItem.membership.revoked_at) return null;
+  const activeStatus = activeItem.convoy.status === 'planned' ||
+    activeItem.convoy.status === 'active' ||
+    activeItem.convoy.status === 'paused';
+  if (!activeStatus) return null;
+
+  return {
+    convoyId: activeItem.convoy.id,
+    role: activeItem.membership.role,
+    isLeader: activeItem.membership.role === 'lead' || Boolean(userId && activeItem.convoy.leader_user_id === userId),
+    memberUserIds: Array.from(new Set([
+      activeItem.membership.user_id,
+      ...memberUserIds,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0))),
+  };
+}
+
 export default function DispatchCadCommandCenter() {
   const router = useRouter();
+  const isDispatchFocused = useIsFocused();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isLandscapeDispatch = windowWidth > windowHeight;
   const {
     user,
     operatorInfo,
@@ -1974,6 +2106,21 @@ export default function DispatchCadCommandCenter() {
     dispatchGps.position?.latitude,
     dispatchGps.position?.longitude,
   ]);
+  const dispatchConvoyUserLocation = useMemo(() => (
+    dispatchGps.hasFix && dispatchGps.position
+      ? {
+          latitude: dispatchGps.position.latitude,
+          longitude: dispatchGps.position.longitude,
+          accuracyMeters: dispatchGps.position.accuracyM ?? null,
+          headingDegrees: dispatchGps.position.headingDeg ?? null,
+          speedMps: dispatchGps.position.speedMph != null ? dispatchGps.position.speedMph / 2.23694 : null,
+          timestamp: dispatchGps.position.timestamp,
+        }
+      : null
+  ), [
+    dispatchGps.hasFix,
+    dispatchGps.position,
+  ]);
   const dispatchWeather = useOperationalWeather({
     enabled: true,
     gps: dispatchWeatherGpsInput,
@@ -1990,6 +2137,11 @@ export default function DispatchCadCommandCenter() {
   const [dismissedAdvisoryId, setDismissedAdvisoryId] = useState<string | null>(null);
   const [channelRevision, setChannelRevision] = useState(0);
   const [recoveryAssistSubmitting, setRecoveryAssistSubmitting] = useState(false);
+  const [activeConvoyControl, setActiveConvoyControl] = useState<ConvoyLifecycleControlState | null>(null);
+  const [convoyLifecycleBusy, setConvoyLifecycleBusy] = useState(false);
+  const [convoyLifecycleRevision, setConvoyLifecycleRevision] = useState(0);
+  const [mapCameraResetKey, setMapCameraResetKey] = useState(0);
+  const [pulsingAdvisoryId, setPulsingAdvisoryId] = useState<string | null>(null);
   const [teamSnapshot, setTeamSnapshot] = useState<TeamStoreSnapshot>(() => teamStore.getSnapshot());
   const [dispatchProfile, setDispatchProfile] = useState<DispatchProfileSnapshot>(() => dispatchProfileStore.getSnapshot());
   const [dispatchProfileHydrated, setDispatchProfileHydrated] = useState(() => dispatchProfileStore.isHydrated());
@@ -2006,6 +2158,28 @@ export default function DispatchCadCommandCenter() {
   const realtimeSessionRef = useRef<DispatchRealtimeSession | null>(null);
   const recoveryCadPublishInFlightRef = useRef<Set<string>>(new Set());
   const recoveryCadLastRetryAtRef = useRef<Record<string, number>>({});
+  const recoveryPingAlertedIdsRef = useRef<Set<string>>(new Set());
+  const advisoryPulseSeenIdsRef = useRef<Set<string>>(new Set());
+  const wasDispatchFocusedRef = useRef(isDispatchFocused);
+
+  useEffect(() => {
+    setDashboardExpanded(isLandscapeDispatch);
+    if (!isLandscapeDispatch) {
+      hideDashboardDockReveal();
+    }
+  }, [isLandscapeDispatch]);
+
+  useEffect(() => () => {
+    setDashboardExpanded(false);
+    hideDashboardDockReveal();
+  }, []);
+
+  useEffect(() => {
+    if (isDispatchFocused && !wasDispatchFocusedRef.current) {
+      setMapCameraResetKey((current) => current + 1);
+    }
+    wasDispatchFocusedRef.current = isDispatchFocused;
+  }, [isDispatchFocused]);
 
   const queuedCount = queueSize + dirtyCount;
   const activeTeamId = teamSnapshot.activeTeam?.id ?? null;
@@ -2021,6 +2195,49 @@ export default function DispatchCadCommandCenter() {
     offlineMode,
   });
   const dispatchChannelSignatureRef = useRef<string | null>(null);
+
+  const loadConvoyLifecycleControl = useCallback(async (): Promise<ConvoyLifecycleControlState | null> => {
+    const context = await convoyMembershipService.getActiveConvoyContext();
+    if (!context?.convoyId) return null;
+
+    const activeConvoys = await convoyMembershipService.listMyActiveConvoys();
+    if (!activeConvoys.ok) return null;
+
+    const roster = await convoyMembershipService.listConvoyRoster(context.convoyId);
+    const memberUserIds = roster.ok
+      ? roster.data.members.map((member) => member.user_id)
+      : [];
+
+    return resolveConvoyLifecycleControl(context, activeConvoys.data, user?.id, memberUserIds);
+  }, [user?.id]);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadConvoyLifecycleControl().then((nextControl) => {
+      if (mounted) setActiveConvoyControl(nextControl);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [loadConvoyLifecycleControl, convoyLifecycleRevision]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+      void Promise.all([
+        loadConvoyLifecycleControl(),
+        navigateRouteSessionStore.hydrateFromPersistence(),
+      ]).then(([nextControl]) => {
+        if (!mounted) return;
+        setActiveConvoyControl(nextControl);
+        setConvoyLifecycleRevision((current) => current + 1);
+        setMapCameraResetKey((current) => current + 1);
+      });
+      return () => {
+        mounted = false;
+      };
+    }, [loadConvoyLifecycleControl]),
+  );
 
   useEffect(() => {
     publishSharedWeatherBriefAdvisories(dispatchWeather.snapshot);
@@ -2171,12 +2388,6 @@ export default function DispatchCadCommandCenter() {
     ].join(':'),
     [commandIdentity.callsign, commandIdentity.displayName, commandIdentity.email, commandIdentity.userId],
   );
-  const recoveryCadRealtimeExpeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? null;
-  const recoveryCadPersistenceDefaults = useMemo(() => getRecoveryCadPersistenceDefaults(), []);
-  const recoveryCadBackendContext = useMemo(
-    () => getRecoveryCadBackendContext(teamSnapshot, currentExpedition, commandIdentity),
-    [commandIdentity, currentExpedition, teamSnapshot],
-  );
   const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
   const teamPositionSharingEnabled = isDispatchFeatureEnabled(dispatchRollout, 'teamPositionSharing');
   const externalDispatchIntegrationEnabled = isDispatchFeatureEnabled(dispatchRollout, 'externalDispatchIntegration');
@@ -2184,9 +2395,16 @@ export default function DispatchCadCommandCenter() {
   const automatedSosTransmissionEnabled = isDispatchFeatureEnabled(dispatchRollout, 'automatedSosTransmission');
   const liveRadioNetworkIntegrationsEnabled = isDispatchFeatureEnabled(dispatchRollout, 'liveRadioNetworkIntegrations');
   const agencyDataIngestionEnabled = isDispatchFeatureEnabled(dispatchRollout, 'agencyDataIngestion');
+  const recoveryCadSharingEnabled = externalDispatchIntegrationEnabled || Boolean(activeConvoyControl?.convoyId);
+  const recoveryCadRealtimeExpeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? activeConvoyControl?.convoyId ?? null;
+  const recoveryCadPersistenceDefaults = useMemo(() => getRecoveryCadPersistenceDefaults(), []);
+  const recoveryCadBackendContext = useMemo(
+    () => getRecoveryCadBackendContext(teamSnapshot, currentExpedition, commandIdentity, activeConvoyControl),
+    [activeConvoyControl, commandIdentity, currentExpedition, teamSnapshot],
+  );
   const localDispatchPersistenceId = useMemo(
-    () => getLocalDispatchPersistenceId(currentExpedition),
-    [currentExpedition],
+    () => getLocalDispatchPersistenceId(currentExpedition, activeConvoyControl),
+    [activeConvoyControl, currentExpedition],
   );
   const dispatchSensitiveGateNotice = useMemo(() => {
     const disabledFeatures: DispatchRolloutFeature[] = [];
@@ -2277,7 +2495,7 @@ export default function DispatchCadCommandCenter() {
   ]);
 
   useEffect(() => {
-    if (!externalDispatchIntegrationEnabled || !recoveryCadBackendContext || offlineMode || !isOnline) {
+    if (!recoveryCadSharingEnabled || !recoveryCadBackendContext || offlineMode || !isOnline) {
       return undefined;
     }
 
@@ -2294,6 +2512,7 @@ export default function DispatchCadCommandCenter() {
             teamSnapshot,
             expedition: currentExpedition,
             identity: commandIdentity,
+            convoyContext: activeConvoyControl,
           }))
           .forEach((event) => {
             const receivedEvent: DispatchEvent = {
@@ -2320,11 +2539,12 @@ export default function DispatchCadCommandCenter() {
   }, [
     commandIdentity,
     currentExpedition,
-    externalDispatchIntegrationEnabled,
+    activeConvoyControl,
     isOnline,
     offlineMode,
     persistDispatchCadEventLocally,
     recoveryCadBackendContext,
+    recoveryCadSharingEnabled,
     teamSnapshot,
   ]);
 
@@ -2332,7 +2552,7 @@ export default function DispatchCadCommandCenter() {
     realtimeSessionRef.current?.close();
     realtimeSessionRef.current = null;
 
-    if (!externalDispatchIntegrationEnabled || !recoveryCadRealtimeExpeditionId || !teamSnapshot.activeTeam) {
+    if (!recoveryCadSharingEnabled || !recoveryCadRealtimeExpeditionId || (!teamSnapshot.activeTeam && !activeConvoyControl)) {
       setRealtimeStatus('disabled');
       return undefined;
     }
@@ -2355,6 +2575,7 @@ export default function DispatchCadCommandCenter() {
           teamSnapshot,
           expedition: currentExpedition,
           identity: commandIdentity,
+          convoyContext: activeConvoyControl,
         })) {
           console.warn('[DISPATCH] recovery_cad_event_blocked reason=unauthorized_context');
           return;
@@ -2375,10 +2596,11 @@ export default function DispatchCadCommandCenter() {
   }, [
     commandIdentity,
     currentExpedition,
-    externalDispatchIntegrationEnabled,
+    activeConvoyControl,
     persistDispatchCadEventLocally,
     realtimeClientId,
     recoveryCadRealtimeExpeditionId,
+    recoveryCadSharingEnabled,
     teamSnapshot,
     teamSnapshot.activeTeam,
   ]);
@@ -2423,6 +2645,29 @@ export default function DispatchCadCommandCenter() {
     () => visibleEvents.filter(isRecoveryCriticalEvent),
     [visibleEvents],
   );
+  const primaryEmergencyCoordinatePing = emergencyCoordinatePingEvents[0] ?? null;
+  const ownedEmergencyCoordinatePingEvents = useMemo(
+    () => emergencyCoordinatePingEvents.filter((event) => isDispatchEventCreatedByIdentity(event, commandIdentity)),
+    [
+      commandIdentity,
+      emergencyCoordinatePingEvents,
+    ],
+  );
+  const emergencyPingAttentionActive = useMemo(
+    () => emergencyCoordinatePingEvents.some((event) => (
+      isEmergencyPingUnviewed(getEventUiMeta(uiMetaById, event, false))
+    )),
+    [emergencyCoordinatePingEvents, uiMetaById],
+  );
+  useEffect(() => {
+    emergencyCoordinatePingEvents.forEach((event) => {
+      if (recoveryPingAlertedIdsRef.current.has(event.id)) return;
+      recoveryPingAlertedIdsRef.current.add(event.id);
+      if (isRecentRecoveryPingForAlert(event)) {
+        playDispatchRecoveryPingAlert();
+      }
+    });
+  }, [emergencyCoordinatePingEvents]);
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? null,
     [events, selectedEventId],
@@ -2443,6 +2688,13 @@ export default function DispatchCadCommandCenter() {
   });
   const teamStatusLabel = teamSyncState.label;
   const sourceState = getLiveSourceState(visibleEvents);
+  const commandSurfaceStatusLabel = activeConvoyControl
+    ? 'convoy active'
+    : sourceState === 'live_systems'
+      ? 'live inputs'
+      : sourceState === 'cached_last_known'
+        ? 'recent data'
+        : 'standby';
   const channelSnapshots = useMemo(
     () => {
       if (channelRevision < 0) {
@@ -2457,6 +2709,30 @@ export default function DispatchCadCommandCenter() {
     const topEvent = getTopDispatchAdvisory(visibleEvents);
     return topEvent?.id === dismissedAdvisoryId ? null : topEvent;
   }, [dismissedAdvisoryId, visibleEvents]);
+  const advisoryIsEmergencyPing = advisory ? isRecoveryCriticalEvent(advisory) : false;
+  useEffect(() => {
+    if (!isDispatchFocused || !advisory || !advisoryIsEmergencyPing) {
+      return undefined;
+    }
+
+    if (advisoryPulseSeenIdsRef.current.has(advisory.id)) {
+      return undefined;
+    }
+
+    advisoryPulseSeenIdsRef.current.add(advisory.id);
+    setPulsingAdvisoryId(advisory.id);
+    const timeoutId = setTimeout(() => {
+      setPulsingAdvisoryId((currentId) => (currentId === advisory.id ? null : currentId));
+    }, RECOVERY_ADVISORY_PULSE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [advisory, advisoryIsEmergencyPing, isDispatchFocused]);
+  const advisoryPulseActive = Boolean(advisory && advisory.id === pulsingAdvisoryId);
+  const advisoryPulseOpacity = useDispatchPulse(advisoryPulseActive, 0.48);
+  const advisoryPulseScale = advisoryPulseOpacity.interpolate({
+    inputRange: [0.48, 1],
+    outputRange: [0.75, 1.18],
+  });
 
   useEffect(() => {
     const signature = `${visibleEvents.length}:${createLiveDispatchEventListFingerprint(visibleEvents)}`;
@@ -2506,7 +2782,7 @@ export default function DispatchCadCommandCenter() {
   ]);
 
   const publishRecoveryCadEvent = useCallback((event: DispatchEvent) => {
-    if (!externalDispatchIntegrationEnabled) {
+    if (!recoveryCadSharingEnabled) {
       return;
     }
 
@@ -2528,6 +2804,7 @@ export default function DispatchCadCommandCenter() {
       teamSnapshot,
       expedition: currentExpedition,
       identity: commandIdentity,
+      convoyContext: activeConvoyControl,
     })) {
       return;
     }
@@ -2592,18 +2869,77 @@ export default function DispatchCadCommandCenter() {
   }, [
     commandIdentity,
     currentExpedition,
-    externalDispatchIntegrationEnabled,
+    activeConvoyControl,
     isOnline,
     offlineMode,
     persistRecoveryCadEventLocally,
     recoveryCadBackendContext,
+    recoveryCadSharingEnabled,
     realtimeStatus,
     showToast,
     teamSnapshot,
   ]);
 
+  const requestDispatchSync = useCallback(async () => {
+    setChannelRevision((revision) => revision + 1);
+
+    if (offlineMode || !isOnline) {
+      showToast?.('Dispatch sync will retry when ECS is online.');
+      return;
+    }
+
+    const session = realtimeSessionRef.current;
+    if (!session || realtimeStatus !== 'connected' || !recoveryCadSharingEnabled || !localDispatchPersistenceId) {
+      const retryableRecoveryEvents = events.filter((event) => (
+        isRecoveryCriticalEvent(event) &&
+        (event.syncState === 'queued' || event.syncState === 'failed' || event.syncState === 'sending')
+      ));
+      retryableRecoveryEvents.forEach(publishRecoveryCadEvent);
+      showToast?.(
+        retryableRecoveryEvents.length > 0
+          ? 'Dispatch sync requested.'
+          : 'Dispatch sync state refreshed.',
+      );
+      return;
+    }
+
+    try {
+      const result = await replayQueuedDispatchActions({
+        expeditionId: localDispatchPersistenceId,
+        defaults: recoveryCadPersistenceDefaults,
+        publish: (event) => session.publish(event),
+        persistCadEvent: recoveryCadBackendContext
+          ? (event) => upsertDispatchCadEventToBackend(event, recoveryCadBackendContext).then((response) => response.ok)
+          : undefined,
+      });
+
+      dispatchPersistenceAdapter.save(result.snapshot);
+      setChannelRevision((revision) => revision + 1);
+      showToast?.(
+        result.attempted === 0
+          ? 'Dispatch sync state refreshed.'
+          : result.failed > 0
+            ? `Dispatch sync sent ${result.replayed}/${result.attempted}; ${result.failed} failed.`
+            : `Dispatch sync sent ${result.replayed}/${result.attempted}.`,
+      );
+    } catch {
+      showToast?.('Dispatch sync failed. ECS will retry queued items.');
+    }
+  }, [
+    events,
+    isOnline,
+    localDispatchPersistenceId,
+    offlineMode,
+    publishRecoveryCadEvent,
+    realtimeStatus,
+    recoveryCadBackendContext,
+    recoveryCadPersistenceDefaults,
+    recoveryCadSharingEnabled,
+    showToast,
+  ]);
+
   useEffect(() => {
-    if (!externalDispatchIntegrationEnabled || realtimeStatus !== 'connected' || offlineMode || !isOnline) {
+    if (!recoveryCadSharingEnabled || realtimeStatus !== 'connected' || offlineMode || !isOnline) {
       return;
     }
 
@@ -2615,10 +2951,10 @@ export default function DispatchCadCommandCenter() {
       .forEach(publishRecoveryCadEvent);
   }, [
     events,
-    externalDispatchIntegrationEnabled,
     isOnline,
     offlineMode,
     publishRecoveryCadEvent,
+    recoveryCadSharingEnabled,
     realtimeStatus,
   ]);
 
@@ -2651,12 +2987,13 @@ export default function DispatchCadCommandCenter() {
   }, []);
 
   const appendEvent = useCallback((event: DispatchEvent, queued: boolean): DispatchEvent | null => {
-    const canShareRecoveryCadEvent = externalDispatchIntegrationEnabled &&
+    const canShareRecoveryCadEvent = recoveryCadSharingEnabled &&
       isRecoveryCadEventInAuthorizedContext({
         event,
         teamSnapshot,
         expedition: currentExpedition,
         identity: commandIdentity,
+        convoyContext: activeConvoyControl,
       });
     const eventForStore = prepareRecoveryCadEventForSync({
       event,
@@ -2687,14 +3024,20 @@ export default function DispatchCadCommandCenter() {
   }, [
     commandIdentity,
     currentExpedition,
-    externalDispatchIntegrationEnabled,
+    activeConvoyControl,
     persistDispatchCadEventLocally,
     publishRecoveryCadEvent,
+    recoveryCadSharingEnabled,
     realtimeStatus,
     teamSnapshot,
   ]);
 
   const handleChannelAction = useCallback((channel: DispatchChannelSnapshot) => {
+    if (channel.id === 'sync') {
+      void requestDispatchSync();
+      return;
+    }
+
     const availability = getDispatchChannelAvailability({
       channel,
       isOnline,
@@ -2729,7 +3072,7 @@ export default function DispatchCadCommandCenter() {
       rig: commandIdentity.rig,
     }, !isOnline || offlineMode || queuedCount > 0);
     showToast?.(storedEvent ? `${channel.actionLabel} created.` : 'Already submitted.');
-  }, [activeVehicle, appendEvent, commandIdentity, isOnline, offlineMode, queuedCount, showToast]);
+  }, [activeVehicle, appendEvent, commandIdentity, isOnline, offlineMode, queuedCount, requestDispatchSync, showToast]);
 
   const submitCommand = useCallback(async () => {
     if (!activeCommand || commandSubmittingRef.current) {
@@ -2750,7 +3093,7 @@ export default function DispatchCadCommandCenter() {
         ? await createRecoveryCadEventFromCurrentGps({
           form: commandForm,
           identity: commandIdentity,
-          context: getRecoveryCadEventContext(teamSnapshot, currentExpedition),
+          context: getRecoveryCadEventContext(teamSnapshot, currentExpedition, activeConvoyControl),
         })
         : createEventFromCommand({
           command: activeCommand,
@@ -2782,6 +3125,7 @@ export default function DispatchCadCommandCenter() {
     }
   }, [
     activeCommand,
+    activeConvoyControl,
     appendEvent,
     commandForm,
     commandIdentity,
@@ -2851,6 +3195,60 @@ export default function DispatchCadCommandCenter() {
     showToast?.(`Cleared ${clearableEvents.length} routine CAD item${clearableEvents.length === 1 ? '' : 's'} locally.`);
   }, [dismissedAdvisoryId, showToast, visibleEvents]);
 
+  const markEmergencyPingViewed = useCallback((event: DispatchEvent) => {
+    setUiMetaById((currentMeta) => {
+      const meta = getEventUiMeta(currentMeta, event, false);
+      if (!isEmergencyPingUnviewed(meta)) {
+        return currentMeta;
+      }
+
+      return {
+        ...currentMeta,
+        [event.id]: {
+          state: 'acknowledged',
+          notes: [...meta.notes, 'Active GPS ping viewed from Dispatch.'],
+        },
+      };
+    });
+  }, []);
+
+  const clearEmergencyPingEvents = useCallback((
+    targetEvents: DispatchEvent[],
+    note: string,
+    toastMessage?: string,
+  ) => {
+    if (targetEvents.length === 0) {
+      return;
+    }
+
+    const targetIds = new Set(targetEvents.map((event) => event.id));
+    setUiMetaById((currentMeta) => {
+      const nextMeta = { ...currentMeta };
+      targetEvents.forEach((event) => {
+        const meta = getEventUiMeta(currentMeta, event, false);
+        nextMeta[event.id] = {
+          state: 'dismissed',
+          notes: [...meta.notes, note],
+        };
+      });
+      return nextMeta;
+    });
+
+    setSelectedEventId((currentId) => (currentId && targetIds.has(currentId) ? null : currentId));
+    setDrilldownEventId((currentId) => (currentId && targetIds.has(currentId) ? null : currentId));
+    if (advisory && targetIds.has(advisory.id)) {
+      setDismissedAdvisoryId(advisory.id);
+    }
+    if (toastMessage) {
+      showToast?.(toastMessage);
+    }
+  }, [advisory, showToast]);
+
+  const handleOpenEmergencyPing = useCallback((event: DispatchEvent) => {
+    markEmergencyPingViewed(event);
+    setSelectedEventId(event.id);
+  }, [markEmergencyPingViewed]);
+
   const handleThreatAction = useCallback((event: DispatchEvent, actionId: ThreatActionId) => {
     const actionKey = createTargetActionDedupeKey(actionId, event, commandIdentity);
     if (submittedEventActionKeysRef.current.has(actionKey) || submittingThreatActionKey === actionKey) {
@@ -2889,20 +3287,25 @@ export default function DispatchCadCommandCenter() {
         source: 'alert',
         target: 'navigate',
         intent: 'route_preview',
-        label: 'Recovery Assist',
-        message: 'Recovery assist route starting.',
+        label: 'Active GPS Ping',
+        message: 'Active ping route starting.',
         context: {
           routeId: payload.id,
           autoStartNavigation: true,
           overrideActiveNavigation: true,
           navigationMode: 'recovery_assist',
+          activePing: true,
           recoveryAssistEventId: event.id,
           dispatchEventId: event.id,
         },
       });
       setSelectedEventId(null);
       setDrilldownEventId(null);
-      showToast?.('Recovery assist route starting.');
+      clearEmergencyPingEvents(
+        [event],
+        'Cleared locally after active GPS ping navigation started.',
+      );
+      showToast?.('Active ping route starting.');
       setTimeout(() => {
         router.push('/navigate' as any);
       }, 0);
@@ -2911,7 +3314,7 @@ export default function DispatchCadCommandCenter() {
     } finally {
       setNavigatingAssistEventId(null);
     }
-  }, [navigatingAssistEventId, router, showToast]);
+  }, [clearEmergencyPingEvents, navigatingAssistEventId, router, showToast]);
 
   const handleRecoveryAssist = useCallback(async () => {
     if (recoveryAssistSubmitting || recoveryAssistSubmittingRef.current) {
@@ -2925,7 +3328,7 @@ export default function DispatchCadCommandCenter() {
       const event = createRecoveryAssistEvent(
         gpsFix,
         commandIdentity,
-        getRecoveryCadEventContext(teamSnapshot, currentExpedition),
+        getRecoveryCadEventContext(teamSnapshot, currentExpedition, activeConvoyControl),
       );
       if (!event) {
         showToast?.('Recovery Assist failed validation.');
@@ -2935,9 +3338,9 @@ export default function DispatchCadCommandCenter() {
       const storedEvent = appendEvent(event, !isOnline || offlineMode || queuedCount > 0);
       if (storedEvent) {
         setMoreVisible(false);
-        showToast?.(externalDispatchIntegrationEnabled
-          ? 'Recovery Assist queued for team sync.'
-          : 'Recovery Assist saved locally with GPS pin.');
+        showToast?.(storedEvent.syncState === 'local'
+          ? 'Active GPS ping saved locally.'
+          : 'Active GPS ping queued for convoy sync.');
       } else {
         setMoreVisible(false);
         showToast?.('Already submitted.');
@@ -2951,9 +3354,9 @@ export default function DispatchCadCommandCenter() {
     }
   }, [
     appendEvent,
+    activeConvoyControl,
     commandIdentity,
     currentExpedition,
-    externalDispatchIntegrationEnabled,
     isOnline,
     offlineMode,
     queuedCount,
@@ -2962,13 +3365,141 @@ export default function DispatchCadCommandCenter() {
     teamSnapshot,
   ]);
 
+  const emergencyPingButtonMode = recoveryAssistSubmitting
+    ? 'loading'
+    : ownedEmergencyCoordinatePingEvents.length > 0
+      ? 'cancel'
+      : emergencyCoordinatePingEvents.length > 0
+        ? 'clear'
+        : 'ping';
+  const emergencyPingButtonLabel =
+    emergencyPingButtonMode === 'loading'
+      ? 'GPS...'
+      : emergencyPingButtonMode === 'cancel'
+        ? 'Cancel'
+        : emergencyPingButtonMode === 'clear'
+          ? 'Clear GPS'
+          : 'Ping GPS';
+  const emergencyPingButtonAccessibilityLabel =
+    emergencyPingButtonMode === 'cancel'
+      ? 'Cancel active GPS ping'
+      : emergencyPingButtonMode === 'clear'
+        ? 'Clear active GPS ping from Dispatch'
+        : 'Ping GPS to convoy team';
+  const emergencyPingButtonIcon: IconName =
+    emergencyPingButtonMode === 'cancel'
+      ? 'close-circle-outline'
+      : emergencyPingButtonMode === 'clear'
+        ? 'checkmark-done-outline'
+        : 'locate-outline';
+  const emergencyPingButtonTone =
+    emergencyPingButtonMode === 'cancel' || emergencyPingButtonMode === 'clear'
+      ? TACTICAL.amber
+      : TACTICAL.danger;
+
+  const handleEmergencyPingButtonPress = useCallback(() => {
+    if (recoveryAssistSubmitting) {
+      return;
+    }
+
+    if (ownedEmergencyCoordinatePingEvents.length > 0) {
+      clearEmergencyPingEvents(
+        ownedEmergencyCoordinatePingEvents,
+        'Cancelled locally by originating operator.',
+        'Active GPS ping cancelled.',
+      );
+      return;
+    }
+
+    if (emergencyCoordinatePingEvents.length > 0) {
+      clearEmergencyPingEvents(
+        emergencyCoordinatePingEvents,
+        'Cleared locally by receiving operator.',
+        'Active GPS ping cleared locally.',
+      );
+      return;
+    }
+
+    void handleRecoveryAssist();
+  }, [
+    clearEmergencyPingEvents,
+    emergencyCoordinatePingEvents,
+    handleRecoveryAssist,
+    ownedEmergencyCoordinatePingEvents,
+    recoveryAssistSubmitting,
+  ]);
+
+  const performConvoyLifecycleAction = useCallback(async () => {
+    if (!activeConvoyControl || convoyLifecycleBusy) return;
+
+    setConvoyLifecycleBusy(true);
+    try {
+      const result = activeConvoyControl.isLeader
+        ? await convoyMembershipService.endConvoy({ convoyId: activeConvoyControl.convoyId })
+        : await convoyMembershipService.leaveConvoy({ convoyId: activeConvoyControl.convoyId });
+
+      if (!result.ok) {
+        showToast?.(result.error);
+        return;
+      }
+
+      stopConvoyLocationSubscription();
+      setActiveConvoyControl(null);
+      setConvoyLifecycleRevision((current) => current + 1);
+      showToast?.(activeConvoyControl.isLeader
+        ? 'Convoy ended. Live location sharing stopped for all members.'
+        : 'You left the convoy. Live location sharing stopped.');
+    } catch (error) {
+      showToast?.(error instanceof Error ? error.message : 'Convoy membership update failed.');
+    } finally {
+      setConvoyLifecycleBusy(false);
+    }
+  }, [activeConvoyControl, convoyLifecycleBusy, showToast]);
+
+  const handleConvoyLifecycleAction = useCallback(() => {
+    if (!activeConvoyControl || convoyLifecycleBusy) return;
+
+    if (activeConvoyControl.isLeader) {
+      Alert.alert(
+        'End convoy?',
+        'This terminates the active convoy for every member and removes live location visibility for the group.',
+        [
+          { text: 'Go back', style: 'cancel' },
+          {
+            text: 'End Convoy',
+            style: 'destructive',
+            onPress: () => {
+              void performConvoyLifecycleAction();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Leave convoy?',
+      'Are you sure you want to leave the convoy? Your live location will stop sharing, and other members will remain connected.',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Leave',
+          style: 'destructive',
+          onPress: () => {
+            void performConvoyLifecycleAction();
+          },
+        },
+      ],
+    );
+  }, [activeConvoyControl, convoyLifecycleBusy, performConvoyLifecycleAction]);
+
   const renderEvent: ListRenderItem<DispatchEvent> = ({ item }) => (
     <EventRow
       event={item}
       meta={getEventUiMeta(uiMetaById, item, false)}
       onPress={(event) => {
         if (isRecoveryCriticalEvent(event)) {
-          setSelectedEventId(event.id);
+          handleOpenEmergencyPing(event);
           return;
         }
 
@@ -2987,135 +3518,322 @@ export default function DispatchCadCommandCenter() {
       }}
     />
   );
+  void dispatchSensitiveGateNotice;
 
-  return (
-    <View style={styles.root}>
-      <ECSShellTexture />
-      <View style={styles.headerStrip}>
+  const handleRevealDispatchDock = () => {
+    revealDashboardDock(5000);
+  };
+
+  const dockRevealControl = isLandscapeDispatch ? (
+    <TouchableOpacity
+      style={styles.landscapeDockRevealButton}
+      accessibilityRole="button"
+      accessibilityLabel="Show Dispatch navigation dock"
+      activeOpacity={0.82}
+      onPress={handleRevealDispatchDock}
+    >
+      <Ionicons name="apps-outline" size={13} color={TACTICAL.amber} />
+    </TouchableOpacity>
+  ) : null;
+
+  const convoyLifecycleButtonLabel = activeConvoyControl?.isLeader ? 'End Convoy' : 'Leave Convoy';
+
+  const headerStrip = (
+    <View style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}>
+      {!isLandscapeDispatch ? (
         <View style={styles.headerCopy}>
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={1}>DISPATCH</Text>
-            {teamPositionSharingEnabled || externalDispatchIntegrationEnabled ? (
-              <TouchableOpacity
-                style={styles.profileButton}
-                accessibilityRole="button"
-                accessibilityLabel="Connect Team"
-                onPress={() => setInviteVisible(true)}
-                activeOpacity={0.82}
-              >
-                <Ionicons name="person-add-outline" size={14} color={TACTICAL.amber} />
-                <Text style={styles.profileButtonText} numberOfLines={1}>Connect</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
           <Text style={styles.channel} numberOfLines={1}>{teamStatusLabel}</Text>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.profileButton}
-            accessibilityRole="button"
-            accessibilityLabel="Open Dispatch Profile"
-            onPress={() => setProfileVisible(true)}
-            activeOpacity={0.82}
+      ) : null}
+      <View style={[styles.headerActions, isLandscapeDispatch ? styles.headerActionsLandscape : null]}>
+        <TouchableOpacity
+          style={[styles.headerUtilityButton, isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null, styles.headerConvoyButton]}
+          accessibilityRole="button"
+          accessibilityLabel="Open convoy setup"
+          activeOpacity={0.82}
+          onPress={() => router.push('/convoy-command' as any)}
+        >
+          <Ionicons name="people-circle-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
+          <Text
+            style={[styles.headerUtilityButtonText, isLandscapeDispatch ? styles.headerUtilityButtonTextLandscape : null]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
           >
-            <Ionicons name="person-circle-outline" size={14} color={TACTICAL.amber} />
-            <Text style={styles.profileButtonText} numberOfLines={1}>Profile</Text>
+            Convoy
+          </Text>
+        </TouchableOpacity>
+        {activeConvoyControl ? (
+          <TouchableOpacity
+            style={[
+              styles.headerUtilityButton,
+              isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null,
+              activeConvoyControl.isLeader ? styles.headerEndConvoyButton : styles.headerLeaveConvoyButton,
+              convoyLifecycleBusy ? styles.commandButtonDisabled : null,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={activeConvoyControl.isLeader ? 'End active convoy for all members' : 'Leave active convoy'}
+            accessibilityState={{ disabled: convoyLifecycleBusy }}
+            activeOpacity={convoyLifecycleBusy ? 1 : 0.78}
+            disabled={convoyLifecycleBusy}
+            onPress={handleConvoyLifecycleAction}
+          >
+            <Ionicons
+              name={activeConvoyControl.isLeader ? 'close-circle-outline' : 'exit-outline'}
+              size={isLandscapeDispatch ? 12 : 14}
+              color={TACTICAL.danger}
+            />
+            <Text
+              style={[
+                styles.headerUtilityButtonText,
+                isLandscapeDispatch ? styles.headerUtilityButtonTextLandscape : null,
+                styles.headerConvoyLifecycleButtonText,
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
+              {convoyLifecycleBusy ? 'Updating' : convoyLifecycleButtonLabel}
+            </Text>
           </TouchableOpacity>
-          <View style={[styles.connectionPill, { borderColor: `${connectionState.tone}66` }]}>
-            <View style={[styles.connectionDot, { backgroundColor: connectionState.tone }]} />
-            <Text style={styles.connectionText}>{connectionState.label}</Text>
-          </View>
-        </View>
-      </View>
-
-      {dispatchSensitiveGateNotice ? (
-        <View style={styles.rolloutNotice}>
-          <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.rolloutNoticeText}>
-            {dispatchSensitiveGateNotice}
+        ) : null}
+        <TouchableOpacity
+          style={[
+            styles.headerUtilityButton,
+            isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null,
+            styles.headerPingButton,
+            emergencyPingButtonMode === 'cancel' || emergencyPingButtonMode === 'clear'
+              ? styles.headerPingButtonCancel
+              : null,
+            recoveryAssistSubmitting ? styles.commandButtonDisabled : null,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={emergencyPingButtonAccessibilityLabel}
+          activeOpacity={recoveryAssistSubmitting ? 1 : 0.78}
+          disabled={recoveryAssistSubmitting}
+          onPress={handleEmergencyPingButtonPress}
+        >
+          <Ionicons name={emergencyPingButtonIcon} size={isLandscapeDispatch ? 12 : 14} color={emergencyPingButtonTone} />
+          <Text
+            style={[
+              styles.headerUtilityButtonText,
+              isLandscapeDispatch ? styles.headerUtilityButtonTextLandscape : null,
+              styles.headerPingButtonText,
+              emergencyPingButtonMode === 'cancel' || emergencyPingButtonMode === 'clear'
+                ? styles.headerPingButtonCancelText
+                : null,
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            {emergencyPingButtonLabel}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.headerUtilityButton, isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null]}
+          accessibilityRole="button"
+          accessibilityLabel="Create recovery report"
+          activeOpacity={0.82}
+          onPress={() => openCommand('hazard')}
+        >
+          <Ionicons name="warning-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
+          <Text
+            style={[styles.headerUtilityButtonText, isLandscapeDispatch ? styles.headerUtilityButtonTextLandscape : null]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            Recovery Report
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.profileButton, isLandscapeDispatch ? styles.profileButtonLandscape : null]}
+          accessibilityRole="button"
+          accessibilityLabel="Open Dispatch Profile"
+          onPress={() => setProfileVisible(true)}
+          activeOpacity={0.82}
+        >
+          <Ionicons name="person-circle-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
+          <Text
+            style={[styles.profileButtonText, isLandscapeDispatch ? styles.profileButtonTextLandscape : null]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            Profile
+          </Text>
+        </TouchableOpacity>
+        <View style={[styles.connectionPill, isLandscapeDispatch ? styles.connectionPillLandscape : null, { borderColor: `${connectionState.tone}66` }]}>
+          <View style={[styles.connectionDot, isLandscapeDispatch ? styles.connectionDotLandscape : null, { backgroundColor: connectionState.tone }]} />
+          <Text
+            style={[styles.connectionText, isLandscapeDispatch ? styles.connectionTextLandscape : null]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
+            {connectionState.label}
           </Text>
         </View>
-      ) : null}
-
-      <DispatchConvoyTeamSetupCard
-        connectionLabel={connectionState.label}
-        connectionTone={connectionState.tone}
-        teamStatusLabel={teamStatusLabel}
-        teamMemberCount={teamMemberCount}
-        hasActiveTeam={hasActiveTeam}
-        emergencyCount={emergencyCoordinatePingEvents.length}
-        canConnect={teamPositionSharingEnabled || externalDispatchIntegrationEnabled}
-        onConnect={() => setInviteVisible(true)}
-        onProfile={() => setProfileVisible(true)}
-      />
-
-      <View style={styles.liveStrip}>
-        {channelSnapshots.map((channel) => (
-          <DispatchChannelButton
-            key={channel.id}
-            channel={channel}
-            availability={getDispatchChannelAvailability({
-              channel,
-              isOnline,
-              offlineMode,
-              hasActiveVehicle: !!activeVehicle,
-            })}
-            onPress={handleChannelAction}
-          />
-        ))}
+        {dockRevealControl}
       </View>
+    </View>
+  );
 
-      {advisory ? (
-        <View style={styles.advisoryLine}>
-          <ECSShellTexture />
-          <Ionicons name="pulse-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.advisoryLabel}>ECS Advisory</Text>
-          <Text style={styles.advisoryText} numberOfLines={1}>{advisory.message}</Text>
-          <TouchableOpacity
-            style={styles.advisoryDismiss}
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss ECS advisory"
-            onPress={() => setDismissedAdvisoryId(advisory.id)}
-          >
-            <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
-          </TouchableOpacity>
+  const landscapeTitleBar = isLandscapeDispatch ? (
+    <View style={styles.landscapeTitleBar}>
+      <View style={styles.landscapeTitleCenter}>
+        <Text style={[styles.title, styles.titleLandscape]} numberOfLines={1}>DISPATCH</Text>
+      </View>
+    </View>
+  ) : null;
+
+  const advisoryLine = advisory ? (
+    <View
+      style={[
+        styles.advisoryLine,
+        isLandscapeDispatch ? styles.advisoryLineLandscape : null,
+        advisoryPulseActive ? styles.advisoryLinePulseActive : null,
+      ]}
+    >
+      <ECSShellTexture />
+      {advisoryPulseActive ? (
+        <View pointerEvents="none" style={styles.advisoryTraceRail}>
+          <View style={styles.advisoryTraceLine} />
+          <Animated.View
+            style={[
+              styles.advisoryTraceBeat,
+              {
+                opacity: advisoryPulseOpacity,
+                transform: [{ scaleY: advisoryPulseScale }],
+              },
+            ]}
+          />
         </View>
       ) : null}
+      <Ionicons name="pulse-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
+      <Text style={[styles.advisoryLabel, isLandscapeDispatch ? styles.advisoryLabelLandscape : null]}>ECS Advisory</Text>
+      <Text style={[styles.advisoryText, isLandscapeDispatch ? styles.advisoryTextLandscape : null]} numberOfLines={1}>{advisory.message}</Text>
+      <TouchableOpacity
+        style={styles.advisoryDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss ECS advisory"
+        onPress={() => setDismissedAdvisoryId(advisory.id)}
+      >
+        <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+      </TouchableOpacity>
+    </View>
+  ) : null;
 
-      <DispatchReadinessContextCard />
+  const renderLiveStrip = (compact = false) => (
+    <View style={[styles.liveStrip, compact ? styles.liveStripLandscape : styles.liveStripPortrait]}>
+      {channelSnapshots.map((channel) => (
+        <DispatchChannelButton
+          key={channel.id}
+          channel={channel}
+          compact={compact}
+          availability={getDispatchChannelAvailability({
+            channel,
+            isOnline,
+            offlineMode,
+            hasActiveVehicle: !!activeVehicle,
+          })}
+          onPress={handleChannelAction}
+        />
+      ))}
+    </View>
+  );
 
-      <View style={styles.feedPanel}>
+  return (
+    <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
+      {!isLandscapeDispatch ? <ECSShellTexture /> : null}
+      {isLandscapeDispatch ? (
+        <>
+          {landscapeTitleBar}
+          <View style={styles.landscapeTopRow}>
+            <View style={styles.landscapeSetupRail}>
+              {advisoryLine ?? <View style={styles.landscapeSetupTopSpacer} />}
+              <DispatchConvoyTeamSetupCard
+                compact
+                teamStatusLabel={teamStatusLabel}
+                teamMemberCount={teamMemberCount}
+                hasActiveTeam={hasActiveTeam}
+                emergencyCount={emergencyCoordinatePingEvents.length}
+                emergencyAlertActive={emergencyPingAttentionActive}
+                onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
+              />
+              {renderLiveStrip(true)}
+            </View>
+            <View style={styles.landscapeCommandRail}>
+              {headerStrip}
+              <DispatchConvoyCommandPanel
+                connectionLabel={connectionState.label}
+                teamStatusLabel={teamStatusLabel}
+                teamMemberCount={teamMemberCount}
+                hasActiveTeam={hasActiveTeam}
+                userLocation={dispatchConvoyUserLocation}
+                emergencyEvents={emergencyCoordinatePingEvents}
+                emergencyAlertActive={emergencyPingAttentionActive}
+                emergencySubmitting={recoveryAssistSubmitting}
+                emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
+                emergencyButtonTone={emergencyPingButtonTone}
+                onEmergencyPing={handleEmergencyPingButtonPress}
+                onOpenEmergencyEvent={handleOpenEmergencyPing}
+                presentation="summary"
+                showEmergencyOverlay={false}
+                convoyLifecycleRevision={convoyLifecycleRevision}
+                testID="dispatch-convoy-command-landscape-summary"
+              />
+            </View>
+          </View>
+        </>
+      ) : (
+        <>
+          {headerStrip}
+          {advisoryLine}
+          <DispatchConvoyTeamSetupCard
+            teamStatusLabel={teamStatusLabel}
+            teamMemberCount={teamMemberCount}
+            hasActiveTeam={hasActiveTeam}
+            emergencyCount={emergencyCoordinatePingEvents.length}
+            emergencyAlertActive={emergencyPingAttentionActive}
+            onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
+          />
+          {renderLiveStrip(false)}
+        </>
+      )}
+
+      <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeMap : null]}>
         <ECSShellTexture />
-        <View style={styles.feedHeader}>
+        <View style={[styles.feedHeader, isLandscapeDispatch ? styles.feedHeaderLandscape : null]}>
           <View>
-            <Text style={styles.feedTitle}>Convoy Command</Text>
-            <Text style={styles.feedSource}>CAD FEED SURFACE</Text>
+            <Text style={[styles.feedTitle, isLandscapeDispatch ? styles.feedTitleLandscape : null]}>Convoy Command</Text>
+            <Text style={[styles.feedSource, isLandscapeDispatch ? styles.feedSourceLandscape : null]}>COMMAND SURFACE</Text>
           </View>
-          <View style={styles.feedHeaderActions}>
-            <Text style={styles.feedCount}>{emergencyCoordinatePingEvents.length} emergency</Text>
-            <TouchableOpacity
-              style={[styles.clearCadButton, styles.recoveryFeedButton]}
-              accessibilityRole="button"
-              accessibilityLabel="Create recovery or hazard CAD event"
-              activeOpacity={0.78}
-              onPress={() => openCommand('hazard')}
-            >
-              <Text style={[styles.clearCadButtonText, styles.recoveryFeedButtonText]} numberOfLines={1}>
-                Recovery
-              </Text>
-            </TouchableOpacity>
-          </View>
+          {!isLandscapeDispatch ? (
+            <Text style={styles.feedCount}>{commandSurfaceStatusLabel}</Text>
+          ) : null}
         </View>
         <DispatchConvoyCommandPanel
           connectionLabel={connectionState.label}
           teamStatusLabel={teamStatusLabel}
           teamMemberCount={teamMemberCount}
           hasActiveTeam={hasActiveTeam}
+          userLocation={dispatchConvoyUserLocation}
           emergencyEvents={emergencyCoordinatePingEvents}
+          emergencyAlertActive={emergencyPingAttentionActive}
           emergencySubmitting={recoveryAssistSubmitting}
-          onEmergencyPing={handleRecoveryAssist}
-          onOpenEmergencyEvent={(event) => setSelectedEventId(event.id)}
-          presentation="feed"
+          emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
+          emergencyButtonTone={emergencyPingButtonTone}
+          onEmergencyPing={handleEmergencyPingButtonPress}
+          onOpenEmergencyEvent={handleOpenEmergencyPing}
+          presentation={isLandscapeDispatch ? 'map' : 'feed'}
+          cameraResetKey={mapCameraResetKey}
+          showEmergencyOverlay={false}
+          convoyLifecycleRevision={convoyLifecycleRevision}
           testID="dispatch-convoy-command-feed-panel"
         />
       </View>
@@ -3123,7 +3841,6 @@ export default function DispatchCadCommandCenter() {
       <EventDetailModal
         event={selectedEvent}
         meta={selectedEventMeta}
-        submittingThreatActionKey={submittingThreatActionKey}
         navigatingAssistEventId={navigatingAssistEventId}
         onClose={() => setSelectedEventId(null)}
         onAction={handleEventAction}
@@ -3131,7 +3848,6 @@ export default function DispatchCadCommandCenter() {
           setSelectedEventId(null);
           setDrilldownEventId(event.id);
         }}
-        onThreatAction={handleThreatAction}
         onNavigateAssist={handleNavigateAssist}
       />
       <ThreatDrilldownModal
@@ -3210,48 +3926,47 @@ export default function DispatchCadCommandCenter() {
         }
         showToast={showToast}
         onClose={() => setInviteVisible(false)}
+        onOpenJoin={() => {
+          setInviteVisible(false);
+          router.push('/join-expedition' as any);
+        }}
       />
     </View>
   );
 }
 
 function DispatchConvoyTeamSetupCard({
-  canConnect,
-  connectionLabel,
-  connectionTone,
+  compact = false,
+  emergencyAlertActive,
   emergencyCount,
   hasActiveTeam,
-  onConnect,
-  onProfile,
+  onOpenEmergencyPings,
   teamMemberCount,
   teamStatusLabel,
 }: {
-  canConnect: boolean;
-  connectionLabel: string;
-  connectionTone: string;
+  compact?: boolean;
+  emergencyAlertActive: boolean;
   emergencyCount: number;
   hasActiveTeam: boolean;
-  onConnect: () => void;
-  onProfile: () => void;
+  onOpenEmergencyPings?: () => void;
   teamMemberCount: number;
   teamStatusLabel: string;
 }) {
+  const emergencyCellActive = emergencyCount > 0 && !!onOpenEmergencyPings;
+  const emergencyCountOpacity = useDispatchPulse(emergencyCellActive && emergencyAlertActive);
+
   return (
-    <View style={styles.convoyTeamCard} testID="dispatch-convoy-team-setup-card">
+    <View style={[styles.convoyTeamCard, compact ? styles.convoyTeamCardCompact : null]} testID="dispatch-convoy-team-setup-card">
       <ECSShellTexture />
-      <View style={styles.convoyTeamHeader}>
+      <View style={[styles.convoyTeamHeader, compact ? styles.convoyTeamHeaderCompact : null]}>
         <View style={styles.convoyTeamTitleBlock}>
-          <Text style={styles.convoyTeamEyebrow}>CONVOY SETUP / TEAM</Text>
-          <Text style={styles.convoyTeamTitle} numberOfLines={1}>
+          <Text style={[styles.convoyTeamEyebrow, compact ? styles.convoyTeamEyebrowCompact : null]}>CONVOY SETUP / TEAM</Text>
+          <Text style={[styles.convoyTeamTitle, compact ? styles.convoyTeamTitleCompact : null]} numberOfLines={1}>
             {hasActiveTeam ? 'Team channel staged' : 'Team channel not configured'}
           </Text>
         </View>
-        <View style={[styles.convoyTeamStatusPill, { borderColor: `${connectionTone}66` }]}>
-          <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
-          <Text style={styles.convoyTeamStatusText} numberOfLines={1}>{connectionLabel}</Text>
-        </View>
       </View>
-      <View style={styles.convoyTeamMetaRow}>
+      <View style={[styles.convoyTeamMetaRow, compact ? styles.convoyTeamMetaRowCompact : null]}>
         <View style={styles.convoyTeamMetaCell}>
           <Text style={styles.convoyTeamMetaLabel}>Team</Text>
           <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
@@ -3262,36 +3977,34 @@ function DispatchConvoyTeamSetupCard({
           <Text style={styles.convoyTeamMetaLabel}>Sync</Text>
           <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>{teamStatusLabel}</Text>
         </View>
-        <View style={styles.convoyTeamMetaCell}>
-          <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
-          <Text style={[styles.convoyTeamMetaValue, emergencyCount > 0 ? styles.convoyTeamMetaValueAlert : null]} numberOfLines={1}>
-            {emergencyCount} active
-          </Text>
-        </View>
-      </View>
-      <View style={styles.convoyTeamActions}>
-        {canConnect ? (
+        {emergencyCellActive ? (
           <TouchableOpacity
-            style={styles.convoyTeamActionButton}
+            style={[styles.convoyTeamMetaCell, styles.convoyTeamMetaCellAction]}
             accessibilityRole="button"
-            accessibilityLabel="Connect team"
-            activeOpacity={0.82}
-            onPress={onConnect}
+            accessibilityLabel="Open active emergency GPS ping"
+            activeOpacity={0.78}
+            onPress={onOpenEmergencyPings}
           >
-            <Ionicons name="person-add-outline" size={13} color={TACTICAL.amber} />
-            <Text style={styles.convoyTeamActionText}>Connect</Text>
+            <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
+            <Animated.Text
+              style={[
+                styles.convoyTeamMetaValue,
+                styles.convoyTeamMetaValueAlert,
+                emergencyAlertActive ? { opacity: emergencyCountOpacity } : null,
+              ]}
+              numberOfLines={1}
+            >
+              {emergencyCount} active
+            </Animated.Text>
           </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity
-          style={styles.convoyTeamActionButton}
-          accessibilityRole="button"
-          accessibilityLabel="Open Dispatch profile"
-          activeOpacity={0.82}
-          onPress={onProfile}
-        >
-          <Ionicons name="person-circle-outline" size={13} color={TACTICAL.amber} />
-          <Text style={styles.convoyTeamActionText}>Profile</Text>
-        </TouchableOpacity>
+        ) : (
+          <View style={styles.convoyTeamMetaCell}>
+            <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
+            <Text style={[styles.convoyTeamMetaValue, emergencyCount > 0 ? styles.convoyTeamMetaValueAlert : null]} numberOfLines={1}>
+              {emergencyCount} active
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -3299,26 +4012,51 @@ function DispatchConvoyTeamSetupCard({
 
 function DispatchChannelButton({
   channel,
+  compact = false,
   availability,
   onPress,
 }: {
   channel: DispatchChannelSnapshot;
+  compact?: boolean;
   availability: DispatchChannelAvailability;
   onPress: (channel: DispatchChannelSnapshot) => void;
 }) {
   const disabled = !availability.enabled;
-  const tone = disabled
+  const isLiveSource = channel.sourceState === 'live_systems';
+  const isCachedSource = channel.sourceState === 'cached_last_known';
+  const isUnavailableSource = channel.sourceState === 'unavailable';
+  const isElevatedChannel = isDispatchChannelElevated(channel);
+  const isPrimaryChannel = isPrimaryDispatchChannel(channel) && isElevatedChannel;
+  const isSubduedChannel = !isElevatedChannel;
+  const sourceTone = isLiveSource
+    ? SEVERITY_TONE[channel.severity]
+    : isCachedSource
+      ? TACTICAL.amber
+      : TACTICAL.textMuted;
+  const tone = disabled && !isLiveSource && !isCachedSource
     ? TACTICAL.textMuted
-    : SEVERITY_TONE[channel.severity];
+    : sourceTone;
   const displayActionLabel = disabled
     ? availability.reason ?? 'Unavailable'
     : channel.actionLabel;
+  const compactActionLabel = compact && channel.id === 'sync' ? '' : displayActionLabel;
+  const sourceLabel = getSourceStateLabel(channel.sourceState);
+  const displaySourceLabel = isCachedSource ? channel.sourceLabel : sourceLabel;
 
   return (
     <TouchableOpacity
-      style={[styles.liveChip, disabled ? styles.liveChipDisabled : null]}
+      testID={`dispatch-channel-${channel.id}-${channel.sourceState}`}
+      style={[
+        styles.liveChip,
+        compact ? styles.liveChipCompact : null,
+        isPrimaryChannel ? styles.liveChipPrimary : null,
+        isLiveSource ? styles.liveChipSourceLive : null,
+        isCachedSource ? styles.liveChipSourceCached : null,
+        isSubduedChannel ? styles.liveChipSubdued : null,
+        disabled && isUnavailableSource ? styles.liveChipDisabled : null,
+      ]}
       accessibilityRole="button"
-      accessibilityLabel={`${channel.label}. ${channel.statusLabel}. ${channel.actionLabel}`}
+      accessibilityLabel={`${channel.label}. ${sourceLabel}. ${channel.statusLabel}. ${displayActionLabel}`}
       accessibilityState={{ disabled }}
       disabled={disabled}
       activeOpacity={disabled ? 1 : 0.78}
@@ -3329,16 +4067,68 @@ function DispatchChannelButton({
     >
       <ECSShellTexture />
       <View style={styles.channelTopRow}>
-        <Text style={[styles.liveChipLabel, disabled ? styles.liveChipTextDisabled : null]} numberOfLines={1}>{channel.label}</Text>
-        <View style={[styles.channelStatusDot, { backgroundColor: tone }]} />
+        <Text
+          style={[
+            styles.liveChipLabel,
+            compact ? styles.liveChipLabelCompact : null,
+            isSubduedChannel ? styles.liveChipTextSubdued : null,
+            isUnavailableSource ? styles.liveChipTextDisabled : null,
+          ]}
+          numberOfLines={1}
+        >
+          {channel.label}
+        </Text>
+        <View style={[styles.channelStatusWrap, isLiveSource ? styles.channelStatusWrapLive : null]}>
+          <View style={[styles.channelStatusDot, { backgroundColor: tone }]} />
+        </View>
       </View>
-      <Text style={[styles.liveChipValue, { color: tone }]} numberOfLines={1}>{channel.statusLabel}</Text>
-      <Text style={[styles.channelDetail, disabled ? styles.liveChipTextDisabled : null]} numberOfLines={1}>{channel.detail}</Text>
-      <Text style={[styles.channelActionLabel, disabled ? styles.channelActionLabelDisabled : null]} numberOfLines={1}>
-        {displayActionLabel}
+      <Text style={[styles.liveChipValue, compact ? styles.liveChipValueCompact : null, { color: tone }]} numberOfLines={1}>{channel.statusLabel}</Text>
+      <Text
+        style={[
+          styles.channelDetail,
+          compact ? styles.channelDetailCompact : null,
+          isSubduedChannel ? styles.liveChipTextSubdued : null,
+          isUnavailableSource ? styles.liveChipTextDisabled : null,
+        ]}
+        numberOfLines={1}
+      >
+        {channel.detail}
       </Text>
+      <View style={styles.channelFooterRow}>
+        <Text
+          style={[
+            styles.channelSourceLabel,
+            isLiveSource ? styles.channelSourceLabelLive : null,
+            isCachedSource ? styles.channelSourceLabelCached : null,
+            isSubduedChannel ? styles.channelSourceLabelSubdued : null,
+          ]}
+          numberOfLines={1}
+        >
+          {displaySourceLabel}
+        </Text>
+        {compactActionLabel ? (
+          <Text
+            style={[
+              styles.channelActionLabel,
+              isSubduedChannel ? styles.channelActionLabelSubdued : null,
+              disabled ? styles.channelActionLabelDisabled : null,
+            ]}
+            numberOfLines={1}
+          >
+            {compactActionLabel}
+          </Text>
+        ) : null}
+      </View>
     </TouchableOpacity>
   );
+}
+
+function isDispatchChannelElevated(channel: DispatchChannelSnapshot): boolean {
+  return channel.sourceState === 'live_systems' || channel.severity === 'critical' || channel.severity === 'warning';
+}
+
+function isPrimaryDispatchChannel(channel: DispatchChannelSnapshot): boolean {
+  return channel.id === 'route' || channel.id === 'sync';
 }
 
 function FeedSeparator() {
@@ -3451,22 +4241,18 @@ function EventRow({
 function EventDetailModal({
   event,
   meta,
-  submittingThreatActionKey,
   navigatingAssistEventId,
   onClose,
   onAction,
   onOpenDrilldown,
-  onThreatAction,
   onNavigateAssist,
 }: {
   event: DispatchEvent | null;
   meta: EventUiMeta | null;
-  submittingThreatActionKey: string | null;
   navigatingAssistEventId: string | null;
   onClose: () => void;
   onAction: (event: DispatchEvent, actionId: EventActionId) => void;
   onOpenDrilldown: (event: DispatchEvent) => void;
-  onThreatAction: (event: DispatchEvent, actionId: ThreatActionId) => void;
   onNavigateAssist: (event: DispatchEvent) => void;
 }) {
   const actions = event && meta ? getEventActions(event, meta) : [];
@@ -3481,6 +4267,77 @@ function EventDetailModal({
     ? `${detail.typeLabel} | ${isRecoveryCritical ? 'Recovery Critical' : detail.severityLabel}`
     : undefined;
   const recoverySyncLabel = event ? getRecoveryCadSyncLabel(event) : null;
+
+  if (event && meta && detail && isRecoveryCritical) {
+    return (
+      <ECSModalShell
+        visible
+        onClose={onClose}
+        title="Active GPS Ping"
+        subtitle={recoverySyncLabel ? `Team sync: ${recoverySyncLabel}` : detailSubtitle}
+        icon="locate-outline"
+        overlayClass="workflow"
+        stackBehavior="replace"
+        maxWidth={980}
+        maxHeightFraction={1}
+        minHeightFraction={1}
+        scrollable={false}
+        dismissOnBackdrop={false}
+        allowSwipeDismiss={false}
+        showHandle={false}
+        bodyStyle={styles.recoveryAssistModalBody}
+      >
+        <View style={styles.recoveryAssistScreen}>
+          <View style={styles.recoveryAssistSummaryRow}>
+            <ModalMetaItem label="Priority" value="Recovery Critical" tone={TACTICAL.danger} />
+            <ModalMetaItem
+              label="Accuracy"
+              value={getRecoveryLocationAccuracyText(event) ?? 'Not provided'}
+              tone={TACTICAL.text}
+            />
+            <ModalMetaItem
+              label="GPS Fix"
+              value={event.location?.timestamp ? formatRecoveryLocationTimestamp(event.location.timestamp) ?? 'Provided' : 'Not provided'}
+            />
+            {senderLabel ? (
+              <ModalMetaItem label="Sent By" value={senderLabel} />
+            ) : null}
+          </View>
+
+          <View style={styles.recoveryAssistMapShell}>
+            <RecoveryAssistPinDetail event={event} detail={detail} large />
+          </View>
+
+          <View style={styles.recoveryAssistBottomBar}>
+            <View style={styles.recoveryAssistBrief}>
+              <Text style={styles.modalSectionLabel}>Active GPS Ping</Text>
+              <Text style={styles.recoveryAssistBriefText} numberOfLines={2}>
+                {detail.body}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.detailActionButton,
+                styles.navigateAssistButton,
+                styles.recoveryAssistPrimaryAction,
+                navigateAssistSubmitting ? styles.commandButtonDisabled : null,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Proceed to active ping"
+              disabled={navigateAssistSubmitting}
+              activeOpacity={navigateAssistSubmitting ? 1 : 0.78}
+              onPress={() => onNavigateAssist(event)}
+            >
+              <Ionicons name="navigate-outline" size={16} color={TACTICAL.danger} />
+              <Text style={[styles.detailActionText, styles.navigateAssistText]}>
+                {navigateAssistSubmitting ? 'Starting Route' : 'Proceed to Active Ping'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ECSModalShell>
+    );
+  }
 
   return (
       <ECSModalShell
@@ -3609,42 +4466,6 @@ function EventDetailModal({
           <View style={styles.actionsPanel}>
             <Text style={styles.modalSectionLabel}>Available Actions</Text>
             <View style={styles.actionGrid}>
-              {isRecoveryCritical ? (
-                <>
-                  <TouchableOpacity
-                    style={[
-                      styles.detailActionButton,
-                      styles.navigateAssistButton,
-                      navigateAssistSubmitting ? styles.commandButtonDisabled : null,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Navigate Assist"
-                    disabled={navigateAssistSubmitting}
-                    onPress={() => onNavigateAssist(event)}
-                  >
-                    <Text style={[styles.detailActionText, styles.navigateAssistText]}>
-                      {navigateAssistSubmitting ? 'Starting Assist' : 'Navigate Assist'}
-                    </Text>
-                  </TouchableOpacity>
-                  {(['ping_threat', 'mark_hazard', 'request_assist'] as ThreatActionId[]).map((actionId) => {
-                    const disabled = submittingThreatActionKey != null;
-                    return (
-                      <TouchableOpacity
-                        key={actionId}
-                        style={[styles.detailActionButton, disabled ? styles.commandButtonDisabled : null]}
-                        accessibilityRole="button"
-                        accessibilityLabel={THREAT_ACTION_LABELS[actionId]}
-                        disabled={disabled}
-                        onPress={() => onThreatAction(event, actionId)}
-                      >
-                        <Text style={styles.detailActionText}>
-                          {disabled ? 'Submitting' : THREAT_ACTION_LABELS[actionId]}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              ) : null}
               {showDrilldown ? (
                 <TouchableOpacity
                   style={[styles.detailActionButton, styles.mapActionButton]}
@@ -3734,7 +4555,7 @@ function ThreatDrilldownModal({
       allowSwipeDismiss={false}
       bodyStyle={styles.threatModalBody}
     >
-      <View style={styles.threatScreen}>
+        <View style={styles.threatScreen}>
         <View style={styles.threatMapPanel}>
           <ThreatMapSurface event={event} geometry={geometry} />
         </View>
@@ -3769,12 +4590,12 @@ function ThreatDrilldownModal({
                     navigateAssistSubmitting ? styles.commandButtonDisabled : null,
                   ]}
                   accessibilityRole="button"
-                  accessibilityLabel="Navigate to Recovery Request"
+                  accessibilityLabel="Proceed to active ping"
                   disabled={navigateAssistSubmitting}
                   onPress={() => onNavigateAssist(event)}
                 >
                   <Text style={[styles.threatActionText, styles.navigateAssistText]}>
-                    {navigateAssistSubmitting ? 'Starting Navigation' : 'Navigate to Recovery Request'}
+                    {navigateAssistSubmitting ? 'Starting Route' : 'Proceed to Active Ping'}
                   </Text>
                 </TouchableOpacity>
               ) : (
@@ -3815,9 +4636,11 @@ function ThreatDrilldownModal({
 function RecoveryAssistPinDetail({
   event,
   detail,
+  large = false,
 }: {
   event: DispatchEvent;
   detail: ReturnType<typeof createDispatchEventDetailPresentation>;
+  large?: boolean;
 }) {
   const geometry = useMemo(() => getThreatMapGeometry(event), [event]);
   const coordinateText = getRecoveryCoordinateText(event) ?? detail.coordinatesText;
@@ -3828,23 +4651,23 @@ function RecoveryAssistPinDetail({
   const hazardType = getRecoveryHazardTypeLabel(event) ?? 'Recovery';
 
   return (
-    <View style={styles.recoveryPinPanel}>
+    <View style={[styles.recoveryPinPanel, large ? styles.recoveryPinPanelLarge : null]}>
       <View style={styles.recoveryPinHeader}>
         <View style={styles.recoveryPinHeaderCopy}>
           <Text style={styles.recoveryPinEyebrow}>PIN LOCATION</Text>
           <Text style={styles.recoveryPinTitle} numberOfLines={1}>
-            Recovery Assist Drop
+            Active GPS Ping
           </Text>
         </View>
         <Text style={styles.recoveryPinStatus} numberOfLines={1}>Recovery Critical</Text>
       </View>
 
       {geometry.center ? (
-        <View style={styles.recoveryPinMapPreview}>
+        <View style={[styles.recoveryPinMapPreview, large ? styles.recoveryPinMapPreviewLarge : null]}>
           <ThreatMapSurface event={event} geometry={geometry} />
         </View>
       ) : (
-        <View style={styles.recoveryPinFallback}>
+        <View style={[styles.recoveryPinFallback, large ? styles.recoveryPinFallbackLarge : null]}>
           <Text style={styles.recoveryPinFallbackTitle}>Pin location unavailable</Text>
           <Text style={styles.recoveryPinFallbackCopy}>
             This recovery CAD event does not include a valid GPS coordinate.
@@ -4565,6 +5388,7 @@ function ExpeditionChannelInvitePanel({
   canManageInvite,
   showToast,
   onClose,
+  onOpenJoin,
 }: {
   visible: boolean;
   expedition: ExpeditionRecord | null;
@@ -4574,6 +5398,7 @@ function ExpeditionChannelInvitePanel({
   canManageInvite: boolean;
   showToast?: (message: string) => void;
   onClose: () => void;
+  onOpenJoin: () => void;
 }) {
   const [approvalRequired, setApprovalRequired] = useState(true);
   const [inviteState, setInviteState] = useState<InvitePanelState | null>(null);
@@ -4711,7 +5536,7 @@ function ExpeditionChannelInvitePanel({
   const handleEnableTeamMode = useCallback(() => {
     if (!expedition) return;
     createLocalTeamForExpedition(getExpeditionInviteLabel(expedition, null));
-    showToast?.('Team channel created.');
+    showToast?.('Convoy channel created.');
   }, [createLocalTeamForExpedition, expedition, showToast]);
 
   const copyText = useCallback(async (value: string, label: string) => {
@@ -4735,8 +5560,13 @@ function ExpeditionChannelInvitePanel({
 
     try {
       await Share.share({
-        message: `${expeditionLabel}\nJoin Code: ${invite.joinCode}\n${invite.inviteLink}`,
-        title: 'Expedition Channel Invite',
+        message: [
+          `${expeditionLabel} Convoy Invite`,
+          `Join Code: ${invite.joinCode}`,
+          invite.inviteLink,
+          'Open the link or enter the code in ECS Dispatch > Convoy.',
+        ].join('\n'),
+        title: 'ECS Convoy Invite',
       });
     } catch {
       showToast?.('Invite share failed.');
@@ -4793,7 +5623,7 @@ function ExpeditionChannelInvitePanel({
     <DispatchActionPanel
       visible={visible}
       onClose={onClose}
-      title="Expedition Channel Invite"
+      title="Convoy Setup"
       icon="people-circle-outline"
     >
       <View style={styles.commandForm}>
@@ -4802,23 +5632,32 @@ function ExpeditionChannelInvitePanel({
             <Ionicons name="people-circle-outline" size={21} color={TACTICAL.amber} />
           </View>
           <View style={styles.profilePreviewCopy}>
-            <Text style={styles.profilePreviewEyebrow}>EXPEDITION CHANNEL</Text>
+            <Text style={styles.profilePreviewEyebrow}>CONVOY CHANNEL</Text>
             <Text style={styles.profilePreviewName} numberOfLines={1}>{expeditionLabel}</Text>
             <Text style={styles.profilePreviewRig} numberOfLines={2}>
               {invite
-                ? 'Connect team members to this expedition.'
+                ? 'Invite vehicles into this convoy and review join requests.'
                 : expedition
-                  ? 'Switch this expedition to Team mode to invite members.'
-                  : 'No active expedition selected.'}
+                  ? 'Create a team channel for this expedition to invite vehicles.'
+                  : 'Start a convoy or join one with a host-provided code.'}
             </Text>
           </View>
+          <TouchableOpacity
+            style={styles.inviteMiniButton}
+            accessibilityRole="button"
+            accessibilityLabel="Join existing convoy"
+            onPress={onOpenJoin}
+          >
+            <Ionicons name="log-in-outline" size={13} color={TACTICAL.text} />
+            <Text style={styles.inviteMiniButtonText}>Join</Text>
+          </TouchableOpacity>
         </View>
 
         {!expedition ? (
           <View style={styles.createExpeditionPanel}>
-            <Text style={styles.modalSectionLabel}>Create Expedition</Text>
+            <Text style={styles.modalSectionLabel}>Start Convoy</Text>
             <ProfileTextInput
-              label="Expedition Name"
+              label="Convoy Name"
               value={createForm.expeditionName}
               onChangeText={(value) => updateCreateForm('expeditionName', value)}
             />
@@ -4885,9 +5724,9 @@ function ExpeditionChannelInvitePanel({
               onChangeText={(value) => updateCreateForm('commsNotes', value)}
             />
             <OptionGroup
-              label="Privacy / Join Mode"
+              label="Invite Mode"
               options={[
-                { label: 'Approval Required', value: 'approval_required' },
+                { label: 'Host Approval', value: 'approval_required' },
                 { label: 'Open Join', value: 'open' },
               ]}
               value={createForm.joinMode}
@@ -4899,11 +5738,11 @@ function ExpeditionChannelInvitePanel({
             <TouchableOpacity
               style={[styles.commandFooterButton, styles.commandSubmitButton, creatingExpedition ? styles.commandButtonDisabled : null]}
               accessibilityRole="button"
-              accessibilityLabel="Create expedition"
+              accessibilityLabel="Start convoy"
               disabled={creatingExpedition}
               onPress={handleCreateExpedition}
             >
-              <Text style={styles.commandSubmitText}>{creatingExpedition ? 'Creating' : 'Create Expedition'}</Text>
+              <Text style={styles.commandSubmitText}>{creatingExpedition ? 'Starting' : 'Start Convoy'}</Text>
             </TouchableOpacity>
           </View>
         ) : invite && status ? (
@@ -4917,6 +5756,37 @@ function ExpeditionChannelInvitePanel({
                 <View style={[styles.connectionDot, { backgroundColor: statusTone }]} />
                 <Text style={[styles.inviteStatusText, { color: statusTone }]}>{status.toUpperCase()}</Text>
               </View>
+            </View>
+
+            <View style={styles.inviteMethodGrid}>
+              <TouchableOpacity
+                style={styles.inviteMethodButton}
+                accessibilityRole="button"
+                accessibilityLabel="Share convoy invite by text or email"
+                onPress={shareInvite}
+              >
+                <Ionicons name="chatbubbles-outline" size={16} color={TACTICAL.amber} />
+                <View style={styles.inviteMethodCopy}>
+                  <Text style={styles.invitePlaceholderTitle}>Text / Email / Nearby</Text>
+                  <Text style={styles.invitePlaceholderText} numberOfLines={2}>
+                    Use the device share sheet to send the invite through any available channel.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.inviteMethodButton}
+                accessibilityRole="button"
+                accessibilityLabel="Join convoy by code"
+                onPress={onOpenJoin}
+              >
+                <Ionicons name="keypad-outline" size={16} color={TACTICAL.amber} />
+                <View style={styles.inviteMethodCopy}>
+                  <Text style={styles.invitePlaceholderTitle}>Join By Code</Text>
+                  <Text style={styles.invitePlaceholderText} numberOfLines={2}>
+                    Other users can enter the join code from Dispatch on their device.
+                  </Text>
+                </View>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.inviteValueCard}>
@@ -4970,9 +5840,9 @@ function ExpeditionChannelInvitePanel({
               <View style={styles.invitePlaceholderIcon}>
                 <Ionicons name="qr-code-outline" size={19} color={TACTICAL.textMuted} />
               </View>
-              <Text style={styles.invitePlaceholderTitle}>QR Code</Text>
+              <Text style={styles.invitePlaceholderTitle}>QR Handoff</Text>
               <Text style={styles.invitePlaceholderText}>
-                QR display unavailable until QR renderer is configured.
+                QR display needs the QR renderer. Use share link or join code in this build.
               </Text>
             </View>
 
@@ -4980,7 +5850,7 @@ function ExpeditionChannelInvitePanel({
               <View style={styles.invitePlaceholderCopy}>
                 <Text style={styles.invitePlaceholderTitle}>Approval Required</Text>
                 <Text style={styles.invitePlaceholderText}>
-                  Host approval is required before new members join this expedition.
+                  Host approval is required before new vehicles join this convoy.
                 </Text>
               </View>
               <Switch
@@ -5047,22 +5917,33 @@ function ExpeditionChannelInvitePanel({
             </View>
             <View style={styles.invitePlaceholderCopy}>
               <Text style={styles.invitePlaceholderTitle}>
-                {expedition ? 'Team mode required' : 'No active expedition selected'}
+                {expedition ? 'Convoy channel required' : 'No active convoy selected'}
               </Text>
               <Text style={styles.invitePlaceholderText}>
                 {expedition
-                  ? 'Switch this expedition to Team mode to invite members.'
-                  : 'Start or select an active expedition before creating an Expedition Channel invite.'}
+                  ? 'Create a convoy channel to invite members.'
+                  : 'Start a convoy or join an existing convoy with a host code.'}
               </Text>
               {expedition ? (
                 <TouchableOpacity
                   style={styles.inviteMiniButton}
                   accessibilityRole="button"
-                  accessibilityLabel="Create team channel"
+                  accessibilityLabel="Create convoy channel"
                   onPress={handleEnableTeamMode}
                 >
                   <Ionicons name="people-outline" size={13} color={TACTICAL.text} />
-                  <Text style={styles.inviteMiniButtonText}>Create Team Channel</Text>
+                  <Text style={styles.inviteMiniButtonText}>Create Convoy Channel</Text>
+                </TouchableOpacity>
+              ) : null}
+              {!expedition ? (
+                <TouchableOpacity
+                  style={styles.inviteMiniButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Join existing convoy by code"
+                  onPress={onOpenJoin}
+                >
+                  <Ionicons name="log-in-outline" size={13} color={TACTICAL.text} />
+                  <Text style={styles.inviteMiniButtonText}>Join Existing Convoy</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -5219,16 +6100,73 @@ const styles = StyleSheet.create({
     minHeight: 0,
     position: 'relative',
     paddingHorizontal: 10,
-    paddingTop: 6,
-    paddingBottom: 8,
-    gap: 7,
+    paddingTop: 4,
+    paddingBottom: 4,
+    gap: 5,
+  },
+  rootLandscape: {
+    paddingHorizontal: 8,
+    paddingTop: 7,
+    paddingBottom: 0,
+    gap: 3,
+  },
+  landscapeTitleBar: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    paddingHorizontal: 2,
+  },
+  landscapeTitleCenter: {
+    position: 'absolute',
+    left: 72,
+    right: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  landscapeTopRow: {
+    flex: 0,
+    minHeight: 126,
+    maxHeight: 148,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 6,
+  },
+  landscapeSetupRail: {
+    flex: 0.86,
+    minWidth: 0,
+    minHeight: 0,
+    gap: 4,
+  },
+  landscapeCommandRail: {
+    flex: 1.14,
+    minWidth: 270,
+    minHeight: 0,
+    alignSelf: 'stretch',
+    gap: 4,
+  },
+  landscapeDockRevealButton: {
+    width: 28,
+    height: 24,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}66`,
+    backgroundColor: 'rgba(5,8,10,0.84)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerStrip: {
-    minHeight: 44,
+    minHeight: 38,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  headerStripLandscape: {
+    minHeight: 24,
+    justifyContent: 'flex-end',
+    gap: 0,
   },
   headerCopy: {
     flex: 1,
@@ -5237,7 +6175,77 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
+    gap: 6,
+    flexShrink: 0,
+  },
+  headerActionsLandscape: {
+    gap: 4,
+    flex: 1,
+    flexShrink: 1,
+    justifyContent: 'flex-end',
+  },
+  headerUtilityButton: {
+    minHeight: 30,
+    maxWidth: 118,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderRadius: 7,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    paddingHorizontal: 8,
+  },
+  headerUtilityButtonLandscape: {
+    flex: 1,
+    minHeight: 24,
+    minWidth: 0,
+    maxWidth: 110,
+    gap: 2,
+    borderRadius: 6,
+    paddingHorizontal: 5,
+  },
+  headerConvoyButton: {
+    borderColor: `${TACTICAL.amber}55`,
+    backgroundColor: `${TACTICAL.amber}10`,
+  },
+  headerEndConvoyButton: {
+    borderColor: `${TACTICAL.danger}66`,
+    backgroundColor: `${TACTICAL.danger}12`,
+  },
+  headerLeaveConvoyButton: {
+    borderColor: `${TACTICAL.danger}55`,
+    backgroundColor: `${TACTICAL.danger}0F`,
+  },
+  headerPingButton: {
+    borderColor: `${TACTICAL.danger}55`,
+    backgroundColor: `${TACTICAL.danger}10`,
+  },
+  headerPingButtonCancel: {
+    borderColor: `${TACTICAL.amber}88`,
+    backgroundColor: `${TACTICAL.amber}16`,
+  },
+  headerUtilityButtonText: {
+    color: TACTICAL.text,
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  headerUtilityButtonTextLandscape: {
+    fontSize: 6.8,
+    letterSpacing: 0.16,
+    textAlign: 'center',
+  },
+  headerPingButtonText: {
+    color: TACTICAL.danger,
+  },
+  headerPingButtonCancelText: {
+    color: TACTICAL.amber,
+  },
+  headerConvoyLifecycleButtonText: {
+    color: TACTICAL.danger,
   },
   titleRow: {
     flexDirection: 'row',
@@ -5252,12 +6260,20 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     flexShrink: 0,
   },
+  titleLandscape: {
+    fontSize: 16,
+    letterSpacing: 1.05,
+  },
   channel: {
     color: TACTICAL.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
+  },
+  channelLandscape: {
+    fontSize: 7,
+    letterSpacing: 0.35,
   },
   profileButton: {
     minHeight: 30,
@@ -5270,12 +6286,27 @@ const styles = StyleSheet.create({
     backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
     paddingHorizontal: 8,
   },
+  profileButtonLandscape: {
+    flex: 1,
+    minHeight: 24,
+    minWidth: 0,
+    maxWidth: 110,
+    gap: 2,
+    borderRadius: 6,
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
   profileButtonText: {
     color: TACTICAL.text,
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
+  },
+  profileButtonTextLandscape: {
+    fontSize: 6.8,
+    letterSpacing: 0.16,
+    textAlign: 'center',
   },
   connectionPill: {
     flexDirection: 'row',
@@ -5287,10 +6318,26 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
   },
+  connectionPillLandscape: {
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
+    maxWidth: 110,
+    minHeight: 24,
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
   connectionDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
+  },
+  connectionDotLandscape: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
   },
   connectionText: {
     color: TACTICAL.text,
@@ -5298,10 +6345,31 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.1,
   },
+  connectionTextLandscape: {
+    minWidth: 0,
+    fontSize: 7,
+    letterSpacing: 0.2,
+    textAlign: 'center',
+  },
   liveStrip: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 5,
+  },
+  liveStripPortrait: {
+    justifyContent: 'space-between',
+    rowGap: 5,
+    columnGap: 0,
+  },
+  liveStripLandscape: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'space-between',
+    rowGap: 4,
+    columnGap: 0,
+    paddingHorizontal: 2,
+  },
+  landscapeSetupTopSpacer: {
+    minHeight: 24,
   },
   rolloutNotice: {
     minHeight: 32,
@@ -5328,21 +6396,36 @@ const styles = StyleSheet.create({
   },
   convoyTeamCard: {
     position: 'relative',
-    minHeight: 104,
+    minHeight: 68,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
+    borderColor: `${TACTICAL.amber}3D`,
     borderRadius: 9,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    backgroundColor: 'rgba(7,11,14,0.94)',
     paddingHorizontal: 10,
-    paddingVertical: 9,
+    paddingVertical: 7,
     overflow: 'hidden',
-    gap: 8,
+    gap: 7,
+    shadowColor: TACTICAL.amber,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 1,
+  },
+  convoyTeamCardCompact: {
+    minHeight: 48,
+    marginHorizontal: 2,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    gap: 4,
   },
   convoyTeamHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  convoyTeamHeaderCompact: {
+    gap: 6,
   },
   convoyTeamTitleBlock: {
     flex: 1,
@@ -5354,6 +6437,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.1,
     textTransform: 'uppercase',
+  },
+  convoyTeamEyebrowCompact: {
+    fontSize: 6.8,
+    letterSpacing: 0.65,
   },
   convoyTeamTitle: {
     color: TACTICAL.text,
@@ -5383,15 +6470,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 7,
   },
+  convoyTeamMetaRowCompact: {
+    gap: 4,
+  },
   convoyTeamMetaCell: {
     flex: 1,
     minWidth: 0,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.divider,
+    borderColor: 'rgba(139,148,158,0.18)',
     borderRadius: 7,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(0,0,0,0.24)',
     paddingHorizontal: 8,
     paddingVertical: 6,
+  },
+  convoyTeamMetaCellAction: {
+    borderColor: `${TACTICAL.danger}77`,
+    backgroundColor: `${TACTICAL.danger}10`,
   },
   convoyTeamMetaLabel: {
     color: TACTICAL.textMuted,
@@ -5434,7 +6528,7 @@ const styles = StyleSheet.create({
   },
   liveChip: {
     width: '32%',
-    minHeight: 62,
+    minHeight: 50,
     borderWidth: 1,
     borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
     backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
@@ -5444,13 +6538,42 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     overflow: 'hidden',
   },
+  liveChipCompact: {
+    width: '32%',
+    minHeight: 32,
+    borderRadius: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+  },
+  liveChipPrimary: {
+    borderColor: `${TACTICAL.amber}55`,
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  liveChipSourceLive: {
+    borderColor: `${TACTICAL.amber}72`,
+    backgroundColor: 'rgba(196,138,44,0.105)',
+    shadowColor: TACTICAL.amber,
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 2,
+  },
+  liveChipSourceCached: {
+    borderColor: `${TACTICAL.amber}3F`,
+    backgroundColor: 'rgba(196,138,44,0.055)',
+  },
+  liveChipSubdued: {
+    borderColor: 'rgba(139,148,158,0.13)',
+    backgroundColor: 'rgba(7,10,12,0.62)',
+  },
   liveChipDisabled: {
-    opacity: 0.52,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    opacity: 0.64,
   },
   liveChipTextDisabled: {
     color: TACTICAL.textMuted,
+  },
+  liveChipTextSubdued: {
+    color: 'rgba(183,190,196,0.64)',
   },
   channelTopRow: {
     flexDirection: 'row',
@@ -5463,6 +6586,16 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
   },
+  channelStatusWrap: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelStatusWrapLive: {
+    backgroundColor: `${TACTICAL.amber}24`,
+  },
   liveChipLabel: {
     color: TACTICAL.textMuted,
     fontSize: 8,
@@ -5470,10 +6603,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
+  liveChipLabelCompact: {
+    fontSize: 6.4,
+    letterSpacing: 0.35,
+  },
   liveChipValue: {
     fontSize: 11,
     fontWeight: '900',
     marginTop: 1,
+  },
+  liveChipValueCompact: {
+    fontSize: 8.5,
+    marginTop: 0,
   },
   channelDetail: {
     color: TACTICAL.textMuted,
@@ -5481,19 +6622,51 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 1,
   },
+  channelDetailCompact: {
+    fontSize: 6.6,
+    marginTop: 0,
+  },
+  channelFooterRow: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 5,
+    marginTop: 2,
+  },
+  channelSourceLabel: {
+    flexShrink: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 6.8,
+    fontWeight: '900',
+    letterSpacing: 0.42,
+    textTransform: 'uppercase',
+  },
+  channelSourceLabelLive: {
+    color: TACTICAL.amber,
+  },
+  channelSourceLabelCached: {
+    color: `${TACTICAL.amber}CC`,
+  },
+  channelSourceLabelSubdued: {
+    color: 'rgba(183,190,196,0.58)',
+  },
   channelActionLabel: {
     color: TACTICAL.amber,
     fontSize: 7,
     fontWeight: '900',
     letterSpacing: 0.45,
-    marginTop: 2,
     textTransform: 'uppercase',
+    flexShrink: 0,
   },
   channelActionLabelDisabled: {
     color: TACTICAL.textMuted,
   },
+  channelActionLabelSubdued: {
+    color: 'rgba(183,190,196,0.62)',
+  },
   advisoryLine: {
-    minHeight: 34,
+    minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
@@ -5503,8 +6676,43 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingLeft: 9,
     paddingRight: 5,
-    paddingVertical: 6,
+    paddingVertical: 5,
     overflow: 'hidden',
+  },
+  advisoryLinePulseActive: {
+    borderColor: `${TACTICAL.danger}66`,
+    backgroundColor: `${TACTICAL.danger}10`,
+  },
+  advisoryTraceRail: {
+    position: 'absolute',
+    left: 40,
+    right: 36,
+    bottom: 4,
+    height: 8,
+    justifyContent: 'center',
+    opacity: 0.72,
+  },
+  advisoryTraceLine: {
+    height: 1,
+    backgroundColor: `${TACTICAL.danger}50`,
+  },
+  advisoryTraceBeat: {
+    position: 'absolute',
+    left: '42%',
+    width: 5,
+    height: 8,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: TACTICAL.danger,
+  },
+  advisoryLineLandscape: {
+    minHeight: 24,
+    marginHorizontal: 2,
+    gap: 5,
+    borderRadius: 7,
+    paddingLeft: 7,
+    paddingRight: 4,
+    paddingVertical: 3,
   },
   advisoryLabel: {
     color: TACTICAL.amber,
@@ -5513,11 +6721,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     textTransform: 'uppercase',
   },
+  advisoryLabelLandscape: {
+    fontSize: 7,
+    letterSpacing: 0.35,
+  },
   advisoryText: {
     flex: 1,
     color: TACTICAL.text,
     fontSize: 11,
     fontWeight: '800',
+  },
+  advisoryTextLandscape: {
+    fontSize: 8,
   },
   advisoryDismiss: {
     width: 28,
@@ -5534,8 +6749,15 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     overflow: 'hidden',
   },
+  feedPanelLandscapeMap: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 10,
+    marginBottom: 0,
+    alignSelf: 'stretch',
+  },
   feedHeader: {
-    minHeight: 38,
+    minHeight: 32,
     paddingHorizontal: 9,
     flexDirection: 'row',
     alignItems: 'center',
@@ -5544,16 +6766,27 @@ const styles = StyleSheet.create({
     borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
     backgroundColor: ECS_POPUP_SURFACE_DARK.headerBg,
   },
+  feedHeaderLandscape: {
+    minHeight: 24,
+    paddingHorizontal: 8,
+  },
   feedTitle: {
     color: TACTICAL.text,
     fontSize: 12,
     fontWeight: '900',
+  },
+  feedTitleLandscape: {
+    fontSize: 10,
   },
   feedSource: {
     color: TACTICAL.textMuted,
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 0.8,
+  },
+  feedSourceLandscape: {
+    fontSize: 6.8,
+    letterSpacing: 0.5,
   },
   feedHeaderActions: {
     flexDirection: 'row',
@@ -5595,6 +6828,155 @@ const styles = StyleSheet.create({
   },
   recoveryFeedButtonText: {
     color: TACTICAL.danger,
+  },
+  dispatchRecoveryPanel: {
+    flex: 0.78,
+    minHeight: 150,
+    borderWidth: 1,
+    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
+    borderRadius: 9,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    overflow: 'hidden',
+  },
+  dispatchRecoveryHeader: {
+    minHeight: 36,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
+    backgroundColor: ECS_POPUP_SURFACE_DARK.headerBg,
+  },
+  dispatchRecoveryTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  dispatchRecoveryEyebrow: {
+    color: TACTICAL.danger,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  dispatchRecoveryTitle: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  convoyTeamTitleCompact: {
+    fontSize: 10.5,
+    lineHeight: 12,
+  },
+  dispatchRecoveryCount: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  dispatchRecoveryActions: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
+  },
+  dispatchRecoveryPrimaryButton: {
+    flex: 1,
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.danger}77`,
+    borderRadius: 999,
+    backgroundColor: `${TACTICAL.danger}16`,
+    paddingHorizontal: 10,
+  },
+  dispatchRecoveryPrimaryText: {
+    color: TACTICAL.danger,
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  dispatchRecoverySecondaryButton: {
+    flex: 1,
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}44`,
+    borderRadius: 999,
+    backgroundColor: `${TACTICAL.amber}10`,
+    paddingHorizontal: 10,
+  },
+  dispatchRecoverySecondaryText: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  dispatchRecoveryFeed: {
+    flex: 1,
+    minHeight: 0,
+  },
+  dispatchRecoveryEventRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
+  },
+  dispatchRecoveryEventIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.danger}66`,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${TACTICAL.danger}14`,
+  },
+  dispatchRecoveryEventCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  dispatchRecoveryEventTitle: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  dispatchRecoveryEventMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  dispatchRecoveryEmptyRow: {
+    flex: 1,
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  dispatchRecoveryEmptyText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 14,
   },
   feedList: {
     flex: 1,
@@ -5816,6 +7198,54 @@ const styles = StyleSheet.create({
   modalStack: {
     gap: 10,
   },
+  recoveryAssistModalBody: {
+    flex: 1,
+    minHeight: 0,
+    padding: 10,
+  },
+  recoveryAssistScreen: {
+    flex: 1,
+    minHeight: 0,
+    gap: 10,
+  },
+  recoveryAssistSummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  recoveryAssistMapShell: {
+    flex: 1,
+    minHeight: 260,
+  },
+  recoveryAssistBottomBar: {
+    minHeight: 74,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    borderRadius: 9,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    padding: 9,
+  },
+  recoveryAssistBrief: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    gap: 5,
+  },
+  recoveryAssistBriefText: {
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  recoveryAssistPrimaryAction: {
+    flexBasis: 174,
+    minHeight: 54,
+    flexDirection: 'row',
+    gap: 7,
+  },
   modalMetaGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -5946,11 +7376,16 @@ const styles = StyleSheet.create({
     color: TACTICAL.danger,
   },
   recoveryPinPanel: {
+    flexShrink: 1,
     borderWidth: 1,
     borderColor: `${TACTICAL.danger}55`,
     borderRadius: 9,
     backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
     overflow: 'hidden',
+  },
+  recoveryPinPanelLarge: {
+    flex: 1,
+    minHeight: 0,
   },
   recoveryPinHeader: {
     minHeight: 46,
@@ -5993,6 +7428,11 @@ const styles = StyleSheet.create({
     minHeight: 148,
     backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
   },
+  recoveryPinMapPreviewLarge: {
+    flex: 1,
+    height: undefined,
+    minHeight: 240,
+  },
   recoveryPinFallback: {
     minHeight: 132,
     alignItems: 'center',
@@ -6000,6 +7440,10 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 18,
     backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+  },
+  recoveryPinFallbackLarge: {
+    flex: 1,
+    minHeight: 240,
   },
   recoveryPinFallbackTitle: {
     color: TACTICAL.text,
@@ -6456,6 +7900,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  inviteMethodGrid: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  inviteMethodButton: {
+    flex: 1,
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    borderRadius: 9,
+    backgroundColor: 'rgba(212,160,23,0.07)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  inviteMethodCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   inviteMiniButton: {
     minHeight: 28,

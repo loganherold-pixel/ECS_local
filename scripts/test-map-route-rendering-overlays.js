@@ -25,6 +25,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -191,6 +202,19 @@ assert(
   mapRendererSource.includes('function applyRouteRenderMode(mode)') &&
     mapRendererSource.includes("normalizedMode === 'preview' ? [1.4, 1.2] : [1, 0]"),
   'MapRenderer should visually distinguish preview route lines from active route lines.',
+);
+assert(
+  mapRendererSource.includes('function promoteRouteGuidanceLayers()') &&
+    mapRendererSource.includes("'route-progress-layer'") &&
+    mapRendererSource.includes('promoteRouteGuidanceLayers();'),
+  'MapRenderer should re-promote active route guidance layers after camp/search overlay updates.',
+);
+assert(
+  mapRendererSource.includes('function markerPayloadChanged(key, items)') &&
+    mapRendererSource.includes("markerPayloadChanged('campScoutPins'") &&
+    mapRendererSource.includes('buildCampLayerHash') &&
+    mapRendererSource.includes('buildFeatureCollectionSummaryHash'),
+  'MapRenderer should avoid re-rendering unchanged camp pins or stringifying full camp GeoJSON on every active-guidance update.',
 );
 assert(
   navigateSource.includes('routeRenderMode={displayedRouteRenderMode}') &&

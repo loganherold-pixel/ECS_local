@@ -121,17 +121,17 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     ),
     check(
       'dashboard_command_center_is_available_without_convoy_widget_menu',
-      'Dashboard command center hosts implemented command modes, falls back safely, and no longer exposes the Convoy widget/menu surface.',
+      'Dashboard command center hosts only the Attitude and 3D Navigation command menu modes while fixed dashboard widgets remain outside the selector.',
       widgetRenderers.includes('CommandCenterHost') &&
         widgetRenderers.includes('isCommandCenterModuleId(selectedCommandModule)') &&
         widgetRenderers.includes('commandCenterHostSelected') &&
         commandRegistry.includes('COMMAND_CENTER_IMPLEMENTED_MODES') &&
         commandRegistry.includes("'attitude'") &&
         commandRegistry.includes("'threeDNavigation'") &&
-        commandRegistry.includes("'recoveryHazardCompass'") &&
-        commandRegistry.includes("'trailDecision'") &&
-        commandRegistry.includes("'campScout'") &&
-        commandRegistry.includes("'expeditionReadiness'") &&
+        !commandRegistry.includes("component: RecoveryHazardCompassWidget") &&
+        !commandRegistry.includes("component: TrailDecisionCommandWidget") &&
+        !commandRegistry.includes("component: CampScoutCommandWidget") &&
+        !commandRegistry.includes("component: ExpeditionReadinessCommand") &&
         commandRegistry.includes('resolveCommandCenterMode') &&
         commandRegistry.includes('getSelectableCommandCenterModes') &&
         commandRegistry.includes("fallbackId: 'attitude'") &&
@@ -149,7 +149,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
         relPath(root, paths.commandHost),
         relPath(root, paths.commandSelector),
       ],
-      ['Capture Android command-center switching evidence for Attitude, 3D Nav, Recovery, Trail, Camp, Readiness, unavailable fallback, and Dispatch-owned Convoy.'],
+      ['Capture Android command-center switching evidence for Attitude, 3D Nav, unavailable fallback, and Dispatch-owned Convoy.'],
     ),
     check(
       'dashboard_header_brief_and_detail_surfaces_use_shared_shells',
@@ -222,7 +222,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     notes: [
       'This gate separates Dashboard widget implementation readiness from Android visual, source-state, rotation, and owner-decision evidence.',
       'Dashboard widgets must keep stale, cached, manual, disconnected, unavailable, and no-route states visible instead of presenting fake live data.',
-      'Convoy Command belongs in Dispatch; Dashboard command center should retain Attitude, 3D Nav, Recovery, Trail, Camp, and Readiness modes only.',
+      'Convoy Command belongs in Dispatch; Dashboard command center menu should retain only Attitude and 3D Nav modes.',
     ],
   };
 }

@@ -67,6 +67,8 @@ export type VehicleTelemetrySnapshot = {
   rangeMiles: number | null;
   oilTempF: number | null;
   transmissionTempF: number | null;
+  tirePressuresPsi?: [number | null, number | null, number | null, number | null] | null;
+  tireTempsF?: [number | null, number | null, number | null, number | null] | null;
 
   pitchDeg: number | null;
   rollDeg: number | null;

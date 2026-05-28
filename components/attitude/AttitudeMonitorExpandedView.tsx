@@ -146,6 +146,7 @@ function AttitudeMonitorExpandedView({
           variant={wide ? 'vehicle' : 'detail'}
           vehicleId={vehicleId ?? heroVehicle?.attitudeVehicleId}
           heroVehicle={heroVehicle}
+          telemetryFrame="vehicle"
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
           onCalibrate={onCalibrate}

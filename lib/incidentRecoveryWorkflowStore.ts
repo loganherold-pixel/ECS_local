@@ -165,6 +165,11 @@ export type IncidentStatusTransitionInput = {
   actor?: string | null;
 };
 
+export type ClearIncidentInput = {
+  incidentId?: string | null;
+  expeditionId?: string;
+};
+
 type IncidentWorkflowListener = () => void;
 
 const listeners = new Set<IncidentWorkflowListener>();
@@ -1441,6 +1446,20 @@ export const incidentRecoveryWorkflowStore = {
   },
 
   canTransitionIncidentStatus,
+
+  clearIncident(input: ClearIncidentInput = {}): boolean {
+    const beforeCount = incidents.length;
+    if (input.incidentId) {
+      incidents = incidents.filter((incident) => incident.id !== input.incidentId);
+    } else if (input.expeditionId) {
+      incidents = incidents.filter((incident) => incident.expeditionId && incident.expeditionId !== input.expeditionId);
+    } else {
+      incidents = [];
+    }
+    const changed = incidents.length !== beforeCount;
+    if (changed) emit();
+    return changed;
+  },
 
   clear(): void {
     incidents = [];

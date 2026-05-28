@@ -109,6 +109,11 @@ export type DispersedCampingRegionSelectionPayload = {
   sourceProvider?: string;
   sourceUpdatedAt?: string;
   requiresVerification: boolean;
+  routeNearby?: boolean;
+  distanceFromRouteMiles?: number;
+  routeCorridorMiles?: number;
+  latitude?: number;
+  longitude?: number;
 };
 
 export type DispersedCampingEligibilityLayerState = {
@@ -117,6 +122,7 @@ export type DispersedCampingEligibilityLayerState = {
   errorMessage?: string;
   diagnostic?: CampLayerFetchFailureDiagnostic;
   featureCount?: number;
+  renderKey?: string;
   lastAttemptedBbox?: {
     minLng: number;
     minLat: number;

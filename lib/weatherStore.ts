@@ -34,7 +34,7 @@ import type {
 
 // Cache Configuration
 const CACHE_KEY_PREFIX = 'ecs_weather_';
-const CACHE_DURATION_MS = 30 * 60 * 1000;
+const CACHE_DURATION_MS = 10 * 60 * 1000;
 const STALE_WARNING_MS = 2 * 60 * 60 * 1000;
 const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
 const RETRY_DELAY_MS = 2000;
@@ -154,6 +154,7 @@ export function hasUsableWeatherResponse(data: WeatherResponse | null | undefine
   if (!data || !Array.isArray(data.results) || data.results.length === 0) return false;
   return data.results.some(result =>
     hasUsableCurrent(result.current) ||
+    Boolean(result.hourly?.length) ||
     Boolean(result.forecast?.length) ||
     Boolean(result.alerts?.length) ||
     Boolean(result.trail_conditions?.factors?.length),
@@ -206,6 +207,7 @@ export function getWeatherStaleness(cachedAt: number): 'fresh' | 'aging' | 'stal
 }
 
 function toNumber(value: any): number | null {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -514,6 +516,57 @@ function normalizeForecastList(forecast: any, units: 'imperial' | 'metric'): any
   });
 }
 
+function normalizeHourlyList(hourly: any, units: 'imperial' | 'metric'): any[] {
+  const hourlyList = resolveForecastList(hourly).slice(0, 48);
+  if (!hourlyList.length) return [];
+  const windUnit = getOpenWeatherWindUnit(units);
+
+  return hourlyList.map((hour: any, idx: number) => {
+    const timeValue = firstDefined(hour, ['time', 'startTime', 'validTime', 'dt_txt', 'dt', 'timestamp']);
+    const timestampMs = typeof timeValue === 'number' && Number.isFinite(timeValue)
+      ? (timeValue > 10_000_000_000 ? timeValue : timeValue * 1000)
+      : typeof timeValue === 'string' && Date.parse(timeValue)
+        ? Date.parse(timeValue)
+        : Date.now() + idx * 3600000;
+    const iso = new Date(timestampMs).toISOString();
+    const popValue = toNumber(firstDefined(hour, [
+      'pop',
+      'precipitationProbability',
+      'precipitationChance',
+      'precipChance',
+      'probabilityOfPrecipitation.value',
+      'values.precipitationProbability',
+    ]));
+    const temp = toNumber(firstDefined(hour, ['temp', 'temperature', 'values.temperature']));
+    const windSpeed = normalizeWindSpeed(firstDefined(hour, ['wind_speed', 'windSpeed', 'wind.speed', 'values.windSpeed']), windUnit);
+    const windGust = normalizeWindSpeed(firstDefined(hour, ['wind_gust', 'windGust', 'gust', 'wind.gust', 'values.windGust']), windUnit);
+
+    return {
+      date: iso,
+      time: iso,
+      dt: normalizeTimestampSeconds(timeValue),
+      temp,
+      temp_day: temp,
+      feels_like: toNumber(firstDefined(hour, ['feels_like', 'feelsLike', 'apparentTemperature', 'values.apparentTemperature'])),
+      temp_min: temp,
+      temp_max: temp,
+      humidity: toNumber(firstDefined(hour, ['humidity', 'relativeHumidity', 'values.humidity'])),
+      pressure: toNumber(firstDefined(hour, ['pressure', 'pressure_hpa', 'pressureHpa', 'values.pressureSurfaceLevel'])),
+      wind_max: windSpeed,
+      wind_speed: windSpeed,
+      wind_gust_max: windGust,
+      wind_deg: toNumber(firstDefined(hour, ['wind_deg', 'windDirectionDeg', 'wind_direction', 'wind.deg', 'values.windDirection'])),
+      pop: Math.round((popValue ?? 0) * ((popValue ?? 0) <= 1 ? 100 : 1)),
+      rain_total: toNumber(hour?.rain_total ?? hour?.rain_1h ?? hour?.rain?.['1h']) ?? 0,
+      snow_total: toNumber(hour?.snow_total ?? hour?.snow_1h ?? hour?.snow?.['1h']) ?? 0,
+      weather_id: toNumber(hour?.weather_id ?? hour?.weather?.[0]?.id ?? mapWeatherCodeToCondition(hour?.weather_code ?? hour?.weatherCode).weather_id),
+      weather_main: hour?.weather_main ?? hour?.condition ?? hour?.conditions ?? hour?.shortForecast ?? hour?.weather?.[0]?.main ?? mapWeatherCodeToCondition(hour?.weather_code ?? hour?.weatherCode).weather_main,
+      weather_description: hour?.weather_description ?? hour?.description ?? hour?.summary ?? hour?.detailedForecast ?? hour?.weather?.[0]?.description ?? mapWeatherCodeToCondition(hour?.weather_code ?? hour?.weatherCode).weather_description,
+      weather_icon: hour?.weather_icon ?? hour?.weather?.[0]?.icon ?? mapWeatherCodeToCondition(hour?.weather_code ?? hour?.weatherCode).weather_icon,
+    };
+  });
+}
+
 function normalizeCurrent(current: any, label?: string | null, units: 'imperial' | 'metric' = 'imperial') {
   const windUnit = getOpenWeatherWindUnit(units);
 
@@ -525,6 +578,7 @@ function normalizeCurrent(current: any, label?: string | null, units: 'imperial'
       temp_max: null,
       humidity: null,
       pressure: null,
+      uvi: null,
       visibility: null,
       wind_speed: null,
       wind_deg: null,
@@ -588,6 +642,7 @@ function normalizeCurrent(current: any, label?: string | null, units: 'imperial'
     temp_max: toNumber(firstDefined(current, ['temp_max', 'temperature_max', 'temperatureMax', 'temperatureHigh', 'tempHigh', 'high', 'highTemperature', 'temp.max', 'temperature.max', 'daily.high'])),
     humidity: toNumber(current?.humidity),
     pressure: toNumber(current?.pressure ?? current?.pressure_hpa ?? current?.pressureHpa ?? current?.pressure_msl ?? current?.surface_pressure ?? current?.main?.pressure),
+    uvi: toNumber(current?.uvi ?? current?.uvIndex ?? current?.uv_index),
     visibility: toNumber(current?.visibility),
     wind_speed: normalizeWindSpeed(current?.wind_speed ?? current?.windSpeed ?? current?.wind?.speed, windUnit),
     wind_deg: toNumber(current?.wind_deg ?? current?.windDirectionDeg ?? current?.wind_direction ?? current?.wind?.deg),
@@ -610,6 +665,7 @@ function normalizeCurrent(current: any, label?: string | null, units: 'imperial'
 
 function normalizeResult(raw: any, fallbackLabel?: string | null, units: 'imperial' | 'metric' = 'imperial'): WaypointWeather {
   const forecast = normalizeForecastList(raw?.forecast ?? raw?.forecastDays ?? raw?.dailyForecast ?? raw?.daily ?? raw?.forecast_daily ?? raw?.weather?.forecast ?? [], units);
+  const hourly = normalizeHourlyList(raw?.hourly ?? raw?.hourlyForecast ?? raw?.forecast_hourly ?? raw?.weather?.hourly ?? [], units);
   const normalizedCurrent = normalizeCurrent(raw?.current, raw?.label ?? fallbackLabel ?? null, units);
   const firstForecast = forecast[0] ?? null;
   const current = {
@@ -654,6 +710,8 @@ function normalizeResult(raw: any, fallbackLabel?: string | null, units: 'imperi
     label: raw?.label ?? fallbackLabel ?? null,
     error: raw?.error ?? null,
     current,
+    hourly,
+    daily: forecast,
     forecast,
     alerts,
     trail_conditions: trailConditions,
@@ -700,6 +758,8 @@ function normalizeWeatherResponse(
     results,
     fetched_at: typeof data?.fetched_at === 'string' ? data.fetched_at : new Date().toISOString(),
     units: responseUnits,
+    provider: typeof data?.provider === 'string' ? data.provider : null,
+    errors: Array.isArray(data?.errors) ? data.errors : [],
   };
 }
 
@@ -719,6 +779,7 @@ function generateFallbackWeather(
       temp_max: null,
       humidity: null,
       pressure: null,
+      uvi: null,
       visibility: null,
       wind_speed: null,
       wind_deg: null,
@@ -737,6 +798,8 @@ function generateFallbackWeather(
       location_name: coord.label || null,
       dt: null,
     },
+    hourly: [],
+    daily: [],
     forecast: [],
     alerts: [],
     trail_conditions: {

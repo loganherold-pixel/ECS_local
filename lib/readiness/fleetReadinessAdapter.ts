@@ -126,14 +126,14 @@ function buildConcerns(vehicleState: ECSVehicularState, recoverySummary: string 
   if (classification.classId === 'compact_suv_crossover') {
     concerns.push('Compact crossover profile: clearance, tires, and approach angle can become limiting on rough routes.');
   }
-  if (classification.classId === 'full_size_hd_truck') {
-    concerns.push('HD truck profile: width, weight, turnarounds, and trail shelf roads need review.');
-  }
   if (classification.classId === 'van_overland_van') {
     concerns.push('Van profile: height, departure angle, wheelbase, and narrow-track access need review.');
   }
   if (classification.classId === 'short_wheelbase_4x4') {
     concerns.push('Short wheelbase helps trail fit, but roof and rear cargo weight still need control.');
+  }
+  if (classification.classId === 'full_size_hd_truck' || classification.traits.trailManeuverability === 'wide_or_long') {
+    concerns.push('HD truck profile: width, weight, and turnaround space need route-specific review.');
   }
   if (vehicleState.centerOfGravity.topHeavyRisk === 'critical' || vehicleState.centerOfGravity.topHeavyRisk === 'caution') {
     concerns.push('Top-heavy load risk is elevated from Fleet weight distribution.');

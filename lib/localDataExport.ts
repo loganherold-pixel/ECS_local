@@ -32,9 +32,13 @@ import {
   userSettingsStore,
 } from './storage';
 import { routeStore } from './routeStore';
+import { loadoutItemStore, loadoutStore } from './loadoutStore';
+import { setupStore } from './setupStore';
+import { vehicleSetupStore } from './vehicleSetupStore';
+import { vehicleStore } from './vehicleStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
 import { expeditionStateStore } from './expeditionStateStore';
-import { getDocumentDirectory, fsWriteString } from './fsCompat';
+import { getDocumentDirectory, fsReadFileFromPickerUri, fsWriteString } from './fsCompat';
 
 
 // ── Types ────────────────────────────────────────────────────
@@ -59,10 +63,33 @@ export interface LocalDataExport {
   vehicle_specs: Record<string, any>;
   expedition_log: any[];
   user_settings: any | null;
+  setup_state?: {
+    active_vehicle_id: string | null;
+    setup_vehicle_id: string | null;
+    setup_complete: boolean;
+    onboarding_complete: boolean;
+  } | null;
+}
+
+export interface LocalDataImportResult {
+  success: boolean;
+  canceled?: boolean;
+  totalItems: number;
+  importedCounts: Record<string, number>;
+  skippedCounts: Record<string, number>;
+  error?: string;
 }
 
 // ── Gather all local data ────────────────────────────────────
 export async function gatherLocalData(): Promise<LocalDataExport> {
+  await Promise.all([
+    vehicleStore.waitForHydration().catch(() => {}),
+    loadoutStore.waitForHydration().catch(() => {}),
+    vehicleSpecStore.waitForHydration().catch(() => {}),
+    vehicleSetupStore.waitForHydration().catch(() => {}),
+    setupStore.waitForHydration().catch(() => {}),
+  ]);
+
   // Gather from IndexedDB / localStorage stores
   const [
     trips,
@@ -89,10 +116,7 @@ export async function gatherLocalData(): Promise<LocalDataExport> {
   // Vehicles (localStorage-based)
   let vehicles: any[] = [];
   try {
-    const raw = Platform.OS === 'web' && typeof localStorage !== 'undefined'
-      ? localStorage.getItem('ecs_local_vehicles')
-      : null;
-    if (raw) vehicles = JSON.parse(raw);
+    vehicles = vehicleStore.getLocalSnapshot();
   } catch {}
 
   // Vehicle specs
@@ -105,22 +129,26 @@ export async function gatherLocalData(): Promise<LocalDataExport> {
   let loadouts: any[] = [];
   let loadoutItems: any[] = [];
   try {
-    const loadoutsRaw = Platform.OS === 'web' && typeof localStorage !== 'undefined'
-      ? localStorage.getItem('ecs_local_loadouts')
-      : null;
-    if (loadoutsRaw) loadouts = JSON.parse(loadoutsRaw);
+    loadouts = loadoutStore.getLocalSnapshot();
   } catch {}
   try {
-    const loadoutItemsRaw = Platform.OS === 'web' && typeof localStorage !== 'undefined'
-      ? localStorage.getItem('ecs_local_loadout_items')
-      : null;
-    if (loadoutItemsRaw) loadoutItems = JSON.parse(loadoutItemsRaw);
+    loadoutItems = loadoutItemStore.getLocalSnapshot();
   } catch {}
 
   // Expedition log
   let expeditionLog: any[] = [];
   try {
     expeditionLog = expeditionStateStore.getLog();
+  } catch {}
+
+  let setupState: LocalDataExport['setup_state'] = null;
+  try {
+    setupState = {
+      active_vehicle_id: vehicleSetupStore.getActiveVehicleId(),
+      setup_vehicle_id: setupStore.getSetupVehicleId(),
+      setup_complete: setupStore.isComplete(),
+      onboarding_complete: vehicleSetupStore.hasCompletedOnboarding(),
+    };
   } catch {}
 
   // Filter out soft-deleted items for the "active" counts
@@ -174,6 +202,7 @@ export async function gatherLocalData(): Promise<LocalDataExport> {
     vehicle_specs: vehicleSpecs,
     expedition_log: expeditionLog,
     user_settings: userSettings,
+    setup_state: setupState,
   };
 }
 
@@ -257,6 +286,215 @@ export async function exportLocalData(): Promise<{
       success: false,
       totalItems: 0,
       error: e?.message || 'Export failed',
+    };
+  }
+}
+
+function readJsonFileFromWebPicker(): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') {
+      resolve(null);
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.style.display = 'none';
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Unable to read the selected JSON file.'));
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.readAsText(file);
+    };
+
+    document.body.appendChild(input);
+    input.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(input);
+      } catch {}
+    }, 5000);
+  });
+}
+
+async function pickLocalDataImportJson(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return readJsonFileFromWebPicker();
+  }
+
+  const DocumentPicker = await import('expo-document-picker' as any);
+  const result = await DocumentPicker.getDocumentAsync({
+    type: ['application/json', 'text/json', 'text/plain', '*/*'],
+    copyToCacheDirectory: true,
+  });
+  if (result.canceled || !result.assets || result.assets.length === 0) return null;
+  return fsReadFileFromPickerUri(result.assets[0].uri);
+}
+
+function parseLocalDataImport(rawJson: string): Partial<LocalDataExport> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error('Selected file is not valid JSON.');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Selected JSON is not an ECS local data export.');
+  }
+
+  const data = parsed as Partial<LocalDataExport>;
+  const hasKnownExportShape =
+    !!data._meta ||
+    Array.isArray(data.vehicles) ||
+    !!data.vehicle_specs ||
+    Array.isArray(data.trips) ||
+    Array.isArray(data.loadouts);
+
+  if (!hasKnownExportShape) {
+    throw new Error('Selected JSON does not contain ECS local data.');
+  }
+
+  return data;
+}
+
+function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function addCount(target: Record<string, number>, key: string, value: number): void {
+  target[key] = (target[key] || 0) + Math.max(0, value);
+}
+
+export async function importLocalData(): Promise<LocalDataImportResult> {
+  const importedCounts: Record<string, number> = {};
+  const skippedCounts: Record<string, number> = {};
+
+  try {
+    const rawJson = await pickLocalDataImportJson();
+    if (!rawJson) {
+      return {
+        success: false,
+        canceled: true,
+        totalItems: 0,
+        importedCounts,
+        skippedCounts,
+      };
+    }
+
+    const data = parseLocalDataImport(rawJson);
+
+    const trips = asArray(data.trips);
+    if (trips.length) {
+      await tripStore.bulkUpsert(trips);
+      addCount(importedCounts, 'trips', trips.length);
+    }
+
+    const loadItems = asArray(data.load_items);
+    if (loadItems.length) {
+      await loadItemStore.bulkUpsert(loadItems);
+      addCount(importedCounts, 'load_items', loadItems.length);
+    }
+
+    const loadMapSlots = asArray(data.load_map_slots);
+    if (loadMapSlots.length) {
+      await loadMapSlotStore.bulkUpsert(loadMapSlots);
+      addCount(importedCounts, 'load_map_slots', loadMapSlots.length);
+    }
+
+    const waypoints = asArray(data.waypoints);
+    if (waypoints.length) {
+      await waypointStore.bulkUpsert(waypoints);
+      addCount(importedCounts, 'waypoints', waypoints.length);
+    }
+
+    const fuelWaterLogs = asArray(data.fuel_water_logs);
+    if (fuelWaterLogs.length) {
+      await fuelWaterLogStore.bulkUpsert(fuelWaterLogs);
+      addCount(importedCounts, 'fuel_water_logs', fuelWaterLogs.length);
+    }
+
+    const routeResult = routeStore.bulkUpsert(asArray(data.routes));
+    addCount(importedCounts, 'routes', routeResult.imported);
+    addCount(skippedCounts, 'routes', routeResult.skipped);
+
+    const vehicleResult = await vehicleStore.importLocalSnapshot(asArray(data.vehicles));
+    addCount(importedCounts, 'vehicles', vehicleResult.imported);
+    addCount(skippedCounts, 'vehicles', vehicleResult.skipped);
+
+    const specs = data.vehicle_specs && typeof data.vehicle_specs === 'object' && !Array.isArray(data.vehicle_specs)
+      ? data.vehicle_specs
+      : {};
+    for (const [vehicleId, spec] of Object.entries(specs)) {
+      if (!vehicleId || !spec || typeof spec !== 'object') {
+        addCount(skippedCounts, 'vehicle_specs', 1);
+        continue;
+      }
+      vehicleSpecStore.set(vehicleId, spec as any);
+      addCount(importedCounts, 'vehicle_specs', 1);
+    }
+
+    const loadoutResult = await loadoutStore.importLocalSnapshot(asArray(data.loadouts));
+    addCount(importedCounts, 'loadouts', loadoutResult.imported);
+    addCount(skippedCounts, 'loadouts', loadoutResult.skipped);
+
+    const loadoutItemResult = await loadoutItemStore.importLocalSnapshot(asArray(data.loadout_items));
+    addCount(importedCounts, 'loadout_items', loadoutItemResult.imported);
+    addCount(skippedCounts, 'loadout_items', loadoutItemResult.skipped);
+
+    const logResult = expeditionStateStore.importLog(asArray(data.expedition_log));
+    addCount(importedCounts, 'expedition_log_entries', logResult.imported);
+    addCount(skippedCounts, 'expedition_log_entries', logResult.skipped);
+
+    if (data.user_settings && typeof data.user_settings === 'object') {
+      await userSettingsStore.save(data.user_settings as any);
+      addCount(importedCounts, 'user_settings', 1);
+    }
+
+    const importedVehicles = asArray(data.vehicles);
+    const restoredVehicleId =
+      data.setup_state?.active_vehicle_id ||
+      data.setup_state?.setup_vehicle_id ||
+      importedVehicles.find((vehicle) => vehicle?.id)?.id ||
+      null;
+    if (restoredVehicleId) {
+      vehicleSetupStore.setActiveVehicleId(restoredVehicleId);
+      setupStore.setSetupVehicleId(restoredVehicleId);
+      setupStore.markComplete(restoredVehicleId);
+      vehicleSetupStore.markOnboardingComplete();
+      addCount(importedCounts, 'setup_state', 1);
+    }
+
+    await Promise.all([
+      vehicleStore.flush().catch(() => {}),
+      loadoutStore.waitForHydration().catch(() => {}),
+      vehicleSpecStore.flush().catch(() => {}),
+      vehicleSetupStore.flush().catch(() => {}),
+      setupStore.flush().catch(() => {}),
+    ]);
+
+    const totalItems = Object.values(importedCounts).reduce((sum, count) => sum + count, 0);
+    return {
+      success: true,
+      totalItems,
+      importedCounts,
+      skippedCounts,
+    };
+  } catch (e: any) {
+    console.error('[LocalDataExport] Import failed:', e);
+    return {
+      success: false,
+      totalItems: 0,
+      importedCounts,
+      skippedCounts,
+      error: e?.message || 'Import failed',
     };
   }
 }

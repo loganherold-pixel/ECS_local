@@ -118,6 +118,16 @@ function pickFirstString(...values: unknown[]): string | null {
   return null;
 }
 
+function pickFirstTireValues(...values: unknown[]): [number | null, number | null, number | null, number | null] | undefined {
+  const source = values.find((value) => Array.isArray(value));
+  if (!Array.isArray(source)) return undefined;
+  const next = [0, 1, 2, 3].map((index) => {
+    const n = asNumber(source[index]);
+    return n != null && n >= 0 ? n : null;
+  }) as [number | null, number | null, number | null, number | null];
+  return next.some((entry) => entry != null) ? next : undefined;
+}
+
 function normalizeProviderId(value: string | null): VehicleTelemetryProviderId {
   switch (value) {
     case 'obd2':
@@ -202,6 +212,20 @@ function normalizeTelemetry(
       readPath(raw, 'engine.load'),
       readPath(raw, 'metrics.engineLoad')
     ) ?? undefined,
+    tire_pressures: pickFirstTireValues(
+      raw?.tire_pressures,
+      raw?.tirePressures,
+      raw?.tirePressurePsi,
+      readPath(raw, 'tpms.pressures'),
+      readPath(raw, 'metrics.tirePressures')
+    ),
+    tire_temps: pickFirstTireValues(
+      raw?.tire_temps,
+      raw?.tireTemps,
+      raw?.tireTempF,
+      readPath(raw, 'tpms.temps'),
+      readPath(raw, 'metrics.tireTemps')
+    ),
   };
 }
 

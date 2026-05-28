@@ -142,8 +142,24 @@ assertIncludes(discoverSource, 'ECSSegmentedControl', 'Explore tab should use th
 assertIncludes(discoverSource, "case 'suggested_routes':", 'Suggested Routes tab should keep routing to existing suggestions.');
 assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should no longer be a primary Explore tab action.');
 assertIncludes(discoverSource, 'activeExplorePrimaryTab === \'suggested_routes\'', 'Suggested Routes should be the face-page tab.');
-assertIncludes(discoverSource, 'testID={`explore-${activeExplorePrimaryTab}-tab-panel`}', 'Planning tabs should render inline tab panels.');
+assertIncludes(discoverSource, 'router.push(\'/explore-trip-builder\')', 'Trip Builder should open the real planning surface directly.');
+assertIncludes(discoverSource, 'testID="explore-offline_prep_pack-tab-panel"', 'Offline Prep should keep its inline planning panel.');
+assertNotIncludes(discoverSource, 'testID="explore-open-trip-builder"', 'Trip Builder should not render a redundant inline staging panel.');
 assertIncludes(discoverSource, 'event: \'explore_feature_selected\'', 'Explore feature selections should log a placeholder analytics-style event.');
+assertIncludes(discoverSource, "trip_builder: 'LIVE'", 'Trip Builder should display as live in the Explorer primary tab badge.');
+assertIncludes(discoverSource, "offline_prep_pack: 'LIVE'", 'Offline Prep Pack should display as live in the Explorer primary tab badge.');
+assertNotIncludes(discoverSource, "trip_builder: 'STAGED'", 'Trip Builder should not display a staged badge once live.');
+assertNotIncludes(discoverSource, "offline_prep_pack: 'STAGED'", 'Offline Prep Pack should not display a staged badge once live.');
+assertIncludes(
+  discoverSource,
+  'adaptive.isLandscape && windowWidth >= 640',
+  'Explore category panels should switch Hidden Gems and Popular Trails to a two-column card grid in landscape.',
+);
+assertIncludes(
+  discoverSource,
+  'exploreRouteGridColumns',
+  'Explore landscape card width should be based on the active route grid column count.',
+);
 
 assertIncludes(discoverSource, 'DistanceRadiusFilter', 'Existing Route Filters component should remain wired.');
 assertIncludes(discoverSource, 'applyExploreRefinementFilter', 'Existing route refinement pipeline should remain wired.');

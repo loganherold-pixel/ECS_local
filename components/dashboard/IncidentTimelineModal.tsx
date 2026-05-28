@@ -11,7 +11,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type {
   IncidentContext,
   IncidentCoordinate,
@@ -112,6 +112,7 @@ export default function IncidentTimelineModal({
   onAddNote,
   onLogLocation,
 }: IncidentTimelineModalProps) {
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const [note, setNote] = useState('');
   const events = useMemo(
     () => [...(incident?.timeline ?? [])].sort((left, right) => getEventTime(left) - getEventTime(right)),
@@ -132,7 +133,7 @@ export default function IncidentTimelineModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Chronological incident updates, notes, and workflow events."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

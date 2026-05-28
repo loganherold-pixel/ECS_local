@@ -68,22 +68,43 @@ assert.strictEqual(
 assert.deepStrictEqual(
   phase({ roadStatus: 'destination_selected', roadHasDestination: true, roadError: 'GPS required' }),
   {
-    phase: 'ready',
+    phase: 'building',
     source: 'road',
     isLoading: false,
     error: 'GPS required',
     canStartGuidance: false,
     canCancel: true,
-    shouldRenderPreview: true,
+    shouldRenderPreview: false,
     shouldRenderGuidance: false,
   },
-  'A selected destination without GPS should be ready, cancellable, and honest about the blocker.',
+  'A selected destination without route geometry should stay out of ready/preview while remaining cancellable and honest about the blocker.',
 );
 
 assert.strictEqual(
   phase({ roadStatus: 'navigation_active', roadHasRoute: true }).phase,
   'navigating',
   'Active road guidance should normalize to navigating.',
+);
+
+assert.deepStrictEqual(
+  phase({
+    roadStatus: 'route_preview',
+    roadHasDestination: true,
+    roadHasRoute: true,
+    roadHasValidGeometry: false,
+  }).phase,
+  'failed',
+  'A road preview with malformed or missing geometry must not enter preview.',
+);
+
+assert.deepStrictEqual(
+  phase({
+    roadStatus: 'navigation_active',
+    roadHasRoute: true,
+    roadHasValidGeometry: false,
+  }).phase,
+  'failed',
+  'Active road guidance must not enter navigating when geometry is invalid.',
 );
 
 assert.strictEqual(

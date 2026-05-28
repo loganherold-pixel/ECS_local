@@ -327,12 +327,6 @@ export function classifyVehicle(input: ECSVehicleClassificationInput | FleetVehi
   if (includesAny(search, MID_SIZE_TRUCK_MODELS)) {
     return buildClassification('mid_size_truck', 'high', ['Model matches mid-size truck patterns.'], classificationInput);
   }
-  if (vehicleType.includes('truck') && gvwr != null && gvwr >= 6000 && gvwr < 8500) {
-    return buildClassification('full_size_half_ton_truck', 'medium', ['Truck GVWR indicates a full-size half-ton truck; verify exact model.'], classificationInput);
-  }
-  if (vehicleType.includes('pickup') || vehicleType.includes('truck')) {
-    return buildClassification('mid_size_truck', 'low', ['Truck profile does not match HD or half-ton patterns.'], classificationInput);
-  }
   if (includesAny(search, FULL_SIZE_SUV_MODELS)) {
     return buildClassification('full_size_suv', 'high', ['Model matches full-size SUV patterns.'], classificationInput);
   }
@@ -344,6 +338,12 @@ export function classifyVehicle(input: ECSVehicleClassificationInput | FleetVehi
   }
   if (vehicleType.includes('suv') || vehicleType.includes('sport utility')) {
     return buildClassification('mid_size_suv', 'low', ['SUV type is available but exact class needs verification.'], classificationInput);
+  }
+  if (vehicleType.includes('truck') && gvwr != null && gvwr >= 6000 && gvwr < 8500) {
+    return buildClassification('full_size_half_ton_truck', 'medium', ['Truck GVWR indicates a full-size half-ton truck; verify exact model.'], classificationInput);
+  }
+  if (vehicleType.includes('pickup') || vehicleType.includes('truck')) {
+    return buildClassification('mid_size_truck', 'low', ['Truck profile does not match HD or half-ton patterns.'], classificationInput);
   }
 
   return buildClassification('unknown_custom', 'low', ['Vehicle make/model/class is incomplete or custom.'], classificationInput);
@@ -425,7 +425,7 @@ export function buildVehicleIntelligenceSuggestions(input: ECSVehicleSuggestionI
     || confidence === 'unknown'
     || (confidenceScore != null && confidenceScore < 70)
   ) {
-    suggestions.push('ECS is using estimates; verify door placard, saved specs, or scale ticket for higher confidence.');
+    suggestions.push('ECS is using estimates; enter saved base/GVWR, accessory, and loadout values for higher confidence.');
   }
 
   return Array.from(new Set(suggestions)).slice(0, 5);

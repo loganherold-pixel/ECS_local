@@ -107,6 +107,29 @@ assert.ok(
   'Active Guidance alignment should be unchanged by the Road Preview fix.',
 );
 
+const activeGuidanceMetricsRow = extractStyleBlock('activeGuidanceMetricsRow');
+assert.ok(
+  /flexWrap:\s*'wrap'/.test(activeGuidanceMetricsRow),
+  'Active Guidance metrics should wrap so turn sits above remaining and ETA in the compact card.',
+);
+const activeGuidancePrimaryMetricChip = extractStyleBlock('activeGuidancePrimaryMetricChip');
+assert.ok(
+  /flexBasis:\s*'100%'/.test(activeGuidancePrimaryMetricChip),
+  'Active Guidance turn metric should occupy the first compact row.',
+);
+assertIncludes(
+  "label: metric.label.toUpperCase() === 'REMAIN' ? 'REMAINING' : metric.label",
+  'Active Guidance should present Remaining instead of the shortened Remain label.',
+);
+assertNavigateIncludes(
+  'const ACTIVE_GUIDANCE_TOP = effectiveMapExpanded',
+  'Active Guidance should account for device safe-area/status chrome in fullscreen map mode.',
+);
+assertNavigateIncludes(
+  '{ top: roadNavigationSurfaceTopOffset }',
+  'Landscape dock reveal control should align vertically with Active Guidance.',
+);
+
 assert.ok(
   dispersedSummarySource.includes('zIndex: 24') && dispersedSummarySource.includes('elevation: 24'),
   'Dispersed Camping Near Route summary should stay below the Road Preview panel.',
@@ -114,6 +137,16 @@ assert.ok(
 assert.ok(
   establishedSummarySource.includes('zIndex: 25') && establishedSummarySource.includes('elevation: 25'),
   'Established Campsites route summary should stay below the Road Preview panel.',
+);
+assert.ok(
+  dispersedSummarySource.includes("pointerEvents={hasResults ? 'box-none' : 'none'}") &&
+    establishedSummarySource.includes("pointerEvents={hasResults ? 'box-none' : 'none'}"),
+  'Empty camping route summaries should not intercept map or navigation controls.',
+);
+assert.ok(
+  dispersedSummarySource.includes('<View pointerEvents="none" style={styles.resultStack}>') &&
+    establishedSummarySource.includes('<View pointerEvents="none" style={styles.header}>'),
+  'Only actionable camping summary controls should receive touches.',
 );
 assertNavigateIncludes(
   'zIndex: 23,\n  elevation: 23,',

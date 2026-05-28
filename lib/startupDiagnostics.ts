@@ -9,6 +9,7 @@ export type StartupPhase =
   | 'app_rendered_main'
   | 'app_rendered_sign_in'
   | 'app_rendered_setup'
+  | 'post_auth_handoff_fallback_route'
   | 'startup_recovery_fallback';
 
 type StartupPhaseEntry = {

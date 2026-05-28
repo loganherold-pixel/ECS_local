@@ -51,6 +51,17 @@ function normalizeReliability(value: unknown): TripBuilderConfidence {
   return 'unknown';
 }
 
+function isPositive(value: unknown): boolean {
+  const numberValue = finiteNumber(value);
+  if (numberValue != null) return numberValue > 0;
+  return value === true;
+}
+
+function sourceLabel(value: unknown, fallback: string): string {
+  const text = String(value ?? '').trim();
+  return text || fallback;
+}
+
 function statusFromSupportDistance(distanceMiles: number | null): ResupplyStatus {
   if (distanceMiles == null) return 'medium';
   if (distanceMiles <= 5) return 'good';
@@ -169,6 +180,7 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
   const remoteMultiplier = remoteness != null && remoteness >= 7 ? 1.3 : 1.15;
   const estimatedMinimumRangeMiles = routeDistance == null ? null : roundTenths(routeDistance * remoteMultiplier);
   const vehicleRangeMiles = finiteNumber(args.vehicleProfile?.rangeMiles);
+  const fuelSource = sourceLabel(args.vehicleProfile?.rangeSource ?? args.vehicleProfile?.source, 'manual');
   const rangeMarginMiles =
     vehicleRangeMiles != null && estimatedMinimumRangeMiles != null
       ? roundTenths(vehicleRangeMiles - estimatedMinimumRangeMiles)
@@ -199,13 +211,27 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
     addWarning(warnings, 'fuel', 'fuel-range-unknown', 'Vehicle fuel range or route distance data unavailable. Verify before departure.', 'caution');
   } else if (rangeMarginMiles != null && rangeMarginMiles < 0) {
     status = 'low';
-    addWarning(warnings, 'fuel', 'fuel-range-deficit', 'Estimated route demand appears above vehicle range. Verify before departure.', 'critical');
+    addWarning(
+      warnings,
+      'fuel',
+      'fuel-range-deficit',
+      `Estimated route demand appears above the ${fuelSource} vehicle range. Verify fuel before departure.`,
+      'critical',
+    );
   } else if (rangeMarginMiles != null && rangeMarginMiles < estimatedMinimumRangeMiles * 0.1) {
     status = 'low';
-    addWarning(warnings, 'fuel', 'fuel-range-tight', 'Fuel range margin appears tight. Verify before departure.', 'caution');
+    addWarning(warnings, 'fuel', 'fuel-range-tight', `Fuel range margin appears tight against the ${fuelSource} vehicle range. Verify before departure.`, 'caution');
   } else if (fuelPoints.length === 0) {
-    status = 'medium';
-    addWarning(warnings, 'fuel', 'fuel-points-unknown', 'No known fuel source detected for this route.', 'watch');
+    status = rangeMarginMiles != null && rangeMarginMiles >= 0 ? 'good' : 'medium';
+    if (rangeMarginMiles != null && rangeMarginMiles >= 0) {
+      recommendations.push(recommendation(
+        'fuel',
+        'fuel-manual-range-viable',
+        `Manual vehicle range covers estimated route demand with ${rangeMarginMiles.toFixed(rangeMarginMiles >= 10 ? 0 : 1)} mi margin. Verify the entered fuel before departure.`,
+      ));
+    } else {
+      addWarning(warnings, 'fuel', 'fuel-points-unknown', 'No known fuel source detected for this route.', 'watch');
+    }
   } else if (rangeMarginMiles != null && rangeMarginMiles >= estimatedMinimumRangeMiles * 0.25) {
     status = 'good';
   } else {
@@ -213,19 +239,21 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
   }
 
   const point = nearestFuelBeforeStart ?? nearestFuelAfterExit ?? lastReliableFuelBeforeRemoteSection;
-  recommendations.push(recommendation(
-    'fuel',
-    'fuel-primary',
-    point
-      ? `${point.name} is the known fuel reference. Verify availability before departure.`
-      : 'No known fuel source detected. Verify before departure.',
-    point?.id,
-  ));
+  if (point) {
+    recommendations.push(recommendation(
+      'fuel',
+      'fuel-primary',
+      `${point.name} is the known fuel reference. Verify availability before departure.`,
+      point.id,
+    ));
+  } else if (recommendations.length === 0) {
+    recommendations.push(recommendation('fuel', 'fuel-primary', 'No known fuel source detected. Verify before departure.'));
+  }
 
   return {
     category: 'fuel',
     status,
-    confidence: fuelPoints.length > 0 && vehicleRangeMiles != null ? 'medium' : 'unknown',
+    confidence: vehicleRangeMiles != null ? 'medium' : 'unknown',
     primaryRecommendation: recommendations[0].message,
     keyPoint: point ?? null,
     keyDistanceMiles: roundTenths(point?.distanceFromRouteMiles ?? point?.distanceFromStartMiles ?? point?.distanceFromEndMiles ?? null),
@@ -244,20 +272,38 @@ function buildPointBackedPlan<TCategory extends 'water' | 'food_supplies' | 'rep
   category: TCategory,
   points: ResupplyPoint[],
   labels: { missing: string; action: string },
+  manualSupport?: { available: boolean; message: string; source?: string | null },
 ): ResupplyCategoryPlanFor<TCategory> {
   const warnings: ResupplyWarning[] = [];
   const point = nearestPoint(points);
-  const status: ResupplyStatus = points.length === 0 ? 'unknown' : statusFromSupportDistance(point?.distanceFromRouteMiles ?? null);
-  if (!point) addWarning(warnings, category, `${category}-unknown`, labels.missing, 'watch');
+  const status: ResupplyStatus = points.length === 0
+    ? manualSupport?.available ? 'good' : 'unknown'
+    : statusFromSupportDistance(point?.distanceFromRouteMiles ?? null);
+  if (!point && !manualSupport?.available) addWarning(warnings, category, `${category}-unknown`, labels.missing, 'watch');
   const recommendations = [
-    recommendation(category, `${category}-primary`, point ? `${labels.action}: ${point.name}.` : labels.missing, point?.id),
+    recommendation(
+      category,
+      `${category}-primary`,
+      point
+        ? `${labels.action}: ${point.name}.`
+        : manualSupport?.available
+          ? manualSupport.message
+          : labels.missing,
+      point?.id,
+    ),
   ];
   return {
     category,
     status,
-    confidence: point ? normalizeReliability(point.reliability) || 'medium' : 'unknown',
+    confidence: point ? normalizeReliability(point.reliability) || 'medium' : manualSupport?.available ? 'medium' : 'unknown',
     primaryRecommendation: recommendations[0].message,
-    keyPoint: point,
+    keyPoint: point ?? (manualSupport?.available ? {
+      id: `${category}-manual-support`,
+      name: manualSupport.source ? `Manual ${manualSupport.source}` : 'Manual loadout support',
+      category,
+      source: manualSupport.source ?? 'manual_vehicle_loadout',
+      notes: [manualSupport.message],
+    } as ResupplyPoint : null),
     keyDistanceMiles: roundTenths(point?.distanceFromRouteMiles ?? point?.distanceFromStartMiles ?? point?.distanceFromEndMiles ?? null),
     warnings,
     recommendations,
@@ -347,22 +393,54 @@ export function buildSmartResupplyPlan(args: BuildSmartResupplyPlanArgs): SmartR
   const points = collectResupplyPoints(args);
   const byCategory = (category: ResupplyCategory) => points.filter((point) => point.category === category);
   const fuel = buildFuelPlan(args, byCategory('fuel'));
+  const support = args.vehicleProfile?.supportReadiness ?? null;
+  const waterGallons = finiteNumber(args.vehicleProfile?.currentWaterGallons) ?? finiteNumber(args.vehicleProfile?.waterCapacityGal);
+  const manualWater = isPositive(waterGallons) || support?.water === true
+    ? {
+        available: true,
+        source: args.vehicleProfile?.waterSource ?? support?.source ?? 'vehicle profile',
+        message: waterGallons != null && waterGallons > 0
+          ? `Manual vehicle water capacity is set to ${waterGallons.toFixed(waterGallons >= 10 ? 0 : 1)} gal. Verify carried water and refill options before departure.`
+          : 'Manual loadout includes water support. Verify quantity and refill options before departure.',
+      }
+    : undefined;
+  const manualSupplies = support?.foodSupplies === true
+    ? {
+        available: true,
+        source: support.source ?? 'active loadout',
+        message: 'Active loadout includes food or supply support. Verify quantity for the trip duration before departure.',
+      }
+    : undefined;
+  const manualRepair = support?.repair === true || support?.recovery === true
+    ? {
+        available: true,
+        source: support.source ?? 'active loadout',
+        message: 'Active loadout includes repair or recovery support. Verify tire repair, tools, and recovery equipment before departure.',
+      }
+    : undefined;
+  const manualMedical = support?.medical === true
+    ? {
+        available: true,
+        source: support.source ?? 'active loadout',
+        message: 'Active loadout includes medical support. Verify first-aid contents and accessibility before departure.',
+      }
+    : undefined;
   const water = attachKnownPoints(buildPointBackedPlan('water', byCategory('water'), {
     missing: 'No known water source detected.',
     action: 'Known water refill point',
-  }), byCategory('water'));
+  }, manualWater), byCategory('water'));
   const supplies = attachKnownPoints(buildPointBackedPlan('food_supplies', byCategory('food_supplies'), {
     missing: 'No known food or supply source detected.',
     action: 'Known supply point',
-  }), byCategory('food_supplies'));
+  }, manualSupplies), byCategory('food_supplies'));
   const repair = attachKnownPoints(buildPointBackedPlan('repair', byCategory('repair'), {
     missing: 'No known repair source detected.',
     action: 'Known repair support',
-  }), byCategory('repair'));
+  }, manualRepair), byCategory('repair'));
   const medical = attachKnownPoints(buildPointBackedPlan('medical', byCategory('medical'), {
     missing: 'No known medical source detected.',
     action: 'Known medical support',
-  }), byCategory('medical'));
+  }, manualMedical), byCategory('medical'));
   const exitAccess = buildExitAccessPlan(args.exitPoints, args.tripPlan.route.distanceMiles);
   const repairWithExit = {
     ...repair,
@@ -374,7 +452,7 @@ export function buildSmartResupplyPlan(args: BuildSmartResupplyPlanArgs): SmartR
     generatedAt,
     sourceSummary: [
       points.length > 0 ? `${points.length} route or POI support point${points.length === 1 ? '' : 's'}` : 'No route/POI support points supplied',
-      args.vehicleProfile ? 'vehicle range profile' : 'vehicle range data unavailable',
+      args.vehicleProfile ? `vehicle range profile${support?.source ? ` + ${support.source}` : ''}` : 'vehicle range data unavailable',
       args.exitPoints && args.exitPoints.length > 0 ? `${args.exitPoints.length} exit point${args.exitPoints.length === 1 ? '' : 's'}` : 'exit access data unavailable',
     ],
     fuel,

@@ -124,6 +124,22 @@ assert(
   'OBD adapter must support V Peak and Veepeak naming variants',
 );
 assert(
+  adapter.includes('/obd\\s*check/i') &&
+    adapter.includes('/\\bvpake\\b/i') &&
+    adapter.includes('/\\bvp\\s*11\\b/i') &&
+    adapter.includes('0000ffe0-0000-1000-8000-00805f9b34fb') &&
+    adapter.includes('6e400001-b5a3-f393-e0a9-e50e24dcca9e') &&
+    adapter.includes('6e400002-b5a3-f393-e0a9-e50e24dcca9e') &&
+    adapter.includes('6e400003-b5a3-f393-e0a9-e50e24dcca9e'),
+  'OBD adapter must surface VeePeak BLE UART discovery and Nordic UART transport candidates',
+);
+assert(
+  adapter.includes('extractAdvertisedServiceUUIDs') &&
+    adapter.includes('device.serviceData') &&
+    adapter.includes('solicitedServiceUUIDs'),
+  'OBD adapter must use advertised serviceData and solicited UUID keys when serviceUUIDs are missing',
+);
+assert(
   adapter.includes('return true;') && adapter.includes('await this.startPidTelemetry(deviceId)'),
   'OBD adapter must connect before attempting live telemetry reads',
 );
@@ -135,10 +151,18 @@ assert(
 );
 
 const unified = read('lib/useUnifiedDeviceConnections.ts');
-assert(unified.includes("type DeviceCategory = 'telemetry' | 'obd' | 'sensor' | 'power' | 'unknown'"), 'unified device model must expose required device categories');
+for (const category of ["'telemetry'", "'obd'", "'sensor'", "'power'", "'unknown'"]) {
+  assert(
+    unified.includes('type DeviceCategory =') && unified.includes(category),
+    `unified device model must expose required device category ${category}`,
+  );
+}
 assert(unified.includes("deviceCategory: 'obd'"), 'OBD scanner rows must be categorized as obd');
 assert(unified.includes("deviceCategory: 'power'"), 'power rows must be categorized as power');
-assert(unified.includes("deviceCategory: kind === 'sensor' ? 'sensor' : 'unknown'"), 'unknown scanner rows must remain visible with unknown category');
+assert(
+  unified.includes("kind === 'sensor'") && unified.includes(": 'unknown'"),
+  'unknown scanner rows must remain visible with unknown category',
+);
 assert(unified.includes('vehicleTelemetrySnapshot.isLive'), 'unified device connections must use the live telemetry snapshot');
 assert(unified.includes('Classic Bluetooth OBD2 discovery is not available in this runtime'), 'unified scanner must surface unsupported Classic Bluetooth OBD2 discovery clearly');
 

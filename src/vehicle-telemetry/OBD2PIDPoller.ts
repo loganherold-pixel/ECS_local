@@ -42,6 +42,12 @@ import { Platform, AppState } from 'react-native';
 import type { AppStateStatus } from 'react-native';
 import type { NormalizedVehicleTelemetry, OBD2TelemetryValue } from './VehicleTelemetryTypes';
 import { ecsLog } from '../../lib/ecsLogger';
+import {
+  bluLog,
+  bluLogThrottled,
+  buildBluTelemetryLogDetails,
+  buildBluTimeoutLogDetails,
+} from '../../lib/bluDiagnosticsLog';
 
 const TAG = '[OBD2-PIDPoller]';
 
@@ -51,6 +57,10 @@ function logTelemetryDebug(message: string, details?: Record<string, unknown>): 
 
 function logTelemetryWarn(message: string, details?: Record<string, unknown>): void {
   ecsLog.warn('TELEMETRY', `${TAG} ${message}`, details);
+}
+
+function isBluTimeoutMessage(message: string | null | undefined): boolean {
+  return /timeout|timed out|no live|no data|did not receive|stall|unavailable/i.test(String(message ?? ''));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -447,6 +457,12 @@ export class OBD2PIDPoller {
 
     this.state = 'initializing';
     logTelemetryDebug('Initializing ELM327 adapter...');
+    bluLog('[BLU_HANDSHAKE]', 'obd2_pid_poller_initializing', {
+      deviceId: this.deviceId,
+      vendor: 'obd2',
+      phase: 'elm327_init',
+      streamMode: 'ble_notifications_pid_poll',
+    });
 
     try {
       let successfulInitResponses = 0;
@@ -476,6 +492,12 @@ export class OBD2PIDPoller {
 
       this.initialized = true;
       logTelemetryDebug('ELM327 initialized');
+      bluLog('[BLU_HANDSHAKE]', 'obd2_elm327_initialized', {
+        deviceId: this.deviceId,
+        vendor: 'obd2',
+        phase: 'elm327_init',
+        successfulInitResponses,
+      });
 
       // Read battery voltage first
       await this.readBatteryVoltage();
@@ -493,6 +515,14 @@ export class OBD2PIDPoller {
         intervalMs: this.intervalMs,
         supportedPidCount: this.supportedPids.size,
       });
+      bluLog('[BLU_STREAM]', 'obd2_pid_polling_started', {
+        deviceId: this.deviceId,
+        vendor: 'obd2',
+        phase: 'pid_polling',
+        streamMode: 'ble_notifications_pid_poll',
+        intervalMs: this.intervalMs,
+        supportedPidCount: this.supportedPids.size,
+      });
       this.setupAppStateListener();
       await this.executePollCycle();
       if (this.lastDataAt <= 0) {
@@ -503,6 +533,24 @@ export class OBD2PIDPoller {
       return true;
     } catch (err: any) {
       const msg = err?.message ?? 'Initialization failed';
+      bluLog(isBluTimeoutMessage(msg) ? '[BLU_TIMEOUT]' : '[BLU_OBD2]', 'obd2_pid_poller_initialization_failed', isBluTimeoutMessage(msg)
+        ? buildBluTimeoutLogDetails({
+            deviceId: this.deviceId,
+            vendor: 'obd2',
+            phase: 'pid_poller_initialization',
+            timeoutMs: 5_000,
+            lastSuccessfulPhase: this.initialized ? 'elm327_init' : null,
+            lastPacketAt: this.lastDataAt || null,
+            errorCode: 'PID_POLLER_INIT_FAILED',
+            message: msg,
+          })
+        : {
+            deviceId: this.deviceId,
+            vendor: 'obd2',
+            phase: 'pid_poller_initialization',
+            errorCode: 'PID_POLLER_INIT_FAILED',
+            message: msg,
+          });
       logTelemetryWarn('Init failed', { error: msg });
       this.lastError = msg;
       this.state = 'error';
@@ -522,6 +570,12 @@ export class OBD2PIDPoller {
     this.state = 'stopped';
     this.inCycle = false;
     this.removeAppStateListener();
+    bluLog('[BLU_DISCONNECT]', 'obd2_pid_polling_stopped', {
+      deviceId: this.deviceId,
+      vendor: 'obd2',
+      streamMode: 'ble_notifications_pid_poll',
+      cycleCount: this.cycleCount,
+    });
     logTelemetryDebug('Polling stopped', { cycleCount: this.cycleCount });
   }
 
@@ -535,6 +589,11 @@ export class OBD2PIDPoller {
       this.pollTimer = null;
     }
     this.state = 'paused';
+    bluLog('[BLU_STREAM]', 'obd2_pid_polling_paused', {
+      deviceId: this.deviceId,
+      vendor: 'obd2',
+      streamMode: 'ble_notifications_pid_poll',
+    });
     logTelemetryDebug('Polling paused');
   }
 
@@ -544,6 +603,11 @@ export class OBD2PIDPoller {
   resume(): void {
     if (this.state !== 'paused') return;
     this.state = 'polling';
+    bluLog('[BLU_RECONNECT]', 'obd2_pid_polling_resumed', {
+      deviceId: this.deviceId,
+      vendor: 'obd2',
+      streamMode: 'ble_notifications_pid_poll',
+    });
     logTelemetryDebug('Polling resumed');
     this.schedulePollCycle();
   }
@@ -596,6 +660,15 @@ export class OBD2PIDPoller {
     logTelemetryDebug('PID discovery complete', {
       supportedPidCount: this.supportedPids.size,
       unsupportedPidCount: this.unsupportedPids.size,
+    });
+    bluLog('[BLU_HANDSHAKE]', 'obd2_pid_capabilities_discovered', {
+      deviceId: this.deviceId,
+      vendor: 'obd2',
+      phase: 'pid_capability_discovery',
+      supportedPidCount: this.supportedPids.size,
+      unsupportedPidCount: this.unsupportedPids.size,
+      supportedPids: Array.from(this.supportedPids),
+      unsupportedPids: Array.from(this.unsupportedPids),
     });
 
     // Notify callbacks about discovered capabilities
@@ -697,6 +770,13 @@ export class OBD2PIDPoller {
         };
 
         this.lastDataAt = Date.now();
+        bluLogThrottled('[BLU_TELEMETRY]', `pid-poller:${this.deviceId}`, 'obd2_pid_poll_telemetry', buildBluTelemetryLogDetails({
+          deviceId: this.deviceId,
+          vendor: 'obd2',
+          telemetry,
+          streamMode: 'ble_notifications_pid_poll',
+          lastPacketAt: this.lastDataAt,
+        }), 5_000);
         this.callbacks.onTelemetry(telemetry);
       }
 
@@ -710,10 +790,29 @@ export class OBD2PIDPoller {
         });
       }
     } catch (err: any) {
+      const message = err?.message ?? 'Poll cycle failed';
+      bluLog(isBluTimeoutMessage(message) ? '[BLU_TIMEOUT]' : '[BLU_OBD2]', 'obd2_pid_poll_cycle_error', isBluTimeoutMessage(message)
+        ? buildBluTimeoutLogDetails({
+            deviceId: this.deviceId,
+            vendor: 'obd2',
+            phase: 'pid_poll_cycle',
+            timeoutMs: 5_000,
+            lastSuccessfulPhase: this.lastDataAt > 0 ? 'telemetry_packet' : 'pid_polling_started',
+            lastPacketAt: this.lastDataAt || null,
+            errorCode: 'PID_POLL_CYCLE_ERROR',
+            message,
+          })
+        : {
+            deviceId: this.deviceId,
+            vendor: 'obd2',
+            phase: 'pid_poll_cycle',
+            errorCode: 'PID_POLL_CYCLE_ERROR',
+            message,
+          });
       logTelemetryWarn(`Poll cycle ${this.cycleCount} error`, {
-        error: err?.message ?? 'unknown',
+        error: message,
       });
-      this.lastError = err?.message ?? 'Poll cycle failed';
+      this.lastError = message;
     } finally {
       this.inCycle = false;
     }

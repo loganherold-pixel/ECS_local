@@ -20,6 +20,8 @@ const vehicleResourceProfilePath = path.join(root, 'lib', 'vehicleResourceProfil
 const consumablesStorePath = path.join(root, 'lib', 'consumablesStore.ts');
 const vehicleSpecStorePath = path.join(root, 'lib', 'vehicleSpecStore.ts');
 const weightEnginePath = path.join(root, 'lib', 'weightEngine.ts');
+const vehicleClassificationPath = path.join(root, 'lib', 'fleet', 'vehicleClassification.ts');
+const fleetOverviewStatusPath = path.join(root, 'lib', 'fleet', 'fleetOverviewStatus.ts');
 
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -58,6 +60,8 @@ const vehicleResourceProfile = require(vehicleResourceProfilePath);
 const consumables = require(consumablesStorePath);
 const vehicleSpecs = require(vehicleSpecStorePath);
 const weightEngine = require(weightEnginePath);
+const vehicleClassification = require(vehicleClassificationPath);
+const fleetOverviewStatus = require(fleetOverviewStatusPath);
 
 function walkKeys(value, visit) {
   if (!value || typeof value !== 'object') return;
@@ -128,7 +132,7 @@ assert.deepStrictEqual(advancedSpecs.FLEET_ADVANCED_SUSPENSION_HEIGHT_OPTIONS, [
 assert.deepStrictEqual(advancedSpecs.FLEET_ADVANCED_FRONT_LEVEL_OPTIONS, [1, 2, 3, 4]);
 assert.deepStrictEqual(
   [advancedSpecs.FLEET_ADVANCED_TIRE_SIZE_OPTIONS[0], advancedSpecs.FLEET_ADVANCED_TIRE_SIZE_OPTIONS.at(-1)],
-  [26, 60],
+  [20, 60],
 );
 
 for (let suspensionLiftInches = 0; suspensionLiftInches <= 10; suspensionLiftInches += 1) {
@@ -171,7 +175,7 @@ assert.strictEqual(
   'Disabled Level should clear front level before save.',
 );
 
-for (const tireSizeInches of [26, 33, 60]) {
+for (const tireSizeInches of [20, 26, 33, 60]) {
   assert.deepStrictEqual(
     advancedSpecs.validateFleetAdvancedSpecsDraft(advancedDraft({ tireSizeInches })),
     [],
@@ -183,9 +187,9 @@ assert.strictEqual(
   37,
   'Selected tire size should normalize for persistence.',
 );
-for (const tireSizeInches of [25, 61, null]) {
+for (const tireSizeInches of [19, 61, null]) {
   assert.ok(
-    advancedSpecs.validateFleetAdvancedSpecsDraft(advancedDraft({ tireSizeInches })).some((error) => error.includes('26-60')),
+    advancedSpecs.validateFleetAdvancedSpecsDraft(advancedDraft({ tireSizeInches })).some((error) => error.includes('20-60')),
     `Tire size ${tireSizeInches} should be rejected.`,
   );
 }
@@ -599,6 +603,135 @@ assert.ok(
   'Fleet profile validation should make year visibly required before confirming specs.',
 );
 assert.strictEqual(profile.calculateConfirmedPayloadRemaining(ramProfileDraft), 2448);
+
+assert.deepStrictEqual(
+  profile.resolveFleetVehicleProfilePrefillOptions(profile.createEmptyFleetVehicleProfileDraft()),
+  [],
+  'Fleet profile prefill options should not display before year, make, and model are entered.',
+);
+const passportProfileDraft = profile.applyFleetProfilePreset(
+  profile.createEmptyFleetVehicleProfileDraft(),
+  'honda-passport-trailsport-awd',
+);
+passportProfileDraft.year = '2023';
+const passportPrefillOptions = profile.resolveFleetVehicleProfilePrefillOptions({
+  ...profile.createEmptyFleetVehicleProfileDraft(),
+  year: '2023',
+  make: 'Honda',
+  model: 'Passport',
+});
+assert.strictEqual(passportPrefillOptions.length, 3, 'Passport should expose three contextual prefill options after year/make/model are entered.');
+assert.ok(
+  passportPrefillOptions.some((option) => option.label.includes('TrailSport AWD')),
+  'Passport contextual prefill options should include TrailSport AWD.',
+);
+const appliedPassportPrefill = profile.applyFleetProfilePrefillOption(
+  {
+    ...profile.createEmptyFleetVehicleProfileDraft(),
+    nickname: 'Family Passport',
+    year: '2023',
+    make: 'Honda',
+    model: 'Passport',
+  },
+  'honda-passport-trailsport-awd',
+);
+assert.strictEqual(appliedPassportPrefill.nickname, 'Family Passport');
+assert.strictEqual(appliedPassportPrefill.trim, 'TrailSport');
+assert.strictEqual(appliedPassportPrefill.engine, 'Gas V6');
+assert.strictEqual(appliedPassportPrefill.drivetrain, 'AWD');
+assert.strictEqual(appliedPassportPrefill.vehicleType, 'suv');
+assert.strictEqual(appliedPassportPrefill.baseNetWeight, '4300');
+assert.strictEqual(appliedPassportPrefill.gvwr, '5500');
+const passportProfileSuggestion = profile.resolveFleetVehicleProfileSuggestion(passportProfileDraft);
+assert.strictEqual(passportProfileDraft.vehicleType, 'suv');
+assert.strictEqual(passportProfileSuggestion.oemMatchStatus, 'matched');
+assert.strictEqual(passportProfileSuggestion.oemReference.vehicleType, 'suv');
+assert.strictEqual(passportProfileSuggestion.oemReference.specs.fuel_tank_capacity_gal, 19.5);
+const passportClassification = vehicleClassification.classifyVehicle({
+  vehicleType: 'truck',
+  year: 2023,
+  make: 'Honda',
+  model: 'Passport',
+  trim: 'TrailSport',
+  gvwrLbs: 5500,
+  baseWeightLbs: 4300,
+});
+assert.strictEqual(
+  passportClassification.classId,
+  'mid_size_suv',
+  'Passport model identity should override stale truck defaults during classification.',
+);
+const passportFleetVehicle = fleet.adaptLegacyVehicleToFleetVehicle({
+  vehicle: {
+    id: 'passport-resource-test',
+    owner_user_id: 'local',
+    name: 'Passport TrailSport',
+    type: 'suv',
+    make: 'Honda',
+    model: 'Passport',
+    year: 2023,
+    notes: null,
+    fuel_tank_capacity_gal: 19.5,
+    avg_mpg: null,
+    current_fuel_percent: 75,
+    water_capacity_gal: null,
+    current_water_gal: 0,
+    water_updated_at: null,
+    created_at: '2026-05-22T00:00:00.000Z',
+    updated_at: '2026-05-22T00:00:00.000Z',
+  },
+  specs: {
+    base_weight_lb: 4300,
+    gvwr_lb: 5500,
+    fuel_tank_capacity_gal: 19.5,
+    fuel_type: 'gas',
+  },
+});
+assert.strictEqual(passportFleetVehicle.vehicleType, 'suv');
+assert.strictEqual(passportFleetVehicle.buildProfile.resourceProfile.fuelTankCapacityGal, 19.5);
+assert.strictEqual(passportFleetVehicle.buildProfile.resourceProfile.fuelType, 'gas');
+const passportWeightResult = fleet.calculateFleetWeightResult(passportFleetVehicle, [], []);
+const fleetAverageConfidenceNotice = fleetOverviewStatus.buildFleetConfidenceNotice([
+  {
+    id: legacy.vehicle.id,
+    name: legacy.vehicle.nickname,
+    weightResult,
+    vehicleSuggestions: ['Verify Ram accessory weights.'],
+  },
+  {
+    id: passportFleetVehicle.id,
+    name: passportFleetVehicle.nickname,
+    weightResult: passportWeightResult,
+    vehicleSuggestions: ['Verify Passport door placard.'],
+  },
+]);
+assert.ok(
+  fleetAverageConfidenceNotice.reasons.some((reason) => reason.includes('Fleet average combines 2 vehicle confidence scores')),
+  'Average Fleet confidence notice should explain that it combines each vehicle card score.',
+);
+assert.ok(
+  fleetAverageConfidenceNotice.reasons.some((reason) => reason.includes(legacy.vehicle.nickname)) &&
+    fleetAverageConfidenceNotice.reasons.some((reason) => reason.includes(passportFleetVehicle.nickname)),
+  'Average Fleet confidence notice should include contributing vehicles.',
+);
+assert.ok(
+  fleetAverageConfidenceNotice.improvements.some((action) => action.includes('Ram')) &&
+    fleetAverageConfidenceNotice.improvements.some((action) => action.includes('Passport')),
+  'Average Fleet confidence notice should include vehicle-specific improvement actions when available.',
+);
+const passportConfidenceNotice = fleetOverviewStatus.buildFleetConfidenceNotice([
+  {
+    id: passportFleetVehicle.id,
+    name: passportFleetVehicle.nickname,
+    weightResult: passportWeightResult,
+    vehicleSuggestions: ['Verify Passport door placard.'],
+  },
+]);
+assert.ok(
+  passportConfidenceNotice.title.includes(passportFleetVehicle.nickname) &&
+    !passportConfidenceNotice.title.startsWith('Fleet confidence'),
+  'Single-vehicle confidence notice should be labeled for the selected vehicle, not the Fleet average.',
+);
 assert.ok(
   profile.validateFleetVehicleProfileDraft({
     ...ramProfileDraft,
@@ -1004,8 +1137,26 @@ const verifiedVehicle = weightSummary.applyFleetWeightVerification(legacy.vehicl
 const verifiedWeightResult = fleet.calculateFleetWeightResult(verifiedVehicle, [], []);
 const verifiedWeightSummary = weightSummary.buildFleetWeightSummary(verifiedVehicle, verifiedWeightResult);
 assert.ok(
-  verifiedWeightSummary.confidenceScore > emptyRiskWeightSummary.confidenceScore,
-  'Confidence should increase after weight verification.',
+  verifiedWeightSummary.payloadRemainingLb < emptyRiskWeightSummary.payloadRemainingLb,
+  'Verified base weight should still update payload math.',
+);
+const sourceOnlyVerifiedVehicle = weightSummary.applyFleetWeightVerification(legacy.vehicle, {
+  id: 'verification-scale-source-only',
+  vehicleId: legacy.vehicle.id,
+  target: 'baseNetWeight',
+  weight: fleet.createFleetWeightValue(legacy.vehicle.buildProfile.baseNetWeight.lbs, 'scale_ticket'),
+  method: 'scale_ticket',
+  sourceLabel: 'Scale ticket',
+  recordedAt: '2026-04-27T12:00:00.000Z',
+});
+const sourceOnlyVerifiedWeightResult = fleet.calculateFleetWeightResult(sourceOnlyVerifiedVehicle, [], []);
+const sourceOnlyVerifiedWeightSummary = weightSummary.buildFleetWeightSummary(
+  sourceOnlyVerifiedVehicle,
+  sourceOnlyVerifiedWeightResult,
+);
+assert.ok(
+  sourceOnlyVerifiedWeightSummary.confidenceScore > emptyRiskWeightSummary.confidenceScore,
+  'Verified base weight source upgrades should increase Fleet confidence.',
 );
 assert.strictEqual(weightSummary.fleetRiskTone('critical'), 'unavailable');
 assert.strictEqual(weightSummary.fleetRiskTone('caution'), 'warning');

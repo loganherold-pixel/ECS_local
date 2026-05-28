@@ -5,6 +5,7 @@ node_modules/
 
 # Local Gradle caches/build outputs
 .gradle/
+.gradle-*/
 .gradle-local/
 .gradle-local-build2/
 .gradle-local-build3/
@@ -13,7 +14,9 @@ node_modules/
 .gradle-local-release-audit/
 .gradle-user-home/
 .gradle-local-fieldtest/
-.npm-cache/
+.android-home/
+.android-local/
+.npm-cache*/
 
 # Expo, smoke-test, and web export outputs
 .expo/
@@ -22,6 +25,7 @@ node_modules/
 .expo-local/
 .expo-export-check/
 .expo-runtime/
+.eas-spawn-tmp/
 .smoke/
 artifacts/
 dist/

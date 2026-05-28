@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,8 @@ import { TACTICAL } from '../../lib/theme';
 import { useTheme } from '../../context/ThemeContext';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
-const BAR_HEIGHT = 68;
+const COMPACT_BAR_HEIGHT = 50;
+const CRITICAL_BAR_HEIGHT = 68;
 const FADE_IN_MS = 340;
 const FADE_OUT_MS = 360;
 
@@ -102,8 +103,12 @@ export default function ExpeditionIntelligenceBar({
   const [state, setState] = useState<AdvisoryState>(advisoryStore.getState());
   const [reduceMotion, setReduceMotion] = useState(false);
   const fadeAnim = useStableAnimatedValue(0);
-  const visible = !!state.current && !!state.isVisible;
-  const currentMessageId = state.current?.id ?? null;
+  const transitionTokenRef = useRef(0);
+  const overrideMessageKey = override
+    ? `${override.badge}|${override.title}|${override.detail ?? ''}|${override.tone ?? ''}|${override.live ? 'live' : 'idle'}`
+    : null;
+  const visible = !!override || (!!state.current && !!state.isVisible);
+  const currentMessageId = overrideMessageKey ?? state.current?.id ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +144,7 @@ export default function ExpeditionIntelligenceBar({
 
   useEffect(() => {
     const shouldAnimate = !reduceMotion && !disableAnimations;
+    const transitionToken = ++transitionTokenRef.current;
     fadeAnim.stopAnimation();
 
     if (shouldAnimate) {
@@ -147,8 +153,13 @@ export default function ExpeditionIntelligenceBar({
         duration: visible ? FADE_IN_MS : FADE_OUT_MS,
         useNativeDriver: true,
       });
-      animation.start();
+      animation.start(({ finished }) => {
+        if (finished && transitionTokenRef.current === transitionToken) {
+          fadeAnim.setValue(visible ? 1 : 0);
+        }
+      });
       return () => {
+        transitionTokenRef.current += 1;
         animation.stop();
         fadeAnim.stopAnimation();
       };
@@ -157,12 +168,14 @@ export default function ExpeditionIntelligenceBar({
     }
   }, [currentMessageId, visible, reduceMotion, disableAnimations, fadeAnim]);
 
-  if (!enabled || !state.enabled) {
-    return <View style={[styles.reservedSpace, { backgroundColor: palette.bg, borderBottomColor: palette.border }]} />;
-  }
-
   const message = state.current;
   const mode: AdvisoryMode = message?.mode ?? 'standby';
+  const criticalState = mode === 'alert' || override?.tone === 'warning';
+
+  if (!enabled || !state.enabled) {
+    return <View style={[styles.reservedSpace, { height: COMPACT_BAR_HEIGHT, backgroundColor: palette.bg, borderBottomColor: palette.border }]} />;
+  }
+
   const fallbackVisual = MODE_VISUALS[mode] ?? MODE_VISUALS.standby;
   const overrideVisual = (() => {
     switch (override?.tone) {
@@ -233,7 +246,16 @@ export default function ExpeditionIntelligenceBar({
       : 'Expedition intelligence standing by';
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.bg, borderBottomColor: palette.border }]}>
+    <View
+      style={[
+        styles.container,
+        {
+          height: criticalState ? CRITICAL_BAR_HEIGHT : COMPACT_BAR_HEIGHT,
+          backgroundColor: palette.bg,
+          borderBottomColor: palette.border,
+        },
+      ]}
+    >
       <Animated.View
         style={[
           styles.bar,
@@ -249,8 +271,6 @@ export default function ExpeditionIntelligenceBar({
       >
         {override || message ? (
           <View style={styles.content}>
-            <View style={[styles.accentStrip, { backgroundColor: visual.accent }]} />
-
             <View style={styles.indicatorGroup}>
               <View style={[styles.modeDot, { backgroundColor: visual.indicator }]} />
               {override?.live ? (
@@ -266,7 +286,7 @@ export default function ExpeditionIntelligenceBar({
             <View style={styles.messageBlock}>
               <Text
                 style={[styles.messageTitle, { color: visual.text }]}
-                numberOfLines={2}
+                numberOfLines={criticalState ? 2 : 1}
                 ellipsizeMode="tail"
               >
                 {renderedTitle}
@@ -274,7 +294,7 @@ export default function ExpeditionIntelligenceBar({
               {renderedDetail ? (
                 <Text
                   style={[styles.messageDetail, { color: isLight ? colors.textSecondary : TACTICAL.textMuted }]}
-                  numberOfLines={2}
+                  numberOfLines={criticalState ? 2 : 1}
                   ellipsizeMode="tail"
                 >
                   {renderedDetail}
@@ -300,12 +320,6 @@ export default function ExpeditionIntelligenceBar({
           <View style={styles.emptyContent}>
             <View
               style={[
-                styles.emptyAccent,
-                { backgroundColor: MODE_VISUALS.standby.accent },
-              ]}
-            />
-            <View
-              style={[
                 styles.emptyDot,
                 { backgroundColor: MODE_VISUALS.standby.indicator },
               ]}
@@ -327,17 +341,15 @@ export default function ExpeditionIntelligenceBar({
 
 const styles = StyleSheet.create({
   reservedSpace: {
-    height: BAR_HEIGHT,
     borderBottomWidth: 1,
     backgroundColor: TACTICAL.bg,
     borderBottomColor: TACTICAL.border,
   },
 
   container: {
-    height: BAR_HEIGHT,
     paddingHorizontal: 12,
-    paddingTop: 5,
-    paddingBottom: 5,
+    paddingTop: 4,
+    paddingBottom: 4,
     justifyContent: 'center',
     borderBottomWidth: 1,
     backgroundColor: TACTICAL.bg,
@@ -363,11 +375,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingRight: 12,
     gap: 8,
-  },
-
-  accentStrip: {
-    width: 3,
-    alignSelf: 'stretch',
   },
 
   indicatorGroup: {
@@ -430,17 +437,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     opacity: 0.42,
-  },
-
-  emptyAccent: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 3,
-    borderTopLeftRadius: 10,
-    borderBottomLeftRadius: 10,
-    opacity: 0.45,
   },
 
   emptyDot: {

@@ -74,9 +74,11 @@ assert(
 assert(
   realtimeSource.includes('_warnThrottled') &&
     realtimeSource.includes('suppressedRepeats') &&
+    realtimeSource.includes('realtime_subscribe_timeout_warning_deferred') &&
+    realtimeSource.includes("reason === 'subscription_timeout' && wasInitialSubscribe") &&
     !realtimeSource.includes("console.warn('[RealtimeSync] Channel error/closed')") &&
     !realtimeSource.includes("console.warn('[RealtimeSync] Subscription timed out')"),
-  'RealtimeSync should throttle repeated channel warnings instead of logging every failure.',
+  'RealtimeSync should defer first subscription-timeout warnings and throttle repeated channel warnings.',
 );
 
 assert(

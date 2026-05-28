@@ -5,10 +5,12 @@ This plan validates the production unified scanner and telemetry pipeline with r
 ## Scope
 
 - Power-device discovery uses the unified scanner only.
+- Bluestack provider readiness is governed by `docs/bluestack-provider-readiness.md`.
 - The Device Connections UI shows one actionable list: **Found nearby power and OBD2 devices**.
 - Saved, known, failed, and cloud-only records do not appear as connectable nearby devices.
 - EcoFlow cloud authorization is separate from local BLE discovery/connection.
 - OBD2 connected means native transport plus OBD initialization/handshake succeeded.
+- Propane and water monitors can be linked as utility sensor profiles, but live level telemetry requires a verified parser.
 - Streaming means live telemetry reaches the ECS telemetry/widget store.
 - Disconnect stops provider streams, BLE monitors/subscriptions, polling loops, and clears or ages live widget telemetry.
 
@@ -19,6 +21,7 @@ This plan validates the production unified scanner and telemetry pipeline with r
 - One BLE-capable supported or likely-supported power station.
 - EcoFlow power station for cloud/BLE separation testing.
 - BLE ELM327-compatible OBD2 adapter supported by ECS.
+- Optional propane and water/fluid BLE monitors for utility profile linking.
 - Vehicle with OBD2 port.
 - Access to device settings for Bluetooth and permissions.
 

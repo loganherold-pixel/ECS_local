@@ -172,6 +172,9 @@ Password reset:
 - Deep link destination: `/create-access-key?mode=reset`
 - Verification and completion owner: [app/create-access-key.tsx](/C:/Users/logan/Desktop/ECS_local/app/create-access-key.tsx)
 - Route gating owner: [app/_layout.tsx](/C:/Users/logan/Desktop/ECS_local/app/_layout.tsx)
+- Email template owner: [supabase/templates/recovery.html](/C:/Users/logan/Desktop/ECS_local/supabase/templates/recovery.html)
+- Local template config: [supabase/config.toml](/C:/Users/logan/Desktop/ECS_local/supabase/config.toml) under `[auth.email.template.recovery]`
+- Production sender requirement: Supabase Auth custom SMTP must send from `admin@expeditioncommand.com` with sender name `Expedition Command`. SMTP credentials must be configured in Supabase project settings or secrets, never committed.
 
 Invite or activation:
 

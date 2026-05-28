@@ -112,15 +112,16 @@ export default function ExpeditionTab({
 
   const resolvedRouteLifecycleState: RouteLifecycleState =
     routeLifecycleState ?? (routeCompleted ? 'completed' : hasActiveRoute ? 'active' : 'idle');
+  const hasCampReviewAvailable = campCount > 0 || hasActiveRoute;
 
   useEffect(() => {
     setExpeditionFrameworkPreviewState({
       routeLifecycleState: resolvedRouteLifecycleState,
       hasActiveExpedition: hasActiveRoute,
       teamMemberCount,
-      hasRouteCamps: campCount > 0,
+      hasRouteCamps: hasCampReviewAvailable,
     });
-  }, [campCount, hasActiveRoute, resolvedRouteLifecycleState, teamMemberCount]);
+  }, [hasActiveRoute, hasCampReviewAvailable, resolvedRouteLifecycleState, teamMemberCount]);
 
   useEffect(() => {
     void refreshAssessments();
@@ -279,9 +280,9 @@ export default function ExpeditionTab({
       label: 'Camp',
       icon: 'bonfire-outline',
       enabled: isCampEnabled(frameworkState),
-      status: isCampEnabled(frameworkState) ? campAssessment.status : 'No camps on active route',
+      status: isCampEnabled(frameworkState) ? campAssessment.status : 'No camp review available',
       assessmentStatus: campAssessment.assessmentStatus,
-      disabledHint: 'No camps on active route',
+      disabledHint: 'No camp review available',
       unreadCount: getVisibleUnreadCount(frameworkState, 'camp'),
       alertCount: campAssessment.alertCount,
       stale: campAssessment.stale,
@@ -441,27 +442,29 @@ function ExpeditionCard({
             color={card.enabled ? TACTICAL.amber : TACTICAL.textMuted}
           />
         </View>
-        <View style={[
-          styles.cardStatusPill,
-          statusTone === 'critical' && styles.cardStatusCritical,
-          statusTone === 'caution' && styles.cardStatusCaution,
-          statusTone === 'watch' && styles.cardStatusWatch,
-          statusTone === 'unknown' && styles.cardStatusUnknown,
-          !card.enabled && styles.cardStatusDisabled,
-        ]}>
-          <Text style={[
-            styles.cardStatusPillText,
-            !card.enabled && styles.disabledHintText,
+        <View style={styles.cardStatusStack}>
+          <View style={[
+            styles.cardStatusPill,
+            statusTone === 'critical' && styles.cardStatusCritical,
+            statusTone === 'caution' && styles.cardStatusCaution,
+            statusTone === 'watch' && styles.cardStatusWatch,
+            statusTone === 'unknown' && styles.cardStatusUnknown,
+            !card.enabled && styles.cardStatusDisabled,
           ]}>
-            {String(statusTone).toUpperCase()}
-          </Text>
+            <Text style={[
+              styles.cardStatusPillText,
+              !card.enabled && styles.disabledHintText,
+            ]}>
+              {String(statusTone).toUpperCase()}
+            </Text>
+          </View>
+          {showUnread ? (
+            <View style={styles.cardUnreadBadge}>
+              <Text style={styles.cardUnreadBadgeText}>{badgeCount}</Text>
+            </View>
+          ) : null}
         </View>
       </View>
-      {showUnread ? (
-        <View style={styles.cardUnreadBadge}>
-          <Text style={styles.cardUnreadBadgeText}>{badgeCount}</Text>
-        </View>
-      ) : null}
       <Text style={[styles.cardLabel, !card.enabled && styles.disabledText]} numberOfLines={1}>
         {card.label}
       </Text>
@@ -471,7 +474,7 @@ function ExpeditionCard({
           card.stale && card.enabled && styles.cardStatusStale,
           !card.enabled && styles.disabledHintText,
         ]}
-        numberOfLines={1}
+        numberOfLines={2}
       >
         {card.status}
       </Text>
@@ -577,9 +580,13 @@ const styles = StyleSheet.create({
   cardHeader: {
     minHeight: 22,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 4,
+  },
+  cardStatusStack: {
+    alignItems: 'flex-end',
+    gap: 5,
   },
   cardStatusPill: {
     maxWidth: 66,
@@ -631,9 +638,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(139,148,158,0.08)',
   },
   cardUnreadBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
     minWidth: 18,
     height: 18,
     borderRadius: 9,
@@ -659,6 +663,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 9,
     fontWeight: '700',
+    lineHeight: 12,
   },
   cardStatusStale: {
     color: TACTICAL.amber,

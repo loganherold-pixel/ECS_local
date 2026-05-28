@@ -144,6 +144,15 @@ export interface VehicleBuildProfile {
   isLeveled?: boolean | null;
   frontLevelInches?: number | null;
   groundClearanceInches?: number | null;
+  overallLengthIn?: number | null;
+  overallWidthIn?: number | null;
+  overallHeightIn?: number | null;
+  trackWidthFrontIn?: number | null;
+  trackWidthRearIn?: number | null;
+  approachAngleDeg?: number | null;
+  breakoverAngleDeg?: number | null;
+  departureAngleDeg?: number | null;
+  turningDiameterFt?: number | null;
   resourceProfile?: FleetResourceProfile;
   drivetrain?: string | null;
   engine?: string | null;
@@ -335,6 +344,15 @@ type LegacyVehicleInput = {
   is_leveled?: boolean | null;
   front_level_inches?: number | null;
   ground_clearance_inches?: number | null;
+  overall_length_in?: number | null;
+  overall_width_in?: number | null;
+  overall_height_in?: number | null;
+  track_width_front_in?: number | null;
+  track_width_rear_in?: number | null;
+  approach_angle_deg?: number | null;
+  breakover_angle_deg?: number | null;
+  departure_angle_deg?: number | null;
+  turning_diameter_ft?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -367,6 +385,24 @@ type LegacyVehicleSpecInput = {
   frontLevelInches?: number | null;
   ground_clearance_inches?: number | null;
   groundClearanceInches?: number | null;
+  overall_length_in?: number | null;
+  overallLengthIn?: number | null;
+  overall_width_in?: number | null;
+  overallWidthIn?: number | null;
+  overall_height_in?: number | null;
+  overallHeightIn?: number | null;
+  track_width_front_in?: number | null;
+  trackWidthFrontIn?: number | null;
+  track_width_rear_in?: number | null;
+  trackWidthRearIn?: number | null;
+  approach_angle_deg?: number | null;
+  approachAngleDeg?: number | null;
+  breakover_angle_deg?: number | null;
+  breakoverAngleDeg?: number | null;
+  departure_angle_deg?: number | null;
+  departureAngleDeg?: number | null;
+  turning_diameter_ft?: number | null;
+  turningDiameterFt?: number | null;
   cab?: string | null;
   bed_length?: string | null;
   trim?: string | null;
@@ -656,6 +692,37 @@ export const VEHICLE_WEIGHT_DEFAULTS_CATALOG: readonly VehicleWeightDefaultCatal
     }),
     gvwr: createFleetWeightValue(6300, 'ecs_default', {
       sourceLabel: 'Toyota 4Runner ECS GVWR estimate, verify by door placard',
+      confidence: 72,
+    }),
+    confidenceTier: 'vehicle_type_default',
+    confidenceLevel: 'ecs_estimate',
+  },
+  {
+    id: 'honda-passport-trailsport-model-estimate',
+    make: 'honda',
+    model: 'passport',
+    trim: 'trailsport',
+    netEmptyWeight: createFleetWeightValue(4300, 'ecs_default', {
+      sourceLabel: 'Honda Passport TrailSport ECS model estimate, verify by door placard',
+      confidence: 72,
+    }),
+    gvwr: createFleetWeightValue(5500, 'ecs_default', {
+      sourceLabel: 'Honda Passport TrailSport GVWR estimate, verify by door placard',
+      confidence: 72,
+    }),
+    confidenceTier: 'vehicle_type_default',
+    confidenceLevel: 'ecs_estimate',
+  },
+  {
+    id: 'honda-passport-model-estimate',
+    make: 'honda',
+    model: 'passport',
+    netEmptyWeight: createFleetWeightValue(4300, 'ecs_default', {
+      sourceLabel: 'Honda Passport ECS model estimate, verify by door placard',
+      confidence: 72,
+    }),
+    gvwr: createFleetWeightValue(5500, 'ecs_default', {
+      sourceLabel: 'Honda Passport GVWR estimate, verify by door placard',
       confidence: 72,
     }),
     confidenceTier: 'vehicle_type_default',
@@ -1102,11 +1169,11 @@ function copyForWeightConfidence(level: FleetWeightConfidenceLevel): Pick<FleetW
     case 'verified':
       return { label: 'Verified', copy: 'Weight profile uses verified vehicle specs.' };
     case 'catalog_estimate':
-      return { label: 'Catalog estimate', copy: 'Weight profile uses catalog/spec data. Verify door placard when possible.' };
+      return { label: 'Catalog estimate', copy: 'Weight profile uses catalog/spec data for saved vehicle values.' };
     case 'ecs_estimate':
-      return { label: 'ECS estimate', copy: 'Weight profile is estimated from saved vehicle details. Confirm key specs for higher confidence.' };
+      return { label: 'Saved profile', copy: 'Weight profile uses saved vehicle values. Confirm estimated or user-entered core weights for higher Fleet confidence.' };
     case 'class_estimate':
-      return { label: 'Class estimate', copy: 'Weight profile uses generic vehicle-class values until specs are confirmed.' };
+      return { label: 'Class estimate', copy: 'Weight profile uses generic vehicle-class values until specific vehicle values are entered.' };
     case 'incomplete':
       return { label: 'Incomplete', copy: 'Weight profile is missing key specs. ECS will keep estimates conservative.' };
     default:
@@ -1187,6 +1254,14 @@ function buildWeightConfidenceMetadata(input: {
     score: clampFleetConfidence(input.confidence),
     reasons: Array.from(new Set(reasons)),
   };
+}
+
+function confidenceForCoreFleetWeight(value: FleetWeightValue | null | undefined): number {
+  return value && value.lbs > 0 && value.source !== 'unknown' ? value.confidence : 0;
+}
+
+function optionalFleetWeightConfidence(value: FleetWeightValue | null | undefined): number | null {
+  return value && value.lbs > 0 ? value.confidence : null;
 }
 
 export function calculateFleetWeightResult(
@@ -1296,16 +1371,15 @@ export function calculateFleetWeightResult(
         : gvwrUsagePct != null && gvwrUsagePct >= 85
           ? 'watch'
           : 'clear';
+  const confidenceInputs = [
+    confidenceForCoreFleetWeight(baseNetWeight),
+    confidenceForCoreFleetWeight(gvwr),
+    optionalFleetWeightConfidence(installedAccessoryWeight),
+    optionalFleetWeightConfidence(activeLoadoutWeight),
+    optionalFleetWeightConfidence(consumablesWeight),
+  ].filter((value): value is number => typeof value === 'number');
   const confidence = clampFleetConfidence(
-    gvwr
-      ? (
-          baseNetWeight.confidence +
-          installedAccessoryWeight.confidence +
-          activeLoadoutWeight.confidence +
-          consumablesWeight.confidence +
-          gvwr.confidence
-        ) / 5
-      : 0,
+    confidenceInputs.reduce((sum, value) => sum + value, 0) / Math.max(1, confidenceInputs.length),
   );
   const validationFlags = buildWeightValidationFlags({
     baseNetWeight,
@@ -1381,7 +1455,12 @@ export function scoreFleetVehicle(
     ...(weightResult.topHeavyRisk === 'caution' || weightResult.topHeavyRisk === 'critical'
       ? ['Move roof or bed-high weight lower when possible.']
       : []),
-    ...(weightResult.confidence < 75 ? ['Verify base weight, GVWR, and major accessory weights.'] : []),
+    ...(weightResult.installedAccessoryWeight.lbs > 0 && weightResult.installedAccessoryWeight.confidence < 75
+      ? ['Replace major accessory weight estimates with measured or manufacturer-listed weights.']
+      : []),
+    ...(weightResult.activeLoadoutWeight.lbs > 0 && weightResult.activeLoadoutWeight.confidence < 75
+      ? ['Replace loadout item estimates with measured item or loaded-bin weights.']
+      : []),
     ...(vehicle.buildProfile.useCases.includes('towing') && weightResult.zoneWeights.hitch.totalWeight.lbs > 0
       ? ['Review hitch and rear axle load before towing.']
       : []),
@@ -1510,6 +1589,42 @@ export function adaptLegacyVehicleToFleetVehicle(input: {
       positiveNumber(specs?.groundClearanceInches)
       ?? positiveNumber(specs?.ground_clearance_inches)
       ?? positiveNumber(vehicle.ground_clearance_inches),
+    overallLengthIn:
+      positiveNumber(specs?.overallLengthIn)
+      ?? positiveNumber(specs?.overall_length_in)
+      ?? positiveNumber(vehicle.overall_length_in),
+    overallWidthIn:
+      positiveNumber(specs?.overallWidthIn)
+      ?? positiveNumber(specs?.overall_width_in)
+      ?? positiveNumber(vehicle.overall_width_in),
+    overallHeightIn:
+      positiveNumber(specs?.overallHeightIn)
+      ?? positiveNumber(specs?.overall_height_in)
+      ?? positiveNumber(vehicle.overall_height_in),
+    trackWidthFrontIn:
+      positiveNumber(specs?.trackWidthFrontIn)
+      ?? positiveNumber(specs?.track_width_front_in)
+      ?? positiveNumber(vehicle.track_width_front_in),
+    trackWidthRearIn:
+      positiveNumber(specs?.trackWidthRearIn)
+      ?? positiveNumber(specs?.track_width_rear_in)
+      ?? positiveNumber(vehicle.track_width_rear_in),
+    approachAngleDeg:
+      positiveNumber(specs?.approachAngleDeg)
+      ?? positiveNumber(specs?.approach_angle_deg)
+      ?? positiveNumber(vehicle.approach_angle_deg),
+    breakoverAngleDeg:
+      positiveNumber(specs?.breakoverAngleDeg)
+      ?? positiveNumber(specs?.breakover_angle_deg)
+      ?? positiveNumber(vehicle.breakover_angle_deg),
+    departureAngleDeg:
+      positiveNumber(specs?.departureAngleDeg)
+      ?? positiveNumber(specs?.departure_angle_deg)
+      ?? positiveNumber(vehicle.departure_angle_deg),
+    turningDiameterFt:
+      positiveNumber(specs?.turningDiameterFt)
+      ?? positiveNumber(specs?.turning_diameter_ft)
+      ?? positiveNumber(vehicle.turning_diameter_ft),
     resourceProfile,
     drivetrain: specs?.drivetrain ?? null,
     engine: specs?.engine ?? null,

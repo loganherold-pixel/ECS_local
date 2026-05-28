@@ -83,10 +83,10 @@ const PROVIDER_REGISTRY: BluProviderMeta[] = [
   {
     id: 'victron',
     displayName: 'Victron Energy',
-    status: 'planned',
+    status: 'limited',
     icon: 'git-network',
     accentColor: '#1976D2',
-    statusNote: 'VE.Direct / BLE integration planned',
+    statusNote: 'Native BLE telemetry path enabled; live promotion requires decoded hardware fields',
   },
 ];
 

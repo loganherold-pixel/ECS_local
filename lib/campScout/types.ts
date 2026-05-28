@@ -79,6 +79,9 @@ export type CampScoutCandidate = {
   distanceFromNearestRoadMiles?: number;
   distanceFromPavementMiles?: number;
   slopeEstimate?: number;
+  terrainType?: string;
+  surfaceType?: string;
+  landUse?: string;
   terrainConfidence?: number;
   accessConfidence: number;
   legalityConfidence: number;
@@ -111,6 +114,9 @@ export type CampScoutCandidate = {
   distanceFromRoadOrTrail?: number;
   slope?: number;
   isPrivateLand?: boolean;
+  isWaterBody?: boolean;
+  nearBuildings?: boolean;
+  nearHighway?: boolean;
   isProtectedArea?: boolean;
   isClosed?: boolean;
   noCamping?: boolean;

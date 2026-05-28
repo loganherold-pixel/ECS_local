@@ -171,6 +171,26 @@ export const pinStore = {
     return true;
   },
 
+  deleteAll: (): number => {
+    const all = getAllPins();
+    if (all.length === 0) return 0;
+    savePins([]);
+    console.log(TAG, `Deleted all pins: ${all.length}`);
+    return all.length;
+  },
+
+  deleteMany: (ids: string[]): number => {
+    const deleteIds = new Set(ids);
+    if (deleteIds.size === 0) return 0;
+    const all = getAllPins();
+    const filtered = all.filter(p => !deleteIds.has(p.id));
+    const deletedCount = all.length - filtered.length;
+    if (deletedCount === 0) return 0;
+    savePins(filtered);
+    console.log(TAG, `Deleted pins: ${deletedCount}`);
+    return deletedCount;
+  },
+
   // ── Filtering ──────────────────────────────────────────────
   filter: (opts: {
     showWaypoints?: boolean;

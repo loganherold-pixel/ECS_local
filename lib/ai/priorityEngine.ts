@@ -296,6 +296,18 @@ export function assessWeatherPriority(params: {
   offline?: boolean;
   confidence?: ECSPriorityConfidenceInput;
 }): ECSPriorityResult {
+  const confidenceLevel = confidenceLevelOf(params.confidence);
+  const confidenceReduced =
+    params.offline === true ||
+    params.stale === true ||
+    confidenceLevel === 'limited' ||
+    confidenceLevel === 'low' ||
+    confidenceLevel === 'unknown';
+  const reasons: ECSPriorityReason[] = params.offline || params.stale
+    ? ['weather_exposure', 'offline_degraded']
+    : confidenceReduced
+      ? ['weather_exposure', 'limited_confidence']
+      : ['weather_exposure'];
   let level: ECSPriorityLevel;
   switch (params.severity) {
     case 'extreme':
@@ -309,7 +321,7 @@ export function assessWeatherPriority(params: {
       break;
     case 'none':
     default:
-      level = params.offline || params.stale ? 'advisory' : 'informational';
+      level = confidenceReduced ? 'advisory' : 'informational';
       break;
   }
 
@@ -327,19 +339,19 @@ export function assessWeatherPriority(params: {
           ? 'Weather warning'
           : params.severity === 'advisory'
             ? 'Weather advisory'
-            : params.offline || params.stale
+            : confidenceReduced
               ? 'Weather confidence reduced'
               : 'Weather stable',
     shortReason:
       params.severity === 'none'
-        ? params.offline || params.stale
-          ? 'Weather is cached or stale'
+        ? confidenceReduced
+          ? 'Weather source is cached, stale, or confidence-limited'
           : 'No elevated weather signal'
         : params.routeActive
           ? 'Weather is affecting the active route'
           : 'Weather is worth operator attention',
     confidence: params.confidence,
-    reasons: params.offline || params.stale ? ['weather_exposure', 'offline_degraded'] : ['weather_exposure'],
+    reasons,
     sourceKey: 'weather',
   });
 }

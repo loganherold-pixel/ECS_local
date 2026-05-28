@@ -51,6 +51,12 @@ const reactStub = {
   memo(component) {
     return component;
   },
+  useEffect() {
+    return undefined;
+  },
+  useMemo(factory) {
+    return factory();
+  },
   useState(initialValue) {
     let value = typeof initialValue === 'function' ? initialValue() : initialValue;
     return [
@@ -81,6 +87,36 @@ const reactNativeStub = {
   View: 'View',
 };
 
+const svgStub = {
+  __esModule: true,
+  default: 'Svg',
+  Circle: 'Circle',
+  G: 'G',
+  Line: 'Line',
+  Path: 'Path',
+};
+
+const reanimatedStub = {
+  __esModule: true,
+  default: {
+    createAnimatedComponent(component) {
+      return component;
+    },
+  },
+  useAnimatedProps(factory) {
+    return factory();
+  },
+  useAnimatedStyle(factory) {
+    return factory();
+  },
+  useSharedValue(initialValue) {
+    return { value: initialValue };
+  },
+  withTiming(value) {
+    return value;
+  },
+};
+
 const mockBackdropSource = { mock: 'jeep-source' };
 let accelerometerEnabled = null;
 let accelerometerPitchDeg = 2.5;
@@ -90,6 +126,8 @@ const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react') return reactStub;
   if (request === 'react-native') return reactNativeStub;
+  if (request === 'react-native-svg') return svgStub;
+  if (request === 'react-native-reanimated') return reanimatedStub;
   if (request.includes('attitudeMonitorVehicleVisual')) {
     return {
       useActiveVehicleAttitudeBackdrop: () => ({
@@ -167,19 +205,19 @@ assert.strictEqual(
   mockBackdropSource,
   'Connected widget should pass the resolved local image source into the presentational widget.',
 );
-assert.strictEqual(textContent(findOne(dashboardFedTree, byTestID('vehicle-attitude-pitch-degree-readout')).node), '+6.4°');
-assert.strictEqual(textContent(findOne(dashboardFedTree, byTestID('vehicle-attitude-roll-degree-readout')).node), '-3.2°');
+assert.strictEqual(textContent(findOne(dashboardFedTree, byTestID('attitude-command-pitch-dial-meter-degree-readout')).node), '+6°');
+assert.strictEqual(textContent(findOne(dashboardFedTree, byTestID('attitude-command-roll-dial-meter-degree-readout')).node), '-3°');
 
 const selfFedTree = Connected({});
 assert.strictEqual(accelerometerEnabled, true, 'Standalone connected widget should use the existing accelerometer hook.');
-assert.strictEqual(textContent(findOne(selfFedTree, byTestID('vehicle-attitude-pitch-degree-readout')).node), '+2.5°');
-assert.strictEqual(textContent(findOne(selfFedTree, byTestID('vehicle-attitude-roll-degree-readout')).node), '-1.5°');
+assert.strictEqual(textContent(findOne(selfFedTree, byTestID('attitude-command-pitch-dial-meter-degree-readout')).node), '+3°');
+assert.strictEqual(textContent(findOne(selfFedTree, byTestID('attitude-command-roll-dial-meter-degree-readout')).node), '-1°');
 
 accelerometerPitchDeg = undefined;
 accelerometerRollDeg = undefined;
 const missingTelemetryTree = Connected({});
-assert.strictEqual(textContent(findOne(missingTelemetryTree, byTestID('vehicle-attitude-pitch-degree-readout')).node), '+0.0°');
-assert.strictEqual(textContent(findOne(missingTelemetryTree, byTestID('vehicle-attitude-roll-degree-readout')).node), '+0.0°');
+assert.strictEqual(textContent(findOne(missingTelemetryTree, byTestID('attitude-command-pitch-dial-meter-degree-readout')).node), '0°');
+assert.strictEqual(textContent(findOne(missingTelemetryTree, byTestID('attitude-command-roll-dial-meter-degree-readout')).node), '0°');
 
 const connectedSource = fs.readFileSync(
   path.join(root, 'src', 'components', 'attitudeCommand', 'AttitudeCommandWidgetConnected.tsx'),
@@ -193,7 +231,8 @@ assert.ok(!connectedSource.includes('Rive'), 'Connected widget must not use Rive
 const widgetRenderersSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
 assert.ok(
   widgetRenderersSource.includes('function AttitudeCommandWidgetConnected({') &&
-    widgetRenderersSource.includes('return <VehicleAttitudeStage {...stageProps} />;') &&
+    widgetRenderersSource.includes('<VehicleAttitudeStage {...stageProps}>') &&
+    widgetRenderersSource.includes('<TirePressureDrivelineOverlay pressureState={tirePressureState} />') &&
     widgetRenderersSource.includes('<AttitudeCommandWidgetConnected') &&
     widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
     widgetRenderersSource.includes('rollDeg={commandStageRollDeg}') &&

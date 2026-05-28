@@ -163,6 +163,16 @@ assert(
 );
 
 assert(
+  !widgetRenderers.includes('powerLiveIndicator') &&
+    !widgetRenderers.includes('powerLiveDot') &&
+    !widgetRenderers.includes('powerLiveText') &&
+    !widgetRenderers.includes('powerFlowLineInput') &&
+    !widgetRenderers.includes('powerFlowLineOutput') &&
+    !widgetRenderers.includes('powerFlowPulseMini'),
+  'Dashboard Power Monitor must not render redundant live pills or React Native center flow rails around the blue Rive module.',
+);
+
+assert(
   metroConfig.includes("'riv'") &&
     packageJson.dependencies['@rive-app/react-native'] &&
     packageJson.dependencies['react-native-nitro-modules'],

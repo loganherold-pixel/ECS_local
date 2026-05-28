@@ -5,6 +5,7 @@ import {
   type PowerProviderId,
   type ProviderSupportLevel,
 } from './powerSetupStore';
+import { getBluestackProviderReadiness } from './bluestack/bluestackProviderReadiness';
 
 export type PowerReadinessState = 'connected' | 'partial' | 'manual' | 'unavailable';
 
@@ -26,6 +27,17 @@ export const BLU_PROVIDER_TO_POWER_PROVIDER: Record<string, PowerProviderId> = {
   renogy: 'Renogy',
   redarc: 'Redarc',
   dakota_lithium: 'DakotaLithium',
+};
+
+const POWER_PROVIDER_TO_BLU_PROVIDER: Record<PowerProviderId, string> = {
+  EcoFlow: 'ecoflow',
+  Bluetti: 'bluetti',
+  AnkerSolix: 'anker_solix',
+  Jackery: 'jackery',
+  GoalZero: 'goal_zero',
+  Renogy: 'renogy',
+  Redarc: 'redarc',
+  DakotaLithium: 'dakota_lithium',
 };
 
 const POWER_READINESS_META: Record<PowerReadinessState, Omit<PowerReadinessMeta, 'state'>> = {
@@ -75,6 +87,17 @@ export function resolveProviderReadiness(providerId: PowerProviderId): PowerRead
   if (supportLevel === 'verified') return getPowerReadinessMeta('connected');
   if (supportLevel === 'partial' || supportLevel === 'implemented_unverified') {
     return getPowerReadinessMeta('partial');
+  }
+  const bluestackReadiness = getBluestackProviderReadiness(POWER_PROVIDER_TO_BLU_PROVIDER[providerId]);
+  if (bluestackReadiness.stage === 'native_parser_pending') {
+    return {
+      state: 'partial',
+      label: 'PARSER PENDING',
+      color: '#FFB300',
+      icon: 'construct-outline',
+      summary: 'Bluestack can identify this provider, but live telemetry is not validated yet.',
+      detail: bluestackReadiness.statusDetail,
+    };
   }
   return getPowerReadinessMeta('unavailable');
 }

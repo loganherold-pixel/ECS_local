@@ -12,6 +12,9 @@ const header = fs
 const dashboardHeader = fs
   .readFileSync(path.join(root, 'components', 'dashboard', 'DashboardHeader.tsx'), 'utf8')
   .replace(/\r\n/g, '\n');
+const bluetoothNavigation = fs
+  .readFileSync(path.join(root, 'lib', 'bluetoothCommandNavigation.ts'), 'utf8')
+  .replace(/\r\n/g, '\n');
 const shellLayout = fs
   .readFileSync(path.join(root, 'lib', 'shellLayout.ts'), 'utf8')
   .replace(/\r\n/g, '\n');
@@ -160,8 +163,18 @@ assertIncludes(
 );
 assertIncludes(
   globalBanner,
-  'backgroundColor: ECS_BANNER_DARK_BACKGROUND',
-  'Every banner plate should have dark backing so the app body cannot bleed through at edges.',
+  "ECS_BANNER_LIGHT_BACKGROUND = '#F7F1E8'",
+  'Shared banner plate should provide a light fallback background behind image assets.',
+);
+assertIncludes(
+  globalBanner,
+  'backgroundColor: bannerBackground',
+  'Every banner plate should have theme-aware backing so the app body cannot bleed through at edges.',
+);
+assertIncludes(
+  globalBanner,
+  'resolveEcsPopupSurfaceTheme(effectiveTheme)',
+  'Every banner plate should resolve dark, light, and driving surface backing from the shared theme.',
 );
 assertIncludes(
   globalBanner,
@@ -305,6 +318,31 @@ assertIncludes(
   'width: 30,\n    height: 30,\n    minHeight: 30',
   'Dashboard Bluetooth should use the same 30px square footprint as the eye/profile controls.',
 );
+assertIncludes(
+  bluetoothNavigation,
+  "UNIFIED_BLUETOOTH_COMMAND_ROUTE = '/power/blu'",
+  'Bluetooth controls should share the canonical Device Connections route.',
+);
+assertIncludes(
+  header,
+  'openUnifiedBluetoothCommand(router',
+  'Shared tab header Bluetooth control should use the canonical launcher.',
+);
+assertIncludes(
+  dashboardHeader,
+  'openUnifiedBluetoothCommand(router',
+  'Dashboard header Bluetooth control should use the canonical launcher.',
+);
+assertNotIncludes(
+  header,
+  "router.push('/power')",
+  'Shared tab header Bluetooth control should not fall back to the old Power screen.',
+);
+assertNotIncludes(
+  dashboardHeader,
+  "router.push('/power')",
+  'Dashboard header Bluetooth control should not fall back to the old Power screen.',
+);
 
 assertIncludes(
   dashboardHeader,
@@ -407,6 +445,16 @@ assertIncludes(
   commandDock,
   'BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3',
   'Active CommandDock should drop the bottom banner background by three pixels.',
+);
+assertIncludes(
+  commandDock,
+  'const SHIELD_ICON_SIZE = 72',
+  'Dashboard center dock button should be roughly 10% smaller than the previous oversized 80px crest.',
+);
+assertIncludes(
+  commandDock,
+  'const CENTER_DASHBOARD_BUTTON_DROP = OUTER_DOCK_ITEM_VERTICAL_OFFSET + 9',
+  'Dashboard center dock button should sit centered inside the lower banner without riding the top rail.',
 );
 assertIncludes(
   commandDock,

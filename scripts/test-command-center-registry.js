@@ -29,32 +29,32 @@ function loadTsModule(relativePath, mocks = {}) {
 }
 
 const registry = loadTsModule('components/dashboard/commandCenter/commandCenterRegistry.ts', {
-  './RecoveryHazardCompass': { default: function RecoveryHazardCompass() {} },
-  './TrailDecisionCommand': { default: function TrailDecisionCommand() {} },
-  './CampScoutCommand': { default: function CampScoutCommand() {} },
-  './ExpeditionReadinessCommand': { ExpeditionReadinessCommand: function ExpeditionReadinessCommand() {} },
   '../../../lib/ecsCommandModuleStore': {},
 });
 
-assert.strictEqual(registry.COMMAND_CENTER_DEFAULT_MODE, 'attitude');
+assert.strictEqual(registry.COMMAND_CENTER_DEFAULT_MODE, 'threeDNavigation');
 assert.deepStrictEqual(registry.COMMAND_CENTER_IMPLEMENTED_MODES, [
-  'attitude',
   'threeDNavigation',
-  'recoveryHazardCompass',
-  'trailDecision',
-  'campScout',
-  'expeditionReadiness',
 ]);
 
 for (const id of [
-  'attitude',
   'threeDNavigation',
+]) {
+  assert(registry.COMMAND_CENTER_WIDGET_REGISTRY[id], `Registry missing ${id}`);
+}
+
+for (const id of [
+  'attitude',
   'recoveryHazardCompass',
   'trailDecision',
   'campScout',
   'expeditionReadiness',
 ]) {
-  assert(registry.COMMAND_CENTER_WIDGET_REGISTRY[id], `Registry missing ${id}`);
+  assert.strictEqual(
+    registry.COMMAND_CENTER_WIDGET_REGISTRY[id],
+    undefined,
+    `${id} should not be exposed in the command widget menu registry.`,
+  );
 }
 
 assert.strictEqual(
@@ -64,36 +64,50 @@ assert.strictEqual(
 assert(!registry.getSelectableCommandCenterModes({}).includes('convoyCommand'));
 
 assert.strictEqual(registry.commandModuleToCenterMode('follow3d'), 'threeDNavigation');
-assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'attitude');
-assert.strictEqual(registry.centerModeToCommandModule('campScout'), 'campScoutCommand');
+assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'threeDNavigation');
+assert.strictEqual(registry.commandModuleToCenterMode('attitude'), 'threeDNavigation');
+assert.strictEqual(registry.commandModuleToCenterMode('terrainRisk'), 'threeDNavigation');
+assert.strictEqual(registry.centerModeToCommandModule('campScout'), 'follow3d');
+assert.strictEqual(registry.centerModeToCommandModule('attitude'), 'follow3d');
 assert.strictEqual(registry.isCommandCenterModuleId('routeCommand'), false);
+assert.strictEqual(registry.isCommandCenterModuleId('terrainRisk'), false);
+assert.strictEqual(registry.isCommandCenterModuleId('attitude'), false);
 assert.strictEqual(registry.isCommandCenterModuleId('convoy-command'), false);
-assert.strictEqual(registry.isCommandCenterModuleId('expeditionReadinessCommand'), true);
+assert.strictEqual(registry.isCommandCenterModuleId('expeditionReadinessCommand'), false);
 
-assert.strictEqual(registry.resolveCommandCenterMode(null, {}), 'attitude');
-assert.strictEqual(registry.resolveCommandCenterMode('convoyCommand', {}), 'attitude');
-assert.strictEqual(registry.resolveCommandCenterMode('trailDecision', { hasLocation: false }), 'trailDecision');
-assert.strictEqual(registry.resolveCommandCenterMode('campScout', { hasLocation: false }), 'campScout');
+assert.strictEqual(registry.resolveCommandCenterMode(null, {}), 'threeDNavigation');
+assert.strictEqual(registry.resolveCommandCenterMode('convoyCommand', {}), 'threeDNavigation');
+assert.strictEqual(registry.resolveCommandCenterMode('trailDecision', { hasLocation: false }), 'threeDNavigation');
+assert.strictEqual(registry.resolveCommandCenterMode('campScout', { hasLocation: false }), 'threeDNavigation');
 assert.strictEqual(registry.resolveCommandCenterMode('threeDNavigation', { hasActiveRoute: false }), 'threeDNavigation');
 
-assert.strictEqual(
-  registry.getCommandCenterAvailability(
-    registry.COMMAND_CENTER_WIDGET_REGISTRY.trailDecision,
-    { hasLocation: false },
-  ),
-  'setupNeeded',
-);
-assert.strictEqual(
-  registry.getCommandCenterAvailability(
-    registry.COMMAND_CENTER_WIDGET_REGISTRY.recoveryHazardCompass,
-    { hasLocation: true, hasHeading: true, hasSavedPins: true },
-  ),
-  'available',
-);
-
-assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'"));
+assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d'"));
 assert(commandStoreSource.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE)'));
 assert(commandStoreSource.includes('normalizeECSCommandModuleId(stored)'));
 assert(commandStoreSource.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;"));
+assert(
+  commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n];"),
+  'Command module selector should expose only 3D Nav Command.',
+);
+for (const retiredLabel of [
+  'Attitude Command',
+  'Terrain Risk',
+  'Recovery / Hazard Compass',
+  'Trail Decision Command',
+  'Camp Scout Command',
+  'Expedition Readiness Command',
+  'Route Command',
+  'Power Command',
+  'Environmental Command',
+]) {
+  assert(
+    !commandStoreSource.includes(retiredLabel),
+    `${retiredLabel} should not remain in the command module selector registry.`,
+  );
+}
+assert(
+  commandStoreSource.includes('const normalized = normalizeECSCommandModuleId(moduleId) ?? DEFAULT_ECS_COMMAND_MODULE;'),
+  'setSelectedModule should normalize retired module ids back to the default command module.',
+);
 
 console.log('[command-center-registry] registry, availability, mapping, and fallback checks passed');

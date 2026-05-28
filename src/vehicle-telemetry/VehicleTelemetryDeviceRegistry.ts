@@ -27,6 +27,7 @@ import type {
   VehicleTelemetryCapabilities,
 } from './VehicleTelemetryTypes';
 import { EMPTY_CAPABILITIES, VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
+import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
 
 const TAG = '[VT-DeviceRegistry]';
 
@@ -40,15 +41,15 @@ function logVehicleTelemetryRegistryDev(...args: unknown[]) {
 const STALE_DEVICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ── Storage helpers ──────────────────────────────────────
-const mem: Record<string, string> = {};
+const vehicleTelemetryDevicePersistenceCache = createPersistedKeyValueCache('ecs_vehicle_telemetry_devices');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
+    return vehicleTelemetryDevicePersistenceCache.get(key);
+  } catch { return vehicleTelemetryDevicePersistenceCache.get(key); }
 }
 
 function sSet(key: string, value: string): void {
@@ -56,8 +57,8 @@ function sSet(key: string, value: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.setItem(key, value);
     }
-    mem[key] = value;
-  } catch { mem[key] = value; }
+    vehicleTelemetryDevicePersistenceCache.set(key, value);
+  } catch { vehicleTelemetryDevicePersistenceCache.set(key, value); }
 }
 
 function sRemove(key: string): void {
@@ -65,8 +66,8 @@ function sRemove(key: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.removeItem(key);
     }
-    delete mem[key];
-  } catch { delete mem[key]; }
+    vehicleTelemetryDevicePersistenceCache.delete(key);
+  } catch { vehicleTelemetryDevicePersistenceCache.delete(key); }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -77,9 +78,18 @@ class VehicleTelemetryDeviceRegistry {
   private devices: VehicleTelemetryDevice[] = [];
   private primaryDeviceId: string | null = null;
   private listeners: (() => void)[] = [];
+  private hydrationPromise: Promise<void>;
 
   constructor() {
     this.restore();
+    this.hydrationPromise = vehicleTelemetryDevicePersistenceCache.waitForHydration()
+      .then(() => {
+        this.restore();
+        this.notify();
+      })
+      .catch((error) => {
+        console.warn(TAG, 'Failed to hydrate device registry:', error);
+      });
   }
 
   // ── Persistence ────────────────────────────────────────
@@ -135,6 +145,7 @@ class VehicleTelemetryDeviceRegistry {
       } else {
         sRemove(VT_STORAGE_KEYS.PRIMARY_DEVICE);
       }
+      void vehicleTelemetryDevicePersistenceCache.flush();
     } catch (e) {
       console.warn(TAG, 'Failed to persist devices:', e);
     }
@@ -148,9 +159,14 @@ class VehicleTelemetryDeviceRegistry {
 
   subscribe(fn: () => void): () => void {
     this.listeners.push(fn);
+    fn();
     return () => {
       this.listeners = this.listeners.filter(l => l !== fn);
     };
+  }
+
+  async waitForHydration(): Promise<void> {
+    await this.hydrationPromise;
   }
 
   // ── Device Registration ────────────────────────────────

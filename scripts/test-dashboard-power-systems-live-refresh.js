@@ -35,21 +35,7 @@ function notIncludes(source, fragment, message) {
   "getWidgetToneColor('good')",
   "getWidgetToneColor('warning')",
 ].forEach((fragment) => {
-  includes(widgetSource, fragment, `Power widget should use semantic flow token ${fragment}`);
-});
-
-[
-  'useReducedMotion()',
-  'Animated.loop',
-  'Easing.inOut(Easing.quad)',
-  'useNativeDriver: true',
-  'const shouldAnimate = hasFlow && !reducedMotion;',
-  'pulse.stopAnimation()',
-  'const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);',
-  'const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);',
-  'isStale?: boolean;',
-].forEach((fragment) => {
-  includes(widgetSource, fragment, `Power flow animation should include ${fragment}`);
+  includes(widgetSource, fragment, `Power detail surfaces should retain semantic flow token ${fragment}`);
 });
 
 includes(
@@ -110,7 +96,22 @@ includes(
 notIncludes(
   widgetSource,
   '<PowerFlowGraphic inputWatts={totalInputWatts} outputWatts={totalOutputWatts} />',
-  'Power card should not animate raw totals without stale/live gating.',
+  'Power card should not render the legacy inline flow graphic; the blue Rive module owns power flow animation.',
+);
+notIncludes(
+  widgetSource,
+  'function PowerFlowGraphic',
+  'Power card should not keep the legacy center tick/flow graphic helper.',
+);
+notIncludes(
+  widgetSource,
+  'function usePowerFlowPulse',
+  'Power card should not keep the legacy center tick/flow pulse loop.',
+);
+notIncludes(
+  widgetSource,
+  "footer={<WidgetMetaLine",
+  'Power monitor should not show a redundant footer/live pill beneath the blue module.',
 );
 notIncludes(
   widgetSource,

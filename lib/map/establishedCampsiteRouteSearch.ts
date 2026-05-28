@@ -12,8 +12,9 @@ import {
   type RouteCoordinate,
 } from './routeGeometryUtils';
 
-export const DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES = 10;
+export const DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES = 5;
 export const DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_SUMMARY_LIMIT = 3;
+export const MAX_ESTABLISHED_CAMPSITE_ROUTE_ANALYSIS_POINTS = 80;
 
 export type RouteNearbyEstablishedCampsite = EstablishedCampsite & {
   distanceFromRouteMiles?: number;
@@ -36,6 +37,31 @@ function clampPositiveMiles(value: number | null | undefined, fallback: number):
 function roundMiles(value: number | null | undefined): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.round(value * 10) / 10;
+}
+
+function thinRouteForCampLayerSearch(
+  route: ReturnType<typeof normalizeRouteCoordinates>,
+  maxPoints = MAX_ESTABLISHED_CAMPSITE_ROUTE_ANALYSIS_POINTS,
+) {
+  if (route.length <= maxPoints) return route;
+  const result: ReturnType<typeof normalizeRouteCoordinates> = [];
+  const lastIndex = route.length - 1;
+  const step = lastIndex / (maxPoints - 1);
+  for (let index = 0; index < maxPoints; index += 1) {
+    const routeIndex = index === maxPoints - 1 ? lastIndex : Math.round(index * step);
+    const coordinate = route[routeIndex];
+    if (!coordinate) continue;
+    const previous = result[result.length - 1];
+    if (
+      previous &&
+      previous.latitude === coordinate.latitude &&
+      previous.longitude === coordinate.longitude
+    ) {
+      continue;
+    }
+    result.push(coordinate);
+  }
+  return result.length >= 2 ? result : route.slice(0, 2);
 }
 
 function isValidCampsiteCoordinate(campsite: EstablishedCampsite): boolean {
@@ -107,8 +133,9 @@ export function findEstablishedCampsitesNearRoute({
   corridorMiles = DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES,
   maxResults = DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_SUMMARY_LIMIT,
 }: EstablishedCampsiteRouteSearchOptions): RouteNearbyEstablishedCampsite[] {
-  const route = normalizeRouteCoordinates(routeCoordinates);
-  if (route.length < 2 || !Array.isArray(campsites) || campsites.length === 0) return [];
+  const normalizedRoute = normalizeRouteCoordinates(routeCoordinates);
+  if (normalizedRoute.length < 2 || !Array.isArray(campsites) || campsites.length === 0) return [];
+  const route = thinRouteForCampLayerSearch(normalizedRoute);
 
   const corridor = clampPositiveMiles(corridorMiles, DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES);
   const limit = Math.max(1, Math.floor(maxResults || DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_SUMMARY_LIMIT));

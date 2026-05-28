@@ -157,8 +157,17 @@ for (const marker of [
 }
 assert(
   unified.includes('isReleaseScannerBluetoothRoute') &&
-    unified.includes('!isReleaseScannerBluetoothRoute(entry.routing)'),
-  'generic and sensor scan results must be classified as hidden Bluetooth noise instead of visible release scanner rows',
+    unified.includes("entry.routing.owner === 'sensor' || entry.routing.owner === 'generic'") &&
+    unified.includes('releaseAccessoryDevices'),
+  'generic Bluetooth noise must stay hidden while Bluestack propane/water utility sensors can become visible release rows',
+);
+assert(
+  unified.includes('telemetryFallbackCandidateDiscoveries') &&
+    unified.includes('OBD2 Candidate') &&
+    unified.includes('Tap Connect to test the ELM327 handshake') &&
+    unified.includes('OBD2_FALLBACK_CANDIDATE_LIMIT') &&
+    unified.includes('OBD2_STRONG_UNKNOWN_CANDIDATE_MIN_RSSI'),
+  'unified scanner must surface capped OBD2 fallback candidates when no branded OBD2 adapter is found',
 );
 assert(
   unified.includes("await stopScan('connect_attempt')"),
@@ -235,16 +244,15 @@ assert(
 );
 assert(
   unified.includes("export type ECSConnectionSection = 'connected' | 'nearby' | 'known' | 'attention'") &&
-    unified.includes("connection_state === 'disconnected'") &&
     unified.includes("return 'known'") &&
     unified.includes('knownDevices'),
-  'disconnected saved/known devices must be excluded from production device rows even when compatibility state remains available',
+  'saved/known devices must remain in the production known-device section after disconnects',
 );
 assert(
-  unified.includes('sortDevices([...powerDevices, ...telemetryDevices])') &&
+  unified.includes('sortDevices([...powerDevices, ...telemetryDevices, ...releaseAccessoryDevices])') &&
     !unified.includes('sortDevices([...powerDevices, ...telemetryDevices, ...accessoryDevices])') &&
     unified.includes('unsupported_bluetooth_noise_hidden'),
-  'release scanner rows must include only power and telemetry devices while counting hidden Bluetooth noise in diagnostics',
+  'release scanner rows must include power, telemetry, and vetted Bluestack utility sensors while counting generic Bluetooth noise in diagnostics',
 );
 assert(
   unified.includes('stopScanning: (reason?: string) => Promise<void>;') &&
@@ -435,28 +443,36 @@ assert(
   'Expo Router must register /power/blu as the active Device Connections route',
 );
 assert(
-  !deviceConnectionsScreen.includes('PremiumAccessGate') &&
+    !deviceConnectionsScreen.includes('PremiumAccessGate') &&
     !deviceConnectionsScreen.includes('featureLabel="Device connections"') &&
-    deviceConnectionsScreen.includes('UNIFIED SCANNER') &&
-    deviceConnectionsScreen.includes('Scan for real nearby Bluetooth advertisements'),
-  'Device Connections must remain directly available for field power/OBD2 setup instead of being blocked by a Pro gate',
+    deviceConnectionsScreen.includes('BLUESTACK UNIFIED SCANNER') &&
+    deviceConnectionsScreen.includes('Scan for supported OBD2, power, propane, and water monitor connections'),
+  'Bluestack must remain directly available for field device setup instead of being blocked by a Pro gate',
 );
 const globalHeader = read('components/Header.tsx');
+const bluetoothNavigation = read('lib/bluetoothCommandNavigation.ts');
 assert(
-  globalHeader.includes("router.push('/power/blu')") &&
+  globalHeader.includes('openUnifiedBluetoothCommand(router') &&
     globalHeader.includes('accessibilityHint="Opens device connections and Bluetooth controls"'),
   'global Bluetooth pill must route to the corrected Device Connections screen',
 );
 const dashboardHeader = read('components/dashboard/DashboardHeader.tsx');
 assert(
-  dashboardHeader.includes("router.push('/power/blu')") &&
+  dashboardHeader.includes('openUnifiedBluetoothCommand(router') &&
     dashboardHeader.includes('accessibilityHint="Opens device connections and Bluetooth controls"'),
   'dashboard Bluetooth pill must route to the corrected Device Connections screen',
 );
 assert(
+  bluetoothNavigation.includes("UNIFIED_BLUETOOTH_COMMAND_ROUTE = '/power/blu'") &&
+    bluetoothNavigation.includes('openUnifiedBluetoothCommand') &&
+    !globalHeader.includes("router.push('/power')") &&
+    !dashboardHeader.includes("router.push('/power')"),
+  'top banner Bluetooth launchers must share the canonical Device Connections route without a legacy Power fallback',
+);
+assert(
     deviceConnectionsScreen.includes('Ready to scan') &&
     deviceConnectionsScreen.includes('Scanning nearby devices') &&
-    deviceConnectionsScreen.includes('No nearby power or OBD2 devices found') &&
+    deviceConnectionsScreen.includes('No Bluestack devices found') &&
     deviceConnectionsScreen.includes('Permission needed') &&
     deviceConnectionsScreen.includes('Bluetooth off') &&
     deviceConnectionsScreen.includes('Runtime unsupported') &&
@@ -468,24 +484,32 @@ assert(
   'Device Connections screen must show distinct idle, scanning, empty, permission, source failure, and unavailable scan states',
 );
 assert(
-  deviceConnectionsScreen.includes('Scan Visibility') &&
-    deviceConnectionsScreen.includes('Raw Seen') &&
-    deviceConnectionsScreen.includes('Filtered') &&
-    deviceConnectionsScreen.includes('Major reasons') &&
-    deviceConnectionsScreen.includes('connections.lastScanSummary'),
-  'Device Connections screen must render a visible scan summary with source diagnostics and empty-list reasons',
+    !deviceConnectionsScreen.includes('Scan Visibility') &&
+    !deviceConnectionsScreen.includes('Scan notes') &&
+    !deviceConnectionsScreen.includes('connections.lastScanSummary') &&
+    deviceConnectionsScreen.includes('title="Available devices"'),
+  'Device Connections screen must keep scan diagnostics out of the normal scanner UI and place available devices directly under the hero scan action',
 );
 assert(
   !deviceConnectionsScreen.includes('Saved / Known') &&
     !deviceConnectionsScreen.includes('A zero-result nearby scan does not remove these records.') &&
-    !deviceConnectionsScreen.includes('connections.knownDevices') &&
     !deviceConnectionsScreen.includes('Failed / Needs Attention') &&
     !deviceConnectionsScreen.includes('connections.attentionDevices.map') &&
-    !deviceConnectionsScreen.includes('connections.connectedDevices.map') &&
-    deviceConnectionsScreen.includes('isRealNearbyReleaseDevice') &&
-    deviceConnectionsScreen.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
-    deviceConnectionsScreen.includes('Found nearby power and OBD2 devices'),
-  'Device Connections screen must render only real nearby power/OBD2 advertisements and must not render saved/known/failed containers as a production Bluetooth path',
+    deviceConnectionsScreen.includes('connectedReleaseDevices') &&
+    deviceConnectionsScreen.includes('connections.knownDevices') &&
+    deviceConnectionsScreen.includes('for (const device of connections.connectedDevices)') &&
+    deviceConnectionsScreen.includes('isVisibleReleaseDevice') &&
+    deviceConnectionsScreen.includes('visibleReleaseDevices') &&
+    deviceConnectionsScreen.includes('for (const device of connections.devices)') &&
+    deviceConnectionsScreen.includes('connections.nearbyDevices, connections.attentionDevices') &&
+    !deviceConnectionsScreen.includes('onRescan={handleRescanPress}') &&
+    !deviceConnectionsScreen.includes('actionLabel="Scan for Device Connections"') &&
+    !deviceConnectionsScreen.includes('actionLabel="Scan for Devices"') &&
+    deviceConnectionsScreen.includes('title="Connected devices"') &&
+    deviceConnectionsScreen.includes('Live and attached Bluestack devices') &&
+    deviceConnectionsScreen.includes('Connected devices are listed above') &&
+    deviceConnectionsScreen.includes('title="Available devices"'),
+  'Device Connections screen must render connected and remembered devices as visible controllable rows without duplicate scan buttons or failed containers',
 );
 assert(
   deviceConnectionsScreen.includes('useFocusEffect') &&
@@ -503,14 +527,14 @@ assert(
 
 const quickActions = read('components/QuickActionsSheet.tsx');
 assert(
-  quickActions.includes('const openDeviceConnections = useCallback') &&
-    quickActions.includes("router.push('/power/blu')") &&
-    quickActions.includes("key: 'bluetooth'") &&
-    quickActions.includes('onPress: openDeviceConnections') &&
+  !quickActions.includes('const openDeviceConnections = useCallback') &&
+    !quickActions.includes('openUnifiedBluetoothCommand(router') &&
+    !quickActions.includes("key: 'bluetooth'") &&
+    !quickActions.includes('onPress: openDeviceConnections') &&
     !quickActions.includes('function FieldUtilitiesBluetoothPanel()') &&
     !quickActions.includes('useUnifiedDeviceConnections()') &&
     !quickActions.includes('connections.scanAreaMessage'),
-  'Field Utilities Bluetooth action must route to the canonical Device Connections screen instead of embedding a duplicate scanner',
+  'Field Utilities must not embed or duplicate Bluetooth; the global banner opens canonical Device Connections',
 );
 
 const powerCenter = read('app/power/index.tsx');

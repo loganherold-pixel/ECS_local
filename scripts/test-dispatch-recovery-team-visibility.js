@@ -57,8 +57,13 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /event\.teamId !== team\.id/,
-  'Recovery CAD visibility should require matching active team context.',
+  /event\.teamId === team\.id/,
+  'Recovery CAD visibility should support matching active team context.',
+);
+assert.match(
+  dispatchSource,
+  /event\.teamId !== convoyContext\.convoyId/,
+  'Recovery CAD visibility should support matching active convoy context.',
 );
 assert.match(
   dispatchSource,
@@ -67,8 +72,18 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /isAuthorizedRecoveryCadMember\(teamSnapshot, identity\)/,
-  'Recovery CAD visibility should require an authorized team member identity.',
+  /isAuthorizedRecoveryCadMember\(teamSnapshot, identity, convoyContext\)/,
+  'Recovery CAD visibility should require an authorized team or convoy member identity.',
+);
+assert.match(
+  dispatchSource,
+  /memberUserIds\.includes\(identity\.userId\)/,
+  'Recovery CAD convoy visibility should require roster membership.',
+);
+assert.match(
+  dispatchSource,
+  /recoveryCadSharingEnabled = externalDispatchIntegrationEnabled \|\| Boolean\(activeConvoyControl\?\.convoyId\)/,
+  'Recovery CAD sharing should stay enabled for active convoys even without external dispatch integration.',
 );
 assert.match(
   dispatchSource,

@@ -11,7 +11,9 @@ function DispatchScreenShell() {
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
   const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
-  const useScrollableDispatch = height < 820 || width > height;
+  const isLandscape = width > height;
+  const useScrollableDispatch = height < 820 && !isLandscape;
+  const containerBottomPadding = isLandscape || useScrollableDispatch ? 0 : dockClearance;
   const scrollInnerStyle = useMemo(
     () => ({ minHeight: Math.max(height - 118, 680) }),
     [height],
@@ -20,8 +22,8 @@ function DispatchScreenShell() {
   return (
     <View style={styles.root}>
       <TopoBackground>
-        <View style={[styles.container, { paddingBottom: useScrollableDispatch ? 0 : dockClearance }]}>
-          <Header title="Dispatch" />
+        <View style={[styles.container, { paddingBottom: containerBottomPadding }]}>
+          {!isLandscape ? <Header title="Dispatch" /> : null}
           {useScrollableDispatch ? (
             <ScrollView
               style={styles.scroll}

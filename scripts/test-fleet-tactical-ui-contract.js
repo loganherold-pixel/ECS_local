@@ -147,7 +147,7 @@ for (const premiumFleetFragment of [
   'formatFleetWeightValue(weightResult.payloadRemaining?.lbs)',
   'Base Net/Empty',
   'GVWR is the max loaded rating',
-  'Scale ticket or axle weights improve ECS confidence',
+  'Measured accessory, loadout, or axle weights can refine front/rear estimates',
   'selectFleetVehicleStateFromRecord',
   'fleetRiskTone',
   'ECSInlineHelper',
@@ -337,7 +337,7 @@ for (const advancedSpecsRuleFragment of [
   'Array.from({ length: 11 }, (_, value) => value)',
   'FLEET_ADVANCED_FRONT_LEVEL_OPTIONS = [1, 2, 3, 4]',
   'FLEET_ADVANCED_TIRE_SIZE_OPTIONS',
-  'index + 26',
+  'index + 20',
   'validateFleetAdvancedSpecsDraft',
   'normalizeFleetAdvancedSpecsDraftForSave',
   'frontLevelInches: draft.isLeveled ? draft.frontLevelInches : null',
@@ -388,8 +388,8 @@ for (const doneSaveFragment of [
 const openAdvancedBody = profileModal.slice(profileModal.indexOf('const openAdvancedSpecs'), closeAdvancedStart);
 assertIncludes(
   openAdvancedBody,
-  'setAdvancedDraft(buildAdvancedSetupDraft(vehicle))',
-  'Reopening Advanced Specs should hydrate from saved vehicle/store values.',
+  'setAdvancedDraft(buildAdvancedSetupDraft(vehicle, advancedSpecFallbacks))',
+  'Reopening Advanced Specs should hydrate from saved vehicle/store values plus OEM suggestions.',
 );
 
 for (const pipelineFragment of [
@@ -427,7 +427,7 @@ for (const operationalFragment of [
   );
 }
 assertIncludes(profileHelper, 'ECS estimated this from vehicle configuration.', 'Fleet profile helper should explain ECS configuration confidence.');
-assertIncludes(profileHelper, 'Add verified specs or a scale ticket to improve confidence.', 'Fleet profile helper should explain how to improve confidence.');
+assertIncludes(profileHelper, 'Enter saved base weight and GVWR values to replace generic defaults.', 'Fleet profile helper should explain how to replace generic defaults.');
 
 for (const forbiddenProfileMedia of [
   'iconAsset=',

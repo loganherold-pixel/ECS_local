@@ -161,7 +161,10 @@ assert(weatherFreshness.includes('WEATHER_DAILY_FRESH_TTL_MS = 2 * 60 * 60 * 100
 
 const edgeFunction = read('supabase/functions/get-weather/index.ts');
 assert(edgeFunction.includes('data/3.0/onecall'), 'get-weather should prefer OpenWeather One Call 3.0.');
-assert(edgeFunction.includes('data/2.5/weather') && edgeFunction.includes('data/2.5/forecast'), 'get-weather should retain existing fallback provider path.');
+assert(!edgeFunction.includes('data/2.5/weather'), 'get-weather should not call the basic OpenWeather current weather endpoint.');
+assert(!edgeFunction.includes('data/2.5/forecast'), 'get-weather should not call the basic OpenWeather forecast endpoint.');
+assert(edgeFunction.includes('buildHourlyForecastFromOneCall'), 'get-weather should normalize One Call hourly forecast data.');
+assert(edgeFunction.includes('buildDailyForecastFromOneCall'), 'get-weather should normalize One Call daily forecast data.');
 assert(!edgeFunction.includes('appid=${coord'), 'provider key must not be derived from coordinates or logged.');
 
 console.log('weather forecast resilience checks passed');

@@ -6,11 +6,11 @@ import {
   TouchableOpacity,
   StyleSheet,
   TextInput,
+  ScrollView,
   ActivityIndicator,
   Platform,
   useWindowDimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSModalShell from './ECSModalShell';
@@ -20,12 +20,20 @@ import FieldUseProtocolDetail, { type FieldUseGuideProtocol } from './emergency/
 import RecoveryProtocolDetail from './emergency/RecoveryProtocolDetail';
 import { RECOVERY_PROTOCOLS, isRecoveryProtocol, type ProtocolDefinition } from './emergency/RecoveryProtocolData';
 import { getTacticalGlyph } from './emergency/TacticalGlyphs';
+import DocumentPreviewModal from './intel/DocumentPreviewModal';
+import DocumentationCenter from './intel/DocumentationCenter';
+import PermitsAccessPanel from './intel/PermitsAccessPanel';
+import TripSummaries from './intel/TripSummaries';
 import { useApp } from '../context/AppContext';
+import { calculateRisk, getPackingStats, getRiskColor } from '../lib/calculations';
+import { getBuilderState, getCachedExpeditions } from '../lib/expeditionCache';
 import { missionEventStore, missionNoteStore } from '../lib/missionStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { dispatchStore } from '../lib/dispatchStore';
 import { commsStore, type CustomCommsData } from '../lib/commsStore';
-import { hapticCommand, hapticMicro } from '../lib/haptics';
+import { routeStore, type ImportedRoute } from '../lib/routeStore';
+import type { EcsExpedition } from '../lib/expeditionTypes';
+import { hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
 import {
@@ -34,6 +42,7 @@ import {
   getShellHeaderTopPadding,
 } from '../lib/shellLayout';
 import { useOperationalWeather } from '../lib/useOperationalWeather';
+import type { WeatherCoordinate } from '../lib/weatherTypes';
 
 type FieldUtilitiesView =
   | 'menu'
@@ -44,6 +53,9 @@ type FieldUtilitiesView =
   | 'protocolDetail'
   | 'recoveryProtocols'
   | 'recoveryProtocolDetail'
+  | 'permitsAccess'
+  | 'tripSummaries'
+  | 'documentation'
   | 'team';
 
 type FieldUtilitiesReturnTarget = 'dashboard' | 'quickActions' | 'map' | string;
@@ -133,6 +145,30 @@ function formatCoords(lat: number, lng: number): string {
   return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
+function resolveRouteTrailheadCoordinate(route: ImportedRoute | null): WeatherCoordinate | null {
+  if (!route) return null;
+  const firstSegmentPoint = route.segments
+    ?.find((segment) => Array.isArray(segment.points) && segment.points.length > 0)
+    ?.points?.[0];
+  const firstWaypoint = route.waypoints?.[0];
+  const lat = firstSegmentPoint?.lat ?? firstWaypoint?.lat;
+  const lng = firstSegmentPoint?.lon ?? firstWaypoint?.lon;
+  if (
+    typeof lat !== 'number' ||
+    typeof lng !== 'number' ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng)
+  ) {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    label: `${route.name || 'Active Route'} Trailhead`,
+  };
+}
+
 function buildEmergencyFieldUseGuide(protocol: ProtocolDefinition): FieldUseGuideProtocol {
   return {
     id: protocol.id,
@@ -176,15 +212,29 @@ interface Props {
 }
 
 export default function QuickActionsSheet({ visible, onClose, returnTarget = 'dashboard' }: Props) {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { height: viewportHeight } = useWindowDimensions();
-  const { showToast, activeTrip, user } = useApp();
+  const {
+    showToast,
+    activeTrip,
+    user,
+    loadItems,
+    riskScore,
+    refreshActiveTrip,
+  } = useApp();
   const [fieldUtilitiesState, setFieldUtilitiesState] = useState<FieldUtilitiesState>({
     isOpen: visible,
     activeView: 'menu',
     returnTarget,
   });
+  const [builderState, setBuilderState] = useState(() => getBuilderState());
+  const [activeRoute, setActiveRoute] = useState<ImportedRoute | null>(() => routeStore.getActive());
+  const [expeditions, setExpeditions] = useState<EcsExpedition[]>(() => getCachedExpeditions());
+  const [docPreviewVisible, setDocPreviewVisible] = useState(false);
+  const [docPreviewId, setDocPreviewId] = useState('');
+  const [docPreviewTitle, setDocPreviewTitle] = useState('');
+  const [docPreviewCategory, setDocPreviewCategory] = useState<'system' | 'operational'>('system');
+  const [docPreviewContent, setDocPreviewContent] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -210,6 +260,8 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     protocolDetailActive ||
     activeView === 'recoveryProtocols' ||
     recoveryProtocolDetailActive;
+  const commsStaticActive = activeView === 'emergencyComms';
+  const fixedStaticActive = protocolStaticActive || commsStaticActive;
   const protocolCompactMode = viewportHeight < 760;
   const frequencyCards = useMemo(
     () => mergeCommsDefaultsWithOverrides('freq', DEFAULT_FREQUENCIES, dispatchComms.frequencies),
@@ -242,11 +294,29 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     }),
     [gpsCoords],
   );
+  const trailheadWeatherCoordinate = useMemo(
+    () => resolveRouteTrailheadCoordinate(activeRoute),
+    [activeRoute],
+  );
   const fieldUtilitiesWeather = useOperationalWeather({
     enabled: visible && activeView === 'intel',
     gps: intelWeatherGps,
     units: 'imperial',
   });
+  const risk = useMemo(() => {
+    if (riskScore) {
+      return calculateRisk(riskScore);
+    }
+
+    return { score: 0, level: 'N/A' as any };
+  }, [riskScore]);
+  const loadoutStats = useMemo(() => {
+    if (activeTrip) {
+      return getPackingStats(loadItems, activeTrip.active_mode || 'Trip');
+    }
+
+    return { totalActive: 0, packedActive: 0, pct: 0 };
+  }, [activeTrip, loadItems]);
 
   const refreshSavedNotes = useCallback(() => {
     const notes = missionNoteStore.getByExpeditionId(missionId);
@@ -327,16 +397,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     closeFieldUtilityAction();
   }, [activeView, closeFieldUtilities, closeFieldUtilityAction, openFieldUtilityAction]);
 
-  const openDeviceConnections = useCallback(() => {
-    void hapticCommand();
-    closeFieldUtilities();
-    try {
-      router.push('/power/blu');
-    } catch {
-      showToast('Device connections unavailable');
-    }
-  }, [closeFieldUtilities, router, showToast]);
-
   useEffect(() => {
     if (!visible) {
       setFieldUtilitiesState({
@@ -359,7 +419,18 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   useEffect(() => {
     if (!visible) return;
     refreshSavedNotes();
-  }, [refreshSavedNotes, visible]);
+    refreshActiveTrip();
+    setBuilderState(getBuilderState());
+    setActiveRoute(routeStore.getActive());
+    setExpeditions(getCachedExpeditions());
+  }, [refreshActiveTrip, refreshSavedNotes, visible]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    return routeStore.subscribe(() => {
+      setActiveRoute(routeStore.getActive());
+    });
+  }, [visible]);
 
   useEffect(() => {
     if (!visible || activeView !== 'quickNote') return;
@@ -449,6 +520,47 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
     showToast(`Coordinates ready: ${value}`);
   }, [gpsCoords, showToast]);
+
+  const handleViewDocument = useCallback((
+    id: string,
+    title: string,
+    category: 'system' | 'operational',
+    content?: string,
+  ) => {
+    setDocPreviewId(id);
+    setDocPreviewTitle(title);
+    setDocPreviewCategory(category);
+    setDocPreviewContent(content);
+    setDocPreviewVisible(true);
+  }, []);
+
+  const handleCloseDocPreview = useCallback(() => {
+    setDocPreviewVisible(false);
+  }, []);
+
+  const handleExportContent = useCallback((content: string, filename?: string) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename || 'ecs-export'}-${new Date().toISOString().split('T')[0]}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('DOCUMENT EXPORTED');
+      return;
+    }
+
+    showToast('Export available on web');
+  }, [showToast]);
+
+  const handleTripSummaryViewDoc = useCallback((id: string, title: string, content: string) => {
+    handleViewDocument(id, title, 'operational', content);
+  }, [handleViewDocument]);
+
+  const handleTripSummaryExport = useCallback((content: string) => {
+    handleExportContent(content, 'ecs-trip-summary');
+  }, [handleExportContent]);
 
   const handleStartEditCommsEntry = useCallback((
     section: EditableCommsSection,
@@ -563,12 +675,12 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
     },
     {
-      key: 'bluetooth',
-      label: 'Bluetooth',
-      subtitle: 'Open device connections',
-      icon: 'bluetooth-outline',
-      color: '#5AC8FA',
-      onPress: openDeviceConnections,
+      key: 'recovery-protocol',
+      label: 'Recovery Protocol',
+      subtitle: 'Vehicle recovery procedures for field extraction.',
+      icon: 'car-sport-outline',
+      color: TACTICAL.amber,
+      onPress: () => openFieldUtilityAction('recoveryProtocols'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -583,16 +695,37 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: 'AVAILABLE',
     },
     {
-      key: 'recovery-protocol',
-      label: 'Recovery Protocol',
-      subtitle: 'Vehicle recovery procedures for field extraction.',
-      icon: 'car-sport-outline',
-      color: TACTICAL.amber,
-      onPress: () => openFieldUtilityAction('recoveryProtocols'),
+      key: 'permits-access',
+      label: 'Permits & Access',
+      subtitle: 'Permits, restrictions, and closure notes',
+      icon: 'key-outline',
+      color: '#9CCC65',
+      onPress: () => openFieldUtilityAction('permitsAccess'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'trip-summaries',
+      label: 'Trip Summaries',
+      subtitle: 'Expedition reports and history',
+      icon: 'analytics-outline',
+      color: '#64B5F6',
+      onPress: () => openFieldUtilityAction('tripSummaries'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
   ] as const;
+
+  const documentationTile: QuickActionTile = {
+    key: 'documentation',
+    label: 'Documentation',
+    subtitle: 'System and operational documents',
+    icon: 'folder-open-outline',
+    color: '#BCAAA4',
+    onPress: () => openFieldUtilityAction('documentation'),
+    disabled: false,
+    availabilityLabel: 'AVAILABLE',
+  };
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
@@ -639,6 +772,24 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
           </TouchableOpacity>
         ))}
       </View>
+      <TouchableOpacity
+        key={documentationTile.key}
+        style={[styles.tile, styles.documentationTile]}
+        onPress={documentationTile.onPress}
+        activeOpacity={0.78}
+        disabled={busy}
+      >
+        <View style={[styles.tileIconWrap, { borderColor: `${documentationTile.color}35`, backgroundColor: `${documentationTile.color}12` }]}>
+          <Ionicons name={documentationTile.icon as any} size={20} color={documentationTile.color} />
+        </View>
+        <View style={styles.documentationTileCopy}>
+          <Text style={styles.tileLabel}>{documentationTile.label}</Text>
+          <Text style={styles.tileSubLabel}>{documentationTile.subtitle}</Text>
+        </View>
+        <View style={styles.tileStateBadge}>
+          <Text style={styles.tileStateText}>{documentationTile.availabilityLabel}</Text>
+        </View>
+      </TouchableOpacity>
     </View>
   );
 
@@ -729,27 +880,27 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   );
 
   const renderLiveCoordinatesCard = () => (
-      <View style={styles.infoCard}>
-        <Text style={styles.cardTitle}>Live Coordinates</Text>
-        {gpsLoading ? (
-          <View style={styles.stateRow}>
-            <ActivityIndicator size="small" color={TACTICAL.amber} />
-            <Text style={styles.stateText}>Waiting for GPS</Text>
-          </View>
-        ) : gpsCoords ? (
-          <>
-            <Text selectable style={styles.coordsText}>
-              {formatCoords(gpsCoords.lat, gpsCoords.lng)}
-            </Text>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={handleCopyCoords} activeOpacity={0.78}>
-              <Ionicons name="copy-outline" size={14} color={TACTICAL.amber} />
-              <Text style={styles.secondaryBtnText}>COPY COORDINATES</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <Text style={styles.stateText}>Coordinates unavailable</Text>
-        )}
-      </View>
+    <View style={[styles.infoCard, styles.commsCoordinatesCard]}>
+      <Text style={styles.cardTitle}>Live Coordinates</Text>
+      {gpsLoading ? (
+        <View style={styles.stateRow}>
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.stateText}>Waiting for GPS</Text>
+        </View>
+      ) : gpsCoords ? (
+        <View style={styles.coordinatesActionRow}>
+          <Text selectable style={styles.coordsText} numberOfLines={1} adjustsFontSizeToFit>
+            {formatCoords(gpsCoords.lat, gpsCoords.lng)}
+          </Text>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={handleCopyCoords} activeOpacity={0.78}>
+            <Ionicons name="copy-outline" size={13} color={TACTICAL.amber} />
+            <Text style={styles.secondaryBtnText}>COPY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <Text style={styles.stateText}>Coordinates unavailable</Text>
+      )}
+    </View>
   );
 
   const renderIntelPanel = () => (
@@ -768,6 +919,9 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         autoFetch={false}
         weatherSnapshot={fieldUtilitiesWeather.snapshot}
         onRefreshWeather={fieldUtilitiesWeather.refresh}
+        mergeForecastIntoConditions
+        trailCoordinate={trailheadWeatherCoordinate}
+        trailAssessmentActive={trailheadWeatherCoordinate != null}
         frameless
       />
     </View>
@@ -844,19 +998,24 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     section: EditableCommsSection,
     entries: EditableCommsEntry[],
   ) => (
-    <View style={styles.infoCard}>
+    <View style={[styles.infoCard, styles.commsSectionCard]}>
       <View style={styles.commsSectionHeader}>
         <Text style={styles.cardTitle}>{title}</Text>
-        <Text style={styles.commsHint}>Long press to edit</Text>
       </View>
-      <View style={styles.commsEntryList}>
+      <ScrollView
+        style={styles.commsEntryScroller}
+        contentContainerStyle={styles.commsEntryList}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
         {entries.map((entry) => renderEditableCommsEntry(section, entry))}
-      </View>
+      </ScrollView>
     </View>
   );
 
   const renderCommsPanel = () => (
-    <View style={styles.panelBody}>
+    <View style={[styles.panelBody, styles.commsPanelBody]}>
       {renderPanelIntro('Emergency Comms', 'Frequencies, field signals, emergency numbers, and shareable live coordinates.')}
       <View style={styles.commsReferenceGrid}>
         {renderCommsSection('Frequencies', 'frequencies', frequencyCards)}
@@ -864,6 +1023,9 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         {renderCommsSection('Emergency Numbers', 'contacts', emergencyContactCards)}
       </View>
       {renderLiveCoordinatesCard()}
+      <Text style={styles.commsAdvisoryText}>
+        Long press to edit frequencies, signals, or emergency numbers.
+      </Text>
     </View>
   );
 
@@ -934,6 +1096,45 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     </View>
   );
 
+  const renderPermitsAccessPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Permits & Access', 'Permits, restrictions, closures, and access notes for field planning.')}
+      <PermitsAccessPanel onToast={showToast} />
+    </View>
+  );
+
+  const renderTripSummariesPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Trip Summaries', 'Generate and review expedition reports from the current ECS context.')}
+      <TripSummaries
+        builderState={builderState}
+        activeRoute={activeRoute}
+        riskScore={riskScore ? risk.score : null}
+        riskLevel={risk.level}
+        riskColor={getRiskColor(risk.level)}
+        loadoutStats={loadoutStats}
+        expeditions={expeditions}
+        onExport={handleTripSummaryExport}
+        onViewDocument={handleTripSummaryViewDoc}
+        onToast={showToast}
+      />
+    </View>
+  );
+
+  const renderDocumentationPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Documentation', 'System policy documents and operational exports.')}
+      <DocumentationCenter
+        builderState={builderState}
+        activeRoute={activeRoute}
+        loadoutStats={loadoutStats}
+        onViewDocument={handleViewDocument}
+        onExportDocument={handleExportContent}
+        onToast={showToast}
+      />
+    </View>
+  );
+
   const renderProtocolDetailPanel = () => {
     if (!selectedProtocol) {
       return (
@@ -990,6 +1191,12 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         return renderRecoveryProtocolsPanel();
       case 'recoveryProtocolDetail':
         return renderRecoveryProtocolDetailPanel();
+      case 'permitsAccess':
+        return renderPermitsAccessPanel();
+      case 'tripSummaries':
+        return renderTripSummariesPanel();
+      case 'documentation':
+        return renderDocumentationPanel();
       case 'team':
         return renderTeamPanel();
       default:
@@ -998,35 +1205,46 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   })();
 
   return (
-    <ECSModalShell
-      visible={visible}
-      onClose={handleShellClose}
-      title="Field Utilities"
-      subtitle={
-        mainPanelActive
-          ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
-          : 'Focused utility actions stay inside Field Utilities without changing tabs.'
-      }
-      icon="flash-outline"
-      eyebrow="QUICK ACTIONS"
-      overlayClass="workflow"
-      maxWidth={980}
-      maxHeightFraction={1}
-      minHeightFraction={1}
-      scrollable={!protocolStaticActive}
-      keyboardAware={activeView === 'quickNote'}
-      showHandle={false}
-      dismissOnBackdrop={false}
-      allowSwipeDismiss={false}
-      onBack={mainPanelActive ? undefined : handleShellBack}
-      closeGuardKey={activeView}
-      topClearanceOverride={fieldUtilitiesTopClearance}
-      bottomClearanceOverride={fieldUtilitiesBottomClearance}
-      bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : undefined}
-      contentContainerStyle={protocolStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
-    >
-      {panelContent}
-    </ECSModalShell>
+    <>
+      <ECSModalShell
+        visible={visible}
+        onClose={handleShellClose}
+        title="Field Utilities"
+        subtitle={
+          mainPanelActive
+            ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
+            : 'Focused utility actions stay inside Field Utilities without changing tabs.'
+        }
+        icon="flash-outline"
+        eyebrow="QUICK ACTIONS"
+        overlayClass="workflow"
+        maxWidth={980}
+        maxHeightFraction={1}
+        minHeightFraction={1}
+        scrollable={!fixedStaticActive}
+        keyboardAware={activeView === 'quickNote'}
+        showHandle={false}
+        dismissOnBackdrop={false}
+        allowSwipeDismiss={false}
+        onBack={mainPanelActive ? undefined : handleShellBack}
+        closeGuardKey={activeView}
+        topClearanceOverride={fieldUtilitiesTopClearance}
+        bottomClearanceOverride={fieldUtilitiesBottomClearance}
+        bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}
+        contentContainerStyle={fixedStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
+      >
+        {panelContent}
+      </ECSModalShell>
+      <DocumentPreviewModal
+        visible={docPreviewVisible}
+        onClose={handleCloseDocPreview}
+        documentId={docPreviewId}
+        documentTitle={docPreviewTitle}
+        documentCategory={docPreviewCategory}
+        customContent={docPreviewContent}
+        onExport={(content) => handleExportContent(content, `ecs-${docPreviewId}`)}
+      />
+    </>
   );
 }
 
@@ -1134,6 +1352,9 @@ const styles = StyleSheet.create({
   quickProtocolStaticBody: {
     padding: 10,
   },
+  quickCommsStaticBody: {
+    padding: 10,
+  },
   mainPanel: {
     flexGrow: 1,
     minHeight: 0,
@@ -1202,6 +1423,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.06)',
   },
+  documentationTile: {
+    width: '100%',
+    minHeight: 82,
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 0,
+  },
+  documentationTileCopy: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
   tileIconWrap: {
     width: 34,
     height: 34,
@@ -1264,6 +1498,11 @@ const styles = StyleSheet.create({
   },
   intelPanelBody: {
     gap: 10,
+  },
+  commsPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
   },
   protocolsPanelBody: {
     flex: 1,
@@ -1415,7 +1654,16 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   commsReferenceGrid: {
-    gap: 12,
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
+  },
+  commsSectionCard: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
   },
   commsSectionHeader: {
     flexDirection: 'row',
@@ -1423,15 +1671,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  commsHint: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+  commsEntryScroller: {
+    flex: 1,
+    minHeight: 0,
   },
   commsEntryList: {
-    gap: 8,
+    gap: 7,
+    paddingBottom: 2,
   },
   commsEntryRow: {
     minHeight: 44,
@@ -1534,6 +1780,26 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  commsCoordinatesCard: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
+  },
+  coordinatesActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  commsAdvisoryText: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
   protocolActionGrid: {
     flex: 1,
     minHeight: 0,
@@ -1557,13 +1823,14 @@ const styles = StyleSheet.create({
   },
   protocolActionImage: {
     ...StyleSheet.absoluteFillObject,
-    top: -2,
-    right: -2,
-    bottom: -2,
-    left: -2,
+    top: -10,
+    right: -10,
+    bottom: -10,
+    left: -10,
     width: undefined,
     height: undefined,
     opacity: 0.88,
+    transform: [{ scale: 1.08 }],
   },
   protocolActionFallback: {
     ...StyleSheet.absoluteFillObject,
@@ -1612,25 +1879,27 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
   },
   coordsText: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 16,
     fontWeight: '800',
     color: TACTICAL.text,
     fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
   },
   secondaryBtn: {
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    minHeight: 38,
+    minHeight: 32,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}40`,
     backgroundColor: `${TACTICAL.amber}10`,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   secondaryBtnText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.2,

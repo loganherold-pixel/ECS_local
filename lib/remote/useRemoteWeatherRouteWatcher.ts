@@ -399,7 +399,12 @@ export function useRemoteWeatherRouteWatcher({
     };
 
     const handleRouteSnapshot = (route: NavigateRouteSessionSnapshot) => {
-      if (!enabled || route.lifecycle !== 'active' || !route.sessionId) {
+      if (!enabled) {
+        resetRouteState();
+        return;
+      }
+
+      if (route.lifecycle !== 'active' || !route.sessionId) {
         resetRouteState();
         return;
       }

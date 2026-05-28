@@ -13,27 +13,20 @@ type Props = {
   compact?: boolean;
 };
 
-const MODE_LABEL: Record<CommandCenterMode, string> = {
-  attitude: 'ATTITUDE',
-  threeDNavigation: 'NAV 3D',
-  recoveryHazardCompass: 'RECOVERY',
-  trailDecision: 'TRAIL',
-  campScout: 'CAMP',
-  expeditionReadiness: 'READY',
-};
+function getModeLabel(mode: CommandCenterMode): string {
+  switch (mode) {
+    case 'threeDNavigation':
+      return 'NAV 3D';
+    case 'attitude':
+    default:
+      return 'ATTITUDE';
+  }
+}
 
 function getModeIcon(mode: CommandCenterMode) {
   switch (mode) {
     case 'threeDNavigation':
       return 'navigate-outline';
-    case 'recoveryHazardCompass':
-      return 'compass-outline';
-    case 'trailDecision':
-      return 'analytics-outline';
-    case 'campScout':
-      return 'bonfire-outline';
-    case 'expeditionReadiness':
-      return 'shield-checkmark-outline';
     case 'attitude':
     default:
       return 'speedometer-outline';
@@ -57,12 +50,13 @@ export default function CommandCenterModeSelector({
     >
       {availableModes.map((availableMode) => {
         const selected = availableMode === mode;
+        const label = getModeLabel(availableMode);
         return (
           <TouchableOpacity
             key={availableMode}
             accessibilityRole="tab"
             accessibilityState={{ selected }}
-            accessibilityLabel={`Switch command center to ${MODE_LABEL[availableMode]}`}
+            accessibilityLabel={`Switch command center to ${label}`}
             activeOpacity={0.82}
             onPress={() => onModeChange(availableMode)}
             style={[
@@ -86,7 +80,7 @@ export default function CommandCenterModeSelector({
               ]}
               numberOfLines={1}
             >
-              {MODE_LABEL[availableMode]}
+              {label}
             </Text>
           </TouchableOpacity>
         );

@@ -2,7 +2,7 @@
  * ECS Map Configuration — Phase 3 Mapbox Integration (Secure Token Persistence)
  *
  * Manages:
- *   - Mapbox token retrieval (multi-source, reliable on device)
+ *   - Mapbox public token retrieval (multi-source, reliable on device)
  *   - Secure token persistence via expo-secure-store on native (iOS/Android)
  *   - Map style definitions
  *   - Constants for map rendering
@@ -11,10 +11,10 @@
  * Token resolution order (fastest → slowest):
  *   1. In-memory cache
  *   2. Expo Constants (app.json extra / expoConfig)
- *   3. Environment variable (EXPO_PUBLIC_MAPBOX_TOKEN)
+ *   3. Environment variable (EXPO_PUBLIC_MAPBOX_TOKEN / EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN)
  *   4. SecureStore (encrypted native keychain — iOS/Android only)
  *   5. localStorage (web only)
- *   6. Supabase edge function (get-map-token)
+ *   6. Supabase edge function (get-map-token, public pk token only)
  *   7. Empty string (graceful degradation)
  *
  * On native platforms (iOS/Android), tokens entered manually are stored
@@ -23,6 +23,10 @@
  *
  * On web, localStorage is used as the persistence layer (SecureStore
  * is not available in browser environments).
+ *
+ * Runtime map rendering must use a public Mapbox token beginning with pk.
+ * MAPBOX_DOWNLOADS_TOKEN / sk tokens are only for Android build-time Maven
+ * dependency resolution and are intentionally rejected here.
  *
  * Token is fetched once and cached in memory.
  * Graceful degradation if token is missing.
@@ -80,7 +84,7 @@ export const MAP_STYLES: MapStyleDef[] = [
     key: 'route-progress',
     label: 'Route Progress',
     shortLabel: 'RTE',
-    url: 'mapbox://styles/expeditioncommand/cmpax1px3005a01sq5doe9xml',
+    url: 'mapbox://styles/mapbox/dark-v11',
     icon: 'git-branch-outline',
   },
 ];
@@ -265,16 +269,14 @@ let tokenFetched = false;
 let tokenResolutionPromise: Promise<string> | null = null;
 
 /**
- * Validate that a string looks like a valid Mapbox public token.
+ * Validate that a string is a Mapbox public runtime token.
  */
 function isValidMapboxToken(token: string | undefined | null): boolean {
   if (!token || typeof token !== 'string') return false;
-  if (token.length < 10) return false;
-  if (token === 'undefined' || token === 'null' || token === 'YOUR_TOKEN_HERE') return false;
-  if (token.startsWith('pk.')) return true;
-  if (token.startsWith('sk.')) return true;
-  if (token.length > 50) return true;
-  return false;
+  const trimmed = token.trim();
+  if (trimmed.length < 10) return false;
+  if (trimmed === 'undefined' || trimmed === 'null' || trimmed === 'YOUR_TOKEN_HERE') return false;
+  return trimmed.startsWith('pk.');
 }
 
 /**
@@ -283,19 +285,26 @@ function isValidMapboxToken(token: string | undefined | null): boolean {
  */
 function getEnvToken(): string {
   try {
-    const envToken = String(process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '');
-    if (isValidMapboxToken(envToken)) {
-      debugMapConfig('Found EXPO_PUBLIC_MAPBOX_TOKEN from environment', { length: envToken.length });
-      return envToken;
-    }
-    if (envToken && envToken.length > 0) {
-      console.warn(
-        '[MapConfig] EXPO_PUBLIC_MAPBOX_TOKEN is set but does not look valid (length:',
-        envToken.length,
-        ', prefix:',
-        envToken.substring(0, 5),
-        ')',
-      );
+    const candidates = [
+      ['EXPO_PUBLIC_MAPBOX_TOKEN', process.env.EXPO_PUBLIC_MAPBOX_TOKEN],
+      ['EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN', process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN],
+    ] as const;
+
+    for (const [key, rawToken] of candidates) {
+      const envToken = String(rawToken ?? '');
+      if (isValidMapboxToken(envToken)) {
+        debugMapConfig(`Found ${key} from environment`, { length: envToken.length });
+        return envToken;
+      }
+      if (envToken && envToken.length > 0) {
+        console.warn(
+          `[MapConfig] ${key} is set but does not look valid (length:`,
+          envToken.length,
+          ', prefix:',
+          envToken.substring(0, 5),
+          ')',
+        );
+      }
     }
   } catch {}
   return '';
@@ -315,6 +324,7 @@ function getConstantsToken(): string {
         extra.mapboxAccessToken,
         extra.mapbox_access_token,
         extra.EXPO_PUBLIC_MAPBOX_TOKEN,
+        extra.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN,
       ];
       for (const candidate of candidates) {
         if (isValidMapboxToken(candidate)) {
@@ -331,6 +341,8 @@ function getConstantsToken(): string {
         legacyExtra.MAPBOX_ACCESS_TOKEN,
         legacyExtra.mapboxAccessToken,
         legacyExtra.mapbox_access_token,
+        legacyExtra.EXPO_PUBLIC_MAPBOX_TOKEN,
+        legacyExtra.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN,
       ];
       for (const candidate of candidates) {
         if (typeof candidate === 'string' && isValidMapboxToken(candidate)) {
@@ -346,6 +358,8 @@ function getConstantsToken(): string {
       const candidates = [
         manifest2Extra.MAPBOX_ACCESS_TOKEN,
         manifest2Extra.mapboxAccessToken,
+        manifest2Extra.EXPO_PUBLIC_MAPBOX_TOKEN,
+        manifest2Extra.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN,
       ];
       for (const candidate of candidates) {
         if (typeof candidate === 'string' && isValidMapboxToken(candidate)) {
@@ -424,12 +438,14 @@ async function clearPersistedToken(): Promise<void> {
  * Manually set the Mapbox token.
  */
 export function setMapboxToken(token: string): void {
-  cachedToken = token;
   tokenFetched = true;
   if (isValidMapboxToken(token)) {
-    persistToken(token);
+    const trimmedToken = token.trim();
+    cachedToken = trimmedToken;
+    persistToken(trimmedToken);
     debugMapConfig('Token manually set and persisted', { length: token.length });
   } else {
+    cachedToken = '';
     debugMapConfig('Token manually set but not persisted because format is invalid', {
       length: token.length,
     });
@@ -444,20 +460,22 @@ export async function setMapboxTokenAsync(token: string): Promise<{
   secureStore: boolean;
   storage: 'secure-store' | 'localStorage' | 'memory';
 }> {
-  cachedToken = token;
   tokenFetched = true;
 
   if (!isValidMapboxToken(token)) {
+    cachedToken = '';
     debugMapConfig('Async token set skipped persistence because format is invalid', {
       length: token.length,
     });
     return { persisted: false, secureStore: false, storage: 'memory' };
   }
 
-  webPersistSet(MAPBOX_TOKEN_STORAGE_KEY, token);
+  const trimmedToken = token.trim();
+  cachedToken = trimmedToken;
+  webPersistSet(MAPBOX_TOKEN_STORAGE_KEY, trimmedToken);
 
   if (Platform.OS !== 'web') {
-    const secureSuccess = await secureStoreSet(SECURE_STORE_KEY, token);
+    const secureSuccess = await secureStoreSet(SECURE_STORE_KEY, trimmedToken);
     if (secureSuccess) {
       debugMapConfig('Token persisted to encrypted keychain via SecureStore');
       return { persisted: true, secureStore: true, storage: 'secure-store' };
@@ -475,7 +493,12 @@ export async function setMapboxTokenAsync(token: string): Promise<{
  */
 async function resolveMapboxToken(): Promise<string> {
   if (cachedToken !== null && cachedToken.length > 0) {
-    return cachedToken;
+    if (isValidMapboxToken(cachedToken)) {
+      return cachedToken;
+    }
+    cachedToken = '';
+    tokenFetched = true;
+    return '';
   }
   if (tokenFetched && cachedToken !== null) {
     return cachedToken;
@@ -587,7 +610,7 @@ async function resolveMapboxToken(): Promise<string> {
   console.warn(
     '[MapConfig] No Mapbox token available from any source.\n' +
       'To fix, use ONE of these methods:\n' +
-      '  1. Set EXPO_PUBLIC_MAPBOX_TOKEN in your .env file\n' +
+      '  1. Set EXPO_PUBLIC_MAPBOX_TOKEN or EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in your .env file\n' +
       '  2. Add extra.MAPBOX_ACCESS_TOKEN to app.json or app.config.js\n' +
       '  3. Set MAPBOX_ACCESS_TOKEN in Supabase Edge Function Secrets\n' +
       '  4. Enter the token manually in the Navigate tab',
@@ -646,7 +669,12 @@ export async function getMapboxToken(): Promise<string> {
  */
 export function getMapboxTokenSync(): string {
   if (cachedToken !== null && cachedToken.length > 0) {
-    return cachedToken;
+    if (isValidMapboxToken(cachedToken)) {
+      return cachedToken;
+    }
+    cachedToken = '';
+    tokenFetched = true;
+    return '';
   }
 
   const constantsToken = getConstantsToken();

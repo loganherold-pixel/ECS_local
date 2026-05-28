@@ -5,6 +5,7 @@ import {
 import type { ExpeditionOpportunity } from './discoverEngine';
 import type { CompatibilityResult } from './rigCompatibilityEngine';
 import { buildExploreNavigationPayload } from './navigationHandoffStore';
+import { getExploreRoutePreviewRoutePoints } from './exploreRoutePreview';
 import type { AIGeneratedRoute } from './aiRouteTypes';
 
 export const EXPLORE_ROUTES_AI_CATEGORY = 'all-drivable-trails';
@@ -29,6 +30,8 @@ export type ExploreRouteOverlaySegment = {
   kind: 'explore_route';
   coordinates: ExploreRouteOverlayCoordinate[];
   color: string;
+  route: ExpeditionOpportunity;
+  compatResult?: CompatibilityResult | null;
 };
 
 export type ExploreRouteOverlayBuildResult = {
@@ -41,13 +44,14 @@ export type ExploreRouteOverlayBuildResult = {
 type ExploreRouteCandidate = {
   route: ExpeditionOpportunity;
   category: ExploreRouteOverlayCategory;
+  compatResult?: CompatibilityResult | null;
 };
 
 const CATEGORY_COLORS: Record<ExploreRouteOverlayCategory, string> = {
-  hidden_gem: '#65D4FF',
-  popular_trail: '#65D4FF',
-  trail_pack: '#65D4FF',
-  favorite: '#65D4FF',
+  hidden_gem: '#F2C24D',
+  popular_trail: '#66BB6A',
+  trail_pack: '#A48CFF',
+  favorite: '#F6A35D',
   ecs_route_idea: '#65D4FF',
 };
 
@@ -81,7 +85,7 @@ function routeIdentity(route: ExpeditionOpportunity): string {
 
 function toOverlaySegment(candidate: ExploreRouteCandidate): ExploreRouteOverlaySegment | null {
   const payload = buildExploreNavigationPayload(candidate.route);
-  const coordinates = payload.trailGeometry
+  const coordinates = getExploreRoutePreviewRoutePoints(payload)
     .map((point) => ({
       latitude: Number(point.lat),
       longitude: Number(point.lng),
@@ -104,6 +108,8 @@ function toOverlaySegment(candidate: ExploreRouteCandidate): ExploreRouteOverlay
     kind: 'explore_route',
     coordinates,
     color: CATEGORY_COLORS[candidate.category],
+    route: candidate.route,
+    compatResult: candidate.compatResult ?? null,
   };
 }
 
@@ -128,6 +134,7 @@ export function buildExploreRouteOverlaySegments(args: {
     hiddenGemRoutes,
     popularTrailRoutes,
     ecsRouteIdeaRoutes: aiRoutes,
+    compatibilityResults: args.compatibilityResults,
     maxRenderedRoutes: categoryLimit * 3,
   });
 }
@@ -138,15 +145,24 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
   trailPackRoutes?: ExpeditionOpportunity[];
   favoriteRoutes?: ExpeditionOpportunity[];
   ecsRouteIdeaRoutes?: ExpeditionOpportunity[];
+  compatibilityResults?: Map<string, CompatibilityResult>;
   maxRenderedRoutes?: number;
 }): ExploreRouteOverlayBuildResult {
   const maxRenderedRoutes = Math.max(1, args.maxRenderedRoutes ?? DEFAULT_TOTAL_LIMIT);
+  const toCandidate = (
+    route: ExpeditionOpportunity,
+    category: ExploreRouteOverlayCategory,
+  ): ExploreRouteCandidate => ({
+    route,
+    category,
+    compatResult: args.compatibilityResults?.get(route.id) ?? null,
+  });
   const candidates: ExploreRouteCandidate[] = [
-    ...(args.hiddenGemRoutes ?? []).map((route) => ({ route, category: 'hidden_gem' as const })),
-    ...(args.popularTrailRoutes ?? []).map((route) => ({ route, category: 'popular_trail' as const })),
-    ...(args.trailPackRoutes ?? []).map((route) => ({ route, category: 'trail_pack' as const })),
-    ...(args.favoriteRoutes ?? []).map((route) => ({ route, category: 'favorite' as const })),
-    ...(args.ecsRouteIdeaRoutes ?? []).map((route) => ({ route, category: 'ecs_route_idea' as const })),
+    ...(args.hiddenGemRoutes ?? []).map((route) => toCandidate(route, 'hidden_gem')),
+    ...(args.popularTrailRoutes ?? []).map((route) => toCandidate(route, 'popular_trail')),
+    ...(args.trailPackRoutes ?? []).map((route) => toCandidate(route, 'trail_pack')),
+    ...(args.favoriteRoutes ?? []).map((route) => toCandidate(route, 'favorite')),
+    ...(args.ecsRouteIdeaRoutes ?? []).map((route) => toCandidate(route, 'ecs_route_idea')),
   ];
   const seen = new Set<string>();
   const segments: ExploreRouteOverlaySegment[] = [];

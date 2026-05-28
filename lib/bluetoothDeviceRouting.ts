@@ -1,5 +1,6 @@
 import { getProviderMeta } from './BluProviderRegistry';
 import type { BluProviderId } from './BluTypes';
+import { getBluestackProviderReadiness } from './bluestack/bluestackProviderReadiness';
 import {
   classifyBluetoothDevice,
   type BluetoothDeviceClassificationInput,
@@ -21,6 +22,7 @@ export type BluetoothRouteKey =
   | 'power/live'
   | 'power/partial'
   | 'telemetry/live'
+  | 'sensor/fluid_level'
   | 'sensor/generic'
   | 'bluetooth/generic';
 
@@ -57,36 +59,60 @@ const POWER_BADGE_TO_PROVIDER_ID: Partial<Record<BluetoothProviderBadge, BluProv
   'Victron Energy': 'victron',
 };
 
+function isFluidLevelSensorCategory(category: string | null | undefined): boolean {
+  return category === 'propane_monitor' || category === 'water_tank_monitor';
+}
+
+function getFluidSensorProviderId(providerBadge: BluetoothProviderBadge | null): string {
+  if (providerBadge === 'Propane') return 'propane_monitor';
+  if (providerBadge === 'Water') return 'water_monitor';
+  return 'utility_sensor';
+}
+
+function getFluidSensorProviderLabel(providerBadge: BluetoothProviderBadge | null): string {
+  if (providerBadge === 'Propane') return 'Propane Monitor';
+  if (providerBadge === 'Water') return 'Water Monitor';
+  return 'Utility Sensor';
+}
+
 function getPowerSupport(providerId: BluProviderId): Pick<
   BluetoothRoutingDecision,
   'supportLevel' | 'supportLabel' | 'supportNote'
 > {
   const meta = getProviderMeta(providerId);
+  const readiness = getBluestackProviderReadiness(providerId);
+  if (readiness.stage === 'live_ready') {
+    return {
+      supportLevel: providerId === 'ecoflow' ? 'verified' : 'implemented_unverified',
+      supportLabel: providerId === 'ecoflow' ? 'Cloud/API' : 'Native BLE',
+      supportNote: readiness.statusDetail,
+    };
+  }
   switch (meta?.status) {
     case 'verified':
       return {
         supportLevel: 'verified',
-        supportLabel: 'Supported',
-        supportNote: 'Provider support is validated for ECS-managed connections.',
+        supportLabel: providerId === 'ecoflow' ? 'Cloud/API' : 'Supported',
+        supportNote: readiness.statusDetail,
       };
     case 'implemented':
       return {
         supportLevel: 'implemented_unverified',
-        supportLabel: 'Setup Required',
-        supportNote: 'Provider path is present, but ECS will not label telemetry live until adapter output is validated.',
+        supportLabel: 'Parser Pending',
+        supportNote: readiness.statusDetail,
       };
     case 'limited':
       return {
         supportLevel: 'partial',
-        supportLabel: 'Partial Support',
-        supportNote: 'ECS can use parts of this provider path, but some workflows remain limited.',
+        supportLabel: readiness.stage === 'native_parser_pending' ? 'Parser Pending' : 'Partial Support',
+        supportNote: readiness.statusDetail,
       };
     case 'planned':
     default:
       return {
         supportLevel: 'ui_only',
-        supportLabel: 'Unsupported',
-        supportNote: 'ECS can recognize this provider, but a working live connection path is not available yet.',
+        supportLabel: readiness.statusLabel,
+        supportNote: readiness.statusDetail,
       };
   }
 }
@@ -211,6 +237,31 @@ export function routeBluetoothDevice(
     };
   }
 
+  if (
+    presentation.providerBadge === 'Propane' ||
+    presentation.providerBadge === 'Water' ||
+    isFluidLevelSensorCategory(presentation.deviceCategory)
+  ) {
+    return {
+      owner: 'sensor',
+      routeKey: 'sensor/fluid_level',
+      providerId: getFluidSensorProviderId(presentation.providerBadge),
+      providerLabel: presentation.brandLabel ?? getFluidSensorProviderLabel(presentation.providerBadge),
+      categoryLabel: presentation.categoryHint,
+      supportLevel: 'generic',
+      supportLabel: 'Live Sensor',
+      supportNote: 'Bluestack can link this monitor over native BLE and will promote live fluid-level telemetry only after a decoded percentage is received.',
+      needsUserConfirmation: false,
+      matchedBrandLabels: presentation.matchedBrandLabels,
+      connectionType: presentation.connectionType,
+      deviceCategory: presentation.deviceCategory,
+      suggestedPath: null,
+      shouldNavigate: false,
+      displayName: presentation.displayName,
+      secondaryLabel: presentation.secondaryLabel,
+    };
+  }
+
   if (presentation.providerBadge === 'Sensor') {
     return {
       owner: 'sensor',
@@ -253,7 +304,11 @@ export function routeBluetoothDevice(
 }
 
 export function isReleaseScannerBluetoothRoute(
-  routing: Pick<BluetoothRoutingDecision, 'owner'>,
+  routing: Pick<BluetoothRoutingDecision, 'owner' | 'deviceCategory'>,
 ): boolean {
-  return routing.owner === 'power' || routing.owner === 'telemetry';
+  return (
+    routing.owner === 'power' ||
+    routing.owner === 'telemetry' ||
+    (routing.owner === 'sensor' && isFluidLevelSensorCategory(routing.deviceCategory))
+  );
 }

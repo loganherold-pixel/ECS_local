@@ -37,6 +37,7 @@ require.extensions['.ts'] = function compileTypeScript(mod, filename) {
 
 const liveEventsSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchLiveEvents.ts'), 'utf8');
 const commandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
+const convoyPanelSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'), 'utf8');
 const legacyCommandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCommandCenter.tsx'), 'utf8');
 const alertTabSource = fs.readFileSync(path.join(process.cwd(), 'app/(tabs)/alert.tsx'), 'utf8');
 const serviceAdaptersSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchServiceAdapters.ts'), 'utf8');
@@ -464,7 +465,11 @@ assert.ok(commandCenterSource.includes('Threat map unavailable: exact location o
 assert.ok(!/latitude:\s*3[0-9]\.|longitude:\s*-\d+\./.test(commandCenterSource), 'Threat drilldown should not hardcode fake coordinates.');
 assert.ok(commandCenterSource.includes('Recovery'), 'Dispatch action row should expose Recovery.');
 assert.ok(!/>\s*More\s*<\/Text>/.test(commandCenterSource), 'Dispatch action row should not expose a vague More button.');
-assert.ok(commandCenterSource.includes("onPress={() => openCommand('hazard')}"), 'Recovery action should open the hazard/recovery report panel directly.');
+assert.ok(
+  commandCenterSource.includes('accessibilityLabel="Create recovery report"') &&
+    commandCenterSource.includes("onPress={() => openCommand('hazard')}"),
+  'Recovery action should open the hazard/recovery report panel directly from the header.',
+);
 assert.ok(commandCenterSource.includes('async function getCurrentPosition'), 'Recovery reports should attempt current GPS before event creation.');
 assert.ok(commandCenterSource.includes('Location.getCurrentPositionAsync'), 'Recovery reports should use native current-position GPS acquisition.');
 assert.ok(commandCenterSource.includes('navigator.geolocation.getCurrentPosition'), 'Recovery reports should use web current-position GPS acquisition.');
@@ -477,11 +482,30 @@ assert.ok(commandCenterSource.includes('requiresMapDrilldown: !!recoveryFix'), '
 assert.ok(commandCenterSource.includes('DispatchChannelButton'), 'Dispatch live strip should render actionable channel buttons.');
 assert.ok(commandCenterSource.includes('getDispatchChannelSnapshots'), 'Dispatch live strip should read channel snapshots.');
 assert.ok(commandCenterSource.includes('createDispatchEventFromChannelAction'), 'Dispatch channel buttons should create validated dispatch events.');
+assert.ok(commandCenterSource.includes('isLiveSource = channel.sourceState === \'live_systems\''), 'Dispatch channel tiles should light up from live source state.');
+assert.ok(commandCenterSource.includes('liveChipSourceLive'), 'Dispatch channel tiles should have a distinct live visual state.');
+assert.ok(commandCenterSource.includes('liveChipSourceCached'), 'Dispatch channel tiles should distinguish last-known cached data from live data.');
+assert.ok(commandCenterSource.includes('liveChipSubdued'), 'Dispatch channel tiles should visually calm inactive secondary states.');
+assert.ok(commandCenterSource.includes('isDispatchChannelElevated'), 'Dispatch channel hierarchy should keep live, warning, and critical states elevated.');
+assert.ok(commandCenterSource.includes("channel.id === 'route' || channel.id === 'sync'"), 'Dispatch hierarchy should reserve primary emphasis for active route/link states.');
+assert.ok(commandCenterSource.includes('getSourceStateLabel(channel.sourceState)'), 'Dispatch channel tiles should expose source truth to users.');
+assert.ok(commandCenterSource.includes('displaySourceLabel'), 'Dispatch channel tiles should suppress redundant cached/source wording in the visible footer.');
+assert.ok(!commandCenterSource.includes('LAST KNOWN'), 'Dispatch live tiles should not repeat LAST KNOWN labels in compact channel cards.');
+assert.ok(commandCenterSource.includes('requestDispatchSync'), 'Sync channel should trigger an actual dispatch sync refresh/retry action.');
+assert.ok(commandCenterSource.includes('testID={`dispatch-channel-${channel.id}-${channel.sourceState}`}'), 'Dispatch channel tiles should expose source state for regression tests.');
 assert.ok(commandCenterSource.includes('teamStore.getSnapshot'), 'Dispatch should read real team state from the team store.');
 assert.ok(commandCenterSource.includes('getTeamSyncState'), 'Dispatch should show explicit reasoned team sync/no-team state.');
 assert.ok(commandCenterSource.includes('reason: teamSyncState.reason'), 'Dispatch should log the reason for team sync state.');
 assert.ok(commandCenterSource.includes('No active team') || teamStoreSource.includes('No active team'), 'Dispatch team foundation should expose no-team state.');
 assert.ok(commandCenterSource.includes('Team sync unavailable') || teamStoreSource.includes('Team sync unavailable'), 'Dispatch team foundation should expose offline team sync state.');
+assert.ok(convoyPanelSource.includes('InactiveConvoySurface'), 'Dispatch convoy panel should render an intentional inactive convoy surface.');
+assert.ok(convoyPanelSource.includes('No Active Convoy'), 'Inactive convoy state should explicitly tell the user no convoy is active.');
+assert.ok(
+  convoyPanelSource.includes('hasActiveConvoy ?') &&
+    convoyPanelSource.includes('<ConvoyCommandMap') &&
+    convoyPanelSource.includes('<InactiveConvoySurface'),
+  'Dispatch convoy panel should preserve the active map and only swap to standby presentation when no convoy is active.',
+);
 
 for (const liveImport of [
   'getSharedOperationalWeatherState',
@@ -500,10 +524,11 @@ for (const actionLabel of [
   'Mark Hazard',
   'Request Check',
   'Request Supply',
-  'Report Comms Issue',
+  'Sync Dispatch',
 ]) {
   assert.ok(channelStateSource.includes(actionLabel), `Dispatch channel action should include ${actionLabel}.`);
 }
+assert.ok(!channelStateSource.includes("'LAST KNOWN'"), 'Dispatch channel state should avoid redundant LAST KNOWN status labels.');
 
 assert.ok(eventStoreSource.includes('validateDispatchEvent'), 'DispatchEvent store should validate writes.');
 assert.ok(eventStoreSource.includes('sortDispatchEvents'), 'DispatchEvent store should keep feed ordering deterministic.');

@@ -14,6 +14,8 @@ import {
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
+import { copyTextToClipboard } from '../../lib/clipboard';
+import { formatJoinCode } from '../../lib/dispatchInviteDomain';
 import { TACTICAL } from '../../lib/theme';
 import { dispatchStore } from '../../lib/dispatchStore';
 import type {
@@ -40,6 +42,10 @@ const ROLE_CONFIG: Record<ExpeditionMemberRole, { label: string; color: string; 
 };
 
 const ROLE_OPTIONS: ExpeditionMemberRole[] = ['owner', 'member', 'viewer'];
+
+function normalizeFormattedJoinCode(value: string): string {
+  return formatJoinCode(value).replace(/-/g, '');
+}
 
 // ── Time formatting helpers ──────────────────────────────────
 function formatRelativeTime(dateStr: string): string {
@@ -211,13 +217,8 @@ export default function MembersPanel({
 
   // ── Copy invite code ───────────────────────────────────────
   const handleCopyCode = async (code: string) => {
-    try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(code);
-      }
-      setInviteCopied(code);
-      setTimeout(() => setInviteCopied(null), 3000);
-    } catch {
+    const copied = await copyTextToClipboard(code);
+    if (copied) {
       setInviteCopied(code);
       setTimeout(() => setInviteCopied(null), 3000);
     }
@@ -262,13 +263,14 @@ export default function MembersPanel({
 
   // ── Check invite code (pre-validation) ─────────────────────
   const handleCheckCode = async (code: string) => {
-    if (code.trim().length < 4) {
+    const normalizedCode = normalizeFormattedJoinCode(code);
+    if (normalizedCode.length < 4) {
       setInviteInfo(null);
       return;
     }
     setCheckingCode(true);
     try {
-      const { data } = await dispatchStore.getInviteInfo(code.trim());
+      const { data } = await dispatchStore.getInviteInfo(normalizedCode);
       setInviteInfo(data || null);
     } catch {
       setInviteInfo(null);
@@ -278,7 +280,7 @@ export default function MembersPanel({
 
   // ── Join via invite code ───────────────────────────────────
   const handleJoin = async () => {
-    const code = joinCode.trim();
+    const code = normalizeFormattedJoinCode(joinCode);
     if (!code) {
       setJoinError('Please enter an invite code');
       return;
@@ -807,22 +809,23 @@ export default function MembersPanel({
                   style={[styles.input, joinError ? styles.inputError : null]}
                   value={joinCode}
                   onChangeText={(v) => {
-                    const upper = v.toUpperCase();
-                    setJoinCode(upper);
+                    const formatted = formatJoinCode(v);
+                    const normalized = normalizeFormattedJoinCode(formatted);
+                    setJoinCode(formatted);
                     setJoinError(null);
                     setJoinSuccess(false);
                     setJoinResult(null);
                     // Auto-check when code is long enough
-                    if (upper.trim().length >= 8) {
-                      handleCheckCode(upper);
+                    if (normalized.length >= 8) {
+                      handleCheckCode(normalized);
                     } else {
                       setInviteInfo(null);
                     }
                   }}
-                  placeholder="e.g. A1B2C3D4"
+                  placeholder="e.g. ABCD-EFGH"
                   placeholderTextColor={TACTICAL.textMuted}
                   autoCapitalize="characters"
-                  maxLength={12}
+                  maxLength={14}
                 />
 
                 {/* Pre-validation info card */}

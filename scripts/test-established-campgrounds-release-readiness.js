@@ -105,7 +105,10 @@ assert.ok(
 
 assert.ok(
     mobileTest.includes('Source / attribution') &&
-    mobileTest.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox })') &&
+    (
+      mobileTest.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox })') ||
+      mobileTest.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox, logFailures: false })')
+    ) &&
     mobileTest.includes('Mobile integration must not reference provider secret'),
   'Mobile regression coverage must verify attribution display, Navigate wiring, and provider-secret isolation.',
 );

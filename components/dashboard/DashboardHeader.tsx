@@ -54,6 +54,7 @@ import TopBannerBackground from '../TopBannerBackground';
 import { useEcsTopBannerHeight } from '../ECSGlobalBanner';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 import { useEcsBriefTopBannerMessage } from '../../lib/useEcsBriefTopBannerMessage';
+import { openUnifiedBluetoothCommand } from '../../lib/bluetoothCommandNavigation';
 
 const DHDR = {
   bar: '#1E2125',
@@ -116,7 +117,6 @@ export default function DashboardHeader({
     () => operatorTrustModeStore.mode,
   );
   const [accountActionBusyId, setAccountActionBusyId] = useState<string | null>(null);
-  const [geofenceRadius, setGeofenceRadius] = useState(() => expeditionStateStore.getGeofenceRadius());
   const [diagnosticsPanelVisible, setDiagnosticsPanelVisible] = useState(false);
   const tripleTapCountRef = useRef(0);
   const tripleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -370,8 +370,18 @@ export default function DashboardHeader({
     );
   }, [onExpeditionEnded]);
 
+  const openLoginScreen = useCallback(() => {
+    setProfilePanelVisible(false);
+    router.replace('/login');
+  }, [router]);
+
   const handleAccountAction = useCallback(async (actionId: string) => {
     if (accountActionBusyId) return;
+
+    if (actionId === 'sign_in') {
+      openLoginScreen();
+      return;
+    }
 
     setAccountActionBusyId(actionId);
 
@@ -394,22 +404,15 @@ export default function DashboardHeader({
     } finally {
       setAccountActionBusyId(null);
     }
-  }, [accountActionBusyId, sendPasswordReset, showToast, signOut, user?.email]);
+  }, [accountActionBusyId, openLoginScreen, sendPasswordReset, showToast, signOut, user?.email]);
 
   const openProfilePanel = useCallback(() => {
-    setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
     setProfilePanelVisible(true);
   }, []);
   const openBluetoothConnections = useCallback(() => {
-    try {
-      router.push('/power/blu');
-    } catch {
-      try {
-        router.push('/power');
-      } catch {
-        showToast('Device connections unavailable');
-      }
-    }
+    openUnifiedBluetoothCommand(router, {
+      onUnavailable: () => showToast('Device connections unavailable'),
+    });
   }, [router, showToast]);
 
   const showEndExpedition = expeditionState === 'active';
@@ -670,7 +673,7 @@ export default function DashboardHeader({
                   </Text>
                   <Text
                     style={styles.briefBannerDetail}
-                    numberOfLines={3}
+                    numberOfLines={2}
                     adjustsFontSizeToFit
                     minimumFontScale={0.7}
                   >
@@ -798,9 +801,17 @@ export default function DashboardHeader({
             icon: 'log-out-outline',
             tone: 'danger',
           },
-        ] : []}
+        ] : [
+          {
+            id: 'sign_in',
+            label: 'Sign In',
+            detail: 'Return to the ECS login screen without clearing saved local setup.',
+            icon: 'log-in-outline',
+            tone: 'primary',
+          },
+        ]}
         accountActionBusyId={accountActionBusyId}
-        onAccountAction={user ? handleAccountAction : undefined}
+        onAccountAction={handleAccountAction}
         statusLabel={profileStatus.statusLabel}
         statusDetail={profileStatus.statusDetail}
         statusTone={profileStatus.tone}
@@ -809,11 +820,6 @@ export default function DashboardHeader({
         syncLabel={bannerStatus.processingLabel ?? bannerStatus.statusDetail}
         syncDisabled={!isOnline || bannerStatus.processingActive}
         onManualSync={triggerSync}
-        geofenceRadius={geofenceRadius}
-        onSelectGeofence={(meters) => {
-          setGeofenceRadius(meters);
-          expeditionStateStore.setGeofenceRadius(meters);
-        }}
         appearanceMode={appearanceMode}
         onSelectTheme={setAppearanceMode}
         operatorTrustMode={operatorTrustMode}
@@ -821,7 +827,6 @@ export default function DashboardHeader({
           setOperatorTrustMode(mode);
           operatorTrustModeStore.setMode(mode);
         }}
-        onProfilePress={onAuthPress}
         endActionLabel={showEndExpedition ? 'END EXPEDITION' : undefined}
         onEndAction={showEndExpedition ? handleEndExpedition : undefined}
       />

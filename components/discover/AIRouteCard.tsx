@@ -415,7 +415,7 @@ const s = StyleSheet.create({
     borderRadius: 8,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '24',
+    borderColor: ECS.strokeMuted,
     backgroundColor: ECS.bgElev,
   },
   thumbnailFrameCompact: {
@@ -440,11 +440,11 @@ const s = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '30',
+    borderColor: TACTICAL.goldSoft,
     backgroundColor: 'rgba(10,12,14,0.72)',
   },
   thumbnailBadgeText: {
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     fontSize: 7,
     fontWeight: '900',
     letterSpacing: 0,

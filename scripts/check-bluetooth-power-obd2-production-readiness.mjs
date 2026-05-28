@@ -7,6 +7,8 @@ const RESULT_RELATIVE_PATH = path.join('.smoke', 'bluetooth-power-obd2-productio
 const EVIDENCE_RELATIVE_PATH = path.join('.smoke', 'bluetooth-power-obd2-production-evidence.json');
 const REAL_DEVICE_PLAN_RELATIVE_PATH = path.join('docs', 'bluetooth-obd2-real-device-e2e.md');
 const SCANNER_AUDIT_RELATIVE_PATH = path.join('docs', 'bluetooth-unified-scanner-audit.md');
+const BLUESTACK_PROVIDER_READINESS_RELATIVE_PATH = path.join('docs', 'bluestack-provider-readiness.md');
+const PRODUCTION_EVIDENCE_DOC_RELATIVE_PATH = path.join('docs', 'release', 'bluetooth-power-obd2-production-evidence.md');
 
 function relPath(root, filePath) {
   return path.relative(root, filePath).replace(/\\/g, '/');
@@ -42,6 +44,39 @@ function accepted(value) {
   return String(value ?? '').trim().toLowerCase() === 'accepted';
 }
 
+function isFilledEvidenceString(value) {
+  const text = String(value ?? '').trim();
+  return text.length > 0 && !/^todo\b/i.test(text) && !text.includes('<');
+}
+
+function hasCompleteFieldEvidencePacket(evidence) {
+  return (
+    Array.isArray(evidence?.deviceMatrix) &&
+    evidence.deviceMatrix.length >= 4 &&
+    evidence.deviceMatrix.every(isFilledEvidenceString) &&
+    Array.isArray(evidence?.evidenceReferences) &&
+    evidence.evidenceReferences.length >= 4 &&
+    evidence.evidenceReferences.every(isFilledEvidenceString) &&
+    isFilledEvidenceString(evidence?.notes)
+  );
+}
+
+function hasReviewerSignoff(evidence) {
+  const signoff = evidence?.reviewerSignoff;
+  return (
+    signoff &&
+    isFilledEvidenceString(signoff.product) &&
+    isFilledEvidenceString(signoff.engineering) &&
+    isFilledEvidenceString(signoff.privacy) &&
+    isFilledEvidenceString(signoff.fieldOps) &&
+    isFilledEvidenceString(signoff.acceptedAt)
+  );
+}
+
+function evidenceAccepted(evidence, key) {
+  return evidenceTrue(evidence, key) && hasCompleteFieldEvidencePacket(evidence);
+}
+
 export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
   const root = options.rootDir ?? process.cwd();
   const paths = {
@@ -49,13 +84,21 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
     evidence: path.join(root, EVIDENCE_RELATIVE_PATH),
     realDevicePlan: path.join(root, REAL_DEVICE_PLAN_RELATIVE_PATH),
     scannerAudit: path.join(root, SCANNER_AUDIT_RELATIVE_PATH),
+    bluestackProviderReadiness: path.join(root, BLUESTACK_PROVIDER_READINESS_RELATIVE_PATH),
+    productionEvidenceDoc: path.join(root, PRODUCTION_EVIDENCE_DOC_RELATIVE_PATH),
     packageJson: path.join(root, 'package.json'),
     appJson: path.join(root, 'app.json'),
     androidManifest: path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'),
     deviceConnections: path.join(root, 'app', 'power', 'blu.tsx'),
     unifiedHook: path.join(root, 'lib', 'useUnifiedDeviceConnections.ts'),
     scannerContract: path.join(root, 'lib', 'unifiedScannerContract.ts'),
+    bluestackAdapter: path.join(root, 'lib', 'bluestack', 'bluestackScannerAdapter.ts'),
+    bluestackParserRegistry: path.join(root, 'lib', 'bluestack', 'bluestackTelemetryParserRegistry.ts'),
     scannerListState: path.join(root, 'lib', 'scannerDeviceListState.ts'),
+    legacyDriverRegistry: path.join(root, 'src', 'power', 'drivers', 'DriverRegistry.ts'),
+    ecsLiveSystemBootstrap: path.join(root, 'lib', 'ecsLiveSystemBootstrap.ts'),
+    ecsProviderRegistry: path.join(root, 'lib', 'EcsProviderRegistry.ts'),
+    powerBrandAdapters: path.join(root, 'lib', 'powerBrandConnectionAdapters.ts'),
     deviceRouting: path.join(root, 'lib', 'bluetoothDeviceRouting.ts'),
     classificationTest: path.join(root, 'scripts', 'test-bluetooth-device-classification.js'),
     obd2Adapter: path.join(root, 'src', 'vehicle-telemetry', 'OBD2Adapter.ts'),
@@ -67,13 +110,21 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
   const evidence = readJsonIfExists(paths.evidence);
   const realDevicePlan = readIfExists(paths.realDevicePlan);
   const scannerAudit = readIfExists(paths.scannerAudit);
+  const bluestackProviderReadiness = readIfExists(paths.bluestackProviderReadiness);
+  const productionEvidenceDoc = readIfExists(paths.productionEvidenceDoc);
   const packageJson = readIfExists(paths.packageJson);
   const appJsonText = readIfExists(paths.appJson);
   const androidManifest = readIfExists(paths.androidManifest);
   const deviceConnections = readIfExists(paths.deviceConnections);
   const unifiedHook = readIfExists(paths.unifiedHook);
   const scannerContract = readIfExists(paths.scannerContract);
+  const bluestackAdapter = readIfExists(paths.bluestackAdapter);
+  const bluestackParserRegistry = readIfExists(paths.bluestackParserRegistry);
   const scannerListState = readIfExists(paths.scannerListState);
+  const legacyDriverRegistry = readIfExists(paths.legacyDriverRegistry);
+  const ecsLiveSystemBootstrap = readIfExists(paths.ecsLiveSystemBootstrap);
+  const ecsProviderRegistry = readIfExists(paths.ecsProviderRegistry);
+  const powerBrandAdapters = readIfExists(paths.powerBrandAdapters);
   const deviceRouting = readIfExists(paths.deviceRouting);
   const classificationTest = readIfExists(paths.classificationTest);
   const obd2Adapter = readIfExists(paths.obd2Adapter);
@@ -110,14 +161,17 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
     ),
     check(
       'unified_device_connections_is_canonical_ui',
-      'Device Connections is the canonical user-facing scanner with one nearby power/OBD2 list.',
-      deviceConnections.includes('useUnifiedDeviceConnections') &&
-        deviceConnections.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
-        deviceConnections.includes('Found nearby power and OBD2 devices') &&
+      'Bluestack is the canonical user-facing scanner with connected rows plus one supported-device list.',
+        deviceConnections.includes('useUnifiedDeviceConnections') &&
+        deviceConnections.includes('connectedReleaseDevices') &&
+        deviceConnections.includes('visibleReleaseDevices') &&
+        deviceConnections.includes('isVisibleReleaseDevice') &&
+        deviceConnections.includes('title="Connected devices"') &&
+        deviceConnections.includes('title="Available devices"') &&
         !deviceConnections.includes('Saved / Known') &&
         !deviceConnections.includes('Failed / Needs Attention'),
       [relPath(root, paths.deviceConnections), relPath(root, paths.unifiedHook)],
-      ['Keep saved/known/failed records out of the connectable nearby scanner UI.'],
+      ['Keep saved/known/failed containers out of the scanner UI while preserving visible connected rows and available scanner rows.'],
     ),
     check(
       'scanner_truth_contract_blocks_mocks_and_cloud_ble_confusion',
@@ -133,10 +187,10 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
     ),
     check(
       'release_scanner_filters_consumer_bluetooth_noise',
-      'Release scanner suppresses generic Bluetooth noise and only lists likely power or OBD2 nearby devices.',
-      deviceConnections.includes('isRealNearbyReleaseDevice') &&
-        deviceConnections.includes('connections.nearbyDevices.filter(isRealNearbyReleaseDevice)') &&
-        deviceConnections.includes('TVs, headsets, and unrelated Bluetooth devices stay out of this action list') &&
+      'Release scanner suppresses generic Bluetooth noise and only lists likely Bluestack-compatible nearby devices.',
+      deviceConnections.includes('isVisibleReleaseDevice') &&
+        deviceConnections.includes('visibleReleaseDevices') &&
+        bluestackAdapter.includes('TVs, headsets, and unrelated Bluetooth devices stay out of this action list') &&
         deviceRouting.includes('isReleaseScannerBluetoothRoute') &&
         scannerListState.includes('requireBrandAllowlistMatch') &&
         scannerListState.includes('unknown_ble_hidden') &&
@@ -148,6 +202,7 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
         classificationTest.includes('isReleaseScannerBluetoothRoute(tvRoute), false'),
       [
         relPath(root, paths.deviceConnections),
+        relPath(root, paths.bluestackAdapter),
         relPath(root, paths.deviceRouting),
         relPath(root, paths.scannerListState),
         relPath(root, paths.unifiedHook),
@@ -169,6 +224,41 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
       ['Do not show OBD2 streaming until native connection, initialization, and PID telemetry have succeeded.'],
     ),
     check(
+      'legacy_vendor_driver_resolution_gated_by_bluestack_parser_registry',
+      'Legacy power vendor drivers and provider modules cannot resolve live telemetry unless Bluestack parser registry permits promotion.',
+      legacyDriverRegistry.includes('getBluestackParserDecision(driver.vendor)') &&
+        legacyDriverRegistry.includes('!parserDecision.canDecodeLiveTelemetry') &&
+        legacyDriverRegistry.includes('continue;') &&
+        bluestackParserRegistry.includes('canPromoteBluestackTelemetry') &&
+        ecsLiveSystemBootstrap.includes('getBluestackParserDecision(entry.providerId)') &&
+        ecsLiveSystemBootstrap.includes('!parserDecision.canDecodeLiveTelemetry') &&
+        ecsLiveSystemBootstrap.includes('loadPowerProvider(entry.label, entry.exportName, entry.loadModule)') &&
+        ecsProviderRegistry.includes('getBluestackParserDecision(id)') &&
+        ecsProviderRegistry.includes('getBluestackParserDecision(reading.provider)') &&
+        ecsProviderRegistry.includes('return null;'),
+      [
+        relPath(root, paths.legacyDriverRegistry),
+        relPath(root, paths.bluestackParserRegistry),
+        relPath(root, paths.ecsLiveSystemBootstrap),
+        relPath(root, paths.ecsProviderRegistry),
+      ],
+      ['Keep legacy vendor driver resolution, provider module loading, and provider telemetry ingestion behind Bluestack parser promotion decisions.'],
+    ),
+    check(
+      'power_brand_adapters_follow_bluestack_parser_registry',
+      'Power brand adapters block parser-pending live connections and expose parser decisions in diagnostics.',
+      powerBrandAdapters.includes('getBluestackParserDecision') &&
+        powerBrandAdapters.includes("errorCode: 'PARSER_PENDING'") &&
+        powerBrandAdapters.includes('parserAction: parserDecision.action') &&
+        powerBrandAdapters.includes('supportsLiveTelemetry: parserDecision.canDecodeLiveTelemetry') &&
+        powerBrandAdapters.includes('if (!parserDecision.canDecodeLiveTelemetry) return null;') &&
+        powerBrandAdapters.includes("parserDecision.action !== 'use_ecoflow_cloud'") &&
+        powerBrandAdapters.includes('parserId: parserDecision.parserId') &&
+        powerBrandAdapters.includes('parserStatus: parserDecision.status'),
+      [relPath(root, paths.powerBrandAdapters)],
+      ['Keep power brand connection adapters aligned with Bluestack parser promotion decisions.'],
+    ),
+    check(
       'real_device_plan_documents_required_matrix',
       'Real-device E2E plan documents native build, power, EcoFlow, OBD2, disconnect, and diagnostics matrix.',
       realDevicePlan.includes('Expo Go is expected to fail native BLE access cleanly') &&
@@ -182,41 +272,87 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
       ['Keep the real-hardware E2E matrix and scanner audit current.'],
     ),
     check(
+      'bluestack_provider_readiness_matrix_documented',
+      'Bluestack provider readiness matrix documents live, cloud/API, parser-pending, OBD2, propane, and water states.',
+      bluestackProviderReadiness.includes('EcoFlow') &&
+        bluestackProviderReadiness.includes('Generic OBD2') &&
+        bluestackProviderReadiness.includes('BLUETTI') &&
+        bluestackProviderReadiness.includes('Anker SOLIX') &&
+        bluestackProviderReadiness.includes('Jackery') &&
+        bluestackProviderReadiness.includes('Goal Zero') &&
+        bluestackProviderReadiness.includes('Renogy') &&
+        bluestackProviderReadiness.includes('REDARC') &&
+        bluestackProviderReadiness.includes('Dakota Lithium') &&
+        bluestackProviderReadiness.includes('Propane monitors') &&
+        bluestackProviderReadiness.includes('Water/fluid monitors') &&
+        bluestackProviderReadiness.includes('ECOFLOW_ACCESS_KEY') &&
+        bluestackProviderReadiness.includes('ECOFLOW_SECRET_KEY') &&
+        bluestackProviderReadiness.includes('Parser-pending rows should be visible as recognized hardware') &&
+        bluestackProviderReadiness.includes('lib/bluestack/bluestackTelemetryParserRegistry.ts') &&
+        bluestackParserRegistry.includes('block_pending_parser') &&
+        bluestackParserRegistry.includes("decisionAction: 'use_ecoflow_cloud'") &&
+        bluestackParserRegistry.includes("decisionAction: 'use_obd2_vehicle_adapter'") &&
+        bluestackParserRegistry.includes("decisionAction: 'link_utility_profile'"),
+      [relPath(root, paths.bluestackProviderReadiness), relPath(root, paths.bluestackParserRegistry)],
+      ['Keep provider readiness docs aligned with Bluestack connection policy and field-test evidence.'],
+    ),
+    check(
+      'production_evidence_contract_documented',
+      'Bluetooth production evidence contract documents required real-hardware fields and owner sign-off.',
+      productionEvidenceDoc.includes('.smoke/bluetooth-power-obd2-production-evidence.json') &&
+        productionEvidenceDoc.includes('"androidNativeBleDiscoveryPassed": true') &&
+        productionEvidenceDoc.includes('"powerStationConnectStreamDisconnectPassed": true') &&
+        productionEvidenceDoc.includes('"ecoflowCloudBleSeparationRealDevicePassed": true') &&
+        productionEvidenceDoc.includes('"obd2NoDataPassed": true') &&
+        productionEvidenceDoc.includes('"obd2LiveDataPassed": true') &&
+        productionEvidenceDoc.includes('"obd2DisconnectClearsTelemetryPassed": true') &&
+        productionEvidenceDoc.includes('"productionDecision": "accepted"') &&
+        productionEvidenceDoc.includes('"buildAndDevice"') &&
+        productionEvidenceDoc.includes('"reviewerSignoff"') &&
+        productionEvidenceDoc.includes('"acceptedAt"') &&
+        productionEvidenceDoc.includes('four non-placeholder evidence references') &&
+        productionEvidenceDoc.includes('Do not set `productionDecision` to `accepted` until real-hardware evidence is reviewed'),
+      [relPath(root, paths.productionEvidenceDoc)],
+      ['Keep the Bluetooth production evidence contract aligned with the gate evidence file.'],
+    ),
+    check(
       'android_native_ble_discovery_evidence_present',
       'Android native BLE discovery evidence is recorded from a development/native build.',
-      evidenceTrue(evidence, 'androidNativeBleDiscoveryPassed'),
+      evidenceAccepted(evidence, 'androidNativeBleDiscoveryPassed'),
       [relPath(root, paths.evidence)],
-      ['Run scenarios 2-5 on Android native/dev build and capture diagnostics/screenshots.'],
+      ['Run scenarios 2-5 on Android native/dev build and capture diagnostics/screenshots, device matrix, and evidence references.'],
     ),
     check(
       'power_station_connect_stream_disconnect_evidence_present',
       'Power station scan, connect, stream, disconnect, and reconnect evidence is recorded.',
-      evidenceTrue(evidence, 'powerStationConnectStreamDisconnectPassed'),
+      evidenceAccepted(evidence, 'powerStationConnectStreamDisconnectPassed'),
       [relPath(root, paths.evidence)],
-      ['Run scenarios 6, 8, and 9 with a supported or likely-supported BLE power station.'],
+      ['Run scenarios 6, 8, and 9 with a supported or likely-supported BLE power station and attach evidence references.'],
     ),
     check(
       'ecoflow_cloud_ble_separation_real_device_evidence_present',
       'EcoFlow cloud unauthorized plus nearby BLE evidence is recorded with real hardware.',
-      evidenceTrue(evidence, 'ecoflowCloudBleSeparationRealDevicePassed'),
+      evidenceAccepted(evidence, 'ecoflowCloudBleSeparationRealDevicePassed'),
       [relPath(root, paths.evidence)],
-      ['Run scenario 7 with an advertising EcoFlow unit and unauthorized/unavailable cloud access.'],
+      ['Run scenario 7 with an advertising EcoFlow unit and unauthorized/unavailable cloud access, then attach evidence references.'],
     ),
     check(
       'obd2_no_data_and_live_data_evidence_present',
       'OBD2 no-data, live PID data, and disconnect clearing evidence is recorded.',
-      evidenceTrue(evidence, 'obd2NoDataPassed') &&
-        evidenceTrue(evidence, 'obd2LiveDataPassed') &&
-        evidenceTrue(evidence, 'obd2DisconnectClearsTelemetryPassed'),
+      evidenceAccepted(evidence, 'obd2NoDataPassed') &&
+        evidenceAccepted(evidence, 'obd2LiveDataPassed') &&
+        evidenceAccepted(evidence, 'obd2DisconnectClearsTelemetryPassed'),
       [relPath(root, paths.evidence)],
-      ['Run scenarios 10-12 with a BLE ELM327-compatible adapter and vehicle.'],
+      ['Run scenarios 10-12 with a BLE ELM327-compatible adapter and vehicle, then attach no-data/live/disconnect evidence references.'],
     ),
     check(
       'production_owner_decision_accepted',
       'Production owner decision is accepted for Bluetooth, power devices, EcoFlow, and OBD2.',
-      accepted(evidence?.productionDecision),
+      accepted(evidence?.productionDecision) &&
+        hasCompleteFieldEvidencePacket(evidence) &&
+        hasReviewerSignoff(evidence),
       [relPath(root, paths.evidence)],
-      ['Record product, privacy, engineering, and field-ops acceptance after real-device evidence is complete.'],
+      ['Record product, privacy, engineering, and field-ops acceptance plus acceptedAt after real-device evidence is complete.'],
     ),
   ];
 

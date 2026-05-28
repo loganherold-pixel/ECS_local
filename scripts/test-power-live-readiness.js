@@ -378,6 +378,10 @@ const routingSource = read('lib/bluetoothDeviceRouting.ts');
 const adaptersSource = read('lib/powerBrandConnectionAdapters.ts');
 const hookSource = read('lib/useUnifiedDeviceConnections.ts');
 const scannerScreenSource = read('app/power/blu.tsx');
+const bluestackAdapterSource = read('lib/bluestack/bluestackScannerAdapter.ts');
+const legacyDriverRegistrySource = read('src/power/drivers/DriverRegistry.ts');
+const ecsBootstrapSource = read('lib/ecsLiveSystemBootstrap.ts');
+const ecsProviderRegistrySource = read('lib/EcsProviderRegistry.ts');
 
 assert.ok(widgetSource.includes('inputWatts: number | null;'), 'widget summary should allow unknown input watts');
 assert.ok(centralTelemetryTypesSource.includes('export type PowerTelemetrySnapshot'), 'power must have a separate normalized snapshot contract');
@@ -407,16 +411,51 @@ assert.ok(!/fallback/i.test(widgetSource), 'power widget must not show fallback 
 assert.ok(!/fallback/i.test(detailSource), 'power detail must not show fallback copy');
 assert.ok(detailSource.includes('MANUAL PROFILE'), 'detail modal should label manual profile honestly');
 assert.ok(detailSource.includes('PROVIDER PATHS'), 'detail modal should avoid overclaiming every brand as supported');
-assert.ok(setupSource.includes("supportLabel: 'Provider support pending'"), 'unsupported providers should be setup/support pending');
+assert.ok(setupSource.includes("supportLabel: 'Parser pending'"), 'unvalidated providers should be labeled as parser pending');
+assert.ok(setupSource.includes("connectionMethod: 'Native BLE pending'"), 'unvalidated providers should not imply a manual-only setup path');
+assert.ok(routingSource.includes("supportLabel: 'Parser Pending'"), 'raw Bluetooth power routing should use parser-pending labels for unvalidated providers');
+assert.ok(hookSource.includes("supportLabel: 'Parser Pending'"), 'unified device connection rows should use parser-pending labels for unvalidated providers');
 assert.ok(routingSource.includes("support.supportLevel === 'verified' ? 'power/live' : 'power/partial'"), 'only verified providers should route as live');
 assert.ok(adaptersSource.includes('getCapabilities()'), 'provider adapters should expose capabilities');
 assert.ok(adaptersSource.includes('supportsLiveTelemetry: false'), 'unvalidated adapters should not claim live telemetry');
+assert.ok(adaptersSource.includes('getBluestackParserDecision'), 'brand adapters should follow Bluestack parser decisions');
+assert.ok(adaptersSource.includes("errorCode: 'PARSER_PENDING'"), 'brand adapters should block parser-pending live connection attempts');
+assert.ok(adaptersSource.includes('if (!parserDecision.canDecodeLiveTelemetry) return null;'), 'brand adapters should block parser-pending raw telemetry normalization');
+assert.ok(adaptersSource.includes("parserDecision.action !== 'use_ecoflow_cloud'"), 'scanner normalization should not bypass parser decisions except the EcoFlow cloud path');
+assert.ok(adaptersSource.includes('parserId: parserDecision.parserId'), 'pending power telemetry should carry parser metadata');
+assert.ok(
+  legacyDriverRegistrySource.includes('getBluestackParserDecision(driver.vendor)') &&
+    legacyDriverRegistrySource.includes('!parserDecision.canDecodeLiveTelemetry') &&
+    legacyDriverRegistrySource.includes('continue;'),
+  'legacy vendor driver resolution must be gated by the Bluestack parser registry',
+);
+assert.ok(
+  ecsBootstrapSource.includes('providerId: BluProviderId') &&
+    ecsBootstrapSource.includes('getBluestackParserDecision(entry.providerId)') &&
+    ecsBootstrapSource.includes('!parserDecision.canDecodeLiveTelemetry') &&
+    ecsBootstrapSource.includes('loadPowerProvider(entry.label, entry.exportName, entry.loadModule)'),
+  'power provider bootstrap must not load parser-pending provider modules',
+);
+assert.ok(
+  ecsProviderRegistrySource.includes('getBluestackParserDecision(id)') &&
+    ecsProviderRegistrySource.includes('getBluestackParserDecision(reading.provider)') &&
+    ecsProviderRegistrySource.includes('if (!parserDecision.canDecodeLiveTelemetry)') &&
+    ecsProviderRegistrySource.includes('return null;'),
+  'central provider registry must reject parser-pending providers and readings',
+);
 assert.ok(hookSource.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS'), 'scanner hook should debounce scan windows');
 assert.ok(hookSource.includes('DEBUG_DEVICE_CONNECTIONS'), 'scanner source-search logging should be behind explicit debug gating');
 assert.ok(hookSource.includes("reason: 'debounced_scan_window'"), 'scanner should suppress repeated scan button presses');
 assert.ok(hookSource.includes('requireBrandAllowlistMatch: true'), 'power scanner should require brand allowlist matches by default');
-assert.ok(scannerScreenSource.includes('Found nearby power and OBD2 devices'), 'user-facing scanner should label nearby power and OBD2 findings clearly');
-assert.ok(scannerScreenSource.includes('Real nearby power and OBD2 advertisements only'), 'scanner copy should explain real nearby advertisement filtering');
+assert.ok(scannerScreenSource.includes('title="Connected devices"'), 'user-facing scanner should keep connected Bluestack sessions visible for review and disconnect');
+assert.ok(scannerScreenSource.includes('title="Available devices"'), 'user-facing scanner should keep available Bluestack findings in the main scan action area');
+assert.ok(!scannerScreenSource.includes('Scan notes'), 'scanner diagnostics should stay out of the normal field scanner UI');
+assert.ok(
+  !scannerScreenSource.includes('No nearby native Bluetooth broadcasts were detected.'),
+  'scanner diagnostics should not render raw discovery wording in the field scanner UI',
+);
+assert.ok(!scannerScreenSource.includes('Major reasons'), 'scanner diagnostics should not expose old debug-style Major reasons copy');
+assert.ok(bluestackAdapterSource.includes('Available cloud/API power devices plus nearby Bluetooth power, OBD2, propane, and water monitor advertisements'), 'scanner copy should explain cloud/API and nearby advertisement filtering');
 assert.strictEqual(typeof SCANNER_SCAN_WINDOW_DEBOUNCE_MS, 'number', 'scanner debounce constant should be exported');
 
 console.log('Power live-readiness checks passed.');

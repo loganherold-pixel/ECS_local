@@ -37,8 +37,8 @@ assert(
   source.includes('toolsSearchFieldShell: {') &&
     source.includes("borderColor: 'rgba(196,138,44,0.36)'") &&
     source.includes('toolsSearchField: {') &&
-    source.includes('minHeight: 48'),
-  'Tools popup search should have mobile-friendly contrast and tap height.',
+    source.includes('minHeight: 44'),
+  'Tools popup search should have mobile-friendly contrast and a slightly tighter tap height.',
 );
 
 const toolsPopupStart = source.indexOf("renderMapPopup(\n    toolsPopupVisible");
@@ -98,9 +98,51 @@ assert(
 );
 
 assert(
-  toolsPopupSource.indexOf('RECENT SEARCHES') < toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') &&
-    toolsPopupSource.indexOf('IMPORT') < toolsPopupSource.indexOf('OFFLINE'),
-  'Recent Searches should swap with Submit as Trail Pack, and Import should swap with Offline.',
+  toolsPopupSource.includes('styles.toolsUtilityStack') &&
+    toolsPopupSource.includes('styles.toolsUtilitySection') &&
+    toolsPopupSource.includes('styles.toolsUtilitySectionLabel') &&
+    toolsPopupSource.includes('>ROUTE</Text>') &&
+    toolsPopupSource.includes('>EXPLORE</Text>') &&
+    toolsPopupSource.includes('>FIELD OPS</Text>') &&
+    toolsPopupSource.indexOf('>ROUTE</Text>') < toolsPopupSource.indexOf('BUILD ROUTE PLAN') &&
+    toolsPopupSource.indexOf('BUILD ROUTE PLAN') < toolsPopupSource.indexOf('STITCH ROUTES') &&
+    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('DRAW ROUTE') &&
+    toolsPopupSource.indexOf('DRAW ROUTE') < toolsPopupSource.indexOf('IMPORT') &&
+    !toolsPopupSource.includes('EXPLORE ROUTES') &&
+    toolsPopupSource.indexOf('>EXPLORE</Text>') < toolsPopupSource.indexOf('Recommend Campsite') &&
+    toolsPopupSource.indexOf('Recommend Campsite') < toolsPopupSource.indexOf('DRAW CAMP POTENTIAL AREA') &&
+    toolsPopupSource.indexOf('>FIELD OPS</Text>') < toolsPopupSource.indexOf('RECORD TRAIL') &&
+    toolsPopupSource.indexOf('RECORD TRAIL') < toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') &&
+    toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') < toolsPopupSource.indexOf('DROP PIN') &&
+    toolsPopupSource.indexOf('OFFLINE') > toolsPopupSource.indexOf('DROP PIN') &&
+    toolsPopupSource.includes('RECENT SEARCHES') &&
+    toolsPopupSource.includes('PINS') &&
+    source.includes('toolsUtilitySectionLabel:') &&
+    source.includes('color: TACTICAL.goldMedium'),
+  'Utilities should be grouped into Route, Explore, and Field Ops while preserving existing Recent Searches and Pins utilities.',
+);
+
+assert(
+  toolsPopupSource.includes('BUILD ROUTE PLAN') &&
+    source.includes("router.push('/explore-trip-builder' as any)") &&
+    toolsPopupSource.includes('onPress={handleOpenStitch}') &&
+    toolsPopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}') &&
+    toolsPopupSource.includes('onPress={handleOpenImportRoute}') &&
+    !toolsPopupSource.includes('onPress={toggleExploreRoutesOverlay}') &&
+    toolsPopupSource.includes('onPress={openRecommendCampsiteChooser}') &&
+    toolsPopupSource.includes('onPress={() => runToolsAction(handleOpenCampScoutIntro)}') &&
+    toolsPopupSource.includes("openToolsChildPopup('trail')") &&
+    toolsPopupSource.includes('onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}') &&
+    toolsPopupSource.includes('onPress={() => runToolsAction(handleDropPinHere)}') &&
+    toolsPopupSource.includes("openToolsChildPopup('offlineCache')"),
+  'Grouped utilities should keep the existing button handlers wired.',
+);
+
+assert(
+  !toolsPopupSource.includes('CAMP INTEL ON') &&
+    !toolsPopupSource.includes('CAMP INTEL OFF') &&
+    !toolsPopupSource.includes('bed-outline'),
+  'Tools utilities should remove the old Camp Intel toggle button and its on/off copy.',
 );
 
 assert(

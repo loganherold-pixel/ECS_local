@@ -78,10 +78,10 @@ const ecoflowHybridDevice = {
 };
 assert.strictEqual(
   isEcoFlowCloudDeviceConnection(ecoflowHybridDevice),
-  false,
-  'EcoFlow BLE advertisements must remain native Bluetooth connectable even when cloud metadata is also present.',
+  true,
+  'EcoFlow API+BLE records must use the cloud telemetry route once the cloud source is available.',
 );
-assert.strictEqual(shouldUseNativeBluetoothConnection(ecoflowHybridDevice), true);
+assert.strictEqual(shouldUseNativeBluetoothConnection(ecoflowHybridDevice), false);
 
 const bluettiDevice = {
   kind: 'power',

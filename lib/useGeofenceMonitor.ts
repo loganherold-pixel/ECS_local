@@ -6,16 +6,15 @@
  * When the user re-enters, automatically ends the expedition.
  *
  * ──────────────────────────────────────────────────────────────
- * DYNAMIC RADIUS:
+ * FIXED ECS RADIUS:
  *   The geofence radius is read from expeditionStateStore.getGeofenceRadius()
- *   on every GPS check (~2s interval). Users can configure this value
- *   between 100m and 2000m via the GeofenceRadiusPanel in the
- *   DashboardHeader dropdown. Changes take effect on the next GPS check.
+ *   on every GPS check (~2s interval). ECS pins this behavior to the
+ *   command default of 200m so route/expedition transitions stay consistent.
  *
  * Activation Flow:
  *   1. expedition.state === 'standby' + activeVehicleId exists
  *   2. GPS fix acquired → record as home position
- *   3. User moves > configured radius from home → auto-start expedition
+ *   3. User moves > 200m from home → auto-start expedition
  *   4. expeditionStateStore.beginExpedition() called
  *   5. Gold header underline fades in (150ms, handled by DashboardHeader)
  *   6. Light haptic (Tier 1 — micro confirmation)
@@ -23,7 +22,7 @@
  *
  * Closure Flow:
  *   1. expedition.state === 'active'
- *   2. User moves back within configured radius of home → auto-end expedition
+ *   2. User moves back within 200m of home → auto-end expedition
  *   3. expeditionStateStore.endExpedition() called
  *   4. Gold header underline fades out (220ms, handled by DashboardHeader)
  *   5. Light haptic
@@ -74,7 +73,7 @@ export interface GeofenceMonitorState {
   isOutsideGeofence: boolean;
   /** GPS status from the underlying hook */
   gpsStatus: string;
-  /** Current configured geofence radius in meters */
+  /** Current ECS geofence radius in meters */
   geofenceRadiusM: number;
 }
 
@@ -172,9 +171,7 @@ export function useGeofenceMonitor(
     // Skip inaccurate readings
     if (accuracyM != null && accuracyM > MAX_ACCURACY_M) return;
 
-    // ── Read dynamic geofence radius from store ─────────────
-    // This is read on every check so changes from the
-    // GeofenceRadiusPanel take effect within ~2 seconds.
+    // ── Read fixed ECS geofence radius from store ───────────
     const geofenceRadiusM = expeditionStateStore.getGeofenceRadius();
 
     const expeditionState = expeditionStateStore.getState();

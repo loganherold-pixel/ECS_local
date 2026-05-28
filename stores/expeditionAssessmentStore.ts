@@ -29,6 +29,7 @@ import {
   MANUAL_EXPEDITION_DATA_STALE_AFTER_MINUTES,
   type ManualExpeditionActionId,
 } from '../lib/expedition/manualUpdateActions';
+import { applyLiveConvoyTrackingToAssessmentContext } from '../lib/convoy/convoyAssessmentAdapter';
 
 export type ExpeditionAssessmentContextProvider = () =>
   | ExpeditionContextSnapshot
@@ -69,6 +70,9 @@ export type ManualConvoyCheckInInput = Partial<{
   assistanceNeededMemberLabels: string[];
   communicationsStatus: 'online' | 'degraded' | 'offline' | 'unknown';
   lastCheckInAt: string;
+  trackingEnabled: boolean;
+  liveLocationMemberCount: number;
+  staleLocationMemberLabels: string[];
   convoySpacingMinutes: number;
   leadSweepSeparationMiles: number;
   recommendedRegroupPoint: string;
@@ -237,6 +241,26 @@ function createUnavailableContext(): ExpeditionContextSnapshot {
   };
 }
 
+async function enrichContextWithLiveConvoyTracking(context: ExpeditionContextSnapshot): Promise<ExpeditionContextSnapshot> {
+  let tracking: Awaited<ReturnType<typeof import('./convoyTrackingStore').fetchConvoyTrackingSnapshot>> | null = null;
+  try {
+    const convoyTracking = await import('./convoyTrackingStore');
+    tracking = convoyTracking.fetchConvoyTrackingSnapshot();
+  } catch {
+    return context;
+  }
+
+  if (!tracking.convoyId || tracking.rawMembers.length <= 0) return context;
+
+  return applyLiveConvoyTrackingToAssessmentContext(context, {
+    convoyId: tracking.convoyId,
+    members: tracking.rawMembers,
+    locations: tracking.rawLocations,
+    connectionStatus: tracking.connectionStatus,
+    recommendedRegroupPoint: context.convoy?.recommendedRegroupPoint?.value ?? null,
+  });
+}
+
 function createStateFromContext(
   context: ExpeditionContextSnapshot,
   options: { usingMockData: boolean; loading?: boolean; error?: string | null } = { usingMockData: false },
@@ -281,7 +305,7 @@ async function resolveContext(): Promise<{ context: ExpeditionContextSnapshot; u
 
   const provided = await contextProvider();
   if (provided) {
-    return { context: cloneContext(provided), usingMockData: false };
+    return { context: await enrichContextWithLiveConvoyTracking(cloneContext(provided)), usingMockData: false };
   }
 
   return { context: createUnavailableContext(), usingMockData: false };
@@ -426,6 +450,9 @@ export async function updateManualConvoyCheckIn(input: ManualConvoyCheckInInput)
     if (input.assistanceNeededMemberLabels !== undefined) convoy.assistanceNeededMemberLabels = point(input.assistanceNeededMemberLabels, now);
     if (input.communicationsStatus !== undefined) convoy.communicationsStatus = point(input.communicationsStatus, now);
     if (input.lastCheckInAt !== undefined) convoy.lastCheckInAt = point(input.lastCheckInAt, now);
+    if (input.trackingEnabled !== undefined) convoy.trackingEnabled = point(input.trackingEnabled, now);
+    if (input.liveLocationMemberCount !== undefined) convoy.liveLocationMemberCount = point(input.liveLocationMemberCount, now);
+    if (input.staleLocationMemberLabels !== undefined) convoy.staleLocationMemberLabels = point(input.staleLocationMemberLabels, now);
     if (input.convoySpacingMinutes !== undefined) convoy.convoySpacingMinutes = point(input.convoySpacingMinutes, now);
     if (input.leadSweepSeparationMiles !== undefined) convoy.leadSweepSeparationMiles = point(input.leadSweepSeparationMiles, now);
     if (input.recommendedRegroupPoint !== undefined) convoy.recommendedRegroupPoint = point(input.recommendedRegroupPoint, now);

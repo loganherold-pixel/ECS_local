@@ -434,11 +434,27 @@ function withContractFields(
   };
 }
 
-function toNavigateMapPoint(point: { lat: number; lng?: number; lon?: number } | null | undefined): NavigateRouteMapPoint | null {
+function toNavigateMapPoint(
+  point: {
+    lat: number;
+    lng?: number;
+    lon?: number;
+    ele?: number | null;
+    ele_m?: number | null;
+    elevationFeet?: number | null;
+  } | null | undefined,
+): NavigateRouteMapPoint | null {
   const lng = point?.lng ?? point?.lon;
   if (typeof point?.lat !== 'number' || !Number.isFinite(point.lat)) return null;
   if (typeof lng !== 'number' || !Number.isFinite(lng)) return null;
-  return { lat: point.lat, lng };
+  const ele = Number(point.ele ?? point.ele_m);
+  const elevationFeet = Number(point.elevationFeet);
+  return {
+    lat: point.lat,
+    lng,
+    ...(Number.isFinite(ele) ? { ele, ele_m: ele } : null),
+    ...(Number.isFinite(elevationFeet) ? { elevationFeet } : null),
+  };
 }
 
 function toRouteLocation(point: NavigateRouteMapPoint | null | undefined): { latitude: number; longitude: number } | null {
@@ -808,6 +824,29 @@ export function getImportedRouteProgressSnapshot(params: {
   });
 }
 
+function hasRouteProgressGeometry(snapshot: ActiveRouteProgressSnapshot | null | undefined): boolean {
+  return (snapshot?.routePoints?.length ?? 0) > 1;
+}
+
+function withRouteGeometryFallback(
+  primary: ActiveRouteProgressSnapshot | null | undefined,
+  fallback: ActiveRouteProgressSnapshot | null | undefined,
+): ActiveRouteProgressSnapshot | null {
+  if (!primary) return null;
+  if (hasRouteProgressGeometry(primary) || !hasRouteProgressGeometry(fallback)) {
+    return primary;
+  }
+
+  return {
+    ...primary,
+    routePoints: fallback?.routePoints,
+    progressPoints: (primary.progressPoints?.length ?? 0) > 1 ? primary.progressPoints : fallback?.progressPoints,
+    originLocation: primary.originLocation ?? fallback?.originLocation ?? null,
+    destinationLocation: primary.destinationLocation ?? fallback?.destinationLocation ?? null,
+    geometryStatus: `${primary.geometryStatus} | route geometry from saved active route`,
+  };
+}
+
 export function getActiveRouteProgressSnapshot(params: {
   activeRoute: ImportedRoute | null;
   navigationData: VehicleNavigationData;
@@ -847,11 +886,23 @@ export function getActiveRouteProgressSnapshot(params: {
   const navigateProgressSummary = getNavigateSessionProgressSnapshot(params.navigateSession, gpsSpeed);
   const roadProgressSummary = getRoadProgressSnapshot(params.roadSession, gpsSpeed);
   const trailProgressSummary = getTrailProgressSnapshot(params.trailSession, gpsSpeed);
+  const activeNavigateProgressSummary =
+    navigateProgressSummary?.isActive || navigateProgressSummary?.isComplete
+      ? withRouteGeometryFallback(navigateProgressSummary, importedProgressSummary)
+      : null;
+  const activeTrailProgressSummary =
+    trailProgressSummary?.isActive || trailProgressSummary?.isComplete
+      ? withRouteGeometryFallback(trailProgressSummary, importedProgressSummary)
+      : null;
+  const activeRoadProgressSummary =
+    roadProgressSummary?.isActive || roadProgressSummary?.isComplete
+      ? withRouteGeometryFallback(roadProgressSummary, importedProgressSummary)
+      : null;
 
   return (
-    (navigateProgressSummary?.isActive || navigateProgressSummary?.isComplete ? navigateProgressSummary : null) ??
-    (trailProgressSummary?.isActive || trailProgressSummary?.isComplete ? trailProgressSummary : null) ??
-    (roadProgressSummary?.isActive || roadProgressSummary?.isComplete ? roadProgressSummary : null) ??
+    activeNavigateProgressSummary ??
+    activeTrailProgressSummary ??
+    activeRoadProgressSummary ??
     importedProgressSummary ??
     navigateProgressSummary ??
     trailProgressSummary ??

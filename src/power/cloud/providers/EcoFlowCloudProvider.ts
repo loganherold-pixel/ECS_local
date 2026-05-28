@@ -43,6 +43,7 @@ import {
 } from "../../../../lib/ecoflowUnauthorizedDevice";
 import {
   describeEcoFlowBluEligibility,
+  normalizeEcoFlowTelemetryProductType,
 } from "../../../../lib/ecoflowBluTelemetryEligibility";
 import { ecsLog } from "../../../../lib/ecsLogger";
 
@@ -59,6 +60,7 @@ function isEcoFlowTelemetryDebugEnabled(): boolean {
 }
 
 const ECOFLOW_LOG_TAG = "[EcoFlowCloudProvider]";
+const ecoFlowUnauthorizedWarningKeys = new Set<string>();
 
 function ecoFlowErrorDetails(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -82,6 +84,17 @@ function logEcoFlowDebug(message: string, details?: Record<string, unknown>): vo
 
 function logEcoFlowWarn(message: string, details?: Record<string, unknown>): void {
   ecsLog.warn("POWER", `${ECOFLOW_LOG_TAG} ${message}`, details);
+}
+
+function logEcoFlowUnauthorizedDeviceWarnOnce(deviceId: string, error: string | null): void {
+  const key = `unauthorized:${deviceId}`;
+  if (ecoFlowUnauthorizedWarningKeys.has(key)) return;
+  ecoFlowUnauthorizedWarningKeys.add(key);
+  ecsLog.warn("POWER", `${ECOFLOW_LOG_TAG} filtered EcoFlow device: unauthorized for cloud telemetry`, {
+    deviceId,
+    reason: "unauthorized",
+    errorMessage: error,
+  });
 }
 
 async function getSupabase(): Promise<any> {
@@ -128,6 +141,14 @@ export type EcoFlowCloudStatus =
   | "cloud_error"
   | "simulating";
 
+export type EcoFlowCloudClientState =
+  | "authRequired"
+  | "deviceUnauthorized"
+  | "cloudUnavailable"
+  | "deviceOffline"
+  | "cloudPolling"
+  | "cloudStale";
+
 // ── Per-device poll result (internal diagnostics) ───────────────────────
 
 interface DevicePollResult {
@@ -135,6 +156,7 @@ interface DevicePollResult {
   ok: boolean;
   pendingApproval: boolean;
   unauthorized: boolean;
+  failureState: EcoFlowCloudClientState | null;
   telemetry: Partial<PowerTelemetry> | null;
   error: string | null;
   polledAt: number;
@@ -202,6 +224,14 @@ const MODEL_PROFILES: Record<string, EcoFlowModelProfile> = {
     nominalVoltage: 48,
     firmware: "2.2.1.3",
   },
+  delta31500: {
+    model: "DELTA 3 1500",
+    capacityWh: 1536,
+    maxSolarInputW: 500,
+    maxOutputW: 1800,
+    nominalVoltage: 48,
+    firmware: "3.0.0",
+  },
   river2pro: {
     model: "RIVER 2 Pro",
     capacityWh: 768,
@@ -229,10 +259,23 @@ function resolveProfile(deviceId: string): EcoFlowModelProfile {
   return MODEL_PROFILES.delta2;
 }
 
+function resolveProfileFromText(value: string): EcoFlowModelProfile {
+  const upper = value.toUpperCase();
+  if (upper.includes("DELTA 3 1500")) return MODEL_PROFILES.delta31500;
+  if (upper.includes("DELTA 2 MAX")) return MODEL_PROFILES.delta2max;
+  if (upper.includes("DELTA 2")) return MODEL_PROFILES.delta2;
+  if (upper.includes("DELTA PRO")) return MODEL_PROFILES.deltapro;
+  if (upper.includes("RIVER 2 PRO")) return MODEL_PROFILES.river2pro;
+  return resolveProfile(value);
+}
+
 // ── Edge function response types ────────────────────────────────────────
 
 interface EdgePollSuccess {
   ok: true;
+  source?: "ecoflow-cloud";
+  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  deviceId?: string;
   telemetry: {
     device: { id: string; vendor: string; model: string };
     battery: {
@@ -253,6 +296,15 @@ interface EdgePollError {
   ok: false;
   code: string;
   message: string;
+  source?: "ecoflow-cloud";
+  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  error?: {
+    code: string;
+    message: string;
+    authRequired?: boolean;
+    deviceUnauthorized?: boolean;
+    retryable?: boolean;
+  };
   details?: { status?: number; bodySnippet?: string; ecoflowCode?: string };
 }
 
@@ -262,11 +314,17 @@ type EdgePollResponse = EdgePollSuccess | EdgePollError;
 
 interface EdgeDeviceListSuccess {
   ok: true;
+  source?: "ecoflow-cloud";
+  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
   devices: {
+    id?: string;
     deviceId: string;
+    name?: string;
     deviceName: string;
     model: string;
     productType: string;
+    online?: boolean;
+    serial?: string;
   }[];
   deviceCount: number;
   fetchedAt: string;
@@ -276,9 +334,122 @@ interface EdgeDeviceListError {
   ok: false;
   code: string;
   message: string;
+  source?: "ecoflow-cloud";
+  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  error?: {
+    code: string;
+    message: string;
+    authRequired?: boolean;
+    deviceUnauthorized?: boolean;
+    retryable?: boolean;
+  };
 }
 
 type EdgeDeviceListResponse = EdgeDeviceListSuccess | EdgeDeviceListError;
+
+function getEdgeErrorCode(error: EdgePollError | EdgeDeviceListError | null | undefined): string {
+  return String(error?.error?.code ?? error?.code ?? '').trim();
+}
+
+function getEdgeErrorMessage(error: EdgePollError | EdgeDeviceListError | null | undefined): string {
+  return String(error?.error?.message ?? error?.message ?? '').trim();
+}
+
+function classifyEcoFlowCloudFailureState(
+  value: unknown,
+): EcoFlowCloudClientState {
+  const parts: string[] = [];
+  const collect = (input: unknown, depth = 0): void => {
+    if (input == null || depth > 3) return;
+    if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") {
+      parts.push(String(input));
+      return;
+    }
+    if (input instanceof Error) {
+      parts.push(input.message);
+      return;
+    }
+    if (Array.isArray(input)) {
+      for (const item of input) collect(item, depth + 1);
+      return;
+    }
+    if (typeof input === "object") {
+      const record = input as Record<string, unknown>;
+      if (record.error && typeof record.error === "object") {
+        const edgeError = record.error as Record<string, unknown>;
+        if (edgeError.deviceUnauthorized === true) {
+          parts.push("deviceUnauthorized");
+        }
+        if (edgeError.authRequired === true) {
+          parts.push("authRequired");
+        }
+        if (edgeError.retryable === true) {
+          parts.push("retryable");
+        }
+      }
+      for (const item of Object.values(record)) collect(item, depth + 1);
+    }
+  };
+  collect(value);
+
+  const haystack = parts.join(" ").toLowerCase();
+  if (
+    haystack.includes("deviceunauthorized") ||
+    haystack.includes("device_not_authorized") ||
+    haystack.includes("current device is not allowed") ||
+    haystack.includes("not allowed to get device info") ||
+    haystack.includes("device unauthorized")
+  ) {
+    return "deviceUnauthorized";
+  }
+  if (
+    haystack.includes("authrequired") ||
+    haystack.includes("missing_ecoflow_credentials") ||
+    haystack.includes("ecoflow_auth_required") ||
+    haystack.includes("invalid access") ||
+    haystack.includes("access key") ||
+    haystack.includes("api key") ||
+    haystack.includes("signature") ||
+    haystack.includes("wrong account") ||
+    haystack.includes("wrong region") ||
+    haystack.includes("pending_approval")
+  ) {
+    return "authRequired";
+  }
+  if (
+    haystack.includes("deviceoffline") ||
+    haystack.includes("device_offline") ||
+    haystack.includes("offline") ||
+    haystack.includes("not online") ||
+    haystack.includes("device unavailable")
+  ) {
+    return "deviceOffline";
+  }
+  if (
+    haystack.includes("cloudstale") ||
+    haystack.includes("pending_approval") ||
+    haystack.includes("stale")
+  ) {
+    return "cloudStale";
+  }
+  return "cloudUnavailable";
+}
+
+function normalizeEdgeError(
+  response: EdgePollError | EdgeDeviceListError | null | undefined,
+): EdgePollError | null {
+  if (!response) return null;
+  const nested = response.error;
+  return {
+    ok: false,
+    source: response.source,
+    phase: response.phase,
+    code: getEdgeErrorCode(response),
+    message: getEdgeErrorMessage(response),
+    error: nested,
+    details: (response as EdgePollError).details,
+  };
+}
 
 // ── Legacy name normalization helpers ───────────────────────────────────
 
@@ -321,6 +492,177 @@ function inferEcoFlowMetadata(
   return { model: raw || 'EcoFlow Device', productType: 'unknown' };
 }
 
+function normalizeEcoFlowCatalogProductType(
+  value: string,
+  fallbackText: string,
+): string {
+  const normalized = normalizeEcoFlowTelemetryProductType(value, fallbackText);
+  return normalized === 'unknown' ? inferEcoFlowMetadata(fallbackText).productType : normalized;
+}
+
+function isEcoFlowCloudTelemetryCandidate(
+  eligibility: ReturnType<typeof describeEcoFlowBluEligibility>,
+): boolean {
+  if (!eligibility.deviceId) return false;
+  if (eligibility.telemetryCapable) return true;
+
+  // The EcoFlow device-list API often omits product type/model metadata,
+  // especially for user-renamed devices. Cloud telemetry is a server-side
+  // capability check, so unknown catalog types should be tried instead of
+  // silently blocked. Local BLU/BLE telemetry remains stricter elsewhere.
+  return eligibility.productType === "unknown";
+}
+
+function normalizeEcoFlowTelemetryKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const ECOFLOW_TELEMETRY_ENTRY_KEY_FIELDS = [
+  "key",
+  "name",
+  "quota",
+  "quotaName",
+  "quotaCode",
+  "quota_code",
+  "quotaId",
+  "quota_id",
+  "param",
+  "paramName",
+  "parameter",
+  "parameterName",
+  "property",
+  "propertyName",
+  "identifier",
+  "field",
+  "fieldName",
+  "metric",
+  "metricName",
+  "item",
+  "itemName",
+  "path",
+  "code",
+  "dp",
+  "dpCode",
+  "dp_code",
+  "point",
+  "pointName",
+  "id",
+];
+
+const ECOFLOW_TELEMETRY_ENTRY_VALUE_FIELDS = [
+  "value",
+  "val",
+  "data",
+  "num",
+  "number",
+  "currentValue",
+  "current",
+  "currentVal",
+  "current_value",
+  "actual",
+  "actualValue",
+  "displayValue",
+  "latestValue",
+  "lastValue",
+  "realValue",
+  "rawValue",
+  "valueRaw",
+  "valueNum",
+  "valueNumber",
+  "numericValue",
+  "dataValue",
+  "reading",
+  "meterValue",
+];
+
+function addFlattenedTelemetryValues(
+  target: Map<string, unknown>,
+  value: unknown,
+  path: string[] = [],
+): void {
+  if (!value || typeof value !== "object") return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (Array.isArray(item)) {
+        if (item.length >= 2 && typeof item[0] === "string" && item[0].trim()) {
+          target.set(normalizeEcoFlowTelemetryKey(item[0].trim()), unwrapTelemetryEntryValue(item[1]));
+        }
+        continue;
+      }
+
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+
+      const record = item as Record<string, unknown>;
+      const key = readTelemetryEntryKey(record);
+      const entryValue = readTelemetryEntryValue(record);
+      if (key && entryValue !== undefined) {
+        target.set(normalizeEcoFlowTelemetryKey(key), entryValue);
+        target.set(normalizeEcoFlowTelemetryKey(key), unwrapTelemetryEntryValue(entryValue));
+      }
+
+      addFlattenedTelemetryValues(target, record, path);
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const entryKey = readTelemetryEntryKey(record);
+  const entryValue = readTelemetryEntryValue(record);
+  if (entryKey && entryValue !== undefined) {
+    target.set(normalizeEcoFlowTelemetryKey(entryKey), unwrapTelemetryEntryValue(entryValue));
+  }
+
+  for (const [key, child] of Object.entries(record)) {
+    const nextPath = [...path, key];
+    const exactPath = nextPath.join(".");
+
+    if (child && typeof child === "object") {
+      const childEntryValue = !Array.isArray(child)
+        ? readTelemetryEntryValue(child as Record<string, unknown>)
+        : undefined;
+      if (childEntryValue !== undefined) {
+        const unwrapped = unwrapTelemetryEntryValue(childEntryValue);
+        target.set(normalizeEcoFlowTelemetryKey(exactPath), unwrapped);
+        target.set(normalizeEcoFlowTelemetryKey(key), unwrapped);
+      }
+      addFlattenedTelemetryValues(target, child, nextPath);
+      continue;
+    }
+
+    target.set(normalizeEcoFlowTelemetryKey(exactPath), child);
+    target.set(normalizeEcoFlowTelemetryKey(key), child);
+  }
+}
+
+function readTelemetryEntryKey(record: Record<string, unknown>): string | null {
+  for (const key of ECOFLOW_TELEMETRY_ENTRY_KEY_FIELDS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function readTelemetryEntryValue(record: Record<string, unknown>): unknown {
+  for (const key of ECOFLOW_TELEMETRY_ENTRY_VALUE_FIELDS) {
+    if (key in record) return record[key];
+  }
+  return undefined;
+}
+
+function unwrapTelemetryEntryValue(value: unknown): unknown {
+  let current = value;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return current;
+    const nested = readTelemetryEntryValue(current as Record<string, unknown>);
+    if (nested === undefined || nested === current) return current;
+    current = nested;
+  }
+  return current;
+}
+
 // ── EcoFlowCloudProvider class ──────────────────────────────────────────
 
 export class EcoFlowCloudProvider implements ICloudProvider {
@@ -348,6 +690,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
   // ── Diagnostic state ────────────────────────────────────────────────
   private _lastStatus: EcoFlowCloudStatus = "idle";
   private _lastCloudError: string | null = null;
+  private _lastCloudFailure: EcoFlowCloudClientState | null = null;
   private _cloudPollCount: number = 0;
   private _simulationPollCount: number = 0;
   private _pendingApprovalCount: number = 0;
@@ -374,6 +717,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this._simulationPollCount = 0;
     this._pendingApprovalCount = 0;
     this._lastCloudError = null;
+    this._lastCloudFailure = null;
     this.perDeviceResults.clear();
     this.listedDeviceCatalog.clear();
 
@@ -386,6 +730,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       this.pollMode = "cloud";
       this._lastStatus = "cloud_error";
       this._lastCloudError = "EcoFlow simulation is disabled outside dev/demo mode.";
+      this._lastCloudFailure = "cloudUnavailable";
       this.activeDeviceIds = [];
     } else {
       this.pollMode = "cloud";
@@ -423,6 +768,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this.pollCount = 0;
     this._lastStatus = "idle";
     this._lastCloudError = null;
+    this._lastCloudFailure = null;
     this.activeDeviceIds = [];
     this.perDeviceResults.clear();
     this.listedDeviceCatalog.clear();
@@ -498,7 +844,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     const supabase = await getSupabase();
     if (!supabase) {
       if (__DEV__) logEcoFlowDebug("listDevices: Supabase unavailable; returning empty list");
-      return [];
+      this._lastStatus = "cloud_error";
+      this._lastCloudError = "Supabase client unavailable.";
+      this._lastCloudFailure = "cloudUnavailable";
+      throw new Error("EcoFlow cloud provider unavailable.");
     }
 
     try {
@@ -512,14 +861,23 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         const parsed = this.tryParseEdgeResponse(data, error);
         if (parsed && parsed.code === "pending_approval") {
           if (__DEV__) logEcoFlowDebug("listDevices: pending approval; returning empty list");
+          this._lastStatus = "pending_approval";
+          this._lastCloudError = null;
+          this._lastCloudFailure = "authRequired";
           return [];
         }
+        const failureState = classifyEcoFlowCloudFailureState(parsed ?? data ?? error);
+        const errorMessage = parsed?.message ?? error?.message ?? "EcoFlow device list request failed";
+        this._lastStatus = "cloud_error";
+        this._lastCloudError = errorMessage;
+        this._lastCloudFailure = failureState;
         if (__DEV__) {
           logEcoFlowDebug("listDevices: edge error", {
-            errorMessage: parsed?.message ?? error?.message ?? "unknown",
+            errorMessage,
+            failureState,
           });
         }
-        return [];
+        throw new Error(errorMessage);
       }
 
       const response = data as EdgeDeviceListResponse | null;
@@ -528,16 +886,25 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       // 1. new split function shape: { ok: true, devices: [{ deviceId, deviceName, model, productType }], deviceCount }
       // 2. legacy shared ecoflow shape: { ok: true, devices: [{ id, name, online }] }
       if (!response || !response.ok) {
-        const errResp = response as EdgeDeviceListError | null;
+        const errResp = normalizeEdgeError(response as EdgeDeviceListError | null);
         if (errResp?.code === "pending_approval") {
+          this._lastStatus = "pending_approval";
+          this._lastCloudError = null;
+          this._lastCloudFailure = "authRequired";
           return [];
         }
+        const errorMessage = errResp?.message ?? "EcoFlow device list response failed";
+        const failureState = classifyEcoFlowCloudFailureState(errResp ?? response);
+        this._lastStatus = "cloud_error";
+        this._lastCloudError = errorMessage;
+        this._lastCloudFailure = failureState;
         if (__DEV__) {
           logEcoFlowDebug("listDevices: invalid response", {
-            errorMessage: errResp?.message ?? "empty response",
+            errorMessage,
+            failureState,
           });
         }
-        return [];
+        throw new Error(errorMessage);
       }
 
       const rawDevices = Array.isArray((response as any).devices) ? (response as any).devices : [];
@@ -545,7 +912,15 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         .map((d: any) => {
           const deviceId = String(d?.deviceId ?? d?.id ?? d?.sn ?? '').trim();
           const deviceName = String(d?.deviceName ?? d?.name ?? 'EcoFlow Device').trim();
-          const inferred = inferEcoFlowMetadata(deviceName);
+          const inferenceText = [
+            deviceName,
+            d?.model,
+            d?.productType,
+            d?.productName,
+            d?.deviceModel,
+            d?.deviceType,
+          ].filter(Boolean).join(' ');
+          const inferred = inferEcoFlowMetadata(inferenceText);
           const modelRaw = String(d?.model ?? '').trim();
           const productTypeRaw = String(d?.productType ?? '').trim();
           const online =
@@ -557,10 +932,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
             deviceId,
             deviceName,
             model: modelRaw && modelRaw.toLowerCase() !== 'unknown' ? modelRaw : inferred.model,
-            productType:
-              productTypeRaw && productTypeRaw.toLowerCase() !== 'unknown'
-                ? productTypeRaw
-                : inferred.productType,
+            productType: normalizeEcoFlowCatalogProductType(productTypeRaw, inferenceText),
             online,
           };
         })
@@ -598,7 +970,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       return listedDevices;
     } catch (err) {
       if (__DEV__) logEcoFlowDebug("listDevices: unexpected error", ecoFlowErrorDetails(err));
-      return [];
+      this._lastStatus = "cloud_error";
+      this._lastCloudError = err instanceof Error ? err.message : "EcoFlow device list failed.";
+      this._lastCloudFailure = classifyEcoFlowCloudFailureState(err);
+      throw err;
     }
   }
 
@@ -647,6 +1022,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     return this._lastCloudError;
   }
 
+  /** Diagnostic: normalized client state for the last cloud failure. */
+  get lastCloudFailure(): EcoFlowCloudClientState | null {
+    return this._lastCloudFailure;
+  }
+
   /** Diagnostic: number of successful cloud polls. */
   get cloudPollCount(): number {
     return this._cloudPollCount;
@@ -673,6 +1053,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         ok: result.ok,
         pendingApproval: result.pendingApproval,
         unauthorized: result.unauthorized,
+        failureState: result.failureState,
         error: result.error,
         polledAt: result.polledAt,
         hasTelemetry: result.telemetry !== null,
@@ -685,6 +1066,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       pollMode: this.pollMode,
       lastStatus: this._lastStatus,
       lastCloudError: this._lastCloudError,
+      lastCloudFailure: this._lastCloudFailure,
       totalPolls: this.pollCount,
       cloudPolls: this._cloudPollCount,
       simulationPolls: this._simulationPollCount,
@@ -722,6 +1104,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     ok: boolean;
     pendingApproval: boolean;
     unauthorized: boolean;
+    failureState: EcoFlowCloudClientState | null;
     error: string | null;
     polledAt: number;
   }[] {
@@ -736,6 +1119,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       ok: boolean;
       pendingApproval: boolean;
       unauthorized: boolean;
+      failureState: EcoFlowCloudClientState | null;
       error: string | null;
       polledAt: number;
     }[] = [];
@@ -756,6 +1140,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         ok: result.ok,
         pendingApproval: result.pendingApproval,
         unauthorized: result.unauthorized,
+        failureState: result.failureState,
         error: result.error,
         polledAt: result.polledAt,
       });
@@ -788,10 +1173,21 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       const selected = await powerDeviceStore.getSelected("EcoFlow");
       if (selected.length > 0) {
         this.activeDeviceIds = this.filterTelemetryCandidateIds(selected);
+        const selectedCatalogDevice =
+          catalogDevices.find((device) => device.deviceId === this.activeDeviceIds[0]) ??
+          null;
+        if (selectedCatalogDevice) {
+          this.profile = resolveProfileFromText([
+            selectedCatalogDevice.name,
+            selectedCatalogDevice.model,
+            selectedCatalogDevice.productType,
+          ].filter(Boolean).join(" "));
+        }
         if (__DEV__) {
           logEcoFlowDebug("resolveActiveDevices: selected devices filtered", {
             selectedDeviceCount: selected.length,
             telemetryDeviceCount: this.activeDeviceIds.length,
+            profile: this.profile.model,
           });
         }
         if (this.activeDeviceIds.length > 0) return;
@@ -805,9 +1201,21 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         this.activeDeviceIds = this.filterTelemetryCandidateIds(
           catalogDevices.map((d) => d.deviceId),
         );
+        const selectedCatalogDevice =
+          catalogDevices.find((device) => device.deviceId === this.activeDeviceIds[0]) ??
+          catalogDevices.find((device) => device.deviceId === fallbackDeviceId) ??
+          null;
+        if (selectedCatalogDevice) {
+          this.profile = resolveProfileFromText([
+            selectedCatalogDevice.name,
+            selectedCatalogDevice.model,
+            selectedCatalogDevice.productType,
+          ].filter(Boolean).join(" "));
+        }
         if (__DEV__) {
           logEcoFlowDebug("resolveActiveDevices: catalog telemetry devices selected", {
             telemetryDeviceCount: this.activeDeviceIds.length,
+            profile: this.profile.model,
           });
         }
         if (this.activeDeviceIds.length > 0) return;
@@ -843,7 +1251,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
             online: listed.online,
           })
         : describeEcoFlowBluEligibility({ deviceId, productType: null });
-      if (!eligibility.telemetryCapable) {
+      if (!isEcoFlowCloudTelemetryCandidate(eligibility)) {
         if (__DEV__) {
           logEcoFlowDebug("filtered EcoFlow device", {
             deviceId,
@@ -852,6 +1260,12 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           });
         }
         continue;
+      }
+      if (!eligibility.telemetryCapable && __DEV__) {
+        logEcoFlowDebug("attempting EcoFlow cloud telemetry for unknown catalog type", {
+          deviceId,
+          productType: eligibility.productType,
+        });
       }
       seen.add(deviceId);
       candidates.push(deviceId);
@@ -871,6 +1285,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       ok: false,
       pendingApproval: false,
       unauthorized: true,
+      failureState: "deviceUnauthorized",
       telemetry: null,
       error: ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
       polledAt,
@@ -885,11 +1300,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
 
     if (!this.unauthorizedWarningDeviceIds.has(deviceId)) {
       this.unauthorizedWarningDeviceIds.add(deviceId);
-      logEcoFlowWarn("filtered EcoFlow device: unauthorized for cloud telemetry", {
-        deviceId,
-        reason: "unauthorized",
-        errorMessage: error,
-      });
+      logEcoFlowUnauthorizedDeviceWarnOnce(deviceId, error);
     }
   }
 
@@ -942,6 +1353,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       if (__DEV__) logEcoFlowDebug("pollCloudMulti: Supabase unavailable; returning unavailable telemetry");
       this._lastStatus = "cloud_error";
       this._lastCloudError = "Supabase client unavailable.";
+      this._lastCloudFailure = "cloudUnavailable";
       return this.buildUnavailableTelemetry("EcoFlow cloud provider unavailable.");
     }
 
@@ -957,6 +1369,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       if (__DEV__) logEcoFlowDebug("pollCloudMulti: no active devices; returning unavailable telemetry");
       this._lastStatus = "cloud_error";
       this._lastCloudError = "No active EcoFlow devices selected.";
+      this._lastCloudFailure = "cloudUnavailable";
       return this.buildUnavailableTelemetry("No active EcoFlow device selected.");
     }
 
@@ -1011,6 +1424,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         .join("; ");
       this._lastStatus = "cloud_error";
       this._lastCloudError = errorMsgs;
+      this._lastCloudFailure =
+        failedResults.find((result) => result.failureState)?.failureState ??
+        classifyEcoFlowCloudFailureState(errorMsgs);
 
       if (__DEV__) {
         logEcoFlowDebug("pollCloudMulti: all devices failed", {
@@ -1066,6 +1482,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
             ok: false,
             pendingApproval: true,
             unauthorized: false,
+            failureState: "authRequired",
             telemetry: null,
             error: null,
             polledAt: now,
@@ -1081,6 +1498,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           ok: false,
           pendingApproval: false,
           unauthorized: false,
+          failureState: classifyEcoFlowCloudFailureState(parsed ?? data ?? error),
           telemetry: null,
           error: parsed?.message ?? error?.message ?? "Edge function invoke failed",
           polledAt: now,
@@ -1096,6 +1514,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           ok: false,
           pendingApproval: false,
           unauthorized: false,
+          failureState: "cloudUnavailable",
           telemetry: null,
           error: "Empty response from edge function",
           polledAt: now,
@@ -1103,13 +1522,18 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       }
 
       // ── pending_approval in data ────────────────────────────
-      if (!response.ok && (response as EdgePollError).code === "pending_approval") {
+      const responseError = !response.ok
+        ? normalizeEdgeError(response as EdgePollError)
+        : null;
+
+      if (responseError?.code === "pending_approval") {
         this._pendingApprovalCount++;
         return {
           deviceId,
           ok: false,
           pendingApproval: true,
           unauthorized: false,
+          failureState: "authRequired",
           telemetry: null,
           error: null,
           polledAt: now,
@@ -1118,7 +1542,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
 
       // ── Other errors ────────────────────────────────────────
       if (!response.ok) {
-        const errResp = response as EdgePollError;
+        const errResp = responseError;
         if (isEcoFlowUnauthorizedDeviceError(errResp)) {
           return this.makeUnauthorizedPollResult(deviceId, now);
         }
@@ -1128,8 +1552,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           ok: false,
           pendingApproval: false,
           unauthorized: false,
+          failureState: classifyEcoFlowCloudFailureState(errResp),
           telemetry: null,
-          error: errResp.message || `Error code: ${errResp.code}`,
+          error: errResp?.message || `Error code: ${errResp?.code ?? "unknown"}`,
           polledAt: now,
         };
       }
@@ -1141,6 +1566,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         ok: true,
         pendingApproval: false,
         unauthorized: false,
+        failureState: null,
         telemetry,
         error: null,
         polledAt: now,
@@ -1155,6 +1581,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         ok: false,
         pendingApproval: false,
         unauthorized: false,
+        failureState: classifyEcoFlowCloudFailureState(err),
         telemetry: null,
         error: err instanceof Error ? err.message : "Unexpected poll error",
         polledAt: now,
@@ -1187,6 +1614,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this._cloudPollCount++;
     this._lastStatus = "cloud_ok";
     this._lastCloudError = null;
+    this._lastCloudFailure = null;
 
     const now = Date.now();
 
@@ -1202,10 +1630,13 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     let voltsSum = 0;
     let voltsCount = 0;
     let wattsInSum = 0;
+    let wattsInCount = 0;
     let wattsOutSum = 0;
+    let wattsOutCount = 0;
     let tempSum = 0;
     let tempCount = 0;
     let solarSum = 0;
+    let solarCount = 0;
     let anyLowBattery = false;
     let anyStale = anyPending;
     let allStale = anyPending;
@@ -1228,9 +1659,11 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         }
         if (bat.wattsIn !== undefined) {
           wattsInSum += bat.wattsIn;
+          wattsInCount++;
         }
         if (bat.wattsOut !== undefined) {
           wattsOutSum += bat.wattsOut;
+          wattsOutCount++;
         }
         if (bat.tempC !== undefined) {
           tempSum += bat.tempC;
@@ -1245,6 +1678,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       const sol = t.solar;
       if (sol && sol.watts !== undefined) {
         solarSum += sol.watts;
+        solarCount++;
       }
 
       const flags = t.flags;
@@ -1291,8 +1725,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       battery: {
         socPct: socCount > 0 ? round(socSum / socCount, 1) : undefined,
         volts: voltsCount > 0 ? round(voltsSum / voltsCount, 2) : undefined,
-        wattsIn: wattsInSum > 0 ? Math.round(wattsInSum) : undefined,
-        wattsOut: wattsOutSum > 0 ? Math.round(wattsOutSum) : undefined,
+        wattsIn: wattsInCount > 0 ? Math.round(wattsInSum) : undefined,
+        wattsOut: wattsOutCount > 0 ? Math.round(wattsOutSum) : undefined,
         tempC: tempCount > 0 ? round(tempSum / tempCount, 1) : undefined,
         estRuntimeMin:
           estRuntimeCount > 0
@@ -1301,7 +1735,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       },
 
       solar: {
-        watts: solarSum > 0 ? round(solarSum, 1) : undefined,
+        watts: solarCount > 0 ? round(solarSum, 1) : undefined,
       },
 
       flags: {
@@ -1324,6 +1758,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this._pendingApprovalCount++;
     this._lastStatus = "pending_approval";
     this._lastCloudError = null; // Not an error — it's a known pending state
+    this._lastCloudFailure = "authRequired";
 
     if (__DEV__ && this._pendingApprovalCount <= 3) {
       logEcoFlowDebug("pending approval received; returning stale telemetry", {
@@ -1373,10 +1808,32 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     const raw = (response.telemetry && typeof response.telemetry === "object"
       ? (response.telemetry as Record<string, unknown>)
       : {}) as Record<string, unknown>;
+    const flattened = new Map<string, unknown>();
+    addFlattenedTelemetryValues(flattened, raw);
+
+    const readRawValue = (key: string): unknown => {
+      if (key in raw) {
+        const directValue = raw[key];
+        if (!directValue || typeof directValue !== "object" || Array.isArray(directValue)) {
+          return directValue;
+        }
+      }
+
+      const normalizedKey = normalizeEcoFlowTelemetryKey(key);
+      if (flattened.has(normalizedKey)) return flattened.get(normalizedKey);
+
+      if (key.includes(".")) {
+        for (const [candidateKey, candidateValue] of flattened) {
+          if (candidateKey.endsWith(normalizedKey)) return candidateValue;
+        }
+      }
+
+      return undefined;
+    };
 
     const readNumber = (...keys: string[]): number | undefined => {
       for (const key of keys) {
-        const value = raw[key];
+        const value = readRawValue(key);
         if (typeof value === "number" && Number.isFinite(value)) return value;
         if (typeof value === "string" && value.trim()) {
           const parsed = Number(value);
@@ -1387,23 +1844,246 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     };
 
     const glacierSoc =
-      readNumber("bms_bmsStatus.soc", "bms_bmsStatus.f32ShowSoc", "pd.batPct");
+      readNumber(
+        "bms_bmsStatus.soc",
+        "bms_bmsStatus.f32ShowSoc",
+        "bmsMaster.bmsSoc",
+        "bmsMaster.soc",
+        "bmsMaster.f32ShowSoc",
+        "bms_emsStatus.f32LcdShowSoc",
+        "ems.f32LcdShowSoc",
+        "ems.soc",
+        "bmsBattSoc",
+        "bms.battSoc",
+        "pd.bmsBattSoc",
+        "pd.bmsSoc",
+        "pd.soc",
+        "pd.socO",
+        "pd.socNow",
+        "pd.socLevel",
+        "pd.batPct",
+        "pd.batteryPct",
+        "pd.batteryPercent",
+        "pd.remainCap",
+        "pd.remainBattery",
+        "bms.runState.soc",
+        "cms_bmsRunState.soc",
+        "battery.socPct",
+        "battery.soc",
+        "battery.batteryPercent",
+        "battery.percent",
+        "batteryPct",
+        "batteryPercentage",
+        "batteryPercent",
+        "remainBattery",
+        "socLevel",
+        "socPct",
+        "soc",
+      );
 
     const batteryVoltsRaw =
-      readNumber("bms_bmsStatus.vol", "bms_emsStatus.chgVol", "pd.motorVol");
+      readNumber(
+        "bms_bmsStatus.vol",
+        "bms_emsStatus.chgVol",
+        "bmsMaster.vol",
+        "pd.motorVol",
+        "pd.vol",
+        "bmsBattVol",
+        "bms.battVol",
+        "pd.bmsBattVol",
+        "battery.volts",
+        "battery.voltage",
+        "volts",
+      );
 
     const outputWattsRaw =
-      readNumber("bms_bmsStatus.outWatts", "pd.motorWat");
+      readNumber(
+        "bms_bmsStatus.outWatts",
+        "bms_bmsStatus.outputWatts",
+        "bms_bmsStatus.dsgPower",
+        "bmsMaster.outWatts",
+        "bmsMaster.dsgPower",
+        "ems.outWatts",
+        "ems.outputWatts",
+        "ems.dsgPower",
+        "ems.totalOutputWatts",
+        "inv.outputWatts",
+        "inv.acOutPower",
+        "inv.dcOutPower",
+        "pd.motorWat",
+        "pd.wattsOutSum",
+        "pd.outputWatts",
+        "pd.outputPower",
+        "pd.outputPowerSum",
+        "pd.loadPower",
+        "pd.totalLoadPower",
+        "pd.dsgPower",
+        "pd.acOutPower",
+        "pd.acLvOutPower",
+        "pd.invOutWatts",
+        "pd.dcOutWatts",
+        "pd.dcOutPower",
+        "pd.usbOutPower",
+        "pd.typecOutPower",
+        "pd.totalOutPower",
+        "pd.totalOutputPower",
+        "pd.totalOutWatts",
+        "pd.powOutSumW",
+        "powOutSumW",
+        "pd.powGetAc",
+        "powGetAc",
+        "pd.powGetAcOut",
+        "powGetAcOut",
+        "pd.powGetAcHvOut",
+        "powGetAcHvOut",
+        "pd.powGetAcLvOut",
+        "powGetAcLvOut",
+        "battery.wattsOut",
+        "battery.outputWatts",
+        "battery.outputPower",
+        "outputWatts",
+        "output_watts",
+        "outputPower",
+        "outputPowerSum",
+        "loadPower",
+        "totalLoadPower",
+        "totalOutPower",
+        "totalOutWatts",
+        "totalOutputPower",
+        "invOutWatts",
+        "dcOutWatts",
+        "wattsOut",
+      );
 
     const directInputWattsRaw =
-      readNumber("bms_bmsStatus.inWatts");
+      readNumber(
+        "bms_bmsStatus.inWatts",
+        "bms_bmsStatus.inputWatts",
+        "bms_bmsStatus.chgPower",
+        "bmsMaster.inWatts",
+        "bmsMaster.chgPower",
+        "ems.inWatts",
+        "ems.inputWatts",
+        "ems.chgPower",
+        "ems.totalInputWatts",
+        "ems.totalChargePower",
+        "inv.inputWatts",
+        "inv.acInPower",
+        "pd.wattsInSum",
+        "pd.inputWatts",
+        "pd.inputPower",
+        "pd.inputPowerSum",
+        "pd.chgPower",
+        "pd.chargePower",
+        "pd.chgPowerTotal",
+        "pd.totalChgPower",
+        "pd.totalInputPower",
+        "pd.totalInPower",
+        "pd.gridInputWatts",
+        "pd.gridWatts",
+        "pd.acInWatts",
+        "pd.acInPower",
+        "pd.powInSumW",
+        "powInSumW",
+        "pd.powGetAcIn",
+        "powGetAcIn",
+        "pd.powGet5p8",
+        "powGet5p8",
+        "battery.wattsIn",
+        "battery.inputWatts",
+        "battery.inputPower",
+        "inputWatts",
+        "input_watts",
+        "inputPower",
+        "inputPowerSum",
+        "totalInputPower",
+        "totalInPower",
+        "totalChgPower",
+        "chargePower",
+        "chgPower",
+        "chgPowerTotal",
+        "acInWatts",
+        "gridWatts",
+        "wattsIn",
+      );
 
     const tempCRaw =
-      readNumber("bms_bmsStatus.tmp", "bms_bmsStatus.maxCellTmp", "bms_bmsStatus.minCellTmp");
+      readNumber(
+        "bms_bmsStatus.tmp",
+        "bms_bmsStatus.maxCellTmp",
+        "bms_bmsStatus.minCellTmp",
+        "bmsMaster.tmp",
+        "bmsMaxCellTemp",
+        "bmsMinCellTemp",
+        "bms.maxCellTemp",
+        "bms.minCellTemp",
+        "pd.bmsMaxCellTemp",
+        "pd.bmsMinCellTemp",
+        "battery.tempC",
+        "temperatureC",
+        "tempC",
+      );
 
     const chgState = readNumber("bms_emsStatus.chgState");
     const chgCmd = readNumber("bms_emsStatus.chgCmd");
     const chgAmpRaw = readNumber("bms_emsStatus.chgAmp", "bms_bmsStatus.tagChgAmp");
+    const solarWattsRaw = readNumber(
+      "mppt.inWatts",
+      "mppt.inputWatts",
+      "mppt.inputPower",
+      "mppt.watts",
+      "mppt.pvPower",
+      "mppt.solarWatts",
+      "mppt.solarPower",
+      "mpptPv.pvPower",
+      "mpptPv.inputWatts",
+      "mpptWatts",
+      "pv.power",
+      "pv.watts",
+      "pv.inputWatts",
+      "pd.pvPower",
+      "pd.pvInPower",
+      "pd.pvTotalPower",
+      "pd.pvWatts",
+      "pd.pvInputWatts",
+      "pd.pvHInputWatts",
+      "pd.pvLInputWatts",
+      "pd.solarWatts",
+      "pd.solarInputWatts",
+      "pd.solarInputPower",
+      "battery.solarWatts",
+      "battery.solarInputWatts",
+      "solar.watts",
+      "solar.inputWatts",
+      "solar.inputPower",
+      "solarWatts",
+      "solarInputWatts",
+      "solarInputPower",
+      "solar_input_watts",
+      "solar_power",
+      "pvPower",
+      "pvInPower",
+      "pvTotalPower",
+      "pvWatts",
+    );
+
+    const acPortOutputWatts = [
+      readNumber("pd.powGetAc", "powGetAc"),
+      readNumber("pd.powGetAcOut", "powGetAcOut"),
+      readNumber("pd.powGetAcHvOut", "powGetAcHvOut"),
+      readNumber("pd.powGetAcLvOut", "powGetAcLvOut"),
+      readNumber("pd.powGetAcLvTt30Out", "powGetAcLvTt30Out"),
+    ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const dcPortOutputWatts = [
+      readNumber("pd.powGet12v", "powGet12v"),
+      readNumber("pd.powGet24v", "powGet24v"),
+      readNumber("pd.powGetTypec1", "powGetTypec1"),
+      readNumber("pd.powGetTypec2", "powGetTypec2"),
+      readNumber("pd.powGetQcusb1", "powGetQcusb1"),
+      readNumber("pd.powGetQcusb2", "powGetQcusb2"),
+      readNumber("pd.powGet4p81", "powGet4p81"),
+      readNumber("pd.powGet4p82", "powGet4p82"),
+    ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 
     const volts =
       batteryVoltsRaw !== undefined
@@ -1420,10 +2100,33 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       }
     }
 
-    const wattsOut =
-      outputWattsRaw !== undefined ? outputWattsRaw : undefined;
+    const summedPortOutputWatts = [...acPortOutputWatts, ...dcPortOutputWatts]
+      .reduce((sum, value) => sum + Math.max(0, value), 0);
 
-    const solarWatts = 0;
+    const wattsOut =
+      outputWattsRaw !== undefined
+        ? outputWattsRaw
+        : summedPortOutputWatts > 0
+          ? summedPortOutputWatts
+          : undefined;
+
+    const solarWatts =
+      solarWattsRaw !== undefined
+        ? solarWattsRaw
+        : (() => {
+          const pvValues = [
+            readNumber("pd.pv1InputWatts", "pv1InputWatts"),
+            readNumber("pd.pv2InputWatts", "pv2InputWatts"),
+            readNumber("pd.pv1Power", "pv1Power"),
+            readNumber("pd.pv2Power", "pv2Power"),
+            readNumber("pd.pvHInputWatts", "pvHInputWatts"),
+            readNumber("pd.pvLInputWatts", "pvLInputWatts"),
+            readNumber("pd.powGetPvH", "powGetPvH"),
+            readNumber("pd.powGetPvL", "powGetPvL"),
+          ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+          if (pvValues.length === 0) return undefined;
+          return pvValues.reduce((sum, value) => sum + Math.max(0, value), 0);
+        })();
 
     const tempC =
       tempCRaw !== undefined
@@ -1433,7 +2136,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     const isCharging =
       (typeof chgState === "number" && chgState > 0) ||
       chgCmd === 1 ||
-      (typeof wattsIn === "number" && wattsIn > 0);
+      (typeof wattsIn === "number" && wattsIn > 0) ||
+      (typeof solarWatts === "number" && solarWatts > 0);
 
     let estRuntimeMin: number | undefined;
     if (!isCharging && typeof wattsOut === "number" && wattsOut > 0 && typeof glacierSoc === "number") {
@@ -1444,16 +2148,17 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       }
     }
 
+    const responseDeviceId = String(response.deviceId ?? this.deviceId ?? "unknown");
     const model =
       (typeof raw["device.model"] === "string" && String(raw["device.model"]).trim()) ||
       (typeof raw["model"] === "string" && String(raw["model"]).trim()) ||
       (typeof raw["productName"] === "string" && String(raw["productName"]).trim()) ||
       (typeof raw["deviceName"] === "string" && String(raw["deviceName"]).trim()) ||
-      (this.deviceId?.startsWith("BX") ? "GLACIER" : this.profile.model);
+      (responseDeviceId.startsWith("BX") ? "GLACIER" : this.profile.model);
 
     if (__DEV__ && isEcoFlowTelemetryDebugEnabled()) {
       logEcoFlowDebug("mapped telemetry snapshot", {
-        deviceId: this.deviceId || "unknown",
+        deviceId: responseDeviceId,
         model,
         socPct: glacierSoc,
         volts,
@@ -1473,7 +2178,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       source: "cloud",
 
       device: {
-        id: this.deviceId || "unknown",
+        id: responseDeviceId,
         vendor: "EcoFlow",
         model,
       },
@@ -1488,7 +2193,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       },
 
       solar: {
-        watts: solarWatts,
+        watts: solarWatts !== undefined ? round(solarWatts, 1) : undefined,
       },
 
       flags: {
@@ -1510,15 +2215,18 @@ export class EcoFlowCloudProvider implements ICloudProvider {
   ): EdgePollError | null {
     // Check data first (Supabase sometimes puts the response body here)
     if (data && typeof data === "object" && "code" in (data as any)) {
-      return data as EdgePollError;
+      return normalizeEdgeError(data as EdgePollError);
+    }
+    if (data && typeof data === "object" && "error" in (data as any)) {
+      return normalizeEdgeError(data as EdgePollError);
     }
 
     // Try parsing error.message as JSON
     if (error?.message) {
       try {
         const parsed = JSON.parse(error.message);
-        if (parsed && typeof parsed === "object" && "code" in parsed) {
-          return parsed as EdgePollError;
+        if (parsed && typeof parsed === "object" && ("code" in parsed || "error" in parsed)) {
+          return normalizeEdgeError(parsed as EdgePollError);
         }
       } catch {
         // Not JSON — ignore
@@ -1529,9 +2237,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     if (
       error?.context &&
       typeof error.context === "object" &&
-      "code" in error.context
+      ("code" in error.context || "error" in error.context)
     ) {
-      return error.context as EdgePollError;
+      return normalizeEdgeError(error.context as EdgePollError);
     }
 
     return null;

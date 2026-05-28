@@ -170,6 +170,7 @@ const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
 const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;
 const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 6000;
 const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;
+const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;
 
 interface StartupHydrationResult {
   persistedOfflineMode: boolean;
@@ -246,6 +247,24 @@ function withStartupTimeout<T>(
       }),
     timeoutPromise,
   ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
+function withAuthRequestTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeout) clearTimeout(timeout);
   });
 }
@@ -761,6 +780,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     realtimeSync.destroy();
     syncActionQueue.stopAutoProcess();
     loadoutSyncQueue.stopAutoProcess();
+    void import('../lib/convoy/convoyLocationPublisher')
+      .then(({ stopConvoyLocationSharing }) =>
+        stopConvoyLocationSharing('Auth session ended. Live sharing stopped.'),
+      )
+      .catch(() => {});
 
     setUser(null);
     setOperatorInfo(null);
@@ -1821,7 +1845,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           keepSignedIn,
         });
         // Step 1: Authenticate with Supabase
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await withAuthRequestTimeout(
+          'sign_in_request',
+          supabase.auth.signInWithPassword({ email, password }),
+          SIGN_IN_REQUEST_TIMEOUT_MS,
+        );
 
         console.log('[Auth] Auth request response', {
           source: attemptSource,
@@ -1925,6 +1953,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } catch (err: any) {
         const msg = err?.message || 'Unknown error';
         setSignInPending(false);
+        if (msg.includes('sign_in_request timed out')) {
+          console.log('[Auth] Login attempt failure', {
+            source: attemptSource,
+            ...loginLogIdentity,
+            keepSignedIn,
+            reason: 'auth_request_timeout',
+          });
+          return { error: "Sign in timed out. Check your connection and try again." };
+        }
         if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
           console.log('[Auth] Login attempt failure', {
             source: attemptSource,

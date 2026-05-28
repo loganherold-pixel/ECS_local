@@ -183,6 +183,10 @@ require.extensions['.png'] = (mod, filename) => {
 const vehicleAttitudeStageModule = loadTypeScriptModule('src/features/attitude/components/VehicleAttitudeStage.tsx');
 const VehicleAttitudeStage = vehicleAttitudeStageModule.default;
 const {
+  ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO,
+  COMMAND_ATTITUDE_AXIS_X_NUDGE,
+} = vehicleAttitudeStageModule;
+const {
   VEHICLE_ATTITUDE_ASSETS,
   DEFAULT_ATTITUDE_GEOMETRY,
   ATTITUDE_READOUT_ANCHORS,
@@ -346,6 +350,33 @@ assert.strictEqual(fittedStageStyle.overflow, 'hidden', 'Fitted image stage shou
 assertNear(fittedStageStyle.width, stageWidth, 'Default fitted stage should preserve full image width.');
 assertNear(fittedStageStyle.height, stageHeight, 'Default fitted stage should preserve the image aspect ratio.');
 
+const commandWidthTree = renderStage({ mode: 'command', fitMode: 'containWidth' });
+const commandWidthStage = findOne(commandWidthTree, byTestID('vehicle-attitude-stage-viewbox'), 'Command width-fitted stage should render.');
+const commandWidthStyle = flattenStyle(commandWidthStage.node.props.style);
+const baseMonitorStyle = flattenStyle(findOne(baseTree, byTestID('vehicle-attitude-monitor')).node.props.style);
+const commandMonitorStyle = flattenStyle(findOne(commandWidthTree, byTestID('vehicle-attitude-monitor')).node.props.style);
+assert.strictEqual(
+  ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO,
+  1448 / 1086,
+  'Command full-width stage should use the actual clean PNG aspect ratio.',
+);
+assertNear(commandWidthStyle.width, stageWidth, 'Command width-fitted stage should snap to the available container width.');
+assertNear(
+  commandWidthStyle.height,
+  stageWidth / ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO,
+  'Command width-fitted stage should grow from the real vehicle image aspect ratio without stretching.',
+);
+assertNear(
+  commandMonitorStyle.height,
+  baseMonitorStyle.height * 2,
+  'Portrait command gauge should be approximately 100% larger than the default monitor gauge.',
+  1,
+);
+assert.ok(
+  commandMonitorStyle.top < baseMonitorStyle.top,
+  'Portrait command gauge should move upward to keep a clean buffer over the vehicle image.',
+);
+
 const svgOverlay = findOne(
   baseTree,
   (node) => node.type === 'Svg' && node.props && node.props.testID === 'vehicle-attitude-live-hash-overlay',
@@ -428,10 +459,22 @@ assertNear(
 
 const commandPitchReadout = findOne(commandTree, byTestID('vehicle-attitude-pitch-degree-readout'), 'Command pitch readout should render.');
 const commandRollReadout = findOne(commandTree, byTestID('vehicle-attitude-roll-degree-readout'), 'Command roll readout should render.');
+const commandPitchReadoutStyle = flattenStyle(commandPitchReadout.ancestors[commandPitchReadout.ancestors.length - 1].props.style);
+const commandRollReadoutStyle = flattenStyle(commandRollReadout.ancestors[commandRollReadout.ancestors.length - 1].props.style);
 const commandPitchReadoutTextStyle = flattenStyle(commandPitchReadout.node.props.style);
 const commandRollReadoutTextStyle = flattenStyle(commandRollReadout.node.props.style);
 assert.ok(commandPitchReadoutTextStyle.fontSize <= 15, 'Command pitch degree readout should use a smaller overlay font.');
 assert.ok(commandRollReadoutTextStyle.fontSize <= 15, 'Command roll degree readout should use a smaller overlay font.');
+assertNear(
+  commandPitchReadoutStyle.left + commandPitchReadoutStyle.width / 2,
+  ((ATTITUDE_READOUT_ANCHORS.pitch.x + COMMAND_ATTITUDE_AXIS_X_NUDGE.pitch) / DEFAULT_ATTITUDE_GEOMETRY.viewBox.width) * stageWidth,
+  'Command pitch readout should nudge right to sit over the side-profile vehicle.',
+);
+assertNear(
+  commandRollReadoutStyle.left + commandRollReadoutStyle.width / 2,
+  ((ATTITUDE_READOUT_ANCHORS.roll.x + COMMAND_ATTITUDE_AXIS_X_NUDGE.roll) / DEFAULT_ATTITUDE_GEOMETRY.viewBox.width) * stageWidth,
+  'Command roll readout should nudge right to sit over the rear-profile vehicle.',
+);
 
 const pitchPositive = hashPoints(renderStage({ pitchDeg: 10, rollDeg: 0 }));
 const pitchNegative = hashPoints(renderStage({ pitchDeg: -10, rollDeg: 0 }));
@@ -560,8 +603,8 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(
   mapAttitudeInputForTelemetryFrame({ pitchDeg: 10, rollDeg: 2 }, 'landscapeLeft', 'device'),
-  { pitchDeg: 2, rollDeg: -10 },
-  'Device-frame telemetry should be orientation compensated.',
+  { pitchDeg: 10, rollDeg: 2 },
+  'Device-frame telemetry should preserve semantic pitch and roll values in landscape.',
 );
 
 const vehicleFrameLandscape = renderStage({
@@ -623,13 +666,13 @@ const deviceFrameLandscapeLeft = renderStage({
 });
 assert.strictEqual(
   textContent(findOne(deviceFrameLandscapeLeft, byTestID('vehicle-attitude-pitch-degree-readout')).node),
-  '+2.0°',
-  'Landscape-left device-frame pitch readout should use orientation-compensated vehicle pitch.',
+  '+10.0°',
+  'Landscape-left device-frame pitch readout should preserve the pitch channel.',
 );
 assert.strictEqual(
   textContent(findOne(deviceFrameLandscapeLeft, byTestID('vehicle-attitude-roll-degree-readout')).node),
-  '-10.0°',
-  'Landscape-left device-frame roll readout should use orientation-compensated vehicle roll.',
+  '+2.0°',
+  'Landscape-left device-frame roll readout should preserve the roll channel.',
 );
 
 const deviceFrameLandscapeRight = renderStage({
@@ -640,26 +683,26 @@ const deviceFrameLandscapeRight = renderStage({
 });
 assert.strictEqual(
   textContent(findOne(deviceFrameLandscapeRight, byTestID('vehicle-attitude-pitch-degree-readout')).node),
-  '-2.0°',
-  'Landscape-right device-frame pitch readout should use orientation-compensated vehicle pitch.',
+  '+10.0°',
+  'Landscape-right device-frame pitch readout should preserve the pitch channel.',
 );
 assert.strictEqual(
   textContent(findOne(deviceFrameLandscapeRight, byTestID('vehicle-attitude-roll-degree-readout')).node),
-  '+10.0°',
-  'Landscape-right device-frame roll readout should use orientation-compensated vehicle roll.',
+  '+2.0°',
+  'Landscape-right device-frame roll readout should preserve the roll channel.',
 );
 
 const leftHashPoints = hashPoints(deviceFrameLandscapeLeft);
 const expectedLandscapeLeftPitchFront = getTrackPoint(
   LIVE_HASH_TRACKS.pitchFrontLeft,
-  HORIZON_Y + (2 / 30) * PITCH_FRONT_UI_SIGN * DEFAULT_INDICATOR_TRAVEL_Y,
+  HORIZON_Y + (10 / 30) * PITCH_FRONT_UI_SIGN * DEFAULT_INDICATOR_TRAVEL_Y,
 );
 const expectedLandscapeLeftRollLeft = getTrackPoint(
   LIVE_HASH_TRACKS.rollLeft,
-  HORIZON_Y + (-10 / 30) * ROLL_LEFT_UI_SIGN * DEFAULT_INDICATOR_TRAVEL_Y,
+  HORIZON_Y + (2 / 30) * ROLL_LEFT_UI_SIGN * DEFAULT_INDICATOR_TRAVEL_Y,
 );
-assertNear(leftHashPoints[0].y, expectedLandscapeLeftPitchFront.y, 'Device-frame pitch hash should use remapped landscape-left vehicle pitch.');
-assertNear(leftHashPoints[2].y, expectedLandscapeLeftRollLeft.y, 'Device-frame roll hash should use remapped landscape-left vehicle roll.');
+assertNear(leftHashPoints[0].y, expectedLandscapeLeftPitchFront.y, 'Device-frame pitch hash should preserve landscape-left pitch.');
+assertNear(leftHashPoints[2].y, expectedLandscapeLeftRollLeft.y, 'Device-frame roll hash should preserve landscape-left roll.');
 
 const zeroTree = renderStage({ onZero: () => undefined, onResetZero: () => undefined });
 const zeroControl = findOne(zeroTree, byTestID('vehicle-attitude-zero-control'), 'Zero control should render.');

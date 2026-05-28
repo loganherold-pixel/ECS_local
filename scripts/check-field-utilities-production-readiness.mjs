@@ -159,16 +159,18 @@ export function buildFieldUtilitiesProductionReadinessResult(options = {}) {
       ['Capture Weather Intel parity evidence against Dashboard weather with live, cached, stale, unavailable, and no-route trail states.'],
     ),
     check(
-      'field_utilities_bluetooth_uses_canonical_device_connections',
-      'Field Utilities Bluetooth action opens the canonical Device Connections screen and does not embed a duplicate scanner UI.',
-      quickActions.includes('const openDeviceConnections = useCallback') &&
-        quickActions.includes("router.push('/power/blu')") &&
-        quickActions.includes('onPress: openDeviceConnections') &&
+      'field_utilities_omits_duplicate_bluetooth',
+      'Field Utilities omits the duplicate Bluetooth tile because the global banner opens canonical Device Connections.',
+      !quickActions.includes('const openDeviceConnections = useCallback') &&
+        !quickActions.includes("import { openUnifiedBluetoothCommand } from '../lib/bluetoothCommandNavigation';") &&
+        !quickActions.includes('openUnifiedBluetoothCommand(router') &&
+        !quickActions.includes('onPress: openDeviceConnections') &&
+        !quickActions.includes("key: 'bluetooth'") &&
         !quickActions.includes("openFieldUtilityAction('bluetooth')") &&
         !quickActions.includes('setActivePanel') &&
         !quickActions.includes('OBD2ScannerModal'),
       [relPath(root, paths.quickActions)],
-      ['Validate Android Field Utilities Bluetooth action routes to the same Device Connections UI as the top-level Bluetooth control.'],
+      ['Validate Android Field Utilities keeps six action tiles and Bluetooth remains available from the top global banner.'],
     ),
     check(
       'field_utilities_copy_avoids_external_dispatch_or_fake_live_claims',

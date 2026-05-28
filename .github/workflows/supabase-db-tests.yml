@@ -1,0 +1,34 @@
+name: Supabase Database Tests
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pgtap-rls:
+    name: pgTAP RLS tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+
+      - name: Start local Supabase
+        run: supabase start
+        timeout-minutes: 12
+
+      - name: Run database tests
+        run: supabase test db
+        timeout-minutes: 5
+

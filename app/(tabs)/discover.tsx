@@ -24,6 +24,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Image,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -111,6 +112,11 @@ import {
   saveNavigationHandoffPayload,
   type NavigationHandoffPayload,
 } from '../../lib/navigationHandoffStore';
+import {
+  getActiveGuidanceSnapshot,
+  isNavigationHandoffForActiveGuidance,
+  markNavigationHandoffActiveGuidanceReplacementConfirmed,
+} from '../../lib/navigationActiveGuidanceGuard';
 import { extractExploreRouteCampMarkers } from '../../lib/exploreRouteCampHandoff';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { useECSAI } from '../../lib/ai/useECSAI';
@@ -1069,15 +1075,21 @@ function DiscoverScreenInner() {
     }),
     [adaptive.contentMaxWidth, adaptive.horizontalPadding],
   );
-  const showExploreRouteGrid = adaptive.explore.routeColumns > 1;
+  const exploreRouteGridColumns = adaptive.explore.routeColumns > 1 || (adaptive.isLandscape && windowWidth >= 640)
+    ? 2
+    : 1;
+  const showExploreRouteGrid = exploreRouteGridColumns > 1;
   const routeCardWidth = useMemo(() => {
     if (!showExploreRouteGrid) return undefined;
+    const panelChromeWidth = adaptive.isLandscape ? 48 : 0;
     const usableWidth =
-      Math.min(adaptive.contentMaxWidth ?? windowWidth, windowWidth) - adaptive.horizontalPadding * 2;
+      Math.min(adaptive.contentMaxWidth ?? windowWidth, windowWidth) -
+      adaptive.horizontalPadding * 2 -
+      panelChromeWidth;
     return Math.max(
-      320,
+      300,
       Math.min(
-        Math.floor((usableWidth - adaptive.panelGap) / 2),
+        Math.floor((usableWidth - adaptive.panelGap * (exploreRouteGridColumns - 1)) / exploreRouteGridColumns),
         adaptive.explore.routeCardMaxWidth,
       ),
     );
@@ -1085,7 +1097,9 @@ function DiscoverScreenInner() {
     adaptive.contentMaxWidth,
     adaptive.explore.routeCardMaxWidth,
     adaptive.horizontalPadding,
+    adaptive.isLandscape,
     adaptive.panelGap,
+    exploreRouteGridColumns,
     showExploreRouteGrid,
     windowWidth,
   ]);
@@ -1210,6 +1224,57 @@ function DiscoverScreenInner() {
     setAiPreviewVisible(true);
   }, [stageExploreReadinessPreview]);
 
+  const confirmRouteHandoffAgainstActiveGuidance = useCallback(
+    async (payload: NavigationHandoffPayload): Promise<NavigationHandoffPayload | null> => {
+      const activeGuidance = await getActiveGuidanceSnapshot();
+      if (!activeGuidance) return payload;
+
+      if (isNavigationHandoffForActiveGuidance(payload, activeGuidance)) {
+        router.push('/navigate');
+        return null;
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value: NavigationHandoffPayload | null) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+
+        Alert.alert(
+          'Active guidance is running',
+          `Previewing "${payload.title}" will end the current guidance${
+            activeGuidance.routeTitle ? ` for "${activeGuidance.routeTitle}"` : ''
+          }. Current turn-by-turn directions will be cleared. Continue?`,
+          [
+            {
+              text: 'Keep Current',
+              style: 'cancel',
+              onPress: () => finish(null),
+            },
+            {
+              text: 'Preview New Route',
+              style: 'destructive',
+              onPress: () =>
+                finish(
+                  markNavigationHandoffActiveGuidanceReplacementConfirmed(
+                    payload,
+                    activeGuidance,
+                  ),
+                ),
+            },
+          ],
+          {
+            cancelable: true,
+            onDismiss: () => finish(null),
+          },
+        );
+      });
+    },
+    [router],
+  );
+
   const handleNavigateToRoute = useCallback(
     async (
       route: ExpeditionOpportunity,
@@ -1239,12 +1304,15 @@ function DiscoverScreenInner() {
         return;
       }
 
+      const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(payload);
+      if (!confirmedPayload) return;
+
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
       setAiPreviewRoute(null);
       setTrailPackPreview(null);
-      await saveNavigationHandoffPayload(payload);
+      await saveNavigationHandoffPayload(confirmedPayload);
       await stageNavigationFlow({
         source: 'explore',
         target: 'navigate',
@@ -1252,17 +1320,17 @@ function DiscoverScreenInner() {
         label: options.flowLabel ?? (options.autoStartNavigation ? 'Starting Guidance' : 'Route Ready'),
         message: options.flowMessage ?? (options.autoStartNavigation
           ? 'Route preview accepted. Starting guidance in Navigate.'
-          : 'Route is staged in Navigate. Review Active Guidance, then start when ready.'),
+            : 'Route is staged in Navigate. Review Active Guidance, then start when ready.'),
         context: {
-          routeId: payload.id,
-          tripMode: payload.tripMode,
+          routeId: confirmedPayload.id,
+          tripMode: confirmedPayload.tripMode,
           autoStartNavigation: options.autoStartNavigation === true,
           ...options.flowContext,
         },
       });
       router.push('/navigate');
     },
-    [router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
   );
 
   const handleBuildTripFromRoute = useCallback(
@@ -1346,13 +1414,15 @@ function DiscoverScreenInner() {
           routeCampMarkerCount: campMarkers.length,
         },
       };
+      const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(campPayload);
+      if (!confirmedPayload) return;
 
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
       setAiPreviewRoute(null);
       setTrailPackPreview(null);
-      await saveNavigationHandoffPayload(campPayload);
+      await saveNavigationHandoffPayload(confirmedPayload);
       await stageNavigationFlow({
         source: 'explore',
         target: 'navigate',
@@ -1360,15 +1430,15 @@ function DiscoverScreenInner() {
         label: 'Route Camps',
         message: 'Route camp pins are staged in Navigate.',
         context: {
-          routeId: campPayload.id,
-          tripMode: campPayload.tripMode,
+          routeId: confirmedPayload.id,
+          tripMode: confirmedPayload.tripMode,
           exploreAction: 'view_camps',
-          routeCampMarkerCount: campMarkers.length,
+          routeCampMarkerCount: confirmedPayload.campMarkers?.length ?? campMarkers.length,
         },
       });
       router.push('/navigate');
     },
-    [router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
   );
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
@@ -1965,11 +2035,21 @@ function DiscoverScreenInner() {
       .map((pack) => trailPackToExpeditionOpportunity(pack))
       .filter(routePassesExploreMapLength);
     const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
+    const currentSuggestedRouteIds = new Set(
+      [...hiddenGemRoutes, ...popularTrailRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
+        String(route.id ?? '').trim(),
+      ),
+    );
+    const favoriteRoutes = favoritesSnapshot.favorites
+      .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
+      .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
+      .filter(routePassesExploreMapLength);
     const seen = new Set<string>();
     return [
       ...hiddenGemRoutes,
       ...popularTrailRoutes,
       ...trailPackRoutes,
+      ...favoriteRoutes,
       ...ecsRouteIdeaRoutes,
     ].filter((route) => {
       const key = String(route.id ?? route.name).trim().toLowerCase();
@@ -1979,6 +2059,7 @@ function DiscoverScreenInner() {
     });
   }, [
     discoverableTrailPacks,
+    favoritesSnapshot.favorites,
     hiddenGemExploreOrchestration.items,
     hiddenGemExploreOrchestration.routeMap,
     popularTrailExploreOrchestration.routes,
@@ -1994,16 +2075,29 @@ function DiscoverScreenInner() {
       .map((pack) => trailPackToExpeditionOpportunity(pack))
       .filter(routePassesExploreMapLength);
     const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
+    const currentSuggestedRouteIds = new Set(
+      [...hiddenGemRoutes, ...popularTrailRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
+        String(route.id ?? '').trim(),
+      ),
+    );
+    const favoriteRoutes = favoritesSnapshot.favorites
+      .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
+      .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
+      .filter(routePassesExploreMapLength);
 
     return buildExploreRouteOverlaySegmentsFromRoutes({
       hiddenGemRoutes,
       popularTrailRoutes,
       trailPackRoutes,
+      favoriteRoutes,
       ecsRouteIdeaRoutes,
+      compatibilityResults: compatResults,
       maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES,
     });
   }, [
+    compatResults,
     discoverableTrailPacks,
+    favoritesSnapshot.favorites,
     hiddenGemExploreOrchestration.items,
     hiddenGemExploreOrchestration.routeMap,
     popularTrailExploreOrchestration.routes,
@@ -2062,7 +2156,7 @@ function DiscoverScreenInner() {
     if (exploreMapHandoffBuild.segments.length === 0) {
       setExploreMapHandoffNotice(
         exploreMapHandoffBuild.candidateCount > 0
-          ? `${exploreMapHandoffBuild.candidateCount} matching Explorer route${exploreMapHandoffBuild.candidateCount === 1 ? '' : 's'} found, but none include map-ready route geometry yet.`
+          ? `${exploreMapHandoffBuild.candidateCount} matching Explorer route${exploreMapHandoffBuild.candidateCount === 1 ? '' : 's'} found, but none include enough coordinates for a map preview yet.`
           : 'No Explorer routes match the current filters yet.',
       );
       return;
@@ -2455,7 +2549,12 @@ function DiscoverScreenInner() {
   const handleNavigateToFavorite = useCallback(
     async (favorite: FavoriteTrailRecord) => {
       hapticMicro();
-      await saveNavigationHandoffPayload(favorite.navigationPayload);
+      const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(
+        favorite.navigationPayload,
+      );
+      if (!confirmedPayload) return;
+
+      await saveNavigationHandoffPayload(confirmedPayload);
       await stageNavigationFlow({
         source: 'explore',
         target: 'navigate',
@@ -2463,13 +2562,13 @@ function DiscoverScreenInner() {
         label: 'Trail Preview Ready',
         message: 'Saved trail is ready in Navigate for review and guidance.',
         context: {
-          routeId: favorite.navigationPayload.id,
-          tripMode: favorite.navigationPayload.tripMode,
+          routeId: confirmedPayload.id,
+          tripMode: confirmedPayload.tripMode,
         },
       });
       router.push('/navigate');
     },
-    [router],
+    [confirmRouteHandoffAgainstActiveGuidance, router],
   );
 
   const handleOpenFavorite = useCallback(
@@ -2876,8 +2975,8 @@ function DiscoverScreenInner() {
         refinedCanonicalRoutes.length,
       ),
       route_filters: selectedExploreRefinementLabel ?? `${activeDistanceRadius} mi`,
-      trip_builder: 'STAGED',
-      offline_prep_pack: 'STAGED',
+      trip_builder: 'LIVE',
+      offline_prep_pack: 'LIVE',
     }),
     [
       activeDistanceRadius,
@@ -2896,8 +2995,6 @@ function DiscoverScreenInner() {
       if (!feature?.enabled) return;
 
       hapticMicro();
-      setActiveExplorePrimaryTab(featureId);
-      setActiveExplorerCategoryPanel(null);
       saveExplorePlanningRouteContext({
         routes: exploreSuggestedRouteOptions as any,
         radiusMiles: activeDistanceRadius,
@@ -2914,12 +3011,17 @@ function DiscoverScreenInner() {
 
       switch (featureId) {
         case 'suggested_routes':
+          setActiveExplorePrimaryTab('suggested_routes');
           setActiveExplorerCategoryPanel(null);
           return;
         case 'trip_builder':
+          setActiveExplorerCategoryPanel(null);
           clearTripBuilderRouteHandoff();
+          router.push('/explore-trip-builder');
           return;
         case 'offline_prep_pack':
+          setActiveExplorePrimaryTab('offline_prep_pack');
+          setActiveExplorerCategoryPanel(null);
           clearOfflinePrepPackHandoff();
           return;
         default:
@@ -2930,6 +3032,7 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       exploreSuggestedRouteOptions,
       exploreTopLevelFeatures,
+      router,
       selectedExploreRefinementLabel,
     ],
   );
@@ -2954,22 +3057,14 @@ function DiscoverScreenInner() {
   );
 
   const handleOpenActivePlanningFlow = useCallback(() => {
-    if (activeExplorePrimaryTab === 'suggested_routes') return;
+    if (activeExplorePrimaryTab !== 'offline_prep_pack') return;
     hapticMicro();
     saveExplorePlanningRouteContext({
       routes: exploreSuggestedRouteOptions as any,
       radiusMiles: activeDistanceRadius,
       refinementLabel: selectedExploreRefinementLabel,
-      source: activeExplorePrimaryTab === 'trip_builder' ? 'trip_builder_tab' : 'offline_prep_tab',
+      source: 'offline_prep_tab',
     });
-    if (activeExplorePrimaryTab === 'trip_builder') {
-      if (selectedExplorePlanningRoute) saveTripBuilderRouteHandoff(selectedExplorePlanningRoute as any);
-      router.push({
-        pathname: '/explore-trip-builder',
-        params: selectedExplorePlanningRoute ? { routeId: selectedExplorePlanningRoute.id } : undefined,
-      } as any);
-      return;
-    }
     if (selectedExplorePlanningRoute) {
       saveOfflinePrepPackHandoff({
         route: selectedExplorePlanningRoute as any,
@@ -3498,7 +3593,7 @@ function DiscoverScreenInner() {
                   <Text style={s.exploreMapHandoffTitle}>Map Active Trails</Text>
                   <Text style={s.exploreMapHandoffSubtitle} numberOfLines={2}>
                     {exploreMapHandoffBuild.segments.length > 0
-                      ? `${exploreMapHandoffBuild.segments.length} map-ready trail line${exploreMapHandoffBuild.segments.length === 1 ? '' : 's'} from the current radius${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
+                      ? `${exploreMapHandoffBuild.segments.length} filtered trail line${exploreMapHandoffBuild.segments.length === 1 ? '' : 's'} ready from Suggested Routes${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
                       : 'Open Matching Explorer.'}
                   </Text>
                   {exploreMapHandoffNotice ? (
@@ -3518,16 +3613,6 @@ function DiscoverScreenInner() {
                   <Text style={s.exploreMapHandoffButtonText}>Display on Map</Text>
                 </TouchableOpacity>
               </View>
-
-              {showSectionLoading && (
-                <ECSTransientNotice
-                  kind="syncing"
-                  label="Route Data Refreshing..."
-                  message="Showing current Explore results while the next scan completes."
-                  compact
-                  style={s.discoveryRefreshNotice}
-                />
-              )}
 
             </View>
           )}
@@ -3800,7 +3885,7 @@ function DiscoverScreenInner() {
                     <ECSSectionBadge
                       label={
                         showSectionLoading
-                          ? 'REFRESHING'
+                          ? 'UPDATING'
                           : hiddenGemState.error
                           ? ECS_READINESS_COPY.labels.limited
                           : hiddenGemPage.eligibleCount === 0
@@ -4326,33 +4411,29 @@ function DiscoverScreenInner() {
           )}
 
             </>
-          ) : (
-            <View style={s.explorePlanningPanel} testID={`explore-${activeExplorePrimaryTab}-tab-panel`}>
+          ) : activeExplorePrimaryTab === 'offline_prep_pack' ? (
+            <View style={s.explorePlanningPanel} testID="explore-offline_prep_pack-tab-panel">
               <View style={s.explorePlanningHero}>
                 <View
                   style={[
                     s.explorePlanningHeroIcon,
                     {
-                      borderColor: activeExplorePrimaryTab === 'trip_builder' ? `${TACTICAL.amber}38` : '#5AC8FA38',
-                      backgroundColor: activeExplorePrimaryTab === 'trip_builder' ? `${TACTICAL.amber}10` : '#5AC8FA10',
+                      borderColor: '#5AC8FA38',
+                      backgroundColor: '#5AC8FA10',
                     },
                   ]}
                 >
                   <Ionicons
-                    name={activeExplorePrimaryTab === 'trip_builder' ? 'git-merge-outline' : 'download-outline'}
+                    name="download-outline"
                     size={18}
-                    color={activeExplorePrimaryTab === 'trip_builder' ? TACTICAL.amber : '#5AC8FA'}
+                    color="#5AC8FA"
                   />
                 </View>
                 <View style={s.explorePlanningHeroCopy}>
                   <Text style={s.explorePlanningEyebrow}>EXPLORER PLANNING</Text>
-                  <Text style={s.explorePlanningTitle}>
-                    {activeExplorePrimaryTab === 'trip_builder' ? 'Trip Builder' : 'Offline Prep Pack'}
-                  </Text>
+                  <Text style={s.explorePlanningTitle}>Offline Prep Pack</Text>
                   <Text style={s.explorePlanningText}>
-                    {activeExplorePrimaryTab === 'trip_builder'
-                      ? 'Choose from the active Suggested Routes filter, then turn the route into a field plan.'
-                      : 'Choose from the active Suggested Routes filter, then save route essentials for low-service travel.'}
+                    Choose from the active Suggested Routes filter, then save route essentials for low-service travel.
                   </Text>
                 </View>
               </View>
@@ -4424,22 +4505,20 @@ function DiscoverScreenInner() {
                     activeOpacity={0.84}
                     onPress={handleOpenActivePlanningFlow}
                     accessibilityRole="button"
-                    accessibilityLabel={activeExplorePrimaryTab === 'trip_builder' ? 'Open Trip Builder' : 'Open Offline Prep Pack'}
-                    testID={activeExplorePrimaryTab === 'trip_builder' ? 'explore-open-trip-builder' : 'explore-open-offline-prep-pack'}
+                    accessibilityLabel="Open Offline Prep Pack"
+                    testID="explore-open-offline-prep-pack"
                   >
                     <Ionicons
-                      name={activeExplorePrimaryTab === 'trip_builder' ? 'git-merge-outline' : 'download-outline'}
+                      name="download-outline"
                       size={14}
                       color="#081014"
                     />
-                    <Text style={s.explorePlanningPrimaryText}>
-                      {activeExplorePrimaryTab === 'trip_builder' ? 'Open Trip Builder' : 'Open Offline Prep Pack'}
-                    </Text>
+                    <Text style={s.explorePlanningPrimaryText}>Open Offline Prep Pack</Text>
                   </TouchableOpacity>
                 </>
               )}
             </View>
-          )}
+          ) : null}
 
           <View style={s.footerNote}>
             <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
@@ -4918,7 +4997,7 @@ const s = StyleSheet.create({
   explorePlanningPanel: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(230,184,76,0.22)',
+    borderColor: ECS.strokeMuted,
     backgroundColor: ECS.bgPanel,
     padding: 12,
     gap: 10,
@@ -5327,8 +5406,8 @@ const s = StyleSheet.create({
     paddingVertical: 9,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '30',
-    backgroundColor: TACTICAL.amber + '10',
+    borderColor: TACTICAL.goldSoft,
+    backgroundColor: TACTICAL.goldWash,
   },
   explorerPanelPagerSlot: {
     minWidth: 104,
@@ -5377,7 +5456,7 @@ const s = StyleSheet.create({
     gap: 7,
   },
   hiddenGemSection: {
-    borderColor: 'rgba(230,184,76,0.18)',
+    borderColor: ECS.strokeMuted,
     backgroundColor: 'rgba(20,16,11,0.96)',
   },
   popularTrailsSection: {

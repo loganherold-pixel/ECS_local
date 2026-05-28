@@ -11,7 +11,7 @@
  *   - Gold accent for document export actions
  *
  * System Docs: Privacy Policy, Accuracy Disclaimer, Use Instructions, Data Handling Policy
- * Operational Docs: Expedition Manifest, Trip Summary, Gear List, Emergency Plan, Route Overview
+ * Operational Docs: Manifest, Trip Summary, Gear List, Emergency Plan, Route Overview, Offline Prep, Field Utilities
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
@@ -45,11 +45,13 @@ const SYSTEM_DOCS: DocItem[] = [
 ];
 
 const OPERATIONAL_DOCS: DocItem[] = [
-  { id: 'manifest', title: 'Expedition Manifest', description: 'Complete expedition configuration document', icon: 'document-text-outline', exportable: true },
-  { id: 'trip-summary', title: 'Trip Summary', description: 'Route, consumables, and readiness overview', icon: 'analytics-outline', exportable: true },
-  { id: 'gear-list', title: 'Gear List Export', description: 'Itemized loadout with zones and weights', icon: 'list-outline', exportable: true },
-  { id: 'emergency-plan', title: 'Emergency Plan Summary', description: 'Emergency contacts and protocols', icon: 'medkit-outline', exportable: true },
-  { id: 'route-overview', title: 'Route Overview', description: 'Waypoints, distance, and elevation data', icon: 'map-outline', exportable: true },
+  { id: 'manifest', title: 'Expedition Manifest', description: 'Vehicle, loadout, route, and active planning context', icon: 'document-text-outline', exportable: true },
+  { id: 'trip-summary', title: 'Trip Summary', description: 'Route, readiness, offline prep, and planning overview', icon: 'analytics-outline', exportable: true },
+  { id: 'gear-list', title: 'Gear List Export', description: 'Loadout status with field packing reminders', icon: 'list-outline', exportable: true },
+  { id: 'emergency-plan', title: 'Emergency Plan Summary', description: 'Field Utilities comms, recovery, and emergency protocol reference', icon: 'medkit-outline', exportable: true },
+  { id: 'route-overview', title: 'Route Overview', description: 'Route geometry, waypoints, offline readiness, and map notes', icon: 'map-outline', exportable: true },
+  { id: 'offline-prep', title: 'Offline Prep Packet', description: 'Route geometry, offline maps, weather snapshot, and GPX readiness', icon: 'download-outline', exportable: true },
+  { id: 'field-utilities', title: 'Field Utilities Reference', description: 'Long-press dashboard utilities and documentation layout', icon: 'flash-outline', exportable: true },
 ];
 
 interface Props {
@@ -77,6 +79,16 @@ export default function DocumentationCenter({
   // ── Generate Operational Doc Content ─────────────────────
   const generateOperationalContent = useCallback((docId: string): string => {
     const now = new Date();
+    const routeGeometryStatus = activeRoute
+      ? activeRoute.waypoints.length >= 2
+        ? 'Available from active route waypoints'
+        : 'Route staged, but geometry appears incomplete'
+      : 'No route staged';
+    const routeDistance = activeRoute?.total_distance_miles != null
+      ? `${activeRoute.total_distance_miles.toFixed(1)} mi`
+      : 'Unavailable';
+    const routeWaypointCount = activeRoute?.waypoint_count ?? activeRoute?.waypoints.length ?? 0;
+    const routeSegmentCount = activeRoute?.segment_count ?? 0;
     const header = [
       `${'═'.repeat(52)}`,
       `  ${ECS_ORG}`,
@@ -110,13 +122,21 @@ export default function DocumentationCenter({
           '',
           `  Items:       ${loadoutStats.totalActive}`,
           `  Packed:      ${loadoutStats.packedActive} (${loadoutStats.pct}%)`,
+          `  Offline:     ${activeRoute ? 'Route context ready for Offline Prep handoff' : 'Stage a route before preparing offline pack'}`,
           '',
           activeRoute ? [
             '  ROUTE:',
             `  Name:        ${activeRoute.name}`,
-            `  Distance:    ${activeRoute.total_distance_miles.toFixed(1)} mi`,
-            `  Waypoints:   ${activeRoute.waypoint_count}`,
+            `  Distance:    ${routeDistance}`,
+            `  Waypoints:   ${routeWaypointCount}`,
+            `  Geometry:    ${routeGeometryStatus}`,
           ].join('\n') : '  ROUTE: Not configured',
+          '',
+          '  FIELD SYSTEMS:',
+          '  - Dashboard Field Utilities: Weather, Quick Note, Comms, Team Ping',
+          '  - Recovery and Emergency Protocols: Available from Field Utilities',
+          '  - Permits & Access, Trip Summaries, and Documentation: Field Utilities',
+          '  - Convoy tracking: Opt-in sharing for active convoy members',
           ...footer,
         ].join('\n');
 
@@ -132,14 +152,21 @@ export default function DocumentationCenter({
           activeRoute ? [
             '  ROUTE:',
             `  Name:        ${activeRoute.name}`,
-            `  Distance:    ${activeRoute.total_distance_miles.toFixed(1)} mi`,
-            `  Waypoints:   ${activeRoute.waypoint_count}`,
-            `  Segments:    ${activeRoute.segment_count}`,
+            `  Distance:    ${routeDistance}`,
+            `  Waypoints:   ${routeWaypointCount}`,
+            `  Segments:    ${routeSegmentCount}`,
+            `  Geometry:    ${routeGeometryStatus}`,
           ].join('\n') : '  ROUTE: Not configured',
           '',
           '  READINESS:',
           `  Pack Rate:   ${loadoutStats.pct}%`,
           `  Status:      ${loadoutStats.pct >= 80 ? 'READY' : 'INCOMPLETE'}`,
+          '',
+          '  TRIP BUILDER / OFFLINE PREP:',
+          '  Suggested itinerary, camp candidates, exit access, and smart resupply',
+          '  should be reviewed before departure. Offline Prep requires route',
+          '  geometry so ECS can prepare map tiles, route line, waypoints, weather',
+          '  snapshot, emergency points, and GPX export where supported.',
           ...footer,
         ].join('\n');
 
@@ -152,8 +179,14 @@ export default function DocumentationCenter({
           `  Packed:             ${loadoutStats.packedActive}`,
           `  Pack Rate:          ${loadoutStats.pct}%`,
           '',
-          '  Note: Full itemized list with zone assignments',
-          '  available in Expedition > Loadout Builder.',
+          '  FIELD PACKING NOTES:',
+          '  - Confirm recovery gear, medical kit, water, food, fuel, and repair items',
+          '  - Keep heavy cargo low and centered where possible',
+          '  - Verify manually entered vehicle capacities before relying on range',
+          '  - Connected telemetry can improve confidence when supported',
+          '',
+          '  Note: Full itemized list with zone assignments remains available',
+          '  from Fleet, Build, and Loadout workflows.',
           ...footer,
         ].join('\n');
 
@@ -162,8 +195,15 @@ export default function DocumentationCenter({
           ...header,
           '  EMERGENCY PLAN SUMMARY',
           '',
+          '  FIELD UTILITIES:',
+          '  Open from Dashboard long press.',
+          '  - Emergency Comms: frequencies, field signals, emergency numbers, GPS',
+          '  - Emergency Protocol: field stabilization reference',
+          '  - Recovery Protocol: vehicle recovery reference',
+          '  - Team Ping: active-team status update when configured',
+          '',
           '  EMERGENCY CONTACTS:',
-          '  (Configure in Intel > Operational Access)',
+          '  Configure contacts and field notes before departure.',
           '',
           '  RADIO FREQUENCIES:',
           '  CB Ch 9        Emergency',
@@ -173,10 +213,11 @@ export default function DocumentationCenter({
           '  462.675 MHz    GMRS Emergency',
           '',
           '  PROTOCOLS:',
-          '  - Vehicle breakdown: Secure scene, signal, wait',
-          '  - Medical emergency: Assess, stabilize, evacuate',
-          '  - Lost/stranded: Stay put, signal, conserve',
-          '  - Weather emergency: Shelter, monitor, wait',
+          '  - Vehicle recovery: Secure scene, assess anchors, manage bystanders',
+          '  - Medical emergency: Assess, stabilize, communicate, evacuate if needed',
+          '  - Lost/stranded: Stay put when appropriate, signal, conserve resources',
+          '  - Weather emergency: Shelter, monitor, avoid exposed terrain',
+          '  - Bailout: Identify fuel, water, medical, repair, or exit alternatives',
           ...footer,
         ].join('\n');
 
@@ -190,16 +231,79 @@ export default function DocumentationCenter({
           '',
           `  Route:       ${activeRoute.name}`,
           `  Format:      ${activeRoute.source_format.toUpperCase()}`,
-          `  Distance:    ${activeRoute.total_distance_miles.toFixed(1)} mi`,
-          `  Waypoints:   ${activeRoute.waypoint_count}`,
-          `  Segments:    ${activeRoute.segment_count}`,
+          `  Distance:    ${routeDistance}`,
+          `  Waypoints:   ${routeWaypointCount}`,
+          `  Segments:    ${routeSegmentCount}`,
+          `  Geometry:    ${routeGeometryStatus}`,
           activeRoute.elevation_gain_ft ? `  Elev. Gain:  ${activeRoute.elevation_gain_ft} ft` : '',
+          '',
+          '  MAP / OFFLINE NOTES:',
+          '  - Route geometry is required for offline map download and GPX export',
+          '  - Camp, bailout, resupply, and emergency points should be reviewed on map',
+          '  - Active guidance should not be replaced unless the user confirms a new route',
+          '  - Remoteness corridor and weather overlays are planning aids only',
           '',
           '  WAYPOINTS:',
           ...activeRoute.waypoints.slice(0, 20).map((wp, i) =>
             `  ${String(i + 1).padStart(3, ' ')}. ${wp.name || 'Unnamed'} (${wp.lat.toFixed(5)}, ${wp.lon.toFixed(5)})${wp.ele ? ` ${Math.round(wp.ele * 3.281)}ft` : ''}`
           ),
           activeRoute.waypoints.length > 20 ? `  ... and ${activeRoute.waypoints.length - 20} more` : '',
+          ...footer,
+        ].join('\n');
+
+      case 'offline-prep':
+        return [
+          ...header,
+          '  OFFLINE PREP PACKET',
+          '',
+          `  Route Staged: ${activeRoute ? 'Yes' : 'No'}`,
+          `  Route Name:   ${activeRoute?.name ?? 'Not staged'}`,
+          `  Geometry:     ${routeGeometryStatus}`,
+          `  Distance:     ${routeDistance}`,
+          `  Waypoints:    ${routeWaypointCount}`,
+          '',
+          '  OFFLINE PACK SHOULD INCLUDE:',
+          '  - Offline map tiles for the route corridor',
+          '  - Route line geometry and waypoint list',
+          '  - Trip Builder itinerary stops',
+          '  - Camp candidates and bailout or exit points when available',
+          '  - Smart resupply points such as fuel, water, repair, medical, or supplies',
+          '  - Weather snapshot and alerts when available',
+          '  - GPX export when route geometry exists in this build',
+          '',
+          '  IF ROUTE GEOMETRY IS MISSING:',
+          '  Rebuild or reselect the route from Trip Builder or Explore, then reopen',
+          '  Offline Prep. ECS needs geometry before it can know which tiles, route',
+          '  line, waypoints, and emergency points to prepare.',
+          ...footer,
+        ].join('\n');
+
+      case 'field-utilities':
+        return [
+          ...header,
+          '  FIELD UTILITIES REFERENCE',
+          '',
+          '  OPENING FIELD UTILITIES:',
+          '  Long press the Dashboard button in the lower ECS banner.',
+          '',
+          '  ACTION GRID:',
+          '  LEFT / RIGHT GRID',
+          '  - Weather: operational weather detail using the shared weather pipeline',
+          '  - Quick Note: local mission note capture',
+          '  - Comms: frequencies, signals, emergency numbers, and coordinates',
+          '  - Team Ping: rapid active-team update when a team exists',
+          '  - Recovery Protocol: common vehicle recovery procedures',
+          '  - Emergency Protocol: field stabilization steps',
+          '  - Permits & Access: local access, permit, closure, and restriction notes',
+          '  - Trip Summaries: generated expedition reports',
+          '',
+          '  BOTTOM ACTION:',
+          '  - Documentation: system references and operational document exports',
+          '',
+          '  FIELD RULES:',
+          '  Field Utilities should remain local, compact, and explicit. It should',
+          '  not imply that ECS has contacted emergency services or confirmed live',
+          '  external dispatch unless that function is actually wired and visible.',
           ...footer,
         ].join('\n');
 

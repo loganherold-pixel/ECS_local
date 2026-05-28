@@ -38,6 +38,7 @@ export interface OfflineTileSyncSnapshot {
   latestJob: OfflineTileSyncJob | null;
   latestCompletedJob: OfflineTileSyncJob | null;
   backgroundSupport: 'app-process';
+  resumeSupport: 'app-restart';
 }
 
 type Listener = () => void;
@@ -64,11 +65,22 @@ function isActiveStatus(status: OfflineTileSyncJobStatus): boolean {
 function normalizeStoredJob(value: any): OfflineTileSyncJob | null {
   if (!value || typeof value !== 'object') return null;
   if (typeof value.jobId !== 'string' || typeof value.regionId !== 'string') return null;
-  const status: OfflineTileSyncJobStatus = isActiveStatus(value.status)
-    ? 'error'
+  const wasInterruptedActiveJob = isActiveStatus(value.status);
+  const status: OfflineTileSyncJobStatus = wasInterruptedActiveJob
+    ? 'pending'
     : ['complete', 'error', 'cancelled'].includes(value.status)
       ? value.status
       : 'error';
+  const progress =
+    value.progress && typeof value.progress === 'object'
+      ? {
+          ...value.progress,
+          status: wasInterruptedActiveJob ? 'calculating' : value.progress.status,
+          message: wasInterruptedActiveJob
+            ? 'Download was interrupted and is queued to resume when ECS is active.'
+            : value.progress.message,
+        }
+      : null;
   return {
     jobId: value.jobId,
     regionId: value.regionId,
@@ -85,13 +97,13 @@ function normalizeStoredJob(value: any): OfflineTileSyncJob | null {
           : 'map-view',
     routeIntent: value.routeIntent && typeof value.routeIntent === 'object' ? value.routeIntent : null,
     status,
-    progress: value.progress && typeof value.progress === 'object' ? value.progress : null,
+    progress,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : nowISO(),
     updatedAt: nowISO(),
     completedAt: typeof value.completedAt === 'string' ? value.completedAt : null,
     errorMessage:
       status === 'error'
-        ? value.errorMessage || 'Sync was interrupted when the app process stopped.'
+        ? value.errorMessage || 'Offline sync failed.'
         : value.errorMessage ?? null,
     cleanupFreedMB:
       typeof value.cleanupFreedMB === 'number' && Number.isFinite(value.cleanupFreedMB)
@@ -203,7 +215,67 @@ function buildSnapshot(): OfflineTileSyncSnapshot {
     latestJob: sorted[0] ?? null,
     latestCompletedJob: sorted.find((job) => job.status === 'complete') ?? null,
     backgroundSupport: 'app-process',
+    resumeSupport: 'app-restart',
   };
+}
+
+function launchJob(job: OfflineTileSyncJob): Promise<OfflineTileSyncJob> {
+  const existing = runningPromises.get(job.jobId);
+  if (existing) return existing;
+
+  const runPromise = (async () => {
+    updateJob(job.jobId, { status: 'running', errorMessage: null });
+    const result = await tileCacheStore.startDownloadWithQuota(job.regionId, (progress) => {
+      updateJob(job.jobId, {
+        status:
+          progress.status === 'complete'
+            ? 'complete'
+            : progress.status === 'cancelled'
+              ? 'cancelled'
+              : progress.status === 'error'
+                ? 'error'
+                : 'running',
+        progress,
+        errorMessage: progress.status === 'error' ? progress.message : null,
+        completedAt:
+          progress.status === 'complete' || progress.status === 'cancelled' || progress.status === 'error'
+            ? nowISO()
+            : null,
+      });
+    });
+
+    const cleanupFreedMB = result.cleanupResult?.freedMB;
+    if (cleanupFreedMB && cleanupFreedMB > 0) {
+      updateJob(job.jobId, { cleanupFreedMB });
+    }
+
+    const latest = jobs.find((item) => item.jobId === job.jobId) ?? job;
+    const cancelled = latest.status === 'cancelled' || latest.progress?.status === 'cancelled';
+    const terminal = updateJob(job.jobId, {
+      status: cancelled ? 'cancelled' : result.success ? 'complete' : 'error',
+      completedAt: nowISO(),
+      errorMessage: cancelled
+        ? null
+        : result.success
+          ? null
+          : latest.errorMessage || latest.progress?.message || 'Offline sync failed.',
+    });
+    return terminal ?? latest;
+  })()
+    .catch((error: any) => {
+      const failed = updateJob(job.jobId, {
+        status: 'error',
+        completedAt: nowISO(),
+        errorMessage: error?.message || 'Offline sync failed.',
+      });
+      return failed ?? job;
+    })
+    .finally(() => {
+      runningPromises.delete(job.jobId);
+    });
+
+  runningPromises.set(job.jobId, runPromise);
+  return runPromise;
 }
 
 export const offlineTileSyncCoordinator = {
@@ -230,7 +302,7 @@ export const offlineTileSyncCoordinator = {
     if (activeExisting) {
       const running = runningPromises.get(activeExisting.jobId);
       if (running) return running;
-      return activeExisting;
+      return launchJob(activeExisting);
     }
 
     const region = tileCacheStore.getRegion(input.regionId);
@@ -254,59 +326,24 @@ export const offlineTileSyncCoordinator = {
     upsertJob(job);
     notify();
 
-    const runPromise = (async () => {
-      updateJob(job.jobId, { status: 'running' });
-      const result = await tileCacheStore.startDownloadWithQuota(input.regionId, (progress) => {
-        updateJob(job.jobId, {
-          status:
-            progress.status === 'complete'
-              ? 'complete'
-              : progress.status === 'cancelled'
-                ? 'cancelled'
-                : progress.status === 'error'
-                  ? 'error'
-                  : 'running',
-          progress,
-          errorMessage: progress.status === 'error' ? progress.message : null,
-          completedAt:
-            progress.status === 'complete' || progress.status === 'cancelled' || progress.status === 'error'
-              ? nowISO()
-              : null,
-        });
-      });
+    return launchJob(job);
+  },
 
-      const cleanupFreedMB = result.cleanupResult?.freedMB;
-      if (cleanupFreedMB && cleanupFreedMB > 0) {
-        updateJob(job.jobId, { cleanupFreedMB });
-      }
-
-      const latest = jobs.find((item) => item.jobId === job.jobId) ?? job;
-      const cancelled = latest.status === 'cancelled' || latest.progress?.status === 'cancelled';
-      const terminal = updateJob(job.jobId, {
-        status: cancelled ? 'cancelled' : result.success ? 'complete' : 'error',
-        completedAt: nowISO(),
-        errorMessage: cancelled
-          ? null
-          : result.success
-            ? null
-            : latest.errorMessage || latest.progress?.message || 'Offline sync failed.',
-      });
-      return terminal ?? latest;
-    })()
-      .catch((error: any) => {
-        const failed = updateJob(job.jobId, {
-          status: 'error',
-          completedAt: nowISO(),
-          errorMessage: error?.message || 'Offline sync failed.',
-        });
-        return failed ?? job;
-      })
-      .finally(() => {
-        runningPromises.delete(job.jobId);
-      });
-
-    runningPromises.set(job.jobId, runPromise);
-    return runPromise;
+  resumePendingJobs(input: {
+    source?: OfflineTileSyncSource;
+    syncType?: OfflineTileSyncType;
+  } = {}): OfflineTileSyncJob[] {
+    loadJobs();
+    const resumable = jobs.filter((job) => {
+      if (job.status !== 'pending') return false;
+      if (input.source && job.source !== input.source) return false;
+      if (input.syncType && job.syncType !== input.syncType) return false;
+      return !runningPromises.has(job.jobId);
+    });
+    resumable.forEach((job) => {
+      void launchJob(job);
+    });
+    return resumable;
   },
 
   cancelJob(jobId: string): void {

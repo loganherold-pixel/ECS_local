@@ -85,6 +85,42 @@ assert.strictEqual(duplicateResult.deduped, 1);
 assert.strictEqual(duplicateResult.devices[0].rssi, -54);
 assert.strictEqual(duplicateResult.devices[0].lastSeenAt, NOW + 500);
 
+const obdAllowlistResult = upsertScannerDeviceList([], [{
+  id: 'vpeak-obd2',
+  source: 'ble',
+  displayName: 'V Peak OBD2',
+  brand: 'V Peak / Veepeak OBD2',
+  rssi: -62,
+  lastSeenAt: NOW + 750,
+}], {
+  reason: 'release_scan_obd2',
+  now: NOW + 750,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  obdAllowlistResult.devices.length,
+  1,
+  'release allowlist filtering must keep V Peak / Veepeak OBD2 telemetry candidates visible',
+);
+
+const obdCheckAllowlistResult = upsertScannerDeviceList([], [{
+  id: 'obdcheck-ble',
+  source: 'ble',
+  displayName: 'OBDCheck BLE',
+  brand: 'V Peak / Veepeak OBD2',
+  rssi: -59,
+  lastSeenAt: NOW + 800,
+}], {
+  reason: 'release_scan_obdcheck',
+  now: NOW + 800,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  obdCheckAllowlistResult.devices.length,
+  1,
+  'release allowlist filtering must keep OBDCheck/VeePeak BLE candidates visible',
+);
+
 const anonymousWithHints = {
   source: 'ble',
   displayName: 'Unknown device A1B2',

@@ -62,8 +62,8 @@ assert.match(
 );
 assert.match(
   source,
-  /presentation="feed"/,
-  'Running CAD feed surface should host the Convoy Command Rive panel in feed mode.',
+  /presentation=\{isLandscapeDispatch \? 'map' : 'feed'\}/,
+  'Running CAD feed surface should host the Convoy Command surface in feed mode.',
 );
 assert.doesNotMatch(
   source,
@@ -107,12 +107,12 @@ assert.match(
 );
 assert.match(
   source,
-  /Navigate to Recovery Request/,
-  'Recovery map intelligence should expose one recovery navigation action.',
+  /Proceed to Active Ping/,
+  'Recovery map intelligence should expose one active ping navigation action.',
 );
 assert.match(
   source,
-  /isRecoveryAssistance \? \([\s\S]*Navigate to Recovery Request[\s\S]*\) : \(/,
+  /isRecoveryAssistance \? \([\s\S]*Proceed to Active Ping[\s\S]*\) : \(/,
   'Recovery map intelligence should replace threat actions only for recovery assistance context.',
 );
 assert.match(
@@ -140,6 +140,36 @@ assert.match(
   /isActiveLiveDispatchEvent\(event\) && !\(/,
   'Clear CAD should be able to locally hide routine live events while preserving protected active events.',
 );
+assert.match(
+  source,
+  /playDispatchRecoveryPingAlert/,
+  'New recovery GPS pings should trigger one-time alert feedback.',
+);
+assert.match(
+  source,
+  /handleOpenEmergencyPing\(primaryEmergencyCoordinatePing\)[\s\S]*accessibilityLabel="Open active emergency GPS ping"/,
+  'Emergency pings count in the convoy setup card should open and mark the active GPS ping viewed.',
+);
+assert.match(
+  source,
+  /RECOVERY_PING_ALERT_WINDOW_MS/,
+  'Recovery GPS ping alert feedback should be limited to recently-created events.',
+);
+assert.match(
+  source,
+  /RECOVERY_ADVISORY_PULSE_MS = 5_000/,
+  'Recovery GPS advisory banner should pulse for about five seconds.',
+);
+assert.match(
+  source,
+  /emergencyPingAttentionActive[\s\S]*isEmergencyPingUnviewed/,
+  'Emergency ping count blinking should be gated to unviewed pings.',
+);
+assert.match(
+  source,
+  /state: 'acknowledged'[\s\S]*Active GPS ping viewed from Dispatch/,
+  'Opening an active GPS ping should stop the attention pulse by marking it viewed.',
+);
 
 const renderStart = source.indexOf('const renderEvent: ListRenderItem<DispatchEvent>');
 const renderEnd = source.indexOf('return (', renderStart);
@@ -147,8 +177,8 @@ assert.ok(renderStart >= 0 && renderEnd > renderStart, 'renderEvent should exist
 const renderEvent = source.slice(renderStart, renderEnd);
 assert.match(
   renderEvent,
-  /if \(isRecoveryCriticalEvent\(event\)\) \{[\s\S]*setSelectedEventId\(event\.id\);[\s\S]*return;/,
-  'Clicking a recovery-critical feed row should open event detail instead of the threat drilldown.',
+  /if \(isRecoveryCriticalEvent\(event\)\) \{[\s\S]*handleOpenEmergencyPing\(event\);[\s\S]*return;/,
+  'Clicking a recovery-critical feed row should open event detail, mark it viewed, and skip threat drilldown.',
 );
 
 console.log('Dispatch recovery-critical feed rendering checks passed.');

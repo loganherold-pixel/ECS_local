@@ -541,8 +541,8 @@ const s = StyleSheet.create({
     backgroundColor: ECS.bgElev,
   },
   favoriteToggleActive: {
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0C',
+    borderColor: TACTICAL.goldSoft,
+    backgroundColor: TACTICAL.goldWash,
   },
   favoriteToggleText: {
     ...ECS_TEXT.chip,
@@ -550,7 +550,7 @@ const s = StyleSheet.create({
     color: TACTICAL.textMuted,
   },
   favoriteToggleTextActive: {
-    color: TACTICAL.amber,
+    color: TACTICAL.goldStrong,
   },
   metadataRow: {
     flexDirection: 'row',

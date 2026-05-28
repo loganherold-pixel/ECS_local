@@ -73,10 +73,25 @@ export type TripBuilderVehicleProfile = {
   label?: string | null;
   vehicleType?: string | null;
   rangeMiles?: number | null;
+  rangeSource?: 'telemetry' | 'manual' | 'estimated' | 'unknown' | string | null;
+  fuelTankCapacityGal?: number | null;
+  avgMpg?: number | null;
+  waterCapacityGal?: number | null;
+  currentWaterGallons?: number | null;
+  waterSource?: 'telemetry' | 'manual' | 'estimated' | 'unknown' | string | null;
   payloadRemainingLbs?: number | null;
   clearanceInches?: number | null;
   tireSizeInches?: number | null;
   trailerAttached?: boolean | null;
+  supportReadiness?: {
+    water?: boolean | null;
+    foodSupplies?: boolean | null;
+    repair?: boolean | null;
+    medical?: boolean | null;
+    recovery?: boolean | null;
+    source?: string | null;
+    labels?: string[];
+  } | null;
   confidence?: TripBuilderConfidence | null;
   source?: string | null;
   updatedAt?: string | null;
@@ -96,6 +111,8 @@ export type TripBuilderInput = {
   timeWindow: TimeWindow;
   groupType: GroupType;
   priorities?: TripPriority[];
+  smartResupplyPreference?: 'fuel_only' | 'fuel_supplies' | 'no' | null;
+  bailoutPlanRequested?: boolean | null;
   plannedDepartureAt?: string | null;
   customWindow?: {
     startIso?: string | null;

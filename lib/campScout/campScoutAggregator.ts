@@ -1,4 +1,9 @@
 import {
+  CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE,
+  CAMP_SCOUT_MIN_ACCESS_CONFIDENCE,
+  CAMP_SCOUT_MIN_DISPLAY_SCORE,
+  CAMP_SCOUT_MIN_LEGALITY_CONFIDENCE,
+  CAMP_SCOUT_MIN_REMOTENESS_SCORE,
   rankCampScoutCandidates,
   scoreCampScoutCandidate,
   type CampScoutRankingOptions,
@@ -245,6 +250,9 @@ function normalizeCandidate(
     distanceFromNearestRoadMiles: input.distanceFromNearestRoadMiles,
     distanceFromPavementMiles: input.distanceFromPavementMiles,
     slopeEstimate: input.slopeEstimate,
+    terrainType: input.terrainType,
+    surfaceType: input.surfaceType,
+    landUse: input.landUse,
     terrainConfidence: clampScore(input.terrainConfidence, defaults.terrainConfidence ?? 50),
     accessConfidence: clampScore(input.accessConfidence, defaults.accessConfidence),
     legalityConfidence: clampScore(input.legalityConfidence, defaults.legalityConfidence),
@@ -280,6 +288,18 @@ function normalizeCandidate(
     sourceLabel: input.sourceLabel,
     sourceNotes: sourceNotesFromInput(input),
     mergedSourceTypes: [sourceType],
+    isPrivateLand: input.isPrivateLand,
+    isWaterBody: input.isWaterBody,
+    nearBuildings: input.nearBuildings,
+    nearHighway: input.nearHighway,
+    isProtectedArea: input.isProtectedArea,
+    isClosed: input.isClosed,
+    noCamping: input.noCamping,
+    legalityStatus: input.legalityStatus,
+    warnings: input.warnings,
+    accessNotes: input.accessNotes,
+    distanceFromRoadOrTrail: input.distanceFromRoadOrTrail,
+    slope: input.slope,
   };
 }
 
@@ -485,6 +505,11 @@ export function aggregateCampScoutCandidates(
   }
 
   const rankingOptions: CampScoutRankingOptions = {
+    minimumConfidenceScore: CAMP_SCOUT_MIN_DISPLAY_SCORE,
+    minimumAccessConfidence: CAMP_SCOUT_MIN_ACCESS_CONFIDENCE,
+    minimumLegalityConfidence: CAMP_SCOUT_MIN_LEGALITY_CONFIDENCE,
+    minimumRemotenessScore: CAMP_SCOUT_MIN_REMOTENESS_SCORE,
+    maximumSlopeEstimate: CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE,
     ...(input.filterOptions ?? {}),
     context,
   };

@@ -24,6 +24,9 @@ const {
   buildExpeditionOperationalAssessments,
   buildExpeditionOperationalAssessmentMap,
 } = require(enginePath);
+const {
+  buildDashboardAssessmentContext,
+} = require(path.join(root, 'lib', 'expedition', 'dashboardAssessmentContext.ts'));
 const fixtures = require(fixturesPath);
 
 const expectedCategories = ['overview', 'route', 'convoy', 'camp', 'logistics', 'vehicles'];
@@ -80,6 +83,144 @@ map = assertAssessmentShape(fixtures.logisticsWaterLimitedFixture);
 assert.strictEqual(map.logistics.status, 'caution', 'Water-limited logistics should be caution.');
 assert.ok(map.logistics.why.some((item) => item.toLowerCase().includes('water')));
 assert.strictEqual(map.overview.status, 'caution');
+
+map = assertAssessmentShape(buildDashboardAssessmentContext({
+  route: {
+    hasActiveRoute: true,
+    routeName: 'Manual fuel and water route',
+    distanceRemainingMiles: 42,
+    etaMinutes: 120,
+  },
+  vehicle: {
+    vehicleId: 'manual-vehicle',
+    label: 'Manual vehicle',
+    readinessStatus: 'normal',
+    fuelGallons: 18,
+    fuelTankCapacityGal: 20,
+    estimatedMpg: 15,
+    fuelSource: 'userManual',
+    waterGallons: 8,
+    waterSource: 'userManual',
+  },
+  convoy: {
+    teamMemberCount: 2,
+    activeMemberCount: 2,
+    communicationsStatus: 'online',
+  },
+}));
+assert.strictEqual(
+  map.route.status,
+  'normal',
+  'Dashboard active route context with ETA and no off-route signal should resolve as on-route instead of unknown.',
+);
+assert.notStrictEqual(
+  map.logistics.status,
+  'unknown',
+  'Manual fuel and water should be enough for logistics even when food is not entered.',
+);
+assert.ok(
+  !map.logistics.missingDataWarnings.some((item) => item.toLowerCase().includes('food')),
+  'Food should remain optional and should not create a missing-data warning by default.',
+);
+assert.ok(
+  map.logistics.dataUsed.some((item) => item.id === 'fuel-range' && item.source === 'userManual' && item.value !== null),
+  'Manual fuel should be visible in logistics data used.',
+);
+assert.ok(
+  map.logistics.dataUsed.some((item) => item.id === 'water-remaining' && item.source === 'userManual' && item.value !== null),
+  'Manual water should be visible in logistics data used.',
+);
+
+map = assertAssessmentShape(buildDashboardAssessmentContext({
+  route: {
+    hasActiveRoute: true,
+    routeName: 'Manual gallons route',
+    distanceRemainingMiles: 42,
+    etaMinutes: 120,
+  },
+  vehicle: {
+    vehicleId: 'manual-gallons-vehicle',
+    label: 'Manual gallons vehicle',
+    readinessStatus: 'normal',
+    fuelGallons: 32,
+    fuelTankCapacityGal: 32,
+    fuelSource: 'userManual',
+    waterGallons: 14,
+    waterSource: 'userManual',
+  },
+  convoy: {
+    teamMemberCount: 1,
+    activeMemberCount: 1,
+    communicationsStatus: 'online',
+  },
+}));
+assert.strictEqual(
+  map.camp.status,
+  'caution',
+  'Active route with ETA but no confirmed camp should keep Camp review available as caution instead of unknown.',
+);
+assert.ok(
+  !map.camp.why.some((item) => /missing camp availability or eta/i.test(item)),
+  'Camp review should not claim availability or ETA is missing when active guidance supplies route timing.',
+);
+assert.notStrictEqual(
+  map.logistics.status,
+  'unknown',
+  'Manual fuel gallons and water gallons should satisfy logistics fuel/water data even without MPG-derived range.',
+);
+assert.ok(
+  !map.logistics.why.some((item) => /missing fuel|missing water|missing fuel and water/i.test(item)),
+  'Manual gallons should not produce missing fuel or water assessment copy.',
+);
+assert.ok(
+  !map.logistics.missingDataWarnings.some((item) => /fuel|water/i.test(item)),
+  'Manual gallons should not produce missing fuel or water data warnings.',
+);
+assert.ok(
+  map.logistics.dataUsed.some((item) => item.id === 'fuel-remaining' && item.source === 'userManual' && item.value === 32),
+  'Manual fuel gallons should be visible in logistics data used.',
+);
+assert.ok(
+  map.logistics.dataUsed.some((item) => item.id === 'water-remaining' && item.source === 'userManual' && item.value === 53),
+  'Manual 14 gallons of water should be converted to about 53 liters in logistics data used.',
+);
+
+map = assertAssessmentShape(buildDashboardAssessmentContext({
+  route: {
+    hasActiveRoute: true,
+    routeName: 'Live fuel and water route',
+    distanceRemainingMiles: 42,
+    etaMinutes: 120,
+  },
+  vehicle: {
+    vehicleId: 'live-resource-vehicle',
+    label: 'Live resource vehicle',
+    readinessStatus: 'normal',
+    fuelLevelPercent: 64,
+    fuelTankCapacityGal: 32,
+    fuelSource: 'vehicleObd',
+    waterGallons: 14,
+    waterSource: 'vehicleObd',
+  },
+  convoy: {
+    teamMemberCount: 1,
+    activeMemberCount: 1,
+    communicationsStatus: 'online',
+  },
+}));
+assert.notStrictEqual(
+  map.logistics.status,
+  'unknown',
+  'Live OBD2 fuel level and connected water sensor data should satisfy logistics fuel/water data.',
+);
+assert.ok(
+  map.logistics.dataUsed.some((item) => item.id === 'fuel-level-percent' && item.source === 'vehicleObd' && item.value === 64),
+  'Live OBD2 fuel percent should be visible in logistics data used.',
+);
+assert.ok(
+  !map.logistics.why.some((item) => /missing fuel|missing water|missing fuel and water/i.test(item)),
+  'Live fuel/water sources should not produce missing fuel or water assessment copy.',
+);
 
 map = assertAssessmentShape(fixtures.vehicleDisabledFixture);
 assert.strictEqual(map.vehicles.status, 'critical', 'Disabled vehicle should be critical.');

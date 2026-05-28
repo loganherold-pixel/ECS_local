@@ -223,8 +223,12 @@ otp_expiry = 3600
 # port = 587
 # user = "apikey"
 # pass = "env(SENDGRID_API_KEY)"
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+# admin_email = "admin@expeditioncommand.com"
+# sender_name = "Expedition Command"
+
+[auth.email.template.recovery]
+subject = "Reset Your Password"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]
@@ -450,3 +454,12 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/dispersed-camping-eligibility/deno.json"
 entrypoint = "./functions/dispersed-camping-eligibility/index.ts"
+
+[functions.convoy-membership]
+enabled = true
+# Authenticated convoy invite and roster actions are validated by the Edge
+# Function with the caller's JWT, while invite hashes and service-role writes
+# stay server-side.
+verify_jwt = true
+import_map = "./functions/convoy-membership/deno.json"
+entrypoint = "./functions/convoy-membership/index.ts"

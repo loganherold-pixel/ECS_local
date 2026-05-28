@@ -3,11 +3,11 @@ import {
   ActivityIndicator,
   AccessibilityInfo,
   Animated,
-  Dimensions,
   Image,
   Keyboard,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -26,7 +26,7 @@ import PasswordVisibilityToggle from '../components/login/PasswordVisibilityTogg
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { maskAuthEmail } from '../lib/auth/authLogRedaction';
 import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
-import { exportLocalData } from '../lib/localDataExport';
+import { exportLocalData, importLocalData } from '../lib/localDataExport';
 import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
 import { sessionStore } from '../lib/sessionStore';
 import { setupStore } from '../lib/setupStore';
@@ -37,6 +37,13 @@ import { EASING, MOTION, PRESS } from '../lib/motion';
 import { useApp } from '../context/AppContext';
 
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
+const LOGIN_LOGO_ASPECT_RATIO = 1536 / 1024;
+const LOGIN_LOGO_WIDTH_RATIO = 0.72;
+const LOGIN_LOGO_MAX_WIDTH = 260;
+const LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.16;
+const LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22;
+const LOGIN_FORM_HORIZONTAL_INSET = 24;
+const LOGIN_STATUS_INDICATOR_HEIGHT = 24;
 
 type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
@@ -68,7 +75,7 @@ function normalizeLoginError(rawError: string | undefined, isOnline: boolean) {
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const router = useRouter();
   const params = useLocalSearchParams<{ reason?: string; mode?: string; email?: string }>();
   const {
@@ -83,8 +90,7 @@ export default function LoginScreen() {
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
-  const stableScreenHeight = useRef(Dimensions.get('screen').height).current;
-  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, stableScreenHeight), [stableScreenHeight, width]);
+  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, height), [height, width]);
 
   const passwordRef = useRef<TextInput>(null);
   const primaryPressScale = useRef(new Animated.Value(1)).current;
@@ -101,6 +107,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [exportingLocalData, setExportingLocalData] = useState(false);
+  const [importingLocalData, setImportingLocalData] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
@@ -137,7 +144,7 @@ export default function LoginScreen() {
   }, [loginGuardState]);
   const loginDisabled = loginGuardState.disabled;
   const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
-  const utilityBusy = loading || resetLoading || exportingLocalData;
+  const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData;
 
   useEffect(() => {
     const notice = consumeAuthNotice();
@@ -251,7 +258,7 @@ export default function LoginScreen() {
     if (needsFreshGuestSetup) {
       setPendingFreeDestination(destination);
     }
-  }, [clearStatus, enterOfflineMode, router]);
+  }, [clearStatus, enterOfflineMode]);
 
   useEffect(() => {
     if (!offlineMode || !pendingFreeDestination) return;
@@ -277,6 +284,26 @@ export default function LoginScreen() {
     setStatusMessage(result.error || 'Unable to export local data right now.');
     setStatusTone('error');
   }, [showToast]);
+
+  const handleImport = useCallback(async () => {
+    Keyboard.dismiss();
+    clearStatus();
+    setImportingLocalData(true);
+    const result = await importLocalData();
+    setImportingLocalData(false);
+
+    if (result.canceled) return;
+
+    if (result.success) {
+      showToast(result.totalItems > 0 ? `Imported ${result.totalItems} local items` : 'Local data import completed');
+      setStatusMessage('Local data restored on this device. Sign in to sync subscribed account data when online.');
+      setStatusTone('success');
+      return;
+    }
+
+    setStatusMessage(result.error || 'Unable to import local data right now.');
+    setStatusTone('error');
+  }, [clearStatus, showToast]);
 
   const handleOpenAuthInfo = useCallback((sheet: 'terms' | 'privacy' | 'support') => {
     Keyboard.dismiss();
@@ -404,25 +431,68 @@ export default function LoginScreen() {
 
   const renderMessage = statusMessage ? <AuthStatusBanner text={statusMessage} tone={statusTone} /> : !isOnline ? <AuthStatusBanner text={AUTH_COPY.login.offline} tone="neutral" /> : null;
   const footerMarginTop = layoutMetrics.compact ? 4 : Math.max(6, layoutMetrics.footerGap - 12);
+  const shellTopPadding = insets.top + layoutMetrics.topPadding;
+  const shellBottomPadding = insets.bottom + layoutMetrics.bottomPadding;
+  const authViewportHeight = Math.max(0, height - shellTopPadding - shellBottomPadding);
+  const isLandscape = width > height;
+  const compactPortrait = !isLandscape && authViewportHeight < 620;
+  const landscapeFormWidth = isLandscape ? Math.min(layoutMetrics.columnMaxWidth, 430) : layoutMetrics.columnMaxWidth;
+  const authContentWidth = Math.min(
+    landscapeFormWidth,
+    Math.max(0, width - layoutMetrics.horizontalPadding * 2),
+  );
+  const authFormInnerWidth = Math.max(0, authContentWidth - LOGIN_FORM_HORIZONTAL_INSET);
+  const logoHeightBudget = isLandscape
+    ? Math.max(38, Math.floor(authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO))
+    : compactPortrait
+      ? Math.max(74, Math.floor(authViewportHeight * LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO))
+      : Number.POSITIVE_INFINITY;
+  const loginLogoWidth = Math.min(
+    authFormInnerWidth,
+    LOGIN_LOGO_MAX_WIDTH,
+    Math.round(authContentWidth * LOGIN_LOGO_WIDTH_RATIO),
+    Math.round(logoHeightBudget * LOGIN_LOGO_ASPECT_RATIO),
+  );
+  const loginHeaderHeight = useMemo(() => {
+    const cardTopTarget = height * 0.5;
+    const cardOuterMarginTop = 2;
+    const logoHeight = loginLogoWidth / LOGIN_LOGO_ASPECT_RATIO;
+    const minimumHeaderHeight = Math.ceil(logoHeight) + LOGIN_STATUS_INDICATOR_HEIGHT + (layoutMetrics.compact ? 28 : 38);
+    if (isLandscape) {
+      return Math.min(Math.max(minimumHeaderHeight, 92), Math.max(86, authViewportHeight * 0.32));
+    }
+    return Math.max(minimumHeaderHeight, Math.round(cardTopTarget - shellTopPadding - cardOuterMarginTop));
+  }, [authViewportHeight, height, isLandscape, layoutMetrics.compact, loginLogoWidth, shellTopPadding]);
 
   return (
     <View style={styles.heroScreen}>
       <LoginHeroBackground />
+      <View pointerEvents="none" style={styles.heroGlobalTint} />
       <StatusBar style="light" />
       <View style={styles.heroContentLayer}>
         <View
           style={[
             styles.screenShell,
             {
-              paddingTop: insets.top + layoutMetrics.topPadding,
-              paddingBottom: insets.bottom + layoutMetrics.bottomPadding,
+              paddingTop: shellTopPadding,
+              paddingBottom: shellBottomPadding,
               paddingHorizontal: layoutMetrics.horizontalPadding,
             },
           ]}
         >
-          <View style={styles.screenTopRegion}>
+          <ScrollView
+            style={styles.screenTopRegion}
+            contentContainerStyle={[styles.screenTopContent, { minHeight: authViewportHeight }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
             <View style={[styles.contentShell, { maxWidth: layoutMetrics.columnMaxWidth }]}>
-              <LoginHeaderBlock isOnline={isOnline} compact={layoutMetrics.compact} />
+              <LoginHeaderBlock
+                isOnline={isOnline}
+                headerHeight={loginHeaderHeight}
+                logoWidth={loginLogoWidth}
+              />
               {mode === 'login' ? (
                 <LoginCard
                   email={email}
@@ -450,8 +520,11 @@ export default function LoginScreen() {
                   onContinueFree={handleContinueFree}
                   onViewPro={handleViewPro}
                   onExport={handleExport}
+                  onImport={handleImport}
                   exportingLocalData={exportingLocalData}
+                  importingLocalData={importingLocalData}
                   footerMaxWidth={layoutMetrics.footerMaxWidth}
+                  compactLayout={isLandscape}
                   onOpenAuthInfo={handleOpenAuthInfo}
                   onCreateAccount={handleCreateAccount}
                 />
@@ -471,6 +544,7 @@ export default function LoginScreen() {
                   onForgotPassword={handleForgotPassword}
                   onBackToLogin={() => setMode('login')}
                   onCreateAccount={handleCreateAccount}
+                  compactLayout={isLandscape}
                 />
               )}
               {mode !== 'login' ? (
@@ -479,10 +553,11 @@ export default function LoginScreen() {
                   marginTop={footerMarginTop}
                   onOpenAuthInfo={handleOpenAuthInfo}
                   onCreateAccount={handleCreateAccount}
+                  compactLayout={isLandscape}
                 />
               ) : null}
             </View>
-          </View>
+          </ScrollView>
         </View>
       </View>
     </View>
@@ -492,31 +567,36 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   heroScreen: { flex: 1, backgroundColor: '#040608' },
+  heroGlobalTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2,5,8,0.24)',
+  },
   heroContentLayer: { ...StyleSheet.absoluteFillObject },
-  screenShell: { flex: 1, justifyContent: 'space-between' },
-  screenTopRegion: { flex: 1, justifyContent: 'center' },
-  contentShell: { width: '100%', alignSelf: 'center', alignItems: 'center', justifyContent: 'center' },
+  screenShell: { flex: 1, justifyContent: 'flex-start' },
+  screenTopRegion: { flex: 1 },
+  screenTopContent: { flexGrow: 1, justifyContent: 'flex-start' },
+  contentShell: { width: '100%', alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-start' },
   logoFrame: {
     width: '100%',
-    minHeight: 172,
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 0,
-  },
-  logoFrameCompact: {
-    minHeight: 154,
+    paddingBottom: LOGIN_STATUS_INDICATOR_HEIGHT + 12,
   },
   logoImage: {
-    width: 228,
-    height: 182,
-    transform: [{ translateY: -16 }, { scale: 1.78 }],
+    maxWidth: '100%',
+    aspectRatio: LOGIN_LOGO_ASPECT_RATIO,
   },
-  logoImageCompact: {
-    width: 212,
-    height: 170,
-    transform: [{ translateY: -12 }, { scale: 1.58 }],
+  onlineRow: {
+    position: 'absolute',
+    bottom: 3,
+    alignSelf: 'center',
+    minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
-  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, marginBottom: 6 },
   onlineText: { color: '#5BCB79', fontSize: 12, lineHeight: 15, fontWeight: '700' },
   offlineText: { color: 'rgba(230,237,243,0.62)' },
   card: {
@@ -525,7 +605,14 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.32, shadowRadius: 22, elevation: 7,
     marginTop: 2,
   },
+  cardCompactLandscape: {
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 6,
+    borderRadius: 17,
+  },
   fieldBlock: { marginBottom: 6 },
+  fieldBlockCompactLandscape: { marginBottom: 4 },
   fieldLabel: { marginBottom: 4, fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(230,237,243,0.9)', letterSpacing: 1.6 },
   passwordLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   inlineUtilityHit: { minHeight: 24, justifyContent: 'center' },
@@ -534,13 +621,17 @@ const styles = StyleSheet.create({
     minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
     backgroundColor: 'rgba(12,16,21,0.66)', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8,
   },
+  inputShellCompactLandscape: { minHeight: 38, borderRadius: 11, paddingHorizontal: 10 },
   input: { flex: 1, fontSize: 15, lineHeight: 20, color: 'rgba(236,239,242,0.95)', paddingVertical: 9, minHeight: 38 },
+  inputCompactLandscape: { paddingVertical: 6, minHeight: 32 },
   inlineError: { marginTop: 5, paddingLeft: 2, fontSize: 11, lineHeight: 14, fontWeight: '600', color: '#E2A29A' },
   rememberRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 28, marginTop: -3, marginBottom: 3 },
+  rememberRowCompactLandscape: { minHeight: 24, marginBottom: 1 },
   checkbox: { width: 18, height: 18, borderRadius: 5, borderWidth: 1, borderColor: 'rgba(212,160,23,0.78)', backgroundColor: 'rgba(255,255,255,0.04)', alignItems: 'center', justifyContent: 'center' },
   checkboxChecked: { backgroundColor: TACTICAL.amber, borderColor: TACTICAL.amber },
   rememberText: { flex: 1, fontSize: 13, lineHeight: 17, color: 'rgba(230,237,243,0.82)', fontWeight: '600' },
   primaryButton: { minHeight: 42, marginTop: 1, borderRadius: 12, backgroundColor: TACTICAL.amber, alignItems: 'center', justifyContent: 'center' },
+  primaryButtonCompactLandscape: { minHeight: 36, borderRadius: 11 },
   primaryButtonDisabled: { opacity: 0.46 },
   primaryButtonPressed: { opacity: 0.94, backgroundColor: TACTICAL.amberDark },
   primaryButtonContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -548,24 +639,34 @@ const styles = StyleSheet.create({
   messageRow: { marginTop: 6 },
   messageSlot: { marginTop: 5, minHeight: 28, justifyContent: 'center' },
   messageSlotCollapsed: { marginTop: 2, minHeight: 8 },
+  messageSlotCompactLandscape: { marginTop: 3, minHeight: 20 },
+  messageSlotCollapsedCompactLandscape: { marginTop: 1, minHeight: 4 },
   orRow: { marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  orRowCompactLandscape: { marginTop: 3 },
   orRule: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
   orText: { color: 'rgba(230,237,243,0.42)', fontSize: 11, lineHeight: 14, fontWeight: '700' },
   actionRow: { marginTop: 5, flexDirection: 'row', gap: 8 },
+  actionRowCompactLandscape: { marginTop: 4 },
   secondaryButton: {
     flex: 1, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(6,8,10,0.28)',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 10,
   },
+  secondaryButtonCompactLandscape: { minHeight: 34, borderRadius: 11, paddingHorizontal: 8 },
   secondaryButtonTextPrimary: { color: TACTICAL.amber, fontSize: 14, lineHeight: 18, fontWeight: '800' },
   secondaryButtonText: { color: 'rgba(236,239,242,0.9)', fontSize: 14, lineHeight: 18, fontWeight: '800' },
+  dataTransferRow: { marginTop: 5, flexDirection: 'row', gap: 8 },
+  dataTransferRowCompactLandscape: { marginTop: 4 },
   exportButton: {
-    marginTop: 5, minHeight: 34, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    flex: 1, minHeight: 34, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 8,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.025)',
   },
-  exportButtonText: { fontSize: 13, lineHeight: 17, fontWeight: '700', color: 'rgba(230,237,243,0.82)' },
+  exportButtonCompactLandscape: { minHeight: 31, borderRadius: 11, gap: 6, paddingHorizontal: 7 },
+  exportButtonText: { flexShrink: 1, fontSize: 12, lineHeight: 16, fontWeight: '700', color: 'rgba(230,237,243,0.82)', textAlign: 'center' },
   exportHint: { marginTop: 3, textAlign: 'center', fontSize: 10, lineHeight: 13, color: 'rgba(230,237,243,0.48)' },
   recoveryTitle: { fontSize: 20, lineHeight: 24, fontWeight: '800', color: TACTICAL.text },
+  recoveryTitleCompactLandscape: { fontSize: 18, lineHeight: 22 },
   recoverySupporting: { marginTop: 4, marginBottom: 10, fontSize: 13, lineHeight: 18, color: TACTICAL.textMuted },
+  recoverySupportingCompactLandscape: { marginBottom: 8, lineHeight: 17 },
   linkRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
   bottomLinkHit: { minHeight: 30, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, justifyContent: 'center' },
   bottomLinkText: { fontSize: 13, lineHeight: 17, fontWeight: '700', color: TACTICAL.textMuted },
@@ -574,6 +675,7 @@ const styles = StyleSheet.create({
   footerPill: { minHeight: 28, minWidth: 72, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.045)', backgroundColor: 'rgba(255,255,255,0.016)' },
   footerPillText: { fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(212,160,23,0.9)', letterSpacing: 0.5, textAlign: 'center' },
   createAccountHit: { marginTop: 10, minHeight: 28, justifyContent: 'center' },
+  createAccountHitCompactLandscape: { marginTop: 7, minHeight: 24 },
   createAccountText: { fontSize: 14, lineHeight: 18, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
   loginLegalFooter: { marginTop: 8 },
   utilityPressed: { opacity: 0.72 },
@@ -582,20 +684,20 @@ const styles = StyleSheet.create({
 
 const LoginHeaderBlock = memo(function LoginHeaderBlock({
   isOnline,
-  compact,
+  headerHeight,
+  logoWidth,
 }: {
   isOnline: boolean;
-  compact: boolean;
+  headerHeight: number;
+  logoWidth: number;
 }) {
   return (
-    <>
-      <View style={[styles.logoFrame, compact ? styles.logoFrameCompact : null]}>
-        <Image
-          source={LOGIN_LOGO}
-          resizeMode="contain"
-          style={[styles.logoImage, compact ? styles.logoImageCompact : null]}
-        />
-      </View>
+    <View style={[styles.logoFrame, { height: headerHeight }]}>
+      <Image
+        source={LOGIN_LOGO}
+        resizeMode="contain"
+        style={[styles.logoImage, { width: logoWidth }]}
+      />
       <View style={styles.onlineRow}>
         <Ionicons
           name={isOnline ? 'wifi' : 'cloud-offline-outline'}
@@ -606,7 +708,7 @@ const LoginHeaderBlock = memo(function LoginHeaderBlock({
           {isOnline ? 'Online' : 'Offline'}
         </Text>
       </View>
-    </>
+    </View>
   );
 });
 
@@ -615,11 +717,13 @@ const LoginFooterBlock = memo(function LoginFooterBlock({
   marginTop,
   onOpenAuthInfo,
   onCreateAccount,
+  compactLayout = false,
 }: {
   footerMaxWidth: number;
   marginTop: number;
   onOpenAuthInfo: (sheet: 'terms' | 'privacy' | 'support') => void;
   onCreateAccount: () => void;
+  compactLayout?: boolean;
 }) {
   return (
     <View style={[styles.footerBlock, { marginTop, maxWidth: footerMaxWidth }]}>
@@ -644,7 +748,11 @@ const LoginFooterBlock = memo(function LoginFooterBlock({
         </Pressable>
       </View>
       <Pressable
-        style={({ pressed }) => [styles.createAccountHit, pressed ? styles.utilityPressed : null]}
+        style={({ pressed }) => [
+          styles.createAccountHit,
+          compactLayout ? styles.createAccountHitCompactLandscape : null,
+          pressed ? styles.utilityPressed : null,
+        ]}
         onPress={onCreateAccount}
       >
         <Text style={styles.createAccountText}>{AUTH_COPY.login.createAccount}</Text>
@@ -669,7 +777,9 @@ type LoginCardProps = {
   primaryPressScale: Animated.Value;
   passwordRef: React.RefObject<TextInput | null>;
   exportingLocalData: boolean;
+  importingLocalData: boolean;
   footerMaxWidth: number;
+  compactLayout: boolean;
   onClearStatus: () => void;
   onSetEmail: React.Dispatch<React.SetStateAction<string>>;
   onSetPassword: React.Dispatch<React.SetStateAction<string>>;
@@ -682,6 +792,7 @@ type LoginCardProps = {
   onContinueFree: () => void;
   onViewPro: () => void;
   onExport: () => Promise<void>;
+  onImport: () => Promise<void>;
   onOpenAuthInfo: (sheet: 'terms' | 'privacy' | 'support') => void;
   onCreateAccount: () => void;
 };
@@ -701,7 +812,9 @@ const LoginCard = memo(function LoginCard({
   primaryPressScale,
   passwordRef,
   exportingLocalData,
+  importingLocalData,
   footerMaxWidth,
+  compactLayout,
   onClearStatus,
   onSetEmail,
   onSetPassword,
@@ -714,14 +827,15 @@ const LoginCard = memo(function LoginCard({
   onContinueFree,
   onViewPro,
   onExport,
+  onImport,
   onOpenAuthInfo,
   onCreateAccount,
 }: LoginCardProps) {
   return (
-    <View style={styles.card}>
-      <View style={styles.fieldBlock}>
+    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null]}>
+      <View style={[styles.fieldBlock, compactLayout ? styles.fieldBlockCompactLandscape : null]}>
         <Text style={styles.fieldLabel}>EMAIL</Text>
-        <View style={styles.inputShell}>
+        <View style={[styles.inputShell, compactLayout ? styles.inputShellCompactLandscape : null]}>
           <Ionicons name="mail-outline" size={16} color="rgba(230,237,243,0.38)" />
           <TextInput
             value={email}
@@ -731,7 +845,7 @@ const LoginCard = memo(function LoginCard({
             }}
             placeholder={AUTH_COPY.login.emailPlaceholder}
             placeholderTextColor="rgba(139,148,158,0.74)"
-            style={styles.input}
+            style={[styles.input, compactLayout ? styles.inputCompactLandscape : null]}
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -750,14 +864,14 @@ const LoginCard = memo(function LoginCard({
         {!!emailError && <Text style={styles.inlineError}>{emailError}</Text>}
       </View>
 
-      <View style={styles.fieldBlock}>
+      <View style={[styles.fieldBlock, compactLayout ? styles.fieldBlockCompactLandscape : null]}>
         <View style={styles.passwordLabelRow}>
           <Text style={styles.fieldLabel}>PASSWORD</Text>
           <Pressable onPress={() => onSetMode('forgot')} style={({ pressed }) => [styles.inlineUtilityHit, pressed ? styles.utilityPressed : null]}>
             <Text style={styles.inlineUtilityText}>{AUTH_COPY.login.forgotPassword}</Text>
           </Pressable>
         </View>
-        <View style={styles.inputShell}>
+        <View style={[styles.inputShell, compactLayout ? styles.inputShellCompactLandscape : null]}>
           <Ionicons name="lock-closed-outline" size={16} color="rgba(230,237,243,0.38)" />
           <TextInput
             ref={passwordRef}
@@ -768,7 +882,7 @@ const LoginCard = memo(function LoginCard({
             }}
             placeholder={AUTH_COPY.login.passwordPlaceholder}
             placeholderTextColor="rgba(139,148,158,0.74)"
-            style={styles.input}
+            style={[styles.input, compactLayout ? styles.inputCompactLandscape : null]}
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -790,7 +904,11 @@ const LoginCard = memo(function LoginCard({
       </View>
 
       <Pressable
-        style={({ pressed }) => [styles.rememberRow, pressed ? styles.utilityPressed : null]}
+        style={({ pressed }) => [
+          styles.rememberRow,
+          compactLayout ? styles.rememberRowCompactLandscape : null,
+          pressed ? styles.utilityPressed : null,
+        ]}
         onPress={() => onSetKeepSignedIn((current) => !current)}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: keepSignedIn }}
@@ -803,7 +921,12 @@ const LoginCard = memo(function LoginCard({
 
       <Animated.View style={{ width: '100%', transform: [{ scale: primaryPressScale }] }}>
         <Pressable
-          style={({ pressed }) => [styles.primaryButton, loginDisabled ? styles.primaryButtonDisabled : null, pressed && !loginDisabled ? styles.primaryButtonPressed : null]}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            compactLayout ? styles.primaryButtonCompactLandscape : null,
+            loginDisabled ? styles.primaryButtonDisabled : null,
+            pressed && !loginDisabled ? styles.primaryButtonPressed : null,
+          ]}
           disabled={loginDisabled}
           onPressIn={loginDisabled ? undefined : onPrimaryPressIn}
           onPressOut={loginDisabled ? undefined : onPrimaryPressOut}
@@ -835,35 +958,51 @@ const LoginCard = memo(function LoginCard({
         </Pressable>
       </Animated.View>
 
-      <View style={[styles.messageSlot, !hasMessage ? styles.messageSlotCollapsed : null]}>{renderMessage}</View>
+      <View
+        style={[
+          styles.messageSlot,
+          compactLayout ? styles.messageSlotCompactLandscape : null,
+          !hasMessage ? styles.messageSlotCollapsed : null,
+          compactLayout && !hasMessage ? styles.messageSlotCollapsedCompactLandscape : null,
+        ]}
+      >
+        {renderMessage}
+      </View>
 
-      <View style={styles.orRow}>
+      <View style={[styles.orRow, compactLayout ? styles.orRowCompactLandscape : null]}>
         <View style={styles.orRule} />
         <Text style={styles.orText}>or</Text>
         <View style={styles.orRule} />
       </View>
 
-      <View style={styles.actionRow}>
-        <Pressable style={({ pressed }) => [styles.secondaryButton, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={onContinueFree}>
+      <View style={[styles.actionRow, compactLayout ? styles.actionRowCompactLandscape : null]}>
+        <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={onContinueFree}>
           <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
           <Text style={styles.secondaryButtonTextPrimary}>Continue with Free</Text>
         </Pressable>
-        <Pressable style={({ pressed }) => [styles.secondaryButton, pressed ? styles.utilityPressed : null]} onPress={onViewPro}>
+        <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, pressed ? styles.utilityPressed : null]} onPress={onViewPro}>
           <Ionicons name="diamond-outline" size={14} color="rgba(236,239,242,0.9)" />
           <Text style={styles.secondaryButtonText}>View Pro</Text>
         </Pressable>
       </View>
 
-      <Pressable style={({ pressed }) => [styles.exportButton, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onExport()}>
-        {exportingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="download-outline" size={15} color="rgba(230,237,243,0.82)" />}
-        <Text style={styles.exportButtonText}>Export local data</Text>
-      </Pressable>
+      <View style={[styles.dataTransferRow, compactLayout ? styles.dataTransferRowCompactLandscape : null]}>
+        <Pressable style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onImport()}>
+          {importingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="cloud-upload-outline" size={15} color="rgba(230,237,243,0.82)" />}
+          <Text style={styles.exportButtonText}>Import local data</Text>
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onExport()}>
+          {exportingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="download-outline" size={15} color="rgba(230,237,243,0.82)" />}
+          <Text style={styles.exportButtonText}>Export local data</Text>
+        </Pressable>
+      </View>
       <Text style={styles.exportHint}>Save your offline data as JSON before signing in or switching devices.</Text>
       <LoginFooterBlock
         footerMaxWidth={footerMaxWidth}
-        marginTop={12}
+        marginTop={compactLayout ? 8 : 12}
         onOpenAuthInfo={onOpenAuthInfo}
         onCreateAccount={onCreateAccount}
+        compactLayout={compactLayout}
       />
     </View>
   );
@@ -884,6 +1023,7 @@ type ForgotPasswordCardProps = {
   onForgotPassword: () => Promise<void>;
   onBackToLogin: () => void;
   onCreateAccount: () => void;
+  compactLayout: boolean;
 };
 
 const ForgotPasswordCard = memo(function ForgotPasswordCard({
@@ -901,14 +1041,15 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
   onForgotPassword,
   onBackToLogin,
   onCreateAccount,
+  compactLayout,
 }: ForgotPasswordCardProps) {
   return (
-    <View style={styles.card}>
-      <Text style={styles.recoveryTitle}>{AUTH_COPY.forgotPassword.title}</Text>
-      <Text style={styles.recoverySupporting}>{AUTH_COPY.forgotPassword.supporting}</Text>
-      <View style={styles.fieldBlock}>
+    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null]}>
+      <Text style={[styles.recoveryTitle, compactLayout ? styles.recoveryTitleCompactLandscape : null]}>{AUTH_COPY.forgotPassword.title}</Text>
+      <Text style={[styles.recoverySupporting, compactLayout ? styles.recoverySupportingCompactLandscape : null]}>{AUTH_COPY.forgotPassword.supporting}</Text>
+      <View style={[styles.fieldBlock, compactLayout ? styles.fieldBlockCompactLandscape : null]}>
         <Text style={styles.fieldLabel}>EMAIL</Text>
-        <View style={styles.inputShell}>
+        <View style={[styles.inputShell, compactLayout ? styles.inputShellCompactLandscape : null]}>
           <Ionicons name="mail-outline" size={16} color="rgba(230,237,243,0.38)" />
           <TextInput
             value={resetEmail}
@@ -918,7 +1059,7 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
             }}
             placeholder={AUTH_COPY.login.emailPlaceholder}
             placeholderTextColor="rgba(139,148,158,0.74)"
-            style={styles.input}
+            style={[styles.input, compactLayout ? styles.inputCompactLandscape : null]}
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -936,7 +1077,12 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
       </View>
       <Animated.View style={{ width: '100%', transform: [{ scale: primaryPressScale }] }}>
         <Pressable
-          style={({ pressed }) => [styles.primaryButton, forgotDisabled ? styles.primaryButtonDisabled : null, pressed && !forgotDisabled ? styles.primaryButtonPressed : null]}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            compactLayout ? styles.primaryButtonCompactLandscape : null,
+            forgotDisabled ? styles.primaryButtonDisabled : null,
+            pressed && !forgotDisabled ? styles.primaryButtonPressed : null,
+          ]}
           disabled={forgotDisabled}
           onPressIn={forgotDisabled ? undefined : onPrimaryPressIn}
           onPressOut={forgotDisabled ? undefined : onPrimaryPressOut}
@@ -960,7 +1106,16 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
           <Text style={styles.bottomLinkText}>{AUTH_COPY.login.createAccount}</Text>
         </Pressable>
       </View>
-      <View style={[styles.messageSlot, !hasMessage ? styles.messageSlotCollapsed : null]}>{renderMessage}</View>
+      <View
+        style={[
+          styles.messageSlot,
+          compactLayout ? styles.messageSlotCompactLandscape : null,
+          !hasMessage ? styles.messageSlotCollapsed : null,
+          compactLayout && !hasMessage ? styles.messageSlotCollapsedCompactLandscape : null,
+        ]}
+      >
+        {renderMessage}
+      </View>
     </View>
   );
 });

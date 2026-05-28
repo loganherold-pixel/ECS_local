@@ -10,7 +10,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type { IncidentContext, RecoveryIncidentAgentOutput } from '../../lib/types/incidentRecovery';
 
 type ECSAssessmentModalProps = {
@@ -52,6 +52,7 @@ export default function ECSAssessmentModal({
   incident,
 }: ECSAssessmentModalProps) {
   const output = getOutput(incident);
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const footer = (
     <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.78}>
       <Text style={styles.closeButtonText}>Close</Text>
@@ -67,7 +68,7 @@ export default function ECSAssessmentModal({
       eyebrow="RECOVERY & INCIDENT AGENT"
       subtitle="Structured stabilization assessment. Not a replacement for emergency services or recovery professionals."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

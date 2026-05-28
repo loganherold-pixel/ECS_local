@@ -151,17 +151,12 @@
  *
  * ── OPENWEATHER API ENDPOINTS USED ───────────────────────────
  *
- * Current Weather:
- *   GET https://api.openweathermap.org/data/2.5/weather
- *     ?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units={units}
+ * One Call 3.0:
+ *   GET https://api.openweathermap.org/data/3.0/onecall
+ *     ?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units={units}&exclude=minutely
  *
- * 5-Day Forecast:
- *   GET https://api.openweathermap.org/data/2.5/forecast
- *     ?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units={units}
- *
- * Both endpoints are available on the free OpenWeather tier.
- * The edge function fetches both in parallel for each coordinate,
- * then normalizes and aggregates the data.
+ * The edge function calls One Call API 3.0 for each coordinate,
+ * then normalizes current, hourly, daily, alerts, timezone, and provider metadata.
  *
  * ── CLIENT INVOCATION ────────────────────────────────────────
  *

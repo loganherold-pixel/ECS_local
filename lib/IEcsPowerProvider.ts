@@ -15,7 +15,15 @@
  * Phase 7A — Architecture Hardening: Universal Provider Contract
  */
 
-import type { BluProviderId, BluConnectionState, BluDevice, BluTelemetry, BluDeviceCapabilities } from './BluTypes';
+import type {
+  BluProviderId,
+  BluConnectionState,
+  BluDevice,
+  BluTelemetry,
+  BluDeviceCapabilities,
+  BluMultiDeviceCapability,
+  BluTelemetryEnvelope,
+} from './BluTypes';
 import type { BluetoothTelemetrySource } from './bluetoothLiveTelemetry';
 
 // ── Provider Lifecycle State ────────────────────────────────────────────
@@ -90,6 +98,14 @@ export interface EcsProviderDiagnostics {
   currentBackoffMs: number;
   /** Uptime in ms since last successful connection */
   uptimeMs: number;
+  /** Whether this provider can maintain multiple active devices at once. */
+  multiDeviceCapability?: BluMultiDeviceCapability;
+  /** Human-readable limitation when multi-device support is partial or unavailable. */
+  multiDeviceCapabilityReason?: string;
+  /** Active device ids currently connected or polled by this provider. */
+  activeDeviceIds?: string[];
+  /** Device ids with telemetry in the latest provider cache. */
+  telemetryDeviceIds?: string[];
   /** Provider-specific diagnostic metadata */
   providerMeta?: Record<string, unknown>;
 }
@@ -238,6 +254,8 @@ export interface EcsNormalizedReading {
   telemetryUnsupported?: boolean;
   /** Short reason for unsupported or unavailable telemetry. */
   telemetryUnsupportedReason?: string;
+  /** Shared BLU live telemetry contract envelope for diagnostics and future consumers. */
+  bluTelemetryEnvelope?: BluTelemetryEnvelope;
 }
 
 // ── Charging State Enum ─────────────────────────────────────────────────

@@ -277,6 +277,15 @@ const LOCAL_ONLY_UPDATE_KEYS = new Set([
   'is_leveled',
   'front_level_inches',
   'ground_clearance_inches',
+  'overall_length_in',
+  'overall_width_in',
+  'overall_height_in',
+  'track_width_front_in',
+  'track_width_rear_in',
+  'approach_angle_deg',
+  'breakover_angle_deg',
+  'departure_angle_deg',
+  'turning_diameter_ft',
   'wizard_config',
   'zones',
   'accessoryFramework',
@@ -303,6 +312,15 @@ const LOCAL_ONLY_VEHICLE_FIELDS: (keyof Vehicle)[] = [
   'is_leveled',
   'front_level_inches',
   'ground_clearance_inches',
+  'overall_length_in',
+  'overall_width_in',
+  'overall_height_in',
+  'track_width_front_in',
+  'track_width_rear_in',
+  'approach_angle_deg',
+  'breakover_angle_deg',
+  'departure_angle_deg',
+  'turning_diameter_ft',
 ];
 
 export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
@@ -334,6 +352,15 @@ export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
     is_leveled: Boolean(vehicle.is_leveled ?? false),
     front_level_inches: vehicle.front_level_inches ?? null,
     ground_clearance_inches: vehicle.ground_clearance_inches ?? null,
+    overall_length_in: vehicle.overall_length_in ?? null,
+    overall_width_in: vehicle.overall_width_in ?? null,
+    overall_height_in: vehicle.overall_height_in ?? null,
+    track_width_front_in: vehicle.track_width_front_in ?? null,
+    track_width_rear_in: vehicle.track_width_rear_in ?? null,
+    approach_angle_deg: vehicle.approach_angle_deg ?? null,
+    breakover_angle_deg: vehicle.breakover_angle_deg ?? null,
+    departure_angle_deg: vehicle.departure_angle_deg ?? null,
+    turning_diameter_ft: vehicle.turning_diameter_ft ?? null,
   };
 }
 
@@ -418,6 +445,43 @@ export const vehicleStore = {
    * about vehicle count without starting an async fetch.
    */
   getLocalSnapshot: (): Vehicle[] => getLocalVehicles(),
+
+  importLocalSnapshot: async (incomingVehicles: Vehicle[]): Promise<{ imported: number; skipped: number }> => {
+    await ensureVehicleStorageHydrated();
+    const localVehicles = getLocalVehicles();
+    const byId = new Map(localVehicles.map((vehicle) => [vehicle.id, vehicle]));
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of incomingVehicles) {
+      if (!incoming?.id) {
+        skipped++;
+        continue;
+      }
+
+      const normalized = normalizeVehicleRecord(incoming);
+      const existing = byId.get(normalized.id);
+      if (
+        existing?.updated_at &&
+        normalized.updated_at &&
+        new Date(existing.updated_at).getTime() > new Date(normalized.updated_at).getTime()
+      ) {
+        skipped++;
+        continue;
+      }
+
+      byId.set(normalized.id, normalized);
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveLocalVehicles(Array.from(byId.values()));
+      await flushVehicleStorage();
+      notifyChange('sync', null);
+    }
+
+    return { imported, skipped };
+  },
 
 
 
@@ -622,6 +686,15 @@ export const vehicleStore = {
       is_leveled: false,
       front_level_inches: null,
       ground_clearance_inches: null,
+      overall_length_in: null,
+      overall_width_in: null,
+      overall_height_in: null,
+      track_width_front_in: null,
+      track_width_rear_in: null,
+      approach_angle_deg: null,
+      breakover_angle_deg: null,
+      departure_angle_deg: null,
+      turning_diameter_ft: null,
       created_at: now,
       updated_at: now,
     };

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
+  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -345,6 +346,28 @@ export default function IncidentRecoveryPanel({
   const handleSaveDebrief = (input: IncidentDebriefInput) => {
     incidentRecoveryWorkflowStore.saveIncidentDebrief(input);
   };
+  const handleClearIncident = () => {
+    const incidentId = incidentState.activeIncident?.id;
+    const dispatchEventId = incidentState.activeIncident?.dispatchEventId ?? null;
+    if (!incidentId && !dispatchEventId && !expeditionId) return;
+    Alert.alert(
+      'Clear Incident & Recovery',
+      'This resets Incident & Recovery back to its original state for this incident. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            incidentRecoveryWorkflowStore.clearIncident({ incidentId, expeditionId });
+            if (dispatchEventId) {
+              dispatchEventStore.clearEvent(dispatchEventId);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <>
@@ -394,22 +417,35 @@ export default function IncidentRecoveryPanel({
               ) : null}
             </View>
           </View>
-          <View
-            style={[
-              styles.badge,
-              copy.tone === 'clear' && styles.badgeClear,
-              copy.tone === 'activeIncident' && styles.badgeAlert,
-            ]}
-          >
-            <Text
+          <View style={styles.headerActions}>
+            {incidentState.activeIncident ? (
+              <TouchableOpacity
+                style={styles.clearButton}
+                activeOpacity={0.78}
+                onPress={handleClearIncident}
+                accessibilityRole="button"
+                accessibilityLabel="Clear incident and recovery"
+              >
+                <Text style={styles.clearButtonText}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View
               style={[
-                styles.badgeText,
-                copy.tone === 'clear' && styles.badgeTextClear,
-                copy.tone === 'activeIncident' && styles.badgeTextAlert,
+                styles.badge,
+                copy.tone === 'clear' && styles.badgeClear,
+                copy.tone === 'activeIncident' && styles.badgeAlert,
               ]}
             >
-              {copy.badge}
-            </Text>
+              <Text
+                style={[
+                  styles.badgeText,
+                  copy.tone === 'clear' && styles.badgeTextClear,
+                  copy.tone === 'activeIncident' && styles.badgeTextAlert,
+                ]}
+              >
+                {copy.badge}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -476,6 +512,11 @@ export default function IncidentRecoveryPanel({
                 accessibilityLabel={action.label}
                 accessibilityState={{ disabled: !enabled }}
               >
+                {actionState.status === 'complete' ? (
+                  <View style={styles.completeCheck}>
+                    <Ionicons name="checkmark" size={10} color="#061008" />
+                  </View>
+                ) : null}
                 {actionState.badgeCount && actionState.badgeCount > 0 ? (
                   <View style={styles.actionBadge}>
                     <Text style={styles.actionBadgeText}>{actionState.badgeCount}</Text>
@@ -573,6 +614,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  headerActions: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  clearButton: {
+    minHeight: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(192,57,43,0.36)',
+    backgroundColor: 'rgba(192,57,43,0.10)',
+    paddingHorizontal: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearButtonText: {
+    color: TACTICAL.danger,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   titleWrap: {
     flex: 1,
@@ -742,6 +804,19 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 8,
     fontWeight: '900',
+  },
+  completeCheck: {
+    position: 'absolute',
+    top: 5,
+    right: 6,
+    width: 17,
+    height: 17,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(76,175,80,0.58)',
+    backgroundColor: TACTICAL.successText,
   },
   actionText: {
     color: TACTICAL.text,

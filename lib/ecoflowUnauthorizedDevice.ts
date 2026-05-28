@@ -5,6 +5,8 @@ const ECOFLOW_UNAUTHORIZED_DEVICE_PATTERNS = [
   'not allowed',
   'permission denied',
   'forbidden',
+  'not authorized',
+  'not authorised',
   'unauthorized device',
   'device unauthorized',
 ];

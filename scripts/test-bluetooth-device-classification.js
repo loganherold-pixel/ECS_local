@@ -61,6 +61,8 @@ for (const brandId of [
   'dakota_lithium',
   'victron',
   'veepeak_obd2',
+  'mopeka_propane',
+  'water_level_monitor',
 ]) {
   assert(
     BLUETOOTH_BRAND_REGISTRY.some((entry) => entry.id === brandId),
@@ -130,6 +132,22 @@ const ecoflowByName = classifyBluetoothDevice({
 });
 assert.strictEqual(ecoflowByName.providerBadge, 'EcoFlow');
 
+const ecoflowDelta3ByName = classifyBluetoothDevice({
+  id: 'ecoflow-delta3',
+  name: 'Delta 3-1500-5055',
+  isLikelyOBD: false,
+  rssi: -60,
+});
+assert.strictEqual(ecoflowDelta3ByName.providerBadge, 'EcoFlow');
+
+const ecoflowAlternatorByName = classifyBluetoothDevice({
+  id: 'ecoflow-alternator',
+  name: 'EcoFlow 800W Alternator Charger',
+  isLikelyOBD: false,
+  rssi: -60,
+});
+assert.strictEqual(ecoflowAlternatorByName.providerBadge, 'EcoFlow');
+
 const jackeryByName = classifyBluetoothDevice({
   id: 'jackery-1',
   name: 'Jackery Explorer 1000',
@@ -198,6 +216,79 @@ assert.strictEqual(veepeakByName.providerBadge, 'OBD');
 assert.strictEqual(veepeakByName.brandLabel, 'V Peak / Veepeak OBD2');
 
 for (const [id, name] of [
+  ['obdcheck', 'OBDCheck BLE'],
+  ['vp11', 'VP11 BLE'],
+  ['vpake', 'VPake BLE'],
+  ['vepeak', 'VePeak BLE'],
+  ['ios-vlink', 'IOS-Vlink'],
+  ['android-vlink', 'Android-Vlink'],
+]) {
+  const route = routeBluetoothDevice({
+    id,
+    name,
+    isLikelyOBD: false,
+    rssi: -63,
+  });
+  assert.strictEqual(route.owner, 'telemetry', `${name} should route to OBD2 telemetry`);
+  assert.strictEqual(route.providerId, 'obd2');
+  assert.strictEqual(isReleaseScannerBluetoothRoute(route), true);
+}
+
+const veepBleUartCandidate = routeBluetoothDevice({
+  id: 'veepeak-uart-service',
+  name: '',
+  isLikelyOBD: true,
+  rssi: -60,
+  serviceUUIDs: ['0000ffe0-0000-1000-8000-00805f9b34fb'],
+});
+assert.strictEqual(veepBleUartCandidate.owner, 'telemetry');
+assert.strictEqual(veepBleUartCandidate.providerId, 'obd2');
+assert.strictEqual(veepBleUartCandidate.providerLabel, 'OBD2 Telemetry');
+assert.strictEqual(isReleaseScannerBluetoothRoute(veepBleUartCandidate), true);
+
+const propaneByName = classifyBluetoothDevice({
+  id: 'propane-1',
+  name: 'Mopeka Pro Check Propane',
+  isLikelyOBD: false,
+  rssi: -57,
+});
+assert.strictEqual(propaneByName.providerBadge, 'Propane');
+assert.strictEqual(propaneByName.categoryHint, 'Propane level monitor');
+
+const propaneRoute = routeBluetoothDevice({
+  id: 'propane-route',
+  name: 'Mopeka Tank Check',
+  isLikelyOBD: false,
+  rssi: -58,
+});
+assert.strictEqual(propaneRoute.owner, 'sensor');
+assert.strictEqual(propaneRoute.providerId, 'propane_monitor');
+assert.strictEqual(propaneRoute.deviceCategory, 'propane_monitor');
+assert.strictEqual(propaneRoute.supportLabel, 'Live Sensor');
+assert.strictEqual(isReleaseScannerBluetoothRoute(propaneRoute), true);
+
+const waterByName = classifyBluetoothDevice({
+  id: 'water-1',
+  name: 'SeeLevel Fresh Water Tank Sensor',
+  isLikelyOBD: false,
+  rssi: -59,
+});
+assert.strictEqual(waterByName.providerBadge, 'Water');
+assert.strictEqual(waterByName.categoryHint, 'Water / fluid level monitor');
+
+const waterRoute = routeBluetoothDevice({
+  id: 'water-route',
+  name: 'Fresh Water Level Monitor',
+  isLikelyOBD: false,
+  rssi: -59,
+});
+assert.strictEqual(waterRoute.owner, 'sensor');
+assert.strictEqual(waterRoute.providerId, 'water_monitor');
+assert.strictEqual(waterRoute.deviceCategory, 'water_tank_monitor');
+assert.strictEqual(waterRoute.supportLabel, 'Live Sensor');
+assert.strictEqual(isReleaseScannerBluetoothRoute(waterRoute), true);
+
+for (const [id, name] of [
   ['obdlink', 'OBDLink MX+'],
   ['vgate', 'Vgate iCar Pro'],
   ['bluedriver', 'BlueDriver OBDII'],
@@ -263,6 +354,11 @@ const bluettiRoute = routeBluetoothDevice({
 });
 assert.strictEqual(bluettiRoute.owner, 'power');
 assert.strictEqual(bluettiRoute.providerId, 'bluetti');
+assert.strictEqual(bluettiRoute.supportLabel, 'Native BLE');
+assert(
+  /decoded power fields/i.test(bluettiRoute.supportNote || ''),
+  'BLUETTI route should explain live-ready decoded telemetry promotion instead of generic setup wording',
+);
 assert.strictEqual(isReleaseScannerBluetoothRoute(bluettiRoute), true);
 
 const dakotaRoute = routeBluetoothDevice({
@@ -273,6 +369,7 @@ const dakotaRoute = routeBluetoothDevice({
 });
 assert.strictEqual(dakotaRoute.owner, 'power');
 assert.strictEqual(dakotaRoute.providerId, 'dakota_lithium');
+assert.strictEqual(dakotaRoute.supportLabel, 'Native BLE');
 assert.strictEqual(isReleaseScannerBluetoothRoute(dakotaRoute), true);
 
 const unknownPowerRoute = routeBluetoothDevice({

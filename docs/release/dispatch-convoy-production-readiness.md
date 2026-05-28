@@ -8,12 +8,12 @@ Position sharing approval: pending
 
 ## System
 
-Dispatch/Convoy Command is the first production-readiness lane. Convoy Command now lives in the Dispatch tab, with the Rive panel seated in the lower CAD feed surface while convoy setup/team status remains above it. The old Dashboard widget/menu category is removed.
+Dispatch/Convoy Command is the first production-readiness lane. Convoy Command now lives in the Dispatch tab, with the live-ready Mapbox surface and tactical fallback seated in the lower CAD feed surface while convoy setup/team status remains above it. The old Dashboard widget/menu category is removed.
 
 ## Current Passes
 
 - Dispatch internal beta gate passes.
-- Convoy Command panel Rive asset is bundled for native and web and is mounted in the lower CAD feed surface.
+- Convoy Command uses the Mapbox/fallback surface in the lower CAD feed surface; the old Convoy Command Rive panel wrappers and assets are removed.
 - Dashboard Convoy Command widget/category is removed.
 - Emergency Coordinate Ping is wired to the local Recovery Assist GPS flow.
 - Emergency Coordinate Ping E2E device evidence is captured for GPS allowed, GPS denied, event detail, Navigate Assist handoff, and Navigate recovery route readiness.

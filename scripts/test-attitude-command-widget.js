@@ -106,6 +106,9 @@ const reanimatedStub = {
   useAnimatedProps(factory) {
     return factory();
   },
+  useAnimatedStyle(factory) {
+    return factory();
+  },
   useEffect() {
     return undefined;
   },

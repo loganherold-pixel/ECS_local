@@ -41,8 +41,37 @@ assert(
   'LoginHeroBackground should guard player method calls and fall back cleanly on errors.',
 );
 assert(
+  !loginHero.includes("Platform.OS !== 'android'"),
+  'LoginHeroBackground should not disable the login video on Android.',
+);
+assert(
+  loginHero.includes("status === 'readyToPlay'") &&
+    loginHero.includes('onFirstFrameRender') &&
+    loginHero.includes("safePlayerAction('play')"),
+  'LoginHeroBackground should mark the video ready from status or first frame and keep playback running.',
+);
+assert(
+  !loginHero.includes('if (videoFailed || !videoReady) {\n      safePlayerAction(\'pause\');'),
+  'LoginHeroBackground must not pause the video while waiting for the first frame.',
+);
+assert(
+  loginHero.includes('<Image source={LOGIN_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />'),
+  'LoginHeroBackground should keep the fallback image underneath the video while it loads.',
+);
+assert(
   loadingTransition.includes('safePlaybackAction') && loadingTransition.includes('clearInterval(cycleTimer)'),
   'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
+);
+assert(
+  loadingTransition.includes('const LOADING_FALLBACK') &&
+    loadingTransition.includes('<Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />') &&
+    loadingTransition.includes('flex: 1') &&
+    loadingTransition.includes("backgroundColor: '#040608'") &&
+    loadingTransition.includes('videoFailed') &&
+    loadingTransition.includes('videoReady') &&
+    loadingTransition.includes('onFirstFrameRender') &&
+    loadingTransition.includes('<ActivityIndicator size="small" color={TACTICAL.amber} />'),
+  'LoadingTransitionVideo should show a branded non-gray fallback while media loads or fails.',
 );
 assert(
   loginBackground.includes('if (!isMountedRef.current || hasSignalled.current) return;'),

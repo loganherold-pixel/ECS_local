@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   ScrollView,
   StyleSheet,
   Text,
@@ -24,11 +25,11 @@ import { FUEL_WEIGHT_PER_GAL, vehicleSpecStore, type FuelType } from '../../lib/
 import { consumablesStore, WATER_DENSITY_LB_PER_GAL } from '../../lib/consumablesStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
 import {
-  FLEET_PROFILE_PRESETS,
-  applyFleetProfilePreset,
+  applyFleetProfilePrefillOption,
   calculateConfirmedPayloadRemaining,
   createEmptyFleetVehicleProfileDraft,
   parseFleetProfileNumber,
+  resolveFleetVehicleProfilePrefillOptions,
   resolveFleetVehicleProfileSuggestion,
   validateFleetVehicleProfileDraft,
   type FleetVehicleProfileDraft,
@@ -65,6 +66,12 @@ function formatLbs(value: number | null | undefined): string {
   return `${Math.round(value).toLocaleString()} lb`;
 }
 
+function formatSpecNumber(value: number | null | undefined, suffix: string, precision = 1): string {
+  if (value == null || !Number.isFinite(value)) return '--';
+  const rounded = Number.isInteger(value) ? String(value) : value.toFixed(precision);
+  return `${rounded} ${suffix}`;
+}
+
 function resolveFuelType(vehicle: Vehicle | null): FuelType {
   if (!vehicle) return 'gas';
   const spec = vehicleSpecStore.get(vehicle.id);
@@ -75,28 +82,45 @@ function resolveFuelType(vehicle: Vehicle | null): FuelType {
   return engine.includes('diesel') || engine.includes('cummins') ? 'diesel' : 'gas';
 }
 
-function buildAdvancedSetupDraft(vehicle: Vehicle | null): FleetAdvancedSpecsDraft {
+function buildAdvancedSetupDraft(
+  vehicle: Vehicle | null,
+  fallbacks: { fuelTankCapacityGal?: number | null; waterCapacityGal?: number | null } = {},
+): FleetAdvancedSpecsDraft {
   if (!vehicle) {
+    const fallbackFuelGallons =
+      typeof fallbacks.fuelTankCapacityGal === 'number' && Number.isFinite(fallbacks.fuelTankCapacityGal)
+        ? Math.max(0, fallbacks.fuelTankCapacityGal)
+        : 0;
+    const fallbackWaterGallons =
+      typeof fallbacks.waterCapacityGal === 'number' && Number.isFinite(fallbacks.waterCapacityGal)
+        ? Math.max(0, fallbacks.waterCapacityGal)
+        : 0;
     return {
       suspensionLiftInches: 0,
       isLeveled: false,
       frontLevelInches: null,
       tireSizeInches: null,
-      waterGallons: '0',
-      fuelGallons: '0',
+      waterGallons: formatFleetAdvancedGallonsInput(fallbackWaterGallons),
+      fuelGallons: formatFleetAdvancedGallonsInput(fallbackFuelGallons),
     };
   }
 
   const tiresLift = tiresLiftStore.get(vehicle.id);
   const consumables = consumablesStore.get(vehicle.id);
   const spec = vehicleSpecStore.get(vehicle.id);
-  const fuelTankCapacity = spec?.fuel_tank_capacity_gal ?? vehicle.fuel_tank_capacity_gal ?? 0;
+  const fuelTankCapacity = spec?.fuel_tank_capacity_gal ?? vehicle.fuel_tank_capacity_gal ?? fallbacks.fuelTankCapacityGal ?? 0;
   const currentFuelGallons =
     consumables.fuel_gal_current != null
       ? consumables.fuel_gal_current
       : fuelTankCapacity > 0
         ? fuelTankCapacity * ((consumables.fuel_percent_current ?? 100) / 100)
         : 0;
+  const currentWaterGallons =
+    consumables.water_gal_current ??
+    vehicle.current_water_gal ??
+    vehicle.water_capacity_gal ??
+    fallbacks.waterCapacityGal ??
+    0;
 
   return {
     suspensionLiftInches: Math.max(0, Math.min(10, Math.round(tiresLift?.suspensionLiftInches ?? vehicle.suspension_lift_inches ?? 0))),
@@ -109,7 +133,7 @@ function buildAdvancedSetupDraft(vehicle: Vehicle | null): FleetAdvancedSpecsDra
       tiresLift?.tireSizeInches && tiresLift.tireSizeInches > 0
         ? tiresLift.tireSizeInches
         : vehicle.tire_size_inches ?? null,
-    waterGallons: formatFleetAdvancedGallonsInput(consumables.water_gal_current ?? vehicle.current_water_gal ?? 0),
+    waterGallons: formatFleetAdvancedGallonsInput(currentWaterGallons),
     fuelGallons: formatFleetAdvancedGallonsInput(currentFuelGallons),
   };
 }
@@ -282,6 +306,7 @@ export default function FleetVehicleProfileModal({
   const [advancedErrors, setAdvancedErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const profileGateShake = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
@@ -297,8 +322,18 @@ export default function FleetVehicleProfileModal({
   }, [vehicle, visible]);
 
   const suggestion = useMemo(() => resolveFleetVehicleProfileSuggestion(draft), [draft]);
+  const prefillOptions = useMemo(() => resolveFleetVehicleProfilePrefillOptions(draft), [draft]);
   const validationErrors = useMemo(() => validateFleetVehicleProfileDraft(draft), [draft]);
   const payloadRemaining = useMemo(() => calculateConfirmedPayloadRemaining(draft), [draft]);
+  const suggestedFuelTankCapacityGal = suggestion.oemReference?.specs.fuel_tank_capacity_gal ?? null;
+  const suggestedWaterCapacityGal = vehicle?.water_capacity_gal ?? null;
+  const advancedSpecFallbacks = useMemo(
+    () => ({
+      fuelTankCapacityGal: suggestedFuelTankCapacityGal,
+      waterCapacityGal: suggestedWaterCapacityGal,
+    }),
+    [suggestedFuelTankCapacityGal, suggestedWaterCapacityGal],
+  );
 
   const updateDraft = useCallback((key: keyof FleetVehicleProfileDraft, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -306,14 +341,32 @@ export default function FleetVehicleProfileModal({
 
   const updateAdvancedSetupDraft = useCallback((patch: Partial<FleetAdvancedSpecsDraft>) => {
     setAdvancedErrors([]);
-    setAdvancedDraft((current) => ({ ...(current ?? buildAdvancedSetupDraft(vehicle)), ...patch }));
-  }, [vehicle]);
+    setAdvancedDraft((current) => ({ ...(current ?? buildAdvancedSetupDraft(vehicle, advancedSpecFallbacks)), ...patch }));
+  }, [advancedSpecFallbacks, vehicle]);
+
+  const triggerProfileGateShake = useCallback(() => {
+    profileGateShake.stopAnimation();
+    profileGateShake.setValue(0);
+    Animated.sequence([
+      Animated.timing(profileGateShake, { toValue: 6, duration: 42, useNativeDriver: true }),
+      Animated.timing(profileGateShake, { toValue: -6, duration: 42, useNativeDriver: true }),
+      Animated.timing(profileGateShake, { toValue: 4, duration: 42, useNativeDriver: true }),
+      Animated.timing(profileGateShake, { toValue: -4, duration: 42, useNativeDriver: true }),
+      Animated.timing(profileGateShake, { toValue: 0, duration: 42, useNativeDriver: true }),
+    ]).start();
+  }, [profileGateShake]);
 
   const openAdvancedSpecs = useCallback(() => {
-    setAdvancedDraft(buildAdvancedSetupDraft(vehicle));
+    if (validationErrors.length > 0) {
+      triggerProfileGateShake();
+      showToast?.(validationErrors[0]);
+      return;
+    }
+
+    setAdvancedDraft(buildAdvancedSetupDraft(vehicle, advancedSpecFallbacks));
     setAdvancedErrors([]);
     setAdvancedVisible(true);
-  }, [vehicle]);
+  }, [advancedSpecFallbacks, showToast, triggerProfileGateShake, validationErrors, vehicle]);
 
   const closeAdvancedWithoutSaving = useCallback(() => {
     setAdvancedDraft(null);
@@ -326,11 +379,12 @@ export default function FleetVehicleProfileModal({
       ...current,
       baseNetWeight: suggestion.baseNetWeight ? String(Math.round(suggestion.baseNetWeight.lbs)) : current.baseNetWeight,
       gvwr: suggestion.gvwr ? String(Math.round(suggestion.gvwr.lbs)) : current.gvwr,
+      vehicleType: suggestion.oemReference?.vehicleType ?? current.vehicleType,
     }));
-  }, [suggestion.baseNetWeight, suggestion.gvwr]);
+  }, [suggestion.baseNetWeight, suggestion.gvwr, suggestion.oemReference]);
 
-  const handlePreset = useCallback((presetId: string) => {
-    setDraft((current) => applyFleetProfilePreset(current, presetId));
+  const handlePrefillOption = useCallback((optionId: string) => {
+    setDraft((current) => applyFleetProfilePrefillOption(current, optionId));
   }, []);
 
   const handleClose = useCallback(() => {
@@ -345,14 +399,18 @@ export default function FleetVehicleProfileModal({
     }
 
     const year = parseFleetProfileNumber(draft.year);
-    const baseWeight = parseFleetProfileNumber(draft.baseNetWeight) ?? 0;
-    const gvwr = parseFleetProfileNumber(draft.gvwr) ?? 0;
+    const oemReference = suggestion.oemReference;
+    const oemSpecs = oemReference?.specs ?? null;
+    const resolvedVehicleType = oemReference?.vehicleType ?? draft.vehicleType ?? 'vehicle';
+    const baseWeight = parseFleetProfileNumber(draft.baseNetWeight) ?? suggestion.baseNetWeight?.lbs ?? 0;
+    const gvwr = parseFleetProfileNumber(draft.gvwr) ?? suggestion.gvwr?.lbs ?? 0;
     const fuelType: FuelType =
       draft.engine.toLowerCase().includes('cummins') || draft.engine.toLowerCase().includes('diesel')
+        || oemSpecs?.fuel_type === 'diesel'
         ? 'diesel'
         : 'gas';
     const wizardConfig = {
-      vehicle_type: draft.vehicleType || 'truck',
+      vehicle_type: resolvedVehicleType,
       trim: draft.trim.trim(),
       engine: draft.engine.trim(),
       drivetrain: draft.drivetrain.trim(),
@@ -361,6 +419,10 @@ export default function FleetVehicleProfileModal({
       bed_length: draft.bed.trim(),
       weight_source: suggestion.baseNetWeight?.source ?? 'user_estimate',
       weight_confidence: suggestion.baseNetWeight?.confidence ?? 62,
+      oem_reference_id: oemReference?.id ?? null,
+      oem_reference_label: oemReference?.label ?? null,
+      oem_reference_status: suggestion.oemMatchStatus,
+      oem_reference_confidence: oemReference?.confidence ?? null,
     };
     const identity = {
       name: draft.nickname.trim(),
@@ -372,7 +434,7 @@ export default function FleetVehicleProfileModal({
     const result = vehicle
       ? await vehicleStore.update(vehicle.id, {
           ...identity,
-          type: draft.vehicleType || 'truck',
+          type: resolvedVehicleType,
           wizard_config: wizardConfig,
         } as any, userId)
       : await vehicleStore.create(identity, userId);
@@ -386,15 +448,38 @@ export default function FleetVehicleProfileModal({
       };
     }
 
+    const savedExistingSpec = vehicleSpecStore.get(savedVehicle.id);
+    const resolvedFuelTankCapacityGal =
+      savedExistingSpec?.fuel_tank_capacity_gal && savedExistingSpec.fuel_tank_capacity_gal > 0
+        ? savedExistingSpec.fuel_tank_capacity_gal
+        : oemSpecs?.fuel_tank_capacity_gal ?? savedVehicle.fuel_tank_capacity_gal ?? null;
+    const resolvedWaterCapacityGal = savedVehicle.water_capacity_gal ?? null;
+
     vehicleSpecStore.update(savedVehicle.id, {
       gvwr_lb: gvwr,
       base_weight_lb: baseWeight,
-      fuel_tank_capacity_gal: vehicleSpecStore.get(savedVehicle.id)?.fuel_tank_capacity_gal ?? 0,
+      fuel_tank_capacity_gal: resolvedFuelTankCapacityGal ?? 0,
       fuel_type: fuelType,
       front_base_weight_lb: parseFleetProfileNumber(draft.frontBaseWeight) ?? undefined,
       rear_base_weight_lb: parseFleetProfileNumber(draft.rearBaseWeight) ?? undefined,
       front_gawr_lb: parseFleetProfileNumber(draft.frontGawr) ?? undefined,
       rear_gawr_lb: parseFleetProfileNumber(draft.rearGawr) ?? undefined,
+      payload_capacity_lb: oemSpecs?.payload_capacity_lb ?? (gvwr > 0 && baseWeight > 0 ? gvwr - baseWeight : null),
+      ground_clearance_inches: oemSpecs?.ground_clearance_inches ?? vehicleSpecStore.get(savedVehicle.id)?.ground_clearance_inches,
+      wheelbase_in: oemSpecs?.wheelbase_in ?? vehicleSpecStore.get(savedVehicle.id)?.wheelbase_in,
+      overall_length_in: oemSpecs?.overall_length_in ?? vehicleSpecStore.get(savedVehicle.id)?.overall_length_in,
+      overall_width_in: oemSpecs?.overall_width_in ?? vehicleSpecStore.get(savedVehicle.id)?.overall_width_in,
+      overall_height_in: oemSpecs?.overall_height_in ?? vehicleSpecStore.get(savedVehicle.id)?.overall_height_in,
+      track_width_front_in: oemSpecs?.track_width_front_in ?? vehicleSpecStore.get(savedVehicle.id)?.track_width_front_in,
+      track_width_rear_in: oemSpecs?.track_width_rear_in ?? vehicleSpecStore.get(savedVehicle.id)?.track_width_rear_in,
+      approach_angle_deg: oemSpecs?.approach_angle_deg ?? vehicleSpecStore.get(savedVehicle.id)?.approach_angle_deg,
+      breakover_angle_deg: oemSpecs?.breakover_angle_deg ?? vehicleSpecStore.get(savedVehicle.id)?.breakover_angle_deg,
+      departure_angle_deg: oemSpecs?.departure_angle_deg ?? vehicleSpecStore.get(savedVehicle.id)?.departure_angle_deg,
+      turning_diameter_ft: oemSpecs?.turning_diameter_ft ?? vehicleSpecStore.get(savedVehicle.id)?.turning_diameter_ft,
+      oem_reference_id: oemReference?.id ?? null,
+      oem_reference_label: oemReference?.label ?? null,
+      oem_reference_confidence: oemReference?.confidence ?? null,
+      oem_reference_notes: oemReference?.notes ?? null,
       trim: draft.trim.trim(),
       engine: draft.engine.trim(),
       drivetrain: draft.drivetrain.trim(),
@@ -403,15 +488,28 @@ export default function FleetVehicleProfileModal({
     } as any);
 
     const persisted = await vehicleStore.update(savedVehicle.id, {
-      type: draft.vehicleType || 'truck',
+      type: resolvedVehicleType,
       wizard_config: wizardConfig,
       base_weight_lb: baseWeight || null,
       gvwr_lb: gvwr || null,
+      fuel_tank_capacity_gal: resolvedFuelTankCapacityGal,
+      water_capacity_gal: resolvedWaterCapacityGal,
       fuel_type: fuelType,
       front_base_weight_lb: parseFleetProfileNumber(draft.frontBaseWeight),
       rear_base_weight_lb: parseFleetProfileNumber(draft.rearBaseWeight),
       front_gawr_lb: parseFleetProfileNumber(draft.frontGawr),
       rear_gawr_lb: parseFleetProfileNumber(draft.rearGawr),
+      ground_clearance_inches: oemSpecs?.ground_clearance_inches ?? (savedVehicle as any).ground_clearance_inches ?? null,
+      wheelbase_in: oemSpecs?.wheelbase_in ?? (savedVehicle as any).wheelbase_in ?? null,
+      overall_length_in: oemSpecs?.overall_length_in ?? (savedVehicle as any).overall_length_in ?? null,
+      overall_width_in: oemSpecs?.overall_width_in ?? (savedVehicle as any).overall_width_in ?? null,
+      overall_height_in: oemSpecs?.overall_height_in ?? (savedVehicle as any).overall_height_in ?? null,
+      track_width_front_in: oemSpecs?.track_width_front_in ?? (savedVehicle as any).track_width_front_in ?? null,
+      track_width_rear_in: oemSpecs?.track_width_rear_in ?? (savedVehicle as any).track_width_rear_in ?? null,
+      approach_angle_deg: oemSpecs?.approach_angle_deg ?? (savedVehicle as any).approach_angle_deg ?? null,
+      breakover_angle_deg: oemSpecs?.breakover_angle_deg ?? (savedVehicle as any).breakover_angle_deg ?? null,
+      departure_angle_deg: oemSpecs?.departure_angle_deg ?? (savedVehicle as any).departure_angle_deg ?? null,
+      turning_diameter_ft: oemSpecs?.turning_diameter_ft ?? (savedVehicle as any).turning_diameter_ft ?? null,
     } as any, userId);
 
     if (created) {
@@ -430,7 +528,7 @@ export default function FleetVehicleProfileModal({
       created,
       errors: [],
     };
-  }, [draft, suggestion.baseNetWeight, userId, vehicle]);
+  }, [draft, suggestion.baseNetWeight, suggestion.gvwr, suggestion.oemMatchStatus, suggestion.oemReference, userId, vehicle]);
 
   const handleSave = useCallback(async () => {
     if (savingRef.current) return;
@@ -508,6 +606,7 @@ export default function FleetVehicleProfileModal({
         suspension_lift_inches: normalized.suspensionLiftInches,
         is_leveled: normalized.isLeveled,
         front_level_inches: frontLevelInches,
+        water_capacity_gal: waterGallons > 0 ? waterGallons : targetVehicle.water_capacity_gal ?? null,
         current_water_gal: waterGallons,
         current_fuel_percent: fuelPercent ?? null,
         fuel_type: fuelType,
@@ -526,7 +625,7 @@ export default function FleetVehicleProfileModal({
     }
   }, [advancedDraft, handleClose, onSaved, saveVehicleProfileDraft, showToast, userId, vehicle]);
 
-  const activeAdvancedDraft = advancedDraft ?? buildAdvancedSetupDraft(vehicle);
+  const activeAdvancedDraft = advancedDraft ?? buildAdvancedSetupDraft(vehicle, advancedSpecFallbacks);
   const advancedFuelType = resolveFuelType(vehicle);
   const advancedWaterGallons = parseFleetAdvancedNonNegativeDecimal(activeAdvancedDraft.waterGallons);
   const advancedFuelGallons = parseFleetAdvancedNonNegativeDecimal(activeAdvancedDraft.fuelGallons);
@@ -546,7 +645,8 @@ export default function FleetVehicleProfileModal({
         icon="car-outline"
         overlayClass="workflow"
         maxWidth={980}
-        minHeightFraction={0.86}
+        maxHeightFraction={1}
+        minHeightFraction={1}
         scrollable
         dismissOnBackdrop={false}
         allowSwipeDismiss={false}
@@ -565,7 +665,7 @@ export default function FleetVehicleProfileModal({
           </ECSOverlayFooter>
         }
       >
-        <View style={styles.stack}>
+        <Animated.View style={[styles.stack, { transform: [{ translateX: profileGateShake }] }]}>
           <ECSCard variant="primary" style={styles.guidedCard}>
             <View style={styles.guidedHeader}>
               <View style={styles.guidedIcon}>
@@ -573,16 +673,19 @@ export default function FleetVehicleProfileModal({
               </View>
               <View style={styles.guidedCopy}>
                 <Text style={styles.title}>Start with what you know</Text>
-                <Text style={styles.copy}>Choose a preset or enter year, make, model, trim, engine, and drivetrain. ECS will prefill likely weights for confirmation.</Text>
+                <Text style={styles.copy}>Choose year, make, model, trim, engine, or drivetrain. Once the year, make, and model are entered, ECS will pre-fill the likely weights for confirmation.</Text>
               </View>
             </View>
-            <View style={styles.presetRow}>
-              {FLEET_PROFILE_PRESETS.map((preset) => (
-                <TouchableOpacity key={preset.id} style={styles.presetChip} onPress={() => handlePreset(preset.id)}>
-                  <Text style={styles.presetText}>{preset.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {prefillOptions.length > 0 ? (
+              <View style={styles.presetRow}>
+                {prefillOptions.map((option) => (
+                  <TouchableOpacity key={option.id} style={styles.presetChip} onPress={() => handlePrefillOption(option.id)}>
+                    <Text style={styles.presetText}>{option.label}</Text>
+                    <Text style={styles.presetDetail}>{option.detail}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
           </ECSCard>
 
           <ECSPanel variant="secondary" style={styles.fieldPanel}>
@@ -621,6 +724,49 @@ export default function FleetVehicleProfileModal({
                 <Text style={styles.specValue}>{formatLbs(payloadRemaining)}</Text>
               </View>
             </View>
+            {suggestion.oemReference ? (
+              <View style={styles.oemReferenceCard}>
+                <View style={styles.oemReferenceHeader}>
+                  <View style={styles.oemReferenceTitleBlock}>
+                    <Text style={styles.fieldLabel}>OEM REFERENCE</Text>
+                    <Text style={styles.oemReferenceTitle}>{suggestion.oemReference.label}</Text>
+                  </View>
+                  <ECSBadge label={`${suggestion.oemReference.confidence}% REF`} tone="ready" compact />
+                </View>
+                <Text style={styles.copy}>{suggestion.oemReference.notes}</Text>
+                <View style={styles.oemSpecGrid}>
+                  <View style={styles.oemSpecTile}>
+                    <Text style={styles.fieldLabel}>FUEL</Text>
+                    <Text style={styles.oemSpecValue}>
+                      {formatSpecNumber(suggestion.oemReference.specs.fuel_tank_capacity_gal, 'gal')}
+                    </Text>
+                  </View>
+                  <View style={styles.oemSpecTile}>
+                    <Text style={styles.fieldLabel}>CLEARANCE</Text>
+                    <Text style={styles.oemSpecValue}>
+                      {formatSpecNumber(suggestion.oemReference.specs.ground_clearance_inches, 'in')}
+                    </Text>
+                  </View>
+                  <View style={styles.oemSpecTile}>
+                    <Text style={styles.fieldLabel}>WHEELBASE</Text>
+                    <Text style={styles.oemSpecValue}>
+                      {formatSpecNumber(suggestion.oemReference.specs.wheelbase_in, 'in')}
+                    </Text>
+                  </View>
+                  <View style={styles.oemSpecTile}>
+                    <Text style={styles.fieldLabel}>WIDTH</Text>
+                    <Text style={styles.oemSpecValue}>
+                      {formatSpecNumber(suggestion.oemReference.specs.overall_width_in, 'in')}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.oemReferenceCard}>
+                <Text style={styles.fieldLabel}>OEM REFERENCE</Text>
+                <Text style={styles.copy}>{suggestion.oemMessage}</Text>
+              </View>
+            )}
             <View style={styles.confirmActions}>
               <ECSButton label="Use ECS Estimate" icon="flash-outline" variant="secondary" size="compact" onPress={applySuggestedSpecs} grow />
               <ECSButton label="Advanced Specs" icon="options-outline" variant="tertiary" size="compact" onPress={openAdvancedSpecs} grow />
@@ -633,7 +779,7 @@ export default function FleetVehicleProfileModal({
               </View>
             ) : null}
           </ECSPanel>
-        </View>
+        </Animated.View>
       </ECSModalShell>
 
       <ECSModalShell
@@ -646,6 +792,9 @@ export default function FleetVehicleProfileModal({
         stackBehavior="allow-stack"
         overlayClass="editor"
         maxWidth={720}
+        maxHeightFraction={1}
+        minHeightFraction={1}
+        showHandle={false}
         scrollable
         footer={
           <ECSOverlayFooter>
@@ -784,16 +933,23 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   presetChip: {
+    flexGrow: 1,
+    flexBasis: 220,
     borderWidth: 1,
     borderColor: ECS_STATUS.tone.selected.border,
-    borderRadius: 999,
+    borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 9,
+    gap: 3,
     backgroundColor: ECS_STATUS.tone.selected.background,
   },
   presetText: {
     ...ECS_TEXT.chip,
     color: TACTICAL.amber,
+  },
+  presetDetail: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
   },
   fieldPanel: {
     gap: 10,
@@ -859,6 +1015,47 @@ const styles = StyleSheet.create({
   specValue: {
     ...ECS_TEXT.statValue,
     marginTop: 4,
+  },
+  oemReferenceCard: {
+    borderWidth: 1,
+    borderColor: ECS_STATUS.tone.selected.border,
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+    backgroundColor: ECS_STATUS.tone.selected.background,
+  },
+  oemReferenceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  oemReferenceTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  oemReferenceTitle: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+    marginTop: 2,
+  },
+  oemSpecGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  oemSpecTile: {
+    flexGrow: 1,
+    flexBasis: 118,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 10,
+    padding: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  oemSpecValue: {
+    ...ECS_TEXT.statValue,
+    fontSize: 14,
+    marginTop: 3,
   },
   confirmActions: {
     flexDirection: 'row',

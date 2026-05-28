@@ -140,14 +140,18 @@ export function buildEcsBriefProductionReadinessResult(options = {}) {
     ),
     check(
       'command_brief_surface_is_readiness_grounded',
-      'Command Brief surfaces readiness, source state, recommended actions, and avoids obsolete activity log or overconfident safety copy.',
+      'Command Brief surfaces readiness, source state, collapsed intelligence detail, and avoids obsolete activity log or overconfident safety copy.',
       commandBrief.includes('Command Brief') &&
         commandBrief.includes('ECS Expedition Readiness') &&
         commandBrief.includes('Go / Caution / Hold Decision') &&
         commandBrief.includes('Route Intelligence') &&
         commandBrief.includes('Offline Preparedness') &&
         commandBrief.includes('Communications / Signal Confidence') &&
-        commandBrief.includes('Recommended Actions') &&
+        commandBrief.includes('CollapsibleBriefSection') &&
+        commandBrief.includes('accessibilityState={{ expanded }}') &&
+        !commandBrief.includes('Expedition Readiness Summary') &&
+        !commandBrief.includes('Recommended Actions') &&
+        !commandBrief.includes('Watch Items') &&
         commandBrief.includes('useCurrentExpeditionReadiness') &&
         commandBrief.includes('useReadinessDecision') &&
         commandBrief.includes('Copy packet') &&

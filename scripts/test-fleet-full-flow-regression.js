@@ -68,8 +68,9 @@ const vehicleTwin = source(vehicleTwinPath);
 includes(fleetTab, '<FleetVehicleProfileModal', 'Fleet tab should mount the vehicle profile modal.');
 includes(fleetTab, '<FleetBuildLoadoutModal', 'Fleet tab should mount the Build & Loadout modal.');
 includes(fleetTab, '<WeightDashboardPanel', 'Fleet tab should mount Weight Summary from the vehicle card.');
-includes(fleetTab, "import { FleetIcon } from '../../components/DockIcons';", 'Fleet vehicle card should use the ECS truck/off-road FleetIcon.');
-includes(fleetTab, '<FleetVehicleCardIcon active={isActive} />', 'Fleet vehicle card should render the ECS truck/off-road icon wrapper.');
+notIncludes(fleetTab, "import { FleetIcon } from '../../components/DockIcons';", 'Fleet vehicle card should not use the old custom overland FleetIcon.');
+includes(fleetTab, 'name="car-sport-outline"', 'Fleet vehicle card should use the standard ECS icon glyph.');
+includes(fleetTab, '<FleetVehicleCardIcon active={isActive} />', 'Fleet vehicle card should render the standard ECS icon wrapper.');
 notIncludes(fleetTab, 'name={model.iconName as any}', 'Fleet vehicle card should not render the generic car icon resolver.');
 for (const cardAction of ['Vehicle Profile', 'Build & Loadout', 'Weight Summary']) {
   includes(fleetTab, `label="${cardAction}"`, `Vehicle card should expose ${cardAction}.`);
@@ -99,16 +100,26 @@ for (const hiddenMetricHelper of [
 }
 
 includes(profileModal, 'title="Advanced Specs"', 'Vehicle profile should expose Advanced Specs.');
-includes(profileModal, 'setAdvancedDraft(buildAdvancedSetupDraft(vehicle))', 'Reopening Advanced Specs should hydrate from saved values.');
+includes(profileModal, 'setAdvancedDraft(buildAdvancedSetupDraft(vehicle, advancedSpecFallbacks))', 'Reopening Advanced Specs should hydrate from saved and suggested values.');
 includes(profileModal, 'onClose={closeAdvancedWithoutSaving}', 'Advanced Specs X should close through the no-save handler.');
 includes(profileModal, 'saveVehicleProfileDraft', 'Advanced Specs Done should save or create the vehicle profile before advanced values.');
 includes(profileModal, 'const targetVehicle = profileResult.vehicle', 'Advanced Specs Done should persist against the saved vehicle record.');
 includes(profileModal, 'tiresLiftStore.set(targetVehicle.id', 'Advanced Specs Done should persist tires/lift.');
 includes(profileModal, 'consumablesStore.setWaterGal(targetVehicle.id, waterGallons', 'Advanced Specs Done should persist water gallons.');
 includes(profileModal, 'consumablesStore.setFuelGal(targetVehicle.id, fuelGallons', 'Advanced Specs Done should persist fuel gallons.');
+includes(profileModal, 'fuelTankCapacityGal: suggestedFuelTankCapacityGal', 'Advanced Specs should prefill fuel gallons from OEM suggestions before the user edits them.');
+includes(profileModal, 'vehicle.water_capacity_gal ??', 'Advanced Specs should prefill water gallons from stored water capacity when available.');
+includes(profileModal, 'resolvedFuelTankCapacityGal', 'Fleet profile save should mirror OEM fuel capacity into vehicle specs while preserving user overrides.');
 includes(profileModal, 'vehicleSpecStore.update(targetVehicle.id', 'Advanced Specs Done should update canonical spec fields.');
 includes(profileModal, 'if (profileResult.created)', 'First-vehicle Advanced Specs Done should advance out of the profile flow after saving.');
 includes(profileModal, 'handleClose();', 'First-vehicle Advanced Specs Done should close the setup modal after a successful save.');
+includes(profileModal, 'title="Advanced Specs"', 'Advanced Specs modal should remain discoverable.');
+includes(profileModal, 'showHandle={false}', 'Advanced Specs modal should use the full-height body sheet treatment.');
+includes(
+  fleetTab,
+  'resourceProfile.fuelTankCapacityGal ?? resourceProfile.currentFuelGallons ?? 0',
+  'Fleet readiness should accept manually entered Advanced Specs fuel gallons when tank capacity metadata is unavailable.',
+);
 
 includes(buildLoadoutModal, "accessoryId === 'custom_accessory'", 'Build & Loadout should recognize custom compartments.');
 includes(buildLoadoutModal, 'label="Add Item"', 'Custom compartment should expose Add Item.');

@@ -1,5 +1,7 @@
 import { ecsProviderRegistry } from './EcsProviderRegistry';
 import type { IEcsPowerProvider } from './IEcsPowerProvider';
+import type { BluProviderId } from './BluTypes';
+import { getBluestackParserDecision } from './bluestack';
 import { vehicleTelemetryDeviceRegistry } from '../src/vehicle-telemetry/VehicleTelemetryDeviceRegistry';
 import { vehicleTelemetryService } from '../src/vehicle-telemetry/VehicleTelemetryService';
 import { obd2Adapter } from '../src/vehicle-telemetry/OBD2Adapter';
@@ -10,11 +12,13 @@ type PowerProviderModule = {
 
 const POWER_PROVIDER_EXPORTS: {
   label: string;
+  providerId: BluProviderId;
   exportName: string;
   loadModule: () => PowerProviderModule;
 }[] = [
   {
     label: 'EcoFlowBluAdapter',
+    providerId: 'ecoflow',
     exportName: 'ecoFlowBluAdapter',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -22,59 +26,75 @@ const POWER_PROVIDER_EXPORTS: {
     },
   },
   {
-    label: 'BluettiBluAdapter',
-    exportName: 'bluettiBluAdapter',
+    label: 'BluettiPowerProvider',
+    providerId: 'bluetti',
+    exportName: 'bluettiPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./BluettiBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'AnkerSolixBluAdapter',
-    exportName: 'ankerSolixBluAdapter',
+    label: 'AnkerSolixPowerProvider',
+    providerId: 'anker_solix',
+    exportName: 'ankerSolixPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./AnkerSolixBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'JackeryBluAdapter',
-    exportName: 'jackeryBluAdapter',
+    label: 'JackeryPowerProvider',
+    providerId: 'jackery',
+    exportName: 'jackeryPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./JackeryBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'GoalZeroBluAdapter',
-    exportName: 'goalZeroBluAdapter',
+    label: 'GoalZeroPowerProvider',
+    providerId: 'goal_zero',
+    exportName: 'goalZeroPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./GoalZeroBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'RenogyBluAdapter',
-    exportName: 'renogyBluAdapter',
+    label: 'RenogyPowerProvider',
+    providerId: 'renogy',
+    exportName: 'renogyPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./RenogyBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'RedarcBluAdapter',
-    exportName: 'redarcBluAdapter',
+    label: 'RedarcPowerProvider',
+    providerId: 'redarc',
+    exportName: 'redarcPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./RedarcBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {
-    label: 'DakotaLithiumBluAdapter',
-    exportName: 'dakotaLithiumBluAdapter',
+    label: 'DakotaLithiumPowerProvider',
+    providerId: 'dakota_lithium',
+    exportName: 'dakotaLithiumPowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./DakotaLithiumBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
+    },
+  },
+  {
+    label: 'VictronPowerProvider',
+    providerId: 'victron',
+    exportName: 'victronPowerProvider',
+    loadModule: () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
 ];
@@ -119,6 +139,14 @@ function resolvePowerProviders(): IEcsPowerProvider[] {
   const resolved: IEcsPowerProvider[] = [];
 
   for (const entry of POWER_PROVIDER_EXPORTS) {
+    const parserDecision = getBluestackParserDecision(entry.providerId);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      if (ecsProviderRegistry.isRegistered(entry.providerId)) {
+        ecsProviderRegistry.unregisterProvider(entry.providerId);
+      }
+      continue;
+    }
+
     const provider = loadPowerProvider(entry.label, entry.exportName, entry.loadModule);
     if (!provider) continue;
     resolved.push(provider);

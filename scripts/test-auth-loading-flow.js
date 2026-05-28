@@ -91,6 +91,21 @@ assertIncludes(
 );
 assertIncludes(
   appContextSource,
+  'const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;',
+  'Manual sign-in requests should have a bounded timeout so the auth-screen loading handoff cannot stall forever.',
+);
+assertIncludes(
+  appContextSource,
+  'await withAuthRequestTimeout(\n          \'sign_in_request\',\n          supabase.auth.signInWithPassword({ email, password }),\n          SIGN_IN_REQUEST_TIMEOUT_MS,\n        )',
+  'Supabase password sign-in should be wrapped by the bounded auth request timeout.',
+);
+assertIncludes(
+  appContextSource,
+  "reason: 'auth_request_timeout'",
+  'Timed-out sign-in requests should clear pending auth state and report a recoverable auth timeout.',
+);
+assertIncludes(
+  appContextSource,
   'let connectivityIntelInitializedForAppSession = false;',
   'Connectivity Intelligence initialization should have an app-session singleton guard.',
 );
@@ -333,8 +348,18 @@ assertIncludes(
 );
 assertIncludes(
   layoutSource,
-  "if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {\n    return <LoadingTransitionVideo />;\n  }",
-  'Root authenticated redirects should render the loading video while auth-screen redirects keep the shell stack mounted.',
+  'const authScreenLoadingHandoffActive =\n    !isResetCompletionScreen &&\n    inAuthScreen &&',
+  'AuthGate should cover manual login/auth screens with the loading handoff once sign-in starts.',
+);
+assertIncludes(
+  layoutSource,
+  "authPhase === 'signing_in' ||\n      postAuthBootstrapPending ||\n      postAuthRedirectHoldingScreenActive",
+  'Auth-screen handoff loading should cover sign-in, post-auth bootstrap, and final redirect waits.',
+);
+assertIncludes(
+  layoutSource,
+  "(postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||\n    authScreenLoadingHandoffActive",
+  'Root and auth-screen authenticated redirects should render the loading video while the final shell route becomes ready.',
 );
 assertIncludes(
   redirectEffect,

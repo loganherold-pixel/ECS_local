@@ -2,7 +2,11 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { SAMPLE_ESTABLISHED_CAMPSITES } from '../../lib/map/establishedCampsiteSources';
-import { toEstablishedCampsiteFeatureCollection } from '../../lib/map/establishedCampsiteGeojsonAdapter';
+import {
+  ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS,
+  dedupeEstablishedCampsitesForMap,
+  toEstablishedCampsiteFeatureCollection,
+} from '../../lib/map/establishedCampsiteGeojsonAdapter';
 import {
   DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES,
   findEstablishedCampsitesNearRoute,
@@ -37,6 +41,52 @@ assert.strictEqual(collection.features.length, SAMPLE_ESTABLISHED_CAMPSITES.leng
 assert.ok(
   collection.features.every((feature) => feature.geometry.type === 'Point' && feature.properties.requiresVerification === true),
   'Established campsite GeoJSON should contain verification-required point features.',
+);
+
+const duplicateCampgroundPins = dedupeEstablishedCampsitesForMap([
+  {
+    ...SAMPLE_ESTABLISHED_CAMPSITES[0],
+    id: 'cluster-a',
+    name: 'Pine Basin Campground',
+    latitude: 37.72,
+    longitude: -119.62,
+    sourceConfidence: 80,
+  },
+  {
+    ...SAMPLE_ESTABLISHED_CAMPSITES[0],
+    id: 'cluster-b',
+    name: 'Pine Basin Site Loop',
+    latitude: 37.7208,
+    longitude: -119.6208,
+    sourceConfidence: 92,
+  },
+  {
+    ...SAMPLE_ESTABLISHED_CAMPSITES[0],
+    id: 'far-campground',
+    name: 'Far Meadow Campground',
+    latitude: 37.75,
+    longitude: -119.65,
+  },
+]);
+assert.strictEqual(ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS, 200);
+assert.strictEqual(
+  duplicateCampgroundPins.length,
+  2,
+  'Established campground pins within 200 meters should collapse to one visible map pin.',
+);
+assert.strictEqual(
+  duplicateCampgroundPins[0].id,
+  'cluster-b',
+  'Collapsed established campground pin should keep the strongest source record for details.',
+);
+assert.strictEqual(
+  duplicateCampgroundPins[0].nearbyCampgroundCount,
+  2,
+  'Collapsed established campground pin should retain nearby duplicate context.',
+);
+assert.ok(
+  duplicateCampgroundPins[0].latitude > 37.72 && duplicateCampgroundPins[0].latitude < 37.7208,
+  'Collapsed established campground pin should be placed at the center of nearby duplicate pins.',
 );
 
 const nearRoute = findEstablishedCampsitesNearRoute({
@@ -79,6 +129,7 @@ assert.ok(
   'Availability, fees, seasons, and restrictions may change. Verify current details with the campground operator before travel.',
   'Campground type',
   'Managing agency',
+  'Navigate',
   'formatCampgroundAvailabilityLabel',
 ].forEach((copy) => {
   assert.ok(sheetSource.includes(copy), `Established campsite sheet missing copy: ${copy}`);
@@ -87,12 +138,15 @@ assert.ok(
 [
   'Established Campgrounds Near Route',
   'View on map',
-  'paid',
-  'first-come',
-  'unknown',
 ].forEach((copy) => {
   assert.ok(routeSummarySource.includes(copy), `Established campsite route summary missing copy: ${copy}`);
 });
+assert.ok(
+  !routeSummarySource.includes('badgeLabel') &&
+    !routeSummarySource.includes('badgeStack') &&
+    !routeSummarySource.includes('badgeText'),
+  'Established campsite route summary should leave room for longer names by omitting fee/reservation badges.',
+);
 
 [
   'EstablishedCampsiteSource',
@@ -212,10 +266,10 @@ assert.ok(
 );
 
 assert.ok(
-  routeSearchSource.includes('DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES = 10') &&
+  routeSearchSource.includes('DEFAULT_ESTABLISHED_CAMPSITE_ROUTE_CORRIDOR_MILES = 5') &&
     routeSearchSource.includes('distancePointToRouteMiles') &&
     routeSearchSource.includes('getReservationRank') &&
-    routeSearchSource.includes('getFeeRank') &&
+    routeSearchSource.includes('MAX_ESTABLISHED_CAMPSITE_ROUTE_ANALYSIS_POINTS') &&
     routeSearchSource.includes('getSourceReliabilityRank'),
   'Established campsite route summary should use configurable corridor distance and explicit sorting ranks.',
 );

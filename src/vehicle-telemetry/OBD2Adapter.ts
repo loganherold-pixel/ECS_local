@@ -49,6 +49,7 @@ import {
   isTelemetryScanThrottleActive,
   mapObdStateToTelemetrySourceStatus,
   normalizeTelemetryScanDurationMs,
+  TELEMETRY_SCAN_DEFAULT_DURATION_MS,
   TELEMETRY_SCAN_THROTTLE_MS,
   type TelemetryScanTrigger,
   type TelemetrySourceStatus,
@@ -58,6 +59,20 @@ import {
   classifyBluetoothDiagnosticSource,
   recordBluetoothDiagnosticEvent,
 } from '../../lib/bluetoothDiagnostics';
+import {
+  bluLog,
+  bluLogThrottled,
+  buildBluConnectionAttemptLogDetails,
+  buildBluDiscoveryLogDetails,
+  buildBluTelemetryLogDetails,
+  buildBluTimeoutLogDetails,
+} from '../../lib/bluDiagnosticsLog';
+import {
+  BluStreamLifecycle,
+  DEFAULT_FIRST_PACKET_TIMEOUT_MS,
+  DEFAULT_STALE_AFTER_MS,
+} from '../../lib/bluStreamLifecycle';
+import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
 
 const TAG = '[OBD2-Adapter]';
 const BT_SCAN_TAG = '[BT_SCAN]';
@@ -178,30 +193,54 @@ function logObd2Warn(message: string, details?: Record<string, unknown>): void {
   ecsLog.warn('TELEMETRY', `[OBD2] ${message}`, details);
 }
 
+function isBluTimeoutMessage(message: string | null | undefined): boolean {
+  return /timeout|timed out|no live|no data|did not receive|stall|unavailable/i.test(String(message ?? ''));
+}
+
 // ═══════════════════════════════════════════════════════════
 // OBD-II DEVICE NAME PATTERNS
 // ═══════════════════════════════════════════════════════════
 
 const OBD2_NAME_PATTERNS: RegExp[] = [
-  /obd/i, /elm\s*327/i, /elm327/i, /v[\-\s]*link/i, /vee\s*peak/i, /veepeak/i, /v\s*peak/i,
+  /obd/i, /elm\s*327/i, /elm327/i, /v[\-\s]*link/i, /vee\s*peak/i, /veepeak/i, /ve\s*peak/i, /v\s*peak/i, /\bvpake\b/i,
   /bafx/i, /scan\s*tool/i, /carista/i, /obd\s*link/i, /vgate/i,
   /konnwei/i, /fixd/i, /blue\s*driver/i, /torque/i, /le\s*link/i,
   /viecar/i, /thinkcar/i, /autel/i, /icar/i, /launch/i,
   /ancel/i, /foxwell/i, /innova/i, /autophix/i, /xtool/i,
+  /obd\s*check/i, /\bvp\s*11\b/i, /\bvp11\b/i, /ios\s*v[\-\s]*link/i, /android\s*v[\-\s]*link/i,
+  /car\s*scanner/i, /panlong/i, /micro\s*mechanic/i,
+];
+
+// Common ELM327 BLE adapters, including VeePeak BLE/OBDCheck BLE, often expose a
+// generic UART service instead of an OBD-branded service. These are discovery and
+// transport candidates only; PID telemetry still has to pass the ELM handshake.
+const ELM327_BLE_UART_SERVICE_UUIDS = [
+  '0000ffe0-0000-1000-8000-00805f9b34fb',
+  'ffe0',
+  '0000fff0-0000-1000-8000-00805f9b34fb',
+  'fff0',
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
 ];
 
 const OBD2_SERVICE_UUIDS = [
   '00001101-0000-1000-8000-00805f9b34fb',
   '1101',
   'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+  ...ELM327_BLE_UART_SERVICE_UUIDS,
 ];
 
 const OBD2_CHARACTERISTIC_UUIDS = [
   'ffe1',
+  'ffe2',
   'fff1',
+  'fff2',
   '0000ffe1-0000-1000-8000-00805f9b34fb',
+  '0000ffe2-0000-1000-8000-00805f9b34fb',
   '0000fff1-0000-1000-8000-00805f9b34fb',
+  '0000fff2-0000-1000-8000-00805f9b34fb',
   'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+  '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+  '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
 ];
 
 type OBD2LifecycleEvent =
@@ -294,15 +333,15 @@ const OBD2_STORAGE_KEYS = {
   AUTO_RECONNECT: 'ecs_obd2_auto_reconnect',
 } as const;
 
-const mem: Record<string, string> = {};
+const obd2PersistenceCache = createPersistedKeyValueCache('ecs_obd2_adapter');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
+    return obd2PersistenceCache.get(key);
+  } catch { return obd2PersistenceCache.get(key); }
 }
 
 function sSet(key: string, value: string): void {
@@ -310,8 +349,12 @@ function sSet(key: string, value: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.setItem(key, value);
     }
-    mem[key] = value;
-  } catch { mem[key] = value; }
+    obd2PersistenceCache.set(key, value);
+    void obd2PersistenceCache.flush();
+  } catch {
+    obd2PersistenceCache.set(key, value);
+    void obd2PersistenceCache.flush();
+  }
 }
 
 function sRemove(key: string): void {
@@ -319,8 +362,12 @@ function sRemove(key: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.removeItem(key);
     }
-    delete mem[key];
-  } catch { delete mem[key]; }
+    obd2PersistenceCache.delete(key);
+    void obd2PersistenceCache.flush();
+  } catch {
+    obd2PersistenceCache.delete(key);
+    void obd2PersistenceCache.flush();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -365,6 +412,7 @@ class OBD2Adapter {
   private reconnectAttempt = 0;
   private latestTelemetry: any | null = null;
   private pidPoller: OBD2PIDPoller | null = null;
+  private pidStreamLifecycle: BluStreamLifecycle | null = null;
   private elmTransport: ElmTransport | null = null;
   private pendingElmCommand: PendingElmCommand | null = null;
   private disconnectSubscription: { remove?: () => void } | null = null;
@@ -389,6 +437,7 @@ class OBD2Adapter {
   private backoff: Backoff = createBackoff({ initialDelayMs: 1000, maxDelayMs: 30000 });
   private appStateSubscription: any = null;
   private autoReconnectEnabled = false;
+  private manualDisconnectRequested = false;
   private isDestroyed = false;
 
   /** Phase 2D: Connection health check timer */
@@ -400,6 +449,10 @@ class OBD2Adapter {
   constructor() {
     this.restoreAutoReconnectState();
     this.setupAppStateListener();
+    void obd2PersistenceCache.waitForHydration().then(() => {
+      this.restoreAutoReconnectState();
+      this.notify();
+    }).catch(() => {});
   }
 
   // ── Status ─────────────────────────────────────────────
@@ -595,7 +648,7 @@ class OBD2Adapter {
   // ═══════════════════════════════════════════════════════
 
   async startScan(
-    durationMs: number = 15000,
+    durationMs: number = TELEMETRY_SCAN_DEFAULT_DURATION_MS,
     trigger: TelemetryScanTrigger = 'user_open_tools',
   ): Promise<void> {
     if (this.isDestroyed) {
@@ -683,6 +736,14 @@ class OBD2Adapter {
         durationMs: normalizedDurationMs,
       },
     });
+    bluLog('[BLU_SCAN]', 'obd2_scan_start', {
+      scanId: `obd2:${scanSessionId}`,
+      vendor: 'obd2',
+      durationMs: normalizedDurationMs,
+      trigger,
+      platform: Platform.OS,
+      connectionMode: 'ble',
+    });
 
     if (isBleRuntimeUnsupported()) {
       const msg = getBleRuntimeUnsupportedMessage();
@@ -722,6 +783,13 @@ class OBD2Adapter {
           scanId: `obd2:${scanSessionId}`,
           runtime: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
         },
+      });
+      bluLog('[BLU_SCAN]', 'obd2_scan_runtime_unsupported', {
+        deviceId: 'obd2_scan',
+        vendor: 'obd2',
+        phase: 'scan_readiness',
+        errorCode: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
+        message: msg,
       });
       this.finishScanLifecycle(scanSessionId, 'runtime_unsupported');
       return;
@@ -820,6 +888,13 @@ class OBD2Adapter {
 
     if (!readiness.ok) {
       const msg = readiness.message ?? 'Bluetooth scanner is not ready.';
+      bluLog('[BLU_SCAN]', 'obd2_scan_readiness_blocked', {
+        deviceId: 'obd2_scan',
+        vendor: 'obd2',
+        phase: 'scan_readiness',
+        errorCode: readiness.code,
+        message: msg,
+      });
       this.error = msg;
       this.updateScanDiagnostics({
         lastScanError: msg,
@@ -936,6 +1011,12 @@ class OBD2Adapter {
             logTelemetryScanWarnOnce('Scan callback error', {
               error: error?.message ?? String(error),
             });
+            bluLog('[BLU_SCAN]', 'obd2_scan_callback_error', {
+              deviceId: 'obd2_scan',
+              vendor: 'obd2',
+              phase: 'device_callback',
+              message: error?.message ?? String(error),
+            });
             logBtScanWarn('callback_error', {
               error: error?.message ?? String(error),
             });
@@ -992,7 +1073,10 @@ class OBD2Adapter {
           this.rawScanDeviceIds.add(deviceId);
 
           const existing = this.discovered.get(deviceId);
-          const serviceUUIDs = this.mergeServiceUUIDs(existing?.serviceUUIDs, device.serviceUUIDs);
+          const serviceUUIDs = this.mergeServiceUUIDs(
+            existing?.serviceUUIDs,
+            this.extractAdvertisedServiceUUIDs(device),
+          );
           const manufacturerData = incomingManufacturerData ?? existing?.manufacturerData ?? null;
           const isLikelyOBD = this.isLikelyOBDDevice(
             advertisedName ??
@@ -1019,6 +1103,34 @@ class OBD2Adapter {
               transport: 'ble',
             });
           }
+          const bluDiscoveryDetails = buildBluDiscoveryLogDetails({
+            id: deviceId,
+            name: derivedName.name,
+            localName,
+            manufacturerData,
+            serviceUUIDs,
+            rssi: typeof device.rssi === 'number' ? device.rssi : null,
+            classifiedVendor: isLikelyOBD ? 'obd2' : 'unknown',
+            classifiedType: isLikelyOBD ? 'obd2_adapter' : 'unknown_ble',
+            confidence: isLikelyOBD ? 0.95 : 0.15,
+          });
+          bluLogThrottled(
+            '[BLU_SCAN]',
+            `obd2-scan:${deviceId}`,
+            'device_discovered',
+            bluDiscoveryDetails,
+            10_000,
+          );
+          bluLogThrottled(
+            isLikelyOBD ? '[BLU_OBD2]' : '[BLU_CLASSIFY]',
+            `obd2-classify:${deviceId}:${isLikelyOBD}`,
+            'device_classified',
+            {
+              ...bluDiscoveryDetails,
+              streamMode: 'ble_scan',
+            },
+            10_000,
+          );
           if (!existing) {
             recordBluetoothDiagnosticEvent({
               type: 'device_discovered',
@@ -1233,6 +1345,13 @@ class OBD2Adapter {
         acceptedDevicesCount: this.discovered.size,
       },
     });
+    bluLog('[BLU_SCAN]', 'obd2_scan_stop', {
+      vendor: 'obd2',
+      reason,
+      rawDeviceCallbacksCount: this.rawDeviceCallbacksCount,
+      acceptedDevicesCount: this.discovered.size,
+      likelyObdDevicesCount: Array.from(this.discovered.values()).filter((candidate) => candidate.isLikelyOBD).length,
+    });
 
     this.scanProgress = 1;
     this.updateScanDiagnostics({ scanState: 'idle' });
@@ -1419,6 +1538,14 @@ class OBD2Adapter {
     return Array.from(new Set(next));
   }
 
+  private extractAdvertisedServiceUUIDs(device: any): string[] | undefined {
+    const serviceData = device?.serviceData && typeof device.serviceData === 'object'
+      ? Object.keys(device.serviceData)
+      : [];
+    const solicited = Array.isArray(device?.solicitedServiceUUIDs) ? device.solicitedServiceUUIDs : [];
+    return this.mergeServiceUUIDs(device?.serviceUUIDs, [...serviceData, ...solicited]);
+  }
+
   private getSignalBucket(rssi: number): number {
     if (rssi >= -60) return 4;
     if (rssi >= -72) return 3;
@@ -1457,6 +1584,7 @@ class OBD2Adapter {
 
     const name = deviceName || this.discovered.get(deviceId)?.name || `OBD-II (${deviceId.slice(-6)})`;
 
+    this.manualDisconnectRequested = false;
     this.error = null;
     this.setState('connecting');
     logTelemetryDebug('Connecting to device', { deviceId, name });
@@ -1465,6 +1593,23 @@ class OBD2Adapter {
       deviceId,
       name,
       transport: 'ble',
+    });
+    bluLog('[BLU_CONNECT]', 'obd2_native_connect_start', buildBluConnectionAttemptLogDetails({
+      deviceId,
+      vendor: 'obd2',
+      deviceType: 'obd2_adapter',
+      connectionMode: 'ble',
+      startedAt: Date.now(),
+      timeoutMs: 15_000,
+      attempt: 1,
+      name,
+    }));
+    bluLog('[BLU_OBD2]', 'native_connect_start', {
+      deviceId,
+      vendor: 'obd2',
+      deviceType: 'obd2_adapter',
+      connectionMode: 'ble',
+      phase: 'native_ble_connect',
     });
     recordBluetoothDiagnosticEvent({
       type: 'connect_start',
@@ -1491,6 +1636,13 @@ class OBD2Adapter {
         requestMTU: 512,
         timeout: 15000,
       });
+      bluLog('[BLU_HANDSHAKE]', 'obd2_native_transport_connected', {
+        deviceId,
+        vendor: 'obd2',
+        phase: 'native_ble_connect',
+        connectionMode: 'ble',
+        timeoutMs: 15_000,
+      });
 
       logTelemetryDebug('Discovering services and characteristics...');
       vehicleTelemetryService.updateDeviceConnectionState(deviceId, 'discovering_services');
@@ -1510,6 +1662,12 @@ class OBD2Adapter {
         details: {
           serviceCount: Array.isArray(discoveredServices) ? discoveredServices.length : 0,
         },
+      });
+      bluLog('[BLU_HANDSHAKE]', 'obd2_services_discovered', {
+        deviceId,
+        vendor: 'obd2',
+        phase: 'service_discovery',
+        serviceCount: Array.isArray(discoveredServices) ? discoveredServices.length : 0,
       });
 
       this.connectedDeviceId = deviceId;
@@ -1562,6 +1720,18 @@ class OBD2Adapter {
             phase: 'telemetry_init',
           },
         });
+        bluLog('[BLU_TIMEOUT]', 'obd2_telemetry_init_failed', buildBluTimeoutLogDetails({
+          deviceId,
+          vendor: 'obd2',
+          phase: 'telemetry_init',
+          timeoutMs: 5_000,
+          lastSuccessfulPhase: 'service_discovery',
+          lastPacketAt: null,
+          errorCode: /transport|characteristic|service|unsupported/i.test(unsupportedReason)
+            ? 'TRANSPORT_UNSUPPORTED'
+            : 'PID_POLLING_UNAVAILABLE',
+          message: unsupportedReason,
+        }));
         this.stopPidTelemetry();
         try {
           await mgr.cancelDeviceConnection(deviceId);
@@ -1592,6 +1762,12 @@ class OBD2Adapter {
           transport: 'ble',
         },
       });
+      bluLog('[BLU_HANDSHAKE]', 'obd2_native_connect_and_handshake_succeeded', {
+        deviceId,
+        vendor: 'obd2',
+        phase: 'pid_polling_started',
+        connectionMode: 'ble',
+      });
 
       this.persistLastDevice(deviceId, name);
       this.autoReconnectEnabled = true;
@@ -1613,6 +1789,24 @@ class OBD2Adapter {
         phase: 'connect',
         reason: msg,
       });
+      bluLog(isBluTimeoutMessage(msg) ? '[BLU_TIMEOUT]' : '[BLU_OBD2]', 'obd2_native_connect_failed', isBluTimeoutMessage(msg)
+        ? buildBluTimeoutLogDetails({
+            deviceId,
+            vendor: 'obd2',
+            phase: 'native_ble_connect',
+            timeoutMs: 15_000,
+            lastSuccessfulPhase: 'connect_requested',
+            lastPacketAt: null,
+            errorCode: 'CONNECT_FAILED',
+            message: msg,
+          })
+        : {
+            deviceId,
+            vendor: 'obd2',
+            phase: 'native_ble_connect',
+            errorCode: 'CONNECT_FAILED',
+            message: msg,
+          });
       recordBluetoothDiagnosticEvent({
         type: 'connect_failure',
         source: classifyBluetoothDiagnosticSource(msg, 'native_ble'),
@@ -1642,6 +1836,7 @@ class OBD2Adapter {
   async disconnect(): Promise<void> {
     const disconnectingDeviceId = this.connectedDeviceId;
     const disconnectingDeviceName = this.connectedDeviceName;
+    this.manualDisconnectRequested = true;
     recordBluetoothDiagnosticEvent({
       type: 'disconnect_start',
       source: 'native_ble',
@@ -1649,6 +1844,13 @@ class OBD2Adapter {
       deviceName: disconnectingDeviceName ?? undefined,
       providerId: 'obd2',
       message: 'OBD2 disconnect requested.',
+    });
+    bluLog('[BLU_DISCONNECT]', 'obd2_disconnect_start', {
+      deviceId: disconnectingDeviceId,
+      vendor: 'obd2',
+      deviceType: 'obd2_adapter',
+      connectionMode: 'ble',
+      phase: 'disconnect_requested',
     });
     this.cancelReconnect();
     this.stopHealthCheck();
@@ -1669,6 +1871,12 @@ class OBD2Adapter {
       try {
         const mgr = getBleManager();
         await mgr.cancelDeviceConnection(deviceId);
+        const stillConnected = typeof mgr.isDeviceConnected === 'function'
+          ? await mgr.isDeviceConnected(deviceId).catch(() => false)
+          : false;
+        if (stillConnected) {
+          throw new Error('OBD-II adapter remained connected after disconnect request.');
+        }
         logTelemetryDebug('Disconnected', { name, deviceId });
         recordBluetoothDiagnosticEvent({
           type: 'disconnect_success',
@@ -1678,8 +1886,52 @@ class OBD2Adapter {
           providerId: 'obd2',
           message: 'OBD2 native BLE device disconnected.',
         });
-      } catch {
+        bluLog('[BLU_DISCONNECT]', 'obd2_native_disconnect_succeeded', {
+          deviceId,
+          vendor: 'obd2',
+          deviceType: 'obd2_adapter',
+          connectionMode: 'ble',
+        });
+      } catch (disconnectError: any) {
+        const mgr = getBleManager();
+        const stillConnected = typeof mgr.isDeviceConnected === 'function'
+          ? await mgr.isDeviceConnected(deviceId).catch(() => false)
+          : false;
+        if (stillConnected) {
+          const message =
+            disconnectError?.message ??
+            'OBD-II adapter remained connected after disconnect request.';
+          this.error = message;
+          bluLog('[BLU_DISCONNECT]', 'obd2_native_disconnect_failed', {
+            deviceId,
+            vendor: 'obd2',
+            deviceType: 'obd2_adapter',
+            connectionMode: 'ble',
+            errorCode: 'NATIVE_DISCONNECT_FAILED',
+            message,
+            manualDisconnectRequested: this.manualDisconnectRequested,
+          });
+          recordBluetoothDiagnosticEvent({
+            type: 'disconnect_failure',
+            source: 'native_ble',
+            deviceId,
+            deviceName: name ?? undefined,
+            providerId: 'obd2',
+            message: 'OBD2 native disconnect did not release the device.',
+            error: message,
+          });
+          this.manualDisconnectRequested = false;
+          throw new Error(message);
+        }
+
         // Device may already be disconnected
+        bluLog('[BLU_DISCONNECT]', 'obd2_native_disconnect_reported_error', {
+          deviceId,
+          vendor: 'obd2',
+          deviceType: 'obd2_adapter',
+          connectionMode: 'ble',
+          message: 'Native disconnect reported an error or device was already disconnected.',
+        });
         recordBluetoothDiagnosticEvent({
           type: 'disconnect_failure',
           source: 'native_ble',
@@ -1704,6 +1956,7 @@ class OBD2Adapter {
     this.setState('idle');
     this.emitEvent('disconnected', { at: Date.now(), reason: 'user_disconnect', requested: true });
     this.emitEvent('disconnect', { at: Date.now(), reason: 'user_disconnect', requested: true });
+    this.manualDisconnectRequested = false;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1711,6 +1964,16 @@ class OBD2Adapter {
   // ═══════════════════════════════════════════════════════
 
   async attemptReconnect(): Promise<boolean> {
+    if (this.manualDisconnectRequested) {
+      bluLog('[BLU_RECONNECT]', 'obd2_reconnect_skipped_manual_disconnect', {
+        deviceId: this.connectedDeviceId ?? sGet(OBD2_STORAGE_KEYS.LAST_DEVICE_ID),
+        vendor: 'obd2',
+        deviceType: 'obd2_adapter',
+        connectionMode: 'ble',
+        manualDisconnectRequested: true,
+      });
+      return false;
+    }
     if (this.state === 'connected' || this.state === 'connecting' || this.state === 'reconnecting') {
       return false;
     }
@@ -1734,6 +1997,15 @@ class OBD2Adapter {
 
     this.reconnectAttempt++;
     this.setState('reconnecting');
+    bluLog('[BLU_RECONNECT]', 'obd2_reconnect_attempt', {
+      deviceId: lastDeviceId,
+      vendor: 'obd2',
+      deviceType: 'obd2_adapter',
+      connectionMode: 'ble',
+      attempt: this.reconnectAttempt,
+      timeoutMs: 10_000,
+      maxAttempts: OBD2Adapter.MAX_RECONNECT_ATTEMPTS,
+    });
     logTelemetryDebug('Reconnect attempt', {
       attempt: this.reconnectAttempt,
       maxAttempts: OBD2Adapter.MAX_RECONNECT_ATTEMPTS,
@@ -1762,6 +2034,13 @@ class OBD2Adapter {
       });
 
       await device.discoverAllServicesAndCharacteristics();
+      bluLog('[BLU_HANDSHAKE]', 'obd2_reconnect_transport_succeeded', {
+        deviceId: lastDeviceId,
+        vendor: 'obd2',
+        phase: 'reconnect_service_discovery',
+        connectionMode: 'ble',
+        attempt: this.reconnectAttempt,
+      });
 
       this.connectedDeviceId = lastDeviceId;
       this.connectedDeviceName = lastDeviceName || `OBD-II (${lastDeviceId.slice(-6)})`;
@@ -1780,6 +2059,13 @@ class OBD2Adapter {
       this.startHealthCheck();
 
       this.setState('connected');
+      bluLog('[BLU_RECONNECT]', 'obd2_reconnect_succeeded', {
+        deviceId: lastDeviceId,
+        vendor: 'obd2',
+        deviceType: 'obd2_adapter',
+        connectionMode: 'ble',
+        phase: 'pid_polling_started',
+      });
       this.emitEvent('reconnected', {
         at: Date.now(),
         attempt: this.reconnectAttempt,
@@ -1795,9 +2081,28 @@ class OBD2Adapter {
       return true;
 
     } catch (err: any) {
+      const reconnectError = err?.message ?? 'Reconnect failed';
+      bluLog(isBluTimeoutMessage(reconnectError) ? '[BLU_TIMEOUT]' : '[BLU_RECONNECT]', 'obd2_reconnect_failed', isBluTimeoutMessage(reconnectError)
+        ? buildBluTimeoutLogDetails({
+            deviceId: lastDeviceId,
+            vendor: 'obd2',
+            phase: 'reconnect',
+            timeoutMs: 10_000,
+            lastSuccessfulPhase: 'reconnect_requested',
+            lastPacketAt: null,
+            errorCode: 'RECONNECT_FAILED',
+            message: reconnectError,
+          })
+        : {
+            deviceId: lastDeviceId,
+            vendor: 'obd2',
+            attempt: this.reconnectAttempt,
+            errorCode: 'RECONNECT_FAILED',
+            message: reconnectError,
+          });
       logTelemetryWarn('Reconnect attempt failed', {
         attempt: this.reconnectAttempt,
-        error: err?.message ?? 'unknown',
+        error: reconnectError,
       });
       this.stopPidTelemetry();
 
@@ -1869,6 +2174,14 @@ class OBD2Adapter {
               deviceId: device.id,
               reason: error?.message ?? 'clean disconnect',
             });
+            bluLog('[BLU_DISCONNECT]', 'obd2_native_disconnect_detected', {
+              deviceId: device.id,
+              vendor: 'obd2',
+              deviceType: 'obd2_adapter',
+              connectionMode: 'ble',
+              phase: 'native_disconnect_callback',
+              message: error?.message ?? 'clean disconnect',
+            });
 
             const deviceId = this.connectedDeviceId;
             this.connectedDeviceRef = null;
@@ -1903,6 +2216,15 @@ class OBD2Adapter {
                 reason: error?.message ?? 'connection_dropped',
               });
               const delay = this.backoff.next();
+              bluLog('[BLU_RECONNECT]', 'obd2_auto_reconnect_scheduled', {
+                deviceId,
+                vendor: 'obd2',
+                deviceType: 'obd2_adapter',
+                connectionMode: 'ble',
+                phase: 'disconnect_callback',
+                delayMs: delay,
+                reason: error?.message ?? 'connection_dropped',
+              });
               this.reconnectTimer = setTimeout(() => {
                 if (this.autoReconnectEnabled && !this.isDestroyed) {
                   this.attemptReconnect();
@@ -1967,6 +2289,14 @@ class OBD2Adapter {
           logTelemetryWarn('Health check detected stale session', {
             deviceId: this.connectedDeviceId,
           });
+          bluLog('[BLU_DISCONNECT]', 'obd2_stale_session_detected', {
+            deviceId: this.connectedDeviceId,
+            vendor: 'obd2',
+            deviceType: 'obd2_adapter',
+            connectionMode: 'ble',
+            phase: 'health_check',
+            message: 'Health check detected stale native BLE session.',
+          });
           this.connectedDeviceRef = null;
           this.stopHealthCheck();
           this.stopPidTelemetry();
@@ -2001,6 +2331,14 @@ class OBD2Adapter {
               reason: 'stale_session',
             });
             const delay = this.backoff.next();
+            bluLog('[BLU_RECONNECT]', 'obd2_stale_session_reconnect_scheduled', {
+              deviceId,
+              vendor: 'obd2',
+              deviceType: 'obd2_adapter',
+              connectionMode: 'ble',
+              phase: 'health_check',
+              delayMs: delay,
+            });
             this.reconnectTimer = setTimeout(() => {
               if (this.autoReconnectEnabled && !this.isDestroyed) {
                 this.attemptReconnect();
@@ -2080,6 +2418,13 @@ class OBD2Adapter {
 
                 if (this.autoReconnectEnabled && !this.isDestroyed) {
                   logTelemetryDebug('App resumed — connection invalid, attempting reconnect');
+                  bluLog('[BLU_RECONNECT]', 'obd2_resume_reconnect_attempt', {
+                    deviceId: this.connectedDeviceId,
+                    vendor: 'obd2',
+                    deviceType: 'obd2_adapter',
+                    connectionMode: 'ble',
+                    phase: 'app_resume',
+                  });
                   this.attemptReconnect();
                 }
               }, 1500);
@@ -2138,13 +2483,35 @@ class OBD2Adapter {
       deviceId,
       transport: 'ble',
     });
+    bluLog('[BLU_HANDSHAKE]', 'obd2_elm_transport_init_start', {
+      deviceId,
+      vendor: 'obd2',
+      phase: 'elm_transport',
+      connectionMode: 'ble',
+    });
     await this.ensureElmTransport(this.connectedDeviceRef);
+
+    this.pidStreamLifecycle = new BluStreamLifecycle({
+      deviceId,
+      vendor: 'obd2',
+      deviceType: 'obd2_adapter',
+      source: 'obd2',
+      streamMode: 'ble_notifications_pid_poll',
+      staleAfterMs: Math.max(DEFAULT_STALE_AFTER_MS, 30_000),
+      firstPacketTimeoutMs: DEFAULT_FIRST_PACKET_TIMEOUT_MS,
+      maxReconnectAttempts: 0,
+      onFailed: (health) => {
+        this.error = health.lastError?.message ?? this.error;
+      },
+    });
+    this.pidStreamLifecycle.start();
 
     this.pidPoller = new OBD2PIDPoller(
       deviceId,
       {
         onTelemetry: (telemetry) => {
           this.latestTelemetry = telemetry;
+          this.pidStreamLifecycle?.recordPacket(telemetry.timestamp);
           const telemetryRecord = telemetry as unknown as Record<string, unknown>;
           if (!this.diagnosedFirstTelemetryDeviceIds.has(deviceId)) {
             this.diagnosedFirstTelemetryDeviceIds.add(deviceId);
@@ -2183,12 +2550,49 @@ class OBD2Adapter {
               (telemetry as unknown as Record<string, unknown>)[key] != null
             )),
           });
+          bluLogThrottled('[BLU_TELEMETRY]', `obd2-telemetry:${deviceId}`, 'obd2_telemetry_packet', buildBluTelemetryLogDetails({
+            deviceId,
+            vendor: 'obd2',
+            telemetry,
+            streamMode: 'ble_notifications_pid_poll',
+            lastPacketAt: telemetry.timestamp,
+          }), 5_000);
+          bluLogThrottled('[BLU_STREAM]', `obd2-stream:${deviceId}`, 'obd2_stream_packet', buildBluTelemetryLogDetails({
+            deviceId,
+            vendor: 'obd2',
+            telemetry,
+            streamMode: 'ble_notifications_pid_poll',
+            lastPacketAt: telemetry.timestamp,
+          }), 10_000);
           this.emitEvent('telemetry', telemetry);
           this.emitEvent('data', telemetry);
         },
         sendCommand: (command) => this.sendElmCommand(command),
         onError: (message) => {
           this.error = message;
+          this.pidStreamLifecycle?.recordError(
+            'obd2_pid_polling',
+            message,
+            'PID_POLLING_ERROR',
+            { canRecover: false, timeoutMs: 5_000 },
+          );
+          bluLog(isBluTimeoutMessage(message) ? '[BLU_TIMEOUT]' : '[BLU_OBD2]', 'obd2_pid_error', isBluTimeoutMessage(message)
+            ? buildBluTimeoutLogDetails({
+                deviceId,
+                vendor: 'obd2',
+                phase: 'obd2_pid_polling',
+                timeoutMs: 5_000,
+                lastSuccessfulPhase: 'elm_transport',
+                lastPacketAt: this.latestTelemetry?.timestamp ?? null,
+                errorCode: 'PID_POLLING_ERROR',
+                message,
+              })
+            : {
+                deviceId,
+                vendor: 'obd2',
+                phase: 'obd2_pid_polling',
+                message,
+              });
           recordBluetoothDiagnosticEvent({
             type: /parse|decode|format/i.test(message) ? 'obd2_parser' : 'obd2_pid',
             source: classifyBluetoothDiagnosticSource(message, /parse|decode|format/i.test(message) ? 'obd2_parser' : 'obd2_pid'),
@@ -2241,6 +2645,22 @@ class OBD2Adapter {
 
     const started = await this.pidPoller.start();
     if (!started) {
+      this.pidStreamLifecycle?.recordError(
+        'pid_poller_start',
+        'Connected, but ECS could not start live telemetry polling.',
+        'PID_POLLER_START_FAILED',
+        { canRecover: false, timeoutMs: 5_000 },
+      );
+      bluLog('[BLU_TIMEOUT]', 'obd2_pid_poller_failed_to_start', buildBluTimeoutLogDetails({
+        deviceId,
+        vendor: 'obd2',
+        phase: 'pid_poller_start',
+        timeoutMs: 5_000,
+        lastSuccessfulPhase: 'elm_transport',
+        lastPacketAt: null,
+        errorCode: 'PID_POLLER_START_FAILED',
+        message: 'Connected, but ECS could not start live telemetry polling.',
+      }));
       recordBluetoothDiagnosticEvent({
         type: 'provider_handshake_failure',
         source: 'obd2_pid',
@@ -2273,15 +2693,29 @@ class OBD2Adapter {
       transport: 'ble',
     });
     logObdConnectDebug('notifications_subscribed', { deviceId });
+    bluLog('[BLU_STREAM]', 'obd2_live_pid_subscription_started', {
+      deviceId,
+      vendor: 'obd2',
+      phase: 'pid_polling_started',
+      connectionMode: 'ble',
+      streamMode: 'ble_notifications_pid_poll',
+    });
   }
 
   private stopPidTelemetry(): void {
     const stoppedDeviceId = this.connectedDeviceId;
     this.latestTelemetry = null;
+    this.pidStreamLifecycle?.stop('pid_polling_stopped');
+    this.pidStreamLifecycle = null;
 
     if (this.pidPoller) {
       this.pidPoller.destroy();
       this.pidPoller = null;
+      bluLog('[BLU_DISCONNECT]', 'obd2_live_pid_subscription_stopped', {
+        deviceId: stoppedDeviceId,
+        vendor: 'obd2',
+        streamMode: 'ble_notifications_pid_poll',
+      });
       recordBluetoothDiagnosticEvent({
         type: 'telemetry_subscription_stop',
         source: 'obd2_pid',
@@ -2325,6 +2759,16 @@ class OBD2Adapter {
         rxCandidate.uuid,
         (error: any, characteristic: any) => {
           if (error) {
+            bluLog('[BLU_TIMEOUT]', 'obd2_notification_monitor_error', buildBluTimeoutLogDetails({
+              deviceId: this.connectedDeviceId ?? device.id,
+              vendor: 'obd2',
+              phase: 'ble_notification_subscription',
+              timeoutMs: null,
+              lastSuccessfulPhase: 'elm_transport_selected',
+              lastPacketAt: this.latestTelemetry?.timestamp ?? null,
+              errorCode: 'NOTIFICATION_MONITOR_ERROR',
+              message: error?.message ?? 'ELM327 response monitor failed',
+            }));
             recordBluetoothDiagnosticEvent({
               type: 'obd2_parser',
               source: 'obd2_parser',
@@ -2356,6 +2800,15 @@ class OBD2Adapter {
         serviceUuid: service.uuid,
         characteristicUuid: rxCandidate.uuid,
       });
+      bluLog('[BLU_HANDSHAKE]', 'obd2_elm_transport_selected', {
+        deviceId: this.connectedDeviceId ?? device.id,
+        vendor: 'obd2',
+        phase: 'elm_transport_selected',
+        connectionMode: 'ble',
+        serviceUuid: service.uuid,
+        txCharacteristicUuid: txCandidate.uuid,
+        rxCharacteristicUuid: rxCandidate.uuid,
+      });
       recordBluetoothDiagnosticEvent({
         type: 'service_discovery_success',
         source: 'native_ble',
@@ -2381,6 +2834,16 @@ class OBD2Adapter {
       message: 'OBD2 BLE device did not expose a supported transport.',
       error: 'Connected device does not expose a supported OBD-II Bluetooth transport.',
     });
+    bluLog('[BLU_TIMEOUT]', 'obd2_elm_transport_not_found', buildBluTimeoutLogDetails({
+      deviceId: this.connectedDeviceId ?? device.id,
+      vendor: 'obd2',
+      phase: 'elm_transport_discovery',
+      timeoutMs: null,
+      lastSuccessfulPhase: 'service_discovery',
+      lastPacketAt: null,
+      errorCode: 'TRANSPORT_UNSUPPORTED',
+      message: 'Connected device does not expose a supported OBD-II Bluetooth transport.',
+    }));
     throw new Error('Connected device does not expose a supported OBD-II Bluetooth transport.');
   }
 
@@ -2450,6 +2913,17 @@ class OBD2Adapter {
 
     return await new Promise<string>(async (resolve, reject) => {
       const timeout = setTimeout(() => {
+        bluLog('[BLU_TIMEOUT]', 'obd2_elm_command_timeout', buildBluTimeoutLogDetails({
+          deviceId: this.connectedDeviceId,
+          vendor: 'obd2',
+          phase: 'elm_command',
+          timeoutMs: 5_000,
+          lastSuccessfulPhase: 'elm_transport',
+          lastPacketAt: this.latestTelemetry?.timestamp ?? null,
+          errorCode: 'ELM_COMMAND_TIMEOUT',
+          message: 'OBD-II adapter timed out waiting for a response.',
+          command: command.trim(),
+        }));
         this.clearPendingElmCommand(new Error('OBD-II adapter timed out waiting for a response.'));
         reject(new Error('OBD-II adapter timed out waiting for a response.'));
       }, 5000);
@@ -2489,6 +2963,14 @@ class OBD2Adapter {
           );
         }
       } catch (error: any) {
+        bluLog('[BLU_OBD2]', 'obd2_elm_command_write_failed', {
+          deviceId: this.connectedDeviceId,
+          vendor: 'obd2',
+          phase: 'elm_command_write',
+          errorCode: 'ELM_COMMAND_WRITE_FAILED',
+          message: error?.message ?? 'Failed to send OBD-II command.',
+          command: command.trim(),
+        });
         this.clearPendingElmCommand(new Error(error?.message ?? 'Failed to send OBD-II command.'));
         reject(new Error(error?.message ?? 'Failed to send OBD-II command.'));
       }

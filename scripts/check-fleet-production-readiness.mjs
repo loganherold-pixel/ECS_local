@@ -34,12 +34,63 @@ function evidenceTrue(evidence, key) {
   return evidence?.[key] === true;
 }
 
+function isObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function nonPlaceholderString(value) {
+  const text = String(value ?? '').trim();
+  return Boolean(text) && !/^(tbd|todo|pending|placeholder|n\/a|none)$/i.test(text);
+}
+
+function hasMinNonPlaceholderEntries(value, min) {
+  return Array.isArray(value) && value.filter(nonPlaceholderString).length >= min;
+}
+
 function accepted(value) {
   return String(value ?? '').trim().toLowerCase() === 'accepted';
 }
 
 function excludesAll(source, fragments) {
   return fragments.every((fragment) => !source.includes(fragment));
+}
+
+function hasBuildAndDeviceEvidence(evidence) {
+  const build = evidence?.buildAndDevice;
+  return isObject(build) &&
+    nonPlaceholderString(build.appBuildType) &&
+    nonPlaceholderString(build.appVersion) &&
+    nonPlaceholderString(build.androidDeviceModel) &&
+    nonPlaceholderString(build.androidOsVersion) &&
+    build.nativeBuild === true &&
+    build.expoGoRuntime === false;
+}
+
+function hasAndroidQaStateMatrix(evidence) {
+  const matrix = evidence?.androidQaStateMatrix;
+  return isObject(matrix) &&
+    matrix.sourceLabelsVisible === true &&
+    matrix.confidenceLabelsVisible === true &&
+    matrix.estimatedStateVisible === true &&
+    matrix.missingDataStateVisible === true &&
+    matrix.offlineStateVisible === true &&
+    matrix.noPhotoContractVisible === true;
+}
+
+function hasReviewerSignoff(evidence) {
+  const signoff = evidence?.reviewerSignoff;
+  return isObject(signoff) &&
+    ['product', 'engineering', 'qa', 'privacy'].every((field) => nonPlaceholderString(signoff[field])) &&
+    nonPlaceholderString(signoff.acceptedAt);
+}
+
+function hasEvidenceContract(evidence) {
+  return isObject(evidence) &&
+    hasBuildAndDeviceEvidence(evidence) &&
+    hasAndroidQaStateMatrix(evidence) &&
+    hasMinNonPlaceholderEntries(evidence.deviceMatrix, 2) &&
+    hasMinNonPlaceholderEntries(evidence.evidenceReferences, 4) &&
+    nonPlaceholderString(evidence.notes);
 }
 
 export function buildFleetProductionReadinessResult(options = {}) {
@@ -215,7 +266,7 @@ export function buildFleetProductionReadinessResult(options = {}) {
         fleetScreen.includes('Readiness/ECS Score') &&
         fleetScreen.includes('Operating weight = base net/empty + permanent accessory weight + current loadout.') &&
         fleetScreen.includes('Payload remaining = GVWR - operating weight.') &&
-        fleetScreen.includes('Scale ticket or axle weights improve ECS confidence') &&
+        fleetScreen.includes('Measured accessory, loadout, or axle weights can refine front/rear estimates') &&
         fleetScreen.includes('generatePremiumFleetFabricPayload') &&
         excludesAll(fleetScreen, forbiddenMediaHooks),
       [relPath(root, paths.commandDock), relPath(root, paths.fleetScreen)],
@@ -230,9 +281,19 @@ export function buildFleetProductionReadinessResult(options = {}) {
         uiContractDoc.includes('Fleet must not render another bottom dock') &&
         releaseDoc.includes('Fleet') &&
         releaseDoc.includes('premium') &&
-        releaseDoc.includes('release'),
+        releaseDoc.includes('release') &&
+        releaseDoc.includes('.smoke/fleet-production-evidence.json') &&
+        releaseDoc.includes('sourceConfidenceOfflineStatesVisible') &&
+        releaseDoc.includes('androidQaStateMatrix'),
       [relPath(root, paths.refactorMapDoc), relPath(root, paths.uiContractDoc), relPath(root, paths.releaseDoc)],
       ['Keep Fleet docs updated as production evidence is recorded or release scope changes.'],
+    ),
+    check(
+      'fleet_production_evidence_contract_complete',
+      'Fleet production evidence contract includes Android build/device metadata, artifact references, QA state matrix, and notes.',
+      hasEvidenceContract(evidence),
+      [relPath(root, paths.evidence)],
+      ['Populate .smoke/fleet-production-evidence.json with build/device metadata, Android QA state matrix, device matrix, evidence references, and non-placeholder notes.'],
     ),
     check(
       'android_fleet_profile_visual_evidence_present',
@@ -256,6 +317,13 @@ export function buildFleetProductionReadinessResult(options = {}) {
       ['Record at least one verified scale-ticket or axle-weight profile path and confirm estimate/source labels update correctly.'],
     ),
     check(
+      'source_confidence_offline_android_qa_evidence_present',
+      'Android QA evidence proves source, confidence, estimated, missing-data, offline, and no-photo states are visible.',
+      evidenceTrue(evidence, 'sourceConfidenceOfflineStatesVisible') && hasAndroidQaStateMatrix(evidence),
+      [relPath(root, paths.evidence), relPath(root, paths.fleetScreen)],
+      ['Capture Android Fleet screenshots/log notes showing source labels, confidence labels, estimated/missing states, offline/local mode, and no vehicle-photo surfaces.'],
+    ),
+    check(
       'offline_persistence_migration_evidence_present',
       'Offline persistence and legacy migration evidence is recorded.',
       evidenceTrue(evidence, 'offlinePersistenceMigrationEvidencePassed'),
@@ -265,7 +333,7 @@ export function buildFleetProductionReadinessResult(options = {}) {
     check(
       'production_owner_decision_accepted',
       'Production owner decision is accepted for Fleet.',
-      accepted(evidence?.productionDecision),
+      accepted(evidence?.productionDecision) && hasReviewerSignoff(evidence),
       [relPath(root, paths.evidence)],
       ['Record product, engineering, QA, privacy/security, and support acceptance after Android/profile evidence is complete.'],
     ),
@@ -281,6 +349,23 @@ export function buildFleetProductionReadinessResult(options = {}) {
     checks,
     blockers: failed.map((item) => item.id),
     remediation: failed.flatMap((item) => item.remediation),
+    evidenceContract: {
+      path: RESULT_RELATIVE_PATH.replace('readiness-result', 'evidence'),
+      requiredFields: [
+        'androidFleetProfileVisualQaPassed',
+        'multiVehicleActiveSelectionEvidencePassed',
+        'scaleTicketProfileEvidencePassed',
+        'sourceConfidenceOfflineStatesVisible',
+        'offlinePersistenceMigrationEvidencePassed',
+        'productionDecision',
+        'buildAndDevice',
+        'androidQaStateMatrix',
+        'deviceMatrix',
+        'evidenceReferences',
+        'reviewerSignoff',
+        'notes',
+      ],
+    },
     notes: [
       'This gate separates Fleet implementation readiness from Android, multi-vehicle, verified-weight, offline persistence, and owner-decision evidence.',
       'Fleet must remain tactical and no-photo: vehicle readiness should come from specs, weight math, source confidence, load zones, and explicit stale/missing data labels.',

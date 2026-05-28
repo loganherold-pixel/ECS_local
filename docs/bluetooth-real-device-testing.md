@@ -20,6 +20,7 @@ Native dependency:
 
 - `react-native-ble-plx` is installed in `package.json`.
 - `app.json` includes the `react-native-ble-plx` config plugin.
+- Provider readiness and parser-pending status are tracked in `docs/bluestack-provider-readiness.md`.
 
 Android:
 
@@ -100,6 +101,8 @@ State expectations:
 - `streaming` means ECS is receiving live telemetry or has an active subscription/polling loop.
 - Expo Go/web must not show fake scanner results. They should report native BLE unavailable.
 - EcoFlow cloud authorization failures must remain cloud/API failures and must not be presented as Bluetooth failures.
+- EcoFlow power stations, Glacier/refrigerator devices, WAVE/portable AC devices, and alternator charger devices are eligible for EcoFlow Cloud/API telemetry when the EcoFlow developer account is authorized for the device serial. Local Bluetooth attachment can remain visible, but native EcoFlow BLE telemetry decoding is still parser-pending unless a validated model parser exists.
+- Parser-pending power brands should appear as recognized Bluestack hardware but must not be selectable as live telemetry until field-verified parsers exist.
 
 ## Troubleshooting
 

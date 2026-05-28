@@ -5,6 +5,7 @@ import { EcoFlowCloudProvider } from '../src/power/cloud/providers/EcoFlowCloudP
 import type { PowerDevice as CatalogPowerDevice } from '../src/power/types/PowerDevice';
 import { isEcoFlowUnauthorizedDeviceError } from './ecoflowUnauthorizedDevice';
 import type { UnifiedScannerErrorSource } from './unifiedScannerContract';
+import { normalizeEcoFlowTelemetryProductType } from './ecoflowBluTelemetryEligibility';
 
 export type EcoFlowScannerDevice = EcsDiscoveredDevice & {
   providerId: 'ecoflow';
@@ -39,7 +40,7 @@ export class EcoFlowCloudDiscoveryError extends Error {
 
 export function classifyEcoFlowCloudErrorSource(error: unknown): UnifiedScannerErrorSource {
   const message = error instanceof Error ? error.message : String(error ?? '');
-  if (isEcoFlowUnauthorizedDeviceError(error) || /unauthori[sz]ed|not authorized|forbidden|pending_approval|approval/i.test(message)) {
+  if (isEcoFlowUnauthorizedDeviceError(error) || /unauthori[sz]ed|not authorized|forbidden|pending_approval|approval|missing_ecoflow_credentials|keys not configured|auth required|authorization required/i.test(message)) {
     return 'cloud_auth';
   }
   if (/signature|access key|api key|secret|region|account binding|credential|configuration|config/i.test(message)) {
@@ -63,11 +64,7 @@ function logEcoFlowScanWarn(message: string, details?: Record<string, unknown>):
 }
 
 function normalizeEcoFlowProductType(value: string | null | undefined): string {
-  const normalized = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
-  if (!normalized || normalized === 'unknown') return 'unknown';
-  if (/fridge|refrigerator|glacier/.test(normalized)) return 'refrigerator';
-  if (/power/.test(normalized)) return 'power_station';
-  return normalized;
+  return normalizeEcoFlowTelemetryProductType(value);
 }
 
 function isEcoFlowGlacierDevice(device: CatalogPowerDevice): boolean {
@@ -105,7 +102,9 @@ export function normalizeEcoFlowScannerDevice(
         : 'EcoFlow Device';
   const name = String(device.name ?? '').trim() || `EcoFlow ${model}`;
   const productType = normalizeEcoFlowProductType(
-    isGlacier ? 'refrigerator' : device.productType,
+    isGlacier
+      ? 'refrigerator'
+      : `${device.productType ?? ''} ${device.model ?? ''} ${device.name ?? ''}`,
   );
 
   return {

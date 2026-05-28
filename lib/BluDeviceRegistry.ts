@@ -21,11 +21,12 @@ import type {
   BluDeviceCapabilities,
 } from './BluTypes';
 import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage ─────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'ecs.blu.devices.v1';
-const memoryStore: Record<string, string> = {};
+const bluDevicePersistenceCache = createPersistedKeyValueCache('ecs_blu_devices');
 
 function storageGet(key: string): string | null {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
@@ -35,7 +36,7 @@ function storageGet(key: string): string | null {
       /* quota / private browsing */
     }
   }
-  return memoryStore[key] ?? null;
+  return bluDevicePersistenceCache.get(key);
 }
 
 function storageSet(key: string, value: string): void {
@@ -46,7 +47,7 @@ function storageSet(key: string, value: string): void {
       /* swallow */
     }
   }
-  memoryStore[key] = value;
+  bluDevicePersistenceCache.set(key, value);
 }
 
 // ── Subscriber type ─────────────────────────────────────────────────────
@@ -57,8 +58,20 @@ type RegistrySubscriber = () => void;
 
 class BluDeviceRegistry {
   private cache: BluDevice[] | null = null;
+  private hydrationPromise: Promise<void>;
   private writeQueue: Promise<void> = Promise.resolve();
   private subscribers = new Set<RegistrySubscriber>();
+
+  constructor() {
+    this.hydrationPromise = bluDevicePersistenceCache.waitForHydration()
+      .then(() => {
+        this.cache = null;
+        this.notify();
+      })
+      .catch((error) => {
+        console.warn('[BluDeviceRegistry] Hydration failed:', error);
+      });
+  }
 
   // ── Persistence ────────────────────────────────────────────────────
 
@@ -85,6 +98,7 @@ class BluDeviceRegistry {
   private persist(): void {
     if (this.cache === null) return;
     storageSet(STORAGE_KEY, JSON.stringify(this.cache));
+    void bluDevicePersistenceCache.flush();
   }
 
   private enqueue(fn: () => void): Promise<void> {
@@ -99,9 +113,14 @@ class BluDeviceRegistry {
 
   subscribe(cb: RegistrySubscriber): () => void {
     this.subscribers.add(cb);
+    cb();
     return () => {
       this.subscribers.delete(cb);
     };
+  }
+
+  async waitForHydration(): Promise<void> {
+    await this.hydrationPromise;
   }
 
   private notify(): void {

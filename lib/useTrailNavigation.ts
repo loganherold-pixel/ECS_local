@@ -67,6 +67,7 @@ function sameStringArray(a: string[], b: string[]): boolean {
 }
 
 const BACKWARD_PROGRESS_THRESHOLD_M = 35;
+const TRAIL_NAVIGATION_ARRIVAL_DISTANCE_M = 200;
 const OFF_TRAIL_CONFIRMATION_COUNT = 2;
 const REJOIN_CONFIRMATION_COUNT = 2;
 const TRAIL_PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
@@ -399,7 +400,10 @@ export function useTrailNavigation(params: {
         rejoinHitCountRef.current = 0;
       }
 
-      if (snapshot.progress.remainingDistanceM <= 35 && !snapshot.isOffTrail) {
+      if (
+        snapshot.progress.remainingDistanceM <= TRAIL_NAVIGATION_ARRIVAL_DISTANCE_M &&
+        !snapshot.isOffTrail
+      ) {
         nextStatus =
           prev.payload?.tripMode === 'hybrid'
             ? 'arrived_final_destination'

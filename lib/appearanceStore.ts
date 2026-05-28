@@ -2,7 +2,7 @@
  * Appearance Store — Persistence + Auto-Driving Logic
  *
  * Manages:
- * - appearanceMode: 'auto' | 'dark' | 'light' | 'driving'
+ * - appearanceMode: 'dynamic' | 'dark' | 'light' | 'driving'
  * - autoDrivingEnabled: boolean
  * - Speed-based driving mode auto-activation with hysteresis
  * - AsyncStorage persistence (falls back to localStorage on web)
@@ -59,7 +59,7 @@ function setStored(key: string, value: string): void {
 type AppearanceListener = (mode: AppearanceMode, autoDriving: boolean) => void;
 
 class AppearanceStore {
-  private _mode: AppearanceMode = 'dark';
+  private _mode: AppearanceMode = 'dynamic';
   private _autoDrivingEnabled: boolean = false;
   private _listeners: Set<AppearanceListener> = new Set();
 
@@ -160,8 +160,9 @@ class AppearanceStore {
   }
 
   /**
-   * Resolve the effective theme based on current settings + device color scheme.
-   * @param deviceColorScheme - 'dark' | 'light' from useColorScheme()
+   * Resolve the effective theme for explicit modes.
+   * Dynamic defaults to dark here; ThemeContext applies the app-wide daylight
+   * exposure blend when live brightness data is available.
    */
   resolveEffectiveTheme(deviceColorScheme: 'dark' | 'light' | null | undefined): EffectiveTheme {
     // Driving mode explicit selection always wins
@@ -174,9 +175,9 @@ class AppearanceStore {
     if (this._mode === 'dark') return 'dark';
     if (this._mode === 'light') return 'light';
 
-    // Auto mode: follow device color scheme
+    // Dynamic mode starts as dark unless ThemeContext promotes it from live daylight.
     if (this._mode === 'dynamic') {
-      return deviceColorScheme === 'light' ? 'light' : 'dark';
+      return 'dark';
     }
 
     return 'dark';

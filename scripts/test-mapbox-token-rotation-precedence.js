@@ -44,5 +44,25 @@ assert(
     source.includes('5. localStorage'),
   'Map token resolution order documentation should match rotation-safe precedence.',
 );
+assert(
+  source.includes('EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN') &&
+    source.includes("['EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN', process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN]") &&
+    source.includes('extra.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN') &&
+    source.includes('manifest2Extra.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN'),
+  'Map token resolver should accept the ECS public Mapbox access-token alias across env and Expo Constants.',
+);
+assert(
+  source.includes("return trimmed.startsWith('pk.');"),
+  'Runtime Mapbox token validator should accept only public pk tokens.',
+);
+assert(
+  !source.includes("token.startsWith('sk.')") && !source.includes('token.startsWith("sk.")'),
+  'Runtime Mapbox token resolver must not accept Mapbox secret sk tokens.',
+);
+assert(
+  source.includes('MAPBOX_DOWNLOADS_TOKEN / sk tokens are only for Android build-time Maven') &&
+    source.includes('intentionally rejected here'),
+  'Runtime token docs should distinguish pk runtime tokens from sk downloads tokens.',
+);
 
 console.log('Mapbox token rotation precedence checks passed.');

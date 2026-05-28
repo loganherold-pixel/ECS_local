@@ -44,6 +44,7 @@ import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
 import { timelineIntelligenceEngine } from '../lib/timelineIntelligenceEngine';
 import { ecsSyncCoordinator } from '../lib/ecsSyncCoordinator';
 import { ecsOfflineInterlock } from '../lib/ecsOfflineInterlock';
+import { offlineTileSyncCoordinator } from '../lib/offlineTileSyncCoordinator';
 import { androidAutoBridge } from '../lib/androidAutoBridge';
 import {
   flushQueuedIssueEvents,
@@ -154,6 +155,7 @@ const STARTUP_VISUAL_PALETTE = {
 } as const;
 const INITIAL_URL_RESOLUTION_TIMEOUT_MS = 1500;
 const MIN_LOADING_MS = 3000;
+const POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS = 6500;
 const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;
 const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;
 const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 12000;
@@ -1088,6 +1090,14 @@ function AuthGate() {
         : entryResolution.kind === 'authenticated_restore'
           ? 'remembered_session'
           : 'cold_launch';
+  const authScreenLoadingHandoffActive =
+    !isResetCompletionScreen &&
+    inAuthScreen &&
+    (
+      authPhase === 'signing_in' ||
+      postAuthBootstrapPending ||
+      postAuthRedirectHoldingScreenActive
+    );
   useEffect(() => {
     postAuthLoadingNavigationRef.current = null;
     setMinimumLoadingElapsed(false);
@@ -1102,6 +1112,33 @@ function AuthGate() {
       clearTimeout(minimumLoadingTimer);
     };
   }, [postAuthLoadingGateKey, postAuthRedirectHoldingScreenActive]);
+
+  useEffect(() => {
+    if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return undefined;
+
+    const fallbackTimer = setTimeout(() => {
+      if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return;
+
+      markStartupPhase('post_auth_handoff_fallback_route', {
+        currentPath: normalizedPathname,
+        target: postAuthLoadingTarget,
+        dashboardReady,
+        minimumLoadingElapsed,
+      });
+      router.replace(toExpoRouterShellTarget(postAuthLoadingTarget) as any);
+    }, POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS);
+
+    return () => {
+      clearTimeout(fallbackTimer);
+    };
+  }, [
+    dashboardReady,
+    minimumLoadingElapsed,
+    normalizedPathname,
+    postAuthLoadingTarget,
+    postAuthRedirectHoldingScreenActive,
+    router,
+  ]);
 
   const handleAccessAction = useCallback(
     async (
@@ -1650,7 +1687,10 @@ function AuthGate() {
     );
   }
 
-  if (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') {
+  if (
+    (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||
+    authScreenLoadingHandoffActive
+  ) {
     return <LoadingTransitionVideo />;
   }
 
@@ -1750,7 +1790,7 @@ function AuthGate() {
                     ? boundaryPrimaryAccessAction.id === 'refresh_access'
                       ? boundaryPrimaryAccessAction.label === AUTH_COPY.accessGate.retry
                         ? 'Trying again...'
-                        : 'Refreshing...'
+                        : 'Verifying access...'
                       : boundaryPrimaryAccessAction.id === 'sign_out'
                         ? AUTH_COPY.logout.primaryLoading
                       : boundaryPrimaryAccessAction.id === 'start_subscription'
@@ -1981,6 +2021,13 @@ function AuthGate() {
                 }}
               />
               <Stack.Screen
+                name="convoy-command"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: MOTION.modalSlide,
+                }}
+              />
+              <Stack.Screen
                 name="expedition-archive"
                 options={{
                   animation: 'fade_from_bottom',
@@ -2111,6 +2158,7 @@ export default function RootLayout() {
         nextState === 'active'
       ) {
         ecsSyncCoordinator.resume();
+        offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
         void flushQueuedIssueEvents();
       }
 
@@ -2122,6 +2170,10 @@ export default function RootLayout() {
     return () => {
       subscription.remove();
     };
+  }, []);
+
+  useEffect(() => {
+    offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
   }, []);
 
   useEffect(() => {

@@ -89,7 +89,7 @@ function sourceFrom(input: { source?: ExpeditionReadinessSourceKind; isMock?: bo
 
 function isStaleInput(input: { updatedAt?: string | null; staleAfterMinutes?: number | null; isStale?: boolean } | null | undefined, nowIso: string, fallbackMinutes = 360): boolean {
   if (!input) return false;
-  if (input.isStale) return true;
+  if (input.isStale != null) return input.isStale;
   if (!input.updatedAt) return false;
   const updatedAtMs = Date.parse(input.updatedAt);
   const nowMs = Date.parse(nowIso);
@@ -249,9 +249,6 @@ function vehicleClassConcern(vehicleClass: string | null | undefined, difficulty
   if (!vehicleClass || difficultyRank <= 1) return null;
   if (vehicleClass === 'compact_suv_crossover' && difficultyRank >= 3) {
     return 'Compact SUV / crossover profile needs extra review for hard or technical routes.';
-  }
-  if (vehicleClass === 'full_size_hd_truck' && difficultyRank >= 3) {
-    return 'HD truck profile needs trail width, weight, and turnaround review.';
   }
   if (vehicleClass === 'van_overland_van' && difficultyRank >= 2) {
     return 'Van profile needs height, departure angle, wheelbase, and narrow access review.';
@@ -803,6 +800,25 @@ function offlinePreparedness(input: ExpeditionReadinessInput, nowIso: string): C
     factors.push(factor(id, label, unknownCopy, 'missing', flags.source, 'low', flags));
   };
 
+  const addOfflineReferenceFactor = (
+    id: string,
+    label: string,
+    ready: boolean | null | undefined,
+    readyCopy: string,
+    limitedCopy: string,
+    unknownCopy: string,
+  ) => {
+    if (ready === true) {
+      factors.push(factor(id, label, readyCopy, 'positive', flags.source, 'high', flags));
+      return;
+    }
+    if (ready === false) {
+      factors.push(factor(id, label, limitedCopy, 'neutral', flags.source, 'medium', flags));
+      return;
+    }
+    factors.push(factor(id, label, unknownCopy, 'neutral', flags.source, 'low', flags));
+  };
+
   if (!offline) {
     missingInputs.push('Offline package state');
     warnings.push(issue('offline_preparedness', 'warning', 'offline-state-unavailable', 'Offline state unavailable', 'Offline package state is unavailable; confidence is limited.'));
@@ -836,25 +852,13 @@ function offlinePreparedness(input: ExpeditionReadinessInput, nowIso: string): C
     }
   }
 
-  addOfflineFactor(
-    'route-geometry',
-    'Route geometry',
-    offline?.routeGeometryCached ?? offline?.routeDownloaded,
-    'Route geometry is cached for offline review.',
-    'Route geometry is not cached.',
-    'Route geometry cache state is unavailable.',
-    isRemote ? 18 : 12,
-    isRemote,
-  );
-  addOfflineFactor(
+  addOfflineReferenceFactor(
     'route-corridor-tiles',
     'Route corridor map tiles',
     offline?.mapTilesCachedForRoute ?? offline?.mapsDownloaded,
     'Route corridor map tiles are cached.',
-    isRemote ? 'Remote route corridor tiles are missing.' : 'Route corridor map tiles are not confirmed.',
-    'Route corridor tile cache state is unavailable.',
-    isRemote ? 24 : 14,
-    isRemote,
+    'Route corridor map tiles are not confirmed; this affects offline map detail, not route readiness by itself.',
+    'Route corridor tile cache state is unavailable; this does not block readiness by itself.',
   );
   addOfflineFactor(
     'camp-candidates',
@@ -892,14 +896,13 @@ function offlinePreparedness(input: ExpeditionReadinessInput, nowIso: string): C
     'Fuel, town, or road reference cache state is unavailable.',
     5,
   );
-  addOfflineFactor(
+  addOfflineReferenceFactor(
     'emergency-packet',
     'Emergency/communications packet',
     offline?.emergencyPacketAvailable ?? offline?.emergencyDocsAvailable,
     'Emergency or communications packet is available.',
-    'Emergency or communications packet is not available.',
-    'Emergency packet availability is not connected yet.',
-    6,
+    'Emergency packet is not packaged yet; Comms references can still be reviewed and edited before departure.',
+    'Emergency communications can be completed from the Comms reference section.',
   );
 
   return {
@@ -941,22 +944,24 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
   const remaining = fuel?.routeDistanceRemainingMiles ?? input.route?.distanceMiles ?? null;
   const reserve = fuel?.reserveMiles ?? (range != null && remaining != null ? range - remaining : null);
 
-  if (!fuel || range == null) {
+  if (!fuel || (range == null && fuel.fuelPercent == null)) {
     missingInputs.push('Fuel range remaining');
     score = 56;
+  } else if (range == null && fuel.fuelPercent != null) {
+    score = 84;
   } else if (reserve != null) {
     if (reserve < 0) {
       score = 35;
       blockers.push(issue('fuel_range_margin', 'blocker', 'fuel-range-deficit', 'Fuel range deficit', 'Fuel range is below route distance remaining.'));
     } else if (reserve < 30) {
-      score = 62;
-      warnings.push(issue('fuel_range_margin', 'warning', 'fuel-reserve-tight', 'Fuel reserve tight', `Fuel reserve is ${Math.round(reserve)} miles.`));
+      score = 84;
     } else if (reserve < 60) {
-      score = 76;
-      warnings.push(issue('fuel_range_margin', 'warning', 'fuel-reserve-watch', 'Fuel reserve narrowing', `Fuel reserve is ${Math.round(reserve)} miles.`));
+      score = 86;
     } else {
       score = 92;
     }
+  } else if (range != null) {
+    score = 86;
   }
 
   return {
@@ -964,9 +969,19 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
     label: CATEGORY_LABELS.fuel_range_margin,
     score,
     confidence: missingInputs.length ? 'low' : flags.source === 'manual' ? 'medium' : 'high',
-    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? 'Fuel range margin is usable.',
+    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (range == null && fuel?.fuelPercent != null ? 'Fuel level is available from manual or live vehicle input.' : 'Fuel range margin is usable.'),
     factors: fuel
-      ? [factor('fuel-range', 'Fuel range', `${range ?? 'Unknown'} miles remaining${reserve == null ? '' : `, ${Math.round(reserve)} miles reserve`}.`, score < 82 ? 'warning' : 'positive', flags.source, 'medium', flags)]
+      ? [factor(
+          'fuel-range',
+          'Fuel range',
+          range != null
+            ? `${range} miles remaining${reserve == null ? '' : `, ${Math.round(reserve)} miles reserve`}.`
+            : `${Math.round(fuel.fuelPercent ?? 0)}% fuel level available; range estimate depends on MPG or live range data.`,
+          score < 82 ? 'warning' : 'positive',
+          flags.source,
+          'medium',
+          flags,
+        )]
       : [factor('fuel-missing', 'Fuel range', 'Fuel range input is missing.', 'missing', 'missing', 'low')],
     missingInputs,
     lastUpdatedAt: fuel?.updatedAt ?? nowIso,
@@ -1028,11 +1043,13 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
     }
 
     if (power.inputWatts != null || power.outputWatts != null || power.solarInputWatts != null) {
-      const net = (power.inputWatts ?? 0) - (power.outputWatts ?? 0);
+      const recoveryWatts = (power.inputWatts ?? 0) + (power.solarInputWatts ?? 0);
+      const outputWatts = power.outputWatts ?? 0;
+      const net = recoveryWatts - outputWatts;
       factors.push(factor(
         'power-flow',
         'Power flow',
-        `Input ${Math.round(power.inputWatts ?? 0)}W / Output ${Math.round(power.outputWatts ?? 0)}W${power.solarInputWatts != null ? ` / Solar ${Math.round(power.solarInputWatts)}W` : ''}.`,
+        `Input ${formatPowerWatts(power.inputWatts)} / Output ${formatPowerWatts(power.outputWatts)}${power.solarInputWatts != null ? ` / Solar ${formatPowerWatts(power.solarInputWatts)}` : ''}.`,
         net < -250 ? 'warning' : 'neutral',
         flags.source,
         stale ? 'low' : 'medium',
@@ -1111,6 +1128,16 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
   };
 }
 
+function formatPowerWatts(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}W` : 'unknown';
+}
+
+function formatPowerSignedWatts(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'unknown';
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? '+' : ''}${rounded}W`;
+}
+
 function buildPowerBrief(input: ExpeditionReadinessInput, categories: ExpeditionReadinessCategory[]): ExpeditionPowerBrief {
   const power = input.power;
   const category = categories.find((item) => item.id === 'power_runtime');
@@ -1125,6 +1152,30 @@ function buildPowerBrief(input: ExpeditionReadinessInput, categories: Expedition
   const sourceSummary = power
     ? `${power.deviceLabel ?? power.providerLabel ?? 'Power system'} / ${connected ? 'connected' : power.connectionState ?? 'not connected'}`
     : 'No power system connected.';
+  const recoveryWatts =
+    power?.inputWatts != null || power?.solarInputWatts != null
+      ? (power?.inputWatts ?? 0) + (power?.solarInputWatts ?? 0)
+      : null;
+  const netWatts =
+    recoveryWatts != null || power?.outputWatts != null
+      ? (recoveryWatts ?? 0) - (power?.outputWatts ?? 0)
+      : null;
+  const stateOfChargeSummary =
+    power?.batteryPercent != null
+      ? `${Math.round(power.batteryPercent)}% state of charge.`
+      : connected
+        ? 'State of charge not reporting from the active power source.'
+        : 'State of charge unavailable.';
+  const flowSummary =
+    power
+      ? `Input ${formatPowerWatts(power.inputWatts)} / Output ${formatPowerWatts(power.outputWatts)} / Net ${formatPowerSignedWatts(netWatts)}.`
+      : 'Power flow unavailable.';
+  const solarSummary =
+    power?.solarInputWatts != null
+      ? `${formatPowerWatts(power.solarInputWatts)} solar input reporting.`
+      : connected
+        ? 'Solar input not reporting from the active power source.'
+        : 'Solar input unavailable.';
   const freshness = power?.dataFreshness ?? 'unknown';
   const status: ExpeditionPowerBrief['status'] =
     !connected && power?.powerRelevantForTrip !== true
@@ -1139,6 +1190,9 @@ function buildPowerBrief(input: ExpeditionReadinessInput, categories: Expedition
     statusLabel: status === 'ready' ? 'Ready' : status === 'caution' ? 'Caution' : 'Unknown',
     runtimeSummary,
     sourceSummary,
+    stateOfChargeSummary,
+    flowSummary,
+    solarSummary,
     freshnessSummary: `Power data freshness: ${freshness}.`,
     recommendation: power?.powerRecommendation
       ?? (power?.powerRelevantForTrip ? 'Add a runtime estimate or connect a power source before departure.' : 'Connect or update power only if powered loads matter.'),

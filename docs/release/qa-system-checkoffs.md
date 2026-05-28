@@ -55,7 +55,7 @@ Evidence/gate:
 - Fixed the pre-setup route guard so safety-critical Dispatch and Safety surfaces are reachable while vehicle recovery setup is required.
 - Captured Android Dispatch/Convoy panel evidence on device through `planning-offline-sync:///alert` across tablet portrait, phone portrait, phone landscape, and tablet landscape.
 - Fixed Dispatch Convoy phone portrait overlay collisions by adding cramped-width typography and label handling.
-- Fixed Dispatch Convoy landscape cutoff by enabling a short-screen Dispatch scroll path and removing the old panel max-height clamp so the Rive panel can use the full allowable width without distortion.
+- Fixed Dispatch Convoy landscape cutoff by enabling a short-screen Dispatch scroll path and removing the old panel max-height clamp so the Convoy Command map/fallback surface can use the full allowable width without distortion.
 - Fixed the Recovery Assist event-detail modal body collapse by giving the modal a minimum height fraction.
 - Captured Emergency Coordinate Ping GPS-allowed evidence on device: `PING GPS` created a local `Recovery Assist` row with coordinate and accuracy.
 - Captured Emergency Coordinate Ping GPS-denied evidence: Android permission prompt appeared, denial returned to Dispatch, and no fake coordinate event was created.

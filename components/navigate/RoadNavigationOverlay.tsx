@@ -52,7 +52,9 @@ type Props = {
   onClearDestination: () => void;
   onReroute: () => void;
   activeGuidanceMinimized?: boolean;
+  activeGuidanceWidth?: number;
   onToggleActiveGuidanceMinimized?: () => void;
+  onActiveGuidanceLayout?: (height: number) => void;
   activeAccessoryMinimized?: boolean;
   onExpandActiveAccessory?: () => void;
   uiMode: 'idle' | 'search' | 'preview' | 'active' | 'arrived' | 'error';
@@ -662,7 +664,9 @@ function ActiveNavigationCard({
   onEndNavigation,
   onReroute,
   activeGuidanceMinimized = false,
+  activeGuidanceWidth,
   onToggleActiveGuidanceMinimized,
+  onActiveGuidanceLayout,
   activeContext,
   activeAccessory,
   activeAccessoryMinimized = false,
@@ -676,7 +680,9 @@ function ActiveNavigationCard({
   | 'onEndNavigation'
   | 'onReroute'
   | 'activeGuidanceMinimized'
+  | 'activeGuidanceWidth'
   | 'onToggleActiveGuidanceMinimized'
+  | 'onActiveGuidanceLayout'
   | 'activeAccessoryMinimized'
   | 'onExpandActiveAccessory'
   | 'activeContext'
@@ -689,11 +695,17 @@ function ActiveNavigationCard({
     activeContext?.metrics && activeContext.metrics.length > 0
       ? activeContext.metrics.slice(0, 3)
       : [
-          { label: 'REMAIN', value: formatDistance(session.remainingDistanceM) },
+          { label: 'REMAINING', value: formatDistance(session.remainingDistanceM) },
           { label: 'ETA', value: formatEta(session.etaIso) },
           { label: 'TIME', value: formatDuration(session.remainingDurationS) },
         ];
-  const guidanceMetrics = effectiveMetrics.slice(0, 2);
+  const guidanceMetrics = effectiveMetrics
+    .filter((metric) => ['REMAIN', 'REMAINING', 'ETA'].includes(metric.label.toUpperCase()))
+    .slice(0, 2)
+    .map((metric) => ({
+      ...metric,
+      label: metric.label.toUpperCase() === 'REMAIN' ? 'REMAINING' : metric.label,
+    }));
   const showReroute = activeContext?.showReroute ?? (isRerouting || session.isOffRoute);
   const statusLine = activeContext?.statusText ?? session.routeStatusLabel ?? 'Route active';
   const distanceLine =
@@ -706,19 +718,28 @@ function ActiveNavigationCard({
   const guidanceEyebrow =
     activeContext?.eyebrow ?? (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
   const maneuverIcon = getManeuverIcon(nextInstruction);
-  const guidancePosition = {
-    top: topOffset,
-    left: horizontalInset,
-    right: horizontalInset,
-    paddingRight: guidanceRightInset,
-  };
+  const landscapeCompact = typeof activeGuidanceWidth === 'number' && activeGuidanceWidth > 0;
+  const guidancePosition = landscapeCompact
+    ? {
+        top: topOffset,
+        left: horizontalInset,
+        width: activeGuidanceWidth,
+      }
+    : {
+        top: topOffset,
+        left: horizontalInset,
+        right: horizontalInset,
+        paddingRight: guidanceRightInset,
+      };
   if (activeGuidanceMinimized) {
     return (
       <View
         pointerEvents="box-none"
+        onLayout={(event) => onActiveGuidanceLayout?.(event.nativeEvent.layout.height)}
         style={[
           styles.activeGuidanceWrap,
           guidancePosition,
+          landscapeCompact && styles.activeGuidanceLandscapeWrap,
           styles.activeGuidanceMiniWrap,
         ]}
       >
@@ -740,14 +761,20 @@ function ActiveNavigationCard({
   return (
     <View
       pointerEvents="box-none"
+      onLayout={(event) => onActiveGuidanceLayout?.(event.nativeEvent.layout.height)}
       style={[
         styles.activeGuidanceWrap,
         guidancePosition,
+        landscapeCompact && styles.activeGuidanceLandscapeWrap,
       ]}
     >
       <ECSPanel
         variant="secondary"
-        style={[styles.activeGuidanceCard, styles.activeGuidanceCardBanner]}
+        style={[
+          styles.activeGuidanceCard,
+          styles.activeGuidanceCardBanner,
+          landscapeCompact && styles.activeGuidanceLandscapeCard,
+        ]}
       >
           <View style={styles.activeGuidanceHeaderRow}>
             <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
@@ -772,7 +799,7 @@ function ActiveNavigationCard({
                 accessibilityLabel="Minimize active guidance"
               >
                 <Ionicons name="remove" size={13} color={TACTICAL.amber} />
-                <Text style={styles.activeGuidanceMinimizeButtonText}>Minimize</Text>
+                <Text style={styles.activeGuidanceMinimizeButtonText}>Min</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity
@@ -780,11 +807,11 @@ function ActiveNavigationCard({
               onPress={onEndNavigation}
               activeOpacity={0.82}
               hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="End active navigation"
             >
               <Ionicons name="square" size={10} color="#FFD9C7" />
-              <Text style={styles.activeGuidanceEndButtonText}>
-                {activeContext?.endLabel ?? 'End Nav'}
-              </Text>
+              <Text style={styles.activeGuidanceEndButtonText}>End</Text>
             </TouchableOpacity>
           </View>
           {activeAccessoryMinimized && onExpandActiveAccessory ? (
@@ -818,7 +845,7 @@ function ActiveNavigationCard({
           </View>
 
           <View style={styles.activeGuidanceMetricsRow}>
-            <View style={styles.activeGuidanceMetricChip}>
+            <View style={[styles.activeGuidanceMetricChip, styles.activeGuidancePrimaryMetricChip]}>
               <Text style={styles.activeGuidanceMetricLabel}>TURN</Text>
               <Text style={styles.activeGuidanceMetricValue} numberOfLines={1}>
                 {distanceLine}
@@ -1000,6 +1027,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           onReroute={props.onReroute}
           activeGuidanceMinimized={props.activeGuidanceMinimized}
           onToggleActiveGuidanceMinimized={props.onToggleActiveGuidanceMinimized}
+          onActiveGuidanceLayout={props.onActiveGuidanceLayout}
           activeAccessoryMinimized={props.activeAccessoryMinimized}
           onExpandActiveAccessory={props.onExpandActiveAccessory}
           activeContext={props.activeContext}
@@ -1292,15 +1320,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingLeft: 0,
   },
+  activeGuidanceLandscapeWrap: {
+    right: undefined,
+    alignItems: 'flex-start',
+  },
   activeGuidanceMiniWrap: {
     alignItems: 'flex-start',
     paddingLeft: 0,
     paddingRight: 0,
   },
   activeGuidanceMiniButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -1316,8 +1348,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 720,
     minHeight: 0,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderColor: 'rgba(196,138,44,0.34)',
     backgroundColor: 'rgba(5,8,10,0.90)',
     shadowColor: '#000',
@@ -1325,13 +1357,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 16,
     elevation: 14,
-    gap: 5,
+    gap: 4,
   },
   activeGuidanceCardBanner: {
     maxWidth: undefined,
     minHeight: 0,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  activeGuidanceLandscapeCard: {
+    maxWidth: undefined,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 4,
   },
   activeGuidanceHeaderRow: {
     flexDirection: 'row',
@@ -1342,8 +1380,8 @@ const styles = StyleSheet.create({
   activeGuidanceEyebrow: {
     ...TYPO.U2,
     color: TACTICAL.amber,
-    fontSize: 7.5,
-    letterSpacing: 1.6,
+    fontSize: 7,
+    letterSpacing: 1.2,
     flexShrink: 1,
   },
   activeGuidanceHeaderBadges: {
@@ -1354,8 +1392,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   activeGuidanceMinimizeButton: {
-    minHeight: 28,
-    paddingHorizontal: 8,
+    minHeight: 24,
+    paddingHorizontal: 7,
     borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1368,11 +1406,11 @@ const styles = StyleSheet.create({
   activeGuidanceMinimizeButtonText: {
     ...ECS_TEXT.chip,
     color: TACTICAL.amber,
-    fontSize: 8,
+    fontSize: 7.5,
   },
   activeGuidanceEndButton: {
-    minHeight: 28,
-    paddingHorizontal: 8,
+    minHeight: 24,
+    paddingHorizontal: 7,
     borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1385,7 +1423,7 @@ const styles = StyleSheet.create({
   activeGuidanceEndButtonText: {
     ...ECS_TEXT.chip,
     color: '#FFD9C7',
-    fontSize: 8,
+    fontSize: 7.5,
   },
   activeGuidanceRow: {
     flexDirection: 'row',
@@ -1393,9 +1431,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   activeGuidanceIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(212,160,23,0.12)',
@@ -1409,8 +1447,8 @@ const styles = StyleSheet.create({
   },
   activeGuidanceInstruction: {
     ...ECS_TEXT.cardTitle,
-    fontSize: 13,
-    lineHeight: 16,
+    fontSize: 12.5,
+    lineHeight: 15,
     minHeight: 0,
   },
   activeGuidanceDetail: {
@@ -1420,26 +1458,31 @@ const styles = StyleSheet.create({
   },
   activeGuidanceMetricsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 5,
   },
   activeGuidanceMetricChip: {
     flex: 1,
+    flexBasis: 0,
     minWidth: 0,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
     backgroundColor: 'rgba(255,255,255,0.025)',
     paddingHorizontal: 7,
-    paddingVertical: 5,
+    paddingVertical: 4,
     gap: 1,
+  },
+  activeGuidancePrimaryMetricChip: {
+    flexBasis: '100%',
   },
   activeGuidanceMetricLabel: {
     ...ECS_TEXT.statLabel,
-    fontSize: 7.5,
+    fontSize: 7,
   },
   activeGuidanceMetricValue: {
     ...ECS_TEXT.statValue,
-    fontSize: 11.5,
+    fontSize: 11,
   },
   bottomCard: {
     width: '100%',

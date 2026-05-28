@@ -164,33 +164,16 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
   // Phase 2E: Safe disconnect action
   const disconnectProvider = useCallback(async () => {
     try {
-      // Stop polling first
-      vehicleTelemetryService.stopPolling();
-
-      // Disconnect OBD-II adapter
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { obd2Adapter } = require('./OBD2Adapter');
-      await obd2Adapter.disconnect();
-
-      // Clear inactive devices from registry
-      const allDevices = vehicleTelemetryDeviceRegistry.getAll();
-      for (const device of allDevices) {
-        if (device.connection_state === 'disconnected' || device.connection_state === 'error') {
-          vehicleTelemetryService.removeDevice(device.device_id);
-        }
-      }
-
-      // Clear active provider if no devices remain
-      if (vehicleTelemetryDeviceRegistry.getCount() === 0) {
-        vehicleTelemetryService.clearActiveProvider();
-        vehicleTelemetryStore.clear();
-      }
+      await vehicleTelemetryService.disconnect({ manualDisconnectRequested: true });
+      vehicleTelemetryService.clearActiveProvider();
+      vehicleTelemetryStore.clear();
 
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.log('[VT-Hook] Provider disconnected and cleaned up');
       }
     } catch (err: any) {
       console.warn('[VT-Hook] Disconnect error:', err?.message);
+      throw err;
     }
   }, []);
 

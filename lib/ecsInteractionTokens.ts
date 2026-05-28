@@ -30,18 +30,18 @@ export const ECS_INTERACTION = {
 
 export const ECS_BUTTON_COLORS = {
   primary: {
-    background: TACTICAL.amber,
-    border: TACTICAL.amber,
+    background: TACTICAL.goldStrong,
+    border: TACTICAL.goldStrong,
     text: '#0B0F12',
   },
   secondary: {
-    background: 'rgba(212,160,23,0.08)',
-    border: 'rgba(212,160,23,0.28)',
-    text: TACTICAL.amber,
+    background: TACTICAL.goldWash,
+    border: TACTICAL.goldSoft,
+    text: TACTICAL.goldMedium,
   },
   tertiary: {
     background: 'rgba(255,255,255,0.02)',
-    border: ECS.strokeSoft,
+    border: ECS.strokeMuted,
     text: TACTICAL.text,
   },
   destructive: {
@@ -52,21 +52,21 @@ export const ECS_BUTTON_COLORS = {
   active: {
     background: 'rgba(212,160,23,0.12)',
     border: 'rgba(212,160,23,0.34)',
-    text: TACTICAL.amber,
+    text: TACTICAL.goldStrong,
   },
   chipSelected: {
     background: 'rgba(212,160,23,0.14)',
     border: 'rgba(212,160,23,0.34)',
-    text: TACTICAL.amber,
+    text: TACTICAL.goldStrong,
   },
   chipDefault: {
-    background: ECS.bgElev,
-    border: ECS.stroke,
+    background: ECS.bgPanelInactive,
+    border: ECS.strokeMuted,
     text: TACTICAL.textMuted,
   },
   disabled: {
-    background: 'rgba(62,79,60,0.16)',
-    border: 'rgba(62,79,60,0.30)',
+    background: ECS.bgPanelInactive,
+    border: ECS.strokeMuted,
     text: TACTICAL.textMuted,
   },
 } as const;

@@ -18,12 +18,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSModal, { type OverlayTier } from './ECSModal';
 import ECSShellTexture from './ECSShellTexture';
-import { getShellBottomClearance } from '../lib/shellLayout';
+import {
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  getShellBottomClearance,
+  getShellHeaderTopPadding,
+} from '../lib/shellLayout';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import type { OverlayStackBehavior } from '../lib/overlayCoordinator';
 import { EASING, MOTION } from '../lib/motion';
 import { useTheme } from '../context/ThemeContext';
-import { ECS_POPUP_SURFACE_DARK } from '../lib/theme';
+import { resolveEcsPopupSurfaceTheme } from '../lib/theme';
 
 export type ECSOverlayClass = 'workflow' | 'editor' | 'action' | 'dialog' | 'info' | 'support';
 
@@ -182,37 +186,7 @@ export default function ECSModalShell({
   const { palette, colors, effectiveTheme } = useTheme();
   const translateY = useRef(new Animated.Value(0)).current;
   const closingRef = useRef(false);
-  const surfaceTheme = useMemo(() => {
-    if (effectiveTheme === 'light') {
-      return {
-        shellBg: 'rgba(255, 251, 245, 0.97)',
-        shellBorder: 'rgba(169,119,27,0.22)',
-        headerBg: 'rgba(248, 244, 236, 0.96)',
-        handleBg: 'rgba(248, 244, 236, 0.98)',
-        handleBar: 'rgba(110, 78, 24, 0.18)',
-        controlBg: 'rgba(255,255,255,0.72)',
-        controlBorder: 'rgba(169,119,27,0.18)',
-        divider: 'rgba(169,119,27,0.14)',
-        footerBg: 'rgba(248, 244, 236, 0.94)',
-      };
-    }
-
-    if (effectiveTheme === 'driving') {
-      return {
-        shellBg: 'rgba(30, 35, 40, 0.99)',
-        shellBorder: 'rgba(224,160,48,0.24)',
-        headerBg: 'rgba(38, 44, 50, 0.98)',
-        handleBg: 'rgba(38, 44, 50, 0.98)',
-        handleBar: 'rgba(241, 211, 160, 0.18)',
-        controlBg: 'rgba(42,48,56,0.9)',
-        controlBorder: 'rgba(224,160,48,0.18)',
-        divider: 'rgba(224,160,48,0.14)',
-        footerBg: 'rgba(34, 39, 45, 0.96)',
-      };
-    }
-
-    return ECS_POPUP_SURFACE_DARK;
-  }, [effectiveTheme]);
+  const surfaceTheme = useMemo(() => resolveEcsPopupSurfaceTheme(effectiveTheme), [effectiveTheme]);
 
   const adaptiveMaxWidth =
     preset.layout === 'dialog'
@@ -236,13 +210,20 @@ export default function ECSModalShell({
   const iconGlyphSize = adaptive.overlay.iconGlyphSize;
   const actionGlyphSize = adaptive.overlay.actionGlyphSize;
   const isWorkflowSheet = overlayClass === 'workflow' && preset.layout === 'sheet';
+  const isFullBodySheet =
+    preset.layout === 'sheet' &&
+    (resolvedMaxHeightFraction >= 1 || (resolvedMinHeightFraction ?? 0) >= 1);
 
   const defaultTopClearance = Platform.OS === 'web'
     ? 22
-    : Math.max(
-      insets.top + (isExpanded ? (isWorkflowSheet ? 12 : 18) : (isWorkflowSheet ? 6 : 10)),
-      preset.layout === 'dialog' ? 18 : (isWorkflowSheet ? 8 : 12),
-    );
+    : isFullBodySheet
+      ? getShellHeaderTopPadding(insets.top) +
+        ECS_TOP_SHELL_COMMAND_PILL_HEIGHT +
+        (isWorkflowSheet ? 10 : 8)
+      : Math.max(
+        insets.top + (isExpanded ? (isWorkflowSheet ? 12 : 18) : (isWorkflowSheet ? 6 : 10)),
+        preset.layout === 'dialog' ? 18 : (isWorkflowSheet ? 8 : 12),
+      );
   const defaultBottomClearance = preset.layout === 'sheet'
     ? getShellBottomClearance(
       insets.bottom,

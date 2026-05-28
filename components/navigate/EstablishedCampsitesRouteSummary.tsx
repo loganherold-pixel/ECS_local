@@ -22,24 +22,6 @@ function formatDistance(value?: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} mi`;
 }
 
-function badgeLabel(value: string): string {
-  switch (value) {
-    case 'first_come':
-      return 'first-come';
-    case 'reservable':
-      return 'reservable';
-    case 'paid':
-      return 'paid';
-    case 'free':
-      return 'free';
-    case 'unknown':
-      return 'unknown';
-    default:
-      break;
-  }
-  return value.replace(/_/g, '-');
-}
-
 export default function EstablishedCampsitesRouteSummary({
   visible,
   results,
@@ -59,7 +41,7 @@ export default function EstablishedCampsitesRouteSummary({
 
   return (
     <View
-      pointerEvents="box-none"
+      pointerEvents={hasResults ? 'box-none' : 'none'}
       style={[
         styles.card,
         {
@@ -68,7 +50,7 @@ export default function EstablishedCampsitesRouteSummary({
         },
       ]}
     >
-      <View style={styles.header}>
+      <View pointerEvents="none" style={styles.header}>
         <View style={styles.headerTitleRow}>
           <Ionicons name="trail-sign-outline" size={13} color={TACTICAL.amber} />
           <Text style={styles.title}>Established Campgrounds Near Route</Text>
@@ -94,14 +76,6 @@ export default function EstablishedCampsitesRouteSummary({
                 <Text style={styles.distanceText} numberOfLines={1}>
                   {formatDistance(campsite.distanceFromRouteMiles)} from route
                 </Text>
-              </View>
-              <View style={styles.badgeStack}>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{badgeLabel(campsite.feeStatus)}</Text>
-                </View>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{badgeLabel(campsite.reservationStatus)}</Text>
-                </View>
               </View>
               <TouchableOpacity
                 style={styles.viewButton}
@@ -189,25 +163,6 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 8,
     letterSpacing: 0.5,
-  },
-  badgeStack: {
-    gap: 4,
-    alignItems: 'flex-end',
-  },
-  badge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(242,194,77,0.22)',
-    backgroundColor: 'rgba(242,194,77,0.08)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  badgeText: {
-    ...TYPO.U2,
-    color: TACTICAL.text,
-    fontSize: 7,
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
   },
   viewButton: {
     minHeight: 24,

@@ -16,6 +16,22 @@ function isDevCampOpsVisualQaRoute(path: string | null | undefined): boolean {
   return DEV_CAMPOPS_VISUAL_QA_ROUTE && path === '/dev/campops-visual-qa';
 }
 
+function isPrimaryShellRoute(path: string | null | undefined): boolean {
+  return (
+    path === '/fleet' ||
+    path === '/navigate' ||
+    path === '/dashboard' ||
+    path === '/discover' ||
+    path === '/explore' ||
+    path === '/alert' ||
+    path === '/safety' ||
+    path === '/vehicle-config' ||
+    path === '/route' ||
+    path === '/more' ||
+    path === '/intel'
+  );
+}
+
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
   setupRecoveryRequired?: boolean;
@@ -112,11 +128,7 @@ export function resolveDistributionEntryState(
     shellAccessReady &&
     !setupComplete &&
     setupRecoveryRequired &&
-    (currentPath === '/fleet' ||
-      currentPath === '/navigate' ||
-      currentPath === '/alert' ||
-      currentPath === '/safety' ||
-      currentPath === '/vehicle-config');
+    isPrimaryShellRoute(currentPath);
   const allowPreSetupShellRoute =
     shellAccessReady &&
     !setupComplete &&

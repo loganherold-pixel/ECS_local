@@ -13,6 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { OBD2DiscoveredDevice, OBD2AdapterState, OBD2ScanDiagnostics } from './OBD2Adapter';
 import { obd2Adapter } from './OBD2Adapter';
+import { vehicleTelemetryService } from './VehicleTelemetryService';
 import type { TelemetrySourceStatus } from './TelemetryDiscoveryControl';
 
 export interface OBD2ScannerHookResult {
@@ -160,7 +161,7 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
   }, []);
 
   const disconnect = useCallback(async () => {
-    await obd2Adapter.disconnect();
+    await vehicleTelemetryService.disconnect({ manualDisconnectRequested: true });
     setConnectionJustSucceeded(false);
   }, []);
 

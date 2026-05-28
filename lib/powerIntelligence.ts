@@ -619,9 +619,12 @@ function computeSnapshot(
   const smoothedSolarWatts = average(recentSamples.map((sample) => sample.solarInputWatts)) ?? aggregate.solarInputWatts;
   const netWatts =
     smoothedInputWatts != null && smoothedOutputWatts != null
-      ? smoothedInputWatts - smoothedOutputWatts
+      ? smoothedInputWatts + (smoothedSolarWatts ?? 0) - smoothedOutputWatts
       : null;
-  const inputOffsetRatio = percentage(smoothedInputWatts, smoothedOutputWatts);
+  const totalRecoveryWatts = smoothedInputWatts != null
+    ? smoothedInputWatts + (smoothedSolarWatts ?? 0)
+    : smoothedSolarWatts;
+  const inputOffsetRatio = percentage(totalRecoveryWatts, smoothedOutputWatts);
   const solarOffsetRatio = percentage(smoothedSolarWatts, smoothedOutputWatts);
 
   const drainRateTrend = deriveTrend(
@@ -646,7 +649,7 @@ function computeSnapshot(
     && smoothedOutputWatts != null
       ? computePowerForecast({
           socPct: aggregate.batteryPercent,
-          wattsIn: smoothedInputWatts ?? 0,
+          wattsIn: (smoothedInputWatts ?? 0) + (smoothedSolarWatts ?? 0),
           wattsOut: smoothedOutputWatts,
           capacityWh: aggregate.capacityWh,
         })

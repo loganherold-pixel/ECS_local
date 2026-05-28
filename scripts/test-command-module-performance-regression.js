@@ -22,7 +22,7 @@ assert(
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const STORAGE_KEY_SELECTED_MODULE = 'ecs_command_center_module'") &&
-    commandModuleStore.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, moduleId)') &&
+    commandModuleStore.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized)') &&
     commandModuleStore.includes('waitForHydration()'),
   'Command Module store must default to Attitude Monitor and persist selected module preferences.',
 );

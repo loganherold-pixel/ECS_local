@@ -27,11 +27,11 @@ assert(
   'MapRenderer should add the remoteness heatmap fill layer.',
 );
 assert(
-  mapRenderer.includes("'ecs-remote-forecast-line'") && mapRenderer.includes('[1.4, 1.2]'),
-  'MapRenderer should add a dashed forecast line layer.',
+  mapRenderer.includes("'ecs-remote-forecast-line'") && mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16, 0.44)"),
+  'MapRenderer should add a wide translucent route-snapped forecast segment layer.',
 );
 assert(
-  mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 7.5") &&
+  mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16") &&
     overlayBuilder.includes('const BUFFER_DEGREES = 0.00125'),
   'Remoteness route corridor should render as a wider, readable corridor at full-route zoom.',
 );
@@ -66,7 +66,11 @@ assert(
 );
 assert(
   navigate.includes('presentRemotenessLegendDisclosure') &&
+    navigate.includes('activeGuidanceMeasuredHeight') &&
+    navigate.includes('const activeGuidanceRenderedHeight =') &&
     navigate.includes('remotenessLegendTopOffset') &&
+    navigate.includes('activeGuidanceRenderedHeight +') &&
+    navigate.includes('onActiveGuidanceLayout={handleActiveGuidanceLayout}') &&
     navigate.includes('top: remotenessLegendTopOffset') &&
     navigate.includes('remotenessLegendDisclosureOpacity') &&
     navigate.includes('ECS is shading the active route corridor by expected signal confidence and isolation') &&
@@ -75,7 +79,8 @@ assert(
 );
 assert(
   overlayBuilder.includes('MAX_HEATMAP_AREAS = 48') &&
-    overlayBuilder.includes('MAX_FORECAST_SEGMENTS = 12'),
+    overlayBuilder.includes('MAX_FORECAST_SEGMENTS = 12') &&
+    overlayBuilder.includes('remote-forecast-segment'),
   'Remoteness map overlay builder should bound generated features for WebView performance.',
 );
 assert(

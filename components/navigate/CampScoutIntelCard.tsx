@@ -58,7 +58,7 @@ function sourceLabel(sourceType: CampScoutSourceType): string {
 function sourceDescription(sourceType: CampScoutSourceType): string {
   switch (sourceType) {
     case 'ecs_inferred':
-      return 'ECS-Inferred candidate scouting location. Dispersed camping may be allowed based on available signals; verify locally before relying on it.';
+      return 'ECS-Inferred candidate scouting location. This is a projection only from eligibility, access, remoteness, route proximity, and terrain signals; verify locally before relying on it.';
     case 'official_mapped':
       return 'This location appears in mapped campground/POI data. Verify availability, fees, and access.';
     case 'community_suggested':
@@ -71,7 +71,9 @@ function sourceDescription(sourceType: CampScoutSourceType): string {
 }
 
 const ECS_INFERRED_VERIFICATION_WARNING =
-  'This is an ECS-inferred candidate, not a confirmed allowed overnight stop. Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.';
+  'This is an ECS-inferred projection only, not a confirmed legal campsite. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
+const CAMP_SCOUT_AREA_POTENTIAL_NOTE =
+  'This pin is not an exact campsite location. ECS is marking an area with high potential for viable campsites; verify the exact site on foot and avoid water, private land, buildings, roads, and unsafe terrain.';
 
 function gradeColor(grade: CampScoutCandidate['confidenceGrade']): string {
   switch (grade) {
@@ -196,9 +198,9 @@ export default function CampScoutIntelCard({
             maxWidth: maxWidth ?? undefined,
           },
         ]}
-        pointerEvents="auto"
+        pointerEvents="box-none"
       >
-        <View style={styles.card}>
+        <View style={styles.card} pointerEvents="auto">
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
               <Text style={styles.eyebrow}>{isCampOps ? 'CAMP INTEL' : 'CAMP SCOUT'}</Text>
@@ -320,6 +322,13 @@ export default function CampScoutIntelCard({
                     {basis}
                   </Text>
                 ))}
+              </View>
+            ) : null}
+
+            {activeCandidate ? (
+              <View style={styles.areaPotentialNotice}>
+                <Ionicons name="navigate-circle-outline" size={14} color={TACTICAL.amber} />
+                <Text style={styles.areaPotentialNoticeText}>{CAMP_SCOUT_AREA_POTENTIAL_NOTE}</Text>
               </View>
             ) : null}
 
@@ -462,9 +471,12 @@ const styles = StyleSheet.create({
     minHeight: 0,
     zIndex: 181,
     elevation: 181,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
   },
   card: {
-    flex: 1,
+    width: '100%',
+    maxHeight: 420,
     minHeight: 0,
     borderRadius: 16,
     borderWidth: 1,
@@ -563,6 +575,24 @@ const styles = StyleSheet.create({
   },
   sourceNoticeText: {
     ...TYPO.B2,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  areaPotentialNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(242,194,77,0.22)',
+    backgroundColor: 'rgba(242,194,77,0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  areaPotentialNoticeText: {
+    ...TYPO.B2,
+    flex: 1,
     color: TACTICAL.text,
     fontSize: 11,
     lineHeight: 16,

@@ -76,6 +76,23 @@ export function mapAttitudeInputForTelemetryFrame(
     };
   }
 
+  if (telemetryFrame === 'device') {
+    const pitch = safeDeg(input.pitchDeg);
+    const roll = safeDeg(input.rollDeg);
+
+    if (orientation === 'portraitUpsideDown') {
+      return {
+        pitchDeg: -pitch,
+        rollDeg: -roll,
+      };
+    }
+
+    return {
+      pitchDeg: pitch,
+      rollDeg: roll,
+    };
+  }
+
   return mapScreenAttitudeToVehicleAttitude(input, orientation);
 }
 

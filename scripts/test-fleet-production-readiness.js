@@ -24,9 +24,11 @@ async function main() {
   });
 
   [
+    'fleet_production_evidence_contract_complete',
     'android_fleet_profile_visual_evidence_present',
     'multi_vehicle_active_selection_evidence_present',
     'scale_ticket_profile_evidence_present',
+    'source_confidence_offline_android_qa_evidence_present',
     'offline_persistence_migration_evidence_present',
     'production_owner_decision_accepted',
   ].forEach((id) => {
@@ -39,6 +41,24 @@ async function main() {
   assert.ok(
     result.notes.some((note) => note.includes('no-photo')),
     'Gate notes should keep the Fleet no-photo production rule explicit.',
+  );
+  assert.deepStrictEqual(
+    result.evidenceContract.requiredFields,
+    [
+      'androidFleetProfileVisualQaPassed',
+      'multiVehicleActiveSelectionEvidencePassed',
+      'scaleTicketProfileEvidencePassed',
+      'sourceConfidenceOfflineStatesVisible',
+      'offlinePersistenceMigrationEvidencePassed',
+      'productionDecision',
+      'buildAndDevice',
+      'androidQaStateMatrix',
+      'deviceMatrix',
+      'evidenceReferences',
+      'reviewerSignoff',
+      'notes',
+    ],
+    'Fleet evidence contract should name the Android QA/source/confidence/offline fields needed to unblock production.',
   );
 
   console.log('Fleet production readiness checks passed');

@@ -1,4 +1,5 @@
 import type {
+  RoadNavCoordinate,
   RoadNavDestination,
   RoadNavSourceType,
   RoadNavStatus,
@@ -21,6 +22,13 @@ export interface PersistedRoadNavigationSession {
   >;
   createdFrom: RoadNavSourceType;
   updatedAt: string;
+  routeId?: string | null;
+  routeGeometry?: RoadNavCoordinate[];
+  routeDistanceM?: number | null;
+  routeDurationS?: number | null;
+  routeCreatedAt?: string | null;
+  routeGeometryCacheKey?: string | null;
+  routeGeometryFingerprint?: string | null;
 }
 
 async function readStoredSession(): Promise<string | null> {

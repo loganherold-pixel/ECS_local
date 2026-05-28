@@ -9,7 +9,7 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 
 export type ExpeditionPlaceholderTitle =
   | 'Overview'
@@ -54,6 +54,7 @@ export default function ExpeditionPlaceholderModal({
   onClose,
 }: ExpeditionPlaceholderModalProps) {
   const resolvedTitle = title ?? 'Overview';
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
 
   return (
     <TacticalPopupShell
@@ -64,7 +65,7 @@ export default function ExpeditionPlaceholderModal({
       eyebrow="EXPEDITION FRAMEWORK"
       subtitle={PURPOSE_COPY[resolvedTitle]}
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
       contentContainerStyle={styles.content}
       footer={
         <TouchableOpacity style={styles.closeButton} activeOpacity={0.78} onPress={onClose}>

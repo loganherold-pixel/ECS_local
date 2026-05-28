@@ -14,14 +14,19 @@
  *   - Tile breakdown per zoom level
  *   - Create button
  */
-import React, { useState, useMemo, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, TextInput, StyleSheet } from 'react-native';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput, StyleSheet, Platform } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
 import { MAP_STYLES, type MapStyleKey } from '../../lib/mapConfig';
 import { runStore, type ECSRun } from '../../lib/runStore';
 import { routeStore, type ImportedRoute } from '../../lib/routeStore';
+import {
+  navigateRouteSessionStore,
+  type NavigateRouteSessionSnapshot,
+} from '../../lib/navigateRouteSessionStore';
+import { fsReadFileFromPickerUri } from '../../lib/fsCompat';
 import {
   computeRouteCorridor,
   countTilesForRegion,
@@ -67,11 +72,31 @@ const ZOOM_PRESETS = [
 ];
 
 const AVAILABLE_STYLES = MAP_STYLES;
+const GPX_ACCEPTED_EXTENSIONS = ['gpx', 'xml'];
+
+function normalizeRoutePoints(points: { lat?: number; lng?: number; lon?: number }[]): { lat: number; lng: number }[] {
+  return points
+    .map((point) => {
+      const lat = Number(point.lat);
+      const lng = Number(point.lng ?? point.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+      return { lat, lng };
+    })
+    .filter((point): point is { lat: number; lng: number } => Boolean(point));
+}
 
 export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, onCancel }: Props) {
   const [mode, setMode] = useState<SelectionMode>('route');
+  const [selectionSource, setSelectionSource] = useState<'active' | 'run' | 'route' | null>(null);
   const [selectedRun, setSelectedRun] = useState<ECSRun | null>(null);
   const [selectedRoute, setSelectedRoute] = useState<ImportedRoute | null>(null);
+  const [routeRefreshKey, setRouteRefreshKey] = useState(0);
+  const [importingRoute, setImportingRoute] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [activeGuidance, setActiveGuidance] = useState<NavigateRouteSessionSnapshot>(
+    () => navigateRouteSessionStore.getSnapshot(),
+  );
   const [corridorMiles, setCorridorMiles] = useState(3);
   const [zoomMin, setZoomMin] = useState(8);
   const [zoomMax, setZoomMax] = useState(14);
@@ -85,15 +110,44 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
   const [bboxMinLng, setBboxMinLng] = useState('');
   const [bboxMaxLng, setBboxMaxLng] = useState('');
 
-  const runs = useMemo(() => runStore.getAll(), []);
-  const routes = useMemo(() => routeStore.getAll(), []);
+  useEffect(() => {
+    const unsubscribe = navigateRouteSessionStore.subscribe(setActiveGuidance);
+    void navigateRouteSessionStore.hydrateFromPersistence().then(setActiveGuidance);
+    return unsubscribe;
+  }, []);
+
+  const runs = useMemo(() => {
+    void routeRefreshKey;
+    return runStore.getAll();
+  }, [routeRefreshKey]);
+  const routes = useMemo(() => {
+    void routeRefreshKey;
+    return routeStore.getAll();
+  }, [routeRefreshKey]);
+  const activeGuidancePoints = useMemo(
+    () => normalizeRoutePoints(activeGuidance.routePoints),
+    [activeGuidance.routePoints],
+  );
+  const activeGuidanceAvailable =
+    activeGuidance.lifecycle !== 'inactive' && activeGuidancePoints.length >= 2;
+
+  useEffect(() => {
+    if (selectionSource) return;
+    if (!activeGuidanceAvailable) return;
+    setSelectionSource('active');
+    setSelectedRun(null);
+    setSelectedRoute(null);
+  }, [activeGuidanceAvailable, selectionSource]);
 
   // Compute bounds and tile estimates
   const routePoints = useMemo(() => {
-    if (selectedRun) {
-      return selectedRun.points.map(p => ({ lat: p.lat, lng: p.lng }));
+    if (selectionSource === 'active') {
+      return activeGuidancePoints;
     }
-    if (selectedRoute) {
+    if (selectionSource === 'run' && selectedRun) {
+      return normalizeRoutePoints(selectedRun.points.map(p => ({ lat: p.lat, lng: p.lng })));
+    }
+    if (selectionSource === 'route' && selectedRoute) {
       const pts: { lat: number; lng: number }[] = [];
       for (const seg of selectedRoute.segments) {
         for (const p of seg.points) {
@@ -105,10 +159,10 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
           pts.push({ lat: wp.lat, lng: wp.lon });
         }
       }
-      return pts;
+      return normalizeRoutePoints(pts);
     }
     return [];
-  }, [selectedRun, selectedRoute]);
+  }, [activeGuidancePoints, selectedRun, selectedRoute, selectionSource]);
 
   const computedBounds = useMemo((): TileBounds | null => {
     if (mode === 'route' && routePoints.length > 0) {
@@ -141,10 +195,11 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
   }, [computedBounds, zoomMin, zoomMax]);
 
   const defaultName = useMemo(() => {
-    if (selectedRun) return `${selectedRun.title} — ${corridorMiles}mi`;
-    if (selectedRoute) return `${selectedRoute.name} — ${corridorMiles}mi`;
+    if (selectionSource === 'active') return `${activeGuidance.routeTitle ?? 'Active guidance'} - ${corridorMiles}mi`;
+    if (selectionSource === 'run' && selectedRun) return `${selectedRun.title} - ${corridorMiles}mi`;
+    if (selectionSource === 'route' && selectedRoute) return `${selectedRoute.name} - ${corridorMiles}mi`;
     return 'Custom Region';
-  }, [selectedRun, selectedRoute, corridorMiles]);
+  }, [activeGuidance.routeTitle, selectedRun, selectedRoute, selectionSource, corridorMiles]);
 
   const canCreate = computedBounds !== null && tileCount > 0 && tileCount < 100000;
 
@@ -163,6 +218,100 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
     setZoomMin(preset.min);
     setZoomMax(preset.max);
   };
+
+  const selectActiveGuidance = useCallback(() => {
+    setSelectionSource('active');
+    setSelectedRun(null);
+    setSelectedRoute(null);
+    setImportMessage(null);
+  }, []);
+
+  const importGpxContent = useCallback((content: string, fileName: string) => {
+    if (!content.trim()) {
+      setImportMessage('Selected GPX file was empty.');
+      return;
+    }
+    const route = routeStore.importGPX(content, 'offline_region_import');
+    setRouteRefreshKey((value) => value + 1);
+    setSelectionSource('route');
+    setSelectedRun(null);
+    setSelectedRoute(route);
+    setImportMessage(`Imported ${route.name} for offline region planning.`);
+  }, []);
+
+  const handleImportGpx = useCallback(async () => {
+    if (importingRoute) return;
+    setImportingRoute(true);
+    setImportMessage(null);
+
+    try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        await new Promise<void>((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.gpx,.xml,application/gpx+xml,text/xml,application/xml';
+          input.onchange = async (event: any) => {
+            const file = event.target?.files?.[0];
+            if (!file) {
+              setImportMessage('No GPX file selected.');
+              resolve();
+              return;
+            }
+            const fileName = file.name || 'imported.gpx';
+            const ext = fileName.split('.').pop()?.toLowerCase() || '';
+            if (!GPX_ACCEPTED_EXTENSIONS.includes(ext)) {
+              setImportMessage('Select a GPX file to create an offline route corridor.');
+              resolve();
+              return;
+            }
+            try {
+              importGpxContent(await file.text(), fileName);
+            } catch (error) {
+              setImportMessage(error instanceof Error ? error.message : 'GPX import failed.');
+            }
+            resolve();
+          };
+          (input as any).oncancel = () => {
+            setImportMessage('No GPX file selected.');
+            resolve();
+          };
+          input.click();
+        });
+        return;
+      }
+
+      const DocumentPicker = await import('expo-document-picker');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/gpx+xml', 'text/xml', 'application/xml', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length) {
+        setImportMessage('No GPX file selected.');
+        return;
+      }
+      const asset = result.assets[0];
+      const fileName = asset.name || 'imported.gpx';
+      const ext = fileName.split('.').pop()?.toLowerCase() || '';
+      if (!GPX_ACCEPTED_EXTENSIONS.includes(ext)) {
+        setImportMessage('Select a GPX file to create an offline route corridor.');
+        return;
+      }
+      if (!asset.uri) {
+        setImportMessage('Could not read the selected GPX file location.');
+        return;
+      }
+      const content = await fsReadFileFromPickerUri(asset.uri);
+      if (!content) {
+        setImportMessage('Could not read the selected GPX file content.');
+        return;
+      }
+      importGpxContent(content, fileName);
+    } catch (error) {
+      setImportMessage(error instanceof Error ? error.message : 'GPX import failed.');
+    } finally {
+      setImportingRoute(false);
+    }
+  }, [importGpxContent, importingRoute]);
 
   return (
     <View style={styles.container}>
@@ -196,18 +345,47 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
       {/* Route selection */}
       {mode === 'route' && (
         <>
-          <Text style={styles.fieldLabel}>SELECT RUN OR ROUTE</Text>
+          <View style={styles.fieldHeaderRow}>
+            <Text style={styles.fieldLabel}>SELECT RUN OR ROUTE</Text>
+            <TouchableOpacity
+              style={[styles.importBtn, importingRoute && styles.importBtnDisabled]}
+              onPress={handleImportGpx}
+              activeOpacity={0.82}
+              disabled={importingRoute}
+            >
+              <Ionicons name="document-attach-outline" size={11} color={TACTICAL.amber} />
+              <Text style={styles.importBtnText}>{importingRoute ? 'IMPORTING' : 'IMPORT GPX'}</Text>
+            </TouchableOpacity>
+          </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.runList}>
+            {activeGuidanceAvailable ? (
+              <TouchableOpacity
+                key="active-guidance"
+                style={[styles.runChip, styles.activeGuidanceChip, selectionSource === 'active' && styles.runChipActive]}
+                onPress={selectActiveGuidance}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="radio-outline" size={10} color={selectionSource === 'active' ? TACTICAL.amber : '#66BB6A'} />
+                <View>
+                  <Text style={[styles.runChipTitle, selectionSource === 'active' && styles.runChipTitleActive]} numberOfLines={1}>
+                    {activeGuidance.routeTitle ?? 'Active guidance'}
+                  </Text>
+                  <Text style={styles.runChipMeta}>
+                    Active guidance - {activeGuidancePoints.length} pts
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
             {runs.map(run => (
               <TouchableOpacity
                 key={`run-${run.id}`}
-                style={[styles.runChip, selectedRun?.id === run.id && styles.runChipActive]}
-                onPress={() => { setSelectedRun(run); setSelectedRoute(null); }}
+                style={[styles.runChip, selectionSource === 'run' && selectedRun?.id === run.id && styles.runChipActive]}
+                onPress={() => { setSelectionSource('run'); setSelectedRun(run); setSelectedRoute(null); setImportMessage(null); }}
                 activeOpacity={0.8}
               >
-                <Ionicons name="navigate" size={10} color={selectedRun?.id === run.id ? TACTICAL.amber : TACTICAL.textMuted} />
+                <Ionicons name="navigate" size={10} color={selectionSource === 'run' && selectedRun?.id === run.id ? TACTICAL.amber : TACTICAL.textMuted} />
                 <View>
-                  <Text style={[styles.runChipTitle, selectedRun?.id === run.id && styles.runChipTitleActive]} numberOfLines={1}>
+                  <Text style={[styles.runChipTitle, selectionSource === 'run' && selectedRun?.id === run.id && styles.runChipTitleActive]} numberOfLines={1}>
                     {run.title}
                   </Text>
                   <Text style={styles.runChipMeta}>
@@ -219,13 +397,13 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
             {routes.map(route => (
               <TouchableOpacity
                 key={`route-${route.id}`}
-                style={[styles.runChip, selectedRoute?.id === route.id && styles.runChipActive]}
-                onPress={() => { setSelectedRoute(route); setSelectedRun(null); }}
+                style={[styles.runChip, selectionSource === 'route' && selectedRoute?.id === route.id && styles.runChipActive]}
+                onPress={() => { setSelectionSource('route'); setSelectedRoute(route); setSelectedRun(null); setImportMessage(null); }}
                 activeOpacity={0.8}
               >
-                <Ionicons name="map-outline" size={10} color={selectedRoute?.id === route.id ? TACTICAL.amber : TACTICAL.textMuted} />
+                <Ionicons name="map-outline" size={10} color={selectionSource === 'route' && selectedRoute?.id === route.id ? TACTICAL.amber : TACTICAL.textMuted} />
                 <View>
-                  <Text style={[styles.runChipTitle, selectedRoute?.id === route.id && styles.runChipTitleActive]} numberOfLines={1}>
+                  <Text style={[styles.runChipTitle, selectionSource === 'route' && selectedRoute?.id === route.id && styles.runChipTitleActive]} numberOfLines={1}>
                     {route.name}
                   </Text>
                   <Text style={styles.runChipMeta}>
@@ -234,10 +412,11 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
                 </View>
               </TouchableOpacity>
             ))}
-            {runs.length === 0 && routes.length === 0 && (
-              <Text style={styles.noDataText}>No runs or routes available. Import a GPX first.</Text>
+            {!activeGuidanceAvailable && runs.length === 0 && routes.length === 0 && (
+              <Text style={styles.noDataText}>No active guidance or saved routes yet. Import a GPX file or start guidance first.</Text>
             )}
           </ScrollView>
+          {importMessage ? <Text style={styles.importMessage}>{importMessage}</Text> : null}
 
           {/* Corridor width */}
           <Text style={styles.fieldLabel}>CORRIDOR WIDTH</Text>
@@ -570,6 +749,33 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     marginTop: 2,
   },
+  fieldHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 2,
+  },
+  importBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '55',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  importBtnDisabled: {
+    opacity: 0.55,
+  },
+  importBtnText: {
+    ...TYPO.U2,
+    fontSize: 8,
+    color: TACTICAL.amber,
+  },
   runList: {
     maxHeight: 60,
   },
@@ -588,6 +794,10 @@ const styles = StyleSheet.create({
   runChipActive: {
     borderColor: TACTICAL.amber,
     backgroundColor: 'rgba(196,138,44,0.1)',
+  },
+  activeGuidanceChip: {
+    borderColor: 'rgba(102,187,106,0.45)',
+    backgroundColor: 'rgba(102,187,106,0.08)',
   },
   runChipTitle: {
     ...TYPO.B2,
@@ -609,6 +819,13 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontStyle: 'italic',
     paddingVertical: 8,
+  },
+  importMessage: {
+    ...TYPO.B2,
+    fontSize: 10,
+    color: TACTICAL.textMuted,
+    lineHeight: 14,
+    marginTop: -4,
   },
   chipRow: {
     flexDirection: 'row',

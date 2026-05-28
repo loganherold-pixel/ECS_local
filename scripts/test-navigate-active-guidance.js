@@ -24,7 +24,7 @@ assert(overlay.includes('nestedScrollEnabled'), 'route preview content should sc
 assert(overlay.includes('<ECSActionRow compact wrap'), 'route preview actions should wrap instead of overflowing the card');
 assert(overlay.includes('styles.previewActionButton'), 'route preview action buttons should use compact responsive sizing');
 assert(!overlay.includes('bottom: bottomOffset,\n        left: horizontalInset,\n        right: horizontalInset,\n        paddingRight: guidanceRightInset'), 'active guidance must not anchor from the bottom');
-assert(overlay.includes('maxWidth: 720'), 'active guidance should be a broad tactical banner');
+assert(overlay.includes('activeGuidancePrimaryMetricChip'), 'active guidance should stack turn distance above remaining and ETA.');
 assert(overlay.includes("backgroundColor: 'rgba(5,8,10,0.90)'"), 'active guidance background must be darker for map contrast');
 
 const activeCardStart = overlay.indexOf('function ActiveNavigationCard({');
@@ -54,13 +54,13 @@ assert(
   'Active Guide should own the highest guidance overlay z-index tier.',
 );
 assert(
-  overlay.includes('paddingVertical: 7') &&
-    overlay.includes('gap: 5') &&
-    overlay.includes('width: 30') &&
-    overlay.includes('height: 30') &&
+  overlay.includes('paddingVertical: 6') &&
+    overlay.includes('gap: 4') &&
+    overlay.includes('width: 28') &&
+    overlay.includes('height: 28') &&
     overlay.includes('minHeight: 0') &&
-    overlay.includes('paddingVertical: 5'),
-  'Active Guide should keep a compact top-center footprint while preserving readable guidance content.',
+    overlay.includes('paddingVertical: 4'),
+  'Active Guide should keep a compact top-left footprint while preserving readable guidance content.',
 );
 assert(
   !activeCardBlock.includes('styles.activeTopWrap') &&
@@ -80,7 +80,12 @@ assert(!navigate.includes('campsiteStops: routeGuidanceCampStops'), 'active cont
 assert(!navigate.includes('routeGuidanceCampStops'), 'Navigate must not reference stale routeGuidanceCampStops bindings');
 assert(!navigate.includes('campRouteBuildState'), 'Navigate must not reference stale campRouteBuildState bindings');
 assert(!navigate.includes('activeRouteCampStops'), 'active guidance must not reference stale activeRouteCampStops binding');
-assert(navigate.includes('const ACTIVE_GUIDANCE_TOP = MAP_TOP_EDGE'), 'active guidance must sit on the top edge of the map body');
+assert(
+  navigate.includes('const ACTIVE_GUIDANCE_TOP = effectiveMapExpanded') &&
+    navigate.includes('Math.max(insets.top + 12, 42)') &&
+    navigate.includes('MAP_TOP_EDGE + PAGE_FRAME_TOP_GAP'),
+  'active guidance must keep a safe top buffer in fullscreen while staying compact inside the normal map body.',
+);
 assert(navigate.includes('const roadNavigationSurfaceTopOffset = ACTIVE_GUIDANCE_TOP'), 'active guidance must use the dedicated top-priority route surface offset');
 assert(navigate.includes("guidanceRightInset={navigationOverlayMode === 'active' ? 0 : ACTIVE_GUIDANCE_RIGHT_INSET}"), 'active guidance must span broadly without compass bottom inset');
 assert(
@@ -90,7 +95,7 @@ assert(
 assert(
   navigate.includes('const activeGuidanceToastTopOffset =') &&
     navigate.includes('roadNavigationSurfaceTopOffset +') &&
-    navigate.includes('(activeGuidanceMinimized ? 46 : routeSurfaceHeight) +') &&
+    navigate.includes('activeGuidanceRenderedHeight +') &&
     navigate.includes('activeGuidanceNotificationGap') &&
     navigate.includes('placement="top"') &&
     navigate.includes('zIndex={mapToastAttachedToGuidance ? 84 : undefined}'),
@@ -116,6 +121,130 @@ assert(
     navigate.includes('activeGuidancePopupTopOffset ?? PAGE_FRAME_TOP_GAP') &&
     navigate.includes('activeGuidancePopupTopOffset ?? MAP_POPUP_TOP'),
   'Navigate popups should reserve the Active Guidance band instead of covering it during active navigation.',
+);
+assert(
+  !navigate.includes('const ROUTE_STAGED_TOAST_MIN_INTERVAL_MS') &&
+    !navigate.includes('const routeStagedToastRef = useRef') &&
+    !navigate.includes('const showRouteStagedToast = useCallback') &&
+    !navigate.includes("showToast('ROUTE STAGED: READY TO START WHEN YOU ARE')"),
+  'Route staged restore should not show a transient toast.',
+);
+assert(
+  !navigate.includes("showToast('ACTIVE GUIDANCE ALREADY RUNNING')"),
+  'Repeated active guidance handoffs should be ignored without a transient toast.',
+);
+assert(
+  navigate.includes('const navigateLandscapeExpanded = adaptive.isLandscape;') &&
+    navigate.includes('const effectiveMapExpanded = mapExpanded || navigateLandscapeExpanded;') &&
+    navigate.includes('setDashboardExpanded(navigateLandscapeExpanded);') &&
+    navigate.includes('revealDashboardDock(5000);') &&
+    navigate.includes('styles.navigateLandscapeDockRevealButton') &&
+    navigate.includes('{ top: roadNavigationSurfaceTopOffset }') &&
+    navigate.includes('activeGuidanceWidth={activeGuidanceLandscapeWidth}') &&
+    navigate.includes('activeAccessoryMinimized={navigateLandscapeExpanded ? true : activeReadinessMinimized}'),
+  'Navigate landscape should use expanded map chrome with a dock reveal control aligned to compact active guidance.',
+);
+assert(
+  overlay.includes('activeGuidanceWidth?: number;') &&
+    overlay.includes('const landscapeCompact = typeof activeGuidanceWidth === \'number\'') &&
+    overlay.includes('styles.activeGuidanceLandscapeWrap') &&
+    overlay.includes('styles.activeGuidanceLandscapeCard'),
+  'RoadNavigationOverlay should support a compact top-left landscape active guidance presentation.',
+);
+assert(
+  navigate.includes('const initialMapTokenRef = useRef(getMapboxTokenSync());') &&
+    navigate.includes('void getMapboxToken()') &&
+    navigate.includes('setMapToken(token || \'\')') &&
+    navigate.includes('setMapLoading(false)') &&
+    navigate.includes('tokenResolvedRef.current = token.length > 0;'),
+  'Navigate should asynchronously resolve the Mapbox token on startup so native maps do not stay disabled after sync lookup misses.',
+);
+
+const commandDock = read('components/CommandDock.tsx');
+assert(
+  commandDock.includes("pathname.includes('/navigate')"),
+  'CommandDock should honor Navigate landscape expanded chrome hide/reveal state.',
+);
+
+const toast = read('components/Toast.tsx');
+assert(
+  toast.includes("import ECSShellTexture from './ECSShellTexture';") &&
+    toast.includes('<ECSShellTexture />') &&
+    toast.includes('backgroundColor: surfaceTheme.shellBg') &&
+    toast.includes('borderColor: surfaceTheme.shellBorder') &&
+    toast.includes("overflow: 'hidden'"),
+  'Map toasts should use the themed ECS popup texture instead of a flat gray shell.',
+);
+assert(
+  navigate.includes('clearTokenCache();') &&
+    navigate.includes('const handleMapRetry = useCallback(async () =>') &&
+    navigate.includes('tokenResolvedRef.current = false;') &&
+    navigate.includes('setMapSurfaceRevision((revision) => revision + 1);') &&
+    navigate.includes('key={`navigate-map-${mapSurfaceRevision}`}'),
+  'Navigate map retry should clear stale token state and force the MapRenderer surface to remount.',
+);
+
+const mapRenderer = read('components/navigate/MapRenderer.tsx');
+assert(
+  mapRenderer.includes("if (payload?.reason === 'bootstrap_timeout')") &&
+    mapRenderer.includes("debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell'") &&
+    mapRenderer.includes('hasEverReachedReadyRef.current = true;') &&
+    mapRenderer.includes('setWebReady(true);'),
+  'MapRenderer should show the initialized WebView map shell once the Mapbox constructor is alive instead of blocking behind a late load event.',
+);
+assert(
+  mapRenderer.includes("baseUrl: 'https://api.mapbox.com/'") &&
+    mapRenderer.includes('mixedContentMode="always"') &&
+    mapRenderer.includes('onHttpError=') &&
+    mapRenderer.includes('setWebBootIssue('),
+  'MapRenderer should give Android WebView a stable Mapbox base URL and surface boot/http failures for blank-map diagnosis.',
+);
+assert(
+  mapRenderer.includes('const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;') &&
+    mapRenderer.includes('const hardFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);') &&
+    mapRenderer.includes('const hasEverReachedReadyRef = useRef(false);') &&
+    mapRenderer.includes('onReadyStateChange?.(shouldLoadMap && (webReady || hasEverReachedReadyRef.current));') &&
+    mapRenderer.includes('setWebBootIssue(phase === \'bootstrap_progress\' ? \'map_load_timeout\' : \'webview_startup_timeout\');') &&
+    !mapRenderer.includes('Auto-recovery remount after cold-start timeout') &&
+    !mapRenderer.includes('WEBVIEW_AUTO_RECOVERY_LIMIT'),
+  'MapRenderer should treat slow Mapbox/WebView startup as a soft degraded boot and avoid automatic cold-start remount loops.',
+);
+assert(
+  mapRenderer.includes('const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;') &&
+    mapRenderer.includes("const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';") &&
+    mapRenderer.includes('mapbox-gl-js/${MAPBOX_WEBVIEW_GL_JS_VERSION}/mapbox-gl.js') &&
+    mapRenderer.includes('mapboxgl.workerCount = 1;') &&
+    mapRenderer.includes('const constructorRetryCountRef = useRef(0);') &&
+    mapRenderer.includes('scheduleConstructorRetry(payload.reason)') &&
+    mapRenderer.includes('remountWebView(`map_constructor_retry:${reason}:${nextAttempt}`)') &&
+    mapRenderer.includes("send('mapReady', { ok: false, reason: 'constructor_failed', detail: constructorMessage });") &&
+    mapRenderer.includes('antialias: false') &&
+    mapRenderer.includes('preserveDrawingBuffer: false') &&
+    mapRenderer.includes('failIfMajorPerformanceCaveat: false') &&
+    mapRenderer.includes('fadeDuration: 0'),
+  'MapRenderer should recover from Android WebView Mapbox constructor failures with bounded retries, compatible WebView Mapbox GL, diagnostics, and low-pressure GL options.',
+);
+assert(
+  mapRenderer.includes("import MapFallbackSurface from './MapFallbackSurface';") &&
+    mapRenderer.includes('const fallbackMarkers = useMemo(') &&
+    mapRenderer.includes('const hasFallbackGeometry = useMemo(') &&
+    mapRenderer.includes('const fallbackVisible =') &&
+    mapRenderer.includes('<MapFallbackSurface') &&
+    mapRenderer.includes("statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}") &&
+    mapRenderer.includes('{showBootOverlay && !fallbackVisible && ('),
+  'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize.',
+);
+
+const fallbackSurface = read('components/navigate/MapFallbackSurface.tsx');
+assert(
+  fallbackSurface.includes("import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';") &&
+    fallbackSurface.includes('function buildBounds(') &&
+    fallbackSurface.includes('function makeProjector(') &&
+    fallbackSurface.includes('routeCoords?: LngLat[];') &&
+    fallbackSurface.includes('progressRouteCoords?: LngLat[];') &&
+    fallbackSurface.includes('statusLabel = \'Fallback map\'') &&
+    fallbackSurface.includes('zIndex: 4'),
+  'MapFallbackSurface should draw route/progress/user geometry without depending on Mapbox GL or WebView.',
 );
 
 const topStatusStart = navigate.indexOf('const topStatusOverlaysVisible =');

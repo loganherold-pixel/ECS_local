@@ -29,10 +29,15 @@ function assert(condition, message) {
 }
 
 for (const fileName of [
-  'Remaining_Sunlight_Dawn.png',
-  'Remaining_Sunlight_Day.png',
-  'Remaining_Sunlight_Dusk.png',
-  'Remaining_Sunlight_Night.png',
+  'After_sunset.png',
+  'Approaching_sunset.png',
+  'Civil_twilight.png',
+  'Dark.png',
+  'Daylight.png',
+  'Low_light.png',
+  'Solar_noon.png',
+  'Sunrise.png',
+  'Total_daylight.png',
 ]) {
   assert(
     fs.existsSync(path.join(root, 'assets', 'sunlight', fileName)),
@@ -41,6 +46,23 @@ for (const fileName of [
   assert(
     widgetRenderers.includes(fileName),
     `Remaining Sunlight background asset ${fileName} must be statically required by WidgetRenderers.`,
+  );
+}
+
+for (const backgroundKey of [
+  'afterSunset',
+  'approachingSunset',
+  'civilTwilight',
+  'dark',
+  'daylight',
+  'lowLight',
+  'solarNoon',
+  'sunrise',
+  'totalDaylight',
+]) {
+  assert(
+    widgetRenderers.includes(backgroundKey),
+    `Remaining Sunlight background key ${backgroundKey} must be available for phase selection.`,
   );
 }
 
@@ -177,27 +199,25 @@ assert(
 );
 
 assert(
-  commandModuleStore.includes("export type ECSCommandModuleId") &&
+    commandModuleStore.includes("export type ECSCommandModuleId") &&
     commandModuleStore.includes("'attitude'") &&
     commandModuleStore.includes("'follow3d'") &&
-    commandModuleStore.includes("'recoveryHazardCompass'") &&
-    commandModuleStore.includes("'trailDecisionCommand'") &&
-    commandModuleStore.includes("'campScoutCommand'") &&
-    commandModuleStore.includes("'expeditionReadinessCommand'") &&
-    commandModuleStore.includes("label: 'Navigation Command'") &&
-    commandModuleStore.includes("label: 'Recovery / Hazard Compass'") &&
-    commandModuleStore.includes("label: 'Trail Decision Command'") &&
-    commandModuleStore.includes("label: 'Camp Scout Command'") &&
-    commandModuleStore.includes("label: 'Expedition Readiness Command'") &&
+    commandModuleStore.includes("'terrainRisk'") &&
+    commandModuleStore.includes("label: '3D Nav Command'") &&
+    commandModuleStore.includes("label: 'Terrain Risk'") &&
+    !commandModuleStore.includes("label: 'Recovery / Hazard Compass'") &&
+    !commandModuleStore.includes("label: 'Trail Decision Command'") &&
+    !commandModuleStore.includes("label: 'Camp Scout Command'") &&
+    !commandModuleStore.includes("label: 'Expedition Readiness Command'") &&
     !commandModuleStore.includes("label: 'Convoy Command'") &&
-    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*\];/.test(commandModuleStore) &&
+    /export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId\[\] = \[\s*'attitude',\s*'follow3d',\s*'terrainRisk',\s*\];/.test(commandModuleStore) &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'") &&
     commandModuleStore.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;") &&
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes('setSelectedModule(moduleId: ECSCommandModuleId)') &&
     commandModuleStore.includes('subscribe(listener: ECSCommandModuleListener)'),
-  'ECS Command Module selection must be typed, default to attitude, persist through the command preferences store, and expose Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, Expedition Readiness, and Convoy command-center modes.',
+  'ECS Command Module selection must be typed, default to attitude, persist through the command preferences store, and expose Attitude Command, 3D Nav Command, and Terrain Risk in the selector.',
 );
 
 assert(
@@ -209,10 +229,10 @@ assert(
     widgetRenderers.includes('COMMAND_CENTER_IMPLEMENTED_MODES') &&
     widgetRenderers.includes('isCommandCenterModuleId') &&
     !widgetRenderers.includes('dashboard-command-center-mode-selector') &&
-    commandCenterRegistry.includes("label: 'Recovery / Hazard Compass'") &&
-    commandCenterRegistry.includes("label: 'Trail Decision Command'") &&
-    commandCenterRegistry.includes("label: 'Camp Scout Command'") &&
-    commandCenterRegistry.includes("label: 'Expedition Readiness Command'") &&
+    !commandCenterRegistry.includes("label: 'Recovery / Hazard Compass'") &&
+    !commandCenterRegistry.includes("label: 'Trail Decision Command'") &&
+    !commandCenterRegistry.includes("label: 'Camp Scout Command'") &&
+    !commandCenterRegistry.includes("label: 'Expedition Readiness Command'") &&
     !commandCenterRegistry.includes("label: 'Convoy Command'") &&
     widgetRenderers.includes('<CommandCenterHost') &&
     widgetRenderers.includes('dataContext={commandCenterDataContext}') &&
@@ -221,6 +241,8 @@ assert(
     widgetRenderers.includes("selectedCommandModule === 'attitude' ? (") &&
     widgetRenderers.includes("selectedCommandCenterMode !== 'threeDNavigation'") &&
     widgetRenderers.includes('<Mini3DFollowMap options={options} selected={mode === \'threeDNavigation\'} />') &&
+    widgetRenderers.includes('<TerrainRiskCommandModule') &&
+    widgetRenderers.includes("selectedCommandModule === 'terrainRisk' ? (") &&
     widgetRenderers.includes('selectedCommandModuleDefinition.title') &&
     widgetRenderers.includes('selectedCommandModuleDefinition.subtitle') &&
     widgetRenderers.includes('visible={moduleSelectorVisible}') &&
@@ -235,6 +257,8 @@ assert(
     widgetRenderers.includes('accessibilityState={{ selected }}') &&
     widgetRenderers.includes('moduleTransitionOpacity') &&
     widgetRenderers.includes('attitudeCommandS.moduleTransitionShell') &&
+    widgetRenderers.includes('attitudeCommandS.moduleTransitionShellVehicleImageMode') &&
+    widgetRenderers.includes("fitMode={landscapeInstrumentOnlyAttitude ? 'contain' : 'containWidth'}") &&
     widgetRenderers.includes('Animated.timing(moduleTransitionOpacity'),
   'Attitude Command must host a persisted swappable center module through the three-dot ECS selector and lightweight transition.',
 );
@@ -256,7 +280,7 @@ assert(
 assert(
   navigateSurfaceWidget.includes('export function Mini3DFollowMap') &&
     navigateSurfaceWidget.includes('useNavigateSurfaceState(options)') &&
-    navigateSurfaceWidget.includes('mapStyleKey="3d"') &&
+    navigateSurfaceWidget.includes('mapStyleKey="tactical"') &&
     navigateSurfaceWidget.includes("mode: 'follow_user'") &&
     navigateSurfaceWidget.includes('zoom: hasActiveGuidance ? COMMAND_3D_FOLLOW_ZOOM : COMMAND_3D_FREE_DRIVE_ZOOM') &&
     navigateSurfaceWidget.includes('pitch: COMMAND_3D_FOLLOW_PITCH') &&
@@ -324,7 +348,8 @@ assert(
 assert(
     widgetRenderers.includes('function AttitudeCommandPanelVisual') &&
     widgetRenderers.includes('<ECSInstrumentPanel') &&
-    widgetRenderers.includes("title={isSunlightPanel ? undefined : isVehiclePanel ? 'Vehicle Profile' : eyebrow}") &&
+    widgetRenderers.includes('title={isSunlightPanel || isVehiclePanel ? undefined : eyebrow}') &&
+    widgetRenderers.includes('icon={icon && !isPowerPanel && !isVehiclePanel ?') &&
     widgetRenderers.includes('statusPill={statusPill}') &&
     widgetRenderers.includes('sizeVariant={eyebrow === \'ROUTE PROGRESS\' || eyebrow === \'POWER MONITOR\' ? \'wide\' : \'compact\'}') &&
     widgetRenderers.includes('sunGlyphLayer') &&
@@ -339,15 +364,25 @@ assert(
     !widgetRenderers.includes('sunEventLabelLeft') &&
     !widgetRenderers.includes('sunEventLabelRight') &&
     !widgetRenderers.includes('sunlightGlareStatus') &&
-    widgetRenderers.includes("type SunlightBackgroundType = 'dawn' | 'day' | 'dusk' | 'night'") &&
+    widgetRenderers.includes("type SunlightBackgroundType =") &&
+    widgetRenderers.includes("'solarNoon'") &&
+    widgetRenderers.includes("'totalDaylight'") &&
+    widgetRenderers.includes("'approachingSunset'") &&
+    widgetRenderers.includes("'civilTwilight'") &&
+    widgetRenderers.includes("'lowLight'") &&
+    widgetRenderers.includes("'afterSunset'") &&
     widgetRenderers.includes('function getSunlightBackgroundType(input: unknown): SunlightBackgroundType') &&
     widgetRenderers.includes('AttitudeCommandSunlightBackgroundVisual') &&
     widgetRenderers.includes('sunBackgroundImage') &&
     widgetRenderers.includes('sunBackgroundScrim') &&
     widgetRenderers.includes('SUNLIGHT_BACKGROUND_FADE_MS') &&
+    widgetRenderers.includes("solarNoon: require('../../assets/sunlight/Solar_noon.png')") &&
+    widgetRenderers.includes("totalDaylight: require('../../assets/sunlight/Total_daylight.png')") &&
+    widgetRenderers.includes("approachingSunset: require('../../assets/sunlight/Approaching_sunset.png')") &&
+    widgetRenderers.includes("civilTwilight: require('../../assets/sunlight/Civil_twilight.png')") &&
     widgetRenderers.includes('resolveCommandSunlightRadiancePhase') &&
     widgetRenderers.includes("phaseText.includes('civil twilight')") &&
-    widgetRenderers.includes("return { phase: 'Civil twilight', radiancePhase: 'night' }") &&
+    widgetRenderers.includes("return { phase: 'Civil twilight', radiancePhase: 'civil_twilight' }") &&
     widgetRenderers.includes('formatCommandUvIndex') &&
     widgetRenderers.includes('weatherGlyphLayer') &&
     widgetRenderers.includes('resolveCommandWeatherScene') &&
@@ -368,12 +403,15 @@ assert(
     widgetRenderers.includes('vehicleProfileBackgroundScrim') &&
     widgetRenderers.includes('vehicleGlyphLayer') &&
     widgetRenderers.includes('vehiclePanelContent') &&
-    widgetRenderers.includes('vehicleBaseTelemetryRow') &&
-    widgetRenderers.includes('vehicleBaseTelemetryText') &&
-    widgetRenderers.includes('vehicleBaseTelemetryTextRight') &&
-    widgetRenderers.includes('vehicleBaseNameText') &&
+    !widgetRenderers.includes('vehicleBaseTelemetryRow') &&
+    !widgetRenderers.includes('vehicleBaseTelemetryText') &&
+    !widgetRenderers.includes('vehicleBaseTelemetryTextRight') &&
+    !widgetRenderers.includes('vehicleBaseNameText') &&
+    !widgetRenderers.includes('vehicleBaseIdentityBlock') &&
+    !widgetRenderers.includes('vehicleCommandStatusChip') &&
     !widgetRenderers.includes('vehicleBaseIdentityText') &&
     !widgetRenderers.includes('{vehicleVisual.identity}') &&
+    !widgetRenderers.includes('{vehicleVisual.name}') &&
     !widgetRenderers.includes('vehicleHeroSilhouette') &&
     !widgetRenderers.includes('vehicleReadinessRail') &&
     !widgetRenderers.includes('vehicleMetricStrip') &&
@@ -415,12 +453,12 @@ assert(
     widgetRenderers.includes('outputRows: powerOutputRows') &&
     widgetRenderers.includes('powerColumnLeft') &&
     widgetRenderers.includes('powerModuleBlock') &&
-    widgetRenderers.includes('powerFlowLineInput') &&
-    widgetRenderers.includes('powerFlowLineOutput') &&
     widgetRenderers.includes('powerFlowRowLabel') &&
     widgetRenderers.includes('powerFlowRowValue') &&
-    widgetRenderers.includes('shouldAnimate && inputActive') &&
-    widgetRenderers.includes('shouldAnimate && outputActive') &&
+    !widgetRenderers.includes('powerFlowLineInput') &&
+    !widgetRenderers.includes('powerFlowLineOutput') &&
+    !widgetRenderers.includes('shouldAnimate && inputActive') &&
+    !widgetRenderers.includes('shouldAnimate && outputActive') &&
     widgetRenderers.includes('powerBottomStrip') &&
     widgetRenderers.includes('sanitizeCommandPowerLabel') &&
     !widgetRenderers.includes('/fallback'),
@@ -431,8 +469,18 @@ assert(
   widgetRenderers.includes('const topHeight = clampCommandLayoutValue(height * 0.19, 82, 108)') &&
     widgetRenderers.includes('const bottomHeight = clampCommandLayoutValue(height * 0.2, 90, 118)') &&
     widgetRenderers.includes('minHeight: clampCommandLayoutValue(height * 0.46, 238, 328)') &&
+    widgetRenderers.includes('marginBottom: -5') &&
+    widgetRenderers.includes("selectedCommandModule === 'follow3d' ? attitudeCommandS.attitudeStageNavigationCommandMode : null") &&
+    widgetRenderers.includes('attitudeStageNavigationCommandMode') &&
+    widgetRenderers.includes('marginRight: 3') &&
+    widgetRenderers.includes('marginBottom: 3') &&
+    widgetRenderers.includes('moduleTransitionShellVehicleImageMode') &&
     widgetRenderers.includes("return '--';") &&
     vehicleAttitudeStage.includes('testID="vehicle-attitude-stage-level-readout"') &&
+    vehicleAttitudeStage.includes('COMMAND_ATTITUDE_AXIS_X_NUDGE') &&
+    vehicleAttitudeStage.includes("presentationMode?: 'vehicleImage' | 'instrumentOnly'") &&
+    vehicleAttitudeStage.includes("presentationMode === 'instrumentOnly'") &&
+    vehicleAttitudeStage.includes('styles.instrumentOnlyGauge') &&
     vehicleAttitudeStage.includes('const accessibilityLabel = `Vehicle attitude. Pitch ${pitchLabel}. Roll ${rollLabel}.`;') &&
     !vehicleAttitudeStage.includes('vehicle-attitude-command-chrome-overlay') &&
     !vehicleAttitudeStage.includes('vehicle-attitude-command-pitch-panel') &&
@@ -441,9 +489,11 @@ assert(
 );
 
 assert(
-  commandWidgetSource.includes('<AttitudeCommandWidgetConnected') &&
+    commandWidgetSource.includes('<AttitudeCommandWidgetConnected') &&
     commandWidgetSource.includes('pitchDeg={commandStagePitchDeg}') &&
     commandWidgetSource.includes('rollDeg={commandStageRollDeg}') &&
+    commandWidgetSource.includes('telemetryFrame="device"') &&
+    !commandWidgetSource.includes("telemetryFrame={landscapeInstrumentOnlyAttitude ? 'vehicle' : 'device'}") &&
     commandWidgetSource.includes('telemetryEnabled={false}') &&
     commandWidgetSource.includes('activeVehicleName={activeVehicleContext.vehicle?.name ?? undefined}') &&
     commandWidgetSource.includes('pointerEvents="box-none"') &&
@@ -455,8 +505,12 @@ assert(
     commandWidgetSource.includes('attitudeCommandS.stageModulePillActive') &&
     commandWidgetSource.includes('<Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />') &&
     !commandWidgetSource.includes('CHANGE') &&
-    commandWidgetSource.includes("selectedCommandModule !== 'attitude' ? (") &&
+    commandWidgetSource.includes("selectedCommandModule !== 'attitude' && selectedCommandModule !== 'terrainRisk' ? (") &&
     commandWidgetSource.includes("selectedCommandModule === 'attitude' ? (") &&
+    commandWidgetSource.includes("landscapeInstrumentOnlyAttitude") &&
+    commandWidgetSource.includes("presentationMode={landscapeInstrumentOnlyAttitude ? 'instrumentOnly' : 'vehicleImage'}") &&
+    commandWidgetSource.includes("fitMode={landscapeInstrumentOnlyAttitude ? 'contain' : 'containWidth'}") &&
+    commandWidgetSource.includes("stageVerticalAlign={landscapeInstrumentOnlyAttitude ? 'center' : 'bottom'}") &&
     !commandWidgetSource.includes('attitudeCommandS.stageStatusPillCenterSlot') &&
     !commandWidgetSource.includes('attitudeCommandS.stageStatusPillCentered') &&
     commandWidgetSource.includes('showActiveEdge={false}') &&
@@ -467,7 +521,18 @@ assert(
   'Attitude Command must render the connected active-vehicle attitude stage while keeping the center image clean and icon-only sound/module controls interactive.',
 );
 
-for (const title of ['Remaining Sunlight', 'Current Weather', 'Vehicle Profile', 'Route Progress', 'Power Monitor']) {
+assert(
+  widgetRenderers.includes('const hasScreenDimensions = screenWidth > 0 && screenHeight > 0;') &&
+    widgetRenderers.includes('const isLandscape = hasScreenDimensions') &&
+    widgetRenderers.includes('if (isLandscape) return \'landscape_wide\';') &&
+    !widgetRenderers.includes('if (isLandscape || widgetWidth >= 720 || screenWidth >= 840) return \'landscape_wide\';') &&
+    commandWidgetSource.includes('landscapeInstrumentOnlyAttitude ? attitudeCommandS.attitudeStageLandscapeInstrumentMode : null') &&
+    commandWidgetSource.includes('<ECSShellTexture />') &&
+    commandWidgetSource.includes("presentationMode={landscapeInstrumentOnlyAttitude ? 'instrumentOnly' : 'vehicleImage'}"),
+  'Attitude Command must reserve instrument-only mode for true landscape while keeping portrait vehicle imagery and adding the popup texture layer.',
+);
+
+for (const title of ['Remaining Sunlight', 'Current Weather', 'Vehicle Command', 'Route Progress', 'Power Monitor']) {
   assert(
     widgetRenderers.includes(`title: '${title}'`) || widgetRenderers.includes(`title={activeFocusConfig.title}`),
     `Attitude Command popup title ${title} must be represented.`,
@@ -482,6 +547,15 @@ assert(
     widgetRenderers.includes('activePanel === \'route\'') &&
     widgetRenderers.includes('activePanel === \'power\''),
   'Attitude Command must render focused ECS popups for every internal panel.',
+);
+
+assert(
+  commandWidgetSource.includes("maxHeightFraction={compactRouteFocusPanel ? 0.62 : 1}") &&
+    commandWidgetSource.includes('minHeightFraction={compactRouteFocusPanel ? undefined : 1}') &&
+    commandWidgetSource.includes('scrollable={!compactRouteFocusPanel}') &&
+    commandWidgetSource.includes('maxWidth={980}') &&
+    commandWidgetSource.includes('showHandle={false}'),
+  'Attitude Command focus popups must keep full-height internal panels while Route Progress uses a compact content-sized panel.',
 );
 
 assert(
@@ -504,7 +578,10 @@ assert(
 assert(
   widgetRenderers.includes('daylight.daylightLabel') &&
     widgetRenderers.includes('getSunlightCountdownLabel(environment.sunlight)') &&
-    widgetRenderers.includes('formatSunlightCountdownValue(environment.sunlight)'),
+    widgetRenderers.includes('formatSunlightCountdownValue(environment.sunlight)') &&
+    widgetRenderers.includes('calculateAttitudeCommandSolarPosition') &&
+    widgetRenderers.includes('resolvedSunElevation') &&
+    widgetRenderers.includes('resolvedSunAzimuth'),
   'Remaining Sunlight popup must use the live daylight/sunrise countdown label.',
 );
 
@@ -549,31 +626,16 @@ assert(
   'Current Weather popup must use the shared canonical weather snapshot and existing forecast data.',
 );
 
-for (const vehicleField of [
-  'Vehicle',
-  'Year/make/model',
-  'Drivetrain',
-  'Engine',
-  'Suspension',
-  'Tires',
-  'Build summary',
-  'Loadout',
-  'Operating weight',
-  'Base weight',
-  'GVWR',
-  'Payload margin',
-  'Readiness',
-  'Confidence',
-  'Telemetry',
-  'Fuel',
-  'Voltage',
-  'Source',
-]) {
-  assert(
-    widgetRenderers.includes(`label="${vehicleField}"`),
-    `Vehicle Profile popup must include ${vehicleField}.`,
-  );
-}
+assert(
+  widgetRenderers.includes('<VehicleCommandDetailSection title="Engine Overview" defaultExpanded>') &&
+    widgetRenderers.includes('<VehicleCommandDetailSection title="Voltage & Electrical">') &&
+    widgetRenderers.includes('<VehicleCommandDetailSection title="System Health">') &&
+    widgetRenderers.includes('<VehicleCommandDetailSection title="Temperatures">') &&
+    widgetRenderers.includes('<VehicleCommandDetailSection title="Diagnostics">') &&
+    widgetRenderers.includes('accessibilityState={{ expanded }}') &&
+    !widgetRenderers.includes('<VehicleCommandDetailSection title="Vehicle Profile">'),
+  'Vehicle Command popup must use collapsible live-data sections and omit the old Vehicle Profile block.',
+);
 
 assert(
   widgetRenderers.includes('resolveAttitudeVehicleProfile(activeVehicleContext)') &&
@@ -582,17 +644,30 @@ assert(
     widgetRenderers.includes('(manually set)') &&
     widgetRenderers.includes('snapshot.isLive && snapshot.sourceType !== \'simulated\'') &&
     widgetRenderers.includes('Fleet selected vehicle/build') &&
-    widgetRenderers.includes('No active vehicle profile or live telemetry is available'),
-  'Vehicle Profile popup must use live telemetry first, manual active Fleet values second, and expose an empty state.',
+    widgetRenderers.includes('No active vehicle profile or live telemetry is available') &&
+    widgetRenderers.includes('ECS is showing profile safe fallbacks if configured and available.'),
+  'Vehicle Command popup must use live telemetry first, manual active Fleet values second, and expose the configured fallback state.',
 );
+
+const routePanelMatch = widgetRenderers.match(/\{activePanel === 'route' \? \([\s\S]*?\) : null\}\s*\n\s*\n\s*\{activePanel === 'power' \? \(/);
+assert(routePanelMatch, 'Route Progress popup block must be present before the Power Monitor popup block.');
+const routePanelSource = routePanelMatch[0];
 
 for (const routeField of [
   'Route',
-  'Destination',
   'Distance remaining',
   'Time remaining',
   'ETA',
-  'Progress',
+  'Progress percentage',
+]) {
+  assert(
+    routePanelSource.includes(`label="${routeField}"`),
+    `Route Progress popup must include ${routeField}.`,
+  );
+}
+
+for (const routeNoiseField of [
+  'Destination',
   'Current leg',
   'Navigation status',
   'Next',
@@ -606,10 +681,19 @@ for (const routeField of [
   'Last updated',
 ]) {
   assert(
-    widgetRenderers.includes(`label="${routeField}"`),
-    `Route Progress popup must include ${routeField}.`,
+    !routePanelSource.includes(`label="${routeNoiseField}"`),
+    `Route Progress popup must not include redundant ${routeNoiseField}.`,
   );
 }
+
+assert(
+  widgetRenderers.includes("const compactRouteFocusPanel = activePanel === 'route'") &&
+    widgetRenderers.includes("overlayClass={compactRouteFocusPanel ? 'action' : 'editor'}") &&
+    widgetRenderers.includes('minHeightFraction={compactRouteFocusPanel ? undefined : 1}') &&
+    widgetRenderers.includes('scrollable={!compactRouteFocusPanel}') &&
+    widgetRenderers.includes('compactRouteFocusContent'),
+  'Route Progress popup must use a compact content-sized sheet instead of the full-height editor panel.',
+);
 
 assert(
   widgetRenderers.includes('useActiveRouteProgressSnapshot(options)') &&
@@ -653,6 +737,10 @@ assert(
   widgetRenderers.includes('useUnifiedPowerDevices()') &&
     widgetRenderers.includes('normalizePowerTelemetrySummary(power)') &&
     widgetRenderers.includes('resolveAttitudePowerFlowState(powerSummary)') &&
+    widgetRenderers.includes('resolveAttitudePowerVolts(primaryPowerDevice') &&
+    widgetRenderers.includes('resolveAttitudePowerAmps(primaryPowerDevice') &&
+    widgetRenderers.includes('powerVisibleInputWatts') &&
+    widgetRenderers.includes('powerVisibleOutputWatts') &&
     widgetRenderers.includes('AttitudePowerLiquidFlowIndicator') &&
     widgetRenderers.includes('useReducedMotion()') &&
     widgetRenderers.includes('Connected sources') &&

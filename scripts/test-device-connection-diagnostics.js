@@ -48,6 +48,21 @@ assert(
 );
 
 const hook = read('lib/useUnifiedDeviceConnections.ts');
+const bluestackEvidence = read('lib/bluestack/bluestackAdvertisementEvidence.ts');
+assert(
+  bluestackEvidence.includes('manufacturerDataFingerprint') &&
+    bluestackEvidence.includes('manufacturerDataLength') &&
+    bluestackEvidence.includes('serviceUuidCount') &&
+    !bluestackEvidence.includes('manufacturerDataRaw'),
+  'Bluestack utility sensor evidence must expose parser-safe fingerprints and counts instead of raw manufacturer payloads',
+);
+assert(
+  hook.includes('getBluestackAdvertisementEvidence') &&
+    hook.includes('identifyBluestackUtilitySensorProfile') &&
+    hook.includes('Bluestack utility sensor advertisement profile captured.') &&
+    hook.includes('advertisementEvidence: getBluestackAdvertisementEvidence(entry.device)'),
+  'unified scanner must capture safe utility sensor advertisement evidence for future parser work',
+);
 assert(
   hook.includes('bluetoothDiagnostics: OBD2ScanDiagnostics') &&
     hook.includes('const bleRawDevicesSeenCount = Math.max') &&
@@ -86,10 +101,26 @@ assert(
 assert(
   bluetoothDiagnostics.includes('recordBluetoothDiagnosticEvent') &&
     bluetoothDiagnostics.includes('serializeBluetoothDiagnostics') &&
+    bluetoothDiagnostics.includes('serializeBluetoothProductionEvidenceDraft') &&
     bluetoothDiagnostics.includes('subscribeBluetoothDiagnostics') &&
     bluetoothDiagnostics.includes('resetBluetoothDiagnosticsForTests') &&
+    bluetoothDiagnostics.includes('bluestackReadinessSummary') &&
     bluetoothDiagnostics.includes("debugFlag: DEBUG_FLAG"),
   'Bluetooth diagnostics must expose event recording, subscription, copy serialization, test reset, and debug-gated logging',
+);
+assert(
+  bluetoothDiagnostics.includes('androidNativeBleDiscoveryPassed: false') &&
+    bluetoothDiagnostics.includes('powerStationConnectStreamDisconnectPassed: false') &&
+    bluetoothDiagnostics.includes('ecoflowCloudBleSeparationRealDevicePassed: false') &&
+    bluetoothDiagnostics.includes("productionDecision: 'pending'") &&
+    bluetoothDiagnostics.includes('buildAndDevice') &&
+    bluetoothDiagnostics.includes('reviewerSignoff') &&
+    bluetoothDiagnostics.includes('requiredEvidenceChecklist') &&
+    bluetoothDiagnostics.includes('observedDiagnostics') &&
+    bluetoothDiagnostics.includes('manualReviewRequired: true') &&
+    bluetoothDiagnostics.includes('activeConnectionPresent') &&
+    bluetoothDiagnostics.includes('latestTelemetryDeviceCount'),
+  'Bluetooth evidence draft must provide a non-passing, redacted field evidence skeleton with checklist and signoff placeholders',
 );
 assert(
   hook.includes("type: 'scanner_start'") &&
@@ -123,11 +154,21 @@ assert(
 
 const screen = read('app/power/blu.tsx');
 assert(
-  screen.includes('Native BLE Diagnostics') &&
-    screen.includes('Native Bridge') &&
-    screen.includes('Raw Callbacks') &&
-    screen.includes('summary.bluetoothDiagnostics'),
-  'Device Connections debug panel must expose native BLE diagnostics to dev/admin users',
+  !screen.includes('Native BLE Diagnostics') &&
+    !screen.includes('Pipeline Diagnostics') &&
+    !screen.includes('summary.bluetoothDiagnostics') &&
+    !screen.includes('debugExpanded') &&
+    bluetoothDiagnostics.includes('bluestackReadinessSummary') &&
+    readiness.includes('nativeBridgeStatus') &&
+    adapter.includes('rawDeviceCallbacksCount'),
+  'Device Connections screen should keep diagnostics out of the normal scanner UI while preserving the diagnostics data model',
+);
+assert(
+  !screen.includes('Utility Sensor Evidence') &&
+    hook.includes('advertisementEvidence') &&
+    hook.includes('getBluestackAdvertisementEvidence') &&
+    !screen.includes('manufacturerDataRaw'),
+  'Device Connections diagnostics should retain safe Bluestack utility sensor evidence without rendering debug panels in the scanner UI',
 );
 assert(
   screen.includes("ecsLog.debug('TELEMETRY', '[BT_SOURCE] active_device_connections_route'") &&
@@ -135,23 +176,33 @@ assert(
   'Device Connections screen route diagnostics must use ecsLog instead of console spam',
 );
 assert(
-  screen.includes('Pipeline Diagnostics') &&
-    screen.includes('Copy Diagnostics') &&
-    screen.includes('serializeBluetoothDiagnostics') &&
-    screen.includes('subscribeBluetoothDiagnostics') &&
-    screen.includes('__DEV__ && debugExpanded') &&
-    screen.includes('Found nearby power and OBD2 devices') &&
+    !screen.includes('__DEV__ && debugExpanded') &&
+    !screen.includes('Scan Visibility') &&
+    !screen.includes('Scan notes') &&
+    screen.includes('title="Connected devices"') &&
+    screen.includes('connectedReleaseDevices') &&
+    screen.includes('title="Available devices"') &&
+    screen.includes('for (const device of connections.devices)') &&
+    !screen.includes('actionLabel="Scan for Device Connections"') &&
+    !screen.includes('actionLabel="Scan for Devices"') &&
     !screen.includes('Saved and known devices') &&
     !screen.includes('Failed and needs attention') &&
     !screen.includes('Not Nearby') &&
     !screen.includes('Previously seen by ECS'),
-  'Device Connections screen must expose dev-gated pipeline diagnostics without restoring saved/known/failed production containers',
+  'Device Connections screen must keep the production scanner focused on connected rows plus the available-device list without duplicate scan controls or saved/known/failed containers',
 );
 assert(
   !hook.includes('Known devices available') &&
     !hook.includes('Attention needed') &&
-    hook.includes('const visibleScanResultCount = nearbyDevices.length;'),
-  'unified scanner status messaging must be keyed to real nearby scanner rows, not remembered/attention containers',
+    hook.includes('const visibleScanResultCount = nearbyDevices.length + connectedDevices.length + attentionDevices.length;'),
+  'unified scanner status messaging must be keyed to the single actionable scanner list, not restored saved/known containers',
+);
+assert(
+  hook.includes('REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS') &&
+    hook.includes('userDisconnectedDeviceIdsRef') &&
+    hook.includes("connectDevice(candidate.id, 'saved_auto_reconnect')") &&
+    !hook.includes("if (device.connection_state === 'disconnected') continue;\\n      keys.add(`power:${device.provider}:${device.device_id}`);"),
+  'remembered power devices must remain in the scanner model and auto-reconnect when rediscovered unless the user explicitly disconnected them',
 );
 
 assert(

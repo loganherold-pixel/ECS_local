@@ -79,7 +79,11 @@ function clampCautionLevel(value: number): 0 | 1 | 2 {
 export function formatConvoyDistanceMiles(value: number | null | undefined): string | null {
   const miles = positiveFinite(value);
   if (miles == null) return null;
-  if (miles < 0.1) return '<0.1 mi';
+  if (miles < 0.25) return `${Math.round(miles * 5280)} ft`;
+  if (miles < 1) {
+    const quarterMiles = Math.max(1, Math.round(miles / 0.25)) * 0.25;
+    return `${quarterMiles.toFixed(2).replace(/0$/, '').replace(/\.0$/, '')} mi`;
+  }
   if (miles < 10) return `${miles.toFixed(1)} mi`;
   return `${Math.round(miles)} mi`;
 }

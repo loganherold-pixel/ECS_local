@@ -115,7 +115,8 @@ export function detectDispersedCampingRuntimeContradictions(
   if (
     snapshot.candidatePinCount > 0 &&
     snapshot.candidateGenerationTrigger &&
-    snapshot.candidateGenerationTrigger !== 'explicit_user_action'
+    snapshot.candidateGenerationTrigger !== 'explicit_user_action' &&
+    !(snapshot.candidateGenerationTrigger === 'route_auto_stage' && snapshot.routeExists)
   ) {
     pushContradiction(contradictions, {
       code: 'dispersed_camping_candidate_auto_generated',

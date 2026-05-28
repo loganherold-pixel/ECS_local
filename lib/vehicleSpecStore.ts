@@ -59,6 +59,20 @@ export interface VehicleSpec {
   drivetrain?: string;
   cab?: string;
   bed_length?: string;
+  payload_capacity_lb?: number | null;
+  overall_length_in?: number | null;
+  overall_width_in?: number | null;
+  overall_height_in?: number | null;
+  track_width_front_in?: number | null;
+  track_width_rear_in?: number | null;
+  approach_angle_deg?: number | null;
+  breakover_angle_deg?: number | null;
+  departure_angle_deg?: number | null;
+  turning_diameter_ft?: number | null;
+  oem_reference_id?: string | null;
+  oem_reference_label?: string | null;
+  oem_reference_confidence?: number | null;
+  oem_reference_notes?: string | null;
   /** Fuel tank capacity in gallons (required for fuel percent conversion) */
   fuel_tank_capacity_gal: number;
   /** Fuel type: diesel or gas (default diesel) */
@@ -268,6 +282,20 @@ export function migrateSpec(spec: any): VehicleSpec {
     drivetrain: spec.drivetrain,
     cab: spec.cab,
     bed_length: spec.bed_length,
+    payload_capacity_lb: spec.payload_capacity_lb,
+    overall_length_in: spec.overall_length_in,
+    overall_width_in: spec.overall_width_in,
+    overall_height_in: spec.overall_height_in,
+    track_width_front_in: spec.track_width_front_in,
+    track_width_rear_in: spec.track_width_rear_in,
+    approach_angle_deg: spec.approach_angle_deg,
+    breakover_angle_deg: spec.breakover_angle_deg,
+    departure_angle_deg: spec.departure_angle_deg,
+    turning_diameter_ft: spec.turning_diameter_ft,
+    oem_reference_id: spec.oem_reference_id,
+    oem_reference_label: spec.oem_reference_label,
+    oem_reference_confidence: spec.oem_reference_confidence,
+    oem_reference_notes: spec.oem_reference_notes,
   };
 }
 

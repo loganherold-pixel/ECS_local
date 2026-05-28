@@ -230,6 +230,7 @@ assertResolved({ make: 'Ram', model: '3500' }, 'ram_2500_3500', 'Ram_2500_3500.p
 assertResolved({ make: 'Nissan', model: 'Frontier' }, 'nissan_frontier', 'Nissan_Frontier.png', false);
 assertResolved({ make: 'Toyota', model: 'Tundra' }, 'toyota_tundra', 'Toyota_Tundra.png', false);
 assertResolved({ make: 'Unknown', model: 'Trail Rig', bodyType: 'truck' }, 'generic_pickup', 'Generic_Pickup.png', true);
+assertResolved({ make: 'Honda', model: 'Passport', trim: 'TrailSport', type: 'truck' }, 'generic_suv', 'Generic_SUV.png', true);
 
 const missingFallback = getVehicleAttitudeAsset('missing_vehicle_id');
 assert.strictEqual(missingFallback.vehicleId, 'toyota_tacoma', 'Missing vehicleId should fall back to Toyota Tacoma.');

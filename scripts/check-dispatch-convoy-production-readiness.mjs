@@ -65,17 +65,19 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
     readinessDoc: path.join(root, READINESS_DOC_RELATIVE_PATH),
     dispatchPanel: path.join(root, 'components', 'dispatch', 'DispatchConvoyCommandPanel.tsx'),
     dispatchCommandCenter: path.join(root, 'components', 'dispatch', 'DispatchCadCommandCenter.tsx'),
+    convoyMap: path.join(root, 'components', 'convoy', 'ConvoyCommandMap.tsx'),
+    convoyMapFallback: path.join(root, 'components', 'convoy', 'ConvoyMapFallback.tsx'),
     rolloutConfig: path.join(root, 'lib', 'dispatchRolloutConfig.ts'),
     commandRegistry: path.join(root, 'components', 'dashboard', 'commandCenter', 'commandCenterRegistry.ts'),
     commandStore: path.join(root, 'lib', 'ecsCommandModuleStore.ts'),
-    nativeRiveWrapper: path.join(root, 'components', 'rive', 'ECSConvoyCommandPanelRive.native.tsx'),
-    webRiveWrapper: path.join(root, 'components', 'rive', 'ECSConvoyCommandPanelRive.tsx'),
-    assetRive: path.join(root, 'assets', 'rive', 'ConvoyCommand_Panel.riv'),
-    publicRive: path.join(root, 'public', 'rive', 'ConvoyCommand_Panel.riv'),
     oldDashboardWidget: path.join(root, 'components', 'dashboard', 'command-center', 'widgets', 'ConvoyCommandWidget.tsx'),
     oldDashboardCommand: path.join(root, 'components', 'dashboard', 'commandCenter', 'ConvoyCommand.tsx'),
     oldRiveWrapper: path.join(root, 'components', 'rive', 'ECSConvoyCommandRive.tsx'),
     oldRiveAsset: path.join(root, 'assets', 'rive', 'ConvoyCommand.riv'),
+    oldPanelRiveWrapper: path.join(root, 'components', 'rive', 'ECSConvoyCommandPanelRive.tsx'),
+    oldPanelNativeRiveWrapper: path.join(root, 'components', 'rive', 'ECSConvoyCommandPanelRive.native.tsx'),
+    oldPanelRiveAsset: path.join(root, 'assets', 'rive', 'ConvoyCommand_Panel.riv'),
+    oldPanelPublicRiveAsset: path.join(root, 'public', 'rive', 'ConvoyCommand_Panel.riv'),
   };
 
   const internalBetaResult = readJsonIfExists(paths.internalBetaResult);
@@ -83,13 +85,11 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
   const readinessDoc = readIfExists(paths.readinessDoc);
   const dispatchPanelSource = readIfExists(paths.dispatchPanel);
   const dispatchCommandSource = readIfExists(paths.dispatchCommandCenter);
+  const convoyMapSource = readIfExists(paths.convoyMap);
+  const convoyMapFallbackSource = readIfExists(paths.convoyMapFallback);
   const rolloutSource = readIfExists(paths.rolloutConfig);
   const registrySource = readIfExists(paths.commandRegistry);
   const storeSource = readIfExists(paths.commandStore);
-  const nativeRiveSource = readIfExists(paths.nativeRiveWrapper);
-  const webRiveSource = readIfExists(paths.webRiveWrapper);
-  const assetStat = fs.existsSync(paths.assetRive) ? fs.statSync(paths.assetRive) : null;
-  const publicStat = fs.existsSync(paths.publicRive) ? fs.statSync(paths.publicRive) : null;
 
   const checks = [
     check(
@@ -100,22 +100,30 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
       ['Run npm run gate:dispatch-internal-beta and clear all blockers before production review.'],
     ),
     check(
-      'convoy_panel_rive_assets_present',
-      'Convoy Command panel Rive assets are present for native and web bundles.',
-      Boolean(assetStat?.size && publicStat?.size && assetStat.size === publicStat.size),
-      [relPath(root, paths.assetRive), relPath(root, paths.publicRive)],
-      ['Copy the provided ConvoyCommand_Panel.riv into assets/rive and public/rive.'],
+      'convoy_panel_map_surface_present',
+      'Convoy Command uses the live-ready Mapbox surface with tactical fallback.',
+      /ConvoyCommandMap/.test(dispatchPanelSource) &&
+        !/ECSConvoyCommandPanelRive/.test(dispatchPanelSource) &&
+        !fs.existsSync(paths.oldPanelRiveWrapper) &&
+        !fs.existsSync(paths.oldPanelNativeRiveWrapper) &&
+        !fs.existsSync(paths.oldPanelRiveAsset) &&
+        !fs.existsSync(paths.oldPanelPublicRiveAsset) &&
+        /loadRnMapboxModule/.test(convoyMapSource) &&
+        /ConvoyMapFallback/.test(convoyMapSource) &&
+        /No live convoy locations yet\./.test(convoyMapSource),
+      [relPath(root, paths.dispatchPanel), relPath(root, paths.convoyMap), relPath(root, paths.convoyMapFallback)],
+      ['Keep Dispatch Convoy Command on ConvoyCommandMap with a clear fallback when Mapbox/live tracking is unavailable.'],
     ),
     check(
-      'convoy_panel_runtime_wrappers_present',
-      'Native and web Rive wrappers render the full Dispatch panel asset without stretching.',
-      /ConvoyCommand_Panel\.riv/.test(nativeRiveSource) &&
-        /Fit\.Contain/.test(nativeRiveSource) &&
-        /dashboard_no_exterior_border/.test(nativeRiveSource) &&
-        /ConvoyCommand_Panel\.riv/.test(webRiveSource) &&
-        /Fit\.Contain/.test(webRiveSource),
-      [relPath(root, paths.nativeRiveWrapper), relPath(root, paths.webRiveWrapper)],
-      ['Keep Dispatch Convoy Command on the panel Rive asset with contain-fit rendering.'],
+      'convoy_live_sharing_controls_present',
+      'Convoy Command exposes explicit opt-in location sharing controls.',
+      /Start live sharing/.test(dispatchPanelSource) &&
+        /Stop live sharing/.test(dispatchPanelSource) &&
+        /startConvoyLocationSharing/.test(dispatchPanelSource) &&
+        /stopConvoyLocationSharing/.test(dispatchPanelSource) &&
+        /useConvoyTrackingStore/.test(dispatchPanelSource),
+      [relPath(root, paths.dispatchPanel)],
+      ['Keep convoy location sharing opt-in only and visible to the user.'],
     ),
     check(
       'dashboard_convoy_widget_removed',
@@ -124,6 +132,10 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
         !fs.existsSync(paths.oldDashboardCommand) &&
         !fs.existsSync(paths.oldRiveWrapper) &&
         !fs.existsSync(paths.oldRiveAsset) &&
+        !fs.existsSync(paths.oldPanelRiveWrapper) &&
+        !fs.existsSync(paths.oldPanelNativeRiveWrapper) &&
+        !fs.existsSync(paths.oldPanelRiveAsset) &&
+        !fs.existsSync(paths.oldPanelPublicRiveAsset) &&
         !/ConvoyCommandWidget|id:\s*'convoyCommand'|label:\s*'Convoy Command'/.test(registrySource) &&
         /convoyCommand.*convoy-command/.test(storeSource),
       [
@@ -137,7 +149,9 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
     check(
       'emergency_ping_truthful_and_local',
       'Emergency coordinate ping remains local/internal and does not claim SOS or agency dispatch.',
-      /onEmergencyPing=\{handleRecoveryAssist\}/.test(dispatchCommandSource) &&
+      /onEmergencyPing=\{handleEmergencyPingButtonPress\}/.test(dispatchCommandSource) &&
+        /Clear GPS/.test(dispatchCommandSource) &&
+        /Cancel/.test(dispatchCommandSource) &&
         /It does not contact emergency services\./.test(dispatchPanelSource) &&
         /Local ECS Dispatch report only/.test(dispatchCommandSource) &&
         /does not contact emergency services/.test(dispatchCommandSource),
@@ -158,7 +172,7 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
       'Android device visual QA evidence exists for the Dispatch Convoy panel.',
       requireEvidenceValue(evidence, 'androidDispatchConvoyVisualQaPassed'),
       [relPath(root, paths.evidence)],
-      ['Capture phone/tablet Android screenshots for Dispatch Convoy panel, portrait/landscape, no banner/dock overlap, Rive visible, emergency button visible.'],
+      ['Capture phone/tablet Android screenshots for Dispatch Convoy panel, portrait/landscape, no banner/dock overlap, map/fallback visible, emergency button visible.'],
     ),
     check(
       'emergency_coordinate_ping_e2e_evidence_present',

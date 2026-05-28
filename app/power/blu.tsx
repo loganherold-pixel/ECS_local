@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -18,45 +18,64 @@ import { ecsLog } from '../../lib/ecsLogger';
 import {
   type ECSConnectionActionKind,
   type ECSConnectionStatus,
-  type ECSDiscoverySourceUiStatus,
   type ECSDeviceConnectionModel,
-  type ECSScanSummary,
   useUnifiedDeviceConnections,
 } from '../../lib/unifiedScanner';
 import {
-  getSourceStatusDetail,
-  getSourceStatusLabel,
-} from '../../lib/deviceConnectionScanMessaging';
-import {
-  getBluetoothDiagnosticsSnapshot,
-  serializeBluetoothDiagnostics,
-  subscribeBluetoothDiagnostics,
-  type BluetoothDiagnosticsSnapshot,
-} from '../../lib/bluetoothDiagnostics';
+  getBluestackConnectionPolicy,
+  getBluestackVisibleDeviceListLabel,
+  isBluestackReleaseDeviceModel,
+} from '../../lib/bluestack';
 
 type StatusTone = 'neutral' | 'active' | 'sync' | 'warning' | 'danger';
 
-async function copyDiagnosticsText(value: string): Promise<boolean> {
-  try {
-    const clipboard = (globalThis as any)?.navigator?.clipboard;
-    if (clipboard?.writeText) {
-      await clipboard.writeText(value);
-      return true;
-    }
-  } catch {}
+type CompatibilitySystem = {
+  name: string;
+  detail: string;
+  badge: string;
+  tone: StatusTone;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+};
 
-  return false;
+const VERIFIED_BLUESTACK_SYSTEMS: CompatibilitySystem[] = [
+  {
+    name: 'EcoFlow cloud/API',
+    detail: 'DELTA, RIVER, GLACIER, WAVE, and Alternator Charger telemetry when the EcoFlow account authorizes the device.',
+    badge: 'Live ready',
+    tone: 'active',
+    icon: 'flash-outline',
+  },
+  {
+    name: 'Native BLE power systems',
+    detail: 'BLUETTI/Blue Eddy, Anker SOLIX, Jackery, Goal Zero, Renogy, REDARC, Dakota Lithium, and Victron can attempt live Bluetooth telemetry and promote only decoded hardware readings.',
+    badge: 'Live ready',
+    tone: 'active',
+    icon: 'battery-charging-outline',
+  },
+  {
+    name: 'OBD2 ELM327 telemetry',
+    detail: 'Veepeak/V Peak BLE reference path plus ELM327-compatible OBD2 adapters after the PID handshake succeeds.',
+    badge: 'Live ready',
+    tone: 'active',
+    icon: 'speedometer-outline',
+  },
+  {
+    name: 'Utility tank sensors',
+    detail: 'Mopeka propane plus SeeLevel/water monitor profiles can link over native BLE and promote only decoded tank level readings.',
+    badge: 'Live ready',
+    tone: 'active',
+    icon: 'hardware-chip-outline',
+  },
+];
+
+const RECOGNIZED_BLUESTACK_SYSTEMS: CompatibilitySystem[] = [];
+
+function isVisibleReleaseDevice(device: ECSDeviceConnectionModel): boolean {
+  return isBluestackReleaseDeviceModel(device);
 }
 
-function isRealNearbyReleaseDevice(device: ECSDeviceConnectionModel): boolean {
-  if (device.kind !== 'power' && device.kind !== 'telemetry') return false;
-  if (!device.isDiscoverable) return false;
-
-  const hasNativeAdvertisement =
-    device.sourceBadges.some((badge) => /ble|classic/i.test(badge)) ||
-    /^(ble|classic_bluetooth|hybrid)$/.test(String(device.connectionType ?? '').toLowerCase());
-
-  return hasNativeAdvertisement;
+function getVisibleDeviceListLabel(devices: ECSDeviceConnectionModel[]): string {
+  return getBluestackVisibleDeviceListLabel(devices);
 }
 
 function getStatusTone(status: ECSConnectionStatus): StatusTone {
@@ -97,8 +116,75 @@ function getToneColors(tone: StatusTone) {
   }
 }
 
+function getStatusPillTone(label: string, fallback: StatusTone): StatusTone {
+  switch (label) {
+    case 'Live':
+      return 'active';
+    case 'Connecting':
+    case 'Cloud Polling':
+    case 'Discovered':
+      return 'sync';
+    case 'Awaiting Data':
+    case 'Stale':
+    case 'Mock':
+      return 'warning';
+    case 'Timeout':
+    case 'Auth Required':
+    case 'Unsupported':
+    case 'Failed':
+      return 'danger';
+    case 'Connected':
+    case 'Disconnected':
+    default:
+      return fallback;
+  }
+}
+
+function getSourceTone(label: string): StatusTone {
+  switch (label) {
+    case 'Local BLE':
+    case 'OBD2':
+      return 'sync';
+    case 'Cloud API':
+    case 'Hybrid':
+      return 'neutral';
+    case 'Mock':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
+function formatLastTelemetryLabel(timestamp: number | null): string {
+  if (!timestamp || timestamp <= 0) return 'Last telemetry --';
+  const ageMs = Date.now() - timestamp;
+  if (ageMs >= 0 && ageMs < 5_000) return 'Last telemetry just now';
+  if (ageMs >= 0 && ageMs < 60_000) return `Last telemetry ${Math.max(1, Math.floor(ageMs / 1000))}s ago`;
+  if (ageMs >= 0 && ageMs < 3_600_000) return `Last telemetry ${Math.floor(ageMs / 60_000)}m ago`;
+  try {
+    return `Last telemetry ${new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  } catch {
+    return 'Last telemetry --';
+  }
+}
+
+function shouldShowDiagnosticReason(device: ECSDeviceConnectionModel): boolean {
+  if (!device.diagnosticReason) return false;
+  return (
+    device.statusPillLabel === 'Awaiting Data' ||
+    device.statusPillLabel === 'Stale' ||
+    device.statusPillLabel === 'Timeout' ||
+    device.statusPillLabel === 'Auth Required' ||
+    device.statusPillLabel === 'Unsupported' ||
+    device.statusPillLabel === 'Failed' ||
+    device.telemetryUnsupported
+  );
+}
+
 function getDeviceIcon(device: ECSDeviceConnectionModel): React.ComponentProps<typeof Ionicons>['name'] {
   if (device.kind === 'telemetry') return 'speedometer-outline';
+  if (device.deviceCategory === 'propane_monitor' || device.providerId === 'propane_monitor') return 'flame-outline';
+  if (device.deviceCategory === 'water_tank_monitor' || device.providerId === 'water_monitor') return 'water-outline';
   if (device.kind === 'sensor') return 'hardware-chip-outline';
   if (device.kind === 'generic') return 'bluetooth-outline';
 
@@ -125,6 +211,7 @@ function getDeviceIcon(device: ECSDeviceConnectionModel): React.ComponentProps<t
 }
 
 function getPrimaryActionLabel(device: ECSDeviceConnectionModel): string {
+  const policy = getBluestackConnectionPolicy(device);
   switch (device.actionKind) {
     case 'disconnect':
       return device.actionLabel;
@@ -135,14 +222,14 @@ function getPrimaryActionLabel(device: ECSDeviceConnectionModel): string {
     case 'connecting':
       return 'Connecting...';
     case 'connect':
-      return 'Connect';
+      return policy.primaryActionLabel;
     case 'connected':
       return 'Connected';
     case 'selected':
       return 'Selected';
     case 'none':
     default:
-      return 'Unavailable';
+      return device.actionLabel || 'Unavailable';
   }
 }
 
@@ -159,11 +246,18 @@ function getDeviceModelLabel(device: ECSDeviceConnectionModel): string | null {
 }
 
 function getTruthChip(device: ECSDeviceConnectionModel): { label: string; tone: StatusTone } | null {
+  const policy = getBluestackConnectionPolicy(device);
   if (device.kind === 'sensor' || device.kind === 'generic') {
     if (device.isConnected) {
       return {
-        label: device.kind === 'sensor' ? 'Accessory Linked' : 'Bluetooth Linked',
-        tone: 'active',
+        label: policy.telemetryTruthLabel,
+        tone: policy.lane === 'live_telemetry' ? 'active' : 'warning',
+      };
+    }
+    if (policy.lane === 'native_ble_required') {
+      return {
+        label: policy.telemetryTruthLabel,
+        tone: 'sync',
       };
     }
     return null;
@@ -177,13 +271,13 @@ function getTruthChip(device: ECSDeviceConnectionModel): { label: string; tone: 
   }
   if (device.telemetrySource === 'provider_cloud') {
     return {
-      label: 'Provider Cloud',
+      label: device.telemetrySourceLabel || policy.telemetryTruthLabel || 'Provider Cloud',
       tone: 'sync',
     };
   }
   if (device.telemetryUnsupported) {
     return {
-      label: 'Telemetry Unsupported',
+      label: policy.telemetryTruthLabel || 'Parser Pending',
       tone: 'warning',
     };
   }
@@ -195,8 +289,8 @@ function getTruthChip(device: ECSDeviceConnectionModel): { label: string; tone: 
   }
   if (device.isConnected) {
     return {
-      label: device.telemetrySourceLabel === 'Unavailable' ? 'Data Pending' : device.telemetrySourceLabel,
-      tone: 'neutral',
+      label: policy.telemetryTruthLabel || (device.telemetrySourceLabel === 'Unavailable' ? 'Data Pending' : device.telemetrySourceLabel),
+      tone: policy.lane === 'linked_no_parser' || policy.lane === 'pending_protocol' ? 'warning' : 'neutral',
     };
   }
   return null;
@@ -204,6 +298,7 @@ function getTruthChip(device: ECSDeviceConnectionModel): { label: string; tone: 
 
 function getFooterLabel(device: ECSDeviceConnectionModel): string {
   const metaParts = [
+    formatLastTelemetryLabel(device.lastTelemetryAt),
     device.sourceBadges.length > 0 ? `Source ${device.sourceBadges.join('+')}` : null,
     device.lastSeenAt
       ? `Last seen ${new Date(device.lastSeenAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -264,36 +359,17 @@ function SummaryStat({
   );
 }
 
-function DiagnosticRow({
-  label,
-  value,
-  palette,
-}: {
-  label: string;
-  value: string;
-  palette: any;
-}) {
-  return (
-    <View style={[styles.diagnosticRow, { borderColor: palette.border }]}>
-      <Text style={[styles.diagnosticLabel, { color: palette.textMuted }]}>{label}</Text>
-      <Text style={[styles.diagnosticValue, { color: palette.text }]} numberOfLines={1}>
-        {value}
-      </Text>
-    </View>
-  );
-}
-
 function EmptySection({
   title,
   body,
   onRescan,
-  actionLabel = 'Scan for Device Connections',
+  actionLabel,
   actionDisabled = false,
   palette,
 }: {
   title: string;
   body: string;
-  onRescan: () => void;
+  onRescan?: () => void;
   actionLabel?: string;
   actionDisabled?: boolean;
   palette: any;
@@ -313,27 +389,28 @@ function EmptySection({
         <Text style={[styles.emptyTitle, { color: palette.text }]}>{title}</Text>
         <Text style={[styles.emptyBody, { color: palette.textMuted }]}>{body}</Text>
       </View>
-      <TouchableOpacity
-        style={[
-          styles.inlineActionBtn,
-          {
-            borderColor: palette.amber + '40',
-            backgroundColor: palette.amber + '10',
-          },
-        ]}
-        onPress={() => {
-          if (actionDisabled) return;
-          void hapticCommand();
-          onRescan();
-        }}
-        disabled={actionDisabled}
-        accessibilityState={{ disabled: actionDisabled }}
-        activeOpacity={0.78}
-      >
-        <Text style={[styles.inlineActionBtnText, { color: palette.amber }]} numberOfLines={2}>
-          {actionLabel}
-        </Text>
-      </TouchableOpacity>
+      {onRescan && actionLabel ? (
+        <TouchableOpacity
+          style={[
+            styles.inlineActionBtn,
+            {
+              borderColor: palette.amber + '40',
+              backgroundColor: palette.amber + '10',
+            },
+          ]}
+          onPress={() => {
+            if (actionDisabled) return;
+            onRescan();
+          }}
+          disabled={actionDisabled}
+          accessibilityState={{ disabled: actionDisabled }}
+          activeOpacity={0.78}
+        >
+          <Text style={[styles.inlineActionBtnText, { color: palette.amber }]} numberOfLines={2}>
+            {actionLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -355,14 +432,17 @@ function DeviceRow({
 }) {
   const tone = getStatusTone(device.status);
   const toneColors = getToneColors(tone);
+  const connectionPolicy = getBluestackConnectionPolicy(device);
   const truthChip = getTruthChip(device);
   const selectionEnabled =
     !device.isConnected &&
     !device.isConnecting &&
+    connectionPolicy.canAttemptConnection &&
     (device.actionKind === 'connect' || device.actionKind === 'retry');
   const showSelectionToggle = selectionEnabled || device.isSelected;
   const showPrimaryAction = actionBusy || device.actionKind !== 'none';
   const modelLabel = getDeviceModelLabel(device);
+  const showDiagnosticReason = shouldShowDiagnosticReason(device);
 
   const actionDisabled =
     globalBusy ||
@@ -370,7 +450,8 @@ function DeviceRow({
     device.actionKind === 'connected' ||
     device.actionKind === 'selected' ||
     device.actionKind === 'disconnecting' ||
-    device.actionKind === 'connecting';
+    device.actionKind === 'connecting' ||
+    (!connectionPolicy.canAttemptConnection && !device.isConnected);
 
   const handlePress = useCallback(() => {
     if (actionDisabled) return;
@@ -485,7 +566,23 @@ function DeviceRow({
       </View>
 
       <View style={styles.devicePillsRow}>
-        <DeviceStatePill label={device.stateLabel} tone={tone} />
+        <DeviceStatePill
+          label={device.statusPillLabel}
+          tone={getStatusPillTone(device.statusPillLabel, tone)}
+        />
+        <DeviceStatePill label={device.connectionSourceLabel} tone={getSourceTone(device.connectionSourceLabel)} />
+        <DeviceStatePill
+          label={connectionPolicy.statusLabel}
+          tone={
+            connectionPolicy.lane === 'live_telemetry'
+              ? 'active'
+              : connectionPolicy.lane === 'unsupported' || connectionPolicy.lane === 'cloud_authorization_needed'
+                ? 'danger'
+                : connectionPolicy.lane === 'cloud_authorized'
+                  ? 'sync'
+                  : 'warning'
+          }
+        />
         {truthChip ? <DeviceStatePill label={truthChip.label} tone={truthChip.tone} /> : null}
         {device.isSelected ? <DeviceStatePill label="Selected" tone="sync" /> : null}
         {device.supportLevel !== 'verified' && device.supportLevel !== 'telemetry' && device.status !== 'partial' && device.status !== 'unsupported' ? (
@@ -496,7 +593,57 @@ function DeviceRow({
         ) : null}
       </View>
 
-      <Text style={[styles.deviceDetail, { color: palette.textMuted }]}>{device.detailLabel}</Text>
+      <Text style={[styles.deviceDetail, { color: palette.textMuted }]}>
+        {device.detailLabel || connectionPolicy.statusDetail}
+      </Text>
+
+      {device.telemetryFields.length > 0 ? (
+        <View style={styles.telemetryGrid}>
+          {device.telemetryFields.map((field) => (
+            <View
+              key={field.key}
+              style={[
+                styles.telemetryCell,
+                {
+                  backgroundColor: palette.border + '16',
+                  borderColor: palette.border,
+                },
+              ]}
+            >
+              <Text style={[styles.telemetryCellLabel, { color: palette.textMuted }]} numberOfLines={1}>
+                {field.label}
+              </Text>
+              <Text style={[styles.telemetryCellValue, { color: palette.text }]} numberOfLines={1}>
+                {field.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {showDiagnosticReason ? (
+        <View
+          style={[
+            styles.diagnosticReasonBox,
+            {
+              backgroundColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).background,
+              borderColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).border,
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.diagnosticReasonLabel,
+              { color: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).text },
+            ]}
+          >
+            Reason
+          </Text>
+          <Text style={[styles.diagnosticReasonText, { color: palette.text }]} numberOfLines={3}>
+            {device.diagnosticReason}
+          </Text>
+        </View>
+      ) : null}
 
       <View style={[styles.deviceFooter, { borderTopColor: GOLD_RAIL.subsection }]}>
         <Text style={[styles.deviceFooterText, { color: palette.textMuted }]}>
@@ -558,227 +705,111 @@ function SectionBlock({
   );
 }
 
-function getSourceStatusTone(status: ECSDiscoverySourceUiStatus): StatusTone {
-  switch (status) {
-    case 'success':
-      return 'active';
-    case 'scanning':
-    case 'pending':
-      return 'sync';
-    case 'unsupported':
-    case 'disabled':
-      return 'warning';
-    case 'failed':
-    default:
-      return 'danger';
-  }
-}
-
-function ScanSummaryPanel({
-  summary,
-  expanded,
-  onToggleExpanded,
+function CompatibilitySystemRow({
+  system,
   palette,
 }: {
-  summary: ECSScanSummary;
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  system: CompatibilitySystem;
   palette: any;
 }) {
-  const hasStarted = summary.startedAt != null;
-  const reasonText = summary.filterReasons.length > 0
-    ? summary.filterReasons.join(' / ')
-    : hasStarted
-      ? 'No filters or source blockers reported.'
-      : 'No scan has run yet.';
-  const diagnostics = summary.bluetoothDiagnostics;
-  const missingPermissions = diagnostics.missingPermissions.length > 0
-    ? diagnostics.missingPermissions.join(', ')
-    : 'none';
+  const toneColors = getToneColors(system.tone);
 
   return (
     <View
       style={[
-        styles.scanSummaryCard,
+        styles.compatibilityRow,
+        {
+          backgroundColor: palette.border + '14',
+          borderColor: palette.border,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.compatibilityIconWrap,
+          {
+            backgroundColor: toneColors.background,
+            borderColor: toneColors.border,
+          },
+        ]}
+      >
+        <Ionicons name={system.icon} size={16} color={toneColors.text} />
+      </View>
+      <View style={styles.compatibilityCopy}>
+        <View style={styles.compatibilityTitleRow}>
+          <Text style={[styles.compatibilityName, { color: palette.text }]} numberOfLines={1}>
+            {system.name}
+          </Text>
+          <View
+            style={[
+              styles.compatibilityBadge,
+              {
+                backgroundColor: toneColors.background,
+                borderColor: toneColors.border,
+              },
+            ]}
+          >
+            <Text style={[styles.compatibilityBadgeText, { color: toneColors.text }]}>{system.badge}</Text>
+          </View>
+        </View>
+        <Text style={[styles.compatibilityDetail, { color: palette.textMuted }]}>
+          {system.detail}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function CompatibilitySystemGroup({
+  label,
+  systems,
+  palette,
+}: {
+  label: string;
+  systems: CompatibilitySystem[];
+  palette: any;
+}) {
+  return (
+    <View style={styles.compatibilityGroup}>
+      <Text style={[styles.compatibilityGroupLabel, { color: palette.textMuted }]}>{label}</Text>
+      {systems.map((system) => (
+        <CompatibilitySystemRow key={system.name} system={system} palette={palette} />
+      ))}
+    </View>
+  );
+}
+
+function BluestackCompatibilityCard({ palette }: { palette: any }) {
+  return (
+    <View
+      style={[
+        styles.compatibilityCard,
         {
           backgroundColor: palette.panel,
           borderColor: palette.border,
         },
       ]}
     >
-      <View style={styles.scanSummaryHeader}>
-        <View style={styles.scanSummaryCopy}>
-          <Text style={[styles.scanSummaryTitle, { color: palette.amber }]}>Scan Visibility</Text>
-          <Text style={[styles.scanSummaryBody, { color: palette.textMuted }]}>
-            {hasStarted
-              ? `Last scan: ${Math.round(summary.durationMs / 1000)}s / ${summary.sourcesAttempted.join(', ')}`
-              : 'Ready to scan. Source diagnostics will appear here after the next manual scan.'}
+      <View style={styles.compatibilityHeader}>
+        <Ionicons name="checkmark-done-circle-outline" size={18} color={palette.amber} />
+        <View style={styles.compatibilityHeaderCopy}>
+          <Text style={[styles.compatibilityCardTitle, { color: palette.text }]}>Verified Connection Set</Text>
+          <Text style={[styles.compatibilityCardBody, { color: palette.textMuted }]}>
+            ECS only marks systems as live-ready when a working telemetry path exists. Recognized systems can appear in scans without being presented as verified live data.
           </Text>
         </View>
-        {__DEV__ ? (
-          <TouchableOpacity
-            style={[styles.debugToggle, { borderColor: palette.border, backgroundColor: palette.border + '18' }]}
-            onPress={onToggleExpanded}
-            activeOpacity={0.78}
-          >
-            <Ionicons
-              name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
-              size={14}
-              color={palette.textMuted}
-            />
-            <Text style={[styles.debugToggleText, { color: palette.textMuted }]}>Debug</Text>
-          </TouchableOpacity>
-        ) : null}
       </View>
-
-      <View style={styles.scanSummaryStats}>
-        <SummaryStat
-          label="Raw Seen"
-          value={summary.rawDevicesSeenCount}
-          color={palette.text}
-          mutedColor={palette.textMuted}
+      <CompatibilitySystemGroup
+        label="Tested live telemetry"
+        systems={VERIFIED_BLUESTACK_SYSTEMS}
+        palette={palette}
+      />
+      {RECOGNIZED_BLUESTACK_SYSTEMS.length > 0 ? (
+        <CompatibilitySystemGroup
+          label="Detected, not yet live-ready"
+          systems={RECOGNIZED_BLUESTACK_SYSTEMS}
+          palette={palette}
         />
-        <SummaryStat
-          label="Visible"
-          value={summary.visibleDevicesCount}
-          color="#4CAF50"
-          mutedColor={palette.textMuted}
-        />
-        <SummaryStat
-          label="Filtered"
-          value={summary.filteredDevicesCount}
-          color={summary.filteredDevicesCount > 0 ? '#D6A04B' : palette.textMuted}
-          mutedColor={palette.textMuted}
-        />
-      </View>
-
-      <View style={styles.sourceStatusList}>
-        {summary.sourceStatuses.map((source) => {
-          const tone = getSourceStatusTone(source.status);
-          const toneColors = getToneColors(tone);
-          const sourceMetricsLabel = `raw ${source.rawCount} / normalized ${source.normalizedCount} / added ${source.addedCount}`;
-          return (
-            <View
-              key={source.key}
-              style={[
-                styles.sourceStatusRow,
-                {
-                  borderColor: toneColors.border,
-                  backgroundColor: toneColors.background,
-                },
-              ]}
-            >
-              <View style={styles.sourceStatusCopy}>
-                <Text style={[styles.sourceStatusLabel, { color: palette.text }]}>{source.label}</Text>
-                <Text style={[styles.sourceStatusDetail, { color: palette.textMuted }]} numberOfLines={expanded ? 3 : 1}>
-                  {getSourceStatusDetail(source)}
-                </Text>
-                {expanded ? (
-                  <Text style={[styles.sourceStatusDetail, { color: palette.textMuted }]} numberOfLines={1}>
-                    {sourceMetricsLabel}
-                  </Text>
-                ) : null}
-              </View>
-              <View style={styles.sourceStatusRight}>
-                <Text style={[styles.sourceStatusCount, { color: toneColors.text }]}>{source.deviceCount}</Text>
-                <Text style={[styles.sourceStatusText, { color: toneColors.text }]}>{getSourceStatusLabel(source)}</Text>
-              </View>
-            </View>
-          );
-        })}
-      </View>
-
-      {expanded ? (
-        <View style={[styles.diagnosticBox, { borderColor: palette.border, backgroundColor: palette.border + '14' }]}>
-          <Text style={[styles.diagnosticTitle, { color: palette.textMuted }]}>Native BLE Diagnostics</Text>
-          <DiagnosticRow label="Platform" value={diagnostics.platform} palette={palette} />
-          <DiagnosticRow
-            label="Native Bridge"
-            value={diagnostics.nativeBridgeStatus.replace(/_/g, ' ')}
-            palette={palette}
-          />
-          <DiagnosticRow label="Permissions" value={diagnostics.permissionStatus} palette={palette} />
-          <DiagnosticRow label="Missing" value={missingPermissions} palette={palette} />
-          <DiagnosticRow
-            label="Bluetooth"
-            value={diagnostics.bluetoothState ?? diagnostics.initialBluetoothState ?? 'unknown'}
-            palette={palette}
-          />
-          <DiagnosticRow label="Readiness" value={diagnostics.readinessCode} palette={palette} />
-          <DiagnosticRow label="Raw Callbacks" value={String(diagnostics.rawDeviceCallbacksCount)} palette={palette} />
-          <DiagnosticRow label="Last Error" value={diagnostics.lastScanError ?? diagnostics.message ?? 'none'} palette={palette} />
-        </View>
-      ) : null}
-
-      {expanded || summary.filteredDevicesCount > 0 || summary.filterReasons.length > 0 ? (
-        <View style={[styles.scanReasonBox, { borderColor: GOLD_RAIL.subsection }]}>
-          <Text style={[styles.scanReasonLabel, { color: palette.textMuted }]}>Major reasons</Text>
-          <Text style={[styles.scanReasonText, { color: palette.text }]}>{reasonText}</Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-function PipelineDiagnosticsPanel({
-  snapshot,
-  onCopy,
-  copied,
-  palette,
-}: {
-  snapshot: BluetoothDiagnosticsSnapshot;
-  onCopy: () => void;
-  copied: boolean;
-  palette: any;
-}) {
-  const latestErrors = Object.entries(snapshot.latestErrorsBySource).slice(0, 6);
-  const latestTelemetry = Object.entries(snapshot.latestTelemetryTimestampByDevice).slice(0, 4);
-  const activeConnection = snapshot.activeConnection ?? 'none';
-
-  return (
-    <View style={[styles.diagnosticBox, { borderColor: palette.border, backgroundColor: palette.border + '14' }]}>
-      <View style={styles.diagnosticHeaderRow}>
-        <Text style={[styles.diagnosticTitle, { color: palette.textMuted }]}>Pipeline Diagnostics</Text>
-        <TouchableOpacity
-          style={[styles.copyDiagnosticsButton, { borderColor: palette.amber + '40', backgroundColor: palette.amber + '10' }]}
-          onPress={onCopy}
-          activeOpacity={0.78}
-        >
-          <Text style={[styles.copyDiagnosticsText, { color: palette.amber }]}>
-            {copied ? 'Copied' : 'Copy Diagnostics'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <DiagnosticRow label="Scanner" value={snapshot.scannerState ?? 'unknown'} palette={palette} />
-      <DiagnosticRow label="Native Env" value={snapshot.nativeEnvironmentSupport ?? 'unknown'} palette={palette} />
-      <DiagnosticRow label="Permissions" value={snapshot.permissions} palette={palette} />
-      <DiagnosticRow label="Bluetooth" value={snapshot.bluetoothPoweredState ?? 'unknown'} palette={palette} />
-      <DiagnosticRow label="Active Scans" value={String(snapshot.activeScans)} palette={palette} />
-      <DiagnosticRow label="Nearby Devices" value={String(snapshot.nearbyDeviceCount)} palette={palette} />
-      <DiagnosticRow label="Connection" value={activeConnection} palette={palette} />
-      <DiagnosticRow label="Telemetry Subs" value={String(snapshot.activeTelemetrySubscriptions)} palette={palette} />
-
-      {latestErrors.length > 0 ? (
-        <View style={styles.diagnosticSubsection}>
-          <Text style={[styles.diagnosticSubhead, { color: palette.textMuted }]}>Latest errors by source</Text>
-          {latestErrors.map(([source, event]) => (
-            <Text key={source} style={[styles.diagnosticEventLine, { color: palette.text }]} numberOfLines={2}>
-              {source}: {event.error ?? event.message}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-
-      {latestTelemetry.length > 0 ? (
-        <View style={styles.diagnosticSubsection}>
-          <Text style={[styles.diagnosticSubhead, { color: palette.textMuted }]}>Latest telemetry</Text>
-          {latestTelemetry.map(([deviceId, timestamp]) => (
-            <Text key={deviceId} style={[styles.diagnosticEventLine, { color: palette.text }]} numberOfLines={1}>
-              {deviceId}: {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </Text>
-          ))}
-        </View>
       ) : null}
     </View>
   );
@@ -788,15 +819,47 @@ export default function BluPowerSourcesScreen() {
   const router = useRouter();
   const { palette, colors } = useTheme();
   const connections = useUnifiedDeviceConnections();
-  const [debugExpanded, setDebugExpanded] = useState(false);
-  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState(() => getBluetoothDiagnosticsSnapshot());
-  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
-  const diagnosticsCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopScanning = connections.stopScanning;
-  const nearbyReleaseDevices = useMemo(
-    () => connections.nearbyDevices.filter(isRealNearbyReleaseDevice),
-    [connections.nearbyDevices],
-  );
+  const [showRememberedDevices, setShowRememberedDevices] = useState(false);
+  const connectedReleaseDevices = useMemo(() => {
+    const byId = new Map<string, ECSDeviceConnectionModel>();
+    for (const device of connections.connectedDevices) {
+      if (isVisibleReleaseDevice(device)) {
+        byId.set(device.id, device);
+      }
+    }
+    return Array.from(byId.values());
+  }, [connections.connectedDevices]);
+  const visibleReleaseDevices = useMemo(() => {
+    const byId = new Map<string, ECSDeviceConnectionModel>();
+    const availableScannerDevices = [
+      ...connections.nearbyDevices,
+      ...connections.attentionDevices,
+    ];
+    const availableScannerDeviceIds = new Set(availableScannerDevices.map((device) => device.id));
+    for (const device of connections.devices) {
+      if (!availableScannerDeviceIds.has(device.id)) continue;
+      if (isVisibleReleaseDevice(device)) {
+        byId.set(device.id, device);
+      }
+    }
+    return Array.from(byId.values());
+  }, [connections.devices, connections.nearbyDevices, connections.attentionDevices]);
+  const rememberedReleaseDevices = useMemo(() => {
+    const byId = new Map<string, ECSDeviceConnectionModel>();
+    for (const device of connections.knownDevices) {
+      if (isVisibleReleaseDevice(device)) {
+        byId.set(device.id, device);
+      }
+    }
+    return Array.from(byId.values());
+  }, [connections.knownDevices]);
+
+  useEffect(() => {
+    if (rememberedReleaseDevices.length === 0 && showRememberedDevices) {
+      setShowRememberedDevices(false);
+    }
+  }, [rememberedReleaseDevices.length, showRememberedDevices]);
 
   useEffect(() => {
     if (__DEV__) {
@@ -806,16 +869,6 @@ export default function BluPowerSourcesScreen() {
         hook: 'lib/useUnifiedDeviceConnections.ts',
         buttonText: 'Scan for Device Connections',
       });
-    }
-  }, []);
-
-  useEffect(() => subscribeBluetoothDiagnostics((snapshot) => {
-    setDiagnosticsSnapshot(snapshot);
-  }), []);
-
-  useEffect(() => () => {
-    if (diagnosticsCopiedTimerRef.current) {
-      clearTimeout(diagnosticsCopiedTimerRef.current);
     }
   }, []);
 
@@ -866,23 +919,19 @@ export default function BluPowerSourcesScreen() {
     connections.clearSelection();
   }, [connections]);
 
-  const handleCopyDiagnosticsPress = useCallback(async () => {
-    const copied = await copyDiagnosticsText(serializeBluetoothDiagnostics(diagnosticsSnapshot));
-    setDiagnosticsCopied(copied);
-    if (diagnosticsCopiedTimerRef.current) {
-      clearTimeout(diagnosticsCopiedTimerRef.current);
-    }
-    diagnosticsCopiedTimerRef.current = setTimeout(() => {
-      setDiagnosticsCopied(false);
-      diagnosticsCopiedTimerRef.current = null;
-    }, 1800);
-  }, [diagnosticsSnapshot]);
+  const handleRememberedDevicesPress = useCallback(() => {
+    void hapticMicro();
+    setShowRememberedDevices((current) => !current);
+  }, []);
 
   const nearbyPowerScanState =
-    connections.scanAreaState === 'results' && nearbyReleaseDevices.length === 0
+    connections.scanAreaState === 'results' && visibleReleaseDevices.length === 0
       ? 'empty'
       : connections.scanAreaState;
   const nearbyEmptyTitle = (() => {
+    if (connectedReleaseDevices.length > 0 && nearbyPowerScanState === 'empty') {
+      return 'No additional devices';
+    }
     switch (nearbyPowerScanState) {
       case 'checking':
         return 'Checking Bluetooth';
@@ -903,22 +952,25 @@ export default function BluPowerSourcesScreen() {
       case 'scanning':
         return 'Scanning nearby devices';
       case 'empty':
-        return 'No nearby power or OBD2 devices found';
+        return 'No Bluestack devices found';
       case 'idle':
       default:
         return 'Ready to scan';
     }
   })();
   const nearbyEmptyBody = (() => {
+    if (connectedReleaseDevices.length > 0 && nearbyPowerScanState === 'empty') {
+      return 'Connected devices are listed above. Scan again when you want to add another OBD2, power, propane, or water device.';
+    }
     switch (nearbyPowerScanState) {
       case 'runtime_unsupported':
-        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan real power and OBD2 devices.';
+        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan real power, OBD2, propane, and water devices.';
       case 'permission_denied':
-        return 'Bluetooth permissions are required before ECS can scan nearby power and OBD2 advertisements.';
+        return 'Bluetooth permissions are required before ECS can scan nearby power, OBD2, propane, and water advertisements.';
       case 'bluetooth_unavailable':
-        return 'Turn Bluetooth on, then scan again for nearby power and OBD2 advertisements.';
+        return 'Turn Bluetooth on, then scan again for nearby power, OBD2, propane, and water advertisements.';
       case 'empty':
-        return 'No nearby power or OBD2 advertisements were found. Make sure the device is on, nearby, and advertising over Bluetooth.';
+        return 'No nearby Bluestack-compatible advertisements were found. Make sure the device is on, nearby, and advertising over Bluetooth.';
       default:
         return connections.scanAreaMessage;
     }
@@ -936,8 +988,8 @@ export default function BluPowerSourcesScreen() {
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
-          <Text style={[styles.headerLabel, { color: palette.textMuted }]}>ECS DEVICE CONNECTIONS</Text>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>Device Connections</Text>
+          <Text style={[styles.headerLabel, { color: palette.textMuted }]}>ECS BLUESTACK</Text>
+          <Text style={[styles.headerTitle, { color: palette.text }]}>Bluestack Scanner</Text>
         </View>
 
         <View style={styles.headerRight} />
@@ -967,31 +1019,52 @@ export default function BluPowerSourcesScreen() {
               </View>
 
               <View style={styles.heroCopy}>
-                <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>UNIFIED SCANNER</Text>
+                <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>BLUESTACK UNIFIED SCANNER</Text>
                 <Text style={[styles.heroTitle, { color: palette.text }]}>{connections.globalSummaryLabel}</Text>
                 <Text style={[styles.heroBody, { color: palette.textMuted }]}>
-                  Scan for real nearby Bluetooth advertisements from supported power devices and likely OBD2 telemetry adapters. Consumer Bluetooth noise stays hidden.
+                  Scan for supported OBD2, power, propane, and water monitor connections. Cloud/API power devices stay selectable when native Bluetooth is unavailable, while consumer Bluetooth noise stays hidden.
                 </Text>
               </View>
             </View>
 
             <View style={styles.heroStatsRow}>
               <SummaryStat
-                label="Nearby"
-                value={nearbyReleaseDevices.length}
+                label="Available"
+                value={connections.bluestackSummary.availableCount}
                 color={palette.text}
                 mutedColor={palette.textMuted}
               />
               <SummaryStat
                 label="Live"
-                value={connections.liveCount}
+                value={connections.bluestackSummary.liveCount}
                 color="#4CAF50"
                 mutedColor={palette.textMuted}
               />
               <SummaryStat
                 label="Selected"
-                value={connections.selectedCount}
+                value={connections.bluestackSummary.selectedCount}
                 color={palette.amber}
+                mutedColor={palette.textMuted}
+              />
+            </View>
+
+            <View style={styles.heroStatsRow}>
+              <SummaryStat
+                label="Cloud/API"
+                value={connections.bluestackSummary.cloudApiCount}
+                color="#5AC8FA"
+                mutedColor={palette.textMuted}
+              />
+              <SummaryStat
+                label="Parser Pend"
+                value={connections.bluestackSummary.parserPendingCount}
+                color="#D6A04B"
+                mutedColor={palette.textMuted}
+              />
+              <SummaryStat
+                label="Native Build"
+                value={connections.bluestackSummary.nativeBuildRequiredCount}
+                color={palette.text}
                 mutedColor={palette.textMuted}
               />
             </View>
@@ -1105,46 +1178,107 @@ export default function BluPowerSourcesScreen() {
                   <Text style={[styles.secondaryBtnText, { color: palette.textMuted }]}>Clear Selection</Text>
                 </TouchableOpacity>
               ) : null}
+
+              <TouchableOpacity
+                style={[
+                  styles.secondaryBtn,
+                  {
+                    borderColor: showRememberedDevices ? palette.amber + '50' : palette.border,
+                    backgroundColor: showRememberedDevices ? palette.amber + '12' : palette.border + '1C',
+                    opacity: rememberedReleaseDevices.length > 0 ? 1 : 0.62,
+                  },
+                ]}
+                onPress={handleRememberedDevicesPress}
+                activeOpacity={0.8}
+                disabled={rememberedReleaseDevices.length === 0}
+                accessibilityState={{
+                  disabled: rememberedReleaseDevices.length === 0,
+                  selected: showRememberedDevices,
+                }}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={15}
+                  color={showRememberedDevices ? palette.amber : palette.textMuted}
+                />
+                <Text
+                  style={[
+                    styles.secondaryBtnText,
+                    { color: showRememberedDevices ? palette.amber : palette.textMuted },
+                  ]}
+                  numberOfLines={2}
+                >
+                  Remembered Devices ({rememberedReleaseDevices.length})
+                </Text>
+              </TouchableOpacity>
             </View>
 
           </View>
 
-          <ScanSummaryPanel
-            summary={connections.lastScanSummary}
-            expanded={debugExpanded}
-            onToggleExpanded={() => {
-              void hapticMicro();
-              setDebugExpanded((current) => !current);
-            }}
-            palette={palette}
-          />
-
-          {__DEV__ && debugExpanded ? (
-            <PipelineDiagnosticsPanel
-              snapshot={diagnosticsSnapshot}
-              onCopy={handleCopyDiagnosticsPress}
-              copied={diagnosticsCopied}
+          {connectedReleaseDevices.length > 0 ? (
+            <SectionBlock
+              title="Connected devices"
+              subtitle="Live and attached Bluestack devices. Use each device row to inspect fields or disconnect that device."
+              count={connectedReleaseDevices.length}
               palette={palette}
-            />
+            >
+              {connectedReleaseDevices.map((device) => (
+                <DeviceRow
+                  key={device.id}
+                  device={device}
+                  onToggleSelection={connections.toggleSelection}
+                  onPrimaryAction={handlePrimaryAction}
+                  actionBusy={device.isConnecting}
+                  globalBusy={connections.isBatchBusy}
+                  palette={palette}
+                />
+              ))}
+            </SectionBlock>
+          ) : null}
+
+          {showRememberedDevices ? (
+            <SectionBlock
+              title="Remembered devices"
+              subtitle="Previously successful Bluestack connections. Retry a remembered device to reconnect it without waiting for a fresh scan result when the platform supports it."
+              count={rememberedReleaseDevices.length}
+              palette={palette}
+            >
+              {rememberedReleaseDevices.length === 0 ? (
+                <EmptySection
+                  title="No remembered devices"
+                  body="Devices appear here after ECS completes a successful power, OBD2, propane, or water connection."
+                  palette={palette}
+                />
+              ) : (
+                rememberedReleaseDevices.map((device) => (
+                  <DeviceRow
+                    key={device.id}
+                    device={device}
+                    onToggleSelection={connections.toggleSelection}
+                    onPrimaryAction={handlePrimaryAction}
+                    actionBusy={device.isConnecting}
+                    globalBusy={connections.isBatchBusy}
+                    palette={palette}
+                  />
+                ))
+              )}
+            </SectionBlock>
           ) : null}
 
           <SectionBlock
-            title="Found nearby power and OBD2 devices"
-            subtitle="Real nearby power and OBD2 advertisements only. TVs, headsets, and unrelated Bluetooth devices stay out of this action list."
-            count={nearbyReleaseDevices.length}
+            title="Available devices"
+            subtitle={getVisibleDeviceListLabel(visibleReleaseDevices)}
+            count={visibleReleaseDevices.length}
             palette={palette}
           >
-            {nearbyReleaseDevices.length === 0 ? (
+            {visibleReleaseDevices.length === 0 ? (
               <EmptySection
                 title={nearbyEmptyTitle}
                 body={nearbyEmptyBody}
-                onRescan={connections.rescan}
-                actionLabel="Scan for Devices"
-                actionDisabled={connections.isScanning}
                 palette={palette}
               />
             ) : (
-              nearbyReleaseDevices.map((device) => (
+              visibleReleaseDevices.map((device) => (
                 <DeviceRow
                   key={device.id}
                   device={device}
@@ -1157,6 +1291,8 @@ export default function BluPowerSourcesScreen() {
               ))
             )}
           </SectionBlock>
+
+          <BluestackCompatibilityCard palette={palette} />
 
           <View
             style={[
@@ -1171,10 +1307,10 @@ export default function BluPowerSourcesScreen() {
             <View style={styles.infoCopy}>
               <Text style={[styles.infoTitle, { color: palette.text }]}>Connection Truth</Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                This screen only lists currently discovered nearby power-device and likely OBD2 telemetry advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
+                Bluestack lists available EcoFlow cloud/API devices plus currently discovered nearby power, OBD2, propane, and water monitor advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
               </Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                Generic Bluetooth accessories, TVs, headsets, and other consumer devices are suppressed unless ECS can classify them as power or OBD2 candidates.
+                Generic Bluetooth accessories, TVs, headsets, and other consumer devices are suppressed unless ECS can classify them as OBD2, power, propane, or water candidates.
               </Text>
             </View>
           </View>
@@ -1707,6 +1843,50 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  telemetryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  telemetryCell: {
+    minWidth: 76,
+    flexGrow: 1,
+    flexBasis: '30%',
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 3,
+  },
+  telemetryCellLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  telemetryCellValue: {
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 16,
+  },
+  diagnosticReasonBox: {
+    borderRadius: 11,
+    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    gap: 4,
+  },
+  diagnosticReasonLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  diagnosticReasonText: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   deviceFooter: {
     borderTopWidth: GOLD_RAIL.subsectionWidth,
     paddingTop: 10,
@@ -1721,6 +1901,88 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     lineHeight: 15,
+  },
+  compatibilityCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: SPACING.lg,
+    gap: 14,
+  },
+  compatibilityHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  compatibilityHeaderCopy: {
+    flex: 1,
+    gap: 5,
+  },
+  compatibilityCardTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  compatibilityCardBody: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  compatibilityGroup: {
+    gap: 8,
+  },
+  compatibilityGroupLabel: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  compatibilityRow: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  compatibilityIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compatibilityCopy: {
+    flex: 1,
+    gap: 5,
+    minWidth: 0,
+  },
+  compatibilityTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  compatibilityName: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  compatibilityBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  compatibilityBadgeText: {
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  compatibilityDetail: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   infoCard: {
     borderRadius: 16,

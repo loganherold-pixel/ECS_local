@@ -25,11 +25,12 @@ export interface ScannerDeviceListUpsertResult<T extends ScannerDeviceListItem> 
 }
 
 export const POWER_SCAN_DEFAULT_MIN_RSSI = -85;
-export const SCANNER_SCAN_WINDOW_DEBOUNCE_MS = 1_500;
+export const SCANNER_SCAN_WINDOW_DEBOUNCE_MS = 5_000;
 export const SCANNER_DEVICE_DISMISS_COOLDOWN_MS = 10 * 60 * 1000;
 export const SCANNER_DEVICE_STALE_TIMEOUT_MS = 90 * 1000;
 
 export const POWER_SCANNER_BRAND_ALLOWLIST = [
+  // Release scanner-visible Bluestack domains: power, OBD2 telemetry, propane, and water.
   'ecoflow',
   'delta',
   'river',
@@ -53,6 +54,48 @@ export const POWER_SCANNER_BRAND_ALLOWLIST = [
   'power station',
   'solar generator',
   'power',
+  'mopeka',
+  'propane',
+  'lpg',
+  'tank check',
+  'seelevel',
+  'see level',
+  'garnet',
+  'water level',
+  'water tank',
+  'fluid level',
+  'veepeak',
+  'vee peak',
+  'v peak',
+  'vpeak',
+  'v-link',
+  'vlink',
+  'vlinker',
+  'obd check',
+  'obdcheck',
+  'vp11',
+  'vp 11',
+  'ios vlink',
+  'android vlink',
+  'obd',
+  'obd2',
+  'obdii',
+  'elm327',
+  'elm 327',
+  'obdlink',
+  'obd link',
+  'vgate',
+  'icar',
+  'bafx',
+  'carista',
+  'blue driver',
+  'bluedriver',
+  'konnwei',
+  'kw902',
+  'viecar',
+  'panlong',
+  'micro mechanic',
+  'car scanner',
 ];
 
 const dismissedScannerDevices = new Map<string, number>();

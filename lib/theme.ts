@@ -11,19 +11,35 @@
 //   "Success/Ready" = subtle amber emphasis (NOT green)
 // ============================================================
 
+export const ECS_SPACING = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  xxl: 32,
+} as const;
+
 export const ECS = {
   // ── Backgrounds ──────────────────────────────────────────
   bgPrimary:   '#0B0E12',
   bgPanel:     '#111418',
   bgElev:      '#151A21',
+  bgPanelInactive: 'rgba(17,20,24,0.66)',
 
   // ── Strokes ──────────────────────────────────────────────
   stroke:      '#1E232B',
   strokeSoft:  '#232A33',
+  strokeMuted: 'rgba(139,148,158,0.18)',
 
   // ── Accent ───────────────────────────────────────────────
   accent:      '#D4A017',
-  accentSoft:  'rgba(212,160,23,.15)',
+  accentSoft:  'rgba(212,160,23,.10)',
+  goldStrong:  '#D4A017',
+  goldMedium:  'rgba(212,160,23,0.55)',
+  goldSoft:    'rgba(212,160,23,0.22)',
+  goldWash:    'rgba(212,160,23,0.10)',
+  goldPassive: 'rgba(139,148,158,0.18)',
 
   // ── Mode Color Cues ──────────────────────────────────────
   // Expedition mode = primary gold accent (same as accent)
@@ -38,6 +54,9 @@ export const ECS = {
   // ── Radii ────────────────────────────────────────────────
   radius:      14,
   radiusLg:    18,
+
+  // ── Spacing ───────────────────────────────────────────────
+  spacing: ECS_SPACING,
 
   // ── Shadow ───────────────────────────────────────────────
   shadow: {
@@ -58,9 +77,18 @@ export const ECS = {
   },
 
   // ── Status (warning/error only — NOT for success) ────────
+  critical:    '#C0392B',
   danger:      '#C0392B',
   warning:     '#E67E22',
+  success:     '#D4A017',
   info:        '#5AC8FA',
+  status: {
+    critical:  '#C0392B',
+    danger:    '#C0392B',
+    warning:   '#E67E22',
+    success:   '#D4A017',
+    info:      '#5AC8FA',
+  },
 } as const;
 
 
@@ -74,20 +102,31 @@ export const ECS = {
 export const TACTICAL = {
   bg: ECS.bgPrimary,         // #0B0E12
   panel: ECS.bgPanel,        // #111418
+  panelInactive: ECS.bgPanelInactive,
   accent: ECS.strokeSoft,    // muted neutral (secondary)
   accentDark: ECS.stroke,    // darker neutral (pressed state)
   amber: ECS.accent,         // #D4A017 — primary accent
   amberDark: '#B8890F',      // darker amber (pressed state)
+  goldStrong: ECS.goldStrong,
+  goldMedium: ECS.goldMedium,
+  goldSoft: ECS.goldSoft,
+  goldWash: ECS.goldWash,
+  goldPassive: ECS.goldPassive,
   text: ECS.text,            // #E6EDF3
   textMuted: ECS.muted,      // #8B949E
+  critical: ECS.critical,    // #C0392B
   danger: ECS.danger,        // #C0392B
+  warning: ECS.warning,      // #E67E22
   success: ECS.accent,       // amber emphasis (NOT green)
   successText: ECS.accent,   // amber text for success states
+  info: ECS.info,            // #5AC8FA
   border: ECS.stroke,        // #1E232B — neutral slate
+  borderMuted: ECS.strokeMuted,
   borderFocus: ECS.strokeSoft, // #232A33
   borderError: ECS.danger,   // red border
   radius: ECS.radius,        // 14
   inputBg: 'transparent',
+  spacing: ECS_SPACING,
 };
 
 // ============================================================
@@ -99,15 +138,15 @@ export const GOLD_RAIL = {
   /** Major structural rail — header bottom, dock top (1.5px solid) */
   major: '#A0813A',
   /** Section divider — tab bars, customize bars, modal headers */
-  section: 'rgba(212,160,23,0.25)',
+  section: ECS.goldSoft,
   /** Subsection divider — stat rows, list items, lighter boundaries */
-  subsection: 'rgba(212,160,23,0.15)',
+  subsection: 'rgba(212,160,23,0.12)',
   /** Internal divider — tile headers, card internal separators */
-  internal: 'rgba(212,160,23,0.08)',
+  internal: 'rgba(212,160,23,0.06)',
   /** Instrument cluster border — Attitude Monitor gold-tinted machined edge */
-  instrument: 'rgba(212,160,23,0.25)',
+  instrument: ECS.goldSoft,
   /** Instrument widget header divider — subtle gold tint */
-  instrumentHeader: 'rgba(212,160,23,0.14)',
+  instrumentHeader: 'rgba(212,160,23,0.10)',
   /** Section divider width */
   sectionWidth: 1,
   /** Subsection divider width */
@@ -125,6 +164,51 @@ export const ECS_POPUP_SURFACE_DARK = {
   divider: 'rgba(196,138,44,0.16)',
   footerBg: 'rgba(10,13,16,0.94)',
 } as const;
+
+export const ECS_POPUP_SURFACE_LIGHT = {
+  shellBg: 'rgba(255,251,245,0.97)',
+  shellBorder: 'rgba(169,119,27,0.22)',
+  headerBg: 'rgba(248,244,236,0.96)',
+  handleBg: 'rgba(248,244,236,0.98)',
+  handleBar: 'rgba(110,78,24,0.18)',
+  controlBg: 'rgba(255,255,255,0.72)',
+  controlBorder: 'rgba(169,119,27,0.18)',
+  divider: 'rgba(169,119,27,0.14)',
+  footerBg: 'rgba(248,244,236,0.94)',
+} as const;
+
+export const ECS_POPUP_SURFACE_DRIVING = {
+  shellBg: 'rgba(30,35,40,0.99)',
+  shellBorder: 'rgba(224,160,48,0.24)',
+  headerBg: 'rgba(38,44,50,0.98)',
+  handleBg: 'rgba(38,44,50,0.98)',
+  handleBar: 'rgba(241,211,160,0.18)',
+  controlBg: 'rgba(42,48,56,0.9)',
+  controlBorder: 'rgba(224,160,48,0.18)',
+  divider: 'rgba(224,160,48,0.14)',
+  footerBg: 'rgba(34,39,45,0.96)',
+} as const;
+
+export type ECSPopupSurfaceTheme = {
+  shellBg: string;
+  shellBorder: string;
+  headerBg: string;
+  handleBg: string;
+  handleBar: string;
+  controlBg: string;
+  controlBorder: string;
+  divider: string;
+  footerBg: string;
+};
+export type ECSPopupSurfaceMode = 'dark' | 'light' | 'driving';
+
+export function resolveEcsPopupSurfaceTheme(
+  effectiveTheme: ECSPopupSurfaceMode | string | null | undefined,
+): ECSPopupSurfaceTheme {
+  if (effectiveTheme === 'light') return ECS_POPUP_SURFACE_LIGHT;
+  if (effectiveTheme === 'driving') return ECS_POPUP_SURFACE_DRIVING;
+  return ECS_POPUP_SURFACE_DARK;
+}
 
 
 // ============================================================
@@ -152,7 +236,7 @@ export const INSTRUMENT_HIERARCHY = {
     panelBg:       ECS.bgPanel,                 // #111418
     borderColor:   ECS.stroke,                  // #1E232B — neutral slate
     borderWidth:   1,
-    titleColor:    ECS.accent,                  // #D4A017
+    titleColor:    ECS.goldMedium,              // dimmer section gold
     insetTopColor: 'rgba(255,255,255,0.03)',
     insetBotColor: 'rgba(0,0,0,0.12)',
     shadowOpacity: 0.35,
@@ -163,7 +247,7 @@ export const INSTRUMENT_HIERARCHY = {
     panelBg:       ECS.bgElev,                  // #151A21
     borderColor:   ECS.strokeSoft,              // #232A33
     borderWidth:   1,
-    titleColor:    '#B8930F',                   // slightly subdued amber
+    titleColor:    ECS.goldMedium,              // section gold, not active gold
     insetTopColor: 'rgba(255,255,255,0.02)',
     insetBotColor: 'rgba(0,0,0,0.08)',
     shadowOpacity: 0.28,
@@ -207,20 +291,31 @@ export function getHierarchyStyle(widgetId: string | null | undefined) {
 export const TACTICAL_LIGHT = {
   bg: '#F2F0EB',           // warm off-white
   panel: '#FFFFFF',        // clean white cards
+  panelInactive: 'rgba(248,247,244,0.74)',
   accent: '#5A7A56',       // OD green (slightly brighter)
   accentDark: '#4A6A46',   // pressed state
   amber: '#B07A1C',        // deeper amber for contrast on light bg
   amberDark: '#9A6A10',    // darker amber
+  goldStrong: '#B07A1C',
+  goldMedium: 'rgba(176,122,28,0.52)',
+  goldSoft: 'rgba(176,122,28,0.22)',
+  goldWash: 'rgba(176,122,28,0.10)',
+  goldPassive: 'rgba(107,107,102,0.20)',
   text: '#1A1A18',         // near-black text
   textMuted: '#6B6B66',    // muted but legible on light
+  critical: '#C0392B',     // same red
   danger: '#C0392B',       // same red
+  warning: '#B86712',      // grounded orange for light surfaces
   success: '#3E6B3E',      // same green
   successText: '#2E5A2E',  // darker green text for light bg
+  info: '#2478A8',
   border: '#D0CEC8',       // warm gray border
+  borderMuted: 'rgba(107,107,102,0.20)',
   borderFocus: '#5A7A56',  // green focus
   borderError: '#C0392B',  // red border
   radius: 14,
   inputBg: '#F8F7F4',      // slightly off-white input bg
+  spacing: ECS_SPACING,
 };
 
 // ============================================================
@@ -231,20 +326,31 @@ export const TACTICAL_LIGHT = {
 export const TACTICAL_DRIVING = {
   bg: '#1E2328',           // matte charcoal (lighter than dark, not white)
   panel: '#262C32',        // solid card surface (no transparency)
+  panelInactive: '#242A30',
   accent: '#4E6F4C',       // brighter OD green
   accentDark: '#3E5F3C',   // pressed
   amber: '#E0A030',        // brighter amber for max contrast
   amberDark: '#C89020',    // pressed
+  goldStrong: '#E0A030',
+  goldMedium: 'rgba(224,160,48,0.58)',
+  goldSoft: 'rgba(224,160,48,0.26)',
+  goldWash: 'rgba(224,160,48,0.12)',
+  goldPassive: 'rgba(160,160,154,0.28)',
   text: '#F5F5F0',         // bright white text
   textMuted: '#A0A09A',    // lighter muted (still legible in sun)
+  critical: '#E04030',     // brighter red
   danger: '#E04030',       // brighter red
+  warning: '#FFB020',
   success: '#50A050',      // brighter green
   successText: '#90D090',  // bright green text
+  info: '#6FCFFF',
   border: '#4A5A48',       // stronger border
+  borderMuted: 'rgba(160,160,154,0.28)',
   borderFocus: '#60806C',  // bright focus
   borderError: '#E04030',  // bright red
   radius: 14,
   inputBg: '#2A3038',      // solid input bg
+  spacing: ECS_SPACING,
 };
 
 
@@ -558,6 +664,11 @@ export const COLORS = {
   goldDark: '#B8960C',
   goldMuted: 'rgba(212, 175, 55, 0.15)',
   goldBorder: 'rgba(212, 175, 55, 0.3)',
+  goldStrong: ECS.goldStrong,
+  goldMedium: ECS.goldMedium,
+  goldSoft: ECS.goldSoft,
+  goldWash: ECS.goldWash,
+  goldPassive: ECS.goldPassive,
 
   // Backgrounds
   bg: '#0A0A0A',
@@ -565,6 +676,7 @@ export const COLORS = {
   bgCardHover: '#222222',
   bgElevated: '#252525',
   bgInput: '#151515',
+  bgPanelInactive: ECS.bgPanelInactive,
   bgModal: 'rgba(0,0,0,0.85)',
 
   // Text
@@ -576,12 +688,21 @@ export const COLORS = {
   // Status
   success: '#34C759',
   warning: '#FF9500',
+  critical: '#FF3B30',
   danger: '#FF3B30',
   info: '#5AC8FA',
+  status: {
+    success: '#34C759',
+    warning: '#FF9500',
+    critical: '#FF3B30',
+    danger: '#FF3B30',
+    info: '#5AC8FA',
+  },
 
   // Borders
   border: '#2A2A2A',
   borderLight: '#333333',
+  borderMuted: ECS.strokeMuted,
 
   // Zones
   zoneRoof: '#FF6B6B',

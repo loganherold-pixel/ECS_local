@@ -135,7 +135,7 @@ async function main() {
   const unknownLegalityShown = await locateCampsitesForPolygon({
     polygonCoordinates: drawAreaPolygon,
     candidates: [
-      makeCandidate('unknown-legal-soft-score', 39.001, -121.001, 42, {
+      makeCandidate('unknown-legal-soft-score', 39.001, -121.001, 72, {
         legalityStatus: 'unknown_needs_verification',
         legalAccessScore: 20,
       }),
@@ -161,13 +161,16 @@ async function main() {
     candidates: [
       makeCandidate('private-land', 39.001, -121.001, 96, { isPrivateLand: true }),
       makeCandidate('closed-area', 39.002, -121.002, 95, { legalityStatus: 'restricted_or_not_allowed' }),
-      makeCandidate('open-unknown', 39.003, -121.003, 58, { legalityStatus: 'unknown_needs_verification' }),
+      makeCandidate('lake-point', 39.004, -121.004, 99, { isWaterBody: true }),
+      makeCandidate('building-point', 39.005, -121.005, 99, { nearBuildings: true }),
+      makeCandidate('highway-point', 39.006, -121.006, 99, { nearHighway: true }),
+      makeCandidate('open-unknown', 39.003, -121.003, 72, { legalityStatus: 'unknown_needs_verification' }),
     ],
   });
   assert.deepStrictEqual(
     hardRestrictedRemoved.map((candidate) => candidate.id),
     ['open-unknown'],
-    'Known private/closed/restricted locations must remain hard-excluded.',
+    'Known private/closed/restricted, water, building, and highway locations must remain hard-excluded.',
   );
 
   const softFallbackCandidates = await locateCampsitesForPolygon({
@@ -179,24 +182,8 @@ async function main() {
   });
   assert.deepStrictEqual(
     softFallbackCandidates.map((candidate) => candidate.id),
-    ['soft-low-1', 'soft-low-2'],
-    'Draw-area scans should return fallback candidates when only soft thresholds fail.',
-  );
-  assert.ok(
-    softFallbackCandidates.every((candidate) => candidate.viabilityTier === 'possible'),
-    'Soft fallback candidates should be labeled as possible, not verified.',
-  );
-  assert.ok(
-    softFallbackCandidates.every(
-      (candidate) =>
-        typeof candidate.confidenceLabel === 'string' &&
-        typeof candidate.sourceType === 'string' &&
-        typeof candidate.legalityStatus === 'string' &&
-        Array.isArray(candidate.warnings) &&
-        candidate.warnings.some((warning) => warning.includes('verify local rules')) &&
-        Array.isArray(candidate.reasons),
-    ),
-    'Final fallback candidates must include confidence, source, legality status, warnings, and reasons.',
+    [],
+    'Draw-area scans should not return sub-70 soft fallback candidates.',
   );
 
   const filterStageLogs = [];
@@ -235,8 +222,8 @@ async function main() {
   assert.strictEqual(filterStageLog[2].privateLandRemoved, 1);
   assert.strictEqual(filterStageLog[2].legalStatusRemoved, 1);
   assert.strictEqual(filterStageLog[2].slopeTerrainRemoved, 1);
-  assert.strictEqual(filterStageLog[2].softFallbackUsed, true);
-  assert.strictEqual(filterStageLog[2].finalCandidates, 1);
+  assert.strictEqual(filterStageLog[2].softFallbackUsed, false);
+  assert.strictEqual(filterStageLog[2].finalCandidates, 0);
 
   const deduped = rankAndLimitCampsites(
     [
@@ -605,8 +592,8 @@ async function main() {
   });
   assert.deepStrictEqual(
     polygonRankedByRemoteness.map((candidate) => candidate.id),
-    ['remote-high', 'remote-mid'],
-    'Polygon mode must rank by overall confidence score and filter results below the 55 threshold.',
+    ['remote-high'],
+    'Polygon mode must rank by overall confidence score and filter results below the 70 threshold.',
   );
   assert.ok(
     Array.isArray(polygonRankedByRemoteness[0].ratingFactors) && polygonRankedByRemoteness[0].ratingFactors.length > 0,

@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, View, Text, StyleSheet } from 'react-native';
-import { SafeIcon as Ionicons } from '../SafeIcon';
+import React, { useEffect, useMemo } from 'react';
+import { View, StyleSheet } from 'react-native';
 
 import { TACTICAL } from '../../lib/theme';
 import {
@@ -16,10 +15,7 @@ import { usePowerIntelligence } from '../../lib/powerIntelligence';
 import {
   WidgetCardShell,
   getWidgetToneColor,
-  WidgetMetaLine,
-  type WidgetTone,
 } from './WidgetChrome';
-import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
 import { resolvePowerWidgetPresentation } from '../../lib/resource/resourceCommandResolvers';
 import type { ECSAIState } from '../../lib/ai/aiOrchestrator';
 import type { ECSOrchestratorTargetView } from '../../lib/ai/orchestratorSelectors';
@@ -61,6 +57,10 @@ export interface PowerDeviceReading {
   readinessLabel: string;
   lastUpdated: number;
   capacityWh: number | null;
+  inputVolts: number | null;
+  inputAmps: number | null;
+  outputVolts: number | null;
+  outputAmps: number | null;
   batteryVolts: number | null;
   batteryAmps: number | null;
   signalStrength: number | null;
@@ -149,6 +149,24 @@ function deriveWarningState(
   return 'normal';
 }
 
+function deriveCurrentAmps(watts: number | null, volts: number | null): number | null {
+  if (watts == null || volts == null || !Number.isFinite(watts) || !Number.isFinite(volts) || volts <= 0 || watts <= 0) {
+    return null;
+  }
+  return Math.round((watts / volts) * 10) / 10;
+}
+
+function deriveSignedBatteryAmps(inputWatts: number | null, outputWatts: number | null, volts: number | null): number | null {
+  if (volts == null || !Number.isFinite(volts) || volts <= 0 || (inputWatts == null && outputWatts == null)) {
+    return null;
+  }
+  const netWatts = (inputWatts ?? 0) - (outputWatts ?? 0);
+  if (!Number.isFinite(netWatts) || Math.abs(netWatts) <= 0) {
+    return null;
+  }
+  return Math.round((netWatts / volts) * 10) / 10;
+}
+
 export function getBatteryColor(pct: number | null): string {
   if (pct == null) return TACTICAL.textMuted;
   if (pct >= 60) return '#4CAF50';
@@ -197,10 +215,20 @@ function buildDeviceReading(
 
   const battPct = asNumber(telemetry.batteryPercent);
   const inputW = asNumber(telemetry.inputWatts);
+  const inputVolts = asNumber(telemetry.inputVolts);
+  const inputAmps = asNumber(telemetry.inputAmps);
   const outputW = asNumber(telemetry.outputWatts);
+  const outputVolts = asNumber(telemetry.outputVolts);
+  const outputAmps = asNumber(telemetry.outputAmps);
   const solarW = asNumber(telemetry.solarWatts);
   const tempC = asNumber(telemetry.temperatureCelsius);
   const runtimeMin = asNumber(telemetry.estimatedRuntimeMinutes);
+  const batteryVolts = asNumber(telemetry.batteryVolts);
+  const batteryAmps =
+    asNumber(telemetry.batteryAmps)
+    ?? deriveSignedBatteryAmps(inputW, outputW, batteryVolts);
+  const resolvedInputVolts = inputVolts;
+  const resolvedOutputVolts = outputVolts;
   const telemetrySource = telemetryTransportToBluetoothSource(telemetry.transport);
   const truth = normalizePowerTelemetryTruth({
     source: telemetry.transport === 'ble'
@@ -252,8 +280,12 @@ function buildDeviceReading(
     readinessLabel: readiness.label,
     lastUpdated: simulationBlocked ? 0 : telemetry.lastUpdated,
     capacityWh: simulationBlocked ? null : asNumber(telemetry.capacityWh),
-    batteryVolts: simulationBlocked ? null : asNumber(telemetry.batteryVolts),
-    batteryAmps: simulationBlocked ? null : asNumber(telemetry.batteryAmps),
+    inputVolts: simulationBlocked ? null : resolvedInputVolts,
+    inputAmps: simulationBlocked ? null : inputAmps ?? deriveCurrentAmps(inputW, resolvedInputVolts),
+    outputVolts: simulationBlocked ? null : resolvedOutputVolts,
+    outputAmps: simulationBlocked ? null : outputAmps ?? deriveCurrentAmps(outputW, resolvedOutputVolts),
+    batteryVolts: simulationBlocked ? null : batteryVolts,
+    batteryAmps: simulationBlocked ? null : batteryAmps,
     signalStrength: simulationBlocked ? null : asNumber(telemetry.signalStrength),
     role: 'Primary House Battery',
     telemetrySource,
@@ -411,55 +443,6 @@ export function normalizePowerTelemetrySummary(power: ReturnType<typeof useUnifi
   };
 }
 
-function usePowerFlowPulse(active: boolean, duration: number) {
-  const pulse = useStableAnimatedValue(0);
-  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
-  const runningKeyRef = useRef<string | null>(null);
-  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 1250;
-
-  useEffect(() => {
-    const nextKey = active ? `flow:${safeDuration}` : 'idle';
-    if (runningKeyRef.current === nextKey) {
-      return undefined;
-    }
-
-    loopRef.current?.stop();
-    loopRef.current = null;
-    runningKeyRef.current = nextKey;
-    pulse.stopAnimation();
-
-    if (!active) {
-      pulse.setValue(0);
-      return;
-    }
-
-    pulse.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(pulse, {
-        toValue: 1,
-        duration: safeDuration,
-        easing: Easing.inOut(Easing.quad),
-        useNativeDriver: true,
-      }),
-    );
-    loopRef.current = loop;
-    loop.start();
-
-    return () => {
-      loop.stop();
-      if (loopRef.current === loop) {
-        loopRef.current = null;
-      }
-      if (runningKeyRef.current === nextKey) {
-        runningKeyRef.current = null;
-      }
-      pulse.stopAnimation();
-    };
-  }, [active, pulse, safeDuration]);
-
-  return pulse;
-}
-
 function PowerMonitorRiveHero({
   summary,
   compact = false,
@@ -491,135 +474,12 @@ function PowerMonitorRiveHero({
   );
 }
 
-function PowerFlowGraphic({
-  inputWatts,
-  outputWatts,
-  isStale = false,
-  allowAnimation = true,
-  compact = false,
-}: {
-  inputWatts: number;
-  outputWatts: number;
-  isStale?: boolean;
-  allowAnimation?: boolean;
-  compact?: boolean;
-}) {
-  const reducedMotion = useReducedMotion();
-  const activeInput = inputWatts > 0 && !isStale && allowAnimation;
-  const activeOutput = outputWatts > 0 && !isStale && allowAnimation;
-  const hasFlow = activeInput || activeOutput;
-  const shouldAnimate = hasFlow && !reducedMotion;
-  const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);
-  const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);
-
-  const inputPulseStyle = useMemo(
-    () => ({
-      opacity: inputFlowPulse.interpolate({
-        inputRange: [0, 0.5, 1],
-        outputRange: [0.15, 0.9, 0.15],
-      }),
-      transform: [
-        {
-          translateX: inputFlowPulse.interpolate({
-            inputRange: [0, 1],
-            outputRange: [-28, 28],
-          }),
-        },
-      ],
-    }),
-    [inputFlowPulse],
-  );
-  const outputPulseStyle = useMemo(
-    () => ({
-      opacity: outputFlowPulse.interpolate({
-        inputRange: [0, 0.5, 1],
-        outputRange: [0.15, 0.85, 0.15],
-      }),
-      transform: [
-        {
-          translateX: outputFlowPulse.interpolate({
-            inputRange: [0, 1],
-            outputRange: [-28, 28],
-          }),
-        },
-      ],
-    }),
-    [outputFlowPulse],
-  );
-
-  return (
-    <View style={[ws.flowGraphic, compact && ws.flowGraphicCompact]}>
-      <View style={[ws.flowNode, compact && ws.flowNodeCompact, activeInput && ws.flowNodeInActive]}>
-        <Ionicons name="arrow-down-outline" size={compact ? 10 : 12} color={activeInput ? POWER_CHARGE_IN_COLOR : TACTICAL.textMuted} />
-      </View>
-      <View style={ws.flowTrackWrap}>
-        <View style={ws.flowTrackBase} />
-        <View
-          style={[
-            ws.flowTrackSegment,
-            ws.flowTrackLeft,
-            activeInput && { backgroundColor: POWER_CHARGE_IN_COLOR },
-            compact && ws.flowTrackSegmentCompact,
-          ]}
-        >
-          {activeInput && shouldAnimate ? (
-            <Animated.View
-              pointerEvents="none"
-              style={[ws.flowPulse, { backgroundColor: POWER_CHARGE_IN_COLOR }, inputPulseStyle]}
-            />
-          ) : null}
-        </View>
-        <View
-          style={[
-            ws.flowTrackSegment,
-            ws.flowTrackRight,
-            activeOutput && { backgroundColor: POWER_DRAW_OUT_COLOR },
-            compact && ws.flowTrackSegmentCompact,
-          ]}
-        >
-          {activeOutput && shouldAnimate ? (
-            <Animated.View
-              pointerEvents="none"
-              style={[ws.flowPulse, { backgroundColor: POWER_DRAW_OUT_COLOR }, outputPulseStyle]}
-            />
-          ) : null}
-        </View>
-        <View style={[ws.flowCore, hasFlow && ws.flowCoreActive, compact && ws.flowCoreCompact]}>
-          <Ionicons name="flash-outline" size={compact ? 11 : 13} color={hasFlow ? TACTICAL.amber : TACTICAL.textMuted} />
-        </View>
-      </View>
-      <View style={[ws.flowNode, compact && ws.flowNodeCompact, activeOutput && ws.flowNodeOutActive]}>
-        <Ionicons name="arrow-up-outline" size={compact ? 10 : 12} color={activeOutput ? POWER_DRAW_OUT_COLOR : TACTICAL.textMuted} />
-      </View>
-    </View>
-  );
-}
-
-export function PowerSystemCompact({ data }: { data?: PowerWidgetContextData }) {
+export function PowerSystemCompact({ data: _data }: { data?: PowerWidgetContextData }) {
   const power = useUnifiedPowerDevices();
   const summary = normalizePowerTelemetrySummary(power);
-  const livePowerIntelligence = usePowerIntelligence();
-  const { primaryDevice, totalConnected, totalInputWatts, totalOutputWatts } = power;
+  const { primaryDevice } = power;
   const connectedPrimaryDevice = summary.isLive ? summary.primaryDevice : null;
-  const hasLivePower = summary.isLive;
-  const powerIntelligence =
-    hasLivePower
-      ? data?.aiState?.richContext?.resources?.powerIntelligence ?? livePowerIntelligence
-      : null;
   const runtimeMinutes = connectedPrimaryDevice?.estimatedRuntimeMinutes ?? primaryDevice?.estimatedRuntimeMinutes ?? null;
-  const compactFooter = summary.sourceLabel;
-  const presentation = resolvePowerWidgetPresentation({
-    batteryPercent: connectedPrimaryDevice?.batteryPercent ?? primaryDevice?.batteryPercent ?? null,
-    runtimeMinutes,
-    inputWatts: totalInputWatts,
-    outputWatts: totalOutputWatts,
-    solarWatts: power.totalSolarWatts,
-    connectedDeviceCount: totalConnected,
-    powerIntelligence,
-    providerTelemetry: data?.aiState?.richContext?.resources?.providerTelemetry ?? null,
-    aiState: data?.aiState ?? null,
-    dashboardView: data?.aiDashboardView ?? null,
-  });
 
   useEffect(() => {
     publishPowerBriefAdvisories({
@@ -644,10 +504,7 @@ export function PowerSystemCompact({ data }: { data?: PowerWidgetContextData }) 
   ]);
 
   return (
-    <WidgetCardShell
-      badge={presentation.badge}
-      footer={compactFooter ? <WidgetMetaLine text={compactFooter} tone="neutral" /> : undefined}
-    >
+    <WidgetCardShell>
       <View style={ws.riveShell}>
         <PowerMonitorRiveHero summary={summary} compact />
       </View>
@@ -667,7 +524,6 @@ export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
       ? data?.aiState?.richContext?.resources?.powerIntelligence ?? livePowerIntelligence
       : null;
   const runtimeMinutes = connectedPrimaryDevice?.estimatedRuntimeMinutes ?? primaryDevice?.estimatedRuntimeMinutes ?? null;
-  const sourceTone: WidgetTone = summary.sourceState.tone;
 
   const presentation = resolvePowerWidgetPresentation({
     batteryPercent: connectedPrimaryDevice?.batteryPercent ?? primaryDevice?.batteryPercent ?? null,
@@ -708,12 +564,6 @@ export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
     return (
       <WidgetCardShell
         badge={presentation.badge}
-        footer={
-          <WidgetMetaLine
-            text={summary.sourceLabel}
-            tone={sourceTone}
-          />
-        }
       >
         <View style={ws.riveShell}>
           <PowerMonitorRiveHero summary={summary} />
@@ -722,17 +572,8 @@ export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
     );
   }
 
-  const footerBits = [
-    summary.sourceLabel,
-    totalConnected > 1 ? `${totalConnected} sources` : null,
-    totalSolarWatts > 0 ? `Solar ${Math.round(totalSolarWatts)}W` : null,
-  ].filter(Boolean);
-
   return (
-    <WidgetCardShell
-      badge={presentation.badge}
-      footer={<WidgetMetaLine text={footerBits.join(' | ')} tone="neutral" />}
-    >
+    <WidgetCardShell>
       <View style={ws.riveShell}>
         <PowerMonitorRiveHero summary={summary} />
       </View>
@@ -831,106 +672,6 @@ const ws = StyleSheet.create({
   riveHeroModuleCompact: {
     minWidth: 0,
     minHeight: 0,
-  },
-  flowGraphic: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    minHeight: 30,
-    marginTop: 1,
-  },
-  flowGraphicCompact: {
-    minHeight: 22,
-    gap: 5,
-  },
-  flowNode: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  flowNodeCompact: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-  },
-  flowNodeInActive: {
-    borderColor: 'rgba(76,175,80,0.35)',
-    backgroundColor: 'rgba(76,175,80,0.10)',
-  },
-  flowNodeOutActive: {
-    borderColor: 'rgba(239,83,80,0.35)',
-    backgroundColor: 'rgba(239,83,80,0.10)',
-  },
-  flowTrackWrap: {
-    flex: 1,
-    height: 16,
-    justifyContent: 'center',
-  },
-  flowTrackBase: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 2,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-  },
-  flowTrackSegment: {
-    position: 'absolute',
-    top: 7,
-    height: 2,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  flowTrackSegmentCompact: {
-    top: 7,
-  },
-  flowTrackLeft: {
-    left: 0,
-    right: '50%',
-    marginRight: 14,
-    backgroundColor: 'rgba(76,175,80,0.18)',
-  },
-  flowTrackRight: {
-    left: '50%',
-    right: 0,
-    marginLeft: 14,
-    backgroundColor: 'rgba(239,83,80,0.18)',
-  },
-  flowPulse: {
-    width: 18,
-    height: 2,
-    borderRadius: 2,
-  },
-  flowCore: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: 28,
-    height: 28,
-    marginLeft: -14,
-    marginTop: -14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.18)',
-    backgroundColor: 'rgba(196,138,44,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  flowCoreCompact: {
-    width: 20,
-    height: 20,
-    marginLeft: -10,
-    marginTop: -10,
-    borderRadius: 10,
-  },
-  flowCoreActive: {
-    borderColor: 'rgba(196,138,44,0.32)',
-    backgroundColor: 'rgba(196,138,44,0.12)',
   },
   cardStatusRow: {
     gap: 1,

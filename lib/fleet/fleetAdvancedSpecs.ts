@@ -18,7 +18,7 @@ export type FleetAdvancedSpecsNormalized = {
 
 export const FLEET_ADVANCED_SUSPENSION_HEIGHT_OPTIONS = Array.from({ length: 11 }, (_, value) => value);
 export const FLEET_ADVANCED_FRONT_LEVEL_OPTIONS = [1, 2, 3, 4];
-export const FLEET_ADVANCED_TIRE_SIZE_OPTIONS = Array.from({ length: 35 }, (_, index) => index + 26);
+export const FLEET_ADVANCED_TIRE_SIZE_OPTIONS = Array.from({ length: 41 }, (_, index) => index + 20);
 
 export function parseFleetAdvancedNonNegativeDecimal(value: string): number | null {
   const normalized = String(value).replace(/,/g, '').trim();
@@ -42,8 +42,8 @@ export function validateFleetAdvancedSpecsDraft(draft: FleetAdvancedSpecsDraft):
   if (draft.isLeveled && (!Number.isInteger(frontLevelInches) || frontLevelInches == null || frontLevelInches < 1 || frontLevelInches > 4)) {
     errors.push('Select a front suspension level amount from 1-4 inches.');
   }
-  if (!Number.isInteger(tireSizeInches) || tireSizeInches == null || tireSizeInches < 26 || tireSizeInches > 60) {
-    errors.push('Tire size must be 26-60 inches.');
+  if (!Number.isInteger(tireSizeInches) || tireSizeInches == null || tireSizeInches < 20 || tireSizeInches > 60) {
+    errors.push('Tire size must be 20-60 inches.');
   }
   if (parseFleetAdvancedNonNegativeDecimal(draft.waterGallons) == null) {
     errors.push('Water gallons must be numeric and non-negative.');

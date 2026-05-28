@@ -182,10 +182,11 @@ for (const protocolId of ['hypothermia', 'altitude-sickness']) {
 }
 const protocolImageStyle = styleBlock(quickActionsSource, 'protocolActionImage');
 assertIncludes(protocolImageStyle, '...StyleSheet.absoluteFillObject', 'Protocol image should fill the card.');
-assertIncludes(protocolImageStyle, 'top: -2', 'Protocol image should overscan the top edge to avoid exposed card background.');
-assertIncludes(protocolImageStyle, 'left: -2', 'Protocol image should overscan the left edge to avoid exposed card background.');
-assertIncludes(protocolImageStyle, 'bottom: -2', 'Protocol image should overscan the bottom edge to avoid exposed card background.');
-assertIncludes(protocolImageStyle, 'right: -2', 'Protocol image should overscan the right edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'top: -10', 'Protocol image should overscan the top edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'left: -10', 'Protocol image should overscan the left edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'bottom: -10', 'Protocol image should overscan the bottom edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'right: -10', 'Protocol image should overscan the right edge to avoid exposed card background.');
+assertIncludes(protocolImageStyle, 'transform: [{ scale: 1.08 }]', 'Protocol image should scale inside the clipped card to prevent exposed inner edges.');
 const protocolCardStyle = styleBlock(quickActionsSource, 'protocolActionCard');
 assertIncludes(protocolCardStyle, "overflow: 'hidden'", 'Protocol card should clip the full-card image to the container.');
 assertIncludes(
@@ -462,18 +463,28 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  'scrollable={!protocolStaticActive}',
-  'Protocol list and detail should disable normal page-level scrolling.',
+  'const commsStaticActive = activeView === \'emergencyComms\';',
+  'Emergency Comms should opt into fixed body behavior.',
 );
 assertIncludes(
   quickActionsSource,
-  'bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : undefined}',
-  'Protocol list and detail should use fixed-body sizing.',
+  'const fixedStaticActive = protocolStaticActive || commsStaticActive;',
+  'Fixed Field Utilities screens should share a single page-scroll guard.',
 );
 assertIncludes(
   quickActionsSource,
-  'contentContainerStyle={protocolStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}',
-  'Protocol list and detail should use a fixed static content container.',
+  'scrollable={!fixedStaticActive}',
+  'Protocol and Emergency Comms screens should disable normal page-level scrolling.',
+);
+assertIncludes(
+  quickActionsSource,
+  'bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}',
+  'Protocol and Emergency Comms screens should use fixed-body sizing.',
+);
+assertIncludes(
+  quickActionsSource,
+  'contentContainerStyle={fixedStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}',
+  'Protocol and Emergency Comms screens should use a fixed static content container.',
 );
 assertNotIncludes(
   quickActionsSource,
@@ -566,6 +577,41 @@ assertIncludes(
   'Protocol detail body should be allowed to fit within the fixed shell without clipping.',
 );
 assertIncludes(
+  quickActionsSource,
+  '<ScrollView\n        style={styles.commsEntryScroller}',
+  'Emergency Comms should scroll only inside each frequencies/signals/emergency numbers list.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'commsPanelBody'),
+  'minHeight: 0',
+  'Emergency Comms fixed body should fit within the shell without creating a page scroll surface.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'commsReferenceGrid'),
+  'flex: 1',
+  'Emergency Comms reference grid should consume fixed screen space above coordinates.',
+);
+assertIncludes(
+  quickActionsSource,
+  '<View style={styles.coordinatesActionRow}>',
+  'Emergency Comms coordinates and copy action should sit on one horizontal row.',
+);
+assertIncludes(
+  quickActionsSource,
+  '<Text style={styles.secondaryBtnText}>COPY</Text>',
+  'Emergency Comms copy coordinates action should be compact and right-aligned with coordinates.',
+);
+assertIncludes(
+  quickActionsSource,
+  'Long press to edit frequencies, signals, or emergency numbers.',
+  'Emergency Comms should show one consolidated edit advisory at the base.',
+);
+assertNotIncludes(
+  quickActionsSource,
+  '<Text style={styles.commsHint}>Long press to edit</Text>',
+  'Emergency Comms should not repeat long-press hints inside each container.',
+);
+assertIncludes(
   styleBlock(fieldUseDetailSource, 'scroll'),
   'minHeight: 0',
   'Shared field-use guide scroll region should fit within the fixed shell without clipping critical content.',
@@ -621,24 +667,13 @@ assertNotIncludes(quickActionsSource, 'setActivePanel', 'Field Utilities should 
   "openFieldUtilityAction('intel')",
   "openFieldUtilityAction('team')",
   "openFieldUtilityAction('protocols')",
+  "openFieldUtilityAction('recoveryProtocols')",
 ].forEach((transition) => {
   assertIncludes(quickActionsSource, transition, `Action card should use shared transition ${transition}.`);
 });
-assertIncludes(
-  quickActionsSource,
-  'const openDeviceConnections = useCallback',
-  'Bluetooth action should use a dedicated launcher for the canonical Device Connections screen.',
-);
-assertIncludes(
-  quickActionsSource,
-  "router.push('/power/blu')",
-  'Bluetooth action should route to the canonical Device Connections screen.',
-);
-assertIncludes(
-  quickActionsSource,
-  'onPress: openDeviceConnections',
-  'Bluetooth action card should launch Device Connections instead of opening an embedded panel.',
-);
+assertNotIncludes(quickActionsSource, "key: 'bluetooth'", 'Field Utilities should not duplicate the global Bluetooth launcher.');
+assertNotIncludes(quickActionsSource, "label: 'Bluetooth'", 'Field Utilities should not render a Bluetooth action tile.');
+assertNotIncludes(quickActionsSource, 'openUnifiedBluetoothCommand(router', 'Bluetooth remains available from the global banner, not Field Utilities.');
 assertNotIncludes(
   quickActionsSource,
   "openFieldUtilityAction('bluetooth')",

@@ -36,6 +36,7 @@ import { powerSampleBuffer } from "./PowerSampleBuffer";
 import type { PowerSample } from "./PowerSampleBuffer";
 import { detectLoadEvents } from "../detect/loadDetection";
 import { powerEventsStore } from "../detect/powerEventsStore";
+import { BLU_TELEMETRY_UI_UPDATE_MS } from "../../../lib/bluPerformanceConfig";
 
 
 // ── Default capabilities (all false) ────────────────────────────────────
@@ -121,10 +122,12 @@ function deepMergeTelemetry(
 
 // ── Subscriber callback type ────────────────────────────────────────────
 type TelemetrySubscriber = (telemetry: PowerTelemetry | null) => void;
+type TelemetryByDeviceSubscriber = (telemetryByDeviceId: Record<string, PowerTelemetry>) => void;
 
 // ── Detection interval (Phase 3I-2) ────────────────────────────────────
 const DETECTION_INTERVAL_MS = 10_000; // run detector every 10 s
 const DETECTION_WINDOW_MS = 10 * 60_000; // analyse last 10 min of samples
+export const POWER_TELEMETRY_UI_UPDATE_MS = BLU_TELEMETRY_UI_UPDATE_MS;
 
 // ── Manager class ───────────────────────────────────────────────────────
 
@@ -134,7 +137,11 @@ class PowerTelemetryManager {
   private connectorUnsub: (() => void) | undefined;
   private driver: IPowerDriver | null = null;
   private current: PowerTelemetry | null = null;
+  private currentByDeviceId: Map<string, PowerTelemetry> = new Map();
   private subscribers: Set<TelemetrySubscriber> = new Set();
+  private deviceSubscribers: Set<TelemetryByDeviceSubscriber> = new Set();
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastNotifyAt = 0;
 
   // ── Phase 3I-2: load detection interval ─────────────────────────────
   private detectionTimer: ReturnType<typeof setInterval> | null = null;
@@ -174,23 +181,48 @@ class PowerTelemetryManager {
    * rendering stale "connected" values while the scanner is already offline.
    */
   clearDisconnectedDevice(deviceId?: string | null): void {
-    this.detachConnector();
-    this.stopDetection();
+    if (deviceId) {
+      const existing = this.currentByDeviceId.get(deviceId);
+      if (!existing) {
+        if (this.current?.device?.id === deviceId) {
+          this.current = this.getLatestCurrent();
+          this.notifySubscribers({ immediate: true });
+        }
+        return;
+      }
 
-    if (
-      deviceId &&
-      this.current?.device?.id &&
-      this.current.device.id !== deviceId
-    ) {
+      this.currentByDeviceId.delete(deviceId);
+      ecsTelemetryStore.markDeviceUnavailable(
+        deviceId,
+        'power_device',
+        'Power telemetry disconnected.',
+        existing.device?.vendor,
+      );
+      if (this.current?.device?.id === deviceId) {
+        this.current = this.getLatestCurrent();
+      }
+      if (this.currentByDeviceId.size === 0) {
+        this.detachConnector();
+        this.stopDetection();
+      }
+      this.notifySubscribers({ immediate: true });
       return;
     }
 
-    const clearedDeviceId = deviceId ?? this.current?.device?.id ?? null;
+    this.detachConnector();
+    const currentDevices = Array.from(this.currentByDeviceId.values());
     this.current = null;
-    if (clearedDeviceId) {
-      ecsTelemetryStore.markDeviceUnavailable(clearedDeviceId, 'power_device', 'Power telemetry disconnected.');
+    this.currentByDeviceId.clear();
+    this.stopDetection();
+    for (const telemetry of currentDevices) {
+      ecsTelemetryStore.markDeviceUnavailable(
+        telemetry.device.id,
+        'power_device',
+        'Power telemetry disconnected.',
+        telemetry.device.vendor,
+      );
     }
-    this.notifySubscribers();
+    this.notifySubscribers({ immediate: true });
   }
 
   // ── Driver lifecycle ────────────────────────────────────────────────
@@ -227,7 +259,11 @@ class PowerTelemetryManager {
       partial.timestamp = Date.now();
     }
 
-    if (this.current === null) {
+    const deviceId = partial.device?.id ?? this.current?.device?.id ?? 'unpaired';
+    const currentForDevice = this.currentByDeviceId.get(deviceId) ?? null;
+
+    let merged: PowerTelemetry;
+    if (currentForDevice === null) {
       // First reading — initialise with safe defaults, then merge
       const skeleton: PowerTelemetry = {
         timestamp: Date.now(),
@@ -243,13 +279,16 @@ class PowerTelemetryManager {
         capabilities: { ...DEFAULT_CAPABILITIES },
         quality: { connection: "idle" },
       };
-      this.current = deepMergeTelemetry(skeleton, partial);
+      merged = deepMergeTelemetry(skeleton, partial);
     } else {
-      this.current = deepMergeTelemetry(this.current, partial);
+      merged = deepMergeTelemetry(currentForDevice, partial);
     }
-    ecsTelemetryStore.ingestEvents(canonicalPowerTelemetryToEcsTelemetryEvents(this.current));
+
+    this.currentByDeviceId.set(merged.device.id, merged);
+    this.current = merged;
+    ecsTelemetryStore.ingestEvents(canonicalPowerTelemetryToEcsTelemetryEvents(merged));
     // ── Phase 3I-1: push sample into ring buffer ──────────────────────
-    this.pushSample();
+    this.pushSample(merged);
 
     // ── Phase 3I-2: start detection loop on first ingestion ───────────
     this.ensureDetectionRunning();
@@ -280,6 +319,15 @@ class PowerTelemetryManager {
     };
   }
 
+  subscribeAll(cb: TelemetryByDeviceSubscriber): () => void {
+    this.deviceSubscribers.add(cb);
+    cb(this.getAllCurrentByDeviceId());
+
+    return () => {
+      this.deviceSubscribers.delete(cb);
+    };
+  }
+
   // ── Accessors ───────────────────────────────────────────────────────
 
   /**
@@ -288,6 +336,18 @@ class PowerTelemetryManager {
    */
   getCurrent(): PowerTelemetry | null {
     return this.current;
+  }
+
+  getCurrentByDeviceId(deviceId: string): PowerTelemetry | null {
+    return this.currentByDeviceId.get(deviceId) ?? null;
+  }
+
+  getAllCurrent(): PowerTelemetry[] {
+    return Array.from(this.currentByDeviceId.values());
+  }
+
+  getAllCurrentByDeviceId(): Record<string, PowerTelemetry> {
+    return Object.fromEntries(this.currentByDeviceId.entries());
   }
 
   /**
@@ -310,23 +370,48 @@ class PowerTelemetryManager {
    * Called once per `ingestTelemetry()` invocation.
    * Safe to call when `this.current` is non-null (always true at call site).
    */
-  private pushSample(): void {
-    const t = this.current?.timestamp;
+  private pushSample(telemetry: PowerTelemetry | null = this.current): void {
+    const t = telemetry?.timestamp;
     if (t === undefined) return; // guard — should never happen
 
     const sample: PowerSample = {
       t,
-      wattsIn: this.current?.battery?.wattsIn,
-      wattsOut: this.current?.battery?.wattsOut,
-      solarWatts: this.current?.solar?.watts,
-      socPct: this.current?.battery?.socPct,
-      stale: this.current?.flags?.stale,
+      wattsIn: telemetry?.battery?.wattsIn,
+      wattsOut: telemetry?.battery?.wattsOut,
+      solarWatts: telemetry?.solar?.watts,
+      socPct: telemetry?.battery?.socPct,
+      stale: telemetry?.flags?.stale,
     };
 
     powerSampleBuffer.push(sample);
   }
 
-  private notifySubscribers(): void {
+  private notifySubscribers(options: { immediate?: boolean } = {}): void {
+    if (options.immediate) {
+      if (this.notifyTimer) {
+        clearTimeout(this.notifyTimer);
+        this.notifyTimer = null;
+      }
+      this.flushNotifySubscribers();
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - this.lastNotifyAt;
+    if (elapsed >= POWER_TELEMETRY_UI_UPDATE_MS) {
+      this.flushNotifySubscribers();
+      return;
+    }
+
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      this.flushNotifySubscribers();
+    }, POWER_TELEMETRY_UI_UPDATE_MS - elapsed);
+  }
+
+  private flushNotifySubscribers(): void {
+    this.lastNotifyAt = Date.now();
     const snapshot = this.current;
     for (const cb of this.subscribers) {
       try {
@@ -335,6 +420,24 @@ class PowerTelemetryManager {
         // Subscriber errors must never crash the manager
       }
     }
+    const byDevice = this.getAllCurrentByDeviceId();
+    for (const cb of this.deviceSubscribers) {
+      try {
+        cb(byDevice);
+      } catch {
+        // Subscriber errors must never crash the manager
+      }
+    }
+  }
+
+  private getLatestCurrent(): PowerTelemetry | null {
+    let latest: PowerTelemetry | null = null;
+    for (const telemetry of this.currentByDeviceId.values()) {
+      if (!latest || telemetry.timestamp > latest.timestamp) {
+        latest = telemetry;
+      }
+    }
+    return latest;
   }
 
   // ── Phase 3I-2: load detection integration ────────────────────────────

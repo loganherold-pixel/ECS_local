@@ -40,6 +40,7 @@ import TrailConditionsCard from './TrailConditionsCard';
 import { ecsLog } from '../../lib/ecsLogger';
 
 type WeatherTab = 'current' | 'forecast' | 'trail';
+type WeatherDataSource = 'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null;
 
 const WEATHER_PANEL_FETCH_MEMORY_TTL_MS = 30 * 60 * 1000;
 const WEATHER_PANEL_FETCH_MEMORY_LIMIT = 48;
@@ -60,6 +61,8 @@ interface Props {
   onRefreshWeather?: (() => void) | null;
   frameless?: boolean;
   trailAssessmentActive?: boolean;
+  mergeForecastIntoConditions?: boolean;
+  trailCoordinate?: WeatherCoordinate | null;
 }
 
 function coordsChanged(
@@ -243,6 +246,8 @@ export default function WeatherIntelPanel({
   onRefreshWeather = null,
   frameless = false,
   trailAssessmentActive = true,
+  mergeForecastIntoConditions = false,
+  trailCoordinate = null,
 }: Props) {
   const { isOnline } = useApp();
   const initialCoords = resolveWeatherPanelCoordinates({
@@ -269,12 +274,15 @@ export default function WeatherIntelPanel({
   );
   const [expanded, setExpanded] = useState(!compact);
   const [selectedWaypointIdx, setSelectedWaypointIdx] = useState(0);
-  const [dataSource, setDataSource] = useState<'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null>(
+  const [dataSource, setDataSource] = useState<WeatherDataSource>(
     () => initialCachedWeatherRef.current?.source ?? null,
   );
   const [cachedAt, setCachedAt] = useState<number | null>(
     () => initialCachedWeatherRef.current?.cachedAt ?? null,
   );
+  const [trailWeatherData, setTrailWeatherData] = useState<WaypointWeather | null>(null);
+  const [trailWeatherLoading, setTrailWeatherLoading] = useState(false);
+  const [trailWeatherSource, setTrailWeatherSource] = useState<WeatherDataSource>(null);
 
   const mountedRef = useRef(true);
   const lastGoodWeatherRef = useRef<{
@@ -313,6 +321,58 @@ export default function WeatherIntelPanel({
     () => buildWeatherPanelFetchKey(effectiveCoords, units),
     [effectiveCoords, units],
   );
+  const trailCoordinateKey = useMemo(
+    () => trailCoordinate
+      ? buildWeatherPanelFetchKey([trailCoordinate], units)
+      : '',
+    [trailCoordinate, units],
+  );
+
+  const fetchTrailWeather = useCallback(async (force = false) => {
+    if (!mergeForecastIntoConditions || !trailCoordinate) return;
+    const trailCoords = [trailCoordinate];
+    const cached = getCachedSharedWeatherResult(trailCoords, units, { allowStale: true });
+    if (!force && cached) {
+      setTrailWeatherData(cached.data.results?.[0] ?? null);
+      setTrailWeatherSource(cached.source);
+      if (cached.source === 'cache_fresh') return;
+    }
+
+    setTrailWeatherLoading(true);
+    try {
+      const result = await fetchSharedWeatherForCoordinates(
+        trailCoords,
+        units,
+        force || cached?.source === 'cache_stale',
+        'route_origin',
+      );
+      if (!mountedRef.current) return;
+      setTrailWeatherData(result.result.data.results?.[0] ?? null);
+      setTrailWeatherSource(result.result.source);
+    } catch (err) {
+      logWeatherPanelRetention('trail_weather_fetch_failed', {
+        message: err instanceof Error ? err.message : 'unknown',
+      });
+    } finally {
+      if (mountedRef.current) setTrailWeatherLoading(false);
+    }
+  }, [mergeForecastIntoConditions, trailCoordinate, units]);
+
+  useEffect(() => {
+    if (!mergeForecastIntoConditions) {
+      setTrailWeatherData(null);
+      setTrailWeatherSource(null);
+      setTrailWeatherLoading(false);
+      return;
+    }
+    if (!trailCoordinateKey) {
+      setTrailWeatherData(null);
+      setTrailWeatherSource(null);
+      setTrailWeatherLoading(false);
+      return;
+    }
+    void fetchTrailWeather(false);
+  }, [fetchTrailWeather, mergeForecastIntoConditions, trailCoordinateKey]);
 
   const injectedWeatherData = useMemo<WaypointWeather[] | null>(() => {
     if (!weatherSnapshot) return null;
@@ -561,6 +621,10 @@ export default function WeatherIntelPanel({
   const selectedWeather = effectiveWeatherData && effectiveWeatherData.length > 0
     ? effectiveWeatherData[Math.min(selectedWaypointIdx, effectiveWeatherData.length - 1)]
     : null;
+  const currentTabWeather = selectedWeather;
+  const trailTabWeather = mergeForecastIntoConditions && trailAssessmentActive
+    ? trailWeatherData ?? (effectiveWeatherData && effectiveWeatherData.length > 1 ? effectiveWeatherData[1] : null)
+    : null;
   const weatherDetailSource = injectedWeatherActive
     ? weatherSnapshot?.normalized.source ?? weatherSnapshot?.status.source ?? lastGoodWeatherRef.current?.dataSource ?? 'unavailable'
     : dataSource ?? 'unavailable';
@@ -622,6 +686,21 @@ export default function WeatherIntelPanel({
         : effectiveDataSource === 'fallback'
           ? 'Weather source unavailable'
           : null;
+  const mergedTrailSourceLabel = trailWeatherSource === 'live'
+    ? 'Trailhead weather from live route weather'
+    : trailWeatherSource === 'cache_fresh'
+      ? 'Trailhead weather from fresh cached route weather'
+      : trailWeatherSource === 'cache_stale'
+        ? 'Trailhead weather from stale cached route weather'
+        : trailWeatherSource === 'fallback'
+          ? 'Trailhead weather unavailable'
+          : trailSourceLabel;
+
+  useEffect(() => {
+    if (mergeForecastIntoConditions && tab === 'forecast') {
+      setTab('current');
+    }
+  }, [mergeForecastIntoConditions, tab]);
   const showOfflineBanner =
     !!effectiveWeatherData &&
     (
@@ -668,6 +747,7 @@ export default function WeatherIntelPanel({
   const handleFetch = useCallback(async (force = false) => {
     if (injectedWeatherActive) {
       if (force) onRefreshWeather?.();
+      if (force && mergeForecastIntoConditions) void fetchTrailWeather(true);
       return;
     }
 
@@ -755,7 +835,7 @@ export default function WeatherIntelPanel({
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [applyWeatherRows, effectiveCoords, injectedWeatherActive, onRefreshWeather, units]);
+  }, [applyWeatherRows, effectiveCoords, fetchTrailWeather, injectedWeatherActive, mergeForecastIntoConditions, onRefreshWeather, units]);
 
   useEffect(() => {
     if (injectedWeatherActive) return;
@@ -1011,13 +1091,20 @@ export default function WeatherIntelPanel({
             <View style={[styles.tabBar, frameless ? styles.tabBarFrameless : null]}>
             {([
               { key: 'current' as WeatherTab, label: 'CONDITIONS', icon: 'thermometer-outline' },
-              { key: 'forecast' as WeatherTab, label: 'FORECAST', icon: 'calendar-outline' },
+              ...(
+                mergeForecastIntoConditions
+                  ? []
+                  : [{ key: 'forecast' as WeatherTab, label: 'FORECAST', icon: 'calendar-outline' }]
+              ),
               { key: 'trail' as WeatherTab, label: 'TRAIL', icon: 'trail-sign-outline' },
             ]).map(t => {
               const isActive = tab === t.key;
               const isDisabled =
-                (t.key === 'forecast' && (isFallback || !selectedWeather?.forecast?.length)) ||
-                (t.key === 'trail' && trailAssessmentActive && !selectedWeather?.trail_conditions);
+                !mergeForecastIntoConditions &&
+                (
+                  (t.key === 'forecast' && (isFallback || !selectedWeather?.forecast?.length)) ||
+                  (t.key === 'trail' && trailAssessmentActive && !selectedWeather?.trail_conditions)
+                );
 
               return (
                 <TouchableOpacity
@@ -1055,7 +1142,7 @@ export default function WeatherIntelPanel({
             })}
           </View>
 
-          {effectiveWeatherData && effectiveWeatherData.length > 1 && (
+          {!mergeForecastIntoConditions && effectiveWeatherData && effectiveWeatherData.length > 1 && (
               <View style={[styles.waypointSelector, frameless ? styles.waypointSelectorFrameless : null]}>
               {effectiveWeatherData.map((w, idx) => (
                 <TouchableOpacity
@@ -1139,27 +1226,78 @@ export default function WeatherIntelPanel({
                 <WeatherAlerts alerts={selectedWeather.alerts} />
               )}
 
-              {tab === 'current' && selectedWeather.current && (
-                <CurrentConditionsCard
-                  conditions={selectedWeather.current}
-                  locationName={selectedWeather.label}
-                  units={units}
-                />
-              )}
+              {mergeForecastIntoConditions ? (
+                <>
+                  {tab === 'current' && currentTabWeather?.current && (
+                    <>
+                      <CurrentConditionsCard
+                        conditions={currentTabWeather.current}
+                        locationName={currentTabWeather.label}
+                        units={units}
+                      />
+                      {currentTabWeather.forecast?.length ? (
+                        <ForecastTimeline
+                          forecast={currentTabWeather.forecast.slice(0, 6)}
+                          units={units}
+                        />
+                      ) : null}
+                    </>
+                  )}
 
-              {tab === 'forecast' && selectedWeather.forecast && (
-                <ForecastTimeline
-                  forecast={selectedWeather.forecast}
-                  units={units}
-                />
-              )}
+                  {tab === 'trail' && (
+                    <>
+                      {trailAssessmentActive && trailWeatherLoading && !trailTabWeather ? (
+                        <View style={styles.loadingBox}>
+                          <ActivityIndicator size="small" color={TACTICAL.amber} />
+                          <Text style={styles.loadingText}>FETCHING TRAILHEAD WEATHER...</Text>
+                        </View>
+                      ) : null}
+                      {trailAssessmentActive && trailTabWeather?.current ? (
+                        <CurrentConditionsCard
+                          conditions={trailTabWeather.current}
+                          locationName={trailTabWeather.label}
+                          units={units}
+                        />
+                      ) : null}
+                      <TrailConditionsCard
+                        conditions={trailTabWeather?.trail_conditions}
+                        sourceLabel={mergedTrailSourceLabel}
+                        assessmentActive={trailAssessmentActive}
+                      />
+                      {trailAssessmentActive && trailTabWeather?.forecast?.length ? (
+                        <ForecastTimeline
+                          forecast={trailTabWeather.forecast.slice(0, 6)}
+                          units={units}
+                        />
+                      ) : null}
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {tab === 'current' && selectedWeather.current && (
+                    <CurrentConditionsCard
+                      conditions={selectedWeather.current}
+                      locationName={selectedWeather.label}
+                      units={units}
+                    />
+                  )}
 
-              {tab === 'trail' && (!trailAssessmentActive || selectedWeather.trail_conditions) && (
-                <TrailConditionsCard
-                  conditions={selectedWeather.trail_conditions}
-                  sourceLabel={trailSourceLabel}
-                  assessmentActive={trailAssessmentActive}
-                />
+                  {tab === 'forecast' && selectedWeather.forecast && (
+                    <ForecastTimeline
+                      forecast={selectedWeather.forecast}
+                      units={units}
+                    />
+                  )}
+
+                  {tab === 'trail' && (!trailAssessmentActive || selectedWeather.trail_conditions) && (
+                    <TrailConditionsCard
+                      conditions={selectedWeather.trail_conditions}
+                      sourceLabel={trailSourceLabel}
+                      assessmentActive={trailAssessmentActive}
+                    />
+                  )}
+                </>
               )}
             </View>
           )}

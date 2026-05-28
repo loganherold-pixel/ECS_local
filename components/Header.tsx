@@ -35,6 +35,7 @@ import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
 import TopBannerBackground, { resolveTopBannerVariant } from './TopBannerBackground';
 import { useEcsTopBannerHeight } from './ECSGlobalBanner';
 import { useEcsBriefTopBannerMessage } from '../lib/useEcsBriefTopBannerMessage';
+import { openUnifiedBluetoothCommand } from '../lib/bluetoothCommandNavigation';
 
 const HEADER = {
   bar: '#1E2125',
@@ -108,7 +109,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
   const [signOutConfirmVisible, setSignOutConfirmVisible] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [accountActionBusyId, setAccountActionBusyId] = useState<string | null>(null);
-  const [geofenceRadius, setGeofenceRadius] = useState(() => expeditionStateStore.getGeofenceRadius());
   const [operatorTrustMode, setOperatorTrustMode] = useState<ECSOperatorTrustMode>(
     () => operatorTrustModeStore.mode,
   );
@@ -304,7 +304,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
   });
 
   const openProfilePanel = useCallback(() => {
-    setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
     setProfilePanelVisible(true);
   }, []);
   const requestSignOut = useCallback(() => {
@@ -325,19 +324,15 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
       setSignOutBusy(false);
     }
   }, [signOut, signOutBusy]);
-  const handleOpenAuthEntry = useCallback(() => {
+  const openLoginScreen = useCallback(() => {
     setProfilePanelVisible(false);
-    if (onAuthPress) {
-      onAuthPress();
-      return;
-    }
     router.replace('/login');
-  }, [onAuthPress, router]);
+  }, [router]);
   const handleAccountAction = useCallback(
     async (actionId: string) => {
       if (accountActionBusyId) return;
       if (actionId === 'sign_in') {
-        handleOpenAuthEntry();
+        openLoginScreen();
         return;
       }
       if (actionId === 'sign_out') {
@@ -396,7 +391,7 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
     },
     [
       accountActionBusyId,
-      handleOpenAuthEntry,
+      openLoginScreen,
       purchaseEcsProMonthly,
       requestSignOut,
       refreshAccessState,
@@ -407,15 +402,9 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
     ],
   );
   const openBluetoothConnections = useCallback(() => {
-    try {
-      router.push('/power/blu');
-    } catch {
-      try {
-        router.push('/power');
-      } catch {
-        showToast('Device connections unavailable');
-      }
-    }
+    openUnifiedBluetoothCommand(router, {
+      onUnavailable: () => showToast('Device connections unavailable'),
+    });
   }, [router, showToast]);
 
   const syncActionLabel = useMemo(() => {
@@ -759,11 +748,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
         syncLabel={bannerStatus.processingLabel ?? bannerStatus.statusDetail}
         syncDisabled={!isOnline || bannerStatus.processingActive}
         onManualSync={triggerSync}
-        geofenceRadius={geofenceRadius}
-        onSelectGeofence={(meters) => {
-          setGeofenceRadius(meters);
-          expeditionStateStore.setGeofenceRadius(meters);
-        }}
         appearanceMode={appearanceMode}
         onSelectTheme={setAppearanceMode}
         operatorTrustMode={operatorTrustMode}
@@ -771,7 +755,6 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
           setOperatorTrustMode(mode);
           operatorTrustModeStore.setMode(mode);
         }}
-        onProfilePress={!user ? handleOpenAuthEntry : undefined}
       />
 
       <TacticalPopupShell

@@ -84,9 +84,27 @@ for (const requiredSource of [
   );
 }
 
+const headerIndex = commandCenterSource.indexOf('<View style={styles.headerStrip}>');
+const topAdvisoryIndex = commandCenterSource.indexOf('{advisory ? (', headerIndex);
+const convoySetupIndex = commandCenterSource.indexOf('<DispatchConvoyTeamSetupCard', topAdvisoryIndex);
+const convoyCommandIndex = commandCenterSource.indexOf('<View style={styles.feedPanel}>', convoySetupIndex);
 assert.ok(
-  /teamPositionSharingEnabled \|\| externalDispatchIntegrationEnabled[\s\S]*<TouchableOpacity[\s\S]*Connect/.test(commandCenterSource),
-  'Connect Team entry should be hidden unless team/external integration gates are enabled.',
+  headerIndex >= 0 &&
+    topAdvisoryIndex > headerIndex &&
+    convoySetupIndex > topAdvisoryIndex &&
+    convoyCommandIndex > convoySetupIndex,
+  'Dispatch should render header/status actions, ECS advisory, convoy setup/team, then the enlarged convoy command surface.',
+);
+assert.ok(
+  !commandCenterSource.includes('<View style={styles.rolloutNotice}>'),
+  'Internal beta notice should not render as a visible line in the Dispatch page flow.',
+);
+
+assert.ok(
+  commandCenterSource.includes('accessibilityLabel="Open convoy setup"') &&
+    commandCenterSource.includes('styles.headerConvoyButton') &&
+    commandCenterSource.includes("router.push('/convoy-command' as any)"),
+  'Convoy setup entry should live in the Dispatch top-right action bar.',
 );
 assert.ok(
   serviceAdaptersSource.includes('if (!DISPATCH_DEV_DATA_ENABLED)') &&

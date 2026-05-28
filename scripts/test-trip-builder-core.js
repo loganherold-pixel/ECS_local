@@ -200,8 +200,17 @@ assert.ok(
   'Multi-day plans should surface ranger/agency support points when route data supplies them.',
 );
 assert.ok(
-  sixDayPlan.suggestedStops.filter((stop) => stop.type === 'camp_search').length >= 5,
-  'Six-day plans without named camp data should create day-by-day camp search windows.',
+  sixDayPlan.suggestedStops.filter((stop) => stop.type === 'camp').length >= 5,
+  'Six-day plans without named camp data should create day-by-day ECS camp candidate windows.',
+);
+assert.strictEqual(
+  sixDayPlan.primaryCampCandidate?.source,
+  'ecs_route_inferred_camp_window',
+  'Trip Builder should convert route-progress camp windows into camp candidate data.',
+);
+assert.ok(
+  sixDayPlan.notes.some((note) => note.id === 'camp_candidate_inferred'),
+  'Inferred camp candidates should be clearly labeled as scouting targets.',
 );
 assert.ok(
   sixDayPlan.suggestedStops.findIndex((stop) => stop.type === 'finish') > 3,
@@ -221,10 +230,10 @@ const missingCamp = build(
   },
   { campsiteCandidates: [] },
 );
-assert.strictEqual(missingCamp.primaryCampCandidate, null);
+assert.strictEqual(missingCamp.primaryCampCandidate?.source, 'ecs_route_inferred_camp_window');
 assert.ok(
-  missingCamp.notes.some((note) => note.id === 'camp_candidate_missing'),
-  'Missing campsite data should be represented as an honest note.',
+  missingCamp.notes.some((note) => note.id === 'camp_candidate_inferred'),
+  'Missing named campsite data should become honest ECS-inferred camp planning data when route distance is available.',
 );
 
 const missingVehicle = build(
@@ -250,10 +259,68 @@ const missingExit = build(
   },
   { exitPoints: [] },
 );
-assert.strictEqual(missingExit.primaryExitPoint, null);
+assert.strictEqual(missingExit.primaryExitPoint?.source, 'ecs_midroute_bailout_inference');
+assert.strictEqual(missingExit.primaryExitPoint?.type, 'emergency_road_access');
+assert.notStrictEqual(
+  missingExit.primaryExitPoint?.routeMileMarker,
+  missingExit.route.distanceMiles,
+  'Missing dedicated bailout data must not clone the route finish as the bailout point.',
+);
 assert.ok(
-  missingExit.warnings.some((warning) => warning.id === 'exit_points_missing' && warning.severity === 'caution'),
-  'Missing bailout data should produce a caution when low-risk planning is requested.',
+  missingExit.warnings.some((warning) => warning.id === 'exit_points_emergency_bailout_inferred' && warning.severity === 'caution'),
+  'Missing dedicated bailout data should infer an emergency bailout target while warning the user to verify it.',
+);
+assert.ok(
+  missingExit.suggestedStops.some((stop) => stop.type === 'exit' && stop.source === 'ecs_midroute_bailout_inference'),
+  'Suggested itinerary should include the inferred mid-route emergency bailout stop.',
+);
+assert.strictEqual(
+  missingExit.suggestedStops.filter((stop) => stop.type === 'finish').length,
+  1,
+  'Suggested itinerary should keep one route finish stop.',
+);
+assert.ok(
+  !missingExit.suggestedStops.some((stop) => stop.type === 'exit' && stop.routeMileMarker === missingExit.route.distanceMiles),
+  'Suggested itinerary should not duplicate the finish as an exit stop.',
+);
+
+const forkBailoutRoute = {
+  ...baseRoute,
+  id: 'fork-bailout-route',
+  waypoints: [
+    ...baseRoute.waypoints,
+    {
+      id: 'forest-road-fork',
+      name: 'Forest Road 19 fork to paved county road',
+      waypointType: 'junction',
+      lat: 38.54,
+      lon: -109.69,
+      routeMileMarker: 43,
+      distanceFromRouteMiles: 0.6,
+      reliability: 'medium',
+    },
+  ],
+};
+const forkBailoutPlan = tripBuilder.buildTripPlan({
+  route: forkBailoutRoute,
+  input: {
+    tripType: 'weekend_overland',
+    timeWindow: 'weekend',
+    groupType: 'small_group',
+    priorities: ['low_risk'],
+  },
+  vehicleProfile,
+  exitPoints: [],
+  capturedAt: '2026-05-18T12:00:00.000Z',
+});
+assert.strictEqual(
+  forkBailoutPlan.primaryExitPoint?.id,
+  'forest-road-fork',
+  'Route fork or junction data should become the preferred bailout point before midpoint inference.',
+);
+assert.ok(
+  forkBailoutPlan.suggestedStops.some((stop) => stop.type === 'exit' && /Forest Road 19/.test(stop.title)),
+  'Suggested itinerary should surface route fork bailout points.',
 );
 
 const immutableRoute = JSON.parse(JSON.stringify(baseRoute));
@@ -280,6 +347,99 @@ assert.strictEqual(
   dayTrip.smartResupplyPlan.fuel.vehicleRangeMiles,
   vehicleProfile.rangeMiles,
   'Smart Resupply Plan should use the active vehicle range when supplied.',
+);
+assert.strictEqual(
+  dayTrip.smartResupplyPlan.fuel.status,
+  'good',
+  'Manual vehicle range that exceeds route demand should produce a positive fuel status even without a known fuel POI.',
+);
+assert.ok(
+  /Manual vehicle range covers estimated route demand/.test(dayTrip.smartResupplyPlan.fuel.primaryRecommendation),
+  'Fuel recommendation should explain that manual vehicle fuel/range makes the route viable when margin is positive.',
+);
+
+const preRouteResupplyPlan = build({
+  tripType: 'day_trip',
+  timeWindow: 'full_day',
+  groupType: 'two_vehicle',
+  priorities: ['scenic_stops'],
+}, {
+  resupplyPoints: [
+    {
+      id: 'operator-fuel-a',
+      name: 'Trailhead Fuel',
+      category: 'fuel',
+      location: { latitude: 38.44, longitude: -109.83 },
+      routeMileMarker: 0,
+      distanceFromStartMiles: 1.2,
+      reliability: 'medium',
+      source: 'operator_selected_pre_route_resupply',
+    },
+    {
+      id: 'operator-supply-b',
+      name: 'Trailhead Grocery',
+      category: 'food_supplies',
+      location: { latitude: 38.43, longitude: -109.84 },
+      routeMileMarker: 0,
+      distanceFromStartMiles: 1.8,
+      reliability: 'medium',
+      source: 'operator_selected_pre_route_resupply',
+    },
+  ],
+});
+assert.strictEqual(preRouteResupplyPlan.suggestedStops[0].type, 'fuel');
+assert.strictEqual(preRouteResupplyPlan.suggestedStops[1].type, 'supply');
+assert.strictEqual(preRouteResupplyPlan.suggestedStops[2].type, 'start');
+assert.ok(
+  /Trailhead Fuel/.test(preRouteResupplyPlan.suggestedStops[0].title),
+  'Selected pre-route fuel should become itinerary stop A.',
+);
+assert.ok(
+  /Trailhead Grocery/.test(preRouteResupplyPlan.suggestedStops[1].title),
+  'Selected pre-route groceries should become itinerary stop B before route start.',
+);
+
+const manualSupportPlan = build(
+  {
+    tripType: 'weekend_overland',
+    timeWindow: 'weekend',
+    groupType: 'solo',
+    priorities: ['low_risk'],
+  },
+  {
+    vehicleProfile: {
+      ...vehicleProfile,
+      waterCapacityGal: 12,
+      currentWaterGallons: 12,
+      waterSource: 'manual',
+      supportReadiness: {
+        water: true,
+        foodSupplies: true,
+        repair: true,
+        medical: true,
+        recovery: true,
+        source: 'active loadout: Weekend',
+        labels: ['Water jugs', 'Tire repair kit', 'First aid kit'],
+      },
+    },
+    resupplyPoints: [],
+    availablePoiData: [],
+  },
+);
+assert.strictEqual(manualSupportPlan.smartResupplyPlan.water.status, 'good');
+assert.strictEqual(manualSupportPlan.smartResupplyPlan.repair.status, 'good');
+assert.strictEqual(manualSupportPlan.smartResupplyPlan.medical.status, 'good');
+assert.ok(
+  /Manual vehicle water capacity/.test(manualSupportPlan.smartResupplyPlan.water.primaryRecommendation),
+  'Manual water capacity should be reflected in the water plan.',
+);
+assert.ok(
+  /repair or recovery support/.test(manualSupportPlan.smartResupplyPlan.repair.primaryRecommendation),
+  'Repair/recovery loadout items should satisfy repair support.',
+);
+assert.ok(
+  /medical support/.test(manualSupportPlan.smartResupplyPlan.medical.primaryRecommendation),
+  'Medical loadout items should satisfy medical support.',
 );
 
 console.log('Trip Builder core planning checks passed.');

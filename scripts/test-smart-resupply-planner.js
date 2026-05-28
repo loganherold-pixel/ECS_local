@@ -121,6 +121,7 @@ const missingPoiPlan = buildTripPlan({
 });
 assert.strictEqual(missingPoiPlan.smartResupplyPlan.water.status, 'unknown', 'Missing water POI data should remain unknown.');
 assert.strictEqual(missingPoiPlan.smartResupplyPlan.supplies.status, 'unknown', 'Missing supplies POI data should remain unknown.');
-assert.strictEqual(missingPoiPlan.smartResupplyPlan.exitAccess.status, 'unknown', 'Missing exits should remain unknown.');
+assert.notStrictEqual(missingPoiPlan.smartResupplyPlan.exitAccess.status, 'unknown', 'Route start/finish fallback should prevent exit access from being blank.');
+assert.strictEqual(missingPoiPlan.smartResupplyPlan.exitAccess.knownExitCount >= 1, true, 'Route-derived exit references should be counted when dedicated bailouts are missing.');
 
 console.log('Smart Resupply Planner checks passed.');

@@ -113,8 +113,9 @@ assert.ok(
 
 assert.ok(
   expanded.includes('vehicleId?: string | null') &&
-    expanded.includes('vehicleId={vehicleId ?? heroVehicle?.attitudeVehicleId}'),
-  'Expanded attitude view should pass vehicleId through to the shared surface.',
+    expanded.includes('vehicleId={vehicleId ?? heroVehicle?.attitudeVehicleId}') &&
+    expanded.includes('telemetryFrame="vehicle"'),
+  'Expanded attitude view should pass vehicleId and vehicle-frame pitch/roll through to the shared surface.',
 );
 assert.ok(
   detailWidget.includes('useActiveAttitudeMonitorVehicleId()') &&
@@ -129,6 +130,7 @@ assert.ok(
     widgetRenderers.includes('resolveAttitudeMonitorVehicleId(activeVehicleContext)') &&
     widgetRenderers.includes('vehicleId={attitudeVehicleId}') &&
     widgetRenderers.includes('telemetryFrame="device"') &&
+    !widgetRenderers.includes("telemetryFrame={landscapeInstrumentOnlyAttitude ? 'vehicle' : 'device'}") &&
     widgetRenderers.includes('showLiveHashIndicators={sensorLive}') &&
     widgetRenderers.includes('showReadouts={sensorLive}') &&
     widgetRenderers.includes('showLiveHashIndicators={false}') &&
@@ -137,8 +139,11 @@ assert.ok(
     widgetRenderers.includes('showDegreeReadouts={false}') &&
     widgetRenderers.includes('showLevelReadout={false}') &&
     widgetRenderers.includes('showZeroButton={false}') &&
+    widgetRenderers.includes('Vehicle Leveling Inclinometer') &&
+    widgetRenderers.includes('stageInclinometerTitleBlock') &&
+    widgetRenderers.includes('!landscapeInstrumentOnlyAttitude') &&
     !widgetRenderers.includes('heroVehicle={heroVisual}'),
-  'Dashboard Attitude Monitor should animate live device samples, while Attitude Command center mode should keep the active Fleet vehicle rings mounted without legacy hash/readout overlays.',
+  'Dashboard Attitude Monitor and landscape Attitude Command should animate live semantic device pitch/roll while portrait Attitude Command keeps a centered inclinometer title.',
 );
 assert.ok(
   deviceAttitudeTelemetry.includes("sourceType: 'device_attitude'") &&
@@ -179,7 +184,11 @@ assert.ok(stage.includes('vehicleId: string'), 'VehicleAttitudeStage should rece
 assert.ok(stage.includes("mode?: 'monitor' | 'command'"), 'VehicleAttitudeStage should support monitor and command modes.');
 assert.ok(stage.includes('telemetryFrame?: AttitudeTelemetryFrame'), 'VehicleAttitudeStage should accept a telemetry frame source.');
 assert.ok(stage.includes('screenOrientation?: EcsScreenOrientation'), 'VehicleAttitudeStage should accept an explicit screen orientation override.');
-assert.ok(stage.includes("fitMode?: 'contain' | 'cover'"), 'VehicleAttitudeStage should let command surfaces opt into background-style cover fitting.');
+assert.ok(
+  stage.includes("type VehicleAttitudeFitMode = 'contain' | 'cover' | 'containWidth'") &&
+    stage.includes('fitMode?: VehicleAttitudeFitMode'),
+  'VehicleAttitudeStage should let command surfaces opt into background-style cover and full-width contained fitting.',
+);
 assert.ok(stage.includes('showReadouts?: boolean'), 'VehicleAttitudeStage should allow monitor/command callers to toggle degree readouts.');
 assert.ok(stage.includes('showGaugeOverlay?: boolean'), 'VehicleAttitudeStage should allow command callers to keep the Rive rings mounted without legacy readouts.');
 assert.ok(stage.includes('showDegreeReadouts?: boolean'), 'VehicleAttitudeStage should allow command callers to hide bottom degree readouts independently.');
@@ -195,12 +204,25 @@ assert.ok(stage.includes('source={asset.attitudeImageSource}'), 'VehicleAttitude
 assert.ok(
   stage.includes('resizeMode="contain"') &&
     stage.includes('fitStageToContainer') &&
-    stage.includes("fitMode: 'contain' | 'cover' = 'contain'") &&
+    stage.includes("fitMode: VehicleAttitudeFitMode = 'contain'") &&
     stage.includes('onLayout={handleLayout}'),
-  'VehicleAttitudeStage should center the full composite with aspect-fit behavior by default and support cover fitting for command panels.',
+  'VehicleAttitudeStage should center the full composite with aspect-fit behavior by default and support cover/full-width fitting for command panels.',
 );
 assert.ok(stage.includes('pointerEvents="none"'), 'VehicleAttitudeStage image/passive overlays should not block widget controls.');
-assert.ok(stage.includes('const imageAspect = asset.aspectRatio'), 'VehicleAttitudeStage should size from registry aspect ratio.');
+assert.ok(
+  stage.includes("const imageAspect = fitMode === 'containWidth'") &&
+    stage.includes('ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO') &&
+    stage.includes(': asset.aspectRatio'),
+  'VehicleAttitudeStage should size from registry aspect ratio by default and use the command snap ratio for full-width command fitting.',
+);
+assert.ok(
+  stage.includes('COMMAND_VEHICLE_IMAGE_GAUGE_SCALE = 2') &&
+    stage.includes('COMMAND_VEHICLE_IMAGE_GAUGE_Y_OFFSET') &&
+    stage.includes('commandVehicleImageMode') &&
+    stage.includes('? COMMAND_VEHICLE_IMAGE_GAUGE_SCALE : 1') &&
+    stage.includes('? COMMAND_VEHICLE_IMAGE_GAUGE_Y_OFFSET : 0'),
+  'VehicleAttitudeStage should enlarge and lift only the portrait command vehicle-image gauges.',
+);
 assert.ok(
   stage.includes('function DegreeReadout') &&
     stage.includes('<AttitudeReadout') &&

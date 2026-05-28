@@ -34,10 +34,12 @@ API Weather Sources.txt
 
 # Native/build outputs
 .gradle-local*/
+.gradle-*/
 .gradle-user-home/
+.android-home/
 .android-local/
 ecs_attitude_rive_transparent_ring_bundle.zip
-.npm-cache/
+.npm-cache*/
 artifacts/
 android/.gradle/
 android/.kotlin/
@@ -56,6 +58,7 @@ tmp/
 .smoke/
 .expo-export-check/
 .expo-runtime/
+.eas-spawn-tmp/
 .cleanup-quarantine/
 .cleanup-safety/
 .codex-*

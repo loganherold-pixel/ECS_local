@@ -58,16 +58,13 @@ includes(sources.elevation, 'const hasLiveElevation = hasGpsAltitude && hasFresh
 includes(sources.elevation, "badgeLabel: 'STALE ELEVATION'", 'Elevation resolver should expose stale state copy.');
 includes(sources.elevation, "badgeLabel: 'ELEVATION PENDING'", 'Elevation resolver should expose unavailable state copy.');
 
-// Power: live telemetry should be normalized, stale-gated, manually refreshable, and reduced-motion aware.
+// Power: live telemetry should be normalized, stale-gated, manually refreshable, and owned visually by the Rive module.
 includes(sources.powerWidget, 'export interface PowerTelemetrySummary', 'Power widget should normalize telemetry summary.');
 includes(sources.powerWidget, 'export function normalizePowerTelemetrySummary', 'Power widget should share normalized power data.');
-includes(sources.powerWidget, 'useReducedMotion()', 'Power flow animation should respect reduced motion.');
-includes(sources.powerWidget, 'const activeInput = inputWatts > 0 && !isStale && allowAnimation;', 'Power input animation should stop when stale/inactive or not truth-approved.');
-includes(sources.powerWidget, 'const activeOutput = outputWatts > 0 && !isStale && allowAnimation;', 'Power output animation should stop when stale/inactive or not truth-approved.');
-includes(sources.powerWidget, 'function usePowerFlowPulse(active: boolean, duration: number)', 'Power flow animation should use ref-driven Animated values, not state loops.');
-includes(sources.powerWidget, 'const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);', 'Power input flow should animate independently.');
-includes(sources.powerWidget, 'const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);', 'Power output flow should animate independently.');
-includes(sources.powerWidget, 'outputRange: [-28, 28]', 'Power flow pulses should travel toward the battery for input and away for output.');
+notIncludes(sources.powerWidget, 'function PowerFlowGraphic', 'Power monitor should not render the old center tick/flow graphic.');
+notIncludes(sources.powerWidget, 'function usePowerFlowPulse', 'Power monitor should not keep the old inline flow animation loop.');
+notIncludes(sources.powerWidget, 'useReducedMotion()', 'Power monitor flow animation should be handled by the blue Rive module, not an extra overlay.');
+notIncludes(sources.powerWidget, "footer={<WidgetMetaLine", 'Power monitor should not show redundant live/source footer pills.');
 includes(
   sources.powerWidget,
   "import PowerModuleRiveWidget from './PowerModuleRiveWidget'",

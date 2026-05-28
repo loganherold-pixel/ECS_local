@@ -850,12 +850,20 @@ class RealtimeSyncManager {
       });
     }
 
-    this._warnThrottled(reason, `Realtime channel ${reason.replace(/_/g, ' ')}`, {
-      channelKey,
-      reason,
-      status,
-      error: errorDetails,
-    });
+    if (reason === 'subscription_timeout' && wasInitialSubscribe) {
+      debugRealtime('realtime_subscribe_timeout_warning_deferred', {
+        channelKey,
+        reason,
+        status,
+      });
+    } else {
+      this._warnThrottled(reason, `Realtime channel ${reason.replace(/_/g, ' ')}`, {
+        channelKey,
+        reason,
+        status,
+        error: errorDetails,
+      });
+    }
     this._scheduleReconnect(reason);
   }
 

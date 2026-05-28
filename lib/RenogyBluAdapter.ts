@@ -34,7 +34,8 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
-import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { getBluetoothTelemetrySourceLabel, isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { withBluPowerTelemetryEnvelope } from './bluTelemetryEnvelope';
 import {
   isRenogyDeviceName,
   extractRenogyModelFromName,
@@ -231,6 +232,7 @@ class RenogyBluAdapter {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualDisconnectRequested = false;
 
   // Simulated state for dev/demo
   private simulatedStates = new Map<string, SimulatedRenogyState>();
@@ -480,6 +482,7 @@ class RenogyBluAdapter {
   async connect(deviceId?: string): Promise<RenogyConnectResult> {
     console.log(`[RenogyBluAdapter] Connecting to device: ${deviceId || 'first available'}...`);
 
+    this.manualDisconnectRequested = false;
     this.connectionState = 'connecting';
     this.lastError = null;
     this.lastErrorCode = null;
@@ -579,6 +582,7 @@ class RenogyBluAdapter {
   async disconnect(): Promise<void> {
     console.log('[RenogyBluAdapter] Disconnecting...');
 
+    this.manualDisconnectRequested = true;
     this.stopPolling();
     this.cancelReconnect();
     this.removeAppStateListener();
@@ -864,11 +868,16 @@ class RenogyBluAdapter {
       const remainingWh = (capacityWh * socPct) / 100;
       estimatedRuntimeMin = Math.round((remainingWh / outputW) * 60);
     }
+    const now = Date.now();
 
-    return {
-      timestamp: Date.now(),
+    return withBluPowerTelemetryEnvelope({
+      timestamp: now,
       provider: 'renogy',
       device_id: deviceId,
+      source: 'mock_dev',
+      updatedAt: now,
+      telemetrySourceLabel: getBluetoothTelemetrySourceLabel('mock_dev'),
+      isLive: false,
 
       // Core telemetry
       battery_percent: socPct,
@@ -888,7 +897,11 @@ class RenogyBluAdapter {
       battery_volts: batteryVolts,
       battery_amps: batteryAmps,
       capacity_wh: capacityWh > 0 ? Math.round(capacityWh) : undefined,
-    };
+      raw: {
+        simulated: true,
+        mock: true,
+      },
+    });
   }
 
   private getPrimaryDeviceId(): string | null {
@@ -922,6 +935,7 @@ class RenogyBluAdapter {
   }
 
   private async attemptQuietReconnect(): Promise<void> {
+    if (this.manualDisconnectRequested) return;
     if (this.isReconnecting) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.isReconnecting = false;
@@ -942,6 +956,11 @@ class RenogyBluAdapter {
 
     try {
       await this.simulateDelay(2000);
+      if (this.manualDisconnectRequested) {
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
+        return;
+      }
 
       this.isReconnecting = false;
       this.reconnectAttempts = 0;
@@ -972,6 +991,10 @@ class RenogyBluAdapter {
   }
 
   private scheduleReconnect(): void {
+    if (this.manualDisconnectRequested) {
+      this.cancelReconnect();
+      return;
+    }
     this.isReconnecting = false;
     this.notify();
 
@@ -983,6 +1006,10 @@ class RenogyBluAdapter {
     const delay = RECONNECT_DELAY_MS * this.reconnectAttempts;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manualDisconnectRequested) {
+        this.cancelReconnect();
+        return;
+      }
       this.attemptQuietReconnect();
     }, delay);
   }

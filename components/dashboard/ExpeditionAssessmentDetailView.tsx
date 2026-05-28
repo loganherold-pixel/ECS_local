@@ -12,6 +12,7 @@ import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import type {
   AssessmentCategory,
   ExpeditionAssessment,
+  ExpeditionAssessmentDataUsed,
   ExpeditionAssessmentRelatedAction,
 } from '../../lib/expedition/operationalAssessmentTypes';
 import type { ExpeditionAssessmentNarrative } from '../../lib/ai/expeditionAssessmentNarrative';
@@ -95,7 +96,6 @@ export default function ExpeditionAssessmentDetailView({
   stale,
   onRefresh,
   onOpenIncidentRecovery,
-  onRelatedAction,
 }: ExpeditionAssessmentDetailViewProps) {
   const resolvedCategory = category ? EXPEDITION_ASSESSMENT_CATEGORY_LABELS[category] : 'Assessment';
   const tone = assessment ? STATUS_TONE[assessment.status] : STATUS_TONE.unknown;
@@ -104,7 +104,6 @@ export default function ExpeditionAssessmentDetailView({
     ...(narrative?.whyEcsThinksThis ?? assessment?.why ?? []),
     ...dataLimitations.filter((item) => /missing|stale/i.test(item)),
   ];
-  const relatedActions = buildRelatedActions(assessment, onRefresh, onOpenIncidentRecovery);
   const lowConfidence = assessment?.confidence === 'low';
   const overviewSummary = category === 'overview' && assessment
     ? buildOverviewSystemSummary(assessment)
@@ -156,6 +155,19 @@ export default function ExpeditionAssessmentDetailView({
               Confidence is low. Treat this as a cautious assessment until missing or stale data is refreshed.
             </Text>
           </View>
+        ) : null}
+
+        {onRefresh ? (
+          <TouchableOpacity
+            style={styles.refreshButton}
+            activeOpacity={0.78}
+            onPress={onRefresh}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh Expedition assessment"
+          >
+            <Ionicons name="refresh-outline" size={14} color={TACTICAL.text} />
+            <Text style={styles.refreshButtonText}>Refresh assessment</Text>
+          </TouchableOpacity>
         ) : null}
       </View>
 
@@ -425,52 +437,7 @@ export default function ExpeditionAssessmentDetailView({
       <DetailSection title="What To Watch" items={narrative?.whatToWatch ?? assessment?.whatToWatch} />
       <DetailSection title="Recommended Action" text={narrative?.recommendedAction ?? assessment?.recommendedAction} />
       <DetailSection title="To Improve Status" items={narrative?.toImproveStatus ?? assessment?.toImproveStatus} />
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Data Used</Text>
-        {(assessment?.dataUsed ?? []).map((item) => (
-          <View key={item.id} style={styles.dataRow}>
-            <View style={styles.dataTextWrap}>
-              <Text style={styles.dataLabel}>{item.label}</Text>
-              <Text style={styles.dataValue} numberOfLines={2}>
-                {item.value == null ? 'unknown' : String(item.value)}
-              </Text>
-            </View>
-            <View style={styles.dataMetaWrap}>
-              <Text style={styles.dataSource}>{sourceLabel(item.source)}</Text>
-              {item.isMissing ? <Text style={styles.dataWarning}>MISSING</Text> : null}
-              {item.isStale ? <Text style={styles.dataWarning}>STALE</Text> : null}
-            </View>
-          </View>
-        ))}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Related Actions</Text>
-        <View style={styles.actionGrid}>
-          {relatedActions.map((action) => (
-            <TouchableOpacity
-              key={action.id}
-              style={[styles.relatedAction, action.disabled && styles.relatedActionDisabled]}
-              activeOpacity={0.78}
-              disabled={action.disabled}
-              onPress={() => {
-                if (action.id === 'refresh-assessment') onRefresh?.();
-                else if (action.id === 'open-incident-recovery') onOpenIncidentRecovery?.();
-                else onRelatedAction?.(action);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={action.label}
-              accessibilityState={{ disabled: action.disabled === true }}
-            >
-              <Text style={[styles.relatedActionText, action.disabled && styles.relatedActionTextDisabled]}>
-                {action.label}
-              </Text>
-              {action.reason ? <Text style={styles.relatedActionReason}>{action.reason}</Text> : null}
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
+      <DataUsedSection dataUsed={assessment?.dataUsed} />
     </ScrollView>
   );
 }
@@ -689,6 +656,7 @@ function buildLogisticsSystemSummary(assessment: ExpeditionAssessment): {
     signals: [
       { label: 'Fuel status by vehicle', value: valueFor('fuel-status-by-vehicle') },
       { label: 'Lowest fuel/range vehicle', value: valueFor('lowest-fuel-range-vehicle') },
+      { label: 'Fuel remaining', value: `${valueFor('fuel-remaining')} gal / ${valueFor('fuel-level-percent')}%` },
       { label: 'Fuel reserve to next checkpoint/camp/resupply', value: `${valueFor('fuel-reserve-next-checkpoint')} mi / ${valueFor('fuel-reserve-camp')} mi / ${valueFor('fuel-reserve-resupply')} mi` },
       { label: 'Water remaining', value: `${valueFor('water-remaining')} L` },
       { label: 'Water per person', value: `${valueFor('water-per-person')} L/person` },
@@ -762,37 +730,68 @@ function buildVehiclesSystemSummary(assessment: ExpeditionAssessment): {
   };
 }
 
-function buildRelatedActions(
-  assessment?: ExpeditionAssessment,
-  onRefresh?: () => void,
-  onOpenIncidentRecovery?: () => void,
-): ExpeditionAssessmentDetailAction[] {
-  const actions: ExpeditionAssessmentDetailAction[] = [
-    ...(assessment?.relatedActions ?? []),
-    {
-      id: 'refresh-assessment',
-      label: 'Refresh assessment',
-      disabled: !onRefresh,
-      reason: onRefresh ? undefined : 'Refresh unavailable',
-    },
-  ];
+function shouldShowEscalation(assessment?: ExpeditionAssessment): boolean {
+  return assessment?.status === 'critical' || assessment?.escalationRecommended === true;
+}
 
-  if (shouldShowEscalation(assessment)) {
-    actions.unshift({
-      id: 'open-incident-recovery',
-      label: 'Open Incident & Recovery',
-      disabled: !onOpenIncidentRecovery,
-      reason: onOpenIncidentRecovery ? undefined : 'Use the Incident & Recovery container',
-    });
-  }
+function DataUsedSection({ dataUsed }: { dataUsed?: ExpeditionAssessmentDataUsed[] }) {
+  const rows = dataUsed?.filter((item) => item.label) ?? [];
+  if (rows.length === 0) return null;
 
-  return actions.filter((action, index, list) =>
-    list.findIndex((candidate) => candidate.id === action.id) === index,
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Data Used</Text>
+      {rows.map((item) => (
+        <View
+          key={item.id}
+          style={[
+            styles.dataRow,
+            item.isMissing && styles.dataRowWarning,
+            item.isStale && styles.dataRowStale,
+          ]}
+        >
+          <View style={styles.dataTextWrap}>
+            <Text style={styles.dataLabel}>{item.label}</Text>
+            <Text style={styles.dataValue} numberOfLines={2}>
+              {formatEvidenceValue(item.value)}
+            </Text>
+          </View>
+          <View style={styles.dataMetaWrap}>
+            <Text style={styles.dataSource}>{formatSourceLabel(item.source)}</Text>
+            {item.confidence ? <Text style={styles.dataMeta}>{item.confidence} confidence</Text> : null}
+            {item.updatedAt ? <Text style={styles.dataMeta}>{formatTime(item.updatedAt)}</Text> : null}
+            {item.isMissing ? <Text style={styles.dataWarning}>MISSING</Text> : null}
+            {item.isStale ? <Text style={styles.dataWarning}>STALE</Text> : null}
+          </View>
+        </View>
+      ))}
+    </View>
   );
 }
 
-function shouldShowEscalation(assessment?: ExpeditionAssessment): boolean {
-  return assessment?.status === 'critical' || assessment?.escalationRecommended === true;
+function formatEvidenceValue(value: ExpeditionAssessmentDataUsed['value']): string {
+  if (value === null || value === undefined || value === '') return 'Not available';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+}
+
+function formatSourceLabel(source: ExpeditionAssessmentDataUsed['source']): string {
+  switch (source) {
+    case 'liveGps':
+      return 'LIVE GPS';
+    case 'userManual':
+      return 'MANUAL';
+    case 'vehicleObd':
+      return 'VEHICLE OBD';
+    case 'satellite':
+      return 'SATELLITE';
+    case 'cached':
+      return 'CACHED';
+    case 'mock':
+      return 'MOCK';
+    default:
+      return 'UNKNOWN';
+  }
 }
 
 function MetaChip({ label, emphasized }: { label: string; emphasized?: boolean }) {
@@ -827,25 +826,6 @@ function DetailSection({
       ))}
     </View>
   );
-}
-
-function sourceLabel(source: string): string {
-  switch (source) {
-    case 'liveGps':
-      return 'GPS';
-    case 'userManual':
-      return 'MANUAL';
-    case 'vehicleObd':
-      return 'OBD';
-    case 'satellite':
-      return 'SATELLITE';
-    case 'cached':
-      return 'CACHED';
-    case 'mock':
-      return 'MOCK';
-    default:
-      return 'UNKNOWN';
-  }
 }
 
 function formatTime(value: string): string {
@@ -991,6 +971,24 @@ const styles = StyleSheet.create({
   escalationButtonText: {
     color: TACTICAL.text,
     fontSize: 9,
+    fontWeight: '900',
+  },
+  refreshButton: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(212,160,23,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  refreshButtonText: {
+    color: TACTICAL.text,
+    fontSize: 10,
     fontWeight: '900',
   },
   section: {
@@ -1271,6 +1269,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 8,
   },
+  dataRowWarning: {
+    borderColor: 'rgba(192,57,43,0.34)',
+    backgroundColor: 'rgba(192,57,43,0.07)',
+  },
+  dataRowStale: {
+    borderColor: 'rgba(230,126,34,0.30)',
+    backgroundColor: 'rgba(230,126,34,0.07)',
+  },
   dataTextWrap: {
     flex: 1,
     minWidth: 0,
@@ -1294,6 +1300,12 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 8,
     fontWeight: '900',
+  },
+  dataMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
   dataWarning: {
     color: TACTICAL.danger,

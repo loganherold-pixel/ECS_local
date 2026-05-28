@@ -23,8 +23,9 @@ function assert(condition, message) {
 }
 
 assert(
-  navigate.includes("EXPLORE ROUTES'") || navigate.includes('EXPLORE ROUTES'),
-  'Navigate Tools must expose an Explore Routes control.',
+  !navigate.includes('accessibilityLabel="Explore Routes map overlay"') &&
+    !navigate.includes("{exploreRoutesEnabled ? 'EXPLORE ROUTES ON' : 'EXPLORE ROUTES'}"),
+  'Navigate Tools should not expose a manual Explore Routes button.',
 );
 assert(
   navigate.includes('const [exploreRoutesEnabled, setExploreRoutesEnabled] = useState(false)'),
@@ -32,7 +33,7 @@ assert(
 );
 assert(
   navigate.includes('toggleExploreRoutesOverlay'),
-  'Navigate must wire the Explore Routes control to a toggle handler.',
+  'Navigate must keep the Explore Routes toggle handler for map-level clearing and handoff cleanup.',
 );
 assert(
   navigate.includes('segments={mapSegmentFeatures}'),
@@ -40,11 +41,12 @@ assert(
 );
 assert(
   navigate.includes('onSegmentTap={handleExploreRouteSegmentTap}') &&
-    navigate.includes('categoryLabel.toUpperCase()') &&
-    navigate.includes("segment.category === 'hidden_gem'") &&
-    navigate.includes("segment.category === 'popular_trail'") &&
-    navigate.includes("segment.category === 'ecs_route_idea'"),
-  'Navigate must identify tapped Explore route lines by route name and category.',
+    navigate.includes('<ExpeditionAnalysisModal') &&
+    navigate.includes('selectedExploreRouteOpportunity') &&
+    navigate.includes('handleBuildRouteFromExploreOverlay') &&
+    navigate.includes('handleBuildTripFromExploreOverlay') &&
+    navigate.includes('handlePrepareOfflineFromExploreOverlay'),
+  'Navigate must open the shared Expedition Analysis modal when an Explore route line is tapped.',
 );
 assert(
   navigate.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments]'),
@@ -77,14 +79,17 @@ assert(
   'Explore route overlay segments must carry readable category labels.',
 );
 assert(
-  overlay.includes("hidden_gem: '#65D4FF'") &&
-    overlay.includes("popular_trail: '#65D4FF'") &&
-    overlay.includes("trail_pack: '#65D4FF'"),
-  'Mapped active Explorer trails should render with one consistent ECS blue line style.',
+  overlay.includes("hidden_gem: '#F2C24D'") &&
+    overlay.includes("popular_trail: '#66BB6A'") &&
+    overlay.includes("ecs_route_idea: '#65D4FF'"),
+  'Mapped active Explorer trails should use category colors: Hidden Gems yellow, Popular Trails green, and ECS Route Ideas blue.',
 );
 assert(
-  overlay.includes("kind: 'explore_route'") && overlay.includes('categoryLabel: CATEGORY_LABELS'),
-  'Explore route overlay segments must preserve tap-identifiable route kind and category metadata.',
+  overlay.includes("kind: 'explore_route'") &&
+    overlay.includes('categoryLabel: CATEGORY_LABELS') &&
+    overlay.includes('route: candidate.route') &&
+    overlay.includes('compatResult: candidate.compatResult'),
+  'Explore route overlay segments must preserve tap-identifiable route, category, and compatibility metadata.',
 );
 assert(
   overlay.includes('getHiddenGemRecommendations') &&
@@ -93,8 +98,9 @@ assert(
   'Explore route overlay builder must source Explorer route categories.',
 );
 assert(
-  overlay.includes('buildExploreNavigationPayload'),
-  'Explore route overlay builder must reuse the Explorer navigation payload geometry resolver.',
+  overlay.includes('buildExploreNavigationPayload') &&
+    overlay.includes('getExploreRoutePreviewRoutePoints(payload)'),
+  'Explore route overlay builder must reuse the Explorer preview resolver so endpoint-backed routes render too.',
 );
 assert(
   overlay.includes('buildExploreRouteOverlaySegmentsFromRoutes'),
@@ -102,7 +108,7 @@ assert(
 );
 assert(
   overlay.includes('coordinates.length < 2') && overlay.includes('return null'),
-  'Explore route overlay builder must skip routes without safe line geometry.',
+  'Explore route overlay builder must skip routes without enough safe preview coordinates for a line.',
 );
 assert(
   overlay.includes('seen.has(identity)'),
@@ -122,12 +128,19 @@ assert(
   'Explorer must expose a Display on Map action near the result controls.',
 );
 assert(
-  discover.includes('Map Active Trails') && discover.includes('Open Matching Explorer.'),
+  discover.includes('Map Active Trails') &&
+    discover.includes('filtered trail line') &&
+    discover.includes('Suggested Routes') &&
+    discover.includes('Open Matching Explorer.'),
   'Explorer map handoff copy should use the production Map Active Trails labels.',
 );
 assert(
-  discover.includes('exploreSuggestedRouteOptions') && discover.includes('trailPackRoutes'),
-  'Explorer Display on Map should use the current filtered Suggested Routes universe, including Trail Packs.',
+  discover.includes('exploreSuggestedRouteOptions') &&
+    discover.includes('trailPackRoutes') &&
+    discover.includes('favoriteRoutes') &&
+    discover.includes('favoritesSnapshot.favorites') &&
+    discover.includes('compatibilityResults: compatResults'),
+  'Explorer Display on Map should use the current filtered Suggested Routes universe, including Trail Packs and Favorites.',
 );
 assert(
   discover.includes('saveExploreRoutesMapHandoff') &&
@@ -150,8 +163,9 @@ assert(
 assert(
   navigate.includes('clearExploreRoutesMapHandoff') &&
     navigate.includes('setExploreRoutesHandoff(null)') &&
-    navigate.includes('EXPLORE ROUTES OFF'),
-  'Navigate must clear temporary Explorer route handoff data when the Explore Routes layer is hidden.',
+    !navigate.includes("showToast('EXPLORE ROUTES OFF')") &&
+    !navigate.includes('`EXPLORE ROUTES ON:'),
+  'Navigate must clear temporary Explorer route handoff data when the Explore Routes layer is hidden without showing legacy on/off banners.',
 );
 assert(
   navigate.includes('roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition') &&
@@ -186,6 +200,29 @@ assert(
     mapRenderer.includes("map.queryRenderedFeatures(e.point, { layers: ['segment-layer'] })") &&
     mapRenderer.includes('categoryLabel: seg.categoryLabel || null'),
   'MapRenderer must preserve Explore route category metadata and report tapped Explore route lines.',
+);
+assert(
+  mapRenderer.includes('function normalizeLngLatCoordinate') &&
+    mapRenderer.includes('return [lng, lat]') &&
+    mapRenderer.includes('normalizeLngLatLine(seg.coordinates)'),
+  'MapRenderer must normalize Explorer latitude/longitude route coordinates into Mapbox LineString coordinates.',
+);
+assert(
+  mapRenderer.includes("ensureExploreRouteHaloLayer") &&
+    mapRenderer.includes("'explore-route-halo-layer'") &&
+    mapRenderer.includes("['==', ['get', 'kind'], 'explore_route']") &&
+    mapRenderer.includes('applySegmentLineStyle'),
+  'Mapped Explorer trails must render as category-colored route lines with a dedicated halo, not point/diamond markers.',
+);
+assert(
+  !mapRenderer.includes("} catch (e) {}\n        }\n      }\n\n      function ensureCircleLayer"),
+  'MapRenderer WebView script must not close applySegmentLineStyle with an extra brace before ensureCircleLayer.',
+);
+assert(
+  navigate.includes('CLEAR EXPLORE ROUTES') &&
+    navigate.includes('styles.exploreRoutesClearControl') &&
+    navigate.includes('accessibilityLabel="Clear mapped Explorer trails"'),
+  'Navigate must expose a map-level clear control for mapped Explorer trails.',
 );
 
 console.log('Navigate Explore Routes overlay regression checks passed.');

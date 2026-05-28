@@ -9,6 +9,9 @@ import type {
   BluConnectionState,
   BluDevice,
   BluDeviceCapabilities,
+  BluMultiDeviceCapability,
+  BluStreamHealth,
+  BluStreamState,
   BluProviderId,
   BluTelemetry,
 } from './BluTypes';
@@ -16,13 +19,37 @@ import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluSessionStore } from './BluSessionStore';
 import { bluStateStore } from './BluStateStore';
 import { getBluetoothTelemetrySourceLabel, hasDecodedBluetoothTelemetryMetrics } from './bluetoothLiveTelemetry';
+import { withBluPowerTelemetryEnvelope } from './bluTelemetryEnvelope';
+import {
+  bluLog,
+  bluLogThrottled,
+  buildBluConnectionAttemptLogDetails,
+  buildBluDiscoveryLogDetails,
+  buildBluTelemetryLogDetails,
+  buildBluTimeoutLogDetails,
+  getBluVendorPrefix,
+} from './bluDiagnosticsLog';
+import {
+  BluStreamLifecycle,
+  DEFAULT_FIRST_PACKET_TIMEOUT_MS,
+  DEFAULT_STALE_AFTER_MS,
+  clearBluStreamHealthSnapshot,
+  mapBluStreamPhaseToConnectionStatus,
+  mapBluStreamPhaseToTelemetryHealth,
+} from './bluStreamLifecycle';
+import {
+  BLU_SCAN_COOLDOWN_MS,
+  BLU_SCAN_WINDOW_MS,
+} from './bluPerformanceConfig';
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const BACKGROUND_POLL_INTERVAL_MS = 60_000;
-const BLE_SCAN_DURATION_MS = 9_000;
+const BLE_SCAN_DURATION_MS = BLU_SCAN_WINDOW_MS;
 const RECONNECT_THRESHOLD = 2;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 10_000;
+const NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON =
+  'Native BLE provider adapters currently maintain one active peripheral connection per provider instance; OBD2 and other providers can still run independently.';
 
 const BATTERY_SERVICE_UUID = '180f';
 const BATTERY_LEVEL_UUID = '2a19';
@@ -81,6 +108,11 @@ export interface NativeBleAdapterState {
   connectionState: BluConnectionState;
   discoveredDevices: NativeBleDiscoveredDevice[];
   connectedDevices: BluDevice[];
+  activeDeviceIds: string[];
+  telemetryByDeviceId: Record<string, BluTelemetry>;
+  streamsByDeviceId: Record<string, BluStreamState>;
+  multiDeviceCapability: BluMultiDeviceCapability;
+  multiDeviceCapabilityReason: string | null;
   lastError: string | null;
   lastErrorCode: string | null;
   pollCount: number;
@@ -310,11 +342,14 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     private lastPollAt: number | null = null;
     private pollTimer: ReturnType<typeof setTimeout> | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private scanPromise: Promise<NativeBleDiscoveredDevice[]> | null = null;
+    private lastScanFinishedAt = 0;
     private isPaused = false;
     private isScanning = false;
     private consecutiveFailures = 0;
     private isReconnecting = false;
     private reconnectAttempts = 0;
+    private manualDisconnectRequested = false;
     private subscribers = new Set<AdapterSubscriber>();
     private eventSubscribers = new Map<AdapterEventName, Set<AdapterEventListener>>();
     private telemetryByDeviceId = new Map<string, BluTelemetry>();
@@ -323,6 +358,8 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     private disconnectSubscription: BleManagerSubscription = null;
     private appStateSubscription: { remove?: () => void } | null = null;
     private currentPollInterval = DEFAULT_POLL_INTERVAL_MS;
+    private streamLifecycles = new Map<string, BluStreamLifecycle>();
+    private pollingDeviceIds = new Set<string>();
 
     constructor() {
       this.attachAppLifecycle();
@@ -368,7 +405,12 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       return {
         connectionState: this.connectionState,
         discoveredDevices: [...this.discoveredDevices],
-        connectedDevices: [...this.connectedDevices],
+        connectedDevices: this.getProviderConnectedDevices(),
+        activeDeviceIds: this.getActiveDeviceIds(),
+        telemetryByDeviceId: this.getTelemetryByDeviceObject(),
+        streamsByDeviceId: this.getStreamsByDeviceId(),
+        multiDeviceCapability: 'limited',
+        multiDeviceCapabilityReason: NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON,
         lastError: this.lastError,
         lastErrorCode: this.lastErrorCode,
         pollCount: this.pollCount,
@@ -387,6 +429,165 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
     getAllTelemetry(): BluTelemetry[] {
       return Array.from(this.telemetryByDeviceId.values()).map((item) => ({ ...item }));
+    }
+
+    private getActiveDeviceIds(): string[] {
+      return this.getProviderConnectedDevices()
+        .map((device) => device.device_id)
+        .filter(Boolean);
+    }
+
+    private getProviderConnectedDevices(): BluDevice[] {
+      return this.connectedDevices.filter((device) => device.connection_state === 'connected');
+    }
+
+    private getTelemetryByDeviceObject(): Record<string, BluTelemetry> {
+      return Object.fromEntries(
+        Array.from(this.telemetryByDeviceId.entries()).map(([deviceId, telemetry]) => [
+          deviceId,
+          { ...telemetry },
+        ]),
+      );
+    }
+
+    private getStreamStaleAfterMs(): number {
+      return Math.max(DEFAULT_STALE_AFTER_MS, this.currentPollInterval * 2);
+    }
+
+    private buildFallbackStreamHealth(deviceId: string, telemetry: BluTelemetry | null): BluStreamHealth {
+      const lastPacketAt = telemetry?.updatedAt ?? telemetry?.timestamp ?? undefined;
+      const phase =
+        telemetry?.telemetryUnsupported
+          ? 'failed'
+          : telemetry?.isLive
+            ? 'streaming'
+            : this.connectionState === 'connected'
+              ? 'awaitingFirstPacket'
+              : this.connectionState === 'error'
+                ? 'failed'
+                : 'stopped';
+      return {
+        phase,
+        firstPacketAt: lastPacketAt,
+        lastPacketAt,
+        packetCount: lastPacketAt ? 1 : 0,
+        staleAfterMs: this.getStreamStaleAfterMs(),
+        reconnectAttempts: this.reconnectAttempts,
+        lastError:
+          telemetry?.telemetryUnsupported || this.lastError
+            ? {
+                phase: telemetry?.telemetryUnsupported ? 'telemetry_setup' : 'native_ble',
+                code: telemetry?.telemetryUnsupported ? 'TELEMETRY_UNSUPPORTED' : this.lastErrorCode ?? undefined,
+                message:
+                  telemetry?.telemetryUnsupportedReason ??
+                  this.lastError ??
+                  'Telemetry stream is unavailable.',
+              }
+            : undefined,
+      };
+    }
+
+    private getStreamsByDeviceId(): Record<string, BluStreamState> {
+      const now = Date.now();
+      const ids = new Set<string>([
+        ...this.getActiveDeviceIds(),
+        ...this.telemetryByDeviceId.keys(),
+        ...this.streamLifecycles.keys(),
+      ]);
+
+      return Object.fromEntries(
+        Array.from(ids).map((deviceId) => {
+          const telemetry = this.telemetryByDeviceId.get(deviceId) ?? null;
+          const envelope = telemetry?.bluTelemetryEnvelope;
+          const lifecycleHealth = this.streamLifecycles.get(deviceId)?.getHealth();
+          const streamHealth = lifecycleHealth ?? this.buildFallbackStreamHealth(deviceId, telemetry);
+          const health = mapBluStreamPhaseToTelemetryHealth(streamHealth.phase, {
+            lastPacketAt: streamHealth.lastPacketAt,
+            staleAfterMs: streamHealth.staleAfterMs,
+            now,
+            source: envelope?.source ?? (telemetry?.source === 'ble_live' ? 'local-ble' : 'unknown'),
+          });
+          const stream: BluStreamState = {
+            deviceId,
+            provider: config.provider,
+            phase: streamHealth.phase,
+            streamHealth,
+            connectionStatus:
+              lifecycleHealth
+                ? mapBluStreamPhaseToConnectionStatus(streamHealth.phase)
+                : envelope?.connectionStatus ??
+                  (this.connectionState === 'connected'
+                    ? telemetry
+                      ? 'streaming'
+                      : 'connected'
+                    : this.connectionState === 'connecting'
+                      ? 'connecting'
+                      : this.connectionState === 'error'
+                        ? 'failed'
+                        : 'disconnected'),
+            health: lifecycleHealth ? health : envelope?.health ?? health,
+            source: envelope?.source ?? (telemetry?.source === 'ble_live' ? 'local-ble' : 'unknown'),
+            lastPacketAt: streamHealth.lastPacketAt ?? telemetry?.updatedAt ?? telemetry?.timestamp ?? null,
+            staleAfterMs: streamHealth.staleAfterMs,
+            updatedAt: telemetry?.updatedAt ?? telemetry?.timestamp ?? now,
+            error: streamHealth.lastError
+              ? {
+                  phase: streamHealth.lastError.phase,
+                  code: streamHealth.lastError.code,
+                  message: streamHealth.lastError.message,
+                }
+              : envelope?.error,
+          };
+          return [deviceId, stream];
+        }),
+      );
+    }
+
+    private ensureStreamLifecycle(deviceId: string): BluStreamLifecycle {
+      const existing = this.streamLifecycles.get(deviceId);
+      if (existing) return existing;
+
+      const lifecycle = new BluStreamLifecycle({
+        deviceId,
+        vendor: config.provider,
+        deviceType: config.displayName,
+        source: 'local-ble',
+        streamMode: 'provider_poll',
+        staleAfterMs: this.getStreamStaleAfterMs(),
+        firstPacketTimeoutMs: DEFAULT_FIRST_PACKET_TIMEOUT_MS,
+        maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
+        onPhaseChange: () => this.notify(),
+        onRecover: async () => {
+          if (this.connectionState === 'connected' && this.connectedDeviceRef) {
+            await this.pollTelemetry(deviceId);
+          }
+        },
+        onFailed: (health) => {
+          this.setError(
+            health.lastError?.message ?? 'Telemetry stream failed.',
+            health.lastError?.code ?? 'STREAM_FAILED',
+          );
+          this.notify();
+        },
+      });
+      this.streamLifecycles.set(deviceId, lifecycle);
+      return lifecycle;
+    }
+
+    private stopStreamLifecycle(deviceId: string, reason: string): void {
+      const lifecycle = this.streamLifecycles.get(deviceId);
+      if (lifecycle) {
+        lifecycle.stop(reason);
+        this.streamLifecycles.delete(deviceId);
+      }
+      clearBluStreamHealthSnapshot(deviceId, config.provider);
+    }
+
+    private stopAllStreamLifecycles(reason: string): void {
+      for (const deviceId of Array.from(this.streamLifecycles.keys())) {
+        this.stopStreamLifecycle(deviceId, reason);
+      }
+      this.pollingDeviceIds.clear();
     }
 
     getECSBridgeState() {
@@ -408,19 +609,59 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         lastPollAt: this.lastPollAt,
         primaryDeviceId,
         primaryDevice,
-        connectedDevices: [...this.connectedDevices],
+        connectedDevices: this.getProviderConnectedDevices(),
         discoveredDevices: [...this.discoveredDevices],
         telemetry: this.getLastTelemetry(),
+        telemetryByDeviceId: this.getTelemetryByDeviceObject(),
+        streamsByDeviceId: this.getStreamsByDeviceId(),
+        activeDeviceIds: this.getActiveDeviceIds(),
+        multiDeviceCapability: 'limited' as BluMultiDeviceCapability,
+        multiDeviceCapabilityReason: NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON,
       };
     }
 
     async scanForDevices(): Promise<NativeBleDiscoveredDevice[]> {
+      if (this.scanPromise) {
+        return this.scanPromise;
+      }
+
+      const now = Date.now();
+      if (this.lastScanFinishedAt > 0 && now - this.lastScanFinishedAt < BLU_SCAN_COOLDOWN_MS) {
+        bluLogThrottled('[BLU_SCAN]', `${config.provider}:scan-cooldown`, 'native_ble_vendor_scan_suppressed_cooldown', {
+          vendor: config.provider,
+          providerName: config.displayName,
+          cooldownMs: BLU_SCAN_COOLDOWN_MS,
+          elapsedMs: now - this.lastScanFinishedAt,
+        }, BLU_SCAN_COOLDOWN_MS);
+        return [...this.discoveredDevices];
+      }
+
+      this.scanPromise = this.runScanForDevices().finally(() => {
+        this.scanPromise = null;
+        this.lastScanFinishedAt = Date.now();
+      });
+      return this.scanPromise;
+    }
+
+    private async runScanForDevices(): Promise<NativeBleDiscoveredDevice[]> {
       if (Platform.OS === 'web') {
+        bluLog(getBluVendorPrefix(config.provider), 'native_ble_scan_blocked', {
+          vendor: config.provider,
+          phase: 'scan_readiness',
+          errorCode: 'PLATFORM_UNSUPPORTED',
+          message: 'Bluetooth is unavailable on web.',
+        });
         return this.failScan('Bluetooth is unavailable on web.', 'PLATFORM_UNSUPPORTED');
       }
 
       const permissions = await ensureBlePermissions();
       if (!permissions.ok) {
+        bluLog(getBluVendorPrefix(config.provider), 'native_ble_scan_blocked', {
+          vendor: config.provider,
+          phase: 'scan_permission',
+          errorCode: 'PERMISSION_DENIED',
+          message: 'Permission denied.',
+        });
         return this.failScan('Permission denied.', 'PERMISSION_DENIED');
       }
 
@@ -436,6 +677,12 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.lastError = null;
       this.lastErrorCode = null;
       this.notify();
+      bluLog('[BLU_SCAN]', 'native_ble_vendor_scan_start', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        durationMs: BLE_SCAN_DURATION_MS,
+        connectionMode: 'ble',
+      });
 
       const seen = new Map<string, NativeBleDiscoveredDevice>();
       manager.stopDeviceScan?.();
@@ -447,6 +694,12 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
           if (error) {
             this.isScanning = false;
             this.setError(errorFromCode(detectErrorCode(error)), detectErrorCode(error));
+            bluLog('[BLU_SCAN]', 'native_ble_vendor_scan_error', {
+              vendor: config.provider,
+              phase: 'device_callback',
+              errorCode: detectErrorCode(error),
+              message: errorFromCode(detectErrorCode(error)),
+            });
             manager.stopDeviceScan?.();
             this.notify();
             return;
@@ -472,6 +725,43 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
           if (discovered.id) {
             seen.set(discovered.id, discovered);
+            bluLogThrottled(
+              '[BLU_SCAN]',
+              `${config.provider}:scan:${discovered.id}`,
+              'vendor_device_discovered',
+              buildBluDiscoveryLogDetails({
+                id: discovered.id,
+                name: discovered.name,
+                localName: name,
+                manufacturerData: discovered.manufacturerData,
+                serviceUUIDs: discovered.serviceUUIDs,
+                rssi: discovered.rssi,
+                classifiedVendor: config.provider,
+                classifiedType: discovered.model ?? 'power_device',
+                confidence: 0.65,
+              }),
+              10_000,
+            );
+            bluLogThrottled(
+              getBluVendorPrefix(config.provider),
+              `${config.provider}:classify:${discovered.id}`,
+              'vendor_device_classified',
+              {
+                ...buildBluDiscoveryLogDetails({
+                  id: discovered.id,
+                  name: discovered.name,
+                  localName: name,
+                  manufacturerData: discovered.manufacturerData,
+                  serviceUUIDs: discovered.serviceUUIDs,
+                  rssi: discovered.rssi,
+                  classifiedVendor: config.provider,
+                  classifiedType: discovered.model ?? 'power_device',
+                  confidence: 0.65,
+                }),
+                driverMode: config.decodeTelemetry ? 'local_ble_driver' : 'local_ble_incomplete',
+              },
+              10_000,
+            );
             this.discoveredDevices = Array.from(seen.values()).sort((a, b) => b.rssi - a.rssi);
             this.notify();
           }
@@ -490,11 +780,18 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.emitEvent('status', {
         meta: { phase: 'scan_complete', discoveredCount: this.discoveredDevices.length },
       });
+      bluLog('[BLU_SCAN]', 'native_ble_vendor_scan_complete', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        discoveredCount: this.discoveredDevices.length,
+        durationMs: BLE_SCAN_DURATION_MS,
+      });
       return [...this.discoveredDevices];
     }
 
     async connect(deviceId?: string): Promise<NativeBleConnectResult> {
       this.stopReconnectTimer();
+      this.manualDisconnectRequested = false;
       this.lastError = null;
       this.lastErrorCode = null;
       this.connectionState = 'connecting';
@@ -509,6 +806,16 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       }
       this.notify();
       this.emitEvent('connect', { meta: { deviceId: deviceId ?? null } });
+      bluLog('[BLU_CONNECT]', 'native_ble_vendor_connect_start', buildBluConnectionAttemptLogDetails({
+        deviceId: deviceId ?? null,
+        vendor: config.provider,
+        deviceType: config.displayName,
+        connectionMode: 'ble',
+        startedAt: Date.now(),
+        timeoutMs: 15_000,
+        attempt: 1,
+        driverMode: config.decodeTelemetry ? 'local_ble_driver' : 'local_ble_incomplete',
+      }));
 
       if (Platform.OS === 'web') {
         return this.handleConnectError('Bluetooth is unavailable on web.', 'PLATFORM_UNSUPPORTED');
@@ -538,12 +845,41 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
       try {
         const manager = getBleManager();
+        const previousDeviceId = this.connectedDeviceRef?.id
+          ? String(this.connectedDeviceRef.id)
+          : null;
+        if (previousDeviceId && previousDeviceId !== target.id) {
+          bluLog('[BLU_CONNECT]', 'native_ble_vendor_single_connection_replace', {
+            deviceId: target.id,
+            previousDeviceId,
+            vendor: config.provider,
+            providerName: config.displayName,
+            multiDeviceCapability: 'limited',
+            reason: NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON,
+          });
+          await this.disconnectNativeDevice();
+          this.stopStreamLifecycle(previousDeviceId, 'native_ble_provider_replaced_device');
+          this.telemetryByDeviceId.delete(previousDeviceId);
+          bluStateStore.clearDeviceTelemetry(
+            config.provider,
+            previousDeviceId,
+            `${config.displayName} switched to another BLE device.`,
+          );
+          await bluDeviceRegistry.updateConnectionState(config.provider, previousDeviceId, 'disconnected');
+        }
         const device = await manager.connectToDevice(target.id, {
           requestMTU: 256,
           timeout: 15_000,
         });
 
         await device.discoverAllServicesAndCharacteristics();
+        bluLog('[BLU_HANDSHAKE]', 'native_ble_vendor_services_discovered', {
+          deviceId: target.id,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'service_discovery',
+          connectionMode: 'ble',
+        });
         console.log('[BT_LIVE] device_connected', {
           provider: config.provider,
           deviceId: target.id,
@@ -582,19 +918,47 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         this.reconnectAttempts = 0;
         bluStateStore.setReconnecting(false);
         bluSessionStore.recordConnection(config.provider, target.id);
+        this.ensureStreamLifecycle(target.id).start();
         this.notify();
 
         await this.pollTelemetry(target.id);
-        this.emitEvent('connected', { device: bluDevice, devices: [...this.connectedDevices] });
+        bluLog('[BLU_HANDSHAKE]', 'native_ble_vendor_connect_succeeded', {
+          deviceId: target.id,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'first_poll_attempted',
+          connectionMode: 'ble',
+        });
+        this.emitEvent('connected', { device: bluDevice, devices: this.getProviderConnectedDevices() });
         return {
           success: true,
           device: bluDevice,
-          devices: [...this.connectedDevices],
+          devices: this.getProviderConnectedDevices(),
           error: null,
           errorCode: null,
         };
       } catch (error) {
         const errorCode = detectErrorCode(error);
+        const errorMessage = String((error as any)?.message ?? errorFromCode(errorCode));
+        const timeoutLike = /timeout|timed out|unavailable/i.test(errorMessage) || errorCode === 'DEVICE_UNAVAILABLE';
+        bluLog(timeoutLike ? '[BLU_TIMEOUT]' : getBluVendorPrefix(config.provider), 'native_ble_vendor_connect_failed', timeoutLike
+          ? buildBluTimeoutLogDetails({
+              deviceId: deviceId ?? null,
+              vendor: config.provider,
+              phase: 'native_ble_connect',
+              timeoutMs: 15_000,
+              lastSuccessfulPhase: 'connect_requested',
+              lastPacketAt: this.lastPollAt,
+              errorCode,
+              message: errorMessage,
+            })
+          : {
+              deviceId: deviceId ?? null,
+              vendor: config.provider,
+              phase: 'native_ble_connect',
+              errorCode,
+              message: errorMessage,
+            });
         return this.handleConnectError(errorFromCode(errorCode), errorCode);
       }
     }
@@ -604,10 +968,27 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       if (!first) {
         return [this.handleConnectError('Start a device scan before connecting.', 'DEVICE_UNAVAILABLE')];
       }
-      return [await this.connect(first.id)];
+      if (this.discoveredDevices.length > 1) {
+        bluLog('[BLU_CONNECT]', 'native_ble_vendor_connect_all_limited', {
+          vendor: config.provider,
+          providerName: config.displayName,
+          requestedDeviceCount: this.discoveredDevices.length,
+          connectedDeviceCount: 1,
+          multiDeviceCapability: 'limited',
+          reason: NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON,
+        });
+      }
+        return [await this.connect(first.id)];
     }
 
     async disconnect(): Promise<void> {
+      this.manualDisconnectRequested = true;
+      bluLog('[BLU_DISCONNECT]', 'native_ble_vendor_disconnect_start', {
+        deviceId: this.connectedDeviceRef?.id ?? this.getPrimaryDeviceId(),
+        vendor: config.provider,
+        providerName: config.displayName,
+        connectionMode: 'ble',
+      });
       this.stopPolling();
       this.stopReconnectTimer();
       await this.disconnectNativeDevice();
@@ -615,6 +996,8 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.connectionState = 'disconnected';
       this.connectedDevices = [];
       this.discoveredDevices = [];
+      this.telemetryByDeviceId.clear();
+      this.lastTelemetry = null;
       this.lastError = null;
       this.lastErrorCode = null;
       this.pollCount = 0;
@@ -627,14 +1010,20 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       bluSessionStore.recordDisconnection();
       this.notify();
       this.emitEvent('disconnected', { meta: { requested: true } });
+      bluLog('[BLU_DISCONNECT]', 'native_ble_vendor_disconnect_succeeded', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        connectionMode: 'ble',
+      });
     }
 
     async refreshDevices(): Promise<NativeBleConnectResult> {
       await this.scanForDevices();
+      const connected = this.getProviderConnectedDevices();
       return {
         success: true,
-        device: this.connectedDevices[0] ?? null,
-        devices: [...this.connectedDevices],
+        device: connected[0] ?? null,
+        devices: connected,
         error: null,
         errorCode: null,
       };
@@ -670,7 +1059,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     startPolling(intervalMs: number = DEFAULT_POLL_INTERVAL_MS): void {
-      this.stopPolling();
+      this.stopPolling(false);
       this.currentPollInterval = intervalMs;
       this.isPaused = false;
 
@@ -688,14 +1077,28 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
       void tick();
       bluSessionStore.recordPollingStarted();
+      bluLog('[BLU_STREAM]', 'native_ble_vendor_polling_start', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        streamMode: 'provider_poll',
+        intervalMs,
+      });
     }
 
-    stopPolling(): void {
+    stopPolling(stopStreams: boolean = true): void {
       if (this.pollTimer) {
         clearTimeout(this.pollTimer);
         this.pollTimer = null;
       }
+      if (stopStreams) {
+        this.stopAllStreamLifecycles('polling_stopped');
+      }
       bluSessionStore.recordPollingStopped();
+      bluLog('[BLU_DISCONNECT]', 'native_ble_vendor_polling_stop', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        streamMode: 'provider_poll',
+      });
     }
 
     async renameDevice(deviceId: string, newName: string): Promise<void> {
@@ -772,6 +1175,24 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     private handleConnectError(message: string, errorCode: string): NativeBleConnectResult {
       this.connectionState = 'error';
       this.setError(message, errorCode);
+      bluLog(/timeout|timed out|unavailable/i.test(message) ? '[BLU_TIMEOUT]' : getBluVendorPrefix(config.provider), 'native_ble_vendor_connect_error', /timeout|timed out|unavailable/i.test(message)
+        ? buildBluTimeoutLogDetails({
+            deviceId: null,
+            vendor: config.provider,
+            phase: 'native_ble_connect',
+            timeoutMs: 15_000,
+            lastSuccessfulPhase: 'connect_requested',
+            lastPacketAt: this.lastPollAt,
+            errorCode,
+            message,
+          })
+        : {
+            deviceId: null,
+            vendor: config.provider,
+            phase: 'native_ble_connect',
+            errorCode,
+            message,
+          });
       this.notify();
       this.emitEvent('error', { error: message, errorCode });
       return {
@@ -796,7 +1217,11 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
 
     private async pollConnectedDevices(): Promise<void> {
       const targetIds =
-        this.connectedDevices.map((device) => device.device_id).filter(Boolean).slice(0, 1);
+        this.connectedDevices
+          .filter((device) => device.connection_state === 'connected')
+          .map((device) => device.device_id)
+          .filter(Boolean)
+          .slice(0, 1);
       if (targetIds.length === 0) {
         const primary = this.getPrimaryDeviceId();
         if (primary) targetIds.push(primary);
@@ -811,7 +1236,20 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       if (!targetId || !this.connectedDeviceRef) {
         return { success: false, telemetry: null, error: 'No device available to poll.' };
       }
+      if (this.pollingDeviceIds.has(targetId)) {
+        return {
+          success: false,
+          telemetry: this.telemetryByDeviceId.get(targetId) ?? null,
+          error: 'Poll already in progress.',
+        };
+      }
 
+      const lifecycle = this.ensureStreamLifecycle(targetId);
+      const lifecyclePhase = lifecycle.getHealth().phase;
+      if (lifecyclePhase === 'idle' || lifecyclePhase === 'stopped' || lifecyclePhase === 'failed') {
+        lifecycle.start();
+      }
+      this.pollingDeviceIds.add(targetId);
       try {
         const characteristicMap = await this.readAllReadableCharacteristics(this.connectedDeviceRef);
         const rssi = await this.readRssi(this.connectedDeviceRef);
@@ -835,7 +1273,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         });
         const merged = coalesceTelemetry(standard, vendorSpecific);
         const hasDecodedMetrics = hasDecodedBluetoothTelemetryMetrics(merged as Record<string, unknown>);
-        const telemetry: BluTelemetry = {
+        const telemetry: BluTelemetry = withBluPowerTelemetryEnvelope({
           timestamp: Date.now(),
           provider: config.provider,
           device_id: targetId,
@@ -851,7 +1289,21 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
             ? merged.status_text
             : 'Connected over Bluetooth; telemetry not yet decoded.',
           ...merged,
-        };
+        });
+
+        if (hasDecodedMetrics) {
+          lifecycle.recordPacket(telemetry.timestamp);
+        } else {
+          lifecycle.recordError(
+            'telemetry_setup',
+            telemetry.telemetryUnsupportedReason ?? 'Connected over Bluetooth; telemetry is not decoded for this model yet.',
+            'TELEMETRY_UNSUPPORTED',
+            {
+              canRecover: Boolean(config.decodeTelemetry),
+              timeoutMs: this.getStreamStaleAfterMs(),
+            },
+          );
+        }
 
         this.telemetryByDeviceId.set(targetId, telemetry);
         this.lastTelemetry = telemetry;
@@ -867,6 +1319,34 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         this.notify();
         this.emitEvent('telemetry', { telemetry, device: bluDeviceRegistry.getDevice(config.provider, targetId) ?? null });
         this.emitEvent('data', { telemetry, device: bluDeviceRegistry.getDevice(config.provider, targetId) ?? null });
+        bluLogThrottled(
+          hasDecodedMetrics ? '[BLU_TELEMETRY]' : '[BLU_STREAM]',
+          `${config.provider}:telemetry:${targetId}:${hasDecodedMetrics ? 'decoded' : 'unsupported'}`,
+          hasDecodedMetrics ? 'native_ble_vendor_telemetry_decoded' : 'native_ble_vendor_telemetry_unsupported',
+          hasDecodedMetrics
+            ? buildBluTelemetryLogDetails({
+                deviceId: targetId,
+                vendor: config.provider,
+                telemetry,
+                streamMode: 'provider_poll',
+                lastPacketAt: telemetry.timestamp,
+              })
+            : {
+                deviceId: targetId,
+                vendor: config.provider,
+                streamMode: 'provider_poll',
+                telemetryKeys: Object.keys(merged).filter((key) => (merged as Record<string, unknown>)[key] != null),
+                hasVoltage: false,
+                hasWatts: false,
+                hasBatteryPercent: false,
+                hasTemperature: false,
+                hasObdPid: false,
+                packetAgeMs: 0,
+                readableCharacteristics: characteristicMap.size,
+                driverMode: config.decodeTelemetry ? 'local_ble_driver' : 'local_ble_incomplete',
+              },
+          10_000,
+        );
         console.log(hasDecodedMetrics ? '[BT_LIVE] telemetry_decoded' : '[BT_LIVE] telemetry_unsupported', {
           provider: config.provider,
           deviceId: targetId,
@@ -876,6 +1356,21 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         return { success: true, telemetry, error: null };
       } catch (error) {
         this.consecutiveFailures += 1;
+        const message = String((error as any)?.message ?? error ?? 'Poll failed.');
+        lifecycle.recordError('telemetry_poll', message, detectErrorCode(error), {
+          canRecover: true,
+          timeoutMs: this.currentPollInterval,
+        });
+        bluLog('[BLU_TIMEOUT]', 'native_ble_vendor_poll_failed', buildBluTimeoutLogDetails({
+          deviceId: targetId,
+          vendor: config.provider,
+          phase: 'telemetry_poll',
+          timeoutMs: this.currentPollInterval,
+          lastSuccessfulPhase: this.lastPollAt ? 'telemetry_packet' : 'native_ble_connect',
+          lastPacketAt: this.lastPollAt,
+          errorCode: detectErrorCode(error),
+          message,
+        }));
         bluStateStore.recordPollFailure(String((error as any)?.message ?? error));
         if (targetId) {
           await bluDeviceRegistry.updateConnectionState(config.provider, targetId, 'error');
@@ -892,53 +1387,138 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         return {
           success: false,
           telemetry: this.telemetryByDeviceId.get(targetId) ?? null,
-          error: String((error as any)?.message ?? error ?? 'Poll failed.'),
+          error: message,
         };
+      } finally {
+        this.pollingDeviceIds.delete(targetId);
       }
     }
 
     private beginReconnect(deviceId: string): void {
+      if (this.manualDisconnectRequested) {
+        bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_skipped_manual_disconnect', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          manualDisconnectRequested: true,
+        });
+        return;
+      }
       if (this.isReconnecting) return;
       this.isReconnecting = true;
       this.connectionState = 'error';
       this.reconnectAttempts = 0;
       bluStateStore.setReconnecting(true);
+      bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_begin', {
+        deviceId,
+        vendor: config.provider,
+        providerName: config.displayName,
+        reason: this.lastError ?? 'poll_failure',
+      });
       this.emitEvent('reconnecting', { device: bluDeviceRegistry.getDevice(config.provider, deviceId) ?? null });
       this.notify();
       this.scheduleReconnect(deviceId);
     }
 
     private scheduleReconnect(deviceId: string): void {
+      if (this.manualDisconnectRequested) {
+        this.stopReconnectTimer();
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
+        bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_schedule_skipped_manual_disconnect', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          manualDisconnectRequested: true,
+        });
+        return;
+      }
       this.stopReconnectTimer();
       this.reconnectAttempts += 1;
+      bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_scheduled', {
+        deviceId,
+        vendor: config.provider,
+        providerName: config.displayName,
+        attempt: this.reconnectAttempts,
+        maxAttempts: MAX_RECONNECT_ATTEMPTS,
+        delayMs: RECONNECT_DELAY_MS,
+      });
       this.emitEvent('reconnect_start', { device: bluDeviceRegistry.getDevice(config.provider, deviceId) ?? null });
       if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
         this.isReconnecting = false;
         bluStateStore.setReconnecting(false);
         this.setError('Device unavailable.', 'DEVICE_UNAVAILABLE');
+        this.streamLifecycles.get(deviceId)?.recordError(
+          'reconnect',
+          'Device unavailable.',
+          'DEVICE_UNAVAILABLE',
+          { canRecover: false },
+        );
+        bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_gave_up', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          attempt: this.reconnectAttempts,
+          errorCode: 'DEVICE_UNAVAILABLE',
+        });
         this.emitEvent('reconnect_failed', { error: this.lastError, errorCode: this.lastErrorCode });
         this.notify();
         return;
       }
 
       this.reconnectTimer = setTimeout(() => {
+        if (this.manualDisconnectRequested) {
+          this.reconnectTimer = null;
+          this.isReconnecting = false;
+          bluStateStore.setReconnecting(false);
+          return;
+        }
         void this.reconnect(deviceId);
       }, RECONNECT_DELAY_MS);
     }
 
     private async reconnect(deviceId: string): Promise<void> {
+      if (this.manualDisconnectRequested) {
+        this.stopReconnectTimer();
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
+        bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_skipped_manual_disconnect', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          manualDisconnectRequested: true,
+        });
+        return;
+      }
       try {
         const result = await this.connect(deviceId);
         if (result.success) {
           this.isReconnecting = false;
           bluStateStore.setReconnecting(false);
+          bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_succeeded', {
+            deviceId,
+            vendor: config.provider,
+            providerName: config.displayName,
+          });
           this.emitEvent('reconnect_success', { device: result.device, devices: result.devices });
           this.emitEvent('reconnected', { device: result.device, devices: result.devices });
           this.startPolling(this.currentPollInterval);
         } else {
+          bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_attempt_failed', {
+            deviceId,
+            vendor: config.provider,
+            providerName: config.displayName,
+            errorCode: result.errorCode,
+            message: result.error,
+          });
           this.scheduleReconnect(deviceId);
         }
       } catch {
+        bluLog('[BLU_RECONNECT]', 'native_ble_vendor_reconnect_threw', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+        });
         this.scheduleReconnect(deviceId);
       }
     }
@@ -976,8 +1556,29 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         this.disconnectSubscription?.remove?.();
         this.disconnectSubscription = manager.onDeviceDisconnected(device.id, (_error: unknown) => {
           if (this.connectionState === 'disconnected') return;
+          if (this.manualDisconnectRequested) {
+            this.connectionState = 'disconnected';
+            bluStateStore.setReconnecting(false);
+            return;
+          }
           this.connectionState = 'error';
           this.setError('Device unavailable.', 'DEVICE_UNAVAILABLE');
+          bluLog('[BLU_DISCONNECT]', 'native_ble_vendor_disconnect_detected', {
+            deviceId: device.id,
+            vendor: config.provider,
+            providerName: config.displayName,
+            connectionMode: 'ble',
+            message: String((_error as any)?.message ?? _error ?? 'Device disconnected.'),
+          });
+          this.streamLifecycles.get(device.id)?.recordError(
+            'device_disconnect',
+            'BLE device disconnected.',
+            'DEVICE_UNAVAILABLE',
+            { canRecover: false },
+          );
+          this.telemetryByDeviceId.delete(device.id);
+          void bluDeviceRegistry.updateConnectionState(config.provider, device.id, 'error');
+          bluStateStore.clearDeviceTelemetry(config.provider, device.id, 'BLE device disconnected.');
           this.notify();
           this.beginReconnect(device.id);
         });

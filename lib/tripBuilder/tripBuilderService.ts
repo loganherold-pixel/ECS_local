@@ -5,6 +5,7 @@ import {
   type NormalizedRouteCoordinate,
   type RouteCoordinate,
 } from '../map/routeGeometryUtils';
+import { normalizeRouteGeometryLineString } from '../routeGeometryLifecycle';
 import type {
   BuildTripPlanArgs,
   CampCandidate,
@@ -46,6 +47,12 @@ const EXIT_FIELD_KEYS = [
   'bailouts',
   'bailoutRoutes',
   'pavedExits',
+  'alternateRoutes',
+  'alternateRouteExits',
+  'roadAccessPoints',
+  'roadJunctions',
+  'trailForks',
+  'forks',
 ] as const;
 
 const RESUPPLY_FIELD_KEYS = [
@@ -64,6 +71,10 @@ function finiteNumber(value: unknown): number | null {
 
 function roundTenths(value: number | null): number | null {
   return value == null ? null : Math.round(value * 10) / 10;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function normalizeConfidence(value: unknown): TripBuilderConfidence {
@@ -118,10 +129,26 @@ function routePointCategory(record: Record<string, unknown>): TripPlanStop['type
   if (/\brepair\b|\bmechanic\b|\btire\b/.test(joined)) return 'repair';
   if (/\bmedical\b|\bhospital\b|\bclinic\b|\bems\b/.test(joined)) return 'medical';
   if (joined.includes('ranger') || joined.includes('agency') || joined.includes('visitor_center')) return 'ranger_station';
-  if (/\bexit\b|\bbailout\b|\bpavement\b|\btown_exit\b/.test(joined)) return 'exit';
+  if (/\bexit\b|\bbailout\b|\bpavement\b|\btown_exit\b|\bjunction\b|\btrailhead\b|\bstaging\b|\balternate_route\b/.test(joined)) return 'exit';
   if (/\bcamp\b|\bcampsite\b/.test(joined)) return 'camp';
   if (/\boverlook\b|\bscenic\b|\bphoto\b|\blookout\b/.test(joined)) return 'scenic_stop';
   return null;
+}
+
+function isEmergencyBailoutClue(record: Record<string, unknown>): boolean {
+  if (routePointCategory(record) === 'exit') return true;
+  const text = [
+    record.name,
+    record.title,
+    record.label,
+    record.description,
+    record.notes,
+    record.category,
+    record.kind,
+    record.type,
+    record.waypointType,
+  ].map((value) => Array.isArray(value) ? value.join(' ') : String(value ?? '')).join(' ').toLowerCase();
+  return /\b(bailout|alternate|escape|emergency|fork|junction|pavement|trailhead|staging|county road|forest road|service road|access road|primary road|highway|hwy|address)\b/.test(text);
 }
 
 function sourceFromRecord(record: Record<string, unknown>, fallback: string): string {
@@ -178,7 +205,15 @@ function coordinatesFromGeoJson(value: unknown): NormalizedRouteCoordinate[] {
 }
 
 function extractRouteCoordinates(route: TripBuilderRouteInput): NormalizedRouteCoordinate[] {
+  const sharedGeometry = normalizeRouteGeometryLineString(route);
+  if (sharedGeometry) {
+    return sharedGeometry.coordinates.map(([longitude, latitude]) => ({ latitude, longitude }));
+  }
+
+  const routeRecord = route as Record<string, unknown>;
   const directGeometry = [
+    ...coordinatesFromGeoJson(routeRecord.geometry),
+    ...coordinatesFromGeoJson(routeRecord.coordinates),
     ...coordinatesFromGeoJson(route.trailGeometry),
     ...coordinatesFromGeoJson(route.routeGeometry),
     ...coordinatesFromGeoJson(route.geojson),
@@ -237,6 +272,43 @@ function getRouteDistanceMiles(route: TripBuilderRouteInput, coordinates: Normal
     total += haversineDistanceMiles(coordinates[index - 1], coordinates[index]);
   }
   return total;
+}
+
+function interpolateCoordinateAtRouteMile(
+  coordinates: NormalizedRouteCoordinate[],
+  routeDistanceMiles: number | null,
+  targetMile: number,
+): NormalizedRouteCoordinate | null {
+  if (coordinates.length === 0) return null;
+  if (coordinates.length === 1) return coordinates[0];
+  const routeDistance = routeDistanceMiles && routeDistanceMiles > 0 ? routeDistanceMiles : null;
+  const geometryDistances: number[] = [0];
+  for (let index = 1; index < coordinates.length; index += 1) {
+    geometryDistances[index] = geometryDistances[index - 1] + haversineDistanceMiles(coordinates[index - 1], coordinates[index]);
+  }
+  const geometryDistance = geometryDistances[geometryDistances.length - 1];
+  if (!Number.isFinite(geometryDistance) || geometryDistance <= 0) return coordinates[0];
+  const targetGeometryMile = clamp(
+    routeDistance ? (targetMile / routeDistance) * geometryDistance : targetMile,
+    0,
+    geometryDistance,
+  );
+
+  for (let index = 1; index < geometryDistances.length; index += 1) {
+    const previousMile = geometryDistances[index - 1];
+    const nextMile = geometryDistances[index];
+    if (targetGeometryMile > nextMile) continue;
+    const span = nextMile - previousMile;
+    const ratio = span > 0 ? (targetGeometryMile - previousMile) / span : 0;
+    const start = coordinates[index - 1];
+    const end = coordinates[index];
+    return {
+      latitude: start.latitude + (end.latitude - start.latitude) * ratio,
+      longitude: start.longitude + (end.longitude - start.longitude) * ratio,
+    };
+  }
+
+  return coordinates[coordinates.length - 1];
 }
 
 function getEstimatedDriveTimeHours(route: TripBuilderRouteInput, distanceMiles: number | null): number | null {
@@ -395,6 +467,67 @@ function deriveCampCandidatesFromRoute(route: TripBuilderRouteInput, routeId: st
     .filter((candidate): candidate is CampCandidate => candidate != null);
 }
 
+function isRouteCompletionExit(point: ExitPoint | null | undefined): boolean {
+  return point?.type === 'route_finish' || point?.source === 'ecs_route_completion_exit';
+}
+
+function inferCampCandidateCount(route: TripBuilderRouteInput, tripDays: number, distanceMiles: number | null): number {
+  const routeRecord = route as Record<string, unknown>;
+  const metadata = metadataRecord(route);
+  const explicitSuggested =
+    finiteNumber(routeRecord.suggestedCamps) ??
+    finiteNumber(routeRecord.suggestedCampCount) ??
+    finiteNumber(metadata.suggestedCamps) ??
+    finiteNumber(metadata.suggestedCampCount);
+  if (explicitSuggested != null && explicitSuggested > 0) {
+    return clamp(Math.ceil(explicitSuggested), 1, 5);
+  }
+  if (tripDays > 1) return clamp(tripDays - 1, 1, 5);
+  if (distanceMiles != null && distanceMiles >= 75) return 1;
+  return 0;
+}
+
+function inferCampCandidatesFromRoute(
+  route: TripBuilderRouteInput,
+  routeId: string,
+  routeSummary: TripPlanRouteSummary,
+  coordinates: NormalizedRouteCoordinate[],
+  tripDays: number,
+): CampCandidate[] {
+  const distanceMiles = routeSummary.distanceMiles;
+  const candidateCount = inferCampCandidateCount(route, tripDays, distanceMiles);
+  if (candidateCount <= 0 || distanceMiles == null || distanceMiles <= 0) return [];
+  const remoteness = finiteNumber(route.remotenessScore) ?? 0;
+  const baseScore = clamp(52 + remoteness * 2, 52, 70);
+
+  return Array.from({ length: candidateCount }, (_, index): CampCandidate => {
+    const progress = (index + 1) / (candidateCount + 1);
+    const routeMileMarker = roundTenths(distanceMiles * progress);
+    const location = routeMileMarker == null
+      ? null
+      : interpolateCoordinateAtRouteMile(coordinates, distanceMiles, routeMileMarker);
+    const day = index + 1;
+    return {
+      id: `${routeId}-ecs-camp-window-${day}`,
+      name: `Day ${day} ECS camp candidate window`,
+      location,
+      routeMileMarker,
+      distanceFromRouteMiles: location ? 0 : null,
+      score: roundTenths(baseScore - index * 2),
+      legalConfidence: 'unknown',
+      accessConfidence: location ? 'low' : 'unknown',
+      source: 'ecs_route_inferred_camp_window',
+      notes: [
+        'ECS inferred this as a route-progress camp planning window from trip duration and route distance.',
+        'This is not a verified legal campsite. Confirm land use, fire restrictions, access, and arrival daylight before relying on it.',
+        location
+          ? 'Coordinate is route-derived and should be treated as a scouting target, not a reserved or established campsite.'
+          : 'Route geometry is limited; use the mile marker as the planning target until better map data is available.',
+      ],
+    };
+  });
+}
+
 function exitPointFromRecord(routeId: string, value: unknown, index: number): ExitPoint | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -430,6 +563,110 @@ function deriveExitPointsFromRoute(route: TripBuilderRouteInput, routeId: string
         })
     : [];
   return [...explicit, ...fromWaypoints].filter((point): point is ExitPoint => point != null);
+}
+
+function routeMileForEmergencyBailout(
+  routeSummary: TripPlanRouteSummary,
+  fallbackRatio = 0.5,
+): number | null {
+  return routeSummary.distanceMiles != null && routeSummary.distanceMiles > 0
+    ? roundTenths(routeSummary.distanceMiles * fallbackRatio)
+    : null;
+}
+
+function scoreEmergencyBailoutCandidate(point: ExitPoint, routeDistanceMiles: number | null): number {
+  let score = finiteNumber(point.priority) ?? 0;
+  const typeText = `${point.type ?? ''} ${point.name ?? ''} ${point.source ?? ''}`.toLowerCase();
+  if (/alternate|fork|junction|pavement|road|highway|hwy|trailhead|staging/.test(typeText)) score += 8;
+  if (/address|pavement|highway|hwy|county road|forest road|primary road/.test(typeText)) score += 4;
+  if (point.location) score += 3;
+  if (finiteNumber(point.distanceFromRouteMiles) != null) score += Math.max(0, 4 - Math.min(4, finiteNumber(point.distanceFromRouteMiles) as number));
+  const mile = finiteNumber(point.routeMileMarker);
+  if (routeDistanceMiles != null && routeDistanceMiles > 0 && mile != null) {
+    const midpointDelta = Math.abs(mile - routeDistanceMiles * 0.5) / routeDistanceMiles;
+    score += Math.max(0, 5 - midpointDelta * 10);
+    if (mile <= 0.05 || mile >= routeDistanceMiles - 0.05) score -= 12;
+  }
+  return score;
+}
+
+function inferEmergencyBailoutFromRouteClues(
+  route: TripBuilderRouteInput,
+  routeId: string,
+  routeSummary: TripPlanRouteSummary,
+): ExitPoint | null {
+  const candidates = [
+    ...collectRouteArrays(route, EXIT_FIELD_KEYS),
+    ...(Array.isArray(route.waypoints) ? route.waypoints : []),
+  ]
+    .map((value, index) => {
+      const record = asRecord(value);
+      if (!record || !isEmergencyBailoutClue(record)) return null;
+      return exitPointFromRecord(routeId, record, index);
+    })
+    .filter((point): point is ExitPoint => point != null && !isRouteCompletionExit(point));
+
+  if (candidates.length === 0) return null;
+  return [...candidates].sort((left, right) =>
+    scoreEmergencyBailoutCandidate(right, routeSummary.distanceMiles) -
+    scoreEmergencyBailoutCandidate(left, routeSummary.distanceMiles)
+  )[0] ?? null;
+}
+
+function inferMidRouteEmergencyBailoutPoint(
+  routeId: string,
+  routeSummary: TripPlanRouteSummary,
+  coordinates: NormalizedRouteCoordinate[],
+): ExitPoint | null {
+  const routeMileMarker = routeMileForEmergencyBailout(routeSummary);
+  const location = routeMileMarker != null
+    ? interpolateCoordinateAtRouteMile(coordinates, routeSummary.distanceMiles, routeMileMarker)
+    : null;
+  if (!location && routeMileMarker == null) return null;
+  return {
+    id: `${routeId}-emergency-bailout-midroute`,
+    name: `${routeSummary.name} emergency bailout search`,
+    type: 'emergency_road_access',
+    location,
+    routeMileMarker,
+    distanceFromRouteMiles: null,
+    priority: 5,
+    source: 'ecs_midroute_bailout_inference',
+    notes: [
+      'ECS inferred this as a mid-route emergency bailout search target because no dedicated bailout fork, road access, or address-backed exit was supplied.',
+      'Use it to verify the nearest drivable road, addressable access, or walk-out option near the route midpoint before committing to the route.',
+      'This is not a confirmed legal road, trail, or evacuation corridor; field verification and current conditions are required.',
+    ],
+  };
+}
+
+function inferExitPointsFromRoute(
+  route: TripBuilderRouteInput,
+  routeId: string,
+  routeSummary: TripPlanRouteSummary,
+  coordinates: NormalizedRouteCoordinate[],
+): ExitPoint[] {
+  const points: ExitPoint[] = [];
+  if (routeSummary.startCoordinate) {
+    points.push({
+      id: `${routeId}-route-start-staging-exit`,
+      name: `${routeSummary.name} start / staging return`,
+      type: 'route_start',
+      location: routeSummary.startCoordinate,
+      routeMileMarker: 0,
+      distanceFromRouteMiles: 0,
+      priority: 3,
+      source: 'ecs_route_start_reference',
+      notes: [
+        'ECS is using the route start as a conservative return/staging reference.',
+        'This does not confirm fuel, water, repairs, or alternate pavement access.',
+      ],
+    });
+  }
+  const routeClueBailout = inferEmergencyBailoutFromRouteClues(route, routeId, routeSummary);
+  const inferredBailout = routeClueBailout ?? inferMidRouteEmergencyBailoutPoint(routeId, routeSummary, coordinates);
+  if (inferredBailout) points.push(inferredBailout);
+  return points;
 }
 
 function resupplyCategoryFromStopType(type: TripPlanStop['type']): ResupplyPoint['category'] | null {
@@ -709,6 +946,16 @@ function computeStopMile(stop: TripPlanStop, routeDistanceMiles: number | null):
   return null;
 }
 
+function isPreRouteSupportStop(stop: TripPlanStop): boolean {
+  return (stop.type === 'fuel' || stop.type === 'supply') && (stop.routeMileMarker ?? 0) <= 0;
+}
+
+function preRouteSupportStopOrder(stop: TripPlanStop): number {
+  if (stop.type === 'fuel') return 0;
+  if (stop.type === 'supply') return 1;
+  return 2;
+}
+
 function riskFromInputs(route: TripPlanRouteSummary, priorities: TripPriority[]): TripPlanSegment['riskLevel'] {
   if (priorities.includes('low_risk')) return 'low';
   if ((route.remotenessScore ?? 0) >= 8 || route.difficulty === 'technical') return 'high';
@@ -756,28 +1003,42 @@ function addWarning(warnings: TripBuilderWarning[], warning: TripBuilderWarning)
 export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   const generatedAt = args.capturedAt ?? new Date().toISOString();
   const priorities = args.input.priorities ?? [];
-  const { summary: routeSummary } = buildRouteSummary(args.route);
+  const { summary: routeSummary, coordinates: routeCoordinates } = buildRouteSummary(args.route);
   const routeId = routeSummary.routeId;
+  const tripDays = plannedDaysForTrip(args.input.tripType, routeSummary.estimatedDays);
+  const needsCamping = tripTypeNeedsCamping(args.input.tripType, priorities);
   const routeDerivedCampCandidates = deriveCampCandidatesFromRoute(args.route, routeId);
-  const campsiteCandidates = [
+  const suppliedCampCandidates = [
     ...(args.campsiteCandidates ?? []),
     ...routeDerivedCampCandidates,
   ];
-  const exitPoints = args.exitPoints && args.exitPoints.length > 0
+  const inferredCampCandidates = needsCamping && suppliedCampCandidates.length === 0
+    ? inferCampCandidatesFromRoute(args.route, routeId, routeSummary, routeCoordinates, tripDays)
+    : [];
+  const campsiteCandidates = [
+    ...suppliedCampCandidates,
+    ...inferredCampCandidates,
+  ];
+  const suppliedExitPoints = args.exitPoints && args.exitPoints.length > 0
     ? args.exitPoints
     : deriveExitPointsFromRoute(args.route, routeId);
+  const inferredExitPoints = suppliedExitPoints.length === 0
+    ? inferExitPointsFromRoute(args.route, routeId, routeSummary, routeCoordinates)
+    : [];
+  const exitPoints = [
+    ...suppliedExitPoints,
+    ...inferredExitPoints,
+  ];
   const routeDerivedResupplyPoints = deriveResupplyPointsFromRoute(args.route);
   const resupplyPoints = [
     ...(args.resupplyPoints ?? []),
     ...routeDerivedResupplyPoints,
   ];
-  const needsCamping = tripTypeNeedsCamping(args.input.tripType, priorities);
   const { primary: primaryCampCandidate, backup: backupCampCandidate } = selectCampCandidates(campsiteCandidates);
   const primaryExitPoint = selectPrimaryExitPoint(exitPoints);
   const notes: TripBuilderNote[] = [];
   const warnings: TripBuilderWarning[] = [];
 
-  const tripDays = plannedDaysForTrip(args.input.tripType, routeSummary.estimatedDays);
   const estimateBasis: string[] = [];
   if (routeSummary.distanceMiles != null) estimateBasis.push('selected route distance');
   if (routeSummary.estimatedDriveTimeHours != null) estimateBasis.push('route travel-time estimate');
@@ -799,10 +1060,27 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
     });
   }
 
+  if (needsCamping && inferredCampCandidates.length > 0) {
+    addNote(notes, {
+      id: 'camp_candidate_inferred',
+      message: 'ECS added route-derived camp planning windows. Treat them as scouting targets until legal access and conditions are verified.',
+      source: 'camp',
+    });
+  }
+
   if (!primaryExitPoint) {
     addWarning(warnings, {
       id: 'exit_points_missing',
       message: 'Exit access data unavailable for this route. Verify before departure.',
+      severity: priorities.includes('low_risk') || priorities.includes('remote_travel') ? 'caution' : 'watch',
+      source: 'exit',
+    });
+  }
+
+  if (inferredExitPoints.length > 0) {
+    addWarning(warnings, {
+      id: 'exit_points_emergency_bailout_inferred',
+      message: 'No confirmed dedicated bailout point was supplied. ECS inferred an emergency bailout target near a route fork or mid-route road-access search area; verify legal access, addressability, and drivability before relying on it.',
       severity: priorities.includes('low_risk') || priorities.includes('remote_travel') ? 'caution' : 'watch',
       source: 'exit',
     });
@@ -852,15 +1130,19 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   }
 
   const supportStops = buildSupportStops(routeId, args.route, resupplyPoints);
+  const preRouteSupportStops = supportStops.filter(isPreRouteSupportStop);
+  const inRouteSupportStops = supportStops.filter((stop) => !isPreRouteSupportStop(stop));
   const usedCampIds = new Set<string>();
-  if (primaryCampCandidate) usedCampIds.add(primaryCampCandidate.id);
-  if (backupCampCandidate) usedCampIds.add(backupCampCandidate.id);
+  if (inferredCampCandidates.length === 0) {
+    if (primaryCampCandidate) usedCampIds.add(primaryCampCandidate.id);
+    if (backupCampCandidate) usedCampIds.add(backupCampCandidate.id);
+  }
   const dailyPlanningStops = needsCamping
     ? buildDailyPlanningStops(routeId, tripDays, routeSummary, campsiteCandidates, usedCampIds)
     : [];
 
   const stops: TripPlanStop[] = [
-    ...supportStops.filter((stop) => stop.type === 'fuel' && (stop.routeMileMarker == null || stop.routeMileMarker <= 0)),
+    ...preRouteSupportStops,
     {
       id: `${routeId}-start`,
       type: 'start',
@@ -873,7 +1155,7 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
       source: 'selected_route',
       confidence: routeSummary.startCoordinate ? 'medium' : 'low',
     },
-    ...supportStops.filter((stop) => !(stop.type === 'fuel' && (stop.routeMileMarker == null || stop.routeMileMarker <= 0))),
+    ...inRouteSupportStops,
     ...buildWaypointStops(routeId, args.route, priorities, args.input.tripType),
     ...dailyPlanningStops,
   ];
@@ -913,8 +1195,15 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   });
 
   const orderedStops = [...stops].sort((left, right) => {
-    if (left.type === 'fuel' && right.type === 'start' && (left.routeMileMarker ?? 0) <= 0) return -1;
-    if (right.type === 'fuel' && left.type === 'start' && (right.routeMileMarker ?? 0) <= 0) return 1;
+    const leftPreRouteSupport = isPreRouteSupportStop(left);
+    const rightPreRouteSupport = isPreRouteSupportStop(right);
+    if (leftPreRouteSupport && rightPreRouteSupport) {
+      return preRouteSupportStopOrder(left) - preRouteSupportStopOrder(right) || left.sequence - right.sequence;
+    }
+    if (leftPreRouteSupport && right.type === 'start') return -1;
+    if (rightPreRouteSupport && left.type === 'start') return 1;
+    if (leftPreRouteSupport && !rightPreRouteSupport) return -1;
+    if (rightPreRouteSupport && !leftPreRouteSupport) return 1;
     if (left.type === 'start') return -1;
     if (right.type === 'start') return 1;
     if (left.type === 'finish') return 1;

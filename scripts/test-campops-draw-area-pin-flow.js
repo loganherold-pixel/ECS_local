@@ -32,6 +32,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView: function WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -259,7 +270,7 @@ async function main() {
   const unknownLegalityResults = await locateCampsitesForPolygon({
     polygonCoordinates: polygon,
     candidates: [
-      locatorCandidate('unknown-legality-inside', 39.055, -120.955, 46, {
+      locatorCandidate('unknown-legality-inside', 39.055, -120.955, 72, {
         legalityStatus: 'unknown_needs_verification',
         legalAccessScore: 20,
       }),
@@ -284,7 +295,7 @@ async function main() {
       }),
       locatorCandidate('closed-area', 39.05, -120.95, 97, { isClosed: true }),
       locatorCandidate('no-camping', 39.055, -120.955, 96, { noCamping: true }),
-      locatorCandidate('still-usable', 39.06, -120.96, 58, {
+      locatorCandidate('still-usable', 39.06, -120.96, 72, {
         legalityStatus: 'unknown_needs_verification',
       }),
     ],
@@ -308,8 +319,8 @@ async function main() {
       expandedResults: true,
       allowLowConfidenceFallback: true,
     }).map((candidate) => candidate.id),
-    ['soft-slope'],
-    'Soft terrain signals should not hard-exclude unless a filter config says so.',
+    [],
+    'Camp Scout should hard-exclude steep terrain even when fallback ranking is enabled.',
   );
   assert.deepStrictEqual(
     rankCampScoutCandidates([softCandidate], {
@@ -334,12 +345,8 @@ async function main() {
   });
   assert.deepStrictEqual(
     strictSoftFallback.map((candidate) => candidate.id),
-    ['fallback-low-1', 'fallback-low-2'],
-    'Fallback candidates should be returned when strict soft filters produce zero results.',
-  );
-  assert.ok(
-    strictSoftFallback.every((candidate) => candidate.viabilityTier === 'possible'),
-    'Fallback candidates should be marked possible rather than verified.',
+    [],
+    'Draw-area Camp Scout scans should not return sub-70 soft fallback candidates.',
   );
 
   assert.deepStrictEqual(
@@ -376,7 +383,6 @@ async function main() {
       sourceType: 'ecs_inferred',
       confidenceGrade: 'C',
       confidenceScore: 58,
-      rankLabel: 'C1',
       legalityStatus: 'unknown_needs_verification',
       warnings: ['Verify local rules before camping.'],
     },
@@ -419,7 +425,6 @@ async function main() {
       sourceType: 'ecs_inferred',
       confidenceGrade: 'B',
       confidenceScore: 75,
-      rankLabel: 'B1',
     },
   ]);
   assert.strictEqual(mockMap.getSource(CAMP_SCOUT_PIN_SOURCE_ID).data, firstUpdate);
@@ -440,7 +445,6 @@ async function main() {
       sourceType: 'official_mapped',
       confidenceGrade: 'A',
       confidenceScore: 90,
-      rankLabel: 'OFF',
     },
   ]);
   assert.strictEqual(

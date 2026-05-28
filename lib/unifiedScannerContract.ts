@@ -1,8 +1,20 @@
 import type { ECSDeviceConnectionModel, ECSConnectionScanAreaState, ECSConnectionStatus } from './useUnifiedDeviceConnections';
+import {
+  classifyBluestackDevice,
+  getBluestackConnectionPolicy,
+  getBluestackProviderReadiness,
+  type BluestackDeviceIdentity,
+  type BluestackConnectionLane,
+  type BluestackParserDecisionAction,
+  type BluestackParserVerificationStatus,
+} from './bluestack';
 
 export type UnifiedScannerDeviceCategory =
   | 'power_device'
   | 'obd2'
+  | 'propane_monitor'
+  | 'water_tank_monitor'
+  | 'utility_sensor'
   | 'unknown_supported'
   | 'unsupported';
 
@@ -11,8 +23,20 @@ export type UnifiedScannerProvider =
   | 'bluetti'
   | 'jackery'
   | 'anker'
+  | 'anker_solix'
   | 'goalzero'
+  | 'goal_zero'
+  | 'renogy'
+  | 'redarc'
+  | 'dakota_lithium'
+  | 'victron'
   | 'generic_obd2'
+  | 'mopeka'
+  | 'seelevel'
+  | 'propane_monitor'
+  | 'water_monitor'
+  | 'unknown_power'
+  | 'unknown_sensor'
   | 'unknown';
 
 export type UnifiedScannerTransport =
@@ -69,9 +93,17 @@ export interface UnifiedScannerDevice {
   transport: UnifiedScannerTransport;
   connectionState: UnifiedScannerConnectionState;
   telemetryState: UnifiedScannerTelemetryState;
+  bluestackLane: BluestackConnectionLane;
+  bluestackStatusLabel: string;
+  bluestackStatusDetail: string;
+  bluestackTelemetryTruthLabel: string;
+  parserId: string;
+  parserAction: BluestackParserDecisionAction;
+  parserStatus: BluestackParserVerificationStatus;
   lastSeenAt: number | null;
   rssi: number | null;
   advertised: UnifiedScannerAdvertisedIdentifiers;
+  bluestack: BluestackDeviceIdentity;
   error: string | null;
   errorSource: UnifiedScannerErrorSource | null;
   sourceModel: ECSDeviceConnectionModel;
@@ -91,9 +123,20 @@ function normalizeProvider(providerId: string | null | undefined): UnifiedScanne
   if (value === 'ecoflow') return 'ecoflow';
   if (value === 'bluetti') return 'bluetti';
   if (value === 'jackery') return 'jackery';
-  if (value === 'anker_solix' || value === 'anker') return 'anker';
+  if (value === 'anker_solix') return 'anker_solix';
+  if (value === 'anker') return 'anker';
   if (value === 'goal_zero' || value === 'goalzero') return 'goalzero';
+  if (value === 'renogy') return 'renogy';
+  if (value === 'redarc') return 'redarc';
+  if (value === 'dakota_lithium') return 'dakota_lithium';
+  if (value === 'victron') return 'victron';
   if (value === 'obd2' || value === 'generic_obd2') return 'generic_obd2';
+  if (value === 'mopeka') return 'mopeka';
+  if (value === 'seelevel') return 'seelevel';
+  if (value === 'propane_monitor') return 'propane_monitor';
+  if (value === 'water_monitor') return 'water_monitor';
+  if (value === 'unknown_power') return 'unknown_power';
+  if (value === 'unknown_sensor') return 'unknown_sensor';
   return 'unknown';
 }
 
@@ -107,6 +150,23 @@ function normalizeTransport(value: string | null | undefined): UnifiedScannerTra
 
 function normalizeCategory(device: ECSDeviceConnectionModel): UnifiedScannerDeviceCategory {
   if (!device.isSupported || device.supportLevel === 'ui_only') return 'unsupported';
+  const bluestack = classifyBluestackDevice({
+    providerId: device.providerId,
+    providerLabel: device.provider,
+    categoryLabel: device.category,
+    deviceCategory: device.deviceCategory,
+    name: device.name,
+    model: device.subtype,
+    kind: device.kind,
+    isSupported: device.isSupported,
+  });
+  if (
+    bluestack.category === 'propane_monitor' ||
+    bluestack.category === 'water_tank_monitor' ||
+    bluestack.category === 'utility_sensor'
+  ) {
+    return bluestack.category;
+  }
   if (device.kind === 'power') return 'power_device';
   if (device.kind === 'telemetry' || device.deviceCategory === 'obd') return 'obd2';
   return 'unknown_supported';
@@ -136,9 +196,17 @@ function normalizeConnectionState(
   return 'disconnected';
 }
 
-function normalizeTelemetryState(device: ECSDeviceConnectionModel): UnifiedScannerTelemetryState {
+function normalizeTelemetryState(
+  device: ECSDeviceConnectionModel,
+  lane: BluestackConnectionLane,
+): UnifiedScannerTelemetryState {
   if (device.isLive) return 'streaming';
-  if (device.telemetryUnsupported) return 'error';
+  if (device.lastError) return 'error';
+  if (device.telemetryUnsupported) {
+    return lane === 'linked_no_parser' || lane === 'pending_protocol' || lane === 'sensor_linked'
+      ? 'unavailable'
+      : 'error';
+  }
   if (device.telemetrySource === 'cache') return 'stale';
   if (device.isConnected && device.supportsTelemetryData) return 'polling';
   if (device.isConnecting) return 'subscribing';
@@ -217,6 +285,18 @@ export function mapConnectionStatusToScannerState(
 
 export function normalizeUnifiedScannerDevice(device: ECSDeviceConnectionModel): UnifiedScannerDevice {
   const transport = normalizeTransport(device.connectionType);
+  const bluestack = classifyBluestackDevice({
+    providerId: device.providerId,
+    providerLabel: device.provider,
+    categoryLabel: device.category,
+    deviceCategory: device.deviceCategory,
+    name: device.name,
+    model: device.subtype,
+    kind: device.kind,
+    isSupported: device.isSupported,
+  });
+  const policy = getBluestackConnectionPolicy(device);
+  const readiness = getBluestackProviderReadiness(bluestack.provider);
   const serviceUuids = device.sourceBadges
     .filter((badge) => /^service:/i.test(badge))
     .map((badge) => badge.replace(/^service:/i, '').trim())
@@ -230,13 +310,27 @@ export function normalizeUnifiedScannerDevice(device: ECSDeviceConnectionModel):
     provider: normalizeProvider(device.providerId),
     transport,
     connectionState: normalizeConnectionState(device, transport),
-    telemetryState: normalizeTelemetryState(device),
+    telemetryState: normalizeTelemetryState(device, policy.lane),
+    bluestackLane: policy.lane,
+    bluestackStatusLabel: policy.statusLabel,
+    bluestackStatusDetail: policy.statusDetail,
+    bluestackTelemetryTruthLabel: policy.telemetryTruthLabel,
+    parserId: readiness.parserId,
+    parserAction: readiness.parserDecisionAction,
+    parserStatus: readiness.stage === 'live_ready'
+      ? 'native_live'
+      : readiness.stage === 'cloud_credentials_required'
+        ? 'cloud_live'
+        : readiness.stage === 'native_parser_pending' || readiness.stage === 'field_verification_required'
+          ? 'native_parser_pending'
+          : 'profile_only',
     lastSeenAt: device.lastSeenAt,
     rssi: device.signalStrength,
     advertised: {
       serviceUuids,
       localName: device.name,
     },
+    bluestack,
     error: device.lastError,
     errorSource: inferErrorSource(device, transport),
     sourceModel: device,

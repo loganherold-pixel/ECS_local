@@ -52,6 +52,7 @@ import {
 } from '../lib/shellLayout';
 import {
   getDashboardChromeState,
+  hideDashboardDockReveal,
   subscribeDashboardChrome,
 } from '../lib/dashboardChromeStore';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
@@ -73,13 +74,13 @@ const DOCK = {
 };
 
 // ── Shield sizing ────────────────────────────────────────────
-const SHIELD_ICON_SIZE = 80;
+const SHIELD_ICON_SIZE = 72;
 
 // ── Outer badge sizing ───────────────────────────────────────
 const OUTER_BADGE_SIZE_ACTIVE = 70;
 const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 6;
 const OUTER_BADGE_TO_LABEL_OFFSET = -4;
-const CENTER_DASHBOARD_BUTTON_DROP = 6;
+const CENTER_DASHBOARD_BUTTON_DROP = OUTER_DOCK_ITEM_VERTICAL_OFFSET + 9;
 const BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3;
 
 // ── Bar layout ───────────────────────────────────────────────
@@ -465,16 +466,18 @@ export default function CommandDock() {
   const adaptive = useAdaptiveLayout();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
   const quickActionsNavLockUntilRef = useRef(0);
-  const [dashboardExpanded, setDashboardExpanded] = useState(
-    getDashboardChromeState().expanded
-  );
+  const [dashboardChrome, setDashboardChrome] = useState(getDashboardChromeState());
   const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
   const firstLaunchHintOpacity = useRef(new Animated.Value(0)).current;
   const firstLaunchHintScale = useRef(new Animated.Value(0.96)).current;
   const firstLaunchHintRunningRef = useRef(false);
   const dockVisibilityAnim = useRef(
     new Animated.Value(
-      pathname.includes('/dashboard') && getDashboardChromeState().expanded ? 0 : 1
+      pathname.includes('/dashboard') &&
+        getDashboardChromeState().expanded &&
+        !getDashboardChromeState().dockRevealed
+        ? 0
+        : 1
     )
   ).current;
 
@@ -484,7 +487,14 @@ export default function CommandDock() {
   );
 
   const isHidden = hiddenPaths.has(pathname);
-  const hideForDashboardExpanded = pathname.includes('/dashboard') && dashboardExpanded;
+  const expandedChromePath =
+    pathname.includes('/dashboard') ||
+    pathname.includes('/alert') ||
+    pathname.includes('/navigate');
+  const hideForDashboardExpanded =
+    expandedChromePath &&
+    dashboardChrome.expanded &&
+    !dashboardChrome.dockRevealed;
 
   const isItemActive = useCallback(
     (item: DockItem): boolean => {
@@ -506,6 +516,7 @@ export default function CommandDock() {
         return;
       }
       if (pathname === route) return;
+      hideDashboardDockReveal();
       router.navigate(route as any);
     },
     [pathname, quickActionsVisible, router]
@@ -553,7 +564,7 @@ export default function CommandDock() {
 
   useEffect(() => {
     return subscribeDashboardChrome((nextState) => {
-      setDashboardExpanded(nextState.expanded);
+      setDashboardChrome(nextState);
     });
   }, []);
 

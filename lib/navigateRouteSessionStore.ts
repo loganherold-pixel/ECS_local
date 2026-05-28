@@ -1,5 +1,11 @@
 import { loadRoadNavigationSession } from './roadNavigationStore';
 import { loadTrailNavigationSession } from './trailNavigationStore';
+import { createMigratingNonSecureStorage } from './nonSecureStorage';
+import {
+  logRouteGeometryLifecycle,
+  routeGeometryLineStringToLatLng,
+  validateRouteGeometry,
+} from './routeGeometryLifecycle';
 
 export type NavigateRouteLifecycle = 'inactive' | 'preview' | 'active' | 'arrived';
 export type NavigateRouteSessionSource = 'none' | 'road' | 'trail' | 'hybrid' | 'run';
@@ -8,6 +14,9 @@ export type NavigateRouteGuidanceStatus = 'nominal' | 'rerouting' | 'off_route' 
 export interface NavigateRouteMapPoint {
   lat: number;
   lng: number;
+  ele?: number | null;
+  ele_m?: number | null;
+  elevationFeet?: number | null;
 }
 
 export interface NavigateRouteCurrentLocation {
@@ -44,6 +53,16 @@ type NavigateRouteSessionListener = (snapshot: NavigateRouteSessionSnapshot) => 
 
 const PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const ACTIVE_RESTORE_MAX_AGE_MS = 18 * 60 * 60 * 1000;
+const NAVIGATE_ROUTE_SESSION_KEY = 'ecs_navigate_route_session_v1';
+const NAVIGATE_ROUTE_SESSION_VERSION = 1;
+const MAX_PERSISTED_ROUTE_POINTS = 1200;
+const navigateRouteSessionStorage = createMigratingNonSecureStorage('ecs_navigate_route_session', {
+  logTag: 'NavigateRouteSessionStore',
+});
+
+type PersistedNavigateRouteSessionSnapshot = NavigateRouteSessionSnapshot & {
+  version: number;
+};
 
 const inactiveSnapshot: NavigateRouteSessionSnapshot = {
   sessionId: null,
@@ -73,6 +92,85 @@ const inactiveSnapshot: NavigateRouteSessionSnapshot = {
 let currentSnapshot = inactiveSnapshot;
 let hydratePromise: Promise<NavigateRouteSessionSnapshot> | null = null;
 const listeners = new Set<NavigateRouteSessionListener>();
+
+function downsamplePoints(points: NavigateRouteMapPoint[], maxPoints = MAX_PERSISTED_ROUTE_POINTS): NavigateRouteMapPoint[] {
+  if (points.length <= maxPoints) return points;
+  const step = Math.ceil(points.length / maxPoints);
+  const sampled = points.filter((_, index) => index === 0 || index === points.length - 1 || index % step === 0);
+  return sampled[sampled.length - 1] === points[points.length - 1]
+    ? sampled
+    : [...sampled, points[points.length - 1]];
+}
+
+function normalizePoint(point: unknown): NavigateRouteMapPoint | null {
+  const input = point as Partial<NavigateRouteMapPoint> | null | undefined;
+  const lat = Number(input?.lat);
+  const lng = Number(input?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  const ele = Number(input?.ele ?? input?.ele_m);
+  const elevationFeet = Number(input?.elevationFeet);
+  return {
+    lat,
+    lng,
+    ...(Number.isFinite(ele) ? { ele, ele_m: ele } : null),
+    ...(Number.isFinite(elevationFeet) ? { elevationFeet } : null),
+  };
+}
+
+function normalizePointList(points: unknown): NavigateRouteMapPoint[] {
+  if (!Array.isArray(points)) return [];
+  return downsamplePoints(points.map(normalizePoint).filter((point): point is NavigateRouteMapPoint => !!point));
+}
+
+function getRestoreMaxAge(lifecycle: NavigateRouteLifecycle): number {
+  return lifecycle === 'active' || lifecycle === 'arrived'
+    ? ACTIVE_RESTORE_MAX_AGE_MS
+    : PREVIEW_RESTORE_MAX_AGE_MS;
+}
+
+async function loadPersistedNavigateRouteSession(): Promise<NavigateRouteSessionSnapshot | null> {
+  const raw = await navigateRouteSessionStorage.read(NAVIGATE_ROUTE_SESSION_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as PersistedNavigateRouteSessionSnapshot;
+    if (
+      parsed?.version !== NAVIGATE_ROUTE_SESSION_VERSION ||
+      parsed.lifecycle === 'inactive' ||
+      !isRecentIsoTimestamp(parsed.updatedAt, getRestoreMaxAge(parsed.lifecycle))
+    ) {
+      return null;
+    }
+
+    const { version: _version, ...snapshot } = parsed;
+    const restored = normalizeSnapshot({
+      ...snapshot,
+      routePoints: normalizePointList(parsed.routePoints),
+      progressPoints: normalizePointList(parsed.progressPoints),
+    });
+
+    return restored.lifecycle === 'inactive' ? null : restored;
+  } catch {
+    return null;
+  }
+}
+
+function persistNavigateRouteSession(snapshot: NavigateRouteSessionSnapshot): void {
+  if (snapshot.lifecycle === 'inactive') {
+    void navigateRouteSessionStorage.remove(NAVIGATE_ROUTE_SESSION_KEY);
+    return;
+  }
+
+  const payload: PersistedNavigateRouteSessionSnapshot = {
+    ...snapshot,
+    routePoints: downsamplePoints(snapshot.routePoints),
+    progressPoints: downsamplePoints(snapshot.progressPoints),
+    version: NAVIGATE_ROUTE_SESSION_VERSION,
+  };
+
+  void navigateRouteSessionStorage.write(NAVIGATE_ROUTE_SESSION_KEY, JSON.stringify(payload));
+}
 
 function isRecentIsoTimestamp(value: string | null | undefined, maxAgeMs: number): boolean {
   if (!value) return false;
@@ -143,6 +241,7 @@ function setSnapshot(next: NavigateRouteSessionSnapshot): NavigateRouteSessionSn
     return currentSnapshot;
   }
   currentSnapshot = normalized;
+  persistNavigateRouteSession(currentSnapshot);
   notify(currentSnapshot);
   return currentSnapshot;
 }
@@ -169,6 +268,18 @@ function getRoadLifecycle(status: string): NavigateRouteLifecycle {
 }
 
 async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnapshot> {
+  if (
+    currentSnapshot.lifecycle !== 'inactive' &&
+    isRecentIsoTimestamp(currentSnapshot.updatedAt, getRestoreMaxAge(currentSnapshot.lifecycle))
+  ) {
+    return currentSnapshot;
+  }
+
+  const persistedNavigateSession = await loadPersistedNavigateRouteSession();
+  if (persistedNavigateSession) {
+    return persistedNavigateSession;
+  }
+
   const trail = await loadTrailNavigationSession();
   const trailLifecycle = trail ? getTrailLifecycle(trail.status) : 'inactive';
   const trailMaxAge = trailLifecycle === 'active' ? ACTIVE_RESTORE_MAX_AGE_MS : PREVIEW_RESTORE_MAX_AGE_MS;
@@ -211,6 +322,30 @@ async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnaps
     roadLifecycle !== 'inactive' &&
     isRecentIsoTimestamp(road.updatedAt, roadMaxAge)
   ) {
+    const routeGeometryValidation = validateRouteGeometry(road.routeGeometry);
+    if (!routeGeometryValidation.valid || !routeGeometryValidation.lineString) {
+      logRouteGeometryLifecycle(routeGeometryValidation.reason, {
+        routeId: road.routeId ?? road.destination.id,
+        cacheKey: road.routeGeometryCacheKey ?? null,
+        phase: 'session_store_restore',
+        source: 'road',
+        status: road.status,
+        message: 'Road navigation snapshot restore skipped because route geometry is unavailable.',
+      });
+      return inactiveSnapshot;
+    }
+
+    const routePoints = routeGeometryLineStringToLatLng(routeGeometryValidation.lineString);
+    logRouteGeometryLifecycle('geometry_successfully_loaded', {
+      routeId: road.routeId ?? road.destination.id,
+      cacheKey: road.routeGeometryCacheKey ?? null,
+      phase: 'session_store_restore',
+      source: 'road',
+      status: road.status,
+      pointCount: routeGeometryValidation.pointCount,
+      fingerprint: routeGeometryValidation.fingerprint,
+    });
+
     return normalizeSnapshot({
       sessionId: road.sessionId,
       lifecycle: roadLifecycle,
@@ -220,7 +355,7 @@ async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnaps
       routeSubtitle: road.destination.subtitle ?? null,
       statusLabel: roadLifecycle === 'active' ? 'Road guidance active' : 'Road route staged',
       instruction: roadLifecycle === 'active' ? 'Continue on active route' : 'Open Navigate to start guidance',
-      routePoints: [],
+      routePoints,
       progressPoints: [],
       currentLocation: null,
       headingDeg: null,

@@ -47,7 +47,6 @@ for (const expectedSection of [
   'Recommended Action',
   'To Improve Status',
   'Data Used',
-  'Related Actions',
 ]) {
   assert.ok(
     viewSource.includes(expectedSection),
@@ -56,14 +55,12 @@ for (const expectedSection of [
 }
 
 assert.ok(
-  viewSource.includes('assessment?.missingDataWarnings') &&
-    viewSource.includes('MISSING'),
-  'Reusable detail view should render missing data warnings.',
+  viewSource.includes('assessment?.missingDataWarnings'),
+  'Reusable detail view should fold missing data warnings into the user-facing why section.',
 );
 assert.ok(
-  viewSource.includes('assessment?.staleDataWarnings') &&
-    viewSource.includes('STALE'),
-  'Reusable detail view should render stale data warnings.',
+  viewSource.includes('assessment?.staleDataWarnings'),
+  'Reusable detail view should fold stale data warnings into the user-facing why section.',
 );
 assert.ok(
   viewSource.includes('escalationRecommended') &&
@@ -72,22 +69,22 @@ assert.ok(
   'Reusable detail view should render escalation banner leading to Incident & Recovery.',
 );
 assert.ok(
-  viewSource.includes('assessment?.relatedActions') &&
-    viewSource.includes('refresh-assessment') &&
-    viewSource.includes('open-incident-recovery'),
-  'Reusable detail view should render assessment and contextual related actions.',
+  viewSource.includes('DataUsedSection') &&
+    viewSource.includes('assessment?.dataUsed') &&
+    viewSource.includes('formatSourceLabel') &&
+    viewSource.includes('MISSING') &&
+    viewSource.includes('STALE'),
+  'Reusable detail view should render compact assessment data provenance, including source and stale/missing markers.',
+);
+assert.ok(
+  !viewSource.includes('Related Actions') &&
+    !viewSource.includes('assessment?.relatedActions'),
+  'Reusable detail view should not render the noisy Related Actions section.',
 );
 assert.ok(
   viewSource.includes("assessment?.confidence === 'low'") &&
     viewSource.includes('Confidence is low'),
   'Reusable detail view should make low-confidence assessments obvious.',
-);
-assert.ok(
-  viewSource.includes('sourceLabel') &&
-    ['GPS', 'MANUAL', 'OBD', 'SATELLITE', 'CACHED', 'MOCK', 'UNKNOWN'].every((label) =>
-      viewSource.includes(`'${label}'`),
-    ),
-  'Reusable detail view should label data sources for the operator.',
 );
 assert.ok(
   modalSource.includes('ExpeditionAssessmentDetailView') &&

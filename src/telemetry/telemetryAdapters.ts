@@ -1,5 +1,7 @@
 import type { BluTelemetry } from '../../lib/BluTypes';
+import type { BluetoothAccessoryRecord } from '../../lib/bluetoothAccessoryRegistry';
 import type { BluetoothTelemetrySource } from '../../lib/bluetoothLiveTelemetry';
+import { identifyBluestackAccessorySensorProfile } from '../../lib/bluestack';
 import type { PowerTelemetry } from '../power/types/PowerTelemetry';
 import type { NormalizedVehicleTelemetry } from '../vehicle-telemetry/VehicleTelemetryTypes';
 import type { ECSTelemetryEvent, ECSTelemetryQuality, ECSTelemetryTransport } from './ECSTelemetryTypes';
@@ -87,7 +89,11 @@ export function bluTelemetryToEcsTelemetryEvents(telemetry: BluTelemetry): ECSTe
 
   pushNumberMetric(events, base, 'battery_percent', 'Battery', telemetry.battery_percent, '%');
   pushNumberMetric(events, base, 'input_watts', 'Input', telemetry.input_watts, 'W');
+  pushNumberMetric(events, base, 'input_volts', 'Input Voltage', telemetry.input_volts, 'V');
+  pushNumberMetric(events, base, 'input_amps', 'Input Current', telemetry.input_amps, 'A');
   pushNumberMetric(events, base, 'output_watts', 'Output', telemetry.output_watts, 'W');
+  pushNumberMetric(events, base, 'output_volts', 'Output Voltage', telemetry.output_volts, 'V');
+  pushNumberMetric(events, base, 'output_amps', 'Output Current', telemetry.output_amps, 'A');
   pushNumberMetric(events, base, 'battery_watts', 'Net Battery', telemetry.battery_watts, 'W');
   pushNumberMetric(events, base, 'estimated_runtime_minutes', 'Runtime', telemetry.estimated_runtime_minutes, 'min');
   pushNumberMetric(events, base, 'solar_input_watts', 'Solar', telemetry.solar_input_watts, 'W');
@@ -136,7 +142,11 @@ export function canonicalPowerTelemetryToEcsTelemetryEvents(telemetry: Partial<P
   pushNumberMetric(events, base, 'battery_percent', 'Battery', telemetry.battery?.socPct, '%');
   pushNumberMetric(events, base, 'capacity_wh', 'Capacity', (telemetry as { capacityWh?: unknown }).capacityWh, 'Wh');
   pushNumberMetric(events, base, 'input_watts', 'Input', telemetry.battery?.wattsIn, 'W');
+  pushNumberMetric(events, base, 'input_volts', 'Input Voltage', telemetry.inputVolts ?? telemetry.solar?.volts, 'V');
+  pushNumberMetric(events, base, 'input_amps', 'Input Current', telemetry.inputAmps ?? telemetry.solar?.amps, 'A');
   pushNumberMetric(events, base, 'output_watts', 'Output', telemetry.battery?.wattsOut, 'W');
+  pushNumberMetric(events, base, 'output_volts', 'Output Voltage', telemetry.outputVolts, 'V');
+  pushNumberMetric(events, base, 'output_amps', 'Output Current', telemetry.outputAmps, 'A');
   pushNumberMetric(events, base, 'solar_input_watts', 'Solar', telemetry.solar?.watts, 'W');
   pushNumberMetric(events, base, 'temperature_celsius', 'Temperature', telemetry.battery?.tempC, 'C');
   pushNumberMetric(events, base, 'estimated_runtime_minutes', 'Runtime', telemetry.battery?.estRuntimeMin, 'min');
@@ -173,6 +183,10 @@ export function vehicleTelemetryToEcsTelemetryEvents(telemetry: NormalizedVehicl
   pushNumberMetric(events, base, 'intake_temp', 'Intake Temperature', telemetry.intake_temp, 'F');
   pushNumberMetric(events, base, 'oil_temp', 'Oil Temperature', telemetry.oil_temp, 'F');
   pushNumberMetric(events, base, 'transmission_temp', 'Transmission Temperature', telemetry.transmission_temp, 'F');
+  const tireLabels = ['Front Left Tire Pressure', 'Front Right Tire Pressure', 'Rear Left Tire Pressure', 'Rear Right Tire Pressure'];
+  (telemetry.tire_pressures ?? []).forEach((pressure, index) => {
+    pushNumberMetric(events, base, `tire_pressure_${index + 1}`, tireLabels[index] ?? `Tire Pressure ${index + 1}`, pressure, 'psi');
+  });
 
   for (const value of telemetry.obd2_values ?? []) {
     if (!Number.isFinite(value.value)) continue;
@@ -194,5 +208,93 @@ export function vehicleTelemetryToEcsTelemetryEvents(telemetry: NormalizedVehicl
     });
   }
 
+  return events;
+}
+
+function isUtilitySensorAccessory(record: BluetoothAccessoryRecord): boolean {
+  return (
+    record.owner === 'sensor' &&
+    (
+      record.providerId === 'propane_monitor' ||
+      record.providerId === 'water_monitor' ||
+      record.categoryHint === 'propane_monitor' ||
+      record.categoryHint === 'water_tank_monitor' ||
+      /propane|water|fluid/i.test(`${record.providerLabel} ${record.categoryHint} ${record.displayName}`)
+    )
+  );
+}
+
+function accessoryQuality(record: BluetoothAccessoryRecord): ECSTelemetryQuality {
+  if (record.connectionState === 'error') return 'error';
+  if (record.connectionState === 'connected') {
+    return finiteNumber(record.utilitySensorTelemetry?.levelPercent) != null ? 'live' : 'stale';
+  }
+  return 'unavailable';
+}
+
+export function bluetoothAccessoryToEcsTelemetryEvents(record: BluetoothAccessoryRecord): ECSTelemetryEvent[] {
+  if (!record.deviceId || !isUtilitySensorAccessory(record)) return [];
+
+  const profile = identifyBluestackAccessorySensorProfile(record);
+  const timestamp = Date.parse(record.connectedAt ?? record.lastSeenAt) || Date.now();
+  const quality = accessoryQuality(record);
+  const isLiveLevel = quality === 'live';
+  const parserStatus = record.connectionState === 'connected'
+    ? record.utilitySensorTelemetry?.parserStatus ?? profile?.parserStatus ?? 'awaiting_level'
+    : 'not_streaming';
+  const base = {
+    sourceDeviceId: record.deviceId,
+    sourceDeviceName: record.displayName,
+    sourceType: 'utility_sensor' as const,
+    provider: record.providerId,
+    providerLabel: record.providerLabel,
+    timestamp,
+    quality,
+    transport: 'ble' as const,
+    errorSource: isLiveLevel
+      ? null
+      : record.connectionState === 'connected'
+        ? 'parser' as const
+        : 'transport' as const,
+    errorMessage: record.connectionState === 'connected'
+      ? isLiveLevel
+        ? null
+        : profile?.detail ?? 'Sensor linked; ECS is waiting for a decoded fluid-level reading from this profile.'
+      : record.lastError,
+  };
+
+  const events: ECSTelemetryEvent[] = [
+    {
+      ...base,
+      metricKey: 'link_state',
+      label: 'Sensor Link',
+      value: record.connectionState,
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'sensor_category',
+      label: 'Sensor Category',
+      value: profile?.category ?? record.categoryHint,
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'profile_id',
+      label: 'Sensor Profile',
+      value: profile?.id ?? 'generic_utility_sensor',
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'parser_status',
+      label: 'Parser Status',
+      value: parserStatus,
+      unit: null,
+    },
+  ];
+
+  pushNumberMetric(events, base, 'level_percent', 'Tank Level', record.utilitySensorTelemetry?.levelPercent, '%');
+  pushNumberMetric(events, base, 'signal_strength', 'Signal', record.signalStrength, 'dBm');
   return events;
 }

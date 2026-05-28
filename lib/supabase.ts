@@ -24,6 +24,7 @@ const DEPLOYED_EDGE_FUNCTIONS = new Set([
   "campgrounds-search",
   "campground-detail",
   "dispersed-camping-eligibility",
+  "convoy-membership",
 ]);
 export const EDGE_FUNCTION_UNAVAILABLE_CODE = "EDGE_FUNCTION_UNAVAILABLE";
 export const SUPABASE_CONFIG_UNAVAILABLE_CODE = "SUPABASE_CONFIG_UNAVAILABLE";

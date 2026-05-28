@@ -19,8 +19,8 @@ async function main() {
 
   [
     'dispatch_internal_beta_gate_green',
-    'convoy_panel_rive_assets_present',
-    'convoy_panel_runtime_wrappers_present',
+    'convoy_panel_map_surface_present',
+    'convoy_live_sharing_controls_present',
     'dashboard_convoy_widget_removed',
     'emergency_ping_truthful_and_local',
     'sensitive_dispatch_integrations_default_off',
@@ -36,6 +36,10 @@ async function main() {
   assert.equal(fs.existsSync('components/dashboard/command-center/widgets/ConvoyCommandWidget.tsx'), false);
   assert.equal(fs.existsSync('components/rive/ECSConvoyCommandRive.tsx'), false);
   assert.equal(fs.existsSync('assets/rive/ConvoyCommand.riv'), false);
+  assert.equal(fs.existsSync('components/rive/ECSConvoyCommandPanelRive.tsx'), false);
+  assert.equal(fs.existsSync('components/rive/ECSConvoyCommandPanelRive.native.tsx'), false);
+  assert.equal(fs.existsSync('assets/rive/ConvoyCommand_Panel.riv'), false);
+  assert.equal(fs.existsSync('public/rive/ConvoyCommand_Panel.riv'), false);
 
   console.log('dispatch convoy production readiness checks passed');
 }

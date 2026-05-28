@@ -5,37 +5,52 @@ const path = require('path');
 const sourcePath = path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
-const railStart = source.indexOf('<View style={styles.commandRail}>');
-assert.ok(railStart >= 0, 'Dispatch command rail should render.');
+const headerStart = source.indexOf('<View style={[styles.headerActions');
+assert.ok(headerStart >= 0, 'Dispatch header actions should render.');
 
-const railEnd = source.indexOf('<EventDetailModal', railStart);
-assert.ok(railEnd > railStart, 'Dispatch command rail should appear before event detail modal.');
+const headerEnd = source.indexOf('</View>', source.indexOf('connectionPill', headerStart));
+assert.ok(headerEnd > headerStart, 'Dispatch header actions should include the connection status.');
 
-const commandRail = source.slice(railStart, railEnd);
-assert.match(commandRail, />\s*Recovery\s*</, 'Dispatch command rail should render a Recovery button.');
+const recoveryPanel = source.slice(headerStart, headerEnd);
 assert.match(
-  commandRail,
-  /accessibilityLabel="Create recovery or hazard CAD event"/,
-  'Recovery button should expose the required accessibility label.',
+  recoveryPanel,
+  /accessibilityLabel="Create recovery report"/,
+  'Recovery report button should expose the required accessibility label from the header actions.',
 );
 assert.match(
-  commandRail,
+  recoveryPanel,
   /onPress=\{\(\) => openCommand\('hazard'\)\}/,
-  'Recovery button should open the hazard/recovery CAD event flow directly.',
+  'Recovery report button should open the hazard/recovery CAD event flow directly from the header.',
 );
-assert.doesNotMatch(commandRail, />\s*More\s*</, 'Dispatch command rail should not render the old More button.');
+assert.match(
+  recoveryPanel,
+  /accessibilityLabel=\{emergencyPingButtonAccessibilityLabel\}/,
+  'Ping GPS should be a compact header action with dynamic cancel/clear accessibility.',
+);
+assert.match(
+  recoveryPanel,
+  /onPress=\{handleEmergencyPingButtonPress\}/,
+  'Ping GPS should route through the cancel/clear aware handler.',
+);
+assert.match(
+  source,
+  /emergencyPingButtonMode === 'cancel'[\s\S]*\? 'Cancel'[\s\S]*emergencyPingButtonMode === 'clear'[\s\S]*\? 'Clear GPS'/,
+  'Ping GPS header action should switch to Cancel for own pings and Clear GPS for received pings.',
+);
+assert.doesNotMatch(source, /function DispatchRecoveryCommandPanel/, 'Dispatch should not render the old lower recovery command panel.');
+assert.doesNotMatch(recoveryPanel, />\s*More\s*</, 'Dispatch header actions should not render the old More button.');
 assert.doesNotMatch(
-  commandRail,
+  recoveryPanel,
   /setMoreVisible\(true\)/,
-  'Dispatch command rail should not open the old More actions menu.',
+  'Dispatch header actions should not open the old More actions menu.',
 );
 
-const recoveryButtonStart = commandRail.indexOf('accessibilityLabel="Create recovery or hazard CAD event"');
-const recoveryButtonEnd = commandRail.indexOf('</TouchableOpacity>', recoveryButtonStart);
-assert.ok(recoveryButtonStart >= 0 && recoveryButtonEnd > recoveryButtonStart, 'Recovery button markup should exist.');
+const recoveryButtonStart = recoveryPanel.indexOf('accessibilityLabel="Create recovery report"');
+const recoveryButtonEnd = recoveryPanel.indexOf('</TouchableOpacity>', recoveryButtonStart);
+assert.ok(recoveryButtonStart >= 0 && recoveryButtonEnd > recoveryButtonStart, 'Recovery report button markup should exist.');
 
-const recoveryButton = commandRail.slice(recoveryButtonStart, recoveryButtonEnd);
-assert.doesNotMatch(recoveryButton, /<Ionicons\b/, 'Recovery button should not render an icon.');
-assert.match(recoveryButton, /styles\.recoveryCommandButton/, 'Recovery button should use critical/recovery styling.');
+const recoveryButton = recoveryPanel.slice(recoveryButtonStart, recoveryButtonEnd);
+assert.match(recoveryButton, /warning-outline/, 'Recovery report button should render the warning icon.');
+assert.match(recoveryButton, /styles\.headerUtilityButton/, 'Recovery report button should use compact header utility styling.');
 
-console.log('Dispatch action row Recovery button checks passed.');
+console.log('Dispatch recovery header action checks passed.');

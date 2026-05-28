@@ -192,8 +192,8 @@ assert.strictEqual(
     isAuthScreen: false,
     isProtectedScreen: false,
   }).redirectTarget,
-  '/fleet',
-  'Vehicle recovery should not leave setup-incomplete users on Dashboard.',
+  null,
+  'Vehicle recovery should not bounce users away from Dashboard after normal shell navigation.',
 );
 
 assert.strictEqual(
@@ -233,6 +233,19 @@ assert.strictEqual(
   }).redirectTarget,
   null,
   'Vehicle recovery should allow Navigate so Recovery Assist coordinate handoffs can open the map.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/discover',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Vehicle recovery should allow Explore instead of forcing the user back to Fleet.',
 );
 
 assert.strictEqual(

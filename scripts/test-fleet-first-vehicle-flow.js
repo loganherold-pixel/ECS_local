@@ -134,6 +134,21 @@ includes(
 );
 includes(
   profileModal,
+  'if (validationErrors.length > 0) {',
+  'Advanced Specs should block until required profile fields pass validation.',
+);
+includes(
+  profileModal,
+  'triggerProfileGateShake();',
+  'Blocked Advanced Specs entry should provide shake feedback.',
+);
+includes(
+  profileModal,
+  'showToast?.(validationErrors[0]);',
+  'Blocked Advanced Specs entry should surface the current validation remark.',
+);
+includes(
+  profileModal,
   'const targetVehicle = profileResult.vehicle;',
   'Advanced Specs Done should use the saved first vehicle ID for tires, lift, fuel, and water.',
 );

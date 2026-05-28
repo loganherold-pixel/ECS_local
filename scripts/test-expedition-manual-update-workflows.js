@@ -130,7 +130,7 @@ async function main() {
   const detailViewSource = fs.readFileSync(detailViewPath, 'utf8');
   const expeditionTabSource = fs.readFileSync(expeditionTabPath, 'utf8');
   const manualActionsSource = fs.readFileSync(manualActionsPath, 'utf8');
-  assert.ok(detailViewSource.includes('Related Actions'), 'Manual update actions should be exposed from the assessment detail actions.');
+  assert.ok(!detailViewSource.includes('Related Actions'), 'Assessment detail view should hide the noisy related actions section.');
   assert.ok(expeditionTabSource.includes('applyManualAssessmentAction'), 'Expedition tab should wire detail actions to manual update workflows.');
   assert.ok(manualActionsSource.includes('MANUAL_EXPEDITION_DATA_STALE_AFTER_MINUTES'), 'Manual updates should document local stale behavior.');
 

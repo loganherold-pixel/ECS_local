@@ -665,10 +665,10 @@ assert.ok(
   'Navigate should show empty-success copy, dev diagnostics, and retry actions for failed camp layers.',
 );
 assert.ok(
-  navigateSource.includes('establishedCampsites={establishedCampsitesLayer}') &&
+    navigateSource.includes('establishedCampsites={establishedCampsitesLayer}') &&
     navigateSource.includes('dispersedCampingEligibility={dispersedCampingEligibilityLayer}') &&
-    navigateSource.includes('toEstablishedCampsiteFeatureCollection(establishedCampgrounds)') &&
-    navigateSource.includes('toDispersedCampingFeatureCollection(dispersedCampingRegions'),
+    navigateSource.includes('toEstablishedCampsiteFeatureCollection(establishedCampgroundsForMap)') &&
+    navigateSource.includes('toDispersedCampingFeatureCollection(dispersedCampingRegionsForMap'),
   'Navigate should pass normalized GeoJSON layer state into MapRenderer.',
 );
 assert.ok(

@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import { TACTICAL, ECS } from '../lib/theme';
+import { useTheme } from '../context/ThemeContext';
 import {
   syncSkipAlertStore,
   type SyncSkipAlertState,
@@ -54,6 +55,7 @@ function LearnMoreModal({
   skippedCount: number;
   skippedTypes: string[];
 }) {
+  const { palette, isLight } = useTheme();
   // Map action types to category labels for display
   const categories = skippedTypes.reduce<Record<string, number>>((acc, t) => {
     const cat = ACTION_CATEGORY_MAP[t as SyncActionType] || 'General';
@@ -68,44 +70,44 @@ function LearnMoreModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={modalStyles.overlay}>
-        <View style={modalStyles.container}>
+      <View style={[modalStyles.overlay, { backgroundColor: isLight ? 'rgba(48, 40, 25, 0.34)' : 'rgba(0,0,0,0.82)' }]}>
+        <View style={[modalStyles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}>
           {/* Header */}
           <View style={modalStyles.header}>
             <View style={modalStyles.headerIcon}>
               <Ionicons name="cloud-offline-outline" size={20} color={BANNER_COLORS.icon} />
             </View>
-            <Text style={modalStyles.headerTitle}>OFFLINE CHANGES</Text>
+            <Text style={[modalStyles.headerTitle, { color: palette.text }]}>OFFLINE CHANGES</Text>
             <TouchableOpacity
               onPress={onClose}
               style={modalStyles.closeBtn}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
+              <Ionicons name="close" size={18} color={palette.textMuted} />
             </TouchableOpacity>
           </View>
 
-          <View style={modalStyles.divider} />
+          <View style={[modalStyles.divider, { backgroundColor: isLight ? 'rgba(169,119,27,0.14)' : 'rgba(212,160,23,0.15)' }]} />
 
           <ScrollView style={modalStyles.body} showsVerticalScrollIndicator={false}>
             {/* Summary */}
             <View style={modalStyles.summaryRow}>
               <Text style={modalStyles.summaryCount}>{skippedCount}</Text>
-              <Text style={modalStyles.summaryLabel}>
+              <Text style={[modalStyles.summaryLabel, { color: palette.textMuted }]}>
                 change{skippedCount !== 1 ? 's' : ''} could not sync to the cloud
               </Text>
             </View>
 
             {/* Explanation */}
-            <Text style={modalStyles.paragraph}>
+            <Text style={[modalStyles.paragraph, { color: palette.textMuted }]}>
               These changes were made while you were not signed in. The app saved
               them locally, but could not push them to the cloud because there was
               no authenticated account to associate them with.
             </Text>
 
-            <Text style={modalStyles.paragraph}>
+            <Text style={[modalStyles.paragraph, { color: palette.textMuted }]}>
               When you use the app without signing in, all data is stored on this
-              device only. This is called <Text style={modalStyles.bold}>local-only mode</Text>.
+              device only. This is called <Text style={[modalStyles.bold, { color: palette.text }]}>local-only mode</Text>.
               Changes made in local-only mode are preserved on your device but
               cannot be synced to the cloud or shared across devices.
             </Text>
@@ -113,13 +115,13 @@ function LearnMoreModal({
             {/* What happened */}
             <Text style={modalStyles.sectionTitle}>WHAT HAPPENED</Text>
             <View style={modalStyles.bulletList}>
-              <Text style={modalStyles.bullet}>
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
                 {'\u2022'}  You made changes while signed out or before creating an account
               </Text>
-              <Text style={modalStyles.bullet}>
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
                 {'\u2022'}  The sync system detected these changes cannot be attributed to a cloud account
               </Text>
-              <Text style={modalStyles.bullet}>
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
                 {'\u2022'}  Rather than retry indefinitely and cause errors, the system automatically skipped them
               </Text>
             </View>
@@ -143,18 +145,18 @@ function LearnMoreModal({
             {/* What to do */}
             <Text style={modalStyles.sectionTitle}>WHAT YOU CAN DO</Text>
             <View style={modalStyles.bulletList}>
-              <Text style={modalStyles.bullet}>
-                {'\u2022'}  <Text style={modalStyles.bold}>Sign in</Text> to enable cloud sync for all future changes
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
+                {'\u2022'}  <Text style={[modalStyles.bold, { color: palette.text }]}>Sign in</Text> to enable cloud sync for all future changes
               </Text>
-              <Text style={modalStyles.bullet}>
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
                 {'\u2022'}  Your local data is still on this device and accessible in the app
               </Text>
-              <Text style={modalStyles.bullet}>
+              <Text style={[modalStyles.bullet, { color: palette.textMuted }]}>
                 {'\u2022'}  New changes made after signing in will sync normally
               </Text>
             </View>
 
-            <Text style={[modalStyles.paragraph, { marginTop: 12, opacity: 0.6 }]}>
+            <Text style={[modalStyles.paragraph, { color: palette.textMuted, marginTop: 12, opacity: 0.6 }]}>
               This is expected behavior and not an error. The app is designed to
               work offline-first — your data is safe on this device.
             </Text>
@@ -181,6 +183,7 @@ function LearnMoreModal({
 // ── Main Banner Component ─────────────────────────────────────
 
 export default function SyncSkipAlertBanner() {
+  const { palette, isLight } = useTheme();
   const [state, setState] = useState<SyncSkipAlertState>(
     syncSkipAlertStore.getState()
   );
@@ -254,6 +257,10 @@ export default function SyncSkipAlertBanner() {
         style={[
           styles.container,
           {
+            backgroundColor: isLight ? 'rgba(255,251,245,0.92)' : BANNER_COLORS.bg,
+            borderColor: isLight ? palette.border : BANNER_COLORS.border,
+          },
+          {
             transform: [{ translateY: slideAnim }],
             opacity: opacityAnim,
           },
@@ -263,14 +270,14 @@ export default function SyncSkipAlertBanner() {
         <View style={styles.severityBar} />
 
         {/* Icon */}
-        <View style={styles.iconWrap}>
+        <View style={[styles.iconWrap, { backgroundColor: isLight ? 'rgba(255,255,255,0.62)' : 'rgba(0,0,0,0.18)' }]}>
           <Ionicons name="cloud-offline-outline" size={16} color={BANNER_COLORS.icon} />
         </View>
 
         {/* Content */}
         <View style={styles.content}>
           <Text style={styles.label}>SYNC SKIPPED</Text>
-          <Text style={styles.message} numberOfLines={2}>
+          <Text style={[styles.message, { color: palette.textMuted }]} numberOfLines={2}>
             {message}
           </Text>
           <View style={styles.actions}>
@@ -299,12 +306,12 @@ export default function SyncSkipAlertBanner() {
 
         {/* Dismiss button */}
         <TouchableOpacity
-          style={styles.dismissBtn}
+          style={[styles.dismissBtn, { backgroundColor: isLight ? 'rgba(255,255,255,0.62)' : 'rgba(0,0,0,0.18)' }]}
           onPress={handleDismiss}
           activeOpacity={0.7}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+          <Ionicons name="close" size={14} color={palette.textMuted} />
         </TouchableOpacity>
       </Animated.View>
 

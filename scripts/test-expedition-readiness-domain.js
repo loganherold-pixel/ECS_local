@@ -101,6 +101,9 @@ assert.ok(ready.recoveryBrief.nearestBailoutSummary.includes('Mineral Bottom Roa
 assert.ok(!/official emergency contact:|call ranger/i.test(ready.recoveryBrief.officialContactSummary), 'Recovery brief must not fabricate official contact instructions.');
 assert.strictEqual(ready.powerBrief.statusLabel, 'Ready');
 assert.ok(ready.powerBrief.runtimeSummary.includes('28 h'));
+assert.ok(ready.powerBrief.stateOfChargeSummary.includes('86%'));
+assert.ok(ready.powerBrief.flowSummary.includes('Input 210W / Output 84W / Net +286W'));
+assert.ok(ready.powerBrief.solarSummary.includes('160W solar input'));
 assert.strictEqual(readiness.getReadinessDecisionLabel(ready.status), 'Ready');
 assert.strictEqual(readiness.getReadinessColorToken(ready.status), 'status.ready');
 assert.ok(readiness.getReadinessShortCopy(ready).includes('ECS Intelligence'));

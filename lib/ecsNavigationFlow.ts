@@ -18,6 +18,7 @@ export type ECSNavigationFlowIntent =
   | 'vehicle_context_updated'
   | 'vehicle_ready_confirmed'
   | 'route_preview'
+  | 'prepare_offline_route_package'
   | 'quick_action'
   | 'navigation_ended'
   | 'editor_saved'

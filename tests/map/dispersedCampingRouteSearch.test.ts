@@ -70,11 +70,26 @@ const results = findDispersedCampingRegionsNearRoute({
 
 assert.deepStrictEqual(
   results.map((result: RouteNearbyDispersedCampingRegion) => result.regionId),
-  ['high-near', 'medium-near', 'verify-near'],
-  'Route search should sort high before medium before verify and exclude restricted regions.',
+  ['medium-near', 'high-near', 'verify-near'],
+  'Route search should sort by distance inside the 5-mile corridor and exclude restricted regions.',
 );
 assert.ok(results.every((result) => result.confidence !== 'restricted'));
 assert.ok(results.every((result) => (result.distanceFromRouteMiles ?? 999) <= 5));
+
+const distanceFirstResults = findDispersedCampingRegionsNearRoute({
+  regions: [
+    region('high-edge', 'high', 'BLM', -119.09, 37.16),
+    region('medium-crossing', 'medium', 'USFS', -119.005, 37.16),
+  ],
+  routeCoordinates: route,
+  corridorMiles: DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES,
+  maxResults: 2,
+});
+assert.deepStrictEqual(
+  distanceFirstResults.map((result) => result.regionId),
+  ['medium-crossing', 'high-edge'],
+  'Route search should favor regions closest to the active route before confidence ties.',
+);
 
 const limitedResults = findDispersedCampingRegionsNearRoute({
   regions,

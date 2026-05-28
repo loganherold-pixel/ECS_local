@@ -56,7 +56,7 @@ export interface TrailGuidanceSnapshot {
   isOffTrail: boolean;
 }
 
-const ARRIVAL_DISTANCE_M = 35;
+const ARRIVAL_DISTANCE_M = 200;
 const MIN_REACHED_RADIUS_M = 30;
 const MAX_REACHED_RADIUS_M = 90;
 const CONTINUE_CHUNK_M = 160;

@@ -253,11 +253,17 @@ for (const [oldId, replacementId] of [
 assert.deepStrictEqual(
   dashboardBodyTabs,
   [
-    { key: 'widgets', label: 'WIDGETS' },
     { key: 'brief', label: 'ECS BRIEF' },
-    { key: 'expedition', label: 'EXPEDITION' },
+    { key: 'widgets', label: 'DASHBOARD' },
+    { key: 'expedition', label: 'ECS OVERVIEW' },
   ],
-  'Dashboard body tabs must appear in order: Widgets, ECS Brief, Expedition.',
+  'Dashboard body tabs must appear in order: ECS Brief, Dashboard, ECS Overview.',
+);
+assert.ok(
+  dashboardSource.includes("if (tab === 'brief') return 0;") &&
+    dashboardSource.includes("if (tab === 'widgets') return 1;") &&
+    dashboardSource.includes('return 2;'),
+  'Dashboard tab animation index must match ECS Brief, Dashboard, ECS Overview ordering.',
 );
 assert.ok(
   dashboardSource.includes("<DiscoverIcon color={isActive ? tab.accent : palette.textMuted} size={13} />") &&
@@ -280,7 +286,7 @@ assert.ok(
 );
 assert.ok(
   dashboardSource.includes("type DashboardTab = 'widgets' | 'brief' | 'expedition'"),
-  'DashboardTab union must include Widgets, ECS Brief, and Expedition only.',
+  'DashboardTab union must include Dashboard, ECS Brief, and ECS Overview panels only.',
 );
 assert.ok(
     !dashboardBodyTabs.some((tab) => tab.key === 'highway' || tab.label === 'HIGHWAY') &&
@@ -375,26 +381,26 @@ assert.ok(
   assert.ok(
     widgetGridSource.includes("const widgetMenuLongPressEnabled = slot.widgetType !== 'attitude-command'") &&
       !widgetGridSource.includes('onOpenWidgetReplacementPicker?.(slot)') &&
-      widgetRenderersSource.includes('accessibilityLabel="Change center module"') &&
-      widgetRenderersSource.includes('title="Change Center Module"'),
-    'Dashboard must suppress the old Attitude Command long-press widget menu while preserving the Change Center menu.',
+      !widgetRenderersSource.includes('accessibilityLabel="Change center module"') &&
+      !widgetRenderersSource.includes('title="Change Center Module"'),
+    'Dashboard must suppress the old Attitude Command long-press widget menu and the retired Change Center menu.',
   );
   assert.ok(
-    widgetRenderersSource.includes('const openModuleSelector = useCallback') &&
-      widgetRenderersSource.includes('setModuleSelectorVisible(true)') &&
-      widgetRenderersSource.includes('onPress={openModuleSelector}') &&
-      widgetRenderersSource.includes('Ionicons name="ellipsis-horizontal"') &&
-      widgetRenderersSource.includes('ECS_COMMAND_MODULE_ORDER.map((moduleId)') &&
-      widgetRenderersSource.includes('onPress={() => handleSelectCommandModule(moduleId)}') &&
-      widgetRenderersSource.includes('ecsCommandModuleStore.setSelectedModule(moduleId)') &&
-      widgetRenderersSource.includes("selected ? 'ACTIVE' : 'SELECT'"),
-    'Attitude Command ellipsis menu must remain the official Change Center flow and update the center module store.',
+    !widgetRenderersSource.includes('const openModuleSelector = useCallback') &&
+      !widgetRenderersSource.includes('setModuleSelectorVisible(true)') &&
+      !widgetRenderersSource.includes('onPress={openModuleSelector}') &&
+      !widgetRenderersSource.includes('Ionicons name="ellipsis-horizontal"') &&
+      !widgetRenderersSource.includes('ECS_COMMAND_MODULE_ORDER.map((moduleId)') &&
+      !widgetRenderersSource.includes('onPress={() => handleSelectCommandModule(moduleId)}'),
+    'Attitude Command should not expose a center-module picker now that only 3D Nav Command remains.',
   );
   assert.ok(
-    fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("label: 'Navigation Command'") &&
+    fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("label: '3D Nav Command'") &&
       fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: '3D Follow Map'") &&
-      fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: 'Fleet Vehicle Profile'"),
-    'Center module registry must expose only the stable Attitude Command and Navigation Command modes.',
+      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("label: 'Terrain Risk'") &&
+      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: 'Fleet Vehicle Profile'") &&
+      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: 'Side Profile Analysis'"),
+    'Center module registry must expose only the stable 3D Nav Command mode.',
   );
   assert.ok(
     !widgetRenderersSource.includes('Replace widget') &&
@@ -403,27 +409,31 @@ assert.ok(
     'Change Center menu context must not include deprecated widget-management options.',
   );
   assert.ok(
-    widgetRenderersSource.includes("selectedCommandModule === 'attitude' ? (") &&
-      widgetRenderersSource.includes('<AttitudeCommandWidgetConnected') &&
-      widgetRenderersSource.includes('attitudeStageVehicleImageMode') &&
-      widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
-      widgetRenderersSource.includes('rollDeg={commandStageRollDeg}') &&
-      widgetRenderersSource.includes('telemetryEnabled={false}') &&
+    !widgetRenderersSource.includes("selectedCommandModule === 'attitude' ? (") &&
+      !widgetRenderersSource.includes('<AttitudeCommandWidgetConnected') &&
+      !widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
       widgetRenderersSource.includes("threeDNavigation: ({ mode }) => (") &&
-      widgetRenderersSource.includes('<Mini3DFollowMap'),
-    'Stable shell center window must render the active Fleet vehicle attitude backdrop, live gauge readouts for Attitude Command, and the 3D follow map for Navigation Command.',
+      widgetRenderersSource.includes('<Mini3DFollowMap') &&
+      !widgetRenderersSource.includes('<TerrainRiskCommandModule'),
+    'Stable shell center window must render only the 3D follow map for 3D Nav Command.',
+  );
+  assert.ok(
+    !widgetRenderersSource.includes('{selectedCommandModuleDefinition.title}') &&
+      widgetRenderersSource.includes('{selectedCommandModuleDefinition.subtitle}'),
+    'Navigation Command face should hide the redundant NAVIGATION COMMAND title and keep the compact 3D Follow Map label.',
   );
 }
 assert.ok(
     widgetRenderersSource.includes('const AttitudeCommandWidget') &&
     widgetRenderersSource.includes("case 'attitude-command': return <AttitudeCommandWidget") &&
-    widgetRenderersSource.includes('eyebrow="CURRENT WEATHER"') &&
-    widgetRenderersSource.includes('eyebrow="REMAINING SUNLIGHT"') &&
-    widgetRenderersSource.includes('eyebrow="ROUTE PROGRESS"') &&
-    widgetRenderersSource.includes('eyebrow="POWER MONITOR"') &&
-    widgetRenderersSource.includes('eyebrow="VEHICLE PROFILE"') &&
-    widgetRenderersSource.includes('<TacticalPopupShell'),
-  'Attitude Command renderer must compose the attitude surface with weather, daylight, route, power, and vehicle panels.',
+      widgetRenderersSource.includes('eyebrow="CURRENT WEATHER"') &&
+      widgetRenderersSource.includes('eyebrow="REMAINING SUNLIGHT"') &&
+    widgetRenderersSource.includes('eyebrow="ROUTE TERRAIN RISK"') &&
+    widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview') &&
+      widgetRenderersSource.includes('eyebrow="POWER MONITOR"') &&
+      widgetRenderersSource.includes('eyebrow="VEHICLE PROFILE"') &&
+      widgetRenderersSource.includes('<TacticalPopupShell'),
+  'Attitude Command renderer must compose the attitude surface with weather, daylight, route terrain risk, power, and vehicle panels.',
 );
 assert.ok(
   widgetGridSource.includes("slot.widgetType === 'attitude-monitor' || slot.widgetType === 'attitude-command'"),
@@ -648,7 +658,7 @@ for (const snippet of [
   'card.enabled && badgeCount > 0',
   "Start navigation to enable",
   "Team required",
-  "No camps on active route",
+  "No camp review available",
   "markTopCardViewed(card.id)",
   "useSyncExternalStore",
   "cardUnreadBadge",
@@ -1104,9 +1114,12 @@ assert.ok(
   'Navigation Command turn-by-turn guidance must sit at the darkened bottom/base of the map and reserve space for the compass.',
 );
 assert.ok(
-  widgetRenderersSource.includes("selectedCommandModule !== 'follow3d' && !commandCenterFrameSelected ? (") &&
-    !widgetRenderersSource.includes("selectedCommandModuleStatus.label === 'ROUTE READY'"),
-  'Navigation Command must suppress the parent Route Ready status pill without removing other center module controls.',
+  !widgetRenderersSource.includes("selectedCommandModule !== 'follow3d' && selectedCommandModule !== 'terrainRisk' && !commandCenterFrameSelected ? (") &&
+    !widgetRenderersSource.includes("selectedCommandModuleStatus.label === 'ROUTE READY'") &&
+    !widgetRenderersSource.includes('stageSoundPill') &&
+    !widgetRenderersSource.includes('stageZeroButton') &&
+    !widgetRenderersSource.includes('stageModulePill'),
+  'Navigation Command must remove retired center module controls, including parent status, sound, zero, and selector buttons.',
 );
 
 assert.ok(

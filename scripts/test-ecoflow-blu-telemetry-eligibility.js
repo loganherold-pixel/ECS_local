@@ -24,11 +24,20 @@ function loadTypeScriptModule(relPath) {
 
 const {
   ECOFLOW_BLU_TELEMETRY_PRODUCT_TYPE,
+  ECOFLOW_CLOUD_TELEMETRY_PRODUCT_TYPES,
   describeEcoFlowBluEligibility,
+  normalizeEcoFlowTelemetryProductType,
+  isEcoFlowCloudTelemetryProductType,
   isEcoFlowBluTelemetryCapable,
 } = loadTypeScriptModule('lib/ecoflowBluTelemetryEligibility.ts');
 
 assert.strictEqual(ECOFLOW_BLU_TELEMETRY_PRODUCT_TYPE, 'power_station');
+assert.deepStrictEqual(ECOFLOW_CLOUD_TELEMETRY_PRODUCT_TYPES, [
+  'power_station',
+  'refrigerator',
+  'portable_ac',
+  'charger',
+]);
 assert.strictEqual(
   isEcoFlowBluTelemetryCapable({
     deviceId: 'delta3',
@@ -38,8 +47,42 @@ assert.strictEqual(
   true,
   'EcoFlow power stations should be eligible for BLU telemetry.',
 );
+assert.strictEqual(
+  isEcoFlowBluTelemetryCapable({
+    deviceId: 'glacier',
+    deviceName: 'GLACIER refrigerator',
+    productType: 'refrigerator',
+  }),
+  true,
+  'EcoFlow Glacier refrigerators should be eligible for cloud/API telemetry.',
+);
+assert.strictEqual(isEcoFlowCloudTelemetryProductType('refrigerator'), true);
+assert.strictEqual(isEcoFlowCloudTelemetryProductType('portable_ac'), true);
+assert.strictEqual(isEcoFlowCloudTelemetryProductType('charger'), true);
 
-for (const productType of ['refrigerator', 'charger', 'portable_ac', 'unknown', '', null]) {
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('Power Station'), 'power_station');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('Portable Power Station'), 'power_station');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('', 'EcoFlow DELTA 2 Max'), 'power_station');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('', 'Delta 3-1500-5055'), 'power_station');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType(null, 'RIVER 2 Pro'), 'power_station');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('', 'EcoFlow GLACIER'), 'refrigerator');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('Portable AC', 'WAVE 2'), 'portable_ac');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('DC DC Charger'), 'charger');
+assert.strictEqual(normalizeEcoFlowTelemetryProductType('', 'EcoFlow 800W Alternator Charger'), 'charger');
+
+for (const candidate of [
+  { deviceId: 'delta2-space', deviceName: 'DELTA 2', productType: 'Power Station' },
+  { deviceId: 'delta2-name', deviceName: 'EcoFlow DELTA 2 Max', productType: '' },
+  { deviceId: 'river-name', deviceName: 'RIVER 2 Pro', productType: 'unknown' },
+]) {
+  assert.strictEqual(
+    isEcoFlowBluTelemetryCapable(candidate),
+    true,
+    `${candidate.deviceName} should be eligible even when EcoFlow catalog productType is loose.`,
+  );
+}
+
+for (const productType of ['solar_tracker', 'unknown', '', null]) {
   const eligibility = describeEcoFlowBluEligibility({
     deviceId: `device-${productType ?? 'null'}`,
     deviceName: String(productType ?? 'missing'),
@@ -129,8 +172,15 @@ assert(
   cloudProviderSource.includes('import { ecsLog } from "../../../../lib/ecsLogger";') &&
     cloudProviderSource.includes('function logEcoFlowDebug') &&
     cloudProviderSource.includes('debugFlag: "ECS_DEBUG_ECOFLOW_CLOUD"') &&
-    cloudProviderSource.includes('function logEcoFlowWarn'),
+    cloudProviderSource.includes('function logEcoFlowWarn') &&
+    cloudProviderSource.includes('function logEcoFlowUnauthorizedDeviceWarnOnce') &&
+    cloudProviderSource.includes('const ecoFlowUnauthorizedWarningKeys = new Set<string>();'),
   'EcoFlow cloud provider diagnostics should route through ecsLog with an explicit debug flag.',
+);
+assert(
+  cloudProviderSource.includes('logEcoFlowUnauthorizedDeviceWarnOnce(deviceId, error)') &&
+    !cloudProviderSource.includes('logEcoFlowWarn("filtered EcoFlow device: unauthorized for cloud telemetry"'),
+  'Repeated unauthorized EcoFlow cloud telemetry warnings should be deduped across provider instances.',
 );
 assert(
   !cloudProviderSource.includes('console.log(') &&

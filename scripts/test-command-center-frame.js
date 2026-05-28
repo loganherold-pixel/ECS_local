@@ -30,10 +30,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   "'setupNeeded'",
   "'attitude'",
   "'threeDNavigation'",
-  "'recoveryHazardCompass'",
-  "'trailDecision'",
-  "'campScout'",
-  "'expeditionReadiness'",
 ].forEach((token) => {
   assert.ok(typesSource.includes(token), `Command center types missing ${token}`);
 });
@@ -86,10 +82,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
 [
   'ATTITUDE',
   'NAV 3D',
-  'RECOVERY',
-  'TRAIL',
-  'CAMP',
-  'READY',
   'modeButtonSelected',
   'TACTICAL.amber',
   'TACTICAL.textMuted',
@@ -129,17 +121,15 @@ assert.ok(
 );
 
 assert.ok(
-  commandStoreSource.includes("'recoveryHazardCompass'") &&
-    commandStoreSource.includes("'trailDecisionCommand'") &&
-    commandStoreSource.includes("'campScoutCommand'") &&
-    commandStoreSource.includes("'expeditionReadinessCommand'") &&
-    commandStoreSource.includes('Recovery / Hazard Compass') &&
-    commandStoreSource.includes('Trail Decision Command') &&
-    commandStoreSource.includes('Camp Scout Command') &&
-    commandStoreSource.includes('Expedition Readiness Command') &&
-    commandStoreSource.includes('Recovery Vector Standby') &&
-    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand'/.test(commandStoreSource),
-  'Command module store should persist Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, and Expedition Readiness command-center modes.',
+  /'attitude',\s*'follow3d'/.test(commandStoreSource) &&
+    /'follow3d',\s*'terrainRisk'/.test(commandStoreSource) &&
+    commandStoreSource.includes("label: '3D Nav Command'") &&
+    commandStoreSource.includes("label: 'Terrain Risk'") &&
+    !commandStoreSource.includes('Recovery / Hazard Compass') &&
+    !commandStoreSource.includes('Trail Decision Command') &&
+    !commandStoreSource.includes('Camp Scout Command') &&
+    !commandStoreSource.includes('Expedition Readiness Command'),
+  'Command module store should expose Attitude Command, 3D Nav Command, and Terrain Risk in the command module selector.',
 );
 
 assert.ok(
@@ -153,12 +143,12 @@ assert.ok(
     !widgetRenderersSource.includes('dashboard-command-center-mode-selector') &&
     widgetRenderersSource.includes('isCommandCenterModuleId') &&
     widgetRenderersSource.includes('dataContext={commandCenterDataContext}') &&
-    registrySource.includes("label: 'Recovery / Hazard Compass'") &&
-    registrySource.includes("label: 'Trail Decision Command'") &&
-    registrySource.includes("label: 'Camp Scout Command'") &&
-    registrySource.includes("label: 'Expedition Readiness Command'") &&
+    !registrySource.includes("label: 'Recovery / Hazard Compass'") &&
+    !registrySource.includes("label: 'Trail Decision Command'") &&
+    !registrySource.includes("label: 'Camp Scout Command'") &&
+    !registrySource.includes("label: 'Expedition Readiness Command'") &&
     !registrySource.includes("label: 'Convoy Command'"),
-  'Dashboard Attitude Command renderer should use the reusable command-center host without the redundant in-widget mode selector.',
+  'Dashboard Attitude Command renderer should use the reusable command-center host while keeping non-host modules outside the command-center mode selector.',
 );
 
 assert.ok(

@@ -27,6 +27,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -208,9 +219,10 @@ assert(
     mapRendererSource.includes('camp-scout-selected') &&
     mapRendererSource.includes('camp-scout-tent') &&
     mapRendererSource.includes('camp-scout-rank') &&
-    mapRendererSource.includes('camp-scout-label') &&
-    mapRendererSource.includes("label.textContent = 'camp'"),
-  'Remote Camp Pin Scout base marker style should remain the renderer source of truth.',
+    mapRendererSource.includes('root.appendChild(rank)') &&
+    !mapRendererSource.includes('camp-scout-label') &&
+    !mapRendererSource.includes("label.textContent = 'camp'"),
+  'Remote Camp Pin Scout base marker style should render a tent circle with a hovering rank badge.',
 );
 assert(
   !mapRendererSource.includes('campops-marker') &&

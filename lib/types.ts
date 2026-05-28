@@ -187,6 +187,15 @@ export interface Vehicle {
   /** Front-only leveling amount, separate from total suspension lift. */
   front_level_inches?: number | null;
   ground_clearance_inches?: number | null;
+  overall_length_in?: number | null;
+  overall_width_in?: number | null;
+  overall_height_in?: number | null;
+  track_width_front_in?: number | null;
+  track_width_rear_in?: number | null;
+  approach_angle_deg?: number | null;
+  breakover_angle_deg?: number | null;
+  departure_angle_deg?: number | null;
+  turning_diameter_ft?: number | null;
   created_at: string;
   updated_at: string;
 }

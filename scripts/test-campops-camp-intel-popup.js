@@ -8,6 +8,7 @@ const root = path.join(__dirname, '..');
 const viewModelPath = path.join(root, 'lib', 'campops', 'campOpsCampIntelViewModel.ts');
 const popupPath = path.join(root, 'components', 'navigate', 'CampScoutIntelCard.tsx');
 const establishedPopupPath = path.join(root, 'components', 'navigate', 'EstablishedCampsiteSheet.tsx');
+const establishedScorePath = path.join(root, 'lib', 'map', 'establishedCampgroundScore.ts');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 
 const originalLoad = Module._load;
@@ -148,6 +149,7 @@ assert(
 
 const popupSource = fs.readFileSync(popupPath, 'utf8');
 const establishedPopupSource = fs.readFileSync(establishedPopupPath, 'utf8');
+const establishedScoreSource = fs.readFileSync(establishedScorePath, 'utf8');
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 const combinedSource = `${popupSource}\n${navigateSource}`;
 
@@ -191,11 +193,11 @@ assert(
 );
 
 assert(
-  establishedPopupSource.includes('resolveEstablishedCampScore') &&
+  establishedPopupSource.includes('resolveEstablishedCampgroundScore') &&
     establishedPopupSource.includes('ECS SCORE') &&
     establishedPopupSource.includes('camp confidence') &&
-    establishedPopupSource.includes('source confidence, operating status, availability freshness, and attribution'),
-  'Established campground popups should explain ECS scoring in layman terms without claiming live availability.',
+    establishedScoreSource.includes('live campground status, source confidence, availability freshness, operator data, and provider attribution'),
+  'Established campground popups should explain live-data ECS scoring in layman terms without claiming live availability.',
 );
 
 const forbiddenCopy = [

@@ -17,6 +17,7 @@ import Svg, {
   Line,
   Path,
 } from 'react-native-svg';
+import { getAttitudeDialMagnitudeColor } from '../attitudeDialColor';
 
 export type AttitudeDialLabel = 'ROLL' | 'PITCH';
 
@@ -95,22 +96,6 @@ function formatDialValue(value: number) {
   return `${rounded > 0 ? '+' : ''}${rounded}\u00b0`;
 }
 
-function getSignalColor({
-  criticalThresholdDeg,
-  ecsGold,
-  valueDeg,
-  warningThresholdDeg,
-}: Pick<AttitudeDialProps, 'criticalThresholdDeg' | 'ecsGold' | 'valueDeg' | 'warningThresholdDeg'>) {
-  const magnitude = Math.abs(valueDeg);
-  if (criticalThresholdDeg != null && magnitude >= criticalThresholdDeg) {
-    return '#ff6f4f';
-  }
-  if (warningThresholdDeg != null && magnitude >= warningThresholdDeg) {
-    return '#ffb24a';
-  }
-  return ecsGold;
-}
-
 export default function AttitudeDial({
   criticalThresholdDeg,
   ecsGold,
@@ -137,10 +122,12 @@ export default function AttitudeDial({
   const zeroValue = clamp(0, min, max);
   const valueAngle = degreeToDialAngle(clampedValue, min, max);
   const zeroAngle = degreeToDialAngle(zeroValue, min, max);
-  const activeColor = getSignalColor({
+  void ecsGold;
+  const activeColor = getAttitudeDialMagnitudeColor({
     criticalThresholdDeg,
-    ecsGold,
-    valueDeg: displayValue,
+    maxDeg: max,
+    minDeg: min,
+    valueDeg: clampedValue,
     warningThresholdDeg,
   });
   const animatedAngle = useSharedValue(valueAngle);
@@ -192,6 +179,12 @@ export default function AttitudeDial({
     glowRadius,
     Math.min(zeroAngle, valueAngle),
     Math.max(zeroAngle, valueAngle),
+  );
+  const counterGlowPath = describeArc(
+    center,
+    glowRadius,
+    Math.min(zeroAngle, valueAngle) + 180,
+    Math.max(zeroAngle, valueAngle) + 180,
   );
   const indicatorTop = polarPoint(center, indicatorRadius, 0);
   const indicatorBottom = polarPoint(center, indicatorRadius, 180);
@@ -245,6 +238,16 @@ export default function AttitudeDial({
             strokeLinecap="round"
           />
         ) : null}
+        {counterGlowPath ? (
+          <Path
+            d={counterGlowPath}
+            fill="none"
+            stroke={activeColor}
+            strokeOpacity={0.2}
+            strokeWidth={dialSize * 0.05}
+            strokeLinecap="round"
+          />
+        ) : null}
         {glowPath ? (
           <Path
             d={glowPath}
@@ -252,6 +255,16 @@ export default function AttitudeDial({
             stroke={activeColor}
             strokeOpacity={0.74}
             strokeWidth={dialSize * 0.018}
+            strokeLinecap="round"
+          />
+        ) : null}
+        {counterGlowPath ? (
+          <Path
+            d={counterGlowPath}
+            fill="none"
+            stroke={activeColor}
+            strokeOpacity={0.58}
+            strokeWidth={dialSize * 0.016}
             strokeLinecap="round"
           />
         ) : null}
