@@ -156,7 +156,8 @@ async function main() {
   assert.strictEqual(missingSchemaResult.ok, false, 'missing convoy schema should block createConvoy.');
   assert.strictEqual(missingSchemaResult.code, 'backend_unavailable');
   assert.ok(
-    missingSchemaResult.error.includes('Convoy tracking tables are not available'),
+    missingSchemaResult.error.includes('Convoy tracking') &&
+      missingSchemaResult.error.includes('backend'),
     'missing convoy schema should be translated into a deployable backend readiness message.',
   );
   assert.ok(
@@ -281,6 +282,12 @@ async function main() {
     'Ending a convoy should revoke active memberships and remove live location rows.',
   );
   assert.ok(!source.includes('console.log'), 'Edge Function should not log raw invite codes.');
+  assert.ok(
+    source.includes('backendReadinessFailure') &&
+      source.includes('claim_convoy_invite') &&
+      source.includes("NOTIFY pgrst, 'reload schema'"),
+    'Edge Function should return backend_unavailable guidance for missing migrations/helpers or stale schema cache.',
+  );
 
   const serviceSource = fs.readFileSync(servicePath, 'utf8');
   assert.ok(!serviceSource.includes('convois'), 'Convoy service must never query the misspelled public.convois table.');
@@ -291,10 +298,10 @@ async function main() {
     'Convoy service should expose endConvoy and stop local live sharing after successful termination.',
   );
   assert.ok(
-    serviceSource.includes('schema cache') &&
-      serviceSource.includes('022_convoy_team_tracking.sql') &&
-      serviceSource.includes("NOTIFY pgrst, 'reload schema'"),
-    'Convoy service should map missing schema-cache table errors to deployable migration/cache guidance.',
+    serviceSource.includes('formatConvoyBackendUserMessage') &&
+      serviceSource.includes('formatConvoyBackendOperatorDetails') &&
+      serviceSource.includes('getConvoyBackendReadinessGuidance'),
+    'Convoy service should centralize missing schema-cache/function guidance through convoy backend readiness helpers.',
   );
   assert.ok(
     !serviceSource.includes('convoy:convoys(*)'),
