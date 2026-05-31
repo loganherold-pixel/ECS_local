@@ -1,5 +1,5 @@
 /**
- * EcoFlow Cloud Device Picker — Power Center
+ * EcoFlow Cloud Device Picker — Device Connections
  *
  * Fetches EcoFlow devices through the unified power telemetry service catalog path.
  * This is a cloud catalog selector, not a Bluetooth scanner.

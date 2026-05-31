@@ -63,12 +63,14 @@ notIncludes('{vehicleVisual.name}', 'Compact card should not render the vehicle 
 notIncludes('vehicleBaseIdentityBlock', 'Compact card should not keep the old centered vehicle title container.');
 
 includes('onPress={() => openFocusPanel(\'vehicle\')}', 'Vehicle Profile card must remain tappable.');
-includes('accessibilityLabel="Open vehicle profile details"', 'Vehicle Profile tap target must remain accessible.');
-includes('activePanel === \'vehicle\'', 'Vehicle Profile must open through the existing expanded focus panel.');
-includes('<VehicleCommandExpandedView', 'Vehicle Profile focus panel must render the expanded Vehicle Command view.');
-includes("return { title: 'Vehicle Command'", 'Vehicle focus panel should open as Vehicle Command.');
-includes('title={isSunlightPanel || isVehiclePanel ? undefined : eyebrow}', 'Compact Vehicle Profile should suppress the panel title/header copy.');
-includes('icon={icon && !isPowerPanel && !isVehiclePanel ?', 'Compact Vehicle Profile should suppress the old header icon slot so telemetry corners can sit at the top.');
+includes("accessibilityLabel={expanded ? 'Collapse vehicle profile' : 'Expand vehicle profile'}", 'Vehicle Profile tap target must remain accessible.');
+includes('setActivePanel((current) => (current === panel ? null : panel));', 'Vehicle Profile must toggle through the inline expanded focus panel state.');
+includes('renderCommandPanel(activePanel, true)', 'Vehicle Profile must expand by rendering the same command panel inline over the map.');
+includes('expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded', 'Vehicle Profile expanded mode must scale the live roll surface inside the enlarged widget.');
+includes('eyebrow="VEHICLE COMMAND"', 'Vehicle Command detail surface should retain its Vehicle Command identity.');
+includes('title="Vehicle Command"', 'Vehicle Command detail surface should retain its Vehicle Command title.');
+includes('title={undefined}', 'Compact Vehicle Profile should suppress the old instrument panel title/header copy.');
+includes('icon={null}', 'Compact Vehicle Profile should suppress the old header icon slot so telemetry corners can sit at the top.');
 
 for (const section of [
   'Engine Overview',
@@ -120,7 +122,7 @@ notIncludes('VehicleProfileRive', 'Vehicle Profile must not add a Rive dependenc
 
 [
   "const DEFAULT_MAX_ROLL_DEG = 45",
-  "const CAMPSITE_LEVEL_TOLERANCE_DEG = 1",
+  "const CAMPSITE_LEVEL_TOLERANCE_DEG = 2",
   "const TICK_STEP_DEG = 5",
   "for (let value = -safeMaxRoll; value <= safeMaxRoll; value += TICK_STEP_DEG)",
   "ROLL",
@@ -129,7 +131,7 @@ notIncludes('VehicleProfileRive', 'Vehicle Profile must not add a Rive dependenc
   "LinearGradient",
   "vehicle-roll-active-gradient",
   "const campsiteLevel = isRollLevel && isPitchLevel",
-  "CampSite",
+  "CAMPSITE",
   "campsiteStatusLine",
   "x1={markerX}",
   "y1={4}",

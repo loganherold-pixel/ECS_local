@@ -35,16 +35,17 @@ const registry = loadTsModule('components/dashboard/commandCenter/commandCenterR
 assert.strictEqual(registry.COMMAND_CENTER_DEFAULT_MODE, 'threeDNavigation');
 assert.deepStrictEqual(registry.COMMAND_CENTER_IMPLEMENTED_MODES, [
   'threeDNavigation',
+  'attitude',
 ]);
 
 for (const id of [
+  'attitude',
   'threeDNavigation',
 ]) {
   assert(registry.COMMAND_CENTER_WIDGET_REGISTRY[id], `Registry missing ${id}`);
 }
 
 for (const id of [
-  'attitude',
   'recoveryHazardCompass',
   'trailDecision',
   'campScout',
@@ -65,13 +66,13 @@ assert(!registry.getSelectableCommandCenterModes({}).includes('convoyCommand'));
 
 assert.strictEqual(registry.commandModuleToCenterMode('follow3d'), 'threeDNavigation');
 assert.strictEqual(registry.commandModuleToCenterMode('convoy-command'), 'threeDNavigation');
-assert.strictEqual(registry.commandModuleToCenterMode('attitude'), 'threeDNavigation');
+assert.strictEqual(registry.commandModuleToCenterMode('attitude'), 'attitude');
 assert.strictEqual(registry.commandModuleToCenterMode('terrainRisk'), 'threeDNavigation');
 assert.strictEqual(registry.centerModeToCommandModule('campScout'), 'follow3d');
-assert.strictEqual(registry.centerModeToCommandModule('attitude'), 'follow3d');
+assert.strictEqual(registry.centerModeToCommandModule('attitude'), 'attitude');
 assert.strictEqual(registry.isCommandCenterModuleId('routeCommand'), false);
 assert.strictEqual(registry.isCommandCenterModuleId('terrainRisk'), false);
-assert.strictEqual(registry.isCommandCenterModuleId('attitude'), false);
+assert.strictEqual(registry.isCommandCenterModuleId('attitude'), true);
 assert.strictEqual(registry.isCommandCenterModuleId('convoy-command'), false);
 assert.strictEqual(registry.isCommandCenterModuleId('expeditionReadinessCommand'), false);
 
@@ -83,14 +84,15 @@ assert.strictEqual(registry.resolveCommandCenterMode('threeDNavigation', { hasAc
 
 assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d'"));
 assert(commandStoreSource.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE)'));
+assert(commandStoreSource.includes("const STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED = 'ecs_command_center_default_follow3d_migrated';"));
+assert(commandStoreSource.includes("normalized === 'attitude' && !migratedToFollow3d"));
 assert(commandStoreSource.includes('normalizeECSCommandModuleId(stored)'));
 assert(commandStoreSource.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;"));
 assert(
-  commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n];"),
-  'Command module selector should expose only 3D Nav Command.',
+  commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];"),
+  'Command module selector should expose Attitude and 3D Nav Command.',
 );
 for (const retiredLabel of [
-  'Attitude Command',
   'Terrain Risk',
   'Recovery / Hazard Compass',
   'Trail Decision Command',

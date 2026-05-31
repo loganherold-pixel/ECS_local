@@ -49,8 +49,8 @@ export const EXPLORE_FEATURE_CATEGORY_STYLES: Record<
 const EXPLORE_FEATURE_DEFINITIONS: Omit<ExploreFeatureDefinition, 'enabled'>[] = [
   {
     id: 'suggested_routes',
-    title: 'Suggested Routes',
-    description: 'Open curated Explore route suggestions without changing route readiness scoring.',
+    title: 'Suggested Trailheads',
+    description: 'Open curated Explore trailhead suggestions without implying complete trail-route coverage.',
     icon: 'trail-sign-outline',
     category: 'routes',
     order: 10,

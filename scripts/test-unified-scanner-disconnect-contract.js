@@ -52,11 +52,15 @@ assert(
 );
 assert(
   hook.includes('provider?.stopPolling()') &&
-    hook.includes('await provider?.disconnect()') &&
+    hook.includes('ecoflow_cloud_disconnect_skipped_native_provider_disconnect') &&
     hook.includes('await genericBluetoothAccessoryManager.disconnect(device.rawId)') &&
     hook.includes('await adapter.disconnect({') &&
     hook.includes('await disconnectProvider()'),
-  'unified disconnect must route power, EcoFlow cloud/BLE, generic BLE, and OBD2 through real disconnect paths',
+  'unified disconnect must route power, device-scoped EcoFlow cloud, generic BLE, and OBD2 through real disconnect paths',
+);
+assert(
+  !hook.includes('await provider?.disconnect();\n            setSelectedEcoFlowDevice(null);'),
+  'EcoFlow cloud disconnect must not invoke the native BLE provider-wide disconnect because it clears every EcoFlow registry entry',
 );
 assert(
   hook.includes("await bluDeviceRegistry.updateConnectionState(providerId, device.rawId, 'disconnected')") &&

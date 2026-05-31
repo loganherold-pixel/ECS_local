@@ -1,0 +1,93 @@
+{
+  "schema": "ecs.ecoflow_ble.replay_capture",
+  "schemaVersion": 1,
+  "capturedAt": "2026-05-30T04:18:35.391Z",
+  "providerId": "ecoflow",
+  "captureMode": "explicit_debug_opt_in",
+  "device": {
+    "idFingerprint": "fnv1a:48b7cf1d",
+    "name": "EF-D36F5055",
+    "model": "EF-D36F5055",
+    "rssi": -53,
+    "serviceUuids": [],
+    "manufacturerDataPresent": true,
+    "manufacturerDataLength": 24,
+    "manufacturerDataFingerprint": "fnv1a:68ecb236"
+  },
+  "services": [],
+  "protocol": {
+    "hasRfcommWrite": true,
+    "hasRfcommNotify": true,
+    "hasNordicUartWrite": false,
+    "hasNordicUartNotify": false,
+    "hasAnyProtocolPair": true,
+    "protocolStatus": "ecoflow_ble_protocol_pair_present_auth_not_implemented"
+  },
+  "characteristics": [],
+  "protocolFrames": [],
+  "decodedProtocolPackets": [
+    {
+      "direction": "notify",
+      "valid": true,
+      "src": 2,
+      "dst": 33,
+      "cmdSet": 32,
+      "cmdId": 2,
+      "version": 2,
+      "payloadLength": 133,
+      "payloadFirstByte": 78,
+      "payloadBase64": "TgAAAABNAAABAAAAAABVAAAAAM3o//8AAQAAAAAAAAAAAAAleAAsAQMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAFAAAAAAAAAA==",
+      "payloadFingerprint": "fnv1a:fd89216c",
+      "packetBase64": "qgKFAEIsAAAAAAIAAiEgAk4AAAAATQAAAQAAAAAAVQAAAADN6P//AAEAAAAAAAAAAAAAJXgALAEDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQBQAAAAAAAADV1w==",
+      "packetFingerprint": "fnv1a:c193cfe2",
+      "capturedAtOffsetMs": 1129
+    },
+    {
+      "direction": "notify",
+      "valid": true,
+      "src": 3,
+      "dst": 33,
+      "cmdSet": 32,
+      "cmdId": 2,
+      "version": 2,
+      "payloadLength": 55,
+      "payloadFirstByte": 192,
+      "payloadBase64": "wMDAWhbBwVn7wcHBpcCUwcHy1sHB8tbBwcB9emiDwsHBwMAICsHBWBLBwcHBpcbBwcHBwcHCwA==",
+      "payloadFingerprint": "fnv1a:73b30fd0",
+      "packetBase64": "qgI3ACcswS9EAgJOAyEgAsDAwFoWwcFZ+8HBwaXAlMHB8tbBwfLWwcHAfXpog8LBwcDACArBwVgSwcHBwaXGwcHBwcHBwsDEKg==",
+      "packetFingerprint": "fnv1a:f252472a",
+      "capturedAtOffsetMs": 1005
+    },
+    {
+      "direction": "notify",
+      "valid": true,
+      "src": 5,
+      "dst": 33,
+      "cmdSet": 32,
+      "cmdId": 2,
+      "version": 2,
+      "payloadLength": 94,
+      "payloadFirstByte": 0,
+      "payloadBase64": "AAAAACcAAQbgBQAAAAAAAAAAlc8AAAAAAAAAACYAAAAAAAAAAAAAAAAAAABmAAAAAAAAAAAAJQAAAAABAEAfAAABAAF4AAAAPNwF0AIA0ALQAngAAAAAAAAAAAAAAA==",
+      "payloadFingerprint": "fnv1a:687ebd84",
+      "packetBase64": "qgJeAG8sAAAAAAEBBSEgAgAAAAAnAAEG4AUAAAAAAAAAAJXPAAAAAAAAAAAmAAAAAAAAAAAAAAAAAAAAZgAAAAAAAAAAACUAAAAAAQBAHwAAAQABeAAAADzcBdACANAC0AJ4AAAAAAAAAAAAAABzqQ==",
+      "packetFingerprint": "fnv1a:60c495e7",
+      "capturedAtOffsetMs": 1668
+    }
+  ],
+  "safety": {
+    "rawManufacturerDataIncluded": false,
+    "providerSecretsIncluded": false,
+    "preciseLocationIncluded": false,
+    "replayPayloadBase64Included": true,
+    "rawProtocolFramesIncluded": false,
+    "decryptedProtocolPayloadsIncluded": true
+  },
+  "expected": {
+    "battery_percent": 84.87,
+    "input_watts": 0,
+    "output_watts": 0,
+    "solar_input_watts": 0,
+    "estimated_runtime_minutes": 5939
+  }
+}

@@ -42,7 +42,6 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, 
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import TacticalPopupShell from '../TacticalPopupShell';
 import ECSShellTexture from '../ECSShellTexture';
 import WeatherIntelPanel from '../weather/WeatherIntelPanel';
 
@@ -70,6 +69,7 @@ import {
 } from '../../lib/activeVehicleContext';
 import { consumablesStore, type ConsumableInputSource, type ConsumablesState } from '../../lib/consumablesStore';
 import { routeStore } from '../../lib/routeStore';
+import { getMapboxToken } from '../../lib/mapConfig';
 import { expeditionRiskStore } from '../../lib/expeditionRiskStore';
 import { useApp } from '../../context/AppContext';
 import { missionExpeditionStore } from '../../lib/missionStore';
@@ -195,6 +195,12 @@ import {
   type TerrainRiskRoute,
   type TerrainRiskRouteContext,
 } from '../../lib/terrainRiskCommandProfile';
+import {
+  routeNeedsTerrainElevationSampling,
+  sampleRouteElevationFromMapboxTerrainContours,
+  terrainElevationRouteSignature,
+  type TerrainElevationSampledRoutePoint,
+} from '../../lib/terrainElevationSampling';
 
 // Phase 5: Expedition Risk Engine Widget
 import { ExpeditionRiskCompact, ExpeditionRiskCard, ExpeditionRiskDetailView } from './ExpeditionRiskWidget';
@@ -235,6 +241,7 @@ import {
   COMMAND_CENTER_IMPLEMENTED_MODES,
   centerModeToCommandModule,
   commandModuleToCenterMode,
+  isCommandCenterModuleId,
 } from './commandCenter/commandCenterRegistry';
 import type { CommandCenterMode } from './commandCenter/commandCenterTypes';
 
@@ -3795,6 +3802,10 @@ function AttitudeCommandPanel({
   align = 'left',
   onPress,
   accessibilityLabel,
+  expanded = false,
+  headerStatusLabel,
+  headerStatusValue,
+  headerStatusColor,
   sunlightVisual,
   weatherVisual,
   vehicleVisual,
@@ -3810,6 +3821,10 @@ function AttitudeCommandPanel({
   align?: 'left' | 'center' | 'right';
   onPress?: () => void;
   accessibilityLabel?: string;
+  expanded?: boolean;
+  headerStatusLabel?: string | null;
+  headerStatusValue?: string | null;
+  headerStatusColor?: string;
   sunlightVisual?: CommandSunlightVisualData;
   weatherVisual?: CommandWeatherVisualData;
   vehicleVisual?: CommandVehicleVisualData;
@@ -3823,6 +3838,14 @@ function AttitudeCommandPanel({
   const isRoutePanel = eyebrow === 'ROUTE TERRAIN RISK';
   const isPowerPanel = eyebrow === 'POWER MONITOR';
   const color = getWidgetToneColor(tone);
+  const commandPanelTitle =
+    isSunlightPanel ? 'Sunlight' :
+    isWeatherPanel ? 'Weather' :
+    isVehiclePanel ? 'Vehicle Profile' :
+    isRoutePanel ? 'Terrain' :
+    isPowerPanel ? 'Power Monitor' :
+    eyebrow;
+  const usesTrailingHeaderIcon = isVehiclePanel || isPowerPanel;
   const statusPill =
     isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel
       ? null
@@ -3837,25 +3860,64 @@ function AttitudeCommandPanel({
             : null;
   const content = (
     <ECSInstrumentPanel
-      title={isSunlightPanel || isVehiclePanel ? undefined : eyebrow}
-      header={isSunlightPanel ? (
-        <View style={attitudeCommandS.sunPanelHeader}>
-          {icon ? (
-            <View style={attitudeCommandS.sunPanelHeaderIcon}>
+      title={undefined}
+      header={(
+        <View
+          style={[
+            attitudeCommandS.commandPanelHeader,
+            align === 'center' && attitudeCommandS.commandPanelHeaderCenter,
+            align === 'right' && attitudeCommandS.commandPanelHeaderRight,
+            isWeatherPanel && attitudeCommandS.commandPanelHeaderInlineIcon,
+            usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTrailingIcon,
+          ]}
+        >
+          {icon && !usesTrailingHeaderIcon ? (
+            <View style={attitudeCommandS.commandPanelHeaderIcon}>
               <Ionicons name={icon as any} size={10} color={color} />
             </View>
           ) : null}
           <Text
-            style={attitudeCommandS.sunPanelHeaderTitle}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.64}
+            style={[
+              attitudeCommandS.commandPanelHeaderTitle,
+              isWeatherPanel && attitudeCommandS.commandPanelHeaderTitleInlineIcon,
+              isRoutePanel && headerStatusValue && attitudeCommandS.commandPanelHeaderTitleWithStatus,
+              usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTitleTrailingIcon,
+              align === 'center' && attitudeCommandS.panelTextCenter,
+              align === 'right' && attitudeCommandS.panelTextRight,
+              isVehiclePanel && attitudeCommandS.panelTextRight,
+            ]}
+            numberOfLines={isWeatherPanel ? 1 : 2}
+            adjustsFontSizeToFit={isWeatherPanel}
+            minimumFontScale={isWeatherPanel ? 0.72 : undefined}
           >
-            Remaining Sunlight
+            {commandPanelTitle}
           </Text>
+          {isRoutePanel && headerStatusValue ? (
+            <View style={attitudeCommandS.commandPanelHeaderStatus}>
+              {headerStatusLabel ? (
+                <Text style={attitudeCommandS.commandPanelHeaderStatusLabel} numberOfLines={1}>
+                  {headerStatusLabel}
+                </Text>
+              ) : null}
+              <Text
+                style={[
+                  attitudeCommandS.commandPanelHeaderStatusValue,
+                  { color: headerStatusColor ?? color },
+                ]}
+                numberOfLines={1}
+              >
+                {headerStatusValue}
+              </Text>
+            </View>
+          ) : null}
+          {icon && usesTrailingHeaderIcon ? (
+            <View style={[attitudeCommandS.commandPanelHeaderIcon, attitudeCommandS.commandPanelHeaderIconTrailing]}>
+              <Ionicons name={icon as any} size={10} color={color} />
+            </View>
+          ) : null}
         </View>
-      ) : undefined}
-      icon={icon && !isPowerPanel && !isVehiclePanel ? <Ionicons name={icon as any} size={11} color={color} /> : null}
+      )}
+      icon={null}
       statusPill={statusPill}
       titleAlign={align}
       sizeVariant={isRoutePanel || eyebrow === 'POWER MONITOR' ? 'wide' : 'compact'}
@@ -3864,8 +3926,8 @@ function AttitudeCommandPanel({
       selected={tone === 'attention' || tone === 'warning' || tone === 'critical'}
       showActiveEdge={false}
       innerTexture={false}
-      style={attitudeCommandS.panelFrame}
-      contentStyle={attitudeCommandS.panelFrameContent}
+      style={[attitudeCommandS.panelFrame, expanded && attitudeCommandS.expandedPanelFrame]}
+      contentStyle={[attitudeCommandS.panelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
       background={(
         <AttitudeCommandPanelVisual
           icon={icon}
@@ -3881,11 +3943,17 @@ function AttitudeCommandPanel({
     >
       <View style={[
         attitudeCommandS.panelContent,
+        expanded && attitudeCommandS.expandedPanelContent,
         isSunlightPanel && attitudeCommandS.sunPanelContent,
+        expanded && isSunlightPanel && attitudeCommandS.sunPanelContentExpanded,
         isWeatherPanel && attitudeCommandS.weatherPanelContent,
+        expanded && isWeatherPanel && attitudeCommandS.weatherPanelContentExpanded,
         isVehiclePanel && attitudeCommandS.vehiclePanelContent,
+        expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded,
         isRoutePanel && attitudeCommandS.routePanelContent,
+        expanded && isRoutePanel && attitudeCommandS.routePanelContentExpanded,
         isPowerPanel && attitudeCommandS.powerPanelContent,
+        expanded && isPowerPanel && attitudeCommandS.powerPanelContentExpanded,
         align === 'center' && attitudeCommandS.panelContentCenter,
         align === 'right' && attitudeCommandS.panelContentRight,
       ]}>
@@ -3896,7 +3964,11 @@ function AttitudeCommandPanel({
                 {sunlightVisual?.countdownLabel ?? 'Daylight remaining'}
               </Text>
               <Text
-                style={[attitudeCommandS.sunlightTimeReadout, { color: 'rgba(247, 201, 104, 0.9)' }]}
+                style={[
+                  attitudeCommandS.sunlightTimeReadout,
+                  expanded && attitudeCommandS.sunlightTimeReadoutExpanded,
+                  { color: 'rgba(247, 201, 104, 0.9)' },
+                ]}
                 numberOfLines={2}
                 adjustsFontSizeToFit
                 minimumFontScale={0.68}
@@ -3917,6 +3989,7 @@ function AttitudeCommandPanel({
           <Text
             style={[
               attitudeCommandS.panelTitle,
+              expanded && attitudeCommandS.panelTitleExpanded,
               { color },
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
@@ -3932,6 +4005,7 @@ function AttitudeCommandPanel({
           <Text
             style={[
               attitudeCommandS.panelDetail,
+              expanded && attitudeCommandS.panelDetailExpanded,
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
             ]}
@@ -3944,7 +4018,12 @@ function AttitudeCommandPanel({
       </View>
     </ECSInstrumentPanel>
   );
-  const panelStyle = [attitudeCommandS.panel, align === 'center' && attitudeCommandS.panelCenter, align === 'right' && attitudeCommandS.panelRight];
+  const panelStyle = [
+    attitudeCommandS.panel,
+    align === 'center' && attitudeCommandS.panelCenter,
+    align === 'right' && attitudeCommandS.panelRight,
+    expanded && attitudeCommandS.expandedPanel,
+  ];
 
   if (onPress) {
     return (
@@ -5275,10 +5354,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const commandStagePitchDeg = commandSensorLive ? commandDisplayPitchDeg : 0;
   const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel) => {
     void hapticMicro();
-    setActivePanel(panel);
-  }, []);
-  const closeFocusPanel = useCallback(() => {
-    setActivePanel(null);
+    setActivePanel((current) => (current === panel ? null : panel));
   }, []);
   const handleSelectCommandCenterMode = useCallback((mode: CommandCenterMode) => {
     ecsCommandModuleStore.setSelectedModule(centerModeToCommandModule(mode));
@@ -5402,7 +5478,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     )
       ? activeRouteForEnvironment
       : null;
-  const terrainRiskRoutePoints = useMemo(
+  const rawTerrainRiskRoutePoints = useMemo(
     () => (routeProgress?.routePoints ?? []).map((point) => ({
       lat: point.lat,
       lng: point.lng,
@@ -5411,6 +5487,98 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
       elevationFeet: point.elevationFeet ?? null,
     })),
     [routeProgress?.routePoints],
+  );
+  const [sampledTerrainRiskRoutePoints, setSampledTerrainRiskRoutePoints] = useState<TerrainElevationSampledRoutePoint[] | null>(null);
+  const [sampledTerrainRiskSignature, setSampledTerrainRiskSignature] = useState<string | null>(null);
+  const [terrainRiskSamplingPendingSignature, setTerrainRiskSamplingPendingSignature] = useState<string | null>(null);
+  const [terrainRiskSamplingFallbackSignature, setTerrainRiskSamplingFallbackSignature] = useState<string | null>(null);
+  const terrainRiskSamplingSignature = useMemo(
+    () => terrainElevationRouteSignature(routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null, rawTerrainRiskRoutePoints),
+    [rawTerrainRiskRoutePoints, routeProgress?.activeRouteId, terrainRiskProfileRoute?.id],
+  );
+  const terrainRiskNeedsElevationSampling = routeNeedsTerrainElevationSampling(
+    terrainRiskHasLiveGuidance,
+    rawTerrainRiskRoutePoints,
+  );
+  useEffect(() => {
+    if (!terrainRiskNeedsElevationSampling) {
+      setSampledTerrainRiskRoutePoints(null);
+      setSampledTerrainRiskSignature(null);
+      setTerrainRiskSamplingPendingSignature(null);
+      setTerrainRiskSamplingFallbackSignature(null);
+      return;
+    }
+
+    const abortController = new AbortController();
+    const requestSignature = terrainRiskSamplingSignature;
+    setTerrainRiskSamplingPendingSignature(requestSignature);
+    setTerrainRiskSamplingFallbackSignature((current) => (
+      current === requestSignature ? null : current
+    ));
+
+    void (async () => {
+      try {
+        const token = await getMapboxToken();
+        if (!token || abortController.signal.aborted) {
+          if (!abortController.signal.aborted) {
+            setTerrainRiskSamplingPendingSignature(null);
+            setTerrainRiskSamplingFallbackSignature(requestSignature);
+          }
+          return;
+        }
+        const sampledPoints = await sampleRouteElevationFromMapboxTerrainContours({
+          routePoints: rawTerrainRiskRoutePoints,
+          accessToken: token,
+          signal: abortController.signal,
+        });
+        if (!abortController.signal.aborted) {
+          if (sampledPoints) {
+            setSampledTerrainRiskRoutePoints(sampledPoints);
+            setSampledTerrainRiskSignature(requestSignature);
+            setTerrainRiskSamplingFallbackSignature(null);
+          } else {
+            setTerrainRiskSamplingFallbackSignature(requestSignature);
+          }
+          setTerrainRiskSamplingPendingSignature(null);
+        }
+      } catch {
+        if (!abortController.signal.aborted) {
+          setTerrainRiskSamplingPendingSignature(null);
+          setTerrainRiskSamplingFallbackSignature(requestSignature);
+        }
+      }
+    })();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [rawTerrainRiskRoutePoints, terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);
+  const terrainRiskSampledElevationReady = Boolean(
+    sampledTerrainRiskRoutePoints &&
+    sampledTerrainRiskSignature === terrainRiskSamplingSignature,
+  );
+  const terrainRiskSamplingRequestInFlight =
+    terrainRiskSamplingPendingSignature === terrainRiskSamplingSignature;
+  const terrainRiskSamplingPending =
+    terrainRiskNeedsElevationSampling &&
+    !terrainRiskSampledElevationReady &&
+    (
+      terrainRiskSamplingRequestInFlight ||
+      terrainRiskSamplingFallbackSignature !== terrainRiskSamplingSignature
+    );
+  const terrainRiskRoutePoints = useMemo(
+    () => (
+      sampledTerrainRiskRoutePoints &&
+      sampledTerrainRiskSignature === terrainRiskSamplingSignature
+        ? sampledTerrainRiskRoutePoints
+        : rawTerrainRiskRoutePoints
+    ),
+    [
+      rawTerrainRiskRoutePoints,
+      sampledTerrainRiskRoutePoints,
+      sampledTerrainRiskSignature,
+      terrainRiskSamplingSignature,
+    ],
   );
   const terrainRiskRoutePointsHaveElevation = useMemo(
     () => terrainRiskRoutePoints.some((point) => {
@@ -5430,13 +5598,17 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     sourceLabel: terrainRiskProfileRoute
       ? 'Live guidance elevation profile'
       : terrainRiskRoutePointsHaveElevation
-        ? 'Live guidance elevation profile'
+        ? sampledTerrainRiskRoutePoints && sampledTerrainRiskSignature === terrainRiskSamplingSignature
+          ? 'Mapbox terrain contour estimate'
+          : 'Live guidance elevation profile'
+      : terrainRiskSamplingPending
+        ? 'Terrain elevation sampling pending'
       : terrainRiskHasGpsAltitude
         ? 'Estimated from active guidance geometry + live GPS altitude'
         : 'Live guidance route',
     routeSegments: terrainRiskProfileRoute?.segments ?? null,
     routePoints: terrainRiskRoutePoints,
-    currentElevationFeet: terrainRiskHasGpsAltitude ? options.gpsAltitudeFt ?? null : null,
+    currentElevationFeet: terrainRiskHasGpsAltitude && !terrainRiskSamplingPending ? options.gpsAltitudeFt ?? null : null,
   }), [
     options?.gpsAltitudeFt,
     terrainRiskHasGpsAltitude,
@@ -5445,8 +5617,12 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     routeProgress?.completedMiles,
     routeProgress?.routeLabel,
     routeProgress?.totalDistance,
+    sampledTerrainRiskRoutePoints,
+    sampledTerrainRiskSignature,
     terrainRiskRoutePoints,
     terrainRiskRoutePointsHaveElevation,
+    terrainRiskSamplingPending,
+    terrainRiskSamplingSignature,
     terrainRiskProfileRoute,
   ]);
   const hasTerrainRiskLiveProfile = Boolean(
@@ -5685,45 +5861,23 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     ],
   );
   const commandLayout = resolveAttitudeCommandLayoutMetrics(options);
+  const commandCenterHostSelected = isCommandCenterModuleId(selectedCommandModule);
   const selectedCommandModuleDefinition =
-    ECS_COMMAND_MODULE_REGISTRY.follow3d!;
+    ECS_COMMAND_MODULE_REGISTRY[selectedCommandModule] ?? ECS_COMMAND_MODULE_REGISTRY.follow3d!;
   const selectedCommandCenterMode = commandModuleToCenterMode(selectedCommandModule);
-  const activeFocusConfig = useMemo(() => {
-    switch (activePanel) {
+  const expansionGeometry = resolveAttitudeCommandExpansionGeometry(commandLayout.viewportClass);
+  const renderCommandPanel = (panel: AttitudeCommandFocusPanel, expanded = false) => {
+    switch (panel) {
       case 'sunlight':
-        return { title: 'Remaining Sunlight', icon: 'sunny-outline' as const };
-      case 'weather':
-        return { title: 'Current Weather', icon: 'partly-sunny-outline' as const };
-      case 'vehicle':
-        return { title: 'Vehicle Command', icon: 'car-sport-outline' as const };
-      case 'route':
-        return { title: 'Route Terrain Risk', icon: 'warning-outline' as const };
-      case 'power':
-        return { title: 'Power Monitor', icon: 'battery-charging-outline' as const };
-      default:
-        return { title: 'Attitude Command', icon: 'speedometer-outline' as const };
-    }
-  }, [activePanel]);
-  return (
-    <>
-      <ECSInstrumentPanel
-        variant="command"
-        sizeVariant="dominant"
-        glowIntensity={commandSensorLive ? 'high' : 'medium'}
-        active={commandSensorLive}
-        showActiveEdge={false}
-        innerTexture={false}
-        style={attitudeCommandS.shellFrame}
-        contentStyle={[attitudeCommandS.shell, commandLayout.shell]}
-      >
-        <View style={[attitudeCommandS.topRow, commandLayout.topRow]}>
+        return (
           <AttitudeCommandPanel
             eyebrow="REMAINING SUNLIGHT"
             title={daylight.daylight}
             icon="sunny-outline"
             tone={daylight.daylightTone}
             onPress={() => openFocusPanel('sunlight')}
-            accessibilityLabel="Open remaining sunlight details"
+            accessibilityLabel={expanded ? 'Collapse remaining sunlight' : 'Expand remaining sunlight'}
+            expanded={expanded}
             sunlightVisual={{
               phase: daylight.phase,
               radiancePhase: daylight.radiancePhase,
@@ -5734,6 +5888,9 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               uvIndex: daylight.uvIndex,
             }}
           />
+        );
+      case 'weather':
+        return (
           <AttitudeCommandPanel
             eyebrow="CURRENT WEATHER"
             title={weatherTitle || 'Weather unavailable'}
@@ -5742,21 +5899,25 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             tone={weatherTone}
             align="center"
             onPress={() => openFocusPanel('weather')}
-            accessibilityLabel="Open current weather details"
+            accessibilityLabel={expanded ? 'Collapse current weather' : 'Expand current weather'}
+            expanded={expanded}
             weatherVisual={weatherVisual}
           >
-            <View pointerEvents="none" style={attitudeCommandS.weatherMetricStrip}>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+            <View pointerEvents="none" style={[attitudeCommandS.weatherMetricStrip, expanded && attitudeCommandS.weatherMetricStripExpanded]}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.feelsLike}
               </Text>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.wind}
               </Text>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.humidity}
               </Text>
             </View>
           </AttitudeCommandPanel>
+        );
+      case 'vehicle':
+        return (
           <AttitudeCommandPanel
             eyebrow="VEHICLE PROFILE"
             detail={undefined}
@@ -5764,7 +5925,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             tone={vehicleTone}
             align="left"
             onPress={() => openFocusPanel('vehicle')}
-            accessibilityLabel="Open vehicle profile details"
+            accessibilityLabel={expanded ? 'Collapse vehicle profile' : 'Expand vehicle profile'}
+            expanded={expanded}
             vehicleVisual={vehicleVisual}
           >
             <VehicleProfileRollAttitudeStrip
@@ -5772,6 +5934,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               pitchDeg={commandStagePitchDeg}
               live={commandSensorLive}
               maxRollDeg={45}
+              expanded={expanded}
             />
             <View pointerEvents="none" style={attitudeCommandS.vehicleCommandCornerLayer}>
               {vehicleVisual.hasObd2CommandTelemetry ? (
@@ -5780,6 +5943,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                     <Text
                       style={[
                         attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                         attitudeCommandS.vehicleCommandCoolantCorner,
                         { color: getWidgetToneColor(vehicleVisual.coolantTempTone) },
                       ]}
@@ -5794,6 +5958,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                     <Text
                       style={[
                         attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                         attitudeCommandS.vehicleCommandVoltageCorner,
                         { color: getWidgetToneColor(vehicleVisual.voltageTone) },
                       ]}
@@ -5808,6 +5973,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                     <Text
                       style={[
                         attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                         attitudeCommandS.vehicleCommandRangeCorner,
                         { color: getWidgetToneColor(vehicleVisual.rangeFuelTone) },
                       ]}
@@ -5822,6 +5988,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                     <Text
                       style={[
                         attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                         attitudeCommandS.vehicleCommandLoadCorner,
                         { color: getWidgetToneColor(vehicleVisual.engineLoadTone) },
                       ]}
@@ -5837,6 +6004,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 <Text
                   style={[
                     attitudeCommandS.vehicleCommandCornerValue,
+                    expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                     attitudeCommandS.vehicleCommandVoltageCorner,
                     { color: getWidgetToneColor('unavailable') },
                   ]}
@@ -5849,13 +6017,77 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               )}
             </View>
           </AttitudeCommandPanel>
+        );
+      case 'route':
+        return (
+          <AttitudeCommandPanel
+            eyebrow="ROUTE TERRAIN RISK"
+            title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}
+            detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}
+            icon="warning-outline"
+            tone={terrainRiskRoute ? terrainRiskRoute.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute.overallRiskLabel === 'moderate' ? 'attention' : 'live' : 'neutral'}
+            onPress={() => openFocusPanel('route')}
+            accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}
+            expanded={expanded}
+            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
+            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
+            headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
+          >
+            <AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} expanded={expanded} />
+          </AttitudeCommandPanel>
+        );
+      case 'power':
+        return (
+          <AttitudeCommandPanel
+            eyebrow="POWER MONITOR"
+            title="Power Monitor"
+            detail={undefined}
+            icon="battery-charging-outline"
+            tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'}
+            align="right"
+            onPress={() => openFocusPanel('power')}
+            accessibilityLabel={expanded ? 'Collapse power monitor' : 'Expand power monitor'}
+            expanded={expanded}
+            powerVisual={powerVisual}
+          >
+            <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
+            <View pointerEvents="none" style={[attitudeCommandS.powerBottomStrip, expanded && attitudeCommandS.powerBottomStripExpanded]}>
+              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
+                NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
+              </Text>
+              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
+                RUN {powerVisual.runtime}
+              </Text>
+            </View>
+          </AttitudeCommandPanel>
+        );
+      default:
+        return null;
+    }
+  };
+  return (
+    <>
+      <ECSInstrumentPanel
+        variant="command"
+        sizeVariant="dominant"
+        glowIntensity={commandSensorLive ? 'high' : 'medium'}
+        active={commandSensorLive || commandCenterHostSelected}
+        showActiveEdge={false}
+        innerTexture={false}
+        style={attitudeCommandS.shellFrame}
+        contentStyle={[attitudeCommandS.shell, commandLayout.shell]}
+      >
+        <View style={[attitudeCommandS.topRow, commandLayout.topRow]}>
+          {renderCommandPanel('sunlight')}
+          {renderCommandPanel('weather')}
+          {renderCommandPanel('vehicle')}
         </View>
 
         <View
           style={[
             attitudeCommandS.attitudeStage,
             commandLayout.attitudeStage,
-            selectedCommandModule === 'follow3d' ? attitudeCommandS.attitudeStageNavigationCommandMode : null,
+            selectedCommandCenterMode === 'threeDNavigation' ? attitudeCommandS.attitudeStageNavigationCommandMode : null,
           ]}
         >
           <View pointerEvents="none" style={[attitudeCommandS.commandTitleBlock, commandLayout.commandTitleBlock]}>
@@ -5876,6 +6108,21 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 onModeChange={handleSelectCommandCenterMode}
                 dataContext={commandCenterDataContext}
                 externalRenderers={{
+                  attitude: ({ mode }) => (
+                    <View style={attitudeCommandS.commandCenterAttitudeStage}>
+                      <VehicleAttitudeStage
+                        vehicleId={attitudeVehicleId}
+                        pitchDeg={commandStagePitchDeg}
+                        rollDeg={commandStageRollDeg}
+                        telemetryFrame="device"
+                        mode="command"
+                        presentationMode="instrumentOnly"
+                        showZeroButton={false}
+                        showReadouts={mode === 'attitude'}
+                        showLiveHashIndicators={mode === 'attitude' && sensorLive}
+                      />
+                    </View>
+                  ),
                   threeDNavigation: ({ mode }) => (
                     <Mini3DFollowMap options={options} selected={mode === 'threeDNavigation'} />
                   ),
@@ -5883,166 +6130,34 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               />
             </Animated.View>
           </View>
+          {activePanel ? (
+            <View
+              pointerEvents="box-none"
+              style={[
+                attitudeCommandS.expandedPanelLayer,
+                {
+                  paddingHorizontal: expansionGeometry.insetHorizontal,
+                  paddingVertical: expansionGeometry.insetVertical,
+                },
+              ]}
+            >
+              <Animated.View
+                style={[
+                  attitudeCommandS.expandedPanelCard,
+                  { aspectRatio: expansionGeometry.aspectRatio },
+                ]}
+              >
+                {renderCommandPanel(activePanel, true)}
+              </Animated.View>
+            </View>
+          ) : null}
         </View>
 
         <View style={[attitudeCommandS.bottomRow, commandLayout.bottomRow]}>
-          <AttitudeCommandPanel
-            eyebrow="ROUTE TERRAIN RISK"
-            title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}
-            detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}
-            icon="warning-outline"
-            tone={terrainRiskRoute ? terrainRiskRoute.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute.overallRiskLabel === 'moderate' ? 'attention' : 'live' : 'neutral'}
-            onPress={() => openFocusPanel('route')}
-            accessibilityLabel="Open route terrain risk details"
-          >
-            <AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} />
-          </AttitudeCommandPanel>
-          <AttitudeCommandPanel
-            eyebrow="POWER MONITOR"
-            title="Power Monitor"
-            detail={undefined}
-            icon="battery-charging-outline"
-            tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'}
-            align="right"
-            onPress={() => openFocusPanel('power')}
-            accessibilityLabel="Open power monitor details"
-            powerVisual={powerVisual}
-          >
-            <AttitudeCommandPowerRiveForeground power={powerVisual} />
-            <View pointerEvents="none" style={attitudeCommandS.powerBottomStrip}>
-              <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
-                NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
-              </Text>
-              <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
-                RUN {powerVisual.runtime}
-              </Text>
-            </View>
-          </AttitudeCommandPanel>
+          {renderCommandPanel('route')}
+          {renderCommandPanel('power')}
         </View>
       </ECSInstrumentPanel>
-
-      <TacticalPopupShell
-        visible={activePanel != null}
-        onClose={closeFocusPanel}
-        eyebrow="ATTITUDE COMMAND"
-        title={activeFocusConfig.title}
-        icon={activeFocusConfig.icon}
-        tier="global"
-        overlayClass="editor"
-        maxWidth={980}
-        maxHeightFraction={1}
-        minHeightFraction={1}
-        scrollable
-        showHandle={false}
-      >
-        {activePanel === 'sunlight' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {daylight.unavailableReason ? (
-              <AttitudeCommandUnavailableNotice
-                message={
-                  daylight.unavailableReason === 'location-required'
-                    ? 'Location required. Grant location access or wait for weather solar times before ECS can show daylight detail.'
-                    : daylight.unavailableReason === 'waiting-position'
-                      ? 'Waiting for current position. Sunlight detail will populate once GPS or weather solar times are available.'
-                      : 'Sunlight data unavailable. ECS needs a current location fix or weather solar times for daylight detail.'
-                }
-              />
-            ) : null}
-            <AttitudeCommandDetailRow label={daylight.daylightLabel} value={daylight.daylight} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Estimated sunrise" value={daylight.sunrise} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Estimated sunset" value={daylight.sunset} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Civil twilight" value={daylight.civilTwilight} />
-            <AttitudeCommandDetailRow label="Glare status" value={daylight.glare} tone={daylight.glareTone} />
-            <AttitudeCommandDetailRow label="Sun elevation" value={daylight.sunElevation} />
-            <AttitudeCommandDetailRow label="Sun azimuth" value={daylight.sunAzimuth} />
-            <AttitudeCommandDetailRow label="Location context" value={daylight.location} />
-            <AttitudeCommandDetailRow label="Latitude" value={daylight.latitude} />
-            <AttitudeCommandDetailRow label="Longitude" value={daylight.longitude} />
-            <AttitudeCommandDetailRow label="Source" value={daylight.source} />
-            <AttitudeCommandDetailRow label="Last updated" value={daylight.updated} />
-          </View>
-        ) : null}
-
-        {activePanel === 'weather' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {weatherNotice ? (
-              <AttitudeCommandUnavailableNotice message={weatherNotice} />
-            ) : null}
-            <AttitudeCommandDetailRow
-              label="Condition"
-              value={snapshot.current.description || snapshot.current.condition || formatWeatherHeadline(snapshot) || weatherTitle || 'Weather unavailable'}
-              tone={weatherTone}
-            />
-            <AttitudeCommandDetailRow label="Temperature" value={formatWeatherDegrees(currentTempF)} />
-            <AttitudeCommandDetailRow label="Feels like" value={formatWeatherDegrees(snapshot.current.feelsLike)} />
-            <AttitudeCommandDetailRow label="Wind" value={formatWeatherWindLine(snapshot) || 'Wind unavailable'} />
-            <AttitudeCommandDetailRow label="Precipitation" value={formatAttitudeWeatherPrecipitation(snapshot)} />
-            <AttitudeCommandDetailRow label="Visibility" value={formatAttitudeWeatherVisibility(snapshot.current.visibility)} />
-            <AttitudeCommandDetailRow label="Alerts" value={formatWeatherAlertLine(snapshot) || (weatherAvailable ? 'No active alert in source' : 'Alerts unavailable')} tone={snapshot.alerts.length > 0 ? 'attention' : 'neutral'} />
-            {weatherForecastRows.length > 0 ? (
-              weatherForecastRows.map((row) => (
-                <AttitudeCommandDetailRow key={row.key} label={row.label} value={row.value} />
-              ))
-            ) : (
-              <AttitudeCommandDetailRow label="Forecast" value="Forecast unavailable" />
-            )}
-            <AttitudeCommandDetailRow label="Location" value={snapshot.locationName || 'Current position'} />
-            <AttitudeCommandDetailRow label="Source" value={getCompactWeatherSourceLabel(snapshot)} />
-            <AttitudeCommandDetailRow label="Freshness" value={snapshot.status.label || snapshot.status.kind || 'Unknown'} />
-            <AttitudeCommandDetailRow label="Last updated" value={weatherLastUpdated} />
-          </View>
-        ) : null}
-
-        {activePanel === 'vehicle' ? (
-          <VehicleCommandExpandedView
-            activeVehicleContext={activeVehicleContext}
-            vehicleTelemetry={vehicleTelemetry}
-          />
-        ) : null}
-
-        {activePanel === 'route' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {!terrainRiskVisual.active ? (
-              <AttitudeCommandUnavailableNotice message="No active route. Start live guidance to view route terrain risk." />
-            ) : !terrainRiskRoute ? (
-              <AttitudeCommandUnavailableNotice message="Terrain profile unavailable. Active guidance is running, but ECS needs elevation-backed route points or live GPS altitude before risk can be graphed." />
-            ) : null}
-            <AttitudeCommandDetailRow label="Route" value={terrainRiskRoute?.name || routeProgress?.routeLabel || 'No active route'} tone={terrainRiskRoute ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Terrain risk" value={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} (${terrainRiskRoute.overallRiskScore}/100)` : 'Unavailable'} tone={terrainRiskRoute?.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute?.overallRiskLabel === 'moderate' ? 'attention' : terrainRiskRoute ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Profile distance" value={terrainRiskRoute ? formatDistance(terrainRiskRoute.totalDistanceMiles, 'mi') : routeProgress?.totalMilesText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Next hazard" value={terrainRiskRoute ? `${terrainRiskRoute.nextHazard.label} in ${formatDistance(terrainRiskRoute.nextHazard.distanceMiles, 'mi')}` : 'Unavailable'} tone={terrainRiskRoute?.nextHazard.riskLevel === 'high' ? 'critical' : terrainRiskRoute?.nextHazard.riskLevel === 'moderate' ? 'attention' : terrainRiskRoute ? 'neutral' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Elevation segments" value={terrainRiskRoute ? `${terrainRiskRoute.terrainSegments.length} read | max grade ${terrainRiskRoute.maxGradePercent.toFixed(1)}%` : 'Unavailable'} tone={terrainRiskRoute ? 'neutral' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Warm / hot spots" value={terrainRiskRoute ? `${terrainRiskRoute.warmSpotCount} warm | ${terrainRiskRoute.hotSpotCount} hot` : 'Unavailable'} tone={terrainRiskRoute?.hotSpotCount ? 'critical' : terrainRiskRoute?.warmSpotCount ? 'attention' : terrainRiskRoute ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Elevation gain / loss" value={terrainRiskRoute ? `+${terrainRiskRoute.elevationGainFeet.toLocaleString()} ft | -${terrainRiskRoute.elevationLossFeet.toLocaleString()} ft` : 'Unavailable'} tone={terrainRiskRoute ? 'neutral' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Source" value={terrainRiskRoute?.sourceLabel || terrainRiskRouteContext.sourceLabel || 'Route terrain source unavailable'} />
-          </View>
-        ) : null}
-
-        {activePanel === 'power' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {powerUnavailableMessage ? (
-              <AttitudeCommandUnavailableNotice message={powerUnavailableMessage} />
-            ) : null}
-            <AttitudePowerLiquidFlowIndicator flow={powerFlowState} />
-            <AttitudeCommandDetailRow label="Charge state" value={formatAttitudePowerState(powerSummary.chargingState)} tone={powerFlowState.tone} />
-            <AttitudeCommandDetailRow label="Battery" value={powerVisual.batteryPercent != null ? `${Math.round(powerVisual.batteryPercent)}% state of charge` : 'Battery percentage unavailable'} tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Input watts" value={formatAttitudePowerWatts(powerVisibleInputWatts, 'input')} tone={(powerVisibleInputWatts ?? 0) > 0 && powerSummary.isLive ? 'good' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Input amps" value={formatAttitudePowerMetric(powerInputAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Input volts" value={formatAttitudePowerMetric(powerInputVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Output watts" value={formatAttitudePowerWatts(powerVisibleOutputWatts, 'output')} tone={(powerVisibleOutputWatts ?? 0) > 0 && powerSummary.isLive ? 'attention' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Output amps" value={formatAttitudePowerMetric(powerOutputAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Output volts" value={formatAttitudePowerMetric(powerOutputVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Battery voltage" value={formatAttitudePowerMetric(powerBatteryVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Battery current" value={formatAttitudePowerMetric(powerBatteryAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Solar" value={formatAttitudePowerWatts(powerVisibleSolarWatts, 'input')} tone={(powerVisibleSolarWatts ?? 0) > 0 && powerSummary.isLive ? 'good' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Connected sources" value={powerSources} tone={powerSummary.isLive ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Connected loads" value={powerLoads} />
-            <AttitudeCommandDetailRow label="Telemetry source" value={powerSummary.sourceLabel || primaryPowerDevice?.providerDisplayName || 'Power source unavailable'} />
-            <AttitudeCommandDetailRow label="Freshness" value={powerSummary.isLive ? 'Live telemetry' : powerSummary.isStale ? 'Stale or disconnected' : 'Unavailable'} tone={powerSummary.isLive ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Last updated" value={formatAttitudeCommandTimestamp(powerSummary.lastUpdated)} />
-          </View>
-        ) : null}
-      </TacticalPopupShell>
 
     </>
   );
@@ -6181,10 +6296,32 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'stretch',
     width: '100%',
   },
+  commandCenterAttitudeStage: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minHeight: 0,
+    width: '100%',
+    paddingTop: 28,
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    backgroundColor: 'rgba(4, 8, 10, 0.72)',
+  },
   moduleTouchTarget: {
     flex: 1,
     minHeight: 0,
     zIndex: 0,
+  },
+  expandedPanelLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 8,
+    elevation: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  expandedPanelCard: {
+    width: '100%',
+    alignSelf: 'center',
+    overflow: 'visible',
   },
   moduleHost: {
     flex: 1,
@@ -6819,13 +6956,29 @@ const attitudeCommandS = StyleSheet.create({
   },
   panelCenter: { flex: 1.18 },
   panelRight: {},
+  expandedPanel: {
+    flex: 1,
+    alignSelf: 'stretch',
+  },
   panelFrame: {
     flex: 1,
     minWidth: 0,
   },
+  expandedPanelFrame: {
+    borderColor: 'rgba(247, 201, 104, 0.78)',
+    shadowColor: 'rgba(247, 201, 104, 0.55)',
+    shadowOpacity: 0.32,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 9,
+  },
   panelFrameContent: {
     paddingHorizontal: 8,
     paddingVertical: 6,
+  },
+  expandedPanelFrameContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   panelContent: {
     position: 'relative',
@@ -6833,6 +6986,11 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     gap: 3,
     justifyContent: 'center',
+  },
+  expandedPanelContent: {
+    flex: 1,
+    minHeight: 0,
+    gap: 5,
   },
   panelContentCenter: {
     alignItems: 'center',
@@ -6872,6 +7030,88 @@ const attitudeCommandS = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(241, 199, 103, 0.11)',
   },
+  commandPanelHeader: {
+    flex: 1,
+    minWidth: 0,
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  commandPanelHeaderCenter: {
+    justifyContent: 'center',
+  },
+  commandPanelHeaderRight: {
+    justifyContent: 'flex-end',
+  },
+  commandPanelHeaderInlineIcon: {
+    justifyContent: 'center',
+    gap: 2,
+  },
+  commandPanelHeaderTrailingIcon: {
+    justifyContent: 'flex-end',
+  },
+  commandPanelHeaderIcon: {
+    width: 12,
+    minWidth: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commandPanelHeaderIconTrailing: {
+    flexShrink: 0,
+  },
+  commandPanelHeaderTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.amber,
+    fontSize: 7.8,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.35,
+    includeFontPadding: false,
+    textTransform: 'uppercase',
+  },
+  commandPanelHeaderTitleInlineIcon: {
+    flex: 0,
+    flexShrink: 1,
+    minWidth: 44,
+    maxWidth: '82%',
+  },
+  commandPanelHeaderTitleWithStatus: {
+    flex: 1,
+    maxWidth: '58%',
+  },
+  commandPanelHeaderTitleTrailingIcon: {
+    flex: 0,
+    flexShrink: 1,
+    maxWidth: '82%',
+  },
+  commandPanelHeaderStatus: {
+    marginLeft: 'auto',
+    maxWidth: '40%',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  commandPanelHeaderStatusLabel: {
+    color: 'rgba(230, 237, 243, 0.56)',
+    fontSize: 6.4,
+    lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0.38,
+    includeFontPadding: false,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
+  commandPanelHeaderStatusValue: {
+    fontSize: 7.6,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    includeFontPadding: false,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
   sunPanelHeader: {
     flex: 1,
     minWidth: 0,
@@ -6901,7 +7141,9 @@ const attitudeCommandS = StyleSheet.create({
   panelEyebrowRight: { justifyContent: 'flex-end' },
   panelEyebrow: { fontSize: 7.5, fontWeight: '900', letterSpacing: 1 },
   panelTitle: { fontSize: 12.5, lineHeight: 15, fontWeight: '900' },
+  panelTitleExpanded: { fontSize: 22, lineHeight: 25 },
   panelDetail: { color: 'rgba(230, 237, 243, 0.66)', fontSize: 8.5, lineHeight: 11, fontWeight: '700' },
+  panelDetailExpanded: { fontSize: 10, lineHeight: 13 },
   panelTextCenter: { textAlign: 'center' },
   panelTextRight: { textAlign: 'right' },
   sunPanelContent: {
@@ -6912,6 +7154,9 @@ const attitudeCommandS = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
+  sunPanelContentExpanded: {
+    paddingBottom: 2,
+  },
   vehiclePanelContent: {
     flex: 1,
     minHeight: 0,
@@ -6920,11 +7165,17 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'stretch',
     paddingTop: 2,
   },
+  vehiclePanelContentExpanded: {
+    paddingTop: 4,
+  },
   weatherPanelContent: {
     flex: 1,
     minHeight: 0,
     justifyContent: 'flex-start',
     paddingBottom: 21,
+  },
+  weatherPanelContentExpanded: {
+    paddingBottom: 28,
   },
   routePanelContent: {
     flex: 1,
@@ -6932,11 +7183,17 @@ const attitudeCommandS = StyleSheet.create({
     justifyContent: 'flex-start',
     paddingBottom: 30,
   },
+  routePanelContentExpanded: {
+    paddingBottom: 36,
+  },
   powerPanelContent: {
     flex: 1,
     minHeight: 0,
     justifyContent: 'flex-end',
     paddingBottom: 22,
+  },
+  powerPanelContentExpanded: {
+    paddingBottom: 28,
   },
   sunlightTimeReadout: {
     maxWidth: '100%',
@@ -6948,6 +7205,11 @@ const attitudeCommandS = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.74)',
     textShadowRadius: 6,
     textShadowOffset: { width: 0, height: 1 },
+  },
+  sunlightTimeReadoutExpanded: {
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
   },
   sunlightBottomReadout: {
     alignSelf: 'stretch',
@@ -7071,6 +7333,10 @@ const attitudeCommandS = StyleSheet.create({
     borderColor: 'rgba(245, 199, 73, 0.16)',
     paddingTop: 3,
   },
+  weatherMetricStripExpanded: {
+    minHeight: 24,
+    paddingTop: 5,
+  },
   weatherMetricText: {
     flex: 1,
     minWidth: 0,
@@ -7081,6 +7347,10 @@ const attitudeCommandS = StyleSheet.create({
     letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
+  },
+  weatherMetricTextExpanded: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   vehicleGlyphLayer: {
     position: 'absolute',
@@ -7126,6 +7396,10 @@ const attitudeCommandS = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.88)',
     textShadowRadius: 5,
     textShadowOffset: { width: 0, height: 1 },
+  },
+  vehicleCommandCornerValueExpanded: {
+    fontSize: 9,
+    lineHeight: 11,
   },
   vehicleCommandVoltageCorner: {
     top: 0,
@@ -7232,6 +7506,18 @@ const attitudeCommandS = StyleSheet.create({
     paddingBottom: 5,
     gap: 4,
   },
+  terrainRiskPreviewActive: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    gap: 0,
+  },
+  terrainRiskPreviewActiveRestored: {
+    left: -22,
+    right: -22,
+    top: -22,
+    bottom: -2,
+  },
   terrainRiskPreviewHeader: {
     minHeight: 11,
     flexDirection: 'row',
@@ -7254,7 +7540,8 @@ const attitudeCommandS = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
   },
   terrainRiskNoRouteText: {
-    maxWidth: '45%',
+    flex: 1,
+    minWidth: 0,
     color: 'rgba(230, 237, 243, 0.7)',
     fontSize: 6.6,
     lineHeight: 8,
@@ -7273,31 +7560,10 @@ const attitudeCommandS = StyleSheet.create({
     borderColor: 'rgba(212, 160, 23, 0.16)',
     backgroundColor: 'rgba(0,0,0,0.28)',
   },
-  terrainRiskBottomReadout: {
-    minHeight: 13,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  terrainRiskScoreText: {
-    flexShrink: 0,
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '900',
-    letterSpacing: 0.42,
-    includeFontPadding: false,
-  },
-  terrainRiskSourceText: {
-    flex: 1,
-    minWidth: 0,
-    color: 'rgba(230, 237, 243, 0.56)',
-    fontSize: 6.5,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.42,
-    textAlign: 'right',
-    includeFontPadding: false,
+  terrainRiskChartFrameActive: {
+    borderWidth: 0,
+    borderRadius: 10,
+    backgroundColor: 'transparent',
   },
   terrainRiskEmptyPanel: {
     flex: 1,
@@ -7485,6 +7751,11 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  powerRiveForegroundLayerExpanded: {
+    paddingTop: 8,
+    paddingHorizontal: 8,
+    paddingBottom: 20,
+  },
   powerRiveForegroundBlock: {
     width: 236,
     height: 142,
@@ -7495,12 +7766,25 @@ const attitudeCommandS = StyleSheet.create({
     overflow: 'visible',
     transform: [{ translateY: -12 }],
   },
+  powerRiveForegroundBlockExpanded: {
+    width: '100%',
+    height: '84%',
+    minWidth: 354,
+    minHeight: 213,
+    maxWidth: 660,
+    maxHeight: 396,
+    transform: [{ translateY: -4 }, { scale: 1.5 }],
+  },
   powerRiveModule: {
     width: '100%',
     height: '100%',
     minWidth: 96,
     minHeight: 56,
     alignSelf: 'center',
+  },
+  powerRiveModuleExpanded: {
+    minWidth: 276,
+    minHeight: 165,
   },
   powerModuleLabel: {
     color: 'rgba(245, 199, 73, 0.72)',
@@ -7553,6 +7837,9 @@ const attitudeCommandS = StyleSheet.create({
     borderColor: 'transparent',
     paddingTop: 0,
   },
+  powerBottomStripExpanded: {
+    minHeight: 20,
+  },
   powerBottomStripText: {
     flex: 1,
     minWidth: 0,
@@ -7563,6 +7850,10 @@ const attitudeCommandS = StyleSheet.create({
     letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
+  },
+  powerBottomStripTextExpanded: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   powerBottomStripLive: {
     color: 'rgba(218, 255, 228, 0.9)',
@@ -8476,6 +8767,12 @@ type AttitudeCommandLayoutMetrics = {
     right: number;
     top: number;
   };
+};
+
+type AttitudeCommandExpansionGeometry = {
+  aspectRatio: number;
+  insetHorizontal: number;
+  insetVertical: number;
 };
 
 function clampCommandLayoutValue(value: number, min: number, max: number): number {
@@ -11064,43 +11361,56 @@ function AttitudeCommandVehicleProfileBackgroundVisual({
   );
 }
 
+function resolveAttitudeCommandExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 3, insetHorizontal: 12, insetVertical: 18 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.15, insetHorizontal: 11, insetVertical: 16 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.85, insetHorizontal: 10, insetVertical: 14 };
+  }
+}
+
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
+  expanded = false,
 }: {
   terrainRisk: CommandTerrainRiskVisualData;
+  expanded?: boolean;
 }) {
   const route = terrainRisk.route;
-  const riskColor = route ? getTerrainCommandRiskColor(route.overallRiskLabel) : TACTICAL.textMuted;
 
   return (
-    <View pointerEvents="none" style={attitudeCommandS.terrainRiskPreview}>
-      <View style={attitudeCommandS.terrainRiskPreviewHeader}>
-        <Text style={attitudeCommandS.terrainRiskPreviewTitle} numberOfLines={1}>
-          ROUTE GUIDANCE TERRAIN RISK
-        </Text>
-        {!terrainRisk.active ? (
+    <View
+      pointerEvents={expanded ? 'box-none' : 'none'}
+      style={[
+        attitudeCommandS.terrainRiskPreview,
+        route ? attitudeCommandS.terrainRiskPreviewActive : null,
+        route && !expanded ? attitudeCommandS.terrainRiskPreviewActiveRestored : null,
+      ]}
+    >
+      {!route && terrainRisk.active ? (
+        <View style={attitudeCommandS.terrainRiskPreviewHeader}>
           <Text style={attitudeCommandS.terrainRiskNoRouteText} numberOfLines={1}>
-            NO ACTIVE ROUTE
+            TERRAIN PROFILE PENDING
           </Text>
-        ) : null}
-      </View>
+        </View>
+      ) : null}
 
       {route ? (
         <>
-          <View style={attitudeCommandS.terrainRiskChartFrame}>
+          <View style={[attitudeCommandS.terrainRiskChartFrame, attitudeCommandS.terrainRiskChartFrameActive]}>
             <TerrainRiskSideProfile
               profile={route.profile}
               totalDistanceMiles={route.totalDistanceMiles}
               unit="mi"
+              transparentBackground
+              interactive={expanded}
             />
-          </View>
-          <View style={attitudeCommandS.terrainRiskBottomReadout}>
-            <Text style={[attitudeCommandS.terrainRiskScoreText, { color: riskColor }]} numberOfLines={1}>
-              {formatTerrainRiskLabel(route.overallRiskLabel).toUpperCase()} {route.overallRiskScore}
-            </Text>
-            <Text style={attitudeCommandS.terrainRiskSourceText} numberOfLines={1}>
-              {route.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'LIVE SIDE PROFILE'}
-            </Text>
           </View>
         </>
       ) : (
@@ -11142,16 +11452,36 @@ function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRoute
   );
 }
 
-function AttitudeCommandPowerRiveForeground({ power }: { power?: CommandPowerVisualData }) {
+function AttitudeCommandPowerRiveForeground({
+  power,
+  expanded = false,
+}: {
+  power?: CommandPowerVisualData;
+  expanded?: boolean;
+}) {
   return (
-    <View pointerEvents="none" style={attitudeCommandS.powerRiveForegroundLayer}>
-      <View style={attitudeCommandS.powerRiveForegroundBlock}>
+    <View
+      pointerEvents="none"
+      style={[
+        attitudeCommandS.powerRiveForegroundLayer,
+        expanded && attitudeCommandS.powerRiveForegroundLayerExpanded,
+      ]}
+    >
+      <View
+        style={[
+          attitudeCommandS.powerRiveForegroundBlock,
+          expanded && attitudeCommandS.powerRiveForegroundBlockExpanded,
+        ]}
+      >
         <PowerModuleRiveWidget
           hasEcsData={Boolean(power?.live)}
           batteryPercent={power?.batteryPercent ?? null}
           inputWatts={power?.canDisplayTelemetryValues ? power.inputWatts : null}
           outputWatts={power?.canDisplayTelemetryValues ? power.outputWatts : null}
-          style={attitudeCommandS.powerRiveModule}
+          style={[
+            attitudeCommandS.powerRiveModule,
+            expanded && attitudeCommandS.powerRiveModuleExpanded,
+          ]}
           testID="attitude-command-blu-power-module-rive"
         />
       </View>

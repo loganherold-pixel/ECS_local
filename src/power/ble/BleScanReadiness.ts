@@ -63,9 +63,7 @@ export function getExpoGoRuntimeState(): boolean {
     const constantsModule = require('expo-constants');
     const Constants = constantsModule?.default ?? constantsModule;
     const executionEnvironment = String(Constants?.executionEnvironment ?? '').toLowerCase();
-    const appOwnership = String(Constants?.appOwnership ?? '').toLowerCase();
-
-    return executionEnvironment === 'storeclient' || appOwnership === 'expo';
+    return executionEnvironment === 'storeclient';
   } catch {
     return false;
   }
@@ -215,19 +213,6 @@ export async function ensureBleScanReadiness({
     };
   }
 
-  if (runtime.isExpoGo) {
-    return {
-      ok: false,
-      code: 'runtime_unsupported',
-      message: getBleRuntimeUnsupportedMessage(),
-      permissions: { ok: false, missing: ['runtime.expo_go'] },
-      bluetoothState: null,
-      initialBluetoothState: null,
-      manager: null,
-      runtime,
-    };
-  }
-
   const permissions = await ensureBlePermissions();
   if (!permissions.ok) {
     return {
@@ -248,12 +233,13 @@ export async function ensureBleScanReadiness({
   } catch (err: any) {
     const message = String(err?.message ?? err ?? '');
     const runtimeUnsupported = isBleNativeModuleUnavailableError(err);
+    const runtimeMessage = message
+      ? `${getBleRuntimeUnsupportedMessage()} Native init: ${message}`
+      : getBleRuntimeUnsupportedMessage();
     return {
       ok: false,
       code: runtimeUnsupported ? 'runtime_unsupported' : 'manager_unavailable',
-      message: runtimeUnsupported
-        ? getBleRuntimeUnsupportedMessage()
-        : message || 'Bluetooth scanner could not be initialized.',
+      message: runtimeUnsupported ? runtimeMessage : message || 'Bluetooth scanner could not be initialized.',
       permissions,
       bluetoothState: null,
       initialBluetoothState: null,

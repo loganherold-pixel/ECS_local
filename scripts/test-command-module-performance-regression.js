@@ -18,22 +18,23 @@ function countOccurrences(source, needle) {
 }
 
 assert(
-  commandModuleStore.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude'") &&
+  commandModuleStore.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d'") &&
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const STORAGE_KEY_SELECTED_MODULE = 'ecs_command_center_module'") &&
+    commandModuleStore.includes("const STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED = 'ecs_command_center_default_follow3d_migrated'") &&
     commandModuleStore.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized)') &&
     commandModuleStore.includes('waitForHydration()'),
-  'Command Module store must default to Attitude Monitor and persist selected module preferences.',
+  'Command Module store must default to 3D Navigation and persist selected module preferences.',
 );
 
 assert(
-    widgetRenderers.includes("selectedCommandModule === 'attitude' ? (") &&
+    widgetRenderers.includes('attitude: ({ mode }) => (') &&
     widgetRenderers.includes('<VehicleAttitudeStage') &&
     widgetRenderers.includes('mode="command"') &&
-    widgetRenderers.includes('showLiveHashIndicators={false}') &&
-    widgetRenderers.includes('onZero={undefined}'),
-  'Default Attitude Monitor module must keep the existing VehicleAttitudeStage command rendering path.',
+    widgetRenderers.includes("showReadouts={mode === 'attitude'}") &&
+    widgetRenderers.includes("showLiveHashIndicators={mode === 'attitude' && sensorLive}"),
+  'Attitude module must remain available through the command-center host renderer.',
 );
 
 assert(
@@ -49,7 +50,7 @@ assert(
     navigateSurfaceWidget.includes('useState(() => (enabled ? getMapboxTokenSync() : null))') &&
     navigateSurfaceWidget.includes('if (!enabled) {') &&
     navigateSurfaceWidget.includes('useNavigateSurfaceState(options, selected)') &&
-    navigateSurfaceWidget.includes('if (!selected || !cameraCenter) return null'),
+    navigateSurfaceWidget.includes('if (!selected || !cameraCenter || !followLocked) return null'),
   'Inactive Mini3DFollowMap must not load Mapbox token, subscribe to guidance updates, or emit camera commands.',
 );
 
@@ -59,7 +60,7 @@ assert(
     navigateSurfaceWidget.includes('useMemo<CameraCommand | null>(() => {') &&
     navigateSurfaceWidget.includes('durationMs: 650') &&
     navigateSurfaceWidget.includes('pitch: COMMAND_3D_FOLLOW_PITCH') &&
-    navigateSurfaceWidget.includes('offset: COMMAND_3D_FOLLOW_OFFSET'),
+    navigateSurfaceWidget.includes('offset: hasActiveGuidance ? COMMAND_3D_ACTIVE_FOLLOW_OFFSET : COMMAND_3D_FREE_DRIVE_OFFSET'),
   '3D Follow Map camera updates must be memoized, quantized, and controlled through guarded camera commands.',
 );
 

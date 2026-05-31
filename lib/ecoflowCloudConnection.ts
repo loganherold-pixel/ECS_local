@@ -54,9 +54,12 @@ export interface EcoFlowPerDeviceTelemetry {
   name?: string;
   model?: string;
   socPct?: number;
+  volts?: number;
   wattsIn?: number;
   wattsOut?: number;
   solarWatts?: number;
+  tempC?: number;
+  estRuntimeMin?: number;
   ok: boolean;
   pendingApproval: boolean;
   unauthorized?: boolean;
@@ -241,6 +244,94 @@ function isEcoFlowCloudAuthState(state: EcoFlowCloudClientState | null): boolean
   return state === 'authRequired' || state === 'deviceUnauthorized';
 }
 
+function resolveEcoFlowNoTelemetryCloudState(
+  normalized: EcoFlowCloudTelemetryNormalization,
+  provider: Pick<EcoFlowCloudConnectionProvider, 'lastCloudFailure'>,
+): EcoFlowCloudClientState | null {
+  if (normalized.telemetryActive) return null;
+  const perDevice = normalized.perDeviceTelemetry;
+  if (perDevice?.failureState) return perDevice.failureState;
+  if (perDevice?.unauthorized) return 'deviceUnauthorized';
+  if (perDevice?.pendingApproval) return 'authRequired';
+  if (perDevice?.error) return classifyEcoFlowCloudClientState(perDevice.error);
+  return provider.lastCloudFailure ?? 'cloudStale';
+}
+
+function isEcoFlowCloudNoTelemetryTerminalState(state: EcoFlowCloudClientState | null): boolean {
+  return (
+    state === 'authRequired' ||
+    state === 'deviceUnauthorized' ||
+    state === 'deviceOffline' ||
+    state === 'cloudStale'
+  );
+}
+
+function getEcoFlowCloudConnectionStatusLabel(input: {
+  telemetryActive: boolean;
+  cloudState: EcoFlowCloudClientState | null;
+}): string {
+  if (input.telemetryActive) return 'EcoFlow Cloud telemetry active.';
+  if (input.cloudState === 'deviceUnauthorized') {
+    return 'EcoFlow Cloud access is not authorized for this device.';
+  }
+  if (input.cloudState === 'authRequired') {
+    return 'EcoFlow Cloud authorization required.';
+  }
+  if (input.cloudState === 'deviceOffline') {
+    return 'EcoFlow Cloud device is offline.';
+  }
+  if (input.cloudState === 'cloudStale') {
+    return 'EcoFlow Cloud connected, but no live telemetry was decoded.';
+  }
+  return 'EcoFlow Cloud device available. Status fetch will retry later.';
+}
+
+function getEcoFlowNoTelemetryLogDetails(input: {
+  deviceId: string;
+  cloudState: EcoFlowCloudClientState | null;
+  providerStatus?: string | null;
+  phase: string;
+  lastSuccessfulPhase: string;
+}): {
+  tag: '[BLU_ECOFLOW]' | '[BLU_TIMEOUT]';
+  event: string;
+  details: Record<string, unknown>;
+} {
+  if (isEcoFlowCloudAuthState(input.cloudState)) {
+    return {
+      tag: '[BLU_ECOFLOW]',
+      event: 'ecoflow_cloud_first_poll_auth_blocked',
+      details: {
+        deviceId: input.deviceId,
+        vendor: 'ecoflow',
+        phase: input.phase,
+        lastSuccessfulPhase: input.lastSuccessfulPhase,
+        cloudState: input.cloudState,
+        providerStatus: input.providerStatus ?? null,
+        message: getEcoFlowCloudConnectionStatusLabel({
+          telemetryActive: false,
+          cloudState: input.cloudState,
+        }),
+      },
+    };
+  }
+
+  return {
+    tag: '[BLU_TIMEOUT]',
+    event: 'ecoflow_cloud_first_poll_no_live_telemetry',
+    details: buildBluTimeoutLogDetails({
+      deviceId: input.deviceId,
+      vendor: 'ecoflow',
+      phase: input.phase,
+      timeoutMs: ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
+      lastSuccessfulPhase: input.lastSuccessfulPhase,
+      lastPacketAt: null,
+      errorCode: input.providerStatus ?? null,
+      message: 'EcoFlow cloud first poll returned no decoded live telemetry.',
+    }),
+  };
+}
+
 export function normalizeEcoFlowCloudProductType(
   value: string | null | undefined,
   fallbackText: string = '',
@@ -404,6 +495,14 @@ export function normalizeEcoFlowCloudTelemetry(
     selectedTelemetry?.solarWatts ??
     aggregateDeviceTelemetry?.solar?.watts ??
     readNumberFromSources(rawSources, ['solarWatts', 'solar.watts', 'solar_input_watts']);
+  const batteryVolts =
+    selectedTelemetry?.volts ??
+    aggregateDeviceTelemetry?.battery?.volts ??
+    readNumberFromSources(rawSources, ['batteryVolts', 'battery.volts', 'battery.voltage', 'volts']);
+  const runtimeMinutes =
+    selectedTelemetry?.estRuntimeMin ??
+    aggregateDeviceTelemetry?.battery?.estRuntimeMin ??
+    readNumberFromSources(rawSources, ['estimatedRuntimeMinutes', 'runtimeMinutes', 'battery.estRuntimeMin']);
   const fridgeTemperatureC =
     productType === 'refrigerator'
       ? readNumberFromSources(rawSources, [
@@ -412,11 +511,17 @@ export function normalizeEcoFlowCloudTelemetry(
         'refrigerator.temperatureC',
         'temperatureC',
         'battery.tempC',
-      ]) ?? aggregateDeviceTelemetry?.battery?.tempC ?? null
+      ]) ?? selectedTelemetry?.tempC ?? aggregateDeviceTelemetry?.battery?.tempC ?? null
       : null;
   const acTemperatureC =
     productType === 'portable_ac'
       ? readNumberFromSources(rawSources, ['acTemperatureC', 'ac.tempC', 'temperatureC', 'battery.tempC'])
+        ?? selectedTelemetry?.tempC
+        ?? null
+      : null;
+  const batteryTemperatureC =
+    productType !== 'refrigerator' && productType !== 'portable_ac'
+      ? selectedTelemetry?.tempC ?? aggregateDeviceTelemetry?.battery?.tempC ?? null
       : null;
   const acMode =
     productType === 'portable_ac'
@@ -429,11 +534,14 @@ export function normalizeEcoFlowCloudTelemetry(
 
   const hasDecodedValues = hasDecodedEcoFlowValues([
     batteryPct,
+    batteryVolts,
     inputWatts,
     outputWatts,
     solarWatts,
     fridgeTemperatureC,
     acTemperatureC,
+    batteryTemperatureC,
+    runtimeMinutes,
   ]);
   const aggregateTelemetryActive = hasPowerTelemetryValues(aggregateDeviceTelemetry) || hasDecodedValues;
   const telemetry: Partial<PowerTelemetry> | null = aggregateDeviceTelemetry
@@ -453,13 +561,16 @@ export function normalizeEcoFlowCloudTelemetry(
       battery: {
         ...aggregateDeviceTelemetry.battery,
         socPct: batteryPct ?? aggregateDeviceTelemetry.battery?.socPct,
+        volts: batteryVolts ?? aggregateDeviceTelemetry.battery?.volts,
         wattsIn: inputWatts ?? aggregateDeviceTelemetry.battery?.wattsIn,
         wattsOut: outputWatts ?? aggregateDeviceTelemetry.battery?.wattsOut,
         tempC:
           aggregateDeviceTelemetry.battery?.tempC ??
           fridgeTemperatureC ??
           acTemperatureC ??
+          batteryTemperatureC ??
           undefined,
+        estRuntimeMin: runtimeMinutes ?? aggregateDeviceTelemetry.battery?.estRuntimeMin,
       },
       solar: {
         ...aggregateDeviceTelemetry.solar,
@@ -499,9 +610,11 @@ export function normalizeEcoFlowCloudTelemetry(
         },
         battery: {
           socPct: batteryPct ?? undefined,
+          volts: batteryVolts ?? undefined,
           wattsIn: inputWatts ?? undefined,
           wattsOut: outputWatts ?? undefined,
-          tempC: fridgeTemperatureC ?? acTemperatureC ?? undefined,
+          tempC: fridgeTemperatureC ?? acTemperatureC ?? batteryTemperatureC ?? undefined,
+          estRuntimeMin: runtimeMinutes ?? undefined,
         },
         solar: {
           watts: solarWatts ?? undefined,
@@ -518,7 +631,7 @@ export function normalizeEcoFlowCloudTelemetry(
           hasWattsIn: inputWatts != null,
           hasWattsOut: outputWatts != null,
           hasSolar: solarWatts != null,
-          hasRuntimeEstimate: false,
+          hasRuntimeEstimate: runtimeMinutes != null,
           controllable: false,
         },
         quality: {
@@ -677,32 +790,26 @@ export async function connectEcoFlowCloudDevice(
     const telemetry = await provider.pollOnce();
     const perDeviceTelemetry = provider.getPerDeviceTelemetry();
     const normalized = normalizeEcoFlowCloudTelemetry(device, telemetry, perDeviceTelemetry);
-    const cloudState: EcoFlowCloudClientState | null = normalized.telemetryActive
-      ? null
-      : provider.lastCloudFailure ?? 'cloudStale';
-    bluLog(
-      normalized.telemetryActive ? '[BLU_TELEMETRY]' : '[BLU_TIMEOUT]',
-      normalized.telemetryActive ? 'ecoflow_cloud_first_poll_telemetry' : 'ecoflow_cloud_first_poll_no_live_telemetry',
-      normalized.telemetryActive
-        ? buildBluTelemetryLogDetails({
-            deviceId,
-            vendor: 'ecoflow',
-            telemetry: normalized.telemetry,
-            streamMode: 'cloud_poll',
-            lastPacketAt: normalized.telemetry?.quality?.lastPacketAt ?? normalized.telemetry?.timestamp ?? Date.now(),
-            productType: normalized.productType,
-          })
-        : buildBluTimeoutLogDetails({
-            deviceId,
-            vendor: 'ecoflow',
-            phase: 'ecoflow_cloud_first_poll',
-            timeoutMs: ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
-            lastSuccessfulPhase: 'provider_connect',
-            lastPacketAt: null,
-            errorCode: provider.lastStatus ?? null,
-            message: 'EcoFlow cloud first poll returned no decoded live telemetry.',
-      }),
-    );
+    const cloudState = resolveEcoFlowNoTelemetryCloudState(normalized, provider);
+    if (normalized.telemetryActive) {
+      bluLog('[BLU_TELEMETRY]', 'ecoflow_cloud_first_poll_telemetry', buildBluTelemetryLogDetails({
+        deviceId,
+        vendor: 'ecoflow',
+        telemetry: normalized.telemetry,
+        streamMode: 'cloud_poll',
+        lastPacketAt: normalized.telemetry?.quality?.lastPacketAt ?? normalized.telemetry?.timestamp ?? Date.now(),
+        productType: normalized.productType,
+      }));
+    } else {
+      const logDetails = getEcoFlowNoTelemetryLogDetails({
+        deviceId,
+        cloudState,
+        providerStatus: provider.lastStatus ?? null,
+        phase: 'ecoflow_cloud_first_poll',
+        lastSuccessfulPhase: 'provider_connect',
+      });
+      bluLog(logDetails.tag, logDetails.event, logDetails.details);
+    }
     if (normalized.telemetryActive) {
       recordEcoFlowConnectionPhase({
         deviceId,
@@ -756,9 +863,10 @@ export async function connectEcoFlowCloudDevice(
     }
     return {
       connected: true,
-      statusLabel: normalized.telemetryActive
-        ? 'EcoFlow Cloud telemetry active.'
-        : 'EcoFlow Cloud device available.',
+      statusLabel: getEcoFlowCloudConnectionStatusLabel({
+        telemetryActive: normalized.telemetryActive,
+        cloudState,
+      }),
       statusError: null,
       providerStatus: provider.lastStatus ?? null,
       cloudState,
@@ -848,9 +956,7 @@ async function pollConnectedEcoFlowCloudDevice(
     const telemetry = await provider.pollOnce();
     const perDeviceTelemetry = provider.getPerDeviceTelemetry();
     const normalized = normalizeEcoFlowCloudTelemetry(device, telemetry, perDeviceTelemetry);
-    const cloudState: EcoFlowCloudClientState | null = normalized.telemetryActive
-      ? null
-      : provider.lastCloudFailure ?? 'cloudStale';
+    const cloudState = resolveEcoFlowNoTelemetryCloudState(normalized, provider);
     bluLogThrottled(
       normalized.telemetryActive ? '[BLU_TELEMETRY]' : '[BLU_STREAM]',
       `ecoflow-cloud-poll:${deviceId}:${normalized.telemetryActive ? 'active' : 'no-live'}`,
@@ -903,9 +1009,10 @@ async function pollConnectedEcoFlowCloudDevice(
     }
     return {
       connected: true,
-      statusLabel: normalized.telemetryActive
-        ? 'EcoFlow Cloud telemetry active.'
-        : 'EcoFlow Cloud device available.',
+      statusLabel: getEcoFlowCloudConnectionStatusLabel({
+        telemetryActive: normalized.telemetryActive,
+        cloudState,
+      }),
       statusError: null,
       providerStatus: provider.lastStatus ?? null,
       cloudState,
@@ -1122,6 +1229,12 @@ export function startEcoFlowCloudTelemetryPolling(
         });
       }
       const result = await pollConnectedEcoFlowCloudDevice(device, provider);
+      const noPacketsYet = streamLifecycle.getHealth().packetCount === 0;
+      const terminalNoTelemetry =
+        !result.telemetryActive &&
+        noPacketsYet &&
+        isEcoFlowCloudNoTelemetryTerminalState(result.cloudState);
+
       if (result.telemetryActive) {
         streamLifecycle.recordPacket(
           result.telemetry?.quality?.lastPacketAt ?? result.telemetry?.timestamp ?? Date.now(),
@@ -1131,10 +1244,14 @@ export function startEcoFlowCloudTelemetryPolling(
           'cloud_poll',
           'EcoFlow Cloud poll completed, but no live telemetry fields were decoded.',
           'NO_DECODED_TELEMETRY',
-          { canRecover: true, timeoutMs: intervalMs },
+          { canRecover: !terminalNoTelemetry, timeoutMs: intervalMs },
         );
       }
       handler(result);
+      if (terminalNoTelemetry) {
+        stop();
+        return;
+      }
       if (!result.connected && (isEcoFlowCloudAuthState(result.cloudState) || /not authorized|authorization required/i.test(result.statusError ?? result.statusLabel))) {
         stop();
       }

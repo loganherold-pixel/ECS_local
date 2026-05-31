@@ -6,18 +6,20 @@ Bluestack is the ECS scanner and connection command layer for power, OBD2, propa
 
 - The mobile app must not contain provider API secrets.
 - EcoFlow cloud telemetry is server mediated through Supabase Edge Functions. DELTA/RIVER power stations, Glacier/refrigerators, WAVE/portable AC units, and alternator chargers use the same authorized cloud path when EcoFlow grants access for that serial.
+- EcoFlow local BLE now uses the native power-adapter path with `ecoflow_native_ble_v1`. ECS only promotes it as live when decoded numeric power fields arrive from readable BLE characteristics.
 - Native BLE discovery requires an installed development/native/EAS build. Expo Go cannot run the native scanner.
 - A device can be recognized by Bluestack without being connectable for live telemetry.
 - Native BLE power rows can be live-ready connection candidates, but ECS should not claim live telemetry until decoded data is flowing.
 - OBD2 live status requires native transport, initialization, and PID data.
 - Propane and water monitors may be linked as utility sensors before live parser support is complete.
 - Parser promotion is controlled by `lib/bluestack/bluestackTelemetryParserRegistry.ts`; older vendor driver files must not be treated as release-ready until this registry is updated with field evidence.
+- Parser-pending rows should be visible as recognized hardware, but they must stay non-live until a parser emits decoded telemetry.
 
 ## Provider Matrix
 
 | Provider or class | Current ECS status | Connection path | User action | Secrets |
 | --- | --- | --- | --- | --- |
-| EcoFlow | Release-ready when the account and device are authorized | Cloud/API through Supabase, with nearby BLE attachment kept separate from cloud auth | Can attempt cloud connection; BLE attachment stays visible while local telemetry parsing is pending | `ECOFLOW_ACCESS_KEY`, `ECOFLOW_SECRET_KEY` in server/Edge Function environment only |
+| EcoFlow | Hybrid: cloud/API remains release path when authorized; native BLE can attempt local decoding | Cloud/API through Supabase or native BLE power adapter | Cloud-capable records prefer cloud; pure BLE records can connect natively and are promoted only after decoded hardware telemetry | `ECOFLOW_ACCESS_KEY`, `ECOFLOW_SECRET_KEY` in server/Edge Function environment only |
 | Generic OBD2 | Release-ready when native Bluetooth and OBD handshake succeed | Native Bluetooth | Can attempt connection | None |
 | BLUETTI | Live-ready native BLE candidate | Native BLE | Can attempt connection; promoted only after decoded hardware telemetry | None currently |
 | Anker SOLIX | Live-ready native BLE candidate | Native BLE | Can attempt connection; promoted only after decoded hardware telemetry | None currently |

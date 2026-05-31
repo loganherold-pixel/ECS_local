@@ -428,10 +428,12 @@ assert.ok(
     campCandidateScoringSource.includes('MAX_SCOUT_RADIUS_MILES = 2') &&
     campCandidateScoringSource.includes('MAX_INFERRED_CANDIDATE_LIMIT = 10') &&
     mapRendererSource.includes('camp-scout-source-ecs_inferred .camp-scout-core') &&
-    mapRendererSource.includes('background: #F2C24D') &&
-    mapRendererSource.includes('color: #091014') &&
+    mapRendererSource.includes('color: #F2C24D') &&
+    mapRendererSource.includes('background: transparent;') &&
+    mapRendererSource.includes("'circle-radius': 0") &&
+    mapRendererSource.includes("'circle-opacity': 0") &&
     mapRendererSource.includes('camp-scout-tent'),
-  'Selected dispersed camping region scouting should focus generated yellow ECS-inferred camp pins with a black camp icon.',
+  'Selected dispersed camping region scouting should focus generated ECS-inferred camp icons without paired yellow circles.',
 );
 
 console.log('Dispersed camping eligibility layer checks passed.');

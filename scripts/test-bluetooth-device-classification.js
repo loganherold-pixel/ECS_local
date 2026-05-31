@@ -148,6 +148,32 @@ const ecoflowAlternatorByName = classifyBluetoothDevice({
 });
 assert.strictEqual(ecoflowAlternatorByName.providerBadge, 'EcoFlow');
 
+for (const [id, name] of [
+  ['ecoflow-glacier-advertisement', 'EF-BX11224'],
+  ['ecoflow-delta-advertisement', 'EF-D36F5055'],
+]) {
+  const route = routeBluetoothDevice({
+    id,
+    name,
+    isLikelyOBD: false,
+    rssi: -58,
+  });
+  assert.strictEqual(route.owner, 'power', `${name} should route to the EcoFlow power domain`);
+  assert.strictEqual(route.providerId, 'ecoflow');
+  assert.strictEqual(route.providerLabel, 'EcoFlow');
+  assert.strictEqual(route.supportLabel, 'Native BLE');
+  assert.strictEqual(isReleaseScannerBluetoothRoute(route), true);
+}
+
+const ecoflowAdvertisementWithObdHint = routeBluetoothDevice({
+  id: 'ecoflow-obd-hint',
+  name: 'EF-BX11224',
+  isLikelyOBD: true,
+  rssi: -58,
+});
+assert.strictEqual(ecoflowAdvertisementWithObdHint.owner, 'power');
+assert.strictEqual(ecoflowAdvertisementWithObdHint.providerId, 'ecoflow');
+
 const jackeryByName = classifyBluetoothDevice({
   id: 'jackery-1',
   name: 'Jackery Explorer 1000',

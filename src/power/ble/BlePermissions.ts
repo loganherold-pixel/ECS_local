@@ -36,6 +36,14 @@ const ANDROID_BLE_PERMISSIONS = {
   ACCESS_FINE_LOCATION: "android.permission.ACCESS_FINE_LOCATION",
 } as const;
 
+const ANDROID_PERMISSION_REQUEST_TIMEOUT_MS = 8_000;
+const ANDROID_PERMISSION_REQUEST_TIMEOUT = "android.permission.REQUEST_TIMEOUT";
+const ANDROID_PERMISSION_UNKNOWN_ERROR = "android.permission.UNKNOWN_ERROR";
+
+type PermissionsAndroidModule = typeof import("react-native")["PermissionsAndroid"];
+
+let androidPermissionRequestInFlight: Promise<BlePermissionResult> | null = null;
+
 export function formatBlePermissionDeniedMessage(missing: string[] = []): string {
   if (missing.includes("platform")) {
     return "Bluetooth scanning is not available in web preview. Open ECS on a mobile device to scan and connect.";
@@ -61,6 +69,230 @@ function getAndroidApiLevel(): number {
   return typeof Platform.Version === "number" ? Platform.Version : 0;
 }
 
+function logBlePermissionEvent(event: string, details: Record<string, unknown>): void {
+  try {
+    console.log("[BLU_SCAN]", event, details);
+  } catch {
+    // Best effort diagnostic logging only.
+  }
+}
+
+function getRequestedAndroidBlePermissions(apiLevel: number): string[] {
+  if (apiLevel >= 31) {
+    return [
+      ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN,
+      ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT,
+      ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION,
+    ];
+  }
+  return [ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION];
+}
+
+async function withPermissionTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  eventDetails: Record<string, unknown>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => {
+      timer = null;
+      logBlePermissionEvent("ble_permission_request_timeout", {
+        ...eventDetails,
+        timeoutMs,
+      });
+      const timeoutError = new Error(ANDROID_PERMISSION_REQUEST_TIMEOUT);
+      (timeoutError as any).permission = eventDetails.permission;
+      reject(timeoutError);
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (timer) clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function checkAndroidBlePermissions(
+  PermissionsAndroid: PermissionsAndroidModule,
+  apiLevel: number,
+): Promise<BlePermissionResult> {
+  const missing: string[] = [];
+
+  if (apiLevel >= 31) {
+    const scanGranted = await PermissionsAndroid.check(
+      ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN as any
+    );
+    const connectGranted = await PermissionsAndroid.check(
+      ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT as any
+    );
+    const locationGranted = await PermissionsAndroid.check(
+      ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any
+    );
+
+    if (!scanGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN);
+    if (!connectGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT);
+    if (!locationGranted) missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
+  } else {
+    const locationGranted = await PermissionsAndroid.check(
+      ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any
+    );
+
+    if (!locationGranted) missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
+  }
+
+  return { ok: missing.length === 0, missing };
+}
+
+async function requestAndroidBlePermissions(
+  PermissionsAndroid: PermissionsAndroidModule,
+  apiLevel: number,
+): Promise<BlePermissionResult> {
+  const missing: string[] = [];
+  const requested = getRequestedAndroidBlePermissions(apiLevel);
+  const eventDetails = {
+    platform: Platform.OS,
+    apiLevel,
+    requested,
+  };
+
+  logBlePermissionEvent("ble_permission_request_start", eventDetails);
+
+  if (apiLevel >= 31) {
+    // ── Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT ──
+    // Request individually so a hung platform/RN request identifies the
+    // exact permission instead of trapping the whole requestMultiple batch.
+    for (const permission of requested) {
+      logBlePermissionEvent("ble_permission_request_item_start", {
+        ...eventDetails,
+        permission,
+      });
+      const granted = await withPermissionTimeout(
+        PermissionsAndroid.request(permission as any),
+        ANDROID_PERMISSION_REQUEST_TIMEOUT_MS,
+        { ...eventDetails, permission },
+      );
+      logBlePermissionEvent("ble_permission_request_item_result", {
+        ...eventDetails,
+        permission,
+        granted,
+      });
+
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        missing.push(permission);
+      }
+    }
+  } else {
+    // ── Android < 12: ACCESS_FINE_LOCATION required for BLE scan ──
+    const granted = await withPermissionTimeout(
+      PermissionsAndroid.request(
+        ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any,
+        {
+          title: "Location Permission",
+          message:
+            "ECS needs location access to scan for nearby Bluetooth power devices.",
+          buttonPositive: "Allow",
+          buttonNegative: "Deny",
+          buttonNeutral: "Later",
+        }
+      ),
+      ANDROID_PERMISSION_REQUEST_TIMEOUT_MS,
+      eventDetails,
+    );
+
+    if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+      missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
+    }
+  }
+
+  const result = { ok: missing.length === 0, missing };
+  logBlePermissionEvent("ble_permission_request_result", {
+    ...eventDetails,
+    ok: result.ok,
+    missing: result.missing,
+  });
+  return result;
+}
+
+async function runAndroidBlePermissionRequest(): Promise<BlePermissionResult> {
+  // Dynamic import so the module is never resolved on web/iOS bundles.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
+
+  const apiLevel = getAndroidApiLevel();
+  const precheck = await checkAndroidBlePermissions(PermissionsAndroid, apiLevel);
+  logBlePermissionEvent("ble_permission_precheck_result", {
+    platform: Platform.OS,
+    apiLevel,
+    ok: precheck.ok,
+    missing: precheck.missing,
+  });
+
+  if (precheck.ok) {
+    return precheck;
+  }
+
+  return requestAndroidBlePermissions(PermissionsAndroid, apiLevel);
+}
+
+async function ensureAndroidBlePermissions(): Promise<BlePermissionResult> {
+  if (androidPermissionRequestInFlight) {
+    logBlePermissionEvent("ble_permission_request_joined", {
+      platform: Platform.OS,
+      apiLevel: getAndroidApiLevel(),
+    });
+    return androidPermissionRequestInFlight;
+  }
+
+  androidPermissionRequestInFlight = runAndroidBlePermissionRequest()
+    .catch((err) => {
+      const message = String((err as any)?.message ?? err ?? "unknown");
+      const apiLevel = getAndroidApiLevel();
+      const timedOutPermission = String((err as any)?.permission ?? "");
+      const bluetoothPermissionTimedOut =
+        message.includes(ANDROID_PERMISSION_REQUEST_TIMEOUT) &&
+        apiLevel >= 31 &&
+        (
+          timedOutPermission === ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN ||
+          timedOutPermission === ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT ||
+          timedOutPermission.length === 0
+        );
+
+      if (bluetoothPermissionTimedOut) {
+        logBlePermissionEvent("ble_permission_request_timeout_bypass", {
+          platform: Platform.OS,
+          apiLevel,
+          permission: timedOutPermission || null,
+          reason: "android_bluetooth_permission_api_timeout",
+          message,
+        });
+        return { ok: true, missing: [] };
+      }
+
+      const missing = message.includes(ANDROID_PERMISSION_REQUEST_TIMEOUT)
+        ? [ANDROID_PERMISSION_REQUEST_TIMEOUT]
+        : [ANDROID_PERMISSION_UNKNOWN_ERROR];
+      logBlePermissionEvent("ble_permission_request_failed", {
+        platform: Platform.OS,
+        apiLevel,
+        message,
+        missing,
+      });
+      return { ok: false, missing };
+    })
+    .finally(() => {
+      androidPermissionRequestInFlight = null;
+    });
+
+  return androidPermissionRequestInFlight;
+}
+
 // ── Main export ─────────────────────────────────────────────────────────
 
 /**
@@ -84,66 +316,7 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
 
   // ── Android — request runtime permissions ─────────────────────────
   if (Platform.OS === "android") {
-    try {
-      // Dynamic import so the module is never resolved on web/iOS bundles.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
-
-      const apiLevel = getAndroidApiLevel();
-      const missing: string[] = [];
-
-      if (apiLevel >= 31) {
-        // ── Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT ──
-        const results = await PermissionsAndroid.requestMultiple([
-          ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN as any,
-          ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT as any,
-          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any,
-        ]);
-
-        if (
-          results[ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN] !==
-          PermissionsAndroid.RESULTS.GRANTED
-        ) {
-          missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN);
-        }
-
-        if (
-          results[ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT] !==
-          PermissionsAndroid.RESULTS.GRANTED
-        ) {
-          missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT);
-        }
-
-        if (
-          results[ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION] !==
-          PermissionsAndroid.RESULTS.GRANTED
-        ) {
-          missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
-        }
-      } else {
-        // ── Android < 12: ACCESS_FINE_LOCATION required for BLE scan ──
-        const granted = await PermissionsAndroid.request(
-          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any,
-          {
-            title: "Location Permission",
-            message:
-              "ECS needs location access to scan for nearby Bluetooth power devices.",
-            buttonPositive: "Allow",
-            buttonNegative: "Deny",
-            buttonNeutral: "Later",
-          }
-        );
-
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
-        }
-      }
-
-      return { ok: missing.length === 0, missing };
-    } catch (err) {
-      console.warn("[BlePermissions] Android permission request failed:", err);
-      return { ok: false, missing: ["android.permission.UNKNOWN_ERROR"] };
-    }
+    return ensureAndroidBlePermissions();
   }
 
   // ── Fallback for unknown platforms ────────────────────────────────
@@ -173,34 +346,10 @@ export async function checkBlePermissions(): Promise<BlePermissionResult> {
       const { PermissionsAndroid } = require("react-native") as typeof import("react-native");
 
       const apiLevel = getAndroidApiLevel();
-      const missing: string[] = [];
-
-      if (apiLevel >= 31) {
-        const scanGranted = await PermissionsAndroid.check(
-          ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN as any
-        );
-        const connectGranted = await PermissionsAndroid.check(
-          ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT as any
-        );
-        const locationGranted = await PermissionsAndroid.check(
-          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any
-        );
-
-        if (!scanGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_SCAN);
-        if (!connectGranted) missing.push(ANDROID_BLE_PERMISSIONS.BLUETOOTH_CONNECT);
-        if (!locationGranted) missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
-      } else {
-        const locationGranted = await PermissionsAndroid.check(
-          ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION as any
-        );
-
-        if (!locationGranted) missing.push(ANDROID_BLE_PERMISSIONS.ACCESS_FINE_LOCATION);
-      }
-
-      return { ok: missing.length === 0, missing };
+      return checkAndroidBlePermissions(PermissionsAndroid, apiLevel);
     } catch (err) {
       console.warn("[BlePermissions] Android permission check failed:", err);
-      return { ok: false, missing: ["android.permission.UNKNOWN_ERROR"] };
+      return { ok: false, missing: [ANDROID_PERMISSION_UNKNOWN_ERROR] };
     }
   }
 

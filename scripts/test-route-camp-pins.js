@@ -159,6 +159,45 @@ assert.deepStrictEqual(
   'Route camp rendering should dedupe repeated CampOps candidate ids before render.',
 );
 
+const structureBufferedPins = buildCampOpsCampScoutMapPins(
+  recommendationSet([
+    camp('inside-structure-buffer', 96, 1, { nearestResidentialStructureDistanceMiles: 0.9 }),
+    camp('outside-structure-buffer', 92, 2, { nearestResidentialStructureDistanceMiles: 1.15 }),
+  ]),
+);
+assert.deepStrictEqual(
+  structureBufferedPins.map((pin) => pin.campOpsCandidateId),
+  ['outside-structure-buffer'],
+  'Route camp pins should suppress any candidate inside the one-mile residential/structure buffer.',
+);
+
+assert.deepStrictEqual(
+  normalizeRenderedCampScoutMarkers([
+    {
+      id: 'renderer-structure-buffer',
+      latitude: 39.1,
+      longitude: -120.1,
+      title: 'Renderer blocked pin',
+      sourceType: 'ecs_inferred',
+      confidenceGrade: 'A',
+      confidenceScore: 95,
+      nearestStructureDistanceMiles: 0.5,
+    },
+    {
+      id: 'renderer-clear-buffer',
+      latitude: 39.2,
+      longitude: -120.2,
+      title: 'Renderer clear pin',
+      sourceType: 'ecs_inferred',
+      confidenceGrade: 'A',
+      confidenceScore: 95,
+      nearestStructureDistanceMiles: 1.25,
+    },
+  ]).map((pin) => pin.id),
+  ['camp-scout-renderer-clear-buffer'],
+  'Shared renderer should keep a final one-mile structure-buffer safety net for all ECS camp pins.',
+);
+
 const mapRendererSource = fs.readFileSync(mapRendererPath, 'utf8');
 assert(
     mapRendererSource.includes('camp-scout-marker camp-scout-grade-') &&

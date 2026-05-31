@@ -18,10 +18,12 @@ import type {
   IncidentDebriefInput,
   ResolveIncidentInput,
 } from '../../lib/incidentRecoveryWorkflowStore';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type ResolveDebriefModalProps = {
   visible: boolean;
   onClose: () => void;
+  stackBehavior?: OverlayStackBehavior;
   incident?: IncidentContext | null;
   expeditionId?: string;
   onResolveIncident: (input: ResolveIncidentInput) => void;
@@ -87,6 +89,7 @@ function BooleanField({ label, value, onChange }: BooleanFieldProps) {
 export default function ResolveDebriefModal({
   visible,
   onClose,
+  stackBehavior,
   incident,
   expeditionId,
   onResolveIncident,
@@ -208,6 +211,7 @@ export default function ResolveDebriefModal({
       subtitle="Close the incident intentionally, then capture lessons for debrief intelligence review."
       overlayClass="workflow"
       {...fullBodyPopupProps}
+      stackBehavior={stackBehavior}
       footer={footer}
     >
       <ScrollView

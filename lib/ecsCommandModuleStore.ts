@@ -21,14 +21,25 @@ export type ECSCommandModuleDefinition = {
 type ECSCommandModuleListener = (moduleId: ECSCommandModuleId) => void;
 
 const STORAGE_KEY_SELECTED_MODULE = 'ecs_command_center_module';
+const STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED = 'ecs_command_center_default_follow3d_migrated';
 const commandModuleCache = createPersistedKeyValueCache('ecs_command_preferences');
 const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d';
 
 export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [
   'follow3d',
+  'attitude',
 ];
 
 export const ECS_COMMAND_MODULE_REGISTRY: Partial<Record<ECSCommandModuleId, ECSCommandModuleDefinition>> = {
+  attitude: {
+    id: 'attitude',
+    label: 'Attitude Command',
+    title: 'ATTITUDE COMMAND',
+    subtitle: 'Fleet Vehicle Profile',
+    icon: 'speedometer-outline',
+    statusLabel: 'ATT',
+    description: 'Deterministic pitch and roll command surface from visible device attitude telemetry.',
+  },
   follow3d: {
     id: 'follow3d',
     label: '3D Nav Command',
@@ -42,6 +53,7 @@ export const ECS_COMMAND_MODULE_REGISTRY: Partial<Record<ECSCommandModuleId, ECS
 
 export function normalizeECSCommandModuleId(value: unknown): ECSCommandModuleId | null {
   if (value === 'convoyCommand' || value === 'convoy-command') return null;
+  if (value === 'expeditionReadinessCommand' || value === 'expedition-readiness-command') return null;
   if (typeof value !== 'string') return null;
   return ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId)
     ? (value as ECSCommandModuleId)
@@ -50,6 +62,23 @@ export function normalizeECSCommandModuleId(value: unknown): ECSCommandModuleId 
 
 export function isECSCommandModuleId(value: unknown): value is ECSCommandModuleId {
   return normalizeECSCommandModuleId(value) != null;
+}
+
+function resolveStoredCommandModule(stored: string | null): ECSCommandModuleId {
+  const normalized = normalizeECSCommandModuleId(stored);
+  const migratedToFollow3d = commandModuleCache.get(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED) === 'true';
+
+  if (normalized === 'attitude' && !migratedToFollow3d) {
+    commandModuleCache.set(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED, 'true');
+    commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    return DEFAULT_ECS_COMMAND_MODULE;
+  }
+
+  if (!migratedToFollow3d) {
+    commandModuleCache.set(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED, 'true');
+  }
+
+  return normalized ?? DEFAULT_ECS_COMMAND_MODULE;
 }
 
 class ECSCommandModuleStore {
@@ -64,22 +93,23 @@ class ECSCommandModuleStore {
 
   private _load(): void {
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    const normalized = normalizeECSCommandModuleId(stored);
-    if (normalized) {
-      this._selectedModule = normalized;
-      if (stored !== normalized) {
-        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized);
-      }
-    } else if (stored != null) {
-      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    if (!commandModuleCache.isHydrated() && stored == null) {
+      this._selectedModule = DEFAULT_ECS_COMMAND_MODULE;
+      return;
+    }
+
+    const resolved = resolveStoredCommandModule(stored);
+    this._selectedModule = resolved;
+
+    if (stored !== resolved) {
+      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, resolved);
     }
   }
 
   private async _hydrate(): Promise<void> {
     await commandModuleCache.waitForHydration();
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    const normalized = normalizeECSCommandModuleId(stored);
-    const hydratedModule = normalized ?? DEFAULT_ECS_COMMAND_MODULE;
+    const hydratedModule = resolveStoredCommandModule(stored);
     const changed = hydratedModule !== this._selectedModule;
 
     if (stored !== hydratedModule) {
@@ -128,15 +158,10 @@ class ECSCommandModuleStore {
     await commandModuleCache.waitForHydration();
     if (!this._hydrated) {
       const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-      const normalized = normalizeECSCommandModuleId(stored);
-      if (normalized) {
-        this._selectedModule = normalized;
-        if (stored !== normalized) {
-          commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized);
-        }
-      } else if (stored != null) {
-        this._selectedModule = DEFAULT_ECS_COMMAND_MODULE;
-        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+      const hydratedModule = resolveStoredCommandModule(stored);
+      this._selectedModule = hydratedModule;
+      if (stored !== hydratedModule) {
+        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, hydratedModule);
       }
       this._hydrated = true;
     }

@@ -68,17 +68,17 @@ const UTILITY_EVIDENCE_REQUIREMENTS = [
 
 const PARSER_PROFILES: Partial<Record<BluestackProvider, Omit<BluestackTelemetryParserProfile, 'provider' | 'displayName'>>> = {
   ecoflow: {
-    parserId: 'ecoflow_cloud_api',
+    parserId: 'ecoflow_native_ble_v1',
     category: 'power_device',
     domain: 'power',
-    transport: 'cloud',
-    status: 'cloud_live',
-    decisionAction: 'use_ecoflow_cloud',
+    transport: 'ble',
+    status: 'native_live',
+    decisionAction: 'use_native_power_adapter',
     canDecodeLiveTelemetry: true,
     canAttemptLiveConnection: true,
-    requiresFieldEvidence: false,
-    requiredEvidence: ['EcoFlow Edge Function credentials and authorized device/account'],
-    notes: 'EcoFlow release telemetry is cloud/API mediated through Supabase. This does not prove local Bluetooth support.',
+    requiresFieldEvidence: true,
+    requiredEvidence: ['native EcoFlow BLE readable telemetry fields or text payloads', 'disconnect and stale behavior verified'],
+    notes: 'EcoFlow can attempt native BLE live telemetry. Cloud/API remains available for cloud-capable records; local BLE is promoted only when decoded power fields are received from hardware.',
   },
   generic_obd2: {
     parserId: 'generic_obd2_vehicle_adapter',

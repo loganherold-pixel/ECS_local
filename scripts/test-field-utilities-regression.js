@@ -135,6 +135,22 @@ assertIncludes(
   "onPress: () => openFieldUtilityAction('protocols')",
   'Protocols action should use the shared Field Utilities action transition.',
 );
+const fieldUtilityActionTileBlock = blockBetween(quickActionsSource, 'const tileItems: readonly QuickActionTile[] = [', '\n  ] as const;');
+const fieldUtilityActionOrder = [
+  "key: 'intel'",
+  "key: 'note'",
+  "key: 'comms'",
+  "key: 'recovery-protocol'",
+  "key: 'team'",
+  "key: 'permits-access'",
+  "key: 'trip-summaries'",
+  "key: 'protocols'",
+];
+fieldUtilityActionOrder.reduce((previousIndex, keyFragment) => {
+  const nextIndex = fieldUtilityActionTileBlock.indexOf(keyFragment);
+  assert.ok(nextIndex > previousIndex, `Field Utilities action grid should keep ${keyFragment} in the requested two-row order.`);
+  return nextIndex;
+}, -1);
 
 // Protocol image restoration.
 assert.strictEqual(
@@ -468,23 +484,38 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  'const fixedStaticActive = protocolStaticActive || commsStaticActive;',
+  'const mainPanelStaticActive = mainPanelActive;',
+  'Main Field Utilities should opt into fixed-page body behavior.',
+);
+assertIncludes(
+  quickActionsSource,
+  'const fixedStaticActive = mainPanelStaticActive || protocolStaticActive || commsStaticActive;',
   'Fixed Field Utilities screens should share a single page-scroll guard.',
 );
 assertIncludes(
   quickActionsSource,
   'scrollable={!fixedStaticActive}',
-  'Protocol and Emergency Comms screens should disable normal page-level scrolling.',
+  'Main, Protocol, and Emergency Comms screens should disable normal page-level scrolling.',
 );
 assertIncludes(
   quickActionsSource,
-  'bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}',
-  'Protocol and Emergency Comms screens should use fixed-body sizing.',
+  'bodyStyle={mainPanelStaticActive ? styles.quickMainStaticBody : protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}',
+  'Main, Protocol, and Emergency Comms screens should use fixed-body sizing.',
 );
 assertIncludes(
   quickActionsSource,
   'contentContainerStyle={fixedStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}',
-  'Protocol and Emergency Comms screens should use a fixed static content container.',
+  'Main, Protocol, and Emergency Comms screens should use a fixed static content container.',
+);
+assertIncludes(
+  quickActionsSource,
+  '<IncidentRecoveryPanel',
+  'Field Utilities main page should include the live Incident & Recovery panel.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.incidentRecoveryUtilitySlot',
+  'Incident & Recovery should occupy the open main-page space above Documentation.',
 );
 assertNotIncludes(
   quickActionsSource,

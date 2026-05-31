@@ -337,6 +337,7 @@ export function buildBluTelemetryLogDetails(input: BluTelemetryLogInput): Record
       .filter((key) => typeof key === 'string' && key.length > 0)
       .slice(0, 60),
   ));
+  const measuredTelemetryKeys = telemetryKeys.filter((key) => !key.startsWith('capabilities.'));
   const packetAt = input.packetAt ?? input.lastPacketAt ?? (
     input.telemetry && typeof input.telemetry === 'object'
       ? (input.telemetry as Record<string, unknown>).timestamp ??
@@ -352,11 +353,11 @@ export function buildBluTelemetryLogDetails(input: BluTelemetryLogInput): Record
     deviceId: normalizeLogText(input.deviceId) ?? 'unknown',
     vendor: normalizeLogText(input.vendor) ?? 'unknown',
     telemetryKeys,
-    hasVoltage: hasKeyMatch(telemetryKeys, /volt|voltage|battery_voltage/i),
-    hasWatts: hasKeyMatch(telemetryKeys, /watt|watts|power|wattsIn|wattsOut/i),
-    hasBatteryPercent: hasKeyMatch(telemetryKeys, /battery.*percent|battery_percent|soc|socPct|stateOfCharge/i),
-    hasTemperature: hasKeyMatch(telemetryKeys, /temp|temperature|coolant|intake/i),
-    hasObdPid: hasKeyMatch(telemetryKeys, /obd2_values|pid|engine_rpm|vehicle_speed|coolant_temp|fuel_level|battery_voltage/i),
+    hasVoltage: hasKeyMatch(measuredTelemetryKeys, /volt|voltage|battery_voltage/i),
+    hasWatts: hasKeyMatch(measuredTelemetryKeys, /watt|watts|power|wattsIn|wattsOut/i),
+    hasBatteryPercent: hasKeyMatch(measuredTelemetryKeys, /battery.*percent|battery_percent|soc|socPct|stateOfCharge/i),
+    hasTemperature: hasKeyMatch(measuredTelemetryKeys, /temp|temperature|coolant|intake/i),
+    hasObdPid: hasKeyMatch(measuredTelemetryKeys, /obd2_values|pid|engine_rpm|vehicle_speed|coolant_temp|fuel_level|battery_voltage/i),
     packetAgeMs: resolvePacketAgeMs(packetAt, now),
     streamMode: normalizeLogText(input.streamMode) ?? 'unknown',
   };

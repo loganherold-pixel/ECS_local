@@ -16,7 +16,7 @@
  *   - Only throws if ALL devices fail with non-501 errors
  *   - 501 pending_approval marks stale, never throws
  * Phase 3G-2: getPerDeviceTelemetry() — public accessor for per-device
- *   telemetry contributions, consumed by Power Center device panel.
+ *   telemetry contributions, consumed by the Device Connections panel.
  *
  * Polling modes:
  *   1. "cloud"  — calls edge function; used when a real token is set
@@ -271,25 +271,24 @@ function resolveProfileFromText(value: string): EcoFlowModelProfile {
 
 // ── Edge function response types ────────────────────────────────────────
 
+type EcoFlowEdgePhase = "auth" | "deviceList" | "telemetry" | "mqttCertification" | "mqttTelemetry" | "normalize";
+
 interface EdgePollSuccess {
   ok: true;
   source?: "ecoflow-cloud";
-  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  phase?: EcoFlowEdgePhase;
   deviceId?: string;
-  telemetry: {
-    device: { id: string; vendor: string; model: string };
-    battery: {
-      socPct?: number;
-      volts?: number;
-      wattsIn?: number;
-      wattsOut?: number;
-      tempC?: number;
-    };
-    solar: { watts?: number };
-    flags: { charging?: boolean; stale: boolean };
-  };
+  telemetry: Record<string, unknown>;
   rawQuota?: unknown;
   polledAt: string;
+  mqtt?: {
+    source?: string;
+    receivedAt?: string;
+    updatedAt?: string;
+    typeCode?: string | null;
+    deviceName?: string | null;
+    model?: string | null;
+  };
 }
 
 interface EdgePollError {
@@ -297,7 +296,7 @@ interface EdgePollError {
   code: string;
   message: string;
   source?: "ecoflow-cloud";
-  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  phase?: EcoFlowEdgePhase;
   error?: {
     code: string;
     message: string;
@@ -305,7 +304,7 @@ interface EdgePollError {
     deviceUnauthorized?: boolean;
     retryable?: boolean;
   };
-  details?: { status?: number; bodySnippet?: string; ecoflowCode?: string };
+  details?: Record<string, unknown> & { status?: number; bodySnippet?: string; ecoflowCode?: string };
 }
 
 type EdgePollResponse = EdgePollSuccess | EdgePollError;
@@ -315,7 +314,7 @@ type EdgePollResponse = EdgePollSuccess | EdgePollError;
 interface EdgeDeviceListSuccess {
   ok: true;
   source?: "ecoflow-cloud";
-  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  phase?: EcoFlowEdgePhase;
   devices: {
     id?: string;
     deviceId: string;
@@ -335,7 +334,7 @@ interface EdgeDeviceListError {
   code: string;
   message: string;
   source?: "ecoflow-cloud";
-  phase?: "auth" | "deviceList" | "telemetry" | "normalize";
+  phase?: EcoFlowEdgePhase;
   error?: {
     code: string;
     message: string;
@@ -346,6 +345,31 @@ interface EdgeDeviceListError {
 }
 
 type EdgeDeviceListResponse = EdgeDeviceListSuccess | EdgeDeviceListError;
+
+export interface EcoFlowMqttCertificationStatus {
+  available: boolean;
+  url: string | null;
+  port: string | null;
+  protocol: string | null;
+  certificateAccountFingerprint: string | null;
+  passwordPresent: boolean;
+}
+
+interface EdgeMqttCertificationSuccess {
+  ok: true;
+  source?: "ecoflow-cloud";
+  phase?: EcoFlowEdgePhase;
+  mqtt?: {
+    available?: boolean;
+    url?: string;
+    port?: string;
+    protocol?: string;
+    certificateAccountFingerprint?: string | null;
+    passwordPresent?: boolean;
+  };
+}
+
+type EdgeMqttCertificationResponse = EdgeMqttCertificationSuccess | EdgePollError;
 
 function getEdgeErrorCode(error: EdgePollError | EdgeDeviceListError | null | undefined): string {
   return String(error?.error?.code ?? error?.code ?? '').trim();
@@ -685,6 +709,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
   /** Device IDs excluded from cloud telemetry for this provider session. */
   private unauthorizedDeviceIds = new Set<string>();
   private unauthorizedWarningDeviceIds = new Set<string>();
+  private unauthorizedDetailWarningDeviceIds = new Set<string>();
+  private mqttCertificationProbeLogged = false;
   private fallbackInfoDeviceIds = new Set<string>();
 
   // ── Diagnostic state ────────────────────────────────────────────────
@@ -720,6 +746,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this._lastCloudFailure = null;
     this.perDeviceResults.clear();
     this.listedDeviceCatalog.clear();
+    this.mqttCertificationProbeLogged = false;
 
     // Determine polling mode
     if (token.toUpperCase() === SIMULATE_TOKEN && isPowerSimulationAllowed()) {
@@ -774,6 +801,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     this.listedDeviceCatalog.clear();
     this.unauthorizedDeviceIds.clear();
     this.unauthorizedWarningDeviceIds.clear();
+    this.unauthorizedDetailWarningDeviceIds.clear();
     this.fallbackInfoDeviceIds.clear();
 
     if (__DEV__) logEcoFlowDebug("disconnected");
@@ -1027,6 +1055,47 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     return this._lastCloudFailure;
   }
 
+  async checkMqttCertification(): Promise<EcoFlowMqttCertificationStatus> {
+    const supabase = await getSupabase();
+    if (!supabase) {
+      return {
+        available: false,
+        url: null,
+        port: null,
+        protocol: null,
+        certificateAccountFingerprint: null,
+        passwordPresent: false,
+      };
+    }
+
+    const { data, error } = await supabase.functions.invoke(DEVICE_LIST_FUNCTION, {
+      body: { action: 'mqttCertification' },
+    });
+
+    if (error) {
+      const parsed = this.tryParseEdgeResponse(data, error);
+      this._lastCloudFailure = classifyEcoFlowCloudFailureState(parsed ?? data ?? error);
+      throw new Error(parsed?.message ?? error?.message ?? "EcoFlow MQTT certification check failed");
+    }
+
+    const response = data as EdgeMqttCertificationResponse | null;
+    if (!response || !response.ok) {
+      const errResp = normalizeEdgeError(response as EdgePollError | null);
+      this._lastCloudFailure = classifyEcoFlowCloudFailureState(errResp ?? response);
+      throw new Error(errResp?.message ?? "EcoFlow MQTT certification check failed");
+    }
+
+    const mqtt = response.mqtt ?? {};
+    return {
+      available: Boolean(mqtt.available),
+      url: mqtt.url ? String(mqtt.url) : null,
+      port: mqtt.port ? String(mqtt.port) : null,
+      protocol: mqtt.protocol ? String(mqtt.protocol) : null,
+      certificateAccountFingerprint: mqtt.certificateAccountFingerprint ?? null,
+      passwordPresent: Boolean(mqtt.passwordPresent),
+    };
+  }
+
   /** Diagnostic: number of successful cloud polls. */
   get cloudPollCount(): number {
     return this._cloudPollCount;
@@ -1091,16 +1160,20 @@ export class EcoFlowCloudProvider implements ICloudProvider {
    * (e.g. provider not connected, or using simulation mode with a
    * single device).
    *
-   * Consumed by the Power Center device contribution panel.
+   * Consumed by the Device Connections device contribution panel.
    */
   getPerDeviceTelemetry(): {
     deviceId: string;
     name?: string;
     model?: string;
+    productType?: string;
     socPct?: number;
+    volts?: number;
     wattsIn?: number;
     wattsOut?: number;
     solarWatts?: number;
+    tempC?: number;
+    estRuntimeMin?: number;
     ok: boolean;
     pendingApproval: boolean;
     unauthorized: boolean;
@@ -1112,10 +1185,14 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       deviceId: string;
       name?: string;
       model?: string;
+      productType?: string;
       socPct?: number;
+      volts?: number;
       wattsIn?: number;
       wattsOut?: number;
       solarWatts?: number;
+      tempC?: number;
+      estRuntimeMin?: number;
       ok: boolean;
       pendingApproval: boolean;
       unauthorized: boolean;
@@ -1133,10 +1210,14 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         deviceId: id,
         name: dev?.model ?? dev?.vendor,
         model: dev?.model,
+        productType: inferEcoFlowMetadata(dev?.model ?? "").productType,
         socPct: bat?.socPct,
+        volts: bat?.volts,
         wattsIn: bat?.wattsIn,
         wattsOut: bat?.wattsOut,
         solarWatts: sol?.watts,
+        tempC: bat?.tempC,
+        estRuntimeMin: bat?.estRuntimeMin,
         ok: result.ok,
         pendingApproval: result.pendingApproval,
         unauthorized: result.unauthorized,
@@ -1290,6 +1371,106 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       error: ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
       polledAt,
     };
+  }
+
+  private hasDecodedPowerValues(telemetry: Partial<PowerTelemetry> | null | undefined): boolean {
+    if (!telemetry) return false;
+    return (
+      telemetry.battery?.socPct !== undefined ||
+      telemetry.battery?.wattsIn !== undefined ||
+      telemetry.battery?.wattsOut !== undefined ||
+      telemetry.battery?.estRuntimeMin !== undefined ||
+      telemetry.battery?.volts !== undefined ||
+      telemetry.battery?.tempC !== undefined ||
+      telemetry.solar?.watts !== undefined
+    );
+  }
+
+  private async pollMqttTelemetryFallback(
+    supabase: any,
+    deviceId: string,
+    polledAt: number,
+  ): Promise<DevicePollResult | null> {
+    try {
+      const { data, error } = await supabase.functions.invoke(POLL_FUNCTION, {
+        body: {
+          action: 'mqttTelemetry',
+          deviceId,
+        },
+      });
+
+      if (error) return null;
+      const response = data as EdgePollResponse | null;
+      if (!response || !response.ok) return null;
+
+      const telemetry = this.mapEdgeTelemetry(response as EdgePollSuccess);
+      if (!this.hasDecodedPowerValues(telemetry)) return null;
+
+      this._lastStatus = "cloud_ok";
+      this._lastCloudError = null;
+      this._lastCloudFailure = null;
+
+      if (__DEV__) {
+        logEcoFlowDebug("using MQTT bridge telemetry fallback", {
+          deviceId,
+          source: (response as EdgePollSuccess).mqtt?.source ?? "mqtt_quota",
+        });
+      }
+
+      return {
+        deviceId,
+        ok: true,
+        pendingApproval: false,
+        unauthorized: false,
+        failureState: null,
+        telemetry,
+        error: null,
+        polledAt,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private logUnauthorizedEdgeDetailsOnce(deviceId: string, response: EdgePollError | null | undefined): void {
+    if (!response || this.unauthorizedDetailWarningDeviceIds.has(deviceId)) return;
+    this.unauthorizedDetailWarningDeviceIds.add(deviceId);
+
+    const details = response.details ?? {};
+    logEcoFlowWarn("telemetry unauthorized detail", {
+      deviceId,
+      code: response.code,
+      message: response.message,
+      status: details.status ?? null,
+      ecoflowCode: details.ecoflowCode ?? null,
+      authorization: details.authorization ?? null,
+      remediation: details.remediation ?? null,
+      bodySnippet: details.bodySnippet ?? null,
+    });
+  }
+
+  private async logMqttCertificationProbeOnce(triggerDeviceId: string): Promise<void> {
+    if (this.mqttCertificationProbeLogged) return;
+    this.mqttCertificationProbeLogged = true;
+
+    try {
+      const mqtt = await this.checkMqttCertification();
+      logEcoFlowWarn("mqtt certification probe", {
+        triggerDeviceId,
+        available: mqtt.available,
+        url: mqtt.url,
+        port: mqtt.port,
+        protocol: mqtt.protocol,
+        certificateAccountFingerprint: mqtt.certificateAccountFingerprint,
+        passwordPresent: mqtt.passwordPresent,
+        credentialExposure: "server_side_only",
+      });
+    } catch (err) {
+      logEcoFlowWarn("mqtt certification probe failed", {
+        triggerDeviceId,
+        ...ecoFlowErrorDetails(err),
+      });
+    }
   }
 
   private markUnauthorizedDevice(deviceId: string, error: string | null): void {
@@ -1490,6 +1671,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         }
 
         if (isEcoFlowUnauthorizedDeviceError(parsed ?? data ?? error)) {
+          this.logUnauthorizedEdgeDetailsOnce(deviceId, parsed);
+          void this.logMqttCertificationProbeOnce(deviceId);
+          const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
+          if (mqttFallback) return mqttFallback;
           return this.makeUnauthorizedPollResult(deviceId, now);
         }
 
@@ -1544,6 +1729,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       if (!response.ok) {
         const errResp = responseError;
         if (isEcoFlowUnauthorizedDeviceError(errResp)) {
+          this.logUnauthorizedEdgeDetailsOnce(deviceId, errResp);
+          void this.logMqttCertificationProbeOnce(deviceId);
+          const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
+          if (mqttFallback) return mqttFallback;
           return this.makeUnauthorizedPollResult(deviceId, now);
         }
 
@@ -1573,6 +1762,9 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       };
     } catch (err) {
       if (isEcoFlowUnauthorizedDeviceError(err)) {
+        void this.logMqttCertificationProbeOnce(deviceId);
+        const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
+        if (mqttFallback) return mqttFallback;
         return this.makeUnauthorizedPollResult(deviceId, now);
       }
 
@@ -1805,6 +1997,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     response: EdgePollSuccess,
   ): Partial<PowerTelemetry> {
     const now = Date.now();
+    const responseTime = Date.parse(String(response.polledAt ?? ""));
+    const readingAt = Number.isFinite(responseTime) ? responseTime : now;
     const raw = (response.telemetry && typeof response.telemetry === "object"
       ? (response.telemetry as Record<string, unknown>)
       : {}) as Record<string, unknown>;
@@ -1853,6 +2047,10 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         "bms_emsStatus.f32LcdShowSoc",
         "ems.f32LcdShowSoc",
         "ems.soc",
+        "cms.battSoc",
+        "cmsBattSoc",
+        "cms.soc",
+        "cmsSoc",
         "bmsBattSoc",
         "bms.battSoc",
         "pd.bmsBattSoc",
@@ -1901,6 +2099,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         "bms_bmsStatus.outWatts",
         "bms_bmsStatus.outputWatts",
         "bms_bmsStatus.dsgPower",
+        "bmsMaster.outputWatts",
         "bmsMaster.outWatts",
         "bmsMaster.dsgPower",
         "ems.outWatts",
@@ -1960,6 +2159,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         "bms_bmsStatus.inWatts",
         "bms_bmsStatus.inputWatts",
         "bms_bmsStatus.chgPower",
+        "bmsMaster.inputWatts",
         "bmsMaster.inWatts",
         "bmsMaster.chgPower",
         "ems.inWatts",
@@ -2024,7 +2224,13 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         "tempC",
       );
 
-    const chgState = readNumber("bms_emsStatus.chgState");
+    const chgState = readNumber(
+      "bms_emsStatus.chgState",
+      "cms.chgDsgState",
+      "cmsChgDsgState",
+      "bms.chgDsgState",
+      "bmsChgDsgState",
+    );
     const chgCmd = readNumber("bms_emsStatus.chgCmd");
     const chgAmpRaw = readNumber("bms_emsStatus.chgAmp", "bms_bmsStatus.tagChgAmp");
     const solarWattsRaw = readNumber(
@@ -2133,14 +2339,34 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         ? (tempCRaw > 200 ? tempCRaw / 10 : tempCRaw)
         : undefined;
 
+    const directRuntimeMinRaw = readNumber(
+      "pd.remainTime",
+      "pd.remainingTime",
+      "pd.runtimeMin",
+      "pd.estRuntimeMin",
+      "cms.dsgRemTime",
+      "cmsDsgRemTime",
+      "bms.dsgRemTime",
+      "bmsDsgRemTime",
+      "battery.estRuntimeMin",
+      "battery.runtimeMin",
+      "runtimeMin",
+      "estRuntimeMin",
+      "remainingTimeMin",
+      "remainingRuntimeMin",
+    );
+
+    const totalInputWatts = (wattsIn ?? 0) + (solarWatts ?? 0);
     const isCharging =
-      (typeof chgState === "number" && chgState > 0) ||
+      chgState === 2 ||
       chgCmd === 1 ||
-      (typeof wattsIn === "number" && wattsIn > 0) ||
-      (typeof solarWatts === "number" && solarWatts > 0);
+      (totalInputWatts > 0 && (typeof wattsOut !== "number" || totalInputWatts > wattsOut));
 
     let estRuntimeMin: number | undefined;
-    if (!isCharging && typeof wattsOut === "number" && wattsOut > 0 && typeof glacierSoc === "number") {
+    if (!isCharging && typeof directRuntimeMinRaw === "number" && directRuntimeMinRaw !== 0) {
+      // Older DELTA APIs report pd.remainTime as negative while discharging.
+      estRuntimeMin = Math.round(Math.abs(directRuntimeMinRaw));
+    } else if (!isCharging && typeof wattsOut === "number" && wattsOut > 0 && typeof glacierSoc === "number") {
       const remainingWh = (glacierSoc / 100) * this.profile.capacityWh;
       const netDraw = wattsOut - (wattsIn ?? 0);
       if (netDraw > 0) {
@@ -2174,7 +2400,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     }
 
     return {
-      timestamp: now,
+      timestamp: readingAt,
       source: "cloud",
 
       device: {

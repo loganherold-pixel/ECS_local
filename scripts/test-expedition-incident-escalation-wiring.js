@@ -145,13 +145,20 @@ incidentRecoveryWorkflowStore.clear();
 
 const detailViewSource = fs.readFileSync(detailViewPath, 'utf8');
 const expeditionTabSource = fs.readFileSync(expeditionTabPath, 'utf8');
+const quickActionsSource = fs.readFileSync(path.join(root, 'components', 'QuickActionsSheet.tsx'), 'utf8');
 const incidentPanelSource = fs.readFileSync(incidentPanelPath, 'utf8');
 const reportModalSource = fs.readFileSync(reportModalPath, 'utf8');
 const packageSource = fs.readFileSync(packagePath, 'utf8');
 
 assert.ok(detailViewSource.includes("assessment?.status === 'critical'"), 'Critical assessments should show the escalation banner.');
-assert.ok(expeditionTabSource.includes('buildAssessmentEscalationRequest'), 'Expedition tab should build escalation context.');
-assert.ok(expeditionTabSource.includes('assessmentEscalation={assessmentEscalation}'), 'Expedition tab should pass escalation context to Incident & Recovery.');
+assert.ok(
+  expeditionTabSource.includes('Expedition Hub') &&
+    !expeditionTabSource.includes('buildAssessmentEscalationRequest') &&
+    !expeditionTabSource.includes('assessmentEscalation={assessmentEscalation}') &&
+    !expeditionTabSource.includes('<IncidentRecoveryPanel') &&
+    quickActionsSource.includes('<IncidentRecoveryPanel'),
+  'Incident & Recovery should live in Field Utilities without moving escalation wiring into Expedition Hub.',
+);
 assert.ok(incidentPanelSource.includes('setReportModalVisible(true)'), 'Incident panel should open the Report Incident flow.');
 assert.ok(incidentPanelSource.includes('prefill={reportPrefill}'), 'Incident panel should pass escalation prefill into Report Incident.');
 assert.ok(reportModalSource.includes('prefill?.assessmentEscalation'), 'Report Incident should submit assessment escalation metadata.');

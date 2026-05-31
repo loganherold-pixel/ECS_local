@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as DocumentPicker from 'expo-document-picker';
 
 import Header from '../components/Header';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
@@ -18,6 +19,7 @@ import { ECS, TACTICAL } from '../lib/theme';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { getMapboxToken } from '../lib/mapConfig';
 import { hapticMicro } from '../lib/haptics';
+import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import { loadOpportunitiesWithCompatibility } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
 import { extractExploreRouteCampMarkers } from '../lib/exploreRouteCampHandoff';
@@ -45,6 +47,7 @@ import {
   saveExplorePlanningRouteContext,
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
+import { fsReadFileFromPickerUri } from '../lib/fsCompat';
 import {
   fetchSharedWeatherForCoordinates,
   type SharedWeatherFetchResult,
@@ -93,6 +96,79 @@ function routeName(route: TripBuilderRouteInput): string {
 function routeDistance(route: TripBuilderRouteInput): number | null {
   const value = route.distanceMiles ?? route.total_distance_miles ?? route.distance_mi;
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+type RouteImportState = {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  message: string | null;
+};
+
+function makeRouteIdPart(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .slice(0, 42) || 'route';
+}
+
+function importedRouteDistanceMiles(coordinates: [number, number][]): number {
+  let meters = 0;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const previous = coordinates[index - 1];
+    const current = coordinates[index];
+    meters += haversineMeters(previous[1], previous[0], current[1], current[0]);
+  }
+  return Math.round(metersToMiles(meters) * 10) / 10;
+}
+
+function buildOfflinePrepImportedRoute(fileName: string, content: string): TripBuilderRouteInput {
+  const parsed = parseGeoFile(fileName, content);
+  const coordinates = getPrimaryRouteCoordinates(parsed);
+  if (coordinates.length < 2) {
+    throw new Error('Imported route file does not include a route line with at least two points.');
+  }
+  const first = coordinates[0];
+  const last = coordinates[coordinates.length - 1];
+  const routeName = parsed.name?.trim() || fileName.replace(/\.[^.]+$/, '') || 'Imported Route';
+  const ext = (fileName.toLowerCase().split('.').pop() || 'route').replace(/[^a-z0-9]/g, '');
+  const distanceMiles = importedRouteDistanceMiles(coordinates);
+
+  return {
+    id: `offline-prep-import-${makeRouteIdPart(routeName)}-${Date.now().toString(36)}`,
+    name: routeName,
+    title: routeName,
+    region: 'Imported route',
+    source: 'offline_prep_import',
+    distanceMiles,
+    estimatedTravelHours: Math.max(0.5, Math.round((distanceMiles / 18) * 10) / 10),
+    estimatedDays: Math.max(1, Math.ceil(distanceMiles / 75)),
+    terrainType: 'Imported route file',
+    remotenessScore: 5,
+    permitRequired: false,
+    startLat: first[1],
+    startLng: first[0],
+    coordinate: { lat: first[1], lng: first[0] },
+    destinationCoordinate: { lat: last[1], lng: last[0] },
+    endpointCoordinate: { lat: last[1], lng: last[0] },
+    routeGeometry: {
+      type: 'LineString',
+      coordinates,
+    },
+    trailGeometry: {
+      type: 'LineString',
+      coordinates,
+    },
+    routeMetadata: {
+      source: 'offline_prep_import',
+      sourceFileName: fileName,
+      sourceFileType: ext,
+      importedAt: new Date().toISOString(),
+      routePointCount: coordinates.length,
+      isTrailGeometry: true,
+      geometryRole: 'trail',
+      offlinePrepGeometrySource: 'operator_imported_route_file',
+    },
+  };
 }
 
 function routeToCampCandidates(route: TripBuilderRouteInput | null): CampCandidate[] {
@@ -606,14 +682,16 @@ function MapPrepQueueCard({
 
 export default function ExploreOfflinePrepPackScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ routeId?: string }>();
+  const params = useLocalSearchParams<{ routeId?: string; action?: string }>();
   const insets = useSafeAreaInsets();
   const bottomClearance = getShellBottomClearance(insets.bottom, 8);
   const [routes, setRoutes] = useState<TripBuilderRouteInput[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [routeListVisible, setRouteListVisible] = useState(false);
   const [handoffInput, setHandoffInput] = useState<OfflinePrepPackInput | null>(null);
   const [manifest, setManifest] = useState<OfflinePrepPackManifest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [routeImportState, setRouteImportState] = useState<RouteImportState>({ status: 'idle', message: null });
   const [prepareAttempted, setPrepareAttempted] = useState(false);
   const [prepareConfirmVisible, setPrepareConfirmVisible] = useState(false);
   const [prepareSaving, setPrepareSaving] = useState(false);
@@ -627,6 +705,8 @@ export default function ExploreOfflinePrepPackScreen() {
   const [mapRetrying, setMapRetrying] = useState(false);
   const geometryResolveAttemptedRef = useRef<Set<string>>(new Set());
   const weatherResolveAttemptedRef = useRef<Set<string>>(new Set());
+  const importingRouteRef = useRef(false);
+  const autoImportOpenedRef = useRef(false);
 
   useEffect(() => {
     const refreshSyncState = () => {
@@ -665,13 +745,12 @@ export default function ExploreOfflinePrepPackScreen() {
         const requestedRoute = requestedRouteId
           ? nextRoutes.find((route) => routeId(route) === requestedRouteId)
           : null;
-        setSelectedRouteId(requestedRoute
+        const handoffRouteId = handoff?.input?.route ? routeId(handoff.input.route) : null;
+        const nextSelectedRouteId = requestedRoute
           ? routeId(requestedRoute)
-          : handoff?.input?.route
-            ? routeId(handoff.input.route)
-            : nextRoutes[0]
-              ? routeId(nextRoutes[0])
-              : null);
+          : handoffRouteId;
+        setSelectedRouteId(nextSelectedRouteId);
+        setRouteListVisible(!nextSelectedRouteId || params.action === 'import');
         setError(null);
       } catch {
         if (!cancelled) setError('Offline Prep Pack could not load route options.');
@@ -682,7 +761,7 @@ export default function ExploreOfflinePrepPackScreen() {
     return () => {
       cancelled = true;
     };
-  }, [params.routeId]);
+  }, [params.action, params.routeId]);
 
   const selectedRoute = useMemo(
     () => routes.find((route) => routeId(route) === selectedRouteId) ?? null,
@@ -812,6 +891,99 @@ export default function ExploreOfflinePrepPackScreen() {
     () => resolveOfflinePrepMapQueueState({ manifest, syncSnapshot, regions: tileRegions }),
     [manifest, syncSnapshot, tileRegions],
   );
+
+  const handleSelectOfflinePrepRoute = useCallback((route: TripBuilderRouteInput) => {
+    hapticMicro();
+    setSelectedRouteId(routeId(route));
+    setRouteListVisible(false);
+    setRouteImportState({ status: 'idle', message: null });
+    setPrepareConfirmVisible(false);
+    setPrepareAttempted(false);
+    setActionMessage(null);
+    setError(null);
+  }, []);
+
+  const handleReturnToOfflinePrepRouteList = useCallback(() => {
+    hapticMicro();
+    setSelectedRouteId(null);
+    setRouteListVisible(true);
+    setManifest(null);
+    setPrepareConfirmVisible(false);
+    setPrepareAttempted(false);
+    setActionMessage(null);
+    setError(null);
+  }, []);
+
+  const handleOfflinePrepImportRouteFile = useCallback(async () => {
+    if (importingRouteRef.current) return;
+    importingRouteRef.current = true;
+    hapticMicro();
+    setRouteImportState({ status: 'loading', message: 'Opening route file picker...' });
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/gpx+xml',
+          'application/vnd.google-earth.kml+xml',
+          'text/xml',
+          'application/xml',
+          'application/json',
+          'application/geo+json',
+          'text/plain',
+          '*/*',
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        setRouteImportState({ status: 'idle', message: null });
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileName = asset.name || 'imported-route.gpx';
+      const content = await fsReadFileFromPickerUri(asset.uri);
+      if (!content) {
+        throw new Error('Could not read selected route file.');
+      }
+
+      const importedRoute = buildOfflinePrepImportedRoute(fileName, content);
+      const routeMap = new Map<string, TripBuilderRouteInput>();
+      upsertExplorePlanningRoute(routeMap, importedRoute);
+      routes.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
+      const nextRoutes = Array.from(routeMap.values());
+      setRoutes(nextRoutes);
+      saveExplorePlanningRouteContext({
+        routes: nextRoutes.length > 0 ? nextRoutes : [importedRoute],
+        radiusMiles: null,
+        refinementLabel: 'Imported Route',
+        source: 'offline_prep_tab',
+      });
+      setHandoffInput(null);
+      setSelectedRouteId(routeId(importedRoute));
+      setRouteListVisible(false);
+      setRouteImportState({ status: 'success', message: `${fileName} ready for Offline Prep.` });
+      setPrepareConfirmVisible(false);
+      setPrepareAttempted(false);
+      setActionMessage(null);
+      setError(null);
+    } catch (importError) {
+      setRouteListVisible(true);
+      setRouteImportState({
+        status: 'error',
+        message: importError instanceof Error ? importError.message : 'Route import failed.',
+      });
+    } finally {
+      importingRouteRef.current = false;
+    }
+  }, [routes]);
+
+  useEffect(() => {
+    if (params.action !== 'import' || loading || autoImportOpenedRef.current) return;
+    autoImportOpenedRef.current = true;
+    setRouteListVisible(true);
+    setSelectedRouteId(null);
+    void handleOfflinePrepImportRouteFile();
+  }, [handleOfflinePrepImportRouteFile, loading, params.action]);
 
   const updateCachedRouteTileStatus = async (
     run: ECSRun,
@@ -1098,6 +1270,8 @@ export default function ExploreOfflinePrepPackScreen() {
     router.push('/discover');
   };
 
+  const showRouteList = routes.length > 0 && (routeListVisible || !selectedRouteId);
+
   return (
     <TopoBackground>
       <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
@@ -1131,20 +1305,122 @@ export default function ExploreOfflinePrepPackScreen() {
             <View style={styles.stateCard} testID="offline-prep-empty-state">
               <Ionicons name="map-outline" size={20} color={TACTICAL.textMuted} />
               <Text style={styles.stateTitle}>No routes ready for offline prep</Text>
-              <Text style={styles.stateText}>Open Suggested Routes, then select a route to prepare an Offline Prep Pack.</Text>
-              <TouchableOpacity style={styles.primaryButton} onPress={handleBackToSuggestedRoutes} accessibilityRole="button">
-                <Text style={styles.primaryButtonText}>Suggested Routes</Text>
+              <Text style={styles.stateText}>Import a route file or open Suggested Trailheads, then select a route to prepare an Offline Prep Pack.</Text>
+              <TouchableOpacity
+                style={styles.importRouteCard}
+                activeOpacity={0.84}
+                onPress={handleOfflinePrepImportRouteFile}
+                disabled={routeImportState.status === 'loading'}
+                accessibilityRole="button"
+                accessibilityLabel="Import GPX or route file for Offline Prep"
+                testID="offline-prep-import-route-file"
+              >
+                <View style={styles.importRouteIcon}>
+                  <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
+                </View>
+                <View style={styles.routeOptionCopy}>
+                  <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
+                  <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
+                </View>
+                {routeImportState.status === 'loading' ? (
+                  <ActivityIndicator size="small" color={TACTICAL.amber} />
+                ) : (
+                  <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+                )}
               </TouchableOpacity>
+              {routeImportState.message ? (
+                <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
+                  {routeImportState.message}
+                </Text>
+              ) : null}
+              <TouchableOpacity style={styles.primaryButton} onPress={handleBackToSuggestedRoutes} accessibilityRole="button">
+                <Text style={styles.primaryButtonText}>Suggested Trailheads</Text>
+              </TouchableOpacity>
+            </View>
+          ) : showRouteList ? (
+            <View style={styles.routeListCard} testID="offline-prep-route-list">
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionHeaderCopy}>
+                  <Text style={styles.sectionTitle}>Choose Offline Prep Route</Text>
+                  <Text style={styles.stateTextLeft}>Import a route file or select one of the current Suggested Trailheads.</Text>
+                </View>
+                <Text style={styles.sectionMeta}>{routes.length} ROUTES</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.importRouteCard}
+                activeOpacity={0.84}
+                onPress={handleOfflinePrepImportRouteFile}
+                disabled={routeImportState.status === 'loading'}
+                accessibilityRole="button"
+                accessibilityLabel="Import GPX or route file for Offline Prep"
+                testID="offline-prep-import-route-file"
+              >
+                <View style={styles.importRouteIcon}>
+                  <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
+                </View>
+                <View style={styles.routeOptionCopy}>
+                  <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
+                  <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
+                </View>
+                {routeImportState.status === 'loading' ? (
+                  <ActivityIndicator size="small" color={TACTICAL.amber} />
+                ) : (
+                  <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+                )}
+              </TouchableOpacity>
+
+              {routeImportState.message ? (
+                <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
+                  {routeImportState.message}
+                </Text>
+              ) : null}
+
+              <View style={styles.routeOptionList}>
+                {routes.map((route) => (
+                  <TouchableOpacity
+                    key={routeId(route)}
+                    style={styles.routeOption}
+                    activeOpacity={0.82}
+                    onPress={() => handleSelectOfflinePrepRoute(route)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Prepare ${routeName(route)} for offline use`}
+                    testID={`offline-prep-route-option-${routeId(route)}`}
+                  >
+                    <Ionicons name="map-outline" size={15} color={TACTICAL.textMuted} />
+                    <View style={styles.routeOptionCopy}>
+                      <Text style={styles.routeOptionTitle} numberOfLines={1}>{routeName(route)}</Text>
+                      <Text style={styles.routeOptionMeta} numberOfLines={1}>
+                        {(route.region as string | null) ?? 'Suggested trailhead'} | {routeDistance(route) != null ? `${Math.round(routeDistance(route) as number)} mi` : 'Distance unknown'}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           ) : (
             <>
               {manifest ? (
                 <View style={styles.sectionCard} testID="offline-prep-manifest">
                   <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>{stateCopy.title}</Text>
-                    <Text style={[styles.sectionMeta, { color: statusColor(manifest.progress.status) }]}>
-                      {progressStatusLabel(manifest.progress.status)}
-                    </Text>
+                    <View style={styles.sectionHeaderCopy}>
+                      <Text style={styles.sectionTitle}>{stateCopy.title}</Text>
+                      <Text style={[styles.sectionMeta, { color: statusColor(manifest.progress.status) }]}>
+                        {progressStatusLabel(manifest.progress.status)}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.backToListButton}
+                      activeOpacity={0.82}
+                      onPress={handleReturnToOfflinePrepRouteList}
+                      accessibilityRole="button"
+                      accessibilityLabel="Back to Offline Prep route list"
+                      testID="offline-prep-back-to-route-list"
+                    >
+                      <Ionicons name="arrow-back" size={13} color={TACTICAL.amber} />
+                      <Text style={styles.backToListText}>Back</Text>
+                    </TouchableOpacity>
                   </View>
                   <Text style={styles.stateTextLeft}>
                     {geometryResolving ? 'Refreshing route geometry for offline prep...' : stateCopy.message}
@@ -1288,8 +1564,82 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  sectionHeaderCopy: { flex: 1, minWidth: 0, gap: 3 },
   sectionTitle: { flex: 1, color: TACTICAL.text, fontSize: 13, fontWeight: '900' },
   sectionMeta: { color: TACTICAL.amber, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
+  routeListCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
+    padding: 12,
+    gap: 10,
+  },
+  importRouteCard: {
+    minHeight: 54,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '36',
+    backgroundColor: TACTICAL.amber + '0D',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    alignSelf: 'stretch',
+  },
+  importRouteIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '38',
+    backgroundColor: TACTICAL.amber + '10',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importStatusText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  importErrorText: { color: '#EF9A9A' },
+  routeOptionList: { gap: 8 },
+  routeOption: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  routeOptionCopy: { flex: 1, minWidth: 0, gap: 3 },
+  routeOptionTitle: { color: TACTICAL.text, fontSize: 11, lineHeight: 14, fontWeight: '900' },
+  routeOptionMeta: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 12, fontWeight: '800' },
+  backToListButton: {
+    minHeight: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+  },
+  backToListText: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   stateCard: {
     alignItems: 'center',
     justifyContent: 'center',

@@ -74,13 +74,12 @@ const DOCK = {
 };
 
 // ── Shield sizing ────────────────────────────────────────────
-const SHIELD_ICON_SIZE = 72;
+const SHIELD_ICON_SIZE = 70;
 
 // ── Outer badge sizing ───────────────────────────────────────
 const OUTER_BADGE_SIZE_ACTIVE = 70;
 const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 6;
 const OUTER_BADGE_TO_LABEL_OFFSET = -4;
-const CENTER_DASHBOARD_BUTTON_DROP = OUTER_DOCK_ITEM_VERTICAL_OFFSET + 9;
 const BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3;
 
 // ── Bar layout ───────────────────────────────────────────────
@@ -356,6 +355,7 @@ function ShieldCenterButton({
   hintOpacity,
   hintScale,
   slotWidth,
+  verticalDrop,
 }: {
   isActive: boolean;
   onTap: () => void;
@@ -363,6 +363,7 @@ function ShieldCenterButton({
   hintOpacity?: Animated.Value;
   hintScale?: Animated.Value;
   slotWidth: number;
+  verticalDrop: number;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -415,7 +416,7 @@ function ShieldCenterButton({
   }, [onTap]);
 
   return (
-    <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: CENTER_DASHBOARD_BUTTON_DROP }] }]}>
+    <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: verticalDrop }] }]}>
       {hintOpacity && hintScale ? (
         <Animated.View
           style={[
@@ -435,7 +436,7 @@ function ShieldCenterButton({
             styles.shieldPressable,
             {
               opacity: isActive ? 1 : 0.96,
-              transform: [{ translateY: -1 }, { scale: scaleAnim }],
+              transform: [{ scale: scaleAnim }],
             },
           ]}
         >
@@ -537,6 +538,7 @@ export default function CommandDock() {
   const dockBackgroundDrop = Math.max(6, Math.min(dockBottomPadding, 10));
   const dockBackgroundTopOffset = BOTTOM_BANNER_BACKGROUND_DROP_OFFSET;
   const dockBackgroundHeight = dockHeight + dockBackgroundDrop;
+  const centerDashboardButtonDrop = Math.round((dockBottomPadding + BOTTOM_BANNER_BACKGROUND_DROP_OFFSET) / 2);
   const dockOuterGutter = adaptive.shell.dockOuterGutter;
   const availableDockWidth = Math.max(
     280,
@@ -804,6 +806,7 @@ export default function CommandDock() {
                     openQuickActions();
                   }}
                   slotWidth={centerSlotWidth}
+                  verticalDrop={centerDashboardButtonDrop}
                 />
               ) : (
                 <DockButton
@@ -995,7 +998,7 @@ const styles = StyleSheet.create({
   },
 
   shieldLabelSpacer: {
-    height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
+    height: 0,
     marginTop: 0,
   },
 

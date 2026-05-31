@@ -72,6 +72,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     nameFragments: [
       /eco\s*flow/i,
       /ecoflow/i,
+      /\bef[-_][a-z0-9]{4,}\b/i,
       /\bglacier\b/i,
       /\bwave\b/i,
       /\bdelta\s*(mini|pro|max|2|3|3\s*1500)?\b/i,

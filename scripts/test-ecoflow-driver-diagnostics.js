@@ -96,11 +96,9 @@ for (const marker of [
   "deviceId: 'ecoflow_cloud_discovery'",
   "timeoutKind: 'scanTimeout'",
   "deviceId: device.rawId",
-  "timeoutKind: 'firstTelemetryTimeout'",
-  'LOCAL_BLE_PARSER_UNAVAILABLE',
-  'bluDeviceRegistry.registerDevice({\n            provider: \'ecoflow\'',
-  "telemetry_capable: false",
-  "await ensureManagedPowerOwnership(\n            'ecoflow'",
+  "adapter.connect({",
+  "power_provider_stream_ready",
+  "await ensureManagedPowerOwnership(\n          device.providerId as BluProviderId",
   "stopEcoFlowCloudTelemetryPolling(device.rawId)",
   'ecoflowDiagnosticReason',
 ]) {
@@ -108,15 +106,19 @@ for (const marker of [
 }
 
 assert(
-  unifiedSource.includes('genericBluetoothAccessoryManager.connect') &&
-    unifiedSource.includes('EcoFlow Bluetooth is attached, but ECS does not yet have a validated local telemetry parser'),
-  'EcoFlow local BLE must remain a transport attachment path with parser-pending diagnostics.',
+  unifiedSource.includes('getPowerBrandConnectionAdapterForDevice') &&
+    !unifiedSource.includes('LOCAL_BLE_PARSER_UNAVAILABLE') &&
+    !unifiedSource.includes('EcoFlow Bluetooth is attached, but ECS does not yet have a validated local telemetry parser'),
+  'EcoFlow local BLE must use the power adapter path instead of the old parser-unavailable generic attachment branch.',
 );
 
 assert(
-  ecoFlowDriverSource.includes('supports(') &&
-    ecoFlowDriverSource.includes('return false'),
-  'EcoFlow local BLE driver should remain parser-pending until validated model support exists.',
+  ecoFlowDriverSource.includes('ecoflow_native_ble_v1') &&
+    ecoFlowDriverSource.includes('decodeEcoFlowBleTelemetry') &&
+    ecoFlowDriverSource.includes('isEcoFlowBleDevice') &&
+    !ecoFlowDriverSource.includes('supports(_deviceInfo') &&
+    !ecoFlowDriverSource.includes('return false;\n  }'),
+  'EcoFlow local BLE driver must expose a native parser and device matcher.',
 );
 
 assert(
@@ -148,6 +150,70 @@ const {
   recordEcoFlowConnectionPhase,
   recordEcoFlowTimeout,
 } = loadTypeScriptModule('lib/ecoflowConnectionDiagnostics.ts');
+const {
+  EcoFlowDriver,
+  decodeEcoFlowBleTelemetry,
+  isEcoFlowBleDevice,
+  parseEcoFlowBleTelemetry,
+} = loadTypeScriptModule('src/power/drivers/vendors/EcoFlowDriver.ts');
+
+const driver = new EcoFlowDriver();
+assert.strictEqual(driver.supports({ name: 'EcoFlow DELTA 3 1500' }), true);
+assert.strictEqual(driver.supports({ name: 'Generic Speaker' }), false);
+assert.strictEqual(isEcoFlowBleDevice({ localName: 'RIVER 3 Plus' }), true);
+assert.strictEqual(isEcoFlowBleDevice({ localName: 'EF-BX11224' }), true);
+assert.strictEqual(isEcoFlowBleDevice({ name: 'EF-D36F5055' }), true);
+
+const structuredTelemetry = parseEcoFlowBleTelemetry({
+  deviceId: 'DELTA-1',
+  batteryPercent: 77,
+  inputWatts: 245,
+  outputWatts: 93,
+  solarWatts: 110,
+  temperatureCelsius: 31,
+});
+assert.strictEqual(structuredTelemetry.battery_percent, 77);
+assert.strictEqual(structuredTelemetry.input_watts, 245);
+assert.strictEqual(structuredTelemetry.output_watts, 93);
+assert.strictEqual(structuredTelemetry.solar_input_watts, 110);
+assert.strictEqual(structuredTelemetry.temperature_celsius, 31);
+assert.deepStrictEqual(structuredTelemetry.raw.decodedKeys.sort(), [
+  'battery_percent',
+  'input_watts',
+  'output_watts',
+  'solar_input_watts',
+  'temperature_celsius',
+].sort());
+
+const jsonPayload = Buffer.from(JSON.stringify({
+  soc: 64,
+  wattsIn: 180,
+  wattsOut: 52,
+  runtime: 210,
+}), 'utf8').toString('base64');
+const decodedBle = decodeEcoFlowBleTelemetry({
+  device: { id: 'RIVER-1', name: 'RIVER 3 Plus' },
+  characteristicMap: new Map([
+    ['fff0:fff1', {
+      serviceUuid: 'fff0',
+      characteristicUuid: 'fff1',
+      valueBase64: jsonPayload,
+    }],
+  ]),
+  rssi: -48,
+});
+assert.strictEqual(decodedBle.battery_percent, 64);
+assert.strictEqual(decodedBle.input_watts, 180);
+assert.strictEqual(decodedBle.output_watts, 52);
+assert.strictEqual(decodedBle.estimated_runtime_minutes, 210);
+assert.strictEqual(decodedBle.signal_strength, -48);
+
+const canonicalPower = driver.parse({ deviceId: 'DELTA-1', soc: 88, wattsOut: 45 });
+assert.strictEqual(canonicalPower.source, 'ble');
+assert.strictEqual(canonicalPower.isLive, true);
+assert.strictEqual(canonicalPower.battery.socPct, 88);
+assert.strictEqual(canonicalPower.battery.wattsOut, 45);
+assert.deepStrictEqual(driver.parse({ deviceId: 'DELTA-1', opaque: true }), {});
 
 clearEcoFlowConnectionState();
 recordEcoFlowConnectionPhase({

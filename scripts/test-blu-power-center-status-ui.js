@@ -23,6 +23,7 @@ function lacks(content, needle, label) {
 
 const hook = read('lib/useUnifiedDeviceConnections.ts');
 const screen = read('app/power/blu.tsx');
+const powerIndex = read('app/power/index.tsx');
 const providers = read('lib/useEcsProviders.ts');
 
 for (const field of [
@@ -83,11 +84,32 @@ for (const fragment of [
   'Last telemetry --',
   'Reason',
 ]) {
-  has(screen, fragment, 'Power Center BLU diagnostic card UI');
+  has(screen, fragment, 'Device Connections diagnostic card UI');
 }
 
 has(screen, '{device.detailLabel || connectionPolicy.statusDetail}', 'device-specific status detail');
-lacks(screen, 'Native BLE Diagnostics', 'Power Center production UI');
-lacks(screen, 'Pipeline Diagnostics', 'Power Center production UI');
+lacks(screen, 'Native BLE Diagnostics', 'Device Connections production UI');
+lacks(screen, 'Pipeline Diagnostics', 'Device Connections production UI');
 
-console.log('BLU Power Center status UI checks passed.');
+has(powerIndex, "import { Redirect } from 'expo-router'", 'legacy Power Center route');
+has(powerIndex, '<Redirect href="/power/blu" />', 'legacy Power Center route');
+for (const staleFragment of [
+  'System Overview',
+  'Energy Flow',
+  'Attached Devices',
+  'Primary Device Details',
+  'PowerFlowDiagram',
+  'usePowerTelemetry',
+  'useEcoFlowPowerLive',
+  'getEcoFlowPowerDeviceCatalog',
+  'setPrimaryEcoFlowPowerDevice',
+]) {
+  lacks(powerIndex, staleFragment, 'legacy Power Center redirect route');
+}
+has(hook, 'isEcoFlowCloudAuthBlockedResult', 'EcoFlow cloud auth-blocked results must be classified before timeout logging');
+has(hook, 'ecoflow_cloud_connect_auth_blocked', 'EcoFlow cloud auth blocks must not be logged as generic no-telemetry timeouts');
+has(hook, "result.connected ? 'connected' : 'error'", 'EcoFlow cloud-attached devices must remain connected even when telemetry is auth-blocked');
+has(hook, "result.connected ? 'connected' : 'unavailable'", 'Managed EcoFlow ownership must not be marked unavailable solely because telemetry is auth-blocked');
+has(hook, 'telemetry is authorization-blocked', 'EcoFlow auth-blocked route intent must explain restricted telemetry');
+
+console.log('BLU Device Connections status UI checks passed.');

@@ -232,6 +232,22 @@ async function run() {
         terrainConfidence: 96,
         nearBuildings: true,
       }),
+      candidate('structure-distance-hidden', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        nearestStructureDistanceMiles: 0.95,
+      }),
+      candidate('residential-distance-hidden', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        nearestResidentialStructureDistanceMiles: 1,
+      }),
       candidate('highway-hidden', {
         sourceType: 'ecs_inferred',
         accessConfidence: 96,
@@ -242,7 +258,21 @@ async function run() {
       }),
     ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
     [],
-    'Camp Scout must hard-hide water, building, and highway conflict pins even with fallback enabled.',
+    'Camp Scout must hard-hide water, one-mile structure buffer, building, and highway conflict pins even with fallback enabled.',
+  );
+  assert.deepEqual(
+    rankCampScoutCandidates([
+      candidate('privacy-clear', {
+        sourceType: 'ecs_inferred',
+        accessConfidence: 96,
+        legalityConfidence: 96,
+        remotenessScore: 96,
+        terrainConfidence: 96,
+        nearestStructureDistanceMiles: 1.01,
+      }),
+    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
+    ['privacy-clear'],
+    'Known structure clearance over one mile should remain eligible for ranking.',
   );
   assert.deepEqual(
     rankCampScoutCandidates([
@@ -358,8 +388,13 @@ async function run() {
   assert.ok(
     mapRenderer.includes("tent.textContent = '\\u26FA';") &&
       mapRenderer.includes('.camp-scout-tent::before') &&
-      mapRenderer.includes('content: none;'),
-    'Camp Scout DOM markers should use a camp symbol inside the yellow dot instead of a bare triangle.',
+      mapRenderer.includes('.camp-scout-marker::before') &&
+      mapRenderer.includes('.camp-scout-core') &&
+      mapRenderer.includes('background: transparent;') &&
+      mapRenderer.includes("'circle-radius': 0") &&
+      mapRenderer.includes("'circle-opacity': 0") &&
+      mapRenderer.includes("'circle-stroke-width': 0"),
+    'Camp Scout markers should render the campsite icon as the pin and suppress paired yellow circles.',
   );
   assert.ok(
     navigate.includes('campIntelMarkers={combinedCampMarkers}'),

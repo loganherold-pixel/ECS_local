@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as DocumentPicker from 'expo-document-picker';
 
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import Header from '../components/Header';
@@ -33,13 +34,34 @@ import {
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { hapticMicro } from '../lib/haptics';
 import {
+  buildTripItineraryFromSuggestedRoute,
   buildTripPlan,
   clearTripBuilderRouteHandoff,
+  createMapboxRouteContextProviderRegistry,
+  acceptTripItineraryEditItem,
+  addUserItineraryStop,
+  addUserTrailWaypoint,
+  applyTripItineraryEditSession,
+  createTripItineraryEditSession,
+  dismissTripItineraryEditItem,
+  getTripItineraryReview,
+  getTripItinerarySummary,
+  isUsableRouteContext,
   loadTripBuilderRouteHandoff,
+  reorderTripItineraryStop,
+  routeContextRoutePoints,
+  routeContextSupplyCandidatesToResupplyPoints,
+  routeContextTrailheadCoordinate,
+  routeContextToTripBuilderItineraryContext,
+  routeWithRouteContext,
   type CampCandidate,
   type GroupType,
   type TimeWindow,
+  type PreTrailStopCandidate,
+  type PreTrailStopCandidateInput,
+  type TripBuilderCoordinate,
   type TripBuilderInput,
+  type TripBuilderRouteContextInput,
   type TripBuilderVehicleProfile,
   type TripPlan,
   type TripBuilderRouteInput,
@@ -52,6 +74,16 @@ import {
   type ResupplyCategoryPlan,
   type ResupplyPoint,
   type SmartResupplyPlan,
+  type SelectedPreTrailOption,
+  type SuggestedRoute,
+  type TripBuilderConfidence,
+  type TripItineraryEditItemStatus,
+  type TripItineraryEditSession,
+  type TripItinerary,
+  type TripItineraryReviewAvailability,
+  type TripItineraryReviewModel,
+  type TripItinerarySummaryPhaseStatus,
+  type TripItinerarySummaryViewModel,
 } from '../lib/tripBuilder';
 import {
   getOfflinePrepRouteCoordinates,
@@ -64,11 +96,20 @@ import {
 import { loadoutItemStore, loadoutStore } from '../lib/loadoutStore';
 import {
   createRoadSearchSessionToken,
+  fetchRoadRoute,
   type RoadNavDestination,
   resolveRoadDestination,
   searchRoadDestinations,
   type RoadNavSearchSuggestion,
 } from '../lib/mapboxRoadNavigation';
+import { useGPSLocation } from '../lib/useGPSLocation';
+import type { GPSPosition } from '../lib/useGPSLocation';
+import {
+  routeContextOrchestrator,
+  type RouteContext,
+  type SupplyCandidate,
+  type SupplyMode,
+} from '../lib/routeContext';
 import { fsReadFileFromPickerUri } from '../lib/fsCompat';
 
 let lastTripBuilderPlanState: {
@@ -76,11 +117,13 @@ let lastTripBuilderPlanState: {
   plan: TripPlan | null;
   visible: boolean;
   itinerarySaved: boolean;
+  itineraryEditSession: TripItineraryEditSession | null;
 } = {
   selectedRouteId: null,
   plan: null,
   visible: false,
   itinerarySaved: false,
+  itineraryEditSession: null,
 };
 
 const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
@@ -91,6 +134,23 @@ const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
   { value: 'scenic_exploration', label: 'Scenic' },
   { value: 'technical_trail_run', label: 'Technical' },
 ];
+
+function routeContextSupplyModeForTripBuilder(
+  preference: TripBuilderInput['smartResupplyPreference'],
+): SupplyMode {
+  if (preference === 'fuel_only') return 'gas';
+  if (preference === 'fuel_supplies') return 'gas_and_grocery';
+  return 'none';
+}
+
+const TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS = {
+  'ecs.routeContextEngine.enabled': true,
+  'ecs.routeContextEngine.prefetchOnTrailSelect': true,
+  'ecs.routeContextEngine.trailheadAnchoredSupplyChain': true,
+  'ecs.routeContextEngine.enableCampCandidates': false,
+  'ecs.routeContextEngine.enableBailoutCandidates': true,
+  'ecs.routeContextEngine.debugLogging': false,
+} as const;
 
 const GROUP_OPTIONS: { value: GroupType; label: string }[] = [
   { value: 'solo', label: 'Solo' },
@@ -230,9 +290,9 @@ const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string; detai
 const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
-const SMART_RESUPPLY_SEARCH_LIMIT = 10;
-const SMART_RESUPPLY_NEAR_START_RADIUS_MILES = 75;
-const SMART_RESUPPLY_EXPANDED_START_RADIUS_MILES = 180;
+const SMART_RESUPPLY_SEARCH_LIMIT = 20;
+const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [12, 25, 50] as const;
+const SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES = 60;
 const BAILOUT_SEARCH_QUERY = 'trailhead parking road access ranger station highway';
 const BAILOUT_OPTION_LIMIT = 5;
 const BAILOUT_SEARCH_LIMIT = 10;
@@ -498,12 +558,18 @@ function buildTripBuilderImportedRoute(fileName: string, content: string): Exped
       type: 'LineString',
       coordinates,
     },
+    trailGeometry: {
+      type: 'LineString',
+      coordinates,
+    },
     routeMetadata: {
       source: 'trip_builder_import',
       sourceFileName: fileName,
       sourceFileType: ext,
       importedAt: new Date().toISOString(),
       routePointCount: coordinates.length,
+      isTrailGeometry: true,
+      geometryRole: 'trail',
     },
   };
 }
@@ -1175,6 +1241,330 @@ function ResupplyRow({
   );
 }
 
+function itinerarySummaryStateLabel(state: TripItinerarySummaryViewModel['state']): string {
+  switch (state) {
+    case 'full_itinerary_available':
+      return 'Full';
+    case 'trail_geometry_missing':
+      return 'Trail Data';
+    case 'pre_trail_poi_missing':
+      return 'POI Pending';
+    case 'gps_missing':
+      return 'GPS Pending';
+    case 'itinerary_structure_ready':
+      return 'Structure Ready';
+    case 'itinerary_pending':
+    default:
+      return 'Pending';
+  }
+}
+
+function itinerarySummaryStatusColor(status: TripItinerarySummaryPhaseStatus): string {
+  switch (status) {
+    case 'available':
+      return '#66BB6A';
+    case 'pending':
+    case 'optional':
+      return TACTICAL.amber;
+    case 'missing':
+    case 'unavailable':
+    default:
+      return '#EF5350';
+  }
+}
+
+function ItinerarySummaryPanel({ summary }: { summary: TripItinerarySummaryViewModel }) {
+  const stateColor =
+    summary.state === 'full_itinerary_available'
+      ? '#66BB6A'
+      : summary.state === 'gps_missing' || summary.state === 'trail_geometry_missing'
+        ? '#FFCC80'
+        : TACTICAL.amber;
+  return (
+    <View style={styles.itinerarySummary} testID="trip-builder-itinerary-summary">
+      <View style={styles.itinerarySummaryHeader}>
+        <View style={[styles.itinerarySummaryIcon, { borderColor: stateColor + '44', backgroundColor: stateColor + '12' }]}>
+          <Ionicons name="map-outline" size={13} color={stateColor} />
+        </View>
+        <View style={styles.itinerarySummaryTitleBlock}>
+          <Text style={styles.itinerarySummaryTitle}>{summary.title}</Text>
+          <Text style={styles.itinerarySummaryMessage}>{summary.message}</Text>
+        </View>
+        <Text style={[styles.itinerarySummaryState, { color: stateColor }]}>{itinerarySummaryStateLabel(summary.state)}</Text>
+      </View>
+
+      <View style={styles.itinerarySummaryPhaseRow}>
+        {summary.phases.map((phase) => {
+          const color = itinerarySummaryStatusColor(phase.status);
+          return (
+            <View
+              key={phase.key}
+              style={[styles.itinerarySummaryPhase, { borderColor: color + '30', backgroundColor: color + '08' }]}
+              testID={`trip-builder-itinerary-phase-${phase.key}`}
+            >
+              <View style={[styles.itinerarySummaryPhaseDot, { backgroundColor: color }]} />
+              <View style={styles.itinerarySummaryPhaseCopy}>
+                <Text style={styles.itinerarySummaryPhaseLabel} numberOfLines={1}>{phase.label}</Text>
+                <Text style={styles.itinerarySummaryPhaseDetail} numberOfLines={1}>{phase.detail}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      {summary.dataNotes.slice(0, 2).map((note) => (
+        <Text key={note} style={styles.itinerarySummaryNote}>{note}</Text>
+      ))}
+    </View>
+  );
+}
+
+function itineraryReviewAvailabilityLabel(value: TripItineraryReviewAvailability): string {
+  switch (value) {
+    case 'available':
+      return 'Available';
+    case 'partial':
+      return 'Partial';
+    case 'pending':
+      return 'Pending';
+    case 'missing':
+      return 'Missing';
+    case 'optional':
+      return 'Optional';
+    case 'unavailable':
+    default:
+      return 'Unavailable';
+  }
+}
+
+function itineraryReviewAvailabilityColor(value: TripItineraryReviewAvailability): string {
+  switch (value) {
+    case 'available':
+      return '#66BB6A';
+    case 'partial':
+    case 'pending':
+    case 'optional':
+      return TACTICAL.amber;
+    case 'missing':
+    case 'unavailable':
+    default:
+      return '#EF5350';
+  }
+}
+
+function confidenceDisplay(value: TripBuilderConfidence | null | undefined): string {
+  if (value === 'high') return 'High';
+  if (value === 'medium') return 'Medium';
+  if (value === 'low') return 'Low';
+  return 'Unknown';
+}
+
+function ConfidenceChip({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.itineraryReviewConfidenceChip}>
+      <Text style={styles.itineraryReviewConfidenceLabel}>{label}</Text>
+      <Text style={styles.itineraryReviewConfidenceValue} numberOfLines={1}>{value}</Text>
+    </View>
+  );
+}
+
+function itineraryEditItemStatus(
+  editSession: TripItineraryEditSession | null | undefined,
+  itemId: string,
+): TripItineraryEditItemStatus | null {
+  return editSession?.items.find((item) => item.sourceItemId === itemId || item.id === itemId)?.status ?? null;
+}
+
+function ItineraryReviewPanel({
+  review,
+  editing = false,
+  editSession = null,
+  onAcceptItem,
+  onDismissItem,
+  onMoveStopItem,
+  onAddUserStop,
+  onAddUserWaypoint,
+}: {
+  review: TripItineraryReviewModel;
+  editing?: boolean;
+  editSession?: TripItineraryEditSession | null;
+  onAcceptItem?: (itemId: string) => void;
+  onDismissItem?: (itemId: string) => void;
+  onMoveStopItem?: (itemId: string, direction: -1 | 1) => void;
+  onAddUserStop?: () => void;
+  onAddUserWaypoint?: () => void;
+}) {
+  return (
+    <View style={styles.itineraryReview} testID="trip-builder-itinerary-review">
+      <View style={styles.itineraryReviewHeader}>
+        <View style={styles.itineraryReviewHeaderCopy}>
+          <Text style={styles.itineraryReviewTitle}>{review.title}</Text>
+          <Text style={styles.itineraryReviewSubtitle}>{review.subtitle}</Text>
+        </View>
+      </View>
+
+      <View style={styles.itineraryReviewConfidence} testID="trip-builder-itinerary-confidence-summary">
+        <View style={styles.itineraryReviewSubheader}>
+          <Text style={styles.itineraryReviewSubheaderText}>Confidence Summary</Text>
+          <Text style={styles.itineraryReviewSubheaderMeta}>
+            {review.confidenceSummary.routeGeometryStatus ?? 'unknown'}
+          </Text>
+        </View>
+        <View style={styles.itineraryReviewConfidenceRow}>
+          <ConfidenceChip label="Overall" value={confidenceDisplay(review.confidenceSummary.overall)} />
+          <ConfidenceChip label="Geometry" value={confidenceDisplay(review.confidenceSummary.routeGeometry)} />
+          <ConfidenceChip label="Trailhead" value={confidenceDisplay(review.confidenceSummary.trailhead)} />
+          <ConfidenceChip label="Waypoints" value={confidenceDisplay(review.confidenceSummary.trailWaypoints)} />
+        </View>
+      </View>
+
+      <View style={styles.itineraryReviewPhaseList}>
+        {review.phases.map((phase, index) => {
+          const color = itineraryReviewAvailabilityColor(phase.availability);
+          const addAction =
+            editing && phase.key === 'pre_trail_resupply'
+              ? onAddUserStop
+              : editing && phase.key === 'trail_waypoints'
+                ? onAddUserWaypoint
+                : undefined;
+          return (
+            <View key={phase.key} style={styles.itineraryReviewPhase} testID={`trip-builder-review-phase-${phase.key}`}>
+              <View style={styles.itineraryReviewPhaseHeader}>
+                <View style={[styles.itineraryReviewPhaseNumber, { borderColor: color + '40', backgroundColor: color + '10' }]}>
+                  <Text style={[styles.itineraryReviewPhaseNumberText, { color }]}>{index + 1}</Text>
+                </View>
+                <View style={styles.itineraryReviewPhaseCopy}>
+                  <Text style={styles.itineraryReviewPhaseTitle}>{phase.title}</Text>
+                  <Text style={styles.itineraryReviewPhaseDescription}>{phase.description}</Text>
+                </View>
+                <View style={[styles.itineraryReviewAvailability, { borderColor: color + '38', backgroundColor: color + '0D' }]}>
+                  <Text style={[styles.itineraryReviewAvailabilityText, { color }]}>
+                    {itineraryReviewAvailabilityLabel(phase.availability)}
+                  </Text>
+                </View>
+                {addAction ? (
+                  <TouchableOpacity
+                    style={styles.itineraryReviewIconButton}
+                    activeOpacity={0.82}
+                    onPress={addAction}
+                    accessibilityRole="button"
+                    accessibilityLabel={phase.key === 'pre_trail_resupply' ? 'Add user itinerary stop' : 'Add user trail waypoint'}
+                    testID={phase.key === 'pre_trail_resupply' ? 'trip-builder-add-user-stop' : 'trip-builder-add-user-waypoint'}
+                  >
+                    <Ionicons name="add" size={12} color={TACTICAL.amber} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <View style={styles.itineraryReviewMetaRow}>
+                <Text style={styles.itineraryReviewMetaText}>Confidence: {confidenceDisplay(phase.confidence)}</Text>
+                {phase.editable ? <Text style={styles.itineraryReviewEditableText}>Editable</Text> : null}
+              </View>
+              {phase.recommendation ? (
+                <Text style={styles.itineraryReviewRecommendation}>ECS recommends: {phase.recommendation}</Text>
+              ) : null}
+              {phase.items.length > 0 ? (
+                <View style={styles.itineraryReviewItemList}>
+                  {(editing && phase.editable ? phase.items : phase.items.slice(0, 4)).map((item) => {
+                    const itemStatus = itineraryEditItemStatus(editSession, item.id);
+                    const itemEditable = editing && phase.editable;
+                    return (
+                      <View key={item.id} style={styles.itineraryReviewItem} testID={`trip-builder-review-item-${item.id}`}>
+                        <View style={styles.itineraryReviewItemHeader}>
+                          <View style={styles.itineraryReviewItemCopy}>
+                            <Text style={styles.itineraryReviewItemTitle} numberOfLines={1}>{item.title}</Text>
+                            <Text style={styles.itineraryReviewItemMeta} numberOfLines={1}>
+                              {item.kind} | {confidenceDisplay(item.confidence)}
+                              {item.isUserAdded ? ' | User added' : item.isEcsSuggested ? ' | ECS suggested' : ''}
+                              {itemStatus ? ` | ${itemStatus}` : ''}
+                            </Text>
+                          </View>
+                          {itemEditable ? (
+                            <View style={styles.itineraryReviewItemActions}>
+                              {phase.key === 'pre_trail_resupply' && onMoveStopItem ? (
+                                <>
+                                  <TouchableOpacity
+                                    style={styles.itineraryReviewIconButton}
+                                    activeOpacity={0.82}
+                                    onPress={() => onMoveStopItem(item.id, -1)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Move ${item.title} earlier`}
+                                    testID={`trip-builder-itinerary-move-up-${item.id}`}
+                                  >
+                                    <Ionicons name="chevron-up" size={12} color={TACTICAL.textMuted} />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.itineraryReviewIconButton}
+                                    activeOpacity={0.82}
+                                    onPress={() => onMoveStopItem(item.id, 1)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Move ${item.title} later`}
+                                    testID={`trip-builder-itinerary-move-down-${item.id}`}
+                                  >
+                                    <Ionicons name="chevron-down" size={12} color={TACTICAL.textMuted} />
+                                  </TouchableOpacity>
+                                </>
+                              ) : null}
+                              {onAcceptItem ? (
+                                <TouchableOpacity
+                                  style={styles.itineraryReviewIconButton}
+                                  activeOpacity={0.82}
+                                  onPress={() => onAcceptItem(item.id)}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Accept ${item.title}`}
+                                  testID={`trip-builder-itinerary-accept-${item.id}`}
+                                >
+                                  <Ionicons name="checkmark" size={12} color="#66BB6A" />
+                                </TouchableOpacity>
+                              ) : null}
+                              {onDismissItem ? (
+                                <TouchableOpacity
+                                  style={[styles.itineraryReviewIconButton, styles.itineraryReviewRemoveButton]}
+                                  activeOpacity={0.82}
+                                  onPress={() => onDismissItem(item.id)}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Remove ${item.title}`}
+                                  testID={`trip-builder-itinerary-remove-${item.id}`}
+                                >
+                                  <Ionicons name="close" size={12} color="#EF5350" />
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+              {phase.warnings.slice(0, 2).map((warning) => (
+                <Text key={warning} style={styles.itineraryReviewWarning}>{warning}</Text>
+              ))}
+            </View>
+          );
+        })}
+      </View>
+
+      {review.missingDataWarnings.length > 0 ? (
+        <View style={styles.itineraryReviewWarnings} testID="trip-builder-itinerary-missing-warnings">
+          <View style={styles.itineraryReviewSubheader}>
+            <Text style={styles.itineraryReviewSubheaderText}>Missing Data</Text>
+            <Text style={styles.itineraryReviewSubheaderMeta}>{review.missingDataWarnings.length}</Text>
+          </View>
+          {review.missingDataWarnings.slice(0, 4).map((warning) => (
+            <Text key={warning} style={styles.itineraryReviewWarning}>{warning}</Text>
+          ))}
+        </View>
+      ) : null}
+      {editing && editSession?.dismissedSuggestions.length ? (
+        <Text style={styles.itineraryReviewDismissedText} testID="trip-builder-itinerary-dismissed-count">
+          {editSession.dismissedSuggestions.length} dismissed suggestion{editSession.dismissedSuggestions.length === 1 ? '' : 's'} tracked separately from provider/source records.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function mapScopeTitle(scope: TripPlanMapScope, itinerarySaved = false): string {
   switch (scope) {
     case 'camps':
@@ -1319,6 +1709,116 @@ function routePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[
   if (fallback.length >= 2) return fallback;
   if (normalized.length > 0) return normalized;
   return fallback;
+}
+
+function tripBuilderCoordinateFromGpsPosition(position: GPSPosition | null): TripBuilderCoordinate | null {
+  if (!position) return null;
+  const coordinate = {
+    latitude: position.latitude,
+    longitude: position.longitude,
+    ...(position.accuracyM != null ? { accuracyMeters: position.accuracyM } : {}),
+    ...(position.altitudeFt != null ? { elevationFeet: position.altitudeFt } : {}),
+    source: {
+      label: 'trip_builder_live_gps',
+      state: 'live' as const,
+      capturedAt: new Date(position.timestamp).toISOString(),
+      confidence: position.accuracyM != null && position.accuracyM <= 30 ? 'high' as const : 'medium' as const,
+    },
+  };
+  return isValidMapCoordinate(coordinate) ? coordinate : null;
+}
+
+function routeContextOriginFromTripCoordinate(coordinate: TripBuilderCoordinate | null): RouteContext['origin'] {
+  if (!coordinate || !isValidMapCoordinate(coordinate)) return null;
+  return {
+    lat: Number(coordinate.latitude.toFixed(5)),
+    lng: Number(coordinate.longitude.toFixed(5)),
+    label: 'Current GPS location',
+  };
+}
+
+function lineStringFromTripCoordinates(points: TripMapCoordinate[]): { type: 'LineString'; coordinates: [number, number][] } | null {
+  const coordinates = points
+    .filter(isValidMapCoordinate)
+    .map((point): [number, number] => [point.longitude, point.latitude]);
+  return coordinates.length >= 2 ? { type: 'LineString', coordinates } : null;
+}
+
+function routeHasExplicitTrailGeometry(route: TripBuilderRouteInput): boolean {
+  const record = routeObjectRecord(route);
+  const metadata = routeMetadataRecord(route);
+  return Boolean(
+    record.trailGeometry ??
+      record.trail_geometry ??
+      metadata.trailGeometry ??
+      metadata.trail_geometry ??
+      record.isTrailGeometry ??
+      metadata.isTrailGeometry,
+  );
+}
+
+function routePreviewCanStandInAsTrail(route: TripBuilderRouteInput): boolean {
+  if (routeHasExplicitTrailGeometry(route)) return false;
+  const record = routeObjectRecord(route);
+  const metadata = routeMetadataRecord(route);
+  const source = String(metadata.source ?? record.source ?? '').toLowerCase();
+  const sourceFileType = String(metadata.sourceFileType ?? metadata.source_file_type ?? '').toLowerCase();
+  const previewStatus = String(metadata.previewMetadataStatus ?? metadata.preview_metadata_status ?? '').toLowerCase();
+  return (
+    source === 'trip_builder_import' ||
+    sourceFileType === 'gpx' ||
+    sourceFileType === 'kml' ||
+    sourceFileType === 'geojson' ||
+    previewStatus === 'geometry' ||
+    record.routeGeometry != null ||
+    metadata.routeGeometry != null
+  );
+}
+
+function buildLiveItinerarySuggestedRoute(args: {
+  route: SuggestedRoute;
+  liveApproachRoutePoints: TripMapCoordinate[];
+  routeContext: TripBuilderRouteContextInput | null;
+}): SuggestedRoute {
+  const route = args.route;
+  const metadata = routeMetadataRecord(route);
+  const approachLine = lineStringFromTripCoordinates(args.liveApproachRoutePoints);
+  const routePoints = routePointsForTripMap(route);
+  const routePreviewTrailLine = routePreviewCanStandInAsTrail(route)
+    ? lineStringFromTripCoordinates(routePoints)
+    : null;
+  const routeContextTrailhead = args.routeContext?.trailheadAnchor?.coordinate ?? null;
+  const routeStart = routeContextTrailhead ?? routeStartCoordinateForTrip(route);
+  const routeEnd = routeEndCoordinateForTrip(route);
+
+  return {
+    ...route,
+    ...(approachLine ? { approachGeometry: approachLine, approachRoute: approachLine } : {}),
+    ...(routePreviewTrailLine ? { trailGeometry: routePreviewTrailLine } : {}),
+    ...(routeStart ? { trailheadStart: routeStart } : {}),
+    ...(routeEnd ? { trailEnd: routeEnd } : {}),
+    routeMetadata: {
+      ...metadata,
+      ...(approachLine
+        ? {
+            tripBuilderApproachGeometrySource: 'mapbox_live_gps',
+            approachGeometryPointCount: approachLine.coordinates.length,
+          }
+        : {}),
+      ...(routePreviewTrailLine
+        ? {
+            tripBuilderTrailGeometrySource: 'selected_route_preview',
+            isTrailGeometry: true,
+          }
+        : {}),
+      ...(args.routeContext
+        ? {
+            tripBuilderRouteContextStatus: args.routeContext.status ?? null,
+            tripBuilderRouteContextConfidence: args.routeContext.confidence?.tier ?? args.routeContext.confidence?.value ?? null,
+          }
+        : {}),
+    },
+  };
 }
 
 function buildPreparedTripRoutePreview(
@@ -1489,6 +1989,300 @@ function smartResupplyPointForPlan(option: SmartResupplyPoi): ResupplyPoint {
   };
 }
 
+function selectedPreTrailOptionFromSmartResupply(
+  option: SmartResupplyPoi,
+  bucket: 'fuel' | 'grocery',
+): SelectedPreTrailOption {
+  return {
+    id: `operator-${bucket}-${makePlanIdPart(option.id)}`,
+    title: option.title,
+    coordinate: option.coordinate,
+    source: option.sourceType || 'operator_selected_pre_route_resupply',
+    confidence: 'medium',
+    notes: [
+      bucket === 'fuel'
+        ? 'Operator selected as a pre-trail fuel stop near the trailhead start.'
+        : 'Operator selected as a pre-trail grocery or supply stop near the trailhead start.',
+      option.subtitle ? `Mapbox place context: ${option.subtitle}.` : null,
+    ].filter((note): note is string => !!note),
+    metadata: {
+      preTrailStopBucket: bucket,
+      sourceType: option.sourceType,
+      routeStartDistanceMiles: option.distanceFromRouteStartMiles,
+      mapboxId: option.suggestion.mapboxId ?? null,
+      operatorSelected: true,
+    },
+  };
+}
+
+function preTrailCandidateFromSmartResupply(
+  option: SmartResupplyPoi,
+  bucket: 'fuel' | 'grocery',
+): PreTrailStopCandidate {
+  const provider = option.sourceType === 'route_context_engine' ? 'route_context_engine' : 'mapbox_search';
+  return {
+    id: `candidate-${bucket}-${makePlanIdPart(option.id)}`,
+    providerPlaceId: option.suggestion.mapboxId ?? null,
+    title: option.title,
+    name: option.title,
+    category: bucket,
+    type: bucket,
+    waypointType: bucket,
+    coordinate: option.coordinate,
+    address: option.subtitle ?? null,
+    distanceFromTrailheadMiles: option.distanceFromRouteStartMiles,
+    openStatus: 'unknown',
+    confidence: option.sourceType === 'route_context_engine' ? 'high' : 'medium',
+    score: option.sourceType === 'route_context_engine' ? 0.86 : 0.72,
+    source: provider,
+    provider,
+    notes: [
+      option.sourceType === 'route_context_engine'
+        ? 'Ranked by Route Context as a pre-trail resupply candidate.'
+        : 'Returned by live Mapbox lookup near the trailhead start.',
+      option.subtitle ? `Place context: ${option.subtitle}.` : null,
+      option.diesel ? 'Search text suggests diesel support; verify pump availability.' : null,
+      option.groceries ? 'Search text suggests fuel and grocery/supply support at the same stop.' : null,
+    ].filter((note): note is string => !!note),
+    metadata: {
+      preTrailStopBucket: bucket,
+      sourceType: option.sourceType,
+      mapboxId: option.suggestion.mapboxId ?? null,
+      routeContextCandidateId: routeContextCandidateIdFromSmartOption(option),
+      distanceFromRouteStartMiles: option.distanceFromRouteStartMiles,
+    },
+  };
+}
+
+function routeContextCandidateIdFromSmartOption(option: SmartResupplyPoi): string | null {
+  const raw = option.suggestion.raw;
+  if (!raw || typeof raw !== 'object') return null;
+  const candidateId = (raw as { routeContextCandidateId?: unknown }).routeContextCandidateId;
+  return typeof candidateId === 'string' && candidateId.trim() ? candidateId : null;
+}
+
+function routeContextSupplySelectionFromSmartOptions(
+  fuel: SmartResupplyPoi | null,
+  supply: SmartResupplyPoi | null,
+): {
+  selectedRefuelCandidateId: string | null;
+  selectedResupplyCandidateId: string | null;
+  selectedSupplyCandidateIds: string[];
+} {
+  const selectedRefuelCandidateId = fuel ? routeContextCandidateIdFromSmartOption(fuel) : null;
+  const selectedResupplyCandidateId = supply ? routeContextCandidateIdFromSmartOption(supply) : null;
+  const selectedSupplyCandidateIds = Array.from(new Set([
+    selectedRefuelCandidateId,
+    selectedResupplyCandidateId,
+  ].filter((id): id is string => !!id)));
+  return {
+    selectedRefuelCandidateId,
+    selectedResupplyCandidateId,
+    selectedSupplyCandidateIds,
+  };
+}
+
+function smartResupplyPoiFromRouteContextCandidate(
+  candidate: SupplyCandidate,
+  category: SmartResupplyPoi['category'],
+  routeStart: TripMapCoordinate,
+): SmartResupplyPoi | null {
+  const coordinate = {
+    latitude: candidate.lat,
+    longitude: candidate.lng,
+  };
+  if (!isValidMapCoordinate(coordinate)) return null;
+  const suggestion: RoadNavSearchSuggestion = {
+    id: `route-context-${candidate.id}`,
+    title: candidate.name,
+    subtitle: candidate.address ?? null,
+    sourceType: 'manual_selection',
+    mapboxId: candidate.providerPlaceId ?? null,
+    coordinate: {
+      lat: candidate.lat,
+      lng: candidate.lng,
+    },
+    raw: {
+      source: 'route_context_engine',
+      routeContextCandidateId: candidate.id,
+    },
+  };
+  return {
+    id: `route-context-${candidate.id}`,
+    title: candidate.name,
+    subtitle: candidate.address ?? null,
+    category,
+    coordinate,
+    distanceFromRouteStartMiles: candidate.driveDistanceToTrailheadMeters != null
+      ? Math.round((candidate.driveDistanceToTrailheadMeters / 1609.344) * 10) / 10
+      : Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10,
+    diesel: false,
+    groceries: candidate.category === 'grocery',
+    sourceType: 'route_context_engine',
+    suggestion,
+  };
+}
+
+function isSmartResupplyOptionNearRouteStart(option: SmartResupplyPoi): boolean {
+  return option.distanceFromRouteStartMiles != null &&
+    option.distanceFromRouteStartMiles <= SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES;
+}
+
+function normalizeSmartResupplyKeyPart(value: string | null | undefined): string {
+  return (value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function smartResupplyOptionStableKey(option: SmartResupplyPoi): string {
+  const mapboxId = normalizeSmartResupplyKeyPart(option.suggestion.mapboxId ?? null);
+  if (mapboxId) return `${option.category}:mapbox:${mapboxId}`;
+  const routeContextCandidateId = normalizeSmartResupplyKeyPart(routeContextCandidateIdFromSmartOption(option));
+  if (routeContextCandidateId) return `${option.category}:route-context:${routeContextCandidateId}`;
+  const sourceId = normalizeSmartResupplyKeyPart(option.id || option.suggestion.id);
+  if (sourceId) return `${option.category}:source:${sourceId}`;
+  return [
+    option.category,
+    normalizeSmartResupplyKeyPart(option.title),
+    option.coordinate.latitude.toFixed(4),
+    option.coordinate.longitude.toFixed(4),
+  ].join(':');
+}
+
+function smartResupplyOptionDisplaySignature(option: SmartResupplyPoi): string {
+  return [
+    smartResupplyOptionStableKey(option),
+    normalizeSmartResupplyKeyPart(option.title),
+    normalizeSmartResupplyKeyPart(option.subtitle),
+    option.distanceFromRouteStartMiles == null ? 'unknown' : option.distanceFromRouteStartMiles.toFixed(1),
+    option.sourceType,
+    option.diesel ? 'diesel' : 'no-diesel',
+    option.groceries ? 'groceries' : 'no-groceries',
+  ].join('|');
+}
+
+function smartResupplyOptionListSignature(options: SmartResupplyPoi[]): string {
+  return options.map(smartResupplyOptionDisplaySignature).join('||');
+}
+
+function smartResupplySearchSignature(
+  routeStart: TripMapCoordinate,
+  kind: SmartResupplySearchKind,
+  selectionKey: string | null = null,
+): string {
+  return [
+    kind,
+    routeStart.latitude.toFixed(5),
+    routeStart.longitude.toFixed(5),
+    selectionKey ?? 'none',
+  ].join(':');
+}
+
+function compareSmartResupplyOptionsByDistance(left: SmartResupplyPoi, right: SmartResupplyPoi): number {
+  const distanceDelta =
+    (left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
+    (right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(distanceDelta) > 0.001) return distanceDelta;
+  const leftRouteContext = left.sourceType === 'route_context_engine' ? 0 : 1;
+  const rightRouteContext = right.sourceType === 'route_context_engine' ? 0 : 1;
+  if (leftRouteContext !== rightRouteContext) return leftRouteContext - rightRouteContext;
+  return left.title.localeCompare(right.title);
+}
+
+function preferredSmartResupplyOption(current: SmartResupplyPoi, candidate: SmartResupplyPoi): SmartResupplyPoi {
+  const currentRouteContext = current.sourceType === 'route_context_engine' ? 0 : 1;
+  const candidateRouteContext = candidate.sourceType === 'route_context_engine' ? 0 : 1;
+  if (candidateRouteContext < currentRouteContext) return candidate;
+  if (currentRouteContext < candidateRouteContext) return current;
+  if (current.distanceFromRouteStartMiles == null && candidate.distanceFromRouteStartMiles != null) return candidate;
+  if (!current.subtitle && candidate.subtitle) return candidate;
+  return current;
+}
+
+function applySmartResupplyOptionRefresh(
+  previous: SmartResupplyPoi[],
+  incoming: SmartResupplyPoi[],
+): SmartResupplyPoi[] {
+  return smartResupplyOptionListSignature(previous) === smartResupplyOptionListSignature(incoming)
+    ? previous
+    : incoming;
+}
+
+function refreshSelectedSmartResupplyOption(
+  selected: SmartResupplyPoi | null,
+  options: SmartResupplyPoi[],
+): SmartResupplyPoi | null {
+  if (!selected) return selected;
+  const selectedKey = smartResupplyOptionStableKey(selected);
+  return options.find((option) => smartResupplyOptionStableKey(option) === selectedKey) ?? selected;
+}
+
+function smartResupplyOptionsFromRouteContext(
+  context: RouteContext | null,
+  category: SmartResupplyPoi['category'],
+  routeStart: TripMapCoordinate | null,
+): SmartResupplyPoi[] {
+  if (!isUsableRouteContext(context) || !routeStart) return [];
+  const supplyCategory = category === 'fuel' ? 'gas' : 'grocery';
+  const orderedCandidateIds = new Map(
+    context.selectedSupplyPlan?.orderedStops.map((stop, index) => [stop.candidateId, index]) ?? [],
+  );
+  return context.supplyCandidates
+    .filter((candidate) => candidate.category === supplyCategory)
+    .sort((left, right) => {
+      const leftOrder = orderedCandidateIds.get(left.id) ?? Number.POSITIVE_INFINITY;
+      const rightOrder = orderedCandidateIds.get(right.id) ?? Number.POSITIVE_INFINITY;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      const leftChainScore = typeof left.supplyChainScore === 'number' ? left.supplyChainScore : left.score;
+      const rightChainScore = typeof right.supplyChainScore === 'number' ? right.supplyChainScore : right.score;
+      return rightChainScore - leftChainScore || right.score - left.score || right.confidence.value - left.confidence.value;
+    })
+    .map((candidate) => smartResupplyPoiFromRouteContextCandidate(candidate, category, routeStart))
+    .filter((option): option is SmartResupplyPoi => option != null)
+    .filter(isSmartResupplyOptionNearRouteStart)
+    .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
+}
+
+function mergeSmartResupplyOptions(
+  primary: SmartResupplyPoi[],
+  secondary: SmartResupplyPoi[],
+  previous: SmartResupplyPoi[] = [],
+): SmartResupplyPoi[] {
+  const merged = new Map<string, SmartResupplyPoi>();
+  [...previous, ...primary, ...secondary].forEach((option) => {
+    if (!isSmartResupplyOptionNearRouteStart(option)) return;
+    const key = smartResupplyOptionStableKey(option);
+    const current = merged.get(key);
+    merged.set(key, current ? preferredSmartResupplyOption(current, option) : option);
+  });
+  return Array.from(merged.values())
+    .sort(compareSmartResupplyOptionsByDistance)
+    .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
+}
+
+function orderSelectedSmartResupplyPoints(
+  context: RouteContext | null,
+  points: { option: SmartResupplyPoi; point: ResupplyPoint }[],
+): ResupplyPoint[] {
+  if (!isUsableRouteContext(context) || points.length < 2) return points.map((item) => item.point);
+  const order = new Map(
+    context.selectedSupplyPlan?.orderedStops.map((stop, index) => [stop.candidateId, index]) ?? [],
+  );
+  return [...points]
+    .sort((left, right) => {
+      const leftId = routeContextCandidateIdFromSmartOption(left.option);
+      const rightId = routeContextCandidateIdFromSmartOption(right.option);
+      const leftOrder = leftId && order.has(leftId) ? order.get(leftId) as number : Number.POSITIVE_INFINITY;
+      const rightOrder = rightId && order.has(rightId) ? order.get(rightId) as number : Number.POSITIVE_INFINITY;
+      return leftOrder - rightOrder;
+    })
+    .map((item) => item.point);
+}
+
 function bailoutPlanPointFromDestination(
   suggestion: RoadNavSearchSuggestion,
   destination: RoadNavDestination,
@@ -1587,18 +2381,11 @@ async function loadSmartResupplyOptions(params: {
     collectSuggestions(suggestions);
   };
 
-  try {
-    await collectSearchPass(smartResupplySearchBounds(params.routeStart, SMART_RESUPPLY_NEAR_START_RADIUS_MILES));
-  } catch {}
-
-  if (suggestionMap.size < SMART_RESUPPLY_OPTION_LIMIT) {
+  for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
     try {
-      await collectSearchPass(smartResupplySearchBounds(params.routeStart, SMART_RESUPPLY_EXPANDED_START_RADIUS_MILES));
+      await collectSearchPass(smartResupplySearchBounds(params.routeStart, radiusMiles));
     } catch {}
-  }
-
-  if (suggestionMap.size < SMART_RESUPPLY_OPTION_LIMIT) {
-    await collectSearchPass();
+    if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 2) break;
   }
 
   const options: SmartResupplyPoi[] = [];
@@ -1612,6 +2399,12 @@ async function loadSmartResupplyOptions(params: {
       });
       const option = smartResupplyPoiFromDestination(suggestion, destination, params.category, params.routeStart);
       if (!option) continue;
+      if (
+        option.distanceFromRouteStartMiles == null ||
+        option.distanceFromRouteStartMiles > SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES
+      ) {
+        continue;
+      }
       const key = `${option.title.toLowerCase()}:${option.coordinate.latitude.toFixed(4)}:${option.coordinate.longitude.toFixed(4)}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2352,6 +3145,7 @@ export default function ExploreTripBuilderScreen() {
   const [routeImportState, setRouteImportState] = useState<RouteImportState>({ status: 'idle', message: null });
   const [smartResupplyFuelOptions, setSmartResupplyFuelOptions] = useState<SmartResupplyPoi[]>([]);
   const [smartResupplySupplyOptions, setSmartResupplySupplyOptions] = useState<SmartResupplyPoi[]>([]);
+  const [routeContextSnapshot, setRouteContextSnapshot] = useState<RouteContext | null>(null);
   const [selectedSmartFuel, setSelectedSmartFuel] = useState<SmartResupplyPoi | null>(null);
   const [selectedSmartSupply, setSelectedSmartSupply] = useState<SmartResupplyPoi | null>(null);
   const [smartResupplyLoading, setSmartResupplyLoading] = useState<SmartResupplySearchKind | null>(null);
@@ -2367,16 +3161,69 @@ export default function ExploreTripBuilderScreen() {
   const [planMapScope, setPlanMapScope] = useState<TripPlanMapScope | null>(null);
   const [itineraryEditMode, setItineraryEditMode] = useState(false);
   const [draftItineraryStops, setDraftItineraryStops] = useState<TripPlanStop[]>([]);
+  const [draftTripItineraryEditSession, setDraftTripItineraryEditSession] = useState<TripItineraryEditSession | null>(null);
+  const [savedTripItineraryEditSession, setSavedTripItineraryEditSession] = useState<TripItineraryEditSession | null>(null);
   const [itinerarySaved, setItinerarySaved] = useState(false);
   const [insertState, setInsertState] = useState<ItineraryInsertState | null>(null);
   const [itinerarySearchToken, setItinerarySearchToken] = useState(() => getMapboxTokenSync());
   const [itinerarySearchLoading, setItinerarySearchLoading] = useState(false);
   const [itinerarySearchError, setItinerarySearchError] = useState<string | null>(null);
   const [itinerarySearchSuggestions, setItinerarySearchSuggestions] = useState<RoadNavSearchSuggestion[]>([]);
+  const [liveApproachRoutePoints, setLiveApproachRoutePoints] = useState<TripMapCoordinate[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
+  const smartResupplyFuelOptionsRef = useRef<SmartResupplyPoi[]>([]);
+  const smartResupplySupplyOptionsRef = useRef<SmartResupplyPoi[]>([]);
+  const smartResupplyFuelRequestRef = useRef(0);
+  const smartResupplySupplyRequestRef = useRef(0);
+  const smartResupplyFuelSearchSignatureRef = useRef<string | null>(null);
+  const smartResupplySupplySearchSignatureRef = useRef<string | null>(null);
+  const tripBuilderGps = useGPSLocation({ enabled: true, highAccuracy: true });
+  const liveTripBuilderUserLocation = useMemo(
+    () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.position),
+    [tripBuilderGps.position],
+  );
+  const liveRouteContextOrigin = useMemo(
+    () => routeContextOriginFromTripCoordinate(liveTripBuilderUserLocation),
+    [liveTripBuilderUserLocation],
+  );
+  const routeContextProviderRegistry = useMemo(
+    () => createMapboxRouteContextProviderRegistry(itinerarySearchToken, () => roadSearchSessionTokenRef.current),
+    [itinerarySearchToken],
+  );
+  const commitSmartResupplyFuelOptions = useCallback((incoming: SmartResupplyPoi[]) => {
+    const nextOptions = applySmartResupplyOptionRefresh(smartResupplyFuelOptionsRef.current, incoming);
+    smartResupplyFuelOptionsRef.current = nextOptions;
+    setSmartResupplyFuelOptions(nextOptions);
+    setSelectedSmartFuel((current) => refreshSelectedSmartResupplyOption(current, nextOptions));
+  }, []);
+  const commitSmartResupplySupplyOptions = useCallback((incoming: SmartResupplyPoi[]) => {
+    const nextOptions = applySmartResupplyOptionRefresh(smartResupplySupplyOptionsRef.current, incoming);
+    smartResupplySupplyOptionsRef.current = nextOptions;
+    setSmartResupplySupplyOptions(nextOptions);
+    setSelectedSmartSupply((current) => refreshSelectedSmartResupplyOption(current, nextOptions));
+  }, []);
+
+  useEffect(() => {
+    if (itinerarySearchToken) return;
+    let cancelled = false;
+    getMapboxToken().then((token) => {
+      if (!cancelled && token) setItinerarySearchToken(token);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [itinerarySearchToken]);
+
+  useEffect(() => {
+    smartResupplyFuelOptionsRef.current = smartResupplyFuelOptions;
+  }, [smartResupplyFuelOptions]);
+
+  useEffect(() => {
+    smartResupplySupplyOptionsRef.current = smartResupplySupplyOptions;
+  }, [smartResupplySupplyOptions]);
 
   useEffect(() => {
     try {
@@ -2386,7 +3233,14 @@ export default function ExploreTripBuilderScreen() {
         ? exploreContext.routes
         : loadOpportunitiesWithCompatibility(null).opportunities
       ) as ExpeditionOpportunity[];
-      const handoffRoute = handoff?.route as ExpeditionOpportunity | undefined;
+      const handoffDraftItinerary = handoff?.draftItinerary ?? null;
+      const handoffRoute = handoff?.route
+        ? {
+            ...handoff.route,
+            itinerary: handoffDraftItinerary ?? handoff.route.itinerary ?? null,
+            itineraryConfidence: handoffDraftItinerary?.confidence ?? handoff.route.itineraryConfidence,
+          } as unknown as ExpeditionOpportunity
+        : undefined;
       const routeMap = new Map<string, TripBuilderRouteInput>();
       if (handoffRoute?.id) upsertExplorePlanningRoute(routeMap, handoffRoute as unknown as TripBuilderRouteInput);
       suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route as unknown as TripBuilderRouteInput));
@@ -2409,9 +3263,11 @@ export default function ExploreTripBuilderScreen() {
           null;
         setPreparedTripRoutePreview(buildPreparedTripRoutePreview(restoredRoute as ExpeditionOpportunity | null));
         setItinerarySaved(lastTripBuilderPlanState.itinerarySaved);
+        setSavedTripItineraryEditSession(lastTripBuilderPlanState.itineraryEditSession);
       } else {
         setTripSetupStarted(false);
         setPreparedTripRoutePreview(null);
+        setSavedTripItineraryEditSession(null);
       }
       setError(null);
     } catch {
@@ -2429,9 +3285,53 @@ export default function ExploreTripBuilderScreen() {
     () => tripBuilderRouteDisplayName(selectedRoute),
     [selectedRoute],
   );
+  const selectedRouteContextSupplySelection = useMemo(
+    () => routeContextSupplySelectionFromSmartOptions(selectedSmartFuel, selectedSmartSupply),
+    [selectedSmartFuel, selectedSmartSupply],
+  );
+
+  useEffect(() => {
+    if (!selectedRoute) {
+      setRouteContextSnapshot(null);
+      return;
+    }
+    const trail = selectedRoute as unknown as TripBuilderRouteInput & { id: string };
+    const selectedSupplyMode = routeContextSupplyModeForTripBuilder(smartResupplyPreference);
+    const cachedRouteContext = routeContextOrchestrator.getContext({
+      trailId: String(selectedRoute.id),
+      origin: liveRouteContextOrigin,
+      selectedSupplyMode,
+      selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
+      selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
+      selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
+      featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+      providerRegistry: routeContextProviderRegistry,
+    });
+    setRouteContextSnapshot(cachedRouteContext);
+    let cancelled = false;
+    void routeContextOrchestrator.prefetchForTrailSelection({
+      trail,
+      origin: liveRouteContextOrigin,
+      selectedSupplyMode,
+      selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
+      selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
+      selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
+      featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+      providerRegistry: routeContextProviderRegistry,
+    })
+      .then((context) => {
+        if (!cancelled) setRouteContextSnapshot(context);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [liveRouteContextOrigin, routeContextProviderRegistry, selectedRoute, selectedRouteContextSupplySelection, smartResupplyPreference]);
 
   const selectedRouteStartCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
+    const routeContextTrailhead = routeContextTrailheadCoordinate(routeContextSnapshot);
+    if (routeContextTrailhead) return routeContextTrailhead;
     if (
       tripSetupStarted &&
       preparedRoutePreviewMatches(preparedTripRoutePreview, selectedRoute) &&
@@ -2443,7 +3343,8 @@ export default function ExploreTripBuilderScreen() {
     return routePoints[0] ??
       routeStartCoordinateForTrip(selectedRoute as unknown as TripBuilderRouteInput) ??
       null;
-  }, [preparedTripRoutePreview, selectedRoute, tripSetupStarted]);
+  }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
+  const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate;
 
   const selectedRouteEndCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
@@ -2461,6 +3362,8 @@ export default function ExploreTripBuilderScreen() {
   }, [preparedTripRoutePreview, selectedRoute, tripSetupStarted]);
 
   const selectedPreparedRoutePoints = useMemo(() => {
+    const contextRoutePoints = routeContextRoutePoints(routeContextSnapshot);
+    if (contextRoutePoints.length >= 2) return contextRoutePoints;
     if (
       selectedRoute &&
       tripSetupStarted &&
@@ -2469,7 +3372,74 @@ export default function ExploreTripBuilderScreen() {
       return preparedTripRoutePreview.routePoints;
     }
     return selectedRoute ? routePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput) : [];
-  }, [preparedTripRoutePreview, selectedRoute, tripSetupStarted]);
+  }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
+
+  useEffect(() => {
+    if (
+      !tripSetupStarted ||
+      !itinerarySearchToken ||
+      !liveTripBuilderUserLocation ||
+      !selectedRouteStartCoordinate
+    ) {
+      setLiveApproachRoutePoints([]);
+      return;
+    }
+
+    const origin = {
+      lat: liveTripBuilderUserLocation.latitude,
+      lng: liveTripBuilderUserLocation.longitude,
+    };
+    const trailhead = {
+      lat: selectedRouteStartCoordinate.latitude,
+      lng: selectedRouteStartCoordinate.longitude,
+    };
+    const alreadyAtTrailhead = tripMapCoordinateDistanceMiles(
+      { latitude: origin.lat, longitude: origin.lng },
+      selectedRouteStartCoordinate,
+    ) <= 0.05;
+
+    if (alreadyAtTrailhead) {
+      setLiveApproachRoutePoints([
+        { latitude: origin.lat, longitude: origin.lng },
+        selectedRouteStartCoordinate,
+      ]);
+      return;
+    }
+
+    let cancelled = false;
+    void fetchRoadRoute({
+      accessToken: itinerarySearchToken,
+      origin,
+      destination: {
+        id: `${selectedRouteId ?? 'selected-route'}-trailhead-approach`,
+        title: `${selectedRouteDisplayName ?? 'Selected route'} trailhead`,
+        subtitle: 'Trip Builder live approach to trailhead start.',
+        coordinate: trailhead,
+        sourceType: 'manual_selection',
+      },
+    })
+      .then((roadRoute) => {
+        if (cancelled) return;
+        const routePoints = roadRoute.geometry
+          .map((point) => ({ latitude: point.lat, longitude: point.lng }))
+          .filter(isValidMapCoordinate);
+        setLiveApproachRoutePoints(routePoints.length >= 2 ? routePoints : []);
+      })
+      .catch(() => {
+        if (!cancelled) setLiveApproachRoutePoints([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    itinerarySearchToken,
+    liveTripBuilderUserLocation,
+    selectedRouteDisplayName,
+    selectedRouteId,
+    selectedRouteStartCoordinate,
+    tripSetupStarted,
+  ]);
 
   const readinessReference = useMemo(() => {
     if (!selectedRoute) return null;
@@ -2512,6 +3482,106 @@ export default function ExploreTripBuilderScreen() {
     };
   }, []);
 
+  const selectedPreTrailOptionsForDraft = useMemo(() => {
+    const fuel = selectedSmartFuel
+      ? [selectedPreTrailOptionFromSmartResupply(selectedSmartFuel, 'fuel')]
+      : undefined;
+    const grocerySource = smartResupplyPreference === 'fuel_supplies'
+      ? selectedSmartSupply ?? (selectedSmartFuel?.groceries ? selectedSmartFuel : null)
+      : null;
+    const grocery = grocerySource
+      ? [selectedPreTrailOptionFromSmartResupply(grocerySource, 'grocery')]
+      : undefined;
+    return {
+      ...(fuel ? { fuel } : {}),
+      ...(grocery ? { grocery } : {}),
+    };
+  }, [selectedSmartFuel, selectedSmartSupply, smartResupplyPreference]);
+
+  const preTrailStopCandidatesForDraft = useMemo<PreTrailStopCandidateInput | null>(() => {
+    const fuel = smartResupplyFuelOptions.map((option) => preTrailCandidateFromSmartResupply(option, 'fuel'));
+    const grocery = smartResupplySupplyOptions.map((option) => preTrailCandidateFromSmartResupply(option, 'grocery'));
+    if (fuel.length === 0 && grocery.length === 0) return null;
+    return {
+      ...(fuel.length > 0 ? { fuel } : {}),
+      ...(grocery.length > 0 ? { grocery } : {}),
+    };
+  }, [smartResupplyFuelOptions, smartResupplySupplyOptions]);
+
+  const preTrailProviderAvailableForDraft = Boolean(
+    tripSetupStarted &&
+      smartResupplyPreference !== 'no' &&
+      selectedTrailheadResupplyAnchorCoordinate &&
+      itinerarySearchToken &&
+      smartResupplyLoading == null &&
+      (
+        preTrailStopCandidatesForDraft != null ||
+        smartResupplyError?.startsWith('No fuel options') ||
+        smartResupplyError?.startsWith('No grocery')
+      ),
+  );
+
+  const selectedTripItinerary = useMemo<TripItinerary | null>(() => {
+    if (!selectedRoute) return null;
+    const routeRecord = selectedRoute as unknown as { itinerary?: TripItinerary | null };
+    const handoffItinerary = routeRecord.itinerary ?? null;
+    const selectedSupplyMode = routeContextSupplyModeForTripBuilder(smartResupplyPreference);
+    const routeContextItineraryInput = routeContextSnapshot
+      ? routeContextToTripBuilderItineraryContext(routeContextSnapshot, selectedSupplyMode)
+      : null;
+    const liveItinerarySuggestedRoute = buildLiveItinerarySuggestedRoute({
+      route: selectedRoute as unknown as SuggestedRoute,
+      liveApproachRoutePoints,
+      routeContext: routeContextItineraryInput,
+    });
+
+    try {
+      return buildTripItineraryFromSuggestedRoute({
+        suggestedRoute: liveItinerarySuggestedRoute,
+        userLocation: liveTripBuilderUserLocation ?? handoffItinerary?.userStart ?? null,
+        userPreferences: {
+          smartResupplyPreference,
+          priorities,
+        },
+        selectedPreTrailOptions: selectedPreTrailOptionsForDraft,
+        preTrailStopCandidates: preTrailStopCandidatesForDraft,
+        preTrailProviderAvailable: preTrailProviderAvailableForDraft,
+        routeContext: routeContextItineraryInput,
+        vehicleProfile,
+      });
+    } catch {
+      return handoffItinerary;
+    }
+  }, [
+    priorities,
+    liveApproachRoutePoints,
+    liveTripBuilderUserLocation,
+    preTrailProviderAvailableForDraft,
+    preTrailStopCandidatesForDraft,
+    routeContextSnapshot,
+    selectedPreTrailOptionsForDraft,
+    selectedRoute,
+    smartResupplyPreference,
+    vehicleProfile,
+  ]);
+
+  const activeTripItineraryEditSession = itineraryEditMode
+    ? draftTripItineraryEditSession
+    : savedTripItineraryEditSession;
+  const editableTripItinerary = useMemo(
+    () => applyTripItineraryEditSession(selectedTripItinerary, activeTripItineraryEditSession),
+    [activeTripItineraryEditSession, selectedTripItinerary],
+  );
+
+  const itinerarySummary = useMemo(
+    () => getTripItinerarySummary(editableTripItinerary),
+    [editableTripItinerary],
+  );
+  const itineraryReview = useMemo(
+    () => getTripItineraryReview(editableTripItinerary),
+    [editableTripItinerary],
+  );
+
   const tripPlanMapAvailability = useMemo(() => {
     if (!selectedRoute || !plan) {
       return {
@@ -2546,6 +3616,14 @@ export default function ExploreTripBuilderScreen() {
     if (smartResupplyPreference === 'fuel_only') return true;
     return selectedSmartFuel.groceries || !!selectedSmartSupply;
   }, [selectedSmartFuel, selectedSmartSupply, smartResupplyPreference]);
+  const routeContextFuelOptions = useMemo(
+    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate),
+    [routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
+  );
+  const routeContextSupplyOptions = useMemo(
+    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate),
+    [routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
+  );
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint;
 
   useEffect(() => {
@@ -2558,6 +3636,21 @@ export default function ExploreTripBuilderScreen() {
       cancelled = true;
     };
   }, [insertState, itineraryEditMode, itinerarySearchToken]);
+
+  useEffect(() => {
+    if (!planModalVisible || !selectedRoute) return;
+    setRouteContextSnapshot(routeContextOrchestrator.getContext({
+      trailId: String(selectedRoute.id),
+      trail: selectedRoute as unknown as TripBuilderRouteInput & { id: string },
+      origin: liveRouteContextOrigin,
+      selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
+      selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
+      selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
+      selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
+      featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+      providerRegistry: routeContextProviderRegistry,
+    }));
+  }, [liveRouteContextOrigin, planModalVisible, routeContextProviderRegistry, selectedRoute, selectedRouteContextSupplySelection, smartResupplyPreference]);
 
   useEffect(() => {
     if (!itineraryEditMode || !insertState) return;
@@ -2610,6 +3703,12 @@ export default function ExploreTripBuilderScreen() {
   useEffect(() => {
     setSelectedSmartFuel(null);
     setSelectedSmartSupply(null);
+    smartResupplyFuelRequestRef.current += 1;
+    smartResupplySupplyRequestRef.current += 1;
+    smartResupplyFuelSearchSignatureRef.current = null;
+    smartResupplySupplySearchSignatureRef.current = null;
+    smartResupplyFuelOptionsRef.current = [];
+    smartResupplySupplyOptionsRef.current = [];
     setSmartResupplyFuelOptions([]);
     setSmartResupplySupplyOptions([]);
     setSmartResupplyError(null);
@@ -2617,58 +3716,94 @@ export default function ExploreTripBuilderScreen() {
 
   useEffect(() => {
     if (!tripSetupStarted) {
+      smartResupplyFuelRequestRef.current += 1;
+      smartResupplyFuelSearchSignatureRef.current = null;
+      smartResupplyFuelOptionsRef.current = [];
       setSmartResupplyFuelOptions([]);
-      setSmartResupplyLoading(null);
+      setSmartResupplyLoading((current) => current === 'fuel' ? null : current);
       setSmartResupplyError(null);
       return;
     }
     if (smartResupplyPreference === 'no') {
+      smartResupplyFuelRequestRef.current += 1;
+      smartResupplyFuelSearchSignatureRef.current = null;
+      smartResupplyFuelOptionsRef.current = [];
       setSmartResupplyFuelOptions([]);
       setSmartResupplyLoading(null);
       setSmartResupplyError(null);
       return;
     }
-    if (!selectedRouteStartCoordinate) {
+    if (!selectedTrailheadResupplyAnchorCoordinate) {
+      smartResupplyFuelRequestRef.current += 1;
+      smartResupplyFuelSearchSignatureRef.current = null;
+      smartResupplyFuelOptionsRef.current = [];
       setSmartResupplyFuelOptions([]);
-      setSmartResupplyLoading(null);
+      setSmartResupplyLoading((current) => current === 'fuel' ? null : current);
       setSmartResupplyError('Route start is unavailable, so ECS cannot locate pre-route fuel options.');
       return;
     }
 
+    const searchSignature = smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate, 'fuel');
+    const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
+    if (routeContextFuelOptions.length > 0 || smartResupplyFuelOptionsRef.current.length > 0) {
+      commitSmartResupplyFuelOptions(routeContextMergedOptions);
+    }
+    if (smartResupplyFuelSearchSignatureRef.current === searchSignature && smartResupplyFuelOptionsRef.current.length > 0) {
+      return;
+    }
+    smartResupplyFuelSearchSignatureRef.current = searchSignature;
     let cancelled = false;
-    setSmartResupplyLoading('fuel');
+    const requestId = ++smartResupplyFuelRequestRef.current;
+    setSmartResupplyLoading((current) => {
+      if (current === 'supplies') return current;
+      return 'fuel';
+    });
     setSmartResupplyError(null);
     void (async () => {
       try {
         const token = itinerarySearchToken ?? await getMapboxToken();
-        if (!token) throw new Error('Map search unavailable until Mapbox token is ready.');
+        if (!token) {
+          if (routeContextFuelOptions.length > 0) return;
+          throw new Error('Map search unavailable until Mapbox token is ready.');
+        }
         if (!itinerarySearchToken) setItinerarySearchToken(token);
         const options = await loadSmartResupplyOptions({
           accessToken: token,
           sessionToken: roadSearchSessionTokenRef.current,
           query: SMART_RESUPPLY_FUEL_QUERY,
           category: 'fuel',
-          routeStart: selectedRouteStartCoordinate,
+          routeStart: selectedTrailheadResupplyAnchorCoordinate,
         });
-        if (cancelled) return;
-        setSmartResupplyFuelOptions(options);
-        if (options.length === 0) {
+        if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
+        const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
+        commitSmartResupplyFuelOptions(mergedOptions);
+        if (mergedOptions.length === 0) {
           setSmartResupplyError('No fuel options were found near the route start. Try selecting No, or verify manually.');
         }
       } catch (searchError) {
-        if (!cancelled) {
-          setSmartResupplyFuelOptions([]);
+        if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
+          const fallbackOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
+          commitSmartResupplyFuelOptions(fallbackOptions);
           setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Fuel search unavailable.');
         }
       } finally {
-        if (!cancelled) setSmartResupplyLoading(null);
+        if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
+          setSmartResupplyLoading((current) => current === 'fuel' ? null : current);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [itinerarySearchToken, selectedRouteStartCoordinate, smartResupplyPreference, tripSetupStarted]);
+  }, [
+    commitSmartResupplyFuelOptions,
+    itinerarySearchToken,
+    routeContextFuelOptions,
+    selectedTrailheadResupplyAnchorCoordinate,
+    smartResupplyPreference,
+    tripSetupStarted,
+  ]);
 
   useEffect(() => {
     if (
@@ -2677,45 +3812,86 @@ export default function ExploreTripBuilderScreen() {
       !selectedSmartFuel ||
       selectedSmartFuel.groceries
     ) {
+      smartResupplySupplyRequestRef.current += 1;
+      smartResupplySupplySearchSignatureRef.current = null;
+      smartResupplySupplyOptionsRef.current = [];
       setSmartResupplySupplyOptions([]);
+      setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
       return;
     }
-    if (!selectedRouteStartCoordinate) return;
+    if (!selectedTrailheadResupplyAnchorCoordinate) {
+      smartResupplySupplyRequestRef.current += 1;
+      smartResupplySupplySearchSignatureRef.current = null;
+      setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
+      return;
+    }
 
+    const searchSignature = smartResupplySearchSignature(
+      selectedTrailheadResupplyAnchorCoordinate,
+      'supplies',
+      smartResupplyOptionStableKey(selectedSmartFuel),
+    );
+    const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
+    if (routeContextSupplyOptions.length > 0 || smartResupplySupplyOptionsRef.current.length > 0) {
+      commitSmartResupplySupplyOptions(routeContextMergedOptions);
+    }
+    if (smartResupplySupplySearchSignatureRef.current === searchSignature && smartResupplySupplyOptionsRef.current.length > 0) {
+      return;
+    }
+    smartResupplySupplySearchSignatureRef.current = searchSignature;
     let cancelled = false;
-    setSmartResupplyLoading('supplies');
+    const requestId = ++smartResupplySupplyRequestRef.current;
+    setSmartResupplyLoading((current) => {
+      if (current === 'fuel') return current;
+      return 'supplies';
+    });
     setSmartResupplyError(null);
     void (async () => {
       try {
         const token = itinerarySearchToken ?? await getMapboxToken();
-        if (!token) throw new Error('Map search unavailable until Mapbox token is ready.');
+        if (!token) {
+          if (routeContextSupplyOptions.length > 0) return;
+          throw new Error('Map search unavailable until Mapbox token is ready.');
+        }
         if (!itinerarySearchToken) setItinerarySearchToken(token);
         const options = await loadSmartResupplyOptions({
           accessToken: token,
           sessionToken: roadSearchSessionTokenRef.current,
           query: SMART_RESUPPLY_SUPPLY_QUERY,
           category: 'food_supplies',
-          routeStart: selectedRouteStartCoordinate,
+          routeStart: selectedTrailheadResupplyAnchorCoordinate,
         });
-        if (cancelled) return;
-        setSmartResupplySupplyOptions(options);
-        if (options.length === 0) {
+        if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
+        const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
+        commitSmartResupplySupplyOptions(mergedOptions);
+        if (mergedOptions.length === 0) {
           setSmartResupplyError('No grocery or supply options were found near the route start. Verify manually before departure.');
         }
       } catch (searchError) {
-        if (!cancelled) {
-          setSmartResupplySupplyOptions([]);
+        if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
+          const fallbackOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
+          commitSmartResupplySupplyOptions(fallbackOptions);
           setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Supply search unavailable.');
         }
       } finally {
-        if (!cancelled) setSmartResupplyLoading(null);
+        if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
+          setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [itinerarySearchToken, selectedRouteStartCoordinate, selectedSmartFuel, smartResupplyPreference, tripSetupStarted]);
+  }, [
+    commitSmartResupplySupplyOptions,
+    itinerarySearchToken,
+    routeContextSupplyOptions,
+    selectedSmartFuel,
+    selectedTrailheadResupplyAnchorCoordinate,
+    smartResupplyPreference,
+    tripSetupStarted,
+  ]);
 
   useEffect(() => {
     setSelectedBailoutPoint(null);
@@ -2854,12 +4030,24 @@ export default function ExploreTripBuilderScreen() {
 
   const selectPlanningRoute = (routeId: string) => {
     hapticMicro();
+    const routeForContext = routes.find((route) => String(route.id) === routeId) ?? null;
+    if (routeForContext) {
+      void routeContextOrchestrator.prefetchForTrailSelection({
+        trail: routeForContext as unknown as TripBuilderRouteInput & { id: string },
+        origin: liveRouteContextOrigin,
+        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
+        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+        providerRegistry: routeContextProviderRegistry,
+      }).catch(() => {});
+    }
     setSelectedRouteId(routeId);
     setTripSetupStarted(false);
     setPreparedTripRoutePreview(null);
     setPlan(null);
     setPlanMapScope(null);
     setPlanModalVisible(false);
+    setDraftTripItineraryEditSession(null);
+    setSavedTripItineraryEditSession(null);
     setRouteImportState({ status: 'idle', message: null });
     setSelectedSmartFuel(null);
     setSelectedSmartSupply(null);
@@ -2872,6 +4060,7 @@ export default function ExploreTripBuilderScreen() {
       plan: null,
       visible: false,
       itinerarySaved: false,
+      itineraryEditSession: null,
     };
   };
 
@@ -2880,7 +4069,6 @@ export default function ExploreTripBuilderScreen() {
     hapticMicro();
     setRouteImportState({ status: 'loading', message: 'Opening route file picker...' });
     try {
-      const DocumentPicker = await import('expo-document-picker');
       const result = await DocumentPicker.getDocumentAsync({
         type: [
           'application/gpx+xml',
@@ -2908,6 +4096,13 @@ export default function ExploreTripBuilderScreen() {
       }
 
       const importedRoute = buildTripBuilderImportedRoute(fileName, content);
+      void routeContextOrchestrator.prefetchForTrailSelection({
+        trail: importedRoute as unknown as TripBuilderRouteInput & { id: string },
+        origin: liveRouteContextOrigin,
+        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
+        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+        providerRegistry: routeContextProviderRegistry,
+      }).catch(() => {});
       setRoutes((current) => {
         const routeMap = new Map<string, TripBuilderRouteInput>();
         upsertExplorePlanningRoute(routeMap, importedRoute as unknown as TripBuilderRouteInput);
@@ -2920,6 +4115,8 @@ export default function ExploreTripBuilderScreen() {
       setPlan(null);
       setPlanMapScope(null);
       setPlanModalVisible(false);
+      setDraftTripItineraryEditSession(null);
+      setSavedTripItineraryEditSession(null);
       setSelectedSmartFuel(null);
       setSelectedSmartSupply(null);
       setSmartResupplyError(null);
@@ -2932,6 +4129,7 @@ export default function ExploreTripBuilderScreen() {
         plan: null,
         visible: false,
         itinerarySaved: false,
+        itineraryEditSession: null,
       };
     } catch (importError) {
       setRouteImportState({
@@ -2997,12 +4195,32 @@ export default function ExploreTripBuilderScreen() {
     try {
       setGenerating(true);
       setError(null);
-      const selectedPreRouteResupplyPoints = [
-        selectedSmartFuel ? smartResupplyPointForPlan(selectedSmartFuel) : null,
-        smartResupplyPreference === 'fuel_supplies' && selectedSmartSupply
-          ? smartResupplyPointForPlan(selectedSmartSupply)
-          : null,
-      ].filter((point): point is ResupplyPoint => !!point);
+      const selectedSupplyMode = routeContextSupplyModeForTripBuilder(smartResupplyPreference);
+      const routeContext = routeContextOrchestrator.getContext({
+        trailId: String(selectedRoute.id),
+        trail: selectedRoute as unknown as TripBuilderRouteInput & { id: string },
+        origin: liveRouteContextOrigin,
+        selectedSupplyMode,
+        selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
+        selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
+        selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
+        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+        providerRegistry: routeContextProviderRegistry,
+      });
+      setRouteContextSnapshot(routeContext);
+      const selectedSmartFuelPoint = selectedSmartFuel ? smartResupplyPointForPlan(selectedSmartFuel) : null;
+      const selectedSmartSupplyPoint = smartResupplyPreference === 'fuel_supplies' && selectedSmartSupply
+        ? smartResupplyPointForPlan(selectedSmartSupply)
+        : null;
+      const selectedPreRouteResupplyPoints = orderSelectedSmartResupplyPoints(
+        routeContext,
+        [
+          selectedSmartFuel && selectedSmartFuelPoint ? { option: selectedSmartFuel, point: selectedSmartFuelPoint } : null,
+          selectedSmartSupply && selectedSmartSupplyPoint ? { option: selectedSmartSupply, point: selectedSmartSupplyPoint } : null,
+        ].filter((item): item is { option: SmartResupplyPoi; point: ResupplyPoint } => !!item),
+      );
+      const routeContextPoiData = routeContextSupplyCandidatesToResupplyPoints(routeContext, selectedSupplyMode);
+      const routeContextItineraryInput = routeContextToTripBuilderItineraryContext(routeContext, selectedSupplyMode);
       const selectedBailoutExitPoints = selectedBailoutPoint ? [bailoutExitPointForPlan(selectedBailoutPoint)] : null;
       const input: TripBuilderInput = {
         tripType,
@@ -3012,14 +4230,18 @@ export default function ExploreTripBuilderScreen() {
         smartResupplyPreference,
         bailoutPlanRequested: bailoutPlanPreference === 'yes',
       };
+      const routeForPlan = routeWithRouteContext(selectedRoute as unknown as TripBuilderRouteInput, routeContext);
       const nextPlan = buildTripPlan({
-        route: selectedRoute as unknown as TripBuilderRouteInput,
+        route: routeForPlan,
         input,
         vehicleProfile,
         readiness: readinessReference,
         campsiteCandidates: routeToCampCandidates(selectedRoute),
         exitPoints: selectedBailoutExitPoints,
         resupplyPoints: selectedPreRouteResupplyPoints,
+        availablePoiData: routeContextPoiData,
+        routeContext: routeContextItineraryInput,
+        currentLocation: liveTripBuilderUserLocation,
       });
       const finalizedPlan = appendBailoutStopToPlan(nextPlan, selectedBailoutPoint);
       setPlan(finalizedPlan);
@@ -3027,6 +4249,8 @@ export default function ExploreTripBuilderScreen() {
       setPlanMapScope(null);
       setItineraryEditMode(false);
       setDraftItineraryStops([]);
+      setDraftTripItineraryEditSession(null);
+      setSavedTripItineraryEditSession(null);
       setInsertState(null);
       setItinerarySaved(false);
       setResupplyOverrides({});
@@ -3035,6 +4259,7 @@ export default function ExploreTripBuilderScreen() {
         plan: finalizedPlan,
         visible: true,
         itinerarySaved: false,
+        itineraryEditSession: null,
       };
     } catch {
       setError('Trip Builder could not build a plan from the selected route.');
@@ -3047,6 +4272,13 @@ export default function ExploreTripBuilderScreen() {
     if (!plan) return;
     hapticMicro();
     setDraftItineraryStops(plan.suggestedStops);
+    setDraftTripItineraryEditSession(
+      savedTripItineraryEditSession && selectedTripItinerary?.id === savedTripItineraryEditSession.itineraryId
+        ? savedTripItineraryEditSession
+        : selectedTripItinerary
+          ? createTripItineraryEditSession(selectedTripItinerary)
+          : null,
+    );
     setInsertState(null);
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
@@ -3056,6 +4288,7 @@ export default function ExploreTripBuilderScreen() {
   const handleCancelItineraryEdit = () => {
     hapticMicro();
     setDraftItineraryStops([]);
+    setDraftTripItineraryEditSession(null);
     setInsertState(null);
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
@@ -3066,8 +4299,11 @@ export default function ExploreTripBuilderScreen() {
     if (!plan) return;
     hapticMicro();
     const nextPlan = updateTripPlanStops(plan, draftItineraryStops);
+    const nextTripItineraryEditSession = draftTripItineraryEditSession;
     setPlan(nextPlan);
     setDraftItineraryStops([]);
+    setSavedTripItineraryEditSession(nextTripItineraryEditSession);
+    setDraftTripItineraryEditSession(null);
     setInsertState(null);
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
@@ -3078,7 +4314,43 @@ export default function ExploreTripBuilderScreen() {
       plan: nextPlan,
       visible: planModalVisible,
       itinerarySaved: true,
+      itineraryEditSession: nextTripItineraryEditSession,
     };
+  };
+
+  const handleAcceptItineraryReviewItem = (itemId: string) => {
+    hapticMicro();
+    setDraftTripItineraryEditSession((current) => (
+      current ? acceptTripItineraryEditItem(current, itemId) : current
+    ));
+  };
+
+  const handleDismissItineraryReviewItem = (itemId: string) => {
+    hapticMicro();
+    setDraftTripItineraryEditSession((current) => (
+      current ? dismissTripItineraryEditItem(current, itemId) : current
+    ));
+  };
+
+  const handleMoveItineraryReviewStop = (itemId: string, direction: -1 | 1) => {
+    hapticMicro();
+    setDraftTripItineraryEditSession((current) => (
+      current ? reorderTripItineraryStop(current, itemId, direction) : current
+    ));
+  };
+
+  const handleAddUserItineraryStop = () => {
+    hapticMicro();
+    setDraftTripItineraryEditSession((current) => (
+      current ? addUserItineraryStop(current) : current
+    ));
+  };
+
+  const handleAddUserTrailWaypoint = () => {
+    hapticMicro();
+    setDraftTripItineraryEditSession((current) => (
+      current ? addUserTrailWaypoint(current) : current
+    ));
   };
 
   const handleMoveDraftStop = (index: number, direction: -1 | 1) => {
@@ -3173,8 +4445,10 @@ export default function ExploreTripBuilderScreen() {
       );
       const resupplyPoints = resupplyPointsFromPlan(plan);
       const exitPoints = exitPointsFromPlan(plan, getOfflinePrepRouteCoordinates(route));
+      const itineraryForOfflinePrep = editableTripItinerary ?? selectedTripItinerary ?? null;
       saveOfflinePrepPackHandoff({
         route,
+        itinerary: itineraryForOfflinePrep,
         tripPlan: plan,
         smartResupplyPlan: plan.smartResupplyPlan,
         vehicleProfile,
@@ -3240,7 +4514,7 @@ export default function ExploreTripBuilderScreen() {
                 <Ionicons name="map-outline" size={20} color={TACTICAL.textMuted} />
                 <Text style={styles.stateTitle}>No routes ready for planning</Text>
                 <Text style={styles.stateText}>
-                  Open Suggested Routes, or import your own GPX/KML/GeoJSON route file.
+                  Open Suggested Trailheads, or import your own GPX/KML/GeoJSON route file.
                 </Text>
                 <TouchableOpacity
                   style={[styles.primaryButton, routeImportState.status === 'loading' && styles.primaryButtonDisabled]}
@@ -3258,7 +4532,7 @@ export default function ExploreTripBuilderScreen() {
                   </Text>
                 ) : null}
                 <TouchableOpacity style={styles.primaryButton} onPress={handleBackToSuggestedRoutes} accessibilityRole="button">
-                  <Text style={styles.primaryButtonText}>Suggested Routes</Text>
+                  <Text style={styles.primaryButtonText}>Suggested Trailheads</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -3272,7 +4546,7 @@ export default function ExploreTripBuilderScreen() {
                       </Text>
                     </View>
                     <Text style={styles.routePickerHint}>
-                      ECS OR IMPORTED: Select one of the current Suggested Routes filters or import a route file, then open Trip Builder to start setup.
+                      ECS OR IMPORTED: Select one of the current Suggested Trailheads filters or import a route file, then open Trip Builder to start setup.
                     </Text>
                     <TouchableOpacity
                       style={[styles.importRouteCard, routeImportState.status === 'loading' && styles.primaryButtonDisabled]}
@@ -3474,24 +4748,30 @@ export default function ExploreTripBuilderScreen() {
                       {smartResupplyPreference !== 'no' ? (
                         <View style={styles.smartResupplyPicker} testID="trip-builder-smart-resupply-picker">
                           <View style={styles.smartResupplyPickerHeader}>
-                            <Text style={styles.smartResupplyPickerTitle}>Fuel Near Route Start</Text>
+                            <Text style={styles.smartResupplyPickerTitle}>Fuel Near Trailhead</Text>
                             <Text style={styles.smartResupplyPickerMeta}>PICK 1 OF UP TO 5</Text>
                           </View>
                           <Text style={styles.smartResupplyPickerHint}>
-                            ECS uses the actual route start to stage fuel before the first trail mile.
+                            ECS uses the trailhead as ground zero for pre-trail fuel.
                           </Text>
-                          {smartResupplyLoading === 'fuel' ? (
+                          {smartResupplyLoading === 'fuel' && smartResupplyFuelOptions.length === 0 ? (
                             <View style={styles.smartResupplyLoadingRow}>
                               <ActivityIndicator size="small" color={TACTICAL.amber} />
                               <Text style={styles.smartResupplyPickerHint}>Finding fuel options...</Text>
                             </View>
                           ) : null}
+                          {smartResupplyLoading === 'fuel' && smartResupplyFuelOptions.length > 0 ? (
+                            <View style={styles.smartResupplyLoadingRow}>
+                              <ActivityIndicator size="small" color={TACTICAL.amber} />
+                              <Text style={styles.smartResupplyPickerHint}>Updating nearby fuel options...</Text>
+                            </View>
+                          ) : null}
                           <View style={styles.smartResupplyOptionList}>
                             {smartResupplyFuelOptions.map((option) => (
                               <SmartResupplyOptionCard
-                                key={option.id}
+                                key={smartResupplyOptionStableKey(option)}
                                 option={option}
-                                selected={selectedSmartFuel?.id === option.id}
+                                selected={selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) === smartResupplyOptionStableKey(option) : false}
                                 markerLabel="A"
                                 onPress={() => handleSelectSmartFuel(option)}
                               />
@@ -3510,21 +4790,27 @@ export default function ExploreTripBuilderScreen() {
                           {smartResupplyPreference === 'fuel_supplies' && selectedSmartFuel && !selectedSmartFuel.groceries ? (
                             <View style={styles.smartResupplySupplyBlock} testID="trip-builder-smart-resupply-supply-step">
                               <View style={styles.smartResupplyPickerHeader}>
-                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Near Start</Text>
+                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Near Trailhead</Text>
                                 <Text style={styles.smartResupplyPickerMeta}>NEXT STOP B</Text>
                               </View>
-                              {smartResupplyLoading === 'supplies' ? (
+                              {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length === 0 ? (
                                 <View style={styles.smartResupplyLoadingRow}>
                                   <ActivityIndicator size="small" color={TACTICAL.amber} />
                                   <Text style={styles.smartResupplyPickerHint}>Finding grocery and supply options...</Text>
                                 </View>
                               ) : null}
+                              {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length > 0 ? (
+                                <View style={styles.smartResupplyLoadingRow}>
+                                  <ActivityIndicator size="small" color={TACTICAL.amber} />
+                                  <Text style={styles.smartResupplyPickerHint}>Updating nearby grocery/supply options...</Text>
+                                </View>
+                              ) : null}
                               <View style={styles.smartResupplyOptionList}>
                                 {smartResupplySupplyOptions.map((option) => (
                                   <SmartResupplyOptionCard
-                                    key={option.id}
+                                    key={smartResupplyOptionStableKey(option)}
                                     option={option}
-                                    selected={selectedSmartSupply?.id === option.id}
+                                    selected={selectedSmartSupply ? smartResupplyOptionStableKey(selectedSmartSupply) === smartResupplyOptionStableKey(option) : false}
                                     markerLabel="B"
                                     onPress={() => handleSelectSmartSupply(option)}
                                   />
@@ -3677,6 +4963,7 @@ export default function ExploreTripBuilderScreen() {
                       plan,
                       visible: false,
                       itinerarySaved,
+                      itineraryEditSession: savedTripItineraryEditSession,
                     };
                   }}
                   accessibilityRole="button"
@@ -3722,6 +5009,17 @@ export default function ExploreTripBuilderScreen() {
                       onMapPress={tripPlanMapAvailability.itinerary ? () => openPlanMap('itinerary') : undefined}
                       onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
                     >
+                      <ItinerarySummaryPanel summary={itinerarySummary} />
+                      <ItineraryReviewPanel
+                        review={itineraryReview}
+                        editing={itineraryEditMode}
+                        editSession={draftTripItineraryEditSession}
+                        onAcceptItem={handleAcceptItineraryReviewItem}
+                        onDismissItem={handleDismissItineraryReviewItem}
+                        onMoveStopItem={handleMoveItineraryReviewStop}
+                        onAddUserStop={handleAddUserItineraryStop}
+                        onAddUserWaypoint={handleAddUserTrailWaypoint}
+                      />
                       {itineraryEditMode ? (
                         <View style={styles.itineraryEditor} testID="trip-builder-itinerary-editor">
                           <View style={styles.itineraryEditToolbar}>
@@ -4641,6 +5939,328 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.9,
     textTransform: 'uppercase',
+  },
+  itinerarySummary: {
+    gap: 7,
+    paddingVertical: 2,
+  },
+  itinerarySummaryHeader: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  itinerarySummaryIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itinerarySummaryTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  itinerarySummaryTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  itinerarySummaryMessage: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  itinerarySummaryState: {
+    maxWidth: 76,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
+  itinerarySummaryPhaseRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  itinerarySummaryPhase: {
+    minHeight: 30,
+    minWidth: 92,
+    maxWidth: '48%',
+    flexGrow: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  itinerarySummaryPhaseDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  itinerarySummaryPhaseCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itinerarySummaryPhaseLabel: {
+    color: TACTICAL.text,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  itinerarySummaryPhaseDetail: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '700',
+  },
+  itinerarySummaryNote: {
+    color: '#FFCC80',
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
+  },
+  itineraryReview: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.07)',
+    paddingTop: 8,
+    gap: 8,
+  },
+  itineraryReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  itineraryReviewHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  itineraryReviewTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewSubtitle: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  itineraryReviewConfidence: {
+    gap: 6,
+  },
+  itineraryReviewSubheader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  itineraryReviewSubheaderText: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewSubheaderMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewConfidenceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  itineraryReviewConfidenceChip: {
+    minWidth: 74,
+    flexGrow: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: TACTICAL.amber + '08',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    gap: 1,
+  },
+  itineraryReviewConfidenceLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewConfidenceValue: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  itineraryReviewPhaseList: {
+    gap: 6,
+  },
+  itineraryReviewPhase: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingTop: 7,
+    gap: 5,
+  },
+  itineraryReviewPhaseHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+  },
+  itineraryReviewPhaseNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itineraryReviewPhaseNumberText: {
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  itineraryReviewPhaseCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  itineraryReviewPhaseTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  itineraryReviewPhaseDescription: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  itineraryReviewAvailability: {
+    minHeight: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itineraryReviewAvailabilityText: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingLeft: 31,
+  },
+  itineraryReviewMetaText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+  },
+  itineraryReviewEditableText: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  itineraryReviewRecommendation: {
+    paddingLeft: 31,
+    color: TACTICAL.text,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
+  itineraryReviewItemList: {
+    paddingLeft: 31,
+    gap: 4,
+  },
+  itineraryReviewItem: {
+    minHeight: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    gap: 1,
+  },
+  itineraryReviewItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  itineraryReviewItemCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itineraryReviewItemTitle: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  itineraryReviewItemMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 10,
+    fontWeight: '700',
+  },
+  itineraryReviewItemActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  itineraryReviewIconButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itineraryReviewRemoveButton: {
+    borderColor: '#EF535044',
+    backgroundColor: '#EF53500D',
+  },
+  itineraryReviewWarnings: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(239,83,80,0.18)',
+    paddingTop: 7,
+    gap: 4,
+  },
+  itineraryReviewWarning: {
+    color: '#FFCC80',
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
+  itineraryReviewDismissedText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '800',
   },
   itineraryEditor: {
     gap: 7,

@@ -56,6 +56,10 @@ const cases = [
     'convoy_member_locations is not in supabase_realtime publication',
   ],
   [
+    'realtime_degraded',
+    'Realtime channel TIMED_OUT while subscribing to convoy_member_locations',
+  ],
+  [
     'supabase_unconfigured',
     { message: 'Supabase not configured', code: 'SUPABASE_CONFIG_UNAVAILABLE' },
   ],
@@ -102,8 +106,8 @@ assert.ok(
 
 const store = fs.readFileSync(storePath, 'utf8');
 assert.ok(
-  store.includes("getConvoyBackendReadinessGuidance('realtime_unavailable').userMessage"),
-  'Convoy realtime store should surface Realtime-specific degraded recovery copy.',
+  store.includes("getConvoyBackendReadinessGuidance('realtime_degraded').userMessage"),
+  'Convoy realtime store should surface transient Realtime degraded recovery copy.',
 );
 
 const docs = fs.readFileSync(docsPath, 'utf8');

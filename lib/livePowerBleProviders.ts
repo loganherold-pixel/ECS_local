@@ -21,6 +21,11 @@ import type {
 import { getProviderMeta } from './BluProviderRegistry';
 import { getBluetoothTelemetrySourceLabel } from './bluetoothLiveTelemetry';
 import { buildPowerBluTelemetryEnvelope } from './bluTelemetryEnvelope';
+import {
+  decodeEcoFlowBleTelemetry,
+  getEcoFlowBleModelName,
+  isEcoFlowBleDevice,
+} from '../src/power/drivers/vendors/EcoFlowDriver';
 
 type NativeBleAdapter = ReturnType<typeof createNativeBleBluAdapter>;
 
@@ -228,6 +233,17 @@ function createProvider(
     },
     getConnectedDevices: () => adapter.getState().connectedDevices,
     getRegisteredDevices: () => bluDeviceRegistry.getByProvider(providerId),
+    getLatestReadings: (): EcsNormalizedReading[] => {
+      const state = adapter.getState();
+      return state.connectedDevices
+        .map((device) => normalizeReading(
+          providerId,
+          displayName,
+          state.telemetryByDeviceId[device.device_id],
+          device,
+        ))
+        .filter((reading): reading is EcsNormalizedReading => reading != null);
+    },
 
     fetchTelemetry: async (): Promise<EcsNormalizedReading[]> => {
       const connectedDevices = adapter.getState().connectedDevices;
@@ -325,6 +341,15 @@ export const bluettiPowerProvider = createProvider('bluetti', 'Bluetti', createN
   capabilities: POWER_BLE_CAPABILITIES,
   isSupportedDevice: isNamedDevice(/bluetti/i, /blue\s*eddy/i, /\bac\d{2,}/i, /\beb\d{2,}/i, /\bep\d{2,}/i),
   getModelName: (name) => name.trim() || 'Bluetti Device',
+}));
+
+export const ecoFlowNativeBlePowerProvider = createProvider('ecoflow', 'EcoFlow', createNativeBleBluAdapter({
+  provider: 'ecoflow',
+  displayName: 'EcoFlow',
+  capabilities: POWER_BLE_CAPABILITIES,
+  isSupportedDevice: isEcoFlowBleDevice,
+  getModelName: getEcoFlowBleModelName,
+  decodeTelemetry: decodeEcoFlowBleTelemetry,
 }));
 
 export const ankerSolixPowerProvider = createProvider('anker_solix', 'Anker SOLIX', createNativeBleBluAdapter({

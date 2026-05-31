@@ -29,7 +29,7 @@ const scannerDiscovery = read('lib/ecoflowUnifiedScannerDiscovery.ts');
 const unified = read('lib/useUnifiedDeviceConnections.ts');
 
 for (const fragment of [
-  'type EcoFlowEdgePhase = "auth" | "deviceList" | "telemetry" | "normalize"',
+  '| "bleAuthPayload"',
   'source: "ecoflow-cloud"',
   'phase,',
   'error,',
@@ -46,6 +46,18 @@ for (const fragment of [
   'ECOFLOW_API_HOST',
   '/iot-open/sign/device/list',
   '/iot-open/sign/device/quota/all',
+  '/iot-open/sign/certification',
+  "action === \"mqttCertification\"",
+  "action === \"mqttTelemetry\"",
+  "action === \"bleAuthPayload\"",
+  'ECOFLOW_BLE_ACCOUNT_USER_ID',
+  'ECOFLOW_BLE_AUTH_USER_ID_MISSING',
+  'ECOFLOW_BLE_AUTH_DEVICE_NOT_FOUND',
+  'authPayloadFingerprint',
+  'handling: "session_only_do_not_log_raw_payload"',
+  "ecoflow_mqtt_telemetry_latest",
+  'certificateAccountFingerprint',
+  'passwordPresent',
   'accessKey, timestamp, nonce, sign',
   'safeSnippet(bodyText, secrets)',
 ]) {
@@ -57,6 +69,7 @@ for (const forbidden of [
   'console.error',
   'ECOFLOW_ACCESS_KEY=',
   'ECOFLOW_SECRET_KEY=',
+  'certificatePassword:',
   'JSON.stringify(json?.data',
   '[ecoflow telemetry] sample',
 ]) {
@@ -76,6 +89,10 @@ for (const state of [
 
 for (const fragment of [
   'lastCloudFailure',
+  'checkMqttCertification',
+  'EcoFlowMqttCertificationStatus',
+  'pollMqttTelemetryFallback',
+  "action: 'mqttTelemetry'",
   'failureState',
   'classifyEcoFlowCloudFailureState',
   'normalizeEdgeError',
@@ -84,6 +101,10 @@ for (const fragment of [
   'function readTelemetryEntryValue',
   'if (Array.isArray(value))',
   'target.set(normalizeEcoFlowTelemetryKey(key), entryValue)',
+  '"bmsMaster.inputWatts"',
+  '"bmsMaster.outputWatts"',
+  'mqtt certification probe',
+  'credentialExposure: "server_side_only"',
 ]) {
   has(provider, fragment, 'EcoFlow provider should preserve edge failure state');
 }
@@ -106,7 +127,7 @@ for (const fragment of [
 }
 
 has(scannerDiscovery, 'keys not configured', 'EcoFlow scanner discovery should classify missing credentials as auth-required');
-has(unified, "cloudState === 'authRequired'", 'Power Center model should surface auth-required cloud state');
-has(unified, "cloudState === 'cloudStale'", 'Power Center model should surface stale cloud state');
+has(unified, "cloudState === 'authRequired'", 'Device Connections model should surface auth-required cloud state');
+has(unified, "cloudState === 'cloudStale'", 'Device Connections model should surface stale cloud state');
 
 console.log('EcoFlow edge function/cloud API checks passed.');

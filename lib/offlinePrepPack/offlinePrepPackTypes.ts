@@ -6,6 +6,7 @@ import type {
   TripBuilderReadinessReference,
   TripBuilderRouteInput,
   TripBuilderVehicleProfile,
+  TripItinerary,
   TripPlan,
 } from '../tripBuilder';
 
@@ -20,8 +21,21 @@ export type OfflinePrepPackItemType =
   | 'emergency_points'
   | 'vehicle_readiness_summary'
   | 'trip_itinerary'
+  | 'approach_route'
+  | 'trailhead'
+  | 'trail_route'
+  | 'trail_waypoints'
+  | 'bailout_points'
+  | 'pre_trail_stops'
+  | 'trail_end'
+  | 'exit_route'
   | 'smart_resupply_summary'
   | 'weather_snapshot'
+  | 'remoteness_snapshot'
+  | 'sunlight_window'
+  | 'elevation_snapshot'
+  | 'emergency_notes'
+  | 'missing_data_warnings'
   | 'gpx_export'
   | 'trip_sheet';
 
@@ -117,6 +131,7 @@ export type OfflinePrepPack = {
 
 export type OfflinePrepPackInput = {
   route: TripBuilderRouteInput;
+  itinerary?: TripItinerary | null;
   tripPlan?: TripPlan | null;
   smartResupplyPlan?: SmartResupplyPlan | null;
   vehicleProfile?: TripBuilderVehicleProfile | null;
@@ -126,6 +141,20 @@ export type OfflinePrepPackInput = {
   resupplyPoints?: ResupplyPoint[] | null;
   emergencyPoints?: ResupplyPoint[] | null;
   weatherSnapshot?: Record<string, unknown> | null;
+  remotenessSnapshot?: Record<string, unknown> | null;
+  sunlightWindow?: Record<string, unknown> | null;
+  elevationSnapshot?: Record<string, unknown> | null;
+  emergencyNotes?: Array<string | Record<string, unknown>> | string | Record<string, unknown> | null;
+  capturedAt?: string;
+};
+
+export type OfflinePrepPackFromItineraryInput = {
+  itinerary: TripItinerary;
+  weatherSnapshot?: Record<string, unknown> | null;
+  remotenessSnapshot?: Record<string, unknown> | null;
+  sunlightWindow?: Record<string, unknown> | null;
+  elevationSnapshot?: Record<string, unknown> | null;
+  emergencyNotes?: Array<string | Record<string, unknown>> | string | Record<string, unknown> | null;
   capturedAt?: string;
 };
 

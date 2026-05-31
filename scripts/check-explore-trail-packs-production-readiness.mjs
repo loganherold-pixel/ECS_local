@@ -49,6 +49,7 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
     trailPacks: path.join(root, 'lib', 'explore', 'trailPacks.ts'),
     trailPackConfidence: path.join(root, 'lib', 'explore', 'trailPackConfidence.ts'),
     trailPackFeedback: path.join(root, 'lib', 'explore', 'trailPackFeedback.ts'),
+    liveTrailPackCatalog: path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'),
     trailPackReviewQueue: path.join(root, 'lib', 'explore', 'trailPackReviewQueue.ts'),
     trailPackSubmissions: path.join(root, 'lib', 'explore', 'trailPackSubmissions.ts'),
     trailPackCard: path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
@@ -64,6 +65,7 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
   const trailPacks = normalize(readIfExists(paths.trailPacks));
   const trailPackConfidence = normalize(readIfExists(paths.trailPackConfidence));
   const trailPackFeedback = normalize(readIfExists(paths.trailPackFeedback));
+  const liveTrailPackCatalog = normalize(readIfExists(paths.liveTrailPackCatalog));
   const trailPackReviewQueue = normalize(readIfExists(paths.trailPackReviewQueue));
   const trailPackSubmissions = normalize(readIfExists(paths.trailPackSubmissions));
   const trailPackCard = normalize(readIfExists(paths.trailPackCard));
@@ -84,11 +86,22 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         trailPacks.includes('evaluatedConfidence') &&
         trailPackReviewQueue.includes('isTrailPackPubliclyDiscoverable') &&
         trailPackReviewQueue.includes("return status === 'approved' && reviewState?.publicSuppressed !== true;") &&
+        liveTrailPackCatalog.includes("from('trail_packs')") &&
+        liveTrailPackCatalog.includes("dataState: 'live'") &&
+        liveTrailPackCatalog.includes('normalizeLiveTrailPackRecord') &&
         discover.includes('getDiscoverableTrailPacks(') &&
+        discover.includes('liveTrailPackCatalogStore') &&
+        discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
+        !discover.includes('getDefaultECSTrailPacks') &&
         discover.includes('activeDistanceRadius') &&
         discover.includes('reviewStatesByTrailPackId: trailPackFeedbackReviewStates') &&
         discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
-      [relPath(root, paths.trailPacks), relPath(root, paths.trailPackReviewQueue), relPath(root, paths.discover)],
+      [
+        relPath(root, paths.trailPacks),
+        relPath(root, paths.trailPackReviewQueue),
+        relPath(root, paths.liveTrailPackCatalog),
+        relPath(root, paths.discover),
+      ],
       ['Validate Explore Trail Pack discovery on Android with approved, pending, rejected, own-draft, low-confidence, and out-of-radius records.'],
     ),
     check(
@@ -160,7 +173,12 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
     check(
       'preview_and_navigate_handoff_are_guarded_and_source_labeled',
       'Trail Pack preview and Navigate handoff preserve source metadata, disable missing-geometry guidance, and label confidence/offline-cache state.',
-      trailPackPreview.includes('RouteSegment') &&
+      trailPackPreview.includes('MapRenderer') &&
+        trailPackPreview.includes('DEFAULT_MAP_STYLE') &&
+        trailPackPreview.includes('getMapboxToken') &&
+        trailPackPreview.includes('cameraMode="route_overview"') &&
+        trailPackPreview.includes('surfaceMode="compact"') &&
+        !trailPackPreview.includes('function RouteSegment') &&
         trailPackPreview.includes('LOOP ROUTE') &&
         trailPackPreview.includes('POINT ROUTE') &&
         trailPackPreview.includes('Offline cache unavailable for this Trail Pack.') &&
@@ -185,7 +203,8 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
       discover.includes('Scanning approved ECS Trail Packs within selected radius') &&
         discover.includes('Trail Packs need your location or a selected search area to filter nearby routes.') &&
         discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
-        discover.includes('No approved Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems.') &&
+        discover.includes('No live reviewed Trail Packs found within this radius.') &&
+        discover.includes('Live Trail Packs are not available from the reviewed catalog yet.') &&
         discover.includes('This Trail Pack is under ECS review and is not visible to other users.') &&
         trailPackCard.includes('ECS confidence') &&
         trailPackCard.includes('PREVIEW') &&

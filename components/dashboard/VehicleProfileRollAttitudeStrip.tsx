@@ -15,10 +15,11 @@ type Props = {
   pitchDeg?: number | null;
   live?: boolean;
   maxRollDeg?: number;
+  expanded?: boolean;
 };
 
 const DEFAULT_MAX_ROLL_DEG = 45;
-const CAMPSITE_LEVEL_TOLERANCE_DEG = 1;
+const CAMPSITE_LEVEL_TOLERANCE_DEG = 2;
 const VIEWBOX_WIDTH = 260;
 const VIEWBOX_HEIGHT = 42;
 const TRACK_LEFT = 18;
@@ -68,6 +69,7 @@ export default function VehicleProfileRollAttitudeStrip({
   pitchDeg,
   live = false,
   maxRollDeg = DEFAULT_MAX_ROLL_DEG,
+  expanded = false,
 }: Props) {
   const safeMaxRoll = Math.max(1, Math.abs(maxRollDeg));
   const clampedRoll = clamp(safeRoll(rollDeg), -safeMaxRoll, safeMaxRoll);
@@ -101,27 +103,27 @@ export default function VehicleProfileRollAttitudeStrip({
       accessible
       accessibilityRole="image"
       accessibilityLabel={`Vehicle roll monitor. Roll ${formatRoll(displayRoll)}. Pitch ${formatRoll(displayPitch)}. ${campsiteLevel ? 'Campsite level' : `${directionLabel.toLowerCase()} attitude`}. Range negative ${safeMaxRoll} to positive ${safeMaxRoll} degrees.`}
-      style={styles.container}
+      style={[styles.container, expanded && styles.containerExpanded]}
       testID="vehicle-profile-roll-attitude-strip"
     >
-      <View style={styles.headerRow}>
-        <Text style={styles.label} numberOfLines={1}>
+      <View style={[styles.headerRow, expanded && styles.headerRowExpanded]}>
+        <Text style={[styles.label, expanded && styles.labelExpanded]} numberOfLines={1}>
           ROLL
         </Text>
-        <Text style={[styles.value, { color: activeColor }]} numberOfLines={1}>
+        <Text style={[styles.value, expanded && styles.valueExpanded, { color: activeColor }]} numberOfLines={1}>
           {formatRoll(displayRoll)}
         </Text>
         {live && campsiteLevel ? (
-          <View style={styles.campsiteStatus}>
-            <Text style={styles.campsiteStatusLine} numberOfLines={1}>
-              CampSite
+          <View style={[styles.campsiteStatus, expanded && styles.campsiteStatusExpanded]}>
+            <Text style={[styles.campsiteStatusLine, expanded && styles.campsiteStatusLineExpanded]} numberOfLines={1}>
+              CAMPSITE
             </Text>
-            <Text style={styles.campsiteStatusLine} numberOfLines={1}>
+            <Text style={[styles.campsiteStatusLine, expanded && styles.campsiteStatusLineExpanded]} numberOfLines={1}>
               LEVEL
             </Text>
           </View>
         ) : (
-          <Text style={[styles.status, live ? styles.statusLive : null]} numberOfLines={1}>
+          <Text style={[styles.status, expanded && styles.statusExpanded, live ? styles.statusLive : null]} numberOfLines={1}>
             {live ? directionLabel : 'STANDBY'}
           </Text>
         )}
@@ -221,11 +223,23 @@ const styles = StyleSheet.create({
     marginTop: -29,
     zIndex: 2,
   },
+  containerExpanded: {
+    left: 10,
+    right: 10,
+    height: 116,
+    marginTop: -58,
+  },
   headerRow: {
     minHeight: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+  },
+  headerRowExpanded: {
+    alignSelf: 'center',
+    width: '68%',
+    minHeight: 22,
+    gap: 8,
   },
   label: {
     color: TACTICAL.textMuted,
@@ -235,12 +249,20 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     includeFontPadding: false,
   },
+  labelExpanded: {
+    fontSize: 9.5,
+    lineHeight: 12,
+  },
   value: {
     fontSize: 9,
     lineHeight: 11,
     fontWeight: '900',
     letterSpacing: 0.35,
     includeFontPadding: false,
+  },
+  valueExpanded: {
+    fontSize: 13,
+    lineHeight: 16,
   },
   status: {
     marginLeft: 'auto',
@@ -251,13 +273,20 @@ const styles = StyleSheet.create({
     letterSpacing: 0.48,
     includeFontPadding: false,
   },
+  statusExpanded: {
+    fontSize: 8,
+    lineHeight: 10,
+  },
   statusLive: {
     color: 'rgba(230, 237, 243, 0.76)',
   },
   campsiteStatus: {
     marginLeft: 'auto',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'center',
+  },
+  campsiteStatusExpanded: {
+    marginLeft: 'auto',
   },
   campsiteStatusLine: {
     color: '#76E0A0',
@@ -266,6 +295,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.48,
     includeFontPadding: false,
+    textAlign: 'center',
+  },
+  campsiteStatusLineExpanded: {
+    fontSize: 8,
+    lineHeight: 9,
   },
   trackFrame: {
     flex: 1,

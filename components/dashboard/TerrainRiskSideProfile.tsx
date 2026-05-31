@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, {
   Circle,
   Defs,
+  G,
   LinearGradient,
   Line,
   Path,
@@ -34,13 +35,13 @@ type ChartFrame = {
 };
 
 const CHART_FRAME: ChartFrame = {
-  left: 47,
-  right: 28,
-  top: 18,
-  bottom: 38,
-  width: VIEWBOX_WIDTH - 47 - 28,
-  height: VIEWBOX_HEIGHT - 18 - 38,
-  baselineY: VIEWBOX_HEIGHT - 38,
+  left: 8,
+  right: 0,
+  top: 0,
+  bottom: 18,
+  width: VIEWBOX_WIDTH - 8 - 0,
+  height: VIEWBOX_HEIGHT - 0 - 18,
+  baselineY: VIEWBOX_HEIGHT - 18,
 };
 
 type ElevationBounds = {
@@ -49,6 +50,7 @@ type ElevationBounds = {
 };
 
 type ChartPoint = TerrainProfilePoint & {
+  id: string;
   x: number;
   y: number;
 };
@@ -68,6 +70,7 @@ type RiskSegment = {
 type DistanceTick = {
   ratio: number;
   x: number;
+  labelX: number;
   label: string;
   anchor: 'start' | 'middle' | 'end';
 };
@@ -82,6 +85,8 @@ type Props = {
   profile: TerrainProfilePoint[];
   totalDistanceMiles: number;
   unit: DistanceUnit;
+  transparentBackground?: boolean;
+  interactive?: boolean;
 };
 
 const RISK_COLORS: Record<TerrainRiskLevel, string> = {
@@ -143,6 +148,58 @@ function formatElevationLabel(value: number): string {
   return Math.abs(rounded) >= 1000 ? `${(rounded / 1000).toFixed(1)}k` : String(rounded);
 }
 
+function formatFullElevationLabel(value: number): string {
+  return `${Math.round(value).toLocaleString()} ft`;
+}
+
+function formatTerrainHazardKind(kind: NonNullable<TerrainProfilePoint['hazardKinds']>[number]): string {
+  switch (kind) {
+    case 'washout_watch':
+      return 'Washout watch';
+    case 'tipover_watch':
+      return 'Tipover watch';
+    case 'rapid_elevation_change':
+      return 'Rapid elevation change';
+    case 'steep_grade':
+      return 'Steep grade';
+    case 'high_elevation':
+      return 'High elevation';
+    default:
+      return 'Terrain change';
+  }
+}
+
+function isTerrainProfileReferencePoint(point: TerrainProfilePoint): boolean {
+  return (
+    point.riskLevel === 'high' ||
+    point.thermalBand === 'hot' ||
+    (point.hazardKinds?.length ?? 0) > 0
+  );
+}
+
+function formatTerrainReferenceReason(point: TerrainProfilePoint): string {
+  const hazardLabels = (point.hazardKinds ?? []).map(formatTerrainHazardKind);
+  if (hazardLabels.length > 0) return hazardLabels.slice(0, 2).join(' / ');
+  if (point.thermalBand === 'hot') return 'Hot terrain segment';
+  if (point.riskLevel === 'high') return 'High terrain risk score';
+  return 'Terrain risk change';
+}
+
+function formatTerrainReferenceDetail(point: TerrainProfilePoint, unit: DistanceUnit): string {
+  const grade = Number.isFinite(point.gradePercent)
+    ? ` | grade ${Math.round(point.gradePercent ?? 0)}%`
+    : '';
+  return `${formatDistance(point.distanceMiles, unit).toUpperCase()} | ${formatFullElevationLabel(point.elevationFeet).toUpperCase()}${grade}`;
+}
+
+function getReferenceCalloutLayout(point: ChartPoint): { x: number; y: number; width: number; height: number } {
+  const width = 154;
+  const height = 45;
+  const x = clampNumber(point.x > VIEWBOX_WIDTH - width - 10 ? point.x - width - 8 : point.x + 8, 4, VIEWBOX_WIDTH - width - 4);
+  const y = clampNumber(point.y < height + 8 ? point.y + 10 : point.y - height - 8, 4, VIEWBOX_HEIGHT - height - 18);
+  return { x, y, width, height };
+}
+
 function buildElevationBounds(profile: TerrainProfilePoint[]): ElevationBounds {
   const elevations = profile.map((point) => point.elevationFeet);
   const rawMinElevation = Math.min(...elevations);
@@ -181,12 +238,16 @@ function buildSegmentLinePath(segment: RiskSegment): string {
 }
 
 function buildDistanceTicks(totalDistanceMiles: number, unit: DistanceUnit): DistanceTick[] {
-  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
-    ratio,
-    x: CHART_FRAME.left + ratio * CHART_FRAME.width,
-    label: formatDistance(totalDistanceMiles * ratio, unit).replace(` ${unit}`, ''),
-    anchor: ratio === 0 ? 'start' : ratio === 1 ? 'end' : 'middle',
-  }));
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const x = CHART_FRAME.left + ratio * CHART_FRAME.width;
+    return {
+      ratio,
+      x,
+      labelX: ratio === 1 ? x - 18 : x,
+      label: formatDistance(totalDistanceMiles * ratio, unit).replace(` ${unit}`, ''),
+      anchor: ratio === 0 ? 'start' : ratio === 1 ? 'end' : 'middle',
+    };
+  });
 }
 
 function buildElevationTicks(bounds: ElevationBounds): ElevationTick[] {
@@ -236,13 +297,17 @@ export default function TerrainRiskSideProfile({
   profile,
   totalDistanceMiles,
   unit,
+  transparentBackground = false,
+  interactive = false,
 }: Props) {
+  const [selectedReferencePointId, setSelectedReferencePointId] = useState<string | null>(null);
   const chart = useMemo(() => {
     if (profile.length < 2 || totalDistanceMiles <= 0) return null;
 
     const bounds = buildElevationBounds(profile);
-    const points = profile.map((point) => ({
+    const points = profile.map((point, index) => ({
       ...point,
+      id: `terrain-reference-${index}-${Math.round(point.distanceMiles * 100)}`,
       x: scaleTerrainDistanceToX(point.distanceMiles, totalDistanceMiles),
       y: scaleTerrainElevationToY(point.elevationFeet, bounds),
     }));
@@ -254,6 +319,7 @@ export default function TerrainRiskSideProfile({
     const peakPoint = points.reduce((peak, point) =>
       point.riskScore > peak.riskScore ? point : peak, points[0]);
     const highRiskSegments = segments.filter((segment) => segment.riskLevel === 'high');
+    const referencePoints = points.filter(isTerrainProfileReferencePoint);
 
     return {
       areaPath,
@@ -261,6 +327,7 @@ export default function TerrainRiskSideProfile({
       linePath,
       peakPoint,
       points,
+      referencePoints,
       segments,
       xTicks,
       yTicks,
@@ -271,12 +338,18 @@ export default function TerrainRiskSideProfile({
     return <View style={styles.emptyChart} />;
   }
 
+  const selectedReferencePoint =
+    chart.referencePoints.find((point) => point.id === selectedReferencePointId) ?? null;
+  const selectedReferenceLayout = selectedReferencePoint
+    ? getReferenceCalloutLayout(selectedReferencePoint)
+    : null;
+
   return (
     <View
       accessible
       accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. High risk route sections are highlighted.`}
       accessibilityRole="image"
-      style={styles.shell}
+      style={[styles.shell, transparentBackground ? styles.shellTransparent : null]}
     >
       <Svg width="100%" height="100%" viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}>
         <Defs>
@@ -293,7 +366,9 @@ export default function TerrainRiskSideProfile({
           </LinearGradient>
         </Defs>
 
-        <Rect x={0} y={0} width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} fill="rgba(0,0,0,0.96)" />
+        {!transparentBackground ? (
+          <Rect x={0} y={0} width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} fill="rgba(0,0,0,0.96)" />
+        ) : null}
         <Rect
           x={CHART_FRAME.left}
           y={CHART_FRAME.top}
@@ -415,6 +490,42 @@ export default function TerrainRiskSideProfile({
           />
         ))}
 
+        {chart.referencePoints.map((point) => {
+          const color = getTerrainCommandRiskColor(point.riskLevel);
+          const selected = selectedReferencePointId === point.id;
+          return (
+            <G key={`terrain-risk-reference-${point.id}`}>
+              <Circle
+                cx={point.x}
+                cy={point.y}
+                r={selected ? 7.4 : 5.2}
+                fill={color}
+                opacity={selected ? 0.28 : 0.16}
+              />
+              <Circle
+                cx={point.x}
+                cy={point.y}
+                r={selected ? 3.9 : 3.1}
+                fill={color}
+                stroke="rgba(255,255,255,0.74)"
+                strokeWidth={selected ? 1.3 : 0.9}
+                opacity={0.98}
+              />
+              <Circle
+                testID="terrainRiskReferenceMarker"
+                cx={point.x}
+                cy={point.y}
+                r={interactive ? 12 : 0}
+                fill="transparent"
+                onPress={interactive ? (event: { stopPropagation?: () => void }) => {
+                  event.stopPropagation?.();
+                  setSelectedReferencePointId((current) => current === point.id ? null : point.id);
+                } : undefined}
+              />
+            </G>
+          );
+        })}
+
         <Circle
           cx={chart.peakPoint.x}
           cy={chart.peakPoint.y}
@@ -451,12 +562,12 @@ export default function TerrainRiskSideProfile({
         {chart.yTicks.map((tick) => (
           <SvgText
             key={`y-label-${tick.value}`}
-            x={CHART_FRAME.left - 8}
+            x={2}
             y={tick.y + 3}
             fill={TACTICAL.textMuted}
             fontSize="8"
             fontWeight="700"
-            textAnchor="end"
+            textAnchor="start"
           >
             {tick.label}
           </SvgText>
@@ -465,8 +576,8 @@ export default function TerrainRiskSideProfile({
         {chart.xTicks.map((tick) => (
           <SvgText
             key={`x-label-${tick.ratio}`}
-            x={tick.x}
-            y={VIEWBOX_HEIGHT - 17}
+            x={tick.labelX}
+            y={CHART_FRAME.baselineY + 13}
             fill={TACTICAL.textMuted}
             fontSize="8"
             fontWeight="700"
@@ -477,8 +588,8 @@ export default function TerrainRiskSideProfile({
         ))}
 
         <SvgText
-          x={VIEWBOX_WIDTH - 7}
-          y={VIEWBOX_HEIGHT - 6}
+          x={VIEWBOX_WIDTH - 5}
+          y={CHART_FRAME.baselineY + 13}
           fill={TACTICAL.amber}
           fontSize="8"
           fontWeight="900"
@@ -487,25 +598,57 @@ export default function TerrainRiskSideProfile({
           {unit.toUpperCase()}
         </SvgText>
         <SvgText
-          x={6}
-          y={10}
-          fill={TACTICAL.textMuted}
+          x={CHART_FRAME.left + 2}
+          y={CHART_FRAME.top + 8}
+          fill={TACTICAL.amber}
           fontSize="8"
           fontWeight="900"
           textAnchor="start"
         >
           FT
         </SvgText>
-        <SvgText
-          x={CHART_FRAME.left + 8}
-          y={CHART_FRAME.top - 7}
-          fill="rgba(230,237,243,0.58)"
-          fontSize="7"
-          fontWeight="800"
-          textAnchor="start"
-        >
-          ROUTE SIDE PROFILE
-        </SvgText>
+        {selectedReferencePoint && selectedReferenceLayout ? (
+          <G>
+            <Rect
+              x={selectedReferenceLayout.x}
+              y={selectedReferenceLayout.y}
+              width={selectedReferenceLayout.width}
+              height={selectedReferenceLayout.height}
+              rx={6}
+              fill="rgba(6, 10, 13, 0.94)"
+              stroke={getTerrainCommandRiskColor(selectedReferencePoint.riskLevel)}
+              strokeWidth={1}
+              opacity={0.98}
+            />
+            <SvgText
+              x={selectedReferenceLayout.x + 8}
+              y={selectedReferenceLayout.y + 12}
+              fill={TACTICAL.amber}
+              fontSize="6.5"
+              fontWeight="900"
+            >
+              Why this point was referenced
+            </SvgText>
+            <SvgText
+              x={selectedReferenceLayout.x + 8}
+              y={selectedReferenceLayout.y + 26}
+              fill={getTerrainCommandRiskColor(selectedReferencePoint.riskLevel)}
+              fontSize="8"
+              fontWeight="900"
+            >
+              {formatTerrainReferenceReason(selectedReferencePoint)}
+            </SvgText>
+            <SvgText
+              x={selectedReferenceLayout.x + 8}
+              y={selectedReferenceLayout.y + 38}
+              fill={TACTICAL.textMuted}
+              fontSize="6.6"
+              fontWeight="700"
+            >
+              {formatTerrainReferenceDetail(selectedReferencePoint, unit)}
+            </SvgText>
+          </G>
+        ) : null}
       </Svg>
     </View>
   );
@@ -526,6 +669,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 10,
     elevation: 2,
+  },
+  shellTransparent: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   emptyChart: {
     flex: 1,

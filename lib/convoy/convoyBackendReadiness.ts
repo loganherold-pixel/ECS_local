@@ -4,6 +4,7 @@ export type ConvoyBackendReadinessIssue =
   | 'schema_cache_stale'
   | 'edge_function_missing'
   | 'edge_function_secret_missing'
+  | 'realtime_degraded'
   | 'realtime_unavailable'
   | 'unknown';
 
@@ -30,6 +31,11 @@ const REALTIME_STEPS = [
   'Enable Realtime/Postgres Changes for public.convoy_member_locations.',
   'Confirm public.convoy_member_locations is in the supabase_realtime publication.',
   'Confirm public.convoy_member_locations uses replica identity full so delete events include member_id.',
+];
+
+const REALTIME_DEGRADED_STEPS = [
+  'Check network connectivity and the Supabase Realtime service status.',
+  'If degradation persists, confirm Realtime/Postgres Changes is enabled for public.convoy_member_locations.',
 ];
 
 function lower(value: unknown): string {
@@ -90,25 +96,35 @@ export function classifyConvoyBackendReadinessIssue(error: unknown): ConvoyBacke
     return 'edge_function_missing';
   }
   if (
-    (text.includes('schema cache') || text.includes('pgrst202') || text.includes('pgrst205')) &&
-    (text.includes('convoy') || text.includes('claim_convoy_invite'))
+    ((text.includes('schema cache') || text.includes('pgrst202') || text.includes('pgrst205')) &&
+      (text.includes('convoy') || text.includes('claim_convoy_invite'))) ||
+    (text.includes('convoy tracking tables or helpers') && text.includes('not visible through the supabase api'))
   ) {
     return 'schema_cache_stale';
   }
   if (
     (text.includes('relation') && text.includes('does not exist') && text.includes('convoy')) ||
     (text.includes('undefined_table') && text.includes('convoy')) ||
-    (text.includes('42p01') && text.includes('convoy'))
+    (text.includes('42p01') && text.includes('convoy')) ||
+    (text.includes('convoy tracking schema') && text.includes('not deployed'))
   ) {
     return 'missing_migration';
   }
   if (
-    text.includes('realtime') ||
-    text.includes('postgres changes') ||
     text.includes('supabase_realtime') ||
-    text.includes('publication')
+    text.includes('publication') ||
+    text.includes('postgres changes is not enabled')
   ) {
     return 'realtime_unavailable';
+  }
+  if (
+    text.includes('realtime') ||
+    text.includes('channel_error') ||
+    text.includes('timed_out') ||
+    text.includes('timeout') ||
+    text.includes('channel error')
+  ) {
+    return 'realtime_degraded';
   }
 
   return 'unknown';
@@ -159,6 +175,13 @@ export function getConvoyBackendReadinessGuidance(
         title: 'Convoy Realtime unavailable',
         userMessage: 'Convoy roster data loaded, but live location updates are not available. ECS will show last known or manual convoy state until Realtime is enabled.',
         operatorSteps: [...REALTIME_STEPS],
+      };
+    case 'realtime_degraded':
+      return {
+        issue,
+        title: 'Convoy Realtime degraded',
+        userMessage: 'Realtime convoy tracking is temporarily degraded. ECS is showing last known locations while the connection recovers.',
+        operatorSteps: [...REALTIME_DEGRADED_STEPS],
       };
     case 'unknown':
     default:

@@ -1,12 +1,12 @@
 import { Platform } from 'react-native';
+import {
+  buildTripBuilderSuggestedRouteHandoff,
+  type BuildTripBuilderSuggestedRouteHandoffOptions,
+  type TripBuilderRouteHandoff,
+} from './tripBuilderSuggestedRouteHandoff';
 import type { TripBuilderRouteInput } from './tripBuilderTypes';
 
 const TRIP_BUILDER_ROUTE_HANDOFF_KEY = 'ecs_trip_builder_route_handoff';
-
-type TripBuilderRouteHandoff = {
-  route: TripBuilderRouteInput;
-  createdAt: string;
-};
 
 let memoryHandoff: TripBuilderRouteHandoff | null = null;
 
@@ -19,11 +19,11 @@ function getStorage(): Storage | null {
   }
 }
 
-export function saveTripBuilderRouteHandoff(route: TripBuilderRouteInput): TripBuilderRouteHandoff {
-  const handoff: TripBuilderRouteHandoff = {
-    route,
-    createdAt: new Date().toISOString(),
-  };
+export function saveTripBuilderRouteHandoff(
+  route: TripBuilderRouteInput,
+  options: BuildTripBuilderSuggestedRouteHandoffOptions = {},
+): TripBuilderRouteHandoff {
+  const handoff = buildTripBuilderSuggestedRouteHandoff(route, options);
   memoryHandoff = handoff;
   try {
     getStorage()?.setItem(TRIP_BUILDER_ROUTE_HANDOFF_KEY, JSON.stringify(handoff));

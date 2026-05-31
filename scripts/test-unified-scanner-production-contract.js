@@ -149,10 +149,12 @@ assert(
   'Android native manifest must contain Bluetooth scan/connect and fine-location permissions',
 );
 assert(
-  blePermissions.includes('BLUETOOTH_SCAN') &&
+    blePermissions.includes('BLUETOOTH_SCAN') &&
     blePermissions.includes('BLUETOOTH_CONNECT') &&
     blePermissions.includes('ACCESS_FINE_LOCATION') &&
-    blePermissions.includes('PermissionsAndroid.requestMultiple'),
+    blePermissions.includes('requestAndroidBlePermissions') &&
+    blePermissions.includes('PermissionsAndroid.request(permission as any)') &&
+    blePermissions.includes('ble_permission_request_item_start'),
   'BLE permissions must be requested through the central permission helper',
 );
 assert(
@@ -175,8 +177,10 @@ assert(
 assert(
   hook.includes("connection_state: 'connecting'") &&
     hook.includes("result.connected ? 'connected' : 'error'") &&
-    hook.includes("result.connected ? 'connected' : 'unavailable'"),
-  'EcoFlow cloud authorization failures must not pre-register devices as Bluetooth-connected',
+    hook.includes("result.connected ? 'connected' : 'unavailable'") &&
+    hook.includes('startEcoFlowCloudLiveRefresh(device)') &&
+    hook.includes('if (result.connected && result.telemetryActive)'),
+  'EcoFlow cloud devices may attach without telemetry, but live polling must only start after telemetry is active',
 );
 
 for (const [label, source] of [

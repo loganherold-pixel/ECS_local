@@ -332,6 +332,18 @@ assertSourceIncludes(
   'Camp Scout Mapbox diagnostics should report candidate/feature counts and source/layer ids behind the debug flag.',
 );
 assertSourceIncludes(
+  "'circle-radius': 0",
+  'Camp Scout Mapbox source layer should not paint a visible circle behind the campsite icon pin.',
+);
+assertSourceIncludes(
+  "'circle-opacity': 0",
+  'Camp Scout Mapbox source layer should keep circle fill invisible behind the campsite icon pin.',
+);
+assertSourceIncludes(
+  "'circle-stroke-width': 0",
+  'Camp Scout Mapbox source layer should keep circle stroke invisible behind the campsite icon pin.',
+);
+assertSourceIncludes(
   '[CAMP_SCOUT_DEBUG] rendered_marker_count=',
   'Camp Scout diagnostics should report rendered marker counts behind the debug flag.',
 );

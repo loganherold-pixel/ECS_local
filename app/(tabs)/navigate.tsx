@@ -514,7 +514,7 @@ import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
 import type { WeatherCoordinate } from '../../lib/weatherTypes';
 import { useRemoteWeatherRouteWatcher } from '../../lib/remote/useRemoteWeatherRouteWatcher';
-import { useVehicleHeading, type CompassMode } from '../../lib/useVehicleHeading';
+import { useVehicleHeading } from '../../lib/useVehicleHeading';
 import { useRoadNavigation } from '../../lib/useRoadNavigation';
 import { useTrailNavigation } from '../../lib/useTrailNavigation';
 import { analyzeRoute, type RouteAnalysis } from '../../lib/routeTileCacheEngine';
@@ -900,6 +900,11 @@ const emptyCampScoutBreakdown = (total: number): CampScoutCandidate['scoreBreakd
   total,
 });
 
+function optionalFiniteNumber(value: unknown): number | undefined {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : undefined;
+}
+
 function toCampScoutCandidate(
   candidate: PolygonCampsiteSuggestion,
   index: number,
@@ -919,6 +924,23 @@ function toCampScoutCandidate(
     isPrivateLand?: unknown;
     isWaterBody?: unknown;
     nearBuildings?: unknown;
+    nearStructure?: unknown;
+    nearResidentialStructure?: unknown;
+    nearestBuildingMiles?: unknown;
+    nearestBuildingDistanceMiles?: unknown;
+    buildingDistanceMiles?: unknown;
+    distanceToBuildingMiles?: unknown;
+    distanceFromBuildingMiles?: unknown;
+    nearestStructureMiles?: unknown;
+    nearestStructureDistanceMiles?: unknown;
+    structureDistanceMiles?: unknown;
+    distanceToStructureMiles?: unknown;
+    distanceFromStructureMiles?: unknown;
+    nearestResidentialStructureMiles?: unknown;
+    nearestResidentialStructureDistanceMiles?: unknown;
+    residentialStructureDistanceMiles?: unknown;
+    distanceToResidentialStructureMiles?: unknown;
+    distanceFromResidentialStructureMiles?: unknown;
     nearHighway?: unknown;
   };
   const latitude = Number(candidate.coordinates?.[0]);
@@ -999,6 +1021,25 @@ function toCampScoutCandidate(
     isPrivateLand: metadata.isPrivateLand === true,
     isWaterBody: metadata.isWaterBody === true,
     nearBuildings: metadata.nearBuildings === true,
+    nearStructure: metadata.nearStructure === true,
+    nearResidentialStructure: metadata.nearResidentialStructure === true,
+    nearestBuildingMiles: optionalFiniteNumber(metadata.nearestBuildingMiles),
+    nearestBuildingDistanceMiles: optionalFiniteNumber(metadata.nearestBuildingDistanceMiles),
+    buildingDistanceMiles: optionalFiniteNumber(metadata.buildingDistanceMiles),
+    distanceToBuildingMiles: optionalFiniteNumber(metadata.distanceToBuildingMiles),
+    distanceFromBuildingMiles: optionalFiniteNumber(metadata.distanceFromBuildingMiles),
+    nearestStructureMiles: optionalFiniteNumber(metadata.nearestStructureMiles),
+    nearestStructureDistanceMiles: optionalFiniteNumber(metadata.nearestStructureDistanceMiles),
+    structureDistanceMiles: optionalFiniteNumber(metadata.structureDistanceMiles),
+    distanceToStructureMiles: optionalFiniteNumber(metadata.distanceToStructureMiles),
+    distanceFromStructureMiles: optionalFiniteNumber(metadata.distanceFromStructureMiles),
+    nearestResidentialStructureMiles: optionalFiniteNumber(metadata.nearestResidentialStructureMiles),
+    nearestResidentialStructureDistanceMiles: optionalFiniteNumber(
+      metadata.nearestResidentialStructureDistanceMiles,
+    ),
+    residentialStructureDistanceMiles: optionalFiniteNumber(metadata.residentialStructureDistanceMiles),
+    distanceToResidentialStructureMiles: optionalFiniteNumber(metadata.distanceToResidentialStructureMiles),
+    distanceFromResidentialStructureMiles: optionalFiniteNumber(metadata.distanceFromResidentialStructureMiles),
     nearHighway: metadata.nearHighway === true,
   };
 }
@@ -3902,7 +3943,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const vehicleHeadingHook = useVehicleHeading({
     enabled: !compassPowerSaveActive,
     gpsHeadingDeg: currentGpsHeadingDeg,
-    initialMode: 'auto',
+    initialMode: 'upright',
     speedMph: gps.position?.speedMph ?? null,
   });
   useEffect(() => {
@@ -5482,6 +5523,24 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         distanceFromRoadOrTrail: candidate.distanceFromRoadOrTrail ?? candidate.distanceFromNearestRoadMiles,
         slope: candidate.slope ?? candidate.slopeEstimate,
         accessNotes: candidate.accessNotes ?? candidate.sourceNotes?.join('; '),
+        nearBuildings: candidate.nearBuildings,
+        nearStructure: candidate.nearStructure,
+        nearResidentialStructure: candidate.nearResidentialStructure,
+        nearestBuildingMiles: candidate.nearestBuildingMiles,
+        nearestBuildingDistanceMiles: candidate.nearestBuildingDistanceMiles,
+        buildingDistanceMiles: candidate.buildingDistanceMiles,
+        distanceToBuildingMiles: candidate.distanceToBuildingMiles,
+        distanceFromBuildingMiles: candidate.distanceFromBuildingMiles,
+        nearestStructureMiles: candidate.nearestStructureMiles,
+        nearestStructureDistanceMiles: candidate.nearestStructureDistanceMiles,
+        structureDistanceMiles: candidate.structureDistanceMiles,
+        distanceToStructureMiles: candidate.distanceToStructureMiles,
+        distanceFromStructureMiles: candidate.distanceFromStructureMiles,
+        nearestResidentialStructureMiles: candidate.nearestResidentialStructureMiles,
+        nearestResidentialStructureDistanceMiles: candidate.nearestResidentialStructureDistanceMiles,
+        residentialStructureDistanceMiles: candidate.residentialStructureDistanceMiles,
+        distanceToResidentialStructureMiles: candidate.distanceToResidentialStructureMiles,
+        distanceFromResidentialStructureMiles: candidate.distanceFromResidentialStructureMiles,
       };
     });
   }, [campScoutCandidatesShown, selectedCampScoutCandidateId]);
@@ -5503,6 +5562,24 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       distanceFromRoadOrTrail: candidate.distanceFromRoadOrTrail ?? candidate.distanceFromNearestRoadMiles,
       slope: candidate.slope ?? candidate.slopeEstimate,
       accessNotes: candidate.accessNotes ?? candidate.sourceNotes?.join('; '),
+      nearBuildings: candidate.nearBuildings,
+      nearStructure: candidate.nearStructure,
+      nearResidentialStructure: candidate.nearResidentialStructure,
+      nearestBuildingMiles: candidate.nearestBuildingMiles,
+      nearestBuildingDistanceMiles: candidate.nearestBuildingDistanceMiles,
+      buildingDistanceMiles: candidate.buildingDistanceMiles,
+      distanceToBuildingMiles: candidate.distanceToBuildingMiles,
+      distanceFromBuildingMiles: candidate.distanceFromBuildingMiles,
+      nearestStructureMiles: candidate.nearestStructureMiles,
+      nearestStructureDistanceMiles: candidate.nearestStructureDistanceMiles,
+      structureDistanceMiles: candidate.structureDistanceMiles,
+      distanceToStructureMiles: candidate.distanceToStructureMiles,
+      distanceFromStructureMiles: candidate.distanceFromStructureMiles,
+      nearestResidentialStructureMiles: candidate.nearestResidentialStructureMiles,
+      nearestResidentialStructureDistanceMiles: candidate.nearestResidentialStructureDistanceMiles,
+      residentialStructureDistanceMiles: candidate.residentialStructureDistanceMiles,
+      distanceToResidentialStructureMiles: candidate.distanceToResidentialStructureMiles,
+      distanceFromResidentialStructureMiles: candidate.distanceFromResidentialStructureMiles,
       accessibilityLabel: `ECS-Inferred Camp Candidate. Candidate scouting location. Verify locally before camping.`,
     }));
   }, [dispersedCampingCampScoutCandidates, selectedCampScoutCandidateId]);
@@ -14886,6 +14963,9 @@ const toggleRemotenessOverlay = useCallback(() => {
 
     const payload = selectedExploreRouteNavigationPayload;
     closeExploreRouteAnalysis();
+    setExploreRoutesEnabled(false);
+    setExploreRoutesHandoff(null);
+    await clearExploreRoutesMapHandoff();
     await applyExploreNavigationPayload(payload);
   }, [
     applyExploreNavigationPayload,

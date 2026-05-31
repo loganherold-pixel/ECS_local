@@ -117,8 +117,15 @@ function checkRenderingGate(root, paths) {
     ),
     boolCheck(
       'shared_camp_pin_style_reused',
-      'MapRenderer uses the existing camp-scout marker CSS, tent icon, and rank label for CampOps pins.',
-      hasAll(renderer, [/camp-scout-marker camp-scout-grade-/, /camp-scout-tent/, /camp-scout-rank/, /pinFamily:\s*marker\.pinFamily === 'campops'/]),
+      'MapRenderer uses the shared icon-only camp-scout marker CSS, tent icon, and rank label for CampOps pins.',
+      hasAll(renderer, [
+        /camp-scout-marker camp-scout-grade-/,
+        /camp-scout-tent/,
+        /camp-scout-rank/,
+        /\b(?:item|marker)\.pinFamily === 'campops'/,
+        /'circle-radius':\s*0/,
+        /'circle-opacity':\s*0/,
+      ]),
       [rel(root, paths.source.mapRenderer)],
     ),
     boolCheck(

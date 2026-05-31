@@ -15,12 +15,14 @@ import type { IncidentContext } from '../../lib/types/incidentRecovery';
 import type { IncidentCommunicationPacketAudience } from '../../lib/incidentCommunicationPacket';
 import { exportIncidentCommunicationPacketPdf } from '../../lib/incidentCommunicationPacketPdfExport';
 import { copyTextToClipboard } from '../../lib/clipboard';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type PacketAudience = IncidentCommunicationPacketAudience | 'all';
 
 type CommunicationPacketModalProps = {
   visible: boolean;
   onClose: () => void;
+  stackBehavior?: OverlayStackBehavior;
   incident?: IncidentContext | null;
   onCopyPacket: (audience: PacketAudience) => void;
 };
@@ -28,6 +30,7 @@ type CommunicationPacketModalProps = {
 export default function CommunicationPacketModal({
   visible,
   onClose,
+  stackBehavior,
   incident,
   onCopyPacket,
 }: CommunicationPacketModalProps) {
@@ -97,6 +100,7 @@ export default function CommunicationPacketModal({
       subtitle="Concise copyable incident packet. Sending this does not replace emergency services or local authorities."
       overlayClass="workflow"
       {...fullBodyPopupProps}
+      stackBehavior={stackBehavior}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

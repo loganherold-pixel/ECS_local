@@ -1,0 +1,33 @@
+{
+  "name": "@ecs/trails-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@ecs/shared": "file:../../packages/shared",
+    "next": "^16.2.6",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "overrides": {
+    "postcss": "^8.5.15"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "eslint": "9.38.0",
+    "eslint-config-next": "^16.2.6",
+    "prettier": "^3.8.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.2",
+    "vitest": "^3.2.4"
+  }
+}

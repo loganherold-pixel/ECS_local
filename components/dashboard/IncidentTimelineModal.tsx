@@ -17,10 +17,12 @@ import type {
   IncidentCoordinate,
   IncidentTimelineEvent,
 } from '../../lib/types/incidentRecovery';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type IncidentTimelineModalProps = {
   visible: boolean;
   onClose: () => void;
+  stackBehavior?: OverlayStackBehavior;
   incident?: IncidentContext | null;
   gpsLocation?: IncidentCoordinate | null;
   onAddNote: (note: string) => void;
@@ -107,6 +109,7 @@ function eventIcon(event: IncidentTimelineEvent): React.ComponentProps<typeof Io
 export default function IncidentTimelineModal({
   visible,
   onClose,
+  stackBehavior,
   incident,
   gpsLocation,
   onAddNote,
@@ -134,6 +137,7 @@ export default function IncidentTimelineModal({
       subtitle="Chronological incident updates, notes, and workflow events."
       overlayClass="workflow"
       {...fullBodyPopupProps}
+      stackBehavior={stackBehavior}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

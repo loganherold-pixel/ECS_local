@@ -82,9 +82,11 @@ assert(
 
 assert(
   hook.includes('hasManualDisconnectRequest(device)') &&
+    hook.includes('isEcoFlowCloudAuthBlockedDevice(device)') &&
+    hook.includes('auto_reconnect_skipped_cloud_auth_blocked') &&
     hook.includes("connectDevice(candidate.id, 'saved_auto_reconnect')") &&
     hook.includes("bluLog('[BLU_RECONNECT]', 'saved_power_auto_reconnect_attempt'"),
-  'Saved power auto-reconnect must only run after checking the manual-disconnect guard.',
+  'Saved power auto-reconnect must only run after checking manual-disconnect and EcoFlow cloud-auth guards.',
 );
 
 assert(

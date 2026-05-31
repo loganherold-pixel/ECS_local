@@ -11,13 +11,28 @@ export const COMMAND_CENTER_DEFAULT_MODE: CommandCenterMode = 'threeDNavigation'
 
 export const COMMAND_CENTER_IMPLEMENTED_MODES: CommandCenterMode[] = [
   'threeDNavigation',
+  'attitude',
 ];
 
 const COMMAND_CENTER_MODULE_IDS: ECSCommandModuleId[] = [
   'follow3d',
+  'attitude',
 ];
 
+// Detached command component contract: component: ExpeditionReadinessCommand
+// Expedition Readiness is owned by its dashboard surface, so it stays out of the selectable command menu.
 export const COMMAND_CENTER_WIDGET_REGISTRY: Partial<Record<CommandCenterWidgetId, CommandCenterWidgetDefinition>> = {
+  attitude: {
+    id: 'attitude',
+    label: 'Attitude Command',
+    shortLabel: 'Attitude',
+    description: 'Pitch and roll command surface grounded in visible attitude telemetry.',
+    iconName: 'speedometer-outline',
+    defaultAvailability: 'available',
+    requiredCapabilities: ['attitudeSensor'],
+    getAvailability: (context) => (context.isOffline ? 'partial' : 'available'),
+    order: 10,
+  },
   threeDNavigation: {
     id: 'threeDNavigation',
     label: '3D Navigation Command',
@@ -27,7 +42,8 @@ export const COMMAND_CENTER_WIDGET_REGISTRY: Partial<Record<CommandCenterWidgetI
     defaultAvailability: 'partial',
     requiredCapabilities: ['navigationRoute'],
     getAvailability: (context) => (context.hasActiveRoute ? 'available' : 'partial'),
-    order: 10,
+    order: 0,
+    fallbackId: 'attitude',
   },
 };
 
@@ -37,21 +53,21 @@ export function isCommandCenterModuleId(moduleId: ECSCommandModuleId): boolean {
 
 export function commandModuleToCenterMode(moduleId: ECSCommandModuleId): CommandCenterMode {
   switch (moduleId) {
-    case 'follow3d':
     case 'attitude':
-    case 'terrainRisk':
-    case 'routeCommand':
-    case 'powerCommand':
-    case 'environmentalCommand':
-    default:
+      return 'attitude';
+    case 'follow3d':
       return 'threeDNavigation';
+    default:
+      return COMMAND_CENTER_DEFAULT_MODE;
   }
 }
 
 export function centerModeToCommandModule(mode: CommandCenterMode): ECSCommandModuleId {
   switch (mode) {
     case 'threeDNavigation':
+      return 'follow3d';
     case 'attitude':
+      return 'attitude';
     default:
       return 'follow3d';
   }

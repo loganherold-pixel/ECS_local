@@ -274,6 +274,7 @@ export function useRecoveryHazardCompassData(
   const heading = useVehicleHeading({
     enabled,
     gpsHeadingDeg: gpsPosition?.headingDeg ?? null,
+    initialMode: 'upright',
     speedMph: gpsPosition?.speedMph ?? null,
   });
   const lastKnownHeadingRef = useRef<number | null>(null);

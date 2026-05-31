@@ -1,5 +1,6 @@
 import { isSupabaseConfigured, supabase } from '../supabase';
 import {
+  classifyConvoyBackendReadinessIssue,
   formatConvoyBackendUserMessage,
   getConvoyBackendReadinessGuidance,
 } from './convoyBackendReadiness';
@@ -97,7 +98,7 @@ export interface ConvoyRealtimeServiceBackend {
     convoyId: string,
     handlers: {
       onChange: (change: ConvoyLocationChange) => void;
-      onStatusChange: (status: ConvoyRealtimeConnectionStatus) => void;
+      onStatusChange: (status: ConvoyRealtimeConnectionStatus, error?: string | null) => void;
     },
   ): ConvoyRealtimeSubscription;
 }
@@ -243,7 +244,7 @@ export class ConvoyRealtimeService {
     convoyId: string,
     handlers: {
       onChange: (change: ConvoyLocationChange) => void;
-      onStatusChange?: (status: ConvoyRealtimeConnectionStatus) => void;
+      onStatusChange?: (status: ConvoyRealtimeConnectionStatus, error?: string | null) => void;
     },
   ): ConvoyRealtimeSubscription {
     const normalizedConvoyId = normalizeId(convoyId);
@@ -311,14 +312,18 @@ export function createSupabaseConvoyRealtimeBackend(client: any = supabase): Con
         },
       );
 
-      channel.subscribe((status: string) => {
+      channel.subscribe((status: string, error?: unknown) => {
+        const readinessIssue = classifyConvoyBackendReadinessIssue(error);
+        const degradedMessage = readinessIssue === 'realtime_unavailable'
+          ? getConvoyBackendReadinessGuidance('realtime_unavailable').userMessage
+          : getConvoyBackendReadinessGuidance('realtime_degraded').userMessage;
         switch (status) {
           case 'SUBSCRIBED':
             handlers.onStatusChange('connected');
             return;
           case 'CHANNEL_ERROR':
           case 'TIMED_OUT':
-            handlers.onStatusChange('degraded');
+            handlers.onStatusChange('degraded', degradedMessage);
             return;
           case 'CLOSED':
             handlers.onStatusChange('disconnected');

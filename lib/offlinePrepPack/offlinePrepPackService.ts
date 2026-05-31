@@ -11,9 +11,14 @@ import type { ImportedRoute, RouteSegment, RouteWaypoint } from '../routeStore';
 import type {
   CampCandidate,
   ExitPoint,
+  GeoPoint,
+  ItineraryRoute,
+  ItineraryStop,
+  ItineraryWaypoint,
   ResupplyPoint,
   TripBuilderCoordinate,
   TripBuilderRouteInput,
+  TripItinerary,
 } from '../tripBuilder';
 import type {
   OfflineMapPreparationAdapter,
@@ -21,6 +26,7 @@ import type {
   OfflinePrepPack,
   OfflinePrepPackBounds,
   OfflinePrepPackError,
+  OfflinePrepPackFromItineraryInput,
   OfflinePrepPackInput,
   OfflinePrepPackItem,
   OfflinePrepPackItemAvailability,
@@ -262,6 +268,11 @@ function routeCoordinatesFromTripPlan(input: OfflinePrepPackInput): NormalizedPo
 }
 
 export function getOfflinePrepPackRouteCoordinates(input: OfflinePrepPackInput): NormalizedPoint[] {
+  if (input.itinerary) {
+    const itineraryPoints = combinedItineraryRoutePoints(input.itinerary);
+    if (itineraryPoints.length >= 2) return itineraryPoints;
+  }
+
   const routePoints = getOfflinePrepRouteCoordinates(input.route);
   if (routePoints.length >= 2) return routePoints;
 
@@ -900,10 +911,481 @@ function buildManifestProgress(items: OfflinePrepPackItem[]): OfflinePrepPackPro
   };
 }
 
+function pointFromGeoPoint(point: GeoPoint | null | undefined): NormalizedPoint | null {
+  return coordinateFromValue(point);
+}
+
+function pointsFromItineraryRoute(route: ItineraryRoute | null | undefined): NormalizedPoint[] {
+  const points = Array.isArray(route?.geometry)
+    ? route.geometry.map(pointFromGeoPoint).filter((point): point is NormalizedPoint => point != null)
+    : [];
+  if (points.length >= 2) return points;
+  const fallback = [
+    pointFromGeoPoint(route?.segments?.[0]?.startCoordinate ?? null),
+    pointFromGeoPoint(route?.segments?.[route.segments.length - 1]?.endCoordinate ?? null),
+  ].filter((point): point is NormalizedPoint => point != null);
+  return fallback.length >= 2 ? fallback : points;
+}
+
+function combinedItineraryRoutePoints(itinerary: TripItinerary): NormalizedPoint[] {
+  const points = [
+    ...pointsFromItineraryRoute(itinerary.approachRoute),
+    pointFromGeoPoint(itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null),
+    ...pointsFromItineraryRoute(itinerary.trailRoute),
+    pointFromGeoPoint(itinerary.trailEnd?.coordinate ?? null),
+    ...pointsFromItineraryRoute(itinerary.exitRoute),
+    pointFromGeoPoint(itinerary.exitEnd ?? null),
+  ].filter((point): point is NormalizedPoint => point != null);
+
+  return points.filter((point, index) => {
+    const previous = points[index - 1];
+    return !previous || !samePoint(previous, point);
+  });
+}
+
+function flattenPreTrailStops(itinerary: TripItinerary): ItineraryStop[] {
+  const stops = itinerary.preTrailStops;
+  if (!stops) return [];
+  return [
+    ...(stops.fuel ?? []),
+    ...(stops.grocery ?? []),
+    ...(stops.water ?? []),
+    ...(stops.generalSupply ?? []),
+  ];
+}
+
+function uniqueItineraryWaypoints(waypoints: ItineraryWaypoint[]): ItineraryWaypoint[] {
+  const seen = new Set<string>();
+  return waypoints.filter((waypoint) => {
+    if (seen.has(waypoint.id)) return false;
+    seen.add(waypoint.id);
+    return true;
+  });
+}
+
+function itineraryTrailWaypoints(itinerary: TripItinerary): ItineraryWaypoint[] {
+  return uniqueItineraryWaypoints(itinerary.trailWaypoints ?? []);
+}
+
+function itineraryBailoutWaypoints(itinerary: TripItinerary): ItineraryWaypoint[] {
+  const candidates = [
+    ...(itinerary.trailWaypoints ?? []),
+    ...(itinerary.waypoints ?? []),
+  ].filter((waypoint) => waypoint.type === 'bailout' || waypoint.type === 'turnaround');
+  return uniqueItineraryWaypoints(candidates);
+}
+
+function serializeItineraryPoint(point: ItineraryWaypoint | ItineraryStop): Record<string, unknown> {
+  return {
+    id: point.id,
+    type: point.type,
+    phase: point.phase,
+    title: point.title,
+    description: point.description ?? null,
+    coordinate: point.coordinate ?? null,
+    sequence: point.sequence ?? null,
+    routeMileMarker: point.routeMileMarker ?? null,
+    confidence: point.confidence,
+    confidenceScore: point.confidenceScore ?? null,
+    isUserAdded: point.isUserAdded === true,
+    isEcsSuggested: point.isEcsSuggested === true,
+    source: point.source,
+    notes: point.notes ?? [],
+    metadata: point.metadata ?? null,
+  };
+}
+
+function serializeItineraryRoute(route: ItineraryRoute | null | undefined, points: NormalizedPoint[]): Record<string, unknown> | null {
+  if (!route && points.length === 0) return null;
+  return {
+    id: route?.id ?? null,
+    phase: route?.phase ?? null,
+    title: route?.title ?? null,
+    pointCount: points.length,
+    geometry: points,
+    source: route?.source ?? null,
+    confidence: route?.confidence ?? null,
+    distanceMiles: route?.distanceMiles ?? null,
+    estimatedDriveTimeHours: route?.estimatedDriveTimeHours ?? null,
+    unavailableReason: route?.unavailableReason ?? null,
+    metadata: route?.metadata ?? null,
+  };
+}
+
+function snapshotIsAvailable(snapshot: Record<string, unknown> | null | undefined): snapshot is Record<string, unknown> {
+  return !!snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot);
+}
+
+function normalizeEmergencyNotes(
+  notes: OfflinePrepPackFromItineraryInput['emergencyNotes'],
+): Array<string | Record<string, unknown>> {
+  if (Array.isArray(notes)) {
+    return notes.filter((note) => {
+      if (typeof note === 'string') return note.trim().length > 0;
+      return !!note && typeof note === 'object' && !Array.isArray(note);
+    });
+  }
+  if (typeof notes === 'string') return notes.trim().length > 0 ? [notes] : [];
+  if (notes && typeof notes === 'object' && !Array.isArray(notes)) return [notes];
+  return [];
+}
+
+function itineraryItem(input: {
+  type: OfflinePrepPackItemType;
+  label: string;
+  available: boolean;
+  required?: boolean;
+  source: string;
+  readySummary: string;
+  missingSummary: string;
+  count?: number | null;
+  metadata?: Record<string, unknown> | null;
+  missingErrorId?: string;
+}): OfflinePrepPackItem {
+  return item({
+    type: input.type,
+    label: input.label,
+    status: input.available ? 'ready' : 'unavailable',
+    availability: input.available ? 'available' : 'unavailable',
+    required: input.required ?? false,
+    source: input.source,
+    summary: input.available ? input.readySummary : input.missingSummary,
+    count: input.count ?? null,
+    metadata: input.available ? input.metadata ?? null : input.metadata ?? null,
+    error: input.available || !input.required
+      ? null
+      : makeError(
+        input.missingErrorId ?? `${input.type}-missing`,
+        input.type,
+        input.missingSummary,
+      ),
+  });
+}
+
+function snapshotPackItem(input: {
+  type: OfflinePrepPackItemType;
+  label: string;
+  snapshot: Record<string, unknown> | null | undefined;
+  source: string;
+  missingSummary: string;
+}): OfflinePrepPackItem {
+  const available = snapshotIsAvailable(input.snapshot);
+  return item({
+    type: input.type,
+    label: input.label,
+    status: available ? 'ready' : 'unavailable',
+    availability: available ? 'available' : 'unavailable',
+    source: input.source,
+    summary: available ? `${input.label} is available for offline review.` : input.missingSummary,
+    metadata: available ? input.snapshot : null,
+  });
+}
+
+function itineraryMissingWarnings(input: OfflinePrepPackFromItineraryInput): string[] {
+  const { itinerary } = input;
+  const warnings = new Set<string>();
+  const approachPoints = pointsFromItineraryRoute(itinerary.approachRoute);
+  const trailPoints = pointsFromItineraryRoute(itinerary.trailRoute);
+  const exitPoints = pointsFromItineraryRoute(itinerary.exitRoute);
+  const trailheadCoordinate = pointFromGeoPoint(itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null);
+  const trailEndCoordinate = pointFromGeoPoint(itinerary.trailEnd?.coordinate ?? null);
+  const trailWaypoints = itineraryTrailWaypoints(itinerary);
+
+  if (approachPoints.length < 2) warnings.add('Approach route geometry is missing; road guidance cannot be fully cached from this itinerary.');
+  if (!trailheadCoordinate) warnings.add('Trailhead coordinate is unavailable; the transition from approach to trail is not confirmed.');
+  if (trailPoints.length < 2) warnings.add('Trail route geometry is unavailable; ECS will not mark trail navigation as cached.');
+  if (!trailEndCoordinate) warnings.add('Trail end coordinate is unavailable.');
+  if (exitPoints.length < 2 && !itinerary.exitEnd) warnings.add('Exit route is not included in this itinerary.');
+  if (trailWaypoints.length === 0) warnings.add('No trail waypoints are included; ECS did not create camp, scenic, bailout, or hazard points without source data.');
+  if (!snapshotIsAvailable(input.weatherSnapshot)) warnings.add('Weather snapshot is missing from this Offline Prep Pack.');
+  if (!snapshotIsAvailable(input.remotenessSnapshot)) warnings.add('Remoteness snapshot is missing from this Offline Prep Pack.');
+  if (!snapshotIsAvailable(input.sunlightWindow)) warnings.add('Sunlight window is missing from this Offline Prep Pack.');
+  if (!snapshotIsAvailable(input.elevationSnapshot)) warnings.add('Elevation snapshot is missing from this Offline Prep Pack.');
+
+  itinerary.confidence.missingData?.forEach((warning) => warnings.add(warning));
+  itinerary.warnings?.forEach((warning) => warnings.add(warning.message));
+  itinerary.notes?.filter((note) => /missing|unavailable|unknown|incomplete/i.test(note)).forEach((note) => warnings.add(note));
+  return Array.from(warnings);
+}
+
+function itineraryAsRouteInput(itinerary: TripItinerary, points: NormalizedPoint[]): TripBuilderRouteInput {
+  return {
+    id: itinerary.sourceRouteId ?? itinerary.routeId ?? itinerary.suggestedRouteId ?? itinerary.id,
+    name: itinerary.title,
+    title: itinerary.title,
+    routeGeometry: points.length >= 2 ? points : null,
+    routeGeometryStatus: itinerary.routeGeometryStatus,
+    routeMetadata: {
+      source: 'trip_itinerary_offline_prep',
+      itineraryId: itinerary.id,
+      sourceRouteId: itinerary.sourceRouteId ?? null,
+      routeGeometryStatus: itinerary.routeGeometryStatus,
+      approachPointCount: pointsFromItineraryRoute(itinerary.approachRoute).length,
+      trailPointCount: pointsFromItineraryRoute(itinerary.trailRoute).length,
+      exitPointCount: pointsFromItineraryRoute(itinerary.exitRoute).length,
+      trailGeometryIncluded: pointsFromItineraryRoute(itinerary.trailRoute).length >= 2,
+    },
+  };
+}
+
+function buildOfflinePrepPackManifestFromItinerary(
+  input: OfflinePrepPackFromItineraryInput,
+  options: { offlineMapAdapter?: OfflineMapPreparationAdapter | null } = {},
+): OfflinePrepPackManifest {
+  const { itinerary } = input;
+  const generatedAt = input.capturedAt ?? new Date().toISOString();
+  const approachPoints = pointsFromItineraryRoute(itinerary.approachRoute);
+  const trailPoints = pointsFromItineraryRoute(itinerary.trailRoute);
+  const exitPoints = pointsFromItineraryRoute(itinerary.exitRoute);
+  const routePoints = combinedItineraryRoutePoints(itinerary);
+  const bounds = buildOfflinePrepRouteBoundsFromPoints(routePoints);
+  const route = itineraryAsRouteInput(itinerary, routePoints);
+  const routeKey = routeId(route);
+  const adapter = options.offlineMapAdapter ?? defaultOfflineMapAdapter();
+  const offlineMapItem = buildOfflineMapItem({ route, capturedAt: generatedAt }, bounds, routePoints.length, adapter);
+  const trailheadCoordinate = pointFromGeoPoint(itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null);
+  const trailEndCoordinate = pointFromGeoPoint(itinerary.trailEnd?.coordinate ?? null);
+  const preTrailStops = flattenPreTrailStops(itinerary);
+  const trailWaypoints = itineraryTrailWaypoints(itinerary);
+  const bailoutWaypoints = itineraryBailoutWaypoints(itinerary);
+  const emergencyNotes = normalizeEmergencyNotes(input.emergencyNotes);
+  const missingWarnings = itineraryMissingWarnings(input);
+
+  const items: OfflinePrepPackItem[] = [
+    {
+      ...offlineMapItem,
+      summary: routePoints.length >= 2
+        ? 'Offline map preparation can use the available itinerary geometry. Missing phases remain marked separately.'
+        : offlineMapItem.summary,
+      metadata: {
+        ...(offlineMapItem.metadata ?? {}),
+        itineraryId: itinerary.id,
+        routeGeometryStatus: itinerary.routeGeometryStatus,
+        trailGeometryIncluded: trailPoints.length >= 2,
+        routePointCount: routePoints.length,
+      },
+    },
+    itineraryItem({
+      type: 'trip_itinerary',
+      label: 'Trip Itinerary',
+      available: true,
+      required: true,
+      source: 'trip_itinerary',
+      readySummary: 'Completed Trip Builder itinerary is available for offline review.',
+      missingSummary: 'Trip itinerary data unavailable.',
+      count: itinerary.stops.length + itinerary.waypoints.length,
+      metadata: {
+        itineraryId: itinerary.id,
+        sourceRouteId: itinerary.sourceRouteId ?? null,
+        routeGeometryStatus: itinerary.routeGeometryStatus,
+        status: itinerary.status ?? null,
+        confidence: itinerary.confidence,
+        phaseSummaries: itinerary.phaseSummaries ?? [],
+        warnings: itinerary.warnings ?? [],
+      },
+    }),
+    itineraryItem({
+      type: 'approach_route',
+      label: 'Approach Route',
+      available: approachPoints.length >= 2,
+      required: false,
+      source: 'trip_itinerary_approach_route',
+      readySummary: `${approachPoints.length} approach route points are available for offline prep.`,
+      missingSummary: 'Approach route geometry is unavailable. GPS-to-trailhead guidance cannot be cached from this itinerary yet.',
+      count: approachPoints.length,
+      metadata: serializeItineraryRoute(itinerary.approachRoute, approachPoints),
+    }),
+    itineraryItem({
+      type: 'trailhead',
+      label: 'Trailhead Start',
+      available: !!trailheadCoordinate,
+      required: true,
+      source: 'trip_itinerary_trailhead',
+      readySummary: itinerary.trailheadStartCandidate?.isConfirmedTrailhead
+        ? 'Confirmed trailhead coordinate is available.'
+        : 'Trailhead candidate coordinate is available with confidence metadata.',
+      missingSummary: 'Trailhead coordinate is unavailable.',
+      count: trailheadCoordinate ? 1 : 0,
+      metadata: {
+        waypoint: itinerary.trailheadStart ? serializeItineraryPoint(itinerary.trailheadStart) : null,
+        candidate: itinerary.trailheadStartCandidate ?? null,
+      },
+    }),
+    itineraryItem({
+      type: 'trail_route',
+      label: 'Trail Route Geometry',
+      available: trailPoints.length >= 2,
+      required: true,
+      source: 'trip_itinerary_trail_route',
+      readySummary: `${trailPoints.length} trail route points are available for offline prep.`,
+      missingSummary: itinerary.trailRoute?.unavailableReason ?? 'Trail route geometry is unavailable and is not marked as cached.',
+      count: trailPoints.length,
+      metadata: {
+        routeGeometryStatus: itinerary.routeGeometryStatus,
+        route: serializeItineraryRoute(itinerary.trailRoute, trailPoints),
+      },
+      missingErrorId: 'itinerary-trail-route-missing',
+    }),
+    itineraryItem({
+      type: 'trail_waypoints',
+      label: 'Trail Waypoints',
+      available: trailWaypoints.length > 0,
+      source: 'trip_itinerary_trail_waypoints',
+      readySummary: `${trailWaypoints.length} sourced trail waypoint${trailWaypoints.length === 1 ? '' : 's'} can be saved.`,
+      missingSummary: 'No sourced trail waypoints are available. ECS did not invent camp, scenic, bailout, or hazard points.',
+      count: trailWaypoints.length,
+      metadata: { waypoints: trailWaypoints.map(serializeItineraryPoint) },
+    }),
+    itineraryItem({
+      type: 'bailout_points',
+      label: 'Bailout Points',
+      available: bailoutWaypoints.length > 0,
+      source: 'trip_itinerary_bailout_waypoints',
+      readySummary: `${bailoutWaypoints.length} bailout/turnaround candidate${bailoutWaypoints.length === 1 ? '' : 's'} can be saved with confidence metadata.`,
+      missingSummary: 'No sourced bailout or turnaround waypoints are available.',
+      count: bailoutWaypoints.length,
+      metadata: { waypoints: bailoutWaypoints.map(serializeItineraryPoint) },
+    }),
+    itineraryItem({
+      type: 'pre_trail_stops',
+      label: 'Pre-Trail Stops',
+      available: preTrailStops.length > 0,
+      source: 'trip_itinerary_pre_trail_stops',
+      readySummary: `${preTrailStops.length} pre-trail stop${preTrailStops.length === 1 ? '' : 's'} can be saved.`,
+      missingSummary: 'No pre-trail fuel, grocery, water, or supply stops are included yet; provider and search status remain preserved in metadata.',
+      count: preTrailStops.length,
+      metadata: {
+        stopBuckets: itinerary.preTrailStops ?? null,
+        stopStatus: itinerary.preTrailStopStatus ?? [],
+        stops: preTrailStops.map(serializeItineraryPoint),
+      },
+    }),
+    itineraryItem({
+      type: 'trail_end',
+      label: 'Trail End',
+      available: !!trailEndCoordinate,
+      required: false,
+      source: 'trip_itinerary_trail_end',
+      readySummary: 'Trail end coordinate is available.',
+      missingSummary: 'Trail end coordinate is unavailable.',
+      count: trailEndCoordinate ? 1 : 0,
+      metadata: itinerary.trailEnd ? serializeItineraryPoint(itinerary.trailEnd) : null,
+    }),
+    itineraryItem({
+      type: 'exit_route',
+      label: 'Exit Route',
+      available: exitPoints.length >= 2 || !!itinerary.exitEnd,
+      required: false,
+      source: 'trip_itinerary_exit_route',
+      readySummary: exitPoints.length >= 2
+        ? `${exitPoints.length} exit route points are available.`
+        : 'Exit endpoint is available, but full exit route geometry is not included.',
+      missingSummary: 'Exit route is not set for this itinerary.',
+      count: exitPoints.length,
+      metadata: {
+        route: serializeItineraryRoute(itinerary.exitRoute, exitPoints),
+        exitEnd: itinerary.exitEnd ?? null,
+      },
+    }),
+    snapshotPackItem({
+      type: 'weather_snapshot',
+      label: 'Weather Snapshot',
+      snapshot: input.weatherSnapshot,
+      source: 'weather_snapshot',
+      missingSummary: 'Weather snapshot is unavailable for this pack.',
+    }),
+    snapshotPackItem({
+      type: 'remoteness_snapshot',
+      label: 'Remoteness Snapshot',
+      snapshot: input.remotenessSnapshot,
+      source: 'remoteness_snapshot',
+      missingSummary: 'Remoteness snapshot is unavailable for this pack.',
+    }),
+    snapshotPackItem({
+      type: 'sunlight_window',
+      label: 'Sunlight Window',
+      snapshot: input.sunlightWindow,
+      source: 'sunlight_window',
+      missingSummary: 'Sunlight window is unavailable for this pack.',
+    }),
+    snapshotPackItem({
+      type: 'elevation_snapshot',
+      label: 'Elevation Snapshot',
+      snapshot: input.elevationSnapshot,
+      source: 'elevation_snapshot',
+      missingSummary: 'Elevation snapshot is unavailable for this pack.',
+    }),
+    item({
+      type: 'emergency_notes',
+      label: 'Emergency Notes',
+      status: emergencyNotes.length > 0 ? 'ready' : 'unavailable',
+      availability: emergencyNotes.length > 0 ? 'available' : 'not_set',
+      source: 'operator_emergency_notes',
+      summary: emergencyNotes.length > 0
+        ? `${emergencyNotes.length} emergency note${emergencyNotes.length === 1 ? '' : 's'} can be saved.`
+        : 'No emergency notes were provided for this pack.',
+      count: emergencyNotes.length,
+      metadata: emergencyNotes.length > 0 ? { notes: emergencyNotes } : null,
+    }),
+    item({
+      type: 'missing_data_warnings',
+      label: 'Missing Data Warnings',
+      status: 'ready',
+      availability: missingWarnings.length > 0 ? 'available' : 'not_set',
+      source: 'trip_itinerary_confidence',
+      summary: missingWarnings.length > 0
+        ? `${missingWarnings.length} missing-data warning${missingWarnings.length === 1 ? '' : 's'} preserved for offline review.`
+        : 'No missing-data warnings were detected for this itinerary pack.',
+      count: missingWarnings.length,
+      metadata: { warnings: missingWarnings },
+    }),
+    buildGpxItem({ route, capturedAt: generatedAt }, routePoints),
+  ];
+
+  const errors = items.map((entry) => entry.error).filter((error): error is OfflinePrepPackError => !!error);
+  const progress = buildManifestProgress(items);
+  return {
+    id: `offline-prep-${slug(routeKey)}`,
+    generatedAt,
+    routeId: routeKey,
+    routeName: itinerary.title,
+    routeBounds: bounds,
+    items,
+    progress,
+    errors,
+  };
+}
+
+export function generateOfflinePrepPackFromItinerary(
+  input: OfflinePrepPackFromItineraryInput,
+  options: { offlineMapAdapter?: OfflineMapPreparationAdapter | null } = {},
+): OfflinePrepPack {
+  const manifest = buildOfflinePrepPackManifestFromItinerary(input, options);
+  return {
+    id: manifest.id,
+    status: manifest.progress.status,
+    manifest,
+    createdAt: manifest.generatedAt,
+    updatedAt: manifest.generatedAt,
+  };
+}
+
 export function buildOfflinePrepPackManifest(
   input: OfflinePrepPackInput,
   options: { offlineMapAdapter?: OfflineMapPreparationAdapter | null } = {},
 ): OfflinePrepPackManifest {
+  if (input.itinerary) {
+    return buildOfflinePrepPackManifestFromItinerary({
+      itinerary: input.itinerary,
+      weatherSnapshot: input.weatherSnapshot ?? null,
+      remotenessSnapshot: input.remotenessSnapshot ?? null,
+      sunlightWindow: input.sunlightWindow ?? null,
+      elevationSnapshot: input.elevationSnapshot ?? null,
+      emergencyNotes: input.emergencyNotes ?? null,
+      capturedAt: input.capturedAt,
+    }, options);
+  }
+
   const generatedAt = input.capturedAt ?? new Date().toISOString();
   const points = getOfflinePrepPackRouteCoordinates(input);
   const bounds = buildOfflinePrepRouteBoundsFromPoints(points);

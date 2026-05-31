@@ -252,7 +252,7 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
         powerBrandAdapters.includes('parserAction: parserDecision.action') &&
         powerBrandAdapters.includes('supportsLiveTelemetry: parserDecision.canDecodeLiveTelemetry') &&
         powerBrandAdapters.includes('if (!parserDecision.canDecodeLiveTelemetry) return null;') &&
-        powerBrandAdapters.includes("parserDecision.action !== 'use_ecoflow_cloud'") &&
+        powerBrandAdapters.includes("source === 'cloud' || source === 'api' || source === 'ecoflow_cloud'") &&
         powerBrandAdapters.includes('parserId: parserDecision.parserId') &&
         powerBrandAdapters.includes('parserStatus: parserDecision.status'),
       [relPath(root, paths.powerBrandAdapters)],
@@ -290,7 +290,8 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
         bluestackProviderReadiness.includes('Parser-pending rows should be visible as recognized hardware') &&
         bluestackProviderReadiness.includes('lib/bluestack/bluestackTelemetryParserRegistry.ts') &&
         bluestackParserRegistry.includes('block_pending_parser') &&
-        bluestackParserRegistry.includes("decisionAction: 'use_ecoflow_cloud'") &&
+        bluestackParserRegistry.includes("parserId: 'ecoflow_native_ble_v1'") &&
+        bluestackParserRegistry.includes("decisionAction: 'use_native_power_adapter'") &&
         bluestackParserRegistry.includes("decisionAction: 'use_obd2_vehicle_adapter'") &&
         bluestackParserRegistry.includes("decisionAction: 'link_utility_profile'"),
       [relPath(root, paths.bluestackProviderReadiness), relPath(root, paths.bluestackParserRegistry)],

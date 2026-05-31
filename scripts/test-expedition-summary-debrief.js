@@ -19,9 +19,13 @@ assert.ok(summaryCard.includes('onOpenSummary'));
 assert.ok(summaryCard.includes('Ready to generate PDF'));
 assert.ok(!summaryCard.includes("onOpenPlaceholder('Expedition Summary')"));
 
-assert.ok(expeditionTab.includes("import ExpeditionDebriefModal from './ExpeditionDebriefModal'"));
-assert.ok(expeditionTab.includes('const [summaryVisible, setSummaryVisible] = useState(false)'));
-assert.ok(expeditionTab.includes('completedRecord={completedExpeditionRecord}'));
+assert.ok(expeditionTab.includes('Expedition Hub'));
+assert.ok(expeditionTab.includes('getCompletedTrips'));
+assert.ok(expeditionTab.includes('getTripById'));
+assert.ok(!expeditionTab.includes("import ExpeditionDebriefModal from './ExpeditionDebriefModal'"));
+assert.ok(!expeditionTab.includes('const [summaryVisible, setSummaryVisible] = useState(false)'));
+assert.ok(!expeditionTab.includes('completedRecord={completedExpeditionRecord}'));
+assert.ok(!expeditionTab.includes('Export PDF'));
 
 assert.ok(debriefModal.includes('exportExpeditionDebriefPdf'));
 assert.ok(debriefModal.includes('Export PDF'));

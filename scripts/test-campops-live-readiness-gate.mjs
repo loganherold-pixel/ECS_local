@@ -73,6 +73,8 @@ function writeSourceFixtures(root) {
     "root.className = 'camp-scout-marker camp-scout-grade-' + grade;",
     "tent.className = 'camp-scout-tent';",
     "rank.className = 'camp-scout-rank';",
+    "'circle-radius': 0,",
+    "'circle-opacity': 0,",
   ].join('\n'));
 
   writeFile(root, 'lib/campops/campOpsMapPins.ts', [

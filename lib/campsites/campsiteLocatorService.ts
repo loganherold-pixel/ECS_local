@@ -25,6 +25,7 @@ import {
   type CampsiteRating,
   type CampsiteRatingFactor,
 } from './campsiteRatingTypes';
+import { hasCampStructurePrivacyBufferConflict } from './campStructurePrivacyBuffer';
 import { ecsLog } from '../ecsLogger';
 
 export { MAX_CAMPSITE_MARKERS };
@@ -104,6 +105,23 @@ export interface CampsiteCandidate {
   isPrivateLand?: boolean | null;
   isWaterBody?: boolean | null;
   nearBuildings?: boolean | null;
+  nearStructure?: boolean | null;
+  nearResidentialStructure?: boolean | null;
+  nearestBuildingMiles?: number | null;
+  nearestBuildingDistanceMiles?: number | null;
+  buildingDistanceMiles?: number | null;
+  distanceToBuildingMiles?: number | null;
+  distanceFromBuildingMiles?: number | null;
+  nearestStructureMiles?: number | null;
+  nearestStructureDistanceMiles?: number | null;
+  structureDistanceMiles?: number | null;
+  distanceToStructureMiles?: number | null;
+  distanceFromStructureMiles?: number | null;
+  nearestResidentialStructureMiles?: number | null;
+  nearestResidentialStructureDistanceMiles?: number | null;
+  residentialStructureDistanceMiles?: number | null;
+  distanceToResidentialStructureMiles?: number | null;
+  distanceFromResidentialStructureMiles?: number | null;
   nearHighway?: boolean | null;
   accessNotes?: string | null;
   explanation?: string | null;
@@ -489,17 +507,8 @@ function isKnownWaterBody(candidate: unknown): boolean {
 
 function isNearBuildingOrDevelopment(candidate: unknown): boolean {
   if (!candidate || typeof candidate !== 'object') return false;
+  if (hasCampStructurePrivacyBufferConflict(candidate)) return true;
   const record = candidate as Record<string, unknown>;
-  if (record.nearBuildings === true || record.nearBuilding === true || record.buildingProximity === true) {
-    return true;
-  }
-  const buildingDistance = readFiniteNumber(record, [
-    'nearestBuildingMiles',
-    'buildingDistanceMiles',
-    'distanceToBuildingMiles',
-    'distanceFromBuildingMiles',
-  ]);
-  if (buildingDistance != null && buildingDistance <= 0.1) return true;
   const text = readSafetyContextText(candidate);
   return /\b(building|structure|residential|subdivision|industrial|developed lot|parking lot)\b/.test(text);
 }
@@ -739,6 +748,22 @@ function enrichCampsiteCandidateForRating<T>(candidate: T): T {
     nearestRoadwayMiles: readFiniteNumber(record, ['nearestRoadwayMiles', 'roadwayDistanceMiles']) ?? undefined,
     nearestMajorRoadMiles: readFiniteNumber(record, ['nearestMajorRoadMiles', 'majorRoadDistanceMiles']) ?? undefined,
     nearestPavedRoadMiles: readFiniteNumber(record, ['nearestPavedRoadMiles', 'nearestPavedRoadDistanceMiles']) ?? undefined,
+    nearestBuildingMiles: readFiniteNumber(record, ['nearestBuildingMiles']) ?? undefined,
+    nearestBuildingDistanceMiles: readFiniteNumber(record, ['nearestBuildingDistanceMiles']) ?? undefined,
+    buildingDistanceMiles: readFiniteNumber(record, ['buildingDistanceMiles']) ?? undefined,
+    distanceToBuildingMiles: readFiniteNumber(record, ['distanceToBuildingMiles']) ?? undefined,
+    distanceFromBuildingMiles: readFiniteNumber(record, ['distanceFromBuildingMiles']) ?? undefined,
+    nearestStructureMiles: readFiniteNumber(record, ['nearestStructureMiles']) ?? undefined,
+    nearestStructureDistanceMiles: readFiniteNumber(record, ['nearestStructureDistanceMiles']) ?? undefined,
+    structureDistanceMiles: readFiniteNumber(record, ['structureDistanceMiles']) ?? undefined,
+    distanceToStructureMiles: readFiniteNumber(record, ['distanceToStructureMiles']) ?? undefined,
+    distanceFromStructureMiles: readFiniteNumber(record, ['distanceFromStructureMiles']) ?? undefined,
+    nearestResidentialStructureMiles: readFiniteNumber(record, ['nearestResidentialStructureMiles']) ?? undefined,
+    nearestResidentialStructureDistanceMiles:
+      readFiniteNumber(record, ['nearestResidentialStructureDistanceMiles']) ?? undefined,
+    residentialStructureDistanceMiles: readFiniteNumber(record, ['residentialStructureDistanceMiles']) ?? undefined,
+    distanceToResidentialStructureMiles: readFiniteNumber(record, ['distanceToResidentialStructureMiles']) ?? undefined,
+    distanceFromResidentialStructureMiles: readFiniteNumber(record, ['distanceFromResidentialStructureMiles']) ?? undefined,
     accessType: typeof record.accessType === 'string' ? record.accessType : undefined,
     roadClass: typeof record.roadClass === 'string' ? record.roadClass : undefined,
     ratingFactors: buildRatingFactorsForCandidate(record),
@@ -1182,6 +1207,26 @@ function toPublicCandidate(candidate: unknown, index: number): CampsiteCandidate
     isPrivateLand: isKnownPrivateLand(candidate),
     isWaterBody: isKnownWaterBody(candidate),
     nearBuildings: isNearBuildingOrDevelopment(candidate),
+    nearStructure: record.nearStructure === true || record.nearStructures === true ? true : null,
+    nearResidentialStructure:
+      record.nearResidentialStructure === true || record.nearResidential === true || record.nearResidence === true
+        ? true
+        : null,
+    nearestBuildingMiles: readFiniteNumber(record, ['nearestBuildingMiles']),
+    nearestBuildingDistanceMiles: readFiniteNumber(record, ['nearestBuildingDistanceMiles']),
+    buildingDistanceMiles: readFiniteNumber(record, ['buildingDistanceMiles']),
+    distanceToBuildingMiles: readFiniteNumber(record, ['distanceToBuildingMiles']),
+    distanceFromBuildingMiles: readFiniteNumber(record, ['distanceFromBuildingMiles']),
+    nearestStructureMiles: readFiniteNumber(record, ['nearestStructureMiles']),
+    nearestStructureDistanceMiles: readFiniteNumber(record, ['nearestStructureDistanceMiles']),
+    structureDistanceMiles: readFiniteNumber(record, ['structureDistanceMiles']),
+    distanceToStructureMiles: readFiniteNumber(record, ['distanceToStructureMiles']),
+    distanceFromStructureMiles: readFiniteNumber(record, ['distanceFromStructureMiles']),
+    nearestResidentialStructureMiles: readFiniteNumber(record, ['nearestResidentialStructureMiles']),
+    nearestResidentialStructureDistanceMiles: readFiniteNumber(record, ['nearestResidentialStructureDistanceMiles']),
+    residentialStructureDistanceMiles: readFiniteNumber(record, ['residentialStructureDistanceMiles']),
+    distanceToResidentialStructureMiles: readFiniteNumber(record, ['distanceToResidentialStructureMiles']),
+    distanceFromResidentialStructureMiles: readFiniteNumber(record, ['distanceFromResidentialStructureMiles']),
     nearHighway: isKnownHighwayProximity(candidate),
     accessNotes: typeof record.accessNotes === 'string' ? record.accessNotes : null,
     explanation:

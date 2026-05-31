@@ -291,6 +291,23 @@ function normalizeCandidate(
     isPrivateLand: input.isPrivateLand,
     isWaterBody: input.isWaterBody,
     nearBuildings: input.nearBuildings,
+    nearStructure: input.nearStructure,
+    nearResidentialStructure: input.nearResidentialStructure,
+    nearestBuildingMiles: input.nearestBuildingMiles,
+    nearestBuildingDistanceMiles: input.nearestBuildingDistanceMiles,
+    buildingDistanceMiles: input.buildingDistanceMiles,
+    distanceToBuildingMiles: input.distanceToBuildingMiles,
+    distanceFromBuildingMiles: input.distanceFromBuildingMiles,
+    nearestStructureMiles: input.nearestStructureMiles,
+    nearestStructureDistanceMiles: input.nearestStructureDistanceMiles,
+    structureDistanceMiles: input.structureDistanceMiles,
+    distanceToStructureMiles: input.distanceToStructureMiles,
+    distanceFromStructureMiles: input.distanceFromStructureMiles,
+    nearestResidentialStructureMiles: input.nearestResidentialStructureMiles,
+    nearestResidentialStructureDistanceMiles: input.nearestResidentialStructureDistanceMiles,
+    residentialStructureDistanceMiles: input.residentialStructureDistanceMiles,
+    distanceToResidentialStructureMiles: input.distanceToResidentialStructureMiles,
+    distanceFromResidentialStructureMiles: input.distanceFromResidentialStructureMiles,
     nearHighway: input.nearHighway,
     isProtectedArea: input.isProtectedArea,
     isClosed: input.isClosed,
@@ -329,6 +346,15 @@ function mergeSourceNotes(
     ...(left.sourceNotes ?? []),
     ...(right.sourceNotes ?? []),
   ].filter((note, index, notes) => notes.indexOf(note) === index);
+}
+
+function minimumFinite(
+  ...values: Array<number | undefined>
+): number | undefined {
+  const finite = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return finite.length > 0 ? Math.min(...finite) : undefined;
 }
 
 function mergeNearbyCandidates(
@@ -378,6 +404,70 @@ function mergeNearbyCandidates(
     seasonalRiskPossible:
       preferred.seasonalRiskPossible || secondary.seasonalRiskPossible,
     offlineEstimate: preferred.offlineEstimate || secondary.offlineEstimate,
+    nearBuildings: preferred.nearBuildings || secondary.nearBuildings,
+    nearStructure: preferred.nearStructure || secondary.nearStructure,
+    nearResidentialStructure:
+      preferred.nearResidentialStructure || secondary.nearResidentialStructure,
+    nearestBuildingMiles: minimumFinite(
+      preferred.nearestBuildingMiles,
+      secondary.nearestBuildingMiles,
+    ),
+    nearestBuildingDistanceMiles: minimumFinite(
+      preferred.nearestBuildingDistanceMiles,
+      secondary.nearestBuildingDistanceMiles,
+    ),
+    buildingDistanceMiles: minimumFinite(
+      preferred.buildingDistanceMiles,
+      secondary.buildingDistanceMiles,
+    ),
+    distanceToBuildingMiles: minimumFinite(
+      preferred.distanceToBuildingMiles,
+      secondary.distanceToBuildingMiles,
+    ),
+    distanceFromBuildingMiles: minimumFinite(
+      preferred.distanceFromBuildingMiles,
+      secondary.distanceFromBuildingMiles,
+    ),
+    nearestStructureMiles: minimumFinite(
+      preferred.nearestStructureMiles,
+      secondary.nearestStructureMiles,
+    ),
+    nearestStructureDistanceMiles: minimumFinite(
+      preferred.nearestStructureDistanceMiles,
+      secondary.nearestStructureDistanceMiles,
+    ),
+    structureDistanceMiles: minimumFinite(
+      preferred.structureDistanceMiles,
+      secondary.structureDistanceMiles,
+    ),
+    distanceToStructureMiles: minimumFinite(
+      preferred.distanceToStructureMiles,
+      secondary.distanceToStructureMiles,
+    ),
+    distanceFromStructureMiles: minimumFinite(
+      preferred.distanceFromStructureMiles,
+      secondary.distanceFromStructureMiles,
+    ),
+    nearestResidentialStructureMiles: minimumFinite(
+      preferred.nearestResidentialStructureMiles,
+      secondary.nearestResidentialStructureMiles,
+    ),
+    nearestResidentialStructureDistanceMiles: minimumFinite(
+      preferred.nearestResidentialStructureDistanceMiles,
+      secondary.nearestResidentialStructureDistanceMiles,
+    ),
+    residentialStructureDistanceMiles: minimumFinite(
+      preferred.residentialStructureDistanceMiles,
+      secondary.residentialStructureDistanceMiles,
+    ),
+    distanceToResidentialStructureMiles: minimumFinite(
+      preferred.distanceToResidentialStructureMiles,
+      secondary.distanceToResidentialStructureMiles,
+    ),
+    distanceFromResidentialStructureMiles: minimumFinite(
+      preferred.distanceFromResidentialStructureMiles,
+      secondary.distanceFromResidentialStructureMiles,
+    ),
     mapDataCompleteness: Math.max(
       preferred.mapDataCompleteness ?? 0,
       secondary.mapDataCompleteness ?? 0,

@@ -30,8 +30,14 @@ assertIncludes(screen, 'loadOfflinePrepPackHandoff', 'Offline Prep handoff load'
 assertIncludes(screen, 'loadExplorePlanningRouteContext', 'Offline Prep should consume active Explorer filter route context.');
 assertIncludes(screen, 'loadOpportunitiesWithCompatibility(null)', 'Offline Prep route selection');
 assertIncludes(screen, 'testID="offline-prep-empty-state"', 'Offline Prep empty state');
-assert(!screen.includes('testID="offline-prep-selected-route"'), 'Offline Prep Pack should not render a redundant Selected Route container after route personalization.');
-assert(!screen.includes('routeListScroller'), 'Offline Prep Pack should not render the route selector once the prep-pack stage is reached.');
+assertIncludes(screen, 'testID="offline-prep-route-list"', 'Offline Prep should let operators return to the available route list.');
+assertIncludes(screen, 'testID="offline-prep-back-to-route-list"', 'Offline Prep selected route view should expose a top-right back control.');
+assertIncludes(screen, 'handleReturnToOfflinePrepRouteList', 'Offline Prep back control should clear the selected manifest view instead of leaving the screen.');
+assertIncludes(screen, 'testID="offline-prep-import-route-file"', 'Offline Prep route list should put route-file import above suggested trailheads.');
+assertIncludes(screen, "import * as DocumentPicker from 'expo-document-picker';", 'Offline Prep route import should keep the file picker in the main bundle.');
+assertIncludes(screen, 'handleOfflinePrepImportRouteFile', 'Offline Prep should wire the route file picker directly from the route list.');
+assertIncludes(screen, 'parseGeoFile', 'Offline Prep should parse imported GPX/KML route files.');
+assertIncludes(screen, 'fsReadFileFromPickerUri', 'Offline Prep should read the selected route file from the picker URI.');
 assertIncludes(screen, 'buildOfflinePrepPackManifest(selectedInput)', 'Offline Prep manifest generation');
 assertIncludes(screen, 'fetchSharedWeatherForCoordinates(weatherCoordinates', 'Offline Prep should hydrate route weather snapshots.');
 assertIncludes(screen, 'buildOfflinePrepWeatherSnapshot', 'Offline Prep should normalize route weather snapshots before marking weather ready.');
@@ -83,12 +89,17 @@ assertIncludes(service, 'Campsites and Emergency Points', 'Offline Prep manifest
 assertIncludes(service, 'Camp candidates and optional emergency points. Either can be saved with the pack or have not been set for this pack.', 'Offline Prep merged campsite/emergency copy.');
 assert(!service.includes("source: 'emergency_support_points'"), 'Emergency support points should not remain an independent Offline Prep manifest source.');
 assertIncludes(service, 'Trip sheet manifest is available from the generated Trip Builder plan and Offline Prep manifest.', 'Trip sheet item should be wired to the Offline Prep manifest.');
+assertIncludes(service, 'generateOfflinePrepPackFromItinerary', 'Offline Prep should expose an itinerary-based pack generator.');
+assertIncludes(service, "type: 'trail_route'", 'Offline Prep itinerary generator should preserve trail route availability separately.');
+assertIncludes(service, 'trailGeometryIncluded: trailPoints.length >= 2', 'Offline Prep itinerary generator should not mark missing trail geometry as cached.');
+assertIncludes(service, "type: 'missing_data_warnings'", 'Offline Prep itinerary generator should preserve missing-data warnings.');
 
 assertIncludes(handoff, 'saveOfflinePrepPackHandoff', 'Offline Prep handoff save');
 assertIncludes(handoff, 'loadOfflinePrepPackHandoff', 'Offline Prep handoff load');
 assertIncludes(handoff, 'clearOfflinePrepPackHandoff', 'Offline Prep handoff clear');
 
 assertIncludes(tripBuilder, 'saveOfflinePrepPackHandoff({', 'Trip Builder Offline Prep CTA handoff');
+assertIncludes(tripBuilder, 'itinerary: itineraryForOfflinePrep', 'Trip Builder Offline Prep CTA should hand off the completed TripItinerary.');
 assertIncludes(tripBuilder, "}, 'trip_builder')", 'Trip Builder Offline Prep CTA source');
 assertIncludes(tripBuilder, "router.push('/explore-offline-prep-pack')", 'Trip Builder Offline Prep navigation');
 assertIncludes(tripBuilder, 'testID="trip-builder-prepare-offline-pack"', 'Trip Builder Offline Prep CTA');
@@ -102,6 +113,8 @@ assertIncludes(discover, "}, 'route_details')", 'Selected route Offline Prep han
 assertIncludes(discover, "pathname: '/explore-offline-prep-pack'", 'Selected route Offline Prep navigation');
 assertIncludes(discover, 'testID="selected-route-prepare-offline-pack"', 'Selected route Offline Prep action');
 assertIncludes(discover, 'clearOfflinePrepPackHandoff();', 'Explore top-level Offline Prep reset');
+assertIncludes(discover, 'testID="explore-offline-prep-import-route-file"', 'Explore Offline Prep list should include a top route-file import option.');
+assertIncludes(discover, "params: { action: 'import' }", 'Explore Offline Prep import option should open the Offline Prep importer.');
 
 assert(!screen.includes('community'), 'Offline Prep Pack UI must not add community content.');
 assert(!screen.includes('No fake download success'), 'Offline Prep Pack UI should use field-facing copy instead of implementation jargon.');

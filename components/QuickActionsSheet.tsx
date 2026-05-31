@@ -24,6 +24,7 @@ import DocumentPreviewModal from './intel/DocumentPreviewModal';
 import DocumentationCenter from './intel/DocumentationCenter';
 import PermitsAccessPanel from './intel/PermitsAccessPanel';
 import TripSummaries from './intel/TripSummaries';
+import IncidentRecoveryPanel from './dashboard/IncidentRecoveryPanel';
 import { useApp } from '../context/AppContext';
 import { calculateRisk, getPackingStats, getRiskColor } from '../lib/calculations';
 import { getBuilderState, getCachedExpeditions } from '../lib/expeditionCache';
@@ -36,6 +37,7 @@ import type { EcsExpedition } from '../lib/expeditionTypes';
 import { hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
+import type { IncidentCoordinate } from '../lib/types/incidentRecovery';
 import {
   ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
   getShellBottomClearance,
@@ -217,6 +219,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   const {
     showToast,
     activeTrip,
+    isOnline,
     user,
     loadItems,
     riskScore,
@@ -253,6 +256,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   const fieldUtilitiesTopClearance = getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
   const fieldUtilitiesBottomClearance = getShellBottomClearance(insets.bottom, 2);
   const activeView = fieldUtilitiesState.activeView;
+  const mainPanelActive = activeView === 'menu';
   const protocolDetailActive = activeView === 'protocolDetail';
   const recoveryProtocolDetailActive = activeView === 'recoveryProtocolDetail';
   const protocolStaticActive =
@@ -261,7 +265,12 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     activeView === 'recoveryProtocols' ||
     recoveryProtocolDetailActive;
   const commsStaticActive = activeView === 'emergencyComms';
-  const fixedStaticActive = protocolStaticActive || commsStaticActive;
+  const mainPanelStaticActive = mainPanelActive;
+  const fixedStaticActive = mainPanelStaticActive || protocolStaticActive || commsStaticActive;
+  const gpsBackedUtilityActive =
+    activeView === 'menu' ||
+    activeView === 'emergencyComms' ||
+    activeView === 'intel';
   const protocolCompactMode = viewportHeight < 760;
   const frequencyCards = useMemo(
     () => mergeCommsDefaultsWithOverrides('freq', DEFAULT_FREQUENCIES, dispatchComms.frequencies),
@@ -284,7 +293,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     ),
     [activeTrip?.emergency_contact, dispatchComms.contacts],
   );
-  const mainPanelActive = activeView === 'menu';
   const intelWeatherGps = useMemo(
     () => ({
       lat: gpsCoords?.lat ?? null,
@@ -317,6 +325,27 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
     return { totalActive: 0, packedActive: 0, pct: 0 };
   }, [activeTrip, loadItems]);
+  const incidentRecoveryExpeditionId = useMemo(
+    () => String((activeTrip as any)?.id ?? '').trim() || undefined,
+    [activeTrip],
+  );
+  const incidentRecoveryRouteLabel = useMemo(
+    () => String((activeTrip as any)?.name ?? (activeTrip as any)?.title ?? activeRoute?.name ?? '').trim() || undefined,
+    [activeRoute?.name, activeTrip],
+  );
+  const incidentRecoveryGpsLocation = useMemo<IncidentCoordinate | null>(
+    () => (
+      gpsCoords
+        ? {
+            latitude: gpsCoords.lat,
+            longitude: gpsCoords.lng,
+            source: 'gps',
+            capturedAt: new Date().toISOString(),
+          }
+        : null
+    ),
+    [gpsCoords],
+  );
 
   const refreshSavedNotes = useCallback(() => {
     const notes = missionNoteStore.getByExpeditionId(missionId);
@@ -453,7 +482,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || (activeView !== 'emergencyComms' && activeView !== 'intel')) return;
+    if (!visible || !gpsBackedUtilityActive) return;
     let cancelled = false;
 
     (async () => {
@@ -468,7 +497,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     return () => {
       cancelled = true;
     };
-  }, [activeView, visible]);
+  }, [gpsBackedUtilityActive, visible]);
 
   const handleSaveNote = useCallback(async () => {
     if (!noteText.trim()) return;
@@ -665,16 +694,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: 'AVAILABLE',
     },
     {
-      key: 'team',
-      label: 'Team Ping',
-      subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
-      icon: 'people-outline',
-      color: '#42A5F5',
-      onPress: () => openFieldUtilityAction('team'),
-      disabled: !hasTeam,
-      availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
-    },
-    {
       key: 'recovery-protocol',
       label: 'Recovery Protocol',
       subtitle: 'Vehicle recovery procedures for field extraction.',
@@ -685,14 +704,14 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: 'AVAILABLE',
     },
     {
-      key: 'protocols',
-      label: 'Emergency Protocol',
-      subtitle: 'Field stabilization steps',
-      icon: 'medkit-outline',
-      color: TACTICAL.danger,
-      onPress: () => openFieldUtilityAction('protocols'),
-      disabled: false,
-      availabilityLabel: 'AVAILABLE',
+      key: 'team',
+      label: 'Team Ping',
+      subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
+      icon: 'people-outline',
+      color: '#42A5F5',
+      onPress: () => openFieldUtilityAction('team'),
+      disabled: !hasTeam,
+      availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
     },
     {
       key: 'permits-access',
@@ -714,6 +733,16 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
+    {
+      key: 'protocols',
+      label: 'Emergency Protocol',
+      subtitle: 'Field stabilization steps',
+      icon: 'medkit-outline',
+      color: TACTICAL.danger,
+      onPress: () => openFieldUtilityAction('protocols'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
   ] as const;
 
   const documentationTile: QuickActionTile = {
@@ -732,7 +761,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       <View style={styles.summaryCard}>
         <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
         <Text style={styles.summaryTitle}>Operational shortcuts</Text>
-        <Text style={styles.summaryText}>
+        <Text style={styles.summaryText} numberOfLines={2}>
           {expeditionState === 'active' || expeditionState === 'paused'
             ? 'Fast field controls stay aligned with the current ECS session context.'
             : 'Fast field controls stay available even when no route is active.'}
@@ -747,6 +776,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             key={item.key}
             style={[
               styles.tile,
+              styles.quickActionTile,
               item.key === 'protocols' && styles.emergencyProtocolTile,
               item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
               item.disabled && styles.tileDisabled,
@@ -758,10 +788,10 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
               <Ionicons name={item.icon as any} size={20} color={item.disabled ? ECS.muted : item.color} />
             </View>
-            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]}>
+            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]} numberOfLines={2}>
               {item.label}
             </Text>
-            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]}>
+            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={2}>
               {item.subtitle}
             </Text>
             <View style={[styles.tileStateBadge, item.disabled && styles.tileStateBadgeDisabled]}>
@@ -771,6 +801,18 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             </View>
           </TouchableOpacity>
         ))}
+      </View>
+      <View style={styles.incidentRecoveryUtilitySlot}>
+        <IncidentRecoveryPanel
+          compact
+          modalStackBehavior="allow-stack"
+          style={styles.incidentRecoveryUtilityPanel}
+          onOpenPlaceholder={() => undefined}
+          expeditionId={incidentRecoveryExpeditionId}
+          routeLabel={incidentRecoveryRouteLabel}
+          ecsOnline={isOnline}
+          gpsLocation={incidentRecoveryGpsLocation}
+        />
       </View>
       <TouchableOpacity
         key={documentationTile.key}
@@ -783,8 +825,8 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
           <Ionicons name={documentationTile.icon as any} size={20} color={documentationTile.color} />
         </View>
         <View style={styles.documentationTileCopy}>
-          <Text style={styles.tileLabel}>{documentationTile.label}</Text>
-          <Text style={styles.tileSubLabel}>{documentationTile.subtitle}</Text>
+          <Text style={styles.tileLabel} numberOfLines={1}>{documentationTile.label}</Text>
+          <Text style={styles.tileSubLabel} numberOfLines={1}>{documentationTile.subtitle}</Text>
         </View>
         <View style={styles.tileStateBadge}>
           <Text style={styles.tileStateText}>{documentationTile.availabilityLabel}</Text>
@@ -1230,7 +1272,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         closeGuardKey={activeView}
         topClearanceOverride={fieldUtilitiesTopClearance}
         bottomClearanceOverride={fieldUtilitiesBottomClearance}
-        bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}
+        bodyStyle={mainPanelStaticActive ? styles.quickMainStaticBody : protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}
         contentContainerStyle={fixedStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
       >
         {panelContent}
@@ -1349,6 +1391,9 @@ const styles = StyleSheet.create({
     minHeight: 0,
     justifyContent: 'flex-start',
   },
+  quickMainStaticBody: {
+    padding: 8,
+  },
   quickProtocolStaticBody: {
     padding: 10,
   },
@@ -1356,27 +1401,28 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   mainPanel: {
-    flexGrow: 1,
+    flex: 1,
     minHeight: 0,
-    gap: 10,
+    gap: 6,
+    justifyContent: 'flex-start',
   },
   summaryCard: {
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.14)',
     backgroundColor: 'rgba(196,138,44,0.06)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 3,
   },
   summaryEyebrow: {
-    fontSize: 8,
+    fontSize: 7,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 2,
   },
   summaryTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     color: TACTICAL.text,
     letterSpacing: 0.5,
@@ -1388,29 +1434,34 @@ const styles = StyleSheet.create({
     letterSpacing: 1.8,
   },
   summaryText: {
-    fontSize: 9,
-    lineHeight: 13,
+    fontSize: 8,
+    lineHeight: 11,
     color: TACTICAL.textMuted,
   },
   tileGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    rowGap: 6,
+    columnGap: 6,
     alignContent: 'flex-start',
     justifyContent: 'space-between',
   },
   tile: {
-    width: '48%',
-    minHeight: 82,
-    borderRadius: 14,
+    width: '23.5%',
+    minHeight: 70,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
+  },
+  quickActionTile: {
+    flexGrow: 0,
+    flexShrink: 0,
   },
   tileDisabled: {
     opacity: 0.6,
@@ -1425,9 +1476,9 @@ const styles = StyleSheet.create({
   },
   documentationTile: {
     width: '100%',
-    minHeight: 82,
+    minHeight: 54,
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     marginTop: 0,
   },
   documentationTileCopy: {
@@ -1437,15 +1488,16 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   tileIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   tileLabel: {
-    fontSize: 10,
+    fontSize: 8.8,
+    lineHeight: 11,
     fontWeight: '800',
     color: TACTICAL.text,
     textAlign: 'center',
@@ -1455,21 +1507,21 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
   },
   tileSubLabel: {
-    fontSize: 8,
+    fontSize: 7.1,
     fontWeight: '600',
     color: TACTICAL.textMuted,
     textAlign: 'center',
     letterSpacing: 0.4,
-    lineHeight: 11,
-    minHeight: 22,
+    lineHeight: 9,
+    minHeight: 18,
   },
   tileSubLabelDisabled: {
     color: ECS.muted,
   },
   tileStateBadge: {
-    marginTop: 2,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    marginTop: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.22)',
@@ -1480,10 +1532,23 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
   tileStateText: {
-    fontSize: 8,
+    fontSize: 7,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.1,
+  },
+  incidentRecoveryUtilitySlot: {
+    flex: 1,
+    width: '100%',
+    minHeight: 128,
+    maxHeight: 210,
+    flexShrink: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+  },
+  incidentRecoveryUtilityPanel: {
+    flex: 1,
+    justifyContent: 'space-between',
   },
   tileStateTextDisabled: {
     color: ECS.muted,

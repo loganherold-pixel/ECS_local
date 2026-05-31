@@ -267,13 +267,13 @@ const ecoflowReadiness = getBluestackProviderReadiness('ecoflow');
 assert.strictEqual(ecoflowReadiness.connectionPath, 'hybrid');
 assert(ecoflowReadiness.requiredSecretNames.includes('ECOFLOW_ACCESS_KEY'));
 assert(ecoflowReadiness.requiredSecretNames.includes('ECOFLOW_SECRET_KEY'));
-assert.strictEqual(ecoflowReadiness.parserId, 'ecoflow_cloud_api');
-assert.strictEqual(ecoflowReadiness.parserDecisionAction, 'use_ecoflow_cloud');
+assert.strictEqual(ecoflowReadiness.parserId, 'ecoflow_native_ble_v1');
+assert.strictEqual(ecoflowReadiness.parserDecisionAction, 'use_native_power_adapter');
 
 const ecoflowParser = getBluestackTelemetryParserProfile('ecoflow');
-assert.strictEqual(ecoflowParser.decisionAction, 'use_ecoflow_cloud');
+assert.strictEqual(ecoflowParser.decisionAction, 'use_native_power_adapter');
 assert.strictEqual(ecoflowParser.canDecodeLiveTelemetry, true);
-assert.strictEqual(ecoflowParser.transport, 'cloud');
+assert.strictEqual(ecoflowParser.transport, 'ble');
 assert.strictEqual(canPromoteBluestackTelemetry('ecoflow'), true);
 
 const obdParserDecision = getBluestackParserDecision('generic_obd2');

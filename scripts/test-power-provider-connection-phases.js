@@ -62,6 +62,12 @@ assert(
 );
 
 assert(
+  adapters.includes('has not decoded live telemetry fields for this model yet') &&
+    hook.includes('ecoflow_ble_parser_pending'),
+  'EcoFlow local BLE fallback must surface parser support as the remaining gate after local session negotiation',
+);
+
+assert(
   adapters.includes("`${this.displayName} is connected and decoded telemetry is streaming.`") &&
     adapters.includes("'telemetry_active'") &&
     adapters.includes("'streaming'"),
@@ -78,10 +84,10 @@ assert(
 
 assert(
   !hook.includes("await genericBluetoothAccessoryManager.disconnect(device.rawId).catch(() => undefined)") &&
-    hook.includes("setDeviceUiState(device.id, 'connected', capabilityError)") &&
-    hook.includes('[BT_CONNECT] provider_capability_unavailable') &&
+    hook.includes("setDeviceUiState(device.id, 'failed', localBleAuthGate)") &&
+    hook.includes('ecoflow_ble_parser_pending') &&
     !hook.includes('EcoFlow BLE connected; telemetry parser not yet decoded.'),
-  'EcoFlow BLE fallback should keep the Bluetooth attachment visible without claiming decoded telemetry',
+  'EcoFlow BLE fallback should fail clearly at the parser-support gate without claiming decoded telemetry',
 );
 
 assert(

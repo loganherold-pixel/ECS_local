@@ -1,0 +1,42 @@
+{
+  "schema": "ecs.ecoflow_ble.replay_capture",
+  "schemaVersion": 1,
+  "capturedAt": "2026-05-28T16:30:00.000Z",
+  "providerId": "ecoflow",
+  "captureMode": "explicit_debug_opt_in",
+  "device": {
+    "idFingerprint": "fnv1a:fixture",
+    "name": "EcoFlow DELTA fixture",
+    "model": "DELTA fixture",
+    "rssi": -48,
+    "serviceUuids": [
+      "fff0"
+    ],
+    "manufacturerDataPresent": true,
+    "manufacturerDataLength": 24,
+    "manufacturerDataFingerprint": "fnv1a:fixture"
+  },
+  "characteristics": [
+    {
+      "serviceUuid": "fff0",
+      "characteristicUuid": "fff1",
+      "valueBase64": "eyJzb2MiOjY0LCJ3YXR0c0luIjoxODAsIndhdHRzT3V0Ijo1Miwic29sYXJXYXR0cyI6NzUsInJ1bnRpbWUiOjIxMCwidGVtcEMiOjMxLjV9",
+      "valueLength": 86,
+      "valueFingerprint": "fnv1a:fixture"
+    }
+  ],
+  "safety": {
+    "rawManufacturerDataIncluded": false,
+    "providerSecretsIncluded": false,
+    "preciseLocationIncluded": false,
+    "replayPayloadBase64Included": true
+  },
+  "expected": {
+    "battery_percent": 64,
+    "input_watts": 180,
+    "output_watts": 52,
+    "solar_input_watts": 75,
+    "estimated_runtime_minutes": 210,
+    "temperature_celsius": 31.5
+  }
+}

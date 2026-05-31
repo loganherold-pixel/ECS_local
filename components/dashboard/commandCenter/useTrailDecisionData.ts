@@ -89,6 +89,7 @@ export function useTrailDecisionData(
   const heading = useVehicleHeading({
     enabled,
     gpsHeadingDeg: gpsPosition?.headingDeg ?? null,
+    initialMode: 'upright',
     speedMph: gpsPosition?.speedMph ?? null,
   });
   const lastHeadingRef = useRef<number | null>(null);

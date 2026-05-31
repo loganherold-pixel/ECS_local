@@ -21,55 +21,44 @@ const popupLayoutSource = fs.readFileSync(
 );
 
 assert.ok(
-  tabSource.includes("import ExpeditionAssessmentDetailModal from './ExpeditionAssessmentDetailModal'"),
-  'Expedition tab should use the assessment detail modal.',
+  tabSource.includes('getCompletedTrips') && tabSource.includes('getTripById'),
+  'Expedition Hub should use the completed trip repository instead of assessment modal state.',
 );
 assert.ok(
-  tabSource.includes('useExpeditionAssessmentStore'),
-  'Expedition tab should consume the Expedition assessment store/hook.',
+  tabSource.includes('Expedition Hub') &&
+    tabSource.includes('Recent Expeditions') &&
+    tabSource.includes('No completed expeditions yet.'),
+  'Expedition tab should now render the Expedition Hub foundation.',
 );
 assert.ok(
-  tabSource.includes('setSelectedAssessmentCategory(card.id)'),
-  'Card press should select the assessment category.',
+  !tabSource.includes("import ExpeditionAssessmentDetailModal from './ExpeditionAssessmentDetailModal'") &&
+    !tabSource.includes('useExpeditionAssessmentStore') &&
+    !tabSource.includes('setSelectedAssessmentCategory(card.id)'),
+  'Expedition Hub should not render the old assessment-card modal workflow.',
 );
 assert.ok(
   !tabSource.includes('setPlaceholderTitle(card.label as ExpeditionPlaceholderTitle)'),
   'Top Expedition cards should no longer open the generic placeholder modal.',
 );
 assert.ok(
-  tabSource.includes('markTopCardViewed(card.id)'),
-  'Pressing an active card should still clear viewed/unread state.',
-);
-
-for (const [id, label] of [
-  ['overview', 'Overview'],
-  ['route', 'Route'],
-  ['convoy', 'Convoy'],
-  ['camp', 'Camp'],
-  ['logistics', 'Logistics'],
-  ['vehicles', 'Vehicles'],
-]) {
-  assert.ok(tabSource.includes(`id: '${id}'`), `${label} card should remain in Expedition tab config.`);
-  assert.ok(tabSource.includes(`label: '${label}'`), `${label} card label should remain unchanged.`);
-  assert.ok(tabSource.includes(`getAssessmentCardState('${id}'`), `${label} should read assessment summary/status.`);
-}
-
-assert.ok(
-  tabSource.includes('assessmentStore.assessments[selectedAssessmentCategory]') &&
-    tabSource.includes('assessmentStore.narratives[selectedAssessmentCategory]'),
-  'Assessment modal should receive the selected category assessment and narrative.',
+  !tabSource.includes('markTopCardViewed(card.id)'),
+  'Expedition Hub should not mutate old top-card viewed state.',
 );
 assert.ok(
-  tabSource.includes('onRefresh={() =>') &&
-    tabSource.includes('refreshAssessments()') &&
-    tabSource.includes('onOpenIncidentRecovery={() =>'),
-  'Assessment modal should receive refresh and Incident & Recovery action handlers.',
+  !tabSource.includes('assessmentStore.assessments[selectedAssessmentCategory]') &&
+    !tabSource.includes('assessmentStore.narratives[selectedAssessmentCategory]'),
+  'Expedition Hub should not pass assessment state into the old modal surface.',
 );
 assert.ok(
-  tabSource.includes('card.alertCount') &&
-    tabSource.includes('card.assessmentStatus') &&
-    tabSource.includes('card.stale'),
-  'Cards should expose status, concern count, and stale state from assessments.',
+  tabSource.includes('onPress={() => openTripDetail(trip.id)}') &&
+    tabSource.includes('onLongPress={() => handleLongPressTrip(trip.id)}'),
+  'Expedition Hub cards should open trip details and keep a long-press expansion hook.',
+);
+assert.ok(
+  !tabSource.includes('card.alertCount') &&
+    !tabSource.includes('card.assessmentStatus') &&
+    !tabSource.includes('card.stale'),
+  'Expedition Hub cards should not expose the retired assessment-card status fields.',
 );
 
 for (const expectedText of [

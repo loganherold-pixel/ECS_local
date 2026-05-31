@@ -120,6 +120,7 @@ export interface PowerBrandConnectionAdapter {
 }
 
 const SCANNER_POWER_PROVIDER_IDS: BluProviderId[] = [
+  'ecoflow',
   'bluetti',
   'anker_solix',
   'jackery',
@@ -504,10 +505,10 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       details: { phase: connection.phase },
     });
     connection.phase = 'telemetry_setup';
-    if (!provider.isPolling()) {
-      provider.startPolling(15_000);
-    }
-    const readings = await ecsProviderRegistry.fetchAllTelemetry().catch(() => []);
+    const snapshotReadings = provider.getLatestReadings?.();
+    const readings = snapshotReadings && snapshotReadings.length > 0
+      ? snapshotReadings
+      : await ecsProviderRegistry.fetchAllTelemetry().catch(() => []);
     const hasLiveTelemetry = readings.some((reading) => (
       reading.provider === this.providerId &&
       reading.isLive === true &&
@@ -515,9 +516,14 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     ));
 
     if (!hasLiveTelemetry) {
-      provider.stopPolling();
+      if (provider.isPolling()) {
+        provider.stopPolling();
+      }
       await provider.disconnect().catch(() => undefined);
-      const detail = `${this.displayName} connected at the provider layer, but ECS did not receive decoded live telemetry for this model. The device stays nearby, not connected.`;
+      const detail =
+        this.providerId === 'ecoflow'
+          ? 'EcoFlow BLE connected and negotiated the local session, but ECS has not decoded live telemetry fields for this model yet. The device stays nearby, not connected.'
+          : `${this.displayName} connected at the provider layer, but ECS did not receive decoded live telemetry for this model. The device stays nearby, not connected.`;
       bluLog('[BLU_TIMEOUT]', 'power_provider_no_live_telemetry', buildBluTimeoutLogDetails({
         deviceId: device.rawId,
         vendor: this.providerId,
@@ -548,6 +554,9 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       };
     }
 
+    if (!provider.isPolling()) {
+      provider.startPolling(15_000);
+    }
     connection.phase = 'streaming';
     bluLog('[BLU_STREAM]', 'power_provider_streaming', {
       deviceId: device.rawId,
@@ -892,7 +901,11 @@ export function normalizePowerTelemetryForScanner(
 ): EcsNormalizedReading | null {
   const parserDecision = getBluestackParserDecision(providerId);
   if (!parserDecision.canDecodeLiveTelemetry && parserDecision.action !== 'use_ecoflow_cloud') return null;
-  const adapter = REGISTERED_POWER_ADAPTERS.find((entry) => entry.providerId === providerId);
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const source = String(record.source ?? record.telemetrySource ?? record.telemetry_source ?? '').toLowerCase();
+  const adapter = providerId === 'ecoflow' && (source === 'cloud' || source === 'api' || source === 'ecoflow_cloud')
+    ? REGISTERED_POWER_ADAPTERS.find((entry) => entry instanceof ApiRequiredPowerAdapter)
+    : REGISTERED_POWER_ADAPTERS.find((entry) => entry.providerId === providerId);
   return adapter?.normalizeTelemetry(raw, device) ?? null;
 }
 

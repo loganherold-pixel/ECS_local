@@ -75,16 +75,20 @@ function getFluidSensorProviderLabel(providerBadge: BluetoothProviderBadge | nul
   return 'Utility Sensor';
 }
 
-function getPowerSupport(providerId: BluProviderId): Pick<
+function getPowerSupport(
+  providerId: BluProviderId,
+  connectionType?: string | null,
+): Pick<
   BluetoothRoutingDecision,
   'supportLevel' | 'supportLabel' | 'supportNote'
 > {
   const meta = getProviderMeta(providerId);
   const readiness = getBluestackProviderReadiness(providerId);
+  const isEcoFlowLocalBle = providerId === 'ecoflow' && connectionType !== 'cloud';
   if (readiness.stage === 'live_ready') {
     return {
       supportLevel: providerId === 'ecoflow' ? 'verified' : 'implemented_unverified',
-      supportLabel: providerId === 'ecoflow' ? 'Cloud/API' : 'Native BLE',
+      supportLabel: isEcoFlowLocalBle ? 'Native BLE' : providerId === 'ecoflow' ? 'Cloud/API' : 'Native BLE',
       supportNote: readiness.statusDetail,
     };
   }
@@ -92,7 +96,7 @@ function getPowerSupport(providerId: BluProviderId): Pick<
     case 'verified':
       return {
         supportLevel: 'verified',
-        supportLabel: providerId === 'ecoflow' ? 'Cloud/API' : 'Supported',
+        supportLabel: isEcoFlowLocalBle ? 'Native BLE' : providerId === 'ecoflow' ? 'Cloud/API' : 'Supported',
         supportNote: readiness.statusDetail,
       };
     case 'implemented':
@@ -172,7 +176,7 @@ export function routeBluetoothDevice(
   }
 
   if (presentation.providerBadge === 'EcoFlow') {
-    const support = getPowerSupport('ecoflow');
+    const support = getPowerSupport('ecoflow', presentation.connectionType);
     return {
       owner: 'power',
       routeKey: support.supportLevel === 'verified' ? 'power/live' : 'power/partial',
@@ -195,7 +199,7 @@ export function routeBluetoothDevice(
 
   const powerProviderId = mapBadgeToPowerProviderId(presentation.providerBadge);
   if (powerProviderId) {
-    const support = getPowerSupport(powerProviderId);
+    const support = getPowerSupport(powerProviderId, presentation.connectionType);
     return {
       owner: 'power',
       routeKey: support.supportLevel === 'verified' ? 'power/live' : 'power/partial',

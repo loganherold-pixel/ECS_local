@@ -448,13 +448,13 @@ assertIncludes(
 );
 assertIncludes(
   commandDock,
-  'const SHIELD_ICON_SIZE = 72',
-  'Dashboard center dock button should be roughly 10% smaller than the previous oversized 80px crest.',
+  'const SHIELD_ICON_SIZE = 70',
+  'Dashboard center dock button should keep the smaller ECS crest size.',
 );
 assertIncludes(
   commandDock,
-  'const CENTER_DASHBOARD_BUTTON_DROP = OUTER_DOCK_ITEM_VERTICAL_OFFSET + 9',
-  'Dashboard center dock button should sit centered inside the lower banner without riding the top rail.',
+  'const centerDashboardButtonDrop = Math.round((dockBottomPadding + BOTTOM_BANNER_BACKGROUND_DROP_OFFSET) / 2);',
+  'Dashboard center dock button should center between the lower banner top rail and the device bottom.',
 );
 assertIncludes(
   commandDock,

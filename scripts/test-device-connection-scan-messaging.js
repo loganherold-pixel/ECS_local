@@ -39,7 +39,7 @@ assert.strictEqual(isNativeBluetoothRuntimeUnsupported('Bluetooth powered off'),
 const readinessSource = fs.readFileSync(path.join(process.cwd(), 'src/power/ble/BleScanReadiness.ts'), 'utf8');
 const unifiedSource = fs.readFileSync(path.join(process.cwd(), 'lib/useUnifiedDeviceConnections.ts'), 'utf8');
 assert.match(readinessSource, /export function isBleRuntimeUnsupported/);
-assert.match(unifiedSource, /isBleRuntimeUnsupported\(\)/);
+assert.match(unifiedSource, /Platform\.OS === 'web'/);
 assert.match(unifiedSource, /runtime_unsupported/);
 
 const ecoflowSuccess = {

@@ -163,6 +163,7 @@ async function main() {
       makeCandidate('closed-area', 39.002, -121.002, 95, { legalityStatus: 'restricted_or_not_allowed' }),
       makeCandidate('lake-point', 39.004, -121.004, 99, { isWaterBody: true }),
       makeCandidate('building-point', 39.005, -121.005, 99, { nearBuildings: true }),
+      makeCandidate('structure-buffer-point', 39.007, -121.007, 99, { nearestStructureDistanceMiles: 0.75 }),
       makeCandidate('highway-point', 39.006, -121.006, 99, { nearHighway: true }),
       makeCandidate('open-unknown', 39.003, -121.003, 72, { legalityStatus: 'unknown_needs_verification' }),
     ],
@@ -170,7 +171,22 @@ async function main() {
   assert.deepStrictEqual(
     hardRestrictedRemoved.map((candidate) => candidate.id),
     ['open-unknown'],
-    'Known private/closed/restricted, water, building, and highway locations must remain hard-excluded.',
+    'Known private/closed/restricted, water, one-mile structure buffer, building, and highway locations must remain hard-excluded.',
+  );
+
+  const structureBufferClear = await locateCampsitesForPolygon({
+    polygonCoordinates: drawAreaPolygon,
+    candidates: [
+      makeCandidate('structure-clear', 39.003, -121.003, 92, {
+        nearestStructureDistanceMiles: 1.2,
+        legalityStatus: 'unknown_needs_verification',
+      }),
+    ],
+  });
+  assert.deepStrictEqual(
+    structureBufferClear.map((candidate) => candidate.id),
+    ['structure-clear'],
+    'Campsite locator should keep candidates with known structure clearance beyond one mile.',
   );
 
   const softFallbackCandidates = await locateCampsitesForPolygon({

@@ -9,6 +9,7 @@ function read(...parts) {
 }
 
 const quickActions = read('components', 'QuickActionsSheet.tsx');
+const incidentRecoveryPanel = read('components', 'dashboard', 'IncidentRecoveryPanel.tsx');
 const profilePanel = read('components', 'ProfileSettingsPanel.tsx');
 
 assert.ok(
@@ -39,6 +40,33 @@ assert.ok(
 );
 
 assert.ok(
+  quickActions.includes("import IncidentRecoveryPanel from './dashboard/IncidentRecoveryPanel';") &&
+    quickActions.includes('styles.incidentRecoveryUtilitySlot') &&
+    quickActions.includes('styles.incidentRecoveryUtilityPanel') &&
+    quickActions.includes('<IncidentRecoveryPanel') &&
+    quickActions.includes('compact') &&
+    quickActions.includes('modalStackBehavior="allow-stack"') &&
+    quickActions.indexOf('styles.incidentRecoveryUtilitySlot') < quickActions.indexOf('styles.documentationTile'),
+  'Field Utilities should host Incident & Recovery directly above the full-width Documentation tile.',
+);
+
+assert.ok(
+  incidentRecoveryPanel.includes("modalStackBehavior = 'replace'") &&
+    incidentRecoveryPanel.includes('stackBehavior={modalStackBehavior}') &&
+    incidentRecoveryPanel.includes('style?: StyleProp<ViewStyle>') &&
+    incidentRecoveryPanel.includes('styles.panel,') &&
+    incidentRecoveryPanel.includes('style,'),
+  'Incident & Recovery modals should support allow-stack nesting so Field Utilities stays open while action modals are used.',
+);
+
+assert.ok(
+  quickActions.includes('incidentRecoveryUtilitySlot: {\n    flex: 1,') &&
+    quickActions.includes('incidentRecoveryUtilityPanel: {\n    flex: 1,') &&
+    quickActions.includes("justifyContent: 'space-between'"),
+  'Field Utilities should let Incident & Recovery fill the remaining menu height instead of leaving dead space below Documentation.',
+);
+
+assert.ok(
   quickActions.includes("case 'permitsAccess':") &&
     quickActions.includes('return renderPermitsAccessPanel();') &&
     quickActions.includes("case 'tripSummaries':") &&
@@ -49,9 +77,10 @@ assert.ok(
 );
 
 assert.ok(
-  quickActions.includes("import PermitsAccessPanel from './intel/PermitsAccessPanel';") &&
+    quickActions.includes("import PermitsAccessPanel from './intel/PermitsAccessPanel';") &&
     quickActions.includes("import TripSummaries from './intel/TripSummaries';") &&
-    quickActions.includes("import DocumentationCenter from './intel/DocumentationCenter';"),
+    quickActions.includes("import DocumentationCenter from './intel/DocumentationCenter';") &&
+    quickActions.includes("import IncidentRecoveryPanel from './dashboard/IncidentRecoveryPanel';"),
   'Relocated Field Utilities actions should reuse existing Intel panel components.',
 );
 

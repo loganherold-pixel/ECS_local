@@ -6,6 +6,7 @@ import {
   routeGeometryLineStringToLatLng,
   validateRouteGeometry,
 } from './routeGeometryLifecycle';
+import { trackExpeditionTripFromGuidanceSnapshot } from './expedition/expeditionTripRecordStore';
 
 export type NavigateRouteLifecycle = 'inactive' | 'preview' | 'active' | 'arrived';
 export type NavigateRouteSessionSource = 'none' | 'road' | 'trail' | 'hybrid' | 'run';
@@ -242,6 +243,7 @@ function setSnapshot(next: NavigateRouteSessionSnapshot): NavigateRouteSessionSn
   }
   currentSnapshot = normalized;
   persistNavigateRouteSession(currentSnapshot);
+  void trackExpeditionTripFromGuidanceSnapshot(currentSnapshot);
   notify(currentSnapshot);
   return currentSnapshot;
 }

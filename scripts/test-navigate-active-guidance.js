@@ -234,6 +234,19 @@ assert(
     mapRenderer.includes('{showBootOverlay && !fallbackVisible && ('),
   'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize.',
 );
+assert(
+  mapRenderer.includes('const MAX_ROUTE_RENDER_POINTS = 2400;') &&
+    mapRenderer.includes('const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;') &&
+    mapRenderer.includes('function preserveRouteGeometryForRendering(') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(routeCoordsRaw, MAX_ROUTE_RENDER_POINTS)') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(progressCoordsRaw, MAX_PROGRESS_ROUTE_RENDER_POINTS)') &&
+    mapRenderer.includes('ROUTE_RENDER_TURN_DELTA_DEGREES') &&
+    !mapRenderer.includes('routeCoordsRaw.length > 600') &&
+    !mapRenderer.includes('progressCoordsRaw.length > 600') &&
+    !mapRenderer.includes('Math.ceil(routeCoordsRaw.length / 600') &&
+    !mapRenderer.includes('Math.ceil(progressCoordsRaw.length / 600'),
+  'MapRenderer should preserve high-density snapped route geometry instead of index-sampling active guidance lines off road/trail curves.',
+);
 
 const fallbackSurface = read('components/navigate/MapFallbackSurface.tsx');
 assert(

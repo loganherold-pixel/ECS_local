@@ -7,6 +7,7 @@ import type {
   CampScoutScoreBreakdown,
   CampScoutSourceType,
 } from "./types";
+import { hasCampStructurePrivacyBufferConflict } from "../campsites/campStructurePrivacyBuffer";
 
 export const CAMP_SCOUT_DEFAULT_PIN_LIMIT = 5;
 export const CAMP_SCOUT_EXPANDED_PIN_LIMIT = 10;
@@ -295,6 +296,7 @@ function candidateSignalText(candidate: CampScoutCandidate): string {
 }
 
 function hasExcludedSurfaceSignal(candidate: CampScoutCandidate): boolean {
+  if (hasCampStructurePrivacyBufferConflict(candidate)) return true;
   if (candidate.isWaterBody || candidate.nearBuildings || candidate.nearHighway) return true;
   const text = candidateSignalText(candidate);
   return (

@@ -74,6 +74,13 @@ function isVisibleReleaseDevice(device: ECSDeviceConnectionModel): boolean {
   return isBluestackReleaseDeviceModel(device);
 }
 
+function isVisibleAvailableReleaseDevice(device: ECSDeviceConnectionModel): boolean {
+  return (
+    isVisibleReleaseDevice(device) &&
+    (device.isDiscoverable || device.isSelected || device.isConnecting || device.section === 'nearby' || device.section === 'attention')
+  );
+}
+
 function getVisibleDeviceListLabel(devices: ECSDeviceConnectionModel[]): string {
   return getBluestackVisibleDeviceListLabel(devices);
 }
@@ -832,19 +839,20 @@ export default function BluPowerSourcesScreen() {
   }, [connections.connectedDevices]);
   const visibleReleaseDevices = useMemo(() => {
     const byId = new Map<string, ECSDeviceConnectionModel>();
-    const availableScannerDevices = [
-      ...connections.nearbyDevices,
-      ...connections.attentionDevices,
-    ];
-    const availableScannerDeviceIds = new Set(availableScannerDevices.map((device) => device.id));
-    for (const device of connections.devices) {
-      if (!availableScannerDeviceIds.has(device.id)) continue;
-      if (isVisibleReleaseDevice(device)) {
+    const scanLaneDevices = [...connections.nearbyDevices, ...connections.attentionDevices];
+    for (const device of scanLaneDevices) {
+      if (isVisibleAvailableReleaseDevice(device)) {
         byId.set(device.id, device);
       }
     }
-    return Array.from(byId.values());
-  }, [connections.devices, connections.nearbyDevices, connections.attentionDevices]);
+    for (const device of connections.devices) {
+      if (byId.has(device.id)) continue;
+      if (isVisibleAvailableReleaseDevice(device)) {
+        byId.set(device.id, device);
+      }
+    }
+    return Array.from(byId.values()).filter((device) => !device.isConnected);
+  }, [connections.nearbyDevices, connections.attentionDevices, connections.devices]);
   const rememberedReleaseDevices = useMemo(() => {
     const byId = new Map<string, ECSDeviceConnectionModel>();
     for (const device of connections.knownDevices) {

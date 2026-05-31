@@ -14,14 +14,14 @@ Scope: non-vehicle BLU power vendors currently recognized by ECS. VeePeak OBD2 r
 | REDARC | yes | yes: native BLE live-ready path | yes when decoded hardware fields arrive | no | yes through shared native BLE power bridge | yes: visible as live-ready native BLE | limited: one active peripheral per provider adapter | native BLE live-ready |
 | Dakota Lithium | yes | yes: native BLE live-ready path | yes when decoded hardware fields arrive | no | yes through shared native BLE power bridge | yes: visible as live-ready native BLE | limited: one active peripheral per provider adapter | native BLE live-ready |
 | Victron Energy | yes | yes: native BLE live-ready path | yes when decoded hardware fields arrive | no | yes through shared native BLE power bridge | yes: visible as live-ready native BLE | limited: one active peripheral per provider adapter | native BLE live-ready |
-| EcoFlow | yes | yes for authorized cloud; local BLE parser incomplete | yes through cloud when authorized and decoded; no local BLE stream yet | yes | yes | yes | partial: cloud polling sessions are per-device; primary summary remains guarded | cloud live / local BLE incomplete |
+| EcoFlow | yes | yes for authorized cloud; local BLE can attempt native decode | yes through cloud when authorized and decoded; yes through BLE only when decoded fields are read | yes | yes | yes | partial: cloud polling sessions are per-device; native BLE provider is single-active-device | hybrid cloud / native BLE guarded |
 | Unknown power device | partial | no | no | no | no | yes: visible only when classified as power-like | no | profile-only |
 
 ## Current Release Gate
 
 The release source of truth for power-vendor promotion is `lib/bluestack/bluestackTelemetryParserRegistry.ts`.
 
-EcoFlow remains the cloud/API live path. BLUETTI, Goal Zero, Anker/SOLIX, Jackery, Renogy, REDARC, Dakota Lithium, and Victron now have `canDecodeLiveTelemetry: true` through the shared native BLE power bridge. Unknown power devices remain profile-only until a provider is identified.
+EcoFlow keeps its cloud/API live path and now also has `ecoflow_native_ble_v1` on the shared native BLE power bridge. BLUETTI, Goal Zero, Anker/SOLIX, Jackery, Renogy, REDARC, Dakota Lithium, and Victron also have `canDecodeLiveTelemetry: true` through the same guarded bridge. Unknown power devices remain profile-only until a provider is identified.
 
 Field acceptance for each native BLE provider should still capture:
 
@@ -103,4 +103,4 @@ Victron:
 Victron is recognized in provider metadata and scanner classification, and now has a native BLE live-ready provider bridge.
 
 EcoFlow:
-EcoFlow remains the release cloud/API power-vendor telemetry path. Local BLE attachment is visible but parser-pending for EcoFlow-specific Bluetooth telemetry.
+EcoFlow remains the release cloud/API power-vendor telemetry path for authorized devices. Local BLE now connects through the native power adapter and only promotes telemetry when `EcoFlowDriver` decodes trusted readable fields; unknown binary packets remain telemetry-unsupported.

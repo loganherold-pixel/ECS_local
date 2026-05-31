@@ -35,6 +35,8 @@ function writeCampOpsLiveReadinessFixtures(root) {
     "root.className = 'camp-scout-marker camp-scout-grade-' + grade;",
     "tent.className = 'camp-scout-tent';",
     "rank.className = 'camp-scout-rank';",
+    "'circle-radius': 0,",
+    "'circle-opacity': 0,",
   ].join('\n'));
   writeFile(root, 'components/navigate/CampScoutIntelCard.tsx', 'export default function CampScoutIntelCard({ onDismiss }){ return "Dismiss Camp Intel popup Needs verification Source confidence Legal/source confidence"; }\n');
   writeFile(root, 'lib/campops/campOpsCampIntelViewModel.ts', 'export const copy = "ECS-Inferred Camp Candidate Needs verification Access not fully verified Source confidence Legal/source confidence";\n');

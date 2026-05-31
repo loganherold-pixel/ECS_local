@@ -121,6 +121,31 @@ assertIncludes(
 );
 assertIncludes(
   appContextSource,
+  'const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;',
+  'Supabase startup session restore should have a shorter provider-call timeout before the outer loading watchdog fires.',
+);
+assertIncludes(
+  appContextSource,
+  "withAuthRequestTimeout(\n        'startup_session_restore',\n        supabase.auth.getSession(),\n        STARTUP_PROVIDER_SESSION_TIMEOUT_MS,\n      )",
+  'Startup Supabase session restore should be bounded so fetch failures cannot leave authReady unresolved.',
+);
+assertIncludes(
+  appContextSource,
+  'function isRecoverableStartupSessionRestoreError',
+  'Startup auth restore should classify network and timeout failures as recoverable for stored offline sessions.',
+);
+assertIncludes(
+  appContextSource,
+  'if (hasPersistentSession && (!connectivity.isOnline() || isRecoverableStartupSessionRestoreError(err)))',
+  'Stored sessions should enter offline mode when provider session restore fails from network or timeout errors.',
+);
+assertIncludes(
+  appContextSource,
+  'setPersistedOfflineMode(true);',
+  'Offline startup recovery should persist offline mode so AuthGate can resolve remembered offline access.',
+);
+assertIncludes(
+  appContextSource,
   "markStartupPhase('stores_hydration_start');",
   'Startup diagnostics should track store hydration start.',
 );

@@ -135,12 +135,15 @@ import { orchestrateExploreSectionRoutes } from '../../lib/explore/exploreOrches
 import {
   canStartTrailPackGuidance,
   distanceMilesBetween,
-  getDefaultECSTrailPacks,
   getDiscoverableTrailPacks,
   getTrailPackGeometryCoordinates,
   trailPackToExpeditionOpportunity,
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
+import {
+  liveTrailPackCatalogStore,
+  refreshLiveTrailPackCatalog,
+} from '../../lib/explore/liveTrailPackCatalog';
 import {
   buildTrailPackConfidenceInputsFromFeedback,
   getTrailPackFeedbackSnapshot,
@@ -225,7 +228,7 @@ export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon:
 ];
 
 const FAVORITES_VISIBLE_LIMIT = 5;
-const EXPLORE_CATEGORY_PAGE_SIZE = 10;
+const EXPLORE_CATEGORY_PAGE_SIZE = 18;
 const HIDDEN_GEM_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const POPULAR_TRAIL_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const TRAIL_PACK_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
@@ -652,6 +655,18 @@ function DiscoverScreenInner() {
   const [discoverSourceHydrated, setDiscoverSourceHydrated] = useState(false);
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
+  const tripBuilderHandoffUserLocation = useMemo(
+    () => hasGPSFix
+      ? {
+          latitude: userLat,
+          longitude: userLng,
+          accuracyMeters: gps.position?.accuracyM ?? undefined,
+          elevationFeet: gps.position?.altitudeFt ?? undefined,
+          source: 'explore_live_gps',
+        }
+      : null,
+    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, userLat, userLng],
+  );
 
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
   const [popularTrailPageIndex, setPopularTrailPageIndex] = useState(0);
@@ -677,6 +692,9 @@ function DiscoverScreenInner() {
   const [trailPackFeedbackEvents, setTrailPackFeedbackEvents] = useState(() => getTrailPackFeedbackSnapshot());
   const [trailPackSubmissionSnapshot, setTrailPackSubmissionSnapshot] = useState(() =>
     trailPackSubmissionStore.getSnapshot(),
+  );
+  const [liveTrailPackCatalogSnapshot, setLiveTrailPackCatalogSnapshot] = useState(() =>
+    liveTrailPackCatalogStore.getSnapshot(),
   );
   const [trailPackSubmissionRoute, setTrailPackSubmissionRoute] =
     useState<ECSTrailPackSubmissionRouteInput | null>(null);
@@ -740,6 +758,14 @@ function DiscoverScreenInner() {
     const unsubscribe = trailPackSubmissionStore.subscribe(() => {
       setTrailPackSubmissionSnapshot(trailPackSubmissionStore.getSnapshot());
     });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
+      setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
+    });
+    void refreshLiveTrailPackCatalog();
     return unsubscribe;
   }, []);
 
@@ -975,11 +1001,11 @@ function DiscoverScreenInner() {
   const trailPackCatalog = useMemo(
     () => {
       const localSubmissions = trailPackSubmissionSnapshot.submissions.map((submission) => submission.trailPack);
-      const defaultPacks = getDefaultECSTrailPacks();
+      const liveCatalogPacks = liveTrailPackCatalogSnapshot.trailPacks;
       const localIds = new Set(localSubmissions.map((pack) => pack.id));
-      return [...localSubmissions, ...defaultPacks.filter((pack) => !localIds.has(pack.id))];
+      return [...localSubmissions, ...liveCatalogPacks.filter((pack) => !localIds.has(pack.id))];
     },
-    [trailPackSubmissionSnapshot.submissions],
+    [liveTrailPackCatalogSnapshot.trailPacks, trailPackSubmissionSnapshot.submissions],
   );
   const trailPackFeedbackConfidenceInputs = useMemo(
     () => buildTrailPackConfidenceInputsFromFeedback(trailPackFeedbackEvents),
@@ -1050,6 +1076,10 @@ function DiscoverScreenInner() {
       routeSourceFailureReason: discoverSourceHydrated
         ? discoverRouteSourceFailureReason
         : 'pending_initial_load',
+      trailPackLiveCatalogStatus: liveTrailPackCatalogSnapshot.status,
+      trailPackLiveCatalogCount: liveTrailPackCatalogSnapshot.trailPacks.length,
+      trailPackLiveCatalogError: liveTrailPackCatalogSnapshot.error,
+      trailPackLiveCatalogLastLoadedAt: liveTrailPackCatalogSnapshot.lastLoadedAt,
       locationSourceMode: gps.hasFix && gps.position ? 'shared_live_gps' : 'default_location_fallback',
       offlineModeActive,
       vehicleGateApplied: false,
@@ -1063,6 +1093,10 @@ function DiscoverScreenInner() {
     discoverRouteSourceMode,
     discoverSourceHydrated,
     discoverRouteSourceFailureReason,
+    liveTrailPackCatalogSnapshot.error,
+    liveTrailPackCatalogSnapshot.lastLoadedAt,
+    liveTrailPackCatalogSnapshot.status,
+    liveTrailPackCatalogSnapshot.trailPacks.length,
     gps.hasFix,
     gps.position,
   ]);
@@ -1151,12 +1185,19 @@ function DiscoverScreenInner() {
     );
   }, [activeVehicleId]);
 
+  const stageTripBuilderItineraryHandoff = useCallback((route: ExpeditionOpportunity) => {
+    saveTripBuilderRouteHandoff(route as any, {
+      userLocation: tripBuilderHandoffUserLocation,
+    });
+  }, [tripBuilderHandoffUserLocation]);
+
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
     stageExploreReadinessPreview(op);
+    stageTripBuilderItineraryHandoff(op);
     setSelectedOpportunity(op);
     setAnalysisVisible(true);
-  }, [stageExploreReadinessPreview]);
+  }, [stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
 
   const handleCloseAnalysis = useCallback(() => {
     setAnalysisVisible(false);
@@ -1220,9 +1261,10 @@ function DiscoverScreenInner() {
   const handleAIPreview = useCallback((route: AIGeneratedRoute) => {
     hapticMicro();
     stageExploreReadinessPreview(route);
+    stageTripBuilderItineraryHandoff(route);
     setAiPreviewRoute(route);
     setAiPreviewVisible(true);
-  }, [stageExploreReadinessPreview]);
+  }, [stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
 
   const confirmRouteHandoffAgainstActiveGuidance = useCallback(
     async (payload: NavigationHandoffPayload): Promise<NavigationHandoffPayload | null> => {
@@ -1337,7 +1379,7 @@ function DiscoverScreenInner() {
     (route: ExpeditionOpportunity) => {
       hapticMicro();
       stageExploreReadinessPreview(route);
-      saveTripBuilderRouteHandoff(route as any);
+      stageTripBuilderItineraryHandoff(route);
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
@@ -1348,7 +1390,7 @@ function DiscoverScreenInner() {
         params: { routeId: route.id },
       } as any);
     },
-    [router, stageExploreReadinessPreview],
+    [router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );
 
   const handlePrepareOfflineFromRoute = useCallback(
@@ -2026,7 +2068,7 @@ function DiscoverScreenInner() {
     [radiusFilteredAIRoutes, exploreRefinement],
   );
 
-  const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
+  const exploreMapPreviewRouteSets = useMemo(() => {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
       .filter(routePassesExploreMapLength);
@@ -2044,65 +2086,78 @@ function DiscoverScreenInner() {
       .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
       .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
       .filter(routePassesExploreMapLength);
+    const total =
+      hiddenGemRoutes.length +
+      popularTrailRoutes.length +
+      trailPackRoutes.length +
+      favoriteRoutes.length +
+      ecsRouteIdeaRoutes.length;
+
+    return {
+      hiddenGemRoutes,
+      popularTrailRoutes,
+      trailPackRoutes,
+      favoriteRoutes,
+      ecsRouteIdeaRoutes,
+      counts: {
+        hiddenGems: hiddenGemRoutes.length,
+        popularTrails: popularTrailRoutes.length,
+        trailPacks: trailPackRoutes.length,
+        favorites: favoriteRoutes.length,
+        ecsIdeas: ecsRouteIdeaRoutes.length,
+        total,
+      },
+    };
+  }, [
+    discoverableTrailPacks,
+    favoritesSnapshot.favorites,
+    hiddenGemExploreOrchestration.items,
+    hiddenGemExploreOrchestration.routeMap,
+    popularTrailExploreOrchestration.routes,
+    refinedAIRoutes,
+  ]);
+
+  const exploreMapPreviewRouteCounts = exploreMapPreviewRouteSets.counts;
+  const exploreMapPreviewCategoryBadges = useMemo(
+    () => [
+      { key: 'hidden-gems', label: 'Hidden Gems', count: exploreMapPreviewRouteCounts.hiddenGems, color: TACTICAL.amber },
+      { key: 'popular-trails', label: 'Popular Trails', count: exploreMapPreviewRouteCounts.popularTrails, color: '#66BB6A' },
+      { key: 'trail-packs', label: 'Trail Packs', count: exploreMapPreviewRouteCounts.trailPacks, color: '#A48CFF' },
+      { key: 'ecs-ideas', label: 'ECS Ideas', count: exploreMapPreviewRouteCounts.ecsIdeas, color: '#65D4FF' },
+      ...(exploreMapPreviewRouteCounts.favorites > 0
+        ? [{ key: 'favorites', label: 'Favorites', count: exploreMapPreviewRouteCounts.favorites, color: '#F6A35D' }]
+        : []),
+    ],
+    [exploreMapPreviewRouteCounts],
+  );
+
+  const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
     const seen = new Set<string>();
     return [
-      ...hiddenGemRoutes,
-      ...popularTrailRoutes,
-      ...trailPackRoutes,
-      ...favoriteRoutes,
-      ...ecsRouteIdeaRoutes,
+      ...exploreMapPreviewRouteSets.hiddenGemRoutes,
+      ...exploreMapPreviewRouteSets.popularTrailRoutes,
+      ...exploreMapPreviewRouteSets.trailPackRoutes,
+      ...exploreMapPreviewRouteSets.favoriteRoutes,
+      ...exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
     ].filter((route) => {
       const key = String(route.id ?? route.name).trim().toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [
-    discoverableTrailPacks,
-    favoritesSnapshot.favorites,
-    hiddenGemExploreOrchestration.items,
-    hiddenGemExploreOrchestration.routeMap,
-    popularTrailExploreOrchestration.routes,
-    refinedAIRoutes,
-  ]);
+  }, [exploreMapPreviewRouteSets]);
 
   const exploreMapHandoffBuild = useMemo(() => {
-    const hiddenGemRoutes = hiddenGemExploreOrchestration.items
-      .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
-      .filter(routePassesExploreMapLength);
-    const popularTrailRoutes = popularTrailExploreOrchestration.routes.filter(routePassesExploreMapLength);
-    const trailPackRoutes = discoverableTrailPacks
-      .map((pack) => trailPackToExpeditionOpportunity(pack))
-      .filter(routePassesExploreMapLength);
-    const ecsRouteIdeaRoutes = refinedAIRoutes.filter(routePassesExploreMapLength);
-    const currentSuggestedRouteIds = new Set(
-      [...hiddenGemRoutes, ...popularTrailRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
-        String(route.id ?? '').trim(),
-      ),
-    );
-    const favoriteRoutes = favoritesSnapshot.favorites
-      .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
-      .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
-      .filter(routePassesExploreMapLength);
-
     return buildExploreRouteOverlaySegmentsFromRoutes({
-      hiddenGemRoutes,
-      popularTrailRoutes,
-      trailPackRoutes,
-      favoriteRoutes,
-      ecsRouteIdeaRoutes,
+      hiddenGemRoutes: exploreMapPreviewRouteSets.hiddenGemRoutes,
+      popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes,
+      trailPackRoutes: exploreMapPreviewRouteSets.trailPackRoutes,
+      favoriteRoutes: exploreMapPreviewRouteSets.favoriteRoutes,
+      ecsRouteIdeaRoutes: exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
       compatibilityResults: compatResults,
-      maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES,
+      maxRenderedRoutes: Math.max(EXPLORE_MAP_HANDOFF_MAX_ROUTES, exploreMapPreviewRouteCounts.total),
     });
-  }, [
-    compatResults,
-    discoverableTrailPacks,
-    favoritesSnapshot.favorites,
-    hiddenGemExploreOrchestration.items,
-    hiddenGemExploreOrchestration.routeMap,
-    popularTrailExploreOrchestration.routes,
-    refinedAIRoutes,
-  ]);
+  }, [compatResults, exploreMapPreviewRouteCounts.total, exploreMapPreviewRouteSets]);
 
   const exploreMapHandoffCategories = useMemo<ExploreRouteOverlayCategory[]>(() => {
     const categories = new Set<ExploreRouteOverlayCategory>();
@@ -2149,22 +2204,22 @@ function DiscoverScreenInner() {
     selectedExploreRefinementLabel,
   ]);
 
-  const handleDisplayExploreRoutesOnMap = useCallback(async () => {
+  const handleShowFilteredRoutesOnMap = useCallback(async () => {
     hapticMicro();
     setExploreMapHandoffNotice(null);
 
     if (exploreMapHandoffBuild.segments.length === 0) {
       setExploreMapHandoffNotice(
         exploreMapHandoffBuild.candidateCount > 0
-          ? `${exploreMapHandoffBuild.candidateCount} matching Explorer route${exploreMapHandoffBuild.candidateCount === 1 ? '' : 's'} found, but none include enough coordinates for a map preview yet.`
-          : 'No Explorer routes match the current filters yet.',
+          ? `${exploreMapHandoffBuild.candidateCount} filtered route${exploreMapHandoffBuild.candidateCount === 1 ? '' : 's'} matched, but none include enough coordinates for a map preview yet.`
+          : 'No Suggested Trailheads match the current filters yet.',
       );
       return;
     }
 
     const label = selectedExploreRefinementLabel
-      ? `Explorer routes - ${distanceRadiusFooterLabel} / ${selectedExploreRefinementLabel}`
-      : `Explorer routes - ${distanceRadiusFooterLabel}`;
+      ? `Filtered routes - ${distanceRadiusFooterLabel} / ${selectedExploreRefinementLabel}`
+      : `Filtered routes - ${distanceRadiusFooterLabel}`;
 
     await clearNavigationHandoffPayload();
     await saveExploreFilterStateSnapshot({
@@ -2192,10 +2247,10 @@ function DiscoverScreenInner() {
       source: 'explore',
       target: 'navigate',
       intent: 'route_preview',
-      label: 'Explore Routes',
-      message: 'Filtered Explorer routes are displayed on the Navigate map.',
+      label: 'Filtered Route Map',
+      message: 'Filtered Suggested Trailhead routes are displayed on the Navigate map.',
       context: {
-        exploreAction: 'display_filtered_routes',
+        exploreAction: 'show_filtered_routes_on_map',
         radiusMiles: activeDistanceRadius,
         refinementLabel: selectedExploreRefinementLabel,
         displayedRouteCount: exploreMapHandoffBuild.segments.length,
@@ -2689,6 +2744,10 @@ function DiscoverScreenInner() {
 
   const showInitialLoading = isLoading && !hasLoadedExplorer;
   const showSectionLoading = isLoading && hasLoadedExplorer;
+  const showTrailPackSectionLoading =
+    showSectionLoading ||
+    liveTrailPackCatalogSnapshot.status === 'idle' ||
+    liveTrailPackCatalogSnapshot.status === 'loading';
   const favoriteTrailListScrollable = favoriteTrails.length > FAVORITES_VISIBLE_LIMIT;
   const favoritePlanListScrollable = favoritePlans.length > FAVORITES_VISIBLE_LIMIT;
   const activeFavoritePanelItems = favoritesView === 'trails' ? filteredFavoriteTrails : filteredFavoritePlans;
@@ -2964,6 +3023,7 @@ function DiscoverScreenInner() {
   const activeExplorerCategoryConfig = explorerCategoryTiles.find(
     (category) => category.key === activeExplorerCategoryPanel,
   ) ?? null;
+  const activeExplorerPanelItemLabel = activeExplorerCategoryPanel === 'favorites' ? 'ITEM' : 'TRAILHEAD';
   const exploreTopLevelFeatures = useMemo(() => getVisibleExploreFeatures(), []);
   const exploreFeatureBadges = useMemo<Record<ExploreFeatureId, string | number | null>>(
     () => ({
@@ -3326,7 +3386,7 @@ function DiscoverScreenInner() {
           </View>
         );
       case 'trailPacks':
-        if (showSectionLoading) {
+        if (showTrailPackSectionLoading) {
           return (
             <ExplorerStateCard
               icon="hourglass-outline"
@@ -3345,6 +3405,15 @@ function DiscoverScreenInner() {
           );
         }
         if (visibleTrailPacks.length === 0) {
+          if (liveTrailPackCatalogSnapshot.status === 'error') {
+            return (
+              <ExplorerStateCard
+                icon="cloud-offline-outline"
+                title="Live Trail Packs Unavailable"
+                message="Live Trail Packs are not available from the reviewed catalog yet. No seed or mock Trail Packs are shown here."
+              />
+            );
+          }
           if (broaderTrailPackResults.length > 0) {
             return (
               <ExplorerStateCard
@@ -3358,7 +3427,7 @@ function DiscoverScreenInner() {
             <ExplorerStateCard
               icon="albums-outline"
               title="No Trail Packs Found"
-              message="No approved Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems."
+              message="No live reviewed Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems."
             />
           );
         }
@@ -3590,11 +3659,24 @@ function DiscoverScreenInner() {
 
               <View style={s.exploreMapHandoffCard}>
                 <View style={s.exploreMapHandoffCopy}>
-                  <Text style={s.exploreMapHandoffTitle}>Map Active Trails</Text>
+                  <Text style={s.exploreMapHandoffTitle}>Filtered Route Map Preview</Text>
                   <Text style={s.exploreMapHandoffSubtitle} numberOfLines={2}>
                     {exploreMapHandoffBuild.segments.length > 0
-                      ? `${exploreMapHandoffBuild.segments.length} filtered trail line${exploreMapHandoffBuild.segments.length === 1 ? '' : 's'} ready from Suggested Routes${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
-                      : 'Open Matching Explorer.'}
+                      ? `${exploreMapHandoffBuild.segments.length} of ${exploreMapPreviewRouteCounts.total} filtered Suggested Trailheads have map-ready route lines${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
+                      : exploreMapPreviewRouteCounts.total > 0
+                        ? `${exploreMapPreviewRouteCounts.total} filtered Suggested Trailheads matched, but map geometry is still unavailable.`
+                        : 'No Suggested Trailheads match the active filters yet.'}
+                  </Text>
+                  <View style={s.exploreMapHandoffStatsRow}>
+                    {exploreMapPreviewCategoryBadges.map((badge) => (
+                      <View key={badge.key} style={[s.exploreMapHandoffStatPill, { borderColor: `${badge.color}35` }]}>
+                        <Text style={[s.exploreMapHandoffStatValue, { color: badge.color }]}>{badge.count}</Text>
+                        <Text style={s.exploreMapHandoffStatLabel}>{badge.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={s.exploreMapHandoffFlowText} numberOfLines={3}>
+                    Tap a route line on the Navigate map to review details, then start guidance from that one route.
                   </Text>
                   {exploreMapHandoffNotice ? (
                     <Text style={s.exploreMapHandoffNotice} numberOfLines={2}>
@@ -3604,13 +3686,13 @@ function DiscoverScreenInner() {
                 </View>
                 <TouchableOpacity
                   style={s.exploreMapHandoffButton}
-                  onPress={handleDisplayExploreRoutesOnMap}
+                  onPress={handleShowFilteredRoutesOnMap}
                   activeOpacity={0.86}
                   accessibilityRole="button"
-                  accessibilityLabel="Display current Explorer routes on the Navigate map"
+                  accessibilityLabel="Show filtered Suggested Trailhead routes on the Navigate map"
                 >
                   <Ionicons name="map-outline" size={14} color="#091014" />
-                  <Text style={s.exploreMapHandoffButtonText}>Display on Map</Text>
+                  <Text style={s.exploreMapHandoffButtonText}>Show Routes on Map</Text>
                 </TouchableOpacity>
               </View>
 
@@ -3999,7 +4081,7 @@ function DiscoverScreenInner() {
                           color={TACTICAL.amber}
                         />
                         <Text style={s.hiddenGemPagerText}>
-                          {hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? 'RESTART 10' : 'NEXT 10'}
+                          {`${hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? 'RESTART' : 'NEXT'} ${hiddenGemPage.pageSize}`}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -4109,7 +4191,7 @@ function DiscoverScreenInner() {
                           color="#66BB6A"
                         />
                         <Text style={[s.hiddenGemPagerText, s.popularTrailPagerText]}>
-                          {popularTrailPage.pageIndex + 1 >= popularTrailPageCount ? 'RESTART 10' : 'NEXT 10'}
+                          {`${popularTrailPage.pageIndex + 1 >= popularTrailPageCount ? 'RESTART' : 'NEXT'} ${popularTrailPage.pageSize}`}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -4218,7 +4300,7 @@ function DiscoverScreenInner() {
                           color="#5AC8FA"
                         />
                         <Text style={[s.hiddenGemPagerText, s.aiRouteIdeaPagerText]}>
-                          {aiRouteIdeaPage.pageIndex + 1 >= aiRouteIdeaPageCount ? 'RESTART 10' : 'NEXT 10'}
+                          {`${aiRouteIdeaPage.pageIndex + 1 >= aiRouteIdeaPageCount ? 'RESTART' : 'NEXT'} ${aiRouteIdeaPage.pageSize}`}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -4433,7 +4515,7 @@ function DiscoverScreenInner() {
                   <Text style={s.explorePlanningEyebrow}>EXPLORER PLANNING</Text>
                   <Text style={s.explorePlanningTitle}>Offline Prep Pack</Text>
                   <Text style={s.explorePlanningText}>
-                    Choose from the active Suggested Routes filter, then save route essentials for low-service travel.
+                    Choose from the active Suggested Trailheads filter, then save route essentials for low-service travel.
                   </Text>
                 </View>
               </View>
@@ -4452,7 +4534,7 @@ function DiscoverScreenInner() {
                 <View style={s.explorePlanningContextPill}>
                   <Ionicons name="trail-sign-outline" size={10} color={TACTICAL.textMuted} />
                   <Text style={s.explorePlanningContextText}>
-                    {exploreSuggestedRouteOptions.length} ROUTE{exploreSuggestedRouteOptions.length === 1 ? '' : 'S'}
+                    {exploreSuggestedRouteOptions.length} TRAILHEAD{exploreSuggestedRouteOptions.length === 1 ? '' : 'S'}
                   </Text>
                 </View>
               </View>
@@ -4460,14 +4542,47 @@ function DiscoverScreenInner() {
               {exploreSuggestedRouteOptions.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.explorePlanningEmpty}
-                  title="No Routes In Current Context"
-                  message="Adjust Suggested Routes range or refinements, then return here to build a trip plan."
+                  title="No Trailheads In Current Context"
+                  message="Adjust Suggested Trailheads range or refinements, then return here to build a trip plan."
                   icon="map-outline"
                   variant="compact"
                 />
               ) : (
                 <>
                   <View style={s.explorePlanningRouteList}>
+                    <TouchableOpacity
+                      style={s.explorePlanningRouteOption}
+                      activeOpacity={0.82}
+                      onPress={() => {
+                        hapticMicro();
+                        saveExplorePlanningRouteContext({
+                          routes: exploreSuggestedRouteOptions as any,
+                          radiusMiles: activeDistanceRadius,
+                          refinementLabel: selectedExploreRefinementLabel,
+                          source: 'offline_prep_tab',
+                        });
+                        clearOfflinePrepPackHandoff();
+                        router.push({
+                          pathname: '/explore-offline-prep-pack',
+                          params: { action: 'import' },
+                        } as any);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Import GPX or route file for Offline Prep"
+                      testID="explore-offline-prep-import-route-file"
+                    >
+                      <Ionicons
+                        name="document-attach-outline"
+                        size={14}
+                        color={TACTICAL.amber}
+                      />
+                      <View style={s.explorePlanningRouteCopy}>
+                        <Text style={s.explorePlanningRouteTitle} numberOfLines={1}>Import GPX / Route File</Text>
+                        <Text style={s.explorePlanningRouteMeta} numberOfLines={1}>
+                          Use a route file from this device
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
                     {exploreSuggestedRouteOptions.slice(0, 7).map((route) => {
                       const selected = String(route.id) === String(selectedExplorePlanningRoute?.id);
                       return (
@@ -4580,7 +4695,7 @@ function DiscoverScreenInner() {
               <View style={s.explorerPanelMetaRow}>
                 <View style={s.explorerPanelCountBadge}>
                   <Text style={s.explorerPanelCountText}>
-                    {activeExplorerPanelPage.totalItems} ITEM{activeExplorerPanelPage.totalItems === 1 ? '' : 'S'}
+                    {activeExplorerPanelPage.totalItems} {activeExplorerPanelItemLabel}{activeExplorerPanelPage.totalItems === 1 ? '' : 'S'}
                   </Text>
                 </View>
                 <View style={s.explorerPanelCountBadge}>
@@ -5203,6 +5318,43 @@ const s = StyleSheet.create({
     fontSize: 9,
     lineHeight: 13,
     fontWeight: '700',
+  },
+  exploreMapHandoffStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 3,
+  },
+  exploreMapHandoffStatPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  exploreMapHandoffStatValue: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  exploreMapHandoffStatLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.55,
+    textTransform: 'uppercase',
+  },
+  exploreMapHandoffFlowText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+    marginTop: 2,
   },
   exploreMapHandoffNotice: {
     color: TACTICAL.amber,

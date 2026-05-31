@@ -19,6 +19,10 @@ export const DEFAULT_RECONNECT_BACKOFF_MS = [1000, 3000, 8000, 15_000] as const;
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 
+const NON_RECOVERABLE_STREAM_ERROR_CODES = new Set([
+  'TELEMETRY_UNSUPPORTED',
+]);
+
 export interface BluStreamLifecycleOptions {
   deviceId: string;
   vendor: string;
@@ -284,10 +288,13 @@ export class BluStreamLifecycle {
     this.clearFirstPacketTimer();
     this.clearStaleTimer();
 
-    const canRecover = options.canRecover !== false && typeof this.config.onRecover === 'function';
+    const isNonRecoverable = code ? NON_RECOVERABLE_STREAM_ERROR_CODES.has(code) : false;
+    const canRecover = !isNonRecoverable && options.canRecover !== false && typeof this.config.onRecover === 'function';
     bluLog(
       '[BLU_TIMEOUT]',
-      canRecover && this.reconnectAttempts < this.maxReconnectAttempts
+      isNonRecoverable
+        ? 'blu_stream_unsupported'
+        : canRecover && this.reconnectAttempts < this.maxReconnectAttempts
         ? 'blu_stream_recoverable_error'
         : 'blu_stream_failed',
       buildBluTimeoutLogDetails({

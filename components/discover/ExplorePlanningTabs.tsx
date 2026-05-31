@@ -7,7 +7,7 @@ import { ECSSegmentedControl } from '../ECSChip';
 type ExplorePlanningTab = 'suggested_routes' | 'trip_builder' | 'offline_prep_pack';
 
 const EXPLORE_PLANNING_TAB_OPTIONS = [
-  { key: 'suggested_routes', label: 'Suggested Routes', icon: 'map-outline' as const },
+  { key: 'suggested_routes', label: 'Suggested Trailheads', icon: 'map-outline' as const },
   { key: 'trip_builder', label: 'Trip Builder', icon: 'git-merge-outline' as const },
   { key: 'offline_prep_pack', label: 'Offline Prep', icon: 'download-outline' as const },
 ];

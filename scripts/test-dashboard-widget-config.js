@@ -6,6 +6,11 @@ function readSource(...segments) {
   return fs.readFileSync(path.join(__dirname, '..', ...segments), 'utf8').replace(/\r\n/g, '\n');
 }
 
+function readStyleBlock(source, styleName) {
+  const match = source.match(new RegExp(`${styleName}: \\{[\\s\\S]*?\\n  \\},`));
+  return match ? match[0] : '';
+}
+
 const registryPath = path.join(__dirname, '..', 'lib', 'widgetRegistry.ts');
 const source = readSource('lib', 'widgetRegistry.ts');
 const navigateSurfaceSource = readSource('components', 'dashboard', 'NavigateSurfaceWidget.tsx');
@@ -13,6 +18,7 @@ const widgetGridSource = readSource('components', 'dashboard', 'WidgetGrid.tsx')
 const dashboardStoreSource = readSource('lib', 'dashboardStore.ts');
 const widgetLibrarySource = readSource('components', 'dashboard', 'WidgetLibrary.tsx');
 const widgetRenderersSource = readSource('components', 'dashboard', 'WidgetRenderers.tsx');
+const vehicleRollStripSource = readSource('components', 'dashboard', 'VehicleProfileRollAttitudeStrip.tsx');
 const dashboardSource = readSource('app', '(tabs)', 'dashboard.tsx');
 const dockIconsSource = readSource('components', 'DockIcons.tsx');
 const missionBriefCadLogSource = readSource('components', 'dashboard', 'MissionBriefCadLog.tsx');
@@ -255,15 +261,15 @@ assert.deepStrictEqual(
   [
     { key: 'brief', label: 'ECS BRIEF' },
     { key: 'widgets', label: 'DASHBOARD' },
-    { key: 'expedition', label: 'ECS OVERVIEW' },
+    { key: 'expedition', label: 'EXPEDITION HUB' },
   ],
-  'Dashboard body tabs must appear in order: ECS Brief, Dashboard, ECS Overview.',
+  'Dashboard body tabs must appear in order: ECS Brief, Dashboard, Expedition Hub.',
 );
 assert.ok(
   dashboardSource.includes("if (tab === 'brief') return 0;") &&
     dashboardSource.includes("if (tab === 'widgets') return 1;") &&
     dashboardSource.includes('return 2;'),
-  'Dashboard tab animation index must match ECS Brief, Dashboard, ECS Overview ordering.',
+  'Dashboard tab animation index must match ECS Brief, Dashboard, Expedition Hub ordering.',
 );
 assert.ok(
   dashboardSource.includes("<DiscoverIcon color={isActive ? tab.accent : palette.textMuted} size={13} />") &&
@@ -286,7 +292,7 @@ assert.ok(
 );
 assert.ok(
   dashboardSource.includes("type DashboardTab = 'widgets' | 'brief' | 'expedition'"),
-  'DashboardTab union must include Dashboard, ECS Brief, and ECS Overview panels only.',
+  'DashboardTab union must include Dashboard, ECS Brief, and Expedition Hub panels only.',
 );
 assert.ok(
     !dashboardBodyTabs.some((tab) => tab.key === 'highway' || tab.label === 'HIGHWAY') &&
@@ -392,15 +398,18 @@ assert.ok(
       !widgetRenderersSource.includes('Ionicons name="ellipsis-horizontal"') &&
       !widgetRenderersSource.includes('ECS_COMMAND_MODULE_ORDER.map((moduleId)') &&
       !widgetRenderersSource.includes('onPress={() => handleSelectCommandModule(moduleId)}'),
-    'Attitude Command should not expose a center-module picker now that only 3D Nav Command remains.',
+    'Attitude Command should not expose the retired center-module picker.',
   );
+  const commandModuleStoreSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8');
   assert.ok(
-    fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("label: '3D Nav Command'") &&
-      fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: '3D Follow Map'") &&
-      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("label: 'Terrain Risk'") &&
-      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: 'Fleet Vehicle Profile'") &&
-      !fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8').includes("subtitle: 'Side Profile Analysis'"),
-    'Center module registry must expose only the stable 3D Nav Command mode.',
+    commandModuleStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];") &&
+      commandModuleStoreSource.includes("label: '3D Nav Command'") &&
+      commandModuleStoreSource.includes("subtitle: '3D Follow Map'") &&
+      commandModuleStoreSource.includes("label: 'Attitude Command'") &&
+      commandModuleStoreSource.includes("subtitle: 'Fleet Vehicle Profile'") &&
+      !commandModuleStoreSource.includes("label: 'Terrain Risk'") &&
+      !commandModuleStoreSource.includes("subtitle: 'Side Profile Analysis'"),
+    'Center module registry must expose only the stable 3D Nav Command and Attitude Command modes.',
   );
   assert.ok(
     !widgetRenderersSource.includes('Replace widget') &&
@@ -411,11 +420,12 @@ assert.ok(
   assert.ok(
     !widgetRenderersSource.includes("selectedCommandModule === 'attitude' ? (") &&
       !widgetRenderersSource.includes('<AttitudeCommandWidgetConnected') &&
-      !widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
+      widgetRenderersSource.includes('attitude: ({ mode }) => (') &&
+      widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
       widgetRenderersSource.includes("threeDNavigation: ({ mode }) => (") &&
       widgetRenderersSource.includes('<Mini3DFollowMap') &&
       !widgetRenderersSource.includes('<TerrainRiskCommandModule'),
-    'Stable shell center window must render only the 3D follow map for 3D Nav Command.',
+    'Stable shell center window must render the command-center attitude stage and 3D follow map without restoring Terrain Risk as a center module.',
   );
   assert.ok(
     !widgetRenderersSource.includes('{selectedCommandModuleDefinition.title}') &&
@@ -431,9 +441,96 @@ assert.ok(
     widgetRenderersSource.includes('eyebrow="ROUTE TERRAIN RISK"') &&
     widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview') &&
       widgetRenderersSource.includes('eyebrow="POWER MONITOR"') &&
-      widgetRenderersSource.includes('eyebrow="VEHICLE PROFILE"') &&
-      widgetRenderersSource.includes('<TacticalPopupShell'),
+      widgetRenderersSource.includes('eyebrow="VEHICLE PROFILE"'),
   'Attitude Command renderer must compose the attitude surface with weather, daylight, route terrain risk, power, and vehicle panels.',
+);
+assert.ok(
+  widgetRenderersSource.includes('setActivePanel((current) => (current === panel ? null : panel));') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandExpansionGeometry') &&
+    widgetRenderersSource.includes('expandedPanelLayer') &&
+    widgetRenderersSource.includes('renderCommandPanel(activePanel, true)'),
+  'Attitude Command surrounding panels must toggle an inline enlarged panel over the 3D follow map.',
+);
+assert.ok(
+  !widgetRenderersSource.includes('<TacticalPopupShell') &&
+    !widgetRenderersSource.includes('title={activeFocusConfig.title}'),
+  'Attitude Command surrounding panels must not open the old popup detail shell.',
+);
+assert.ok(
+  widgetRenderersSource.includes('commandPanelHeaderTitle') &&
+    widgetRenderersSource.includes('fontSize: 7.8') &&
+    widgetRenderersSource.includes("isSunlightPanel ? 'Sunlight'") &&
+    widgetRenderersSource.includes("isWeatherPanel ? 'Weather'") &&
+    widgetRenderersSource.includes('Vehicle Profile') &&
+    widgetRenderersSource.includes("isRoutePanel ? 'Terrain'") &&
+    widgetRenderersSource.includes('Power Monitor') &&
+    !widgetRenderersSource.includes("isSunlightPanel ? 'Remaining Sunlight'") &&
+    !widgetRenderersSource.includes("isWeatherPanel ? 'Current Weather'") &&
+    !widgetRenderersSource.includes("isRoutePanel ? 'Route Terrain Risk'"),
+  'The five Attitude Command surrounding panel titles must share a single normalized header style with compact Sunlight, Weather, and Terrain labels.',
+);
+assert.ok(
+  widgetRenderersSource.includes('isWeatherPanel && attitudeCommandS.commandPanelHeaderInlineIcon') &&
+    widgetRenderersSource.includes('isWeatherPanel && attitudeCommandS.commandPanelHeaderTitleInlineIcon') &&
+    widgetRenderersSource.includes('commandPanelHeaderTitleInlineIcon') &&
+    widgetRenderersSource.includes('numberOfLines={isWeatherPanel ? 1 : 2}') &&
+    widgetRenderersSource.includes('adjustsFontSizeToFit={isWeatherPanel}') &&
+    widgetRenderersSource.includes('minimumFontScale={isWeatherPanel ? 0.72 : undefined}') &&
+    readStyleBlock(widgetRenderersSource, 'commandPanelHeaderInlineIcon').includes("gap: 2") &&
+    readStyleBlock(widgetRenderersSource, 'commandPanelHeaderTitleInlineIcon').includes('minWidth: 44') &&
+    !readStyleBlock(widgetRenderersSource, 'commandPanelHeaderTitleInlineIcon').includes('minWidth: 74'),
+  'Weather header must keep the icon tightly inline and centered with the single-word title.',
+);
+assert.ok(
+  widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}") &&
+    widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}") &&
+    widgetRenderersSource.includes('commandPanelHeaderStatus') &&
+    !widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'),
+  'Route Terrain Risk source and score must live in the top-right header instead of over the chart.',
+);
+assert.ok(
+  widgetRenderersSource.includes('!route && terrainRisk.active ?') &&
+    widgetRenderersSource.includes('TERRAIN PROFILE PENDING') &&
+    !widgetRenderersSource.includes("'NO ACTIVE ROUTE'"),
+  'Route Terrain Risk standby must not repeat a No Active Route label above the existing standby copy.',
+);
+assert.ok(
+  widgetRenderersSource.includes('const usesTrailingHeaderIcon = isVehiclePanel || isPowerPanel') &&
+    widgetRenderersSource.includes('usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTrailingIcon') &&
+    widgetRenderersSource.includes('icon && !usesTrailingHeaderIcon') &&
+    widgetRenderersSource.includes('commandPanelHeaderTitleTrailingIcon') &&
+    widgetRenderersSource.includes('isVehiclePanel && attitudeCommandS.panelTextRight') &&
+    widgetRenderersSource.includes('icon && usesTrailingHeaderIcon') &&
+    widgetRenderersSource.includes('commandPanelHeaderIconTrailing'),
+  'Power Monitor and Vehicle Profile headers must trail their icons after right-aligned titles.',
+);
+assert.ok(
+  widgetRenderersSource.includes('<AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />') &&
+    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveForegroundLayerExpanded') &&
+    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveForegroundBlockExpanded') &&
+    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveModuleExpanded') &&
+    widgetRenderersSource.includes('transform: [{ translateY: -4 }, { scale: 1.5 }]') &&
+    widgetRenderersSource.includes('maxWidth: 660') &&
+    widgetRenderersSource.includes('minWidth: 276'),
+  'Expanded Power Monitor must scale the BLU power module at least 50 percent larger with the enlarged container.',
+);
+assert.ok(
+  widgetRenderersSource.includes('expanded={expanded}') &&
+    widgetRenderersSource.includes('<VehicleProfileRollAttitudeStrip') &&
+    vehicleRollStripSource.includes('expanded?: boolean') &&
+    vehicleRollStripSource.includes('expanded = false') &&
+    vehicleRollStripSource.includes('const CAMPSITE_LEVEL_TOLERANCE_DEG = 2') &&
+    vehicleRollStripSource.includes('const isRollLevel = Math.abs(displayRoll) <= CAMPSITE_LEVEL_TOLERANCE_DEG') &&
+    vehicleRollStripSource.includes('const isPitchLevel = Math.abs(displayPitch) <= CAMPSITE_LEVEL_TOLERANCE_DEG') &&
+    vehicleRollStripSource.includes('CAMPSITE') &&
+    !vehicleRollStripSource.includes('CampSite') &&
+    vehicleRollStripSource.includes("campsiteStatus: {\n    marginLeft: 'auto',\n    alignItems: 'center'") &&
+    vehicleRollStripSource.includes("textAlign: 'center'") &&
+    vehicleRollStripSource.includes('styles.containerExpanded') &&
+    vehicleRollStripSource.includes('height: 116') &&
+    vehicleRollStripSource.includes('styles.headerRowExpanded') &&
+    vehicleRollStripSource.includes("width: '68%'"),
+  'Expanded Vehicle Profile must double the roll monitor height, pull status readouts inward, center the CAMPSITE LEVEL stack, and use a +/-2 degree campsite level tolerance.',
 );
 assert.ok(
   widgetGridSource.includes("slot.widgetType === 'attitude-monitor' || slot.widgetType === 'attitude-command'"),
@@ -597,10 +694,12 @@ assert.ok(
   !incidentRecoveryPanelSource.includes('AI Assessment') &&
     incidentRecoveryPanelSource.includes('buildIncidentRecoveryContainerState') &&
     incidentRecoveryContainerStateSource.includes("headline: 'No active incident'") &&
-    expeditionTabSource.includes('isLogisticsEnabled(frameworkState)') &&
-    expeditionTabSource.includes('isVehiclesEnabled(frameworkState)') &&
+    expeditionTabSource.includes('EXPEDITION_OPERATIONAL_ACTIONS') &&
+    expeditionTabSource.includes('Operational Assessments') &&
+    expeditionTabSource.includes('accessibilityLabel={`Open ${action.title} assessment`}') &&
+    expeditionPlaceholderModalSource.includes('ECS Assessment') &&
     expeditionSummaryCardSource.includes('disabled={!enabled}'),
-  'Expedition scaffold must use ECS Assessment, render live incident container state, keep constant tools active, and disable Summary until completion.',
+  'Expedition scaffold must expose operational assessment buttons, support ECS Assessment, render live incident container state, and disable Summary until completion.',
 );
 assert.ok(
   expeditionTypesSource.includes("export type RouteLifecycleState = 'idle' | 'active' | 'ended' | 'completed'") &&
@@ -654,17 +753,15 @@ for (const snippet of [
   assert.ok(expeditionSelectorsSource.includes(snippet), `Expedition selectors must include snippet: ${snippet}`);
 }
 for (const snippet of [
-  "disabled={!card.enabled}",
-  'card.enabled && badgeCount > 0',
-  "Start navigation to enable",
-  "Team required",
-  "No camp review available",
-  "markTopCardViewed(card.id)",
-  "useSyncExternalStore",
-  "cardUnreadBadge",
-  'accessibilityState={{ disabled: !card.enabled',
+  'EXPEDITION_OPERATIONAL_ACTIONS',
+  "onPress={() => setActiveOperationalPanel(action.title)}",
+  'accessibilityLabel={`Open ${action.title} assessment`}',
+  'accessibilityState={{ selected: activeOperationalPanel === action.title }}',
+  'activeOpacity={0.78}',
+  'styles.operationalButton,',
+  'activeOperationalPanel === action.title && styles.operationalButtonActive',
 ]) {
-  assert.ok(expeditionTabSource.includes(snippet), `Expedition cards must include disabled/active behavior snippet: ${snippet}`);
+  assert.ok(expeditionTabSource.includes(snippet), `Expedition operational buttons must include behavior snippet: ${snippet}`);
 }
 for (const snippet of [
   'export function createDefaultExpeditionFrameworkState',
@@ -1020,12 +1117,21 @@ for (const snippet of [
   assert.ok(expeditionSummaryCardSource.includes(snippet), `Expedition Summary card must include gated summary snippet: ${snippet}`);
 }
 assert.ok(
-  expeditionTabSource.includes('<ExpeditionSummaryCard') &&
-    expeditionTabSource.includes('routeLifecycleState={frameworkState.routeLifecycleState}') &&
-    expeditionTabSource.includes('onOpenSummary={() => setSummaryVisible(true)}') &&
-    expeditionTabSource.includes('<ExpeditionDebriefModal') &&
-    expeditionTabSource.includes('visible={summaryVisible}'),
-  'Expedition Summary card must receive the resolved route lifecycle state and open the summary modal from the Expedition tab.',
+    expeditionTabSource.includes('getCompletedTrips') &&
+    expeditionTabSource.includes('getTripById') &&
+    expeditionTabSource.includes('Expedition Hub') &&
+    expeditionTabSource.includes('Your completed expeditions, milestones, and field history.') &&
+    expeditionTabSource.includes('Total Expeditions') &&
+    expeditionTabSource.includes('Total Miles') &&
+    expeditionTabSource.includes('Highest Elevation') &&
+    expeditionTabSource.includes('Hours Logged') &&
+    expeditionTabSource.includes('Recent Expeditions') &&
+    expeditionTabSource.includes('No completed expeditions yet.') &&
+    expeditionTabSource.includes('Your completed journeys will appear here.') &&
+    !expeditionTabSource.includes('<ExpeditionSummaryCard') &&
+    !expeditionTabSource.includes('<ExpeditionDebriefModal') &&
+    expeditionTabSource.includes('routeGeometry={trip.routeGeometry}'),
+  'Expedition Hub must use completed trip records, expose the requested hub copy, avoid summary/debrief UI, and pass route geometry only from selected trip detail.',
 );
 for (const label of [
   'Overview',
@@ -1048,13 +1154,16 @@ for (const snippet of [
   assert.ok(expeditionPlaceholderModalSource.includes(snippet), `Expedition placeholder modal must include placeholder behavior snippet: ${snippet}`);
 }
 for (const snippet of [
-  'const [placeholderTitle, setPlaceholderTitle]',
-  'setSelectedAssessmentCategory(card.id)',
-  'markTopCardViewed(card.id)',
-  'onOpenPlaceholder={setPlaceholderTitle}',
-  'ExpeditionPlaceholderModal',
+  'ExpeditionRecapMap',
+  'ExpeditionNotableMomentsTimeline',
+  'BadgeUnlockSummary',
+  'BadgeGrid',
+  'BadgeMilestoneList',
+  'PersonalRecordsPreview',
+  'ExpeditionReportsView',
+  'refreshExpeditionInsights',
 ]) {
-  assert.ok(expeditionTabSource.includes(snippet), `Expedition tab must route active actions and placeholders with snippet: ${snippet}`);
+  assert.ok(expeditionTabSource.includes(snippet), `Expedition Hub must keep implemented history, badges, reports, insights, and recap surface wired: ${snippet}`);
 }
 assert.ok(
   incidentRecoveryPanelSource.includes('handleActionPress(action)') &&

@@ -135,14 +135,14 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
 
     activeSubscription = service.subscribeToConvoyLocations(normalizedConvoyId, {
       onChange: applyChange,
-      onStatusChange: (connectionStatus) => {
+      onStatusChange: (connectionStatus, statusError) => {
         setState({
           ...state,
           connectionStatus,
           loading: false,
           error:
             connectionStatus === 'degraded'
-              ? getConvoyBackendReadinessGuidance('realtime_unavailable').userMessage
+              ? statusError ?? getConvoyBackendReadinessGuidance('realtime_degraded').userMessage
               : state.error,
         });
       },

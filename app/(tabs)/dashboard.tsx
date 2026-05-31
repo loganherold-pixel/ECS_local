@@ -1,10 +1,10 @@
 /**
  * Cockpit Dashboard — /dashboard
  *
- * Tactical, clean, infrastructure-focused dashboard with ECS Brief/Dashboard/ECS Overview tabs.
+ * Tactical, clean, infrastructure-focused dashboard with ECS Brief/Dashboard/Expedition Hub tabs.
  *
  * Features:
- * - ECS Brief / Dashboard / ECS Overview tab toggle with smooth micro-animation
+ * - ECS Brief / Dashboard / Expedition Hub tab toggle with smooth micro-animation
  * - Dashboard default: existing Expedition profile defaults and user-selected widgets
  * - Former Highway widgets are selectable in the Widgets library
  * - Fill-height 2x2 grid with no dead space
@@ -545,7 +545,7 @@ function DashboardTabBar({
   const tabs: { key: DashboardTab; label: string; accent: string; icon?: string }[] = [
     { key: 'brief', label: 'ECS BRIEF', accent: palette.amber, icon: 'document-text-outline' },
     { key: 'widgets', label: 'DASHBOARD', accent: expeditionAccent, icon: 'apps-outline' },
-    { key: 'expedition', label: 'ECS OVERVIEW', accent: palette.amber },
+    { key: 'expedition', label: 'EXPEDITION HUB', accent: palette.amber },
   ];
 
   return (
@@ -1990,6 +1990,7 @@ function DashboardScreenInner() {
   const attitudeRecalibrationKey = isLandscape ? 'landscape' : 'portrait';
   const accel = useAccelerometer(isFocused, {
     recalibrationKey: attitudeRecalibrationKey,
+    mountOrientation: isLandscape ? 'landscape' : 'portrait',
   });
 
   // ── ECS AI Orchestrator Feed ───────────────────────────
@@ -3317,17 +3318,13 @@ function DashboardScreenInner() {
   }, [isLandscape]);
 
   const handleOpenPowerConnections = useCallback(() => {
-      try {
-        router.push('/power');
+    try {
+      router.push('/power/blu');
     } catch {
-      try {
-        router.push('/power/blu');
-      } catch {
-        console.warn('[dashboard] Failed to open power route');
-        showToast('Power manager unavailable');
-      }
-      }
-    }, [router, showToast]);
+      console.warn('[dashboard] Failed to open power route');
+      showToast('Power manager unavailable');
+    }
+  }, [router, showToast]);
 
   const handleOpenTelemetrySetup = useCallback(() => {
       try {
@@ -4208,7 +4205,7 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 
-  // ── Tabs Section — holds ECS Brief, Dashboard, and ECS Overview labels ──
+  // ── Tabs Section — holds ECS Brief, Dashboard, and Expedition Hub labels ──
   tabsSection: {
     flex: 1,
     flexDirection: 'row',

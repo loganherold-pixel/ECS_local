@@ -98,7 +98,7 @@ GETTING STARTED:
 4. DASHBOARD
    - Monitor ECS Intelligence, route progress, power, weather, vehicle profile, sunlight, and attitude command widgets
    - Long press the Dashboard button to open Field Utilities
-   - Field Utilities contains Weather, Quick Note, Comms, Team Ping, Recovery Protocol, Emergency Protocol, Permits & Access, Trip Summaries, and Documentation
+   - Field Utilities contains Incident & Recovery, Weather, Quick Note, Comms, Team Ping, Recovery Protocol, Emergency Protocol, Permits & Access, Trip Summaries, and Documentation
 
 5. DISPATCH
    - Review convoy setup, roster, command surface, live tracking state, team events, and dispatch advisories

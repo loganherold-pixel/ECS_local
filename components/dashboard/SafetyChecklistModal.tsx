@@ -13,6 +13,7 @@ import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 import type {
   IncidentContext,
   IncidentCoordinate,
@@ -28,6 +29,7 @@ type SafetyChecklistModalProps = {
   visible: boolean;
   onClose: () => void;
   onSubmit: (input: SafetyChecklistInput) => void;
+  stackBehavior?: OverlayStackBehavior;
   activeIncident?: IncidentContext | null;
   expeditionId?: string;
   routeLabel?: string;
@@ -168,6 +170,7 @@ export default function SafetyChecklistModal({
   visible,
   onClose,
   onSubmit,
+  stackBehavior,
   activeIncident,
   expeditionId,
   routeLabel,
@@ -250,6 +253,7 @@ export default function SafetyChecklistModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Stabilize people, location, communication, and hazards before assessment or recovery planning."
       overlayClass="workflow"
+      stackBehavior={stackBehavior}
       {...fullBodyPopupProps}
       footer={footer}
     >

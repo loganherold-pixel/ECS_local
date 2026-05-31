@@ -170,6 +170,7 @@ const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
 const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;
 const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 6000;
 const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;
+const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;
 const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;
 
 interface StartupHydrationResult {
@@ -374,6 +375,21 @@ function isMissingRefreshTokenError(error: unknown): boolean {
     .toLowerCase();
 
   return message.includes('invalid refresh token') || message.includes('refresh token not found');
+}
+
+function isRecoverableStartupSessionRestoreError(error: unknown): boolean {
+  const message = String((error as { message?: string } | null | undefined)?.message ?? error ?? '')
+    .trim()
+    .toLowerCase();
+
+  return (
+    message.includes('network request failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('fetch failed') ||
+    message.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('body is unusable')
+  );
 }
 
 interface AppContextValue {
@@ -1249,7 +1265,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       } else {
       // Step 1: Check existing Supabase session
-      supabase.auth.getSession().then(({ data: { session } }) => {
+      withAuthRequestTimeout(
+        'startup_session_restore',
+        supabase.auth.getSession(),
+        STARTUP_PROVIDER_SESSION_TIMEOUT_MS,
+      ).then(({ data: { session } }) => {
         const currentUser = session?.user || null;
 
       if (currentUser) {
@@ -1321,6 +1341,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setStartupSessionRestored(false);
           setSignInPending(false);
           setOfflineMode(true);
+          setPersistedOfflineMode(true);
           setUser(null);
           setAuthLoading(false);
         } else {
@@ -1364,19 +1385,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (!connectivity.isOnline() && hasPersistentSession) {
+      if (hasPersistentSession && (!connectivity.isOnline() || isRecoverableStartupSessionRestoreError(err))) {
         // Network error but we have a stored session — allow offline access
         console.log('[Auth] Session check failed but offline session exists — entering offline mode');
+        sessionRestoreInFlightRef.current = false;
+        setSignInPending(false);
         setOfflineMode(true);
+        setPersistedOfflineMode(true);
         recordAuthDiagnostic('auth_session_restore_succeeded', {
           entry_mode: 'remembered_session',
           result: 'success',
           duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
-          network_state: 'offline',
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
           access_state: 'offline_mode',
-          metadata: { restoredOfflineSession: true, recoveredFromRestoreFailure: true },
+          metadata: {
+            restoredOfflineSession: true,
+            recoveredFromRestoreFailure: true,
+            providerSessionRestoreTimedOut: String(err instanceof Error ? err.message : err ?? '').includes('startup_session_restore timed out'),
+          },
         });
         setStartupSessionRestored(false);
+        setUser(null);
+        setAuthLoading(false);
+        return;
       } else if (connectivity.isOnline()) {
         recordAuthDiagnostic('auth_session_restore_failed', {
           entry_mode: 'cold_launch',

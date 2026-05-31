@@ -47,37 +47,50 @@ const elevationEngine = loadTsModule('lib/terrainElevationRouteEngine.ts');
 const profile = loadTsModule('lib/terrainRiskCommandProfile.ts', {
   './terrainElevationRouteEngine': elevationEngine,
 });
+const sampling = loadTsModule('lib/terrainElevationSampling.ts');
 
 assert(
-  commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n];"),
-  '3D Nav Command must be the only selectable ECS command module.',
+  commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];"),
+  'Selectable ECS command modules should be limited to 3D Nav Command and Attitude Command.',
 );
 assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d';"), '3D Nav Command must be the default dashboard command module.');
 assert(commandStoreSource.includes("label: '3D Nav Command'"), '3D Nav Command registry label is missing.');
 assert(!commandStoreSource.includes("id: 'terrainRisk'"), 'Terrain Risk must not remain selectable in the command module registry.');
-assert(!commandStoreSource.includes("label: 'Attitude Command'"), 'Attitude Command must not remain selectable in the command module registry.');
 assert(!commandStoreSource.includes("label: 'Terrain Risk'"), 'Terrain Risk must not remain selectable in the command module registry.');
 
 assert(!widgetRenderersSource.includes("import TerrainRiskCommandModule from './TerrainRiskCommandModule';"));
 assert(!widgetRenderersSource.includes("selectedCommandModule === 'terrainRisk' ? ("));
 assert(!widgetRenderersSource.includes('routeContext={terrainRiskRouteContext}'));
 assert(widgetRenderersSource.includes('routePoints: terrainRiskRoutePoints'), 'Terrain Risk must receive active guidance geometry when saved route segments are unavailable.');
-assert(widgetRenderersSource.includes('currentElevationFeet: terrainRiskHasGpsAltitude ? options.gpsAltitudeFt ?? null : null'), 'Terrain Risk must receive live GPS altitude for estimated active guidance profiles.');
+assert(
+  widgetRenderersSource.includes('currentElevationFeet: terrainRiskHasGpsAltitude && !terrainRiskSamplingPending ? options.gpsAltitudeFt ?? null : null'),
+  'Terrain Risk must only use live GPS altitude after elevation sampling has had a chance to resolve.',
+);
 assert(commandModuleSource.includes('routePoints: routeContextPoints'), 'Terrain Risk command module must pass active route points into the risk profile builder.');
 assert(commandModuleSource.includes('currentElevationFeet: routeContextCurrentElevationFeet'), 'Terrain Risk command module must pass live GPS altitude into the risk profile builder.');
 assert(widgetRenderersSource.includes('eyebrow="ROUTE TERRAIN RISK"'), 'Bottom route container must be renamed to Route Terrain Risk.');
 assert(widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview'), 'Bottom route container must render the compact terrain side-profile graph.');
 assert(widgetRenderersSource.includes("ImageBackground") && widgetRenderersSource.includes("require('../../assets/dashboard/terrain-risk-background.png')"), 'Terrain Risk widget must use the dashboard mountain image as a cover background.');
 assert(widgetRenderersSource.includes('resizeMode="cover"') && widgetRenderersSource.includes('terrainRiskBackgroundImageInner'), 'Terrain Risk background image must cover the full container without exposed image edges.');
-assert(widgetRenderersSource.includes('ROUTE GUIDANCE TERRAIN RISK'), 'Terrain Risk widget must label the route guidance terrain risk surface.');
-assert(widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must show no active route in the top-right text when route guidance is unavailable.');
-assert(widgetRenderersSource.includes('label="Elevation segments"'), 'Terrain Risk detail view must show the segment reader count and max grade.');
-assert(widgetRenderersSource.includes('label="Warm / hot spots"'), 'Terrain Risk detail view must show warm and hot terrain spots.');
-assert(widgetRenderersSource.includes('label="Elevation gain / loss"'), 'Terrain Risk detail view must show route elevation gain and loss.');
-assert(widgetRenderersSource.includes('overlayClass="editor"'), 'Route Terrain Risk focus popup must use the centered editor shell, not a bottom action sheet.');
-assert(widgetRenderersSource.includes('maxHeightFraction={1}'), 'Route Terrain Risk focus popup must use the same full-height bounds as other command detail panels.');
-assert(widgetRenderersSource.includes('minHeightFraction={1}'), 'Route Terrain Risk focus popup must reserve full detail height instead of shrinking to the bottom of the screen.');
-assert(widgetRenderersSource.includes('scrollable'), 'Route Terrain Risk focus popup must scroll within the body when text exceeds the visible area.');
+assert(!widgetRenderersSource.includes('ROUTE GUIDANCE TERRAIN RISK'), 'Terrain Risk widget must not duplicate the Route Terrain Risk label inside the chart.');
+assert(widgetRenderersSource.includes('terrainRiskPreviewActive'), 'Active Terrain Risk preview must let the graph use the full route panel surface.');
+assert(widgetRenderersSource.includes('transparentBackground'), 'Compact Terrain Risk chart must render with a transparent chart background.');
+assert(widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Compact Terrain Risk data-source label must sit in the top-right widget header.');
+assert(widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Compact Terrain Risk score must sit in the top-right widget header.');
+assert(!widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'), 'Compact Terrain Risk status readout must not overlay the chart.');
+assert(!widgetRenderersSource.includes('terrainRiskBottomReadoutOverlay'), 'Compact Terrain Risk status readout must not sit over the bottom axis lane.');
+assert(
+  /commandPanelHeaderStatus[\s\S]*commandPanelHeaderStatusLabel[\s\S]*commandPanelHeaderStatusValue/.test(widgetRenderersSource),
+  'Compact Terrain Risk header readout must show the data-source label above the risk score.',
+);
+assert(widgetRenderersSource.includes('sampleRouteElevationFromMapboxTerrainContours'), 'Active guidance terrain risk must sample elevation before falling back to GPS altitude.');
+assert(widgetRenderersSource.includes('Mapbox terrain contour estimate'), 'Sampled route terrain must disclose the Mapbox contour estimate source.');
+assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
+assert(widgetRenderersSource.includes("title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}"), 'Route Terrain Risk inline panel must summarize risk score or standby state.');
+assert(widgetRenderersSource.includes("detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}"), 'Route Terrain Risk inline panel must keep data source or guidance-start copy visible.');
+assert(widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} expanded={expanded} />'), 'Route Terrain Risk expansion must render the shared inline chart preview.');
+assert(widgetRenderersSource.includes("accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}"), 'Route Terrain Risk tap target must describe inline expand/collapse behavior.');
+assert(widgetRenderersSource.includes('renderCommandPanel(activePanel, true)'), 'Route Terrain Risk must use the shared inline expansion path instead of opening a popup.');
 assert(!widgetRenderersSource.includes("const compactRouteFocusPanel = activePanel === 'route'"), 'Route Terrain Risk must not use the old compact bottom-sheet branch.');
 assert(!widgetRenderersSource.includes('compactRouteFocusContent'), 'Route Terrain Risk must not use compact bottom-sheet content padding.');
 assert(
@@ -127,10 +140,25 @@ assert(sideProfileSource.includes('strokeWidth={segment.strokeWidth}'), 'Risk se
 assert(sideProfileSource.includes('textAnchor={tick.anchor}'), 'Distance labels should avoid edge clipping on small chart widths.');
 assert(sideProfileSource.includes('accessibilityRole="image"'), 'Terrain Risk chart should expose image semantics to assistive tech.');
 assert(sideProfileSource.includes('High risk route sections are highlighted'), 'Terrain Risk chart should describe high-risk emphasis for assistive tech.');
-assert(sideProfileSource.includes('left: 47'), 'Terrain Risk chart needs a wider left label lane so FT cannot overlap elevation ticks.');
-assert(sideProfileSource.includes('right: 28'), 'Terrain Risk chart needs a wider right label lane so MI/KM cannot overlap the last distance tick.');
-assert(sideProfileSource.includes('y={VIEWBOX_HEIGHT - 17}'), 'Terrain Risk chart distance ticks should sit above the unit label.');
-assert(sideProfileSource.includes('y={VIEWBOX_HEIGHT - 6}'), 'Terrain Risk chart unit label should sit below the tick values.');
+assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
+assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
+assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
+assert(sideProfileSource.includes('left: 8'), 'Terrain Risk chart should push the graph close to the left edge while preserving readable elevation labels.');
+assert(sideProfileSource.includes('right: 0'), 'Terrain Risk chart should push the graph close to the right edge while preserving a unit label lane.');
+assert(sideProfileSource.includes('top: 0') && sideProfileSource.includes('bottom: 18'), 'Terrain Risk chart should expand upward after the readout moves into the widget header.');
+assert(sideProfileSource.includes('labelX: ratio === 1 ? x - 18 : x'), 'Terrain Risk chart should keep the final distance label clear of the MI/KM unit label.');
+assert(sideProfileSource.includes('y={CHART_FRAME.baselineY + 13}'), 'Terrain Risk chart distance ticks and unit label should share a single aligned bottom axis row.');
+assert(sideProfileSource.includes('x={CHART_FRAME.left + 2}') && sideProfileSource.includes('y={CHART_FRAME.top + 8}'), 'Terrain Risk FT label should stay inside the slimmer elevation tick label lane.');
+assert(
+  /x=\{VIEWBOX_WIDTH - 5\}[\s\S]*fill=\{TACTICAL\.amber\}/.test(sideProfileSource) &&
+    /x=\{CHART_FRAME\.left \+ 2\}[\s\S]*fill=\{TACTICAL\.amber\}/.test(sideProfileSource),
+  'Terrain Risk FT and distance unit labels must use the same ECS gold treatment.',
+);
+assert(sideProfileSource.includes('isTerrainProfileReferencePoint'), 'Terrain Risk chart should derive tappable reference points from existing terrain risk signals.');
+assert(sideProfileSource.includes('formatTerrainReferenceReason'), 'Terrain Risk chart should explain why expanded reference dots were selected.');
+assert(sideProfileSource.includes('onPress={interactive ?'), 'Terrain Risk reference dots should only become tappable in expanded mode.');
+assert(sideProfileSource.includes('Why this point was referenced'), 'Terrain Risk expanded dot callout should explain the selected point.');
+assert(!sideProfileSource.includes('ROUTE SIDE PROFILE'), 'Terrain Risk chart should not spend compact dashboard space on a redundant chart title.');
 assert(!commandModuleSource.includes('<Image'), 'Terrain Risk command module must not be a static image.');
 assert(!sideProfileSource.includes('<Image'), 'Terrain Risk side profile must not be a static image.');
 
@@ -291,4 +319,63 @@ assert(activeRoute.elevationGainFeet > 0, 'Live terrain route must expose elevat
 assert(activeRoute.maxGradePercent > 0, 'Live terrain route must expose max grade.');
 assert(activeRoute.hotSpotCount + activeRoute.warmSpotCount >= 0, 'Live terrain route must count warm/hot risk spots.');
 
-console.log('[terrain-risk-command-module] registration, live route gating, unit conversion, and chart checks passed');
+(async () => {
+  assert.strictEqual(
+    sampling.routeNeedsTerrainElevationSampling(true, [
+      { lat: 39, lng: -120 },
+      { lat: 39.02, lng: -120.02 },
+    ]),
+    true,
+    'Route terrain sampling should run for active guidance geometry without elevation.',
+  );
+  assert.strictEqual(
+    sampling.routeNeedsTerrainElevationSampling(true, [
+      { lat: 39, lng: -120, ele_m: 1500 },
+      { lat: 39.02, lng: -120.02, ele_m: 1520 },
+    ]),
+    false,
+    'Route terrain sampling should not replace existing route elevation.',
+  );
+  assert(
+    sampling.terrainElevationRouteSignature('route-a', [
+      { lat: 39, lng: -120 },
+      { lat: 39.02, lng: -120.02 },
+    ]).includes('route-a:2'),
+    'Route terrain sampling needs a stable signature keyed to route geometry.',
+  );
+
+  const requestedUrls = [];
+  const sampledTerrain = await sampling.sampleRouteElevationFromMapboxTerrainContours({
+    accessToken: 'pk.test-token',
+    maxSamples: 3,
+    routePoints: [
+      { lat: 39, lng: -120 },
+      { lat: 39.02, lng: -120.02 },
+      { lat: 39.04, lng: -120.04 },
+      { lat: 39.06, lng: -120.06 },
+    ],
+    fetchImpl: async (url) => {
+      requestedUrls.push(url);
+      const index = requestedUrls.length - 1;
+      return {
+        ok: true,
+        json: async () => ({
+          features: [
+            { properties: { ele: 1400 + index * 90, tilequery: { distance: 20 } } },
+          ],
+        }),
+      };
+    },
+  });
+  assert(sampledTerrain, 'Mapbox terrain contour sampling should return sampled elevation route points.');
+  assert.strictEqual(sampledTerrain.length, 3);
+  assert.strictEqual(sampledTerrain[0].ele_m, 1400);
+  assert.strictEqual(sampledTerrain[1].ele_m, 1490);
+  assert.strictEqual(Math.round(sampledTerrain[2].elevationFeet), Math.round(1580 * 3.28084));
+  assert(requestedUrls.every((url) => url.includes('mapbox.mapbox-terrain-v2') && url.includes('layers=contour')), 'Mapbox terrain sampling should query terrain contour tiles.');
+
+  console.log('[terrain-risk-command-module] registration, live route gating, terrain sampling, unit conversion, and chart checks passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

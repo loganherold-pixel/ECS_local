@@ -44,6 +44,16 @@ export function isEcoFlowCloudDeviceConnection(device: DeviceConnectionSourceLik
   if (!device) return false;
   const provider = String(device.providerId ?? device.provider ?? '').trim().toLowerCase();
   if (provider !== 'ecoflow') return false;
+  const connectionType = normalizeDeviceConnectionType(device.connectionType);
+  const source = normalizeDeviceConnectionType(device.source);
+  if (
+    connectionType === 'ble' ||
+    connectionType === 'classic_bluetooth' ||
+    source === 'ble' ||
+    source === 'classic_bluetooth'
+  ) {
+    return false;
+  }
   if (hasCloudTelemetrySource(device)) return true;
   if (hasLocalBluetoothSource(device)) return false;
   return false;

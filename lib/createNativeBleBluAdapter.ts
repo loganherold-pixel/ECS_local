@@ -4,7 +4,7 @@ import {
   getBleRuntimeUnsupportedMessage,
   isBleNativeModuleUnavailableError,
 } from '../src/power/ble/BleScanReadiness';
-import { ensureBlePermissions } from '../src/power/ble/BlePermissions';
+import { ensureBlePermissions, type BlePermissionResult } from '../src/power/ble/BlePermissions';
 import type {
   BluConnectionState,
   BluDevice,
@@ -41,6 +41,29 @@ import {
   BLU_SCAN_COOLDOWN_MS,
   BLU_SCAN_WINDOW_MS,
 } from './bluPerformanceConfig';
+import {
+  buildEcoFlowBleCharacteristicProbe,
+  buildEcoFlowBleDecodedProtocolPacketCapture,
+  buildEcoFlowBleProtocolFrameCapture,
+  buildEcoFlowBleReplayCapture,
+  detectEcoFlowBleProtocolSupport,
+  ECOFLOW_BLE_PROTOCOL_CHARACTERISTICS,
+  isEcoFlowBleReplayCaptureEnabled,
+  recordEcoFlowBleProbeEvent,
+  summarizeEcoFlowBleServices,
+  type EcoFlowBleDecodedProtocolPacketCapture,
+  type EcoFlowBleProtocolFrameCapture,
+  type EcoFlowBleProtocolSupport,
+  type EcoFlowBleServiceProbe,
+} from './ecoflowBleDiagnosticCapture';
+import {
+  createEcoFlowBleSessionProbe,
+  hasEcoFlowBleProbePrivateKeyConfigured,
+  inferEcoFlowBlePacketVersionFromHints,
+  isEcoFlowBleDynamicSessionProbeEnabled,
+  type EcoFlowBleSessionProbeStep,
+} from './ecoflowBleSessionProbe';
+import { requestEcoFlowBleAuthPayload } from './ecoflowBleAuthBroker';
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const BACKGROUND_POLL_INTERVAL_MS = 60_000;
@@ -48,8 +71,37 @@ const BLE_SCAN_DURATION_MS = BLU_SCAN_WINDOW_MS;
 const RECONNECT_THRESHOLD = 2;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 10_000;
+const CONNECT_CANCELLED_RETRY_DELAY_MS = 1_200;
+const CONNECT_CANCELLED_MAX_ATTEMPTS = 2;
 const NATIVE_BLE_MULTI_DEVICE_LIMITATION_REASON =
   'Native BLE provider adapters currently maintain one active peripheral connection per provider instance; OBD2 and other providers can still run independently.';
+const DEFAULT_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS = 1_200;
+const DEFAULT_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES = 16;
+const ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS_LIMIT = 30_000;
+const ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES_LIMIT = 64;
+
+function getEcoFlowBleAccountAuthStatusMessage(label: string | null | undefined): string {
+  switch (label) {
+    case 'authorized':
+      return 'EcoFlow BLE account authorization accepted.';
+    case 'wrong_key':
+      return 'EcoFlow BLE account authorization was rejected: wrong user id, account, region, or device serial binding.';
+    case 'need_refresh_token':
+      return 'EcoFlow BLE account authorization was rejected: account token needs to be refreshed.';
+    case 'device_already_bound':
+      return 'EcoFlow BLE account authorization was rejected: device is already bound to another account.';
+    case 'need_bind_install_first':
+      return 'EcoFlow BLE account authorization was rejected: device needs to be bound in the EcoFlow app first.';
+    case 'maximum_devices_error':
+      return 'EcoFlow BLE account authorization was rejected: maximum devices limit reached.';
+    case 'device_internal_error':
+    case 'app_send_data_error':
+    case 'unknown_error':
+      return `EcoFlow BLE account authorization was rejected: ${label}.`;
+    default:
+      return 'EcoFlow BLE account authorization response was received.';
+  }
+}
 
 const BATTERY_SERVICE_UUID = '180f';
 const BATTERY_LEVEL_UUID = '2a19';
@@ -149,6 +201,9 @@ interface CharacteristicSnapshot {
 interface DecodedTelemetryContext {
   device: NativeBleDiscoveredDevice;
   characteristicMap: Map<string, CharacteristicSnapshot>;
+  serviceProbes?: EcoFlowBleServiceProbe[];
+  protocolSupport?: EcoFlowBleProtocolSupport | null;
+  decodedProtocolPackets?: EcoFlowBleDecodedProtocolPacketCapture[];
   previousTelemetry: BluTelemetry | null;
   rssi: number | null;
 }
@@ -254,6 +309,89 @@ function readCharacteristic(
   return map.get(makeCharacteristicKey(serviceUuid, characteristicUuid)) ?? null;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function compactUuid(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/-/g, '');
+}
+
+function getEcoFlowBleProbeFramesFromEnv(): string[] {
+  let raw: unknown = null;
+  try {
+    raw = (globalThis as Record<string, unknown>).__ECS_ECOFLOW_BLE_PROBE_BASE64;
+  } catch {}
+  try {
+    raw =
+      raw ??
+      process.env?.EXPO_PUBLIC_ECS_ECOFLOW_BLE_PROBE_BASE64 ??
+      process.env?.ECS_ECOFLOW_BLE_PROBE_BASE64;
+  } catch {}
+
+  return String(raw ?? '')
+    .split(/[\s,;]+/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => /^[A-Za-z0-9+/]+={0,2}$/.test(entry))
+    .filter((entry) => entry.length > 0 && entry.length <= 256)
+    .slice(0, 4);
+}
+
+function getNumberFromEnv(globalName: string, envNames: string[], fallback: number, min: number, max: number): number {
+  let raw: unknown = null;
+  try {
+    raw = (globalThis as Record<string, unknown>)[globalName];
+  } catch {}
+  try {
+    for (const envName of envNames) {
+      raw = raw ?? process.env?.[envName];
+    }
+  } catch {}
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function boolFromEnv(globalName: string, envNames: string[]): boolean {
+  let raw: unknown = null;
+  try {
+    raw = (globalThis as Record<string, unknown>)[globalName];
+  } catch {}
+  try {
+    for (const envName of envNames) {
+      raw = raw ?? process.env?.[envName];
+    }
+  } catch {}
+  return raw === true || raw === '1' || raw === 'true';
+}
+
+function isEcoFlowBleVerboseSessionLoggingEnabled(): boolean {
+  return boolFromEnv('__ECS_ECOFLOW_BLE_VERBOSE_SESSION_LOGS', [
+    'EXPO_PUBLIC_ECS_ECOFLOW_BLE_VERBOSE_SESSION_LOGS',
+    'ECS_ECOFLOW_BLE_VERBOSE_SESSION_LOGS',
+  ]);
+}
+
+function getEcoFlowBleNotificationCaptureMs(): number {
+  return getNumberFromEnv(
+    '__ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS',
+    ['EXPO_PUBLIC_ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS', 'ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS'],
+    DEFAULT_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS,
+    500,
+    ECOFLOW_BLE_NOTIFICATION_CAPTURE_MS_LIMIT,
+  );
+}
+
+function getEcoFlowBleNotificationCaptureMaxFrames(): number {
+  return getNumberFromEnv(
+    '__ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES',
+    ['EXPO_PUBLIC_ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES', 'ECS_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES'],
+    DEFAULT_ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES,
+    1,
+    ECOFLOW_BLE_NOTIFICATION_CAPTURE_MAX_FRAMES_LIMIT,
+  );
+}
+
 function getStandardTelemetry(
   ctx: DecodedTelemetryContext,
 ): Partial<BluTelemetry> {
@@ -307,6 +445,8 @@ function errorFromCode(code: string): string {
       return 'Pairing required.';
     case 'DEVICE_UNAVAILABLE':
       return 'Device unavailable.';
+    case 'CONNECT_CANCELLED':
+      return 'Connection cancelled.';
     case 'UNSUPPORTED_FIRMWARE':
       return 'Unsupported firmware.';
     case 'PLATFORM_UNSUPPORTED':
@@ -326,6 +466,9 @@ function detectErrorCode(error: unknown): string {
   }
   if (message.includes('permission')) return 'PERMISSION_DENIED';
   if (message.includes('pair') || message.includes('bond')) return 'PAIRING_REQUIRED';
+  if (message.includes('operation was cancelled') || message.includes('operation was canceled')) {
+    return 'CONNECT_CANCELLED';
+  }
   if (message.includes('not found') || message.includes('unavailable')) return 'DEVICE_UNAVAILABLE';
   if (message.includes('firmware')) return 'UNSUPPORTED_FIRMWARE';
   return 'CONNECT_FAILED';
@@ -350,6 +493,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     private isReconnecting = false;
     private reconnectAttempts = 0;
     private manualDisconnectRequested = false;
+    private pollingGeneration = 0;
     private subscribers = new Set<AdapterSubscriber>();
     private eventSubscribers = new Map<AdapterEventName, Set<AdapterEventListener>>();
     private telemetryByDeviceId = new Map<string, BluTelemetry>();
@@ -438,7 +582,10 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     private getProviderConnectedDevices(): BluDevice[] {
-      return this.connectedDevices.filter((device) => device.connection_state === 'connected');
+      const connected = this.connectedDevices.filter((device) => device.connection_state === 'connected');
+      const nativeDeviceId = this.getNativeConnectedDeviceId();
+      if (!nativeDeviceId) return connected;
+      return connected.filter((device) => device.device_id === nativeDeviceId);
     }
 
     private getTelemetryByDeviceObject(): Record<string, BluTelemetry> {
@@ -654,13 +801,39 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         return this.failScan('Bluetooth is unavailable on web.', 'PLATFORM_UNSUPPORTED');
       }
 
-      const permissions = await ensureBlePermissions();
+      bluLog('[BLU_SCAN]', 'native_ble_vendor_permission_start', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        phase: 'scan_permission',
+      });
+      let permissions: BlePermissionResult;
+      try {
+        permissions = await ensureBlePermissions();
+      } catch (error) {
+        const message = String((error as any)?.message ?? error ?? 'Permission check failed.');
+        bluLog('[BLU_SCAN]', 'native_ble_vendor_permission_error', {
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'scan_permission',
+          errorCode: 'PERMISSION_ERROR',
+          message,
+        });
+        return this.failScan('Permission denied.', 'PERMISSION_DENIED');
+      }
+      bluLog('[BLU_SCAN]', 'native_ble_vendor_permission_result', {
+        vendor: config.provider,
+        providerName: config.displayName,
+        phase: 'scan_permission',
+        ok: permissions.ok,
+        missing: permissions.missing,
+      });
       if (!permissions.ok) {
         bluLog(getBluVendorPrefix(config.provider), 'native_ble_scan_blocked', {
           vendor: config.provider,
           phase: 'scan_permission',
           errorCode: 'PERMISSION_DENIED',
           message: 'Permission denied.',
+          missing: permissions.missing,
         });
         return this.failScan('Permission denied.', 'PERMISSION_DENIED');
       }
@@ -670,7 +843,15 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         manager = getBleManager();
       } catch (error) {
         const errorCode = detectErrorCode(error);
-        return this.failScan(errorFromCode(errorCode), errorCode);
+        const message = String((error as any)?.message ?? errorFromCode(errorCode));
+        bluLog('[BLU_SCAN]', 'native_ble_vendor_manager_unavailable', {
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'scan_readiness',
+          errorCode,
+          message,
+        });
+        return this.failScan(errorCode === 'PLATFORM_UNSUPPORTED' ? message : errorFromCode(errorCode), errorCode);
       }
 
       this.isScanning = true;
@@ -838,7 +1019,21 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         return this.handleConnectError('Start a device scan before connecting.', 'DEVICE_UNAVAILABLE');
       }
 
+      bluLog('[BLU_CONNECT]', 'native_ble_vendor_permission_start', {
+        deviceId: target.id,
+        vendor: config.provider,
+        providerName: config.displayName,
+        phase: 'connect_permission',
+      });
       const permissions = await ensureBlePermissions();
+      bluLog('[BLU_CONNECT]', 'native_ble_vendor_permission_result', {
+        deviceId: target.id,
+        vendor: config.provider,
+        providerName: config.displayName,
+        phase: 'connect_permission',
+        ok: permissions.ok,
+        missing: permissions.missing,
+      });
       if (!permissions.ok) {
         return this.handleConnectError('Permission denied.', 'PERMISSION_DENIED');
       }
@@ -867,10 +1062,44 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
           );
           await bluDeviceRegistry.updateConnectionState(config.provider, previousDeviceId, 'disconnected');
         }
-        const device = await manager.connectToDevice(target.id, {
-          requestMTU: 256,
-          timeout: 15_000,
-        });
+        let device: BleManagerDevice | null = null;
+        for (let attempt = 1; attempt <= CONNECT_CANCELLED_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            device = await manager.connectToDevice(target.id, {
+              requestMTU: 256,
+              timeout: 15_000,
+            });
+            break;
+          } catch (error) {
+            const attemptErrorCode = detectErrorCode(error);
+            const attemptMessage = String((error as any)?.message ?? errorFromCode(attemptErrorCode));
+            const canRetry =
+              attemptErrorCode === 'CONNECT_CANCELLED' &&
+              attempt < CONNECT_CANCELLED_MAX_ATTEMPTS &&
+              !this.manualDisconnectRequested;
+            if (!canRetry) throw error;
+            bluLog('[BLU_CONNECT]', 'native_ble_vendor_connect_cancelled_retry', {
+              deviceId: target.id,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'native_ble_connect',
+              attempt,
+              nextAttempt: attempt + 1,
+              delayMs: CONNECT_CANCELLED_RETRY_DELAY_MS,
+              errorCode: attemptErrorCode,
+              message: attemptMessage,
+            });
+            try {
+              await manager.cancelDeviceConnection?.(target.id);
+            } catch {
+              // Best effort cleanup before retrying the Android BLE transport.
+            }
+            await delay(CONNECT_CANCELLED_RETRY_DELAY_MS);
+          }
+        }
+        if (!device) {
+          return this.handleConnectError('Device unavailable.', 'DEVICE_UNAVAILABLE');
+        }
 
         await device.discoverAllServicesAndCharacteristics();
         bluLog('[BLU_HANDSHAKE]', 'native_ble_vendor_services_discovered', {
@@ -1062,17 +1291,23 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       this.stopPolling(false);
       this.currentPollInterval = intervalMs;
       this.isPaused = false;
+      const pollingGeneration = ++this.pollingGeneration;
 
       const tick = async () => {
+        if (pollingGeneration !== this.pollingGeneration || this.manualDisconnectRequested) return;
         if (this.connectionState !== 'connected' && !this.isReconnecting) return;
 
         if (this.isPaused) {
-          this.pollTimer = setTimeout(tick, BACKGROUND_POLL_INTERVAL_MS);
+          if (pollingGeneration === this.pollingGeneration && !this.manualDisconnectRequested) {
+            this.pollTimer = setTimeout(tick, BACKGROUND_POLL_INTERVAL_MS);
+          }
           return;
         }
 
         await this.pollConnectedDevices();
-        this.pollTimer = setTimeout(tick, this.currentPollInterval);
+        if (pollingGeneration === this.pollingGeneration && !this.manualDisconnectRequested) {
+          this.pollTimer = setTimeout(tick, this.currentPollInterval);
+        }
       };
 
       void tick();
@@ -1086,6 +1321,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     stopPolling(stopStreams: boolean = true): void {
+      this.pollingGeneration += 1;
       if (this.pollTimer) {
         clearTimeout(this.pollTimer);
         this.pollTimer = null;
@@ -1210,9 +1446,38 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     private getPrimaryDeviceId(): string | null {
+      const nativeDeviceId = this.getNativeConnectedDeviceId();
+      if (nativeDeviceId) return nativeDeviceId;
       const primary = bluDeviceRegistry.getPrimary();
       if (primary?.provider === config.provider) return primary.device_id;
       return this.connectedDevices[0]?.device_id ?? null;
+    }
+
+    private getNativeConnectedDeviceId(): string | null {
+      const id = this.connectedDeviceRef?.id;
+      return typeof id === 'string' && id.trim().length > 0 ? id : null;
+    }
+
+    private resolveNativePollTargetId(requestedId: string | null | undefined): string | null {
+      const nativeDeviceId = this.getNativeConnectedDeviceId();
+      if (!nativeDeviceId) return requestedId ?? this.getPrimaryDeviceId();
+      if (requestedId && requestedId !== nativeDeviceId) {
+        bluLogThrottled(
+          '[BLU_STREAM]',
+          `${config.provider}:native-poll-alias:${requestedId}:${nativeDeviceId}`,
+          'native_ble_vendor_poll_alias_rerouted',
+          {
+            requestedDeviceId: requestedId,
+            deviceId: nativeDeviceId,
+            vendor: config.provider,
+            providerName: config.displayName,
+            phase: 'telemetry_poll',
+            reason: 'Native BLE adapter has one active peripheral; polling uses the connected BLE device id.',
+          },
+          30_000,
+        );
+      }
+      return nativeDeviceId;
     }
 
     private async pollConnectedDevices(): Promise<void> {
@@ -1232,7 +1497,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
     }
 
     async pollTelemetry(deviceId?: string): Promise<NativeBlePollResult> {
-      const targetId = deviceId ?? this.getPrimaryDeviceId();
+      const targetId = this.resolveNativePollTargetId(deviceId ?? this.getPrimaryDeviceId());
       if (!targetId || !this.connectedDeviceRef) {
         return { success: false, telemetry: null, error: 'No device available to poll.' };
       }
@@ -1258,6 +1523,68 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
           name: this.connectedDevices.find((item) => item.device_id === targetId)?.display_name ?? `${config.displayName} Device`,
           rssi: rssi ?? -90,
         };
+        const serviceProbes =
+          config.provider === 'ecoflow'
+            ? await this.probeEcoFlowBleServices(this.connectedDeviceRef, targetId, discovered)
+            : [];
+        const protocolSupport =
+          config.provider === 'ecoflow'
+            ? detectEcoFlowBleProtocolSupport(serviceProbes)
+            : null;
+
+        const ecoFlowReplayCaptureEnabled =
+          config.provider === 'ecoflow' && isEcoFlowBleReplayCaptureEnabled();
+        const ecoFlowDynamicSessionProbeEnabled =
+          config.provider === 'ecoflow' &&
+          (isEcoFlowBleDynamicSessionProbeEnabled() || hasEcoFlowBleProbePrivateKeyConfigured());
+        const ecoFlowProtocolSamplingEnabled =
+          config.provider === 'ecoflow' &&
+          protocolSupport?.hasAnyProtocolPair === true &&
+          (ecoFlowReplayCaptureEnabled || ecoFlowDynamicSessionProbeEnabled);
+        if (
+          config.provider === 'ecoflow' &&
+          protocolSupport?.hasAnyProtocolPair &&
+          !ecoFlowProtocolSamplingEnabled
+        ) {
+          bluLogThrottled(
+            '[BLU_HANDSHAKE]',
+            `ecoflow-ble-session-probe-disabled:${targetId}`,
+            'ecoflow_ble_session_probe_disabled',
+            {
+              deviceId: targetId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'notification_capture',
+              protocolStatus: protocolSupport.protocolStatus,
+              message: 'Set EXPO_PUBLIC_ECS_ECOFLOW_BLE_PROBE_PRIVATE_KEY_BASE64 before starting Expo to negotiate local EcoFlow BLE telemetry without replay capture.',
+            },
+            30_000,
+          );
+        }
+
+        const protocolCapture =
+          ecoFlowProtocolSamplingEnabled
+            ? await this.sampleEcoFlowBleProtocolNotifications(this.connectedDeviceRef, targetId, serviceProbes)
+            : { frames: [], decodedPackets: [] };
+
+        if (ecoFlowReplayCaptureEnabled) {
+          const capture = buildEcoFlowBleReplayCapture({
+            deviceId: discovered.id,
+            displayName: discovered.name,
+            localName: discovered.name,
+            model: discovered.model,
+            providerId: config.provider,
+            providerLabel: config.displayName,
+            serviceUuids: discovered.serviceUUIDs ?? [],
+            manufacturerData: discovered.manufacturerData ?? null,
+            rssi,
+            characteristicMap,
+            services: serviceProbes,
+            protocolFrames: protocolCapture.frames,
+            decodedProtocolPackets: protocolCapture.decodedPackets,
+          });
+          console.log('[ECOFLOW_BLE_REPLAY_CAPTURE]', JSON.stringify(capture));
+        }
 
         const standard = getStandardTelemetry({
           device: discovered,
@@ -1268,11 +1595,22 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
         const vendorSpecific = config.decodeTelemetry?.({
           device: discovered,
           characteristicMap,
+          serviceProbes,
+          protocolSupport,
+          decodedProtocolPackets: protocolCapture.decodedPackets,
           previousTelemetry: this.telemetryByDeviceId.get(targetId) ?? null,
           rssi,
         });
-        const merged = coalesceTelemetry(standard, vendorSpecific);
+        let merged = coalesceTelemetry(standard, vendorSpecific);
         const hasDecodedMetrics = hasDecodedBluetoothTelemetryMetrics(merged as Record<string, unknown>);
+        if (config.provider === 'ecoflow' && protocolSupport) {
+          merged = coalesceTelemetry(merged, {
+            raw: {
+              ecoflowBleProtocol: protocolSupport,
+              ...(!hasDecodedMetrics ? { parserStatus: protocolSupport.protocolStatus } : {}),
+            },
+          });
+        }
         const telemetry: BluTelemetry = withBluPowerTelemetryEnvelope({
           timestamp: Date.now(),
           provider: config.provider,
@@ -1343,6 +1681,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
                 hasObdPid: false,
                 packetAgeMs: 0,
                 readableCharacteristics: characteristicMap.size,
+                ecoflowBleProtocol: protocolSupport,
                 driverMode: config.decodeTelemetry ? 'local_ble_driver' : 'local_ble_incomplete',
               },
           10_000,
@@ -1357,6 +1696,21 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       } catch (error) {
         this.consecutiveFailures += 1;
         const message = String((error as any)?.message ?? error ?? 'Poll failed.');
+        if (this.manualDisconnectRequested || this.connectionState === 'disconnected' || !this.connectedDeviceRef) {
+          lifecycle.stop('poll_aborted_after_disconnect');
+          bluLog('[BLU_DISCONNECT]', 'native_ble_vendor_poll_aborted_after_disconnect', {
+            deviceId: targetId,
+            vendor: config.provider,
+            providerName: config.displayName,
+            phase: 'telemetry_poll',
+            message,
+          });
+          return {
+            success: false,
+            telemetry: this.telemetryByDeviceId.get(targetId) ?? null,
+            error: message,
+          };
+        }
         lifecycle.recordError('telemetry_poll', message, detectErrorCode(error), {
           canRecover: true,
           timeoutMs: this.currentPollInterval,
@@ -1585,6 +1939,494 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       } catch {
         // Best effort only.
       }
+    }
+
+    private async probeEcoFlowBleServices(
+      device: BleManagerDevice,
+      deviceId: string,
+      discovered: NativeBleDiscoveredDevice,
+    ): Promise<EcoFlowBleServiceProbe[]> {
+      try {
+        const services = await device.services();
+        const serviceProbes: EcoFlowBleServiceProbe[] = [];
+        for (const service of services ?? []) {
+          const serviceUuid = String(service?.uuid ?? '').trim().toLowerCase();
+          if (!serviceUuid) continue;
+          let characteristics: any[] = [];
+          try {
+            characteristics = await device.characteristicsForService(service.uuid);
+          } catch {
+            characteristics = [];
+          }
+          serviceProbes.push({
+            uuid: serviceUuid,
+            characteristicCount: Array.isArray(characteristics) ? characteristics.length : 0,
+            characteristics: (characteristics ?? [])
+              .map((characteristic) => buildEcoFlowBleCharacteristicProbe(serviceUuid, characteristic))
+              .filter((characteristic) => characteristic.characteristicUuid.length > 0),
+          });
+        }
+
+        const summary = summarizeEcoFlowBleServices(serviceProbes);
+        const protocolSupport = detectEcoFlowBleProtocolSupport(summary.services);
+        bluLogThrottled(
+          '[BLU_HANDSHAKE]',
+          `ecoflow-ble-protocol:${deviceId}`,
+          'ecoflow_ble_protocol_candidates',
+          {
+            deviceId,
+            vendor: config.provider,
+            providerName: config.displayName,
+            phase: 'service_discovery',
+            serviceCount: summary.serviceCount,
+            characteristicCount: summary.characteristicCount,
+            notificationCandidateCount: summary.notificationCandidateCount,
+            ...protocolSupport,
+          },
+          30_000,
+        );
+        recordEcoFlowBleProbeEvent({
+          providerId: config.provider,
+          providerLabel: config.displayName,
+          displayName: discovered.name,
+          localName: discovered.name,
+          categoryHint: discovered.model,
+          manufacturerData: discovered.manufacturerData ?? null,
+          serviceUuids: discovered.serviceUUIDs ?? [],
+          deviceId,
+          phase: 'service_discovery_completed',
+          services: serviceProbes,
+        });
+        return serviceProbes;
+      } catch (error) {
+        const message = String((error as any)?.message ?? error ?? 'EcoFlow BLE service probe failed.');
+        recordEcoFlowBleProbeEvent({
+          providerId: config.provider,
+          providerLabel: config.displayName,
+          displayName: discovered.name,
+          localName: discovered.name,
+          categoryHint: discovered.model,
+          manufacturerData: discovered.manufacturerData ?? null,
+          serviceUuids: discovered.serviceUUIDs ?? [],
+          deviceId,
+          phase: 'service_discovery_failed',
+          error: message,
+        });
+        return [];
+      }
+    }
+
+    private async sampleEcoFlowBleProtocolNotifications(
+      device: BleManagerDevice,
+      deviceId: string,
+      services: EcoFlowBleServiceProbe[],
+    ): Promise<{
+      frames: EcoFlowBleProtocolFrameCapture[];
+      decodedPackets: EcoFlowBleDecodedProtocolPacketCapture[];
+    }> {
+      const protocolPairs = [
+        ECOFLOW_BLE_PROTOCOL_CHARACTERISTICS.rfcomm,
+        ECOFLOW_BLE_PROTOCOL_CHARACTERISTICS.nordicUart,
+      ];
+      const notifyTarget = services
+        .flatMap((service) => service.characteristics.map((characteristic) => ({
+          serviceUuid: service.uuid,
+          characteristicUuid: characteristic.characteristicUuid,
+          isNotifiable: characteristic.isNotifiable,
+        })))
+        .find((candidate) =>
+          candidate.isNotifiable === true &&
+          protocolPairs.some((pair) => compactUuid(pair.notifyUuid) === compactUuid(candidate.characteristicUuid))
+        );
+      const writeTarget = services
+        .flatMap((service) => service.characteristics.map((characteristic) => ({
+          serviceUuid: service.uuid,
+          characteristicUuid: characteristic.characteristicUuid,
+          isWritableWithResponse: characteristic.isWritableWithResponse,
+          isWritableWithoutResponse: characteristic.isWritableWithoutResponse,
+        })))
+        .find((candidate) =>
+          (candidate.isWritableWithResponse === true || candidate.isWritableWithoutResponse === true) &&
+          protocolPairs.some((pair) => compactUuid(pair.writeUuid) === compactUuid(candidate.characteristicUuid))
+        );
+
+      if (!notifyTarget) return { frames: [], decodedPackets: [] };
+
+      const frames: EcoFlowBleProtocolFrameCapture[] = [];
+      const decodedPackets: EcoFlowBleDecodedProtocolPacketCapture[] = [];
+      const probeFrames = getEcoFlowBleProbeFramesFromEnv();
+      const dynamicSessionProbeEnabled =
+        config.provider === 'ecoflow' &&
+        (isEcoFlowBleDynamicSessionProbeEnabled() || hasEcoFlowBleProbePrivateKeyConfigured());
+      const connectedDeviceRecord = this.connectedDevices.find((entry) => entry.device_id === deviceId);
+      const dynamicSessionPacketVersion = inferEcoFlowBlePacketVersionFromHints([
+        deviceId,
+        connectedDeviceRecord?.display_name,
+        (connectedDeviceRecord as { model?: string | null } | undefined)?.model,
+      ]);
+      const dynamicSessionProbe = dynamicSessionProbeEnabled
+        ? (() => {
+            try {
+              return createEcoFlowBleSessionProbe({
+                packetVersion: dynamicSessionPacketVersion,
+                includeDecryptedPayloadBase64: true,
+              });
+            } catch (error) {
+              bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_dynamic_session_probe_unavailable', {
+                deviceId,
+                vendor: config.provider,
+                providerName: config.displayName,
+                phase: 'dynamic_session_probe',
+                message: String((error as any)?.message ?? error ?? 'EcoFlow BLE dynamic session probe is unavailable.'),
+              });
+              return null;
+            }
+          })()
+        : null;
+      const activeProbeFrames = dynamicSessionProbe ? [] : probeFrames;
+      const captureMs = getEcoFlowBleNotificationCaptureMs();
+      const maxFrames = getEcoFlowBleNotificationCaptureMaxFrames();
+      const verboseSessionLogs = isEcoFlowBleVerboseSessionLoggingEnabled();
+      const startedAt = Date.now();
+      let subscription: BleManagerSubscription = null;
+      let accountAuthAttempted = false;
+      let accountAuthWaitingForStatusResponse = false;
+      const accountAuthPayloadPromise = dynamicSessionProbe
+        ? requestEcoFlowBleAuthPayload({
+            deviceIdHint: deviceId,
+            deviceNameHint: connectedDeviceRecord?.display_name ?? deviceId,
+            modelHint: (connectedDeviceRecord as { model?: string | null } | undefined)?.model ?? null,
+          }).catch((error) => error)
+        : null;
+
+      try {
+        const writeProbeFrame = async (
+          valueBase64: string,
+          kind: string,
+        ): Promise<void> => {
+          if (!writeTarget) return;
+          const frame = buildEcoFlowBleProtocolFrameCapture({
+            direction: 'write',
+            serviceUuid: writeTarget.serviceUuid,
+            characteristicUuid: writeTarget.characteristicUuid,
+            valueBase64,
+            capturedAtOffsetMs: Date.now() - startedAt,
+          });
+          if (frame) frames.push(frame);
+          if (verboseSessionLogs) {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_active_probe_write_start', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: kind === 'explicit_env_probe' ? 'active_probe' : 'dynamic_session_probe',
+              probeKind: kind,
+              serviceUuid: writeTarget.serviceUuid,
+              characteristicUuid: writeTarget.characteristicUuid,
+              valueLength: frame?.valueLength ?? 0,
+              valueFingerprint: frame?.valueFingerprint ?? null,
+              writeMode: writeTarget.isWritableWithResponse === true ? 'with_response' : 'without_response',
+            });
+          }
+          if (writeTarget.isWritableWithResponse === true) {
+            await device.writeCharacteristicWithResponseForService(
+              writeTarget.serviceUuid,
+              writeTarget.characteristicUuid,
+              valueBase64,
+            );
+          } else {
+            await device.writeCharacteristicWithoutResponseForService(
+              writeTarget.serviceUuid,
+              writeTarget.characteristicUuid,
+              valueBase64,
+            );
+          }
+          if (verboseSessionLogs) {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_active_probe_write_succeeded', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: kind === 'explicit_env_probe' ? 'active_probe' : 'dynamic_session_probe',
+              probeKind: kind,
+              valueLength: frame?.valueLength ?? 0,
+              valueFingerprint: frame?.valueFingerprint ?? null,
+            });
+          }
+          if (kind === 'auth_status_request' && dynamicSessionProbe && accountAuthPayloadPromise && !accountAuthAttempted) {
+            accountAuthWaitingForStatusResponse = true;
+            if (verboseSessionLogs) {
+              bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_waiting_for_status_response', {
+                deviceId,
+                vendor: config.provider,
+                providerName: config.displayName,
+                phase: 'dynamic_session_probe',
+                probeKind: 'account_auth_request',
+                message: 'EcoFlow BLE account auth payload will be sent after the auth-status response is captured.',
+              });
+            }
+          }
+        };
+
+        const sendAccountAuthRequest = async (): Promise<void> => {
+          if (!dynamicSessionProbe || !accountAuthPayloadPromise || accountAuthAttempted) return;
+          accountAuthAttempted = true;
+          try {
+            const authPayload = await accountAuthPayloadPromise;
+            if (authPayload instanceof Error) throw authPayload;
+            if (verboseSessionLogs) {
+              bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_payload_ready', {
+                deviceId,
+                vendor: config.provider,
+                providerName: config.displayName,
+                phase: 'dynamic_session_probe',
+                probeKind: 'account_auth_request',
+                authPayloadFingerprint: authPayload.authPayloadFingerprint,
+                deviceSerialFingerprint: authPayload.deviceSerialFingerprint,
+                deviceSerialSuffix: authPayload.deviceSerialSuffix,
+                accountFingerprint: authPayload.accountFingerprint,
+              });
+            }
+            const accountAuthStep = dynamicSessionProbe.getAccountAuthFrame(authPayload.authPayloadBase64);
+            if (accountAuthStep.writeFrameBase64 && accountAuthStep.writeFrameKind) {
+              await writeProbeFrame(accountAuthStep.writeFrameBase64, accountAuthStep.writeFrameKind);
+            }
+          } catch (error) {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_payload_unavailable', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'dynamic_session_probe',
+              probeKind: 'account_auth_request',
+              message: String((error as any)?.message ?? error ?? 'EcoFlow BLE account auth payload is unavailable.'),
+            });
+          }
+        };
+
+        const handleDynamicSessionProbeStep = (step: EcoFlowBleSessionProbeStep | null): void => {
+          if (!step) return;
+          for (const summary of step.packetSummaries ?? []) {
+            const decodedPacket = buildEcoFlowBleDecodedProtocolPacketCapture({
+              direction: 'notify',
+              valid: summary.valid,
+              src: summary.src,
+              dst: summary.dst,
+              cmdSet: summary.cmdSet,
+              cmdId: summary.cmdId,
+              version: summary.version,
+              payloadLength: summary.payloadLength,
+              payloadFirstByte: summary.payloadFirstByte,
+              payloadBase64: summary.payloadBase64,
+              payloadFingerprint: summary.payloadFingerprint,
+              packetBase64: summary.packetBase64,
+              packetFingerprint: summary.packetFingerprint,
+              decryptedPayloadBase64: summary.decryptedPayloadBase64,
+              decryptedPayloadFingerprint: summary.decryptedPayloadFingerprint,
+              decryptedPayloadLength: summary.decryptedPayloadLength,
+              parseError: summary.parseError,
+              capturedAtOffsetMs: Date.now() - startedAt,
+            });
+            if (decodedPacket) decodedPackets.push(decodedPacket);
+          }
+          const shouldLogProbeStep =
+            verboseSessionLogs ||
+            step.phase === 'public_key_sent' ||
+            step.phase === 'shared_key_ready' ||
+            step.phase === 'auth_status_sent' ||
+            step.phase === 'account_auth_accepted';
+          if (shouldLogProbeStep) {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_dynamic_session_probe_step', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'dynamic_session_probe',
+              probePhase: step.phase,
+              writeFrameKind: step.writeFrameKind ?? null,
+              valueLength: step.valueLength ?? null,
+              valueFingerprint: step.valueFingerprint ?? null,
+              sessionKeyFingerprint: step.sessionKeyFingerprint ?? null,
+              packetVersion: step.packetVersion ?? null,
+              packetSummaries: verboseSessionLogs ? step.packetSummaries ?? null : null,
+              error: step.error ?? null,
+            });
+          }
+          const accountAuthSummary = step.packetSummaries?.find((summary) => (
+            summary.valid === true &&
+            summary.cmdSet === 0x35 &&
+            summary.cmdId === 0x86 &&
+            summary.authStatusCode != null
+          ));
+          if (accountAuthSummary) {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_result', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'dynamic_session_probe',
+              probeKind: 'account_auth_request',
+              authStatusCode: accountAuthSummary.authStatusCode,
+              authStatusLabel: accountAuthSummary.authStatusLabel ?? 'unknown_error',
+              authStatusOk: accountAuthSummary.authStatusOk === true,
+              message: getEcoFlowBleAccountAuthStatusMessage(accountAuthSummary.authStatusLabel),
+            });
+          } else if (step.phase === 'account_auth_accepted') {
+            bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_result', {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'dynamic_session_probe',
+              probeKind: 'account_auth_request',
+              authStatusCode: 0,
+              authStatusLabel: 'authorized_by_data_packet',
+              authStatusOk: true,
+              message: 'EcoFlow BLE account authorization appears accepted; encrypted device data started after auth.',
+            });
+          }
+          if (accountAuthWaitingForStatusResponse && step.phase === 'auth_status_received') {
+            accountAuthWaitingForStatusResponse = false;
+            void sendAccountAuthRequest().catch((error) => {
+              bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_write_failed', {
+                deviceId,
+                vendor: config.provider,
+                providerName: config.displayName,
+                phase: 'dynamic_session_probe',
+                probeKind: 'account_auth_request',
+                message: String((error as any)?.message ?? error ?? 'EcoFlow BLE account auth write failed.'),
+              });
+            });
+          }
+          if (step.writeFrameBase64 && step.writeFrameKind) {
+            void writeProbeFrame(step.writeFrameBase64, step.writeFrameKind).catch((error) => {
+              bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_dynamic_session_probe_write_failed', {
+                deviceId,
+                vendor: config.provider,
+                providerName: config.displayName,
+                phase: 'dynamic_session_probe',
+                probeKind: step.writeFrameKind,
+                message: String((error as any)?.message ?? error ?? 'EcoFlow BLE dynamic session probe write failed.'),
+              });
+            });
+          }
+        };
+
+        subscription = device.monitorCharacteristicForService(
+          notifyTarget.serviceUuid,
+          notifyTarget.characteristicUuid,
+          (error: any, characteristic: any) => {
+            if (error || frames.length >= maxFrames) return;
+            const frame = buildEcoFlowBleProtocolFrameCapture({
+              direction: 'notify',
+              serviceUuid: notifyTarget.serviceUuid,
+              characteristicUuid: notifyTarget.characteristicUuid,
+              valueBase64: characteristic?.value,
+              capturedAtOffsetMs: Date.now() - startedAt,
+            });
+            if (frame) frames.push(frame);
+            if (dynamicSessionProbe && characteristic?.value) {
+              handleDynamicSessionProbeStep(dynamicSessionProbe.processNotifyFrame(characteristic.value));
+            }
+          },
+        );
+        if (writeTarget && (activeProbeFrames.length > 0 || dynamicSessionProbe)) {
+          const dynamicInitialStep = dynamicSessionProbe?.getPublicKeyExchangeFrame() ?? null;
+          bluLogThrottled(
+            '[BLU_HANDSHAKE]',
+            `ecoflow-ble-active-probe:${deviceId}`,
+            'ecoflow_ble_active_probe_start',
+            {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'active_probe',
+              frameCount: activeProbeFrames.length + (dynamicInitialStep?.writeFrameBase64 ? 1 : 0),
+              dynamicSessionProbeEnabled: Boolean(dynamicSessionProbe),
+              captureMs,
+              maxFrames,
+            },
+            60_000,
+          );
+          if (dynamicInitialStep) {
+            handleDynamicSessionProbeStep(dynamicInitialStep);
+          }
+          for (const valueBase64 of activeProbeFrames) {
+            await writeProbeFrame(valueBase64, 'explicit_env_probe');
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+        } else {
+          bluLogThrottled(
+            '[BLU_HANDSHAKE]',
+            `ecoflow-ble-active-probe-skipped:${deviceId}`,
+            'ecoflow_ble_active_probe_skipped',
+            {
+              deviceId,
+              vendor: config.provider,
+              providerName: config.displayName,
+              phase: 'active_probe',
+              hasWriteTarget: Boolean(writeTarget),
+              explicitProbeFrameCount: activeProbeFrames.length,
+              dynamicSessionProbeEnabled,
+              dynamicSessionProbeAvailable: Boolean(dynamicSessionProbe),
+              privateKeyConfigured: hasEcoFlowBleProbePrivateKeyConfigured(),
+            },
+            60_000,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, captureMs));
+      } catch (error) {
+        bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_notification_capture_failed', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'notification_capture',
+          message: String((error as any)?.message ?? error ?? 'EcoFlow BLE notification capture failed.'),
+        });
+      } finally {
+        try {
+          subscription?.remove?.();
+        } catch {}
+      }
+
+      if (dynamicSessionProbe?.getCurrentPhase() === 'account_auth_sent') {
+        bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_account_auth_response_missing', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'dynamic_session_probe',
+          probePhase: 'account_auth_sent',
+          frameCount: frames.length,
+          timeoutMs: captureMs,
+          message:
+            'EcoFlow BLE account-bound auth payload was written, but no encrypted telemetry/auth response was captured before the capture window ended.',
+        });
+      } else if (dynamicSessionProbe?.getCurrentPhase() === 'auth_status_sent') {
+        bluLog('[BLU_HANDSHAKE]', 'ecoflow_ble_auth_status_response_missing', {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'dynamic_session_probe',
+          probePhase: 'auth_status_sent',
+          frameCount: frames.length,
+          timeoutMs: captureMs,
+          message:
+            'EcoFlow BLE session key was negotiated and auth-status was sent, but no encrypted response was captured. This model likely requires account-bound BLE authorization before telemetry can stream.',
+        });
+      }
+
+      bluLogThrottled(
+        '[BLU_HANDSHAKE]',
+        `ecoflow-ble-notification-capture:${deviceId}`,
+        'ecoflow_ble_notification_capture_completed',
+        {
+          deviceId,
+          vendor: config.provider,
+          providerName: config.displayName,
+          phase: 'notification_capture',
+          frameCount: frames.length,
+          decodedPacketCount: decodedPackets.length,
+          timeoutMs: captureMs,
+          maxFrames,
+        },
+        30_000,
+      );
+
+      return { frames, decodedPackets };
     }
 
     private async readDeviceMetadata(

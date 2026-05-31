@@ -265,6 +265,54 @@ assert.strictEqual(delta3PartialPerDeviceTelemetry.telemetryActive, true);
 assert.strictEqual(delta3PartialPerDeviceTelemetry.telemetry.battery.wattsIn, 127);
 assert.strictEqual(delta3PartialPerDeviceTelemetry.telemetry.battery.socPct, undefined);
 
+const wavePerDeviceOnlyTelemetry = normalizeEcoFlowCloudTelemetry(
+  {
+    rawId: 'KT21FAH5HGB70041',
+    name: 'WAVE 2-0041',
+    subtype: 'WAVE 2',
+    category: 'portable_ac',
+  },
+  null,
+  [
+    {
+      deviceId: 'KT21FAH5HGB70041',
+      name: 'WAVE 2-0041',
+      model: 'WAVE 2',
+      solarWatts: 0,
+      tempC: 19.4,
+      ok: true,
+      pendingApproval: false,
+      unauthorized: false,
+      error: null,
+      polledAt: 1700000000285,
+    },
+  ],
+  1700000000290,
+);
+
+assert.strictEqual(wavePerDeviceOnlyTelemetry.productType, 'portable_ac');
+assert.strictEqual(wavePerDeviceOnlyTelemetry.telemetryActive, true);
+assert.strictEqual(wavePerDeviceOnlyTelemetry.batteryPct, null);
+assert.strictEqual(wavePerDeviceOnlyTelemetry.solarWatts, 0);
+assert.strictEqual(wavePerDeviceOnlyTelemetry.acTemperatureC, 19.4);
+assert.strictEqual(wavePerDeviceOnlyTelemetry.telemetry.battery.tempC, 19.4);
+assert.strictEqual(wavePerDeviceOnlyTelemetry.telemetry.capabilities.hasSOC, false);
+
+const cloudConnectionSource = fs.readFileSync(
+  path.join(process.cwd(), 'lib', 'ecoflowCloudConnection.ts'),
+  'utf8',
+);
+assert.match(
+  cloudConnectionSource,
+  /ecoflow_cloud_first_poll_auth_blocked/,
+  'EcoFlow cloud auth blocks must be logged distinctly from no-telemetry timeouts.',
+);
+assert.match(
+  cloudConnectionSource,
+  /isEcoFlowCloudAuthState\(input\.cloudState\)/,
+  'EcoFlow cloud first-poll log classification must branch on auth-blocked states.',
+);
+
 const renamedDeltaPerDeviceTelemetry = normalizeEcoFlowCloudTelemetry(
   {
     rawId: 'USER_RENAMED_DELTA',
@@ -601,6 +649,62 @@ assert.strictEqual(mappedAlternatorChargerQuota.battery.socPct, 76);
 assert.strictEqual(mappedAlternatorChargerQuota.battery.wattsIn, 421);
 assert.strictEqual(mappedAlternatorChargerQuota.battery.wattsOut, 0);
 
+const mappedOfficialDeltaPro3Quota = provider.mapEdgeTelemetry({
+  ok: true,
+  deviceId: 'MR51ZAS2PG330026',
+  telemetry: {
+    cmsBattSoc: 71,
+    cmsChgDsgState: 1,
+    cmsDsgRemTime: 392,
+    powInSumW: 36,
+    powOutSumW: 218,
+    powGetPvH: 22,
+    powGetPvL: 14,
+    bmsMaxCellTemp: 29,
+  },
+});
+assert.strictEqual(
+  mappedOfficialDeltaPro3Quota.battery.socPct,
+  71,
+  'Official newer Delta cloud payloads should decode overall SOC from cmsBattSoc.',
+);
+assert.strictEqual(mappedOfficialDeltaPro3Quota.battery.wattsIn, 36);
+assert.strictEqual(mappedOfficialDeltaPro3Quota.battery.wattsOut, 218);
+assert.strictEqual(
+  mappedOfficialDeltaPro3Quota.solar.watts,
+  36,
+  'Official newer Delta cloud payloads should sum high/low PV input power.',
+);
+assert.strictEqual(
+  mappedOfficialDeltaPro3Quota.battery.estRuntimeMin,
+  392,
+  'Official newer Delta cloud payloads should expose discharge remaining time.',
+);
+assert.strictEqual(
+  mappedOfficialDeltaPro3Quota.flags.charging,
+  false,
+  'A Delta with input watts below output watts should remain classified as discharging.',
+);
+
+const mappedOfficialDelta2RemainTimeQuota = provider.mapEdgeTelemetry({
+  ok: true,
+  deviceId: 'DELTA2_REMAIN_TIME',
+  telemetry: {
+    pd: {
+      soc: 63,
+      remainTime: -185,
+      wattsInSum: 0,
+      wattsOutSum: 207,
+    },
+  },
+});
+assert.strictEqual(mappedOfficialDelta2RemainTimeQuota.battery.socPct, 63);
+assert.strictEqual(
+  mappedOfficialDelta2RemainTimeQuota.battery.estRuntimeMin,
+  185,
+  'Older DELTA cloud payloads should convert negative pd.remainTime to discharge runtime minutes.',
+);
+
 const zeroFlowAggregate = provider.aggregateTelemetry(
   [
     {
@@ -658,6 +762,11 @@ assert.strictEqual(
 assert(
   fs.readFileSync(path.join(process.cwd(), 'src', 'power', 'cloud', 'providers', 'EcoFlowCloudProvider.ts'), 'utf8').includes('delta31500'),
   'EcoFlow provider should include a DELTA 3 1500 profile for route/runtime calculations.',
+);
+assert(
+  fs.readFileSync(path.join(process.cwd(), 'src', 'power', 'cloud', 'providers', 'EcoFlowCloudProvider.ts'), 'utf8').includes('telemetry unauthorized detail') &&
+    fs.readFileSync(path.join(process.cwd(), 'src', 'power', 'cloud', 'providers', 'EcoFlowCloudProvider.ts'), 'utf8').includes('bodySnippet'),
+  'EcoFlow provider should log sanitized Edge Function authorization diagnostics for denied power-station telemetry.',
 );
 
 const mappedEmptyQuota = provider.mapEdgeTelemetry({
@@ -802,6 +911,45 @@ assert.strictEqual(
   assert.strictEqual(authRequiredWithoutPackets.connected, true);
   assert.strictEqual(authRequiredWithoutPackets.telemetryActive, false);
   assert.strictEqual(authRequiredWithoutPackets.cloudState, 'authRequired');
+  assert.match(authRequiredWithoutPackets.statusLabel, /authorization required/i);
+
+  const unauthorizedWithoutPackets = await connectEcoFlowCloudDevice(
+    {
+      rawId: 'F371Z1B49G7S0351',
+      name: 'Alternator Charger',
+      category: 'charger',
+    },
+    {
+      lastStatus: 'cloud_ok',
+      async connect() {},
+      async pollOnce() {
+        return {
+          source: 'cloud',
+          device: { id: 'F371Z1B49G7S0351', vendor: 'EcoFlow', model: 'Alternator Charger' },
+          flags: { stale: true },
+        };
+      },
+      getPerDeviceTelemetry() {
+        return [
+          {
+            deviceId: 'F371Z1B49G7S0351',
+            ok: false,
+            pendingApproval: false,
+            unauthorized: true,
+            failureState: 'deviceUnauthorized',
+            error: 'EcoFlow cloud access is not authorized for this device.',
+            polledAt: Date.now(),
+          },
+        ];
+      },
+    },
+  );
+
+  assert.strictEqual(unauthorizedWithoutPackets.connected, true);
+  assert.strictEqual(unauthorizedWithoutPackets.telemetryActive, false);
+  assert.strictEqual(unauthorizedWithoutPackets.cloudState, 'deviceUnauthorized');
+  assert.match(unauthorizedWithoutPackets.statusLabel, /not authorized/i);
+  assert.doesNotMatch(unauthorizedWithoutPackets.statusLabel, /available/i);
 
   console.log('EcoFlow cloud connection checks passed.');
 })().catch((err) => {

@@ -44,6 +44,10 @@ const user = { latitude: 38.5733, longitude: -109.5507 };
 const defaultPacks = getDefaultECSTrailPacks();
 assert(defaultPacks.length >= 4, 'ECS Trail Pack seed catalog should contain discoverable scaffolding');
 assert(
+  defaultPacks.every((pack) => pack.dataState === 'fixture'),
+  'Default ECS Trail Pack seed catalog should be explicitly marked as fixture data',
+);
+assert(
   defaultPacks.every((pack) => pack.source !== 'partner_source' || pack.reviewStatus !== 'approved'),
   'Partner-source scaffolding must not be discoverable by default',
 );

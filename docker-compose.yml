@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: ecs-trails-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecs_trails}
+      POSTGRES_USER: ${POSTGRES_USER:-ecs_trails}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecs_trails}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ecs_trails_pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: ./apps/api
+    container_name: ecs-trails-api
+    environment:
+      ECS_ENVIRONMENT: ${ECS_ENVIRONMENT:-local}
+      DATABASE_URL: ${API_DATABASE_URL:-postgresql+psycopg://ecs_trails:ecs_trails@db:5432/ecs_trails}
+      MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:-}
+      RIDB_API_KEY: ${RIDB_API_KEY:-}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn ecs_trails_api.main:app --host 0.0.0.0 --port 8000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: ecs-trails-web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN: ${NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN:-}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  ecs_trails_pgdata:

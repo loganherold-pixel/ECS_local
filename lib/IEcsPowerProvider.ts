@@ -368,6 +368,9 @@ export interface IEcsPowerProvider {
   /** Fetch current telemetry for all connected devices */
   fetchTelemetry(): Promise<EcsNormalizedReading[]>;
 
+  /** Return the provider's latest cached/snapshot readings without polling hardware */
+  getLatestReadings?(): EcsNormalizedReading[];
+
   /** Start automatic telemetry polling */
   startPolling(intervalMs?: number): void;
 

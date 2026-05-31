@@ -797,21 +797,6 @@ Expedition Command System
             <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>POWER SYSTEMS</Text>
             <TouchableOpacity
               style={[styles.powerCenterBtn, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}
-              onPress={() => router.push('/power' as any)}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.powerCenterIcon, { backgroundColor: colors.goldMuted }]}>
-                <Ionicons name="flash" size={20} color={colors.gold} />
-              </View>
-              <View style={styles.powerCenterInfo}>
-                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>Power Center</Text>
-                <Text style={[styles.powerCenterDesc, { color: colors.textMuted }]}>Live telemetry, provider status, device management</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.gold} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.powerCenterBtn, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}
               onPress={() => router.push('/power/blu' as any)}
               activeOpacity={0.7}
             >
@@ -1516,7 +1501,7 @@ const styles = StyleSheet.create({
   sharedAccountFooterSecondaryText: { fontSize: 12, fontWeight: '700' },
   sharedAccountFooterPrimary: {},
   sharedAccountFooterPrimaryText: { color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
-  // Power Center
+  // Device Connections
   powerCenterBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: SPACING.md, borderRadius: RADIUS.md, borderWidth: 1, marginBottom: SPACING.lg },
   powerCenterIcon: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   powerCenterInfo: { flex: 1 },

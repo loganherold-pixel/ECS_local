@@ -17,12 +17,12 @@ const POWER_PROVIDER_EXPORTS: {
   loadModule: () => PowerProviderModule;
 }[] = [
   {
-    label: 'EcoFlowBluAdapter',
+    label: 'EcoFlowNativeBlePowerProvider',
     providerId: 'ecoflow',
-    exportName: 'ecoFlowBluAdapter',
+    exportName: 'ecoFlowNativeBlePowerProvider',
     loadModule: () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require('./EcoFlowBluAdapter') as PowerProviderModule;
+      return require('./livePowerBleProviders') as PowerProviderModule;
     },
   },
   {

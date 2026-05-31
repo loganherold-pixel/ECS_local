@@ -19,7 +19,7 @@ assert.ok(
 
 assert.ok(
   modal.includes('Trip Builder, and Offline Prep') &&
-    modal.includes('Field Utilities contains Weather, Quick Note, Comms, Team Ping') &&
+    modal.includes('Field Utilities contains Incident & Recovery, Weather, Quick Note, Comms, Team Ping') &&
     modal.includes('Convoy live sharing is opt-in'),
   'Use Instructions should mention current Explore, Field Utilities, and convoy behavior.',
 );
@@ -47,6 +47,7 @@ assert.ok(
 assert.ok(
   center.includes("case 'field-utilities':") &&
     center.includes('Long press the Dashboard button') &&
+    center.includes('Incident & Recovery: report incidents, safety checklist, ECS assessment, communication packet, timeline, and debrief') &&
     center.includes('Documentation: system references and operational document exports'),
   'Field Utilities generated document should describe the relocated Documentation action.',
 );

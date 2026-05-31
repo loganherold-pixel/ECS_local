@@ -62,6 +62,17 @@ assert(
 );
 
 assert(
+  fleetScreen.includes('style={s.commandReadinessBadge}') &&
+    fleetScreen.includes('textStyle={s.commandReadinessBadgeText}') &&
+    fleetScreen.includes('commandReadinessBadge') &&
+    fleetScreen.includes('minWidth: 188') &&
+    fleetScreen.includes('commandStatusStack') &&
+    fleetScreen.includes('maxWidth: 220') &&
+    fleetScreen.includes('flexShrink: 0'),
+  'Fleet Readiness Command status badge should be wide enough to show PARTIALLY CONFIGURED without clipping.',
+);
+
+assert(
     fleetScreen.includes('onConfidencePress') &&
     fleetScreen.includes('FleetConfidenceNoticeModal') &&
     fleetScreen.includes('scoreEyebrow="VEHICLE CONFIDENCE"') &&

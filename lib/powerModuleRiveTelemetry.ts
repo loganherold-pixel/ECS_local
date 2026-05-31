@@ -17,6 +17,7 @@ export type PowerModuleRiveTelemetrySource = {
   } | null;
   batteryPercent?: number | null;
   inputWatts?: number | null;
+  solarWatts?: number | null;
   outputWatts?: number | null;
 } | null | undefined;
 
@@ -48,11 +49,17 @@ export function adaptPowerTelemetryForRive(
     telemetry.snapshot?.isStale !== true &&
     telemetry.sourceState?.isStale !== true &&
     telemetry.sourceState?.isUnavailable !== true;
+  const inputWatts = sanitizeRiveWatts(telemetry.inputWatts);
+  const solarWatts = sanitizeRiveWatts(telemetry.solarWatts);
+  const recoveryWatts =
+    inputWatts != null && solarWatts != null
+      ? Math.max(inputWatts, solarWatts)
+      : inputWatts ?? solarWatts;
 
   return {
     hasEcsData: hasFreshTelemetry,
     batteryPercent: hasFreshTelemetry ? sanitizeRivePercent(telemetry.batteryPercent) : null,
-    inputWatts: hasFreshTelemetry ? sanitizeRiveWatts(telemetry.inputWatts) : 0,
+    inputWatts: hasFreshTelemetry ? recoveryWatts : 0,
     outputWatts: hasFreshTelemetry ? sanitizeRiveWatts(telemetry.outputWatts) : 0,
   };
 }

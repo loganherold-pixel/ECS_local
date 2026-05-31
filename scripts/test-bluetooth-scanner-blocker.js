@@ -14,6 +14,7 @@ function assert(condition, message) {
 }
 
 const adapter = read('src/vehicle-telemetry/OBD2Adapter.ts');
+const vehicleTelemetryRegistry = read('src/vehicle-telemetry/VehicleTelemetryDeviceRegistry.ts');
 const troubleshootingDoc = read('docs/bluetooth-unified-scanner-troubleshooting.md');
 for (const marker of [
   '[BT_SCAN] scan_button_pressed',
@@ -129,9 +130,10 @@ assert(
   'BLE scan readiness helper must gate scan start on permission, manager readiness, and powered-on adapter state',
 );
 assert(
-  readiness.includes("missing: ['runtime.expo_go']") &&
+  !readiness.includes("missing: ['runtime.expo_go']") &&
+    readiness.includes('manager = createManager()') &&
     readiness.includes('Expo Go and web preview do not include the native Bluetooth scanner'),
-  'BLE scan readiness helper must surface an Expo Go/current-runtime unsupported message',
+  'BLE scan readiness helper must attempt native manager init before surfacing runtime unsupported state',
 );
 assert(
   readiness.includes('export function isBleNativeModuleUnavailableError') &&
@@ -261,12 +263,15 @@ assert(
   'unified scanner hook must expose cleanup that stops active scans without retriggering them',
 );
 assert(
-    unified.includes("discoverEcoFlowDevicesForUnifiedScanner") &&
+  unified.includes("discoverEcoFlowDevicesForUnifiedScanner") &&
     unified.includes("from './ecoflowUnifiedScannerDiscovery';") &&
     unified.includes('const ecoFlowDiscovery = discoverEcoFlowDevicesForUnifiedScanner()') &&
+    unified.includes("const ecoFlowBleDiscovery = nativeBluetoothUnsupported") &&
+    unified.includes("ecsProviderRegistry.getProvider('ecoflow')") &&
+    unified.includes('power_ble_discovery_start') &&
     unified.includes('setDiscoveredPowerDevices((current) =>') &&
-    unified.includes('Promise.allSettled([bleScan, ecoFlowDiscovery, classicDiscovery])'),
-  'manual scanner flow must run EcoFlow API discovery in parallel with BLE and bridge results into the unified device list',
+    unified.includes('Promise.allSettled([bleScan, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery])'),
+  'manual scanner flow must run EcoFlow API/native BLE discovery in parallel with BLE and bridge results into the unified device list',
 );
 assert(
   unified.includes('discoverClassicBluetoothDevicesForUnifiedScanner') &&
@@ -279,8 +284,16 @@ assert(
   unified.includes('upsertScannerDeviceList') &&
     unified.includes('upsertDiscoveredPowerDeviceList') &&
     unified.includes("'ecoflow_api_success'") &&
-    unified.includes('setDiscoveredPowerDevices((current) =>'),
+    unified.includes('setDiscoveredPowerDevices((current) =>') &&
+    unified.includes('setScannerClock(Date.now());'),
   'EcoFlow API scan refreshes must use functional scanner-state upserts without dropping other discovered power devices',
+);
+assert(
+  unified.includes("routedPowerDiscoveries.length === 0") &&
+    unified.includes("routedTelemetryDiscoveries.length === 0") &&
+    unified.includes("routedAccessoryDiscoveries.length === 0") &&
+    unified.includes("setManualScanStatus('completed');"),
+  'manual scanner results must refresh the visible scanner snapshot on the first scan without requiring a second button press',
 );
 const scannerState = read('lib/scannerDeviceListState.ts');
 assert(
@@ -430,7 +443,8 @@ assert(
   nativeBleAdapter.includes('isBleNativeModuleUnavailableError') &&
     nativeBleAdapter.includes('getBleRuntimeUnsupportedMessage') &&
     nativeBleAdapter.includes("return 'PLATFORM_UNSUPPORTED';") &&
-    nativeBleAdapter.includes('return this.failScan(errorFromCode(errorCode), errorCode);'),
+    nativeBleAdapter.includes('native_ble_vendor_manager_unavailable') &&
+    nativeBleAdapter.includes("errorCode === 'PLATFORM_UNSUPPORTED' ? message : errorFromCode(errorCode)"),
   'native BLE power adapter must report Expo Go/createClient native module failures as platform unsupported instead of Bluetooth disabled or per-device failures',
 );
 
@@ -540,11 +554,13 @@ assert(
 const powerCenter = read('app/power/index.tsx');
 const moreTab = read('app/(tabs)/more.tsx');
 assert(
-  powerCenter.includes("router.push('/power/blu')") &&
-    powerCenter.includes('DEVICE CONNECTIONS') &&
+  powerCenter.includes("import { Redirect } from 'expo-router'") &&
+    powerCenter.includes('<Redirect href="/power/blu" />') &&
     moreTab.includes("router.push('/power/blu' as any)") &&
-    moreTab.includes('Device Connections'),
-  'Power Center and More tab entry points must route to /power/blu with current Device Connections labels',
+    moreTab.includes('Device Connections') &&
+    !moreTab.includes("router.push('/power' as any)") &&
+    !moreTab.includes('Power Center</Text>'),
+  'legacy Power Center and More tab entry points must resolve to /power/blu with current Device Connections labels',
 );
 
 const routing = read('lib/bluetoothDeviceRouting.ts');
@@ -586,6 +602,28 @@ assert(
   routing.includes('needsUserConfirmation') &&
     routing.includes("providerId: 'brand_confirmation'"),
   'routing must keep ambiguous multi-brand matches visible for user confirmation instead of dropping them',
+);
+assert(
+  unified.includes('connectedWithoutTelemetryLogKeysRef') &&
+    unified.includes('currentUnsupportedTelemetryKeys') &&
+    unified.includes("device.telemetryUnsupported && device.telemetrySource !== 'unavailable'") &&
+    unified.includes("bluLog('[BLU_STREAM]', 'connected_without_live_telemetry'") &&
+    !unified.includes("bluLogThrottled('[BLU_STREAM]', `connected-model-no-telemetry"),
+  'connected-without-telemetry diagnostics must skip unavailable startup state and emit once per actionable state',
+);
+assert(
+  adapter.includes('function isEcoFlowBleAdvertisementName') &&
+    adapter.includes("deviceName: string") &&
+    adapter.includes('sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_ID)') &&
+    adapter.includes('sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_NAME)'),
+  'OBD2 adapter must refuse to persist stale EcoFlow BLE advertisement names as the last OBD device',
+);
+assert(
+  vehicleTelemetryRegistry.includes('function isRestorableVehicleTelemetryDevice') &&
+    vehicleTelemetryRegistry.includes("device.provider === 'obd2' && isEcoFlowBleAdvertisementName(device.device_name)") &&
+    vehicleTelemetryRegistry.includes('Ignored missing or invalid restored primary device') &&
+    vehicleTelemetryRegistry.includes('Refusing to register EcoFlow BLE advertisement as OBD2 telemetry'),
+  'vehicle telemetry registry must prune and reject stale EF-* EcoFlow advertisements stored under OBD2',
 );
 
 console.log('Bluetooth scanner blocker checks passed.');

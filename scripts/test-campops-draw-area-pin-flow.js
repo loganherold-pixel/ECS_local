@@ -213,7 +213,11 @@ function updateMockCampScoutMapboxSource(map, markers) {
       type: 'circle',
       source: CAMP_SCOUT_PIN_SOURCE_ID,
       layout: { visibility: 'visible' },
-      paint: { 'circle-radius': 7, 'circle-color': '#F2C24D' },
+      paint: {
+        'circle-radius': 0,
+        'circle-opacity': 0,
+        'circle-stroke-width': 0,
+      },
     });
   } else {
     map.setLayoutProperty(CAMP_SCOUT_PIN_LAYER_ID, 'visibility', 'visible');

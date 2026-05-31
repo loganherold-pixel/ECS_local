@@ -139,9 +139,10 @@ export function buildGarminInreachProductionReadinessResult(options = {}) {
         visibilityPanel.includes('testID="garmin-sos-review-banner"') &&
         visibilityPanel.includes('DEMO / SYNTHETIC') &&
         visibilityPanel.includes('May take up to 20 minutes. Charges may apply.') &&
-        expeditionTab.includes('GarminInreachVisibilityPanel'),
+        expeditionTab.includes('Expedition Hub') &&
+        !expeditionTab.includes('GarminInreachVisibilityPanel'),
       [relPath(root, paths.visibilityPanel), relPath(root, paths.expeditionTab)],
-      ['Keep disabled/read-only/command/SOS-review states visibly distinct and require confirmation before any outbound command.'],
+      ['Keep disabled/read-only/command/SOS-review states visibly distinct and require confirmation before any outbound command; keep Expedition Hub free of visible placeholder widgets.'],
     ),
     check(
       'expedition_intelligence_never_auto_commands',

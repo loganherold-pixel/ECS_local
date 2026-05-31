@@ -88,6 +88,7 @@ assert(
 );
 
 for (const provider of [
+  'ecoflow',
   'bluetti',
   'anker_solix',
   'jackery',
@@ -97,8 +98,9 @@ for (const provider of [
   'dakota_lithium',
   'victron',
 ]) {
+  const providerToken = provider === 'ecoflow' ? 'ecoflow:' : `'${provider}'`;
   assert(
-    parserRegistry.includes(`'${provider}'`) &&
+    parserRegistry.includes(providerToken) &&
       parserRegistry.includes('canDecodeLiveTelemetry: true') &&
       parserRegistry.includes('canAttemptLiveConnection: true'),
     `${provider} must be promoted into the live-ready native BLE parser set.`,
@@ -106,6 +108,7 @@ for (const provider of [
 }
 
 for (const marker of [
+  'ecoFlowNativeBlePowerProvider',
   'bluettiPowerProvider',
   'ankerSolixPowerProvider',
   'jackeryPowerProvider',

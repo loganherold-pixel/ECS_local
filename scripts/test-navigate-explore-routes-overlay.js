@@ -124,15 +124,21 @@ assert(
   'Explorer-to-Navigate map handoff must be persisted and consumable by Navigate.',
 );
 assert(
-  discover.includes('Display on Map'),
-  'Explorer must expose a Display on Map action near the result controls.',
+  !discover.includes('Map Active Trails') &&
+    !discover.includes('Display on Map'),
+  'Explorer should replace the old Map Active Trails / Display on Map container.',
 );
 assert(
-  discover.includes('Map Active Trails') &&
-    discover.includes('filtered trail line') &&
-    discover.includes('Suggested Routes') &&
-    discover.includes('Open Matching Explorer.'),
-  'Explorer map handoff copy should use the production Map Active Trails labels.',
+  discover.includes('Filtered Route Map Preview') &&
+    discover.includes('Show Routes on Map') &&
+    discover.includes('exploreMapPreviewRouteCounts') &&
+    discover.includes('Hidden Gems') &&
+    discover.includes('Popular Trails') &&
+    discover.includes('Trail Packs') &&
+    discover.includes('ECS Ideas') &&
+    discover.includes('Suggested Trailheads') &&
+    discover.includes('Tap a route line on the Navigate map to review details, then start guidance from that one route.'),
+  'Explorer route map preview should summarize the filtered trailhead universe and explain the tap-to-select flow.',
 );
 assert(
   discover.includes('exploreSuggestedRouteOptions') &&
@@ -140,14 +146,18 @@ assert(
     discover.includes('favoriteRoutes') &&
     discover.includes('favoritesSnapshot.favorites') &&
     discover.includes('compatibilityResults: compatResults'),
-  'Explorer Display on Map should use the current filtered Suggested Routes universe, including Trail Packs and Favorites.',
+  'Explorer Display on Map should use the current filtered Suggested Trailheads universe, including Trail Packs and Favorites.',
 );
 assert(
   discover.includes('saveExploreRoutesMapHandoff') &&
     discover.includes('clearNavigationHandoffPayload') &&
     discover.includes('stageNavigationFlow') &&
     discover.includes("router.push('/navigate')"),
-  'Explorer Display on Map must clear stale route handoffs, stage the filtered route handoff, and switch to Navigate.',
+  'Explorer route map preview must clear stale route handoffs, stage the filtered route handoff, and switch to Navigate.',
+);
+assert(
+  discover.includes('maxRenderedRoutes: Math.max(EXPLORE_MAP_HANDOFF_MAX_ROUTES, exploreMapPreviewRouteCounts.total)'),
+  'Explorer route map preview should include every filtered route in normal sets instead of capping below the filtered total.',
 );
 assert(
   discover.includes('routePassesExploreMapLength') &&
@@ -166,6 +176,10 @@ assert(
     !navigate.includes("showToast('EXPLORE ROUTES OFF')") &&
     !navigate.includes('`EXPLORE ROUTES ON:'),
   'Navigate must clear temporary Explorer route handoff data when the Explore Routes layer is hidden without showing legacy on/off banners.',
+);
+assert(
+  /const handleBuildRouteFromExploreOverlay[\s\S]*?setExploreRoutesEnabled\(false\);[\s\S]*?setExploreRoutesHandoff\(null\);[\s\S]*?clearExploreRoutesMapHandoff\(\);[\s\S]*?applyExploreNavigationPayload\(payload\);/.test(navigate),
+  'Starting a selected Explore map route should remove the multi-route preview before staging that one route.',
 );
 assert(
   navigate.includes('roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition') &&

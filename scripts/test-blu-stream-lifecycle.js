@@ -42,13 +42,21 @@ has(lifecycle, 'this.reconnectAttempts < this.maxReconnectAttempts', 'shared str
 has(lifecycle, 'clearTimers()', 'shared stream lifecycle cleanup');
 has(lifecycle, "blu_stream_stale", 'shared stream lifecycle stale diagnostics');
 has(lifecycle, "blu_stream_recoverable_error", 'shared stream lifecycle timeout diagnostics');
+has(lifecycle, "NON_RECOVERABLE_STREAM_ERROR_CODES", 'shared stream lifecycle non-recoverable error guard');
+has(lifecycle, "'TELEMETRY_UNSUPPORTED'", 'unsupported telemetry must not enter recovery loop');
+has(lifecycle, "blu_stream_unsupported", 'unsupported telemetry diagnostic');
 
 has(nativeAdapter, 'private streamLifecycles = new Map<string, BluStreamLifecycle>()', 'native BLE lifecycle registry');
 has(nativeAdapter, 'private pollingDeviceIds = new Set<string>()', 'native BLE duplicate poll guard');
+has(nativeAdapter, 'private pollingGeneration = 0', 'native BLE polling generation guard');
 has(nativeAdapter, 'ensureStreamLifecycle(deviceId: string)', 'native BLE lifecycle startup');
 has(nativeAdapter, 'lifecycle.recordPacket(telemetry.timestamp)', 'native BLE packet freshness');
 has(nativeAdapter, "lifecycle.recordError(\n            'telemetry_setup'", 'native BLE unsupported telemetry phase');
 has(nativeAdapter, "lifecycle.recordError('telemetry_poll'", 'native BLE poll failure phase');
+has(nativeAdapter, 'pollingGeneration !== this.pollingGeneration', 'native BLE stopped polling ticks must not reschedule');
+has(nativeAdapter, 'native_ble_vendor_poll_aborted_after_disconnect', 'native BLE disconnect races must not enter recovery');
+has(nativeAdapter, "return 'CONNECT_CANCELLED'", 'native BLE cancelled operations need a distinct non-retryable error code');
+has(nativeAdapter, "'Connection cancelled.'", 'native BLE cancelled operations need a user-safe error message');
 has(nativeAdapter, 'this.stopPolling(false)', 'native BLE polling restart keeps streams alive');
 has(nativeAdapter, 'this.stopAllStreamLifecycles', 'native BLE disconnect stream cleanup');
 
@@ -59,10 +67,12 @@ has(ecoflowCloud, 'streamLifecycle.recordPacket', 'EcoFlow cloud packet freshnes
 has(ecoflowCloud, 'streamLifecycle.recordError', 'EcoFlow cloud timeout/error tracking');
 has(ecoflowCloud, "streamLifecycle.stop('cloud_polling_stopped')", 'EcoFlow cloud stream cleanup');
 
-has(unifiedHook, "phase: 'awaitingTelemetry'", 'EcoFlow local BLE explicit telemetry wait phase');
-has(unifiedHook, "phase: 'awaitingFirstPacket'", 'EcoFlow local BLE shared stream first-packet phase');
-has(unifiedHook, "code: 'LOCAL_BLE_PARSER_UNAVAILABLE'", 'EcoFlow local BLE precise parser failure');
-has(unifiedHook, "clearBluStreamHealthSnapshot(device.rawId, 'ecoflow')", 'EcoFlow local BLE stream cleanup');
+has(nativeAdapter, "lifecycle.recordError(\n            'telemetry_setup'", 'EcoFlow/native BLE first telemetry setup failure phase');
+has(unifiedHook, 'getPowerBrandConnectionAdapterForDevice', 'EcoFlow local BLE native power adapter routing');
+has(unifiedHook, 'power_provider_stream_ready', 'EcoFlow/native BLE stream-ready scanner event');
+has(unifiedHook, "adapter.disconnect({", 'EcoFlow/native BLE adapter disconnect cleanup');
+has(unifiedHook, "code === 'CONNECT_CANCELLED'", 'cancelled native BLE connects must not be retried as transient failures');
+has(unifiedHook, 'operation was cancelled|operation was canceled', 'cancelled native BLE connect messages must not be retried');
 
 has(obd2Adapter, 'private pidStreamLifecycle: BluStreamLifecycle | null = null', 'OBD2 stream lifecycle field');
 has(obd2Adapter, 'this.pidStreamLifecycle = new BluStreamLifecycle', 'OBD2 stream lifecycle startup');

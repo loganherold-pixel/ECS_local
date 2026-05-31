@@ -12,10 +12,12 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type { IncidentContext, RecoveryIncidentAgentOutput } from '../../lib/types/incidentRecovery';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type ECSAssessmentModalProps = {
   visible: boolean;
   onClose: () => void;
+  stackBehavior?: OverlayStackBehavior;
   incident?: IncidentContext | null;
 };
 
@@ -49,6 +51,7 @@ function ListBlock({
 export default function ECSAssessmentModal({
   visible,
   onClose,
+  stackBehavior,
   incident,
 }: ECSAssessmentModalProps) {
   const output = getOutput(incident);
@@ -69,6 +72,7 @@ export default function ECSAssessmentModal({
       subtitle="Structured stabilization assessment. Not a replacement for emergency services or recovery professionals."
       overlayClass="workflow"
       {...fullBodyPopupProps}
+      stackBehavior={stackBehavior}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

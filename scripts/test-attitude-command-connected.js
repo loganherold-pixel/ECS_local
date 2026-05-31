@@ -230,14 +230,19 @@ assert.ok(!connectedSource.includes('Rive'), 'Connected widget must not use Rive
 
 const widgetRenderersSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
 assert.ok(
-  widgetRenderersSource.includes('function AttitudeCommandWidgetConnected({') &&
-    widgetRenderersSource.includes('<VehicleAttitudeStage {...stageProps}>') &&
-    widgetRenderersSource.includes('<TirePressureDrivelineOverlay pressureState={tirePressureState} />') &&
-    widgetRenderersSource.includes('<AttitudeCommandWidgetConnected') &&
+  widgetRenderersSource.includes('const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget') &&
+    widgetRenderersSource.includes('<CommandCenterHost') &&
+    widgetRenderersSource.includes('externalRenderers={{') &&
+    widgetRenderersSource.includes('attitude: ({ mode }) => (') &&
+    widgetRenderersSource.includes('<VehicleAttitudeStage') &&
+    widgetRenderersSource.includes('vehicleId={attitudeVehicleId}') &&
     widgetRenderersSource.includes('pitchDeg={commandStagePitchDeg}') &&
     widgetRenderersSource.includes('rollDeg={commandStageRollDeg}') &&
-    widgetRenderersSource.includes('telemetryEnabled={false}'),
-  'Dashboard Attitude Command should render through the connected widget with existing telemetry values.',
+    widgetRenderersSource.includes('telemetryFrame="device"') &&
+    widgetRenderersSource.includes('presentationMode="instrumentOnly"') &&
+    widgetRenderersSource.includes("showReadouts={mode === 'attitude'}") &&
+    widgetRenderersSource.includes("showLiveHashIndicators={mode === 'attitude' && sensorLive}"),
+  'Dashboard Attitude Command should render command-stage telemetry through the CommandCenterHost attitude stage.',
 );
 
 console.log('Connected AttitudeCommandWidget checks passed.');

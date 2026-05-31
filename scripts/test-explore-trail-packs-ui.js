@@ -35,6 +35,12 @@ assert(
   'Trail Packs should use the selected Explore radius',
 );
 assert(
+  discover.includes('liveTrailPackCatalogStore') &&
+    discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
+    !discover.includes('getDefaultECSTrailPacks'),
+  'Explore Trail Packs should use live reviewed catalog content instead of default fixture packs',
+);
+assert(
   discover.includes('DEFAULT_USER_LOCATION') &&
     discover.includes('useThrottledGPS') &&
     discover.includes("gps.hasFix && gps.position ? 'shared_live_gps' : 'default_location_fallback'"),
@@ -63,15 +69,18 @@ assert(
 );
 assert(
   previewPanel.includes('TrailPackFeedbackPanel') &&
-    previewPanel.includes('RouteSegment') &&
+    previewPanel.includes('MapRenderer') &&
+    previewPanel.includes('cameraMode="route_overview"') &&
+    previewPanel.includes('surfaceMode="compact"') &&
     previewPanel.includes('Offline cache unavailable for this Trail Pack.'),
-  'Trail Pack preview should contain map geometry, feedback controls, and disabled offline cache language',
+  'Trail Pack preview should contain a route map snapshot, feedback controls, and disabled offline cache language',
 );
 assert(
   discover.includes('Scanning approved ECS Trail Packs within selected radius…') &&
     discover.includes('Trail Packs need your location or a selected search area to filter nearby routes.') &&
     discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
-    discover.includes('No approved Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems.'),
+    discover.includes('No live reviewed Trail Packs found within this radius.') &&
+    discover.includes('Live Trail Packs are not available from the reviewed catalog yet.'),
   'Trail Packs should render loading, no-location, low-confidence, and empty states',
 );
 assert(
@@ -112,9 +121,10 @@ assert(
 );
 assert(
   domain.includes("'partner_source'") &&
+    domain.includes("dataState: 'fixture'") &&
     domain.includes("reviewStatus: 'draft'") &&
     !/source:\s*'partner_source'[\s\S]{0,220}reviewStatus:\s*'approved'/.test(domain),
-  'Partner source should remain label/type scaffolding only',
+  'Partner source and default Trail Pack seeds should remain fixture scaffolding only',
 );
 
 console.log('Explore Trail Pack UI checks passed');

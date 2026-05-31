@@ -125,12 +125,16 @@ const missingGeometryPack = {
 assert.strictEqual(canStartTrailPackGuidance(missingGeometryPack), false, 'Missing geometry should disable Start Guidance');
 
 assert(
-  previewSource.includes('RouteSegment') &&
-    previewSource.includes('startMarker') &&
-    previewSource.includes('endMarker') &&
+  previewSource.includes('MapRenderer') &&
+    previewSource.includes('DEFAULT_MAP_STYLE') &&
+    previewSource.includes('getMapboxToken') &&
+    previewSource.includes('cameraMode="route_overview"') &&
+    previewSource.includes('surfaceMode="compact"') &&
+    !previewSource.includes('function RouteSegment') &&
+    !previewSource.includes('projectGeometry(') &&
     previewSource.includes('LOOP ROUTE') &&
     previewSource.includes('POINT ROUTE'),
-  'Trail Pack preview should display route line, start/end, and loop/point indicators',
+  'Trail Pack preview should display a map-rendered route snapshot with loop/point indicators',
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&

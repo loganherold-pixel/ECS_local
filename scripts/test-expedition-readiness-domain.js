@@ -9,7 +9,31 @@ const root = path.join(__dirname, '..');
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'react-native') {
-    return { Platform: { OS: 'web' } };
+    return {
+      Platform: { OS: 'web', select: (options) => options?.web ?? options?.default },
+      StyleSheet: { create: (styles) => styles, flatten: (style) => style },
+      NativeModules: {},
+      Dimensions: { get: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }), addEventListener: () => ({ remove: () => undefined }) },
+      Appearance: { getColorScheme: () => 'dark', addChangeListener: () => ({ remove: () => undefined }) },
+      View: 'View',
+      Text: 'Text',
+      Pressable: 'Pressable',
+      ScrollView: 'ScrollView',
+    };
+  }
+  if (request.includes('codegenNativeComponent')) {
+    const componentFactory = () => 'NativeComponent';
+    componentFactory.default = componentFactory;
+    return componentFactory;
+  }
+  if (request.startsWith('react-native/')) {
+    return {};
+  }
+  if (request === '@react-navigation/native') {
+    return {
+      useFocusEffect: () => undefined,
+      useIsFocused: () => true,
+    };
   }
   if (request === 'expo-file-system' || request === 'expo-file-system/legacy') {
     return {};

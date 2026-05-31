@@ -528,6 +528,8 @@ function FleetCommandSurface({ state }: { state: FleetCommandState }) {
                     : 'muted',
               )}
               compact
+              style={s.commandReadinessBadge}
+              textStyle={s.commandReadinessBadgeText}
             />
             {canSkipConcern ? (
               <TouchableOpacity
@@ -3258,7 +3260,16 @@ const s = StyleSheet.create({
   commandStatusStack: {
     alignItems: 'flex-end',
     gap: 6,
-    maxWidth: 150,
+    maxWidth: 220,
+    flexShrink: 0,
+  },
+  commandReadinessBadge: {
+    alignSelf: 'flex-end',
+    minWidth: 188,
+    justifyContent: 'center',
+  },
+  commandReadinessBadgeText: {
+    textAlign: 'center',
   },
   commandSkipButton: {
     paddingHorizontal: 4,

@@ -12,6 +12,8 @@ import type {
   ExitPoint,
   TripBuilderConfidence,
   TripBuilderNote,
+  TripBuilderRouteContextConfidenceTier,
+  TripBuilderRouteContextInput,
   TripBuilderRouteInput,
   TripBuilderWarning,
   TripPlan,
@@ -347,14 +349,87 @@ function routeDataConfidence(route: TripBuilderRouteInput, coordinates: Normaliz
   return 'unknown';
 }
 
-function buildRouteSummary(route: TripBuilderRouteInput): {
+function routeContextCoordinates(context?: TripBuilderRouteContextInput | null): NormalizedRouteCoordinate[] {
+  return (context?.routeGeometry?.coordinates ?? [])
+    .map((coordinate) => toRouteCoordinate(coordinate))
+    .filter((coordinate): coordinate is NormalizedRouteCoordinate => coordinate != null);
+}
+
+function routeContextTrailheadCoordinate(context?: TripBuilderRouteContextInput | null): NormalizedRouteCoordinate | null {
+  return toRouteCoordinate(context?.trailheadAnchor?.coordinate);
+}
+
+function routeContextDistanceMiles(context?: TripBuilderRouteContextInput | null): number | null {
+  const explicit = finiteNumber(context?.routeDistanceMiles) ?? finiteNumber(context?.routeGeometry?.distanceMiles);
+  if (explicit != null) return roundTenths(explicit);
+  const meters = finiteNumber(context?.routeGeometry?.distanceMeters);
+  return meters != null ? roundTenths(meters / 1609.344) : null;
+}
+
+function routeContextDurationHours(context?: TripBuilderRouteContextInput | null): number | null {
+  const explicit = finiteNumber(context?.routeDurationHours) ?? finiteNumber(context?.routeGeometry?.durationHours);
+  if (explicit != null) return roundTenths(explicit);
+  const seconds = finiteNumber(context?.routeGeometry?.durationSeconds);
+  return seconds != null ? roundTenths(seconds / 3600) : null;
+}
+
+function routeContextWarningCodes(context?: TripBuilderRouteContextInput | null): Set<string> {
+  return new Set((context?.warnings ?? [])
+    .map((warning) => String(warning.code ?? '').trim())
+    .filter(Boolean));
+}
+
+function routeContextConfidenceTier(
+  context: TripBuilderRouteContextInput | null | undefined,
+  hasRouteGeometry: boolean,
+): TripBuilderRouteContextConfidenceTier {
+  if (!context) return 'fallback';
+  if (context.confidence?.tier) return context.confidence.tier;
+  const warnings = routeContextWarningCodes(context);
+  const status = String(context.status ?? '').toLowerCase();
+  const value = finiteNumber(context.confidence?.value);
+  const anchorConfidence = finiteNumber(context.trailheadAnchor?.confidence);
+  const supplyMode = String(context.supplyMode ?? 'none');
+  const supplyCandidateCount = finiteNumber(context.supplyCandidateCount) ?? 0;
+  const missingSupply = supplyMode !== 'none' && supplyCandidateCount <= 0;
+  if (
+    status === 'stale' ||
+    warnings.has('stale_cached_context') ||
+    warnings.has('missing_origin') ||
+    warnings.has('provider_unavailable') ||
+    warnings.has('no_supply_candidates_found') ||
+    missingSupply
+  ) {
+    return 'partial';
+  }
+  if (!hasRouteGeometry || !context.trailheadAnchor?.coordinate) return 'partial';
+  const combined = value ?? anchorConfidence ?? 0;
+  if (status === 'ready' && combined >= 0.78) return 'high';
+  if (combined >= 0.5) return 'medium';
+  return 'partial';
+}
+
+function confidenceFromRouteContextTier(
+  fallback: TripBuilderConfidence,
+  tier: TripBuilderRouteContextConfidenceTier,
+): TripBuilderConfidence {
+  if (tier === 'high') return 'high';
+  if (tier === 'medium') return 'medium';
+  if (tier === 'partial') return fallback === 'unknown' ? 'low' : fallback;
+  return fallback;
+}
+
+function buildRouteSummary(route: TripBuilderRouteInput, routeContext?: TripBuilderRouteContextInput | null): {
   summary: TripPlanRouteSummary;
   coordinates: NormalizedRouteCoordinate[];
 } {
-  const coordinates = extractRouteCoordinates(route);
-  const distanceMiles = roundTenths(getRouteDistanceMiles(route, coordinates));
-  const estimatedDriveTimeHours = roundTenths(getEstimatedDriveTimeHours(route, distanceMiles));
-  const startCoordinate = coordinates[0] ?? toRouteCoordinate(
+  const contextCoordinates = routeContextCoordinates(routeContext);
+  const fallbackCoordinates = extractRouteCoordinates(route);
+  const coordinates = contextCoordinates.length >= 2 ? contextCoordinates : fallbackCoordinates;
+  const contextDistanceMiles = routeContextDistanceMiles(routeContext);
+  const distanceMiles = contextDistanceMiles ?? roundTenths(getRouteDistanceMiles(route, coordinates));
+  const estimatedDriveTimeHours = routeContextDurationHours(routeContext) ?? roundTenths(getEstimatedDriveTimeHours(route, distanceMiles));
+  const startCoordinate = routeContextTrailheadCoordinate(routeContext) ?? coordinates[0] ?? toRouteCoordinate(
     typeof route.startLat === 'number' && typeof route.startLng === 'number'
       ? { latitude: route.startLat, longitude: route.startLng }
       : route.coordinate,
@@ -362,6 +437,8 @@ function buildRouteSummary(route: TripBuilderRouteInput): {
   const endCoordinate = coordinates[coordinates.length - 1] ?? toRouteCoordinate(
     route.destinationCoordinate ?? route.endpointCoordinate ?? route.endCoordinate,
   );
+  const fallbackConfidence = routeDataConfidence(route, coordinates, distanceMiles);
+  const contextTier = routeContextConfidenceTier(routeContext, contextCoordinates.length >= 2 || coordinates.length >= 2);
 
   return {
     coordinates,
@@ -379,7 +456,9 @@ function buildRouteSummary(route: TripBuilderRouteInput): {
       permitRequired: typeof route.permitRequired === 'boolean' ? route.permitRequired : null,
       startCoordinate: startCoordinate ?? null,
       endCoordinate: endCoordinate ?? null,
-      routeDataConfidence: routeDataConfidence(route, coordinates, distanceMiles),
+      routeDataConfidence: confidenceFromRouteContextTier(fallbackConfidence, contextTier),
+      routeContextConfidence: routeContext ? contextTier : null,
+      routeContextStatus: routeContext?.status ?? null,
     },
   };
 }
@@ -1003,7 +1082,7 @@ function addWarning(warnings: TripBuilderWarning[], warning: TripBuilderWarning)
 export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   const generatedAt = args.capturedAt ?? new Date().toISOString();
   const priorities = args.input.priorities ?? [];
-  const { summary: routeSummary, coordinates: routeCoordinates } = buildRouteSummary(args.route);
+  const { summary: routeSummary, coordinates: routeCoordinates } = buildRouteSummary(args.route, args.routeContext);
   const routeId = routeSummary.routeId;
   const tripDays = plannedDaysForTrip(args.input.tripType, routeSummary.estimatedDays);
   const needsCamping = tripTypeNeedsCamping(args.input.tripType, priorities);
@@ -1040,8 +1119,10 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   const warnings: TripBuilderWarning[] = [];
 
   const estimateBasis: string[] = [];
-  if (routeSummary.distanceMiles != null) estimateBasis.push('selected route distance');
-  if (routeSummary.estimatedDriveTimeHours != null) estimateBasis.push('route travel-time estimate');
+  if (args.routeContext && routeSummary.distanceMiles != null) estimateBasis.push('route context distance');
+  else if (routeSummary.distanceMiles != null) estimateBasis.push('selected route distance');
+  if (args.routeContext && routeSummary.estimatedDriveTimeHours != null) estimateBasis.push('route context travel-time estimate');
+  else if (routeSummary.estimatedDriveTimeHours != null) estimateBasis.push('route travel-time estimate');
   if (routeSummary.estimatedDriveTimeHours == null && routeSummary.distanceMiles != null) estimateBasis.push('distance-based trail-speed estimate');
 
   if (!args.vehicleProfile) {

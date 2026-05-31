@@ -30,7 +30,6 @@ import {
   getBleRuntimeDiagnostics,
   getBleRuntimeUnsupportedMessage,
   isBleNativeModuleUnavailableError,
-  isBleRuntimeUnsupported,
   waitForBlePoweredOn,
   type BleRuntimeDiagnostics,
 } from '../power/ble/BleScanReadiness';
@@ -334,6 +333,10 @@ const OBD2_STORAGE_KEYS = {
 } as const;
 
 const obd2PersistenceCache = createPersistedKeyValueCache('ecs_obd2_adapter');
+
+function isEcoFlowBleAdvertisementName(value: unknown): boolean {
+  return typeof value === 'string' && /\bef[-_][a-z0-9]{4,}\b/i.test(value);
+}
 
 function sGet(key: string): string | null {
   try {
@@ -745,18 +748,18 @@ class OBD2Adapter {
       connectionMode: 'ble',
     });
 
-    if (isBleRuntimeUnsupported()) {
+    if (Platform.OS === 'web') {
       const msg = getBleRuntimeUnsupportedMessage();
       this.error = msg;
       this.updateScanDiagnostics({
         platform: Platform.OS,
-        isExpoGo: Platform.OS !== 'web',
-        nativeBridgeStatus: Platform.OS === 'web' ? 'web_unsupported' : 'expo_go_unsupported',
+        isExpoGo: false,
+        nativeBridgeStatus: 'web_unsupported',
         permissionStatus: 'denied',
-        missingPermissions: Platform.OS === 'web' ? ['platform'] : ['runtime.expo_go'],
+        missingPermissions: ['platform'],
         bluetoothState: null,
         initialBluetoothState: null,
-        readinessCode: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
+        readinessCode: 'platform_unsupported',
         message: msg,
         scanState: 'error',
         lastScanError: msg,
@@ -765,12 +768,12 @@ class OBD2Adapter {
       if (!this.runtimeUnsupportedLogged) {
         this.runtimeUnsupportedLogged = true;
         logTelemetryScanWarnOnce('Scan readiness blocked', {
-          reason: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
-          missing: Platform.OS === 'web' ? ['platform'] : ['runtime.expo_go'],
+          reason: 'platform_unsupported',
+          missing: ['platform'],
         });
         logBtBlockerWarn('scan_stop', {
-          reason: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
-          missing: Platform.OS === 'web' ? ['platform'] : ['runtime.expo_go'],
+          reason: 'platform_unsupported',
+          missing: ['platform'],
         });
       }
       recordBluetoothDiagnosticEvent({
@@ -781,17 +784,17 @@ class OBD2Adapter {
         message: 'OBD2 BLE scanner is unavailable in this runtime.',
         details: {
           scanId: `obd2:${scanSessionId}`,
-          runtime: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
+          runtime: 'platform_unsupported',
         },
       });
       bluLog('[BLU_SCAN]', 'obd2_scan_runtime_unsupported', {
         deviceId: 'obd2_scan',
         vendor: 'obd2',
         phase: 'scan_readiness',
-        errorCode: Platform.OS === 'web' ? 'platform_unsupported' : 'runtime_unsupported',
+        errorCode: 'platform_unsupported',
         message: msg,
       });
-      this.finishScanLifecycle(scanSessionId, 'runtime_unsupported');
+      this.finishScanLifecycle(scanSessionId, 'platform_unsupported');
       return;
     }
 
@@ -2442,6 +2445,11 @@ class OBD2Adapter {
   // ═══════════════════════════════════════════════════════
 
   private persistLastDevice(deviceId: string, deviceName: string): void {
+    if (isEcoFlowBleAdvertisementName(deviceName)) {
+      sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_ID);
+      sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_NAME);
+      return;
+    }
     sSet(OBD2_STORAGE_KEYS.LAST_DEVICE_ID, deviceId);
     sSet(OBD2_STORAGE_KEYS.LAST_DEVICE_NAME, deviceName);
   }
@@ -2457,6 +2465,11 @@ class OBD2Adapter {
   getLastDeviceInfo(): { id: string; name: string } | null {
     const id = sGet(OBD2_STORAGE_KEYS.LAST_DEVICE_ID);
     const name = sGet(OBD2_STORAGE_KEYS.LAST_DEVICE_NAME);
+    if (isEcoFlowBleAdvertisementName(name)) {
+      sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_ID);
+      sRemove(OBD2_STORAGE_KEYS.LAST_DEVICE_NAME);
+      return null;
+    }
     if (id && name) return { id, name };
     return null;
   }

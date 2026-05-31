@@ -88,7 +88,6 @@ import {
 } from './bluDiagnosticsLog';
 import { setSelectedEcoFlowDevice } from './ecoFlowSelectionStore';
 import { normalizeEcoFlowBluCandidate } from './ecoflowBluTelemetryEligibility';
-import { recordEcoFlowBleProbeEvent } from './ecoflowBleDiagnosticCapture';
 import {
   connectEcoFlowCloudDevice,
   ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
@@ -110,10 +109,8 @@ import {
   type EcoFlowTimeoutKind,
 } from './ecoflowConnectionDiagnostics';
 import {
-  DEFAULT_STALE_AFTER_MS,
   clearBluStreamHealthSnapshot,
   getBluStreamHealthSnapshot,
-  recordBluStreamHealthSnapshot,
 } from './bluStreamLifecycle';
 import { bluStateStore } from './BluStateStore';
 import { useEcsProviders } from './useEcsProviders';
@@ -123,7 +120,6 @@ import {
   type UnifiedScannerSnapshot,
 } from './unifiedScannerContract';
 import { powerTelemetryManager } from '../src/power/telemetry/PowerTelemetryManager';
-import { isBleRuntimeUnsupported } from '../src/power/ble/BleScanReadiness';
 import { obd2Adapter, type OBD2DiscoveredDevice, type OBD2ScanDiagnostics } from '../src/vehicle-telemetry/OBD2Adapter';
 import { useOBD2Scanner } from '../src/vehicle-telemetry/useOBD2Scanner';
 import { useVehicleTelemetry } from '../src/vehicle-telemetry/useVehicleTelemetry';
@@ -267,6 +263,7 @@ interface DeviceModelBase {
   serviceUuids?: string[];
   manufacturerData?: string | null;
   localName?: string | null;
+  sourceIds?: Partial<Record<UnifiedDiscoverySource, string>>;
   requiresNativeBluetooth: boolean;
   connectableViaCloud: boolean;
   multiDeviceCapability?: BluMultiDeviceCapability;
@@ -621,8 +618,6 @@ const DEFAULT_DISCOVERED_RSSI = -90;
 const UNIFIED_BLUETOOTH_SCAN_DURATION_MS = BLU_SCAN_WINDOW_MS;
 const POWER_DEVICE_ADVERTISEMENT_STALE_MS = SCANNER_DEVICE_STALE_TIMEOUT_MS;
 const REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS = 60_000;
-const ECOFLOW_LOCAL_BLE_CONNECT_TIMEOUT_MS = 15_000;
-const ECOFLOW_LOCAL_FIRST_TELEMETRY_TIMEOUT_MS = 15_000;
 const DEBUG_DEVICE_CONNECTIONS =
   typeof __DEV__ !== 'undefined' &&
   __DEV__ &&
@@ -665,7 +660,12 @@ type UnifiedDiscoveredPowerDevice = Omit<EcsDiscoveredDevice, 'provider'> & {
 
 function isTransientConnectError(error: string | null | undefined, errorCode?: string | null): boolean {
   const code = String(errorCode ?? '').toUpperCase();
-  if (code === 'PERMISSION_DENIED' || code === 'PLATFORM_UNSUPPORTED' || code === 'UNSUPPORTED_DEVICE') {
+  if (
+    code === 'CONNECT_CANCELLED' ||
+    code === 'PERMISSION_DENIED' ||
+    code === 'PLATFORM_UNSUPPORTED' ||
+    code === 'UNSUPPORTED_DEVICE'
+  ) {
     return false;
   }
   if (code === 'CONNECT_FAILED' || code === 'DEVICE_UNAVAILABLE' || code === 'SCAN_FAILED') {
@@ -674,7 +674,9 @@ function isTransientConnectError(error: string | null | undefined, errorCode?: s
 
   const message = String(error ?? '').toLowerCase();
   if (!message) return false;
-  if (/permission|denied|unsupported|pairing required|not available on web/.test(message)) {
+  if (
+    /operation was cancelled|operation was canceled|connection cancelled|connection canceled|permission|denied|unsupported|pairing required|not available on web/.test(message)
+  ) {
     return false;
   }
   return /timeout|timed out|cancelled|canceled|temporar|unavailable|busy|failed to connect|connect failed|connection lost|device unavailable|scan failed/.test(message);
@@ -841,6 +843,10 @@ function getBluDeviceLogType(device: Pick<ECSDeviceConnectionModel, 'kind' | 'de
 }
 
 function getBluConnectionMode(device: Pick<ECSDeviceConnectionModel, 'connectionType' | 'kind' | 'providerId' | 'connectableViaCloud'>): string {
+  const connectionType = normalizeDeviceConnectionType(device.connectionType);
+  if (device.providerId === 'ecoflow' && (connectionType === 'ble' || connectionType === 'classic_bluetooth')) {
+    return connectionType;
+  }
   if (device.providerId === 'ecoflow' && device.connectableViaCloud) return 'cloud';
   if (device.connectionType) return device.connectionType;
   return device.kind === 'telemetry' || device.kind === 'sensor' || device.kind === 'generic' ? 'ble' : 'unknown';
@@ -1060,6 +1066,73 @@ function findEcoFlowCloudMatchForLocalDiscovery(
   return null;
 }
 
+function resolveEcoFlowLocalBleFallbackDeviceId(
+  device: Pick<ECSDeviceConnectionModel, 'rawId' | 'name' | 'subtype' | 'sourceIds'>,
+  discoveries: UnifiedDiscoveredPowerDevice[],
+): string | null {
+  const directBleId = device.sourceIds?.ble ?? null;
+  if (directBleId) return directBleId;
+
+  const cloudId = normalizeEcoFlowDiscoveryMatchText(device.rawId);
+  const cloudSuffix = cloudId.slice(-4);
+  const cloudText = normalizeEcoFlowDiscoveryMatchText(`${device.rawId} ${device.name} ${device.subtype ?? ''}`);
+  const localCandidates = discoveries.filter((candidate) => (
+    isEcoFlowLocalDiscovery(candidate) || candidate.sourceIds?.ble != null
+  ));
+  for (const candidate of localCandidates) {
+    const candidateBleId =
+      candidate.sourceIds?.ble ??
+      (candidate.source === 'ble' || candidate.connectionType === 'ble' ? candidate.id : null);
+    if (!candidateBleId) continue;
+
+    const localText = getEcoFlowDiscoveryText(candidate);
+    if (cloudSuffix.length >= 4 && localText.includes(cloudSuffix)) {
+      return candidateBleId;
+    }
+
+    const cloudMatch = findEcoFlowCloudMatchForLocalDiscovery(candidate, [
+      {
+        id: device.rawId,
+        name: device.name,
+        displayName: device.name,
+        model: device.subtype ?? device.name,
+        modelDisplayName: device.subtype ?? undefined,
+        provider: 'ecoflow',
+        rssi: DEFAULT_DISCOVERED_RSSI,
+        discoveredAt: Date.now(),
+        productType: device.subtype ?? 'power_station',
+        connectionType: 'api',
+        requiresNativeBluetooth: false,
+        connectableViaCloud: true,
+        source: 'api',
+        sources: ['api'],
+        sourceBadges: getDiscoverySourceBadges(['api']),
+        sourceIds: { api: device.rawId },
+        brand: 'EcoFlow',
+        category: device.subtype ?? 'Power Device',
+        isOnline: null,
+        available: null,
+        raw: {
+          deviceId: device.rawId,
+          name: device.name,
+          model: device.subtype,
+          sourceIds: { api: device.rawId },
+        },
+      },
+      ...discoveries,
+    ]);
+    if (cloudMatch?.id === device.rawId || cloudMatch?.sourceIds?.api === device.rawId) {
+      return candidateBleId;
+    }
+
+    if (/delta3|delta31500/.test(cloudText) && /efd36|d36f|5055/.test(localText)) {
+      return candidateBleId;
+    }
+  }
+
+  return null;
+}
+
 function mergeDiscoveredPowerDevices(
   devices: (UnifiedDiscoveredPowerDevice | null)[],
 ): UnifiedDiscoveredPowerDevice[] {
@@ -1174,7 +1247,15 @@ function mergeDiscoveredPowerDevices(
         : record.source;
     const resolvedConnectionType = preferEcoFlowCloudTelemetry
       ? 'api'
+      : hasLocalBluetoothSource
+      ? 'ble'
       : record.connectionType;
+    const resolvedConnectableViaCloud =
+      preferEcoFlowCloudTelemetry
+        ? connectableViaCloud
+        : hasLocalBluetoothSource
+        ? false
+        : connectableViaCloud;
 
     return {
       ...(primary ?? {
@@ -1201,7 +1282,7 @@ function mergeDiscoveredPowerDevices(
       productType: primary?.productType ?? record.category,
       connectionType: resolvedConnectionType,
       requiresNativeBluetooth,
-      connectableViaCloud,
+      connectableViaCloud: resolvedConnectableViaCloud,
       isOnline: record.online,
       available: record.available,
       raw: record.raw,
@@ -1651,6 +1732,57 @@ function makeEcoFlowCloudConnectionDevice(device: ECSDeviceConnectionModel): Eco
   };
 }
 
+function getEcoFlowCloudNoTelemetryInfoMessage(
+  deviceName: string,
+  activation: EcoFlowCloudConnectionResult,
+): string {
+  if (activation.cloudState === 'deviceUnauthorized') {
+    return `${deviceName} is visible in EcoFlow Cloud, but cloud telemetry is not authorized for this device.`;
+  }
+  if (activation.cloudState === 'authRequired') {
+    return `${deviceName} needs EcoFlow Cloud authorization before telemetry can stream.`;
+  }
+  if (activation.cloudState === 'deviceOffline') {
+    return `${deviceName} is visible in EcoFlow Cloud, but the device is offline.`;
+  }
+  return `${deviceName} is visible in EcoFlow Cloud, but no live telemetry was decoded.`;
+}
+
+function isEcoFlowCloudAuthBlockedResult(
+  result: Pick<EcoFlowCloudConnectionResult, 'cloudState' | 'statusError' | 'statusLabel'>,
+): boolean {
+  return (
+    result.cloudState === 'authRequired' ||
+    result.cloudState === 'deviceUnauthorized' ||
+    /authorization|required|not authorized|forbidden/i.test(result.statusError ?? result.statusLabel)
+  );
+}
+
+function isEcoFlowCloudAuthBlockedDevice(
+  device: Pick<ECSDeviceConnectionModel,
+    | 'providerId'
+    | 'ecoflowCloudState'
+    | 'ecoflowDiagnosticReason'
+    | 'lastError'
+    | 'diagnosticReason'
+    | 'detailLabel'
+    | 'statusPillLabel'
+  >,
+): boolean {
+  if (device.providerId !== 'ecoflow') return false;
+  const cloudState = device.ecoflowCloudState ?? device.ecoflowDiagnosticReason?.cloudState ?? null;
+  if (cloudState === 'authRequired' || cloudState === 'deviceUnauthorized') return true;
+
+  const diagnosticText = [
+    device.lastError,
+    device.diagnosticReason,
+    device.detailLabel,
+    device.statusPillLabel,
+  ].filter(Boolean).join(' ');
+
+  return /cloud access is not authorized|cloud telemetry is not authorized|authorization required|auth required|not authorized|forbidden/i.test(diagnosticText);
+}
+
 function ingestEcoFlowCloudTelemetryResult(
   device: Pick<ECSDeviceConnectionModel, 'rawId' | 'name'>,
   result: EcoFlowCloudConnectionResult,
@@ -1887,9 +2019,20 @@ async function activateEcoFlowCloudDevice(device: ECSDeviceConnectionModel): Pro
   );
 
   ingestEcoFlowCloudTelemetryResult(device, result);
-  if (result.connected) {
+  if (result.connected && result.telemetryActive) {
     startEcoFlowCloudLiveRefresh(device);
-    if (!result.telemetryActive) {
+  } else if (result.connected) {
+    if (isEcoFlowCloudAuthBlockedResult(result)) {
+      bluLog('[BLU_ECOFLOW]', 'ecoflow_cloud_first_poll_auth_blocked', {
+        deviceId: device.rawId,
+        vendor: 'ecoflow',
+        phase: 'ecoflow_cloud_first_poll',
+        lastSuccessfulPhase: 'cloud_connect',
+        cloudState: result.cloudState,
+        providerStatus: result.providerStatus,
+        message: result.statusLabel,
+      });
+    } else {
       bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_first_poll_no_live_telemetry', buildBluTimeoutLogDetails({
         deviceId: device.rawId,
         vendor: 'ecoflow',
@@ -1965,6 +2108,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   const disconnectInFlightRef = useRef<Set<string>>(new Set());
   const diagnosedScannerDeviceIdsRef = useRef<Set<string>>(new Set());
   const autoReconnectAttemptedAtRef = useRef<Map<string, number>>(new Map());
+  const connectedWithoutTelemetryLogKeysRef = useRef<Set<string>>(new Set());
   const userDisconnectedDeviceIdsRef = useRef<Set<string>>(new Set());
   const manualDisconnectRequestedRef = useRef<Record<string, boolean>>({});
 
@@ -2419,9 +2563,15 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         durationMs: UNIFIED_BLUETOOTH_SCAN_DURATION_MS,
       });
     }
+    let scanRawDevicesSeenCount = bleRawDevicesSeenCount;
+    let scanAcceptedDevicesCount = bleAcceptedDeviceCount;
+    const recordUnifiedScanCounts = (rawCount: number, acceptedCount: number = rawCount) => {
+      scanRawDevicesSeenCount = Math.max(scanRawDevicesSeenCount, rawCount);
+      scanAcceptedDevicesCount = Math.max(scanAcceptedDevicesCount, acceptedCount);
+    };
 
     try {
-      const nativeBluetoothUnsupported = isBleRuntimeUnsupported();
+      const nativeBluetoothUnsupported = Platform.OS === 'web';
       const unsupportedMessage = `${NATIVE_BLUETOOTH_RUNTIME_MESSAGE} Cloud/API devices remain available.`;
 
       const bleScan = nativeBluetoothUnsupported
@@ -2430,7 +2580,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             bluLog('[BLU_SCAN]', 'native_scan_runtime_unsupported', {
               scanId: scanSessionId,
               phase: 'scan_readiness',
-              runtime: Platform.OS === 'web' ? 'web' : 'native_bridge_missing',
+              runtime: 'web',
               message: unsupportedMessage,
             });
             recordBluetoothDiagnosticEvent({
@@ -2473,7 +2623,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             if (DEBUG_DEVICE_CONNECTIONS) {
               ecsLog.debug('TELEMETRY', '[BT_BLOCKER] scan_stop', {
                 reason: 'runtime_unsupported',
-                missing: Platform.OS === 'web' ? ['platform'] : ['runtime.expo_go'],
+                missing: ['platform'],
                 source: 'unified_device_connections',
               });
             }
@@ -2500,6 +2650,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
                 nativeEnvironmentSupport: 'available',
               },
             });
+            recordUnifiedScanCounts(bleRawDevicesSeenCount, bleAcceptedDeviceCount);
             setSourceStatuses((current) => updateDiscoverySourceStatus(
               current,
               'ble',
@@ -2548,6 +2699,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
                 status: source === 'permission' ? 'denied' : 'failed',
               },
             });
+            recordUnifiedScanCounts(bleRawDevicesSeenCount, bleAcceptedDeviceCount);
             setSourceStatuses((current) => updateDiscoverySourceStatus(
               current,
               'ble',
@@ -2586,6 +2738,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             connectionMode: 'cloud',
             driverMode: 'ecoflow_cloud_api',
           });
+          recordUnifiedScanCounts(devices.length, devices.length);
           for (const device of devices) {
             recordEcoFlowConnectionPhase({
               deviceId: device.id,
@@ -2665,6 +2818,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             }
             return result.devices;
           });
+          setScannerClock(Date.now());
         })
         .catch((error) => {
           const message = error instanceof Error ? error.message : String(error ?? 'EcoFlow API discovery failed.');
@@ -2731,6 +2885,114 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           }
           // EcoFlow cloud discovery logs its own edge-function error and must not block BLE.
         });
+      const ecoFlowBleDiscovery = nativeBluetoothUnsupported
+        ? Promise.resolve()
+        : Promise.resolve().then(async () => {
+            if (!isCurrentScanSession()) return;
+            const provider = ecsProviderRegistry.getProvider('ecoflow');
+            if (!provider || provider.transportType !== 'ble') {
+              bluLog('[BLU_SCAN]', 'power_ble_discovery_skipped', {
+                scanId: scanSessionId,
+                vendor: 'ecoflow',
+                phase: 'power_ble_discovery',
+                reason: provider ? 'provider_not_ble' : 'provider_not_registered',
+              });
+              return;
+            }
+
+            bluLog('[BLU_SCAN]', 'power_ble_discovery_start', {
+              scanId: scanSessionId,
+              vendor: 'ecoflow',
+              phase: 'power_ble_discovery',
+              durationMs: UNIFIED_BLUETOOTH_SCAN_DURATION_MS,
+            });
+
+            try {
+              const devices = await provider.discoverDevices();
+              if (!isCurrentScanSession()) return;
+              const normalized = devices
+                .map((device) => normalizeDiscoveredPowerDevice(device.provider, {
+                  ...device,
+                  source: 'ble',
+                  connectionType: 'ble',
+                  requiresNativeBluetooth: true,
+                  connectableViaCloud: false,
+                  sourceIds: { ble: device.id },
+                  raw: device.raw ?? device,
+                }))
+                .filter((device): device is UnifiedDiscoveredPowerDevice => Boolean(device));
+
+              bluLog('[BLU_SCAN]', 'power_ble_discovery_completed', {
+                scanId: scanSessionId,
+                vendor: 'ecoflow',
+                phase: 'power_ble_discovery',
+                deviceCount: normalized.length,
+                rawCount: devices.length,
+              });
+              recordUnifiedScanCounts(devices.length, normalized.length);
+              for (const device of normalized) {
+                bluLogThrottled('[BLU_SCAN]', `ecoflow-ble:${device.id}`, 'power_ble_device_discovered', buildBluDiscoveryLogDetails({
+                  id: device.id,
+                  name: device.name,
+                  localName: String((device.raw as any)?.localName ?? device.name),
+                  manufacturerDataPresent: Boolean((device.raw as any)?.manufacturerData),
+                  serviceUUIDs: Array.isArray((device.raw as any)?.serviceUUIDs) ? (device.raw as any).serviceUUIDs : [],
+                  rssi: device.rssi,
+                  classifiedVendor: 'ecoflow',
+                  classifiedType: device.productType ?? device.category ?? 'power_device',
+                  confidence: inferBluClassificationConfidence({
+                    supportLevel: 'verified',
+                    connectionType: 'ble',
+                    source: 'ble',
+                    providerId: 'ecoflow',
+                  }),
+                }), 10_000);
+              }
+
+              setDiscoveredPowerDevices((current) => {
+                const result = upsertDiscoveredPowerDeviceList(current, normalized, 'ecoflow_ble_success');
+                return result.devices;
+              });
+              setScannerClock(Date.now());
+              setSourceStatuses((current) => updateDiscoverySourceStatus(
+                current,
+                'ble',
+                'success',
+                Math.max(bleAcceptedDeviceCount, normalized.length),
+                normalized.length > 0
+                  ? 'BLE discovery returned EcoFlow devices.'
+                  : 'BLE scan completed. No EcoFlow advertisements matched yet.',
+                {
+                  rawCount: Math.max(bleRawDevicesSeenCount, devices.length),
+                  normalizedCount: Math.max(bleAcceptedDeviceCount, normalized.length),
+                  addedCount: normalized.length,
+                },
+              ));
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error ?? 'EcoFlow BLE discovery failed.');
+              bluLog('[BLU_SCAN]', 'power_ble_discovery_failed', {
+                scanId: scanSessionId,
+                vendor: 'ecoflow',
+                phase: 'power_ble_discovery',
+                errorCode: isNativeBluetoothRuntimeUnsupported(message) ? 'runtime_unsupported' : 'scan_failed',
+                message,
+              });
+              if (!isCurrentScanSession()) return;
+              setSourceStatuses((current) => updateDiscoverySourceStatus(
+                current,
+                'ble',
+                isNativeBluetoothRuntimeUnsupported(message) ? 'unsupported' : 'failed',
+                0,
+                message,
+                {
+                  rawCount: bleRawDevicesSeenCount,
+                  normalizedCount: bleAcceptedDeviceCount,
+                  addedCount: 0,
+                  failedReason: message,
+                },
+              ));
+            }
+          });
       const classicDiscovery = nativeBluetoothUnsupported
         ? Promise.resolve({
             source: 'classic_bluetooth' as const,
@@ -2744,7 +3006,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             devices: [],
             reason: 'classic_bluetooth_source_error',
           }));
-      const [, , classicResult] = await Promise.allSettled([bleScan, ecoFlowDiscovery, classicDiscovery]);
+      const [, , , classicResult] = await Promise.allSettled([bleScan, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery]);
 
       if (isCurrentScanSession()) {
         if (
@@ -2772,6 +3034,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         } else if (classicResult.status === 'fulfilled') {
           const detail = classicResult.value.reason ?? ('error' in classicResult.value ? classicResult.value.error ?? null : null);
           const normalizedCount = classicResult.value.devices.length;
+          recordUnifiedScanCounts(normalizedCount, classicResult.value.status === 'failed' ? 0 : normalizedCount);
           setSourceStatuses((current) => updateDiscoverySourceStatus(
             current,
             'classic_bluetooth',
@@ -2796,17 +3059,22 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         details: {
           scanId: scanSessionId,
           state: 'completed',
-          rawDevicesSeenCount: bleRawDevicesSeenCount,
-          acceptedDevicesCount: bleAcceptedDeviceCount,
+          rawDevicesSeenCount: scanRawDevicesSeenCount,
+          acceptedDevicesCount: scanAcceptedDevicesCount,
         },
       });
       bluLog('[BLU_SCAN]', 'unified_scan_finished', {
         scanId: scanSessionId,
-        rawDevicesSeenCount: bleRawDevicesSeenCount,
-        acceptedDevicesCount: bleAcceptedDeviceCount,
+        rawDevicesSeenCount: scanRawDevicesSeenCount,
+        acceptedDevicesCount: scanAcceptedDevicesCount,
       });
       if (activeScanSessionRef.current === scanSessionId) {
         scanInFlightRef.current = false;
+        if (mountedRef.current) {
+          setScannerClock(Date.now());
+          setIsRefreshing(false);
+          setManualScanStatus('completed');
+        }
       }
     }
 
@@ -2883,6 +3151,25 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       },
     ));
   }, [bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, manualScanStatus, obdError, obdIsScanning, routedTelemetryDiscoveries.length, telemetryFallbackCandidateDiscoveries.length]);
+
+  useEffect(() => {
+    if (manualScanStatus === 'idle') return;
+    if (
+      routedPowerDiscoveries.length === 0 &&
+      routedTelemetryDiscoveries.length === 0 &&
+      telemetryFallbackCandidateDiscoveries.length === 0 &&
+      routedAccessoryDiscoveries.length === 0
+    ) {
+      return;
+    }
+    setScannerClock(Date.now());
+  }, [
+    manualScanStatus,
+    routedAccessoryDiscoveries.length,
+    routedPowerDiscoveries.length,
+    routedTelemetryDiscoveries.length,
+    telemetryFallbackCandidateDiscoveries.length,
+  ]);
 
   useEffect(() => {
     if (manualScanStatus === 'idle') return;
@@ -3006,6 +3293,17 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               supportLevel: 'verified',
               supportLabel: 'Cloud API',
               supportNote: 'EcoFlow cloud/API device. Native Bluetooth is not required for this connection.',
+              isSupported: true,
+            }
+          : providerId === 'ecoflow' && discoveredDevice && (
+              discoveredDevice.connectionType === 'ble' ||
+              discoveredDevice.source === 'ble' ||
+              discoveredDevice.sources?.includes('ble')
+            )
+          ? {
+              supportLevel: 'verified',
+              supportLabel: 'Native BLE',
+              supportNote: 'EcoFlow local Bluetooth advertisement. ECS can attempt native BLE telemetry without cloud authorization.',
               isSupported: true,
             }
           : adapterStatus.capability === 'api_required'
@@ -3231,6 +3529,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         signalStrength,
         affectsMultipleDevices: false,
         connectionType: discoveredDevice?.connectionType ?? null,
+        sourceIds: discoveredDevice?.sourceIds,
         requiresNativeBluetooth: discoveredDevice?.requiresNativeBluetooth ?? true,
         connectableViaCloud: discoveredDevice?.connectableViaCloud ?? false,
         multiDeviceCapability,
@@ -3738,6 +4037,26 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       });
       return;
     }
+
+    if (!isUserInitiated && isEcoFlowCloudAuthBlockedDevice(device)) {
+      bluLog('[BLU_RECONNECT]', 'auto_reconnect_skipped_cloud_auth_blocked', {
+        deviceId: device.rawId,
+        vendor: device.providerId,
+        deviceType: getBluDeviceLogType(device),
+        connectionMode: getBluConnectionMode(device),
+        source,
+        cloudState: device.ecoflowCloudState ?? device.ecoflowDiagnosticReason?.cloudState ?? null,
+      });
+      ecsLog.debug('TELEMETRY', '[DEVICE_CONNECTIONS] connect_skipped_cloud_auth_blocked', {
+        deviceId: device.rawId,
+        modelId: device.id,
+        providerId: device.providerId,
+        source,
+        cloudState: device.ecoflowCloudState ?? device.ecoflowDiagnosticReason?.cloudState ?? null,
+      });
+      return;
+    }
+
     const connectionPolicy = getBluestackConnectionPolicy(device);
 
     if (device.actionKind === 'none' || (!connectionPolicy.canAttemptConnection && device.actionKind !== 'retry')) {
@@ -3992,7 +4311,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             providerStatus: activation.providerStatus,
             cloudState: activation.cloudState,
           });
-          bluLog('[BLU_ECOFLOW]', 'cloud_connect_succeeded', {
+          bluLog('[BLU_ECOFLOW]', activation.telemetryActive ? 'cloud_connect_succeeded' : 'cloud_connect_no_live_telemetry', {
             deviceId: device.rawId,
             vendor: 'ecoflow',
             deviceType: getBluDeviceLogType(device),
@@ -4028,21 +4347,127 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               chargerStatus: activation.chargerStatus,
             });
           } else {
-            bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_connected_no_live_telemetry', buildBluTimeoutLogDetails({
-              deviceId: device.rawId,
-              vendor: 'ecoflow',
-              phase: 'ecoflow_cloud_first_poll',
-              timeoutMs: ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
-              lastSuccessfulPhase: 'cloud_connect',
-              lastPacketAt: null,
-              errorCode: activation.statusError,
-              message: activation.statusError ?? 'EcoFlow cloud connected, but no live telemetry packet was decoded.',
-            }));
+            if (isEcoFlowCloudAuthBlockedResult(activation)) {
+              bluLog('[BLU_ECOFLOW]', 'ecoflow_cloud_connect_auth_blocked', {
+                deviceId: device.rawId,
+                vendor: 'ecoflow',
+                phase: 'cloud_connected_auth_blocked',
+                connectionMode: 'cloud',
+                productType: activation.productType,
+                telemetryActive: false,
+                providerStatus: activation.providerStatus,
+                cloudState: activation.cloudState,
+                statusLabel: activation.statusLabel,
+              });
+              const localBleDeviceId = resolveEcoFlowLocalBleFallbackDeviceId(device, liveDiscoveredPowerDevices);
+              if (isUserInitiated && localBleDeviceId) {
+                bluLog('[BLU_ECOFLOW]', 'ecoflow_cloud_auth_blocked_local_ble_fallback_start', {
+                  deviceId: device.rawId,
+                  bleDeviceId: localBleDeviceId,
+                  vendor: 'ecoflow',
+                  connectionMode: 'ble',
+                  phase: 'local_ble_fallback',
+                  lastSuccessfulPhase: 'cloud_auth_blocked',
+                  driverMode: 'ecoflow_native_ble_v1',
+                });
+                const localAdapter = getPowerBrandConnectionAdapterForDevice({
+                  providerId: device.providerId,
+                  rawId: localBleDeviceId,
+                  name: device.name,
+                  model: device.subtype,
+                  connectionType: 'ble',
+                  signalStrength: device.signalStrength,
+                });
+                const localResult = localAdapter
+                  ? await localAdapter.connect({
+                      providerId: device.providerId,
+                      rawId: localBleDeviceId,
+                      name: device.name,
+                      model: device.subtype,
+                      connectionType: 'ble',
+                      signalStrength: device.signalStrength,
+                    })
+                  : null;
+
+                if (!isCurrentDeviceOperation(device.id, operationId)) return;
+
+                if (localResult?.success) {
+                  await powerDeviceStore.removeSelected('EcoFlow', device.rawId).catch(() => {});
+                  await ensureManagedPowerOwnership(
+                    device.providerId as BluProviderId,
+                    localBleDeviceId,
+                    device.name,
+                    localResult.devices[0]?.model ?? device.subtype ?? device.name,
+                    device.signalStrength,
+                    'ble',
+                    'connected',
+                  );
+                  setSelectedIds((current) => current.filter((entry) => entry !== device.id));
+                  setDeviceUiState(device.id, 'connected', null);
+                  bluLog('[BLU_ECOFLOW]', 'ecoflow_local_ble_fallback_connected', {
+                    deviceId: localBleDeviceId,
+                    cloudDeviceId: device.rawId,
+                    vendor: 'ecoflow',
+                    connectionMode: 'ble',
+                    phase: localResult.status.phase,
+                    status: localResult.status.label,
+                    driverMode: 'ecoflow_native_ble_v1',
+                  });
+                  setInfoMessage(`${device.name} connected locally over EcoFlow BLE. ${localResult.status.detail}`);
+                  void ecsProviderRegistry.fetchAllTelemetry();
+                  return;
+                }
+
+                const fallbackError =
+                  localResult?.error ??
+                  'EcoFlow cloud telemetry is authorization-blocked, and local BLE did not produce live telemetry.';
+                const localBleAuthGate =
+                  localResult?.errorCode === 'TELEMETRY_UNAVAILABLE'
+                    ? fallbackError
+                    : fallbackError;
+                bluLog('[BLU_ECOFLOW]', 'ecoflow_local_ble_fallback_failed', {
+                  deviceId: localBleDeviceId,
+                  cloudDeviceId: device.rawId,
+                  vendor: 'ecoflow',
+                  connectionMode: 'ble',
+                  phase: localResult?.status.phase ?? 'local_ble_fallback',
+                  errorCode: localResult?.errorCode ?? 'LOCAL_BLE_FALLBACK_FAILED',
+                  message: localBleAuthGate,
+                  driverMode: localResult?.errorCode === 'TELEMETRY_UNAVAILABLE' ? 'ecoflow_ble_parser_pending' : 'ecoflow_native_ble_v1',
+                });
+                setDeviceUiState(device.id, 'failed', localBleAuthGate);
+                setInfoMessage(localBleAuthGate);
+                return;
+              }
+              if (isUserInitiated && !localBleDeviceId) {
+                bluLog('[BLU_ECOFLOW]', 'ecoflow_cloud_auth_blocked_local_ble_fallback_unavailable', {
+                  deviceId: device.rawId,
+                  vendor: 'ecoflow',
+                  connectionMode: 'cloud',
+                  phase: 'local_ble_fallback_lookup',
+                  nearbyEcoFlowBleIds: liveDiscoveredPowerDevices
+                    .filter((entry) => isEcoFlowLocalDiscovery(entry) || entry.sourceIds?.ble != null)
+                    .map((entry) => entry.sourceIds?.ble ?? entry.id)
+                    .slice(0, 4),
+                });
+              }
+            } else {
+              bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_connected_no_live_telemetry', buildBluTimeoutLogDetails({
+                deviceId: device.rawId,
+                vendor: 'ecoflow',
+                phase: 'ecoflow_cloud_first_poll',
+                timeoutMs: ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
+                lastSuccessfulPhase: 'cloud_connect',
+                lastPacketAt: null,
+                errorCode: activation.statusError,
+                message: activation.statusError ?? 'EcoFlow cloud connected, but no live telemetry packet was decoded.',
+              }));
+            }
           }
           setInfoMessage(
             activation.telemetryActive
               ? `${device.name} is connected through EcoFlow Cloud with telemetry active.`
-              : `${device.name} is available through EcoFlow Cloud. Native Bluetooth is not required in this runtime.`,
+              : getEcoFlowCloudNoTelemetryInfoMessage(device.name, activation),
           );
           enqueueRouteIntent({
             owner: 'power',
@@ -4056,10 +4481,14 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             supportLabel: device.supportLabel,
             supportNote: activation.statusError
               ? `EcoFlow Cloud is available, but latest status did not load: ${activation.statusError}`
+              : isEcoFlowCloudAuthBlockedResult(activation)
+                ? activation.statusLabel
               : 'EcoFlow Cloud/API connection is active; native Bluetooth was skipped.',
             message: activation.telemetryActive
               ? `${device.provider} telemetry is now flowing through EcoFlow Cloud.`
-              : `${device.provider} is now owned by the ECS power domain through EcoFlow Cloud.`,
+              : isEcoFlowCloudAuthBlockedResult(activation)
+                ? `${device.provider} is attached through EcoFlow Cloud, but telemetry is authorization-blocked.`
+                : `${device.provider} is now owned by the ECS power domain through EcoFlow Cloud.`,
           });
           return;
         }
@@ -4069,240 +4498,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           rawId: device.rawId,
           name: device.name,
           model: device.subtype,
+          connectionType: getBluConnectionMode(device),
           signalStrength: device.signalStrength,
         });
-
-        if (device.providerId === 'ecoflow') {
-          const ecoFlowEligibility = normalizeEcoFlowBluCandidate({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            model: device.subtype,
-            productType: device.category,
-          });
-          bluLog('[BLU_ECOFLOW]', 'local_ble_connect_attempt', buildBluConnectionAttemptLogDetails({
-            deviceId: device.rawId,
-            vendor: 'ecoflow',
-            deviceType: getBluDeviceLogType(device),
-            connectionMode: 'ble',
-            startedAt: Date.now(),
-            timeoutMs: ECOFLOW_LOCAL_BLE_CONNECT_TIMEOUT_MS,
-            attempt: 1,
-            driverMode: 'local_ble_parser_pending',
-          }));
-          recordEcoFlowConnectionPhase({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            productType: ecoFlowEligibility.productType,
-            phase: 'connecting',
-            source: 'local-ble',
-            lastSuccessfulPhase: 'discovered',
-          });
-          const result = await genericBluetoothAccessoryManager.connect({
-            deviceId: device.rawId,
-            displayName: device.name,
-            providerLabel: device.provider,
-            providerId: device.providerId,
-            categoryHint: device.category,
-            owner: 'generic',
-            supportLabel: device.supportLabel,
-            supportNote: device.supportNote,
-            signalStrength: device.signalStrength,
-            serviceUuids: device.serviceUuids,
-            manufacturerData: device.manufacturerData,
-            localName: device.localName ?? device.name,
-          });
-
-          if (!result.success) {
-            const failureReason = result.error ?? 'EcoFlow Bluetooth connection failed.';
-            bluLog('[BLU_ECOFLOW]', 'local_ble_connect_failed', {
-              deviceId: device.rawId,
-              vendor: 'ecoflow',
-              deviceType: getBluDeviceLogType(device),
-              connectionMode: 'ble',
-              phase: 'native_transport',
-              errorCode: 'CONNECT_FAILED',
-              message: failureReason,
-              driverMode: 'local_ble_parser_pending',
-            });
-            if (isBluTimeoutLike(result.error)) {
-              recordEcoFlowTimeout({
-                deviceId: device.rawId,
-                deviceName: device.name,
-                productType: ecoFlowEligibility.productType,
-                source: 'local-ble',
-                timeoutKind: 'connectTimeout',
-                reason: failureReason,
-                canRetry: true,
-                requiresCloudAuth: false,
-                requiresNativeBle: true,
-                lastSuccessfulPhase: 'connecting',
-                lastPacketAt: null,
-              });
-              bluLog('[BLU_TIMEOUT]', 'ecoflow_local_ble_timeout', buildBluTimeoutLogDetails({
-                deviceId: device.rawId,
-                vendor: 'ecoflow',
-                phase: 'local_ble_connect',
-                timeoutMs: ECOFLOW_LOCAL_BLE_CONNECT_TIMEOUT_MS,
-                lastSuccessfulPhase: 'connect_requested',
-                lastPacketAt: null,
-                errorCode: 'CONNECT_FAILED',
-                message: failureReason,
-              }));
-            } else {
-              recordEcoFlowFailure({
-                deviceId: device.rawId,
-                deviceName: device.name,
-                productType: ecoFlowEligibility.productType,
-                source: 'local-ble',
-                reason: failureReason,
-                canRetry: true,
-                requiresCloudAuth: false,
-                requiresNativeBle: true,
-                lastSuccessfulPhase: 'connecting',
-              });
-            }
-            recordBluetoothDiagnosticEvent({
-              type: 'connect_failure',
-              source: 'native_ble',
-              deviceId: device.rawId,
-              deviceName: device.name,
-              providerId: device.providerId,
-              message: 'EcoFlow local Bluetooth connect failed.',
-              error: failureReason,
-            });
-            ecsLog.warn('TELEMETRY', '[BT_CONNECT] failure', {
-              deviceId: device.rawId,
-              modelId: device.id,
-              providerId: device.providerId,
-              reason: failureReason,
-            });
-            setDeviceUiState(device.id, 'failed', failureReason);
-            return;
-          }
-
-          const capabilityError = 'EcoFlow Bluetooth is attached, but ECS does not yet have a validated local telemetry parser for this model. Use the EcoFlow Cloud/API path for live telemetry while local decoding is pending.';
-          recordEcoFlowBleProbeEvent({
-            deviceId: device.rawId,
-            displayName: device.name,
-            providerId: device.providerId,
-            providerLabel: device.provider,
-            localName: device.localName ?? device.name,
-            categoryHint: device.category,
-            manufacturerData: device.manufacturerData,
-            serviceUuids: device.serviceUuids,
-            phase: 'local_parser_blocked',
-            reason: capabilityError,
-          });
-          recordEcoFlowConnectionPhase({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            productType: ecoFlowEligibility.productType,
-            phase: 'connected',
-            source: 'local-ble',
-            lastSuccessfulPhase: 'connecting',
-          });
-          recordEcoFlowConnectionPhase({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            productType: ecoFlowEligibility.productType,
-            phase: 'awaitingTelemetry',
-            source: 'local-ble',
-            lastSuccessfulPhase: 'connected',
-          });
-          recordBluStreamHealthSnapshot({
-            deviceId: device.rawId,
-            vendor: 'ecoflow',
-            phase: 'awaitingFirstPacket',
-            source: 'local-ble',
-            streamMode: 'local_ble_notifications',
-            staleAfterMs: Math.max(DEFAULT_STALE_AFTER_MS, ECOFLOW_LOCAL_FIRST_TELEMETRY_TIMEOUT_MS),
-          });
-          await bluDeviceRegistry.registerDevice({
-            provider: 'ecoflow',
-            device_id: device.rawId,
-            display_name: device.name,
-            model: device.subtype ?? device.name,
-            product_type: ecoFlowEligibility.productType,
-            telemetry_capable: false,
-            connection_state: 'connected',
-            last_seen: Date.now(),
-            capabilities: DEFAULT_BLU_CAPABILITIES,
-          });
-          await bluDeviceRegistry.ensurePrimary('ecoflow');
-          await ensureManagedPowerOwnership(
-            'ecoflow',
-            device.rawId,
-            device.name,
-            device.subtype ?? device.name,
-            device.signalStrength,
-            'ble',
-            'connected',
-          );
-          bluLog('[BLU_HANDSHAKE]', 'ecoflow_local_ble_parser_unavailable', {
-            deviceId: device.rawId,
-            vendor: 'ecoflow',
-            deviceType: getBluDeviceLogType(device),
-            connectionMode: 'ble',
-            phase: 'telemetry_parser',
-            lastSuccessfulPhase: 'native_transport_connected',
-            driverMode: 'local_ble_incomplete',
-            message: capabilityError,
-          });
-          recordEcoFlowTimeout({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            productType: ecoFlowEligibility.productType,
-            source: 'local-ble',
-            timeoutKind: 'firstTelemetryTimeout',
-            reason: capabilityError,
-            canRetry: false,
-            requiresCloudAuth: true,
-            requiresNativeBle: false,
-            lastSuccessfulPhase: 'connected',
-            lastPacketAt: null,
-          });
-          recordBluStreamHealthSnapshot({
-            deviceId: device.rawId,
-            vendor: 'ecoflow',
-            phase: 'failed',
-            source: 'local-ble',
-            streamMode: 'local_ble_notifications',
-            staleAfterMs: Math.max(DEFAULT_STALE_AFTER_MS, ECOFLOW_LOCAL_FIRST_TELEMETRY_TIMEOUT_MS),
-            error: {
-              phase: 'awaitingFirstPacket',
-              code: 'LOCAL_BLE_PARSER_UNAVAILABLE',
-              message: capabilityError,
-            },
-          });
-          bluLog('[BLU_TIMEOUT]', 'ecoflow_local_ble_first_telemetry_timeout', buildBluTimeoutLogDetails({
-            deviceId: device.rawId,
-            vendor: 'ecoflow',
-            phase: 'ecoflow_local_ble_first_telemetry',
-            timeoutMs: ECOFLOW_LOCAL_FIRST_TELEMETRY_TIMEOUT_MS,
-            lastSuccessfulPhase: 'native_transport_connected',
-            lastPacketAt: null,
-            errorCode: 'LOCAL_BLE_PARSER_UNAVAILABLE',
-            message: capabilityError,
-          }));
-          recordBluetoothDiagnosticEvent({
-            type: 'provider_handshake_failure',
-            source: 'provider_handshake',
-            deviceId: device.rawId,
-            deviceName: device.name,
-            providerId: device.providerId,
-            message: 'EcoFlow local Bluetooth attached; provider telemetry parser unavailable.',
-            error: capabilityError,
-          });
-          ecsLog.warn('TELEMETRY', '[BT_CONNECT] provider_capability_unavailable', {
-            deviceId: device.rawId,
-            modelId: device.id,
-            providerId: device.providerId,
-            reason: capabilityError,
-          });
-          setDeviceUiState(device.id, 'connected', capabilityError);
-          setInfoMessage(capabilityError);
-          return;
-        }
 
         if (!adapter) {
           bluLog('[BLU_VENDOR]', 'power_brand_adapter_unavailable', {
@@ -4362,6 +4560,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             rawId: device.rawId,
             name: device.name,
             model: device.subtype,
+            connectionType: getBluConnectionMode(device),
             signalStrength: device.signalStrength,
           });
           if (result.success) {
@@ -4815,6 +5014,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     enqueueRouteIntent,
     hasManualDisconnectRequest,
     isCurrentDeviceOperation,
+    liveDiscoveredPowerDevices,
     obdError,
     obdIsScanning,
     obdLastDevice,
@@ -4877,7 +5077,12 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           if (remainingEcoFlowSelections.length === 0) {
             stopEcoFlowCloudTelemetryPolling(device.rawId);
             provider?.stopPolling();
-            await provider?.disconnect();
+            bluLog('[BLU_DISCONNECT]', 'ecoflow_cloud_disconnect_skipped_native_provider_disconnect', {
+              deviceId: device.rawId,
+              vendor: 'ecoflow',
+              connectionMode: 'cloud',
+              reason: 'cloud_disconnect_is_device_scoped',
+            });
             setSelectedEcoFlowDevice(null);
           } else {
             const nextEcoFlowDeviceId = remainingEcoFlowSelections[0];
@@ -4896,17 +5101,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             await provider?.fetchTelemetry().catch(() => []);
             clearProviderPrimary = false;
           }
-        } else if (providerId === 'ecoflow') {
-          await genericBluetoothAccessoryManager.disconnect(device.rawId);
-          clearBluStreamHealthSnapshot(device.rawId, 'ecoflow');
-          recordEcoFlowConnectionPhase({
-            deviceId: device.rawId,
-            deviceName: device.name,
-            productType: device.category,
-            phase: 'disconnected',
-            source: 'local-ble',
-            lastSuccessfulPhase: 'disconnected',
-          });
         } else {
           const adapter = getPowerBrandConnectionAdapterForDevice({
             providerId: device.providerId,
@@ -5163,6 +5357,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       if (device.isConnected || device.isConnecting) return false;
       if (device.actionKind !== 'connect' && device.actionKind !== 'retry') return false;
       if (hasManualDisconnectRequest(device)) return false;
+      if (isEcoFlowCloudAuthBlockedDevice(device)) return false;
       const previousAttemptAt = autoReconnectAttemptedAtRef.current.get(device.id) ?? 0;
       return now - previousAttemptAt >= REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS;
     });
@@ -5242,8 +5437,14 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   }, [manualScanStatus, sourceStatuses]);
 
   useEffect(() => {
+    const currentUnsupportedTelemetryKeys = new Set<string>();
     for (const device of connectedDevices) {
       if (device.isLive) {
+        for (const loggedKey of Array.from(connectedWithoutTelemetryLogKeysRef.current)) {
+          if (loggedKey.startsWith(`${device.rawId}:${device.providerId}:`)) {
+            connectedWithoutTelemetryLogKeysRef.current.delete(loggedKey);
+          }
+        }
         bluLogThrottled('[BLU_TELEMETRY]', `connected-model:${device.rawId}:${device.providerId}`, 'connected_device_live_state', buildBluTelemetryLogDetails({
           deviceId: device.rawId,
           vendor: device.providerId,
@@ -5257,16 +5458,27 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           telemetrySource: device.telemetrySource,
           telemetryUnsupported: device.telemetryUnsupported,
         }), 15_000);
-      } else if (device.telemetryUnsupported) {
-        bluLogThrottled('[BLU_STREAM]', `connected-model-no-telemetry:${device.rawId}:${device.providerId}`, 'connected_without_live_telemetry', {
-          deviceId: device.rawId,
-          vendor: device.providerId,
-          deviceType: getBluDeviceLogType(device),
-          connectionMode: getBluConnectionMode(device),
-          telemetrySource: device.telemetrySource,
-          telemetryUnsupported: device.telemetryUnsupported,
-          streamMode: device.telemetrySource,
-        }, 15_000);
+      } else if (device.telemetryUnsupported && device.telemetrySource !== 'unavailable') {
+        const logKey = [
+          device.rawId,
+          device.providerId,
+          device.telemetrySource,
+          device.ecoflowPhase ?? device.status,
+          device.ecoflowCloudState ?? 'no_cloud_state',
+        ].join(':');
+        currentUnsupportedTelemetryKeys.add(logKey);
+        if (!connectedWithoutTelemetryLogKeysRef.current.has(logKey)) {
+          connectedWithoutTelemetryLogKeysRef.current.add(logKey);
+          bluLog('[BLU_STREAM]', 'connected_without_live_telemetry', {
+            deviceId: device.rawId,
+            vendor: device.providerId,
+            deviceType: getBluDeviceLogType(device),
+            connectionMode: getBluConnectionMode(device),
+            telemetrySource: device.telemetrySource,
+            telemetryUnsupported: device.telemetryUnsupported,
+            streamMode: device.telemetrySource,
+          });
+        }
       }
       if (!DEBUG_DEVICE_CONNECTIONS) continue;
       ecsLog.debug('TELEMETRY', '[BT_LIVE] control_page_source', {
@@ -5277,6 +5489,11 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         isLive: device.isLive,
         telemetryUnsupported: device.telemetryUnsupported,
       });
+    }
+    for (const loggedKey of Array.from(connectedWithoutTelemetryLogKeysRef.current)) {
+      if (!currentUnsupportedTelemetryKeys.has(loggedKey)) {
+        connectedWithoutTelemetryLogKeysRef.current.delete(loggedKey);
+      }
     }
   }, [connectedDevices]);
 

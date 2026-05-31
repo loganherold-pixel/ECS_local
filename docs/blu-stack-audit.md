@@ -11,7 +11,7 @@ This audit is documentation-only. No runtime behavior was changed. The VeePeak O
 ECS currently has two related but separate live-data lanes:
 
 1. Vehicle telemetry lane: VeePeak/ELM327-compatible OBD2 adapters are scanned through the native BLE scanner, classified as OBD2, connected by `src/vehicle-telemetry/OBD2Adapter.ts`, initialized as an ELM327 transport, polled by `src/vehicle-telemetry/OBD2PIDPoller.ts`, normalized by `src/vehicle-telemetry/VehicleTelemetryService.ts` and `src/vehicle-telemetry/VehicleTelemetryStore.ts`, then rendered by vehicle/dashboard consumers.
-2. Power telemetry lane: power vendors are discovered by the unified Bluestack scanner, but release live telemetry is gated by parser readiness. EcoFlow is the release cloud/API path through Supabase Edge Function `supabase/functions/ecoflow/index.ts`; EcoFlow local BLE attachment exists but local telemetry parsing is explicitly not promoted. Bluetti, Goal Zero, and Anker/SOLIX are recognized as native BLE candidates, but their live telemetry parsers are blocked by the Bluestack parser registry pending field evidence.
+2. Power telemetry lane: power vendors are discovered by the unified Bluestack scanner, but release live telemetry is gated by parser readiness. EcoFlow keeps the cloud/API path through Supabase Edge Function `supabase/functions/ecoflow/index.ts` and now also has a guarded native BLE parser path through `ecoflow_native_ble_v1`; local BLE is promoted only when decoded power fields are received. Other live-ready brands use the shared native BLE bridge, while unknown power devices remain profile-only.
 
 The main user-facing scanner is `app/power/blu.tsx` backed by `lib/useUnifiedDeviceConnections.ts`. It merges native BLE/OBD scan callbacks, EcoFlow cloud discovery, saved/registered devices, and generic accessory links into one Bluestack device model.
 
@@ -41,7 +41,7 @@ User opens Bluestack scanner
       -> connect request
         -> telemetry/OBD2: OBD2Adapter.connectToDevice()
         -> EcoFlow cloud: lib/ecoflowCloudConnection.ts
-        -> EcoFlow local BLE: lib/genericBluetoothAccessoryManager.ts, parser unavailable
+        -> EcoFlow local BLE: lib/powerBrandConnectionAdapters.ts -> lib/livePowerBleProviders.ts
         -> other power vendors: lib/powerBrandConnectionAdapters.ts, parser-gated
         -> utility/generic accessories: lib/genericBluetoothAccessoryManager.ts
       -> telemetry stores
@@ -100,8 +100,8 @@ Do not change or replace this path while fixing power-device/EcoFlow issues.
 | --- | --- | --- |
 | VeePeak/OBD2 | `useUnifiedDeviceConnections.connectDevice()`, `OBD2Adapter.connectToDevice()` | Native BLE connect, service/characteristic discovery, ELM327 handshake, PID poller start, then telemetry is live. |
 | EcoFlow cloud/API | `activateEcoFlowCloudDevice()`, `connectEcoFlowCloudDevice()`, `startEcoFlowCloudTelemetryPolling()` | Skips native BLE, persists selected EcoFlow device, registers BLU device as EcoFlow cloud-owned, polls cloud every 5s by default. |
-| EcoFlow local BLE | `genericBluetoothAccessoryManager.connect()` from `useUnifiedDeviceConnections` | Can attach locally, but the code records provider parser unavailable and tells the user to use cloud/API for live telemetry while local decoding is pending. |
-| Bluetti, Goal Zero, Anker/SOLIX | `getPowerBrandConnectionAdapterForDevice()`, `RegisteredProviderPowerAdapter.connect()` | Discovery can classify these brands, but live connection is blocked because parser decision has `canDecodeLiveTelemetry: false`. If forced, adapters return `PARSER_PENDING`. |
+| EcoFlow local BLE | `getPowerBrandConnectionAdapterForDevice()`, `RegisteredProviderPowerAdapter.connect()`, `ecoFlowNativeBlePowerProvider` | Connects through the native power adapter and promotes only decoded readable EcoFlow fields. Unknown binary/proprietary packets remain telemetry-unsupported. |
+| Bluetti, Goal Zero, Anker/SOLIX | `getPowerBrandConnectionAdapterForDevice()`, `RegisteredProviderPowerAdapter.connect()` | Discovery can classify these brands and connect through the shared native BLE bridge; live state is promoted only after decoded hardware telemetry. |
 | Utility sensors | `genericBluetoothAccessoryManager` and `lib/bluestack/*` utility profile logic | Live-ready profile path; ECS links native BLE sensors and promotes only decoded tank-level percentages. |
 | Generic accessories | `genericBluetoothAccessoryManager` | Managed as generic Bluetooth sessions, not live telemetry providers. |
 
@@ -122,6 +122,7 @@ Do not change or replace this path while fixing power-device/EcoFlow issues.
 | Step | Files/functions | Store/event output |
 | --- | --- | --- |
 | EcoFlow cloud poll | `EcoFlowCloudProvider.pollOnce()`, `ecoflowCloudConnection.normalizeEcoFlowCloudTelemetry()` | Canonical `PowerTelemetry` with source `cloud`, source label `EcoFlow Cloud`, and live only when decoded numeric fields exist. |
+| EcoFlow local BLE poll | `ecoFlowNativeBlePowerProvider`, `createNativeBleBluAdapter()`, `EcoFlowDriver.decodeEcoFlowBleTelemetry()` | Native BLE readings with source `ble_live`, promoted only when readable characteristics decode trusted power fields. |
 | Canonical manager | `src/power/telemetry/PowerTelemetryManager.ts` | Deep-merges power telemetry, normalizes truth, ingests `canonicalPowerTelemetryToEcsTelemetryEvents()` into `ECSTelemetryStore`. |
 | Legacy BLU store | `lib/BluStateStore.ts` | Keeps BLU summary and per-provider telemetry, guarded against unsupported/mock paths. |
 | Authority facade | `lib/BluPowerAuthority.ts` | Used by dashboard/header/AI contexts for power authority snapshots. |
@@ -181,7 +182,7 @@ Do not change or replace this path while fixing power-device/EcoFlow issues.
 | OBD2 | `useVehicleTelemetry.disconnectProvider()` calls `vehicleTelemetryService.stop()`, `obd2Adapter.disconnect()`, removes inactive devices, and clears store if no devices remain. `OBD2Adapter.disconnect()` stops PID telemetry/health checks, removes BLE monitor, cancels pending command, disables auto reconnect, and clears live telemetry. |
 | EcoFlow cloud | `useUnifiedDeviceConnections.disconnectDevice()` removes the device from `PowerDeviceStore`; if no EcoFlow selections remain it stops cloud telemetry polling, disconnects provider, clears selected EcoFlow device, updates BLU registry, and clears power telemetry. |
 | EcoFlow cloud with remaining selected devices | Promotes another selected EcoFlow device, restarts cloud telemetry polling for it, and clears only the disconnected device from canonical telemetry. |
-| EcoFlow local BLE | Disconnects the generic Bluetooth accessory link. |
+| EcoFlow local BLE | Uses the selected `PowerBrandConnectionAdapter.disconnect()`, then updates `BluDeviceRegistry`, managed power setup state, and `PowerTelemetryManager.clearDisconnectedDevice()`. |
 | Other power vendors | Uses the selected `PowerBrandConnectionAdapter.disconnect()`, then updates `BluDeviceRegistry`, managed power setup state, and `PowerTelemetryManager.clearDisconnectedDevice()`. |
 | Generic/sensor accessories | `genericBluetoothAccessoryManager.disconnect()` and scanner UI state cleanup. |
 
@@ -208,10 +209,10 @@ Do not change or replace this path while fixing power-device/EcoFlow issues.
 | Device catalog returns unsupported/unknown product type | Device may be listed but not telemetry-capable unless unknown cloud telemetry check succeeds | `ecoflowBluTelemetryEligibility.ts`, `EcoFlowCloudProvider.ts` |
 | Cloud connect succeeds but `pollOnce()` has no decoded fields | UI can show cloud/API linked or available, but not live telemetry | `ecoflowCloudConnection.ts` |
 | Glacier quota payload uses fields not currently mapped | Glacier can connect/cloud-link but show no live data or timeout-like retry state | `EcoFlowCloudProvider.mapEdgeTelemetry()`, `normalizeEcoFlowCloudTelemetry()` |
-| EcoFlow local BLE attach succeeds | Local BLE is attached but provider parser is explicitly unavailable; live telemetry should not appear | `useUnifiedDeviceConnections.ts` |
+| EcoFlow local BLE connect succeeds but no readable fields decode | Local BLE remains connected at the provider layer, but telemetry is unsupported and not promoted live | `EcoFlowDriver.ts`, `livePowerBleProviders.ts`, `createNativeBleBluAdapter.ts` |
 | Cloud polling hard errors | Poll loop reports available/retry for non-auth errors; auth errors stop the session | `startEcoFlowCloudTelemetryPolling()` |
 
-EcoFlow Glacier specifically is discoverable and can connect, but timeouts/no live data are most likely in the cloud telemetry quota/decode segment, not in the scanner list itself. The local BLE path is not a release live parser path today.
+EcoFlow Glacier specifically is discoverable and can connect, but timeouts/no live data are usually in either the cloud telemetry quota/decode segment or model-specific local BLE payload shape. The local BLE parser refuses to fabricate values from unknown binary packets.
 
 ## Vendor Implementation Status
 
@@ -221,19 +222,19 @@ EcoFlow Glacier specifically is discoverable and can connect, but timeouts/no li
 | Generic ELM327-compatible BLE OBD2 | Recognized by OBD/ELM/service evidence and fallback candidates | Supported if native BLE and ELM transport work | Live only after ELM init and PID data | complete for supported BLE ELM327 devices |
 | Classic Bluetooth/SPP OBD2 | Source explicitly unsupported in current runtime | Not discoverable by current scanner | No telemetry | disconnected from UI / unsupported source |
 | EcoFlow cloud/API | Cloud catalog discovery implemented, server-side credentials required | Cloud connect implemented | Live only when authorized quota payload decodes numeric fields | cloud-only / partially wired |
-| EcoFlow local BLE | Brand discovery and generic link path implemented | Can attach as generic Bluetooth accessory | Local BLE parser unavailable by design | local BLE incomplete |
+| EcoFlow local BLE | Brand discovery and native BLE power adapter implemented | Can connect through shared native BLE bridge | Live only when readable fields decode through `ecoflow_native_ble_v1`; unknown binary remains unsupported | native BLE guarded |
 | EcoFlow Glacier | Cloud discovery normalized as refrigerator/API candidate | Cloud connect path implemented | Live depends on quota authorization and mapped refrigerator fields; timeout/no-data likely here | cloud-only / partially wired |
-| Bluetti | Brand/name/service discovery exists; provider metadata says implemented | Parser registry blocks live connection; adapter returns parser pending when forced | Not promoted to widgets | local BLE incomplete |
-| Goal Zero | Brand/name/service discovery exists | Parser registry blocks live connection; adapter returns parser pending when forced | Not promoted to widgets | local BLE incomplete |
-| Anker/SOLIX | Brand/name/service discovery exists | Parser registry blocks live connection; adapter returns parser pending when forced | Not promoted to widgets | local BLE incomplete |
-| Jackery/Renogy/Redarc/Dakota/Victron | Recognized or planned to varying levels | Parser/field verification pending | Not promoted to live widgets | local BLE incomplete / profile-only |
+| Bluetti | Brand/name/service discovery exists; provider metadata says implemented | Native BLE bridge can attempt connection | Live only after decoded hardware telemetry | native BLE guarded |
+| Goal Zero | Brand/name/service discovery exists | Native BLE bridge can attempt connection | Live only after decoded hardware telemetry | native BLE guarded |
+| Anker/SOLIX | Brand/name/service discovery exists | Native BLE bridge can attempt connection | Live only after decoded hardware telemetry | native BLE guarded |
+| Jackery/Renogy/Redarc/Dakota/Victron | Recognized or planned to varying levels | Native BLE bridge can attempt connection for registered providers | Live only after decoded hardware telemetry | native BLE guarded / profile-only |
 | Propane/water monitors | Utility profiles recognized | Linkable as utility sensors with decoded tank percentage promotion | Awaiting decoded level until payload is read | live-ready bridge |
 
 ## Risks And Likely Root Causes
 
 - VeePeak regression risk: touching `OBD2Adapter`, `OBD2PIDPoller`, `useOBD2Scanner`, `useUnifiedDeviceConnections` telemetry routing, or `VehicleTelemetryStore` can break the known-good path. Keep OBD2 changes isolated and test the live-pipeline scripts plus real device.
 - EcoFlow timeout risk: the scanner and cloud connect can succeed while telemetry remains inactive because quota/all returns unauthorized, offline, unexpected model fields, or fields not decoded into `PowerTelemetry`.
-- EcoFlow local BLE confusion: EcoFlow BLE advertisements may appear connectable, but local BLE telemetry is intentionally not validated. The UI correctly tells users to use cloud/API for live telemetry while local parser work is pending.
+- EcoFlow local BLE confusion: EcoFlow BLE advertisements may connect, but live telemetry appears only after decoded readable fields arrive. Unknown binary packets remain telemetry-unsupported and should be field-captured before any binary decoder is promoted.
 - Parser-pending vendor risk: legacy adapter files contain simulation/dev fallback code, but the release gate is `lib/bluestack/bluestackTelemetryParserRegistry.ts`. Do not bypass that gate for Bluetti, Goal Zero, Anker, or other vendors without field evidence.
 - Expo Go/web risk: native BLE is expected to be unavailable in Expo Go and web preview. This is not a scanner bug if it fails cleanly and keeps cloud/API rows available.
 - Store truth risk: stale/cached/manual/mock paths must remain explicit. `ECSTelemetryStore`, `VehicleTelemetryStore`, `bluetoothLiveTelemetry.ts`, and `PowerTelemetryManager` are the truth gates.

@@ -21,6 +21,7 @@ import { ecsLog } from '../../lib/ecsLogger';
 import { TACTICAL } from '../../lib/theme';
 import MapFallbackSurface from './MapFallbackSurface';
 import type { CampIntelMarkerPayload, CampIntelTone } from '../../lib/campIntel/campIntelTypes';
+import { hasCampStructurePrivacyBufferConflict } from '../../lib/campsites/campStructurePrivacyBuffer';
 import { MAX_CAMPSITE_MARKERS } from '../../lib/campsites/campsiteThresholds';
 import type {
   DispersedCampingEligibilityLayerState,
@@ -50,6 +51,9 @@ const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
+const MAX_ROUTE_RENDER_POINTS = 2400;
+const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
+const ROUTE_RENDER_TURN_DELTA_DEGREES = 8;
 const CAMERA_EPSILON = 0.00005;
 const DEBUG_MAP_RENDERER =
   ((globalThis as typeof globalThis & { __ECS_DEBUG_MAP_RENDERER__?: boolean })
@@ -163,6 +167,24 @@ export type CampScoutMapMarkerPayload = {
   distanceFromRoadOrTrail?: number;
   slope?: number;
   accessNotes?: string;
+  nearBuildings?: boolean;
+  nearStructure?: boolean;
+  nearResidentialStructure?: boolean;
+  nearestBuildingMiles?: number;
+  nearestBuildingDistanceMiles?: number;
+  buildingDistanceMiles?: number;
+  distanceToBuildingMiles?: number;
+  distanceFromBuildingMiles?: number;
+  nearestStructureMiles?: number;
+  nearestStructureDistanceMiles?: number;
+  structureDistanceMiles?: number;
+  distanceToStructureMiles?: number;
+  distanceFromStructureMiles?: number;
+  nearestResidentialStructureMiles?: number;
+  nearestResidentialStructureDistanceMiles?: number;
+  residentialStructureDistanceMiles?: number;
+  distanceToResidentialStructureMiles?: number;
+  distanceFromResidentialStructureMiles?: number;
   pinFamily?: 'camp_scout' | 'campops';
   campOpsRole?: 'candidate' | 'recommended' | 'backup' | 'emergency';
   campOpsCandidateId?: string;
@@ -605,6 +627,86 @@ function normalizePointList(points?: RoutePoint[]): [number, number][] {
   return normalizeRouteLineCoordinates(out);
 }
 
+function bearingDegreesBetweenLngLat(start: [number, number], end: [number, number]) {
+  if (coordinatesSame(start, end)) return null;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const startLat = toRad(start[1]);
+  const endLat = toRad(end[1]);
+  const deltaLng = toRad(end[0] - start[0]);
+  const y = Math.sin(deltaLng) * Math.cos(endLat);
+  const x =
+    Math.cos(startLat) * Math.sin(endLat) -
+    Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function bearingDeltaDegrees(
+  before: [number, number],
+  current: [number, number],
+  after: [number, number],
+) {
+  const inbound = bearingDegreesBetweenLngLat(before, current);
+  const outbound = bearingDegreesBetweenLngLat(current, after);
+  if (inbound == null || outbound == null) return 0;
+  const delta = Math.abs(inbound - outbound) % 360;
+  return delta > 180 ? 360 - delta : delta;
+}
+
+function selectEvenlyDistributedIndexes(indexes: number[], limit: number) {
+  if (limit <= 0 || indexes.length === 0) return [];
+  if (indexes.length <= limit) return indexes;
+  if (limit === 1) return [indexes[Math.floor(indexes.length / 2)]];
+
+  const selected: number[] = [];
+  const lastPosition = indexes.length - 1;
+  for (let slot = 0; slot < limit; slot += 1) {
+    const position = Math.round((slot * lastPosition) / (limit - 1));
+    const value = indexes[position];
+    if (selected[selected.length - 1] !== value) {
+      selected.push(value);
+    }
+  }
+  return selected;
+}
+
+function preserveRouteGeometryForRendering(
+  points: [number, number][],
+  maxPoints: number,
+): [number, number][] {
+  if (points.length <= maxPoints) return points;
+  if (maxPoints <= 1) return points.slice(0, Math.max(maxPoints, 0));
+
+  const lastIndex = points.length - 1;
+  const selected = new Set<number>([0, lastIndex]);
+  const turnIndexes: number[] = [];
+  const strideIndexes: number[] = [];
+  const stride = Math.max(1, Math.ceil((points.length - 2) / Math.max(maxPoints - 2, 1)));
+
+  for (let index = 1; index < lastIndex; index += 1) {
+    const turnDelta = bearingDeltaDegrees(points[index - 1], points[index], points[index + 1]);
+    if (turnDelta >= ROUTE_RENDER_TURN_DELTA_DEGREES) {
+      turnIndexes.push(index);
+    } else if (index % stride === 0) {
+      strideIndexes.push(index);
+    }
+  }
+
+  for (const index of selectEvenlyDistributedIndexes(turnIndexes, maxPoints - selected.size)) {
+    selected.add(index);
+  }
+
+  const remainingBudget = maxPoints - selected.size;
+  const fillIndexes = strideIndexes.filter((index) => !selected.has(index));
+  for (const index of selectEvenlyDistributedIndexes(fillIndexes, remainingBudget)) {
+    selected.add(index);
+  }
+
+  return Array.from(selected)
+    .sort((left, right) => left - right)
+    .map((index) => points[index]);
+}
+
 function pickRouteColor(level?: string) {
   switch ((level || '').toLowerCase()) {
     case 'red':
@@ -833,6 +935,7 @@ export function normalizeRenderedCampScoutMarkers(
   for (const marker of input) {
     if (rendered.length >= 10) break;
     if (!isValidCoord(marker.latitude, marker.longitude)) continue;
+    if (hasCampStructurePrivacyBufferConflict(marker)) continue;
     const identity = marker.id || `${marker.latitude.toFixed(6)}:${marker.longitude.toFixed(6)}`;
     const coordinateKey = routeCoordinateKey(marker.latitude, marker.longitude);
     const key = `${identity}:${coordinateKey}`;
@@ -1035,26 +1138,10 @@ function buildCameraCommandHash(command?: CameraCommand | null, trigger?: number
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const routeCoordsRaw = normalizePointList(props.points);
   const progressCoordsRaw = normalizePointList(props.progressPoints);
-  const routeCoords =
-    routeCoordsRaw.length > 600
-      ? routeCoordsRaw.filter(
-          (_, index) =>
-            index === 0 ||
-            index === routeCoordsRaw.length - 1 ||
-            index % Math.ceil(routeCoordsRaw.length / 600) === 0,
-        )
-      : routeCoordsRaw;
-  const progressRouteCoords =
-    progressCoordsRaw.length > 600
-      ? progressCoordsRaw.filter(
-          (_, index) =>
-            index === 0 ||
-            index === progressCoordsRaw.length - 1 ||
-            index % Math.ceil(progressCoordsRaw.length / 600) === 0,
-        )
-      : progressCoordsRaw;
+  const routeCoords = preserveRouteGeometryForRendering(routeCoordsRaw, MAX_ROUTE_RENDER_POINTS);
+  const progressRouteCoords = preserveRouteGeometryForRendering(progressCoordsRaw, MAX_PROGRESS_ROUTE_RENDER_POINTS);
 
-  const routePointsForBounds = routeCoords.map(([lng, lat]) => ({ lat, lng }));
+  const routePointsForBounds = routeCoordsRaw.map(([lng, lat]) => ({ lat, lng }));
 
   const bounds =
     routePointsForBounds.length > 1
@@ -1569,42 +1656,43 @@ function makeMapHtml(
       filter: drop-shadow(0 6px 12px rgba(0,0,0,0.34));
     }
     .camp-scout-marker::before {
-      content: '';
+      content: none;
       position: absolute;
       inset: 1px;
       border-radius: 999px;
-      border: 1px solid rgba(196,138,44,0.24);
-      background: rgba(8, 11, 14, 0.36);
+      border: 0;
+      background: transparent;
     }
     .camp-scout-core {
       position: relative;
-      width: 26px;
-      height: 26px;
+      width: 24px;
+      height: 24px;
       padding: 0;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: #F2C24D;
-      color: #091014;
+      border-radius: 0;
+      border: 0;
+      background: transparent;
+      color: #F2C24D;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 9px;
-      line-height: 26px;
+      font-size: 18px;
+      line-height: 24px;
       font-weight: 900;
       letter-spacing: 0;
       text-transform: uppercase;
       gap: 2px;
+      filter: drop-shadow(0 2px 3px rgba(0,0,0,0.62));
     }
     .camp-scout-tent {
       position: relative;
-      width: 16px;
-      height: 16px;
+      width: 22px;
+      height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
       flex: 0 0 auto;
-      color: #091014;
-      font-size: 12px;
+      color: currentColor;
+      font-size: 20px;
       line-height: 1;
       font-weight: 900;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -1642,22 +1730,21 @@ function makeMapHtml(
       display: none;
     }
     .camp-scout-grade-a { z-index: 12; }
-    .camp-scout-grade-a .camp-scout-core { background: #F2C24D; }
-    .camp-scout-grade-b .camp-scout-core { background: #D4A017; }
-    .camp-scout-grade-c .camp-scout-core { background: #9EC2B1; color: #0B1116; }
+    .camp-scout-grade-a .camp-scout-core { color: #F2C24D; }
+    .camp-scout-grade-b .camp-scout-core { color: #D4A017; }
+    .camp-scout-grade-c .camp-scout-core { color: #9EC2B1; }
     .camp-scout-source-ecs_inferred .camp-scout-core {
-      background: #F2C24D;
-      color: #091014;
-      border-color: rgba(9,16,20,0.34);
-      box-shadow: 0 0 0 2px rgba(242,194,77,0.14);
+      color: #F2C24D;
+      border-color: transparent;
+      box-shadow: none;
     }
     .camp-scout-source-ecs_inferred::before {
-      border-color: rgba(242,194,77,0.42);
-      background: rgba(242,194,77,0.10);
+      border-color: transparent;
+      background: transparent;
     }
-    .camp-scout-source-official_mapped .camp-scout-core { background: #8FD694; color: #0B1116; }
-    .camp-scout-source-community_suggested .camp-scout-core { background: #65C97A; color: #0B1116; }
-    .camp-scout-source-imported_route_context .camp-scout-core { background: #86B8FF; color: #0B1116; }
+    .camp-scout-source-official_mapped .camp-scout-core { color: #8FD694; }
+    .camp-scout-source-community_suggested .camp-scout-core { color: #65C97A; }
+    .camp-scout-source-imported_route_context .camp-scout-core { color: #86B8FF; }
     .camp-scout-selected {
       width: 34px;
       height: 34px;
@@ -1666,14 +1753,14 @@ function makeMapHtml(
     }
     .camp-scout-selected::before {
       inset: 1px;
-      border-color: rgba(255,248,220,0.86);
-      box-shadow: 0 0 18px rgba(242,194,77,0.36);
+      border-color: transparent;
+      box-shadow: none;
     }
     .camp-scout-selected .camp-scout-core {
-      width: 30px;
-      height: 30px;
-      line-height: 30px;
-      font-size: 10px;
+      width: 28px;
+      height: 28px;
+      line-height: 28px;
+      font-size: 22px;
     }
     .camp-scout-selected .camp-scout-rank {
       top: -13px;
@@ -3364,11 +3451,11 @@ function makeMapHtml(
             },
             paint: {
               'circle-color': getCampScoutSourceColorExpression(),
-              'circle-radius': ['case', ['==', ['get', 'selected'], true], 10, 7],
-              'circle-opacity': 0.9,
+              'circle-radius': 0,
+              'circle-opacity': 0,
               'circle-stroke-color': '#F2C24D',
-              'circle-stroke-width': 2,
-              'circle-stroke-opacity': 0.96,
+              'circle-stroke-width': 0,
+              'circle-stroke-opacity': 0,
             },
           });
         } else {
