@@ -136,6 +136,18 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'ottawa-national-forest',
   'hiawatha-national-forest',
   'chequamegon-nicolet-national-forest',
+  'national-forests-in-florida',
+  'ouachita-national-forest',
+  'mark-twain-national-forest',
+  'national-forests-in-mississippi',
+  'kisatchie-national-forest',
+  'george-washington-jefferson-national-forest',
+  'francis-marion-sumter-national-forests',
+  'national-forests-in-texas',
+  'national-forests-in-north-carolina',
+  'allegheny-national-forest',
+  'cherokee-national-forest',
+  'daniel-boone-national-forest',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,

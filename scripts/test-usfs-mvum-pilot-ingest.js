@@ -77,6 +77,18 @@ const expectedUsfsMvumForestSlugs = [
     'ottawa-national-forest',
     'hiawatha-national-forest',
     'chequamegon-nicolet-national-forest',
+    'national-forests-in-florida',
+    'ouachita-national-forest',
+    'mark-twain-national-forest',
+    'national-forests-in-mississippi',
+    'kisatchie-national-forest',
+    'george-washington-jefferson-national-forest',
+    'francis-marion-sumter-national-forests',
+    'national-forests-in-texas',
+    'national-forests-in-north-carolina',
+    'allegheny-national-forest',
+    'cherokee-national-forest',
+    'daniel-boone-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -124,12 +136,24 @@ const expectedUsfsMvumForestNames = [
   'Ottawa National Forest',
   'Hiawatha National Forest',
   'Chequamegon-Nicolet National Forest',
+  'National Forests in Florida',
+  'Ouachita National Forest',
+  'Mark Twain National Forest',
+  'National Forests in Mississippi',
+  'Kisatchie National Forest',
+  'George Washington and Jefferson National Forest',
+  'Francis Marion and Sumter National Forests',
+  'National Forests in Texas',
+  'National Forests in North Carolina',
+  'Allegheny National Forest',
+  'Cherokee National Forest',
+  'Daniel Boone National Forest',
 ];
 
 assert.deepStrictEqual(
   USFS_MVUM_PILOT_FORESTS.map((forest) => forest.slug),
   expectedUsfsMvumForestSlugs,
-  'MVUM pilot forests should include the first four verified public recommendation expansion batches',
+  'MVUM pilot forests should include every verified public recommendation expansion batch',
 );
 assert(
   USFS_MVUM_LAYERS.some((layer) => layer.kind === 'road' && layer.url.includes('Motor_Vehicle_Use_Map_Roads')) &&

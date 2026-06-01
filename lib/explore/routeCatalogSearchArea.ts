@@ -43,6 +43,18 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'ottawa_nf'
   | 'hiawatha_nf'
   | 'chequamegon_nicolet_nf'
+  | 'florida_nf'
+  | 'ouachita_nf'
+  | 'mark_twain_nf'
+  | 'mississippi_nf'
+  | 'kisatchie_nf'
+  | 'gwj_nf'
+  | 'francis_marion_sumter_nf'
+  | 'texas_nf'
+  | 'north_carolina_nf'
+  | 'allegheny_nf'
+  | 'cherokee_nf'
+  | 'daniel_boone_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -542,6 +554,126 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Chequamegon-Nicolet NF',
     latitude: 45.95,
     longitude: -90.55,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'florida_nf',
+    label: 'National Forests in Florida',
+    shortLabel: 'Florida NF',
+    latitude: 29.769,
+    longitude: -83.262,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'ouachita_nf',
+    label: 'Ouachita National Forest',
+    shortLabel: 'Ouachita NF',
+    latitude: 34.053,
+    longitude: -93.438,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'mark_twain_nf',
+    label: 'Mark Twain National Forest',
+    shortLabel: 'Mark Twain NF',
+    latitude: 37.253,
+    longitude: -91.991,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'mississippi_nf',
+    label: 'National Forests in Mississippi',
+    shortLabel: 'Mississippi NF',
+    latitude: 32.714,
+    longitude: -89.931,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'kisatchie_nf',
+    label: 'Kisatchie National Forest',
+    shortLabel: 'Kisatchie NF',
+    latitude: 31.944,
+    longitude: -92.82,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'gwj_nf',
+    label: 'George Washington and Jefferson National Forest',
+    shortLabel: 'GWJ NF',
+    latitude: 37.867,
+    longitude: -80.592,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'francis_marion_sumter_nf',
+    label: 'Francis Marion and Sumter National Forests',
+    shortLabel: 'FM-Sumter NF',
+    latitude: 33.971,
+    longitude: -81.396,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'texas_nf',
+    label: 'National Forests in Texas',
+    shortLabel: 'Texas NF',
+    latitude: 31.9,
+    longitude: -95.642,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'north_carolina_nf',
+    label: 'National Forests in North Carolina',
+    shortLabel: 'North Carolina NF',
+    latitude: 35.407,
+    longitude: -80.483,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'allegheny_nf',
+    label: 'Allegheny National Forest',
+    shortLabel: 'Allegheny NF',
+    latitude: 41.693,
+    longitude: -79.015,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'cherokee_nf',
+    label: 'Cherokee National Forest',
+    shortLabel: 'Cherokee NF',
+    latitude: 35.814,
+    longitude: -83.207,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'daniel_boone_nf',
+    label: 'Daniel Boone National Forest',
+    shortLabel: 'Daniel Boone NF',
+    latitude: 37.433,
+    longitude: -84.033,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],
