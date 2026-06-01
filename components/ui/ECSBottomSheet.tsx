@@ -18,6 +18,7 @@ import {
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
+import ECSShellTexture from '../ECSShellTexture';
 import { useSheetLayout } from '../../lib/useSheetLayout';
 import { MODAL_HEADER, MODAL_FOOTER, SECTION, SAFE_AREA } from '../../lib/uiConstants';
 
@@ -94,6 +95,7 @@ export default function ECSBottomSheet({
         style,
       ]}
     >
+      <ECSShellTexture />
       {/* Drag Handle */}
       {showHandle && (
         <View style={styles.handleContainer}>

@@ -21,18 +21,15 @@ import {
   Animated, Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
-import {
-  fetchWeatherForLocation,
-  type WeatherFetchResult,
-} from '../../lib/weatherStore';
 import type {
   WeatherAlert,
   AlertSeverity,
-  WaypointWeather,
 } from '../../lib/weatherTypes';
 import { getAlertColor } from '../../lib/weatherTypes';
+import { useOperationalWeather } from '../../lib/useOperationalWeather';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -76,6 +73,10 @@ export interface UseWeatherAlertsResult {
   tempString: string | null;
   /** Wind info */
   windString: string | null;
+  /** Precipitation summary */
+  precipString: string | null;
+  /** State label for stale/offline/error */
+  statusText: string | null;
 }
 
 // ── Haversine distance (meters) ──────────────────────────────
@@ -137,24 +138,72 @@ export function useWeatherAlerts(
     return false;
   });
 
-  const [alerts, setAlerts] = useState<WeatherAlert[]>([]);
-  const [markers, setMarkers] = useState<WeatherAlertMarker[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [source, setSource] = useState<'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [lastFetchAt, setLastFetchAt] = useState<number | null>(null);
-  const [conditionsSummary, setConditionsSummary] = useState<string | null>(null);
-  const [tempString, setTempString] = useState<string | null>(null);
-  const [windString, setWindString] = useState<string | null>(null);
-
-  const lastFetchLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const seenAlertKeysRef = useRef<Set<string>>(new Set());
-  const mountedRef = useRef(true);
-  const intervalRef = useRef<any>(null);
-
-  useEffect(() => {
-    return () => { mountedRef.current = false; };
-  }, []);
+  const userLat = userLocation?.lat ?? null;
+  const userLng = userLocation?.lng ?? null;
+  const gps = useMemo(
+    () => ({
+      lat: userLat,
+      lng: userLng,
+      hasFix: userLat != null && userLng != null,
+    }),
+    [userLat, userLng],
+  );
+  const { snapshot, refresh: refreshOperational } = useOperationalWeather({
+    enabled,
+    gps,
+    units: 'imperial',
+    freshnessWindowMs: REFETCH_INTERVAL_MS,
+    movementThresholdM: REFETCH_DISTANCE_M,
+  });
+  const alerts = useMemo(() => (enabled ? snapshot.alerts : []), [enabled, snapshot.alerts]);
+  const markers = useMemo<WeatherAlertMarker[]>(
+    () =>
+      enabled && userLat != null && userLng != null
+        ? alerts.map((alert, index) => ({
+            id: `wa_${userLat}_${userLng}_${alert.type}_${alert.severity}_${index}`,
+            lat: userLat,
+            lng: userLng,
+            severity: alert.severity,
+            title: alert.title,
+            description: alert.description,
+            type: alert.type,
+            color: getAlertColor(alert.severity),
+          }))
+        : [],
+    [alerts, enabled, userLat, userLng],
+  );
+  const source = enabled ? snapshot.status.source : null;
+  const error = enabled ? snapshot.status.error : null;
+  const lastFetchAt = useMemo(() => {
+    if (!enabled || !snapshot.fetchedAt) return null;
+    const parsed = Date.parse(snapshot.fetchedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [enabled, snapshot.fetchedAt]);
+  const conditionsSummary = enabled
+    ? snapshot.current.description ?? snapshot.current.condition
+    : null;
+  const tempString = enabled && snapshot.current.temp != null
+    ? `${Math.round(snapshot.current.temp)}°F`
+    : null;
+  const windString = enabled && snapshot.current.windSpeed != null
+    ? `${Math.round(snapshot.current.windSpeed)} mph`
+    : null;
+  const precipChance = snapshot.current.precipChance;
+  const precipType = snapshot.current.precipType;
+  const precipString = useMemo(() => {
+    if (!enabled || precipChance == null) return null;
+    const precipLabel =
+      precipType === 'snow'
+        ? 'Snow'
+        : precipType === 'rain'
+          ? 'Rain'
+          : 'Precip';
+    return `${precipLabel} ${Math.round(precipChance)}%`;
+  }, [enabled, precipChance, precipType]);
+  const statusText = enabled
+    ? snapshot.status.label ?? (snapshot.status.error ? 'Weather degraded' : null)
+    : null;
 
   const toggle = useCallback(() => {
     hapticMicro();
@@ -166,144 +215,47 @@ export function useWeatherAlerts(
         }
       } catch {}
       if (!next) {
-        // Clear alerts when disabled
-        setAlerts([]);
-        setMarkers([]);
-        setConditionsSummary(null);
-        setTempString(null);
-        setWindString(null);
+        seenAlertKeysRef.current.clear();
       }
       return next;
     });
   }, []);
 
-  const processWeatherResult = useCallback((result: WeatherFetchResult, lat: number, lng: number) => {
-    if (!mountedRef.current) return;
-
-    setSource(result.source);
-    setError(result.error);
-    setLastFetchAt(Date.now());
-    lastFetchLocationRef.current = { lat, lng };
-
-    // Extract all alerts from all waypoints
-    const allAlerts: WeatherAlert[] = [];
-    const allMarkers: WeatherAlertMarker[] = [];
-
-    if (result.data.results) {
-      for (const wp of result.data.results) {
-        if (wp.alerts && wp.alerts.length > 0) {
-          for (const alert of wp.alerts) {
-            allAlerts.push(alert);
-            allMarkers.push({
-              id: `wa_${wp.lat}_${wp.lng}_${alert.type}_${alert.severity}`,
-              lat: wp.lat,
-              lng: wp.lng,
-              severity: alert.severity,
-              title: alert.title,
-              description: alert.description,
-              type: alert.type,
-              color: getAlertColor(alert.severity),
-            });
-          }
-        }
-
-        // Extract conditions summary from first waypoint with data
-        if (wp.current && wp.current.temp != null && !conditionsSummary) {
-          setConditionsSummary(wp.current.weather_main || 'Unknown');
-          setTempString(`${Math.round(wp.current.temp)}°F`);
-          if (wp.current.wind_speed != null) {
-            setWindString(`${Math.round(wp.current.wind_speed)} mph`);
-          }
-        }
-      }
-    }
-
-    // Sort by severity
-    allAlerts.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
-
-    // Detect NEW severe alerts (warning or extreme)
-    const newSevereAlerts: WeatherAlert[] = [];
-    for (const alert of allAlerts) {
-      const key = `${alert.type}_${alert.severity}_${alert.title}`;
-      if (!seenAlertKeysRef.current.has(key)) {
-        seenAlertKeysRef.current.add(key);
-        if (alert.severity === 'extreme' || alert.severity === 'warning') {
-          newSevereAlerts.push(alert);
-        }
-      }
-    }
-
-    // Trigger haptic + toast for new severe alerts
-    if (newSevereAlerts.length > 0) {
-      hapticWarning();
-      const worst = newSevereAlerts[0];
-      const severityLabel = worst.severity === 'extreme' ? 'EXTREME' : 'WARNING';
-      if (newSevereAlerts.length === 1) {
-        showToast(`${severityLabel}: ${worst.title}`);
-      } else {
-        showToast(`${newSevereAlerts.length} NEW WEATHER ALERTS — ${worst.title}`);
-      }
-    }
-
-    setAlerts(allAlerts);
-    setMarkers(allMarkers);
-  }, [showToast, conditionsSummary]);
-
-  const fetchWeather = useCallback(async (lat: number, lng: number) => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const result = await fetchWeatherForLocation(lat, lng, 'imperial');
-      if (mountedRef.current) {
-        processWeatherResult(result, lat, lng);
-      }
-    } catch (err: any) {
-      if (mountedRef.current) {
-        setError(err?.message || 'Weather fetch failed');
-      }
-    }
-    if (mountedRef.current) setLoading(false);
-  }, [loading, processWeatherResult]);
-
   const refresh = useCallback(() => {
-    if (userLocation) {
-      hapticMicro();
-      // Reset seen alerts on manual refresh to re-trigger notifications
-      seenAlertKeysRef.current.clear();
-      fetchWeather(userLocation.lat, userLocation.lng);
-    }
-  }, [userLocation, fetchWeather]);
-
-  // Auto-fetch when enabled and GPS position changes significantly
-  useEffect(() => {
     if (!enabled || !userLocation) return;
+    hapticMicro();
+    seenAlertKeysRef.current.clear();
+    refreshOperational();
+  }, [enabled, refreshOperational, userLocation]);
 
-    const lastLoc = lastFetchLocationRef.current;
-    const shouldFetch = !lastLoc ||
-      haversineM(lastLoc.lat, lastLoc.lng, userLocation.lat, userLocation.lng) > REFETCH_DISTANCE_M;
-
-    if (shouldFetch) {
-      fetchWeather(userLocation.lat, userLocation.lng);
-    }
-  }, [enabled, userLocation?.lat, userLocation?.lng]);
-
-  // Periodic refresh every 5 minutes when enabled
   useEffect(() => {
-    if (!enabled || !userLocation) {
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-      return;
+    if (!enabled || !userLocation || alerts.length === 0) return;
+
+    const orderedAlerts = [...alerts].sort(
+      (a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3),
+    );
+    const newSevereAlerts: WeatherAlert[] = [];
+
+    for (const alert of orderedAlerts) {
+      const key = `${alert.type}_${alert.severity}_${alert.title}`;
+      if (seenAlertKeysRef.current.has(key)) continue;
+      seenAlertKeysRef.current.add(key);
+      if (alert.severity === 'extreme' || alert.severity === 'warning') {
+        newSevereAlerts.push(alert);
+      }
     }
 
-    intervalRef.current = setInterval(() => {
-      if (userLocation && mountedRef.current) {
-        fetchWeather(userLocation.lat, userLocation.lng);
-      }
-    }, REFETCH_INTERVAL_MS);
+    if (newSevereAlerts.length === 0) return;
 
-    return () => {
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-    };
-  }, [enabled, userLocation?.lat, userLocation?.lng]);
+    hapticWarning();
+    const worst = newSevereAlerts[0];
+    const severityLabel = worst.severity === 'extreme' ? 'EXTREME' : 'WARNING';
+    if (newSevereAlerts.length === 1) {
+      showToast(`${severityLabel}: ${worst.title}`);
+    } else {
+      showToast(`${newSevereAlerts.length} NEW WEATHER ALERTS â€” ${worst.title}`);
+    }
+  }, [alerts, enabled, showToast, userLocation]);
 
   const severeCount = useMemo(() =>
     alerts.filter(a => a.severity === 'extreme' || a.severity === 'warning').length,
@@ -317,13 +269,15 @@ export function useWeatherAlerts(
     enabled,
     toggle,
     refresh,
-    loading,
+    loading: enabled && snapshot.status.loading,
     source,
     error,
     lastFetchAt,
     conditionsSummary,
     tempString,
     windString,
+    precipString,
+    statusText,
   };
 }
 
@@ -341,8 +295,12 @@ interface OverlayProps {
   conditionsSummary: string | null;
   tempString: string | null;
   windString: string | null;
+  precipString: string | null;
+  statusText: string | null;
   onDetailPress: () => void;
   onRefresh: () => void;
+  topOffset?: number;
+  leftOffset?: number;
 }
 
 export function WeatherAlertMapOverlay({
@@ -355,8 +313,12 @@ export function WeatherAlertMapOverlay({
   conditionsSummary,
   tempString,
   windString,
+  precipString,
+  statusText,
   onDetailPress,
   onRefresh,
+  topOffset = 10,
+  leftOffset = 10,
 }: OverlayProps) {
   const [expanded, setExpanded] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -386,7 +348,7 @@ export function WeatherAlertMapOverlay({
     worstSeverity === 'advisory' ? '#42A5F5' : TACTICAL.amber;
 
   return (
-    <View style={ovStyles.container} pointerEvents="box-none">
+    <View style={[ovStyles.container, { top: topOffset, left: leftOffset }]} pointerEvents="box-none">
       {/* Compact badge */}
       <TouchableOpacity
         style={[
@@ -428,16 +390,28 @@ export function WeatherAlertMapOverlay({
                 )}
               </View>
             ) : (
-              <View style={ovStyles.conditionsRow}>
-                {tempString && (
-                  <Text style={ovStyles.tempText}>{tempString}</Text>
+              <View style={ovStyles.conditionsStack}>
+                <View style={ovStyles.conditionsRow}>
+                  {tempString && (
+                    <Text style={ovStyles.tempText}>{tempString}</Text>
+                  )}
+                  {conditionsSummary && (
+                    <Text style={ovStyles.conditionsText}>{conditionsSummary}</Text>
+                  )}
+                  {!tempString && !conditionsSummary && (
+                    <Text style={ovStyles.conditionsText}>
+                      {loading ? 'Loading weather' : 'No alerts'}
+                    </Text>
+                  )}
+                </View>
+                {(windString || precipString) && (
+                  <Text style={ovStyles.secondaryLine} numberOfLines={1}>
+                    {windString || '--'}{windString && precipString ? ' • ' : ''}{precipString || ''}
+                  </Text>
                 )}
-                {conditionsSummary && (
-                  <Text style={ovStyles.conditionsText}>{conditionsSummary}</Text>
-                )}
-                {!tempString && !conditionsSummary && (
-                  <Text style={ovStyles.conditionsText}>
-                    {loading ? 'FETCHING...' : 'NO ALERTS'}
+                {statusText && (
+                  <Text style={ovStyles.statusLine} numberOfLines={1}>
+                    {statusText}
                   </Text>
                 )}
               </View>
@@ -565,7 +539,7 @@ export function WeatherAlertDetailModal({
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
+    <ECSModal visible={visible} onClose={onClose} dismissOnBackdrop={false} stackBehavior="replace">
       <View style={dmStyles.overlay}>
         <TouchableOpacity style={dmStyles.backdrop} onPress={onClose} activeOpacity={1} />
         <View style={dmStyles.sheet}>
@@ -748,7 +722,7 @@ export function WeatherAlertDetailModal({
           </View>
         </View>
       </View>
-    </Modal>
+    </ECSModal>
   );
 }
 
@@ -828,6 +802,9 @@ const ovStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  conditionsStack: {
+    gap: 2,
+  },
   tempText: {
     fontSize: 11,
     fontWeight: '700',
@@ -839,6 +816,19 @@ const ovStyles = StyleSheet.create({
     fontWeight: '600',
     color: TACTICAL.textMuted,
     letterSpacing: 0.5,
+  },
+  secondaryLine: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.4,
+    fontFamily: 'Courier',
+  },
+  statusLine: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: TACTICAL.amber,
+    letterSpacing: 0.4,
   },
 
   // Expanded panel

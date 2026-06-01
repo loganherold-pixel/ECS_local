@@ -34,13 +34,14 @@ import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL } from '../lib/theme';
 import Header from '../components/Header';
+import PremiumAccessGate from '../components/premium/PremiumAccessGate';
 import TelemetryProviderCard from '../components/vehicle-telemetry/TelemetryProviderCard';
 import OBD2ScannerModal from '../components/vehicle-telemetry/OBD2ScannerModal';
 import {
   VEHICLE_TELEMETRY_PROVIDERS,
 } from '../src/vehicle-telemetry/VehicleTelemetryTypes';
 import { useVehicleTelemetry } from '../src/vehicle-telemetry/useVehicleTelemetry';
-import { useOBD2Scanner } from '../src/vehicle-telemetry/useOBD2Scanner';
+import { useUnifiedOBD2Scanner } from '../lib/unifiedScanner';
 import { vehicleTelemetryService } from '../src/vehicle-telemetry/VehicleTelemetryService';
 import { vehicleTelemetryDeviceRegistry } from '../src/vehicle-telemetry/VehicleTelemetryDeviceRegistry';
 
@@ -66,7 +67,7 @@ export default function VehicleTelemetrySettingsScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
   const vt = useVehicleTelemetry();
-  const scanner = useOBD2Scanner();
+  const scanner = useUnifiedOBD2Scanner();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [connectionSuccess, setConnectionSuccess] = useState<string | null>(null);
@@ -91,7 +92,7 @@ export default function VehicleTelemetrySettingsScreen() {
     const errored = devices.find(d => d.connection_state === 'error');
     if (errored) return 'error';
     return 'disconnected';
-  }, [vt.devices, scanner.isConnected, scanner.isConnecting, scanner.isReconnecting, vt.isReconnecting, scanner.error]);
+  }, [scanner.isConnected, scanner.isConnecting, scanner.isReconnecting, vt.isReconnecting, scanner.error]);
 
   const getProviderDeviceName = useCallback((providerId: string) => {
     if (providerId === 'obd2' && scanner.connectedDeviceName) {
@@ -102,11 +103,11 @@ export default function VehicleTelemetrySettingsScreen() {
     const devices = vehicleTelemetryDeviceRegistry.getByProvider(providerId as any);
     if (devices.length > 0) return devices[0].device_name;
     return null;
-  }, [vt.primaryDevice, vt.devices, scanner.connectedDeviceName]);
+  }, [vt.primaryDevice, scanner.connectedDeviceName]);
 
   const getProviderDeviceCount = useCallback((providerId: string) => {
     return vehicleTelemetryDeviceRegistry.getByProvider(providerId as any).length;
-  }, [vt.devices]);
+  }, []);
 
   // ── Handlers ───────────────────────────────────────────
 
@@ -118,7 +119,7 @@ export default function VehicleTelemetrySettingsScreen() {
 
   const handleChangePrimary = useCallback((deviceId: string) => {
     vt.changePrimary(deviceId);
-  }, [vt.changePrimary]);
+  }, [vt]);
 
   const handleRemoveDevice = useCallback((deviceId: string) => {
     if (Platform.OS === 'web') {
@@ -175,7 +176,7 @@ export default function VehicleTelemetrySettingsScreen() {
         ],
       );
     }
-  }, [vt.disconnectProvider]);
+  }, [vt]);
 
   const handleReconnect = useCallback(async () => {
     await scanner.attemptReconnect();
@@ -206,6 +207,7 @@ export default function VehicleTelemetrySettingsScreen() {
         <Text style={styles.backText}>Settings</Text>
       </TouchableOpacity>
 
+      <PremiumAccessGate featureLabel="Vehicle telemetry">
       <ScrollView style={styles.scroll} contentContainerStyle={[
         styles.scrollContent,
         isTablet && styles.scrollContentTablet,
@@ -713,6 +715,7 @@ export default function VehicleTelemetrySettingsScreen() {
 
         <View style={{ height: 60 }} />
       </ScrollView>
+      </PremiumAccessGate>
 
       {/* OBD-II Scanner Modal */}
       <OBD2ScannerModal

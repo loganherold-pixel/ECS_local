@@ -1,0 +1,4 @@
+{
+  "error": "unauthorized",
+  "message": "ACTIVE_API_SECRET rejected by provider"
+}

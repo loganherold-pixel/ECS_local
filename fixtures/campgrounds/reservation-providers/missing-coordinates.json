@@ -1,0 +1,6 @@
+{
+  "id": "missing-coordinates-1",
+  "name": "No Coordinate Campground",
+  "reservationUrl": "https://example.test/no-coordinates",
+  "status": "open"
+}

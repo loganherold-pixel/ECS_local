@@ -107,9 +107,6 @@ export default function ExpeditionLogScreen() {
     setAddVisible(true);
   };
 
-  if (!user) return null;
-
-  // Group by date
   const groupedByDate = useMemo(() => {
     const groups: Record<string, EcsFieldLog[]> = {};
     for (const log of filtered) {
@@ -119,6 +116,8 @@ export default function ExpeditionLogScreen() {
     }
     return groups;
   }, [filtered]);
+
+  if (!user) return null;
 
   return (
     <TopoBackground>

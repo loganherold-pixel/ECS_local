@@ -11,7 +11,6 @@
  *   - Subtle iconography (not warning-heavy or alarming)
  *   - Same grid space as active widgets (no layout reflow)
  *   - Widget titles remain visible
- *   - Optional "Connect Device" action
  *   - Smooth fade transition when telemetry becomes available
  *   - Works in both full and compact modes
  *
@@ -20,15 +19,13 @@
  *     state="awaiting_connection"
  *     widgetTitle="EcoFlow Power"
  *     compact={false}
- *     onConnectDevice={() => router.push('/power')}
  *   />
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
   Animated,
 } from 'react-native';
@@ -36,6 +33,8 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import type { TelemetryAvailability } from '../../lib/telemetryStateEngine';
+import { EASING, MOTION } from '../../lib/motion';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 // ── Props ────────────────────────────────────────────────────
 export interface TelemetryPlaceholderProps {
@@ -45,10 +44,6 @@ export interface TelemetryPlaceholderProps {
   widgetTitle?: string;
   /** Whether to render in compact mode (collapsed bar) */
   compact?: boolean;
-  /** Callback when "Connect Device" is tapped */
-  onConnectDevice?: () => void;
-  /** Whether to show the connect device action */
-  showConnectAction?: boolean;
   /** Custom primary message override */
   primaryMessage?: string;
   /** Custom secondary message override */
@@ -77,24 +72,24 @@ const STATE_CONFIG: Record<TelemetryAvailability, {
   awaiting_connection: {
     icon: 'bluetooth-outline',
     iconColor: 'rgba(212,175,55,0.5)',
-    primary: 'Awaiting Device Connection',
-    secondary: 'Connect a compatible power or telemetry source to activate live data.',
+    primary: 'Waiting for ECS live feed',
+    secondary: 'Use Device Connections from quick actions to reconnect a compatible power or telemetry source.',
     accentColor: 'rgba(212,175,55,0.6)',
     bgTint: 'rgba(212,175,55,0.03)',
   },
   unavailable: {
     icon: 'close-circle-outline',
     iconColor: 'rgba(255,255,255,0.25)',
-    primary: 'Telemetry Source Unavailable',
-    secondary: 'This source is not supported for the current configuration.',
+    primary: 'ECS source unavailable',
+    secondary: 'This widget is not receiving a supported live or saved source yet.',
     accentColor: 'rgba(255,255,255,0.3)',
     bgTint: 'rgba(255,255,255,0.02)',
   },
   error: {
     icon: 'alert-circle-outline',
     iconColor: 'rgba(239,83,80,0.5)',
-    primary: 'Live Data Temporarily Unavailable',
-    secondary: 'Telemetry will resume automatically when the connection is restored.',
+    primary: 'Live feed temporarily unavailable',
+    secondary: 'ECS will refresh this widget when the connection returns.',
     accentColor: 'rgba(239,83,80,0.5)',
     bgTint: 'rgba(239,83,80,0.03)',
   },
@@ -105,23 +100,22 @@ export default function TelemetryPlaceholder({
   state,
   widgetTitle,
   compact = false,
-  onConnectDevice,
-  showConnectAction,
   primaryMessage,
   secondaryMessage,
   iconName,
 }: TelemetryPlaceholderProps) {
   const config = STATE_CONFIG[state] || STATE_CONFIG.awaiting_connection;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useStableAnimatedValue(0);
 
   // Fade in on mount
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 300,
+      duration: MOTION.stateTransition,
+      easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [fadeAnim]);
 
   // Resolve display values
   const displayIcon = iconName || config.icon;
@@ -129,20 +123,15 @@ export default function TelemetryPlaceholder({
   const displaySecondary = secondaryMessage !== undefined ? secondaryMessage : config.secondary;
   const displayAccent = config.accentColor;
 
-  // Determine if connect action should show
-  const shouldShowConnect = showConnectAction !== undefined
-    ? showConnectAction
-    : (state === 'awaiting_connection' && onConnectDevice != null);
-
   // ── Compact Mode ───────────────────────────────────────────
   if (compact) {
     return (
       <Animated.View style={[styles.compactContainer, { opacity: fadeAnim }]}>
         <Ionicons name={displayIcon} size={12} color={displayAccent} />
         <Text style={[styles.compactText, { color: displayAccent }]} numberOfLines={1}>
-          {state === 'awaiting_connection' ? 'AWAITING' :
-           state === 'unavailable' ? 'N/A' :
-           state === 'error' ? 'ERROR' : 'OK'}
+          {state === 'awaiting_connection' ? 'WAITING' :
+           state === 'unavailable' ? 'UNAVAILABLE' :
+           state === 'error' ? 'PARTIAL' : 'LIVE'}
         </Text>
       </Animated.View>
     );
@@ -171,17 +160,6 @@ export default function TelemetryPlaceholder({
         </Text>
       )}
 
-      {/* Connect Device action */}
-      {shouldShowConnect && onConnectDevice && (
-        <TouchableOpacity
-          style={styles.connectButton}
-          onPress={onConnectDevice}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="link-outline" size={12} color={TACTICAL.amber} />
-          <Text style={styles.connectButtonText}>Connect Device</Text>
-        </TouchableOpacity>
-      )}
     </Animated.View>
   );
 }
@@ -190,28 +168,21 @@ export default function TelemetryPlaceholder({
 export function TelemetryPanelPlaceholder({
   state,
   panelTitle,
-  onConnectDevice,
-  showConnectAction,
 }: {
   state: TelemetryAvailability;
   panelTitle?: string;
-  onConnectDevice?: () => void;
-  showConnectAction?: boolean;
 }) {
   const config = STATE_CONFIG[state] || STATE_CONFIG.awaiting_connection;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useStableAnimatedValue(0);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 400,
+      duration: MOTION.stateTransition,
+      easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, []);
-
-  const shouldShowConnect = showConnectAction !== undefined
-    ? showConnectAction
-    : (state === 'awaiting_connection' && onConnectDevice != null);
+  }, [fadeAnim]);
 
   return (
     <Animated.View style={[panelStyles.container, { opacity: fadeAnim }]}>
@@ -238,16 +209,6 @@ export function TelemetryPanelPlaceholder({
           </Text>
         )}
 
-        {shouldShowConnect && onConnectDevice && (
-          <TouchableOpacity
-            style={panelStyles.connectButton}
-            onPress={onConnectDevice}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="link-outline" size={14} color={TACTICAL.amber} />
-            <Text style={panelStyles.connectButtonText}>Connect Device</Text>
-          </TouchableOpacity>
-        )}
       </View>
     </Animated.View>
   );
@@ -281,25 +242,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     opacity: 0.8,
   },
-  connectButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 5,
-    backgroundColor: TACTICAL.amber + '0C',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-  },
-  connectButtonText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1,
-  },
-
   // Compact mode
   compactContainer: {
     flexDirection: 'row',
@@ -369,24 +311,6 @@ const panelStyles = StyleSheet.create({
     lineHeight: 16,
     paddingHorizontal: 16,
     opacity: 0.8,
-  },
-  connectButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: TACTICAL.amber + '0C',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-  },
-  connectButtonText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1.5,
   },
 });
 

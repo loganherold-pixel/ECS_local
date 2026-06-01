@@ -23,11 +23,10 @@ import {
   ScrollView,
   TextInput,
   Alert,
-  Animated,
 } from 'react-native';
 
-import ECSModal from '../ECSModal';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import TacticalPopupShell from '../TacticalPopupShell';
 import { TACTICAL } from '../../lib/theme';
 import {
   GRID_LAYOUT_CONFIG,
@@ -518,35 +517,37 @@ export default function LayoutPresetsModal({
   }, [onClose]);
 
   return (
-    <ECSModal visible={visible} onClose={handleClose} tier="global">
-      <TouchableOpacity
-        style={styles.backdrop}
-        activeOpacity={1}
-        onPress={handleClose}
-      >
-        <View
-          style={styles.panel}
-          onStartShouldSetResponder={() => true}
-          onTouchEnd={(e) => e.stopPropagation()}
-        >
+    <TacticalPopupShell
+      visible={visible}
+      onClose={handleClose}
+      tier="global"
+      icon="copy-outline"
+      eyebrow="DASHBOARD LAYOUT"
+      title="Layout Presets"
+      subtitle="Switch grid layouts or save a reusable preset for this dashboard profile."
+      overlayClass="editor"
+      maxWidth={980}
+      maxHeightFraction={0.8}
+      minHeightFraction={0.72}
+      scrollable={false}
+      bodyStyle={styles.shellBody}
+      footer={
+        <View style={styles.footer}>
+          <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
+          <Text style={styles.footerText}>
+            Selecting a preset changes grid layout and widget sizes. Existing widgets are preserved in order.
+          </Text>
+        </View>
+      }
+    >
+      <View style={styles.panel}>
           {/* Header */}
           <View style={styles.header}>
-            <View style={styles.headerIcon}>
-              <Ionicons name="copy-outline" size={18} color={TACTICAL.amber} />
-            </View>
             <View style={styles.headerText}>
-              <Text style={styles.title}>LAYOUT PRESETS</Text>
               <Text style={styles.subtitle}>
                 Current: {GRID_LAYOUT_CONFIG[gridLayout].label} grid {'\u2014'} {totalPresets} presets
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={handleClose}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="close" size={20} color={TACTICAL.textMuted} />
-            </TouchableOpacity>
           </View>
 
           {/* Save Current Button */}
@@ -646,75 +647,32 @@ export default function LayoutPresetsModal({
             })}
           </ScrollView>
 
-          {/* Footer */}
-          <View style={styles.footer}>
-            <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
-            <Text style={styles.footerText}>
-              Selecting a preset changes grid layout and widget sizes. Existing widgets are preserved in order.
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    </ECSModal>
+      </View>
+    </TacticalPopupShell>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+  shellBody: {
+    padding: 0,
   },
   panel: {
     width: '100%',
-    maxWidth: 400,
-    maxHeight: '85%',
-    backgroundColor: TACTICAL.panel,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: TACTICAL.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    elevation: 20,
-    overflow: 'hidden',
   },
 
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 12,
-  },
-  headerIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    backgroundColor: TACTICAL.amber + '10',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingBottom: 10,
   },
   headerText: { flex: 1 },
-  title: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 3,
-  },
   subtitle: {
     fontSize: 10,
     fontWeight: '500',
     color: TACTICAL.textMuted,
-    marginTop: 2,
   },
-  closeBtn: { padding: 4 },
 
   saveCurrentBtn: {
     flexDirection: 'row',
@@ -998,10 +956,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.04)',
   },
   footerText: {
     fontSize: 10,

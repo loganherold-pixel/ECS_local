@@ -654,9 +654,9 @@ function computeAnalyticsFromPoints(
       const p = points[i];
       const spd = p.speed ?? 0;
       const color = getSpeedColor(spd, maxSpeedMph);
-      if (!currentBucket || currentBucket.color !== color) {
-        if (currentBucket && currentBucket.coordinates.length > 0) {
-          const lastCoord = currentBucket.coordinates[currentBucket.coordinates.length - 1];
+        if (!currentBucket || currentBucket.color !== color) {
+          if (currentBucket && currentBucket.coordinates.length > 0) {
+          const lastCoord: [number, number] = currentBucket.coordinates[currentBucket.coordinates.length - 1];
           currentBucket = { coordinates: [lastCoord], speed_mph: spd, color };
         } else {
           currentBucket = { coordinates: [], speed_mph: spd, color };

@@ -127,7 +127,7 @@ export default function LoadTemplateModal({ visible, onClose, userId, onTemplate
   }, [visible, userId]);
 
   // Detect vehicle type from builder state
-  const builderState = useMemo(() => getBuilderState(), [visible]);
+  const builderState = useMemo(() => getBuilderState(), []);
   const vehicleType = useMemo(() =>
     detectVehicleType(builderState.vehicleName, builderState.frameworkType),
     [builderState.vehicleName, builderState.frameworkType]

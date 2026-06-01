@@ -74,13 +74,19 @@ export default function OfflineExpeditionDataPanel({ onToast }: Props) {
         offlineExpeditionDbEngine.initialize();
       }
     } catch {}
-    _refreshRegions();
+    try {
+      setRegions(offlineExpeditionDbEngine.getAvailableRegions());
+      setActiveDownload(offlineExpeditionDbStore.getActiveDownload());
+    } catch {}
   }, []);
 
   // Subscribe to store changes
   useEffect(() => {
     const unsub = offlineExpeditionDbStore.subscribe(() => {
-      _refreshRegions();
+      try {
+        setRegions(offlineExpeditionDbEngine.getAvailableRegions());
+        setActiveDownload(offlineExpeditionDbStore.getActiveDownload());
+      } catch {}
     });
     return unsub;
   }, []);

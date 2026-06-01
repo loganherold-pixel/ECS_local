@@ -52,8 +52,8 @@ const VEHICLE_ICON_MAP: Record<VehicleTypeKey, VehicleIconInfo> = {
 };
 
 const DEFAULT_ICON: VehicleIconInfo = {
-  outline: 'car-outline',
-  filled: 'car',
+  outline: 'car-sport-outline',
+  filled: 'car-sport',
   label: 'VEHICLE',
   color: '#C48A2C',
 };

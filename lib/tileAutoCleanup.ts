@@ -26,12 +26,21 @@ import {
   type RegionOverlapPair,
   type RegionSizeBreakdown,
 } from './tileCacheStore';
+import { ecsLog } from './ecsLogger';
 import { missionExpeditionStore } from './missionStore';
 import { routeStore } from './routeStore';
 
 // ── Persistence key for cleanup history ─────────────────────
 const CLEANUP_HISTORY_KEY = 'ecs_tile_cleanup_history';
 const CLEANUP_DISMISSED_KEY = 'ecs_tile_cleanup_dismissed';
+const DEBUG_AUTO_CLEANUP =
+  ((globalThis as typeof globalThis & { __ECS_DEBUG_AUTO_CLEANUP__?: boolean })
+    .__ECS_DEBUG_AUTO_CLEANUP__ === true);
+
+function debugAutoCleanup(message: string, details?: Record<string, any>): void {
+  if (!DEBUG_AUTO_CLEANUP) return;
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -526,9 +535,16 @@ export async function executeCleanup(
         await tileCacheStore.deleteRegion(candidate.regionId);
         regionsDeleted++;
         freedMB += candidate.sizeMB;
-        console.log(`[AutoCleanup] Deleted broken region: ${candidate.regionName} (${candidate.reason}, ${candidate.sizeMB.toFixed(1)} MB)`);
+        debugAutoCleanup('Deleted broken tile region', {
+          regionId: candidate.regionId,
+          regionName: candidate.regionName,
+          reason: candidate.reason,
+          sizeMB: Number(candidate.sizeMB.toFixed(1)),
+        });
       } catch (e) {
-        console.warn(`[AutoCleanup] Failed to delete region ${candidate.regionId}:`, e);
+        ecsLog.warn('SYSTEM', `Auto-cleanup failed to delete region ${candidate.regionId}`, {
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
   }
@@ -548,9 +564,16 @@ export async function executeCleanup(
         await tileCacheStore.deleteRegion(candidate.regionId);
         regionsDeleted++;
         freedMB += candidate.sizeMB;
-        console.log(`[AutoCleanup] Deleted stale region: ${candidate.regionName} (${candidate.ageDays}d old, ${candidate.sizeMB.toFixed(1)} MB)`);
+        debugAutoCleanup('Deleted stale tile region', {
+          regionId: candidate.regionId,
+          regionName: candidate.regionName,
+          ageDays: candidate.ageDays,
+          sizeMB: Number(candidate.sizeMB.toFixed(1)),
+        });
       } catch (e) {
-        console.warn(`[AutoCleanup] Failed to delete region ${candidate.regionId}:`, e);
+        ecsLog.warn('SYSTEM', `Auto-cleanup failed to delete region ${candidate.regionId}`, {
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
   }
@@ -563,10 +586,16 @@ export async function executeCleanup(
         if (result.success) {
           mergesPerformed++;
           freedMB += result.savedMB;
-          console.log(`[AutoCleanup] Merged regions: ${suggestion.description}`);
+          debugAutoCleanup('Merged overlapping tile regions', {
+            description: suggestion.description,
+            savedMB: result.savedMB,
+          });
         }
       } catch (e) {
-        console.warn(`[AutoCleanup] Merge failed:`, e);
+        ecsLog.warn('SYSTEM', 'Auto-cleanup merge failed', {
+          description: suggestion.description,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
   }
@@ -637,19 +666,35 @@ export async function runStartupCleanup(): Promise<{
   report: CleanupReport;
   cleanupResult: CleanupResult | null;
 }> {
-  console.log('[AutoCleanup] Running startup analysis...');
-
   const report = analyzeCache();
 
-  console.log(`[AutoCleanup] Analysis complete: ${report.summaryMessage}`);
-  console.log(`[AutoCleanup] Warning level: ${report.warningLevel}, needsAttention: ${report.needsAttention}`);
-  console.log(`[AutoCleanup] Stale: ${report.staleRegions.length}, Broken: ${report.brokenRegions.length}, Merges: ${report.mergeSuggestions.length}`);
-  console.log(`[AutoCleanup] Protected: ${report.protectedRegionIds.size}, Auto-clean candidates: ${report.autoCleanCandidates.length}`);
+  debugAutoCleanup('Startup tile cleanup analysis complete', {
+    summaryMessage: report.summaryMessage,
+    warningLevel: report.warningLevel,
+    needsAttention: report.needsAttention,
+    staleRegions: report.staleRegions.length,
+    brokenRegions: report.brokenRegions.length,
+    mergeSuggestions: report.mergeSuggestions.length,
+    protectedRegions: report.protectedRegionIds.size,
+    autoCleanCandidates: report.autoCleanCandidates.length,
+  });
+
+  if (report.warningLevel !== 'ok' || report.needsAttention) {
+    ecsLog.warn('SYSTEM', `Offline cache attention: ${report.summaryMessage}`, {
+      warningLevel: report.warningLevel,
+      staleRegions: report.staleRegions.length,
+      brokenRegions: report.brokenRegions.length,
+      mergeSuggestions: report.mergeSuggestions.length,
+      autoCleanCandidates: report.autoCleanCandidates.length,
+    });
+  }
 
   let cleanupResult: CleanupResult | null = null;
 
   if (report.shouldAutoClean && report.autoCleanCandidates.length > 0) {
-    console.log(`[AutoCleanup] Auto-cleanup triggered — cleaning ${report.autoCleanCandidates.length} candidates...`);
+    debugAutoCleanup('Auto-cleanup triggered from startup', {
+      candidates: report.autoCleanCandidates.length,
+    });
 
     cleanupResult = await executeCleanup(report, {
       deleteStale: true,
@@ -658,7 +703,11 @@ export async function runStartupCleanup(): Promise<{
       trigger: 'startup',
     });
 
-    console.log(`[AutoCleanup] Startup cleanup complete: ${cleanupResult.message}`);
+    debugAutoCleanup('Startup cleanup completed', {
+      message: cleanupResult.message,
+      regionsDeleted: cleanupResult.regionsDeleted,
+      freedMB: cleanupResult.freedMB,
+    });
   }
 
   return { report, cleanupResult };

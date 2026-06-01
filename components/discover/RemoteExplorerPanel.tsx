@@ -115,7 +115,7 @@ export default function RemoteExplorerPanel({
             <Ionicons name="compass-outline" size={16} color={TACTICAL.amber} />
           </View>
           <View>
-            <Text style={s.panelLabel}>REMOTE EXPLORER</Text>
+            <Text style={s.panelLabel}>REMOTE EXPLORE</Text>
             <Text style={s.panelDesc}>Explore remote zones without a planned expedition</Text>
           </View>
         </View>

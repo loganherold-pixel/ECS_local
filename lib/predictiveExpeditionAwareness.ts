@@ -52,6 +52,10 @@ import {
   PREDICTIVE_RISK_COLORS,
   PREDICTIVE_RISK_ICONS,
 } from './predictiveAwarenessTypes';
+import {
+  buildEnvironmentSnapshot,
+  formatEnvironmentTime,
+} from './environmentSnapshotService';
 
 const TAG = '[PREDICTIVE_AWARENESS]';
 
@@ -196,39 +200,6 @@ function predictFuelRange(
 // ══════════════════════════════════════════════════════════════
 
 /**
- * Approximate sunset time for a given latitude and day of year.
- * Uses a simplified solar declination model.
- *
- * Returns hours after midnight (UTC) for sunset.
- */
-function approximateSunsetUTC(latDeg: number, dayOfYear: number): number {
-  // Solar declination (simplified)
-  const declRad = -23.44 * Math.cos((360 / 365) * (dayOfYear + 10) * Math.PI / 180) * Math.PI / 180;
-  const latRad = latDeg * Math.PI / 180;
-
-  // Hour angle at sunset
-  const cosHourAngle = -Math.tan(latRad) * Math.tan(declRad);
-
-  // Clamp for polar regions
-  if (cosHourAngle < -1) return 24; // Midnight sun
-  if (cosHourAngle > 1) return 12;  // Polar night (sun never rises high)
-
-  const hourAngleDeg = Math.acos(cosHourAngle) * 180 / Math.PI;
-  const sunsetHoursUTC = 12 + hourAngleDeg / 15; // Solar noon + hour angle
-
-  return sunsetHoursUTC;
-}
-
-/**
- * Get the day of year (1–366) for a given date.
- */
-function getDayOfYear(date: Date): number {
-  const start = new Date(date.getFullYear(), 0, 0);
-  const diff = date.getTime() - start.getTime();
-  return Math.floor(diff / (1000 * 60 * 60 * 24));
-}
-
-/**
  * Predict whether the expedition will continue after dark.
  *
  * Uses:
@@ -243,11 +214,11 @@ function predictDaylight(
   routeDistanceRemainingMi: number | null,
   terrainDifficultyScore: number,
 ): DaylightPrediction {
-  if (currentLat == null) {
+  if (currentLat == null || currentLon == null) {
     return {
       available: false,
       status: 'unknown',
-      message: 'GPS unavailable for daylight estimate',
+      message: 'GPS coordinate unavailable for daylight estimate',
       daylightRemainingHours: null,
       estimatedCompletionHours: null,
       sunsetTimeLocal: null,
@@ -257,27 +228,38 @@ function predictDaylight(
   }
 
   const now = new Date();
-  const dayOfYear = getDayOfYear(now);
-  const currentHourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;
-
-  // Approximate timezone offset from longitude (rough: 1 hour per 15 degrees)
-  const tzOffsetHours = currentLon != null ? Math.round(currentLon / 15) : 0;
-
-  // Sunset time in UTC
-  const sunsetUTC = approximateSunsetUTC(currentLat, dayOfYear);
-  const sunsetLocal = sunsetUTC + tzOffsetHours;
-
-  // Current local time
-  const currentLocalHour = currentHourUTC + tzOffsetHours;
-
-  // Daylight remaining
-  let daylightRemainingHours = sunsetLocal - currentLocalHour;
-  if (daylightRemainingHours < 0) daylightRemainingHours = 0;
-
-  // Format sunset time
-  const sunsetH = Math.floor(sunsetLocal % 24);
-  const sunsetM = Math.round((sunsetLocal % 1) * 60);
-  const sunsetTimeLocal = `${sunsetH.toString().padStart(2, '0')}:${sunsetM.toString().padStart(2, '0')}`;
+  const environment = buildEnvironmentSnapshot({
+    coordinate: {
+      latitude: currentLat,
+      longitude: currentLon,
+      source: 'gps',
+      updatedAt: now.getTime(),
+    },
+    nowMs: now.getTime(),
+  });
+  const isCurrentlyDark = environment.sunlight.nextEvent === 'sunrise';
+  const daylightRemainingHours =
+    environment.sunlight.remainingMinutes == null
+      ? null
+      : isCurrentlyDark
+        ? 0
+        : environment.sunlight.remainingMinutes / 60;
+  const sunsetTimeLocal = formatEnvironmentTime(
+    environment.sunlight.sunsetIso,
+    environment.timezone.id,
+  );
+  if (daylightRemainingHours == null || sunsetTimeLocal === 'Unavailable') {
+    return {
+      available: false,
+      status: 'unknown',
+      message: 'Sunlight data unavailable for current coordinate',
+      daylightRemainingHours: null,
+      estimatedCompletionHours: null,
+      sunsetTimeLocal: null,
+      darknessLikely: false,
+      marginHours: null,
+    };
+  }
 
   // Estimate completion time
   let estimatedCompletionHours: number | null = null;

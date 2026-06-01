@@ -600,12 +600,22 @@ async function _downloadRegion(
     onProgress?.({ ...progress });
 
     // Phase 6B: Invalidate cache readiness so CI picks up the change
-    try { invalidateCacheReadiness(); } catch {}
+    try {
+      invalidateCacheReadiness('offline_region_download_complete', {
+        regionId,
+        entryCount: totalEntries,
+        sizeMb: actualSizeMb,
+      });
+    } catch {}
 
     // Phase 6C: Invalidate navigation bridge cache
     try {
       const { offlineNavigationBridge } = require('./offlineNavigationBridge');
-      offlineNavigationBridge.invalidateCache();
+      offlineNavigationBridge.invalidateCache('offline_region_download_complete', {
+        regionId,
+        entryCount: totalEntries,
+        sizeMb: actualSizeMb,
+      });
     } catch {}
 
     console.log(
@@ -943,10 +953,10 @@ export const offlineExpeditionDbEngine = {
    */
   removeRegion(regionId: string): void {
     offlineExpeditionDbStore.removeRegion(regionId);
-    try { invalidateCacheReadiness(); } catch {}
+    try { invalidateCacheReadiness('offline_region_removed', { regionId }); } catch {}
     try {
       const { offlineNavigationBridge } = require('./offlineNavigationBridge');
-      offlineNavigationBridge.invalidateCache();
+      offlineNavigationBridge.invalidateCache('offline_region_removed', { regionId });
     } catch {}
   },
 

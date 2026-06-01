@@ -209,9 +209,32 @@ export interface CachedZone {
   sort_order: number;
 }
 
+function getZoneCacheSignature(zones: CachedZone[]): string {
+  return JSON.stringify(zones.map((zone) => ({
+    id: zone.id,
+    name: zone.name,
+    zone_type: zone.zone_type,
+    slot_count: zone.slot_count,
+    color: zone.color,
+    icon: zone.icon,
+    sort_order: zone.sort_order,
+  })));
+}
+
 export function setCachedVehicleZones(vehicleId: string, zones: CachedZone[]): void {
   try {
     const key = KEYS.vehicleZones + vehicleId;
+    const existingRaw = storageGet(key);
+    if (existingRaw) {
+      try {
+        const existing = JSON.parse(existingRaw);
+        const existingZones = Array.isArray(existing?.zones) ? existing.zones : [];
+        if (getZoneCacheSignature(existingZones) === getZoneCacheSignature(zones)) {
+          return;
+        }
+      } catch {}
+    }
+
     storageSet(key, JSON.stringify({
       zones,
       cachedAt: new Date().toISOString(),

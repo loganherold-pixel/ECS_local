@@ -54,7 +54,7 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
         .order('order_index', { ascending: true });
       if (err) throw err;
       setWaypoints(data || []);
-    } catch { setError('FAILED TO LOAD WAYPOINTS'); }
+    } catch { setError('FAILED TO LOAD ROUTE POINTS'); }
     setLoading(false);
   }, [expeditionId]);
 
@@ -123,7 +123,7 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
     if (Platform.OS === 'web') {
       if (confirm('Delete this waypoint?')) doDelete();
     } else {
-      Alert.alert('Delete Waypoint', 'This cannot be undone.', [
+      Alert.alert('Delete Route Point', 'This cannot be undone.', [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: doDelete },
       ]);
@@ -148,7 +148,7 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
     return (
       <View style={s.center}>
         <ActivityIndicator size="large" color={TACTICAL.accent} />
-        <Text style={s.loadingText}>LOADING WAYPOINTS...</Text>
+        <Text style={s.loadingText}>LOADING ROUTE POINTS...</Text>
       </View>
     );
   }
@@ -166,15 +166,15 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
       {!showForm && (
         <TouchableOpacity style={s.addBtn} onPress={() => { resetForm(); setShowForm(true); }}>
           <Ionicons name="add-circle-outline" size={18} color={TACTICAL.text} />
-          <Text style={s.addBtnText}>ADD WAYPOINT</Text>
+          <Text style={s.addBtnText}>ADD ROUTE POINT</Text>
         </TouchableOpacity>
       )}
 
       {/* Form */}
       {showForm && (
         <View style={s.formCard}>
-          <Text style={s.formTitle}>{editingId ? 'EDIT WAYPOINT' : 'NEW WAYPOINT'}</Text>
-          <TextInput style={s.input} value={name} onChangeText={setName} placeholder="Waypoint Name *" placeholderTextColor={TACTICAL.textMuted} />
+          <Text style={s.formTitle}>{editingId ? 'EDIT ROUTE POINT' : 'NEW ROUTE POINT'}</Text>
+          <TextInput style={s.input} value={name} onChangeText={setName} placeholder="Route point name *" placeholderTextColor={TACTICAL.textMuted} />
           <TextInput style={[s.input, s.textArea]} value={description} onChangeText={setDescription} placeholder="Description" placeholderTextColor={TACTICAL.textMuted} multiline textAlignVertical="top" />
 
           {/* Type selector */}
@@ -193,7 +193,7 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
             <View style={s.waterFieldsContainer}>
               <View style={s.waterFieldsHeader}>
                 <Ionicons name="water-outline" size={14} color="#29B6F6" />
-                <Text style={s.waterFieldsTitle}>WATER RESUPPLY DETAILS</Text>
+                <Text style={s.waterFieldsTitle}>RESUPPLY DETAILS</Text>
               </View>
 
               <Text style={s.fieldLabel}>EXPECTED WATER RESUPPLY (GAL)</Text>
@@ -215,10 +215,10 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
                   />
                   <View>
                     <Text style={[s.toggleLabel, isPrimaryResupply && { color: '#29B6F6' }]}>
-                      PRIMARY WATER STOP
+                      PRIMARY RESUPPLY
                     </Text>
                     <Text style={s.toggleSub}>
-                      Used for next-resupply projection calculations
+                      Used by ECS resupply projection
                     </Text>
                   </View>
                 </View>
@@ -258,8 +258,8 @@ export default function WaypointsTab({ expeditionId, userId }: Props) {
       {waypoints.length === 0 && !showForm ? (
         <View style={s.empty}>
           <Ionicons name="navigate-outline" size={40} color={TACTICAL.textMuted} />
-          <Text style={s.emptyTitle}>NO WAYPOINTS PLOTTED</Text>
-          <Text style={s.emptySubtitle}>Add waypoints to plan your route</Text>
+          <Text style={s.emptyTitle}>NO ROUTE POINTS PLOTTED</Text>
+          <Text style={s.emptySubtitle}>Add route points to build your execution line</Text>
         </View>
       ) : (
         waypoints.map((wp, idx) => {

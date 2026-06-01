@@ -9,7 +9,7 @@
  *   - Detailed candidate list with reasons and priorities
  *   - Cleanup history log
  */
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -73,15 +73,16 @@ export default function CleanupPanel({ onCleanupComplete, showToast, autoAnalyze
   const [showHistory, setShowHistory] = useState(false);
   const [showCandidates, setShowCandidates] = useState(false);
   const [showProtected, setShowProtected] = useState(false);
+  const runAnalysisRef = useRef<() => void>(() => {});
 
-  const history = useMemo(() => getCleanupHistoryEntries(), [lastResult]);
+  const history = useMemo(() => getCleanupHistoryEntries(), []);
 
   // Auto-analyze on mount
   useEffect(() => {
     if (autoAnalyze) {
-      runAnalysis();
+      runAnalysisRef.current();
     }
-  }, []);
+  }, [autoAnalyze]);
 
   const runAnalysis = useCallback(async () => {
     setAnalyzing(true);
@@ -89,11 +90,14 @@ export default function CleanupPanel({ onCleanupComplete, showToast, autoAnalyze
       const r = analyzeCache();
       setReport(r);
     } catch (e) {
-      showToast('ANALYSIS FAILED');
+      showToast('Cache analysis could not be completed.');
     } finally {
       setAnalyzing(false);
     }
   }, [showToast]);
+  runAnalysisRef.current = () => {
+    void runAnalysis();
+  };
 
   const handleQuickCleanup = useCallback(async () => {
     const doClean = async () => {
@@ -101,13 +105,13 @@ export default function CleanupPanel({ onCleanupComplete, showToast, autoAnalyze
       try {
         const result = await quickCleanup();
         setLastResult(result);
-        showToast(result.message.toUpperCase());
+        showToast(result.message);
         // Re-analyze after cleanup
         const r = analyzeCache();
         setReport(r);
         onCleanupComplete();
       } catch (e: any) {
-        showToast(`CLEANUP FAILED: ${e?.message || 'Unknown error'}`);
+        showToast(`Cleanup could not finish: ${e?.message || 'unknown error'}`);
       } finally {
         setCleaning(false);
       }
@@ -140,12 +144,12 @@ export default function CleanupPanel({ onCleanupComplete, showToast, autoAnalyze
         trigger: 'manual',
       });
       setLastResult(result);
-      showToast(result.message.toUpperCase());
+      showToast(result.message);
       const r = analyzeCache();
       setReport(r);
       onCleanupComplete();
     } catch (e: any) {
-      showToast(`CLEANUP FAILED: ${e?.message || 'Unknown error'}`);
+      showToast(`Cleanup could not finish: ${e?.message || 'unknown error'}`);
     } finally {
       setCleaning(false);
     }
@@ -355,7 +359,7 @@ export default function CleanupPanel({ onCleanupComplete, showToast, autoAnalyze
                     {c.isProtected && (
                       <View style={styles.protectedBadge}>
                         <Ionicons name="shield-checkmark-outline" size={9} color="#66BB6A" />
-                        <Text style={styles.protectedBadgeText}>SAFE</Text>
+                        <Text style={styles.protectedBadgeText}>KEPT</Text>
                       </View>
                     )}
                   </View>

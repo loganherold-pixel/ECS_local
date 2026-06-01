@@ -99,7 +99,7 @@ export default function StorageDashboard({ stats, regions, isLoading }: Props) {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Ionicons name="server-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.headerText}>CACHE STORAGE</Text>
+          <Text style={styles.headerText}>OFFLINE READINESS</Text>
         </View>
         <View style={styles.engineBadge}>
           <Ionicons
@@ -108,7 +108,7 @@ export default function StorageDashboard({ stats, regions, isLoading }: Props) {
             color={TACTICAL.textMuted}
           />
           <Text style={styles.engineText}>
-            {isNative ? 'FILE SYSTEM' : 'INDEXEDDB'}
+            {isNative ? 'ON DEVICE' : 'LOCAL STORAGE'}
           </Text>
         </View>
       </View>
@@ -194,7 +194,7 @@ export default function StorageDashboard({ stats, regions, isLoading }: Props) {
         <View style={styles.stalenessWarning}>
           <Ionicons name="alert-circle-outline" size={12} color="#FFB300" />
           <Text style={styles.stalenessText}>
-            Oldest region is {oldestAge}d old. Map data may be outdated — consider re-downloading.
+            Some saved map coverage is getting old. Refresh before remote travel if a connection is available.
           </Text>
         </View>
       )}

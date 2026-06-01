@@ -1,0 +1,24 @@
+{
+  "RECDATA": [
+    {
+      "FacilityID": "RIDB-PAGE-2",
+      "FacilityName": "Second Page Campground",
+      "FacilityLatitude": 38.4,
+      "FacilityLongitude": -119.4,
+      "FacilityTypeDescription": "Campground"
+    },
+    {
+      "FacilityID": "RIDB-PAGE-3",
+      "FacilityName": "Final Page Campground",
+      "FacilityLatitude": 38.5,
+      "FacilityLongitude": -119.5,
+      "FacilityTypeDescription": "Campground"
+    }
+  ],
+  "METADATA": {
+    "RESULTS": {
+      "CURRENT_COUNT": 2,
+      "TOTAL_COUNT": 5
+    }
+  }
+}

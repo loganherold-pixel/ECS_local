@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "API_ERROR",
+    "message": "NPS provider rejected the request"
+  }
+}

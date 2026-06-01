@@ -76,7 +76,7 @@ const FRESHNESS_CONFIG: Record<FreshnessStatus, {
   'checking': {
     color: '#64B5F6',
     icon: 'sync-outline',
-    label: 'CHECKING',
+    label: 'VERIFYING',
     bgAlpha: '18',
   },
   'fresh': {
@@ -88,7 +88,7 @@ const FRESHNESS_CONFIG: Record<FreshnessStatus, {
   'update-available': {
     color: '#FFB300',
     icon: 'arrow-up-circle-outline',
-    label: 'UPDATE AVAILABLE',
+    label: 'REFRESH AVAILABLE',
     bgAlpha: '18',
   },
   'error': {
@@ -350,7 +350,7 @@ export default function CachedRegionCard({
         <View style={styles.completeBadge}>
           <View style={styles.completeLeft}>
             <Ionicons name="checkmark-circle" size={11} color="#66BB6A" />
-            <Text style={styles.completeText}>READY FOR OFFLINE USE</Text>
+            <Text style={styles.completeText}>SAVED FOR OFFLINE USE</Text>
           </View>
           {/* Cache age badge */}
           <View style={[styles.freshnessBadge, { borderColor: freshnessColor + '40' }]}>
@@ -459,8 +459,8 @@ export default function CachedRegionCard({
               <Ionicons name="time-outline" size={8} color={TACTICAL.textMuted} />
               <Text style={styles.lastVerifiedText}>
                 {region.lastVerifiedAt
-                  ? `Verified ${formatAge(region.lastVerifiedAt)}`
-                  : 'Never verified'}
+                  ? `Checked ${formatAge(region.lastVerifiedAt)}`
+                  : 'Not checked yet'}
               </Text>
             </View>
           </View>
@@ -470,7 +470,7 @@ export default function CachedRegionCard({
             <View style={styles.updateDetailRow}>
               <Ionicons name="information-circle-outline" size={10} color="#FFB300" />
               <Text style={styles.updateDetailText}>
-                ~{region.freshnessChangePercent}% of sampled tiles have upstream changes
+                ~{region.freshnessChangePercent}% of sampled tiles appear to have newer source data
                 {region.updatedTilesAvailable != null && region.updatedTilesAvailable > 0
                   ? ` (${region.updatedTilesAvailable} changed)`
                   : ''}
@@ -498,7 +498,7 @@ export default function CachedRegionCard({
                   <Ionicons name="sync-outline" size={10} color="#64B5F6" />
                 )}
                 <Text style={[styles.freshnessActionText, { color: '#64B5F6' }]}>
-                  {isCheckingFreshness ? 'CHECKING' : 'CHECK'}
+                  {isCheckingFreshness ? 'VERIFYING' : 'VERIFY'}
                 </Text>
               </TouchableOpacity>
             )}
@@ -522,7 +522,7 @@ export default function CachedRegionCard({
                   <Ionicons name="cloud-download-outline" size={10} color="#FFB300" />
                 )}
                 <Text style={[styles.freshnessActionText, { color: '#FFB300' }]}>
-                  {isRefreshing ? 'UPDATING' : 'UPDATE'}
+                  {isRefreshing ? 'REFRESHING' : 'REFRESH'}
                 </Text>
               </TouchableOpacity>
             )}

@@ -1,0 +1,13 @@
+{
+  "FacilityID": "RIDB-1001",
+  "FacilityName": "Juniper Flats Campground",
+  "FacilityLatitude": 38.71234,
+  "FacilityLongitude": -119.81234,
+  "FacilityTypeDescription": "Campground",
+  "FacilityDescription": "Developed campground with drinking water, vault toilets, picnic tables and fire rings.",
+  "FacilityReservationURL": "https://www.recreation.gov/camping/campgrounds/1001",
+  "FacilityURL": "https://ridb.recreation.gov/api/v1/facilities/RIDB-1001",
+  "OrgName": "USFS",
+  "CampsiteTotal": 24,
+  "Keywords": "water; vault toilet; picnic table; fire ring"
+}

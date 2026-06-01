@@ -37,7 +37,7 @@ import type {
   Waypoint,
 } from "./types";
 import { getAllSlotKeys } from "./theme";
-import { notifyLocalWrite } from "./autoPush";
+import { notifyLocalWrite } from "./localWriteBridge";
 
 
 // ============================================================

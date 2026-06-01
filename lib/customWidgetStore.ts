@@ -9,6 +9,8 @@
  * - Threshold color rules (green/amber/red)
  */
 
+import { getActiveVehicleContext } from './activeVehicleContext';
+
 // ── Data Field Definitions ─────────────────────────────
 
 export type DataSource = 'trip' | 'vehicle' | 'loadout';
@@ -213,6 +215,15 @@ export const customWidgetStore = {
     if (!fieldDef) return { value: null, raw: null };
 
     const trip = data.activeTrip;
+    const activeVehicleContext = getActiveVehicleContext();
+    const activeVehicleId = activeVehicleContext.activeVehicleId;
+    const activeVehicle = activeVehicleContext.vehicle;
+    const activeVehicleSpec = activeVehicleContext.spec;
+    const resourceProfile = activeVehicleContext.resourceProfile;
+    const fuelCapacityGal = activeVehicleSpec?.fuel_tank_capacity_gal ?? resourceProfile.fuelTankCapacityGal ?? trip?.capac_fuel_gal ?? null;
+    const mpg = activeVehicle?.avg_mpg ?? trip?.capac_mpg ?? null;
+    const waterCapacityGal = resourceProfile.waterCapacityGal ?? trip?.capac_water_gal ?? null;
+    const batteryUsableWh = resourceProfile.batteryUsableWh ?? trip?.battery_usable_wh ?? null;
 
     // Trip fields
     if (fieldDef.source === 'trip') {
@@ -224,32 +235,27 @@ export const customWidgetStore = {
     // Vehicle fields (derived from trip data)
     if (fieldDef.source === 'vehicle') {
       switch (fieldKey) {
-        case 'capac_fuel_gal': return numVal(trip?.capac_fuel_gal);
-        case 'capac_mpg': return numVal(trip?.capac_mpg);
-        case 'primary_vehicle': return { value: trip?.primary_vehicle || '--', raw: null };
-        case 'capac_water_gal': return numVal(trip?.capac_water_gal);
+        case 'capac_fuel_gal': return numVal(fuelCapacityGal);
+        case 'capac_mpg': return numVal(mpg);
+        case 'primary_vehicle': return { value: activeVehicle?.name || trip?.primary_vehicle || '--', raw: null };
+        case 'capac_water_gal': return numVal(waterCapacityGal);
         case 'water_use_per_person_day': return numVal(trip?.water_use_per_person_day);
-        case 'battery_usable_wh': return numVal(trip?.battery_usable_wh);
+        case 'battery_usable_wh': return numVal(batteryUsableWh);
         case 'solar_watts': return numVal(trip?.solar_watts);
         case 'sun_hours_per_day': return numVal(trip?.sun_hours_per_day);
         case 'fuel_range_miles': {
-          const gal = trip?.capac_fuel_gal;
-          const mpg = trip?.capac_mpg;
-          if (gal && mpg) { const v = gal * mpg; return { value: v.toFixed(0), raw: v }; }
+          if (fuelCapacityGal && mpg) { const v = fuelCapacityGal * mpg; return { value: v.toFixed(0), raw: v }; }
           return { value: '--', raw: null };
         }
         case 'fuel_days': {
-          const gal = trip?.capac_fuel_gal;
-          const mpg = trip?.capac_mpg;
           const mpd = trip?.avg_miles_per_day;
-          if (gal && mpg && mpd) { const v = gal / (mpd / mpg); return { value: v.toFixed(1), raw: v }; }
+          if (fuelCapacityGal && mpg && mpd) { const v = fuelCapacityGal / (mpd / mpg); return { value: v.toFixed(1), raw: v }; }
           return { value: '--', raw: null };
         }
         case 'water_days': {
-          const wg = trip?.capac_water_gal;
           const wpp = trip?.water_use_per_person_day || 1;
           const ts = trip?.team_size || 1;
-          if (wg) { const v = wg / (wpp * ts); return { value: v.toFixed(1), raw: v }; }
+          if (waterCapacityGal) { const v = waterCapacityGal / (wpp * ts); return { value: v.toFixed(1), raw: v }; }
           return { value: '--', raw: null };
         }
         case 'solar_daily_wh': {

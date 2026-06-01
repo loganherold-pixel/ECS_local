@@ -49,7 +49,9 @@ export default function MissionLog({ expeditionId }: Props) {
   const [telemetryState, setTelemetryState] = useState<LiveTelemetryState | null>(null);
 
   useEffect(() => {
-    refreshData();
+    setEvents(missionEventStore.getByExpeditionId(expeditionId));
+    setNotes(missionNoteStore.getByExpeditionId(expeditionId));
+    setCheckpoints(missionCheckpointStore.getByExpeditionId(expeditionId));
   }, [expeditionId]);
 
   const refreshData = useCallback(() => {

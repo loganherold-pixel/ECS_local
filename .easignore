@@ -1,0 +1,58 @@
+# Dependencies and repository metadata
+node_modules/
+
+.git/
+
+# Local Gradle caches/build outputs
+.gradle/
+.gradle-local/
+.gradle-local-build2/
+.gradle-local-build3/
+.gradle-local-build/
+.gradle-local-apk-build/
+.gradle-local-release-audit/
+.gradle-user-home/
+.gradle-local-fieldtest/
+.npm-cache/
+
+# Expo, smoke-test, and web export outputs
+.expo/
+.expo-*/
+.expo-cli-home/
+.expo-local/
+.expo-export-check/
+.expo-runtime/
+.smoke/
+artifacts/
+dist/
+coverage/
+web-build/
+metro-cache/
+.metro-cache-*/
+
+# Native build outputs
+android/.gradle/
+android/.gradle/**
+android/build/
+android/build/**
+android/app/build/
+android/app/build/**
+android/app/.cxx/
+android/app/.cxx/**
+android/.kotlin/
+android/.kotlin/**
+
+# Local build artifacts and diagnostics
+*.apk
+*.aab
+*.hprof
+*.log
+*.err
+/tmp_*.png
+/tmp-*.png
+tmp/
+.tmp/
+.tmp-*
+.codex-*
+npm-debug.log*
+yarn-error.log*

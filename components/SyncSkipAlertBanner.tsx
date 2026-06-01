@@ -218,7 +218,7 @@ export default function SyncSkipAlertBanner() {
       slideAnim.setValue(-30);
       opacityAnim.setValue(0);
     }
-  }, [state.isVisible]);
+  }, [state.isVisible, opacityAnim, slideAnim]);
 
   const handleDismiss = useCallback(() => {
     Animated.parallel([
@@ -235,7 +235,7 @@ export default function SyncSkipAlertBanner() {
     ]).start(() => {
       syncSkipAlertStore.dismiss();
     });
-  }, []);
+  }, [opacityAnim, slideAnim]);
 
   const handleDismissForever = useCallback(() => {
     syncSkipAlertStore.dismissPermanently();

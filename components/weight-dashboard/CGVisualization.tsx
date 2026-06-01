@@ -7,7 +7,7 @@
  *   - Zone regions with weight-proportional fills
  *   - Axle load percentages
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { TACTICAL } from '../../lib/theme';
 import type { CGResult } from '../../lib/weightEngine';
@@ -19,12 +19,107 @@ interface Props {
   frontAxlePercent: number;
   rearAxlePercent: number;
   totalWeight: number;
+  vehicleType?: string | null;
 }
 
-const VEHICLE_WIDTH = 280;
-const VEHICLE_HEIGHT = 120;
 const FRONT_AXLE_X = 0.22;
 const REAR_AXLE_X = 0.72;
+type VehicleProfileKind = 'truck' | 'suv' | 'van' | 'wagon' | 'generic';
+
+function clampPercent(value: number, fallback: number): number {
+  const safe = Number.isFinite(value) ? value : fallback;
+  return Math.max(7, Math.min(93, safe * 100));
+}
+
+function resolveVehicleProfileKind(vehicleType: string | null | undefined): VehicleProfileKind {
+  const normalized = String(vehicleType ?? '').toLowerCase();
+  if (normalized.includes('truck') || normalized.includes('pickup') || normalized.includes('ute')) return 'truck';
+  if (normalized.includes('van') || normalized.includes('bus')) return 'van';
+  if (normalized.includes('suv') || normalized.includes('jeep') || normalized.includes('4x4')) return 'suv';
+  if (normalized.includes('wagon') || normalized.includes('crossover') || normalized.includes('car')) return 'wagon';
+  return 'generic';
+}
+
+function vehicleProfileLabel(kind: VehicleProfileKind): string {
+  switch (kind) {
+    case 'truck': return 'TRUCK PROFILE';
+    case 'suv': return 'SUV / 4x4 PROFILE';
+    case 'van': return 'VAN PROFILE';
+    case 'wagon': return 'WAGON PROFILE';
+    default: return 'VEHICLE PROFILE';
+  }
+}
+
+function TopDownVehicleFallbackProfile({ kind }: { kind: VehicleProfileKind }) {
+  if (kind === 'truck') {
+    return (
+      <View style={styles.vehicleProfileSilhouette}>
+        <View style={[styles.profileNose, styles.truckNose]}>
+          <View style={styles.hoodRidge} />
+        </View>
+        <View style={styles.truckCab}>
+          <View style={styles.windshield} />
+          <View style={styles.cabinGlass} />
+        </View>
+        <View style={styles.truckBed}>
+          <View style={styles.bedRailTop} />
+          <View style={styles.bedFloor} />
+          <View style={styles.bedRailBottom} />
+        </View>
+        <View style={styles.tailGate} />
+      </View>
+    );
+  }
+
+  if (kind === 'van') {
+    return (
+      <View style={styles.vehicleProfileSilhouette}>
+        <View style={[styles.profileNose, styles.vanNose]}>
+          <View style={styles.hoodRidge} />
+        </View>
+        <View style={styles.vanCabin}>
+          <View style={styles.windshield} />
+          <View style={styles.vanGlass} />
+          <View style={styles.vanCargoLine} />
+        </View>
+        <View style={styles.tailGate} />
+      </View>
+    );
+  }
+
+  if (kind === 'suv') {
+    return (
+      <View style={styles.vehicleProfileSilhouette}>
+        <View style={[styles.profileNose, styles.suvNose]}>
+          <View style={styles.hoodRidge} />
+        </View>
+        <View style={styles.suvCabin}>
+          <View style={styles.windshield} />
+          <View style={styles.cabinGlass} />
+          <View style={styles.rearGlass} />
+        </View>
+        <View style={styles.suvHatch} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.vehicleProfileSilhouette}>
+      <View style={[styles.profileNose, styles.wagonNose]}>
+        <View style={styles.hoodRidge} />
+      </View>
+      <View style={styles.wagonCabin}>
+        <View style={styles.windshield} />
+        <View style={styles.cabinGlass} />
+      </View>
+      <View style={styles.wagonRear} />
+    </View>
+  );
+}
+
+function TopDownVehicleProfile({ kind }: { kind: VehicleProfileKind }) {
+  return <TopDownVehicleFallbackProfile kind={kind} />;
+}
 
 export default function CGVisualization({
   cgResult,
@@ -32,15 +127,12 @@ export default function CGVisualization({
   frontAxlePercent,
   rearAxlePercent,
   totalWeight,
+  vehicleType,
 }: Props) {
-  // CG position mapped to vehicle outline
-  const cgDotX = cgResult.xCG * VEHICLE_WIDTH;
-  const cgDotY = VEHICLE_HEIGHT / 2; // centered laterally
-  const cgDotZ = cgResult.zCG; // vertical CG for display
-
-  // Axle positions
-  const frontAxleX = FRONT_AXLE_X * VEHICLE_WIDTH;
-  const rearAxleX = REAR_AXLE_X * VEHICLE_WIDTH;
+  const profileKind = useMemo(() => resolveVehicleProfileKind(vehicleType), [vehicleType]);
+  const cgLongitudinalPercent = clampPercent(cgResult.xCG, 0.45);
+  const cgLateralPercent = clampPercent(cgResult.yCG ?? 0.5, 0.5);
+  const markerClamped = cgLongitudinalPercent <= 7 || cgLongitudinalPercent >= 93 || cgLateralPercent <= 7 || cgLateralPercent >= 93;
 
   // Stability color
   const stabilityColor = cgResult.stability === 'balanced'
@@ -66,44 +158,36 @@ export default function CGVisualization({
 
       {/* Vehicle Outline */}
       <View style={styles.vehicleContainer}>
-        {/* Vehicle body outline */}
-        <View style={styles.vehicleBody}>
-          {/* Front section (cab) */}
-          <View style={styles.cabSection}>
-            <Text style={styles.sectionLabel}>CAB</Text>
+        <View style={styles.profileLegend}>
+          <Text style={styles.profileLabel}>{vehicleProfileLabel(profileKind)}</Text>
+          <View style={styles.sideLegend}>
+            <Text style={styles.sideLegendText}>DRIVER</Text>
+            <View style={styles.sideLegendLine} />
+            <Text style={styles.sideLegendText}>PASSENGER</Text>
           </View>
+        </View>
 
-          {/* Mid section */}
-          <View style={styles.midSection}>
-            <Text style={styles.sectionLabel}>MID</Text>
-          </View>
+        <View style={styles.profileFrame}>
+          <TopDownVehicleProfile kind={profileKind} />
 
-          {/* Rear section (bed) */}
-          <View style={styles.rearSection}>
-            <Text style={styles.sectionLabel}>REAR</Text>
-          </View>
-
-          {/* Front axle line */}
-          <View style={[styles.axleLine, { left: `${FRONT_AXLE_X * 100}%` }]}>
-            <View style={styles.axleWheel} />
+          <View style={[styles.axleLine, { top: `${FRONT_AXLE_X * 100}%` }]}>
+            <View style={styles.axleEnd} />
             <View style={styles.axleDash} />
-            <View style={styles.axleWheel} />
+            <View style={styles.axleEnd} />
           </View>
 
-          {/* Rear axle line */}
-          <View style={[styles.axleLine, { left: `${REAR_AXLE_X * 100}%` }]}>
-            <View style={styles.axleWheel} />
+          <View style={[styles.axleLine, { top: `${REAR_AXLE_X * 100}%` }]}>
+            <View style={styles.axleEnd} />
             <View style={styles.axleDash} />
-            <View style={styles.axleWheel} />
+            <View style={styles.axleEnd} />
           </View>
 
-          {/* CG Dot */}
           <View
             style={[
               styles.cgDot,
               {
-                left: `${cgResult.xCG * 100}%`,
-                top: '50%',
+                left: `${cgLateralPercent}%`,
+                top: `${cgLongitudinalPercent}%`,
                 backgroundColor: cgColor,
                 shadowColor: cgColor,
               },
@@ -112,16 +196,19 @@ export default function CGVisualization({
             <View style={[styles.cgDotInner, { backgroundColor: cgColor }]} />
           </View>
 
-          {/* CG Crosshair lines */}
-          <View style={[styles.cgLineH, { top: '50%', left: `${(cgResult.xCG * 100) - 8}%`, width: '16%' }]} />
-          <View style={[styles.cgLineV, { left: `${cgResult.xCG * 100}%`, top: '20%', height: '60%' }]} />
+          <View style={[styles.cgLineH, { top: `${cgLongitudinalPercent}%`, left: '18%', width: '64%' }]} />
+          <View style={[styles.cgLineV, { left: `${cgLateralPercent}%`, top: `${Math.max(0, cgLongitudinalPercent - 8)}%`, height: '16%' }]} />
         </View>
 
-        {/* Direction arrow */}
+        {markerClamped ? (
+          <Text style={styles.markerWarning}>COG marker clamped to visible vehicle profile bounds</Text>
+        ) : null}
+
         <View style={styles.directionArrow}>
-          <View style={styles.arrowLine} />
-          <View style={styles.arrowHead} />
           <Text style={styles.arrowLabel}>FWD</Text>
+          <View style={styles.arrowLine} />
+          <View style={styles.arrowHeadDown} />
+          <Text style={styles.arrowLabel}>REAR</Text>
         </View>
       </View>
 
@@ -161,7 +248,7 @@ export default function CGVisualization({
                   styles.axleBarFill,
                   {
                     width: `${Math.min(100, rearAxlePercent)}%`,
-                    backgroundColor: rearAxlePercent > 65 ? '#FF9800' : rearAxlePercent > 75 ? '#EF5350' : '#66BB6A',
+                    backgroundColor: rearAxlePercent > 75 ? '#EF5350' : rearAxlePercent > 65 ? '#FF9800' : '#66BB6A',
                   },
                 ]}
               />
@@ -181,6 +268,11 @@ export default function CGVisualization({
         <View style={styles.cgCoordItem}>
           <Text style={styles.cgCoordLabel}>CG-X</Text>
           <Text style={styles.cgCoordValue}>{(cgResult.xCG * 100).toFixed(1)}%</Text>
+        </View>
+        <View style={styles.cgCoordDivider} />
+        <View style={styles.cgCoordItem}>
+          <Text style={styles.cgCoordLabel}>CG-Y</Text>
+          <Text style={styles.cgCoordValue}>{((cgResult.yCG ?? 0.5) * 100).toFixed(1)}%</Text>
         </View>
         <View style={styles.cgCoordDivider} />
         <View style={styles.cgCoordItem}>
@@ -251,64 +343,252 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
   },
-  vehicleBody: {
+  profileLegend: {
     width: '100%',
-    height: 100,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: 'rgba(196, 138, 44, 0.3)',
-    backgroundColor: 'rgba(196, 138, 44, 0.04)',
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  profileLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.5,
+  },
+  sideLegend: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  sideLegendText: {
+    fontSize: 7,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  sideLegendLine: {
+    width: 18,
+    height: 1,
+    backgroundColor: 'rgba(196, 138, 44, 0.28)',
+  },
+  profileFrame: {
+    width: '100%',
+    height: 280,
+    maxHeight: 320,
     position: 'relative',
     overflow: 'visible',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  cabSection: {
-    width: '35%',
-    height: '100%',
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(196, 138, 44, 0.15)',
+  vehicleProfileSilhouette: {
+    position: 'absolute',
+    left: '24%',
+    right: '24%',
+    top: 10,
+    bottom: 10,
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  midSection: {
-    width: '25%',
-    height: '100%',
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(196, 138, 44, 0.15)',
-    alignItems: 'center',
+  profileNose: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.4)',
+    backgroundColor: 'rgba(196, 138, 44, 0.08)',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  rearSection: {
+  truckNose: {
+    width: '62%',
+    height: '16%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderBottomWidth: 0,
+  },
+  suvNose: {
+    width: '66%',
+    height: '17%',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderBottomWidth: 0,
+  },
+  vanNose: {
+    width: '76%',
+    height: '12%',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderBottomWidth: 0,
+  },
+  wagonNose: {
+    width: '62%',
+    height: '18%',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderBottomWidth: 0,
+  },
+  hoodRidge: {
+    width: '58%',
+    height: 1,
+    backgroundColor: 'rgba(196, 138, 44, 0.32)',
+  },
+  truckCab: {
+    width: '78%',
+    height: '23%',
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.46)',
+    backgroundColor: 'rgba(196, 138, 44, 0.13)',
+    borderRadius: 14,
+    marginTop: -1,
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 8,
+  },
+  truckBed: {
+    width: '86%',
     flex: 1,
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.4)',
+    borderTopWidth: 0,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    marginTop: -1,
+    justifyContent: 'space-between',
+    paddingVertical: 8,
   },
-  sectionLabel: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: 'rgba(196, 138, 44, 0.35)',
-    letterSpacing: 2,
+  bedRailTop: {
+    height: 1,
+    marginHorizontal: 10,
+    backgroundColor: 'rgba(196, 138, 44, 0.35)',
+  },
+  bedFloor: {
+    flex: 1,
+    marginHorizontal: 14,
+    marginVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.18)',
+    backgroundColor: 'rgba(196, 138, 44, 0.04)',
+  },
+  bedRailBottom: {
+    height: 1,
+    marginHorizontal: 10,
+    backgroundColor: 'rgba(196, 138, 44, 0.35)',
+  },
+  tailGate: {
+    width: '74%',
+    height: '7%',
+    borderWidth: 1.5,
+    borderTopWidth: 0,
+    borderColor: 'rgba(196, 138, 44, 0.34)',
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 18,
+    backgroundColor: 'rgba(196, 138, 44, 0.07)',
+  },
+  windshield: {
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: 'rgba(138, 181, 158, 0.45)',
+  },
+  cabinGlass: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(138, 181, 158, 0.28)',
+    backgroundColor: 'rgba(138, 181, 158, 0.08)',
+  },
+  rearGlass: {
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: 'rgba(138, 181, 158, 0.35)',
+  },
+  suvCabin: {
+    width: '82%',
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.44)',
+    backgroundColor: 'rgba(196, 138, 44, 0.12)',
+    borderRadius: 18,
+    marginTop: -1,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    gap: 7,
+  },
+  suvHatch: {
+    width: '68%',
+    height: '8%',
+    borderWidth: 1.5,
+    borderTopWidth: 0,
+    borderColor: 'rgba(196, 138, 44, 0.34)',
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
+    backgroundColor: 'rgba(196, 138, 44, 0.08)',
+  },
+  vanCabin: {
+    width: '88%',
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.44)',
+    backgroundColor: 'rgba(196, 138, 44, 0.1)',
+    borderRadius: 12,
+    marginTop: -1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  vanGlass: {
+    height: '34%',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(138, 181, 158, 0.28)',
+    backgroundColor: 'rgba(138, 181, 158, 0.08)',
+  },
+  vanCargoLine: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.14)',
+  },
+  wagonCabin: {
+    width: '76%',
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: 'rgba(196, 138, 44, 0.42)',
+    backgroundColor: 'rgba(196, 138, 44, 0.1)',
+    borderRadius: 18,
+    marginTop: -1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  wagonRear: {
+    width: '66%',
+    height: '10%',
+    borderWidth: 1.5,
+    borderTopWidth: 0,
+    borderColor: 'rgba(196, 138, 44, 0.32)',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    backgroundColor: 'rgba(196, 138, 44, 0.06)',
   },
 
   // Axle lines
   axleLine: {
     position: 'absolute',
-    top: -8,
-    bottom: -8,
-    width: 2,
+    left: '20%',
+    right: '20%',
+    height: 2,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  axleWheel: {
-    width: 10,
-    height: 6,
+  axleEnd: {
+    width: 4,
+    height: 8,
     borderRadius: 2,
-    backgroundColor: 'rgba(138, 138, 133, 0.5)',
+    backgroundColor: 'rgba(196, 138, 44, 0.38)',
   },
   axleDash: {
     flex: 1,
-    width: 1,
+    height: 1,
     backgroundColor: 'rgba(138, 138, 133, 0.25)',
   },
 
@@ -343,28 +623,36 @@ const styles = StyleSheet.create({
     width: 1,
     backgroundColor: 'rgba(196, 138, 44, 0.25)',
   },
+  markerWarning: {
+    marginTop: 4,
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#FF9800',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
 
   // Direction arrow
   directionArrow: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     marginTop: 8,
     gap: 4,
   },
   arrowLine: {
-    width: 20,
-    height: 1,
+    width: 1,
+    height: 20,
     backgroundColor: TACTICAL.textMuted,
   },
-  arrowHead: {
+  arrowHeadDown: {
     width: 0,
     height: 0,
-    borderLeftWidth: 5,
-    borderTopWidth: 3,
-    borderBottomWidth: 3,
-    borderLeftColor: TACTICAL.textMuted,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
+    borderTopWidth: 5,
+    borderLeftWidth: 3,
+    borderRightWidth: 3,
+    borderTopColor: TACTICAL.textMuted,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
   },
   arrowLabel: {
     fontSize: 7,

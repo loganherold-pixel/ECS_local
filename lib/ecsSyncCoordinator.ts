@@ -34,6 +34,7 @@
  */
 
 import { ecsBus } from './ecsBus';
+import { ecsLog } from './ecsLogger';
 import type {
   EcsChannel,
   EcsPowerSummary,
@@ -52,6 +53,10 @@ import type {
 } from './ecsSyncTypes';
 
 const TAG = '[ECS-SYNC]';
+
+function debugSync(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 // ── Configuration ────────────────────────────────────────
 
@@ -112,20 +117,80 @@ function _normalizePower(): EcsPowerSummary {
   };
 
   try {
-    const { bluStateStore } = require('../src/power/blu/BluStateStore');
-    const summary = bluStateStore.getSummary();
+    const { bluPowerAuthority } = require('./BluPowerAuthority');
+    const snapshot = bluPowerAuthority.getSnapshot?.();
 
-    if (summary && summary.available) {
-      base.has_devices = true;
-      base.available = true;
-      base.device_count = 1; // BLU aggregates to primary device
-      base.freshness = bluStateStore.isStale() ? 'stale' : 'live';
-      base.battery_percent = summary.battery_percent ?? null;
-      base.input_watts = summary.live_input ?? null;
-      base.output_watts = summary.live_output ?? null;
-      base.runtime_minutes = summary.runtime_remaining ?? null;
-      base.is_sustainable = (base.input_watts ?? 0) >= (base.output_watts ?? 0);
+    if (!snapshot) {
+      return base;
     }
+
+    const hasDevices =
+      snapshot.hasPowerData === true ||
+      snapshot.primaryDevice != null ||
+      snapshot.primaryTelemetry != null;
+
+    const batteryPercent =
+      typeof snapshot.batteryPercent === 'number' && Number.isFinite(snapshot.batteryPercent)
+        ? snapshot.batteryPercent
+        : null;
+
+    const inputWatts =
+      typeof snapshot.inputWatts === 'number' && Number.isFinite(snapshot.inputWatts)
+        ? snapshot.inputWatts
+        : null;
+
+    const outputWatts =
+      typeof snapshot.outputWatts === 'number' && Number.isFinite(snapshot.outputWatts)
+        ? snapshot.outputWatts
+        : null;
+
+    const runtimeMinutes =
+      typeof snapshot.estimatedRuntimeMinutes === 'number' &&
+      Number.isFinite(snapshot.estimatedRuntimeMinutes)
+        ? snapshot.estimatedRuntimeMinutes
+        : null;
+
+    const freshnessMap: Record<string, EcsFreshness> = {
+      live: 'live',
+      reconnecting: 'recent',
+      stale: 'stale',
+      disconnected: 'unavailable',
+      last_known: 'stale',
+    };
+
+    const freshness: EcsFreshness =
+      freshnessMap[String(snapshot.freshness ?? 'unavailable')] ?? 'unavailable';
+
+    let deviceCount = 0;
+    if (snapshot.primaryDevice || snapshot.primaryTelemetry || snapshot.hasPowerData) {
+      deviceCount = 1;
+    }
+
+    const reserveHealthy = batteryPercent != null && batteryPercent >= 35;
+    const reserveCritical = batteryPercent != null && batteryPercent <= 10;
+    const hasInput = (inputWatts ?? 0) > 0;
+    const hasOutput = (outputWatts ?? 0) > 0;
+    const netPositive = (inputWatts ?? 0) >= (outputWatts ?? 0);
+    const modestDraw = hasOutput && (outputWatts ?? 0) <= 120;
+
+    const isSustainable =
+      hasDevices &&
+      !reserveCritical &&
+      (
+        netPositive ||
+        (reserveHealthy && modestDraw) ||
+        (reserveHealthy && hasInput)
+      );
+
+    base.available = hasDevices;
+    base.has_devices = hasDevices;
+    base.device_count = deviceCount;
+    base.freshness = freshness;
+    base.battery_percent = batteryPercent;
+    base.input_watts = inputWatts;
+    base.output_watts = outputWatts;
+    base.runtime_minutes = runtimeMinutes;
+    base.is_sustainable = isSustainable;
   } catch {
     // Power system not available — graceful degradation
   }
@@ -528,10 +593,12 @@ function _refreshAllSummaries(): void {
 
     // Throttled logging
     if (_cascadeCount <= 3 || _cascadeCount % 10 === 0) {
-      console.log(
-        TAG,
-        `Cascade #${_cascadeCount}: ${availCount}/${Object.keys(_storeStatus).length} systems available (${elapsed}ms)`
-      );
+      debugSync('Sync cascade completed', {
+        availableSystems: availCount,
+        cascadeCount: _cascadeCount,
+        durationMs: elapsed,
+        totalSystems: Object.keys(_storeStatus).length,
+      });
     }
   } catch (e) {
     console.warn(TAG, 'Refresh cascade error:', e);
@@ -604,6 +671,13 @@ function _subscribeToStores(): void {
       },
     },
     {
+      name: 'bluPowerAuthority',
+      subscribe: () => {
+        const { bluPowerAuthority } = require('./BluPowerAuthority');
+        return bluPowerAuthority.subscribe(() => _debouncedRefresh());
+      },
+    },
+    {
       name: 'loadoutWeightCache',
       subscribe: () => {
         const { loadoutWeightCache } = require('./loadoutWeightCache');
@@ -636,7 +710,7 @@ function _subscribeToStores(): void {
     {
       name: 'bluStateStore',
       subscribe: () => {
-        const { bluStateStore } = require('../src/power/blu/BluStateStore');
+        const { bluStateStore } = require('./BluStateStore');
         return bluStateStore.subscribe(() => _debouncedRefresh());
       },
     },
@@ -671,7 +745,8 @@ function _subscribeToStores(): void {
           // Invalidate cache readiness so CI picks up the change
           try {
             const { invalidateCacheReadiness } = require('./offlineCacheAwarenessEngine');
-            invalidateCacheReadiness();
+            const readiness = offlineExpeditionDbStore.evaluateReadiness?.();
+            invalidateCacheReadiness('sync_offline_expedition_store_change', readiness ?? null);
           } catch {}
           _debouncedRefresh();
         });
@@ -692,7 +767,10 @@ function _subscribeToStores(): void {
     }
   }
 
-  console.log(TAG, `Store subscriptions: ${successCount}/${storeSubscribers.length} active`);
+  debugSync('Sync coordinator store subscriptions active', {
+    activeSubscriptions: successCount,
+    totalSubscriptions: storeSubscribers.length,
+  });
 }
 
 /**
@@ -743,7 +821,7 @@ function _wireBusCascade(): void {
   );
   _busUnsubs.push(assistantUnsub);
 
-  console.log(TAG, 'Bus cascade wiring complete');
+  debugSync('Sync coordinator bus cascade wiring complete');
 }
 
 /**
@@ -777,11 +855,11 @@ export const ecsSyncCoordinator = {
    */
   start(): void {
     if (_lifecycle === 'running') {
-      console.log(TAG, 'Already running');
-      return;
-    }
+    debugSync('Sync coordinator already running');
+    return;
+  }
 
-    console.log(TAG, 'Starting (Integration Pass 1)...');
+  debugSync('Sync coordinator starting');
     _lifecycle = 'initializing';
     _initTimestamp = Date.now();
 
@@ -802,7 +880,10 @@ export const ecsSyncCoordinator = {
     }, PERIODIC_REFRESH_MS);
 
     _lifecycle = 'running';
-    console.log(TAG, `Started (periodic: ${PERIODIC_REFRESH_MS / 1000}s, store debounce: ${STORE_CHANGE_DEBOUNCE_MS / 1000}s)`);
+  debugSync('Sync coordinator started', {
+    periodicSeconds: PERIODIC_REFRESH_MS / 1000,
+    storeDebounceSeconds: STORE_CHANGE_DEBOUNCE_MS / 1000,
+  });
   },
 
   /**
@@ -812,7 +893,7 @@ export const ecsSyncCoordinator = {
   stop(): void {
     if (_lifecycle === 'stopped' || _lifecycle === 'idle') return;
 
-    console.log(TAG, 'Stopping...');
+  debugSync('Sync coordinator stopping');
 
     // Flush pending updates
     ecsBus.flush();
@@ -834,7 +915,7 @@ export const ecsSyncCoordinator = {
     _unwireBusCascade();
 
     _lifecycle = 'stopped';
-    console.log(TAG, `Stopped (cascades: ${_cascadeCount})`);
+  debugSync('Sync coordinator stopped', { cascades: _cascadeCount });
   },
 
   /**
@@ -858,7 +939,7 @@ export const ecsSyncCoordinator = {
     }
 
     _lifecycle = 'suspended';
-    console.log(TAG, 'Suspended');
+  debugSync('Sync coordinator suspended');
   },
 
   /**
@@ -878,7 +959,7 @@ export const ecsSyncCoordinator = {
       _refreshAllSummaries();
     }, PERIODIC_REFRESH_MS);
 
-    console.log(TAG, 'Resumed');
+  debugSync('Sync coordinator resumed');
   },
 
   /**
@@ -1003,7 +1084,6 @@ export const ecsSyncCoordinator = {
     _lastCascadeAt = null;
     Object.keys(_storeStatus).forEach(k => delete (_storeStatus as any)[k]);
     _lifecycle = 'idle';
-    console.log(TAG, 'Full reset complete');
+  debugSync('Sync coordinator reset complete');
   },
 };
-

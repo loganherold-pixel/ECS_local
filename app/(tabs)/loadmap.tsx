@@ -20,11 +20,13 @@ import VehicleSilhouette from '../../components/loadmap/VehicleSilhouette';
 import type { SilhouetteZone } from '../../components/loadmap/VehicleSilhouette';
 import ZoneDetailModal from '../../components/loadmap/ZoneDetailModal';
 import type { ZoneInfo, ZoneItem } from '../../components/loadmap/ZoneDetailModal';
+import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 
 import { TACTICAL, TYPO, DENSITY } from '../../lib/theme';
+import { ecsLog } from '../../lib/ecsLogger';
 import { fetchVehicleZones } from '../../lib/fetchVehicleZones';
 import { vehicleStore } from '../../lib/vehicleStore';
 import { setCachedVehicleZones, setBuilderState, getBuilderState, type CachedZone } from '../../lib/expeditionCache';
@@ -55,6 +57,8 @@ function LoadMapScreenInner() {
   const [loading, setLoading] = useState(true);
   const [zonesLoading, setZonesLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [zoneDataStatus, setZoneDataStatus] = useState<'ready' | 'empty' | 'error'>('empty');
+  const [zoneDataMessage, setZoneDataMessage] = useState('No load zones configured yet.');
 
   const [selectedZone, setSelectedZone] = useState<ZoneInfo | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
@@ -93,6 +97,12 @@ function LoadMapScreenInner() {
 
       const flatZones = result.flat || [];
       setVehicleZones(flatZones);
+      setZoneDataStatus(flatZones.length > 0 ? 'ready' : 'empty');
+      setZoneDataMessage(
+        flatZones.length > 0
+          ? ''
+          : 'No load zones configured yet. Add build/loadout data to populate the load map.'
+      );
 
       // Bridge: write to expedition cache for builder flow persistence
       if (flatZones.length > 0) {
@@ -116,7 +126,15 @@ function LoadMapScreenInner() {
         }
       }
     } catch (err) {
-      console.warn('[LoadMap] fetchZones error:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      ecsLog.warn('MAP', '[LoadMap] Failed to fetch vehicle zones', {
+        vehicleId,
+        error: message,
+      });
+      if (mountedRef.current) {
+        setZoneDataStatus('error');
+        setZoneDataMessage('Zone data could not be loaded. Pull to refresh or update vehicle setup.');
+      }
       if (mountedRef.current) setVehicleZones([]);
     }
 
@@ -124,42 +142,59 @@ function LoadMapScreenInner() {
   }, []);
 
   // ── Fetch loadout items ───────────────────────────────
-  const fetchLoadoutItems = useCallback(async () => {
+  const fetchLoadoutItems = useCallback(async (vehicleId?: string | null) => {
     try {
-      const { loadoutItemStore } = await import('../../lib/loadoutStore');
+      const { loadoutStore, loadoutItemStore } = await import('../../lib/loadoutStore');
+      const loadoutIds: string[] = [];
+      if (vehicleId) {
+        const { loadouts } = await loadoutStore.getByVehicleId(vehicleId, user?.id || null);
+        loadoutIds.push(...loadouts.map((loadout: any) => loadout.id).filter(Boolean));
+      }
+      const items = (
+        await Promise.all(loadoutIds.map((loadoutId) =>
+          loadoutItemStore.getByLoadoutId(loadoutId, user?.id || null)
+        ))
+      ).flat();
       if (mountedRef.current) {
-        setLoadoutItems([]);
+        setLoadoutItems(items as LoadoutItem[]);
       }
     } catch (err) {
       console.warn('[LoadMap] fetchLoadoutItems error:', err);
+      if (mountedRef.current) setLoadoutItems([]);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     const init = async () => {
       setLoading(true);
       await fetchVehicles();
-      await fetchLoadoutItems();
     };
     init();
-  }, [fetchVehicles, fetchLoadoutItems]);
+  }, [fetchVehicles]);
 
   useEffect(() => {
-    if (selectedVehicleId) fetchZones(selectedVehicleId);
-  }, [selectedVehicleId, fetchZones]);
+    if (selectedVehicleId) {
+      fetchZones(selectedVehicleId);
+      fetchLoadoutItems(selectedVehicleId);
+    }
+  }, [selectedVehicleId, fetchZones, fetchLoadoutItems]);
 
   useFocusEffect(
     useCallback(() => {
       if (selectedVehicleId) {
         fetchZones(selectedVehicleId);
+        fetchLoadoutItems(selectedVehicleId);
       }
-    }, [selectedVehicleId, fetchZones])
+    }, [selectedVehicleId, fetchZones, fetchLoadoutItems])
   );
 
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchVehicles();
-    if (selectedVehicleId) await fetchZones(selectedVehicleId);
+    if (selectedVehicleId) {
+      await fetchZones(selectedVehicleId);
+      await fetchLoadoutItems(selectedVehicleId);
+    }
     setRefreshing(false);
   };
 
@@ -311,7 +346,7 @@ function LoadMapScreenInner() {
             <View style={styles.emptyIconWrap}>
               <Ionicons name="car-outline" size={40} color={TACTICAL.textMuted} />
             </View>
-            <Text style={styles.emptyTitle}>CONFIGURE VEHICLE FIRST</Text>
+            <Text style={styles.emptyTitle}>SET UP VEHICLE FIRST</Text>
             <Text style={styles.emptySubtext}>
               Set up your vehicle to see the load map.{'\n'}Works offline — no sign-in required.
             </Text>
@@ -321,7 +356,7 @@ function LoadMapScreenInner() {
               activeOpacity={0.8}
             >
               <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-              <Text style={styles.configureBtnText}>CONFIGURE VEHICLE</Text>
+              <Text style={styles.configureBtnText}>SET UP VEHICLE</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -330,7 +365,12 @@ function LoadMapScreenInner() {
   }
 
   // ── Vehicle exists but not configured ─────────────────
-  const hasConfig = selectedVehicle?.wizard_config != null || (selectedVehicle as any)?.zones?.length > 0;
+  const hasConfig =
+    selectedVehicle?.wizard_config != null ||
+    (selectedVehicle as any)?.zones?.length > 0 ||
+    (selectedVehicle as any)?.containerZones?.length > 0 ||
+    (selectedVehicle as any)?.accessoryFramework != null ||
+    (selectedVehicle as any)?.wizard_config?.fleet_build_loadout != null;
 
   return (
     <TopoBackground>
@@ -387,9 +427,9 @@ function LoadMapScreenInner() {
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
+              {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              tintColor={TACTICAL.accent}
             />
           }
         >
@@ -418,7 +458,7 @@ function LoadMapScreenInner() {
                   onPress={() => router.push('/(tabs)/vehicle-config')}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.setupBtnText}>DEPLOY</Text>
+                  <Text style={styles.setupBtnText}>SET UP</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -429,9 +469,9 @@ function LoadMapScreenInner() {
               <View style={styles.notConfiguredIcon}>
                 <Ionicons name="construct-outline" size={32} color={TACTICAL.amber} />
               </View>
-              <Text style={styles.notConfiguredTitle}>DEPLOY CONFIGURATION</Text>
+              <Text style={styles.notConfiguredTitle}>VEHICLE SETUP REQUIRED</Text>
               <Text style={styles.notConfiguredText}>
-                Run the Vehicle Configuration Wizard to define your zones and loadout slots.
+                Open Vehicle Setup to define your zones and loadout slots.
               </Text>
               <TouchableOpacity
                 style={styles.configureBtn}
@@ -439,7 +479,7 @@ function LoadMapScreenInner() {
                 activeOpacity={0.8}
               >
                 <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-                <Text style={styles.configureBtnText}>DEPLOY</Text>
+                <Text style={styles.configureBtnText}>OPEN SETUP</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.editVehicleBtn}
@@ -459,7 +499,7 @@ function LoadMapScreenInner() {
                 }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.editVehicleText}>EDIT VEHICLE</Text>
+                <Text style={styles.editVehicleText}>EDIT SETUP</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -526,10 +566,16 @@ function LoadMapScreenInner() {
 
           {hasConfig && !zonesLoading && vehicleZones.length === 0 && (
             <View style={styles.noZonesCard}>
-              <Ionicons name="grid-outline" size={32} color={TACTICAL.textMuted} />
-              <Text style={styles.noZonesTitle}>NO ZONES FOUND</Text>
+              <Ionicons
+                name={zoneDataStatus === 'error' ? 'warning-outline' : 'grid-outline'}
+                size={32}
+                color={zoneDataStatus === 'error' ? TACTICAL.danger : TACTICAL.textMuted}
+              />
+              <Text style={styles.noZonesTitle}>
+                {zoneDataStatus === 'error' ? 'ZONE DATA UNAVAILABLE' : 'NO LOAD ZONES CONFIGURED'}
+              </Text>
               <Text style={styles.noZonesText}>
-                Zones may not have been saved. Try reconfiguring.
+                {zoneDataMessage}
               </Text>
               <TouchableOpacity
                 style={styles.configureBtn}
@@ -537,7 +583,7 @@ function LoadMapScreenInner() {
                 activeOpacity={0.8}
               >
                 <Ionicons name="construct-outline" size={16} color="#0B0F12" />
-                <Text style={styles.configureBtnText}>RECONFIGURE</Text>
+                <Text style={styles.configureBtnText}>UPDATE SETUP</Text>
               </TouchableOpacity>
             </View>
           )}

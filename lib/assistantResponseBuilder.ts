@@ -678,6 +678,49 @@ function _handleOfflineReadiness(s: AssistantContextSnapshot): AssistantResponse
 // ── Loadout Check with Bridge (Integration Pass 4) ───────
 // Detects stability sub-questions and routes to bridge answers.
 
+function _handleLoadoutCheck(s: AssistantContextSnapshot): AssistantResponseBlock[] {
+  const ls = s.loadout_status;
+
+  if (!_isAvail(ls.availability)) {
+    return [
+      _block('summary', 'Loadout status is not currently available.', 'low', ['loadout_status']),
+    ];
+  }
+
+  if (!ls.has_active_loadout) {
+    return [
+      _block(
+        'suggested_action',
+        'No active loadout is configured. Set up a loadout to evaluate readiness, critical items, and weight impact.',
+        _blockConf(ls.availability),
+        ['loadout_status'],
+      ),
+    ];
+  }
+
+  const blocks: AssistantResponseBlock[] = [
+    _block(
+      ls.is_overweight || ls.critical_missing > 0 ? 'caution' : 'summary',
+      `Loadout readiness is ${ls.readiness_pct}%. ${ls.critical_missing} critical item(s) are missing and ${ls.packed_items}/${ls.total_items} items are packed.`,
+      _blockConf(ls.availability),
+      ['loadout_status'],
+    ),
+  ];
+
+  if (ls.is_overweight) {
+    blocks.push(
+      _block(
+        'caution',
+        'The current loadout is overweight. Rebalance or reduce cargo before departure.',
+        _blockConf(ls.availability),
+        ['loadout_status'],
+      ),
+    );
+  }
+
+  return blocks;
+}
+
 function _handleLoadoutCheckWithBridge(s: AssistantContextSnapshot, query?: string): AssistantResponseBlock[] {
   // Integration Pass 4: Detect stability sub-questions via bridge
   if (query) {

@@ -144,7 +144,6 @@ const POWER_RELATED_KEYS: (keyof AccessoryFramework)[] = [
 
 /** Accessory keys that are power-dependent (consume power) */
 const POWER_DEPENDENT_KEYS: (keyof AccessoryFramework)[] = [
-  'fridgeSlide',
   'interiorStorage', // may have lighting/electronics
 ];
 
@@ -156,13 +155,13 @@ const RTT_KEYS: (keyof AccessoryFramework)[] = [
 /** Short labels for compact zone summary pills */
 const COMPACT_ZONE_LABELS: Record<string, string> = {
   cab_rack: 'Cab Rack',
-  cab_rack_acc: 'Cab Acc',
   roof_rack: 'Roof Rack',
   rtt: 'RTT',
-  bed_drawer: 'Bed Storage',
+  bed_drawer: 'Drawers',
   interior_storage: 'Interior',
-  fridge_slide: 'Fridge',
   recovery_mount: 'Recovery',
+  shell_system: 'Shell',
+  truck_bed: 'Bed',
   water_storage: 'Water',
   power_system: 'Power',
 };
@@ -288,7 +287,6 @@ export function buildPowerDistributionInfo(
 
   const powerZone = zones.find(z => POWER_RELATED_KEYS.includes(z.accessoryKey));
   const powerEntry = framework.powerSystemBattery;
-  const fridgeZone = zones.find(z => z.accessoryKey === 'fridgeSlide');
 
   return {
     hasPowerZone: !!powerZone,
@@ -296,8 +294,8 @@ export function buildPowerDistributionInfo(
     powerStatus: powerEntry?.enabled
       ? (powerEntry.status || 'installed')
       : 'none',
-    hasFridgeZone: !!fridgeZone,
-    fridgeZone: fridgeZone || null,
+    hasFridgeZone: false,
+    fridgeZone: null,
     powerDependentZoneIds: zones
       .filter(z => POWER_DEPENDENT_KEYS.includes(z.accessoryKey))
       .map(z => z.id),

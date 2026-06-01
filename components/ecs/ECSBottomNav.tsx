@@ -5,9 +5,14 @@ import {
   Image,
   Pressable,
   StyleSheet,
-  ImageSourcePropType,
-  Platform,
 } from 'react-native';
+import type { ImageSourcePropType } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  ECSGlobalBanner,
+  getEcsBottomSafePadding,
+  useEcsBottomBannerHeight,
+} from '../ECSGlobalBanner';
 
 export type ECSTabKey = 'fleet' | 'navigate' | 'center' | 'discover' | 'alert';
 
@@ -35,6 +40,7 @@ const ICONS = {
   discover: require('../../assets/ecs/nav/discover-badge.png'),
   alert: require('../../assets/ecs/nav/alert-badge.png'),
 };
+const BOTTOM_BANNER_BACKGROUND = require('../../assets/chrome/banners/ECS_Bottom_Banner.png');
 
 function NavButton({
   item,
@@ -84,6 +90,9 @@ export default function ECSBottomNav({
   onDiscoverPress,
   onAlertPress,
 }: Props) {
+  const insets = useSafeAreaInsets();
+  const bannerHeight = useEcsBottomBannerHeight();
+  const bottomPadding = getEcsBottomSafePadding(insets.bottom);
   const tabs: TabItem[] = [
     { key: 'fleet', label: 'FLEET', icon: ICONS.fleet, onPress: onFleetPress },
     { key: 'navigate', label: 'NAVIGATE', icon: ICONS.navigate, onPress: onNavigatePress },
@@ -93,8 +102,20 @@ export default function ECSBottomNav({
   ];
 
   return (
-    <View style={styles.root}>
-      <View style={styles.topLine} />
+    <View
+      style={[
+        styles.root,
+        {
+          height: bannerHeight + bottomPadding,
+          paddingBottom: bottomPadding,
+        },
+      ]}
+    >
+      <ECSGlobalBanner
+        source={BOTTOM_BANNER_BACKGROUND}
+        placement="bottom"
+        style={styles.backgroundImage}
+      />
       <View style={styles.container}>
         {tabs.map((item) => (
           <NavButton
@@ -119,24 +140,19 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 22 : 12,
-    backgroundColor: 'rgba(8, 11, 15, 0.96)',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: '#020304',
+    overflow: 'hidden',
   },
-  topLine: {
-    position: 'absolute',
-    top: 0,
-    left: 22,
-    right: 22,
-    height: 1,
-    backgroundColor: 'rgba(198,162,90,0.10)',
+  backgroundImage: {
+    ...StyleSheet.absoluteFillObject,
   },
   container: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-around',
     paddingHorizontal: 8,
+    position: 'relative',
+    zIndex: 1,
   },
   buttonWrap: {
     minWidth: 68,

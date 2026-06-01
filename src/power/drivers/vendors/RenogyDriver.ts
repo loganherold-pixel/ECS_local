@@ -25,7 +25,7 @@ import {
   isRenogyDeviceName,
   lookupRenogyModel,
   extractRenogyModelFromName,
-} from "../../blu/RenogyConstants";
+} from "../../../../lib/RenogyConstants";
 
 const RENOGY_CAPABILITIES: PowerCapabilities = {
   hasSOC: true,
@@ -143,7 +143,6 @@ export class RenogyDriver implements IPowerDriver {
       },
       solar: solarWatts !== undefined ? {
         watts: solarWatts,
-        available: solarWatts > 0,
       } : undefined,
       flags: {
         charging: isCharging,
@@ -162,4 +161,3 @@ export class RenogyDriver implements IPowerDriver {
     return { ...RENOGY_CAPABILITIES };
   }
 }
-

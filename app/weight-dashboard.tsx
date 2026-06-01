@@ -19,7 +19,7 @@ import WeightDashboardPanel from '../components/weight-dashboard/WeightDashboard
 
 export default function WeightDashboardScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ loadoutId?: string }>();
+  const params = useLocalSearchParams<{ loadoutId?: string; vehicleId?: string }>();
 
   return (
     <View style={styles.container}>
@@ -37,6 +37,7 @@ export default function WeightDashboardScreen() {
 
       <WeightDashboardPanel
         loadoutId={params.loadoutId || null}
+        vehicleId={params.vehicleId || null}
       />
     </View>
   );

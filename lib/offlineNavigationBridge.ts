@@ -34,6 +34,7 @@
  *
  * Phase 6C: Initial implementation.
  */
+import { ecsLog } from './ecsLogger';
 
 import type {
   DatasetEntry,
@@ -162,9 +163,46 @@ let _cacheTime = 0;
 let _cacheLat: number | null = null;
 let _cacheLng: number | null = null;
 let _cacheRadius: number | null = null;
+let _lastInvalidationKey: string | null = null;
+let _lastInvalidationAt = 0;
+let _invalidationVersion = 0;
 
 /** GPS movement threshold before re-querying (approx 0.3 miles) */
 const GPS_MOVEMENT_THRESHOLD_DEG = 0.004;
+
+/** Suppress duplicate invalidations during startup/store hydration fan-out */
+const INVALIDATION_DEDUPE_WINDOW_MS = 2_000;
+
+const VOLATILE_INVALIDATION_KEYS = new Set([
+  'captured_at',
+  'checked_at',
+  'evaluated_at',
+  'lastCheckedAt',
+  'lastRunAt',
+  'lastUpdatedAt',
+  'queried_at',
+  'reported_at',
+  'timestamp',
+]);
+
+function stableInvalidationValue(value: unknown, seen = new WeakSet<object>()): string {
+  if (value == null) return '';
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return `[${value.map(item => stableInvalidationValue(item, seen)).join(',')}]`;
+
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter(key => !VOLATILE_INVALIDATION_KEYS.has(key))
+    .sort()
+    .map(key => `${key}:${stableInvalidationValue(record[key], seen)}`)
+    .join(',')}}`;
+}
+
+function buildInvalidationKey(reason: string, sourceState?: unknown): string {
+  return `${reason || 'unspecified'}::${stableInvalidationValue(sourceState)}`;
+}
 
 function _shouldRefreshCache(lat: number, lng: number, radiusMi: number): boolean {
   if (!_cachedOverlay) return true;
@@ -337,14 +375,15 @@ export const offlineNavigationBridge = {
           skippedEntries++;
           continue;
         }
+        const category = entry.category as DatasetCategory;
 
-        if (!byCategory[entry.category]) {
-          byCategory[entry.category] = [];
+        if (!byCategory[category]) {
+          byCategory[category] = [];
         }
 
         // Limit markers per category to prevent clutter
-        if (byCategory[entry.category]!.length < MAX_MARKERS_PER_CATEGORY) {
-          byCategory[entry.category]!.push(marker);
+        if (byCategory[category]!.length < MAX_MARKERS_PER_CATEGORY) {
+          byCategory[category]!.push(marker);
           allMarkers.push(marker);
         }
       }
@@ -410,8 +449,8 @@ export const offlineNavigationBridge = {
 
       // Phase 6D: Filter out invalid entries
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }
@@ -439,8 +478,8 @@ export const offlineNavigationBridge = {
       });
 
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }
@@ -468,8 +507,8 @@ export const offlineNavigationBridge = {
       });
 
       return result.entries
-        .map(e => _convertToMarker(e, lat, lng))
-        .filter((m): m is OfflineExpeditionMarker => m != null);
+        .map((e: DatasetEntry) => _convertToMarker(e, lat, lng))
+        .filter((m: OfflineExpeditionMarker | null): m is OfflineExpeditionMarker => m != null);
     } catch {
       return [];
     }
@@ -547,13 +586,40 @@ export const offlineNavigationBridge = {
    * Invalidate the memoization cache.
    * Call when offline data changes (download, delete, etc.)
    */
-  invalidateCache(): void {
+  invalidateCache(reason = 'unspecified', sourceState?: unknown): boolean {
+    const now = Date.now();
+    const key = buildInvalidationKey(reason, sourceState);
+    const duplicateHydrationFanout =
+      key === _lastInvalidationKey &&
+      _cachedOverlay == null &&
+      _cacheTime === 0;
+    const duplicateBurst =
+      key === _lastInvalidationKey &&
+      (now - _lastInvalidationAt) < INVALIDATION_DEDUPE_WINDOW_MS;
+
+    if (duplicateHydrationFanout || duplicateBurst) {
+      return false;
+    }
+
     _cachedOverlay = null;
     _cacheTime = 0;
     _cacheLat = null;
     _cacheLng = null;
     _cacheRadius = null;
-    console.log(`${TAG} Cache invalidated`);
+    _lastInvalidationKey = key;
+    _lastInvalidationAt = now;
+    _invalidationVersion += 1;
+    ecsLog.dev('SYSTEM', 'Cache invalidated', {
+      reason,
+      version: _invalidationVersion,
+    }, {
+      tag: TAG,
+      debugFlag: 'ECS_DEBUG_OFFLINE_CACHE',
+      fingerprint: `offline-nav-cache:${reason}:${_invalidationVersion}`,
+      throttleMs: 5000,
+      aggregateWindowMs: 30_000,
+    });
+    return true;
   },
 
   /**

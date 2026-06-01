@@ -84,7 +84,7 @@ export default function TemplateSyncBadge({ status, compact = false }: Props) {
     } else {
       spinAnim.setValue(0);
     }
-  }, [status]);
+  }, [spinAnim, status]);
 
   const spin = spinAnim.interpolate({
     inputRange: [0, 1],
@@ -151,7 +151,7 @@ export function SyncSummaryBar({
     } else {
       spinAnim.setValue(0);
     }
-  }, [isSyncing]);
+  }, [isSyncing, spinAnim]);
 
   const spin = spinAnim.interpolate({
     inputRange: [0, 1],

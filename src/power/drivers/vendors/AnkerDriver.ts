@@ -19,7 +19,7 @@ import {
   isAnkerSolixDeviceName,
   extractAnkerModelFromName,
   lookupAnkerSolixModel,
-} from "../../blu/AnkerSolixConstants";
+} from "../../../../lib/AnkerSolixConstants";
 
 const ANKER_SOLIX_CAPABILITIES: PowerCapabilities = {
   hasSOC: true,

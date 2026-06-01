@@ -296,6 +296,14 @@ export const missionNoteStore = {
     saveAll(KEYS.notes, all);
     return note;
   },
+
+  remove: (noteId: string): boolean => {
+    const all = getAll<ExpeditionNote>(KEYS.notes);
+    const next = all.filter((note) => note.id !== noteId);
+    if (next.length === all.length) return false;
+    saveAll(KEYS.notes, next);
+    return true;
+  },
 };
 
 // ============================================================

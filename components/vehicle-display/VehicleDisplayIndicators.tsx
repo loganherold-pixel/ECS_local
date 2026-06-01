@@ -1,107 +1,119 @@
-/**
- * VehicleDisplayIndicators — Shared Status Indicators
- *
- * Always displayed at the top of the vehicle display interface.
- * Shows:
- *   - GPS signal strength
- *   - Connectivity status
- *   - Offline maps availability
- *   - Battery status
- *
- * Designed for driver-safe glanceability:
- *   - Small, subtle indicators
- *   - Color-coded status
- *   - No text labels (icon-only)
- */
-
 import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type {
-  VehicleIndicators,
   VehicleDisplayMode,
+  VehicleIndicators,
+  VehicleRouteSessionState,
 } from '../../lib/vehicleDisplayTypes';
-
 import {
-  VEHICLE_DISPLAY_MODE_LABELS,
   VEHICLE_DISPLAY_MODE_COLORS,
+  VEHICLE_DISPLAY_MODE_SHORT_LABELS,
 } from '../../lib/vehicleDisplayTypes';
 
 interface Props {
   indicators: VehicleIndicators;
   mode: VehicleDisplayMode;
+  routePhase: VehicleRouteSessionState;
+  companionPlatform?: string | null;
+  statusLabel?: string | null;
 }
 
 function gpsIcon(signal: VehicleIndicators['gpsSignal']): { name: string; color: string } {
   switch (signal) {
-    case 'strong':   return { name: 'navigate', color: '#4CAF50' };
-    case 'moderate': return { name: 'navigate-outline', color: '#E0A030' };
-    case 'weak':     return { name: 'navigate-outline', color: '#EF5350' };
-    case 'none':
-    default:         return { name: 'navigate-outline', color: '#555' };
+    case 'strong':
+      return { name: 'navigate', color: '#4CAF50' };
+    case 'moderate':
+      return { name: 'navigate-outline', color: '#D4A017' };
+    case 'weak':
+      return { name: 'navigate-outline', color: '#EF5350' };
+    default:
+      return { name: 'navigate-outline', color: '#666' };
   }
 }
 
 function connectivityIcon(status: VehicleIndicators['connectivity']): { name: string; color: string } {
   switch (status) {
-    case 'online':  return { name: 'wifi', color: '#4CAF50' };
-    case 'limited': return { name: 'wifi', color: '#E0A030' };
-    case 'offline': return { name: 'wifi', color: '#EF5350' };
-    case 'unknown':
-    default:        return { name: 'wifi-outline', color: '#555' };
+    case 'online':
+      return { name: 'wifi', color: '#4CAF50' };
+    case 'limited':
+      return { name: 'wifi', color: '#D4A017' };
+    case 'offline':
+      return { name: 'cloud-offline-outline', color: '#EF5350' };
+    default:
+      return { name: 'wifi-outline', color: '#666' };
   }
 }
 
-function batteryIcon(percent: number | null, charging: boolean): { name: string; color: string } {
-  if (percent === null) return { name: 'battery-dead-outline', color: '#555' };
-  if (charging) return { name: 'battery-charging', color: '#4CAF50' };
-  if (percent > 60) return { name: 'battery-full', color: '#4CAF50' };
-  if (percent > 30) return { name: 'battery-half', color: '#E0A030' };
-  return { name: 'battery-dead', color: '#EF5350' };
+function phasePresentation(routePhase: VehicleRouteSessionState): { label: string; color: string } {
+  switch (routePhase) {
+    case 'route_active':
+      return { label: 'ACTIVE', color: '#4CAF50' };
+    case 'route_selected':
+      return { label: 'READY', color: '#5B8DEF' };
+    case 'alerting_or_degraded':
+      return { label: 'ALERT', color: '#EF5350' };
+    case 'completed':
+      return { label: 'DONE', color: '#8FA36B' };
+    default:
+      return { label: 'IDLE', color: '#8B949E' };
+  }
 }
 
-export default function VehicleDisplayIndicators({ indicators, mode }: Props) {
+export default function VehicleDisplayIndicators({
+  indicators,
+  mode,
+  routePhase,
+  companionPlatform,
+  statusLabel,
+}: Props) {
+  const modeColor = VEHICLE_DISPLAY_MODE_COLORS[mode];
   const gps = gpsIcon(indicators.gpsSignal);
   const conn = connectivityIcon(indicators.connectivity);
-  const batt = batteryIcon(indicators.batteryPercent, indicators.batteryCharging);
-  const modeColor = VEHICLE_DISPLAY_MODE_COLORS[mode];
+  const phase = phasePresentation(routePhase);
+  const companionLabel =
+    companionPlatform === 'android_auto'
+      ? 'AA'
+      : companionPlatform === 'carplay'
+        ? 'CP'
+        : null;
 
   return (
     <View style={styles.container}>
-      {/* Mode badge */}
-      <View style={[styles.modeBadge, { borderColor: modeColor }]}>
-        <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
-        <Text style={[styles.modeLabel, { color: modeColor }]}>
-          {VEHICLE_DISPLAY_MODE_LABELS[mode]}
-        </Text>
+      <View style={styles.leading}>
+        <View style={[styles.modeBadge, { borderColor: `${modeColor}66` }]}>
+          <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
+          <Text style={[styles.modeLabel, { color: modeColor }]}>
+            {VEHICLE_DISPLAY_MODE_SHORT_LABELS[mode]}
+          </Text>
+        </View>
+
+        <View style={[styles.phaseBadge, { borderColor: `${phase.color}55`, backgroundColor: `${phase.color}14` }]}>
+          <Text style={[styles.phaseLabel, { color: phase.color }]}>{phase.label}</Text>
+        </View>
       </View>
 
-      <View style={styles.spacer} />
+      <View style={styles.trailing}>
+        {statusLabel ? <Text style={styles.statusLabel}>{statusLabel}</Text> : null}
+        {companionLabel ? <Text style={styles.companionLabel}>{companionLabel}</Text> : null}
 
-      {/* Indicator icons */}
-      <View style={styles.indicators}>
-        <View style={styles.indicatorItem}>
-          <Ionicons name={gps.name as any} size={16} color={gps.color} />
-        </View>
+        <Ionicons name={gps.name as any} size={15} color={gps.color} />
+        <Ionicons name={conn.name as any} size={15} color={conn.color} />
 
-        <View style={styles.indicatorItem}>
-          <Ionicons name={conn.name as any} size={16} color={conn.color} />
-        </View>
+        {indicators.offlineMaps ? (
+          <Ionicons name="download-outline" size={15} color="#5AC8FA" />
+        ) : null}
 
-        {indicators.offlineMaps && (
-          <View style={styles.indicatorItem}>
-            <Ionicons name="download-outline" size={16} color="#5AC8FA" />
+        {indicators.batteryPercent != null ? (
+          <View style={styles.batteryGroup}>
+            <Ionicons
+              name={indicators.batteryCharging ? 'battery-charging' : 'battery-half'}
+              size={15}
+              color={indicators.batteryCharging ? '#4CAF50' : '#8B949E'}
+            />
+            <Text style={styles.batteryText}>{Math.round(indicators.batteryPercent)}%</Text>
           </View>
-        )}
-
-        <View style={styles.indicatorItem}>
-          <Ionicons name={batt.name as any} size={16} color={batt.color} />
-          {indicators.batteryPercent !== null && (
-            <Text style={[styles.batteryText, { color: batt.color }]}>
-              {indicators.batteryPercent}%
-            </Text>
-          )}
-        </View>
+        ) : null}
       </View>
     </View>
   );
@@ -111,19 +123,30 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingVertical: 10,
+    backgroundColor: '#0D1117',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  leading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  trailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   modeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderRadius: 6,
+    borderRadius: 999,
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 4,
   },
   modeDot: {
     width: 6,
@@ -134,27 +157,39 @@ const styles = StyleSheet.create({
   modeLabel: {
     fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 3,
+    letterSpacing: 2,
   },
-  spacer: {
-    flex: 1,
+  phaseBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  indicators: {
+  phaseLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  companionLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    color: '#8B949E',
+  },
+  statusLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    color: '#C7D1DB',
+  },
+  batteryGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  indicatorItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
+    gap: 4,
   },
   batteryText: {
     fontSize: 10,
-    fontWeight: '600',
-    fontFamily: 'Courier',
+    fontWeight: '700',
+    color: '#8B949E',
   },
 });
-
-
-

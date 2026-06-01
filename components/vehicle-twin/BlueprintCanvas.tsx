@@ -89,7 +89,7 @@ function CGMarker({
       duration: CG_ANIM_MS,
       useNativeDriver: false,
     }).start();
-  }, [verticalFrac]);
+  }, [verticalFrac, animTop]);
 
   useEffect(() => {
     if (horizontalFrac != null) {
@@ -99,7 +99,7 @@ function CGMarker({
         useNativeDriver: false,
       }).start();
     }
-  }, [horizontalFrac]);
+  }, [horizontalFrac, animLeft]);
 
   const cgAreaTop = containerH * 0.20;
   const cgAreaHeight = containerH * 0.68;
@@ -272,12 +272,12 @@ export function BlueprintCanvas({
   const gridW = hasMeasured ? Math.round(twinW - 16) : FALLBACK_CANVAS_W;
   const gridH = hasMeasured ? Math.round(twinH - 16) : 500;
 
-  const ib = imbalance ?? {
+  const ib = useMemo(() => imbalance ?? {
     leftHeavy: false,
     rightHeavy: false,
     roofOverloaded: false,
     rearHeavy: false,
-  };
+  }, [imbalance]);
 
   /* ── Build zone weight map from twin weights ─────────── */
   const effectiveZoneWeights = useMemo(() => {

@@ -35,6 +35,7 @@ import {
   Text,
   Pressable,
 } from 'react-native';
+import ECSShellTexture from '../ECSShellTexture';
 import { TACTICAL, DENSITY, TYPO, ECS, GOLD_RAIL } from '../../lib/theme';
 import {
   CLOSE_BTN,
@@ -157,6 +158,7 @@ export default function ECSPopupPanel({
         style,
       ]}
     >
+      <ECSShellTexture />
       {/* Drag Handle (bottom variant) */}
       {showHandle && variant === 'bottom' && (
         <View style={styles.handleContainer}>

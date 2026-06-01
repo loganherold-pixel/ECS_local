@@ -10,6 +10,16 @@ export type {
   ProviderAvailability,
   VehicleTelemetryProviderInfo,
   VehicleTelemetryConnectionState,
+  TelemetryConnectionState,
+  VehicleTelemetrySource,
+  ECSTelemetrySourceType,
+  ECSTelemetryFreshness,
+  ECSTelemetryConfidence,
+  ECSTelemetryWarningSeverity,
+  PowerTelemetrySourceType,
+  PowerTelemetrySnapshot,
+  VehicleTelemetryWarning,
+  VehicleTelemetrySnapshot,
   VehicleTelemetryCapabilities,
   VehicleTelemetryDevice,
   NormalizedVehicleTelemetry,
@@ -21,6 +31,7 @@ export type {
 
 export {
   EMPTY_CAPABILITIES,
+  EMPTY_VEHICLE_TELEMETRY_SNAPSHOT,
   EMPTY_TELEMETRY,
   EMPTY_SUMMARY,
   VEHICLE_TELEMETRY_PROVIDERS,
@@ -49,8 +60,6 @@ export type {
 } from './OBD2Adapter';
 
 // ── OBD-II Scanner Hook (Phase 2B) ──────────────────────
-export { useOBD2Scanner } from './useOBD2Scanner';
-export type { OBD2ScannerHookResult } from './useOBD2Scanner';
 
 // ── OBD-II PID Poller (Phase 2C) ────────────────────────
 export { OBD2PIDPoller, OBD2_PIDS, parseELM327Response, parseBatteryVoltageResponse } from './OBD2PIDPoller';

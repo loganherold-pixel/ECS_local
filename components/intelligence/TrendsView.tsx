@@ -113,7 +113,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
       if (ai) setAIInsights(ai);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [showToast]);
 
   // ── Store subscription ─────────────────────────────────────
   useEffect(() => {
@@ -389,7 +389,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
               <View style={s.aiIconWrap}>
                 <Ionicons name="sparkles" size={12} color="#B388FF" />
               </View>
-              <Text style={s.aiBtnText}>AI CROSS-EXPEDITION ANALYSIS</Text>
+              <Text style={s.aiBtnText}>ECS CROSS-EXPEDITION ANALYSIS</Text>
               <Ionicons name="chevron-forward" size={11} color="rgba(179,136,255,0.4)" />
             </>
           )}
@@ -404,7 +404,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
             <View style={s.aiIconWrap}>
               <Ionicons name="sparkles" size={10} color="#B388FF" />
             </View>
-            <Text style={s.aiCardTitle}>AI FLEET ANALYSIS</Text>
+            <Text style={s.aiCardTitle}>ECS FLEET ANALYSIS</Text>
             <View style={s.aiScoreBadge}>
               <Text style={s.aiScoreText}>{aiInsights.fleet_health_score}/10</Text>
             </View>
@@ -443,7 +443,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
                  detailModal === 'risk' ? 'RISK ANALYSIS' :
                  detailModal === 'grades' ? 'EXPEDITION GRADE HISTORY' :
                  detailModal === 'lessons' ? 'LESSONS LEARNED' :
-                 'AI FLEET ANALYSIS'}
+                 'ECS FLEET ANALYSIS'}
               </Text>
               <TouchableOpacity onPress={() => setDetailModal(null)} style={s.modalClose}>
                 <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
@@ -671,13 +671,13 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
                       <View style={s.divider} />
                       <View style={s.aiSectionHeader}>
                         <Ionicons name="sparkles" size={10} color="#B388FF" />
-                        <Text style={[s.sectionLabel, { color: '#B388FF', marginTop: 0 }]}>AI IMPROVEMENT ASSESSMENT</Text>
+                  <Text style={[s.sectionLabel, { color: '#B388FF', marginTop: 0 }]}>ECS IMPROVEMENT ASSESSMENT</Text>
                       </View>
                       {aiInsights.improvement_tracking.map((track, i) => (
                         <View key={i} style={s.aiTrackCard}>
                           <View style={s.aiTrackHeader}>
                             <View style={s.aiBadge}>
-                              <Text style={s.aiBadgeText}>AI</Text>
+                      <Text style={s.aiBadgeText}>ECS</Text>
                             </View>
                             <Text style={s.aiTrackTitle}>{track.title}</Text>
                             <View style={[s.statusPill, { backgroundColor: `${statusColor(track.status)}15` }]}>
@@ -733,7 +733,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
                       {aiInsights.cross_patterns.map((p, i) => (
                         <View key={i} style={s.aiInsightCard}>
                           <View style={s.aiInsightHeader}>
-                            <View style={s.aiBadge}><Text style={s.aiBadgeText}>AI</Text></View>
+              <View style={s.aiBadge}><Text style={s.aiBadgeText}>ECS</Text></View>
                             <Text style={s.aiInsightTitle}>{p.title}</Text>
                             <View style={[s.sevPill, { backgroundColor: `${severityColor(p.severity)}15` }]}>
                               <Text style={[s.sevPillText, { color: severityColor(p.severity) }]}>{p.severity}</Text>
@@ -786,7 +786,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
                       {aiInsights.operational_recommendations.map((r, i) => (
                         <View key={i} style={s.aiInsightCard}>
                           <View style={s.aiInsightHeader}>
-                            <View style={s.aiBadge}><Text style={s.aiBadgeText}>AI</Text></View>
+              <View style={s.aiBadge}><Text style={s.aiBadgeText}>ECS</Text></View>
                             <Text style={s.aiInsightTitle}>{r.title}</Text>
                             <View style={[s.sevPill, { backgroundColor: `${severityColor(r.priority)}15` }]}>
                               <Text style={[s.sevPillText, { color: severityColor(r.priority) }]}>{r.priority}</Text>
@@ -808,7 +808,7 @@ export default function TrendsView({ showToast }: TrendsViewProps) {
                       {aiInsights.resource_insights.map((r, i) => (
                         <View key={i} style={s.aiInsightCard}>
                           <View style={s.aiInsightHeader}>
-                            <View style={s.aiBadge}><Text style={s.aiBadgeText}>AI</Text></View>
+              <View style={s.aiBadge}><Text style={s.aiBadgeText}>ECS</Text></View>
                             <Text style={s.aiInsightTitle}>{r.title}</Text>
                           </View>
                           <Text style={s.aiInsightDetail}>{r.detail}</Text>

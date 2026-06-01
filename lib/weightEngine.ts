@@ -27,8 +27,16 @@
 
 import { vehicleSpecStore, type FuelType } from './vehicleSpecStore';
 import { consumablesStore, FUEL_DENSITY_LB_PER_GAL, WATER_DENSITY_LB_PER_GAL } from './consumablesStore';
-import { loadoutWeightCache } from './loadoutWeightCache';
 import { ecsLog } from './ecsLogger';
+import type { ActiveVehicleContext } from './vehicle/activeVehicleTypes';
+
+function resolveActiveVehicleContext(): ActiveVehicleContext {
+  // Keep the active vehicle context out of the weight engine's module graph.
+  // The CG helpers in this file are used by Fleet selectors during startup, and
+  // a top-level activeVehicleContext import creates a Metro require cycle.
+  const activeVehicleContextModule = require('./activeVehicleContext') as typeof import('./activeVehicleContext');
+  return activeVehicleContextModule.getActiveVehicleContext();
+}
 
 // ── Phase 10: Safe numeric helper ────────────────────────────
 function _sn(value: any, fallback: number = 0): number {
@@ -46,6 +54,8 @@ export interface WeightModule {
   mass: number;
   /** Longitudinal position (0=front, 1=rear) */
   x: number;
+  /** Lateral position (0=driver/left, 1=passenger/right) */
+  y?: number;
   /** Vertical position (0=ground, 1=roof) */
   z: number;
   /** Zone: 'front' | 'mid' | 'rear' */
@@ -59,6 +69,8 @@ export interface WeightModule {
 export interface CGResult {
   /** Longitudinal CG (0=front, 1=rear) */
   xCG: number;
+  /** Lateral CG (0=driver/left, 1=passenger/right) */
+  yCG?: number;
   /** Vertical CG (0=ground, 1=roof) */
   zCG: number;
   /** Total mass in lbs */
@@ -491,6 +503,7 @@ export function buildLoadoutWeightModules(zoneWeights: LoadoutZoneWeight[]): Wei
       label: z.zoneName || 'Unknown Zone',
       mass: _sn(z.weightLbs),
       x: _sn(z.posX, 0.50),
+      y: _sn(z.posY, 0.50),
       z: _sn(z.posZ, 0.30),
       zone: classifyZone(_sn(z.posX, 0.50)),
       intensity: classifyIntensity(_sn(z.weightLbs)),
@@ -526,6 +539,7 @@ export function calculateCG(
     for (const m of allModules) {
       m.mass = _sn(m.mass);
       m.x = _sn(m.x, 0.5);
+      m.y = _sn(m.y ?? 0.5, 0.5);
       m.z = _sn(m.z, 0.25);
     }
 
@@ -534,6 +548,7 @@ export function calculateCG(
     if (totalMass === 0) {
       return {
         xCG: 0.45,
+        yCG: 0.5,
         zCG: 0.25,
         totalMass: 0,
         frontAxlePercent: 50,
@@ -544,6 +559,7 @@ export function calculateCG(
     }
 
     const xCG = _sn(allModules.reduce((sum, m) => sum + m.mass * m.x, 0) / totalMass, 0.45);
+    const yCG = _sn(allModules.reduce((sum, m) => sum + m.mass * (m.y ?? 0.5), 0) / totalMass, 0.5);
     const zCG = _sn(allModules.reduce((sum, m) => sum + m.mass * m.z, 0) / totalMass, 0.25);
 
     // Axle load calculation
@@ -560,6 +576,7 @@ export function calculateCG(
 
     return {
       xCG,
+      yCG,
       zCG,
       totalMass,
       frontAxlePercent,
@@ -571,6 +588,7 @@ export function calculateCG(
     ecsLog.error('WEIGHT', 'calculateCG crashed — returning neutral defaults', err);
     return {
       xCG: 0.45,
+      yCG: 0.5,
       zCG: 0.25,
       totalMass: 0,
       frontAxlePercent: 50,
@@ -804,10 +822,11 @@ export function getBuildSummaryText(selections: Record<string, string>): string 
 // ═══════════════════════════════════════════════════════════════
 // SINGLE SOURCE OF TRUTH — Build Weight Breakdown
 //
-// All screens/widgets MUST use this function for build_weight_lb
-// and payload_margin_lb to prevent desync.
+// Legacy widgets still call this helper. When the active Fleet fabric payload is
+// available, this delegates to the canonical Fleet operating-weight result so
+// older dashboard surfaces do not recompute fuel, water, loadout, or payload.
 //
-// Reads from: vehicleSpecStore, consumablesStore, loadoutWeightCache
+// Reads from: canonical Fleet fabric, vehicleSpecStore, consumablesStore
 // Accepts optional overrides for form-preview scenarios.
 // ═══════════════════════════════════════════════════════════════
 
@@ -872,7 +891,7 @@ export interface BuildWeightOverrides {
  * Reads vehicle specs, consumables, and item weights from their stores.
  * Returns a complete breakdown that all UI components should consume.
  *
- * @param vehicleId - Vehicle to compute for (uses first vehicle if omitted)
+ * @param vehicleId - Vehicle to compute for (uses the Fleet-selected active vehicle if omitted)
  * @param overrides - Optional overrides for form-preview (e.g., VehicleSpecsSection)
  */
 export function computeFullBuildWeightBreakdown(
@@ -882,16 +901,77 @@ export function computeFullBuildWeightBreakdown(
   // Phase 10: Wrap entire function in try-catch for crash protection
   try {
 
-  // ── Resolve vehicle spec ──
-  let resolvedVehicleId = vehicleId || '';
-  let spec = vehicleId ? vehicleSpecStore.get(vehicleId) : null;
-  if (!spec) {
-    const first = vehicleSpecStore.getFirst();
-    if (first) {
-      spec = first.spec;
-      resolvedVehicleId = first.vehicleId;
+    // ── Resolve vehicle spec ──
+    const activeVehicleContext = resolveActiveVehicleContext();
+    let resolvedVehicleId = vehicleId || activeVehicleContext.activeVehicleId || '';
+    let spec = vehicleId
+      ? vehicleSpecStore.get(vehicleId)
+      : activeVehicleContext.spec;
+    if (!spec) {
+      spec = resolvedVehicleId ? vehicleSpecStore.get(resolvedVehicleId) : null;
     }
-  }
+
+    const canonicalWeight =
+      !overrides &&
+      activeVehicleContext.activeVehicleId === resolvedVehicleId
+        ? activeVehicleContext.fleetFabricPayload?.weight ?? null
+        : null;
+    if (canonicalWeight) {
+      const resourceProfile = activeVehicleContext.resourceProfile;
+      const base_weight_lb = canonicalWeight.baseNetWeight.lbs;
+      const gvwr_lb = canonicalWeight.gvwr?.lbs ?? 0;
+      const hardware_additions_lb = canonicalWeight.installedAccessoryWeight.lbs;
+      const fuel_tank_capacity_gal = resourceProfile.fuelTankCapacityGal ?? 0;
+      const fuel_type: FuelType = resourceProfile.fuelType === 'gas' ? 'gas' : 'diesel';
+      const fuel_gal_current = resourceProfile.currentFuelGallons;
+      const fuel_weight_lb = resourceProfile.currentFuelWeightLb;
+      const water_gal_current = resourceProfile.currentWaterGallons;
+      const water_weight_lb = resourceProfile.currentWaterWeightLb;
+      const consumables_weight_lb = canonicalWeight.consumablesWeight.lbs;
+      const items_weight_lb = canonicalWeight.activeLoadoutWeight.lbs;
+      const build_weight_lb = canonicalWeight.operatingWeight.lbs;
+      const payload_margin_lb = canonicalWeight.payloadRemaining?.lbs ?? 0;
+      const payload_capacity_lb = gvwr_lb > 0 && base_weight_lb > 0 ? gvwr_lb - base_weight_lb : 0;
+      const has_specs = base_weight_lb > 0 && gvwr_lb > 0;
+      const fuel_density_lb_per_gal = FUEL_DENSITY_LB_PER_GAL[fuel_type] ?? 7.1;
+      const margin_label: BuildWeightBreakdown['margin_label'] = has_specs
+        ? (getPayloadMarginLabel(payload_margin_lb, gvwr_lb) as BuildWeightBreakdown['margin_label'])
+        : null;
+      const status_tag: BuildWeightBreakdown['status_tag'] =
+        margin_label === 'OVER LIMIT' || margin_label === 'NEAR LIMIT' ? margin_label : null;
+      const status_color =
+        status_tag === 'OVER LIMIT'
+          ? '#EF5350'
+          : status_tag === 'NEAR LIMIT'
+            ? '#FFB74D'
+            : '#8A8A85';
+
+      return {
+        base_weight_lb,
+        gvwr_lb,
+        hardware_additions_lb,
+        fuel_percent_current: resourceProfile.currentFuelPercent ?? 100,
+        fuel_gal_current,
+        fuel_weight_lb,
+        fuel_tank_capacity_gal,
+        fuel_type,
+        has_fuel_tank_capacity: fuel_tank_capacity_gal > 0,
+        water_gal_current,
+        water_weight_lb,
+        consumables_weight_lb,
+        fuel_density_lb_per_gal,
+        fuel_weight_full_tank_lb: fuel_tank_capacity_gal * fuel_density_lb_per_gal,
+        items_weight_lb,
+        build_weight_lb,
+        payload_margin_lb,
+        payload_capacity_lb,
+        has_specs,
+        status_tag,
+        status_color,
+        margin_color: has_specs ? getPayloadMarginColor(payload_margin_lb, gvwr_lb) : '#8A8A85',
+        margin_label,
+      };
+    }
 
   const base_weight_lb = overrides?.base_weight_lb ?? spec?.base_weight_lb ?? 0;
   const gvwr_lb = overrides?.gvwr_lb ?? spec?.gvwr_lb ?? 0;
@@ -913,11 +993,11 @@ export function computeFullBuildWeightBreakdown(
   const water_weight_lb = water_gal_current * WATER_DENSITY_LB_PER_GAL;
   const consumables_weight_lb = fuel_weight_lb + water_weight_lb;
 
-  // ── Items weight ──
-  // Use override if provided, otherwise read from loadout weight cache
-  const items_weight_lb = overrides?.items_weight_lb != null
-    ? overrides.items_weight_lb
-    : (loadoutWeightCache.getFirst()?.itemsWeightLb ?? 0);
+    // ── Items weight ──
+    // Use override if provided, otherwise read from loadout weight cache
+    const items_weight_lb = overrides?.items_weight_lb != null
+      ? overrides.items_weight_lb
+      : 0;
 
   // ── Build weight ──
   const build_weight_lb = base_weight_lb > 0

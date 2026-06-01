@@ -80,7 +80,7 @@ export default function NewExpeditionSheet({ visible, onClose }: NewExpeditionSh
         }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, fadeAnim, slideAnim]);
 
   // ── Close with animation ───────────────────────────────────
   const handleClose = useCallback(() => {

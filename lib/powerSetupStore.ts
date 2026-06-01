@@ -9,11 +9,12 @@
  *   - Connection state & last seen timestamp
  *   - Last known telemetry snapshot
  *
- * Storage: localStorage (web) / in-memory (native).
+ * Storage: localStorage (web) / durable native file cache.
  * Thread-safe via write queue serialisation.
  */
 
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -23,7 +24,15 @@ export type PowerProviderId =
   | 'AnkerSolix'
   | 'Jackery'
   | 'GoalZero'
-  | 'Renogy';
+  | 'Renogy'
+  | 'Redarc'
+  | 'DakotaLithium';
+
+export type ProviderSupportLevel =
+  | 'verified'
+  | 'implemented_unverified'
+  | 'partial'
+  | 'ui_only';
 
 export type ConnectionMethod = 'ble' | 'cloud' | 'manual';
 
@@ -50,49 +59,103 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
 
 export const PROVIDER_DISPLAY: Record<
   PowerProviderId,
-  { label: string; color: string; icon: string; subtitle: string }
+  {
+    label: string;
+    color: string;
+    icon: string;
+    subtitle: string;
+    supportLevel: ProviderSupportLevel;
+    supportLabel: string;
+    supportNote: string;
+    connectionMethod: string;
+  }
 > = {
   EcoFlow: {
     label: 'EcoFlow',
     color: '#00A6FF',
     icon: 'flash',
     subtitle: 'Portable Power Station',
+    supportLevel: 'verified',
+    supportLabel: 'Verified',
+    supportNote: 'Cloud metadata and local scanner support are tracked separately.',
+    connectionMethod: 'Cloud API / local scanner',
   },
   Bluetti: {
     label: 'Bluetti',
     color: '#2196F3',
     icon: 'cube',
     subtitle: 'Battery System',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   AnkerSolix: {
     label: 'Anker SOLIX',
     color: '#00C4B4',
     icon: 'battery-charging',
     subtitle: 'Portable Power Station',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   Jackery: {
     label: 'Jackery',
     color: '#FF8C00',
     icon: 'sunny',
     subtitle: 'Solar Generator',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   GoalZero: {
     label: 'Goal Zero',
     color: '#4CAF50',
     icon: 'compass',
     subtitle: 'Power Station',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
   Renogy: {
     label: 'Renogy',
     color: '#9C27B0',
     icon: 'hardware-chip',
     subtitle: 'Battery System',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
+  },
+  Redarc: {
+    label: 'REDARC',
+    color: '#C62828',
+    icon: 'car',
+    subtitle: 'Direct Bluetooth Telemetry',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
+  },
+  DakotaLithium: {
+    label: 'Dakota Lithium',
+    color: '#6FBF4B',
+    icon: 'shield',
+    subtitle: 'Bluetooth Battery Monitor',
+    supportLevel: 'ui_only',
+    supportLabel: 'Provider support pending',
+    supportNote: 'Detected/manual profile only until ECS validates live adapter telemetry.',
+    connectionMethod: 'Detected / manual',
   },
 };
 
 export interface ManagedPowerDevice {
   id: string;
   provider: PowerProviderId;
+  providerDeviceId?: string | null;
   connectionMethod: ConnectionMethod;
   /** Original device name from provider */
   originalName: string;
@@ -127,7 +190,7 @@ export interface ManagedPowerDevice {
 // ── Storage ─────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'ecs.power.managedDevices.v1';
-const memoryStore: Record<string, string> = {};
+const powerSetupPersistenceCache = createPersistedKeyValueCache('ecs_power_setup_store');
 
 function lsGet(key: string): string | null {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
@@ -135,7 +198,7 @@ function lsGet(key: string): string | null {
       return localStorage.getItem(key);
     } catch {}
   }
-  return memoryStore[key] ?? null;
+  return powerSetupPersistenceCache.get(key);
 }
 
 function lsSet(key: string, value: string): void {
@@ -144,7 +207,15 @@ function lsSet(key: string, value: string): void {
       localStorage.setItem(key, value);
     } catch {}
   }
-  memoryStore[key] = value;
+  powerSetupPersistenceCache.set(key, value);
+}
+
+async function ensurePowerSetupStorageHydrated(): Promise<void> {
+  await powerSetupPersistenceCache.waitForHydration();
+}
+
+async function flushPowerSetupStorage(): Promise<void> {
+  await powerSetupPersistenceCache.flush();
 }
 
 function generateId(): string {
@@ -175,6 +246,18 @@ function notifyListeners(devices: ManagedPowerDevice[]) {
 class PowerSetupStoreImpl {
   private cache: ManagedPowerDevice[] | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
+  private hydrationPromise: Promise<void>;
+
+  constructor() {
+    this.hydrationPromise = ensurePowerSetupStorageHydrated()
+      .then(() => {
+        this.cache = null;
+        notifyListeners(this.getAll());
+      })
+      .catch((error) => {
+        console.warn('[PowerSetupStore] Native hydration failed:', error);
+      });
+  }
 
   private load(): ManagedPowerDevice[] {
     if (this.cache !== null) return this.cache;
@@ -192,14 +275,19 @@ class PowerSetupStoreImpl {
     return this.cache;
   }
 
-  private persist(): void {
+  private async persist(): Promise<void> {
     if (this.cache === null) return;
     lsSet(STORAGE_KEY, JSON.stringify(this.cache));
+    await flushPowerSetupStorage();
   }
 
-  private enqueue(fn: () => void): Promise<void> {
-    this.writeQueue = this.writeQueue.then(() => fn());
+  private enqueue(fn: () => Promise<void> | void): Promise<void> {
+    this.writeQueue = this.writeQueue.then(() => Promise.resolve(fn()));
     return this.writeQueue;
+  }
+
+  async waitForHydration(): Promise<void> {
+    await this.hydrationPromise;
   }
 
   /** Subscribe to device list changes */
@@ -236,6 +324,16 @@ class PowerSetupStoreImpl {
     return this.getAll().filter((d) => d.provider === provider);
   }
 
+  /** Get a device by stable provider-owned device identifier */
+  getByProviderDevice(
+    provider: PowerProviderId,
+    providerDeviceId: string,
+  ): ManagedPowerDevice | null {
+    return this.getAll().find((d) => (
+      d.provider === provider && d.providerDeviceId === providerDeviceId
+    )) ?? null;
+  }
+
   /** Add a new managed device */
   async add(
     device: Omit<
@@ -243,6 +341,7 @@ class PowerSetupStoreImpl {
       'id' | 'connectedAt' | 'lastSeenAt' | 'removed'
     >
   ): Promise<ManagedPowerDevice> {
+    await this.waitForHydration();
     const now = new Date().toISOString();
     const newDevice: ManagedPowerDevice = {
       ...device,
@@ -252,7 +351,7 @@ class PowerSetupStoreImpl {
       removed: false,
     };
 
-    await this.enqueue(() => {
+    await this.enqueue(async () => {
       const devices = this.load();
       // If this is primary, unset other primaries
       if (newDevice.isPrimary) {
@@ -266,10 +365,10 @@ class PowerSetupStoreImpl {
         newDevice.isPrimary = true;
       }
       devices.push(newDevice);
-      this.persist();
-      notifyListeners(this.getAll());
+      await this.persist();
     });
 
+    notifyListeners(this.getAll());
     return newDevice;
   }
 
@@ -280,9 +379,10 @@ class PowerSetupStoreImpl {
       Omit<ManagedPowerDevice, 'id' | 'connectedAt' | 'removed'>
     >
   ): Promise<ManagedPowerDevice | null> {
+    await this.waitForHydration();
     let updated: ManagedPowerDevice | null = null;
 
-    await this.enqueue(() => {
+    await this.enqueue(async () => {
       const devices = this.load();
       const idx = devices.findIndex((d) => d.id === deviceId);
       if (idx === -1) return;
@@ -300,18 +400,19 @@ class PowerSetupStoreImpl {
         lastSeenAt: new Date().toISOString(),
       };
       updated = devices[idx];
-      this.persist();
-      notifyListeners(this.getAll());
+      await this.persist();
     });
 
+    notifyListeners(this.getAll());
     return updated;
   }
 
   /** Soft-remove a device */
   async remove(deviceId: string): Promise<boolean> {
+    await this.waitForHydration();
     let removed = false;
 
-    await this.enqueue(() => {
+    await this.enqueue(async () => {
       const devices = this.load();
       const idx = devices.findIndex((d) => d.id === deviceId);
       if (idx === -1) return;
@@ -329,18 +430,19 @@ class PowerSetupStoreImpl {
       }
 
       removed = true;
-      this.persist();
-      notifyListeners(this.getAll());
+      await this.persist();
     });
 
+    notifyListeners(this.getAll());
     return removed;
   }
 
   /** Hard-delete a device */
   async hardDelete(deviceId: string): Promise<boolean> {
+    await this.waitForHydration();
     let deleted = false;
 
-    await this.enqueue(() => {
+    await this.enqueue(async () => {
       const devices = this.load();
       const idx = devices.findIndex((d) => d.id === deviceId);
       if (idx === -1) return;
@@ -357,10 +459,10 @@ class PowerSetupStoreImpl {
 
       deleted = true;
       this.cache = devices;
-      this.persist();
-      notifyListeners(this.getAll());
+      await this.persist();
     });
 
+    notifyListeners(this.getAll());
     return deleted;
   }
 

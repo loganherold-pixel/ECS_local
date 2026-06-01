@@ -18,7 +18,7 @@ import {
   isJackeryDeviceName,
   lookupJackeryModel,
   extractJackeryModelFromName,
-} from "../../blu/JackeryConstants";
+} from "../../../../lib/JackeryConstants";
 
 const JACKERY_CAPABILITIES: PowerCapabilities = {
   hasSOC: true,

@@ -36,6 +36,7 @@ import { Platform } from 'react-native';
 import { loadoutWeightCache, computeItemsWeightLb } from './loadoutWeightCache';
 import { consumablesStore, WATER_DENSITY_LB_PER_GAL } from './consumablesStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
+import { getActiveVehicleContext } from './activeVehicleContext';
 import {
   computeFullBuildWeightBreakdown,
   type BuildWeightBreakdown,
@@ -453,9 +454,11 @@ function recalculate(
     );
 
     // ── 2. Compute zone weights ──
+    const activeVehicleContext = getActiveVehicleContext();
+    const resolvedVehicleId = vehicleId || activeVehicleContext.activeVehicleId || '';
     const specEntry = vehicleId
       ? vehicleSpecStore.get(vehicleId)
-      : vehicleSpecStore.getFirst()?.spec ?? null;
+      : activeVehicleContext.spec ?? null;
 
     const baseWeight = specEntry?.base_weight_lb ?? 0;
     const gvwr = specEntry?.gvwr_lb ?? 0;
@@ -497,7 +500,6 @@ function recalculate(
     const distribution = computeDistribution(bridgeZoneWeights);
 
     // ── 7. Get full build weight breakdown (single source of truth) ──
-    const resolvedVehicleId = vehicleId || vehicleSpecStore.getFirst()?.vehicleId || '';
     const buildBreakdown = computeFullBuildWeightBreakdown(resolvedVehicleId, {
       items_weight_lb: totalItemsWeightLbs,
     });

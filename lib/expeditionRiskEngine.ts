@@ -63,6 +63,20 @@
 import {
   createDefaultRiskInputSnapshot,
   OPERATIONAL_CONNECTIVITY_RISK_WEIGHTS,
+  type VehicleWeightClass,
+  type OperationalConnectivityState,
+  type VehicleCapabilityInput,
+  type VehicleCapabilityTier,
+  type WeightDistributionStability,
+  type VehicleHealthInput,
+  type ExpeditionResourcesInput,
+  type RouteDifficultyInput,
+  type RemotenessInput,
+  type ConnectivityStatusInput,
+  type RiskInputSnapshot,
+  type PrimaryRiskFactor,
+  type OperationalStatus,
+  type RiskEvaluation,
 } from './expeditionRiskTypes';
 import {
   validateRiskScore,
@@ -70,6 +84,7 @@ import {
   clampScore,
   stabilityLog,
 } from './ecsStabilityGuards';
+import { expeditionRiskStore } from './expeditionRiskStore';
 
 
 
@@ -504,7 +519,12 @@ function _gatherExpeditionResources(): ExpeditionResourcesInput {
 
     const activeExp = missionExpeditionStore.getActive();
     const specEntry = vehicleSpecStore.getFirst();
-    const vehicleId = specEntry?.vehicleId;
+    const { vehicleSetupStore } = require('./vehicleSetupStore');
+    const { vehicleStore } = require('./vehicleStore');
+    const { getVehicleResourceProfile } = require('./vehicleResourceProfile');
+    const vehicleId = specEntry?.vehicleId || vehicleSetupStore.getActiveVehicleId();
+    const vehicle = vehicleId ? vehicleStore.getById(vehicleId) : null;
+    const resourceProfile = getVehicleResourceProfile(vehicle);
 
     // ── Phase 4D: BLU telemetry ──
     let hasBlu = false;
@@ -539,10 +559,11 @@ function _gatherExpeditionResources(): ExpeditionResourcesInput {
     // ── Phase 4D: Vehicle spec for capacities ──
     try {
       if (specEntry?.spec) {
-        fuelCapGal = specEntry.spec.fuel_capacity_gal ?? null;
-        waterCapGal = specEntry.spec.water_capacity_gal ?? null;
+        fuelCapGal = specEntry.spec.fuel_tank_capacity_gal ?? null;
       }
     } catch {}
+    waterCapGal = resourceProfile.waterCapacityGal ?? waterCapGal;
+    const powerCapWh = resourceProfile.batteryUsableWh;
 
     // ── Base resource data ──
     let fuelPct: number | null = consumables?.fuel_percent_current ?? null;
@@ -598,7 +619,7 @@ function _gatherExpeditionResources(): ExpeditionResourcesInput {
       loadout_readiness_pct: loadoutReadinessPct,
       critical_items_missing: criticalsMissing,
       fuel_capacity_gal: fuelCapGal, water_capacity_gal: waterCapGal,
-      power_capacity_wh: null,
+      power_capacity_wh: powerCapWh,
       has_blu_telemetry: hasBlu,
       blu_battery_percent: bluBattery, blu_input_watts: bluIn,
       blu_output_watts: bluOut, blu_runtime_minutes: bluRuntime,

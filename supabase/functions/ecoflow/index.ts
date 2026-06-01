@@ -1,3 +1,4 @@
+/* eslint-disable import/no-unresolved */
 // supabase/functions/ecoflow/index.ts
 
 import "@supabase/functions-js/edge-runtime.d.ts";
@@ -194,6 +195,16 @@ async function handleTelemetry(
       json.message || "EcoFlow telemetry error"
     );
   }
+
+  console.log(
+    "[ecoflow telemetry] top-level keys:",
+    Object.keys(json?.data ?? {})
+  );
+
+  console.log(
+    "[ecoflow telemetry] sample:",
+    JSON.stringify(json?.data ?? {}, null, 2).slice(0, 4000)
+  );
 
   return successResponse({
     deviceId,

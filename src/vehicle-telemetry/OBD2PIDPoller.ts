@@ -40,9 +40,18 @@
 
 import { Platform, AppState } from 'react-native';
 import type { AppStateStatus } from 'react-native';
-import type { NormalizedVehicleTelemetry } from './VehicleTelemetryTypes';
+import type { NormalizedVehicleTelemetry, OBD2TelemetryValue } from './VehicleTelemetryTypes';
+import { ecsLog } from '../../lib/ecsLogger';
 
 const TAG = '[OBD2-PIDPoller]';
+
+function logTelemetryDebug(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('TELEMETRY', `${TAG} ${message}`, details);
+}
+
+function logTelemetryWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn('TELEMETRY', `${TAG} ${message}`, details);
+}
 
 // ═══════════════════════════════════════════════════════════
 // OBD-II PID DEFINITIONS
@@ -209,6 +218,14 @@ const ELM327_INIT_COMMANDS = [
   'ATSP0',  // Auto-detect protocol
 ];
 
+const ELM327_VERIFY_COMMANDS = [
+  'ATI',
+  'AT@1',
+];
+
+const NO_PID_DATA_MESSAGE =
+  'Adapter connected, but no live OBD-II PID responses were received. Confirm the ignition/engine is on and the adapter supports BLE ELM327 telemetry.';
+
 // ═══════════════════════════════════════════════════════════
 // RESPONSE PARSER
 // ═══════════════════════════════════════════════════════════
@@ -365,6 +382,7 @@ export class OBD2PIDPoller {
   private inCycle = false;
   private lastDataAt = 0;
   private batteryVoltage: number | null = null;
+  private currentObd2Values: OBD2TelemetryValue[] = [];
 
   private callbacks: PollerCallbacks;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -428,24 +446,36 @@ export class OBD2PIDPoller {
     if (this.state === 'polling') return true;
 
     this.state = 'initializing';
-    console.log(TAG, 'Initializing ELM327 adapter...');
+    logTelemetryDebug('Initializing ELM327 adapter...');
 
     try {
+      let successfulInitResponses = 0;
+
       // Send initialization commands
       for (const cmd of ELM327_INIT_COMMANDS) {
         try {
           const response = await this.callbacks.sendCommand(cmd + '\r');
-          console.log(TAG, `Init ${cmd}: ${response.substring(0, 40)}`);
+          logTelemetryDebug(`Init ${cmd}`, { responsePreview: response.substring(0, 40) });
+          if (this.isPositiveAdapterResponse(response)) {
+            successfulInitResponses += 1;
+          }
           // Small delay between init commands
           await this.delay(150);
         } catch (err: any) {
-          console.warn(TAG, `Init command ${cmd} failed:`, err?.message);
+          logTelemetryDebug(`Init command ${cmd} failed`, {
+            error: err?.message ?? 'unknown',
+          });
           // Continue — some commands may fail on certain adapters
         }
       }
 
+      const adapterVerified = await this.verifyAdapterReady(successfulInitResponses);
+      if (!adapterVerified) {
+        throw new Error('Bluetooth transport connected, but the ELM327 adapter did not complete initialization.');
+      }
+
       this.initialized = true;
-      console.log(TAG, 'ELM327 initialized');
+      logTelemetryDebug('ELM327 initialized');
 
       // Read battery voltage first
       await this.readBatteryVoltage();
@@ -453,16 +483,27 @@ export class OBD2PIDPoller {
       // Discover supported PIDs
       await this.discoverPIDs();
 
+      if (this.supportedPids.size === 0 && this.batteryVoltage == null) {
+        throw new Error(NO_PID_DATA_MESSAGE);
+      }
+
       // Start polling loop
       this.state = 'polling';
-      console.log(TAG, `Polling started (${this.intervalMs}ms interval, ${this.supportedPids.size} PIDs)`);
+      logTelemetryDebug('Polling started', {
+        intervalMs: this.intervalMs,
+        supportedPidCount: this.supportedPids.size,
+      });
       this.setupAppStateListener();
+      await this.executePollCycle();
+      if (this.lastDataAt <= 0) {
+        throw new Error(NO_PID_DATA_MESSAGE);
+      }
       this.schedulePollCycle();
 
       return true;
     } catch (err: any) {
       const msg = err?.message ?? 'Initialization failed';
-      console.warn(TAG, 'Init failed:', msg);
+      logTelemetryWarn('Init failed', { error: msg });
       this.lastError = msg;
       this.state = 'error';
       this.callbacks.onError(msg);
@@ -481,7 +522,7 @@ export class OBD2PIDPoller {
     this.state = 'stopped';
     this.inCycle = false;
     this.removeAppStateListener();
-    console.log(TAG, `Polling stopped after ${this.cycleCount} cycles`);
+    logTelemetryDebug('Polling stopped', { cycleCount: this.cycleCount });
   }
 
   /**
@@ -494,7 +535,7 @@ export class OBD2PIDPoller {
       this.pollTimer = null;
     }
     this.state = 'paused';
-    console.log(TAG, 'Polling paused');
+    logTelemetryDebug('Polling paused');
   }
 
   /**
@@ -503,7 +544,7 @@ export class OBD2PIDPoller {
   resume(): void {
     if (this.state !== 'paused') return;
     this.state = 'polling';
-    console.log(TAG, 'Polling resumed');
+    logTelemetryDebug('Polling resumed');
     this.schedulePollCycle();
   }
 
@@ -516,6 +557,7 @@ export class OBD2PIDPoller {
     this.supportedPids.clear();
     this.unsupportedPids.clear();
     this.currentReading = {};
+    this.currentObd2Values = [];
   }
 
   // ═══════════════════════════════════════════════════════
@@ -527,7 +569,7 @@ export class OBD2PIDPoller {
    * Sends each essential PID once and checks for valid response.
    */
   private async discoverPIDs(): Promise<void> {
-    console.log(TAG, 'Discovering supported PIDs...');
+    logTelemetryDebug('Discovering supported PIDs...');
 
     for (const pidDef of OBD2_PIDS) {
       if (this.isDestroyed) return;
@@ -538,20 +580,23 @@ export class OBD2PIDPoller {
 
         if (bytes && bytes.length >= pidDef.bytes) {
           this.supportedPids.add(pidDef.pid);
-          console.log(TAG, `  PID ${pidDef.pid} (${pidDef.name}): SUPPORTED`);
+          logTelemetryDebug(`PID ${pidDef.pid} supported`, { pidName: pidDef.name });
         } else {
           this.unsupportedPids.add(pidDef.pid);
-          console.log(TAG, `  PID ${pidDef.pid} (${pidDef.name}): unsupported`);
+          logTelemetryDebug(`PID ${pidDef.pid} unsupported`, { pidName: pidDef.name });
         }
       } catch {
         this.unsupportedPids.add(pidDef.pid);
-        console.log(TAG, `  PID ${pidDef.pid} (${pidDef.name}): error/timeout`);
+        logTelemetryDebug(`PID ${pidDef.pid} errored during discovery`, { pidName: pidDef.name });
       }
 
       await this.delay(100);
     }
 
-    console.log(TAG, `Discovery complete: ${this.supportedPids.size} supported, ${this.unsupportedPids.size} unsupported`);
+    logTelemetryDebug('PID discovery complete', {
+      supportedPidCount: this.supportedPids.size,
+      unsupportedPidCount: this.unsupportedPids.size,
+    });
 
     // Notify callbacks about discovered capabilities
     this.callbacks.onCapabilitiesDiscovered(
@@ -583,7 +628,9 @@ export class OBD2PIDPoller {
 
     try {
       this.currentReading = {};
+      this.currentObd2Values = [];
       let anyData = false;
+      const timestamp = Date.now();
 
       // Poll each supported PID
       for (const pidDef of OBD2_PIDS) {
@@ -597,11 +644,22 @@ export class OBD2PIDPoller {
           if (bytes && bytes.length >= pidDef.bytes) {
             const value = pidDef.parse(bytes);
             (this.currentReading as any)[pidDef.telemetryField] = value;
+            this.currentObd2Values.push({
+              pid: pidDef.pid,
+              label: pidDef.name,
+              value,
+              unit: pidDef.unit,
+              timestamp,
+              sourceDeviceId: this.deviceId,
+              quality: 'live',
+            });
             anyData = true;
           }
         } catch (err: any) {
           // Individual PID failure — skip and continue
-          console.warn(TAG, `PID ${pidDef.pid} poll failed:`, err?.message);
+          logTelemetryDebug(`PID ${pidDef.pid} poll failed`, {
+            error: err?.message ?? 'unknown',
+          });
         }
 
         // Small delay between PID requests to avoid overwhelming the adapter
@@ -616,6 +674,15 @@ export class OBD2PIDPoller {
       // Include battery voltage in reading
       if (this.batteryVoltage != null) {
         this.currentReading.battery_voltage = this.batteryVoltage;
+        this.currentObd2Values.push({
+          pid: 'ATRV',
+          label: 'Adapter Voltage',
+          value: this.batteryVoltage,
+          unit: 'V',
+          timestamp,
+          sourceDeviceId: this.deviceId,
+          quality: 'live',
+        });
       }
 
       // Emit normalized telemetry if we got any data
@@ -624,6 +691,8 @@ export class OBD2PIDPoller {
           timestamp: Date.now(),
           provider: 'obd2',
           device_id: this.deviceId,
+          source: 'bluetooth_obd_live',
+          obd2_values: this.currentObd2Values,
           ...this.currentReading,
         };
 
@@ -635,10 +704,15 @@ export class OBD2PIDPoller {
 
       // Periodic logging (every 20 cycles)
       if (this.cycleCount % 20 === 0) {
-        console.log(TAG, `Poll cycle ${this.cycleCount} complete (${this.supportedPids.size} PIDs)`);
+        logTelemetryDebug('Poll cycle complete', {
+          cycleCount: this.cycleCount,
+          supportedPidCount: this.supportedPids.size,
+        });
       }
     } catch (err: any) {
-      console.warn(TAG, `Poll cycle ${this.cycleCount} error:`, err?.message);
+      logTelemetryWarn(`Poll cycle ${this.cycleCount} error`, {
+        error: err?.message ?? 'unknown',
+      });
       this.lastError = err?.message ?? 'Poll cycle failed';
     } finally {
       this.inCycle = false;
@@ -665,6 +739,47 @@ export class OBD2PIDPoller {
     }
   }
 
+  private async verifyAdapterReady(successfulInitResponses: number): Promise<boolean> {
+    if (successfulInitResponses >= 2) return true;
+
+    for (const command of ELM327_VERIFY_COMMANDS) {
+      try {
+        const response = await this.callbacks.sendCommand(command + '\r');
+        if (this.isPositiveAdapterResponse(response)) {
+          return true;
+        }
+      } catch (err: any) {
+        logTelemetryDebug(`Verify command ${command} failed`, {
+          error: err?.message ?? 'unknown',
+        });
+      }
+      await this.delay(100);
+    }
+
+    return false;
+  }
+
+  private isPositiveAdapterResponse(raw: string | null | undefined): boolean {
+    const cleaned = String(raw ?? '')
+      .replace(/[\r\n>]/g, '')
+      .trim()
+      .toUpperCase();
+
+    if (!cleaned) return false;
+    if (
+      cleaned.includes('NO DATA') ||
+      cleaned.includes('ERROR') ||
+      cleaned.includes('UNABLE') ||
+      cleaned.includes('BUS ERROR') ||
+      cleaned.includes('CAN ERROR') ||
+      cleaned === '?'
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
   // ═══════════════════════════════════════════════════════
   // APP STATE MANAGEMENT
   // ═══════════════════════════════════════════════════════
@@ -678,12 +793,12 @@ export class OBD2PIDPoller {
 
           if (nextState === 'background' || nextState === 'inactive') {
             if (this.state === 'polling') {
-              console.log(TAG, 'App backgrounded — pausing polling');
+              logTelemetryDebug('App backgrounded — pausing polling');
               this.pause();
             }
           } else if (nextState === 'active') {
             if (this.state === 'paused') {
-              console.log(TAG, 'App foregrounded — resuming polling');
+              logTelemetryDebug('App foregrounded — resuming polling');
               this.resume();
             }
           }

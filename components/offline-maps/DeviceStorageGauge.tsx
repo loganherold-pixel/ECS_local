@@ -202,8 +202,8 @@ export default function DeviceStorageGauge({ stats, refreshKey }: Props) {
           />
           <Text style={[styles.warningText, freeCritical && { color: '#EF5350' }]}>
             {freeCritical
-              ? 'Critical: Less than 5% storage remaining. Delete cached regions to free space.'
-              : 'Low storage: Less than 10% remaining. Consider cleaning up old cached regions.'}
+              ? 'Storage is nearly full. Remove older saved regions before downloading more map coverage.'
+              : 'Storage is getting tight. Consider cleaning up older saved regions soon.'}
           </Text>
         </View>
       )}

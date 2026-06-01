@@ -69,12 +69,12 @@ export default function TrailHistory({
     // refreshKey dependency forces reload
     void refreshKey;
     return trailHistoryStore.getAll();
-  }, [refreshKey, expanded]); // reload when expanded changes too
+  }, [refreshKey]); // refreshKey already drives reload
 
   const storageInfo = useMemo<StorageInfo>(() => {
     void refreshKey;
     return trailHistoryStore.getStorageInfo();
-  }, [refreshKey, trails.length]);
+  }, [refreshKey]);
 
   const toggleExpanded = useCallback(() => {
     hapticMicro();

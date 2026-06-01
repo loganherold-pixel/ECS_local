@@ -56,7 +56,7 @@ export default function BatchFreshnessChecker({
 
   const handleStartBatchCheck = useCallback(async () => {
     if (!isOnline) {
-      showToast('CANNOT CHECK FRESHNESS — NO NETWORK CONNECTION');
+      showToast('Freshness checks need a network connection.');
       return;
     }
 
@@ -78,18 +78,18 @@ export default function BatchFreshnessChecker({
       const errorCount = checkResults.filter(r => r.status === 'error').length;
 
       if (updateCount > 0) {
-        showToast(`${updateCount} REGION${updateCount > 1 ? 'S' : ''} HAVE UPDATES AVAILABLE`);
+        showToast(`${updateCount} region${updateCount > 1 ? 's' : ''} can be refreshed with newer map data.`);
       } else if (freshCount === checkResults.length) {
-        showToast('ALL REGIONS ARE FRESH');
+        showToast('All saved regions are current enough for offline use.');
       } else {
-        showToast(`FRESHNESS CHECK COMPLETE: ${freshCount} FRESH, ${errorCount} ERRORS`);
+        showToast(`Freshness check finished: ${freshCount} current, ${errorCount} unavailable.`);
       }
 
       onComplete();
     } catch (e: any) {
       setIsChecking(false);
       setProgress(null);
-      showToast(`FRESHNESS CHECK FAILED: ${e?.message || 'Unknown error'}`);
+      showToast(`Freshness check could not finish: ${e?.message || 'unknown error'}`);
     }
   }, [isOnline, showToast, onComplete]);
 
@@ -235,7 +235,7 @@ export default function BatchFreshnessChecker({
         <View style={styles.offlineNote}>
           <Ionicons name="cloud-offline-outline" size={10} color="#EF5350" />
           <Text style={styles.offlineNoteText}>
-            Freshness checking requires a network connection
+            Freshness checks pause until a network connection is available
           </Text>
         </View>
       )}

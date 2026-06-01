@@ -139,7 +139,7 @@ export function FuelDetailModal({
   config,
   status,
 }: FuelDetailProps) {
-  const history = useMemo(() => buildResourceHistory(expeditionId, 'fuel'), [expeditionId, visible]);
+  const history = useMemo(() => buildResourceHistory(expeditionId, 'fuel'), [expeditionId]);
   const hex = getStatusHex(status);
 
   return (
@@ -304,7 +304,7 @@ export function WaterDetailModal({
   config,
   status,
 }: WaterDetailProps) {
-  const history = useMemo(() => buildResourceHistory(expeditionId, 'water'), [expeditionId, visible]);
+  const history = useMemo(() => buildResourceHistory(expeditionId, 'water'), [expeditionId]);
   const hex = getStatusHex(status);
   const waterPct = config.waterCapacityL && config.waterRemainingL !== null
     ? Math.round((config.waterRemainingL / config.waterCapacityL) * 100)
@@ -453,7 +453,7 @@ export function PowerDetailModal({
   config,
   status,
 }: PowerDetailProps) {
-  const history = useMemo(() => buildResourceHistory(expeditionId, 'power'), [expeditionId, visible]);
+  const history = useMemo(() => buildResourceHistory(expeditionId, 'power'), [expeditionId]);
   const hex = getStatusHex(status);
 
   return (

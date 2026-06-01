@@ -112,19 +112,19 @@ export default function VehicleSilhouette({
     if (!emphasisZone) return null;
     switch (emphasisZone) {
       case 'roof':
-        return { left: sx(0.10), top: sy(0.01), width: sx(0.84), height: sy(0.18) };
+        return { left: width * 0.10, top: height * 0.01, width: width * 0.84, height: height * 0.18 };
       case 'bed':
-        return { left: sx(0.52), top: sy(0.22), width: sx(0.44), height: sy(0.52) };
+        return { left: width * 0.52, top: height * 0.22, width: width * 0.44, height: height * 0.52 };
       case 'interior':
-        return { left: sx(0.06), top: sy(0.14), width: sx(0.46), height: sy(0.42) };
+        return { left: width * 0.06, top: height * 0.14, width: width * 0.46, height: height * 0.42 };
       case 'drawer':
-        return { left: sx(0.54), top: sy(0.54), width: sx(0.40), height: sy(0.20) };
+        return { left: width * 0.54, top: height * 0.54, width: width * 0.40, height: height * 0.20 };
       case 'hitch':
-        return { left: sx(0.90), top: sy(0.40), width: sx(0.10), height: sy(0.36) };
+        return { left: width * 0.90, top: height * 0.40, width: width * 0.10, height: height * 0.36 };
       default:
         return null;
     }
-  }, [emphasisZone, width, height]);
+  }, [emphasisZone, height, width]);
 
   const cabRackColor = has('cab_rack') ? GOLD : BASE;
   const smartcapColor = has('smartcap') || has('topper') || has('alu_cab') ? GOLD : BASE;

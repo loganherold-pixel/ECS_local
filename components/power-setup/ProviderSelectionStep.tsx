@@ -1,7 +1,7 @@
 /**
  * ProviderSelectionStep — Step 1: Choose a power system provider.
  *
- * Displays 6 supported providers as selectable tactical cards.
+ * Displays the supported providers as selectable tactical cards.
  * Each card shows: brand name, icon, subtitle, connection method badge.
  */
 
@@ -19,6 +19,7 @@ import {
   PROVIDER_DISPLAY,
   type PowerProviderId,
 } from '../../lib/powerSetupStore';
+import { resolveProviderReadiness } from '../../lib/powerReadiness';
 
 interface Props {
   palette: any;
@@ -28,15 +29,16 @@ interface Props {
 
 const PROVIDERS: {
   id: PowerProviderId;
-  connectionMethod: string;
   connectionIcon: string;
 }[] = [
-  { id: 'EcoFlow', connectionMethod: 'Cloud API + BLE', connectionIcon: 'cloud-outline' },
-  { id: 'Bluetti', connectionMethod: 'Bluetooth', connectionIcon: 'bluetooth-outline' },
-  { id: 'AnkerSolix', connectionMethod: 'Bluetooth', connectionIcon: 'bluetooth-outline' },
-  { id: 'Jackery', connectionMethod: 'Bluetooth', connectionIcon: 'bluetooth-outline' },
-  { id: 'GoalZero', connectionMethod: 'Bluetooth', connectionIcon: 'bluetooth-outline' },
-  { id: 'Renogy', connectionMethod: 'Bluetooth', connectionIcon: 'bluetooth-outline' },
+  { id: 'EcoFlow', connectionIcon: 'cloud-outline' },
+  { id: 'Redarc', connectionIcon: 'bluetooth-outline' },
+  { id: 'DakotaLithium', connectionIcon: 'bluetooth-outline' },
+  { id: 'Bluetti', connectionIcon: 'bluetooth-outline' },
+  { id: 'AnkerSolix', connectionIcon: 'bluetooth-outline' },
+  { id: 'Jackery', connectionIcon: 'bluetooth-outline' },
+  { id: 'GoalZero', connectionIcon: 'bluetooth-outline' },
+  { id: 'Renogy', connectionIcon: 'bluetooth-outline' },
 ];
 
 export default function ProviderSelectionStep({ palette, onSelect, onCancel }: Props) {
@@ -67,6 +69,9 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
       >
         {PROVIDERS.map((provider) => {
           const display = PROVIDER_DISPLAY[provider.id];
+          const isUiOnly = display.supportLevel === 'ui_only';
+          const readiness = resolveProviderReadiness(provider.id);
+          const trailingIconColor = isUiOnly ? readiness.color : palette.textMuted;
           return (
             <TouchableOpacity
               key={provider.id}
@@ -75,9 +80,11 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
                 {
                   backgroundColor: palette.panel,
                   borderColor: palette.border,
+                  opacity: isUiOnly ? 0.68 : 1,
                 },
               ]}
               onPress={() => onSelect(provider.id)}
+              disabled={isUiOnly}
               activeOpacity={0.7}
             >
               {/* Icon */}
@@ -98,6 +105,9 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
                 <Text style={[styles.providerSubtitle, { color: palette.textMuted }]}>
                   {display.subtitle}
                 </Text>
+                <Text style={[styles.providerSupportNote, { color: palette.textMuted }]}>
+                  {readiness.detail}
+                </Text>
               </View>
 
               {/* Connection method badge */}
@@ -110,10 +120,32 @@ export default function ProviderSelectionStep({ palette, onSelect, onCancel }: P
                 >
                   <Ionicons name={provider.connectionIcon} size={10} color={display.color} />
                   <Text style={[styles.methodText, { color: display.color }]}>
-                    {provider.connectionMethod}
+                    {display.connectionMethod}
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={16} color={palette.textMuted} />
+                <View
+                  style={[
+                    styles.supportBadge,
+                    {
+                      backgroundColor: readiness.color + '12',
+                      borderColor: readiness.color + '33',
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.supportText,
+                      { color: readiness.color },
+                    ]}
+                  >
+                    {readiness.label}
+                  </Text>
+                </View>
+                <Ionicons
+                  name={isUiOnly ? 'lock-closed-outline' : 'chevron-forward'}
+                  size={16}
+                  color={trailingIconColor}
+                />
               </View>
             </TouchableOpacity>
           );
@@ -226,6 +258,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  providerSupportNote: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 4,
+  },
   providerRight: {
     alignItems: 'flex-end',
     gap: 6,
@@ -242,6 +279,17 @@ const styles = StyleSheet.create({
   methodText: {
     fontSize: 8,
     fontWeight: '700',
+    letterSpacing: 1,
+  },
+  supportBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  supportText: {
+    fontSize: 8,
+    fontWeight: '800',
     letterSpacing: 1,
   },
   futureNote: {

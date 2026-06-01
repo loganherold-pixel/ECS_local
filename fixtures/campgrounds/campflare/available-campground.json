@@ -1,0 +1,14 @@
+{
+  "id": "cf-available-1001",
+  "name": "Juniper Flats Campground",
+  "latitude": 38.71235,
+  "longitude": -119.81232,
+  "reservationUrl": "https://www.recreation.gov/camping/campgrounds/1001",
+  "sourceUrl": "https://campflare.com/campgrounds/cf-available-1001",
+  "availabilityStatus": "available tonight",
+  "availableSiteCount": 4,
+  "reservable": true,
+  "firstComeFirstServed": false,
+  "lastCheckedAt": "2026-05-14T12:00:00.000Z",
+  "expiresAt": "2026-05-14T12:15:00.000Z"
+}

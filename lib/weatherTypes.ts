@@ -8,11 +8,22 @@ export interface WeatherCoordinate {
   lat: number;
   lng: number;
   label?: string;
+  accuracyM?: number | null;
+  timestamp?: number | null;
 }
 
 export interface CurrentConditions {
   temp: number | null;
+  temperature?: number | null;
+  tempF?: number | null;
+  temperatureF?: number | null;
+  tempC?: number | null;
+  temperatureC?: number | null;
+  temp_f?: number | null;
+  temp_c?: number | null;
   feels_like: number | null;
+  feelsLikeF?: number | null;
+  feelsLikeC?: number | null;
   temp_min: number | null;
   temp_max: number | null;
   humidity: number | null;
@@ -38,12 +49,16 @@ export interface CurrentConditions {
 
 export interface DailyForecast {
   date: string;
+  temp_day?: number | null;
   temp_min: number | null;
   temp_max: number | null;
   humidity: number | null;
   pressure: number | null;
-  wind_max: number;
-  wind_gust_max: number;
+  wind_max: number | null;
+  wind_gust_max: number | null;
+  wind_deg?: number | null;
+  sunrise?: number | string | null;
+  sunset?: number | string | null;
   pop: number; // precipitation probability %
   rain_total: number;
   snow_total: number;
@@ -74,6 +89,8 @@ export interface WeatherAlert {
   title: string;
   description: string;
   type: string;
+  effective?: string | null;
+  expires?: string | null;
 }
 
 export interface WaypointWeather {

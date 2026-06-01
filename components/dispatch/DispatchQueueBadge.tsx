@@ -24,6 +24,7 @@ export default function DispatchQueueBadge({ expeditionId, onPress }: Props) {
   const [count, setCount] = useState(0);
   const [isFlushing, setIsFlushing] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const hasQueuedItems = count > 0;
 
   // Subscribe to queue changes
   useEffect(() => {
@@ -47,7 +48,7 @@ export default function DispatchQueueBadge({ expeditionId, onPress }: Props) {
 
   // Pulse animation when count > 0
   useEffect(() => {
-    if (count > 0) {
+    if (hasQueuedItems) {
       const pulse = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -67,7 +68,7 @@ export default function DispatchQueueBadge({ expeditionId, onPress }: Props) {
     } else {
       pulseAnim.setValue(1);
     }
-  }, [count > 0]);
+  }, [hasQueuedItems, pulseAnim]);
 
   // Don't render if no queued items
   if (count === 0) return null;

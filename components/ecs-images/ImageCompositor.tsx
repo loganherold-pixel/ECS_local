@@ -36,13 +36,14 @@
 
 import React, { useMemo, useRef, useEffect, useCallback } from 'react';
 import { View, Image, Text, StyleSheet, Animated, Easing } from 'react-native';
-import type { ImageVehicleConfig } from './AssetRegistry';
 import {
+  type DebugAnchorPoint,
+  type ImageLayer,
+  type ImageVehicleConfig,
   resolveImageLayers,
   VEHICLE_DISPLAY_NAMES,
   getDebugAnchorPoints,
 } from './AssetRegistry';
-import type { DebugAnchorPoint, ImageLayer } from './AssetRegistry';
 
 // ── Constants ───────────────────────────────────────────
 /** Source image grid size */

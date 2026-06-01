@@ -8,7 +8,7 @@
  *
  * MODES:
  *   'wizard'     — Used during initial vehicle setup.
- *                  Footer: BACK | SKIP | DEPLOY EXPEDITION
+ *                  Footer: BACK | SKIP | DEPLOY VEHICLE
  *   'fleet-edit' — Used from Fleet tab for post-setup loadout editing.
  *                  Footer: CLOSE | SAVE
  *
@@ -29,9 +29,9 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   ActivityIndicator,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -58,6 +58,12 @@ import {
 const ECS_GOLD = '#C48A2C';
 const TAG = '[LoadoutWizardStep]';
 
+function logLoadoutWizardDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
+
 // ── Props ───────────────────────────────────────────────────
 interface Props {
   /** Operating mode: 'wizard' for initial setup, 'fleet-edit' for post-setup editing */
@@ -73,9 +79,9 @@ interface Props {
   /** Navigate back to Step 4 (Container Framework) — wizard mode */
   onBack?: () => void;
 
-  /** Skip loadout → deploy expedition — wizard mode */
+  /** Skip loadout → deploy vehicle — wizard mode */
   onSkipLoadout?: () => void;
-  /** Deploy expedition (with loadout) — wizard mode */
+  /** Finalize vehicle setup (with loadout) — wizard mode */
   onCompleteBuild?: () => void;
 
   /** Save loadout changes — fleet-edit mode */
@@ -142,9 +148,9 @@ export default function LoadoutWizardStep({
   // ── Computed stats ────────────────────────────────────────
   const stats = useMemo(() => {
     const total = loadoutItems.length;
-    const totalWeight = getTotalLoadoutWeight(loadoutItems);
+    const totalWeight = getTotalLoadoutWeight(loadoutItems, containerZones);
     return { total, totalWeight };
-  }, [loadoutItems]);
+  }, [containerZones, loadoutItems]);
 
   // ── Initialize loadout ────────────────────────────────────
   // FIX: Uses getByVehicleId instead of getAll to find the correct loadout.
@@ -160,7 +166,7 @@ export default function LoadoutWizardStep({
         const { loadouts: vehicleLoadouts } = await loadoutStore.getByVehicleId(vehicleId, userId);
         if (vehicleLoadouts.length > 0) {
           active = vehicleLoadouts[0];
-          console.log(TAG, `Found existing loadout for vehicle ${vehicleId}: ${active.id}`);
+          logLoadoutWizardDev(TAG, `Found existing loadout for vehicle ${vehicleId}: ${active.id}`);
         }
       }
 
@@ -174,7 +180,7 @@ export default function LoadoutWizardStep({
           const matched = allLoadouts.find(l => l.vehicle_id === vehicleId);
           if (matched) {
             active = matched;
-            console.log(TAG, `Found loadout via getAll fallback: ${active.id}`);
+            logLoadoutWizardDev(TAG, `Found loadout via getAll fallback: ${active.id}`);
           }
         }
       }
@@ -192,13 +198,13 @@ export default function LoadoutWizardStep({
           vehicle_id: vehicleId,
         }, userId);
         active = loadout;
-        console.log(TAG, `Created new loadout for vehicle ${vehicleId}: ${active.id}`);
+        logLoadoutWizardDev(TAG, `Created new loadout for vehicle ${vehicleId}: ${active.id}`);
       }
 
       // FIX: Ensure the loadout is linked to the current vehicle
       // (handles case where loadout exists but vehicle_id is null or wrong)
       if (active && vehicleId && active.vehicle_id !== vehicleId) {
-        console.log(TAG, `Linking loadout ${active.id} to vehicle ${vehicleId} (was: ${active.vehicle_id})`);
+        logLoadoutWizardDev(TAG, `Linking loadout ${active.id} to vehicle ${vehicleId} (was: ${active.vehicle_id})`);
         const updated = await loadoutStore.update(active.id, { vehicle_id: vehicleId } as any, userId);
         if (updated) {
           active = updated;
@@ -250,7 +256,7 @@ export default function LoadoutWizardStep({
   // accurate values without requiring a manual SAVE or DEPLOY action.
   const reconcileLoadoutRecord = useCallback(async (freshItems: LoadoutItem[]) => {
     if (!activeLoadout) return;
-    const newWeight = getTotalLoadoutWeight(freshItems);
+    const newWeight = getTotalLoadoutWeight(freshItems, containerZones);
     const newCount = freshItems.length;
 
     // Skip update if values haven't changed
@@ -276,7 +282,7 @@ export default function LoadoutWizardStep({
     } catch (e) {
       console.warn(TAG, 'Failed to reconcile loadout stats:', e);
     }
-  }, [activeLoadout, userId]);
+  }, [activeLoadout, containerZones, userId]);
 
   // ── Container press → open detail sheet ───────────────────
   const handleContainerPress = useCallback((containerKey: string) => {
@@ -295,8 +301,10 @@ export default function LoadoutWizardStep({
       await loadoutItemStore.create({
         loadout_id: activeLoadout.id,
         name: payload.name,
+        category: payload.category,
         quantity: payload.quantity,
         weight_lbs: payload.weight_lbs,
+        weight_source: payload.weight_source,
         is_critical: payload.is_critical,
         notes: payload.notes,
         storage_location: payload.storage_location,
@@ -335,7 +343,7 @@ export default function LoadoutWizardStep({
   }, [userId, refreshItems, reconcileLoadoutRecord, showToast]);
 
 
-  // ── Handle Deploy Expedition (wizard mode) ─────────────────
+  // ── Handle Deploy Vehicle (wizard mode) ────────────────────
   // Persist final loadout stats (total_weight_lbs, item_count) to the
   // loadout record, fire haptic confirmation, then hand off to parent.
   const handleComplete = useCallback(async () => {
@@ -355,8 +363,8 @@ export default function LoadoutWizardStep({
           userId,
         );
       } catch (e) {
-        console.warn(TAG, 'Failed to persist loadout stats on deploy:', e);
-        // Non-blocking — still allow deploy to proceed
+        console.warn(TAG, 'Failed to persist loadout stats on vehicle deploy:', e);
+        // Non-blocking — still allow vehicle deploy to proceed
       }
     }
 
@@ -401,8 +409,8 @@ export default function LoadoutWizardStep({
 
   // ── Info box text based on mode ───────────────────────────
   const infoText = isFleetEdit
-    ? `${stats.total} item${stats.total !== 1 ? 's' : ''} configured (${stats.totalWeight.toFixed(1)} lbs). Tap SAVE to persist changes.`
-    : `${stats.total} item${stats.total !== 1 ? 's' : ''} added (${stats.totalWeight.toFixed(1)} lbs). Tap DEPLOY EXPEDITION when ready.`;
+    ? `${stats.total} item${stats.total !== 1 ? 's' : ''} configured (${stats.totalWeight.toFixed(1)} lbs total). Save to persist changes.`
+    : `${stats.total} item${stats.total !== 1 ? 's' : ''} added (${stats.totalWeight.toFixed(1)} lbs). Tap Deploy Vehicle when this rig is ready.`;
 
 
   return (
@@ -415,11 +423,11 @@ export default function LoadoutWizardStep({
           </View>
           <View>
             <Text style={styles.subHeaderTitle}>
-              {isFleetEdit ? 'CONFIGURE LOADOUT' : 'LOADOUT'}
+              {isFleetEdit ? 'Loadout Framework' : 'Loadout Framework'}
             </Text>
             <Text style={styles.subHeaderSubtitle}>
               {containerZones.length > 0
-                ? 'Tap a container to add cargo items'
+                ? 'Finish the loadout, then deploy this vehicle when ready'
                 : 'No containers — configure container framework first'}
             </Text>
           </View>
@@ -476,7 +484,7 @@ export default function LoadoutWizardStep({
           <Text style={styles.emptySubtext}>
             {isFleetEdit
               ? 'This vehicle has no accessory containers configured. Edit the vehicle to add accessories first.'
-              : 'Go back to Step 4 and configure at least one container zone for your loadout.'}
+              : 'Go back to Step 3 and configure at least one container zone for your loadout.'}
 
           </Text>
           {!isFleetEdit && (
@@ -505,31 +513,30 @@ export default function LoadoutWizardStep({
         /* ── Container Grid ─────────────────────────────────── */
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={styles.contentArea}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          {/* Hint */}
-          <View style={styles.hintRow}>
-            <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
-            <Text style={styles.hintText}>{hintText}</Text>
+          <View style={styles.summaryStack}>
+            <View style={styles.hintRow}>
+              <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
+              <Text style={styles.hintText}>{hintText}</Text>
+            </View>
+
+            {stats.total > 0 && (
+              <View style={styles.infoBox}>
+                <Ionicons name="checkmark-circle-outline" size={16} color="#66BB6A" />
+                <Text style={styles.infoText}>{infoText}</Text>
+              </View>
+            )}
           </View>
 
-          {/* Container Grid */}
           <ContainerGrid
             containerZones={containerZones}
             items={loadoutItems}
             onContainerPress={handleContainerPress}
+            columns={3}
           />
-
-          {/* Info Box */}
-          {stats.total > 0 && (
-            <View style={styles.infoBox}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#66BB6A" />
-              <Text style={styles.infoText}>{infoText}</Text>
-            </View>
-          )}
-
-          <View style={{ height: 100 }} />
         </ScrollView>
       )}
 
@@ -566,7 +573,7 @@ export default function LoadoutWizardStep({
           </TouchableOpacity>
         </View>
       ) : (
-        /* ── Wizard Footer: BACK | SKIP | DEPLOY EXPEDITION ──── */
+        /* ── Wizard Footer: BACK | SKIP | DEPLOY VEHICLE ─────── */
         <View style={styles.footer}>
           {/* Back Button */}
           <TouchableOpacity
@@ -587,7 +594,7 @@ export default function LoadoutWizardStep({
             <Text style={styles.footerSkipText}>SKIP</Text>
           </TouchableOpacity>
 
-          {/* Deploy Expedition Button */}
+          {/* Deploy Vehicle Button */}
           <TouchableOpacity
             style={[
               styles.footerCompleteBtn,
@@ -601,8 +608,8 @@ export default function LoadoutWizardStep({
               <ActivityIndicator size="small" color="#0B0F12" />
             ) : (
               <>
-                <Ionicons name="rocket-outline" size={16} color="#0B0F12" />
-                <Text style={styles.footerCompleteText}>DEPLOY EXPEDITION</Text>
+                <Ionicons name="car-sport-outline" size={16} color="#0B0F12" />
+                <Text style={styles.footerCompleteText}>Deploy Vehicle</Text>
               </>
             )}
           </TouchableOpacity>
@@ -617,8 +624,6 @@ export default function LoadoutWizardStep({
           onClose={() => { setDetailSheetVisible(false); setSelectedContainer(null); }}
           container={selectedContainer}
           allItems={loadoutItems}
-          allZones={containerZones}
-          loadoutId={activeLoadout.id}
           onAddItem={handleDetailAddItem}
           onUpdateItem={handleDetailUpdateItem}
           onDeleteItem={handleDetailDeleteItem}
@@ -642,7 +647,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 7,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62, 79, 60, 0.2)',
     backgroundColor: 'rgba(0,0,0,0.1)',
@@ -664,13 +669,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   subHeaderTitle: {
-    fontSize: 10,
-    fontWeight: '900',
+    fontSize: 13,
+    fontWeight: '800',
     color: TACTICAL.text,
-    letterSpacing: 1,
+    letterSpacing: 0.3,
   },
   subHeaderSubtitle: {
-    fontSize: 8,
+    fontSize: 10,
     color: TACTICAL.textMuted,
     letterSpacing: 0.3,
     marginTop: 1,
@@ -696,7 +701,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 5,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62, 79, 60, 0.12)',
   },
@@ -708,11 +713,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(62, 79, 60, 0.2)',
-    paddingVertical: 6,
+    paddingVertical: 5,
     paddingHorizontal: 4,
   },
   statValue: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
     color: TACTICAL.text,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
@@ -743,8 +748,14 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
-  scrollContent: {
-    padding: 12,
+  contentArea: {
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 14,
+    gap: 10,
+  },
+  summaryStack: {
+    gap: 8,
   },
 
   // ── Hint ──────────────────────────────────────────────────
@@ -753,7 +764,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 4,
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   hintText: {
     fontSize: 9,
@@ -821,7 +832,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 8,
     padding: 12,
-    marginTop: 8,
     backgroundColor: 'rgba(102, 187, 106, 0.06)',
     borderRadius: 8,
     borderWidth: 1,
@@ -840,12 +850,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 7,
     borderTopWidth: 1,
     borderTopColor: 'rgba(196, 138, 44, 0.15)',
     backgroundColor: 'rgba(0,0,0,0.2)',
   },
-
   // ── Wizard Footer Buttons ─────────────────────────────────
   footerBackBtn: {
     flexDirection: 'row',

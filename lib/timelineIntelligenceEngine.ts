@@ -24,6 +24,10 @@ import { expeditionStateStore, type ExpeditionState, type ExpeditionRecord } fro
 import { gpsDistanceTracker } from './gpsDistanceTracker';
 import { remotenessStore, type RemotenessTier } from './remotenessStore';
 import { gpsUIState } from './gpsUIState';
+import {
+  isExpeditionCloudTableUnavailable,
+  markExpeditionCloudTableUnavailable,
+} from './expeditionCloudSyncAvailability';
 
 const TAG = '[TIMELINE_INTEL]';
 
@@ -165,6 +169,7 @@ function saveEntries(entries: TimelineEntry[]): void {
 
 async function syncEntryToCloud(entry: TimelineEntry): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
+  if (isExpeditionCloudTableUnavailable('expedition_timeline')) return false;
   try {
     const { error } = await supabase
       .from('expedition_timeline')
@@ -180,11 +185,17 @@ async function syncEntryToCloud(entry: TimelineEntry): Promise<boolean> {
         meta: entry.meta,
       });
     if (error) {
+      if (markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline', error)) {
+        return false;
+      }
       console.warn(TAG, 'Cloud sync failed:', error.message);
       return false;
     }
     return true;
   } catch (e: any) {
+    if (markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline', e)) {
+      return false;
+    }
     console.warn(TAG, 'Cloud sync error:', e?.message);
     return false;
   }
@@ -440,6 +451,7 @@ function generateSummary(expeditionId: string): TimelineSummary {
 
 async function loadCloudEntries(expeditionId: string): Promise<TimelineEntry[]> {
   if (!isSupabaseConfigured) return [];
+  if (isExpeditionCloudTableUnavailable('expedition_timeline')) return [];
   try {
     const { data, error } = await supabase
       .from('expedition_timeline')
@@ -448,7 +460,10 @@ async function loadCloudEntries(expeditionId: string): Promise<TimelineEntry[]> 
       .order('timestamp', { ascending: false })
       .limit(100);
 
-    if (error || !data) return [];
+    if (error || !data) {
+      if (error) markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline', error);
+      return [];
+    }
 
     return data.map((row: any) => ({
       id: row.id,
@@ -462,7 +477,8 @@ async function loadCloudEntries(expeditionId: string): Promise<TimelineEntry[]> 
       meta: row.meta || {},
       _synced: true,
     }));
-  } catch {
+  } catch (e) {
+    markExpeditionCloudTableUnavailable(TAG, 'expedition_timeline', e);
     return [];
   }
 }
@@ -486,6 +502,13 @@ export const timelineIntelligenceEngine = {
    * Called when expedition state becomes ACTIVE.
    */
   start(expeditionId: string): void {
+    if (_isMonitoring && _currentExpeditionId === expeditionId) {
+      if (!_monitorTimer) {
+        _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+      }
+      return;
+    }
+
     if (_isMonitoring) this.stop();
 
     _currentExpeditionId = expeditionId;
@@ -520,6 +543,8 @@ export const timelineIntelligenceEngine = {
    * Stop monitoring. Called when expedition ends.
    */
   stop(): void {
+    if (!_isMonitoring && !_monitorTimer) return;
+
     if (_monitorTimer) {
       clearInterval(_monitorTimer);
       _monitorTimer = null;
@@ -669,9 +694,22 @@ export const timelineIntelligenceEngine = {
    * Call once at app startup.
    */
   initAutoMonitor(): () => void {
+    if (_expeditionUnsubscribe) {
+      return () => {};
+    }
+
+    const resumeMonitoring = (expeditionId: string) => {
+      if (_isMonitoring && _currentExpeditionId === expeditionId && _monitorTimer) return;
+      _currentExpeditionId = expeditionId;
+      _isMonitoring = true;
+      if (!_monitorTimer) {
+        _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+      }
+    };
+
     // Subscribe to expedition state changes
     const unsubscribe = expeditionStateStore.subscribe((state: ExpeditionState, record: ExpeditionRecord | null) => {
-      if (state === 'active' && record && !_isMonitoring) {
+      if (state === 'active' && record && (!_isMonitoring || _currentExpeditionId !== record.id)) {
         // Expedition just became active — start monitoring
         // Don't log start event if we already have one for this expedition
         const existing = getEntriesForExpedition(record.id);
@@ -680,9 +718,7 @@ export const timelineIntelligenceEngine = {
           this.start(record.id);
         } else {
           // Resume monitoring without logging start again
-          _currentExpeditionId = record.id;
-          _isMonitoring = true;
-          _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+          resumeMonitoring(record.id);
         }
       } else if (state === 'complete' && record && _isMonitoring) {
         // Expedition just completed — log end and stop
@@ -705,9 +741,7 @@ export const timelineIntelligenceEngine = {
       if (!hasStart) {
         this.start(currentRecord.id);
       } else {
-        _currentExpeditionId = currentRecord.id;
-        _isMonitoring = true;
-        _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+        resumeMonitoring(currentRecord.id);
       }
     }
 

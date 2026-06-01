@@ -1,0 +1,307 @@
+import { ecsLog } from './ecsLogger';
+
+export type BluetoothDiagnosticSource =
+  | 'native_ble'
+  | 'permission'
+  | 'unsupported_runtime'
+  | 'provider_handshake'
+  | 'ecoflow_cloud_auth'
+  | 'cloud_access'
+  | 'obd2_parser'
+  | 'obd2_pid'
+  | 'widget_telemetry'
+  | 'transport'
+  | 'app_state';
+
+export type BluetoothDiagnosticEventType =
+  | 'scanner_start'
+  | 'scanner_stop'
+  | 'permission_request'
+  | 'permission_result'
+  | 'bluetooth_power_state'
+  | 'device_discovered'
+  | 'device_classified'
+  | 'connect_start'
+  | 'connect_success'
+  | 'connect_failure'
+  | 'service_discovery_success'
+  | 'service_discovery_failure'
+  | 'provider_handshake_success'
+  | 'provider_handshake_failure'
+  | 'telemetry_first_packet'
+  | 'telemetry_subscription_start'
+  | 'telemetry_subscription_stop'
+  | 'telemetry_stale'
+  | 'disconnect_start'
+  | 'disconnect_success'
+  | 'disconnect_failure'
+  | 'ecoflow_cloud_auth_success'
+  | 'ecoflow_cloud_auth_failure'
+  | 'obd2_handshake'
+  | 'obd2_pid'
+  | 'obd2_parser'
+  | 'widget_telemetry_update'
+  | 'scanner_snapshot';
+
+export interface BluetoothDiagnosticEvent {
+  id: string;
+  type: BluetoothDiagnosticEventType;
+  source: BluetoothDiagnosticSource;
+  timestamp: number;
+  deviceId?: string | null;
+  deviceName?: string | null;
+  providerId?: string | null;
+  message?: string | null;
+  error?: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface BluetoothDiagnosticsSnapshot {
+  events: BluetoothDiagnosticEvent[];
+  scannerState: string;
+  nativeEnvironmentSupport: string;
+  permissions: string;
+  bluetoothPoweredState: string;
+  activeScans: number;
+  nearbyDeviceCount: number;
+  activeConnection: string | null;
+  activeTelemetrySubscriptions: number;
+  latestErrorsBySource: Partial<Record<BluetoothDiagnosticSource, BluetoothDiagnosticEvent>>;
+  latestTelemetryTimestampByDevice: Record<string, number>;
+  updatedAt: number | null;
+}
+
+type Listener = (snapshot: BluetoothDiagnosticsSnapshot) => void;
+
+const MAX_EVENTS = 160;
+const DEBUG_FLAG = 'ECS_DEBUG_BLUETOOTH_DIAGNOSTICS';
+
+const events: BluetoothDiagnosticEvent[] = [];
+const listeners = new Set<Listener>();
+const activeScans = new Set<string>();
+const telemetrySubscriptions = new Set<string>();
+const latestErrorsBySource: Partial<Record<BluetoothDiagnosticSource, BluetoothDiagnosticEvent>> = {};
+const latestTelemetryTimestampByDevice: Record<string, number> = {};
+
+let scannerState = 'idle';
+let nativeEnvironmentSupport = 'unknown';
+let permissions = 'unknown';
+let bluetoothPoweredState = 'unknown';
+let nearbyDeviceCount = 0;
+let activeConnection: string | null = null;
+let updatedAt: number | null = null;
+let sequence = 0;
+
+function nextId(type: BluetoothDiagnosticEventType): string {
+  sequence += 1;
+  return `${Date.now().toString(36)}-${sequence.toString(36)}-${type}`;
+}
+
+function eventKey(event: BluetoothDiagnosticEvent): string {
+  return [
+    event.type,
+    event.source,
+    event.deviceId ?? '',
+    event.error ?? event.message ?? '',
+  ].join(':');
+}
+
+function applyEvent(event: BluetoothDiagnosticEvent): void {
+  switch (event.type) {
+    case 'scanner_start':
+      scannerState = 'scanning';
+      activeScans.add(String(event.details?.scanId ?? event.id));
+      break;
+    case 'scanner_stop':
+      scannerState = String(event.details?.state ?? 'idle');
+      if (event.details?.scanId) {
+        activeScans.delete(String(event.details.scanId));
+      } else {
+        activeScans.clear();
+      }
+      break;
+    case 'permission_request':
+      permissions = 'requesting';
+      break;
+    case 'permission_result':
+      permissions = String(event.details?.status ?? event.message ?? 'unknown');
+      break;
+    case 'bluetooth_power_state':
+      bluetoothPoweredState = String(event.details?.state ?? event.message ?? 'unknown');
+      nativeEnvironmentSupport = String(event.details?.nativeEnvironmentSupport ?? nativeEnvironmentSupport);
+      break;
+    case 'scanner_snapshot':
+      scannerState = String(event.details?.scannerState ?? scannerState);
+      nativeEnvironmentSupport = String(event.details?.nativeEnvironmentSupport ?? nativeEnvironmentSupport);
+      permissions = String(event.details?.permissions ?? permissions);
+      bluetoothPoweredState = String(event.details?.bluetoothPoweredState ?? bluetoothPoweredState);
+      nearbyDeviceCount = Number(event.details?.nearbyDeviceCount ?? nearbyDeviceCount) || 0;
+      break;
+    case 'connect_start':
+      activeConnection = event.deviceName ?? event.deviceId ?? null;
+      break;
+    case 'connect_success':
+      activeConnection = event.deviceName ?? event.deviceId ?? activeConnection;
+      break;
+    case 'connect_failure':
+      activeConnection = null;
+      break;
+    case 'disconnect_success':
+      activeConnection = null;
+      break;
+    case 'telemetry_subscription_start':
+      telemetrySubscriptions.add(String(event.deviceId ?? event.id));
+      break;
+    case 'telemetry_subscription_stop':
+      if (event.deviceId) telemetrySubscriptions.delete(event.deviceId);
+      break;
+    case 'telemetry_first_packet':
+    case 'widget_telemetry_update':
+      if (event.deviceId) {
+        latestTelemetryTimestampByDevice[event.deviceId] = event.timestamp;
+      }
+      break;
+  }
+
+  if (event.error || /failure|stale/.test(event.type)) {
+    latestErrorsBySource[event.source] = event;
+  }
+}
+
+function notify(): void {
+  const snapshot = getBluetoothDiagnosticsSnapshot();
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch {}
+  }
+}
+
+export function classifyBluetoothDiagnosticSource(
+  error: unknown,
+  fallback: BluetoothDiagnosticSource = 'transport',
+): BluetoothDiagnosticSource {
+  const message = String(error instanceof Error ? error.message : error ?? '').toLowerCase();
+  if (!message) return fallback;
+  if (/permission|denied|unauthorized scan|bluetooth_scan|bluetooth_connect|location/.test(message)) return 'permission';
+  if (/expo go|native module|ble manager|not available|null|unsupported runtime|web preview/.test(message)) return 'unsupported_runtime';
+  if (/unauthori[sz]ed|forbidden|auth|api key|access key|signature|region|account binding/.test(message)) return 'ecoflow_cloud_auth';
+  if (/cloud|api|provider access/.test(message)) return 'cloud_access';
+  if (/handshake|capabilit|service|characteristic|telemetry unavailable|decoded live telemetry/.test(message)) return 'provider_handshake';
+  if (/elm|pid|obd|parser|decode|no data/.test(message)) return /pid|no data/.test(message) ? 'obd2_pid' : 'obd2_parser';
+  if (/widget|telemetry store|subscription/.test(message)) return 'widget_telemetry';
+  if (/background|foreground|app state/.test(message)) return 'app_state';
+  if (/ble|bluetooth|transport|disconnect|connect/.test(message)) return 'native_ble';
+  return fallback;
+}
+
+export function recordBluetoothDiagnosticEvent(
+  event: Omit<BluetoothDiagnosticEvent, 'id' | 'timestamp'> & { timestamp?: number },
+): BluetoothDiagnosticEvent {
+  const normalized: BluetoothDiagnosticEvent = {
+    ...event,
+    id: nextId(event.type),
+    timestamp: event.timestamp ?? Date.now(),
+  };
+
+  const previous = events[events.length - 1];
+  if (previous && eventKey(previous) === eventKey(normalized) && normalized.timestamp - previous.timestamp < 750) {
+    return previous;
+  }
+
+  events.push(normalized);
+  while (events.length > MAX_EVENTS) {
+    events.shift();
+  }
+  updatedAt = normalized.timestamp;
+  applyEvent(normalized);
+  ecsLog.dev('TELEMETRY', 'bluetooth_diagnostic_event', {
+    type: normalized.type,
+    source: normalized.source,
+    deviceId: normalized.deviceId ?? null,
+    providerId: normalized.providerId ?? null,
+    message: normalized.message ?? null,
+    error: normalized.error ?? null,
+  }, {
+    tag: '[BT_DIAG]',
+    debugFlag: DEBUG_FLAG,
+    fingerprint: eventKey(normalized),
+    throttleMs: 1000,
+    aggregateWindowMs: 10_000,
+  });
+  notify();
+  return normalized;
+}
+
+export function subscribeBluetoothDiagnostics(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getBluetoothDiagnosticsSnapshot(): BluetoothDiagnosticsSnapshot {
+  return {
+    events: [...events].reverse(),
+    scannerState,
+    nativeEnvironmentSupport,
+    permissions,
+    bluetoothPoweredState,
+    activeScans: activeScans.size,
+    nearbyDeviceCount,
+    activeConnection,
+    activeTelemetrySubscriptions: telemetrySubscriptions.size,
+    latestErrorsBySource: { ...latestErrorsBySource },
+    latestTelemetryTimestampByDevice: { ...latestTelemetryTimestampByDevice },
+    updatedAt,
+  };
+}
+
+export function resetBluetoothDiagnosticsForTests(): void {
+  events.length = 0;
+  activeScans.clear();
+  telemetrySubscriptions.clear();
+  for (const source of Object.keys(latestErrorsBySource) as BluetoothDiagnosticSource[]) {
+    delete latestErrorsBySource[source];
+  }
+  for (const deviceId of Object.keys(latestTelemetryTimestampByDevice)) {
+    delete latestTelemetryTimestampByDevice[deviceId];
+  }
+  scannerState = 'idle';
+  nativeEnvironmentSupport = 'unknown';
+  permissions = 'unknown';
+  bluetoothPoweredState = 'unknown';
+  nearbyDeviceCount = 0;
+  activeConnection = null;
+  updatedAt = null;
+  notify();
+}
+
+export function serializeBluetoothDiagnostics(snapshot = getBluetoothDiagnosticsSnapshot()): string {
+  return JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    scannerState: snapshot.scannerState,
+    nativeEnvironmentSupport: snapshot.nativeEnvironmentSupport,
+    permissions: snapshot.permissions,
+    bluetoothPoweredState: snapshot.bluetoothPoweredState,
+    activeScans: snapshot.activeScans,
+    nearbyDeviceCount: snapshot.nearbyDeviceCount,
+    activeConnection: snapshot.activeConnection,
+    activeTelemetrySubscriptions: snapshot.activeTelemetrySubscriptions,
+    latestErrorsBySource: Object.fromEntries(
+      Object.entries(snapshot.latestErrorsBySource).map(([source, event]) => [
+        source,
+        event ? {
+          type: event.type,
+          message: event.message,
+          error: event.error,
+          deviceId: event.deviceId,
+          providerId: event.providerId,
+          timestamp: event.timestamp,
+        } : null,
+      ]),
+    ),
+    latestTelemetryTimestampByDevice: snapshot.latestTelemetryTimestampByDevice,
+    recentEvents: snapshot.events.slice(0, 50),
+  }, null, 2);
+}

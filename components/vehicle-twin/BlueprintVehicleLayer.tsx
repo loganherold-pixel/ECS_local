@@ -242,7 +242,7 @@ export default function BlueprintVehicleLayer({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [weightRollDeg, weightPitchDeg]);
+  }, [weightRollDeg, weightPitchDeg, animPitch, animRoll]);
 
   /* ── Build animated transform for the tilt layer ─────────── */
   const tiltTransform = {

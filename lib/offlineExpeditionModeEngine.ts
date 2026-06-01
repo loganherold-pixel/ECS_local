@@ -38,6 +38,8 @@
  */
 
 import { Platform } from 'react-native';
+import { ecsLog } from './ecsLogger';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 import type {
   OfflineConnectivityState,
   OfflineExpeditionModeState,
@@ -61,9 +63,20 @@ import {
 
 const TAG = '[OFFLINE_MODE]';
 const STORAGE_KEY = 'ecs_offline_expedition_mode_session';
+const OFFLINE_MODE_KEY = 'ecs_offline_mode';
+const runtimeFlagsCache = createPersistedKeyValueCache('ecs_runtime_flags');
+
+function debugOfflineMode(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 /** State transition debounce (prevents flicker) */
 const STATE_DEBOUNCE_MS = 3_000;
+const LIMITED_STATE_DEBOUNCE_MS = 12_000;
+const RECONNECTING_STATE_DEBOUNCE_MS = 8_000;
+const OFFLINE_STATE_DEBOUNCE_MS = 2_000;
+const RECOVERY_TO_ONLINE_SETTLE_MS = 2_500;
+const TRANSIENT_SUPPRESSION_LOG_MS = 30_000;
 
 /** Evaluation interval */
 const EVAL_INTERVAL_MS = 15_000;
@@ -103,6 +116,7 @@ const _ls = {
 let _state: OfflineExpeditionModeState = createDefaultOfflineModeState();
 let _pendingState: OfflineConnectivityState | null = null;
 let _pendingStateTimestamp = 0;
+let _lastSuppressedTransitionLogAt = 0;
 let _reconnectingTimer: ReturnType<typeof setTimeout> | null = null;
 let _evalTimer: ReturnType<typeof setInterval> | null = null;
 let _storeUnsubs: (() => void)[] = [];
@@ -152,23 +166,126 @@ function _readRawConnectivity(): OfflineConnectivityState {
   }
 }
 
+function _readConnectivityReason(): Record<string, unknown> {
+  const reason: Record<string, unknown> = {
+    source: 'network_transport',
+    userForcedOfflineMode: false,
+    realtimeSyncUnavailable: false,
+    tileCacheServiceUnavailable: false,
+  };
+
+  try {
+    reason.userForcedOfflineMode = runtimeFlagsCache.get(OFFLINE_MODE_KEY) === 'true';
+  } catch {}
+
+  try {
+    const { connectivity } = require('./connectivity');
+    reason.connectivityStatus = connectivity.status;
+    reason.connectivityLevel = connectivity.getLevel();
+    reason.internetReachable = connectivity.isInternetReachable;
+    reason.networkType = connectivity.getNetworkType?.() ?? 'unknown';
+  } catch {}
+
+  try {
+    const { realtimeSync } = require('./realtimeSync');
+    const realtimeState = realtimeSync?.stats;
+    reason.realtimeStatus = realtimeState?.status ?? 'unknown';
+    reason.realtimeFailureReason = realtimeState?.lastFailureReason ?? null;
+    reason.realtimeSyncUnavailable =
+      realtimeState?.status === 'degraded' ||
+      realtimeState?.status === 'timed_out' ||
+      realtimeState?.status === 'retrying';
+  } catch {}
+
+  try {
+    const { tileCacheStore } = require('./tileCacheStore');
+    const stats = tileCacheStore?.getStats?.();
+    reason.tileCacheServiceUnavailable = false;
+    reason.cachedTileRegions = stats?.totalRegions ?? null;
+  } catch {
+    reason.tileCacheServiceUnavailable = true;
+  }
+
+  return reason;
+}
+
+function _getDebounceWindowMs(
+  rawState: OfflineConnectivityState,
+  currentState: OfflineConnectivityState,
+): number {
+  if (rawState === 'limited') return LIMITED_STATE_DEBOUNCE_MS;
+  if (rawState === 'reconnecting') return RECONNECTING_STATE_DEBOUNCE_MS;
+  if (rawState === 'offline') return OFFLINE_STATE_DEBOUNCE_MS;
+  if (rawState === 'online' && currentState === 'limited') return RECOVERY_TO_ONLINE_SETTLE_MS;
+  return STATE_DEBOUNCE_MS;
+}
+
+function _logSuppressedTransient(
+  rawState: OfflineConnectivityState,
+  currentState: OfflineConnectivityState,
+  debounceWindowMs: number,
+): void {
+  const now = Date.now();
+  if (now - _lastSuppressedTransitionLogAt < TRANSIENT_SUPPRESSION_LOG_MS) return;
+  _lastSuppressedTransitionLogAt = now;
+  debugOfflineMode('Offline mode transient state held for hysteresis', {
+    currentState,
+    rawState,
+    debounceWindowMs,
+    ..._readConnectivityReason(),
+  });
+}
+
 /**
  * Apply debounce/hysteresis to state transitions.
  * Prevents rapid flicker between states.
- * Exception: transitions TO 'online' are immediate (good news travels fast).
+ * Exception: recovery from a true offline state may briefly show reconnecting,
+ * but recovery from a limited transient settles directly back to online.
  */
 function _debounceState(rawState: OfflineConnectivityState): OfflineConnectivityState {
   const now = Date.now();
   const currentState = _state.connectivity_state;
 
-  // Fast-path: online transitions are immediate
+  // Recovery from limited is common during short reachability checks. Do not
+  // surface an extra reconnecting phase; settle back to online after a small
+  // confirmation window.
+  if (rawState === 'online' && currentState === 'limited') {
+    if (_pendingState !== 'online') {
+      _pendingState = 'online';
+      _pendingStateTimestamp = now;
+      _logSuppressedTransient(rawState, currentState, RECOVERY_TO_ONLINE_SETTLE_MS);
+      return currentState;
+    }
+
+    if ((now - _pendingStateTimestamp) >= RECOVERY_TO_ONLINE_SETTLE_MS) {
+      _pendingState = null;
+      _pendingStateTimestamp = 0;
+      return 'online';
+    }
+
+    return currentState;
+  }
+
+  // Recovery from offline can show a brief reconnecting state, but only after
+  // the online signal has persisted long enough to avoid navigation-time flaps.
   if (rawState === 'online' && currentState !== 'online') {
-    // Brief reconnecting phase before going fully online
-    if (currentState === 'offline' || currentState === 'limited') {
+    if (currentState === 'offline') {
+      if (_pendingState !== 'online') {
+        _pendingState = 'online';
+        _pendingStateTimestamp = now;
+        _logSuppressedTransient(rawState, currentState, RECOVERY_TO_ONLINE_SETTLE_MS);
+        return currentState;
+      }
+
+      if ((now - _pendingStateTimestamp) < RECOVERY_TO_ONLINE_SETTLE_MS) {
+        return currentState;
+      }
+
       _pendingState = 'online';
       _pendingStateTimestamp = now;
       return 'reconnecting';
     }
+
     _pendingState = null;
     _pendingStateTimestamp = 0;
     return rawState;
@@ -185,11 +302,13 @@ function _debounceState(rawState: OfflineConnectivityState): OfflineConnectivity
   if (_pendingState !== rawState) {
     _pendingState = rawState;
     _pendingStateTimestamp = now;
+    _logSuppressedTransient(rawState, currentState, _getDebounceWindowMs(rawState, currentState));
     return currentState; // Hold current
   }
 
   // Same pending — check debounce window
-  if ((now - _pendingStateTimestamp) >= STATE_DEBOUNCE_MS) {
+  const debounceWindowMs = _getDebounceWindowMs(rawState, currentState);
+  if ((now - _pendingStateTimestamp) >= debounceWindowMs) {
     _pendingState = null;
     _pendingStateTimestamp = 0;
     return rawState;
@@ -241,7 +360,23 @@ function _applyStateTransition(newState: OfflineConnectivityState): void {
     _triggerReconnectSync();
   }
 
-  console.log(`${TAG} State: ${oldState} → ${newState}`);
+  const transitionDetails = {
+    previousState: oldState,
+    ..._readConnectivityReason(),
+  };
+
+  if (newState === 'offline') {
+    ecsLog.warn('SYSTEM', `Offline mode state changed to ${newState}`, {
+      ...transitionDetails,
+    });
+  } else if (newState === 'limited' || newState === 'reconnecting') {
+    debugOfflineMode(`Offline mode state changed to ${newState}`, transitionDetails);
+  } else {
+    debugOfflineMode('Offline mode state changed', {
+      nextState: newState,
+      ...transitionDetails,
+    });
+  }
   _notify();
 }
 
@@ -307,20 +442,34 @@ function _evaluateSystemProfiles(): SystemOfflineProfile[] {
         }
         case 'weather': {
           behavior = isOffline ? 'last_known' : 'fully_available';
-          statusMessage = isOffline ? 'Cached weather data' : 'Live weather';
+          statusMessage = isOffline ? 'Weather cache unavailable' : 'Live weather available when refreshed';
           try {
-            const { getWeatherStaleness } = require('./weatherStore');
-            // If we have any cached weather, it's available
-            hasCachedData = true;
-            const staleness = getWeatherStaleness?.(Date.now() - 3600000);
+            const { getAnyCachedWeather, getWeatherStaleness } = require('./weatherStore');
+            const { gpsUIState } = require('./gpsUIState');
+            const gps = gpsUIState.get?.();
+            const coordinates = gps?.hasFix && gps?.position
+              ? [{ lat: gps.position.latitude, lng: gps.position.longitude, label: 'Current Position' }]
+              : [];
+            const cached = getAnyCachedWeather?.(coordinates);
+            hasCachedData = !!cached;
+            const staleness = cached?.cachedAt ? getWeatherStaleness?.(cached.cachedAt) : null;
             if (staleness === 'stale' || staleness === 'very_stale') {
               isStale = true;
-              stalenessLabel = 'Weather data may be outdated';
+              stalenessLabel = staleness === 'very_stale'
+                ? 'Weather cache is very stale'
+                : 'Weather cache is stale';
+            }
+            if (cached?.cachedAt) {
+              lastUpdated = new Date(cached.cachedAt).toISOString();
             }
           } catch {
             hasCachedData = false;
           }
-          if (isOffline) statusMessage = isStale ? 'Cached weather (may be outdated)' : 'Cached weather data';
+          if (isOffline) {
+            statusMessage = hasCachedData
+              ? isStale ? 'Cached weather - stale' : 'Cached weather - last known'
+              : 'Weather cache unavailable';
+          }
           break;
         }
         case 'remoteness': {
@@ -353,7 +502,7 @@ function _evaluateSystemProfiles(): SystemOfflineProfile[] {
             hasCachedData = route != null;
             behavior = hasCachedData ? 'cached_data' : 'unavailable';
             statusMessage = hasCachedData
-              ? 'Route available offline'
+              ? 'Saved route geometry loaded; map cache not confirmed'
               : 'No route loaded';
           } catch {
             behavior = 'unavailable';
@@ -516,7 +665,7 @@ function _generateTransitionMessages(
   if (newState === 'reconnecting') {
     messages.push({
       key: 'reconnecting',
-      message: 'Connectivity restored — syncing data',
+      message: 'Signal recovering - syncing saved data',
       category: 'connectivity',
       severity: 'info',
       icon: 'sync-outline',
@@ -530,7 +679,7 @@ function _generateTransitionMessages(
   if (newState === 'online' && (oldState === 'offline' || oldState === 'reconnecting')) {
     messages.push({
       key: 'back_online',
-      message: 'Back online — all services restored',
+      message: 'Back online - refreshing live services',
       category: 'connectivity',
       severity: 'info',
       icon: 'wifi-outline',
@@ -894,7 +1043,10 @@ function _triggerReconnectSync(): void {
     };
     _notify();
 
-    console.log(`${TAG} Reconnect sync complete: ${syncedCount} synced, ${failedCount} failed`);
+  debugOfflineMode('Offline mode reconnect sync completed', {
+    failedCount,
+    syncedCount,
+  });
   }, 1000);
 }
 
@@ -970,7 +1122,7 @@ function _restore(): boolean {
       _state.sync_state.last_sync_at = session.last_sync_at;
     }
 
-    console.log(`${TAG} Session restored: ${_state.packs.length} packs`);
+  debugOfflineMode('Offline mode session restored', { packs: _state.packs.length });
     return true;
   } catch {
     return false;
@@ -988,7 +1140,7 @@ export const offlineExpeditionModeEngine = {
 
   initialize(): void {
     if (_state.initialized) return;
-    console.log(`${TAG} Initializing...`);
+  debugOfflineMode('Offline mode initializing');
 
     _restore();
     _state.initialized = true;
@@ -1008,7 +1160,10 @@ export const offlineExpeditionModeEngine = {
     // Start periodic evaluation
     _evalTimer = setInterval(_evaluate, EVAL_INTERVAL_MS);
 
-    console.log(`${TAG} Initialized: state=${_state.connectivity_state}, packs=${_state.packs.length}`);
+  debugOfflineMode('Offline mode initialized', {
+    packs: _state.packs.length,
+    state: _state.connectivity_state,
+  });
   },
 
   stop(): void {
@@ -1025,7 +1180,7 @@ export const offlineExpeditionModeEngine = {
     }
     _storeUnsubs = [];
     _persist();
-    console.log(`${TAG} Stopped`);
+  debugOfflineMode('Offline mode stopped');
   },
 
 
@@ -1156,7 +1311,10 @@ export const offlineExpeditionModeEngine = {
     _persist();
     _notify();
 
-    console.log(`${TAG} Pack created: "${pack.name}" (${pack.size_kb} KB)`);
+  debugOfflineMode('Offline expedition pack created', {
+    name: pack.name,
+    sizeKb: pack.size_kb,
+  });
     return pack;
   },
 
@@ -1209,7 +1367,10 @@ export const offlineExpeditionModeEngine = {
     _persist();
     _notify();
 
-    console.log(`${TAG} Pack refreshed: "${updated.name}" v${updated.version}`);
+  debugOfflineMode('Offline expedition pack refreshed', {
+    name: updated.name,
+    version: updated.version,
+  });
     return updated;
   },
 
@@ -1322,7 +1483,7 @@ export const offlineExpeditionModeEngine = {
     _pendingState = null;
     _pendingStateTimestamp = 0;
     _listeners.clear();
-    console.log(`${TAG} Reset complete`);
+  debugOfflineMode('Offline mode reset complete');
   },
 };
 

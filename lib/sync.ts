@@ -47,6 +47,9 @@ type SyncCallback = (status: SyncStatus) => void;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const CHUNK_SIZE = 50;
+const SERVER_SYNC_COLUMN_BY_TABLE: Record<string, string | null> = {
+  fuel_water_logs: null,
+};
 
 // ============================================================
 // Retry with exponential backoff
@@ -126,17 +129,38 @@ export async function pushTable(tableName: string, dirtyRows: any[]): Promise<nu
 // NOTE: If your RLS already restricts reads to auth.uid(), this is fine.
 // If you want extra safety, add .eq("user_id", userId) to the query.
 // ============================================================
+function getRemoteRowSyncTimestamp(row: any): string | null {
+  if (typeof row?.updated_at === "string" && row.updated_at.length > 0) {
+    return row.updated_at;
+  }
+  if (typeof row?.created_at === "string" && row.created_at.length > 0) {
+    return row.created_at;
+  }
+  return null;
+}
+
 async function pullTable(tableName: string, lastSync: string | null): Promise<any[]> {
   return withRetry(
     async () => {
       let query: any = supabase.from(tableName).select("*");
-      if (lastSync) {
+      const serverSyncColumn = Object.prototype.hasOwnProperty.call(SERVER_SYNC_COLUMN_BY_TABLE, tableName)
+        ? SERVER_SYNC_COLUMN_BY_TABLE[tableName]
+        : "updated_at";
+      if (lastSync && serverSyncColumn) {
         // Use gt to avoid repeatedly re-pulling boundary rows
-        query = query.gt("updated_at", lastSync);
+        query = query.gt(serverSyncColumn, lastSync);
       }
       const { data, error } = await query;
       if (error) throw new Error(`Pull ${tableName}: ${error.message}`);
-      return data || [];
+      const rows = data || [];
+      if (!lastSync || serverSyncColumn) {
+        return rows;
+      }
+
+      return rows.filter((row: any) => {
+        const syncTimestamp = getRemoteRowSyncTimestamp(row);
+        return !syncTimestamp || syncTimestamp > lastSync;
+      });
     },
     `pull:${tableName}`,
   );
@@ -460,4 +484,3 @@ export function cancelAutoSync(): void {
 export function resetAutoSyncAttempts(): void {
   autoSyncAttempt = 0;
 }
-

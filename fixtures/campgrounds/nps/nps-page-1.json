@@ -1,0 +1,15 @@
+{
+  "total": "2",
+  "limit": "1",
+  "start": "0",
+  "data": [
+    {
+      "id": "nps-page-1",
+      "parkCode": "yose",
+      "name": "First NPS Campground",
+      "latitude": "37.1",
+      "longitude": "-119.1",
+      "url": "https://www.nps.gov/yose/planyourvisit/first.htm"
+    }
+  ]
+}

@@ -9,7 +9,7 @@
  * Uses accordion layout to keep panel compact.
  * Parent bottom sheet handles scrolling — no internal ScrollView.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,32 +20,17 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL } from '../../lib/theme';
+import {
+  alertIntelStore,
+  type AlertClosureEntry,
+  type AlertPermitEntry,
+  type AlertRestrictionEntry,
+} from '../../lib/alertIntelStore';
 
 // ── Data Types ───────────────────────────────────────────────
-interface PermitEntry {
-  id: string;
-  permitName: string;
-  issuingAuthority: string;
-  requiredFor: string;
-  effectiveDates: string;
-  notes: string;
-}
-
-interface RestrictionEntry {
-  id: string;
-  restrictionType: string;
-  areaZone: string;
-  effectiveDates: string;
-  notes: string;
-}
-
-interface ClosureEntry {
-  id: string;
-  closureReason: string;
-  areaRoute: string;
-  startEnd: string;
-  notes: string;
-}
+type PermitEntry = AlertPermitEntry;
+type RestrictionEntry = AlertRestrictionEntry;
+type ClosureEntry = AlertClosureEntry;
 
 type SectionKey = 'permits' | 'restrictions' | 'closures';
 
@@ -84,6 +69,25 @@ export default function PermitsAccessPanel({ onToast }: Props) {
   const [permits, setPermits] = useState<PermitEntry[]>([]);
   const [restrictions, setRestrictions] = useState<RestrictionEntry[]>([]);
   const [closures, setClosures] = useState<ClosureEntry[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    void alertIntelStore.waitForHydration().then(() => {
+      if (!active) return;
+      const persisted = alertIntelStore.getPermitsAccess();
+      setPermits(persisted.permits);
+      setRestrictions(persisted.restrictions);
+      setClosures(persisted.closures);
+      setIsHydrated(true);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // ── Toggle Section ─────────────────────────────────────────
   const toggleSection = useCallback((key: SectionKey) => {
@@ -133,9 +137,22 @@ export default function PermitsAccessPanel({ onToast }: Props) {
   }, []);
 
   // ── Save All ───────────────────────────────────────────────
-  const handleSaveAll = useCallback(() => {
-    onToast?.('Permits & access data saved locally');
-  }, [onToast]);
+  const handleSaveAll = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      await alertIntelStore.savePermitsAccess({
+        permits,
+        restrictions,
+        closures,
+      });
+      onToast?.('Permits & access notes saved locally');
+    } catch (error) {
+      console.warn('[PermitsAccessPanel] Failed to save local notes:', error);
+      onToast?.('Unable to save permits & access notes');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [closures, onToast, permits, restrictions]);
 
   // ── Section Config ─────────────────────────────────────────
   const sections: {
@@ -182,17 +199,28 @@ export default function PermitsAccessPanel({ onToast }: Props) {
           </View>
         </View>
         <TouchableOpacity
-          style={styles.saveAllBtn}
-          onPress={handleSaveAll}
+          style={[styles.saveAllBtn, isSaving && styles.saveAllBtnDisabled]}
+          onPress={() => void handleSaveAll()}
           activeOpacity={0.7}
+          disabled={isSaving}
         >
           <Ionicons name="checkmark-circle-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.saveAllBtnText}>SAVE</Text>
+          <Text style={styles.saveAllBtnText}>{isSaving ? 'SAVING' : 'SAVE'}</Text>
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.truthNote}>
+        <Ionicons name="document-text-outline" size={12} color={TACTICAL.textMuted} />
+        <Text style={styles.truthNoteText}>
+          Local planning notes only. Verify current permits, restrictions, and closures independently.
+        </Text>
       </View>
 
       {/* Content (no internal scroll — parent bottom sheet handles scrolling) */}
       <View style={styles.contentArea}>
+        {!isHydrated && (
+          <Text style={styles.emptyText}>Loading saved permits and access notes…</Text>
+        )}
         {sections.map(section => {
           const isExpanded = expandedSection === section.key;
 
@@ -490,11 +518,27 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(196, 138, 44, 0.3)',
     backgroundColor: 'rgba(196, 138, 44, 0.06)',
   },
+  saveAllBtnDisabled: {
+    opacity: 0.7,
+  },
   saveAllBtnText: {
     fontSize: 9,
     fontWeight: '800',
     color: TACTICAL.amber,
     letterSpacing: 1.5,
+  },
+  truthNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  truthNoteText: {
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
   },
 
   // Content area (replaces ScrollView)

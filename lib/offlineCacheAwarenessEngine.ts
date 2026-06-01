@@ -48,6 +48,7 @@ import type {
   ConnectivityIntelState,
   ConnectivityTelemetry,
 } from './connectivityIntelTypes';
+import { ecsLog } from './ecsLogger';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -108,12 +109,18 @@ let _lastEvalTime = 0;
 let _lastRouteId: string | null = null;
 let _lastGpsLat: number | null = null;
 let _lastGpsLon: number | null = null;
+let _lastInvalidationKey: string | null = null;
+let _lastInvalidationAt = 0;
+let _invalidationVersion = 0;
 
 /** Minimum interval between full re-evaluations (30 seconds) */
 const EVAL_INTERVAL_MS = 30_000;
 
 /** GPS movement threshold before re-evaluating (approx 0.5 miles) */
 const GPS_MOVEMENT_THRESHOLD_DEG = 0.007;
+
+/** Suppress duplicate invalidations during startup/store hydration fan-out */
+const INVALIDATION_DEDUPE_WINDOW_MS = 2_000;
 
 
 // ── Helpers ──────────────────────────────────────────────
@@ -182,6 +189,37 @@ function gpsMovedSignificantly(
     Math.abs(newLat - prevLat) > GPS_MOVEMENT_THRESHOLD_DEG ||
     Math.abs(newLon - prevLon) > GPS_MOVEMENT_THRESHOLD_DEG
   );
+}
+
+const VOLATILE_INVALIDATION_KEYS = new Set([
+  'captured_at',
+  'checked_at',
+  'evaluated_at',
+  'lastCheckedAt',
+  'lastRunAt',
+  'lastUpdatedAt',
+  'queried_at',
+  'reported_at',
+  'timestamp',
+]);
+
+function stableInvalidationValue(value: unknown, seen = new WeakSet<object>()): string {
+  if (value == null) return '';
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return `[${value.map(item => stableInvalidationValue(item, seen)).join(',')}]`;
+
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter(key => !VOLATILE_INVALIDATION_KEYS.has(key))
+    .sort()
+    .map(key => `${key}:${stableInvalidationValue(record[key], seen)}`)
+    .join(',')}}`;
+}
+
+function buildInvalidationKey(reason: string, sourceState?: unknown): string {
+  return `${reason || 'unspecified'}::${stableInvalidationValue(sourceState)}`;
 }
 
 
@@ -427,10 +465,40 @@ export function buildOfflineCacheProviderData(): ConnectivityProviderData {
  * Invalidate the cached readiness snapshot.
  * Call this when offline cache state changes (download, delete, etc.)
  */
-export function invalidateCacheReadiness(): void {
+export function invalidateCacheReadiness(reason = 'unspecified', sourceState?: unknown): boolean {
+  const now = Date.now();
+  const key = buildInvalidationKey(reason, sourceState);
+  const duplicateHydrationFanout =
+    key === _lastInvalidationKey &&
+    _cachedSnapshot == null &&
+    _lastEvalTime === 0;
+  const duplicateBurst =
+    key === _lastInvalidationKey &&
+    (now - _lastInvalidationAt) < INVALIDATION_DEDUPE_WINDOW_MS;
+
+  if (duplicateHydrationFanout || duplicateBurst) {
+    return false;
+  }
+
   _cachedSnapshot = null;
   _lastEvalTime = 0;
-  console.log('[OfflineCacheAwareness] Cache readiness invalidated');
+  _lastRouteId = null;
+  _lastGpsLat = null;
+  _lastGpsLon = null;
+  _lastInvalidationKey = key;
+  _lastInvalidationAt = now;
+  _invalidationVersion += 1;
+  ecsLog.dev('SYSTEM', 'Cache readiness invalidated', {
+    reason,
+    version: _invalidationVersion,
+  }, {
+    tag: '[OfflineCacheAwareness]',
+    debugFlag: 'ECS_DEBUG_OFFLINE_CACHE',
+    fingerprint: `cache-readiness:${reason}:${_invalidationVersion}`,
+    throttleMs: 5000,
+    aggregateWindowMs: 30_000,
+  });
+  return true;
 }
 
 /**

@@ -25,7 +25,7 @@ function TripsScreenInner() {
   const [profileTrip, setProfileTrip] = useState<Trip | null>(null);
   const [editFields, setEditFields] = useState<Partial<Trip>>({});
 
-  useFocusEffect(useCallback(() => { refreshTrips(); }, []));
+  useFocusEffect(useCallback(() => { refreshTrips(); }, [refreshTrips]));
 
   const createTrip = async () => {
     try {

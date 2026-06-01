@@ -30,6 +30,7 @@
 
 import type { RiskLevel, DynamicRiskResult, RouteContextStatus } from './terrainRiskEngine';
 import type { RemotenessOutput, RemotenessTier } from './remotenessStore';
+import { assessRouteRiskPriority } from './ai/priorityEngine';
 
 // Re-export RouteContextStatus from terrainRiskEngine for convenience.
 // The canonical definition lives in terrainRiskEngine to avoid circular deps.
@@ -388,6 +389,16 @@ export function applyRouteContextToRisk(
   return {
     riskScore: newScore,
     riskLevel: finalLevel,
+    confidence: riskResult.confidence,
+    priority: assessRouteRiskPriority({
+      riskLevel: finalLevel,
+      riskScore: newScore,
+      routeActive: true,
+      remotenessScore,
+      bailoutAvailable: routeContext.bailoutAvailable,
+      confidence: riskResult.confidence,
+      driver: newDrivers[0] ?? null,
+    }),
     drivers: newDrivers,
     terrainModifiers: riskResult.terrainModifiers,
     components: newComponents,

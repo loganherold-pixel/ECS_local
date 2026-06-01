@@ -23,7 +23,7 @@ export interface Trip {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface RiskScore {
@@ -38,7 +38,7 @@ export interface RiskScore {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface LoadItem {
@@ -56,7 +56,7 @@ export interface LoadItem {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface LoadMapSlot {
@@ -69,7 +69,7 @@ export interface LoadMapSlot {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface FuelWaterLog {
@@ -83,7 +83,7 @@ export interface FuelWaterLog {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 
@@ -104,7 +104,7 @@ export interface Waypoint {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  dirty?: boolean;
+  dirty?: boolean | number;
 }
 
 export interface UserSettings {
@@ -166,6 +166,27 @@ export interface Vehicle {
   water_capacity_gal: number | null;
   current_water_gal: number | null;
   water_updated_at: string | null;
+  battery_usable_wh?: number | null;
+  /** Local Fleet spec mirrors keep advanced/readiness inputs attached to the vehicle record without requiring cloud columns. */
+  fuel_type?: 'diesel' | 'gas' | null;
+  base_weight_lb?: number | null;
+  curb_weight_lb?: number | null;
+  empty_weight_lb?: number | null;
+  gvwr_lb?: number | null;
+  front_base_weight_lb?: number | null;
+  rear_base_weight_lb?: number | null;
+  front_gawr_lb?: number | null;
+  rear_gawr_lb?: number | null;
+  wheelbase_in?: number | null;
+  tire_size_inches?: number | null;
+  tire_width_inches?: number | null;
+  wheel_diameter_inches?: number | null;
+  tire_model?: string | null;
+  suspension_lift_inches?: number | null;
+  is_leveled?: boolean | null;
+  /** Front-only leveling amount, separate from total suspension lift. */
+  front_level_inches?: number | null;
+  ground_clearance_inches?: number | null;
   created_at: string;
   updated_at: string;
 }

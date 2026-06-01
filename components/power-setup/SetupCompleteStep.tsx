@@ -20,10 +20,9 @@ import { SPACING, RADIUS, GOLD_RAIL } from '../../lib/theme';
 import {
   PROVIDER_DISPLAY,
   DEVICE_ROLE_LABELS,
-  type PowerProviderId,
-  type DeviceRole,
   type ManagedPowerDevice,
 } from '../../lib/powerSetupStore';
+import { resolvePowerReadiness } from '../../lib/powerReadiness';
 
 interface Props {
   palette: any;
@@ -43,6 +42,15 @@ export default function SetupCompleteStep({
   const display = PROVIDER_DISPLAY[device.provider];
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const readiness = resolvePowerReadiness({
+    providerId: device.provider,
+    connectionMethod: device.connectionMethod,
+    connectionState: device.connectionState,
+    hasTelemetry:
+      device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+    hasStoredSnapshot:
+      device.lastSocPct != null || device.lastWattsIn != null || device.lastWattsOut != null,
+  });
 
   useEffect(() => {
     Animated.sequence([
@@ -58,9 +66,10 @@ export default function SetupCompleteStep({
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fadeAnim, scaleAnim]);
 
-  const batteryPct = device.lastSocPct ?? Math.floor(Math.random() * 40 + 60);
+  const batteryPct = device.lastSocPct;
+  const supportColor = readiness.color;
 
   return (
     <View style={styles.container}>
@@ -78,11 +87,9 @@ export default function SetupCompleteStep({
         </View>
       </Animated.View>
 
-      <Text style={[styles.successTitle, { color: '#34C759' }]}>
-        Power System Connected
-      </Text>
+      <Text style={[styles.successTitle, { color: supportColor }]}>Power System Saved</Text>
       <Text style={[styles.successSubtitle, { color: palette.textMuted }]}>
-        Your device is ready for expedition monitoring.
+        {readiness.detail}
       </Text>
 
       {/* Device Summary Card */}
@@ -121,8 +128,10 @@ export default function SetupCompleteStep({
         {/* Stats grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statItem}>
-            <Ionicons name="battery-half-outline" size={16} color="#34C759" />
-            <Text style={[styles.statValue, { color: '#34C759' }]}>{batteryPct}%</Text>
+            <Ionicons name="battery-half-outline" size={16} color={batteryPct != null ? '#34C759' : palette.textMuted} />
+            <Text style={[styles.statValue, { color: batteryPct != null ? '#34C759' : palette.textMuted }]}>
+              {batteryPct != null ? `${batteryPct}%` : '—'}
+            </Text>
             <Text style={[styles.statLabel, { color: palette.textMuted }]}>BATTERY</Text>
           </View>
           <View style={[styles.statDivider, { backgroundColor: palette.border }]} />
@@ -135,11 +144,23 @@ export default function SetupCompleteStep({
           </View>
           <View style={[styles.statDivider, { backgroundColor: palette.border }]} />
           <View style={styles.statItem}>
-            <Ionicons name="checkmark-circle" size={16} color="#34C759" />
-            <Text style={[styles.statValue, { color: '#34C759' }]}>Active</Text>
-            <Text style={[styles.statLabel, { color: palette.textMuted }]}>STATUS</Text>
+            <Ionicons name={readiness.icon as any} size={16} color={supportColor} />
+            <Text style={[styles.statValue, { color: supportColor }]}>{readiness.label}</Text>
+            <Text style={[styles.statLabel, { color: palette.textMuted }]}>STATE</Text>
           </View>
         </View>
+
+        <View style={[styles.summaryDivider, { backgroundColor: GOLD_RAIL.subsection }]} />
+
+        <View style={styles.detailRow}>
+          <Text style={[styles.detailLabel, { color: palette.textMuted }]}>PROVIDER STATE</Text>
+          <Text style={[styles.detailValue, { color: supportColor }]}>
+            {readiness.label}
+          </Text>
+        </View>
+        <Text style={[styles.supportNote, { color: palette.textMuted }]}>
+          {readiness.summary}
+        </Text>
 
         <View style={[styles.summaryDivider, { backgroundColor: GOLD_RAIL.subsection }]} />
 
@@ -244,6 +265,7 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
   detailLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase' },
   detailValue: { fontSize: 13, fontWeight: '600' },
+  supportNote: { fontSize: 11, lineHeight: 16, marginBottom: 2 },
 
   // Actions
   actions: { width: '100%', gap: SPACING.sm },

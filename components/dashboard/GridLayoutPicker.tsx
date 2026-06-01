@@ -7,7 +7,7 @@
  * Each option shows a mini visual preview of the grid arrangement
  * with the active layout highlighted in amber.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import {
   GRID_LAYOUTS_ORDERED,
   type GridLayout,
 } from '../../lib/dashboardStore';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 interface GridLayoutPickerProps {
   currentLayout: GridLayout;
@@ -91,8 +92,8 @@ const miniStyles = StyleSheet.create({
 
 export default function GridLayoutPicker({ currentLayout, onSelect, disabled }: GridLayoutPickerProps) {
   const [pickerVisible, setPickerVisible] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.9)).current;
+  const fadeAnim = useStableAnimatedValue(0);
+  const scaleAnim = useStableAnimatedValue(0.9);
 
   useEffect(() => {
     if (pickerVisible) {
@@ -104,7 +105,7 @@ export default function GridLayoutPicker({ currentLayout, onSelect, disabled }: 
       fadeAnim.setValue(0);
       scaleAnim.setValue(0.9);
     }
-  }, [pickerVisible]);
+  }, [pickerVisible, fadeAnim, scaleAnim]);
 
   const handleSelect = (layout: GridLayout) => {
     onSelect(layout);
@@ -133,7 +134,7 @@ export default function GridLayoutPicker({ currentLayout, onSelect, disabled }: 
       </TouchableOpacity>
 
       {/* Picker Modal */}
-      <ECSModal visible={pickerVisible} onClose={() => setPickerVisible(false)} tier="global">
+      <ECSModal visible={pickerVisible} onClose={() => setPickerVisible(false)} tier="global" stackBehavior="replace">
 
         <TouchableOpacity
           style={styles.backdrop}

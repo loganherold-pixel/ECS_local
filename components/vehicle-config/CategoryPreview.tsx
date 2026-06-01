@@ -173,7 +173,7 @@ export default function CategoryPreview({
       }).start();
       prevTypeRef.current = null;
     }
-  }, [selectedVehicleType]);
+  }, [selectedVehicleType, fadeAnim, scaleAnim]);
 
   if (!categoryEntry) {
     return null;

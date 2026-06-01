@@ -646,7 +646,7 @@ export default function ExpeditionArchiveScreen() {
             ListFooterComponent={
               <View style={styles.listFooter}>
                 <Text style={styles.footerText}>
-                  {filteredExpeditions.length} EXPEDITION{filteredExpeditions.length !== 1 ? 'S' : ''}  //  ECS ARCHIVE
+                  {`${filteredExpeditions.length} EXPEDITION${filteredExpeditions.length !== 1 ? 'S' : ''} | ECS ARCHIVE`}
                 </Text>
               </View>
             }

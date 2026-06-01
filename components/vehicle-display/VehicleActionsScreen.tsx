@@ -15,7 +15,6 @@ import { View, StyleSheet, Text, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type {
   VehicleAction,
-  VehicleActionType,
   VehicleDisplayMode,
 } from '../../lib/vehicleDisplayTypes';
 
@@ -23,6 +22,7 @@ import {
   HIGHWAY_ACTIONS,
   EXPEDITION_ACTIONS,
 } from '../../lib/vehicleDisplayTypes';
+import { vehicleDisplayStore } from '../../lib/vehicleDisplayStore';
 
 interface Props {
   mode: VehicleDisplayMode;
@@ -31,7 +31,6 @@ interface Props {
 
 export default function VehicleActionsScreen({ mode, actions }: Props) {
   const isExpedition = mode === 'expedition_drive';
-  const accentColor = isExpedition ? '#D4A017' : '#5B8DEF';
 
   // Use the provided actions, or fall back to defaults
   const displayActions = actions.length > 0

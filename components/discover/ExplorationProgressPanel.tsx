@@ -148,7 +148,7 @@ export default function ExplorationProgressPanel({
             <Text style={s.panelSubtitle}>
               {hasCompletions
                 ? `${progressLabel} · ${stats.completionPercentage}% of routes explored`
-                : 'Track your Discovery route completions'
+                : 'Track your completed Explore routes'
               }
             </Text>
           </View>
@@ -298,7 +298,7 @@ export default function ExplorationProgressPanel({
             <Ionicons name="trail-sign-outline" size={24} color={TACTICAL.textMuted} />
             <Text style={s.emptyTitle}>NO ROUTES EXPLORED YET</Text>
             <Text style={s.emptyDesc}>
-              Drive Discovery routes to track your exploration progress.
+              Drive Explore routes to track your exploration progress.
               ECS will record completed routes and visualize your journey.
             </Text>
           </View>
@@ -311,7 +311,7 @@ export default function ExplorationProgressPanel({
         <Text style={s.panelFooterText}>
           {hasCompletions
             ? `${stats.totalRoutesCompleted} of ${totalAvailableRoutes} routes explored · ${stats.totalMilesExplored} total miles · ${stats.regionsExplored} region${stats.regionsExplored !== 1 ? 's' : ''} visited. Routes are marked complete when 60% of trail distance is traveled.`
-            : 'Exploration progress tracks routes you complete through Discovery. Data is stored locally and survives app restarts.'
+            : 'Exploration progress tracks routes you complete through Explore. Data is stored locally and survives app restarts.'
           }
         </Text>
       </View>

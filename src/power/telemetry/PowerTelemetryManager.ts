@@ -26,6 +26,12 @@ import type {
   PowerCapabilities,
   PowerConnectionState,
 } from "../types/PowerTelemetry";
+import {
+  getPowerTruthLabel,
+  normalizePowerTelemetryTruth,
+} from "../types/PowerTelemetry";
+import { ecsTelemetryStore } from "../../telemetry/ECSTelemetryStore";
+import { canonicalPowerTelemetryToEcsTelemetryEvents } from "../../telemetry/telemetryAdapters";
 import { powerSampleBuffer } from "./PowerSampleBuffer";
 import type { PowerSample } from "./PowerSampleBuffer";
 import { detectLoadEvents } from "../detect/loadDetection";
@@ -50,14 +56,14 @@ const DEFAULT_CAPABILITIES: PowerCapabilities = {
  * the corresponding key in `base`. Returns a new object — neither
  * argument is mutated.
  */
-function mergeObject<T extends Record<string, unknown>>(
+function mergeObject<T extends object>(
   base: T | undefined,
   patch: T | undefined,
 ): T | undefined {
   if (!patch) return base;
   if (!base) return { ...patch };
-  const out = { ...base } as Record<string, unknown>;
-  for (const key of Object.keys(patch)) {
+  const out = { ...(base as object) } as Record<string, unknown>;
+  for (const key of Object.keys(patch as object)) {
     const val = (patch as Record<string, unknown>)[key];
     if (val !== undefined) {
       out[key] = val;
@@ -76,11 +82,15 @@ function deepMergeTelemetry(
   current: PowerTelemetry,
   partial: Partial<PowerTelemetry>,
 ): PowerTelemetry {
-  return {
+  const merged: PowerTelemetry = {
     // Primitives — partial overrides current if defined
     timestamp:
       partial.timestamp !== undefined ? partial.timestamp : current.timestamp,
     source: partial.source !== undefined ? partial.source : current.source,
+    sourceLabel:
+      partial.sourceLabel !== undefined ? partial.sourceLabel : current.sourceLabel,
+    isLive:
+      partial.isLive !== undefined ? partial.isLive : current.isLive,
 
     // Nested objects — merge one level deep
     device: mergeObject(current.device, partial.device)!,
@@ -93,6 +103,19 @@ function deepMergeTelemetry(
     capabilities: partial.capabilities
       ? mergeObject(current.capabilities, partial.capabilities)!
       : current.capabilities,
+
+    truth: partial.truth ?? current.truth,
+  };
+  const truth = normalizePowerTelemetryTruth(merged);
+  return {
+    ...merged,
+    truth,
+    sourceLabel: partial.sourceLabel ?? getPowerTruthLabel(truth),
+    isLive: truth.isLive,
+    flags: {
+      ...(merged.flags ?? {}),
+      stale: truth.isStale,
+    },
   };
 }
 
@@ -146,6 +169,30 @@ class PowerTelemetryManager {
     this.connector = undefined;
   }
 
+  /**
+   * Clear live telemetry after an explicit disconnect so widgets do not keep
+   * rendering stale "connected" values while the scanner is already offline.
+   */
+  clearDisconnectedDevice(deviceId?: string | null): void {
+    this.detachConnector();
+    this.stopDetection();
+
+    if (
+      deviceId &&
+      this.current?.device?.id &&
+      this.current.device.id !== deviceId
+    ) {
+      return;
+    }
+
+    const clearedDeviceId = deviceId ?? this.current?.device?.id ?? null;
+    this.current = null;
+    if (clearedDeviceId) {
+      ecsTelemetryStore.markDeviceUnavailable(clearedDeviceId, 'power_device', 'Power telemetry disconnected.');
+    }
+    this.notifySubscribers();
+  }
+
   // ── Driver lifecycle ────────────────────────────────────────────────
 
   /**
@@ -184,7 +231,14 @@ class PowerTelemetryManager {
       // First reading — initialise with safe defaults, then merge
       const skeleton: PowerTelemetry = {
         timestamp: Date.now(),
-        source: "sim",
+        source: "unavailable",
+        sourceLabel: "Unavailable",
+        isLive: false,
+        truth: normalizePowerTelemetryTruth({
+          source: "unavailable",
+          timestamp: Date.now(),
+          device: { id: "unpaired", vendor: "unknown" },
+        }),
         device: { id: "unpaired", vendor: "unknown" },
         capabilities: { ...DEFAULT_CAPABILITIES },
         quality: { connection: "idle" },
@@ -193,6 +247,7 @@ class PowerTelemetryManager {
     } else {
       this.current = deepMergeTelemetry(this.current, partial);
     }
+    ecsTelemetryStore.ingestEvents(canonicalPowerTelemetryToEcsTelemetryEvents(this.current));
     // ── Phase 3I-1: push sample into ring buffer ──────────────────────
     this.pushSample();
 

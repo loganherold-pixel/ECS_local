@@ -1,51 +1,102 @@
-/**
- * ═══════════════════════════════════════════════════════════
- * ECS VEHICLE TELEMETRY WIDGET
- * ═══════════════════════════════════════════════════════════
- *
- * Dashboard widget for live OBD-II vehicle telemetry.
- * Three display modes:
- *   - Compact: RPM, Coolant, Voltage, Fuel (glanceable)
- *   - Card: Full telemetry with freshness indicator
- *   - Detail: Expanded view with all available PIDs
- *
- * Designed for expedition use — large text, high contrast,
- * readable while driving.
- */
-
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import { ECSButton } from '../ECSButton';
+import ECSActionRow from '../ECSActionRow';
+
 import { TACTICAL } from '../../lib/theme';
+import { resolveTelemetrySourceState } from '../../lib/telemetrySourceState';
+import { publishTelemetryBriefAdvisories } from '../../lib/telemetryBriefPublisher';
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
-import { useOBD2Scanner } from '../../src/vehicle-telemetry/useOBD2Scanner';
+import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
+import OBD2ScannerModal from '../vehicle-telemetry/OBD2ScannerModal';
 import { evaluateOBDTelemetry, getAlertSeverityColor } from '../../lib/obdIntelligenceEngine';
 import type { OBDIntelligenceAlert } from '../../lib/obdIntelligenceEngine';
+import {
+  WidgetCardShell,
+  WidgetEmptyState,
+  WidgetMetaLine,
+} from './WidgetChrome';
+import type { WidgetTone } from './WidgetChrome';
+import {
+  WidgetDetailLeadCard,
+  WidgetDetailSectionTitle,
+  WidgetDetailStateCard,
+} from './WidgetDetailChrome';
+import type { VehicleTelemetrySnapshot } from '../../src/types/telemetry';
 
-// ═══════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════
+type VehicleTelemetryState = ReturnType<typeof useVehicleTelemetry>;
+type VehicleTelemetryScannerState = ReturnType<typeof useUnifiedOBD2Scanner>;
+type VehicleTelemetrySourceState = ReturnType<typeof resolveTelemetrySourceState>;
+
+type VehicleTelemetryMetric = {
+  label: string;
+  value: string;
+  color?: string;
+};
+
+type VehicleTelemetryFieldDefinition = {
+  key: keyof VehicleTelemetrySnapshot;
+  label: string;
+  formatter: (value: unknown) => string;
+};
+
+function logVehicleTelemetryWidgetDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
 
 function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <View style={ms.row}>
-      <Text style={ms.label}>{label}</Text>
-      <Text style={[ms.value, color ? { color } : null]}>{value}</Text>
+    <View style={styles.metricRow}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={[styles.metricValue, color ? { color } : null]} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
 
-const ms = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
-  label: { fontSize: 9, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1 },
-  value: { fontSize: 11, fontWeight: '800', color: TACTICAL.text, fontFamily: 'Courier' },
-});
+function TelemetryMetricTile({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  return (
+    <View style={styles.metricTile}>
+      <Text style={styles.metricTileLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text
+        style={[styles.metricTileValue, color ? { color } : null]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function TelemetryActionNote({ children }: { children: React.ReactNode }) {
+  return (
+    <Text style={styles.actionNote} numberOfLines={2}>
+      {children}
+    </Text>
+  );
+}
 
 const ENGINE_STATUS: Record<string, { label: string; color: string }> = {
   running: { label: 'RUNNING', color: '#4CAF50' },
   idle: { label: 'IDLE', color: TACTICAL.amber },
   off: { label: 'OFF', color: TACTICAL.textMuted },
-  unknown: { label: '\u2014', color: TACTICAL.textMuted },
+  unknown: { label: 'UNKNOWN', color: TACTICAL.textMuted },
 };
 
 const FRESHNESS_COLORS: Record<string, string> = {
@@ -58,7 +109,6 @@ const FRESHNESS_COLORS: Record<string, string> = {
 
 function getBattColor(v: number | null): string {
   if (v == null) return TACTICAL.textMuted;
-  if (v >= 13.5) return '#4CAF50';
   if (v >= 12.4) return '#4CAF50';
   if (v >= 11.8) return '#FFB300';
   return '#EF5350';
@@ -78,361 +128,1134 @@ function getFuelColor(f: number | null): string {
   return '#EF5350';
 }
 
-// ═══════════════════════════════════════════════════════════
-// COMPACT MODE — For dashboard grid (collapsed)
-// ═══════════════════════════════════════════════════════════
+function getVehicleTelemetrySourceState(vt: VehicleTelemetryState) {
+  return resolveTelemetrySourceState({
+    sourceType: vt.snapshot.sourceType,
+    freshness: vt.snapshot.freshness,
+    updatedAt: vt.snapshot.updatedAt,
+    isStreaming: vt.snapshot.isLive,
+  });
+}
+
+function getConnectionLabel(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  if (sourceState.isHighConfidenceLive) return `${sourceState.label} telemetry`;
+  if (sourceState.isRecent) return 'Recent telemetry';
+  if (sourceState.isStale) return 'Stale telemetry';
+  if (sourceState.isManual) return 'Manual telemetry';
+  if (sourceState.isSimulated) return 'Simulation telemetry';
+  if (scanner.isConnected || vt.snapshot.unsupportedReason) return 'Connected — telemetry not yet decoded';
+  if (vt.freshnessLabel === 'reconnecting') return 'Telemetry reconnecting';
+  return 'Telemetry source unavailable';
+}
+
+function formatBatteryVoltage(value: number | null | undefined) {
+  return value != null ? `${value.toFixed(1)}V` : '--';
+}
+
+function formatFuelLevel(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}%` : '--';
+}
+
+function formatCoolantTemp(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}F` : '--';
+}
+
+function formatRpm(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}` : '--';
+}
+
+function formatEngineLoad(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}%` : '--';
+}
+
+function formatSpeed(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)} MPH` : '--';
+}
+
+function formatDegrees(value: number | null | undefined) {
+  return value != null ? `${value.toFixed(1)} deg` : '--';
+}
+
+function formatGenericPercent(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}%` : '--';
+}
+
+function formatIntakeTemp(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)}F` : '--';
+}
+
+function formatRange(value: number | null | undefined) {
+  return value != null ? `${Math.round(value)} mi` : '--';
+}
+
+function hasTelemetryMetricValue(value: number | null | undefined): value is number {
+  return value != null && Number.isFinite(value);
+}
+
+const VEHICLE_TELEMETRY_FIELDS: VehicleTelemetryFieldDefinition[] = [
+  { key: 'speedMph', label: 'Speed', formatter: (value) => formatSpeed(value as number | null | undefined) },
+  { key: 'rpm', label: 'RPM', formatter: (value) => formatRpm(value as number | null | undefined) },
+  { key: 'coolantTempF', label: 'Coolant', formatter: (value) => formatCoolantTemp(value as number | null | undefined) },
+  { key: 'intakeTempF', label: 'Intake', formatter: (value) => formatIntakeTemp(value as number | null | undefined) },
+  { key: 'engineLoadPct', label: 'Engine Load', formatter: (value) => formatGenericPercent(value as number | null | undefined) },
+  { key: 'throttlePct', label: 'Throttle', formatter: (value) => formatGenericPercent(value as number | null | undefined) },
+  { key: 'batteryVoltage', label: 'Battery', formatter: (value) => formatBatteryVoltage(value as number | null | undefined) },
+  { key: 'fuelLevelPct', label: 'Fuel', formatter: (value) => formatFuelLevel(value as number | null | undefined) },
+  { key: 'rangeMiles', label: 'Range', formatter: (value) => formatRange(value as number | null | undefined) },
+  { key: 'oilTempF', label: 'Oil Temp', formatter: (value) => formatIntakeTemp(value as number | null | undefined) },
+  { key: 'transmissionTempF', label: 'Trans Temp', formatter: (value) => formatIntakeTemp(value as number | null | undefined) },
+  { key: 'pitchDeg', label: 'Pitch', formatter: (value) => formatDegrees(value as number | null | undefined) },
+  { key: 'rollDeg', label: 'Roll', formatter: (value) => formatDegrees(value as number | null | undefined) },
+  { key: 'headingDeg', label: 'Heading', formatter: (value) => formatDegrees(value as number | null | undefined) },
+];
+
+function getTelemetryDetailSourceLabel(snapshot: VehicleTelemetrySnapshot, sourceState: VehicleTelemetrySourceState) {
+  switch (snapshot.sourceType) {
+    case 'obd_live':
+      return sourceState.isHighConfidenceLive ? 'OBD Live' : sourceState.label;
+    case 'ble_live':
+      return sourceState.isHighConfidenceLive ? 'BLE Live' : sourceState.label;
+    case 'device_sensor':
+      return sourceState.isHighConfidenceLive || sourceState.isRecent ? 'Device Attitude' : sourceState.label;
+    case 'manual':
+      return 'Manual Profile';
+    case 'cached':
+      return sourceState.isStale ? 'Cached - stale' : 'Cached';
+    case 'simulated':
+      return 'Simulation';
+    case 'unavailable':
+    default:
+      return 'Unavailable';
+  }
+}
+
+function buildVehicleTelemetryMetrics(snapshot: VehicleTelemetrySnapshot): VehicleTelemetryMetric[] {
+  const metrics: VehicleTelemetryMetric[] = [];
+
+  if (hasTelemetryMetricValue(snapshot.rpm)) {
+    metrics.push({ label: 'RPM', value: formatRpm(snapshot.rpm) });
+  }
+  if (hasTelemetryMetricValue(snapshot.speedMph)) {
+    metrics.push({ label: 'SPD', value: formatSpeed(snapshot.speedMph) });
+  }
+  if (hasTelemetryMetricValue(snapshot.batteryVoltage)) {
+    metrics.push({
+      label: 'BATT',
+      value: formatBatteryVoltage(snapshot.batteryVoltage),
+      color: getBattColor(snapshot.batteryVoltage),
+    });
+  }
+  if (hasTelemetryMetricValue(snapshot.fuelLevelPct)) {
+    metrics.push({
+      label: 'FUEL',
+      value: formatFuelLevel(snapshot.fuelLevelPct),
+      color: getFuelColor(snapshot.fuelLevelPct),
+    });
+  }
+  if (hasTelemetryMetricValue(snapshot.coolantTempF)) {
+    metrics.push({
+      label: 'COOL',
+      value: formatCoolantTemp(snapshot.coolantTempF),
+      color: getCoolantColor(snapshot.coolantTempF),
+    });
+  }
+  if (hasTelemetryMetricValue(snapshot.engineLoadPct)) {
+    metrics.push({ label: 'LOAD', value: formatEngineLoad(snapshot.engineLoadPct) });
+  }
+
+  return metrics;
+}
+
+function hasDisplayableTelemetry(
+  vt: VehicleTelemetryState,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  const hasSource =
+    sourceState.isHighConfidenceLive ||
+    sourceState.isRecent ||
+    sourceState.isStale ||
+    sourceState.isManual ||
+    sourceState.isSimulated;
+  return hasSource && buildVehicleTelemetryMetrics(vt.snapshot).length > 0;
+}
+
+function getTelemetryBadge(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  if (sourceState.isHighConfidenceLive) {
+    return { label: sourceState.label.toUpperCase(), tone: 'live' as const };
+  }
+  if (sourceState.isRecent) {
+    return { label: 'RECENT TELEMETRY', tone: 'attention' as const };
+  }
+  if (sourceState.isStale) {
+    return { label: 'STALE TELEMETRY', tone: 'stale' as const };
+  }
+  if (sourceState.isManual) {
+    return { label: 'MANUAL TELEMETRY', tone: 'attention' as const };
+  }
+  if (sourceState.isSimulated) {
+    return { label: 'SIMULATION', tone: 'warning' as const };
+  }
+  if (!scanner.isConnected && !vt.hasData) {
+    return { label: 'TELEMETRY UNAVAILABLE', tone: 'unavailable' as const };
+  }
+  if (scanner.isConnected && vt.freshnessLabel === 'reconnecting') {
+    return { label: 'TELEMETRY RECONNECTING', tone: 'attention' as const };
+  }
+  if (scanner.isConnected) {
+    return { label: 'CONNECTED - NOT DECODED', tone: 'attention' as const };
+  }
+  return { label: 'TELEMETRY UNAVAILABLE', tone: 'unavailable' as const };
+}
+
+function getTelemetryFooter(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  const tone: WidgetTone = sourceState.isUnavailable && scanner.isConnected
+    ? 'attention'
+    : sourceState.tone;
+
+  if (vt.lastUpdatedText) {
+    return {
+      text: `${sourceState.label} | ${vt.lastUpdatedText}`,
+      tone,
+    };
+  }
+  if (scanner.isConnected) {
+    return {
+      text: vt.snapshot.unsupportedReason ?? 'Connected — telemetry not yet decoded',
+      tone,
+    };
+  }
+  return {
+    text: sourceState.isUnavailable ? 'Telemetry source unavailable' : sourceState.label,
+    tone,
+  };
+}
+
+function getTelemetryAlert(vt: VehicleTelemetryState): OBDIntelligenceAlert | null {
+  if (!vt.snapshot.isLive) return null;
+  return evaluateOBDTelemetry(vt.rawTelemetry)[0] ?? null;
+}
+
+function useVehicleTelemetryBriefPublisher(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+) {
+  const lastPublishSignatureRef = useRef<string | null>(null);
+  const latestPublishInputRef = useRef({
+    snapshot: vt.snapshot,
+    scannerConnected: scanner.isConnected,
+    scannerSourceStatus: scanner.sourceStatus,
+    deviceId: scanner.connectedDeviceId ?? vt.snapshot.deviceId ?? vt.primaryDevice?.device_id ?? null,
+    deviceName: scanner.connectedDeviceName ?? vt.primaryDevice?.device_name ?? null,
+  });
+  const publishSignature = [
+    vt.snapshot.sourceType,
+    vt.snapshot.freshness,
+    vt.snapshot.confidence,
+    vt.snapshot.updatedAt,
+    vt.snapshot.batteryVoltage,
+    vt.snapshot.coolantTempF,
+    vt.snapshot.transmissionTempF,
+    vt.snapshot.isLive,
+    vt.snapshot.deviceId,
+    scanner.isConnected,
+    scanner.sourceStatus,
+    scanner.connectedDeviceId,
+  ].join('|');
+  latestPublishInputRef.current = {
+    snapshot: vt.snapshot,
+    scannerConnected: scanner.isConnected,
+    scannerSourceStatus: scanner.sourceStatus,
+    deviceId: scanner.connectedDeviceId ?? vt.snapshot.deviceId ?? vt.primaryDevice?.device_id ?? null,
+    deviceName: scanner.connectedDeviceName ?? vt.primaryDevice?.device_name ?? null,
+  };
+
+  useEffect(() => {
+    if (lastPublishSignatureRef.current === publishSignature) return;
+    lastPublishSignatureRef.current = publishSignature;
+    publishTelemetryBriefAdvisories(latestPublishInputRef.current);
+  }, [publishSignature]);
+}
+
+function getAlertSummary(alert: OBDIntelligenceAlert | null) {
+  if (!alert) return null;
+  return `${alert.category.trim()} ${alert.severity.trim()}`.toUpperCase();
+}
+
+function getAlertTone(alert: OBDIntelligenceAlert | null) {
+  if (!alert) return null;
+  if (alert.severity === 'critical') return '#EF5350';
+  if (alert.severity === 'warning') return '#FFB300';
+  if (alert.severity === 'caution') return '#FFB74D';
+  return '#4CAF50';
+}
+
+function getDiagnosticsSummary(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  alert: OBDIntelligenceAlert | null,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  if (alert) return getAlertSummary(alert) ?? 'ACTIVE ALERT';
+  if (!scanner.isConnected && !hasDisplayableTelemetry(vt, sourceState)) return 'UNAVAILABLE';
+  if (!hasDisplayableTelemetry(vt, sourceState) && scanner.isConnected) return 'NOT DECODED';
+  if (vt.freshnessLabel === 'reconnecting') return 'RECONNECTING';
+  return sourceState.label.toUpperCase();
+}
+
+function getDiagnosticsTone(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  alert: OBDIntelligenceAlert | null,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  if (alert) return getAlertTone(alert) ?? TACTICAL.text;
+  if (!scanner.isConnected && !hasDisplayableTelemetry(vt, sourceState)) return TACTICAL.textMuted;
+  if (!hasDisplayableTelemetry(vt, sourceState) && scanner.isConnected) return '#FFB300';
+  if (vt.freshnessLabel === 'reconnecting') return '#FFB300';
+  if (sourceState.isStale || sourceState.isRecent) return '#FFB300';
+  if (sourceState.isManual || sourceState.isSimulated) return TACTICAL.amber;
+  return '#4CAF50';
+}
+
+function getCompactEventText(
+  vt: VehicleTelemetryState,
+  scanner: VehicleTelemetryScannerState,
+  alert: OBDIntelligenceAlert | null,
+  sourceState: VehicleTelemetrySourceState = getVehicleTelemetrySourceState(vt),
+) {
+  if (alert) return getAlertSummary(alert) ?? 'ACTIVE ALERT';
+  if (!scanner.isConnected && !hasDisplayableTelemetry(vt, sourceState)) return 'Telemetry source unavailable';
+  if (!hasDisplayableTelemetry(vt, sourceState) && scanner.isConnected) return 'Connected - not decoded';
+  if (vt.freshnessLabel === 'reconnecting') return 'Reconnecting telemetry feed';
+  return sourceState.label;
+}
+
+function getAlertListSignature(alerts: OBDIntelligenceAlert[]): string {
+  return alerts
+    .map((alert) => `${alert.category}:${alert.severity}:${alert.message}`)
+    .join('|');
+}
 
 export function VehicleTelemetryCompact() {
   const vt = useVehicleTelemetry();
-  const hasData = vt.hasData && (vt.freshnessLabel === 'live' || vt.freshnessLabel === 'reconnecting' || vt.isWithinGraceWindow);
+  const scanner = useUnifiedOBD2Scanner();
+  useVehicleTelemetryBriefPublisher(vt, scanner);
+  const sourceState = getVehicleTelemetrySourceState(vt);
+  const badge = getTelemetryBadge(vt, scanner, sourceState);
+  const footer = getTelemetryFooter(vt, scanner, sourceState);
+  const alert = getTelemetryAlert(vt);
+  const eventText = getCompactEventText(vt, scanner, alert, sourceState);
+  const eventColor = getDiagnosticsTone(vt, scanner, alert, sourceState);
+  const hasRenderableData = hasDisplayableTelemetry(vt, sourceState);
+  const metrics = buildVehicleTelemetryMetrics(vt.snapshot).slice(0, 2);
+  const lastWidgetLogSignatureRef = useRef<string | null>(null);
+  const {
+    batteryVoltage,
+    coolantTempF,
+    engineLoadPct,
+    fuelLevelPct,
+    rpm,
+    sourceType,
+    speedMph,
+    transmissionTempF,
+  } = vt.snapshot;
+  const widgetLogSignature = useMemo(() => {
+    const fields = [
+      ['batteryVoltage', batteryVoltage],
+      ['coolantTempF', coolantTempF],
+      ['engineLoadPct', engineLoadPct],
+      ['fuelLevelPct', fuelLevelPct],
+      ['rpm', rpm],
+      ['speedMph', speedMph],
+      ['transmissionTempF', transmissionTempF],
+    ].filter(([, value]) => value != null).map(([key]) => String(key));
+    return {
+      fields,
+      signature: `${sourceType}|${sourceState.label}|${fields.join(',')}`,
+    };
+  }, [
+    batteryVoltage,
+    coolantTempF,
+    engineLoadPct,
+    fuelLevelPct,
+    rpm,
+    sourceState.label,
+    sourceType,
+    speedMph,
+    transmissionTempF,
+  ]);
 
-  if (!hasData) {
+  useEffect(() => {
+    if (lastWidgetLogSignatureRef.current === widgetLogSignature.signature) return;
+    lastWidgetLogSignatureRef.current = widgetLogSignature.signature;
+    logVehicleTelemetryWidgetDev('[VEHICLE_TELEMETRY_WIDGET] render', {
+      sourceType: vt.snapshot.sourceType,
+      sourceState: sourceState.label,
+      fields: widgetLogSignature.fields,
+    });
+  }, [sourceState.label, vt.snapshot.sourceType, widgetLogSignature]);
+
+  if (!scanner.isConnected && !hasRenderableData) {
     return (
-      <View style={cs.row}>
-        <View style={cs.cell}>
-          <Text style={[cs.value, { fontSize: 9, color: TACTICAL.textMuted }]}>NO OBD</Text>
+      <WidgetCardShell
+        badge={badge}
+        footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+      >
+        <View style={styles.compactUnavailableState}>
+          <Text style={styles.compactUnavailableTitle}>Telemetry unavailable</Text>
+          <Text style={styles.compactUnavailableText} numberOfLines={2}>
+            Connect a supported vehicle feed.
+          </Text>
         </View>
-      </View>
+      </WidgetCardShell>
     );
   }
 
-  const rpm = vt.summary.engine_rpm;
-  const coolant = vt.summary.coolant_temp;
-  const voltage = vt.summary.battery_voltage;
+  if (scanner.isConnected && !hasRenderableData) {
+    return (
+      <WidgetCardShell
+        badge={badge}
+        footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+      >
+        <View style={styles.compactUnavailableState}>
+          <Text style={styles.compactUnavailableTitle}>Connected — telemetry not yet decoded</Text>
+          <Text style={styles.compactUnavailableText} numberOfLines={2}>
+            ECS is waiting for readable vehicle signals.
+          </Text>
+        </View>
+      </WidgetCardShell>
+    );
+  }
 
   return (
-    <View style={cs.row}>
-      <View style={cs.cell}>
-        <Text style={cs.label}>RPM</Text>
-        <Text style={cs.value}>{rpm != null ? Math.round(rpm).toString() : '\u2014'}</Text>
+    <WidgetCardShell
+      badge={badge}
+      footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+    >
+      <View style={styles.compactTelemetryShell}>
+        {metrics.length > 0 ? (
+          <View style={styles.snapshotRow}>
+            {metrics.map((metric) => (
+              <TelemetryMetricTile
+                key={metric.label}
+                label={metric.label}
+                value={metric.value}
+                color={metric.color}
+              />
+            ))}
+          </View>
+        ) : null}
+        <View style={styles.compactEventBand}>
+          <Text style={styles.compactEventLabel} numberOfLines={1}>
+            SOURCE
+          </Text>
+          <Text
+            style={[styles.compactEventValue, { color: eventColor }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            {eventText}
+          </Text>
+        </View>
       </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>COOL</Text>
-        <Text style={[cs.value, { color: getCoolantColor(coolant) }]}>
-          {coolant != null ? `${Math.round(coolant)}°` : '\u2014'}
-        </Text>
-      </View>
-      <View style={cs.cell}>
-        <Text style={cs.label}>BATT</Text>
-        <Text style={[cs.value, { color: getBattColor(voltage) }]}>
-          {voltage != null ? `${voltage.toFixed(1)}` : '\u2014'}
-        </Text>
-      </View>
-    </View>
+    </WidgetCardShell>
   );
 }
-
-const cs = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  cell: { flex: 1, alignItems: 'center' },
-  label: { fontSize: 7, fontWeight: '700', color: TACTICAL.textMuted, letterSpacing: 1, marginBottom: 1 },
-  value: { fontSize: 12, fontWeight: '900', fontFamily: 'Courier', color: TACTICAL.text },
-});
-
-// ═══════════════════════════════════════════════════════════
-// CARD MODE — For dashboard grid (full card)
-// ═══════════════════════════════════════════════════════════
 
 export function VehicleTelemetryCard() {
   const vt = useVehicleTelemetry();
-  const scanner = useOBD2Scanner();
-  const hasData = vt.hasData && (vt.freshnessLabel === 'live' || vt.freshnessLabel === 'reconnecting' || vt.isWithinGraceWindow);
-  const freshColor = FRESHNESS_COLORS[vt.freshnessLabel] || TACTICAL.textMuted;
-  const engineInfo = ENGINE_STATUS[vt.engineStatus] || ENGINE_STATUS.unknown;
+  const scanner = useUnifiedOBD2Scanner();
+  useVehicleTelemetryBriefPublisher(vt, scanner);
+  const sourceState = getVehicleTelemetrySourceState(vt);
+  const hasRenderableData = hasDisplayableTelemetry(vt, sourceState);
+  const badge = getTelemetryBadge(vt, scanner, sourceState);
+  const footer = getTelemetryFooter(vt, scanner, sourceState);
+  const alert = getTelemetryAlert(vt);
+  const metrics = buildVehicleTelemetryMetrics(vt.snapshot).slice(0, 6);
 
-  // ── Empty state ──
-  if (!hasData && !scanner.isConnected) {
+  if (!scanner.isConnected && !hasRenderableData) {
     return (
-      <View style={cardS.body}>
-        <View style={cardS.emptyState}>
-          <Ionicons name="car-outline" size={20} color={TACTICAL.textMuted} />
-          <Text style={cardS.emptyTitle}>No OBD-II Connected</Text>
-          <Text style={cardS.emptyDesc}>Connect an adapter for live vehicle telemetry</Text>
-        </View>
-      </View>
+      <WidgetCardShell
+        badge={badge}
+        footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+      >
+        <WidgetEmptyState
+          primary="Telemetry source unavailable"
+          secondary="Connect a supported vehicle feed to restore live expedition telemetry."
+        />
+      </WidgetCardShell>
     );
   }
 
-  const { battery_voltage, fuel_level, coolant_temp, engine_rpm, vehicle_speed } = vt.summary;
+  if (scanner.isConnected && !hasRenderableData) {
+    return (
+      <WidgetCardShell
+        badge={badge}
+        footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+      >
+        <WidgetEmptyState
+          primary="Connected — telemetry not yet decoded"
+          secondary="ECS can see the adapter, but no supported vehicle signals are readable yet."
+        />
+      </WidgetCardShell>
+    );
+  }
 
   return (
-    <View style={cardS.body}>
-      {/* Freshness indicator */}
-      <View style={cardS.freshnessRow}>
-        <View style={[cardS.freshDot, { backgroundColor: freshColor }]} />
-        <Text style={[cardS.freshLabel, { color: freshColor }]}>
-          {vt.freshnessLabel === 'live' ? 'OBD LIVE' :
-           vt.freshnessLabel === 'reconnecting' ? 'UPDATING' :
-           vt.freshnessLabel === 'last_known' ? 'LAST KNOWN' : 'OBD'}
-        </Text>
-        {vt.lastUpdatedText && (
-          <Text style={cardS.freshTime}>{vt.lastUpdatedText}</Text>
-        )}
+    <WidgetCardShell
+      badge={badge}
+      footer={<WidgetMetaLine text={footer.text} tone={footer.tone} />}
+    >
+      <View style={styles.expandedTelemetryGrid}>
+        {metrics.map((metric) => (
+          <TelemetryMetricTile
+            key={metric.label}
+            label={metric.label}
+            value={metric.value}
+            color={metric.color}
+          />
+        ))}
+        <TelemetryMetricTile
+          label="DIAGNOSTICS"
+          value={getDiagnosticsSummary(vt, scanner, alert, sourceState)}
+          color={getDiagnosticsTone(vt, scanner, alert, sourceState)}
+        />
       </View>
-
-      {/* Engine status */}
-      <MetricRow label="ENGINE" value={engineInfo.label} color={engineInfo.color} />
-
-      {/* Battery voltage */}
-      <MetricRow
-        label="BATTERY"
-        value={battery_voltage != null ? `${battery_voltage.toFixed(1)} V` : '\u2014'}
-        color={getBattColor(battery_voltage)}
-      />
-
-      {/* Coolant temp */}
-      {coolant_temp != null && (
-        <MetricRow
-          label="COOLANT"
-          value={`${Math.round(coolant_temp)}°F`}
-          color={getCoolantColor(coolant_temp)}
-        />
-      )}
-
-      {/* Fuel level */}
-      {fuel_level != null && (
-        <MetricRow
-          label="FUEL"
-          value={`${Math.round(fuel_level)}%`}
-          color={getFuelColor(fuel_level)}
-        />
-      )}
-
-      {/* Speed (when moving) */}
-      {vehicle_speed != null && vehicle_speed > 0 && (
-        <MetricRow label="SPEED" value={`${Math.round(vehicle_speed)} mph`} />
-      )}
-
-      {/* RPM */}
-      {engine_rpm != null && engine_rpm > 0 && (
-        <MetricRow label="RPM" value={`${Math.round(engine_rpm)}`} />
-      )}
-    </View>
+    </WidgetCardShell>
   );
 }
 
-const cardS = StyleSheet.create({
-  body: { gap: 2 },
-  freshnessRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
-  freshDot: { width: 5, height: 5, borderRadius: 3 },
-  freshLabel: { fontSize: 7, fontWeight: '800', letterSpacing: 1.5 },
-  freshTime: { fontSize: 7, fontWeight: '600', color: TACTICAL.textMuted, fontFamily: 'Courier', marginLeft: 'auto' },
-  emptyState: { alignItems: 'center', gap: 4, paddingVertical: 8 },
-  emptyTitle: { fontSize: 10, fontWeight: '700', color: TACTICAL.textMuted },
-  emptyDesc: { fontSize: 8, fontWeight: '500', color: TACTICAL.textMuted, textAlign: 'center', opacity: 0.7 },
-});
-
-// ═══════════════════════════════════════════════════════════
-// DETAIL MODE — Expanded view for WidgetDetailModal
-// ═══════════════════════════════════════════════════════════
-
-export function VehicleTelemetryDetailView() {
+export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }) {
   const vt = useVehicleTelemetry();
-  const scanner = useOBD2Scanner();
+  const scanner = useUnifiedOBD2Scanner();
   const [alerts, setAlerts] = useState<OBDIntelligenceAlert[]>([]);
-
-  // Evaluate alerts when telemetry changes
-  useEffect(() => {
-    if (vt.hasData) {
-      const newAlerts = evaluateOBDTelemetry(vt.rawTelemetry);
-      if (newAlerts.length > 0) {
-        setAlerts(prev => [...newAlerts, ...prev].slice(0, 10));
-      }
-    }
-  }, [vt.rawTelemetry.timestamp]);
-
+  const alertsSignatureRef = useRef('');
+  const latestRawTelemetryRef = useRef(vt.rawTelemetry);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const sourceState = getVehicleTelemetrySourceState(vt);
   const freshColor = FRESHNESS_COLORS[vt.freshnessLabel] || TACTICAL.textMuted;
-  const engineInfo = ENGINE_STATUS[vt.engineStatus] || ENGINE_STATUS.unknown;
   const raw = vt.rawTelemetry;
-  const hasData = vt.hasData;
+  const hasData = hasDisplayableTelemetry(vt, sourceState);
+  const connectionLabel = getConnectionLabel(vt, scanner, sourceState);
+  const sourceLabel = getTelemetryDetailSourceLabel(vt.snapshot, sourceState);
+  const hasAnySource = hasData || scanner.isConnected || scanner.isConnecting || scanner.isReconnecting;
+  const permissionRequired = scanner.sourceStatus === 'permission_required';
+  const canReconnect = Boolean(scanner.lastDevice) && !scanner.isConnected && !scanner.isConnecting && !scanner.isReconnecting;
+  const canDisableTelemetry = hasAnySource || vt.deviceCount > 0;
+  const detailTone =
+    sourceState.isHighConfidenceLive
+      ? 'live'
+    : scanner.isConnecting || scanner.isReconnecting
+      ? 'attention'
+      : scanner.isConnected || sourceState.isManual || sourceState.isSimulated || sourceState.isRecent
+        ? 'warning'
+        : sourceState.isStale
+          ? 'warning'
+          : 'muted';
+  const primarySignals = useMemo(
+    () => buildVehicleTelemetryMetrics(vt.snapshot),
+    [vt.snapshot],
+  );
+  const {
+    battery_voltage: rawBatteryVoltage,
+    coolant_temp: rawCoolantTemp,
+    device_id: rawDeviceId,
+    engine_rpm: rawEngineRpm,
+    provider: rawProvider,
+    timestamp: rawTimestamp,
+    transmission_temp: rawTransmissionTemp,
+    vehicle_speed: rawVehicleSpeed,
+  } = vt.rawTelemetry;
+  latestRawTelemetryRef.current = vt.rawTelemetry;
+  const rawTelemetryAlertSignature = [
+    rawProvider,
+    rawDeviceId,
+    rawTimestamp,
+    rawBatteryVoltage,
+    rawCoolantTemp,
+    rawTransmissionTemp,
+    rawEngineRpm,
+    rawVehicleSpeed,
+  ].join('|');
 
-  // ── No data state ──
+  useEffect(() => {
+    const nextAlerts = vt.snapshot.isLive
+      ? evaluateOBDTelemetry(latestRawTelemetryRef.current).slice(0, 3)
+      : [];
+    const nextSignature = getAlertListSignature(nextAlerts);
+    if (alertsSignatureRef.current === nextSignature) return;
+    alertsSignatureRef.current = nextSignature;
+    setAlerts(nextAlerts);
+  }, [rawTelemetryAlertSignature, vt.snapshot.isLive]);
+
+  const fieldRows = useMemo(
+    () => VEHICLE_TELEMETRY_FIELDS.map((field) => {
+      const rawValue = vt.snapshot[field.key];
+      return {
+        key: String(field.key),
+        label: field.label,
+        value: field.formatter(rawValue),
+        available: rawValue != null,
+      };
+    }),
+    [vt.snapshot],
+  );
+
+  const handleReconnect = useCallback(async () => {
+    setActionBusy('reconnect');
+    setActionMessage(null);
+    try {
+      const restored = await scanner.attemptReconnect();
+      setActionMessage(
+        restored
+          ? 'Reconnect started for the last known telemetry source.'
+          : 'No saved telemetry adapter was available. Open Scan / Connect to choose a source.',
+      );
+      if (!restored) {
+        setScannerVisible(true);
+      }
+    } catch (error: any) {
+      setActionMessage(error?.message ?? 'Reconnect failed. Open Scan / Connect to choose a source.');
+    } finally {
+      setActionBusy(null);
+    }
+  }, [scanner]);
+
+  const handleManualProfileOnly = useCallback(async () => {
+    setActionBusy('manual');
+    setActionMessage(null);
+    try {
+      await vt.disconnectProvider();
+      setActionMessage('Live telemetry disabled. Vehicle profile/manual values remain the fallback source where configured.');
+    } catch (error: any) {
+      setActionMessage(error?.message ?? 'Could not switch to manual profile only.');
+    } finally {
+      setActionBusy(null);
+    }
+  }, [vt]);
+
+  const handleDisableTelemetry = useCallback(async () => {
+    setActionBusy('disable');
+    setActionMessage(null);
+    try {
+      await scanner.stopScan('telemetry_detail_disable');
+      await vt.disconnectProvider();
+      setActionMessage('Telemetry provider disconnected and scanner stopped.');
+    } catch (error: any) {
+      setActionMessage(error?.message ?? 'Could not disable telemetry cleanly.');
+    } finally {
+      setActionBusy(null);
+    }
+  }, [scanner, vt]);
+
   if (!hasData && !scanner.isConnected) {
     return (
-      <View style={detailS.container}>
-        <Text style={detailS.section}>OBD-II VEHICLE TELEMETRY</Text>
-        <View style={detailS.emptyCard}>
-          <Ionicons name="car-outline" size={32} color={TACTICAL.textMuted} />
-          <Text style={detailS.emptyTitle}>No OBD-II Adapter Connected</Text>
-          <Text style={detailS.emptyDesc}>
-            Connect a Bluetooth OBD-II adapter to monitor live vehicle health and performance data.
-          </Text>
-          <View style={detailS.adapterList}>
-            <Text style={detailS.adapterListTitle}>SUPPORTED ADAPTERS</Text>
-            {['OBDLink MX+', 'OBDLink CX', 'Veepeak BLE', 'BAFX', 'Carista'].map(name => (
-              <View key={name} style={detailS.adapterRow}>
-                <View style={detailS.adapterDot} />
-                <Text style={detailS.adapterName}>{name}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
+      <View style={styles.detailContainer}>
+        <WidgetDetailStateCard
+          title="Telemetry source unavailable"
+          message="Connect a supported vehicle telemetry source to restore live expedition signals."
+          badgeLabel="UNAVAILABLE"
+          tone="muted"
+          icon="car-outline"
+        >
+          <ECSActionRow style={styles.actionRow}>
+            <ECSButton
+              label="Scan / Connect"
+              icon="bluetooth-outline"
+              variant="secondary"
+              size="compact"
+              onPress={() => setScannerVisible(true)}
+              grow
+            />
+            <ECSButton
+              label="Reconnect"
+              icon="sync-outline"
+              variant="tertiary"
+              size="compact"
+              onPress={handleReconnect}
+              disabled={!canReconnect}
+              loading={actionBusy === 'reconnect'}
+              grow
+            />
+            <ECSButton
+              label="Close"
+              icon="close-outline"
+              variant="tertiary"
+              size="compact"
+              onPress={onClose}
+              disabled={!onClose}
+              grow
+            />
+          </ECSActionRow>
+          {!canReconnect ? <TelemetryActionNote>No saved telemetry adapter is available for reconnect.</TelemetryActionNote> : null}
+          {actionMessage ? <TelemetryActionNote>{actionMessage}</TelemetryActionNote> : null}
+          <OBD2ScannerModal
+            visible={scannerVisible}
+            onClose={() => setScannerVisible(false)}
+          />
+        </WidgetDetailStateCard>
       </View>
     );
   }
 
   return (
-    <View style={detailS.container}>
-      {/* ═══ CONNECTION STATUS ═══ */}
-      <Text style={detailS.section}>CONNECTION STATUS</Text>
-      <View style={detailS.statusCard}>
-        <View style={detailS.statusRow}>
-          <View style={[detailS.statusDot, { backgroundColor: freshColor }]} />
-          <Text style={[detailS.statusLabel, { color: freshColor }]}>
-            {vt.freshnessLabel.toUpperCase().replace('_', ' ')}
-          </Text>
-          {vt.lastUpdatedText && (
-            <Text style={detailS.statusTime}>{vt.lastUpdatedText}</Text>
-          )}
+    <View style={styles.detailContainer}>
+      <WidgetDetailLeadCard
+        eyebrow="VEHICLE TELEMETRY"
+        title={sourceLabel}
+        summary={
+          sourceState.isHighConfidenceLive
+            ? 'Live vehicle telemetry is active from the normalized ECS snapshot.'
+            : sourceState.isStale
+              ? 'Showing stale vehicle telemetry. Live updates are not active.'
+            : sourceState.isRecent
+              ? 'Showing recent vehicle telemetry. Streaming is not currently confirmed.'
+            : sourceState.isManual
+              ? 'Manual vehicle telemetry is active. ECS will not treat it as live.'
+            : sourceState.isSimulated
+              ? 'Simulation telemetry is active. ECS will not treat it as live.'
+            : scanner.isConnecting || scanner.isReconnecting
+              ? 'Reconnecting telemetry feed from the paired vehicle source.'
+              : scanner.isConnected
+                ? 'Connected, but ECS has not decoded readable vehicle telemetry from this adapter yet.'
+                : 'Vehicle telemetry is unavailable.'
+        }
+        tone={detailTone}
+        badges={[
+          {
+            label: sourceState.isUnavailable && scanner.isConnected
+              ? 'NOT DECODED'
+              : sourceLabel.toUpperCase(),
+            tone: detailTone,
+          },
+          { label: vt.snapshot.confidence.toUpperCase(), tone: detailTone },
+        ]}
+        metaLines={[
+          `Source ${vt.snapshot.sourceType}`,
+          `Scanner ${scanner.sourceStatus}`,
+          scanner.connectedDeviceName ? `Adapter ${scanner.connectedDeviceName}` : null,
+          vt.primaryDevice?.protocol ? `Protocol ${vt.primaryDevice.protocol}` : null,
+          vt.lastUpdatedText ? `Updated ${vt.lastUpdatedText}` : 'No live source.',
+        ]}
+      >
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: freshColor }]} />
+          <Text style={[styles.connectionLabel, { color: freshColor }]}>{connectionLabel}</Text>
+          {vt.lastUpdatedText ? <Text style={styles.statusTime}>{vt.lastUpdatedText}</Text> : null}
         </View>
-        {scanner.connectedDeviceName && (
-          <MetricRow label="ADAPTER" value={scanner.connectedDeviceName} />
-        )}
-        {vt.primaryDevice?.protocol && (
-          <MetricRow label="PROTOCOL" value={vt.primaryDevice.protocol} />
-        )}
-        <MetricRow label="POLLING" value={vt.isPolling ? 'ACTIVE' : 'INACTIVE'} color={vt.isPolling ? '#4CAF50' : TACTICAL.textMuted} />
+        <MetricRow label="POLLING" value={vt.isPolling ? 'Active' : 'Inactive'} color={vt.isPolling ? '#4CAF50' : TACTICAL.textMuted} />
+      </WidgetDetailLeadCard>
+
+      {permissionRequired ? (
+        <>
+          <View style={styles.detailDivider} />
+          <WidgetDetailStateCard
+            title="Bluetooth permission required"
+            message={scanner.error ?? 'Enable Bluetooth permission before ECS can scan for vehicle telemetry sources.'}
+            badgeLabel="PERMISSION REQUIRED"
+            tone="attention"
+            icon="lock-closed-outline"
+          >
+            <ECSButton
+              label="Retry Scan"
+              icon="refresh-outline"
+              variant="secondary"
+              size="compact"
+              onPress={() => setScannerVisible(true)}
+            />
+          </WidgetDetailStateCard>
+        </>
+      ) : null}
+
+      <View style={styles.detailDivider} />
+      <WidgetDetailSectionTitle>SOURCE CONTROLS</WidgetDetailSectionTitle>
+      <View style={styles.actionPanel}>
+        <ECSActionRow style={styles.actionRow}>
+          <ECSButton
+            label="Scan / Connect"
+            icon="bluetooth-outline"
+            variant="secondary"
+            size="compact"
+            onPress={() => setScannerVisible(true)}
+            grow
+          />
+          <ECSButton
+            label="Reconnect"
+            icon="sync-outline"
+            variant="tertiary"
+            size="compact"
+            onPress={handleReconnect}
+            disabled={!canReconnect}
+            loading={actionBusy === 'reconnect'}
+            grow
+          />
+        </ECSActionRow>
+        <ECSActionRow style={styles.actionRow}>
+          <ECSButton
+            label="Use Manual Profile Only"
+            icon="create-outline"
+            variant="tertiary"
+            size="compact"
+            onPress={handleManualProfileOnly}
+            disabled={!canDisableTelemetry}
+            loading={actionBusy === 'manual'}
+            grow
+          />
+          <ECSButton
+            label="Disable Telemetry"
+            icon="power-outline"
+            variant="destructive"
+            size="compact"
+            onPress={handleDisableTelemetry}
+            disabled={!canDisableTelemetry}
+            loading={actionBusy === 'disable'}
+            grow
+          />
+        </ECSActionRow>
+        <ECSButton
+          label="Close"
+          icon="close-outline"
+          variant="secondary"
+          size="compact"
+          onPress={onClose}
+          disabled={!onClose}
+        />
+        {!canReconnect ? <TelemetryActionNote>Reconnect is available after a telemetry adapter has been saved.</TelemetryActionNote> : null}
+        {!canDisableTelemetry ? <TelemetryActionNote>No active telemetry source is available to disable.</TelemetryActionNote> : null}
+        {actionMessage ? <TelemetryActionNote>{actionMessage}</TelemetryActionNote> : null}
       </View>
 
-      {/* ═══ ENGINE ═══ */}
-      <Text style={detailS.section}>ENGINE</Text>
-      <MetricRow label="STATUS" value={engineInfo.label} color={engineInfo.color} />
-      <MetricRow label="RPM" value={raw.engine_rpm != null ? `${Math.round(raw.engine_rpm)}` : '\u2014'} />
-      <MetricRow label="LOAD" value={raw.engine_load != null ? `${Math.round(raw.engine_load)}%` : '\u2014'}
-        color={raw.engine_load != null && raw.engine_load > 85 ? '#FFB300' : undefined} />
-      <MetricRow label="THROTTLE" value={raw.throttle_position != null ? `${Math.round(raw.throttle_position)}%` : '\u2014'} />
-      {raw.engine_runtime != null && (
-        <MetricRow label="RUNTIME" value={raw.engine_runtime >= 3600
-          ? `${Math.floor(raw.engine_runtime / 3600)}h ${Math.floor((raw.engine_runtime % 3600) / 60)}m`
-          : `${Math.floor(raw.engine_runtime / 60)}m`} />
+      <View style={styles.detailDivider} />
+      <WidgetDetailSectionTitle>EXPEDITION SIGNALS</WidgetDetailSectionTitle>
+      {primarySignals.length > 0 ? (
+        <View style={styles.detailGrid}>
+          {primarySignals.map((metric) => (
+            <TelemetryMetricTile key={metric.label} label={metric.label} value={metric.value} color={metric.color} />
+          ))}
+        </View>
+      ) : (
+        <WidgetDetailStateCard
+          title="No decoded telemetry values"
+          message="ECS has source state, but no readable vehicle values are available yet."
+          badgeLabel={sourceState.label.toUpperCase()}
+          tone={detailTone}
+          icon="pulse-outline"
+        />
       )}
 
-      {/* ═══ TEMPERATURES ═══ */}
-      <View style={detailS.divider} />
-      <Text style={detailS.section}>TEMPERATURES</Text>
-      <MetricRow label="COOLANT" value={raw.coolant_temp != null ? `${Math.round(raw.coolant_temp)}°F` : '\u2014'}
-        color={getCoolantColor(raw.coolant_temp ?? null)} />
-      {raw.intake_temp != null && (
-        <MetricRow label="INTAKE AIR" value={`${Math.round(raw.intake_temp)}°F`}
-          color={raw.intake_temp > 150 ? '#FFB300' : undefined} />
-      )}
-      {raw.transmission_temp != null && (
-        <MetricRow label="TRANSMISSION" value={`${Math.round(raw.transmission_temp)}°F`}
-          color={raw.transmission_temp > 230 ? '#EF5350' : raw.transmission_temp > 200 ? '#FFB300' : undefined} />
-      )}
-      {raw.oil_temp != null && (
-        <MetricRow label="OIL" value={`${Math.round(raw.oil_temp)}°F`} />
-      )}
-      {raw.ambient_temp != null && (
-        <MetricRow label="AMBIENT" value={`${Math.round(raw.ambient_temp)}°F`} />
-      )}
-
-      {/* ═══ ELECTRICAL ═══ */}
-      <View style={detailS.divider} />
-      <Text style={detailS.section}>ELECTRICAL</Text>
-      <MetricRow label="BATTERY VOLTAGE" value={raw.battery_voltage != null ? `${raw.battery_voltage.toFixed(1)} V` : '\u2014'}
-        color={getBattColor(raw.battery_voltage ?? null)} />
-
-      {/* ═══ FUEL ═══ */}
-      <View style={detailS.divider} />
-      <Text style={detailS.section}>FUEL</Text>
-      <MetricRow label="LEVEL" value={raw.fuel_level != null ? `${Math.round(raw.fuel_level)}%` : '\u2014'}
-        color={getFuelColor(raw.fuel_level ?? null)} />
-      {raw.fuel_rate != null && (
-        <MetricRow label="CONSUMPTION" value={`${raw.fuel_rate.toFixed(2)} gal/hr`} />
-      )}
-
-      {/* ═══ VEHICLE ═══ */}
-      <View style={detailS.divider} />
-      <Text style={detailS.section}>VEHICLE</Text>
-      <MetricRow label="SPEED" value={raw.vehicle_speed != null ? `${Math.round(raw.vehicle_speed)} mph` : '\u2014'} />
-      {raw.mass_air_flow != null && (
-        <MetricRow label="MAF" value={`${raw.mass_air_flow.toFixed(1)} g/s`} />
-      )}
-      {raw.barometric_pressure != null && (
-        <MetricRow label="BARO PRESSURE" value={`${raw.barometric_pressure.toFixed(0)} kPa`} />
-      )}
-      {raw.odometer != null && (
-        <MetricRow label="ODOMETER" value={`${Math.round(raw.odometer).toLocaleString()} mi`} />
-      )}
-
-      {/* ═══ INTELLIGENCE ALERTS ═══ */}
-      {alerts.length > 0 && (
+      {(raw.engine_load != null || raw.throttle_position != null) ? (
         <>
-          <View style={detailS.divider} />
-          <Text style={detailS.section}>INTELLIGENCE ALERTS</Text>
-          {alerts.slice(0, 5).map((alert, i) => (
-            <View key={`${alert.id}-${i}`} style={[detailS.alertCard, {
-              borderLeftColor: getAlertSeverityColor(alert.severity),
-            }]}>
-              <View style={detailS.alertHeader}>
+          <View style={styles.detailDivider} />
+          <WidgetDetailSectionTitle>POWERTRAIN LOAD</WidgetDetailSectionTitle>
+          {raw.engine_load != null ? (
+            <MetricRow
+              label="ENGINE LOAD"
+              value={`${Math.round(raw.engine_load)}%`}
+              color={raw.engine_load > 85 ? '#FFB300' : TACTICAL.text}
+            />
+          ) : null}
+          {raw.throttle_position != null ? (
+            <MetricRow label="THROTTLE" value={`${Math.round(raw.throttle_position)}%`} />
+          ) : null}
+        </>
+      ) : null}
+
+      {alerts.length > 0 ? (
+        <>
+          <View style={styles.detailDivider} />
+          <WidgetDetailSectionTitle>ECS ALERTS</WidgetDetailSectionTitle>
+          {alerts.map((alert) => (
+            <View key={alert.id} style={[styles.alertCard, { borderLeftColor: getAlertSeverityColor(alert.severity) }]}>
+              <View style={styles.alertHeader}>
                 <Ionicons name="alert-circle-outline" size={12} color={getAlertSeverityColor(alert.severity)} />
-                <Text style={[detailS.alertTitle, { color: getAlertSeverityColor(alert.severity) }]}>
-                  {alert.title}
-                </Text>
+                <Text style={[styles.alertTitle, { color: getAlertSeverityColor(alert.severity) }]}>{alert.title}</Text>
               </View>
-              <Text style={detailS.alertMessage}>{alert.message}</Text>
+              <Text style={styles.alertMessage}>{alert.message}</Text>
             </View>
           ))}
         </>
-      )}
+      ) : null}
 
-      {/* ═══ DEVICE INFO ═══ */}
-      <View style={detailS.divider} />
-      <Text style={detailS.section}>DEVICE INFO</Text>
+      <View style={styles.detailDivider} />
+      <WidgetDetailSectionTitle>FIELD AVAILABILITY</WidgetDetailSectionTitle>
+      <View style={styles.fieldGrid}>
+        {fieldRows.map((field) => (
+          <View
+            key={field.key}
+            style={[
+              styles.fieldTile,
+              field.available ? styles.fieldTileAvailable : styles.fieldTileMissing,
+            ]}
+          >
+            <Text style={styles.fieldLabel} numberOfLines={1}>{field.label}</Text>
+            <Text
+              style={[
+                styles.fieldValue,
+                !field.available ? styles.fieldValueMissing : null,
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.76}
+            >
+              {field.value}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.detailDivider} />
+      <WidgetDetailSectionTitle>DEVICE INFO</WidgetDetailSectionTitle>
       <MetricRow label="DEVICES" value={`${vt.deviceCount}`} />
-      <MetricRow label="PROVIDER" value={vt.activeProvider?.toUpperCase() || '\u2014'} />
-      <MetricRow label="GRACE STATE" value={vt.graceState.toUpperCase()} />
-      <MetricRow label="RECOVERY" value={vt.recoveryStatus.toUpperCase()} />
-      {vt.primaryDevice?.firmware_version && (
-        <MetricRow label="FIRMWARE" value={vt.primaryDevice.firmware_version} />
-      )}
+      <MetricRow label="PROVIDER" value={vt.activeProvider?.toUpperCase() || '--'} />
+      <MetricRow label="STATE" value={vt.connectionDisplayState.toUpperCase()} color={freshColor} />
+      <MetricRow label="LAST UPDATE" value={vt.lastUpdatedText ?? 'No live source'} />
+      <OBD2ScannerModal
+        visible={scannerVisible}
+        onClose={() => setScannerVisible(false)}
+      />
     </View>
   );
 }
 
-const detailS = StyleSheet.create({
-  container: { gap: 2 },
-  section: { fontSize: 10, fontWeight: '800', color: TACTICAL.amber, letterSpacing: 1.5, marginTop: 8, marginBottom: 4 },
-  divider: { height: 1, backgroundColor: TACTICAL.border, marginVertical: 8 },
-  statusCard: {
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 8,
+const styles = StyleSheet.create({
+  metricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    minHeight: 18,
+    paddingVertical: 3,
+  },
+  metricLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  metricValue: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    fontFamily: 'Courier',
+  },
+  metricTile: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    minWidth: 0,
+    minHeight: 50,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
-    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    justifyContent: 'space-between',
+    gap: 3,
+  },
+  metricTileLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  metricTileValue: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    lineHeight: 14,
+    includeFontPadding: false,
+  },
+  compactTelemetryShell: {
+    flex: 1,
+    minHeight: 0,
+    gap: 7,
+    justifyContent: 'center',
+  },
+  snapshotRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  compactEventBand: {
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    justifyContent: 'space-between',
+    gap: 3,
+  },
+  compactEventLabel: {
+    fontSize: 7.5,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+  },
+  compactEventValue: {
+    fontSize: 10.5,
+    lineHeight: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    includeFontPadding: false,
+  },
+  compactUnavailableState: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  compactUnavailableTitle: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+  compactUnavailableText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    textAlign: 'center',
+    lineHeight: 12,
+  },
+  expandedTelemetryGrid: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignContent: 'flex-start',
+  },
+  connectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  connectionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  connectionLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+  },
+  detailContainer: {
     gap: 4,
   },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.5 },
-  statusTime: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted, fontFamily: 'Courier', marginLeft: 'auto' },
-  emptyCard: {
-    alignItems: 'center',
-    paddingVertical: 24,
+  detailDivider: {
+    height: 1,
+    backgroundColor: TACTICAL.border,
+    marginVertical: 8,
+  },
+  statusTime: {
+    marginLeft: 'auto',
+    fontSize: 8,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    fontFamily: 'Courier',
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
-  emptyTitle: { fontSize: 14, fontWeight: '700', color: TACTICAL.textMuted },
-  emptyDesc: { fontSize: 11, fontWeight: '500', color: TACTICAL.textMuted, textAlign: 'center', lineHeight: 16, paddingHorizontal: 20 },
-  adapterList: { marginTop: 12, gap: 6, alignSelf: 'stretch', paddingHorizontal: 20 },
-  adapterListTitle: { fontSize: 8, fontWeight: '800', color: TACTICAL.textMuted, letterSpacing: 1.5, marginBottom: 4 },
-  adapterRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  adapterDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: TACTICAL.amber + '60' },
-  adapterName: { fontSize: 10, fontWeight: '600', color: TACTICAL.textMuted },
   alertCard: {
     backgroundColor: 'rgba(255,255,255,0.02)',
-    borderRadius: 6,
+    borderRadius: 8,
     borderLeftWidth: 3,
-    borderLeftColor: '#FFB300',
     padding: 10,
     gap: 4,
     marginBottom: 6,
   },
-  alertHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  alertTitle: { fontSize: 10, fontWeight: '700', flex: 1 },
-  alertMessage: { fontSize: 9, fontWeight: '500', color: TACTICAL.textMuted, lineHeight: 13 },
+  alertHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  alertTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    flex: 1,
+  },
+  alertMessage: {
+    fontSize: 9,
+    fontWeight: '500',
+    color: TACTICAL.textMuted,
+    lineHeight: 13,
+  },
+  actionPanel: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: 10,
+    gap: 8,
+  },
+  actionRow: {
+    flexWrap: 'wrap',
+  },
+  actionNote: {
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+  },
+  fieldGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  fieldTile: {
+    flexBasis: '30%',
+    flexGrow: 1,
+    minWidth: 92,
+    borderRadius: 9,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    gap: 4,
+  },
+  fieldTileAvailable: {
+    borderColor: 'rgba(76,175,80,0.22)',
+    backgroundColor: 'rgba(76,175,80,0.06)',
+  },
+  fieldTileMissing: {
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+  },
+  fieldLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  fieldValue: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    fontFamily: 'Courier',
+  },
+  fieldValueMissing: {
+    color: TACTICAL.textMuted,
+  },
 });
-
-
-
-

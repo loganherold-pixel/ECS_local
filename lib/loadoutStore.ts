@@ -24,6 +24,7 @@
  */
 import { Platform } from 'react-native';
 import { supabase, isSupabaseConfigured } from './supabase';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 import { queueLoadoutAction } from './syncActionQueue';
 import { loadoutSyncQueue } from './loadoutSyncQueue';
 import { loadoutWeightCache } from './loadoutWeightCache';
@@ -50,18 +51,18 @@ function isSyncableUserId(userId?: string | null): userId is string {
 // ── Timeout wrapper for Supabase calls ──────────────────
 const SUPABASE_TIMEOUT_MS = 8000; // 8 seconds max for any cloud call
 
-function withTimeout<T>(promise: Promise<T>, ms: number = SUPABASE_TIMEOUT_MS): Promise<T> {
+function withTimeout<T>(promise: PromiseLike<T>, ms: number = SUPABASE_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`[LoadoutStore] Operation timed out after ${ms}ms`));
     }, ms);
 
-    promise
+    Promise.resolve(promise)
       .then((result) => {
         clearTimeout(timer);
         resolve(result);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         clearTimeout(timer);
         reject(err);
       });
@@ -69,7 +70,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number = SUPABASE_TIMEOUT_MS): 
 }
 
 // ── Storage helpers ─────────────────────────────────────
-const memoryStore: Record<string, string> = {};
+const loadoutPersistenceCache = createPersistedKeyValueCache('ecs_loadout_store');
 
 function lsGet(key: string): string | null {
   try {
@@ -79,7 +80,7 @@ function lsGet(key: string): string | null {
   } catch (e) {
     console.warn('[LoadoutStore] localStorage read error:', e);
   }
-  return memoryStore[key] || null;
+  return loadoutPersistenceCache.get(key);
 }
 
 function lsSet(key: string, value: string): void {
@@ -90,7 +91,15 @@ function lsSet(key: string, value: string): void {
   } catch (e) {
     console.warn('[LoadoutStore] localStorage write error:', e);
   }
-  memoryStore[key] = value;
+  loadoutPersistenceCache.set(key, value);
+}
+
+async function ensureLoadoutStorageHydrated(): Promise<void> {
+  await loadoutPersistenceCache.waitForHydration();
+}
+
+async function flushLoadoutStorage(): Promise<void> {
+  await loadoutPersistenceCache.flush();
 }
 
 function generateId(): string {
@@ -132,6 +141,28 @@ export interface LocalLoadoutItem extends LoadoutItem {
   sync_status: LocalSyncStatus;
 }
 
+type LoadoutListener = (loadoutId?: string, vehicleId?: string | null) => void;
+type LoadoutItemListener = (loadoutId: string) => void;
+
+const loadoutListeners: Set<LoadoutListener> = new Set();
+const loadoutItemListeners: Set<LoadoutItemListener> = new Set();
+
+function notifyLoadoutListeners(loadoutId?: string, vehicleId?: string | null): void {
+  loadoutListeners.forEach((listener) => {
+    try {
+      listener(loadoutId, vehicleId ?? null);
+    } catch {}
+  });
+}
+
+function notifyLoadoutItemListeners(loadoutId: string): void {
+  loadoutItemListeners.forEach((listener) => {
+    try {
+      listener(loadoutId);
+    } catch {}
+  });
+}
+
 // ── Local loadout CRUD ──────────────────────────────────
 
 function getLocalLoadouts(): LocalLoadout[] {
@@ -154,9 +185,80 @@ function saveLocalLoadoutItems(items: LocalLoadoutItem[]): void {
   lsSet(LS_LOADOUT_ITEMS, JSON.stringify(items || []));
 }
 
+function sortLoadoutsByUpdatedAtDesc(items: LocalLoadout[]): LocalLoadout[] {
+  return [...items].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+}
+
+function sortLoadoutItemsByOrder(items: LocalLoadoutItem[]): LocalLoadoutItem[] {
+  return [...items].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
+const LOADOUT_CLOUD_EXCLUDED_KEYS = new Set([
+  'id',
+  'owner_user_id',
+  'created_at',
+  'updated_at',
+  '_item_count',
+  '_critical_count',
+  '_packed_count',
+  '_readiness_pct',
+]);
+
+const LOADOUT_ITEM_CLOUD_EXCLUDED_KEYS = new Set([
+  'id',
+  'owner_user_id',
+  'loadout_id',
+  'created_at',
+  'updated_at',
+]);
+
+function buildLoadoutCloudPayload(changes: Partial<Loadout>): Record<string, any> {
+  const payload: Record<string, any> = {};
+  for (const [key, value] of Object.entries(changes)) {
+    if (value !== undefined && !LOADOUT_CLOUD_EXCLUDED_KEYS.has(key)) {
+      payload[key] = value;
+    }
+  }
+  return payload;
+}
+
+function buildLoadoutItemCloudPayload(changes: Partial<LoadoutItem>): Record<string, any> {
+  const payload: Record<string, any> = {};
+  for (const [key, value] of Object.entries(changes)) {
+    if (value !== undefined && !LOADOUT_ITEM_CLOUD_EXCLUDED_KEYS.has(key)) {
+      payload[key] = value;
+    }
+  }
+  return payload;
+}
+
 // ── Loadout Store ───────────────────────────────────────
 
 export const loadoutStore = {
+  waitForHydration: async (): Promise<void> => {
+    await ensureLoadoutStorageHydrated();
+  },
+
+  getLocalByVehicleIdSync: (vehicleId: string): LocalLoadout[] => {
+    if (!vehicleId) return [];
+    try {
+      return sortLoadoutsByUpdatedAtDesc(getLocalLoadouts().filter((loadout) => loadout.vehicle_id === vehicleId));
+    } catch {
+      return [];
+    }
+  },
+
+  getLatestLocalByVehicleIdSync: (vehicleId: string): LocalLoadout | null => {
+    return loadoutStore.getLocalByVehicleIdSync(vehicleId)[0] ?? null;
+  },
+
+  subscribe: (listener: LoadoutListener): (() => void) => {
+    loadoutListeners.add(listener);
+    return () => {
+      loadoutListeners.delete(listener);
+    };
+  },
+
   /**
    * Get all loadouts. Merges cloud + local when authenticated.
    * FIXED: Added timeout to prevent hanging on slow/failed Supabase calls.
@@ -165,6 +267,7 @@ export const loadoutStore = {
     userId?: string | null,
     mode?: LoadoutMode
   ): Promise<{ loadouts: LocalLoadout[]; source: 'cloud' | 'local' | 'merged' }> => {
+    await ensureLoadoutStorageHydrated();
     let local: LocalLoadout[] = [];
     try {
       local = getLocalLoadouts().filter(l => !mode || l.mode === mode);
@@ -233,10 +336,15 @@ export const loadoutStore = {
       console.warn('[LoadoutStore] Local getById error:', e);
     }
 
-    if (userId && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
         const { data } = await withTimeout(
-          supabase.from('loadouts').select('*').eq('id', id).single()
+          supabase
+            .from('loadouts')
+            .select('*')
+            .eq('id', id)
+            .eq('owner_user_id', userId)
+            .single()
         );
         if (data) {
           return { ...data, device_id: getDeviceId(), sync_status: 'synced' as LocalSyncStatus };
@@ -262,6 +370,7 @@ export const loadoutStore = {
     },
     userId?: string | null
   ): Promise<{ loadout: LocalLoadout; source: 'cloud' | 'local' }> => {
+    await ensureLoadoutStorageHydrated();
     const now = nowISO();
     const deviceId = getDeviceId();
     const id = generateId();
@@ -290,7 +399,7 @@ export const loadoutStore = {
     };
 
     // Try cloud first if authenticated
-    if (userId && userId !== 'local' && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
         const { data: cloudData, error } = await withTimeout(
           supabase
@@ -326,6 +435,8 @@ export const loadoutStore = {
             const locals = getLocalLoadouts();
             locals.push(cloudLoadout);
             saveLocalLoadouts(locals);
+            await flushLoadoutStorage();
+            notifyLoadoutListeners(cloudLoadout.id, cloudLoadout.vehicle_id ?? null);
           } catch (e) {
             console.warn('[LoadoutStore] Failed to cache cloud loadout locally:', e);
           }
@@ -341,6 +452,8 @@ export const loadoutStore = {
       const locals = getLocalLoadouts();
       locals.push(loadout);
       saveLocalLoadouts(locals);
+      await flushLoadoutStorage();
+      notifyLoadoutListeners(loadout.id, loadout.vehicle_id ?? null);
     } catch (e) {
       console.warn('[LoadoutStore] Failed to save loadout locally:', e);
     }
@@ -374,13 +487,16 @@ export const loadoutStore = {
    * reconciled weight/count values eventually reach other devices.
    */
   update: async (id: string, changes: Partial<Loadout>, userId?: string | null): Promise<LocalLoadout | null> => {
+    await ensureLoadoutStorageHydrated();
     let cloudSyncSucceeded = false;
+    const cloudChanges = buildLoadoutCloudPayload(changes);
 
     try {
       const locals = getLocalLoadouts();
       const idx = locals.findIndex(l => l.id === id);
 
       if (idx !== -1) {
+        const previousVehicleId = locals[idx].vehicle_id ?? null;
         locals[idx] = {
           ...locals[idx],
           ...changes,
@@ -388,16 +504,25 @@ export const loadoutStore = {
           sync_status: locals[idx].sync_status === 'synced' ? 'pending' : locals[idx].sync_status,
         };
         saveLocalLoadouts(locals);
+        await flushLoadoutStorage();
+        notifyLoadoutListeners(id, locals[idx].vehicle_id ?? previousVehicleId);
 
         // Try cloud update
-        if (isSyncableUserId(userId) && isSupabaseConfigured) {
+        if (isSyncableUserId(userId) && isSupabaseConfigured && Object.keys(cloudChanges).length > 0) {
           try {
-            const { error } = await withTimeout(supabase.from('loadouts').update(changes).eq('id', id));
+            const { error } = await withTimeout(
+              supabase
+                .from('loadouts')
+                .update(cloudChanges)
+                .eq('id', id)
+                .eq('owner_user_id', userId)
+            );
             if (error) {
               throw new Error(error.message || 'Supabase update returned error');
             }
             locals[idx].sync_status = 'synced';
             saveLocalLoadouts(locals);
+            await flushLoadoutStorage();
             cloudSyncSucceeded = true;
 
             // If this loadout was previously in the retry queue, it's now synced
@@ -417,7 +542,7 @@ export const loadoutStore = {
               loadoutSyncQueue.enqueue(id, reconciliationChanges as any, userId);
             } else {
               // For non-reconciliation changes, use the general sync action queue
-              queueLoadoutAction('loadout_update', { loadoutId: id, changes, userId }, `Update loadout ${id}`);
+              queueLoadoutAction('loadout_update', { loadoutId: id, changes: cloudChanges, userId }, `Update loadout ${id}`);
             }
           }
         }
@@ -430,13 +555,14 @@ export const loadoutStore = {
     }
 
     // Try cloud-only update (record not found locally)
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && Object.keys(cloudChanges).length > 0) {
       try {
         const { data, error } = await withTimeout(
           supabase
             .from('loadouts')
-            .update(changes)
+            .update(cloudChanges)
             .eq('id', id)
+            .eq('owner_user_id', userId)
             .select('*')
             .single()
         );
@@ -447,7 +573,7 @@ export const loadoutStore = {
     }
 
     // Queue for later sync if cloud update was not attempted or failed
-    if (!cloudSyncSucceeded && isSyncableUserId(userId)) {
+    if (!cloudSyncSucceeded && isSyncableUserId(userId) && Object.keys(cloudChanges).length > 0) {
       // Check if these are reconciliation changes
       const hasReconciliation = 'total_weight_lbs' in changes || 'item_count' in changes;
       if (hasReconciliation) {
@@ -456,7 +582,7 @@ export const loadoutStore = {
         if ('item_count' in changes) reconciliationChanges.item_count = changes.item_count;
         loadoutSyncQueue.enqueue(id, reconciliationChanges as any, userId);
       } else {
-        queueLoadoutAction('loadout_update', { loadoutId: id, changes, userId }, `Update loadout ${id}`);
+        queueLoadoutAction('loadout_update', { loadoutId: id, changes: cloudChanges, userId }, `Update loadout ${id}`);
       }
     }
     return null;
@@ -469,23 +595,41 @@ export const loadoutStore = {
    * Delete a loadout
    */
   delete: async (id: string, userId?: string | null): Promise<boolean> => {
+    await ensureLoadoutStorageHydrated();
     try {
       const locals = getLocalLoadouts();
+      const removed = locals.find(l => l.id === id) ?? null;
       const filtered = locals.filter(l => l.id !== id);
       saveLocalLoadouts(filtered);
+      await flushLoadoutStorage();
+      notifyLoadoutListeners(id, removed?.vehicle_id ?? null);
 
       // Also delete items
       const items = getLocalLoadoutItems();
       saveLocalLoadoutItems(items.filter(i => i.loadout_id !== id));
+      await flushLoadoutStorage();
+      notifyLoadoutItemListeners(id);
     } catch (e) {
       console.warn('[LoadoutStore] Local delete error:', e);
     }
 
     // Try cloud delete
-    if (userId && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
-        await withTimeout(supabase.from('loadout_items').delete().eq('loadout_id', id));
-        await withTimeout(supabase.from('loadouts').delete().eq('id', id));
+        await withTimeout(
+          supabase
+            .from('loadout_items')
+            .delete()
+            .eq('loadout_id', id)
+            .eq('owner_user_id', userId)
+        );
+        await withTimeout(
+          supabase
+            .from('loadouts')
+            .delete()
+            .eq('id', id)
+            .eq('owner_user_id', userId)
+        );
       } catch {}
     }
 
@@ -562,13 +706,14 @@ export const loadoutStore = {
     }
 
     // Also check cloud items
-    if (userId && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
         const { data: items } = await withTimeout(
           supabase
             .from('loadout_items')
             .select('loadout_id, is_critical, is_packed')
             .in('loadout_id', loadoutIds)
+            .eq('owner_user_id', userId)
         );
 
         if (items && Array.isArray(items)) {
@@ -599,6 +744,7 @@ export const loadoutStore = {
    * Sync all local loadouts to cloud
    */
   syncToCloud: async (userId: string): Promise<{ synced: number; errors: number }> => {
+    await ensureLoadoutStorageHydrated();
     if (!isSupabaseConfigured) return { synced: 0, errors: 0 };
 
     let locals: LocalLoadout[] = [];
@@ -658,6 +804,7 @@ export const loadoutStore = {
     }
 
     saveLocalLoadouts(locals);
+    await flushLoadoutStorage();
     return { synced, errors };
   },
 
@@ -761,8 +908,24 @@ function autoUpdateWeightCache(loadoutId: string): void {
 // ── Loadout Item Store ──────────────────────────────────
 
 export const loadoutItemStore = {
+  getLocalByLoadoutIdSync: (loadoutId: string): LocalLoadoutItem[] => {
+    if (!loadoutId) return [];
+    try {
+      return sortLoadoutItemsByOrder(getLocalLoadoutItems().filter((item) => item.loadout_id === loadoutId));
+    } catch {
+      return [];
+    }
+  },
+
+  subscribe: (listener: LoadoutItemListener): (() => void) => {
+    loadoutItemListeners.add(listener);
+    return () => {
+      loadoutItemListeners.delete(listener);
+    };
+  },
 
   getByLoadoutId: async (loadoutId: string, userId?: string | null): Promise<LocalLoadoutItem[]> => {
+    await ensureLoadoutStorageHydrated();
     try {
       const local = getLocalLoadoutItems().filter(i => i.loadout_id === loadoutId);
       if (local.length > 0) return local.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -771,13 +934,14 @@ export const loadoutItemStore = {
     }
 
     // Try cloud
-    if (userId && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
         const { data } = await withTimeout(
           supabase
             .from('loadout_items')
             .select('*')
             .eq('loadout_id', loadoutId)
+            .eq('owner_user_id', userId)
             .order('sort_order')
         );
 
@@ -810,6 +974,7 @@ export const loadoutItemStore = {
     },
     userId?: string | null
   ): Promise<LocalLoadoutItem> => {
+    await ensureLoadoutStorageHydrated();
     const now = nowISO();
     const deviceId = getDeviceId();
     const id = generateId();
@@ -839,12 +1004,14 @@ export const loadoutItemStore = {
       const locals = getLocalLoadoutItems();
       locals.push(item);
       saveLocalLoadoutItems(locals);
+      await flushLoadoutStorage();
+      notifyLoadoutItemListeners(data.loadout_id);
     } catch (e) {
       console.warn('[LoadoutStore] Failed to save item locally:', e);
     }
 
     // Try cloud
-    if (userId && userId !== 'local' && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured) {
       try {
         const { device_id, sync_status, ...cloudData } = item;
         await withTimeout(supabase.from('loadout_items').insert(cloudData));
@@ -854,6 +1021,7 @@ export const loadoutItemStore = {
           const idx = locals.findIndex(i => i.id === id);
           if (idx !== -1) locals[idx].sync_status = 'synced';
           saveLocalLoadoutItems(locals);
+          await flushLoadoutStorage();
         } catch {}
       } catch {}
     }
@@ -866,6 +1034,8 @@ export const loadoutItemStore = {
 
 
   update: async (id: string, changes: Partial<LoadoutItem>, userId?: string | null): Promise<LocalLoadoutItem | null> => {
+    await ensureLoadoutStorageHydrated();
+    const cloudChanges = buildLoadoutItemCloudPayload(changes);
     try {
       const locals = getLocalLoadoutItems();
       const idx = locals.findIndex(i => i.id === id);
@@ -878,12 +1048,21 @@ export const loadoutItemStore = {
         sync_status: locals[idx].sync_status === 'synced' ? 'pending' : locals[idx].sync_status,
       };
       saveLocalLoadoutItems(locals);
+      await flushLoadoutStorage();
+      notifyLoadoutItemListeners(locals[idx].loadout_id);
 
-      if (userId && isSupabaseConfigured) {
+      if (isSyncableUserId(userId) && isSupabaseConfigured && Object.keys(cloudChanges).length > 0) {
         try {
-          await withTimeout(supabase.from('loadout_items').update(changes).eq('id', id));
+          await withTimeout(
+            supabase
+              .from('loadout_items')
+              .update(cloudChanges)
+              .eq('id', id)
+              .eq('owner_user_id', userId)
+          );
           locals[idx].sync_status = 'synced';
           saveLocalLoadoutItems(locals);
+          await flushLoadoutStorage();
         } catch {}
       }
 
@@ -898,18 +1077,31 @@ export const loadoutItemStore = {
   },
 
   delete: async (id: string, userId?: string | null): Promise<boolean> => {
+    await ensureLoadoutStorageHydrated();
     let loadoutId: string | null = null;
     try {
       const locals = getLocalLoadoutItems();
       const item = locals.find(i => i.id === id);
       if (item) loadoutId = item.loadout_id;
       saveLocalLoadoutItems(locals.filter(i => i.id !== id));
+      await flushLoadoutStorage();
+      if (loadoutId) {
+        notifyLoadoutItemListeners(loadoutId);
+      }
     } catch (e) {
       console.warn('[LoadoutStore] Item delete error:', e);
     }
 
     if (isSyncableUserId(userId) && isSupabaseConfigured) {
-      try { await withTimeout(supabase.from('loadout_items').delete().eq('id', id)); } catch {}
+      try {
+        await withTimeout(
+          supabase
+            .from('loadout_items')
+            .delete()
+            .eq('id', id)
+            .eq('owner_user_id', userId)
+        );
+      } catch {}
     }
 
     // Phase 3 Stabilization: Auto-notify weight cache after item delete

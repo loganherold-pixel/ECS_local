@@ -15,6 +15,7 @@
  *   - Terrain risk engine (ground clearance vs obstacle height)
  */
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
@@ -46,6 +47,8 @@ export interface TiresLiftConfig {
   suspensionLiftInches: number;
   /** Whether the vehicle is leveled (front raised to match rear) */
   isLeveled: boolean;
+  /** Front suspension leveling amount in inches when leveled is enabled */
+  frontLevelInches?: number | null;
   /** Optional: tire width (e.g. 12.5 for 285/75R17) — future use */
   tireWidthInches?: number;
   /** Optional: wheel diameter (e.g. 17) — future use */
@@ -61,6 +64,7 @@ export const DEFAULT_TIRES_LIFT: TiresLiftConfig = {
   tireSizeInches: 0,
   suspensionLiftInches: 0,
   isLeveled: false,
+  frontLevelInches: null,
   updatedAt: new Date().toISOString(),
 };
 
@@ -86,15 +90,40 @@ export const SUSPENSION_OPTIONS: { label: string; value: number; isLeveled?: boo
 
 // ── Persistence ─────────────────────────────────────────
 const LS_KEY = 'ecs_tires_lift';
+const tiresLiftPersistence = createPersistedKeyValueCache('ecs_tires_lift_store');
 
 function getAllConfigs(): Record<string, TiresLiftConfig> {
-  const raw = lsGet(LS_KEY);
+  const raw = tiresLiftPersistence.get(LS_KEY);
   if (!raw) return {};
   try { return JSON.parse(raw) || {}; } catch { return {}; }
 }
 
 function saveAllConfigs(configs: Record<string, TiresLiftConfig>): void {
-  lsSet(LS_KEY, JSON.stringify(configs));
+  tiresLiftPersistence.set(LS_KEY, JSON.stringify(configs));
+}
+
+export function normalizeTiresLiftConfig(config: Partial<TiresLiftConfig> | null | undefined): TiresLiftConfig {
+  const tireSizeInches =
+    typeof config?.tireSizeInches === 'number' && Number.isFinite(config.tireSizeInches)
+      ? Math.max(0, config.tireSizeInches)
+      : DEFAULT_TIRES_LIFT.tireSizeInches;
+  const suspensionLiftInches =
+    typeof config?.suspensionLiftInches === 'number' && Number.isFinite(config.suspensionLiftInches)
+      ? Math.max(0, config.suspensionLiftInches)
+      : DEFAULT_TIRES_LIFT.suspensionLiftInches;
+  const frontLevelInches =
+    typeof config?.frontLevelInches === 'number' && Number.isFinite(config.frontLevelInches)
+      ? Math.max(0, config.frontLevelInches)
+      : null;
+  return {
+    ...DEFAULT_TIRES_LIFT,
+    ...config,
+    tireSizeInches,
+    suspensionLiftInches,
+    isLeveled: Boolean(config?.isLeveled ?? false),
+    frontLevelInches,
+    updatedAt: typeof config?.updatedAt === 'string' ? config.updatedAt : new Date().toISOString(),
+  };
 }
 
 // ── Change listeners ────────────────────────────────────
@@ -113,7 +142,7 @@ export const tiresLiftStore = {
    */
   get: (vehicleId: string): TiresLiftConfig | null => {
     const all = getAllConfigs();
-    return all[vehicleId] || null;
+    return all[vehicleId] ? normalizeTiresLiftConfig(all[vehicleId]) : null;
   },
 
   /**
@@ -130,7 +159,7 @@ export const tiresLiftStore = {
    */
   set: (vehicleId: string, config: TiresLiftConfig): void => {
     const all = getAllConfigs();
-    all[vehicleId] = { ...config, updatedAt: new Date().toISOString() };
+    all[vehicleId] = { ...normalizeTiresLiftConfig(config), updatedAt: new Date().toISOString() };
     saveAllConfigs(all);
     notifyListeners(vehicleId);
   },
@@ -140,8 +169,8 @@ export const tiresLiftStore = {
    */
   update: (vehicleId: string, partial: Partial<TiresLiftConfig>): void => {
     const all = getAllConfigs();
-    const existing = all[vehicleId] || { ...DEFAULT_TIRES_LIFT };
-    all[vehicleId] = { ...existing, ...partial, updatedAt: new Date().toISOString() };
+    const existing = normalizeTiresLiftConfig(all[vehicleId] || DEFAULT_TIRES_LIFT);
+    all[vehicleId] = { ...normalizeTiresLiftConfig({ ...existing, ...partial }), updatedAt: new Date().toISOString() };
     saveAllConfigs(all);
     notifyListeners(vehicleId);
   },
@@ -187,10 +216,12 @@ export const tiresLiftStore = {
 
     const tires = hasTires ? `${config.tireSizeInches}"` : null;
     let suspension: string | null = null;
-    if (hasLift) {
+    if (hasLift && hasLeveled) {
+      suspension = `${config.suspensionLiftInches}" Level`;
+    } else if (hasLift) {
       suspension = `${config.suspensionLiftInches}" Lift`;
     } else if (hasLeveled) {
-      suspension = 'Leveled';
+      suspension = config.frontLevelInches ? `Level +${config.frontLevelInches}" Front` : 'Leveled';
     }
 
     return { tires, suspension };
@@ -228,5 +259,9 @@ export const tiresLiftStore = {
     if (total >= 1 || config.isLeveled) return 'mild';
     return 'stock';
   },
+
+  waitForHydration: (): Promise<void> => tiresLiftPersistence.waitForHydration(),
+
+  flush: (): Promise<void> => tiresLiftPersistence.flush(),
 };
 

@@ -50,7 +50,7 @@ function ElevationMiniChart({
   width,
   height,
 }: {
-  profile: Array<{ distanceMi: number; elevationFt: number }>;
+  profile: { distanceMi: number; elevationFt: number }[];
   width: number;
   height: number;
 }) {
@@ -394,6 +394,9 @@ export default function RouteAnalysisPanel({
       <Text style={styles.routeName} numberOfLines={1}>
         {intelligence.routeName}
       </Text>
+      <Text style={styles.truthNote} numberOfLines={2}>
+        ECS-estimated from route geometry. Access, weather, closures, and field conditions need current verification.
+      </Text>
 
       {/* Primary stats grid */}
       <View style={styles.statsGrid}>
@@ -723,6 +726,16 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 2,
     opacity: 0.8,
+  },
+  truthNote: {
+    fontSize: 8,
+    fontWeight: '600',
+    letterSpacing: 1,
+    lineHeight: 12,
+    color: TACTICAL.textMuted,
+    paddingHorizontal: 12,
+    paddingBottom: 5,
+    opacity: 0.72,
   },
 
   // ── Stats Grid ──

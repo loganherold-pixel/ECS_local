@@ -30,12 +30,17 @@ import {
 import { missionExpeditionStore } from './missionStore';
 import { routeStore } from './routeStore';
 import { getDeviceStorageInfo } from './nativeTileStorage';
+import { ecsLog } from './ecsLogger';
 
 
 // ── Persistence keys ────────────────────────────────────────
 const RULES_KEY = 'ecs_storage_cleanup_rules';
 const ACCESS_LOG_KEY = 'ecs_region_access_log';
 const LAST_AUTO_CHECK_KEY = 'ecs_last_auto_cleanup_check';
+
+function debugStorageCleanup(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -702,20 +707,26 @@ export async function runAutoCleanupCheck(): Promise<SmartCleanupResult | null> 
 
   setLastAutoCheckTime();
 
-  console.log('[StorageCleanup] Running auto-cleanup check...');
+  debugStorageCleanup('Storage auto-cleanup check running');
 
   // Check device storage
   const deviceStatus = await getDeviceStorageStatus();
 
   if (deviceStatus.belowThreshold) {
-    console.log(`[StorageCleanup] Device storage below threshold: ${deviceStatus.freeMB}MB free (threshold: ${rules.minFreeSpaceMB}MB)`);
+    ecsLog.warn('SYSTEM', 'Device storage below cleanup threshold', {
+      freeMB: deviceStatus.freeMB,
+      thresholdMB: rules.minFreeSpaceMB,
+    });
     return smartCleanup(0, 'device-threshold');
   }
 
   // Check cache size
   const stats = tileCacheStore.getStats();
   if (stats.totalSizeMB > rules.maxCacheSizeMB) {
-    console.log(`[StorageCleanup] Cache size exceeded: ${stats.totalSizeMB}MB (limit: ${rules.maxCacheSizeMB}MB)`);
+    ecsLog.warn('SYSTEM', 'Tile cache size exceeded cleanup threshold', {
+      limitMB: rules.maxCacheSizeMB,
+      totalSizeMB: stats.totalSizeMB,
+    });
     return smartCleanup(0, 'cache-size');
   }
 
@@ -725,12 +736,16 @@ export async function runAutoCleanupCheck(): Promise<SmartCleanupResult | null> 
   if (veryOld.length > 0) {
     const totalOldMB = veryOld.reduce((sum, r) => sum + r.sizeMB, 0);
     if (totalOldMB > 50) { // Only auto-clean if old regions are significant
-      console.log(`[StorageCleanup] Found ${veryOld.length} regions older than ${rules.maxCacheAgeDays} days (${formatMB(totalOldMB)})`);
+      ecsLog.warn('SYSTEM', 'Stale tile cache regions exceeded cleanup threshold', {
+        ageDays: rules.maxCacheAgeDays,
+        regionCount: veryOld.length,
+        totalOldMB: formatMB(totalOldMB),
+      });
       return smartCleanup(totalOldMB, 'age');
     }
   }
 
-  console.log('[StorageCleanup] No cleanup needed');
+  debugStorageCleanup('Storage auto-cleanup check found no work');
   return null;
 }
 

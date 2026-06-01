@@ -44,6 +44,20 @@ import {
   type DownloadProgress,
   type QuotaStatus,
 } from '../../lib/tileCacheStore';
+import {
+  offlineTileSyncCoordinator,
+  type OfflineTileSyncSnapshot,
+  type OfflineTileSyncSource,
+} from '../../lib/offlineTileSyncCoordinator';
+import {
+  listOfflineCachedRoutes,
+  removeOfflineCachedRoute,
+  type OfflineCachedRoute,
+} from '../../lib/offlineRouteCacheService';
+import {
+  formatRemoteCacheLastVerified,
+  formatRemoteCacheSize,
+} from '../../lib/remote/offlineRemoteCache';
 import { connectivity } from '../../lib/connectivity';
 import {
   analyzeCache,
@@ -68,9 +82,49 @@ interface Props {
   mapStyle: string;
   showToast: (msg: string) => void;
   onRequestMapBounds?: () => void;
+  onOpenDownloadedSync?: (item: DownloadedSyncOpenTarget) => void | Promise<void>;
 }
 
 type TabKey = 'cache' | 'regions' | 'storage';
+export type DownloadedSyncOpenTarget =
+  | {
+      kind: 'route';
+      route: OfflineCachedRoute;
+    }
+  | {
+      kind: 'region';
+      region: TileCacheRegion;
+    };
+
+type DownloadedSyncCard =
+  | {
+      kind: 'route';
+      id: string;
+      title: string;
+      region: string;
+      metricPrimary: string;
+      metricSecondary: string;
+      typeLabel: string;
+      guidanceLabel: string;
+      cachedLabel: string;
+      statusLabel: string;
+      tone: 'route' | 'region';
+      route: OfflineCachedRoute;
+    }
+  | {
+      kind: 'region';
+      id: string;
+      title: string;
+      region: string;
+      metricPrimary: string;
+      metricSecondary: string;
+      typeLabel: string;
+      guidanceLabel: string;
+      cachedLabel: string;
+      statusLabel: string;
+      tone: 'route' | 'region';
+      regionItem: TileCacheRegion;
+    };
 
 // ── Zoom Presets ────────────────────────────────────────
 
@@ -85,6 +139,7 @@ const STYLE_OPTIONS = [
   { key: 'tactical', label: 'TACTICAL', icon: 'shield-outline' },
   { key: 'terrain', label: 'TERRAIN', icon: 'trail-sign-outline' },
   { key: 'satellite', label: 'SAT', icon: 'earth-outline' },
+  { key: '3d', label: '3D', icon: 'cube-outline' },
 ];
 
 // ── Helpers ─────────────────────────────────────────────
@@ -115,6 +170,60 @@ function formatETA(seconds: number | null | undefined): string {
   if (safeSeconds < 60) return `${Math.round(safeSeconds)}s`;
   if (safeSeconds < 3600) return `${Math.ceil(safeSeconds / 60)}m`;
   return `${(safeSeconds / 3600).toFixed(1)}h`;
+}
+
+function formatMiles(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '--';
+  if (value < 10) return `${value.toFixed(1)} mi`;
+  return `${Math.round(value)} mi`;
+}
+
+function formatBoundsArea(bounds: TileBounds | null | undefined): string {
+  if (!bounds) return 'Map area';
+  const latSpan = Math.abs(bounds.maxLat - bounds.minLat);
+  const lngSpan = Math.abs(bounds.maxLng - bounds.minLng);
+  if (!Number.isFinite(latSpan) || !Number.isFinite(lngSpan)) return 'Map area';
+  return `${latSpan.toFixed(2)}\u00B0 x ${lngSpan.toFixed(2)}\u00B0`;
+}
+
+function formatBoundsCenter(bounds: TileBounds | null | undefined): string {
+  if (!bounds) return 'Saved offline region';
+  const centerLat = (bounds.minLat + bounds.maxLat) / 2;
+  const centerLng = (bounds.minLng + bounds.maxLng) / 2;
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return 'Saved offline region';
+  return `${centerLat.toFixed(3)}, ${centerLng.toFixed(3)}`;
+}
+
+function routeSourceLabel(source: string | null | undefined): string {
+  const value = String(source ?? '').trim();
+  if (!value) return 'OFFLINE ROUTE';
+  if (value === 'gpx') return 'GPX ROUTE';
+  if (value === 'explore') return 'EXPLORE ROUTE';
+  if (value === 'drawn') return 'DRAWN ROUTE';
+  if (value === 'built') return 'BUILT ROUTE';
+  return `${value.toUpperCase()} ROUTE`;
+}
+
+function downloadedRouteTypeLabel(route: OfflineCachedRoute): string {
+  if (route.routeIntent?.syncType === 'route') return 'ROUTE SYNC';
+  return routeSourceLabel(route.source);
+}
+
+function formatMapStyleLabel(styleKey: string | null | undefined): string {
+  const key = String(styleKey ?? '').trim().toLowerCase();
+  if (!key) return 'STYLE UNKNOWN';
+  if (key === 'ecs') return 'DAY STYLE';
+  if (key === 'tactical') return 'TAC STYLE';
+  if (key === 'satellite') return 'SAT STYLE';
+  if (key === '3d') return '3D STYLE';
+  if (key === 'terrain') return 'TERRAIN STYLE';
+  return `${key.toUpperCase()} STYLE`;
+}
+
+function regionSourceLabel(sourceType: TileCacheRegion['sourceType']): string {
+  if (sourceType === 'route-corridor') return 'ROUTE CORRIDOR';
+  if (sourceType === 'bounding-box') return 'MAP VIEW';
+  return 'MANUAL REGION';
 }
 
 function getFreshnessColor(iso: string | null | undefined): string {
@@ -150,7 +259,7 @@ function TacticalProgressBar({ percent, color = TACTICAL.amber, height = 6, anim
       duration: animated ? 400 : 0,
       useNativeDriver: false,
     }).start();
-  }, [percent, animated]);
+  }, [animValue, percent, animated]);
 
   useEffect(() => {
     if (percent > 0 && percent < 100) {
@@ -163,7 +272,7 @@ function TacticalProgressBar({ percent, color = TACTICAL.amber, height = 6, anim
     } else {
       pulseAnim.setValue(1);
     }
-  }, [percent > 0 && percent < 100]);
+  }, [percent, pulseAnim]);
 
   const width = animValue.interpolate({
     inputRange: [0, 100],
@@ -240,6 +349,7 @@ export default function OfflineCacheModal({
   mapStyle: currentMapStyle,
   showToast,
   onRequestMapBounds,
+  onOpenDownloadedSync,
 }: Props) {
   // ── Safe sheet layout — responsive height + safe-area padding ──
   const { sheetMaxHeight, contentBottomPadding, safeBottom } = useSheetLayout({
@@ -250,15 +360,17 @@ export default function OfflineCacheModal({
   // ── State ─────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabKey>('cache');
   const [regions, setRegions] = useState<TileCacheRegion[]>([]);
+  const [offlineRoutes, setOfflineRoutes] = useState<OfflineCachedRoute[]>([]);
   const [stats, setStats] = useState<TileCacheStats>({
     totalRegions: 0, totalTiles: 0, downloadedTiles: 0,
     totalSizeMB: 0, lastDownloadAt: null,
     storageQuotaMB: null, storageUsedMB: null,
   });
   const [quotaStatus, setQuotaStatus] = useState<QuotaStatus | null>(null);
-  const [activeProgress, setActiveProgress] = useState<Map<string, DownloadProgress>>(new Map());
+  const [syncSnapshot, setSyncSnapshot] = useState<OfflineTileSyncSnapshot>(
+    () => offlineTileSyncCoordinator.getSnapshot(),
+  );
   const [isOnline, setIsOnline] = useState(true);
-  const [isCaching, setIsCaching] = useState(false);
 
   // Cache config
   const [cacheZoomMin, setCacheZoomMin] = useState(8);
@@ -278,24 +390,31 @@ export default function OfflineCacheModal({
   const [isCleaning, setIsCleaning] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
   const [deviceStorage, setDeviceStorage] = useState<{ totalMB: number; freeMB: number } | null>(null);
+  const surfaceVisible = embedded || visible;
 
 
   // ── Connectivity ──────────────────────────────────────
   useEffect(() => {
-    if (!visible) return;
+    if (!surfaceVisible) return;
     setIsOnline(connectivity.isOnline());
     const unsub = connectivity.onStatusChange((status) => {
       setIsOnline(status === 'online');
     });
     connectivity.startMonitoring();
     return () => { unsub(); };
-  }, [visible]);
+  }, [surfaceVisible]);
 
   // ── Load data ─────────────────────────────────────────
   const refreshData = useCallback(async () => {
     const r = tileCacheStore.getRegions();
     setRegions(r);
     setQuotaStatus(tileCacheStore.getQuotaStatus());
+    try {
+      const routes = await listOfflineCachedRoutes();
+      setOfflineRoutes(routes);
+    } catch {
+      setOfflineRoutes([]);
+    }
     try {
       const s = await tileCacheStore.getStatsWithStorage();
       setStats(s);
@@ -305,16 +424,24 @@ export default function OfflineCacheModal({
   }, []);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!surfaceVisible) return;
     refreshData();
     const unsub = tileCacheStore.subscribe(refreshData);
     return unsub;
-  }, [visible, refreshData]);
+  }, [surfaceVisible, refreshData]);
+
+  useEffect(() => {
+    setSyncSnapshot(offlineTileSyncCoordinator.getSnapshot());
+    const unsubscribe = offlineTileSyncCoordinator.subscribe(() => {
+      setSyncSnapshot(offlineTileSyncCoordinator.getSnapshot());
+    });
+    return unsubscribe;
+  }, []);
 
   // Sync style key with map
   useEffect(() => {
-    if (visible && currentMapStyle) setCacheStyleKey(currentMapStyle);
-  }, [visible, currentMapStyle]);
+    if (surfaceVisible && currentMapStyle) setCacheStyleKey(currentMapStyle);
+  }, [surfaceVisible, currentMapStyle]);
 
   // ── Tile estimates ────────────────────────────────────
   const viewTileEstimate = useMemo(() => {
@@ -350,35 +477,14 @@ export default function OfflineCacheModal({
   }, [mapBounds]);
 
   // ── Download management ───────────────────────────────
-  const startDownload = useCallback(async (regionId: string) => {
+  const startDownload = useCallback((regionId: string, source: OfflineTileSyncSource = 'manual-region') => {
     if (!isOnline) {
       showToast('CANNOT DOWNLOAD \u2014 NO NETWORK');
       return;
     }
-    const onProgress = (progress: DownloadProgress) => {
-      setActiveProgress(prev => {
-        const next = new Map(prev);
-        next.set(regionId, progress);
-        return next;
-      });
-      if (progress.downloadedTiles % 10 === 0 || progress.status === 'complete' || progress.status === 'error') {
-        refreshData();
-      }
-    };
     showToast('DOWNLOAD STARTED');
-    const result = await tileCacheStore.startDownloadWithQuota(regionId, onProgress);
-    if (result.cleanupResult && result.cleanupResult.purged > 0) {
-      showToast(`AUTO-CLEANUP: FREED ${formatSize(result.cleanupResult.freedMB)}`);
-    }
-    setTimeout(() => {
-      setActiveProgress(prev => {
-        const next = new Map(prev);
-        next.delete(regionId);
-        return next;
-      });
-      refreshData();
-    }, 2000);
-    showToast(result.success ? 'DOWNLOAD COMPLETE' : 'DOWNLOAD FAILED');
+    void offlineTileSyncCoordinator.startRegionSync({ regionId, source });
+    refreshData();
   }, [showToast, refreshData, isOnline]);
 
   // ── Cache Current View ────────────────────────────────
@@ -393,7 +499,6 @@ export default function OfflineCacheModal({
     if (!isOnline) { showToast('CANNOT DOWNLOAD \u2014 NO NETWORK'); return; }
     if (quotaCheck && !quotaCheck.canProceed) { showToast(`QUOTA EXCEEDED \u2014 ${quotaCheck.message}`); return; }
 
-    setIsCaching(true);
     const region = tileCacheStore.createFromBounds(
       `Map View \u2014 Z${cacheZoomMin}-${cacheZoomMax}`,
       mapBounds,
@@ -403,14 +508,14 @@ export default function OfflineCacheModal({
     );
     showToast(`REGION CREATED: ${region.tileCount.toLocaleString()} TILES`);
     refreshData();
-    startDownload(region.id).finally(() => setIsCaching(false));
+    startDownload(region.id, 'current-view');
   }, [mapBounds, viewTileEstimate, cacheZoomMin, cacheZoomMax, cacheStyleKey, isOnline, showToast, refreshData, startDownload, onRequestMapBounds, quotaCheck]);
 
   // ── Region actions ────────────────────────────────────
   const handleResume = useCallback((regionId: string) => startDownload(regionId), [startDownload]);
 
   const handleCancel = useCallback((regionId: string) => {
-    tileCacheStore.cancelDownload(regionId);
+    offlineTileSyncCoordinator.cancelRegion(regionId);
     showToast('DOWNLOAD CANCELLED');
     refreshData();
   }, [showToast, refreshData]);
@@ -428,6 +533,30 @@ export default function OfflineCacheModal({
     ]); }
   }, [showToast, refreshData]);
 
+  const handleDeleteDownloadedSync = useCallback((item: DownloadedSyncCard) => {
+    const doDelete = async () => {
+      if (item.kind === 'route') {
+        await removeOfflineCachedRoute(item.route.id);
+        if (item.route.offlineTileRegionId) {
+          await tileCacheStore.deleteRegion(item.route.offlineTileRegionId).catch(() => {});
+        }
+        showToast('OFFLINE ROUTE REMOVED');
+      } else {
+        await tileCacheStore.deleteRegion(item.regionItem.id);
+        showToast('DOWNLOADED SYNC REMOVED');
+      }
+      refreshData();
+    };
+    if (Platform.OS === 'web') {
+      if (confirm('Remove this downloaded sync?')) doDelete();
+    } else {
+      Alert.alert('Remove Downloaded Sync', 'Remove this offline item and cached tiles?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: doDelete },
+      ]);
+    }
+  }, [refreshData, showToast]);
+
   const handleCheckFreshness = useCallback(async (regionId: string) => {
     if (!isOnline) { showToast('CANNOT CHECK \u2014 NO NETWORK'); return; }
     setCheckingRegionIds(prev => new Set(prev).add(regionId));
@@ -441,10 +570,22 @@ export default function OfflineCacheModal({
     setCheckingRegionIds(prev => { const next = new Set(prev); next.delete(regionId); return next; });
   }, [isOnline, showToast, refreshData]);
 
+  const handleOpenDownloadedSync = useCallback((item: DownloadedSyncCard) => {
+    if (!onOpenDownloadedSync) {
+      showToast(`${item.kind === 'route' ? 'OFFLINE ROUTE' : 'OFFLINE SYNC'}: ${item.title}`);
+      return;
+    }
+
+    void onOpenDownloadedSync(
+      item.kind === 'route'
+        ? { kind: 'route', route: item.route }
+        : { kind: 'region', region: item.regionItem },
+    );
+  }, [onOpenDownloadedSync, showToast]);
+
   const handleClearAll = useCallback(() => {
     const doClear = () => {
       tileCacheStore.clearAll();
-      setActiveProgress(new Map());
       showToast('ALL CACHED TILES CLEARED');
       refreshData();
     };
@@ -460,7 +601,7 @@ export default function OfflineCacheModal({
   // ── RegionSelector handlers ───────────────────────────
   const handleCreateFromRoute = useCallback((
     name: string,
-    points: Array<{ lat: number; lng: number }>,
+    points: { lat: number; lng: number }[],
     corridorMiles: number,
     zoomMin: number,
     zoomMax: number,
@@ -469,15 +610,19 @@ export default function OfflineCacheModal({
 
     try {
       const bounds = computeRouteCorridor(points, corridorMiles);
+      if (!bounds) {
+        showToast('FAILED TO COMPUTE ROUTE CORRIDOR');
+        return;
+      }
       const region = tileCacheStore.createFromBounds(name, bounds, zoomMin, zoomMax, styleKey);
       showToast(`ROUTE CORRIDOR: ${region.tileCount.toLocaleString()} TILES`);
       setShowRouteSelector(false);
       refreshData();
-      startDownload(region.id);
+      startDownload(region.id, 'route-corridor');
     } catch (e: any) {
       showToast(e?.message || 'FAILED TO CREATE REGION');
     }
-  }, [isOnline, showToast, refreshData, startDownload]);
+  }, [showToast, refreshData, startDownload]);
 
   const handleCreateFromBounds = useCallback((
     name: string,
@@ -492,7 +637,7 @@ export default function OfflineCacheModal({
       showToast(`REGION CREATED: ${region.tileCount.toLocaleString()} TILES`);
       setShowRouteSelector(false);
       refreshData();
-      startDownload(region.id);
+      startDownload(region.id, 'manual-region');
     } catch (e: any) {
       showToast(e?.message || 'FAILED TO CREATE REGION');
     }
@@ -539,8 +684,352 @@ export default function OfflineCacheModal({
     ? Math.round((stats.downloadedTiles / stats.totalTiles) * 100) : 0;
 
   const quotaLevelColor = quotaStatus ? getLevelColor(quotaStatus.level) : TACTICAL.textMuted;
+  const activeProgress = useMemo(() => {
+    const progressByRegion = new Map<string, DownloadProgress>();
+    syncSnapshot.activeJobs.forEach((job) => {
+      if (job.progress) progressByRegion.set(job.regionId, job.progress);
+    });
+    return progressByRegion;
+  }, [syncSnapshot.activeJobs]);
+  const isCaching = syncSnapshot.activeJobs.length > 0;
+  const activeDownloads = useMemo(() => Array.from(activeProgress.values()), [activeProgress]);
+  const primaryDownloadProgress = activeDownloads[0] ?? null;
+  const downloadedSyncCards = useMemo<DownloadedSyncCard[]>(() => {
+    const regionIdsClaimedByRoutes = new Set(
+      offlineRoutes
+        .map((route) => route.offlineTileRegionId)
+        .filter((id): id is string => !!id),
+    );
+    const routeCards: DownloadedSyncCard[] = offlineRoutes
+      .filter((route) => route.cacheStatus === 'cached')
+      .map((route) => {
+        const linkedRegion = route.offlineTileRegionId
+          ? sortedRegions.find((region) => region.id === route.offlineTileRegionId)
+          : null;
+        const styleLabel = formatMapStyleLabel(
+          route.routeIntent?.mapContext?.styleKey ?? linkedRegion?.styleKey,
+        );
+        return {
+          kind: 'route',
+          id: route.id,
+          title: route.name,
+          region: formatBoundsCenter(route.routeBounds),
+          metricPrimary: formatMiles(route.routeDistanceMiles),
+          metricSecondary: styleLabel,
+          typeLabel: downloadedRouteTypeLabel(route),
+          guidanceLabel:
+            route.routeIntent?.destination?.label
+              ? `Opens road preview to ${route.routeIntent.destination.label}`
+              : route.runDetail?.buildSnapshot?.vehicle_name
+                ? `${route.runDetail.buildSnapshot.vehicle_name} guidance`
+                : 'Route guidance ready',
+          cachedLabel: route.remoteCache?.enabled
+            ? formatRemoteCacheLastVerified(route.remoteCache.lastUpdated)
+            : formatAge(route.cachedAt),
+          statusLabel: route.tileCacheStatus === 'complete' ? 'OFFLINE READY' : 'ROUTE SAVED',
+          tone: 'route',
+          route,
+        };
+      });
+
+    const regionCards: DownloadedSyncCard[] = sortedRegions
+      .filter((region) => region.status === 'complete' && !regionIdsClaimedByRoutes.has(region.id))
+      .map((region) => ({
+        kind: 'region',
+        id: region.id,
+        title: region.name,
+        region: formatBoundsCenter(region.bounds),
+        metricPrimary: formatBoundsArea(region.bounds),
+        metricSecondary: `${region.downloadedTiles.toLocaleString()} tiles`,
+        typeLabel: regionSourceLabel(region.sourceType),
+        guidanceLabel: `Z${region.zoomMin}-${region.zoomMax} ${formatMapStyleLabel(region.styleKey)}`,
+        cachedLabel: formatAge(region.completedAt || region.downloadedAt),
+        statusLabel: 'SAVED',
+        tone: 'region',
+        regionItem: region,
+      }));
+
+    return [...routeCards, ...regionCards].sort((a, b) => {
+      const aDate = a.kind === 'route' ? a.route.cachedAt : a.regionItem.completedAt || a.regionItem.downloadedAt;
+      const bDate = b.kind === 'route' ? b.route.cachedAt : b.regionItem.completedAt || b.regionItem.downloadedAt;
+      return bDate.localeCompare(aDate);
+    });
+  }, [offlineRoutes, sortedRegions]);
+
+  const renderDownloadedSyncsSection = useCallback((compact = false) => (
+    <View style={[styles.downloadedSyncsSection, compact && styles.downloadedSyncsSectionCompact]}>
+      <View style={styles.downloadedSyncsHeader}>
+        <View>
+          <Text style={styles.downloadedSyncsEyebrow}>OFFLINE LIBRARY</Text>
+          <Text style={styles.downloadedSyncsTitle}>Downloaded Syncs</Text>
+        </View>
+        <View style={styles.downloadedSyncsCountBadge}>
+          <Text style={styles.downloadedSyncsCountText}>{downloadedSyncCards.length}</Text>
+        </View>
+      </View>
+
+      {downloadedSyncCards.length === 0 ? (
+        <View style={styles.downloadedSyncsEmptyCard}>
+          <Ionicons name="map-outline" size={18} color={TACTICAL.textMuted} />
+          <View style={styles.downloadedSyncsEmptyCopy}>
+            <Text style={styles.downloadedSyncsEmptyTitle}>No offline routes saved yet.</Text>
+            <Text style={styles.downloadedSyncsEmptyText}>
+              Synced map views and saved offline routes will appear here after they finish downloading.
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.downloadedSyncsList}>
+          {downloadedSyncCards.map((item) => {
+            const accentColor = item.tone === 'route' ? TACTICAL.amber : '#66BB6A';
+            return (
+              <View key={`${item.kind}:${item.id}`} style={styles.downloadedSyncCard}>
+                <View style={styles.downloadedSyncAccentBar}>
+                  <View style={[styles.downloadedSyncAccentTop, { backgroundColor: accentColor }]} />
+                  <View style={styles.downloadedSyncAccentBottom} />
+                </View>
+
+                <View style={styles.downloadedSyncCardBody}>
+                  <View style={styles.downloadedSyncBadgeRow}>
+                    <View
+                      style={[
+                        styles.downloadedSyncTypeBadge,
+                        { borderColor: `${accentColor}50`, backgroundColor: `${accentColor}14` },
+                      ]}
+                    >
+                      <Ionicons
+                        name={item.kind === 'route' ? 'navigate-outline' : 'layers-outline'}
+                        size={9}
+                        color={accentColor}
+                      />
+                      <Text style={[styles.downloadedSyncTypeText, { color: accentColor }]}>
+                        {item.typeLabel}
+                      </Text>
+                    </View>
+                    <View style={styles.downloadedSyncStatusBadge}>
+                      <Text style={styles.downloadedSyncStatusText}>{item.statusLabel}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.downloadedSyncNameBlock}>
+                    <Text style={styles.downloadedSyncName} numberOfLines={2}>
+                      {item.title}
+                    </Text>
+                    <Text style={styles.downloadedSyncRegion} numberOfLines={1}>
+                      {item.region}
+                    </Text>
+                  </View>
+
+                  <View style={styles.downloadedSyncStatsRow}>
+                    <View style={styles.downloadedSyncStatItem}>
+                      <Ionicons name="resize-outline" size={10} color={TACTICAL.amber} />
+                      <Text style={styles.downloadedSyncStatValue}>{item.metricPrimary}</Text>
+                    </View>
+                    <View style={styles.downloadedSyncStatItem}>
+                      <Ionicons name="file-tray-full-outline" size={10} color={TACTICAL.textMuted} />
+                      <Text style={styles.downloadedSyncStatValue}>{item.metricSecondary}</Text>
+                    </View>
+                    <View style={styles.downloadedSyncStatItem}>
+                      <Ionicons name="time-outline" size={10} color={TACTICAL.textMuted} />
+                      <Text style={styles.downloadedSyncStatValue}>{item.cachedLabel}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.downloadedSyncChipRow}>
+                    <View style={styles.downloadedSyncChip}>
+                      <Text style={styles.downloadedSyncChipText}>{item.guidanceLabel}</Text>
+                    </View>
+                    <View style={styles.downloadedSyncChip}>
+                      <Text style={styles.downloadedSyncChipText}>
+                        {item.kind === 'route' ? 'ROUTE DETAIL' : 'MAP TILES'}
+                      </Text>
+                    </View>
+                    {item.kind === 'route' && item.route.remoteCache?.enabled ? (
+                      <View style={styles.downloadedSyncChip}>
+                        <Text style={styles.downloadedSyncChipText}>
+                          REMOTE {formatRemoteCacheSize(item.route.remoteCache.estimatedBytes)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <View style={styles.downloadedSyncActionRow}>
+                    <TouchableOpacity
+                      style={styles.downloadedSyncActionBtn}
+                      activeOpacity={0.78}
+                      onPress={() => handleOpenDownloadedSync(item)}
+                    >
+                      <Ionicons name="open-outline" size={11} color={TACTICAL.amber} />
+                      <Text style={styles.downloadedSyncActionText}>OPEN</Text>
+                    </TouchableOpacity>
+                    {item.kind === 'region' ? (
+                      <TouchableOpacity
+                        style={styles.downloadedSyncActionBtn}
+                        activeOpacity={0.78}
+                        onPress={() => handleCheckFreshness(item.regionItem.id)}
+                      >
+                        <Ionicons name="refresh-outline" size={11} color={TACTICAL.textMuted} />
+                        <Text style={styles.downloadedSyncActionTextMuted}>REFRESH</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={[styles.downloadedSyncActionBtn, styles.downloadedSyncDeleteBtn]}
+                      activeOpacity={0.78}
+                      onPress={() => handleDeleteDownloadedSync(item)}
+                    >
+                      <Ionicons name="trash-outline" size={11} color="#EF5350" />
+                      <Text style={styles.downloadedSyncDeleteText}>DELETE</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  ), [downloadedSyncCards, handleCheckFreshness, handleDeleteDownloadedSync, handleOpenDownloadedSync]);
 
   if (!embedded && !visible) return null;
+
+  if (embedded) {
+    return (
+      <View style={styles.embeddedShell}>
+        <View style={styles.embeddedHero}>
+          <View style={styles.embeddedHeroCopy}>
+            <Text style={styles.embeddedEyebrow}>OFFLINE MAP READY</Text>
+            <Text style={styles.embeddedTitle}>
+              {mapBounds ? 'Sync the current map view for offline use.' : 'Choose a map area to prepare offline.'}
+            </Text>
+            <Text style={styles.embeddedBody}>
+              {mapBounds
+                ? `Current view will cache ${viewTileEstimate.count.toLocaleString()} tiles at approximately ${formatSize(viewTileEstimate.sizeMB)}.`
+                : 'Pan or zoom the map first, then sync the area you want available without service.'}
+            </Text>
+          </View>
+
+          <View style={styles.embeddedStatusChipRow}>
+            <View
+              style={[
+                styles.embeddedStatusChip,
+                isOnline ? styles.embeddedStatusChipOnline : styles.embeddedStatusChipOffline,
+              ]}
+            >
+              <Ionicons
+                name={isOnline ? 'cloud-done-outline' : 'cloud-offline-outline'}
+                size={12}
+                color={isOnline ? '#66BB6A' : '#EF5350'}
+              />
+              <Text
+                style={[
+                  styles.embeddedStatusChipText,
+                  { color: isOnline ? '#66BB6A' : '#EF5350' },
+                ]}
+              >
+                {isOnline ? 'ONLINE' : 'OFFLINE'}
+              </Text>
+            </View>
+
+            {!!downloadingCount && (
+              <View style={styles.embeddedStatusChip}>
+                <Ionicons name="download-outline" size={12} color={TACTICAL.amber} />
+                <Text style={styles.embeddedStatusChipText}>{downloadingCount} ACTIVE</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.embeddedSummaryRow}>
+          <View style={styles.embeddedSummaryCard}>
+            <Text style={styles.embeddedSummaryLabel}>AREA</Text>
+            <Text style={styles.embeddedSummaryValue}>
+              {boundsDisplay?.area ?? 'Map view required'}
+            </Text>
+          </View>
+          <View style={styles.embeddedSummaryCard}>
+            <Text style={styles.embeddedSummaryLabel}>CACHE</Text>
+            <Text style={styles.embeddedSummaryValue}>{formatSize(stats.totalSizeMB)}</Text>
+          </View>
+          <View style={styles.embeddedSummaryCard}>
+            <Text style={styles.embeddedSummaryLabel}>REGIONS</Text>
+            <Text style={styles.embeddedSummaryValue}>{stats.totalRegions}</Text>
+          </View>
+        </View>
+
+        {primaryDownloadProgress ? (
+          <View style={styles.embeddedDownloadCard}>
+            <View style={styles.embeddedDownloadHeader}>
+              <Text style={styles.embeddedDownloadTitle}>Sync in progress</Text>
+              <Text style={styles.embeddedDownloadPercent}>
+                {Math.round(primaryDownloadProgress.percent)}%
+              </Text>
+            </View>
+            <TacticalProgressBar percent={primaryDownloadProgress.percent} />
+            <View style={styles.embeddedDownloadMetaRow}>
+              <Text style={styles.embeddedDownloadMeta}>
+                {primaryDownloadProgress.downloadedTiles.toLocaleString()} /{' '}
+                {primaryDownloadProgress.totalTiles.toLocaleString()} tiles
+              {primaryDownloadProgress.eta
+                ? ` • ${formatETA(primaryDownloadProgress.eta)} left`
+                : ''}
+              </Text>
+              <TouchableOpacity
+                style={styles.embeddedCancelButton}
+                onPress={() => handleCancel(primaryDownloadProgress.regionId)}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel offline sync"
+              >
+                <Text style={styles.embeddedCancelButtonText}>CANCEL</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        {quotaCheck?.canProceed === false ? (
+          <View style={styles.embeddedNoteCard}>
+            <Ionicons name="warning-outline" size={14} color="#FFB300" />
+            <Text style={styles.embeddedNoteText}>{quotaCheck.message}</Text>
+          </View>
+        ) : (
+          <View style={styles.embeddedNoteCard}>
+            <Ionicons
+              name={mapBounds ? 'download-outline' : 'map-outline'}
+              size={14}
+              color={TACTICAL.amber}
+            />
+            <Text style={styles.embeddedNoteText}>
+              {mapBounds
+                ? 'Use sync to keep the visible route area ready when service drops.'
+                : 'Map sync becomes available as soon as the current view bounds are captured.'}
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[
+            styles.embeddedPrimaryButton,
+            (!mapBounds || !isOnline || isCaching || (quotaCheck?.canProceed === false)) &&
+              styles.embeddedPrimaryButtonDisabled,
+          ]}
+          onPress={handleCacheCurrentView}
+          activeOpacity={0.85}
+          disabled={!mapBounds || !isOnline || isCaching || quotaCheck?.canProceed === false}
+        >
+          {isCaching ? (
+            <ActivityIndicator size="small" color="#091014" />
+          ) : (
+            <Ionicons name="cloud-download-outline" size={16} color="#091014" />
+          )}
+          <Text style={styles.embeddedPrimaryButtonText}>
+            {isCaching ? 'SYNCING CURRENT VIEW' : 'SYNC CURRENT VIEW'}
+          </Text>
+        </TouchableOpacity>
+
+        {renderDownloadedSyncsSection(true)}
+      </View>
+    );
+  }
 
   const content = (
     <>
@@ -1047,6 +1536,8 @@ export default function OfflineCacheModal({
                     }`}
               </Text>
             </TouchableOpacity>
+
+            {renderDownloadedSyncsSection()}
 
             {downloadingCount > 0 && (
               <View style={styles.activeDownloadsSection}>
@@ -1728,6 +2219,417 @@ export default function OfflineCacheModal({
 // ── Styles ──────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  embeddedShell: {
+    gap: 12,
+    paddingTop: 6,
+  },
+  embeddedHero: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(10,14,18,0.94)',
+    padding: 16,
+    gap: 12,
+  },
+  embeddedHeroCopy: {
+    gap: 6,
+  },
+  embeddedEyebrow: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 9,
+    letterSpacing: 2.4,
+  },
+  embeddedTitle: {
+    ...TYPO.T2,
+    color: TACTICAL.text,
+    fontSize: 16,
+    lineHeight: 21,
+  },
+  embeddedBody: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  embeddedStatusChipRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  embeddedStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.16)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  embeddedStatusChipOnline: {
+    backgroundColor: 'rgba(102,187,106,0.08)',
+    borderColor: 'rgba(102,187,106,0.22)',
+  },
+  embeddedStatusChipOffline: {
+    backgroundColor: 'rgba(239,83,80,0.08)',
+    borderColor: 'rgba(239,83,80,0.22)',
+  },
+  embeddedStatusChipText: {
+    ...TYPO.U2,
+    color: TACTICAL.text,
+    fontSize: 8,
+    letterSpacing: 1.2,
+  },
+  embeddedSummaryRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  embeddedSummaryCard: {
+    flex: 1,
+    minHeight: 78,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.16)',
+    backgroundColor: 'rgba(8,12,15,0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    gap: 6,
+  },
+  embeddedSummaryLabel: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    letterSpacing: 1.5,
+  },
+  embeddedSummaryValue: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  embeddedDownloadCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.16)',
+    backgroundColor: 'rgba(8,12,15,0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  embeddedDownloadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  embeddedDownloadTitle: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    fontSize: 12,
+  },
+  embeddedDownloadPercent: {
+    ...TYPO.K3,
+    color: TACTICAL.amber,
+    fontSize: 12,
+  },
+  embeddedDownloadMeta: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+  },
+  embeddedDownloadMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  embeddedCancelButton: {
+    minHeight: 28,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,179,0,0.26)',
+    backgroundColor: 'rgba(255,179,0,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  embeddedCancelButtonText: {
+    ...TYPO.U2,
+    color: '#FFB300',
+    fontSize: 8,
+    letterSpacing: 1.2,
+  },
+  embeddedNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(8,12,15,0.82)',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  embeddedNoteText: {
+    ...TYPO.B2,
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  embeddedPrimaryButton: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: TACTICAL.amber,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.26,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  embeddedPrimaryButtonDisabled: {
+    opacity: 0.45,
+  },
+  embeddedPrimaryButtonText: {
+    ...TYPO.U1,
+    color: '#091014',
+    fontSize: 11,
+    letterSpacing: 1.8,
+  },
+  downloadedSyncsSection: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.16)',
+    backgroundColor: 'rgba(8,12,15,0.82)',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    gap: 10,
+  },
+  downloadedSyncsSectionCompact: {
+    marginTop: 0,
+  },
+  downloadedSyncsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  downloadedSyncsEyebrow: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    letterSpacing: 1.4,
+  },
+  downloadedSyncsTitle: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    fontSize: 13,
+  },
+  downloadedSyncsCountBadge: {
+    minWidth: 28,
+    minHeight: 24,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  downloadedSyncsCountText: {
+    ...TYPO.K3,
+    color: TACTICAL.amber,
+    fontSize: 10,
+  },
+  downloadedSyncsEmptyCard: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  downloadedSyncsEmptyCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  downloadedSyncsEmptyTitle: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    fontSize: 11,
+  },
+  downloadedSyncsEmptyText: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  downloadedSyncsList: {
+    gap: 10,
+  },
+  downloadedSyncCard: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(10,14,18,0.94)',
+  },
+  downloadedSyncAccentBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+  },
+  downloadedSyncAccentTop: {
+    flex: 1,
+  },
+  downloadedSyncAccentBottom: {
+    flex: 1,
+    backgroundColor: 'rgba(102,187,106,0.82)',
+  },
+  downloadedSyncCardBody: {
+    paddingLeft: 13,
+    paddingRight: 10,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  downloadedSyncBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  downloadedSyncTypeBadge: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  downloadedSyncTypeText: {
+    ...TYPO.U2,
+    fontSize: 7,
+    letterSpacing: 1.1,
+  },
+  downloadedSyncStatusBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(102,187,106,0.24)',
+    backgroundColor: 'rgba(102,187,106,0.08)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  downloadedSyncStatusText: {
+    ...TYPO.U2,
+    color: '#66BB6A',
+    fontSize: 7,
+    letterSpacing: 1.1,
+  },
+  downloadedSyncNameBlock: {
+    gap: 3,
+  },
+  downloadedSyncName: {
+    ...TYPO.T3,
+    color: TACTICAL.text,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  downloadedSyncRegion: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+  },
+  downloadedSyncStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  downloadedSyncStatItem: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  downloadedSyncStatValue: {
+    ...TYPO.K3,
+    color: TACTICAL.text,
+    fontSize: 9,
+  },
+  downloadedSyncChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  downloadedSyncChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.12)',
+    backgroundColor: 'rgba(196,138,44,0.06)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  downloadedSyncChipText: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    letterSpacing: 1,
+  },
+  downloadedSyncActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196,138,44,0.08)',
+    paddingTop: 8,
+  },
+  downloadedSyncActionBtn: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  downloadedSyncDeleteBtn: {
+    borderColor: 'rgba(239,83,80,0.22)',
+    backgroundColor: 'rgba(239,83,80,0.06)',
+  },
+  downloadedSyncActionText: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    letterSpacing: 1.1,
+  },
+  downloadedSyncActionTextMuted: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    letterSpacing: 1.1,
+  },
+  downloadedSyncDeleteText: {
+    ...TYPO.U2,
+    color: '#EF5350',
+    fontSize: 7,
+    letterSpacing: 1.1,
+  },
   sheet: {
     backgroundColor: TACTICAL.panel,
     borderTopLeftRadius: 20,
@@ -2070,6 +2972,3 @@ const styles = StyleSheet.create({
   storageInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   storageInfoText: { ...TYPO.B2, fontSize: 9, color: TACTICAL.textMuted },
 });
-
-
-

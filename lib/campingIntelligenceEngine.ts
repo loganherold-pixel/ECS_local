@@ -18,7 +18,7 @@
 //     - Route proximity (15%): reasonable distance from route
 //
 // CAMP ZONE TYPES
-//   - DISPERSED: Open public land dispersed camping
+//   - DISPERSED: Public-land dispersed camping access signal
 //   - ESTABLISHED: Established campground (no hookups)
 //   - PRIMITIVE: Primitive/backcountry camping
 //   - ROADSIDE: Pulloff/roadside camping area

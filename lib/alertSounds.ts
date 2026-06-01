@@ -98,11 +98,13 @@ function getAudioContext(): AudioContext | null {
     if (!_audioCtx || _audioCtx.state === 'closed') {
       _audioCtx = new AudioCtx();
     }
+    const ctx = _audioCtx;
+    if (!ctx) return null;
     // Resume if suspended (browser autoplay policy)
-    if (_audioCtx.state === 'suspended') {
-      _audioCtx.resume().catch(() => {});
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
     }
-    return _audioCtx;
+    return ctx;
   } catch {
     return null;
   }

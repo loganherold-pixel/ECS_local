@@ -56,6 +56,9 @@ export type PowerDevice = {
   /** Product type / category from the provider API. */
   productType?: string;
 
+  /** Whether provider catalog reports the device as currently online. */
+  online?: boolean;
+
   /** Hardware serial number (may differ from deviceId). */
   serial?: string;
 

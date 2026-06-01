@@ -182,7 +182,7 @@ export default function DocumentationCenter({
 
       case 'route-overview':
         if (!activeRoute) {
-          return [...header, '  ROUTE OVERVIEW', '', '  No active route configured.', '  Import a route via Navigate tab.', ...footer].join('\n');
+          return [...header, '  ROUTE OVERVIEW', '', '  No route staged.', '  Import a route in Navigate.', ...footer].join('\n');
         }
         return [
           ...header,

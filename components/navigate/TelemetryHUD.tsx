@@ -232,7 +232,7 @@ export default function TelemetryHUD({
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [followUser, isMoving, replayMode, useExternalGPS]);
+  }, [followUser, internalHeading, isMoving, replayMode, useExternalGPS]);
 
   if (!visible) return null;
 

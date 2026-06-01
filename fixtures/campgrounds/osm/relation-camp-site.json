@@ -1,0 +1,15 @@
+{
+  "type": "relation",
+  "id": 103,
+  "center": {
+    "lat": 38.3003,
+    "lon": -120.3003
+  },
+  "tags": {
+    "tourism": "camp_site",
+    "name": "River Bend Group Camp",
+    "operator": "State Parks",
+    "capacity:pitches": "12",
+    "picnic_table": "yes"
+  }
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml:kml xmlns:kml="http://www.opengis.net/kml/2.2">
+  <kml:Document>
+    <kml:Placemark>
+      <kml:name>Namespaced Position</kml:name>
+      <kml:description>Namespaced message.</kml:description>
+      <kml:TimeStamp><kml:when>2026-04-29T18:30:00Z</kml:when></kml:TimeStamp>
+      <kml:Point><kml:coordinates>-119.5383,37.8651,1220</kml:coordinates></kml:Point>
+    </kml:Placemark>
+  </kml:Document>
+</kml:kml>

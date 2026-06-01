@@ -78,8 +78,7 @@ export const WIDGET_CHANNEL_MAP: Record<string, EcsChannel[]> = {
 
   // ── Highway Widgets ────────────────────────────────────
   'hwy-forward-weather':    ['connectivity'],
-  'hwy-daylight-remaining': [],  // Uses device clock + GPS
-  'hwy-cell-coverage':      ['connectivity'],
+  'hwy-daylight-remaining': [],  // Uses GPS coordinate + resolved coordinate timezone
   'hwy-wind-monitor':       ['connectivity'],
   'hwy-elevation-profile':  ['route'],
   'hwy-road-hazards':       ['connectivity', 'route'],
@@ -93,7 +92,6 @@ export const WIDGET_CHANNEL_MAP: Record<string, EcsChannel[]> = {
   'operational-readiness':  ['loadout', 'route', 'power'],
   'fuel-range':             ['vehicle_profile'],
   'vehicle-health':         ['vehicle_health'],
-  'power-systems':          ['power'],
   'water-projection':       ['vehicle_profile'],
   'mission-sustainment':    ['power', 'vehicle_profile'],
   'loadout-readiness':      ['loadout'],
@@ -289,7 +287,6 @@ export const MODE_WIDGET_PRIORITIES: Record<DashboardMode, Record<string, number
     'vehicle-systems': 10,
     'attitude-monitor': 9,
     'hwy-forward-weather': 8,
-    'hwy-cell-coverage': 8,
     'hwy-daylight-remaining': 7,
     'hwy-road-hazards': 7,
     'hwy-wind-monitor': 6,
@@ -657,4 +654,3 @@ export function teardownBridge(): void {
   _bridgeListeners = [];
   console.log(TAG, 'Bridge torn down');
 }
-

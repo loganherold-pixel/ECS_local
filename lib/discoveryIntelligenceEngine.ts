@@ -3,16 +3,16 @@
 // ============================================================
 // Combines hidden gems logic, diversity rotation, risk preview,
 // vehicle capability matching, and route label assignment for
-// the ECS Discovery AI Route Suggestions system.
+// the ECS Discovery Route Suggestions system.
 //
 // Features:
 //   - Hidden Gem scoring with weighted multi-factor model
-//   - Route label assignment (Known Route, AI Suggested, etc.)
+//   - Route label assignment (Known Route, ECS Suggested, etc.)
 //   - Diversity rotation to prevent repetitive feeds
 //   - Pre-trip risk preview for discovery routes
 //   - Vehicle capability matching for route suitability
 //   - Integration with Remoteness, Risk, and Vehicle systems
-//   - Route confidence evaluation for AI suggestions
+//   - Route confidence evaluation for ECS suggestions
 //   - Mixed feed builder for unified discovery experience
 //   - Route comparison for side-by-side evaluation
 //   - Saved routes management
@@ -21,6 +21,19 @@
 import type { ExpeditionOpportunity } from './discoverEngine';
 import type { AIGeneratedRoute, AIRouteConfidence } from './aiRouteTypes';
 import type { CompatibilityResult, VehicleProfile } from './rigCompatibilityEngine';
+import { isPopularTrail } from './discoverCategoryEngine';
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import {
+  assessExploreRecommendationConfidence,
+  assessRouteRiskConfidence,
+  assessVehicleAssessmentConfidence,
+} from './ai/confidenceEngine';
+import { explainRecommendation } from './ai/recommendationExplanationEngine';
+import type { ECSExplanationResult } from './ai/recommendationExplanationTypes';
+import type { ECSTrustMetadata } from './ai/trustTypes';
+import { buildTrustMetadata } from './ai/trustContract';
+import { evaluateVehicleFit } from './ai/vehicleFitEngine';
+import type { ECSVehicleFitLevel, ECSVehicleFitResult } from './ai/vehicleFitTypes';
 
 const TAG = '[DiscoveryIntel]';
 
@@ -30,7 +43,7 @@ const TAG = '[DiscoveryIntel]';
 
 export type RouteLabel =
   | 'Known Route'
-  | 'AI Suggested'
+  | 'ECS Suggested'
   | 'Hidden Gem'
   | 'Remote Option'
   | 'Good Candidate'
@@ -46,7 +59,7 @@ export interface RouteLabelConfig {
 
 export const ROUTE_LABEL_CONFIGS: Record<RouteLabel, RouteLabelConfig> = {
   'Known Route':     { label: 'Known Route',     color: '#4CAF50', icon: 'checkmark-circle-outline', priority: 5 },
-  'AI Suggested':    { label: 'AI Suggested',    color: '#5AC8FA', icon: 'sparkles-outline',         priority: 3 },
+  'ECS Suggested':   { label: 'ECS Suggested',    color: '#5AC8FA', icon: 'sparkles-outline',         priority: 3 },
   'Hidden Gem':      { label: 'Hidden Gem',      color: '#E67E22', icon: 'diamond-outline',          priority: 1 },
   'Remote Option':   { label: 'Remote Option',   color: '#C0392B', icon: 'radio-outline',            priority: 2 },
   'Good Candidate':  { label: 'Good Candidate',  color: '#66BB6A', icon: 'thumbs-up-outline',        priority: 4 },
@@ -56,6 +69,10 @@ export const ROUTE_LABEL_CONFIGS: Record<RouteLabel, RouteLabelConfig> = {
 
 export function getRouteLabelConfig(label: RouteLabel): RouteLabelConfig {
   return ROUTE_LABEL_CONFIGS[label] ?? ROUTE_LABEL_CONFIGS['Known Route'];
+}
+
+export function getRouteLabelDisplay(label: RouteLabel): string {
+  return label === 'ECS Suggested' ? 'ECS-Inferred' : label;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -135,6 +152,9 @@ export function assignRouteLabel(
   op: ExpeditionOpportunity,
   gemScore: HiddenGemScore,
 ): RouteLabel {
+  if (isPopularTrail(op)) {
+    return (op.popularityScore ?? 0) >= 65 ? 'Local Favorite' : 'Known Route';
+  }
   if (gemScore.isGem) return 'Hidden Gem';
   if ((op.remotenessScore ?? 0) >= 8) return 'Remote Option';
   if ((op.matchScore ?? 0) >= 70 || (op as any).discoveryScore >= 70) return 'Good Candidate';
@@ -145,8 +165,8 @@ export function assignRouteLabel(
 export function assignAIRouteLabel(route: AIGeneratedRoute): RouteLabel {
   if (route.confidence === 'explore') return 'Expedition Idea';
   if ((route.remotenessScore ?? 0) >= 8) return 'Remote Option';
-  if (route.confidence === 'high') return 'AI Suggested';
-  return 'AI Suggested';
+  if (route.confidence === 'high') return 'ECS Suggested';
+  return 'ECS Suggested';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -163,6 +183,8 @@ export interface RouteRiskPreview {
   factors: string[];
   vehicleSuitable: boolean;
   vehicleNote: string;
+  confidence: ECSConfidenceResult;
+  explanation?: ECSExplanationResult | null;
 }
 
 const RISK_PREVIEW_COLORS: Record<RiskPreviewLevel, string> = {
@@ -171,6 +193,29 @@ const RISK_PREVIEW_COLORS: Record<RiskPreviewLevel, string> = {
   Elevated: '#E67E22',
   High: '#EF5350',
 };
+
+function buildHiddenGemDrivers(
+  gemScore: HiddenGemScore,
+  vehicleMatch: VehicleMatchResult | null,
+): string[] {
+  const drivers: string[] = [];
+  if (gemScore.factors.lowPopularity >= 70) drivers.push('lower traffic');
+  if (gemScore.factors.scenicValue >= 65) drivers.push('strong scenic value');
+  if (gemScore.factors.remoteness >= 60) drivers.push('remote setting');
+  if (gemScore.factors.terrainVariety >= 65) drivers.push('varied terrain');
+  if (gemScore.factors.explorationValue >= 60) drivers.push('exploration value');
+  if (vehicleMatch && vehicleMatch.score >= 70) drivers.push('better fit for your configured vehicle');
+  return drivers;
+}
+
+function routeLabelDriver(label: RouteLabel): string {
+  if (label === 'Known Route') return 'proven trail identity';
+  if (label === 'Local Favorite') return 'strong local track record';
+  if (label === 'Remote Option') return 'remote setting';
+  if (label === 'Good Candidate') return 'solid route fit';
+  if (label === 'Expedition Idea') return 'expedition value';
+  return 'lower traffic';
+}
 
 export function computeRouteRiskPreview(
   op: ExpeditionOpportunity,
@@ -250,6 +295,17 @@ export function computeRouteRiskPreview(
 
   const topFactors = factors.slice(0, 3);
   if (topFactors.length === 0) topFactors.push('No significant risk factors identified');
+  const confidence = assessRouteRiskConfidence({
+    hasTerrainProfile: !!(op.terrainType || op.terrainDifficulty != null),
+    hasWeightProfile: !!vehicleProfile,
+    hasRouteContext: op.remotenessScore != null,
+    hasWeatherCoverage: false,
+  });
+  const explanation = explainRecommendation({
+    type: 'route_risk',
+    drivers: topFactors,
+    confidenceLevel: confidence.level,
+  });
 
   return {
     level,
@@ -259,6 +315,8 @@ export function computeRouteRiskPreview(
     factors: topFactors,
     vehicleSuitable,
     vehicleNote,
+    confidence,
+    explanation,
   };
 }
 
@@ -272,6 +330,77 @@ export interface VehicleMatchResult {
   color: string;
   note: string;
   concerns: string[];
+  confidence: ECSConfidenceResult;
+  explanation?: ECSExplanationResult | null;
+}
+
+function legacyVehicleMatchLevel(level: ECSVehicleFitLevel): VehicleMatchResult['level'] {
+  switch (level) {
+    case 'strong_fit':
+      return 'Excellent';
+    case 'good_fit':
+      return 'Good';
+    case 'limited_fit':
+      return 'Adequate';
+    case 'poor_fit':
+      return 'Challenging';
+    case 'unknown_fit':
+    default:
+      return 'Adequate';
+  }
+}
+
+function legacyVehicleMatchColor(level: ECSVehicleFitLevel): string {
+  switch (level) {
+    case 'strong_fit':
+      return '#4CAF50';
+    case 'good_fit':
+      return '#66BB6A';
+    case 'limited_fit':
+      return '#FFB300';
+    case 'poor_fit':
+      return '#E67E22';
+    case 'unknown_fit':
+    default:
+      return '#8B949E';
+  }
+}
+
+function formatLoadoutConcern(concern?: string): string | null {
+  if (!concern) return null;
+
+  const normalized = concern.toLowerCase();
+  if (normalized.includes('clearance') || normalized.includes('lift')) return 'clearance risk';
+  if (normalized.includes('tire')) return 'tire or traction mismatch';
+  if (normalized.includes('fuel')) return 'fuel or range concern';
+  if (normalized.includes('recovery')) return 'recovery readiness gap';
+  return concern.replace(/^recommended\s+/i, '').replace(/\s+—.*$/, '').trim();
+}
+
+function buildVehicleMatchNote(
+  fit: ECSVehicleFitResult,
+  vehicleProfile: VehicleProfile | null,
+): string {
+  const vehicleName = vehicleProfile?.vehicleName ?? 'Your vehicle';
+  const primaryConcern = formatLoadoutConcern(fit.limitingFactors[0]);
+
+  if (fit.level === 'unknown_fit') {
+    return 'Add a vehicle to see capability match';
+  }
+
+  if (fit.level === 'strong_fit' || fit.level === 'good_fit') {
+    return `${vehicleName} is well-matched for this route`;
+  }
+
+  if (fit.level === 'limited_fit') {
+    return primaryConcern
+      ? `${vehicleName} can handle this route with care â€” ${primaryConcern}`
+      : `${vehicleName} can handle this route with care`;
+  }
+
+  return primaryConcern
+    ? `Loadout not ready â€” ${primaryConcern}`
+    : `Loadout not ready â€” ${vehicleName} may be underprepared`;
 }
 
 export function evaluateVehicleMatch(
@@ -279,25 +408,70 @@ export function evaluateVehicleMatch(
   vehicleProfile: VehicleProfile | null,
   compatResult: CompatibilityResult | null,
 ): VehicleMatchResult {
+  const fit = evaluateVehicleFit(op, vehicleProfile, {
+    compatibility: compatResult,
+  });
+  const fitScore = fit.score;
+  const fitLevel = legacyVehicleMatchLevel(fit.level);
+  const fitColor =
+    fit.level === 'poor_fit' && fitScore < 30
+      ? '#EF5350'
+      : legacyVehicleMatchColor(fit.level);
+  const fitNote = buildVehicleMatchNote(fit, vehicleProfile);
+
+  return {
+    score: fitScore,
+    level: fitLevel,
+    color: fitColor,
+    note: fitNote,
+    concerns: fit.limitingFactors,
+    confidence: fit.confidence!,
+    explanation: fit.explanation,
+  };
+
   if (!vehicleProfile) {
-    return { score: 0, level: 'Adequate', color: '#8B949E', note: 'Add a vehicle to see capability match', concerns: [] };
+    const confidence = assessVehicleAssessmentConfidence({
+      hasVehicleProfile: false,
+      hasCoreSpecs: false,
+      hasFuelSpecs: false,
+      hasTireConfig: false,
+      hasSuspensionConfig: false,
+      hasFullScore: false,
+    });
+    return {
+      score: 0,
+      level: 'Adequate',
+      color: '#8B949E',
+      note: 'Add a vehicle to see capability match',
+      concerns: [],
+      confidence,
+      explanation: explainRecommendation({
+        type: 'vehicle_assessment',
+        drivers: ['vehicle profile is not configured'],
+        confidenceLevel: confidence.level,
+      }),
+    };
   }
 
   const concerns: string[] = [];
   let score = compatResult?.score ?? 60;
 
-  if (op.recommendedTireSize && vehicleProfile.tireSizeInches) {
-    const tireDiff = vehicleProfile.tireSizeInches - op.recommendedTireSize;
+  const tireSizeInches = vehicleProfile?.tireSizeInches ?? Number.NaN;
+  const recommendedTireSize = op.recommendedTireSize ?? Number.NaN;
+  if (Number.isFinite(tireSizeInches) && Number.isFinite(recommendedTireSize)) {
+    const tireDiff = tireSizeInches - recommendedTireSize;
     if (tireDiff < -2) {
-      concerns.push(`Recommended ${op.recommendedTireSize}" tires — current setup may be undersized`);
+      concerns.push(`Recommended ${recommendedTireSize}" tires — current setup may be undersized`);
       score = Math.max(score - 10, 0);
     }
   }
 
-  if (op.recommendedLift != null) {
-    const liftDiff = (vehicleProfile.suspensionLiftInches ?? 0) - op.recommendedLift;
+  const suspensionLiftInches = vehicleProfile?.suspensionLiftInches ?? 0;
+  const recommendedLift = op.recommendedLift ?? Number.NaN;
+  if (Number.isFinite(recommendedLift)) {
+    const liftDiff = suspensionLiftInches - recommendedLift;
     if (liftDiff < -1) {
-      concerns.push(`Recommended ${op.recommendedLift}" lift — current clearance may be limited`);
+      concerns.push(`Recommended ${recommendedLift}" lift — current clearance may be limited`);
       score = Math.max(score - 5, 0);
     }
   }
@@ -310,14 +484,42 @@ export function evaluateVehicleMatch(
   else if (score >= 30) { level = 'Challenging'; color = '#E67E22'; }
   else { level = 'Exceeds Setup'; color = '#EF5350'; }
 
-  const vName = vehicleProfile.vehicleName ?? 'Your vehicle';
+  const vName = vehicleProfile?.vehicleName ?? 'Your vehicle';
+  const primaryConcern = formatLoadoutConcern(concerns[0]);
   const note = score >= 70
     ? `${vName} is well-matched for this route`
     : score >= 50
-    ? `${vName} can handle this route with care`
-    : `This route may challenge ${vName}'s current setup`;
+    ? primaryConcern
+      ? `${vName} can handle this route with care — ${primaryConcern}`
+      : `${vName} can handle this route with care`
+    : primaryConcern
+    ? `Loadout not ready — ${primaryConcern}`
+    : `Loadout not ready — ${vName} may be underprepared`;
 
-  return { score, level, color, note, concerns };
+  const confidence =
+    compatResult?.confidence ??
+    assessVehicleAssessmentConfidence({
+      hasVehicleProfile: true,
+      hasCoreSpecs: true,
+      hasFuelSpecs: false,
+      hasTireConfig: !!vehicleProfile?.tireSizeInches,
+      hasSuspensionConfig: !!(vehicleProfile?.suspensionLiftInches || vehicleProfile?.isLeveled),
+      hasFullScore: false,
+    });
+
+  return {
+    score,
+    level,
+    color,
+    note,
+    concerns,
+    confidence,
+    explanation: explainRecommendation({
+      type: 'vehicle_assessment',
+      drivers: concerns.length > 0 ? concerns : [note],
+      confidenceLevel: confidence.level,
+    }),
+  };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -381,6 +583,10 @@ export interface EnrichedDiscoveryRoute extends ExpeditionOpportunity {
   gemScore: HiddenGemScore;
   riskPreview: RouteRiskPreview;
   vehicleMatch: VehicleMatchResult;
+  vehicleFit?: ECSVehicleFitResult | null;
+  recommendationConfidence: ECSConfidenceResult;
+  explanation?: ECSExplanationResult | null;
+  trust?: ECSTrustMetadata | null;
   isAIGenerated?: boolean;
   aiConfidence?: AIRouteConfidence;
 }
@@ -392,13 +598,39 @@ export function enrichKnownRoute(
 ): EnrichedDiscoveryRoute {
   const gemScore = computeHiddenGemScore(op, recentlyShownRoutes);
   const routeLabel = assignRouteLabel(op, gemScore);
+  const riskPreview = computeRouteRiskPreview(op, vehicleProfile, compatResult);
+  const vehicleMatch = evaluateVehicleMatch(op, vehicleProfile, compatResult);
+  const vehicleFit = evaluateVehicleFit(op, vehicleProfile, {
+    compatibility: compatResult,
+  });
+  const recommendationConfidence = assessExploreRecommendationConfidence({
+    hasDistanceContext: op.distanceFromUserMiles != null,
+    gpsEstimated: op.distanceFromUserMiles == null,
+    hasVehicleAssessment: vehicleMatch.score > 0,
+    hasHiddenGemSignals: gemScore.score > 0,
+  });
+  const explanation = explainRecommendation({
+    type: 'hidden_gem',
+    drivers:
+      buildHiddenGemDrivers(gemScore, vehicleMatch).length > 0
+        ? buildHiddenGemDrivers(gemScore, vehicleMatch)
+        : [routeLabelDriver(routeLabel), riskPreview.factors[0] ?? vehicleMatch.note, vehicleMatch.note],
+    confidenceLevel: recommendationConfidence.level,
+  });
   return {
     ...op,
     routeLabel,
     routeLabelConfig: getRouteLabelConfig(routeLabel),
     gemScore,
-    riskPreview: computeRouteRiskPreview(op, vehicleProfile, compatResult),
-    vehicleMatch: evaluateVehicleMatch(op, vehicleProfile, compatResult),
+    riskPreview,
+    vehicleMatch,
+    vehicleFit,
+    recommendationConfidence,
+    explanation,
+    trust: buildTrustMetadata({
+      confidence: recommendationConfidence,
+      freshnessClass: 'marker_scoring',
+    }),
   };
 }
 
@@ -408,13 +640,38 @@ export function enrichAIRoute(
 ): EnrichedDiscoveryRoute {
   const gemScore = computeHiddenGemScore(route, recentlyShownRoutes);
   const routeLabel = assignAIRouteLabel(route);
+  const riskPreview = computeRouteRiskPreview(route, vehicleProfile, null);
+  const vehicleMatch = evaluateVehicleMatch(route, vehicleProfile, null);
+  const vehicleFit = evaluateVehicleFit(route, vehicleProfile, {});
+  const recommendationConfidence = assessExploreRecommendationConfidence({
+    hasDistanceContext: route.distanceFromUserMiles != null,
+    gpsEstimated: route.distanceFromUserMiles == null,
+    hasVehicleAssessment: vehicleMatch.score > 0,
+    hasHiddenGemSignals: gemScore.score > 0,
+    aiConfidence: route.confidence,
+  });
+  const explanation = explainRecommendation({
+    type: 'hidden_gem',
+    drivers:
+      buildHiddenGemDrivers(gemScore, vehicleMatch).length > 0
+        ? buildHiddenGemDrivers(gemScore, vehicleMatch)
+        : [routeLabelDriver(routeLabel), riskPreview.factors[0] ?? vehicleMatch.note, vehicleMatch.note],
+    confidenceLevel: recommendationConfidence.level,
+  });
   return {
     ...route,
     routeLabel,
     routeLabelConfig: getRouteLabelConfig(routeLabel),
     gemScore,
-    riskPreview: computeRouteRiskPreview(route, vehicleProfile, null),
-    vehicleMatch: evaluateVehicleMatch(route, vehicleProfile, null),
+    riskPreview,
+    vehicleMatch,
+    vehicleFit,
+    recommendationConfidence,
+    explanation,
+    trust: buildTrustMetadata({
+      confidence: recommendationConfidence,
+      freshnessClass: 'marker_scoring',
+    }),
     isAIGenerated: true,
     aiConfidence: route.confidence,
   };
@@ -502,7 +759,7 @@ export function generateRouteIntelligence(route: EnrichedDiscoveryRoute): string
   if ((route.remotenessScore ?? 0) >= 9) messages.push('Extreme remoteness — expect no cell coverage or services');
   else if ((route.remotenessScore ?? 0) >= 7) messages.push('High remoteness — limited services along route');
 
-  if (!route.vehicleMatch.vehicleSuitable) messages.push('Route may challenge current vehicle setup');
+  if (route.vehicleMatch.score < 50) messages.push('Route may challenge current vehicle setup');
   if (route.vehicleMatch.concerns.length > 0) messages.push(route.vehicleMatch.concerns[0]);
   if (route.gemScore.isGem) messages.push('Lesser-known route with strong exploration potential');
   if ((route.estimatedFuelRequired ?? 0) >= 20) messages.push('Plan fuel resupply — high fuel requirement');
@@ -531,7 +788,7 @@ export function compareRoutes(routeA: EnrichedDiscoveryRoute, routeB: EnrichedDi
       { field: 'duration', label: 'Duration', valueA: `${routeA.estimatedDays}d`, valueB: `${routeB.estimatedDays}d`, advantage: routeA.estimatedDays < routeB.estimatedDays ? 'A' : routeA.estimatedDays > routeB.estimatedDays ? 'B' : 'equal' },
       { field: 'remoteness', label: 'Remoteness', valueA: `${routeA.remotenessScore}/10`, valueB: `${routeB.remotenessScore}/10`, advantage: 'equal' },
       { field: 'risk', label: 'Risk Preview', valueA: routeA.riskPreview.level, valueB: routeB.riskPreview.level, advantage: routeA.riskPreview.score < routeB.riskPreview.score ? 'A' : routeA.riskPreview.score > routeB.riskPreview.score ? 'B' : 'equal' },
-      { field: 'vehicleMatch', label: 'Vehicle Match', valueA: routeA.vehicleMatch.level, valueB: routeB.vehicleMatch.level, advantage: routeA.vehicleMatch.score > routeB.vehicleMatch.score ? 'A' : routeA.vehicleMatch.score < routeB.vehicleMatch.score ? 'B' : 'equal' },
+      { field: 'vehicleMatch', label: 'Vehicle Fit', valueA: routeA.vehicleMatch.level, valueB: routeB.vehicleMatch.level, advantage: routeA.vehicleMatch.score > routeB.vehicleMatch.score ? 'A' : routeA.vehicleMatch.score < routeB.vehicleMatch.score ? 'B' : 'equal' },
       { field: 'difficulty', label: 'Difficulty', valueA: `${routeA.terrainDifficulty ?? 5}/10`, valueB: `${routeB.terrainDifficulty ?? 5}/10`, advantage: 'equal' },
       { field: 'fuel', label: 'Fuel Required', valueA: `${routeA.estimatedFuelRequired} gal`, valueB: `${routeB.estimatedFuelRequired} gal`, advantage: routeA.estimatedFuelRequired < routeB.estimatedFuelRequired ? 'A' : routeA.estimatedFuelRequired > routeB.estimatedFuelRequired ? 'B' : 'equal' },
     ],
@@ -560,4 +817,3 @@ export function toggleSaveRoute(id: string): boolean {
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
-

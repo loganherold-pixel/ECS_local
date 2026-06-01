@@ -7,13 +7,12 @@
  *
  * Contains:
  *   - VehicleDisplayIndicators (shared status bar)
- *   - Screen navigation tabs (Map, Status, Weather, Actions)
+ *   - Screen navigation tabs (Navigation, Attitude, Resources, Weather, Exit)
  *   - Mode toggle (HighwayDrive / ExpeditionDrive)
  *   - Active screen content
  *
  * Phase 8 Integration:
  *   - Starts/stops VehicleCompanionManager for synchronized state
- *   - Starts/stops VehicleDisplayFallback for health monitoring
  *   - Starts/stops Android Auto and CarPlay bridges
  *   - Displays companion connection status
  *
@@ -49,7 +48,6 @@ import { useRouter } from 'expo-router';
 
 import { vehicleDisplayStore } from '../lib/vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from '../lib/vehicleDisplayModeEngine';
-import { vehicleDisplayFallback } from '../lib/vehicleDisplayFallback';
 import { vehicleCompanionManager } from '../lib/vehicleCompanionManager';
 import { vehicleSessionState } from '../lib/vehicleSessionState';
 import { androidAutoBridge } from '../lib/androidAutoBridge';
@@ -63,22 +61,21 @@ import type {
   VehicleDisplayMode,
   VehicleDisplayScreen,
   VehicleDisplayState,
-  VehicleDisplayTypes,
 } from '../lib/vehicleDisplayTypes';
 
 import {
   VEHICLE_DISPLAY_SCREENS,
   VEHICLE_SCREEN_LABELS,
   VEHICLE_SCREEN_ICONS,
-  VEHICLE_DISPLAY_MODE_LABELS,
   VEHICLE_DISPLAY_MODE_COLORS,
 } from '../lib/vehicleDisplayTypes';
 
 import VehicleDisplayIndicators from '../components/vehicle-display/VehicleDisplayIndicators';
-import VehicleMapScreen from '../components/vehicle-display/VehicleMapScreen';
-import VehicleStatusScreen from '../components/vehicle-display/VehicleStatusScreen';
-import VehicleWeatherScreen from '../components/vehicle-display/VehicleWeatherScreen';
-import VehicleActionsScreen from '../components/vehicle-display/VehicleActionsScreen';
+import VehicleNavigationScreen from '../components/vehicle-display/VehicleNavigationScreen';
+import VehicleAttitudeScreen from '../components/vehicle-display/VehicleAttitudeScreen';
+import VehicleResourceScreen from '../components/vehicle-display/VehicleResourceScreen';
+import VehicleWeatherHazardScreen from '../components/vehicle-display/VehicleWeatherHazardScreen';
+import VehicleExitPlanScreen from '../components/vehicle-display/VehicleExitPlanScreen';
 
 export default function VehicleDisplayPage() {
   const router = useRouter();
@@ -94,7 +91,6 @@ export default function VehicleDisplayPage() {
     // Start core vehicle display systems
     vehicleDisplayStore.start();
     vehicleDisplayModeEngine.start();
-    vehicleDisplayFallback.start();
 
     // Start the companion manager (Phase 8)
     vehicleCompanionManager.start();
@@ -150,25 +146,14 @@ export default function VehicleDisplayPage() {
       vehicleCompanionManager.stop();
 
       // Stop core systems
-      vehicleDisplayFallback.stop();
       vehicleDisplayModeEngine.stop();
       vehicleDisplayStore.stop();
     };
   }, []);
 
-
-
-
   const handleScreenChange = useCallback((screen: VehicleDisplayScreen) => {
     vehicleDisplayStore.setActiveScreen(screen);
   }, []);
-
-  const handleModeToggle = useCallback(() => {
-    const newMode: VehicleDisplayMode =
-      state.mode === 'highway_drive' ? 'expedition_drive' : 'highway_drive';
-    vehicleDisplayModeEngine.setMode(newMode);
-    setShowModeSwitch(false);
-  }, [state.mode]);
 
   const handleAutoModeToggle = useCallback(() => {
     const current = vehicleDisplayModeEngine.isAutoModeEnabled();
@@ -179,12 +164,38 @@ export default function VehicleDisplayPage() {
     if (router.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)/dashboard');
+      router.replace('/dashboard');
     }
   }, [router]);
 
   const modeColor = VEHICLE_DISPLAY_MODE_COLORS[state.mode];
   const autoMode = vehicleDisplayModeEngine.isAutoModeEnabled();
+  let activeScreenContent: React.ReactNode = null;
+
+  switch (state.activeScreen) {
+    case 'navigation':
+      activeScreenContent = <VehicleNavigationScreen data={state.navigationData} automotive={state.automotiveSurface} />;
+      break;
+    case 'attitude':
+      activeScreenContent = <VehicleAttitudeScreen data={state.attitudeData} />;
+      break;
+    case 'resources':
+      activeScreenContent = <VehicleResourceScreen data={state.resourceData} automotive={state.automotiveSurface} />;
+      break;
+    case 'weather_hazard':
+      activeScreenContent = <VehicleWeatherHazardScreen data={state.weatherHazardData} automotive={state.automotiveSurface} />;
+      break;
+    case 'exit_plan':
+      activeScreenContent = <VehicleExitPlanScreen data={state.exitPlanData} automotive={state.automotiveSurface} />;
+      break;
+    default:
+      vehicleDisplayStore.recordTemplateRenderFailure({
+        activeScreen: state.activeScreen,
+        reason: 'Unknown vehicle display screen',
+      });
+      activeScreenContent = <VehicleNavigationScreen data={state.navigationData} />;
+      break;
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -278,26 +289,13 @@ export default function VehicleDisplayPage() {
         <VehicleDisplayIndicators
           indicators={state.indicators}
           mode={state.mode}
+          routePhase={state.routePhase}
+          companionPlatform={companionPlatform}
+          statusLabel={state.automotiveSurface.platformStatusLabel}
         />
 
         {/* Active screen content */}
-        <View style={styles.screenContent}>
-          {state.activeScreen === 'map' && (
-            <VehicleMapScreen data={state.mapData} />
-          )}
-          {state.activeScreen === 'status' && (
-            <VehicleStatusScreen data={state.statusData} />
-          )}
-          {state.activeScreen === 'weather' && (
-            <VehicleWeatherScreen data={state.weatherData} />
-          )}
-          {state.activeScreen === 'actions' && (
-            <VehicleActionsScreen
-              mode={state.mode}
-              actions={state.actions}
-            />
-          )}
-        </View>
+        <View style={styles.screenContent}>{activeScreenContent}</View>
 
         {/* Screen navigation tabs */}
         <View style={styles.tabBar}>
@@ -320,9 +318,6 @@ export default function VehicleDisplayPage() {
                 ]}>
                   {VEHICLE_SCREEN_LABELS[screen]}
                 </Text>
-                {isActive && (
-                  <View style={[styles.tabIndicator, { backgroundColor: modeColor }]} />
-                )}
               </TouchableOpacity>
             );
           })}
@@ -450,14 +445,6 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     color: '#555',
     marginTop: 4,
-  },
-  tabIndicator: {
-    position: 'absolute',
-    top: 0,
-    left: '25%',
-    right: '25%',
-    height: 2,
-    borderRadius: 1,
   },
 });
 

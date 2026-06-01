@@ -19,11 +19,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { offlineExpeditionModeEngine } from '../../app/lib/offlineExpeditionModeEngine';
+import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
 import type {
   SystemOfflineProfile,
   SystemOfflineBehavior,
-} from '../../app/lib/offlineExpeditionModeTypes';
+} from '../../lib/offlineExpeditionModeTypes';
 
 const BEHAVIOR_DISPLAY: Record<SystemOfflineBehavior, {
   label: string;

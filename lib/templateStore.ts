@@ -10,7 +10,7 @@
 // ============================================================
 
 import { Platform } from 'react-native';
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isDeployedEdgeFunction, isSupabaseConfigured } from './supabase';
 import { templateSyncEngine } from './templateSyncEngine';
 import type { BuilderStepState, CachedZone } from './expeditionCache';
 
@@ -142,7 +142,7 @@ export const templateStore = {
    */
   list: async (userId?: string | null): Promise<ExpeditionTemplate[]> => {
     // Try cloud first — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         const { data, error } = await withTimeout(
@@ -178,7 +178,7 @@ export const templateStore = {
     if (local) return local;
 
     // Try cloud — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         const { data, error } = await withTimeout(
@@ -239,7 +239,7 @@ export const templateStore = {
     }
 
     // Try immediate cloud push — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         const { data, error } = await withTimeout(
@@ -292,7 +292,7 @@ export const templateStore = {
     }
 
     // Try cloud — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         const { data, error } = await withTimeout(
@@ -323,7 +323,7 @@ export const templateStore = {
    */
   duplicate: async (templateId: string, userId?: string | null): Promise<ExpeditionTemplate | null> => {
     // Try cloud — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         const { data, error } = await withTimeout(
@@ -383,7 +383,7 @@ export const templateStore = {
     templateSyncEngine.removeTracking(templateId);
 
     // Try cloud — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
       try {
         await withTimeout(
           supabase.functions.invoke('manage-templates', {
@@ -415,7 +415,7 @@ export const templateStore = {
     }
 
     // Try cloud — only if userId is a real syncable UUID
-    if (isSyncableUserId(userId) && isSupabaseConfigured) {
+    if (isSyncableUserId(userId) && isSupabaseConfigured && isDeployedEdgeFunction('manage-templates')) {
 
       try {
         await supabase.functions.invoke('manage-templates', {

@@ -44,7 +44,7 @@ export default function MissionLoadoutOps({ expeditionId, onRefresh }: Props) {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
 
   useEffect(() => {
-    refreshItems();
+    setItems(missionItemStore.getByExpeditionId(expeditionId));
   }, [expeditionId]);
 
   const refreshItems = () => {

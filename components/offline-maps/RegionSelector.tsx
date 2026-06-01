@@ -35,7 +35,7 @@ type SelectionMode = 'route' | 'bbox';
 interface Props {
   onCreateFromRoute: (
     name: string,
-    points: Array<{ lat: number; lng: number }>,
+    points: { lat: number; lng: number }[],
     corridorMiles: number,
     zoomMin: number,
     zoomMax: number,
@@ -66,7 +66,7 @@ const ZOOM_PRESETS = [
   { label: 'FULL', min: 5, max: 16, desc: 'All zoom levels' },
 ];
 
-const AVAILABLE_STYLES = MAP_STYLES.filter(s => s.key !== 'outdoors');
+const AVAILABLE_STYLES = MAP_STYLES;
 
 export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, onCancel }: Props) {
   const [mode, setMode] = useState<SelectionMode>('route');
@@ -94,7 +94,7 @@ export default function RegionSelector({ onCreateFromRoute, onCreateFromBounds, 
       return selectedRun.points.map(p => ({ lat: p.lat, lng: p.lng }));
     }
     if (selectedRoute) {
-      const pts: Array<{ lat: number; lng: number }> = [];
+      const pts: { lat: number; lng: number }[] = [];
       for (const seg of selectedRoute.segments) {
         for (const p of seg.points) {
           pts.push({ lat: p.lat, lng: p.lon });

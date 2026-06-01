@@ -32,6 +32,10 @@ import { TACTICAL } from '../../lib/theme';
 import {
   vehicleSpecStore,
   VEHICLE_SPEC_PRESETS,
+  getVehiclePresetFuelOptions,
+  getVehiclePresetId,
+  matchesVehicleSpecPreset,
+  resolveVehicleSpecPreset,
   type VehicleSpecPreset,
   type FuelType,
 } from '../../lib/vehicleSpecStore';
@@ -62,34 +66,57 @@ export default function VehicleSpecsSection({
   const [fuelCapacity, setFuelCapacity] = useState('');
   const [fuelType, setFuelType] = useState<FuelType>('diesel');
   const [showPresets, setShowPresets] = useState(false);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [specSaved, setSpecSaved] = useState(false);
+
+  const presets = useMemo(
+    () => VEHICLE_SPEC_PRESETS[vehicleType] || [],
+    [vehicleType]
+  );
+
+  const selectedPreset = useMemo(
+    () => presets.find((preset) => getVehiclePresetId(preset) === selectedPresetId) || null,
+    [presets, selectedPresetId]
+  );
+
+  const applyResolvedPreset = useCallback((preset: VehicleSpecPreset, nextFuelType?: FuelType | null) => {
+    const resolvedSpec = resolveVehicleSpecPreset(preset, nextFuelType);
+    setGvwr(String(resolvedSpec.gvwr_lb));
+    setBaseWeight(String(resolvedSpec.base_weight_lb));
+    setFuelCapacity(resolvedSpec.fuel_tank_capacity_gal > 0 ? String(resolvedSpec.fuel_tank_capacity_gal) : '');
+    setFuelType(resolvedSpec.fuel_type);
+    vehicleSpecStore.set(vehicleId, resolvedSpec);
+    setSpecSaved(true);
+    setTimeout(() => setSpecSaved(false), 1500);
+  }, [vehicleId]);
 
   // ── Load existing specs ───────────────────────────────
   useEffect(() => {
     const existing = vehicleSpecStore.get(vehicleId);
+    const matchedPreset = vehicleSpecStore.findPreset(vehicleType, vehicleMake, vehicleModel);
+    const matchedExistingPreset = existing
+      ? presets.find((preset) => matchesVehicleSpecPreset(preset, existing)) || null
+      : null;
+
     if (existing) {
       setGvwr(existing.gvwr_lb > 0 ? String(existing.gvwr_lb) : '');
       setBaseWeight(existing.base_weight_lb > 0 ? String(existing.base_weight_lb) : '');
       setFuelCapacity(existing.fuel_tank_capacity_gal > 0 ? String(existing.fuel_tank_capacity_gal) : '');
       setFuelType(existing.fuel_type || 'diesel');
+      setSelectedPresetId(matchedExistingPreset ? getVehiclePresetId(matchedExistingPreset) : null);
     } else {
       // Try auto-match preset
-      const preset = vehicleSpecStore.findPreset(vehicleType, vehicleMake, vehicleModel);
-      if (preset) {
-        setGvwr(String(preset.gvwr_lb));
-        setBaseWeight(String(preset.base_weight_lb));
-        setFuelCapacity(preset.fuel_tank_capacity_gal > 0 ? String(preset.fuel_tank_capacity_gal) : '');
-        setFuelType(preset.fuel_type || 'diesel');
-        // Auto-save the preset match
-        vehicleSpecStore.set(vehicleId, {
-          gvwr_lb: preset.gvwr_lb,
-          base_weight_lb: preset.base_weight_lb,
-          fuel_tank_capacity_gal: preset.fuel_tank_capacity_gal,
-          fuel_type: preset.fuel_type,
-        });
+      if (matchedPreset) {
+        const resolvedSpec = resolveVehicleSpecPreset(matchedPreset);
+        setGvwr(String(resolvedSpec.gvwr_lb));
+        setBaseWeight(String(resolvedSpec.base_weight_lb));
+        setFuelCapacity(resolvedSpec.fuel_tank_capacity_gal > 0 ? String(resolvedSpec.fuel_tank_capacity_gal) : '');
+        setFuelType(resolvedSpec.fuel_type || 'diesel');
+        setSelectedPresetId(getVehiclePresetId(matchedPreset));
+        vehicleSpecStore.set(vehicleId, resolvedSpec);
       }
     }
-  }, [vehicleId, vehicleType, vehicleMake, vehicleModel]);
+  }, [vehicleId, vehicleType, vehicleMake, vehicleModel, presets]);
 
   // ── Persist on change ─────────────────────────────────
   const saveSpecs = useCallback(() => {
@@ -127,6 +154,28 @@ export default function VehicleSpecsSection({
       setTimeout(() => setSpecSaved(false), 1500);
     }
   }, [vehicleId, gvwr, baseWeight, fuelCapacity, fuelType]);
+
+  const handleFuelTypeSelect = useCallback((nextFuelType: FuelType) => {
+    if (selectedPreset) {
+      applyResolvedPreset(selectedPreset, nextFuelType);
+      return;
+    }
+
+    setFuelType(nextFuelType);
+    const gvwrNum = parseInt(gvwr, 10) || 0;
+    const baseNum = parseInt(baseWeight, 10) || 0;
+    const fuelNum = parseFloat(fuelCapacity) || 0;
+    if (gvwrNum > 0 || baseNum > 0 || fuelNum > 0) {
+      vehicleSpecStore.set(vehicleId, {
+        gvwr_lb: gvwrNum,
+        base_weight_lb: baseNum,
+        fuel_tank_capacity_gal: fuelNum,
+        fuel_type: nextFuelType,
+      });
+      setSpecSaved(true);
+      setTimeout(() => setSpecSaved(false), 1500);
+    }
+  }, [applyResolvedPreset, selectedPreset, vehicleId, gvwr, baseWeight, fuelCapacity]);
 
   // ── Computed values (SINGLE SOURCE OF TRUTH) ──────────
   const gvwrNum = parseInt(gvwr, 10) || 0;
@@ -170,25 +219,10 @@ export default function VehicleSpecsSection({
 
 
   // ── Presets for current vehicle type ──────────────────
-  const presets = useMemo(
-    () => VEHICLE_SPEC_PRESETS[vehicleType] || [],
-    [vehicleType]
-  );
-
   const handlePresetSelect = (preset: VehicleSpecPreset) => {
-    setGvwr(String(preset.gvwr_lb));
-    setBaseWeight(String(preset.base_weight_lb));
-    setFuelCapacity(preset.fuel_tank_capacity_gal > 0 ? String(preset.fuel_tank_capacity_gal) : '');
-    setFuelType(preset.fuel_type || 'diesel');
-    vehicleSpecStore.set(vehicleId, {
-      gvwr_lb: preset.gvwr_lb,
-      base_weight_lb: preset.base_weight_lb,
-      fuel_tank_capacity_gal: preset.fuel_tank_capacity_gal,
-      fuel_type: preset.fuel_type,
-    });
+    setSelectedPresetId(getVehiclePresetId(preset));
+    applyResolvedPreset(preset);
     setShowPresets(false);
-    setSpecSaved(true);
-    setTimeout(() => setSpecSaved(false), 1500);
   };
 
   return (
@@ -309,21 +343,7 @@ export default function VehicleSpecsSection({
               ]}
               onPress={() => {
                 if (fuelType !== 'diesel') {
-                  setFuelType('diesel');
-                  // Auto-save
-                  const gvwrN = parseInt(gvwr, 10) || 0;
-                  const baseN = parseInt(baseWeight, 10) || 0;
-                  const fuelN = parseFloat(fuelCapacity) || 0;
-                  if (gvwrN > 0 || baseN > 0 || fuelN > 0) {
-                    vehicleSpecStore.set(vehicleId, {
-                      gvwr_lb: gvwrN,
-                      base_weight_lb: baseN,
-                      fuel_tank_capacity_gal: fuelN,
-                      fuel_type: 'diesel',
-                    });
-                    setSpecSaved(true);
-                    setTimeout(() => setSpecSaved(false), 1500);
-                  }
+                  handleFuelTypeSelect('diesel');
                 }
               }}
               activeOpacity={0.7}
@@ -340,21 +360,7 @@ export default function VehicleSpecsSection({
               ]}
               onPress={() => {
                 if (fuelType !== 'gas') {
-                  setFuelType('gas');
-                  // Auto-save
-                  const gvwrN = parseInt(gvwr, 10) || 0;
-                  const baseN = parseInt(baseWeight, 10) || 0;
-                  const fuelN = parseFloat(fuelCapacity) || 0;
-                  if (gvwrN > 0 || baseN > 0 || fuelN > 0) {
-                    vehicleSpecStore.set(vehicleId, {
-                      gvwr_lb: gvwrN,
-                      base_weight_lb: baseN,
-                      fuel_tank_capacity_gal: fuelN,
-                      fuel_type: 'gas',
-                    });
-                    setSpecSaved(true);
-                    setTimeout(() => setSpecSaved(false), 1500);
-                  }
+                  handleFuelTypeSelect('gas');
                 }
               }}
               activeOpacity={0.7}
@@ -489,9 +495,9 @@ export default function VehicleSpecsSection({
               style={styles.modalScroll}
               showsVerticalScrollIndicator={false}
             >
-              {presets.map((preset, idx) => (
+              {presets.map((preset) => (
                 <TouchableOpacity
-                  key={idx}
+                  key={getVehiclePresetId(preset)}
                   style={styles.presetRow}
                   onPress={() => handlePresetSelect(preset)}
                   activeOpacity={0.7}
@@ -513,7 +519,7 @@ export default function VehicleSpecsSection({
                       </Text>
                       <View style={styles.presetSpecDot} />
                       <Text style={styles.presetSpec}>
-                        {preset.fuel_type.toUpperCase()}
+                        {getVehiclePresetFuelOptions(preset).map((fuel) => fuel.toUpperCase()).join(' / ')}
                       </Text>
                       <View style={styles.presetSpecDot} />
                       <Text style={styles.presetPayloadInline}>

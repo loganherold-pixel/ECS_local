@@ -10,7 +10,7 @@
  * container or loadout wizard step is needed.
  *
  * UI: Non-scrolling 2-column tile grid (fit screen)
- * 10 accessory categories, each toggleable with Installed/Planned status
+ * 8 accessory categories, each toggleable with Installed/Planned status
  * Quick presets: Minimal, Standard, Full Overland
  *
  * ICONS: Each tile uses a category-specific icon from AccessoryIcons.tsx
@@ -53,16 +53,16 @@ export interface AccessoryCategory {
 
 export const ACCESSORY_CATEGORIES: AccessoryCategory[] = [
   { id: 'cab_rack', label: 'Cab Rack', icon: 'barbell-outline', color: '#FF6B6B' },
-  { id: 'cab_rack_acc', label: 'Cab Rack Acc.', icon: 'layers-outline', color: '#FF8A5B' },
-  { id: 'bed_drawer', label: 'Bed / Drawer', icon: 'server-outline', color: '#96CEB4' },
+  { id: 'bed_drawer', label: 'Drawer Storage', icon: 'server-outline', color: '#96CEB4' },
   { id: 'roof_rack', label: 'Roof / Crossbars', icon: 'resize-outline', color: '#4FC3F7' },
   { id: 'rtt', label: 'RTT', icon: 'trail-sign-outline', color: '#C77DFF' },
   { id: 'interior_storage', label: 'Interior Storage', icon: 'file-tray-stacked-outline', color: '#4ECDC4' },
-  { id: 'fridge_slide', label: 'Fridge / Slide', icon: 'snow-outline', color: '#64DFDF' },
-  { id: 'recovery_mount', label: 'Recovery Mount', icon: 'construct-outline', color: '#AB47BC' },
+  { id: 'recovery_mount', label: 'Recovery Mount Hitch System', icon: 'construct-outline', color: '#AB47BC' },
   { id: 'water_storage', label: 'Water Storage', icon: 'water-outline', color: '#26A69A' },
   { id: 'power_system', label: 'Power / Battery', icon: 'flash-outline', color: '#FFB74D' },
 ];
+
+const ACTIVE_ACCESSORY_CATEGORY_IDS = new Set(ACCESSORY_CATEGORIES.map((category) => category.id));
 
 // ── Accessory State ─────────────────────────────────────────
 export type AccessoryStatus = 'installed' | 'planned';
@@ -102,7 +102,6 @@ const PRESETS: Preset[] = [
     categories: {
       roof_rack: { enabled: true, status: 'installed' },
       interior_storage: { enabled: true, status: 'installed' },
-      fridge_slide: { enabled: true, status: 'installed' },
       recovery_mount: { enabled: true, status: 'installed' },
       water_storage: { enabled: true, status: 'installed' },
       power_system: { enabled: true, status: 'installed' },
@@ -126,6 +125,23 @@ export function getDefaultAccessorySelections(): AccessorySelections {
     result[cat.id] = { enabled: false, status: 'installed' };
   }
   return result;
+}
+
+export function normalizeAccessorySelections(raw: unknown): AccessorySelections {
+  const normalized = getDefaultAccessorySelections();
+  if (!raw || typeof raw !== 'object') return normalized;
+
+  for (const [categoryId, state] of Object.entries(raw as Record<string, unknown>)) {
+    if (!ACTIVE_ACCESSORY_CATEGORY_IDS.has(categoryId) || !state || typeof state !== 'object') continue;
+
+    const entry = state as Partial<AccessoryState>;
+    normalized[categoryId] = {
+      enabled: Boolean(entry.enabled),
+      status: entry.status === 'planned' ? 'planned' : 'installed',
+    };
+  }
+
+  return normalized;
 }
 
 // ── Props ───────────────────────────────────────────────────
@@ -238,7 +254,7 @@ export default function AccessoryConfigStep({
             <Ionicons name="layers-outline" size={12} color={ECS_GOLD} />
           </View>
           <View>
-            <Text style={styles.subHeaderTitle}>ACCESSORY FRAMEWORK</Text>
+            <Text style={styles.subHeaderTitle}>Accessory Framework</Text>
             <Text style={styles.subHeaderSubtitle}>Define your vehicle container system</Text>
           </View>
         </View>
@@ -430,7 +446,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62, 79, 60, 0.2)',
     backgroundColor: 'rgba(0,0,0,0.1)',
@@ -452,13 +468,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   subHeaderTitle: {
-    fontSize: 10,
-    fontWeight: '900' as const,
+    fontSize: 13,
+    fontWeight: '800' as const,
     color: TACTICAL.text,
-    letterSpacing: 1,
+    letterSpacing: 0.3,
   },
   subHeaderSubtitle: {
-    fontSize: 8,
+    fontSize: 10,
     color: TACTICAL.textMuted,
     letterSpacing: 0.3,
     marginTop: 1,
@@ -484,8 +500,8 @@ const styles = StyleSheet.create({
   presetsRow: {
     flexDirection: 'row',
     paddingHorizontal: GRID_PAD,
-    paddingVertical: 4,
-    gap: 4,
+    paddingVertical: 6,
+    gap: 6,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(62, 79, 60, 0.12)',
   },
@@ -495,7 +511,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    paddingVertical: 5,
+    minHeight: 34,
+    paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
     borderColor: 'rgba(62, 79, 60, 0.3)',
@@ -506,10 +523,10 @@ const styles = StyleSheet.create({
     backgroundColor: ECS_GOLD_BG,
   },
   presetLabel: {
-    fontSize: 7,
+    fontSize: 8,
     fontWeight: '800',
     color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   presetLabelActive: {
     color: ECS_GOLD,
@@ -519,14 +536,15 @@ const styles = StyleSheet.create({
   gridContainer: {
     flex: 1,
     paddingHorizontal: GRID_PAD,
-    paddingTop: 4,
-    paddingBottom: 2,
+    paddingTop: 8,
+    paddingBottom: 6,
     gap: TILE_GAP,
-    justifyContent: 'center',
+    justifyContent: 'space-evenly',
   },
   gridRow: {
     flexDirection: 'row',
     gap: TILE_GAP,
+    flex: 1,
   },
   tileWrapper: {
     flex: 1,
@@ -534,13 +552,16 @@ const styles = StyleSheet.create({
 
   // ── Tile (compact) ────────────────────────────────────────
   tile: {
-    paddingVertical: 5,
+    flex: 1,
+    minHeight: 76,
+    paddingVertical: 8,
     paddingHorizontal: 8,
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: 'rgba(62, 79, 60, 0.25)',
     backgroundColor: TACTICAL.panel,
-    gap: 2,
+    gap: 4,
+    justifyContent: 'space-between',
   },
   tileEnabled: {
     borderColor: 'rgba(196, 138, 44, 0.45)',
@@ -561,10 +582,11 @@ const styles = StyleSheet.create({
 
   // ── Tile Label ────────────────────────────────────────────
   tileLabel: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 0.4,
+    lineHeight: 13,
   },
   tileLabelEnabled: {
     color: TACTICAL.text,

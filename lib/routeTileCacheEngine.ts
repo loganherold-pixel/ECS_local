@@ -336,6 +336,7 @@ export async function startRouteCaching(
   analysis: RouteAnalysis,
   styleKey: string = 'tactical',
   onProgress: (progress: CacheProgress) => void,
+  additionalCacheSizeMB: number = 0,
 ): Promise<{ success: boolean; regionId: string | null; error?: string }> {
   if (!connectivity.isOnline()) {
     return { success: false, regionId: null, error: 'No network connection' };
@@ -346,7 +347,11 @@ export async function startRouteCaching(
   }
 
   // Check quota
-  const quotaCheck = tileCacheStore.checkQuotaBeforeDownload(analysis.estimatedSizeMB);
+  const safeAdditionalSizeMB =
+    typeof additionalCacheSizeMB === 'number' && Number.isFinite(additionalCacheSizeMB)
+      ? Math.max(0, additionalCacheSizeMB)
+      : 0;
+  const quotaCheck = tileCacheStore.checkQuotaBeforeDownload(analysis.estimatedSizeMB + safeAdditionalSizeMB);
   if (!quotaCheck.canProceed) {
     return { success: false, regionId: null, error: quotaCheck.message };
   }

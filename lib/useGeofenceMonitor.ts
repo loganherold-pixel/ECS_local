@@ -28,7 +28,7 @@
  *   4. Gold header underline fades out (220ms, handled by DashboardHeader)
  *   5. Light haptic
  *   6. Toast: "Expedition ended."
- *   7. ExpeditionSummarySheet shown (handled by dashboard subscription)
+ *   7. Completion data retained for the Expedition Summary flow
  *
  * Hysteresis:
  *   - Exit requires 3 consecutive readings outside geofence
@@ -153,12 +153,7 @@ export function useGeofenceMonitor(
     } else {
       hasTriggeredStartRef.current = false;
       hasTriggeredEndRef.current = false;
-
-      // Check for a stored home geofence from a previous session
-      const storedHome = expeditionStateStore.getHomeGeofence();
-      if (storedHome) {
-        homePositionRef.current = storedHome;
-      }
+      homePositionRef.current = null;
     }
   }, [enabled]);
 

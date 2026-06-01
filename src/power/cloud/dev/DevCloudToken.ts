@@ -19,6 +19,7 @@
  */
 
 import { tokenStore } from "../TokenStore";
+import { ecsLog } from "../../../../lib/ecsLogger";
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -60,11 +61,10 @@ export async function setEcoFlowToken(
 
   const backend = tokenStore.getBackendType();
 
-  if (__DEV__) {
-    console.log(
-      `[DevCloudToken] EcoFlow token stored (${backend} backend, ${token.trim().length} chars).`,
-    );
-  }
+  ecsLog.debug(
+    'POWER',
+    `[DevCloudToken] EcoFlow token stored (${backend} backend, ${token.trim().length} chars).`,
+  );
 }
 
 /**
@@ -76,9 +76,7 @@ export async function setEcoFlowToken(
 export async function clearEcoFlowToken(): Promise<void> {
   await tokenStore.clearToken(ECOFLOW_PROVIDER_ID);
 
-  if (__DEV__) {
-    console.log("[DevCloudToken] EcoFlow token cleared.");
-  }
+  ecsLog.debug('POWER', '[DevCloudToken] EcoFlow token cleared.');
 }
 
 /**
@@ -145,7 +143,15 @@ export async function inspectEcoFlowToken(): Promise<{
 export function logDevTokenInstructions(): void {
   if (!__DEV__) return;
 
-  console.log(
+  ecsLog.debug(
+    'POWER',
+    '[DevCloudToken] Cloud token helper instructions available',
+    {
+      helper: "Use setEcoFlowToken('your-api-key-here') from src/power/cloud/dev/DevCloudToken",
+    },
+  );
+  ecsLog.debug(
+    'POWER',
     "\n" +
       "┌─────────────────────────────────────────────────────────────┐\n" +
       "│  ECS Power — Cloud Token Helper                            │\n" +

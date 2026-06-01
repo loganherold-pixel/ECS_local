@@ -250,7 +250,7 @@ export default function TiltAlertSettingsPanel({
             <View style={sty.alertBellClapper} />
             <View style={sty.alertBellTop} />
           </View>
-          <Text style={sty.headerTitle}>TILT ALERT THRESHOLDS</Text>
+          <Text style={sty.headerTitle}>ECS ATTITUDE ALERTS</Text>
         </View>
         <TouchableOpacity
           style={sty.closeBtn}
@@ -270,8 +270,8 @@ export default function TiltAlertSettingsPanel({
           label="Use Custom Thresholds"
           description={
             localPrefs.useCustomThresholds
-              ? 'Custom angle limits active'
-              : 'Using computed defaults from stability model'
+              ? 'Custom ECS thresholds active'
+              : 'Using the computed ECS stability model'
           }
           value={localPrefs.useCustomThresholds}
           onToggle={(v) => updatePref('useCustomThresholds', v)}
@@ -281,7 +281,7 @@ export default function TiltAlertSettingsPanel({
         {/* ── Computed defaults reference ── */}
         {!localPrefs.useCustomThresholds && (
           <View style={sty.computedRef}>
-            <Text style={sty.computedTitle}>COMPUTED DEFAULTS</Text>
+            <Text style={sty.computedTitle}>COMPUTED ECS MODEL</Text>
             <View style={sty.computedGrid}>
               <View style={sty.computedItem}>
                 <Text style={sty.computedLabel}>Roll Warn</Text>

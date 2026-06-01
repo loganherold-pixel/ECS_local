@@ -38,6 +38,7 @@ import {
   dashboardModeEngine,
   type RoadClassification,
 } from './dashboardModeEngine';
+import { ecsLog } from './ecsLogger';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -226,7 +227,7 @@ export const roadClassificationBridge = {
         _currentClassification = newClassification;
         _lastFeedTime = now;
         dashboardModeEngine.feedRoadClassification(newClassification);
-        console.log('[RoadBridge] Fed: unknown (off-road)');
+        ecsLog.debug('MAP', 'Road classification fed as off-road fallback');
       }
 
       _notify();
@@ -258,7 +259,7 @@ export const roadClassificationBridge = {
       dashboardModeEngine.feedRoadClassification(ecsClass);
 
       if (changed) {
-        console.log(
+        ecsLog.debug('MAP',
           `[RoadBridge] Classification changed → ${ecsClass}` +
           (data.roadName ? ` (${data.roadName})` : '') +
           ` [raw: ${data.roadClass}, confidence: ${_confidence}]`

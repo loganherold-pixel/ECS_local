@@ -33,6 +33,7 @@ import {
   getDeviceStorageInfo,
   isNativeStorageAvailable,
 } from './nativeTileStorage';
+import { getMapboxTokenSync } from './mapConfig';
 
 const STORAGE_KEY = 'ecs_tile_cache_meta';
 const QUOTA_SETTINGS_KEY = 'ecs_tile_cache_quota';
@@ -97,8 +98,10 @@ export interface TileCacheRegion {
   styleKey: string;
   status: 'pending' | 'downloading' | 'complete' | 'partial' | 'error' | 'cancelled';
   sourceType: 'route-corridor' | 'bounding-box' | 'manual';
+  syncType?: 'route' | 'map-view' | 'manual';
   routeId?: string;
   corridorMiles?: number;
+  routeIntent?: Record<string, unknown> | null;
   errorMessage?: string;
   /** ISO timestamp of last freshness verification */
   lastVerifiedAt?: string;
@@ -339,7 +342,7 @@ export function countTilesForRegion(
 }
 
 export function estimateSizeMB(tileCount: number, styleKey: string = 'tactical'): number {
-  const avgKB = styleKey === 'satellite' ? 40 : styleKey === 'terrain' ? 25 : 15;
+  const avgKB = styleKey === 'satellite' ? 40 : styleKey === 'terrain' || styleKey === '3d' ? 25 : 15;
   return Math.round((tileCount * avgKB) / 1024 * 10) / 10;
 }
 
@@ -561,6 +564,10 @@ function buildTileUrl(x: number, y: number, z: number, styleKey: string): string
       return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
     case 'terrain':
       return `https://tile.opentopomap.org/${z}/${x}/${y}.png`;
+    case '3d': {
+      const token = getMapboxTokenSync();
+      return `https://api.mapbox.com/styles/v1/expeditioncommand/cmonsduoz000b01spgl7bepey/tiles/256/${z}/${x}/${y}@2x?access_token=${encodeURIComponent(token)}`;
+    }
     default:
       return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
   }
@@ -987,6 +994,7 @@ class TileCacheStore {
       styleKey,
       status: 'pending',
       sourceType: 'route-corridor',
+      syncType: 'route',
       corridorMiles,
     };
 
@@ -1017,6 +1025,7 @@ class TileCacheStore {
       styleKey,
       status: 'pending',
       sourceType: 'bounding-box',
+      syncType: 'map-view',
     };
 
     this.addRegion(region);
@@ -1032,8 +1041,12 @@ class TileCacheStore {
     if (!region) return false;
 
     this.updateRegion(regionId, { status: 'downloading' });
+    let terminalStatus: DownloadProgress['status'] | null = null;
 
     const wrappedProgress: ProgressCallback = (progress) => {
+      if (progress.status === 'complete' || progress.status === 'cancelled' || progress.status === 'error') {
+        terminalStatus = progress.status;
+      }
       const updates: Partial<TileCacheRegion> = {
         downloadedTiles: progress.downloadedTiles,
         actualSizeMB: progress.downloadedSizeMB,
@@ -1050,13 +1063,14 @@ class TileCacheStore {
     };
 
     const result = await downloadRegion(region, wrappedProgress);
+    const cancelled = terminalStatus === 'cancelled';
 
     this.updateRegion(regionId, {
-      status: result.success ? 'complete' : 'error',
+      status: cancelled ? 'cancelled' : result.success ? 'complete' : 'error',
       downloadedTiles: result.downloaded,
       actualSizeMB: result.sizeMB,
       completedAt: result.success ? new Date().toISOString() : undefined,
-      errorMessage: result.success ? undefined : `${result.failed} tiles failed`,
+      errorMessage: cancelled || result.success ? undefined : `${result.failed} tiles failed`,
     });
 
     return result.success;

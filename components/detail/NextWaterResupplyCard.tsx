@@ -103,7 +103,7 @@ export default function NextWaterResupplyCard({
       if (err) throw err;
       setNextWater(data && data.length > 0 ? data[0] : null);
     } catch {
-      setError('FAILED TO LOAD WATER WAYPOINTS');
+      setError('FAILED TO LOAD WATER RESUPPLY POINTS');
     }
     setLoading(false);
   }, [expeditionId]);
@@ -182,11 +182,11 @@ export default function NextWaterResupplyCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="navigate-outline" size={16} color="#29B6F6" />
-          <Text style={s.cardTitle}>NEXT WATER RESUPPLY</Text>
+          <Text style={s.cardTitle}>ECS WATER RESUPPLY</Text>
         </View>
         <View style={s.loadingBox}>
           <ActivityIndicator size="small" color={TACTICAL.accent} />
-          <Text style={s.loadingText}>SCANNING WAYPOINTS...</Text>
+          <Text style={s.loadingText}>SCANNING ROUTE POINTS...</Text>
         </View>
       </View>
     );
@@ -198,7 +198,7 @@ export default function NextWaterResupplyCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="navigate-outline" size={16} color={TACTICAL.danger} />
-          <Text style={s.cardTitle}>NEXT WATER RESUPPLY</Text>
+          <Text style={s.cardTitle}>ECS WATER RESUPPLY</Text>
         </View>
         <View style={s.errorBox}>
           <Ionicons name="alert-circle" size={16} color={TACTICAL.danger} />
@@ -214,13 +214,13 @@ export default function NextWaterResupplyCard({
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Ionicons name="navigate-outline" size={16} color={TACTICAL.textMuted} />
-          <Text style={s.cardTitle}>NEXT WATER RESUPPLY</Text>
+          <Text style={s.cardTitle}>ECS WATER RESUPPLY</Text>
         </View>
         <View style={s.emptyBox}>
           <Ionicons name="water-outline" size={28} color={TACTICAL.textMuted} />
-          <Text style={s.emptyTitle}>NO UPCOMING WATER STOPS</Text>
+          <Text style={s.emptyTitle}>NO UPCOMING WATER RESUPPLY</Text>
           <Text style={s.emptySub}>
-            Add a waypoint with type "WATER" and set an ETA to enable projections
+            Add a water route point with ETA to enable projection
           </Text>
         </View>
       </View>
@@ -255,7 +255,7 @@ export default function NextWaterResupplyCard({
       {/* Header */}
       <View style={s.cardHeader}>
         <Ionicons name="navigate-outline" size={16} color="#29B6F6" />
-        <Text style={s.cardTitle}>NEXT WATER RESUPPLY</Text>
+        <Text style={s.cardTitle}>ECS WATER RESUPPLY</Text>
         {expeditionStatus === 'active' && (
           <View style={s.liveBadge}>
             <View style={s.liveDot} />
@@ -342,7 +342,7 @@ export default function NextWaterResupplyCard({
         <View style={[s.projectionBlock, { borderLeftColor: afterColor }]}>
           <View style={s.projectionHeader}>
             <Ionicons name="arrow-up-circle-outline" size={14} color={afterColor} />
-            <Text style={s.projectionTitle}>AFTER RESUPPLY</Text>
+            <Text style={s.projectionTitle}>POST-RESUPPLY</Text>
             {nextWater.water_resupply_gal != null && (
               <Text style={s.resupplyAmtText}>+{nextWater.water_resupply_gal} GAL</Text>
             )}

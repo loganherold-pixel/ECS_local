@@ -39,8 +39,13 @@ import type {
   EcsFreshness,
 } from './ecsSyncTypes';
 import { ECS_CHANNEL_PRIORITY } from './ecsSyncTypes';
+import { ecsLog } from './ecsLogger';
 
 const TAG = '[ECS-BUS]';
+
+function debugBus(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
 
 
 // ── Configuration ────────────────────────────────────────
@@ -170,7 +175,11 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
   if (_propagating && _propagationSource === source) {
     _circularPreventionCount++;
     if (_shouldLogVerbose()) {
-      console.log(TAG, `Circular prevented: ${source} → ${channel} (depth=${_propagationDepth})`);
+      debugBus('Bus circular propagation prevented', {
+        channel,
+        depth: _propagationDepth,
+        source,
+      });
     }
     return;
   }
@@ -189,7 +198,11 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
       if (summaryTs < lastTs) {
         _staleRejectionCount++;
         if (_shouldLogVerbose()) {
-          console.log(TAG, `Stale data rejected: ${channel} (${summaryTs} < ${lastTs})`);
+          debugBus('Bus stale data rejected', {
+            channel,
+            lastTimestamp: lastTs,
+            summaryTimestamp: summaryTs,
+          });
         }
         return;
       }
@@ -249,10 +262,12 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
 
   // Verbose logging (throttled)
   if (_shouldLogVerbose() && notified > 0) {
-    console.log(
-      TAG,
-      `Published: ${channel} (source=${source}, subs=${notified}, depth=${_propagationDepth + 1})`
-    );
+    debugBus('Bus published event', {
+      channel,
+      depth: _propagationDepth + 1,
+      notifiedSubscribers: notified,
+      source,
+    });
   }
 }
 
@@ -479,7 +494,7 @@ export const ecsBus = {
       }
     }
     if (pendingChannels.length > 0) {
-      console.log(TAG, `Flushed ${pendingChannels.length} pending channel(s)`);
+  debugBus('Bus flushed pending channels', { pendingChannels: pendingChannels.length });
     }
   },
 
@@ -510,7 +525,7 @@ export const ecsBus = {
     _circularPreventionCount = 0;
     _staleRejectionCount = 0;
 
-    console.log(TAG, 'Bus reset');
+  debugBus('Bus reset');
   },
 };
 

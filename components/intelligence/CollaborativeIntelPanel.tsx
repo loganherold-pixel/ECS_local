@@ -266,6 +266,7 @@ function SubmitObservationForm({ onSubmitted }: { onSubmitted: () => void }) {
     let lng: number | null = null;
     let altFt: number | null = null;
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { gpsUIState } = require('../../lib/gpsUIState');
       const gps = gpsUIState.get();
       if (gps.hasFix && gps.position) {

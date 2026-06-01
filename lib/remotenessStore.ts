@@ -40,8 +40,28 @@ import { TERRAIN_COMPLEXITY_SCORES, analyzeElevationComplexity } from './elevati
 import { gpsUIState } from './gpsUIState';
 import { routeStore } from './routeStore';
 import { connectivity } from './connectivity';
-import type { RemotenessIndexOutput } from './remotenessTypes';
+import { connectivityIntelStore } from './connectivityIntelStore';
+import type {
+  ConnectivityAssessment,
+  ConnectivitySignal,
+  InfrastructureProximity,
+  ProximityEstimate,
+  RemotenessIndexOutput,
+} from './remotenessTypes';
 import { computeFullRemoteness, scoreToLevel } from './remotenessEngine';
+import {
+  getCachedRemotenessLiveProximity,
+  type RemotenessLiveProximitySnapshot,
+  refreshRemotenessLiveProximity,
+} from './remotenessLiveProximity';
+import { offlineExpeditionDbStore } from './offlineExpeditionDbStore';
+import {
+  resetRemotenessRuntimeSnapshot,
+  setRemotenessRuntimeSnapshot,
+} from './remotenessRuntime';
+import type { ECSConfidenceResult } from './ai/confidenceTypes';
+import type { ECSPriorityResult } from './ai/priorityTypes';
+import { createPriorityResult } from './ai/priorityEngine';
 
 
 // ── Tier definitions ────────────────────────────────────
@@ -58,6 +78,8 @@ export interface RemotenessOutput {
   tier: RemotenessTier;
   reason: string;           // single supporting line
   tierColor: string;
+  confidence: ECSConfidenceResult;
+  priority: ECSPriorityResult;
   /** Individual signal contributions for detail modal */
   signals: {
     elevationScore: number;
@@ -88,6 +110,12 @@ interface CacheAwareConnectivity {
   freshness: string;
   /** Phase 6A: Whether offline expedition data is cached for the current area */
   expeditionDataReady: boolean;
+  networkType: 'wifi' | 'cellular' | 'ethernet' | 'none' | 'unknown';
+  signalQuality: 'excellent' | 'good' | 'fair' | 'poor' | 'none' | 'unknown';
+  quality: 'strong' | 'moderate' | 'weak' | 'unavailable' | 'unknown';
+  latencyMs: number | null;
+  internetReachable: boolean;
+  isLive: boolean;
 }
 
 // ── Input signals (kept for backward compat / manual overrides) ──
@@ -198,6 +226,30 @@ const TIER_FORCE_DELTA = 8;
 // ── Recomputation interval ──────────────────────────────
 const RECOMPUTE_INTERVAL_MS = 12_000;
 
+const UNKNOWN_CONFIDENCE: ECSConfidenceResult = {
+  level: 'unknown',
+  score: 0,
+  label: 'Confidence unavailable',
+  shortReason: 'Awaiting stronger signal',
+  reasons: ['awaiting_signal'],
+  sourceSummary: {
+    live: 0,
+    manual: 0,
+    inferred: 0,
+    stale: 0,
+    missing: 0,
+  },
+};
+
+const UNKNOWN_PRIORITY: ECSPriorityResult = createPriorityResult({
+  level: 'informational',
+  domain: 'remoteness',
+  title: 'Remoteness assessing',
+  shortReason: 'Awaiting stronger signal',
+  reasons: ['missing_signal'],
+  sourceKey: 'remoteness',
+});
+
 
 // ══════════════════════════════════════════════════════════
 // SEGMENT MEMOIZATION CACHE
@@ -237,7 +289,6 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
   // Phase 3D: Try Connectivity Intelligence summary first
   let expeditionDataReady = false;
   try {
-    const { offlineExpeditionDbStore } = require('./offlineExpeditionDbStore');
     if (offlineExpeditionDbStore.isInitialized()) {
       const readiness = offlineExpeditionDbStore.evaluateReadiness();
       expeditionDataReady = readiness.has_offline_data && readiness.covers_current_position;
@@ -245,7 +296,6 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
   } catch {}
 
   try {
-    const { connectivityIntelStore } = require('./connectivityIntelStore');
     if (connectivityIntelStore.isInitialized() && connectivityIntelStore.isMonitoring()) {
       const summary = connectivityIntelStore.getSummary();
       if (summary) {
@@ -260,6 +310,12 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
             cachedRouteAvailable: summary.cached_route_available,
             freshness,
             expeditionDataReady,
+            networkType: summary.network_type,
+            signalQuality: summary.signal_quality,
+            quality: summary.quality,
+            latencyMs: summary.latency_ms,
+            internetReachable: summary.internet_reachable,
+            isLive: summary.is_live,
           };
         }
 
@@ -268,7 +324,7 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
           let state: ConnectivityState;
           switch (summary.connectivity_state) {
             case 'connected': state = 'online'; break;
-            case 'limited':   state = 'unknown'; break;
+            case 'limited':   state = 'degraded'; break;
             case 'degraded':  state = 'degraded'; break;
             case 'offline':   state = 'offline'; break;
             case 'unknown':
@@ -287,6 +343,12 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
             cachedRouteAvailable: summary.cached_route_available,
             freshness,
             expeditionDataReady,
+            networkType: summary.network_type,
+            signalQuality: summary.signal_quality,
+            quality: summary.quality,
+            latencyMs: summary.latency_ms,
+            internetReachable: summary.internet_reachable,
+            isLive: summary.is_live,
           };
         }
       }
@@ -294,14 +356,40 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
   } catch {}
 
   // Legacy fallback
-  const level = connectivity.getLevel();
+  const detailedState = connectivity.getDetailedState();
+  const level = detailedState.level;
   let state: ConnectivityState;
   switch (level) {
     case 'no_service': state = 'offline'; break;
-    case 'limited':    state = 'unknown'; break;
+    case 'limited':    state = 'degraded'; break;
     case 'normal':     state = 'online'; break;
     case 'unknown':
     default:           state = 'unknown'; break;
+  }
+
+  let signalQuality: CacheAwareConnectivity['signalQuality'] = 'unknown';
+  if (!detailedState.isInternetReachable || detailedState.networkType === 'none') {
+    signalQuality = 'none';
+  } else if (detailedState.latencyMs != null) {
+    if (detailedState.latencyMs <= 150) signalQuality = 'excellent';
+    else if (detailedState.latencyMs <= 500) signalQuality = 'good';
+    else if (detailedState.latencyMs <= 1500) signalQuality = 'fair';
+    else signalQuality = 'poor';
+  } else if (state === 'online') {
+    signalQuality = 'good';
+  } else if (state === 'degraded') {
+    signalQuality = 'fair';
+  }
+
+  let quality: CacheAwareConnectivity['quality'] = 'unknown';
+  if (!detailedState.isInternetReachable || detailedState.networkType === 'none') {
+    quality = 'unavailable';
+  } else if (signalQuality === 'excellent') {
+    quality = 'strong';
+  } else if (signalQuality === 'good') {
+    quality = 'moderate';
+  } else if (signalQuality === 'fair' || signalQuality === 'poor') {
+    quality = 'weak';
   }
 
   return {
@@ -311,6 +399,117 @@ function _resolveConnectivityState(): CacheAwareConnectivity {
     cachedRouteAvailable: false,
     freshness: 'offline',
     expeditionDataReady,
+    networkType: detailedState.networkType,
+    signalQuality,
+    quality,
+    latencyMs: detailedState.latencyMs,
+    internetReachable: detailedState.isInternetReachable,
+    isLive: detailedState.initialized,
+  };
+}
+
+function makeLiveUnavailableEstimate(source: string): ProximityEstimate {
+  return {
+    distanceMi: null,
+    confidence: 'estimated',
+    source,
+    label: null,
+    latitude: null,
+    longitude: null,
+    sourceState: 'unavailable',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function buildWidgetProximity(
+  proximity: InfrastructureProximity,
+  liveInfrastructure: RemotenessLiveProximitySnapshot | null,
+): InfrastructureProximity {
+  return {
+    nearestPavedRoad:
+      liveInfrastructure?.nearestPavedRoad ??
+      makeLiveUnavailableEstimate('awaiting live nearest-road lookup'),
+    nearestTown:
+      liveInfrastructure?.nearestTown ??
+      makeLiveUnavailableEstimate('awaiting live nearest-town lookup'),
+    nearestFuelStation:
+      liveInfrastructure?.nearestFuelStation ??
+      makeLiveUnavailableEstimate('awaiting live nearest-fuel lookup'),
+    nearestEmergencyServices: proximity.nearestEmergencyServices,
+    nearestServices: proximity.nearestServices,
+  };
+}
+
+function buildConnectivityAssessment(
+  connectivityState: CacheAwareConnectivity,
+): ConnectivityAssessment {
+  let signal: ConnectivitySignal = 'unknown';
+
+  if (
+    connectivityState.state === 'offline' ||
+    connectivityState.networkType === 'none'
+  ) {
+    signal = 'no_signal';
+  } else if (
+    !connectivityState.internetReachable &&
+    connectivityState.networkType !== 'unknown'
+  ) {
+    signal = 'intermittent';
+  } else if (
+    connectivityState.quality === 'strong' ||
+    connectivityState.signalQuality === 'excellent'
+  ) {
+    signal = 'strong';
+  } else if (
+    connectivityState.quality === 'moderate' ||
+    connectivityState.signalQuality === 'good'
+  ) {
+    signal = 'moderate';
+  } else if (
+    connectivityState.quality === 'weak' ||
+    connectivityState.signalQuality === 'fair'
+  ) {
+    signal = 'weak';
+  } else if (
+    connectivityState.signalQuality === 'poor' ||
+    connectivityState.state === 'degraded' ||
+    connectivityState.freshness === 'recovering' ||
+    connectivityState.freshness === 'stale'
+  ) {
+    signal = 'intermittent';
+  }
+
+  let qualityScore = 25;
+  switch (signal) {
+    case 'strong':
+      qualityScore = 92;
+      break;
+    case 'moderate':
+      qualityScore = 72;
+      break;
+    case 'weak':
+      qualityScore = 46;
+      break;
+    case 'intermittent':
+      qualityScore = 24;
+      break;
+    case 'no_signal':
+      qualityScore = 0;
+      break;
+    case 'unknown':
+    default:
+      qualityScore = connectivityState.internetReachable ? 40 : 18;
+      break;
+  }
+
+  return {
+    signal,
+    hasCellular: connectivityState.networkType === 'cellular',
+    hasWifi: connectivityState.networkType === 'wifi',
+    isOffline:
+      connectivityState.state === 'offline' ||
+      connectivityState.networkType === 'none',
+    qualityScore,
   };
 }
 
@@ -373,6 +572,7 @@ interface GatheredSignals {
   freshness: string;
   /** Phase 6A: Whether offline expedition data is cached for the current area */
   expeditionDataReady: boolean;
+  connectivity: CacheAwareConnectivity;
 }
 
 function _gatherSignals(): GatheredSignals {
@@ -420,6 +620,7 @@ function _gatherSignals(): GatheredSignals {
     elevResult,
     freshness: cacheAware.freshness,
     expeditionDataReady: cacheAware.expeditionDataReady,
+    connectivity: cacheAware,
   };
 }
 
@@ -438,8 +639,8 @@ function _computeRawScore(signals: GatheredSignals): {
 } {
   if (!signals.hasActiveRoute) {
     return {
-      score: 25,
-      reason: 'Backcountry conditions',
+      score: 0,
+      reason: 'Remoteness unknown until route or live location context is available',
       elevationScore: 0,
       connectivityScore: 0,
       speedScore: 0,
@@ -601,6 +802,8 @@ function _recompute() {
     tier: _currentTier,
     reason: _currentReason,
     tierColor: _currentTierColor,
+    confidence: UNKNOWN_CONFIDENCE,
+    priority: UNKNOWN_PRIORITY,
     signals: {
       elevationScore: _elevationScore,
       connectivityScore: _connectivityScore,
@@ -626,11 +829,50 @@ function _recompute() {
 
 let _cachedIndexOutput: RemotenessIndexOutput | null = null;
 
-function _recomputeIndex(signals: GatheredSignals): void {
+function _proximityEstimateChanged(
+  prevDistance: { distanceMi: number | null; confidence: string; source: string },
+  nextDistance: { distanceMi: number | null; confidence: string; source: string },
+): boolean {
+  return (
+    prevDistance.distanceMi !== nextDistance.distanceMi ||
+    prevDistance.confidence !== nextDistance.confidence ||
+    prevDistance.source !== nextDistance.source
+  );
+}
+
+function _didIndexOutputChange(
+  previous: RemotenessIndexOutput | null,
+  next: RemotenessIndexOutput,
+): boolean {
+  if (!previous) return true;
+
+  return (
+    previous.score !== next.score ||
+    previous.rawScore !== next.rawScore ||
+    previous.level !== next.level ||
+    previous.levelColor !== next.levelColor ||
+    previous.reason !== next.reason ||
+    previous.description !== next.description ||
+    previous.connectivity.signal !== next.connectivity.signal ||
+    previous.connectivity.qualityScore !== next.connectivity.qualityScore ||
+    previous.forecast.available !== next.forecast.available ||
+    previous.forecast.peakScore !== next.forecast.peakScore ||
+    previous.forecast.isIncreasing !== next.forecast.isIncreasing ||
+    previous.advisories.length !== next.advisories.length ||
+    previous.advisories[0]?.id !== next.advisories[0]?.id ||
+    previous.advisories[0]?.message !== next.advisories[0]?.message ||
+    _proximityEstimateChanged(previous.proximity.nearestPavedRoad, next.proximity.nearestPavedRoad) ||
+    _proximityEstimateChanged(previous.proximity.nearestTown, next.proximity.nearestTown) ||
+    _proximityEstimateChanged(previous.proximity.nearestFuelStation, next.proximity.nearestFuelStation)
+  );
+}
+
+function _recomputeIndex(signals: GatheredSignals, allowLiveRefresh = true): boolean {
   const gps = gpsUIState.get();
   const gpsLat = gps.hasFix && gps.position ? gps.position.latitude : null;
   const gpsLon = gps.hasFix && gps.position ? gps.position.longitude : null;
   const elevFt = gps.hasFix && gps.position ? (gps.position.altitudeFt ?? null) : null;
+  const liveInfrastructure = getCachedRemotenessLiveProximity(gpsLat, gpsLon);
 
   const result = computeFullRemoteness({
     speedMph: signals.speedMph,
@@ -641,22 +883,27 @@ function _recomputeIndex(signals: GatheredSignals): void {
     cacheReady: signals.cacheReady,
     gpsLat,
     gpsLon,
+    infrastructureOverride: liveInfrastructure,
   });
 
   const { level, color } = scoreToLevel(result.score);
+  const widgetProximity = buildWidgetProximity(result.proximity, liveInfrastructure);
+  const connectivityAssessment = buildConnectivityAssessment(signals.connectivity);
 
-  _cachedIndexOutput = {
+  const nextIndexOutput: RemotenessIndexOutput = {
     score: result.score,
     rawScore: result.score,
     level,
     levelColor: color,
     reason: result.reason,
     description: result.description,
+    confidence: result.confidence,
+    priority: result.priority,
     factors: result.factors,
     availableFactorCount: result.factors.filter(f => f.available).length,
     totalFactorCount: result.factors.length,
-    proximity: result.proximity,
-    connectivity: result.connectivity,
+    proximity: widgetProximity,
+    connectivity: connectivityAssessment,
     terrain: result.terrain,
     forecast: result.forecast,
     advisories: result.advisories,
@@ -666,12 +913,50 @@ function _recomputeIndex(signals: GatheredSignals): void {
     gpsLon,
     speedMph: signals.speedMph,
   };
+
+  const changed = _didIndexOutputChange(_cachedIndexOutput, nextIndexOutput);
+  _cachedIndexOutput = nextIndexOutput;
+
+  if (changed) {
+    const source =
+      gpsLat == null || gpsLon == null
+        ? 'unavailable'
+        : widgetProximity.nearestTown.sourceState === 'cache' ||
+          widgetProximity.nearestFuelStation.sourceState === 'cache' ||
+          widgetProximity.nearestPavedRoad.sourceState === 'cache'
+          ? 'cache'
+          : widgetProximity.nearestTown.sourceState === 'live' ||
+            widgetProximity.nearestFuelStation.sourceState === 'live' ||
+            widgetProximity.nearestPavedRoad.sourceState === 'live'
+            ? 'live'
+            : 'unavailable';
+    console.log(`[REMOTENESS] source_selected source=${source}`);
+  }
+
+  if (
+    allowLiveRefresh &&
+    typeof gpsLat === 'number' &&
+    typeof gpsLon === 'number'
+  ) {
+    void refreshRemotenessLiveProximity(gpsLat, gpsLon)
+      .then(() => {
+        if (!_isRunning) return;
+        const latestSignals = _gatherSignals();
+        if (_recomputeIndex(latestSignals, false)) {
+          _notify();
+        }
+      })
+      .catch(() => {});
+  }
+
+  return changed;
 }
 
 // Patch _recompute to also compute index
 const _originalRecompute = _recompute;
 function _recomputeWithIndex() {
   const signals = _gatherSignals();
+  const computedAt = Date.now();
 
   // Run legacy computation
   const result = _computeRawScore(signals);
@@ -737,6 +1022,8 @@ function _recomputeWithIndex() {
     tier: _currentTier,
     reason: _currentReason,
     tierColor: _currentTierColor,
+    confidence: _cachedIndexOutput?.confidence ?? UNKNOWN_CONFIDENCE,
+    priority: _cachedIndexOutput?.priority ?? UNKNOWN_PRIORITY,
     signals: {
       elevationScore: _elevationScore,
       connectivityScore: _connectivityScore,
@@ -749,14 +1036,22 @@ function _recomputeWithIndex() {
     },
   };
 
+  setRemotenessRuntimeSnapshot({
+    isRunning: _isRunning,
+    score: newScore,
+    tier: _currentTier,
+    lastComputedAt: computedAt,
+  });
+
   // Run enhanced index computation
+  let indexChanged = false;
   try {
-    _recomputeIndex(signals);
+    indexChanged = _recomputeIndex(signals);
   } catch (e) {
     // Gracefully handle engine errors
   }
 
-  if (changed) _notify();
+  if (changed || indexChanged) _notify();
 }
 
 
@@ -786,6 +1081,8 @@ export const remotenessStore = {
       tier: 'NEAR CIVILIZATION',
       reason: 'Assessing environment\u2026',
       tierColor: '#4CAF50',
+      confidence: UNKNOWN_CONFIDENCE,
+      priority: UNKNOWN_PRIORITY,
       signals: {
         elevationScore: 0,
         connectivityScore: 0,
@@ -826,6 +1123,7 @@ export const remotenessStore = {
   start: (): void => {
     if (_isRunning) return;
     _isRunning = true;
+    setRemotenessRuntimeSnapshot({ isRunning: true });
 
     _recomputeWithIndex();
 
@@ -839,6 +1137,7 @@ export const remotenessStore = {
    */
   stop: (): void => {
     _isRunning = false;
+    setRemotenessRuntimeSnapshot({ isRunning: false });
     if (_recomputeTimer) {
       clearInterval(_recomputeTimer);
       _recomputeTimer = null;
@@ -871,6 +1170,7 @@ export const remotenessStore = {
     _lastKnownCIState = 'unknown';
     _lastKnownCIFreshness = 'offline';
     _clearSegmentCache();
+    resetRemotenessRuntimeSnapshot();
     _notify();
   },
 

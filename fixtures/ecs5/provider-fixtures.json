@@ -1,0 +1,157 @@
+{
+  "generatedFor": "ECS 5.0 fixture-only CI",
+  "openWeather": {
+    "normalForecast": {
+      "lat": 38.78,
+      "lon": -121.2,
+      "timezone": "America/Los_Angeles",
+      "current": { "dt": 1777500000, "temp": 68, "wind_speed": 6, "humidity": 42, "weather": [{ "main": "Clear" }] },
+      "hourly": [{ "dt": 1777503600, "temp": 67, "wind_speed": 7, "pop": 0.05, "weather": [{ "main": "Clear" }] }],
+      "daily": [{ "dt": 1777520000, "temp": { "min": 48, "max": 74 }, "weather": [{ "main": "Clear" }] }]
+    },
+    "severeWeatherAlert": {
+      "lat": 38.78,
+      "lon": -121.2,
+      "current": { "dt": 1777500000, "temp": 64, "wind_speed": 28, "weather": [{ "main": "Thunderstorm" }] },
+      "hourly": [{ "dt": 1777503600, "temp": 62, "wind_speed": 34, "pop": 0.9, "rain": { "1h": 1.2 }, "weather": [{ "main": "Thunderstorm" }] }],
+      "alerts": [{ "sender_name": "National Weather Service", "event": "Severe Thunderstorm Warning", "start": 1777500000, "end": 1777507200, "description": "Severe storms expected." }]
+    },
+    "snowForecast": {
+      "lat": 39.1,
+      "lon": -120.1,
+      "current": { "dt": 1777500000, "temp": 29, "weather": [{ "main": "Snow" }] },
+      "hourly": [{ "dt": 1777503600, "temp": 27, "snow": { "1h": 2.1 }, "weather": [{ "main": "Snow" }] }]
+    },
+    "heavyRainForecast": {
+      "lat": 38.9,
+      "lon": -121.1,
+      "current": { "dt": 1777500000, "temp": 52, "weather": [{ "main": "Rain" }] },
+      "hourly": [{ "dt": 1777503600, "temp": 51, "rain": { "1h": 2.4 }, "pop": 1, "weather": [{ "main": "Rain" }] }]
+    },
+    "highWindForecast": {
+      "lat": 38.9,
+      "lon": -121.1,
+      "current": { "dt": 1777500000, "temp": 61, "wind_speed": 41, "wind_gust": 58, "weather": [{ "main": "Wind" }] },
+      "hourly": [{ "dt": 1777503600, "temp": 60, "wind_speed": 44, "wind_gust": 62, "weather": [{ "main": "Wind" }] }]
+    }
+  },
+  "nws": {
+    "points": {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-121.2, 38.78] },
+      "properties": {
+        "gridId": "STO",
+        "gridX": 52,
+        "gridY": 74,
+        "forecast": "fixture://nws/forecast",
+        "forecastHourly": "fixture://nws/hourly",
+        "forecastZone": "fixture://nws/zone/CAZ017",
+        "county": "fixture://nws/county/CAC061",
+        "fireWeatherZone": "fixture://nws/fire/CAZ217"
+      }
+    },
+    "hourlyForecast": {
+      "properties": {
+        "generatedAt": "2026-04-29T17:00:00Z",
+        "expires": "2026-04-29T20:00:00Z",
+        "periods": [
+          { "startTime": "2026-04-29T18:00:00Z", "temperature": 67, "windSpeed": "8 mph", "shortForecast": "Clear" },
+          { "startTime": "2026-04-29T19:00:00Z", "temperature": 31, "windSpeed": "12 mph", "shortForecast": "Snow" }
+        ]
+      }
+    },
+    "activeAlertWithGeometry": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "id": "nws-alert-severe",
+          "geometry": { "type": "Polygon", "coordinates": [[[-121.35, 38.7], [-121.05, 38.7], [-121.05, 38.98], [-121.35, 38.98], [-121.35, 38.7]]] },
+          "properties": {
+            "id": "nws-alert-severe",
+            "event": "Severe Thunderstorm Warning",
+            "headline": "Severe Thunderstorm Warning",
+            "severity": "Severe",
+            "certainty": "Likely",
+            "urgency": "Immediate",
+            "sent": "2026-04-29T17:10:00Z",
+            "onset": "2026-04-29T17:15:00Z",
+            "expires": "2026-04-29T19:00:00Z",
+            "instruction": "Delay travel in exposed areas."
+          }
+        }
+      ]
+    },
+    "redFlagWarning": {
+      "type": "FeatureCollection",
+      "features": [{ "type": "Feature", "id": "nws-red-flag", "geometry": { "type": "Polygon", "coordinates": [[[-121.4, 38.6], [-121.0, 38.6], [-121.0, 39.0], [-121.4, 39.0], [-121.4, 38.6]]] }, "properties": { "id": "nws-red-flag", "event": "Red Flag Warning", "severity": "Severe", "sent": "2026-04-29T16:00:00Z", "expires": "2026-04-30T02:00:00Z" } }]
+    },
+    "floodWinterHighWindAlert": {
+      "type": "FeatureCollection",
+      "features": [
+        { "type": "Feature", "id": "nws-flood", "geometry": { "type": "Polygon", "coordinates": [[[-121.4, 38.6], [-121.0, 38.6], [-121.0, 39.0], [-121.4, 39.0], [-121.4, 38.6]]] }, "properties": { "id": "nws-flood", "event": "Flood Warning", "severity": "Severe", "sent": "2026-04-29T16:00:00Z", "expires": "2026-04-30T02:00:00Z" } },
+        { "type": "Feature", "id": "nws-winter", "properties": { "id": "nws-winter", "event": "Winter Storm Warning", "severity": "Severe", "sent": "2026-04-29T16:00:00Z", "expires": "2026-04-30T02:00:00Z" } },
+        { "type": "Feature", "id": "nws-wind", "properties": { "id": "nws-wind", "event": "High Wind Warning", "severity": "Severe", "sent": "2026-04-29T16:00:00Z", "expires": "2026-04-30T02:00:00Z" } }
+      ]
+    }
+  },
+  "airNow": {
+    "good": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 25, "Category": { "Name": "Good" }, "DateObserved": "2026-04-29", "HourObserved": 10, "LocalTimeZone": "PDT" }],
+    "unhealthySensitive": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 125, "Category": { "Name": "Unhealthy for Sensitive Groups" }, "DateObserved": "2026-04-29", "HourObserved": 10, "LocalTimeZone": "PDT" }],
+    "unhealthy": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 172, "Category": { "Name": "Unhealthy" }, "DateObserved": "2026-04-29", "HourObserved": 10, "LocalTimeZone": "PDT" }],
+    "veryUnhealthy": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 245, "Category": { "Name": "Very Unhealthy" }, "DateObserved": "2026-04-29", "HourObserved": 10, "LocalTimeZone": "PDT" }],
+    "hazardous": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 340, "Category": { "Name": "Hazardous" }, "DateObserved": "2026-04-29", "HourObserved": 10, "LocalTimeZone": "PDT" }],
+    "staleAqi": [{ "ReportingArea": "Auburn", "StateCode": "CA", "Latitude": 38.9, "Longitude": -121.1, "ParameterName": "PM2.5", "AQI": 155, "Category": { "Name": "Unhealthy" }, "DateObserved": "2026-04-25", "HourObserved": 10, "LocalTimeZone": "PDT" }]
+  },
+  "nasaFirms": {
+    "activeFireFarFromRoute": [{ "id": "firms-far", "latitude": 39.8, "longitude": -122.5, "confidence": "h", "acq_date": "2026-04-29", "acq_time": "1700", "satellite": "Aqua", "instrument": "MODIS", "frp": 18 }],
+    "activeFireNearRoute": [{ "id": "firms-near", "latitude": 38.82, "longitude": -121.23, "confidence": "h", "acq_date": "2026-04-29", "acq_time": "1705", "satellite": "Aqua", "instrument": "MODIS", "frp": 44 }],
+    "activeFireIntersectingRouteBbox": [{ "id": "firms-intersect", "latitude": 38.79, "longitude": -121.19, "confidence": "h", "acq_date": "2026-04-29", "acq_time": "1710", "satellite": "VIIRS", "instrument": "VIIRS", "frp": 83 }],
+    "lowConfidenceOlderDetection": [{ "id": "firms-old-low", "latitude": 38.83, "longitude": -121.18, "confidence": "l", "acq_date": "2026-04-25", "acq_time": "1200", "satellite": "Aqua", "instrument": "MODIS", "frp": 5 }]
+  },
+  "wfigs": {
+    "perimeterNotIntersectingRoute": { "type": "FeatureCollection", "features": [{ "type": "Feature", "properties": { "IrwinID": "wfigs-far", "IncidentName": "Far Fire", "IncidentStatus": "Active", "ModifiedOnDateTime": "2026-04-29T16:00:00Z" }, "geometry": { "type": "Polygon", "coordinates": [[[-122.5, 39.5], [-122.1, 39.5], [-122.1, 39.8], [-122.5, 39.8], [-122.5, 39.5]]] } }] },
+    "perimeterNearRoute": { "type": "FeatureCollection", "features": [{ "type": "Feature", "properties": { "IrwinID": "wfigs-near", "IncidentName": "Near Fire", "IncidentStatus": "Active", "ModifiedOnDateTime": "2026-04-29T16:00:00Z" }, "geometry": { "type": "Polygon", "coordinates": [[[-121.55, 38.7], [-121.45, 38.7], [-121.45, 38.9], [-121.55, 38.9], [-121.55, 38.7]]] } }] },
+    "perimeterIntersectingRoute": { "type": "FeatureCollection", "features": [{ "type": "Feature", "properties": { "IrwinID": "wfigs-intersect", "IncidentName": "Route Fire", "IncidentStatus": "Active", "ModifiedOnDateTime": "2026-04-29T16:00:00Z" }, "geometry": { "type": "Polygon", "coordinates": [[[-121.35, 38.7], [-121.05, 38.7], [-121.05, 38.98], [-121.35, 38.98], [-121.35, 38.7]]] } }] },
+    "inactiveHistoricalPerimeter": { "type": "FeatureCollection", "features": [{ "type": "Feature", "properties": { "IrwinID": "wfigs-historical", "IncidentName": "Old Fire", "IncidentStatus": "Historical", "ModifiedOnDateTime": "2026-01-01T16:00:00Z" }, "geometry": { "type": "Polygon", "coordinates": [[[-121.35, 38.7], [-121.05, 38.7], [-121.05, 38.98], [-121.35, 38.98], [-121.35, 38.7]]] } }] }
+  },
+  "inciWeb": {
+    "incidentSummaryWithUrl": { "items": [{ "id": "inciweb-summary", "title": "Route Fire", "url": "https://inciweb.example.test/incident/route-fire", "updatedAt": "2026-04-29T16:00:00Z", "latitude": 38.82, "longitude": -121.2, "summary": "Incident summary only." }] },
+    "incidentUpdate": { "items": [{ "id": "inciweb-update", "title": "Route Fire Update", "url": "https://inciweb.example.test/incident/update", "updatedAt": "2026-04-29T18:00:00Z", "latitude": 38.82, "longitude": -121.2, "summary": "Containment increased." }] },
+    "incidentWithClosureLanguage": { "items": [{ "id": "inciweb-closure-language", "title": "Route Fire Closure Information", "url": "https://inciweb.example.test/incident/closure", "updatedAt": "2026-04-29T18:00:00Z", "latitude": 38.82, "longitude": -121.2, "summary": "Road closure language appears in incident context and requires cautious normalization." }] }
+  },
+  "usfsMvum": {
+    "roadOpenToHighwayLegalVehicles": { "features": [{ "properties": { "id": "mvum-road-open", "roadTrailId": "18N01", "vehicleClass": "highway_legal", "status": "open" }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "trailOpenToMotorcyclesOnly": { "features": [{ "properties": { "id": "mvum-moto", "roadTrailId": "18E01", "vehicleClass": "motorcycle", "status": "open" }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "seasonalRoad": { "features": [{ "properties": { "id": "mvum-seasonal", "roadTrailId": "18N02", "vehicleClass": "high_clearance", "status": "seasonal", "allowedDates": "06-01 to 10-31" }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "routeNotOpenToPublicMotorVehicleTravel": { "features": [{ "properties": { "id": "mvum-closed", "roadTrailId": "18N03", "vehicleClass": "none", "status": "closed" }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "legalButLowStandardRoad": { "features": [{ "properties": { "id": "mvum-low-standard", "roadTrailId": "18N04", "vehicleClass": "high_clearance", "status": "open", "notes": "Low-standard road; passability not guaranteed." }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] }
+  },
+  "blmPlad": {
+    "legalAccessLine": { "features": [{ "properties": { "id": "blm-line", "accessType": "legal access line", "status": "open" }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "accessPolygon": { "features": [{ "properties": { "id": "blm-polygon", "accessType": "access polygon", "status": "open" }, "geometry": { "type": "Polygon", "coordinates": [[[-121.35, 38.7], [-121.05, 38.7], [-121.05, 38.98], [-121.35, 38.98], [-121.35, 38.7]]] } }] },
+    "routeCrossingNonBlmLandWarningCase": { "features": [{ "properties": { "id": "blm-private-warning", "accessType": "mapped access adjacent to non-BLM land", "status": "warning", "notes": "Crossing non-BLM land requires verification." }, "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] }
+  },
+  "nps": {
+    "parkAlert": { "data": [{ "id": "nps-info", "title": "Park Alert", "category": "Information", "description": "General park information.", "url": "https://nps.example.test/alerts/info" }] },
+    "roadClosureAlert": { "data": [{ "id": "nps-road-closure", "title": "Road Closure", "category": "Road Closure", "description": "Road closed due to rockfall.", "url": "https://nps.example.test/alerts/closure" }] },
+    "generalInformationalAlert": { "data": [{ "id": "nps-general", "title": "Visitor Notice", "category": "Information", "description": "Expect delays.", "url": "https://nps.example.test/alerts/general" }] }
+  },
+  "dot511": {
+    "activeRoadClosure": { "items": [{ "id": "dot-closure", "title": "Road closed", "status": "closed", "eventType": "closure", "updatedAt": "2026-04-29T16:00:00Z", "geometry": { "type": "LineString", "coordinates": [[-121.3, 38.75], [-121.1, 38.95]] } }] },
+    "chainControlRestriction": { "items": [{ "id": "dot-chain", "title": "Chain control", "status": "restricted", "eventType": "chain_control", "updatedAt": "2026-04-29T16:00:00Z" }] },
+    "detour": { "items": [{ "id": "dot-detour", "title": "Detour in place", "status": "detour", "eventType": "detour", "updatedAt": "2026-04-29T16:00:00Z" }] },
+    "expiredEvent": { "items": [{ "id": "dot-expired", "title": "Old closure", "status": "expired", "eventType": "closure", "updatedAt": "2026-04-20T16:00:00Z", "expiresAt": "2026-04-21T00:00:00Z" }] }
+  },
+  "manual": {
+    "manualClosureWithSourceUrl": { "items": [{ "id": "manual-closure", "title": "Manual closure", "recordType": "closure", "status": "closed", "sourceUrl": "https://agency.example.test/order", "expiresAt": "2026-05-01T00:00:00Z" }] },
+    "manualRestrictionWithExpiration": { "items": [{ "id": "manual-restriction", "title": "Manual restriction", "recordType": "restriction", "status": "restricted", "sourceUrl": "https://agency.example.test/restriction", "expiresAt": "2026-05-02T00:00:00Z" }] },
+    "manualRoadConditionReport": { "items": [{ "id": "manual-condition", "title": "Manual road condition", "recordType": "road_condition", "status": "rough but passable", "sourceUrl": "https://agency.example.test/condition" }] }
+  },
+  "community": {
+    "blockedRouteReport": { "id": "community-blocked", "status": "blocked by debris", "detail": "Community report says route is blocked.", "observedAt": "2026-04-29T16:00:00Z" },
+    "washoutReport": { "id": "community-washout", "status": "washed out", "detail": "Washout at creek crossing.", "observedAt": "2026-04-29T16:00:00Z" },
+    "gateClosedReport": { "id": "community-gate", "status": "gate closed", "detail": "Gate was closed at spur road.", "observedAt": "2026-04-29T16:00:00Z" },
+    "communityOpenConflictingWithOfficialClosure": { "id": "community-open-conflict", "status": "open and passable yesterday", "detail": "Conflicts with official closure.", "observedAt": "2026-04-29T16:00:00Z" }
+  }
+}

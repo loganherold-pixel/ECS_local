@@ -56,10 +56,17 @@ import {
 import type { ContainerZone, VerticalBias, LongitudinalBias, LateralBias } from './accessoryFramework';
 import { resolveZoneBias } from './accessoryFramework';
 import { matchStorageLocationToZone } from './containerZoneLoader';
+import {
+  FLEET_LOAD_ZONES,
+  type FleetLoadZone,
+  type FleetWeightResult,
+} from './fleet/fleetPremiumDomain';
 
 // ── Types ────────────────────────────────────────────────
 
 export interface WeightDashboardData {
+  vehicleType?: string | null;
+
   // Total weight
   totalVehicleWeight: number;       // base vehicle + hardware + loadout
   hardwareWeight: number;           // from vehicle config modules
@@ -86,6 +93,35 @@ export interface WeightDashboardData {
   rearAxleLoad: number;
   frontAxlePercent: number;
   rearAxlePercent: number;
+
+  // Real Fleet operating-weight metadata when sourced from the current Fleet model
+  operatingWeightMeta?: {
+    gvwrLb: number | null;
+    payloadRemainingLb: number | null;
+    gvwrUsagePct: number | null;
+    confidenceScore: number;
+    sourceLabels: string[];
+    partialDataReasons: string[];
+    warnings: string[];
+    centerOfGravity?: FleetDashboardCenterOfGravity;
+  };
+}
+
+export type FleetCenterOfGravityDataQuality =
+  | 'complete'
+  | 'partial'
+  | 'missing_item_weights'
+  | 'missing_zone_metadata';
+
+export interface FleetDashboardCenterOfGravity {
+  x: number;
+  y: number;
+  z: number;
+  totalKnownWeightLb: number;
+  dataQuality: FleetCenterOfGravityDataQuality;
+  warnings: string[];
+  missingWeightCount: number;
+  missingZoneMetadataCount: number;
 }
 
 export interface ZoneWarning {
@@ -146,6 +182,31 @@ const DEFAULT_DASHBOARD_ZONES = [
   { id: 'drawer', name: 'Drawers', zone_type: 'drawer' },
   { id: 'hitch', name: 'Hitch', zone_type: 'hitch' },
 ];
+
+const FRONT_AXLE_X = 0.22;
+const REAR_AXLE_X = 0.72;
+const WHEELBASE = REAR_AXLE_X - FRONT_AXLE_X;
+
+const FLEET_ZONE_POSITION: Record<FleetLoadZone, {
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  xIn: number;
+  zIn: number;
+  yIn?: number;
+  moduleZone: WeightModule['zone'];
+}> = {
+  frontLow: { label: 'Front Low', x: 0.26, y: 0.50, z: 0.20, xIn: 86, zIn: 20, moduleZone: 'front' },
+  rearLow: { label: 'Rear Low', x: 0.78, y: 0.50, z: 0.22, xIn: -16, zIn: 22, moduleZone: 'rear' },
+  bedLow: { label: 'Bed Low', x: 0.70, y: 0.50, z: 0.25, xIn: -4, zIn: 24, moduleZone: 'rear' },
+  bedHigh: { label: 'Bed High', x: 0.70, y: 0.50, z: 0.62, xIn: -4, zIn: 54, moduleZone: 'rear' },
+  roof: { label: 'Roof', x: 0.48, y: 0.50, z: 0.86, xIn: 42, zIn: 72, moduleZone: 'mid' },
+  cab: { label: 'Cab', x: 0.36, y: 0.50, z: 0.42, xIn: 76, zIn: 36, moduleZone: 'front' },
+  underbody: { label: 'Underbody', x: 0.50, y: 0.50, z: 0.16, xIn: 36, zIn: 16, moduleZone: 'mid' },
+  hitch: { label: 'Hitch', x: 0.94, y: 0.50, z: 0.22, xIn: -36, zIn: 22, moduleZone: 'rear' },
+  trailer: { label: 'Trailer', x: 0.98, y: 0.50, z: 0.32, xIn: -60, zIn: 32, moduleZone: 'rear' },
+};
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -262,6 +323,7 @@ function buildZoneWeightsFromContainerZones(
       zoneName: zone.label,
       weightLbs: zoneWeightMap[zone.id] || 0,
       posX: longitudinalBiasToX(bias.longitudinalBias),
+      posY: bias.lateralBias === 'left' ? 0.28 : bias.lateralBias === 'right' ? 0.72 : 0.5,
       posZ: verticalBiasToZ(bias.verticalBias),
     };
   });
@@ -435,6 +497,249 @@ export function computeWeightDashboard(
 }
 
 // ── Build zone weights from loadout items (legacy fallback) ──
+
+function clampUnit(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+function classifyFleetModuleIntensity(weightLbs: number): WeightModule['intensity'] {
+  if (weightLbs >= 500) return 'excessive';
+  if (weightLbs >= 150) return 'heavy';
+  if (weightLbs >= 50) return 'moderate';
+  return 'light';
+}
+
+function normalizedBaseXFromBaseline(baseline: VehicleBaseline): number {
+  if (baseline.wheelbaseIn <= 0) return 0.42;
+  return clampUnit(REAR_AXLE_X - (baseline.baseCgXIn / baseline.wheelbaseIn) * WHEELBASE, 0.42);
+}
+
+function normalizedBaseZFromBaseline(baseline: VehicleBaseline): number {
+  return clampUnit(baseline.baseCgHeightIn / 84, 0.25);
+}
+
+function buildFleetWeightModules(
+  weightResult: FleetWeightResult,
+  baseline: VehicleBaseline,
+): WeightModule[] {
+  const modules: WeightModule[] = [];
+  const baseWeight = Math.max(0, weightResult.baseNetWeight.lbs);
+
+  if (baseWeight > 0) {
+    modules.push({
+      id: 'base_vehicle',
+      label: weightResult.baseNetWeight.sourceLabel ?? 'Base vehicle',
+      mass: baseWeight,
+      x: normalizedBaseXFromBaseline(baseline),
+      y: 0.5,
+      z: normalizedBaseZFromBaseline(baseline),
+      zone: 'mid',
+      intensity: classifyFleetModuleIntensity(baseWeight),
+      source: 'hardware',
+    });
+  }
+
+  for (const zone of FLEET_LOAD_ZONES) {
+    const zoneResult = weightResult.zoneWeights[zone];
+    const totalWeight = Math.max(0, zoneResult.totalWeight.lbs);
+    if (totalWeight <= 0) continue;
+    const position = FLEET_ZONE_POSITION[zone];
+    modules.push({
+      id: `fleet_${zone}`,
+      label: position.label,
+      mass: totalWeight,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      zone: position.moduleZone,
+      intensity: classifyFleetModuleIntensity(totalWeight),
+      source: zoneResult.accessoryWeight.lbs > 0 && zoneResult.loadoutWeight.lbs <= 0 ? 'hardware' : 'loadout',
+    });
+  }
+
+  return modules;
+}
+
+function buildFleetStabilityModules(weightResult: FleetWeightResult): LoadModule[] {
+  return FLEET_LOAD_ZONES
+    .map((zone) => {
+      const zoneResult = weightResult.zoneWeights[zone];
+      const totalWeight = Math.max(0, zoneResult.totalWeight.lbs);
+      const position = FLEET_ZONE_POSITION[zone];
+      return {
+        zoneName: position.label,
+        weightLbs: totalWeight,
+        x: position.xIn,
+        y: position.yIn ?? 0,
+        z: position.zIn,
+      };
+    })
+    .filter((module) => module.weightLbs > 0);
+}
+
+function computeCgFromFleetModules(modules: WeightModule[]): CGResult {
+  const totalMass = modules.reduce((sum, module) => sum + Math.max(0, module.mass), 0);
+  if (totalMass <= 0) {
+    return {
+      xCG: 0.45,
+      yCG: 0.5,
+      zCG: 0.25,
+      totalMass: 0,
+      frontAxlePercent: 50,
+      rearAxlePercent: 50,
+      stability: 'balanced',
+      modules: [],
+    };
+  }
+
+  const xCG = modules.reduce((sum, module) => sum + module.mass * module.x, 0) / totalMass;
+  const yCG = modules.reduce((sum, module) => sum + module.mass * (module.y ?? 0.5), 0) / totalMass;
+  const zCG = modules.reduce((sum, module) => sum + module.mass * module.z, 0) / totalMass;
+  const rearLoadFraction = Math.max(0, Math.min(1, (xCG - FRONT_AXLE_X) / WHEELBASE));
+  const rearAxlePercent = Math.round(rearLoadFraction * 100);
+  const frontAxlePercent = Math.round((1 - rearLoadFraction) * 100);
+  const stability: CGResult['stability'] =
+    rearAxlePercent > 75 ? 'extreme_rear' :
+    rearAxlePercent > 65 ? 'moderate_rear' :
+    'balanced';
+
+  return {
+    xCG,
+    yCG,
+    zCG,
+    totalMass: Math.round(totalMass * 10) / 10,
+    frontAxlePercent,
+    rearAxlePercent,
+    stability,
+    modules: modules.filter((module) => module.id !== 'base_vehicle'),
+  };
+}
+
+function buildFleetZoneSummary(weightResult: FleetWeightResult): VehicleWeightSummary {
+  const zones: ZoneWeightSummary[] = FLEET_LOAD_ZONES.map((zone) => {
+    const zoneResult = weightResult.zoneWeights[zone];
+    const totalWeightLbs = Math.round(zoneResult.totalWeight.lbs * 10) / 10;
+    return {
+      zoneId: zone,
+      zoneName: FLEET_ZONE_POSITION[zone].label,
+      totalWeightLbs,
+      capacityLbs: 0,
+      itemCount: totalWeightLbs > 0 ? 1 : 0,
+      utilizationPct: 0,
+      isOverweight: false,
+      isWarning: false,
+    };
+  });
+
+  return {
+    totalLoadoutWeightLbs: Math.round(weightResult.activeLoadoutWeight.lbs * 10) / 10,
+    totalCapacityLbs: 0,
+    zones,
+    overweightZones: [],
+    warningZones: [],
+    itemsWithWeight: zones.filter((zone) => zone.totalWeightLbs > 0).length,
+    itemsWithoutWeight: 0,
+    totalItems: zones.filter((zone) => zone.totalWeightLbs > 0).length,
+  };
+}
+
+function buildFleetPartialDataReasons(weightResult: FleetWeightResult): string[] {
+  const reasons = [...weightResult.warnings];
+  if (weightResult.baseNetWeight.source === 'unknown' || weightResult.baseNetWeight.confidence <= 0) {
+    reasons.push('Base vehicle weight is unavailable.');
+  }
+  if (weightResult.gvwr == null) {
+    reasons.push('GVWR is unavailable, so payload margin cannot be confirmed.');
+  }
+  if (weightResult.baseNetWeight.source === 'ecs_default' || weightResult.baseNetWeight.confidence < 75) {
+    reasons.push('Base vehicle weight is estimated; verify with manufacturer data or a scale ticket.');
+  }
+  if (weightResult.installedAccessoryWeight.confidence < 75 && weightResult.installedAccessoryWeight.lbs > 0) {
+    reasons.push('Some installed accessory weights are estimated.');
+  }
+  if (weightResult.activeLoadoutWeight.confidence < 75 && weightResult.activeLoadoutWeight.lbs > 0) {
+    reasons.push('Some loadout item weights are estimated or user-entered.');
+  }
+  return Array.from(new Set(reasons));
+}
+
+export function computeWeightDashboardFromFleetWeightResult(
+  weightResult: FleetWeightResult,
+  vehicleBaseline?: VehicleBaseline,
+  centerOfGravity?: FleetDashboardCenterOfGravity,
+): WeightDashboardData {
+  const baseline = {
+    ...DEFAULT_VEHICLE_BASELINE,
+    ...(vehicleBaseline ?? {}),
+    curbWeightLbs: Math.max(0, vehicleBaseline?.curbWeightLbs ?? weightResult.baseNetWeight.lbs),
+  };
+  const modules = buildFleetWeightModules(weightResult, baseline);
+  const rawCgResult = computeCgFromFleetModules(modules);
+  const cgResult = centerOfGravity
+    ? {
+        ...rawCgResult,
+        xCG: centerOfGravity.x,
+        yCG: centerOfGravity.y,
+        zCG: centerOfGravity.z,
+        totalMass: centerOfGravity.totalKnownWeightLb || rawCgResult.totalMass,
+        frontAxlePercent: Math.round((1 - Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE))) * 100),
+        rearAxlePercent: Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100),
+        stability:
+          Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100) > 75
+            ? 'extreme_rear' as const
+            : Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100) > 65
+              ? 'moderate_rear' as const
+              : 'balanced' as const,
+      }
+    : rawCgResult;
+  const stability = computeStability(baseline, buildFleetStabilityModules(weightResult), 0);
+  const zoneSummary = buildFleetZoneSummary(weightResult);
+  const zoneWarnings = computeZoneWarnings(zoneSummary);
+  const totalVehicleWeight = weightResult.operatingWeight.lbs;
+  const frontAxleLoad = Math.round(totalVehicleWeight * (cgResult.frontAxlePercent / 100));
+  const rearAxleLoad = Math.round(totalVehicleWeight * (cgResult.rearAxlePercent / 100));
+  const sourceLabels = [
+    weightResult.baseNetWeight.sourceLabel,
+    weightResult.installedAccessoryWeight.sourceLabel,
+    weightResult.activeLoadoutWeight.sourceLabel,
+    weightResult.gvwr?.sourceLabel,
+  ].filter((label): label is string => Boolean(label));
+
+  return {
+    totalVehicleWeight,
+    hardwareWeight: weightResult.installedAccessoryWeight.lbs,
+    loadoutWeight: weightResult.activeLoadoutWeight.lbs,
+    baseVehicleWeight: weightResult.baseNetWeight.lbs,
+    cgResult,
+    stability,
+    zoneSummary,
+    zoneWarnings,
+    tiltRisk: computeTiltRisk(stability, cgResult),
+    frontAxleLoad,
+    rearAxleLoad,
+    frontAxlePercent: cgResult.frontAxlePercent,
+    rearAxlePercent: cgResult.rearAxlePercent,
+    operatingWeightMeta: {
+      gvwrLb: weightResult.gvwr?.lbs ?? null,
+      payloadRemainingLb: weightResult.payloadRemaining?.lbs ?? null,
+      gvwrUsagePct: weightResult.gvwrUsagePct,
+      confidenceScore: weightResult.confidence,
+      sourceLabels,
+      partialDataReasons: buildFleetPartialDataReasons(weightResult),
+      warnings: [...weightResult.warnings],
+      centerOfGravity: centerOfGravity ?? {
+        x: cgResult.xCG,
+        y: cgResult.yCG ?? 0.5,
+        z: cgResult.zCG,
+        totalKnownWeightLb: cgResult.totalMass,
+        dataQuality: weightResult.confidence >= 75 ? 'partial' : 'missing_item_weights',
+        warnings: [...weightResult.warnings],
+        missingWeightCount: 0,
+        missingZoneMetadataCount: 0,
+      },
+    },
+  };
+}
 
 function buildZoneWeightsFromItems(
   items: { storage_location: string | null; weight_lbs: number | null; quantity: number }[],
@@ -610,7 +915,8 @@ function computeSnapshot(
     : buildZoneWeightsFromItems(items, zones);
   const cgResult = calculateCG(wizardSelections, zoneWeightsForCG);
   const loadoutWeight = items.reduce((sum, item) => sum + computeItemWeight(item), 0);
-  const totalWeight = DEFAULT_VEHICLE_BASELINE.curbWeightLbs + cgResult.totalMass - 6500 + loadoutWeight;
+  const hardwareAndLoadoutWeight = Math.max(0, cgResult.totalMass - 6500);
+  const totalWeight = DEFAULT_VEHICLE_BASELINE.curbWeightLbs + hardwareAndLoadoutWeight;
 
   const zoneWeights: Record<string, number> = {};
 

@@ -1346,60 +1346,45 @@ export function AlertIcon({ color, size = 24 }: IconProps) {
 
 
 // ═══════════════════════════════════════════════════════════════
-// DISCOVER — Mountain Peak with Trail Path
+// DISCOVER — Three Mountain Peaks
 // ═══════════════════════════════════════════════════════════════
-// Dual mountain summits with winding expedition trail path.
-// Represents expedition opportunity exploration and terrain discovery.
+// Clean monoline mountain mark for compact dashboard/tab usage.
+// Represents expedition terrain without skewed filled geometry.
 
 export function DiscoverIcon({ color, size = 24 }: IconProps) {
   const s = size;
-  const st = STROKE;
-  const c = s / 2;
+  const st = Math.max(size * 0.09, 1.1);
 
   // ── Web: SVG rendering ──────────────────────────────────
   if (Platform.OS === 'web') {
-    const sw = 2.0;
+    const sw = Math.max(size * 0.085, 1.55);
     const elements = [
-      // Primary mountain peak (taller, left-center)
+      // Rear left peak
       svgPath(
-        'M 3.5,18 L 10,5.5 L 16.5,18',
+        'M 2.5,18 L 7,11 L 11.5,18',
         color,
-        { strokeWidth: sw, key: 'peak1', strokeLinejoin: 'miter' }
+        { strokeWidth: sw * 0.78, opacity: 0.55, key: 'peak-left', strokeLinejoin: 'miter' }
       ),
-      // Snow cap on primary peak
+      // Main peak
       svgPath(
-        'M 8,9.5 L 10,5.5 L 12,9.5',
+        'M 7,18 L 12,6 L 17,18',
         color,
-        { strokeWidth: sw * 0.5, opacity: 0.4, key: 'snow1', strokeLinejoin: 'miter' }
+        { strokeWidth: sw, key: 'peak-main', strokeLinejoin: 'miter' }
       ),
-      // Secondary mountain peak (shorter, right)
+      // Rear right peak
       svgPath(
-        'M 12,18 L 17,9 L 22,18',
+        'M 13.5,18 L 18,10 L 22,18',
         color,
-        { strokeWidth: sw * 0.85, opacity: 0.55, key: 'peak2', strokeLinejoin: 'miter' }
+        { strokeWidth: sw * 0.78, opacity: 0.62, key: 'peak-right', strokeLinejoin: 'miter' }
       ),
-      // Snow cap on secondary peak
+      // Small main-peak facet for a more readable mountain silhouette.
       svgPath(
-        'M 15.5,12 L 17,9 L 18.5,12',
+        'M 10.2,10.4 L 12,6 L 13.8,10.4',
         color,
-        { strokeWidth: sw * 0.4, opacity: 0.3, key: 'snow2', strokeLinejoin: 'miter' }
+        { strokeWidth: sw * 0.45, opacity: 0.45, key: 'facet-main', strokeLinejoin: 'miter' }
       ),
-      // Horizon / ground line
-      svgLine(1, 18, 23, 18, color, { strokeWidth: sw * 0.5, opacity: 0.3, key: 'horizon' }),
-      // Winding trail path — from bottom-left curving toward mountains
-      svgPath(
-        'M 1.5,22 C 3,20 5,19.5 7,20 C 9,20.5 10,19 11.5,18.5',
-        color,
-        { strokeWidth: sw * 0.7, opacity: 0.5, key: 'trail1', strokeLinecap: 'round' }
-      ),
-      // Trail continuation (fainter, further away)
-      svgPath(
-        'M 11.5,18.5 C 12.5,18 13,17 13.5,16',
-        color,
-        { strokeWidth: sw * 0.5, opacity: 0.3, key: 'trail2', strokeLinecap: 'round' }
-      ),
-      // Trail marker dot at start
-      svgCircle(1.5, 22, 0.9, color, { fill: color, strokeWidth: 0, opacity: 0.5, key: 'marker' }),
+      // Ground line
+      svgLine(2, 18, 22, 18, color, { strokeWidth: sw * 0.45, opacity: 0.26, key: 'ground' }),
     ];
 
     return (
@@ -1410,116 +1395,51 @@ export function DiscoverIcon({ color, size = 24 }: IconProps) {
   }
 
   // ── Native: View-based rendering ────────────────────────
+  const line = (
+    key: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    opacity = 1,
+    width = st,
+  ) => {
+    const scale = s / 24;
+    const left = x1 * scale;
+    const top = y1 * scale;
+    const dx = (x2 - x1) * scale;
+    const dy = (y2 - y1) * scale;
+    const length = Math.hypot(dx, dy);
+    const angle = `${Math.atan2(dy, dx)}rad`;
+
+    return (
+      <View
+        key={key}
+        style={{
+          position: 'absolute',
+          left: left + dx / 2 - length / 2,
+          top: top + dy / 2 - width / 2,
+          width: length,
+          height: width,
+          backgroundColor: color,
+          opacity,
+          transform: [{ rotate: angle }],
+        }}
+      />
+    );
+  };
+
   return (
-    <View style={{ width: s, height: s, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Horizon / ground line */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.22,
-        left: s * 0.02,
-        right: s * 0.02,
-        height: st * 0.5,
-        backgroundColor: color,
-        opacity: 0.3,
-      }} />
-      {/* Primary mountain peak (taller, left-center) — semi-transparent fill */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.22,
-        left: s * 0.10,
-        width: 0,
-        height: 0,
-        borderLeftWidth: s * 0.28,
-        borderRightWidth: s * 0.28,
-        borderBottomWidth: s * 0.54,
-        borderLeftColor: 'transparent',
-        borderRightColor: 'transparent',
-        borderBottomColor: color,
-        opacity: 0.5,
-        transform: [{ rotate: '180deg' }],
-      }} />
-      {/* Snow cap line on primary peak */}
-      <View style={{
-        position: 'absolute',
-        top: s * 0.18,
-        left: s * 0.32,
-        width: s * 0.18,
-        height: st * 0.5,
-        backgroundColor: color,
-        opacity: 0.4,
-      }} />
-      {/* Secondary mountain peak (shorter, right) — semi-transparent fill */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.22,
-        right: s * 0.04,
-        width: 0,
-        height: 0,
-        borderLeftWidth: s * 0.22,
-        borderRightWidth: s * 0.22,
-        borderBottomWidth: s * 0.38,
-        borderLeftColor: 'transparent',
-        borderRightColor: 'transparent',
-        borderBottomColor: color,
-        opacity: 0.35,
-        transform: [{ rotate: '180deg' }],
-      }} />
-      {/* Trail path — winding line segments */}
-      {/* Trail segment 1 (bottom-left) */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.06,
-        left: s * 0.04,
-        width: s * 0.18,
-        height: st * 0.6,
-        backgroundColor: color,
-        opacity: 0.5,
-        transform: [{ rotate: '-8deg' }],
-      }} />
-      {/* Trail segment 2 (curving right) */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.10,
-        left: s * 0.18,
-        width: s * 0.16,
-        height: st * 0.6,
-        backgroundColor: color,
-        opacity: 0.45,
-        transform: [{ rotate: '12deg' }],
-      }} />
-      {/* Trail segment 3 (approaching mountains) */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.14,
-        left: s * 0.32,
-        width: s * 0.14,
-        height: st * 0.5,
-        backgroundColor: color,
-        opacity: 0.35,
-        transform: [{ rotate: '-15deg' }],
-      }} />
-      {/* Trail segment 4 (fading into distance) */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.20,
-        left: s * 0.42,
-        width: s * 0.08,
-        height: st * 0.4,
-        backgroundColor: color,
-        opacity: 0.25,
-        transform: [{ rotate: '-25deg' }],
-      }} />
-      {/* Trail marker dot */}
-      <View style={{
-        position: 'absolute',
-        bottom: s * 0.04,
-        left: s * 0.04,
-        width: s * 0.06,
-        height: s * 0.06,
-        backgroundColor: color,
-        borderRadius: s * 0.03,
-        opacity: 0.5,
-      }} />
+    <View style={{ width: s, height: s }}>
+      {line('native-left-a', 2.5, 18, 7, 11, 0.55, st * 0.8)}
+      {line('native-left-b', 7, 11, 11.5, 18, 0.55, st * 0.8)}
+      {line('native-main-a', 7, 18, 12, 6, 1)}
+      {line('native-main-b', 12, 6, 17, 18, 1)}
+      {line('native-right-a', 13.5, 18, 18, 10, 0.62, st * 0.8)}
+      {line('native-right-b', 18, 10, 22, 18, 0.62, st * 0.8)}
+      {line('native-facet-a', 10.2, 10.4, 12, 6, 0.45, st * 0.5)}
+      {line('native-facet-b', 12, 6, 13.8, 10.4, 0.45, st * 0.5)}
+      {line('native-ground', 2, 18, 22, 18, 0.26, st * 0.45)}
     </View>
   );
 }

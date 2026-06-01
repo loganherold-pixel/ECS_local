@@ -30,6 +30,12 @@ import { EMPTY_CAPABILITIES, VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
 
 const TAG = '[VT-DeviceRegistry]';
 
+function logVehicleTelemetryRegistryDev(...args: unknown[]) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(...args);
+  }
+}
+
 /** Devices not seen in 30 days are considered stale */
 const STALE_DEVICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -70,7 +76,7 @@ function sRemove(key: string): void {
 class VehicleTelemetryDeviceRegistry {
   private devices: VehicleTelemetryDevice[] = [];
   private primaryDeviceId: string | null = null;
-  private listeners: Array<() => void> = [];
+  private listeners: (() => void)[] = [];
 
   constructor() {
     this.restore();
@@ -104,15 +110,15 @@ class VehicleTelemetryDeviceRegistry {
         });
         const removed = before - this.devices.length;
         if (removed > 0) {
-          console.log(TAG, `Pruned ${removed} stale device(s)`);
+          logVehicleTelemetryRegistryDev(TAG, `Pruned ${removed} stale device(s)`);
         }
 
-        console.log(TAG, `Restored ${this.devices.length} device(s)`);
+      logVehicleTelemetryRegistryDev(TAG, `Restored ${this.devices.length} device(s)`);
       }
       const primaryId = sGet(VT_STORAGE_KEYS.PRIMARY_DEVICE);
       if (primaryId) {
         this.primaryDeviceId = primaryId;
-        console.log(TAG, `Restored primary device: ${primaryId}`);
+        logVehicleTelemetryRegistryDev(TAG, `Restored primary device: ${primaryId}`);
       }
     } catch (e) {
       console.warn(TAG, 'Failed to restore devices:', e);
@@ -164,7 +170,7 @@ class VehicleTelemetryDeviceRegistry {
       existing.capabilities = { ...existing.capabilities, ...device.capabilities };
       existing.firmware_version = device.firmware_version || existing.firmware_version;
       existing.protocol = device.protocol || existing.protocol;
-      console.log(TAG, `Merged device: ${device.device_id} (${device.device_name})`);
+      logVehicleTelemetryRegistryDev(TAG, `Merged device: ${device.device_id} (${device.device_name})`);
       this.persist();
       this.notify();
       return existing;
@@ -177,7 +183,7 @@ class VehicleTelemetryDeviceRegistry {
     };
 
     this.devices.push(newDevice);
-    console.log(TAG, `Registered device: ${device.device_id} (${device.device_name})`);
+    logVehicleTelemetryRegistryDev(TAG, `Registered device: ${device.device_id} (${device.device_name})`);
 
     // Auto-assign primary if this is the only device
     if (this.devices.length === 1) {
@@ -198,7 +204,7 @@ class VehicleTelemetryDeviceRegistry {
 
     const removed = this.devices[idx];
     this.devices.splice(idx, 1);
-    console.log(TAG, `Removed device: ${deviceId}`);
+      logVehicleTelemetryRegistryDev(TAG, `Removed device: ${deviceId}`);
 
     // If the removed device was primary, find a fallback
     if (removed.is_primary || this.primaryDeviceId === deviceId) {
@@ -219,7 +225,7 @@ class VehicleTelemetryDeviceRegistry {
     const removed = before - this.devices.length;
 
     if (removed > 0) {
-      console.log(TAG, `Cleared ${removed} device(s) for provider: ${provider}`);
+    logVehicleTelemetryRegistryDev(TAG, `Cleared ${removed} device(s) for provider: ${provider}`);
 
       // Check if primary was among cleared devices
       if (this.primaryDeviceId && !this.devices.find(d => d.device_id === this.primaryDeviceId)) {
@@ -238,7 +244,7 @@ class VehicleTelemetryDeviceRegistry {
   clearAll(): void {
     this.devices = [];
     this.primaryDeviceId = null;
-    console.log(TAG, 'Cleared all devices');
+    logVehicleTelemetryRegistryDev(TAG, 'Cleared all devices');
     this.persist();
     this.notify();
   }
@@ -260,7 +266,7 @@ class VehicleTelemetryDeviceRegistry {
 
     device.is_primary = true;
     this.primaryDeviceId = deviceId;
-    console.log(TAG, `Primary device set: ${deviceId} (${device.device_name})`);
+    logVehicleTelemetryRegistryDev(TAG, `Primary device set: ${deviceId} (${device.device_name})`);
 
     this.persist();
     this.notify();
@@ -324,7 +330,7 @@ class VehicleTelemetryDeviceRegistry {
 
     if (sorted.length > 0) {
       this.setPrimary(sorted[0].device_id);
-      console.log(TAG, `Fallback primary: ${sorted[0].device_id} (${sorted[0].device_name})`);
+      logVehicleTelemetryRegistryDev(TAG, `Fallback primary: ${sorted[0].device_id} (${sorted[0].device_name})`);
       return sorted[0];
     }
 
@@ -343,10 +349,10 @@ class VehicleTelemetryDeviceRegistry {
       const device = this.devices.find(d => d.device_id === this.primaryDeviceId);
       if (device) {
         device.is_primary = true;
-        console.log(TAG, `Restored primary: ${device.device_id} (${device.device_name})`);
+          logVehicleTelemetryRegistryDev(TAG, `Restored primary: ${device.device_id} (${device.device_name})`);
         return device;
       }
-      console.log(TAG, `Previous primary ${this.primaryDeviceId} no longer exists — finding fallback`);
+      logVehicleTelemetryRegistryDev(TAG, `Previous primary ${this.primaryDeviceId} no longer exists — finding fallback`);
     }
     return this.findFallbackPrimary();
   }
@@ -478,7 +484,7 @@ class VehicleTelemetryDeviceRegistry {
     const removed = before - this.devices.length;
 
     if (removed > 0) {
-      console.log(TAG, `Pruned ${removed} stale device(s)`);
+      logVehicleTelemetryRegistryDev(TAG, `Pruned ${removed} stale device(s)`);
 
       // Check if primary was pruned
       if (this.primaryDeviceId && !this.devices.find(d => d.device_id === this.primaryDeviceId)) {

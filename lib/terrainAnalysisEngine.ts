@@ -89,6 +89,12 @@ export interface TerrainIntelligence {
   totalSegments: number;
   /** Whether elevation data was available */
   hasElevation: boolean;
+  /** Segments that carried usable elevation metrics into terrain analysis */
+  elevationCoverageSegments: number;
+  /** Minimum segments with elevation required for warning detection */
+  elevationCoverageRequired: number;
+  /** Why terrain warning detection was skipped, if it was skipped */
+  warningDetectionSkippedReason: string | null;
 
   /** Overall terrain risk level */
   overallRisk: 'LOW' | 'MODERATE' | 'HIGH' | 'SEVERE';
@@ -228,8 +234,14 @@ export function analyzeTerrain(routeIntelligence: RouteIntelligence): TerrainInt
       segmentsWithElevation++;
     }
   }
+  const requiredElevationSegments = Math.min(2, segments.length);
   const hasUsableElevation = routeIntelligence.hasElevation && segmentsWithElevation > 0;
-  const elevationDataSufficient = segmentsWithElevation >= Math.min(2, segments.length);
+  const elevationDataSufficient = segmentsWithElevation >= requiredElevationSegments;
+  const warningDetectionSkippedReason = hasUsableElevation && elevationDataSufficient
+    ? null
+    : !routeIntelligence.hasElevation
+      ? 'route intelligence did not include elevation-backed samples'
+      : `only ${segmentsWithElevation} of ${segments.length} segments carried usable elevation metrics`;
 
   const warnings: TerrainWarning[] = [];
   const segmentHighlights: SegmentHighlight[] = [];
@@ -371,7 +383,13 @@ export function analyzeTerrain(routeIntelligence: RouteIntelligence): TerrainInt
       }
     }
   } else {
-    console.log(TAG, 'Insufficient elevation data — skipping terrain warning detection');
+    console.warn(TAG, 'Terrain warning detection skipped', {
+      routeName: routeIntelligence.routeName,
+      segmentsWithElevation,
+      totalSegments: segments.length,
+      requiredElevationSegments,
+      reason: warningDetectionSkippedReason,
+    });
   }
 
   // ── Compute elevation stats from segments ──
@@ -432,19 +450,30 @@ export function analyzeTerrain(routeIntelligence: RouteIntelligence): TerrainInt
     totalElevationGainFeet,
     terrainWarnings: warnings,
     totalSegments: segments.length,
-    hasElevation: routeIntelligence.hasElevation,
+    hasElevation: hasUsableElevation,
+    elevationCoverageSegments: segmentsWithElevation,
+    elevationCoverageRequired: requiredElevationSegments,
+    warningDetectionSkippedReason,
     overallRisk,
     analyzedAt: now,
     segmentHighlights,
   };
 
-  console.log(
-    TAG,
-    `Analysis complete: ${routeIntelligence.routeName}`,
-    `— ${steepSegments} steep, ${highElevationSegments} high-ele, ${mountainPassCount} passes,`,
-    `risk=${overallRisk}, ${warnings.length} warnings`,
-    hasUsableElevation ? '' : '(elevation data insufficient)',
-  );
+  if (warningDetectionSkippedReason) {
+    console.warn(TAG, 'Analysis completed without elevation-backed terrain warnings', {
+      routeName: routeIntelligence.routeName,
+      reason: warningDetectionSkippedReason,
+      segmentsWithElevation,
+      totalSegments: segments.length,
+    });
+  } else {
+    console.log(
+      TAG,
+      `Analysis complete: ${routeIntelligence.routeName}`,
+      `— ${steepSegments} steep, ${highElevationSegments} high-ele, ${mountainPassCount} passes,`,
+      `risk=${overallRisk}, ${warnings.length} warnings`,
+    );
+  }
 
   return result;
 }
@@ -518,7 +547,10 @@ function createEmptyIntelligence(
     totalElevationGainFeet: routeIntelligence.elevationGainFeet || 0,
     terrainWarnings: [],
     totalSegments: 0,
-    hasElevation: routeIntelligence.hasElevation,
+    hasElevation: false,
+    elevationCoverageSegments: 0,
+    elevationCoverageRequired: 0,
+    warningDetectionSkippedReason: 'no route segments available for terrain analysis',
     overallRisk: 'LOW',
     analyzedAt,
     segmentHighlights: [],
@@ -545,6 +577,9 @@ function createSafeDefaultIntelligence(analyzedAt: string): TerrainIntelligence 
     terrainWarnings: [],
     totalSegments: 0,
     hasElevation: false,
+    elevationCoverageSegments: 0,
+    elevationCoverageRequired: 0,
+    warningDetectionSkippedReason: 'route intelligence was unavailable',
     overallRisk: 'LOW',
     analyzedAt,
     segmentHighlights: [],

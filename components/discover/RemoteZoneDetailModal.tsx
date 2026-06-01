@@ -14,10 +14,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Modal,
-  Platform,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import TacticalPopupShell from '../TacticalPopupShell';
 import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
 import {
@@ -108,28 +107,19 @@ export default function RemoteZoneDetailModal({
   const diffColor = diffRating ? getDifficultyColor(diffRating) : TACTICAL.textMuted;
 
   return (
-    <Modal
+    <TacticalPopupShell
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      transparent={false}
-      onRequestClose={onClose}
+      onClose={onClose}
+      icon="location-outline"
+      eyebrow="REMOTE ZONE ANALYSIS"
+      title={zone.name}
+      subtitle={zone.region}
+      overlayClass="info"
+      maxWidth={940}
+      maxHeightFraction={0.88}
+      minHeightFraction={0.72}
+      scrollable={false}
     >
-      <View style={s.modalContainer}>
-        {/* Header */}
-        <View style={s.modalHeader}>
-          <View style={s.modalHeaderLeft}>
-            <Text style={s.modalHeaderLabel}>REMOTE ZONE ANALYSIS</Text>
-            <Text style={s.modalHeaderName}>{zone.name}</Text>
-          </View>
-          <TouchableOpacity style={s.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Ionicons name="close" size={18} color={ECS.text} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Gold rail */}
-        <View style={s.goldRail} />
-
         <ScrollView
           style={s.scrollArea}
           contentContainerStyle={s.scrollContent}
@@ -382,63 +372,15 @@ export default function RemoteZoneDetailModal({
 
           <View style={{ height: 30 }} />
         </ScrollView>
-      </View>
-    </Modal>
+    </TacticalPopupShell>
   );
 }
 
 // ============================================================
 // STYLES
 // ============================================================
-const TOP_PAD = Platform.OS === 'web' ? 16 : 54;
-
 const s = StyleSheet.create({
-  modalContainer: {
-    flex: 1,
-    backgroundColor: ECS.bgPrimary,
-  },
-
   // ── Header ────────────────────────────────────────────
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: TOP_PAD,
-    paddingBottom: 12,
-  },
-  modalHeaderLeft: {
-    flex: 1,
-  },
-  modalHeaderLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 2.5,
-  },
-  modalHeaderName: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: TACTICAL.amber,
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: ECS.bgElev,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  goldRail: {
-    height: GOLD_RAIL.sectionWidth,
-    backgroundColor: GOLD_RAIL.section,
-  },
-
   // ── Scroll ────────────────────────────────────────────
   scrollArea: { flex: 1 },
   scrollContent: { padding: 16 },

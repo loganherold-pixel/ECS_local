@@ -27,6 +27,15 @@ import type {
 } from './rigCompatibilityEngine';
 
 const TAG = '[RIG-UPGRADE]';
+const DEBUG_RIG_UPGRADES =
+  __DEV__ &&
+  ((globalThis as typeof globalThis & { __ECS_DEBUG_RIG_UPGRADES__?: boolean })
+    .__ECS_DEBUG_RIG_UPGRADES__ === true);
+
+function debugRigUpgrade(message: string): void {
+  if (!DEBUG_RIG_UPGRADES) return;
+  console.log(TAG, message);
+}
 
 // ── Upgrade Types ───────────────────────────────────────────
 export type UpgradeType =
@@ -90,9 +99,8 @@ export function generateUpgradeSuggestions(
   expedition: CompatibilityExpedition,
   compatResult: CompatibilityResult,
 ): UpgradeSuggestion[] {
-  // Don't suggest upgrades if compatibility is already high
   if (compatResult.score >= UPGRADE_THRESHOLD) {
-    console.log(TAG, `${expedition.name}: score ${compatResult.score}% >= ${UPGRADE_THRESHOLD}% — no upgrades needed`);
+    debugRigUpgrade(`${expedition.name}: score ${compatResult.score}% >= ${UPGRADE_THRESHOLD}% - no upgrades needed`);
     return [];
   }
 
@@ -137,8 +145,7 @@ export function generateUpgradeSuggestions(
   const topSuggestions = suggestions.slice(0, MAX_SUGGESTIONS);
 
   if (topSuggestions.length > 0) {
-    console.log(
-      TAG,
+    debugRigUpgrade(
       `${expedition.name}: ${topSuggestions.length} upgrade suggestion(s) — ` +
       topSuggestions.map(s => `${s.label} (+${s.improvementPoints}pts)`).join(', ')
     );

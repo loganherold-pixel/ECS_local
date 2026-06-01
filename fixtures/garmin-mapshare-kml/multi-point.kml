@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Garmin MapShare Multi</name>
+    <Placemark>
+      <name>Trailhead</name>
+      <TimeStamp><when>2026-04-29T17:00:00Z</when></TimeStamp>
+      <Point><coordinates>-119.5300,37.8600,1180</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Camp</name>
+      <description>Camp reached.</description>
+      <TimeStamp><when>2026-04-29T18:30:00Z</when></TimeStamp>
+      <Point><coordinates>-119.5383,37.8651,1220</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>

@@ -1,0 +1,21 @@
+{
+  "id": "nps-cg-1001",
+  "parkCode": "yose",
+  "name": "North Pines Campground",
+  "latitude": "37.7442",
+  "longitude": "-119.5657",
+  "url": "https://www.nps.gov/yose/planyourvisit/northpines.htm",
+  "description": "Campground with drinking water, restrooms, picnic tables, and fire rings.",
+  "reservationUrl": "https://www.recreation.gov/camping/campgrounds/232449",
+  "campsites": {
+    "totalSites": "81",
+    "tentOnly": "0",
+    "rvOnly": "0"
+  },
+  "amenities": {
+    "potableWater": true,
+    "toilets": true,
+    "showers": false,
+    "cellPhoneReception": "No"
+  }
+}

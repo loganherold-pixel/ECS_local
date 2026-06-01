@@ -90,7 +90,7 @@ export default function ShieldCommandButton() {
 
     if (!longPressTriggered.current) {
       // Single tap → navigate to Dashboard
-      router.push('/(tabs)/dashboard');
+      router.push('/dashboard');
     }
   }, [router, animateRelease]);
 

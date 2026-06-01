@@ -15,7 +15,7 @@
  * Uses useSheetLayout for responsive height + safe-area padding.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -49,7 +49,7 @@ interface EcoFlowDevice {
 interface Props {
   visible: boolean;
   onClose: () => void;
-  onDeviceSelected: (deviceId: string) => void;
+  onDeviceSelected: (deviceId: string) => void | Promise<void>;
 }
 
 // ── Component ───────────────────────────────────────────────────────────
@@ -59,7 +59,12 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activatingId, setActivatingId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const fetchDevicesRef = useRef<() => Promise<void> | void>(() => {});
+  const handleSelectRef = useRef<(deviceId: string) => Promise<void> | void>(() => {});
+  const selectedIdRef = useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
 
   // ── Safe sheet layout for responsive height + safe-area padding ──
   const { sheetMaxHeight, contentBottomPadding, safeBottom } = useSheetLayout({
@@ -73,7 +78,7 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
     if (visible) {
       const persisted = getSelectedEcoFlowDevice();
       setSelectedId(persisted);
-      fetchDevices();
+      fetchDevicesRef.current();
     }
     return () => { mountedRef.current = false; };
   }, [visible]);
@@ -122,12 +127,19 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
         online: d.online ?? false,
       }));
 
-      setDevices(mapped);
+      const sorted = [...mapped].sort((a, b) => {
+        if (a.id === selectedIdRef.current) return -1;
+        if (b.id === selectedIdRef.current) return 1;
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      setDevices(sorted);
       setLoading(false);
 
       // Auto-select if only one device
-      if (mapped.length === 1 && !selectedId) {
-        handleSelect(mapped[0].id);
+      if (sorted.length === 1 && !selectedIdRef.current) {
+        void handleSelectRef.current(sorted[0].id);
       }
     } catch (err: any) {
       if (!mountedRef.current) return;
@@ -137,12 +149,35 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
   }, []);
 
 
-  const handleSelect = useCallback((deviceId: string) => {
-    setSelectedId(deviceId);
-    setSelectedEcoFlowDevice(deviceId);
-    onDeviceSelected(deviceId);
-    onClose();
-  }, [onDeviceSelected, onClose]);
+  const handleSelect = useCallback(async (deviceId: string) => {
+    if (activatingId === deviceId) return;
+
+    setActivatingId(deviceId);
+    setError(null);
+
+    try {
+      setSelectedId(deviceId);
+      setSelectedEcoFlowDevice(deviceId);
+      await Promise.resolve(onDeviceSelected(deviceId));
+
+      if (!mountedRef.current) return;
+      onClose();
+    } catch (err: any) {
+      if (!mountedRef.current) return;
+      setError(err?.message || 'Failed to activate EcoFlow device.');
+    } finally {
+      if (mountedRef.current) {
+        setActivatingId(null);
+      }
+    }
+  }, [activatingId, onDeviceSelected, onClose]);
+  fetchDevicesRef.current = fetchDevices;
+  handleSelectRef.current = handleSelect;
+
+  const selectedDevice = useMemo(
+    () => devices.find((d) => d.id === selectedId) || null,
+    [devices, selectedId],
+  );
 
   return (
     <Modal
@@ -217,10 +252,11 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
             {!loading && !error && devices.length > 0 && (
               <>
                 <Text style={s.hint}>
-                  Tap a device to connect it for live telemetry.
+                  Select the EcoFlow device ECS should treat as the primary live power source.
                 </Text>
                 {devices.map((device) => {
                   const isSelected = selectedId === device.id;
+                  const isActivating = activatingId === device.id;
                   const onlineColor = device.online ? '#34C759' : ECS.muted;
                   return (
                     <TouchableOpacity
@@ -228,9 +264,11 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
                       style={[
                         s.deviceCard,
                         isSelected && s.deviceCardSelected,
+                        isActivating && s.deviceCardActivating,
                       ]}
-                      onPress={() => handleSelect(device.id)}
+                      onPress={() => void handleSelect(device.id)}
                       activeOpacity={0.7}
+                      disabled={!!activatingId}
                     >
                       {/* Radio indicator */}
                       <View
@@ -269,12 +307,21 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
                         </Text>
                       </View>
 
-                      {/* Online badge */}
-                      <View style={[s.onlineBadge, { borderColor: onlineColor + '40' }]}>
-                        <View style={[s.onlineDot, { backgroundColor: onlineColor }]} />
-                        <Text style={[s.onlineText, { color: onlineColor }]}>
-                          {device.online ? 'ON' : 'OFF'}
-                        </Text>
+                      {/* Online / activation badge */}
+                      <View style={s.deviceStatusCol}>
+                        {isActivating ? (
+                          <View style={[s.activatingBadge, { borderColor: ECS.accent + '40' }]}>
+                            <ActivityIndicator size="small" color={ECS.accent} />
+                            <Text style={s.activatingText}>ACTIVATING</Text>
+                          </View>
+                        ) : (
+                          <View style={[s.onlineBadge, { borderColor: onlineColor + '40' }]}>
+                            <View style={[s.onlineDot, { backgroundColor: onlineColor }]} />
+                            <Text style={[s.onlineText, { color: onlineColor }]}>
+                              {device.online ? 'ON' : 'OFF'}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     </TouchableOpacity>
                   );
@@ -286,16 +333,19 @@ export default function EcoFlowPickerModal({ visible, onClose, onDeviceSelected 
           {/* ── Footer ──────────────────────────────────────── */}
           <View style={[s.footer, { paddingBottom: 10 + safeBottom }]}>
             <Text style={s.footerHint}>
-              {selectedId
-                ? `Selected: ${devices.find(d => d.id === selectedId)?.name || selectedId}`
-                : 'No device selected'}
+              {activatingId
+                ? `Activating ${devices.find(d => d.id === activatingId)?.name || activatingId}…`
+                : selectedDevice
+                  ? `Primary device: ${selectedDevice.name}`
+                  : 'No device selected'}
             </Text>
             <TouchableOpacity
-              style={s.cancelBtn}
+              style={[s.cancelBtn, activatingId ? s.cancelBtnDisabled : null]}
               onPress={onClose}
               activeOpacity={0.7}
+              disabled={!!activatingId}
             >
-              <Text style={s.cancelText}>CLOSE</Text>
+              <Text style={s.cancelText}>{activatingId ? 'WAIT…' : 'CLOSE'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -454,6 +504,10 @@ const s = StyleSheet.create({
     borderColor: ECS.accent + '50',
     backgroundColor: ECS.accent + '08',
   },
+  deviceCardActivating: {
+    borderColor: ECS.accent + '65',
+    backgroundColor: ECS.accent + '12',
+  },
 
   // Radio
   radio: {
@@ -491,6 +545,11 @@ const s = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  deviceStatusCol: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
   deviceName: {
     fontSize: 13,
     fontWeight: '700',
@@ -524,6 +583,22 @@ const s = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1.5,
   },
+  activatingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    backgroundColor: ECS.accent + '10',
+  },
+  activatingText: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    color: ECS.accent,
+  },
 
   // Footer
   footer: {
@@ -549,6 +624,9 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: ECS.stroke,
   },
+  cancelBtnDisabled: {
+    opacity: 0.45,
+  },
   cancelText: {
     fontSize: 9,
     fontWeight: '700',
@@ -556,6 +634,3 @@ const s = StyleSheet.create({
     color: ECS.muted,
   },
 });
-
-
-

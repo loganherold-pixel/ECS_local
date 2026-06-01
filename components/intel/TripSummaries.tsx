@@ -286,7 +286,7 @@ function SummaryTile({ label, value, valueColor }: { label: string; value: strin
 }
 const styles = StyleSheet.create({
   scrollWrap: { flex: 1 },
-  section: { gap: 10, padding: 16, paddingTop: 20, paddingBottom: 30 },
+  section: { gap: 10, padding: 16, paddingTop: 10, paddingBottom: 30 },
 
 
 
@@ -294,7 +294,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 2,
+    marginBottom: 0,
   },
   sectionHeaderLeft: {
     flexDirection: 'row',

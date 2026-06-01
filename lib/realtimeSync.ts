@@ -18,6 +18,8 @@
 
 import { Platform } from 'react-native';
 import { supabase, isSupabaseConfigured } from './supabase';
+import { connectivity, type ConnectivityStatus } from './connectivity';
+import { ecsLog } from './ecsLogger';
 import {
   tripStore,
   riskScoreStore,
@@ -46,10 +48,29 @@ export interface RealtimeEvent {
   conflictDetected: boolean;
 }
 
-export type RealtimeStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type RealtimeStatus =
+  | 'idle'
+  | 'connecting'
+  | 'subscribed'
+  | 'timed_out'
+  | 'retrying'
+  | 'degraded'
+  | 'offline_available';
 
 export type RealtimeChangeListener = (event: RealtimeEvent) => void;
 export type RealtimeStatusListener = (status: RealtimeStatus) => void;
+
+type RealtimeFailureReason =
+  | 'auth_missing'
+  | 'auth_session_error'
+  | 'auth_session_invalid'
+  | 'network_offline'
+  | 'channel_closed'
+  | 'channel_error'
+  | 'subscription_timeout'
+  | 'server_rejected'
+  | 'start_failed'
+  | 'supabase_unconfigured';
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -73,7 +94,47 @@ const TABLE_LABELS: Record<string, string> = {
 
 const LIVE_SYNC_KEY = 'ecs_live_sync_enabled';
 const MAX_EVENT_HISTORY = 50;
-const RECONNECT_DELAY_MS = 5000;
+const RECONNECT_BASE_DELAY_MS = 2000;
+const RECONNECT_MAX_DELAY_MS = 60000;
+const RECONNECT_MAX_WINDOW_MS = 5 * 60 * 1000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_JITTER_RATIO = 0.25;
+const SUBSCRIPTION_TIMEOUT_MS = 15000;
+const REALTIME_WARNING_THROTTLE_MS = 30000;
+
+function debugRealtime(message: string, details?: Record<string, unknown>): void {
+  ecsLog.debug('SYSTEM', message, details);
+}
+
+function summarizeRealtimeError(error: unknown): Record<string, unknown> | undefined {
+  if (!error) return undefined;
+
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  if (typeof error === 'object') {
+    const source = error as Record<string, unknown>;
+    return {
+      name: source.name,
+      message: source.message,
+      code: source.code,
+      status: source.status,
+      details: source.details,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function isSessionExpired(expiresAt?: number | null): boolean {
+  if (!expiresAt) return false;
+  const expiresAtMs = expiresAt * 1000;
+  return expiresAtMs <= Date.now() + 30_000;
+}
 
 // ── Store mapping ─────────────────────────────────────────────
 
@@ -141,7 +202,7 @@ function createRealtimeEventId(): string {
 // ── Realtime Sync Manager ─────────────────────────────────────
 
 class RealtimeSyncManager {
-  private _status: RealtimeStatus = 'disconnected';
+  private _status: RealtimeStatus = 'idle';
   private _enabled: boolean = getPersistedLiveSyncEnabled();
   private _userId: string | null = null;
   private _channel: any = null;
@@ -162,6 +223,16 @@ class RealtimeSyncManager {
   private _lastEventAt: string | null = null;
   private _refreshCallback: (() => void) | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _channelKey: string | null = null;
+  private _subscribeInFlight = false;
+  private _retryAttempt = 0;
+  private _retryWindowStartedAt: number | null = null;
+  private _lastFailureReason: RealtimeFailureReason | null = null;
+  private _warningLogState = new Map<string, { lastAt: number; suppressed: number }>();
+  private _connectivityUnsubscribe: (() => void) | null = null;
+  private _channelGeneration = 0;
+  private _lastOfflinePauseKey: string | null = null;
+  private _subscriptionTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Public getters ──────────────────────────────────────────
 
@@ -189,6 +260,9 @@ class RealtimeSyncManager {
       lastEventAt: this._lastEventAt,
       connectedAt: this._connectedAt,
       subscribedTables: SUBSCRIBED_TABLES.length,
+      status: this._status,
+      lastFailureReason: this._lastFailureReason,
+      retryAttempt: this._retryAttempt,
     };
   }
 
@@ -211,15 +285,17 @@ class RealtimeSyncManager {
   // ── Enable / Disable ───────────────────────────────────────
 
   setEnabled(enabled: boolean): void {
+    if (this._enabled === enabled) return;
+
     this._enabled = enabled;
     setPersistedLiveSyncEnabled(enabled);
 
-    if (enabled && this._userId && this._status === 'disconnected') {
+    if (enabled && this._userId && this._status !== 'subscribed' && this._status !== 'connecting') {
       this.start(this._userId);
       return;
     }
 
-    if (!enabled && this._status !== 'disconnected') {
+    if (!enabled && this._status !== 'idle') {
       this.stop();
     }
   }
@@ -228,31 +304,127 @@ class RealtimeSyncManager {
 
   start(userId: string): void {
     if (!isSupabaseConfigured) {
-      console.warn('[RealtimeSync] Supabase not configured — skipping');
+      this._handleStartBlocked('supabase_unconfigured', 'Supabase not configured; realtime sync skipped');
       return;
     }
 
     if (!this._enabled) {
-      console.log('[RealtimeSync] Live Sync disabled — skipping');
+      debugRealtime('Realtime sync disabled; skipping start');
       return;
     }
 
     if (!userId) {
-      console.warn('[RealtimeSync] No userId provided — skipping');
+      this._handleStartBlocked('auth_missing', 'No userId provided; realtime sync skipped');
       return;
     }
 
-    if (this._status === 'connected' || this._status === 'connecting') {
-      console.log('[RealtimeSync] Already connected/connecting');
+    this._userId = userId;
+    this._ensureConnectivityListener();
+
+    if (this._shouldPauseForOffline()) {
+      this._lastFailureReason = 'network_offline';
+      this._setStatus('offline_available');
+      this._debugOfflinePauseOnce('start');
       return;
+    }
+
+    const channelKey = `ecs-realtime-sync:${userId}`;
+    if (this._channelKey === channelKey && this._reconnectTimer) {
+      debugRealtime('realtime_retry_skipped_duplicate', {
+        channelKey,
+        reason: 'reconnect_already_scheduled',
+        status: this._status,
+      });
+      return;
+    }
+
+    if (
+      this._channelKey === channelKey &&
+      (this._status === 'subscribed' || this._status === 'connecting' || this._subscribeInFlight)
+    ) {
+      debugRealtime('realtime_retry_skipped_duplicate', {
+        channelKey,
+        reason: 'subscription_already_active',
+        status: this._status,
+      });
+      return;
+    }
+
+    if (this._channel) {
+      this._removeChannelSafely(this._channel, this._channelKey, 'start_replace');
+      if (this._channelKey) {
+        debugRealtime('realtime_cleanup', {
+          channelKey: this._channelKey,
+          reason: this._channelKey === channelKey ? 'resubscribe' : 'channel_changed',
+        });
+      }
+      this._channel = null;
     }
 
     this._clearReconnectTimer();
-    this._userId = userId;
+    const channelGeneration = ++this._channelGeneration;
+    this._subscribeInFlight = true;
+    this._channelKey = channelKey;
     this._setStatus('connecting');
+    debugRealtime('realtime_subscribe_started', {
+      channelKey,
+      subscribedTables: SUBSCRIBED_TABLES.length,
+    });
+
+    void this._validateSessionAndSubscribe(userId, channelKey, channelGeneration);
+  }
+
+  private async _validateSessionAndSubscribe(
+    userId: string,
+    channelKey: string,
+    channelGeneration: number,
+  ): Promise<void> {
+    try {
+      debugRealtime('realtime_auth_check_started', { channelKey });
+      const { data, error } = await supabase.auth.getSession();
+
+      if (channelGeneration !== this._channelGeneration || channelKey !== this._channelKey) {
+        debugRealtime('realtime_stale_auth_check_ignored', {
+          channelKey,
+          currentChannelKey: this._channelKey,
+        });
+        return;
+      }
+
+      if (error) {
+        this._handleAuthSessionFailure('auth_session_error', channelKey, error);
+        return;
+      }
+
+      const session = data?.session ?? null;
+      const sessionUserId = session?.user?.id ?? null;
+      if (!session || sessionUserId !== userId || isSessionExpired(session.expires_at)) {
+        this._handleAuthSessionFailure('auth_session_invalid', channelKey, {
+          hasSession: !!session,
+          sessionUserMatches: sessionUserId === userId,
+          expiresAt: session?.expires_at ?? null,
+        });
+        return;
+      }
+
+      this._subscribeToChannel(userId, channelKey, channelGeneration);
+    } catch (err) {
+      if (channelGeneration !== this._channelGeneration || channelKey !== this._channelKey) {
+        debugRealtime('realtime_stale_auth_check_ignored', {
+          channelKey,
+          currentChannelKey: this._channelKey,
+        });
+        return;
+      }
+      this._handleAuthSessionFailure('auth_session_error', channelKey, err);
+    }
+  }
+
+  private _subscribeToChannel(userId: string, channelKey: string, channelGeneration: number): void {
+    this._armSubscriptionTimeout(channelKey, channelGeneration);
 
     try {
-      const channel = supabase.channel(`ecs-realtime-sync:${userId}`, {
+      const channel = supabase.channel(channelKey, {
         config: {
           broadcast: { self: false },
         },
@@ -273,57 +445,95 @@ class RealtimeSyncManager {
         );
       }
 
-      channel.subscribe((status: string) => {
-        console.log(`[RealtimeSync] Channel status: ${status}`);
+      this._channel = channel;
 
-        if (status === 'SUBSCRIBED') {
-          this._setStatus('connected');
-          this._connectedAt = new Date().toISOString();
-          console.log(
-            '[RealtimeSync] Connected — listening to',
-            SUBSCRIBED_TABLES.length,
-            'tables'
-          );
+      channel.subscribe((status: string, error?: unknown) => {
+        if (channelGeneration !== this._channelGeneration || channel !== this._channel) {
+          debugRealtime('realtime_stale_channel_status_ignored', {
+            channelKey,
+            status,
+          });
           return;
         }
 
-        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          this._setStatus('error');
-          console.warn('[RealtimeSync] Channel error/closed');
-          this._scheduleReconnect();
+        debugRealtime('Realtime channel status changed', {
+          status,
+          error: summarizeRealtimeError(error),
+        });
+        this._clearSubscriptionTimeout();
+
+        if (status === 'SUBSCRIBED') {
+          const recoveredFrom = this._lastFailureReason;
+          const recoveredAttempt = this._retryAttempt;
+          this._subscribeInFlight = false;
+          this._retryAttempt = 0;
+          this._retryWindowStartedAt = null;
+          this._lastFailureReason = null;
+          this._setStatus('subscribed');
+          this._connectedAt = new Date().toISOString();
+          debugRealtime('realtime_subscribed', {
+            channelKey,
+            subscribedTables: SUBSCRIBED_TABLES.length,
+          });
+          if (recoveredFrom || recoveredAttempt > 0) {
+            debugRealtime('realtime_reconnect_success', {
+              attempt: recoveredAttempt,
+              channelKey,
+              recoveredFrom,
+            });
+          }
+          return;
+        }
+
+        if (status === 'CLOSED') {
+          this._handleChannelFailure('channel_closed', status, channelKey, channelGeneration, error);
+          return;
+        }
+
+        if (status === 'CHANNEL_ERROR') {
+          this._handleChannelFailure('channel_error', status, channelKey, channelGeneration, error);
           return;
         }
 
         if (status === 'TIMED_OUT') {
-          this._setStatus('error');
-          console.warn('[RealtimeSync] Subscription timed out');
-          this._scheduleReconnect();
+          this._handleChannelFailure('subscription_timeout', status, channelKey, channelGeneration, error);
         }
       });
 
-      this._channel = channel;
     } catch (err) {
-      console.error('[RealtimeSync] Failed to start:', err);
-      this._setStatus('error');
-      this._scheduleReconnect();
+      this._subscribeInFlight = false;
+      this._clearSubscriptionTimeout();
+      this._setStatus('degraded');
+      this._warnThrottled('start_failed', 'Failed to start realtime sync', { error: String(err) });
+      this._scheduleReconnect('start_failed');
     }
   }
 
   stop(): void {
     this._clearReconnectTimer();
+    this._clearSubscriptionTimeout();
+    this._subscribeInFlight = false;
+    this._retryAttempt = 0;
+    this._retryWindowStartedAt = null;
+    this._channelGeneration++;
+    this._lastOfflinePauseKey = null;
 
     if (this._channel) {
-      try {
-        void supabase.removeChannel(this._channel);
-      } catch (err) {
-        console.warn('[RealtimeSync] Error removing channel:', err);
-      }
+      this._removeChannelSafely(this._channel, this._channelKey, 'stop');
       this._channel = null;
     }
 
-    this._setStatus('disconnected');
+    if (this._channelKey) {
+      debugRealtime('realtime_cleanup', {
+        channelKey: this._channelKey,
+        reason: 'stop',
+      });
+      this._channelKey = null;
+    }
+
+    this._setStatus('idle');
     this._connectedAt = null;
-    console.log('[RealtimeSync] Stopped');
+    debugRealtime('Realtime sync stopped');
   }
 
   destroy(): void {
@@ -337,6 +547,13 @@ class RealtimeSyncManager {
     this._totalRowsMerged = 0;
     this._lastEventAt = null;
     this._refreshCallback = null;
+    this._lastFailureReason = null;
+    this._lastOfflinePauseKey = null;
+    this._warningLogState.clear();
+    if (this._connectivityUnsubscribe) {
+      this._connectivityUnsubscribe();
+      this._connectivityUnsubscribe = null;
+    }
   }
 
   // ── Internal: Handle incoming change ────────────────────────
@@ -363,7 +580,12 @@ class RealtimeSyncManager {
     const recordId = rowForLabel?.id || 'unknown';
     const recordName = getRecordName(rowForLabel, table);
 
-    console.log(`[RealtimeSync] ${eventType} on ${table}: ${recordName} (${recordId})`);
+    debugRealtime('Realtime row event received', {
+      eventType,
+      recordId,
+      recordName,
+      table,
+    });
 
     const event: RealtimeEvent = {
       id: createRealtimeEventId(),
@@ -463,13 +685,13 @@ class RealtimeSyncManager {
         }
 
         if (safeRemoteRows.length > 0) {
-          await store.bulkUpsert(safeRemoteRows);
+          await store.bulkUpsert(safeRemoteRows as any);
           this._totalRowsMerged++;
         }
         return;
       }
 
-      await store.bulkUpsert([remoteRow]);
+      await store.bulkUpsert([remoteRow] as any);
       this._totalRowsMerged++;
     } catch (err) {
       console.error(`[RealtimeSync] Error checking/merging ${table}:`, err);
@@ -519,19 +741,319 @@ class RealtimeSyncManager {
     });
   }
 
-  private _scheduleReconnect(): void {
+  private _handleStartBlocked(reason: RealtimeFailureReason, message: string): void {
+    this._lastFailureReason = reason;
+    this._setStatus(
+      reason === 'auth_missing' || reason === 'auth_session_invalid'
+        ? 'idle'
+        : reason === 'network_offline'
+          ? 'offline_available'
+          : 'degraded',
+    );
+    this._warnThrottled(reason, message, { reason });
+  }
+
+  private _handleAuthSessionFailure(
+    reason: 'auth_session_error' | 'auth_session_invalid',
+    channelKey: string,
+    error: unknown,
+  ): void {
+    this._subscribeInFlight = false;
+    this._clearSubscriptionTimeout();
+    this._connectedAt = null;
+    this._lastFailureReason = reason;
+    this._setStatus('degraded');
+
+    const errorDetails = summarizeRealtimeError(error);
+    debugRealtime('realtime_auth_session_failure', {
+      channelKey,
+      permanent: reason === 'auth_session_invalid',
+      reason,
+      error: errorDetails,
+    });
+    if (reason === 'auth_session_invalid') {
+      debugRealtime('realtime_permanent_auth_failure', {
+        channelKey,
+        reason,
+      });
+    }
+
+    this._warnThrottled(reason, 'Realtime sync unavailable until session is refreshed', {
+      channelKey,
+      reason,
+      error: errorDetails,
+    });
+
+    if (reason === 'auth_session_error') {
+      this._scheduleReconnect(reason);
+    }
+  }
+
+  private _handleChannelFailure(
+    reason: RealtimeFailureReason,
+    status: string,
+    channelKey = this._channelKey,
+    channelGeneration = this._channelGeneration,
+    error?: unknown,
+  ): void {
+    if (channelGeneration !== this._channelGeneration || channelKey !== this._channelKey) {
+      debugRealtime('realtime_stale_channel_failure_ignored', {
+        channelKey,
+        currentChannelKey: this._channelKey,
+        reason,
+        status,
+      });
+      return;
+    }
+
+    this._subscribeInFlight = false;
+    this._clearSubscriptionTimeout();
+    this._lastFailureReason = this._shouldPauseForOffline() ? 'network_offline' : reason;
+    const hadConnected = !!this._connectedAt;
+    this._connectedAt = null;
+
+    const errorDetails = summarizeRealtimeError(error);
+    const wasInitialSubscribe = !hadConnected && this._retryAttempt === 0;
+
+    if (wasInitialSubscribe) {
+      debugRealtime('realtime_initial_subscribe_failed', {
+        channelKey,
+        reason,
+        status,
+        error: errorDetails,
+      });
+    } else {
+      debugRealtime('realtime_channel_failure', {
+        attempt: this._retryAttempt,
+        channelKey,
+        reason,
+        status,
+        error: errorDetails,
+      });
+    }
+
+    this._cleanupStaleChannel(reason, channelKey);
+
+    if (this._lastFailureReason === 'network_offline') {
+      this._setStatus('offline_available');
+      this._debugOfflinePauseOnce(`channel:${status}`);
+      return;
+    }
+
+    this._setStatus(reason === 'subscription_timeout' ? 'timed_out' : 'degraded');
+
+    if (reason === 'subscription_timeout') {
+      debugRealtime('realtime_subscribe_timeout', {
+        channelKey,
+        reason,
+        status,
+      });
+    }
+
+    this._warnThrottled(reason, `Realtime channel ${reason.replace(/_/g, ' ')}`, {
+      channelKey,
+      reason,
+      status,
+      error: errorDetails,
+    });
+    this._scheduleReconnect(reason);
+  }
+
+  private _scheduleReconnect(reason: RealtimeFailureReason): void {
     if (!this._enabled || !this._userId) return;
-    if (this._reconnectTimer) return;
+
+    if (this._shouldPauseForOffline()) {
+      this._lastFailureReason = 'network_offline';
+      this._clearReconnectTimer();
+      this._setStatus('offline_available');
+      this._debugOfflinePauseOnce(`schedule:${reason}`);
+      return;
+    }
+
+    if (this._reconnectTimer) {
+      debugRealtime('realtime_retry_skipped_duplicate', {
+        channelKey: this._channelKey,
+        reason,
+      });
+      return;
+    }
+
+    const now = Date.now();
+    if (!this._retryWindowStartedAt || now - this._retryWindowStartedAt > RECONNECT_MAX_WINDOW_MS) {
+      this._retryWindowStartedAt = now;
+      this._retryAttempt = 0;
+    }
+
+    const attempt = this._retryAttempt + 1;
+    if (attempt > RECONNECT_MAX_ATTEMPTS) {
+      this._retryAttempt = attempt;
+      this._setStatus('degraded');
+      debugRealtime('realtime_degraded', {
+        attempt,
+        channelKey: this._channelKey,
+        maxAttempts: RECONNECT_MAX_ATTEMPTS,
+        reason,
+      });
+      this._warnThrottled(reason, 'Realtime sync degraded after repeated subscription failures', {
+        channelKey: this._channelKey,
+        maxAttempts: RECONNECT_MAX_ATTEMPTS,
+        reason,
+      });
+      return;
+    }
+
+    const baseDelayMs = Math.min(
+      RECONNECT_BASE_DELAY_MS * Math.pow(2, this._retryAttempt),
+      RECONNECT_MAX_DELAY_MS,
+    );
+    const jitterMs = Math.round(baseDelayMs * RECONNECT_JITTER_RATIO * Math.random());
+    const delayMs = Math.min(RECONNECT_MAX_DELAY_MS, baseDelayMs + jitterMs);
+    this._retryAttempt = attempt;
+    this._setStatus('retrying');
+
+    debugRealtime('realtime_retry_scheduled', {
+      attempt,
+      channelKey: this._channelKey,
+      delayMs,
+      reason,
+    });
 
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
 
-      if (!this._enabled || !this._userId || this._status === 'connected') return;
+      if (!this._enabled || !this._userId || this._status === 'subscribed') return;
 
-      console.log('[RealtimeSync] Auto-reconnecting...');
-      this.stop();
-      this.start(this._userId);
-    }, RECONNECT_DELAY_MS);
+      if (this._shouldPauseForOffline()) {
+        this._lastFailureReason = 'network_offline';
+        this._setStatus('offline_available');
+        this._debugOfflinePauseOnce(`timer:${reason}`);
+        return;
+      }
+
+      const userId = this._userId;
+      debugRealtime('realtime_retry_started', {
+        attempt,
+        channelKey: this._channelKey,
+        reason,
+      });
+      this.start(userId);
+    }, delayMs);
+  }
+
+  private _ensureConnectivityListener(): void {
+    if (this._connectivityUnsubscribe) return;
+
+    this._connectivityUnsubscribe = connectivity.onStatusChange((status: ConnectivityStatus) => {
+      if (status !== 'online') {
+        this._lastFailureReason = 'network_offline';
+        this._clearReconnectTimer();
+        if (this._status !== 'idle') {
+          this._setStatus('offline_available');
+        }
+        this._debugOfflinePauseOnce(`connectivity:${status}`);
+        return;
+      }
+
+      if (
+        this._enabled &&
+        this._userId &&
+        this._lastFailureReason === 'network_offline' &&
+        this._status !== 'subscribed' &&
+        this._status !== 'connecting'
+      ) {
+        this._scheduleReconnect('network_offline');
+      }
+    });
+  }
+
+  private _shouldPauseForOffline(): boolean {
+    try {
+      return connectivity.status !== 'online' && connectivity.getLevel() !== 'unknown';
+    } catch {
+      return false;
+    }
+  }
+
+  private _debugOfflinePauseOnce(source: string): void {
+    const key = `${this._channelKey || 'no-channel'}:${connectivity.status}:${source}`;
+    if (this._lastOfflinePauseKey === key) return;
+    this._lastOfflinePauseKey = key;
+    debugRealtime('realtime_paused_offline', {
+      channelKey: this._channelKey,
+      connectivityStatus: connectivity.status,
+      reason: 'network_offline',
+      source,
+    });
+  }
+
+  private _armSubscriptionTimeout(channelKey: string, channelGeneration: number): void {
+    this._clearSubscriptionTimeout();
+    this._subscriptionTimeoutTimer = setTimeout(() => {
+      this._subscriptionTimeoutTimer = null;
+      this._handleChannelFailure('subscription_timeout', 'TIMED_OUT', channelKey, channelGeneration);
+    }, SUBSCRIPTION_TIMEOUT_MS);
+  }
+
+  private _clearSubscriptionTimeout(): void {
+    if (this._subscriptionTimeoutTimer) {
+      clearTimeout(this._subscriptionTimeoutTimer);
+      this._subscriptionTimeoutTimer = null;
+    }
+  }
+
+  private _cleanupStaleChannel(reason: RealtimeFailureReason, channelKey = this._channelKey): void {
+    if (!this._channel) return;
+    const currentChannel = this._channel;
+    this._channel = null;
+    this._subscribeInFlight = false;
+    this._channelGeneration++;
+    this._removeChannelSafely(currentChannel, channelKey, reason);
+    debugRealtime('realtime_cleanup', {
+      channelKey,
+      reason,
+    });
+  }
+
+  private _removeChannelSafely(channel: any, channelKey: string | null, reason: string): void {
+    try {
+      const removal = supabase.removeChannel(channel);
+      if (removal && typeof (removal as Promise<unknown>).catch === 'function') {
+        void (removal as Promise<unknown>).catch((err) => {
+          this._warnThrottled('channel_closed', 'Error removing realtime channel', {
+            channelKey,
+            reason,
+            error: summarizeRealtimeError(err),
+          });
+        });
+      }
+    } catch (err) {
+      this._warnThrottled('channel_closed', 'Error removing realtime channel', {
+        channelKey,
+        reason,
+        error: summarizeRealtimeError(err),
+      });
+    }
+  }
+
+  private _warnThrottled(
+    reason: RealtimeFailureReason,
+    message: string,
+    details?: Record<string, unknown>,
+  ): void {
+    const now = Date.now();
+    const state = this._warningLogState.get(reason);
+
+    if (state && now - state.lastAt < REALTIME_WARNING_THROTTLE_MS) {
+      state.suppressed += 1;
+      return;
+    }
+
+    const suppressed = state?.suppressed ?? 0;
+    this._warningLogState.set(reason, { lastAt: now, suppressed: 0 });
+    console.warn('[RealtimeSync]', message, {
+      ...details,
+      ...(suppressed > 0 ? { suppressedRepeats: suppressed } : {}),
+    });
   }
 
   private _clearReconnectTimer(): void {

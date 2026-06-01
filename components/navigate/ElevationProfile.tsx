@@ -92,9 +92,9 @@ export default function ElevationProfile({
     const step = Math.max(1, Math.floor(series.length / barCount));
     const barWidth = Math.max(1.5, (w / barCount) - 0.5);
 
-    const bars: Array<{
+    const bars: {
       x: number; height: number; color: string; index: number;
-    }> = [];
+    }[] = [];
 
     for (let i = 0; i < series.length; i += step) {
       const p = series[i];

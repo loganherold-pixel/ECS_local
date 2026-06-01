@@ -1,249 +1,333 @@
-/**
- * DashboardHeader — Minimal cockpit header
- *
- * Left: Active Expedition/Trip name (or "NO ACTIVE EXPEDITION") + State Pill
- * Center: Sync/Signal indicator (ONLINE/OFFLINE/SYNCING/SEARCHING)
- * Right: Theme Toggle | Viewer Settings | Options dropdown | Account icon | DONE button in layout mode
- *
- * ──────────────────────────────────────────────────────────────
- * Bold Gold Structural Integration:
- *   • 1.5px structural gold rail along bottom edge (#A0813A)
- *   • Deepened charcoal background (#1E2125) matching CommandDock
- *   • Radial gradient simulation behind left title area
- *   • Subtle vertical depth shift (bottom edge slightly lighter)
- *   • Inactive icons: muted gold-bronze (#8A7A58)
- *   • Active icons: brighter gold (#C9A24C)
- *   • No glow, no blur
- *   • Visual bookending with CommandDock — gold rails frame content
- * ──────────────────────────────────────────────────────────────
- *
- * Expedition State Integration:
- *   • Subscribes to expeditionStateStore for real-time state changes
- *   • Gold underline animation: 150ms fade-in when active, 220ms fade-out on end
- *   • "End Expedition" dropdown option when expedition.state === 'active'
- *   • "Geofence Radius" dropdown option to configure auto-start/end radius
- *   • Confirmation dialog before ending expedition
- *   • Calls onExpeditionEnded callback to trigger summary sheet in parent
- * ──────────────────────────────────────────────────────────────
- *
- * Developer Diagnostics:
- *   • Triple-tap on expedition title opens hidden ECS Diagnostics Panel
- *   • Only available in __DEV__ mode
- *   • Does not interfere with normal UI interactions
- * ──────────────────────────────────────────────────────────────
- *
- * In layout mode: header dims ~15%
- * Connectivity-aware: shows real signal status
- * Theme-aware: uses palette from ThemeContext
- * Viewer Settings: eye icon opens ViewerSettingsPanel
- */
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Platform,
-  Animated, Alert, Pressable, Modal,
+  Alert,
+  Animated,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
-
-import { TYPO, DENSITY } from '../../lib/theme';
+import ThemeToggle from '../ThemeToggle';
+import { CLOSE_BTN } from '../../lib/uiConstants';
 import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
-import { useViewerSettings } from '../../context/ViewerSettingsContext';
-import ThemeToggle from '../ThemeToggle';
-import AppearanceSettingsModal from '../AppearanceSettingsModal';
-import ViewerSettingsPanel from './ViewerSettingsPanel';
-import GeofenceRadiusPanel from './GeofenceRadiusPanel';
+import { operatorTrustModeStore } from '../../lib/ai/operatorTrustMode';
+import type { ECSOperatorTrustMode } from '../../lib/ai/operatorTrustTypes';
 import EcsDiagnosticsPanel from './EcsDiagnosticsPanel';
-import ExpeditionStatePill, { type ExpeditionPhase } from '../ExpeditionStatePill';
+import ProfileSettingsPanel from '../ProfileSettingsPanel';
 import { getCachedExpeditions } from '../../lib/expeditionCache';
 import { missionExpeditionStore } from '../../lib/missionStore';
 import {
   expeditionStateStore,
   type ExpeditionState,
-  type ExpeditionRecord,
 } from '../../lib/expeditionStateStore';
+import { routeStore } from '../../lib/routeStore';
+import { loadRoadNavigationSession } from '../../lib/roadNavigationStore';
+import { loadTrailNavigationSession } from '../../lib/trailNavigationStore';
+import {
+  ECS_TOP_BANNER_TITLE_CENTER_PADDING,
+  ECS_TOP_BANNER_TITLE_DONE_RIGHT_SLOT_WIDTH,
+  ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH,
+  ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH,
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  ECS_TOP_SHELL_CONTROL_SLOT_WIDTH,
+  getEcsTopBannerLayoutMetrics,
+  getShellHeaderAnchorTop,
+} from '../../lib/shellLayout';
+import { getTopBannerToneColor, resolveProfileCommandStatus, resolveTopBannerPresentation } from '../../lib/ui/topBannerStatusResolver';
+import type { ECSTopBannerCommandContext } from '../../lib/ui/topBannerTypes';
+import { resolveAccountUx } from '../../lib/auth/accountUXResolver';
+import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { bluPowerAuthority, type BluAuthoritySnapshot } from '../../lib/BluPowerAuthority';
+import { useEcsProviders } from '../../lib/useEcsProviders';
+import { ecsLog } from '../../lib/ecsLogger';
+import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
+import { VISIBILITY_THEME_CYCLE } from '../../lib/appearanceStore';
+import { resolveShellChromeTheme } from '../../lib/ui/shellChromeTheme';
+import FleetSyncModal from '../fleet/FleetSyncModal';
+import TopBannerBackground from '../TopBannerBackground';
+import { useEcsTopBannerHeight } from '../ECSGlobalBanner';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
-// ── Bold Gold Structural Palette (matches Header + CommandDock) ──
 const DHDR = {
-  // Bar surface — deepened charcoal
   bar: '#1E2125',
-
-  // Structural gold rail — bottom edge
   goldRail: '#A0813A',
-
-  // Vertical depth shift — lighter bottom edge above gold rail
   barBottomEdge: '#262A2E',
-
-  // Radial gradient simulation (burnished gold, centered on left area)
-  radialCore: 'rgba(161, 129, 58, 0.10)',
-  radialMid: 'rgba(161, 129, 58, 0.05)',
-
-  // Icon colors — gold-bronze family
   iconMuted: '#8A7A58',
   iconActive: '#C9A24C',
-
-  // Sync pill border
-  syncPillBg: '#22272C',
-  syncPillBorder: '#3A3E44',
-
-  // Expedition gold accent
   expeditionGold: '#D4A017',
-  expeditionGoldSoft: 'rgba(212,160,23,0.35)',
 };
 
+type ShellStatusPillTone = 'neutral' | 'active' | 'sync' | 'degraded';
+
+type ShellStatusPillModel = {
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  tone: ShellStatusPillTone;
+};
 
 interface DashboardHeaderProps {
+  title?: string;
   layoutMode: boolean;
   onDone: () => void;
   onAuthPress: () => void;
-  onViewerSettingsApplied?: () => void;
   onExpeditionEnded?: () => void;
+  collapsed?: boolean;
+  commandContext?: ECSTopBannerCommandContext | null;
 }
-
-// ── Radial Gradient Simulation ───────────────────────────────
-function DashHeaderRadialGradient() {
-  return (
-    <View style={styles.radialContainer} pointerEvents="none">
-      <View style={[styles.radialRing, {
-        width: '50%',
-        height: '180%',
-        backgroundColor: DHDR.radialCore,
-        borderRadius: 999,
-      }]} />
-      <View style={[styles.radialRing, {
-        width: '75%',
-        height: '240%',
-        backgroundColor: DHDR.radialMid,
-        borderRadius: 999,
-      }]} />
-    </View>
-  );
-}
-
 export default function DashboardHeader({
-  layoutMode, onDone, onAuthPress, onViewerSettingsApplied, onExpeditionEnded,
+  title,
+  layoutMode,
+  onDone,
+  onAuthPress,
+  onExpeditionEnded,
+  collapsed = false,
+  commandContext,
 }: DashboardHeaderProps) {
-  const { activeTrip, syncStatus, user, triggerSync, isOnline, connectivityStatus, offlineMode } = useApp();
-  const { palette } = useTheme();
-  const { settings } = useViewerSettings();
-  const [appearanceModalVisible, setAppearanceModalVisible] = useState(false);
-  const [viewerSettingsVisible, setViewerSettingsVisible] = useState(false);
-  const [dropdownVisible, setDropdownVisible] = useState(false);
-  const [geofenceRadiusPanelVisible, setGeofenceRadiusPanelVisible] = useState(false);
-
-  // ── Geofence Radius (for dropdown display) ────────────────
-  // Read current radius to display in the dropdown menu item.
-  // Re-reads when dropdown opens to show latest value.
-  const [geofenceRadius, setGeofenceRadius] = useState(() =>
-    expeditionStateStore.getGeofenceRadius()
+  const router = useRouter();
+  const {
+    syncStatus,
+    user,
+    accessState,
+    operatorInfo,
+    triggerSync,
+    isOnline,
+    connectivityStatus,
+    offlineMode,
+    signOut,
+    sendPasswordReset,
+    showToast,
+  } = useApp();
+  const { palette, colors, effectiveTheme, appearanceMode, setAppearanceMode } = useTheme();
+  const insets = useSafeAreaInsets();
+  const adaptive = useAdaptiveLayout();
+  const topBannerHeight = useEcsTopBannerHeight();
+  const obdScanner = useUnifiedOBD2Scanner();
+  const ecsProviders = useEcsProviders();
+  const [profilePanelVisible, setProfilePanelVisible] = useState(false);
+  const [syncModalVisible, setSyncModalVisible] = useState(false);
+  const [bluSnapshot, setBluSnapshot] = useState<BluAuthoritySnapshot>(() => bluPowerAuthority.getSnapshot());
+  const [operatorTrustMode, setOperatorTrustMode] = useState<ECSOperatorTrustMode>(
+    () => operatorTrustModeStore.mode,
   );
-
-
-  // ── ECS Diagnostics Panel (Hidden Developer Mode) ─────────
-  // Triple-tap on the expedition title area opens the diagnostics panel.
-  // Only available in __DEV__ mode. Does not interfere with normal UI.
+  const [accountActionBusyId, setAccountActionBusyId] = useState<string | null>(null);
+  const [geofenceRadius, setGeofenceRadius] = useState(() => expeditionStateStore.getGeofenceRadius());
   const [diagnosticsPanelVisible, setDiagnosticsPanelVisible] = useState(false);
   const tripleTapCountRef = useRef(0);
   const tripleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [expeditionState, setExpeditionState] = useState<ExpeditionState>(expeditionStateStore.getState());
+  const [hasRouteSelected, setHasRouteSelected] = useState(false);
+  const collapseAnim = useStableAnimatedValue(collapsed ? 1 : 0);
+  const syncSpin = useStableAnimatedValue(0);
+  const shellMessageLogKeyRef = useRef<string | null>(null);
 
   const handleTitlePress = useCallback(() => {
-    if (!__DEV__) return; // Only in dev mode
+    if (!__DEV__) return;
 
     tripleTapCountRef.current += 1;
-
     if (tripleTapTimerRef.current) {
       clearTimeout(tripleTapTimerRef.current);
     }
 
     if (tripleTapCountRef.current >= 3) {
-      // Triple tap detected — open diagnostics
       tripleTapCountRef.current = 0;
-      console.log('[ECS_DIAGNOSTICS] Developer gesture detected — opening diagnostics panel');
       setDiagnosticsPanelVisible(true);
-    } else {
-      // Reset after 600ms if not enough taps
-      tripleTapTimerRef.current = setTimeout(() => {
-        tripleTapCountRef.current = 0;
-      }, 600);
+      return;
     }
+
+    tripleTapTimerRef.current = setTimeout(() => {
+      tripleTapCountRef.current = 0;
+    }, 600);
   }, []);
 
+  const refreshRouteSelectionState = useCallback(async () => {
+    let hasSelectedRoute = !!routeStore.getActive();
 
+    try {
+      const [roadSession, trailSession] = await Promise.all([
+        loadRoadNavigationSession(),
+        loadTrailNavigationSession(),
+      ]);
 
+      hasSelectedRoute =
+        hasSelectedRoute ||
+        !!roadSession &&
+          ['destination_selected', 'route_preview', 'navigation_active', 'rerouting'].includes(
+            roadSession.status,
+          ) ||
+        !!trailSession &&
+          [
+            'route_preview_trail',
+            'route_preview_hybrid',
+            'transition_to_trail',
+            'navigation_active_trail',
+            'off_trail',
+            'rejoining_trail',
+          ].includes(trailSession.status);
+    } catch {}
 
-  // ── Expedition State ──────────────────────────────────────
-  const [expeditionState, setExpeditionState] = useState<ExpeditionState>(
-    expeditionStateStore.getState()
-  );
-  const [expeditionRecord, setExpeditionRecord] = useState<ExpeditionRecord | null>(
-    expeditionStateStore.getCurrentExpedition()
-  );
+    setHasRouteSelected(hasSelectedRoute);
+  }, []);
 
-  // ── Gold Underline Animation ──────────────────────────────
-  // 150ms fade-in when expedition becomes active
-  // 220ms fade-out when expedition ends
-  const goldUnderlineAnim = useRef(
-    new Animated.Value(expeditionStateStore.getState() === 'active' ? 1 : 0)
-  ).current;
-
-  // Track previous state to detect transitions
-  const prevStateRef = useRef<ExpeditionState>(expeditionStateStore.getState());
-
-  // ── Subscribe to expedition state changes ─────────────────
   useEffect(() => {
-    const unsubscribe = expeditionStateStore.subscribe((state, record) => {
-      const prevState = prevStateRef.current;
+    const unsubscribe = expeditionStateStore.subscribe((state, _record) => {
       setExpeditionState(state);
-      setExpeditionRecord(record);
-
-      // Animate gold underline based on state transitions
-      if (state === 'active' && prevState !== 'active') {
-        // Fade in: 150ms
-        Animated.timing(goldUnderlineAnim, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: false,
-        }).start();
-      } else if (state !== 'active' && prevState === 'active') {
-        // Fade out: 220ms
-        Animated.timing(goldUnderlineAnim, {
-          toValue: 0,
-          duration: 220,
-          useNativeDriver: false,
-        }).start();
-      }
-
-      prevStateRef.current = state;
     });
 
     return unsubscribe;
-  }, [goldUnderlineAnim]);
+  }, []);
 
-  // Viewer settings indicator: show a colored dot if non-default
-  const isNonDefault = settings.viewerMode !== 'standard' || settings.themeMode !== 'night';
+  useEffect(() => {
+    const off = bluPowerAuthority.subscribe((next) => {
+      setBluSnapshot(next);
+    });
 
-  // ── Global State Indicator: determine expedition phase ──
-  const expeditionPhase: ExpeditionPhase = useMemo(() => {
-    // Use the expedition state store first
-    if (expeditionState === 'active') return 'active';
+    return off;
+  }, []);
+
+  useEffect(() => {
+    return operatorTrustModeStore.subscribe((nextMode) => {
+      setOperatorTrustMode((currentMode) => currentMode === nextMode ? currentMode : nextMode);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (tripleTapTimerRef.current) {
+        clearTimeout(tripleTapTimerRef.current);
+      }
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshRouteSelectionState();
+    }, [refreshRouteSelectionState]),
+  );
+
+  useEffect(() => {
+    void refreshRouteSelectionState();
+  }, [expeditionState, refreshRouteSelectionState]);
+
+  useEffect(() => {
+    Animated.timing(collapseAnim, {
+      toValue: collapsed ? 1 : 0,
+      duration: collapsed ? 220 : 260,
+      useNativeDriver: false,
+    }).start();
+  }, [collapseAnim, collapsed]);
+
+  const hasActiveExpeditionContext = useMemo(() => {
+    if (expeditionState === 'active' || hasRouteSelected) return true;
 
     try {
       const activeMission = missionExpeditionStore.getActive();
-      if (activeMission) return 'active';
+      if (activeMission) return true;
     } catch {}
 
     try {
       const cached = getCachedExpeditions();
-      const hasActive = cached.some(e => e.status === 'active');
-      if (hasActive) return 'active';
+      if (cached.some((expedition) => expedition.status === 'active')) {
+        return true;
+      }
     } catch {}
 
-    return 'planning';
-  }, [activeTrip, syncStatus, expeditionState]);
+    return false;
+  }, [expeditionState, hasRouteSelected]);
 
-  // ── End Expedition Handler ────────────────────────────────
+  const bannerStatus = useMemo(
+    () =>
+      resolveTopBannerPresentation({
+        syncStatus,
+        connectivityStatus,
+        isOnline,
+        offlineMode,
+        userPresent: !!user,
+        expeditionState,
+        hasActiveExpeditionContext,
+        commandContext: commandContext ?? null,
+      }),
+    [
+      commandContext,
+      connectivityStatus,
+      expeditionState,
+      hasActiveExpeditionContext,
+      isOnline,
+      offlineMode,
+      syncStatus,
+      user,
+    ],
+  );
+  const profileStatus = useMemo(
+    () =>
+      resolveProfileCommandStatus({
+        syncStatus,
+        connectivityStatus,
+        isOnline,
+        offlineMode,
+        userPresent: !!user,
+        expeditionState,
+        hasActiveExpeditionContext,
+        commandContext: commandContext ?? null,
+      }),
+    [
+      commandContext,
+      connectivityStatus,
+      expeditionState,
+      hasActiveExpeditionContext,
+      isOnline,
+      offlineMode,
+      syncStatus,
+      user,
+    ],
+  );
+  const shellChrome = useMemo(
+    () => resolveShellChromeTheme({ effectiveTheme, palette, colors }),
+    [colors, effectiveTheme, palette],
+  );
+  const toneColor = useMemo(
+    () =>
+      getTopBannerToneColor(bannerStatus.tone, {
+        active: shellChrome.iconActive,
+        online: shellChrome.online,
+        muted: shellChrome.iconMuted,
+        degraded: '#D6A04B',
+      }),
+    [bannerStatus.tone, shellChrome.iconActive, shellChrome.iconMuted, shellChrome.online],
+  );
+  const titleText = title ?? 'Expedition Command';
+
+  useEffect(() => {
+    if (!bannerStatus.processingActive) {
+      syncSpin.stopAnimation();
+      syncSpin.setValue(0);
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.timing(syncSpin, {
+        toValue: 1,
+        duration: 1300,
+        useNativeDriver: true,
+      }),
+    );
+
+    animation.start();
+    return () => {
+      animation.stop();
+      syncSpin.stopAnimation();
+      syncSpin.setValue(0);
+    };
+  }, [bannerStatus.processingActive, syncSpin]);
+
   const handleEndExpedition = useCallback(() => {
-    setDropdownVisible(false);
-
+    setProfilePanelVisible(false);
     Alert.alert(
       'End Expedition',
       'Are you sure you want to end the current expedition?',
@@ -262,357 +346,558 @@ export default function DashboardHeader({
     );
   }, [onExpeditionEnded]);
 
-  // ── Toggle Dropdown ───────────────────────────────────────
-  const toggleDropdown = useCallback(() => {
-    setDropdownVisible(prev => {
-      if (!prev) {
-        // Refresh geofence radius when opening dropdown
-        setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
+  const handleAccountAction = useCallback(async (actionId: string) => {
+    if (accountActionBusyId) return;
+
+    setAccountActionBusyId(actionId);
+
+    try {
+      if (actionId === 'sign_out') {
+        setProfilePanelVisible(false);
+        await signOut();
+        return;
       }
-      return !prev;
-    });
-  }, []);
-
-  const closeDropdown = useCallback(() => {
-    setDropdownVisible(false);
-  }, []);
-
-
-  const getSyncConfig = () => {
-    if (connectivityStatus === 'reconnecting') {
-      return { label: 'SEARCHING', color: DHDR.iconActive, icon: 'wifi-outline' as const };
-    }
-
-    if (!isOnline) {
-      return { label: 'NO SIGNAL', color: DHDR.iconMuted, icon: 'cloud-offline-outline' as const };
-    }
-
-    switch (syncStatus) {
-      case 'synced':
-        return { label: 'ONLINE', color: '#4CAF50', icon: 'radio' as const };
-      case 'syncing':
-        return { label: 'SYNCING', color: DHDR.iconActive, icon: 'sync' as const };
-      case 'error':
-        return { label: 'SYNC ERR', color: palette.danger, icon: 'alert-circle' as const };
-      default:
-        if (offlineMode && !user) {
-          return { label: 'LOCAL', color: DHDR.iconActive, icon: 'phone-portrait-outline' as const };
+      if (actionId === 'reset_password') {
+        if (!user?.email) {
+          showToast('Unable to load account details right now.');
+          return;
         }
-        return { label: 'OFFLINE', color: DHDR.iconMuted, icon: 'cloud-offline-outline' as const };
+        const result = await sendPasswordReset(user.email);
+        showToast(result.error ? 'Unable to send reset instructions right now.' : 'Reset instructions sent if the account exists.');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to sign out right now.');
+    } finally {
+      setAccountActionBusyId(null);
     }
-  };
+  }, [accountActionBusyId, sendPasswordReset, showToast, signOut, user?.email]);
 
-  const sync = getSyncConfig();
+  const openProfilePanel = useCallback(() => {
+    setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
+    setProfilePanelVisible(true);
+  }, []);
+  const openBluetoothConnections = useCallback(() => {
+    try {
+      router.push('/power/blu');
+    } catch {
+      try {
+        router.push('/power');
+      } catch {
+        showToast('Device connections unavailable');
+      }
+    }
+  }, [router, showToast]);
+  const openSyncManagement = useCallback(() => {
+    setSyncModalVisible(true);
+  }, []);
 
-  // Whether to show the "End Expedition" option in dropdown
   const showEndExpedition = expeditionState === 'active';
+  const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
+  const useFleetMatchedTitleLayout = titleText === 'Expedition Command';
+  const leftControlSlotWidth = useFleetMatchedTitleLayout
+    ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
+    : controlSlotWidth;
+  const rightControlSlotWidth = useFleetMatchedTitleLayout
+    ? layoutMode
+      ? ECS_TOP_BANNER_TITLE_DONE_RIGHT_SLOT_WIDTH
+      : ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH
+    : controlSlotWidth;
+  const centerContentPadding = useFleetMatchedTitleLayout
+    ? ECS_TOP_BANNER_TITLE_CENTER_PADDING
+    : 8;
+  const shellStatusLabel = useMemo(() => {
+    if (bannerStatus.processingActive) return 'SYNC';
+    if (offlineMode || !isOnline) return 'OFFLINE';
+    return 'ONLINE';
+  }, [bannerStatus.processingActive, isOnline, offlineMode]);
+  const syncActionLabel = useMemo(() => {
+    return syncStatus === 'error' ? 'FORCE SYNC' : 'SYNC NOW';
+  }, [syncStatus]);
+  const shellStatusPill = useMemo<ShellStatusPillModel>(() => ({
+    label: shellStatusLabel,
+    icon: bannerStatus.processingActive ? 'sync-outline' : isOnline && !offlineMode ? 'radio-outline' : 'cloud-offline-outline',
+    tone:
+      bannerStatus.processingActive
+        ? 'sync'
+        : offlineMode || !isOnline
+          ? 'degraded'
+          : 'active',
+  }), [bannerStatus.processingActive, isOnline, offlineMode, shellStatusLabel]);
+  const bluetoothPill = useMemo<ShellStatusPillModel>(() => {
+    const providerHasRegisteredDevices = Object.values(bluSnapshot.providers).some((provider) => provider.hasDevices);
+    const powerUnavailable = providerHasRegisteredDevices && !bluSnapshot.isConnected && bluSnapshot.freshness === 'disconnected';
+    const providerScanning = ecsProviders.providerSummaries.some((provider) => provider.isScanning);
+    const permissionMissing = /permission|permissions|denied|not supported|required/i.test(obdScanner.error ?? '');
+    const platformUnavailable = Platform.OS === 'web';
+    const hasConnectedDevice = bluSnapshot.isConnected || obdScanner.isConnected;
+    const isConnecting =
+      bluSnapshot.isReconnecting ||
+      obdScanner.isScanning ||
+      obdScanner.isConnecting ||
+      obdScanner.isReconnecting ||
+      providerScanning ||
+      ecsProviders.isAnyReconnecting;
+    const isDegraded =
+      platformUnavailable ||
+      permissionMissing ||
+      obdScanner.state === 'error' ||
+      powerUnavailable;
 
-  // ── Gold underline interpolation ──────────────────────────
-  const goldUnderlineOpacity = goldUnderlineAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
+    if (hasConnectedDevice) {
+      return {
+        label: 'BLU',
+        icon: 'bluetooth',
+        tone: 'active',
+      };
+    }
+
+    if (isConnecting) {
+      return {
+        label: 'BLU',
+        icon: 'sync-outline',
+        tone: 'sync',
+      };
+    }
+
+    if (isDegraded) {
+      return {
+        label: 'BLU',
+        icon: 'bluetooth-outline',
+        tone: 'degraded',
+      };
+    }
+
+    return {
+      label: 'BLU',
+      icon: 'bluetooth-outline',
+      tone: 'neutral',
+    };
+  }, [
+    bluSnapshot.freshness,
+    bluSnapshot.isConnected,
+    bluSnapshot.isReconnecting,
+    bluSnapshot.providers,
+    ecsProviders.isAnyReconnecting,
+    ecsProviders.providerSummaries,
+    obdScanner.error,
+    obdScanner.isConnected,
+    obdScanner.isConnecting,
+    obdScanner.isReconnecting,
+    obdScanner.isScanning,
+    obdScanner.state,
+  ]);
+  const shellStatusPillStyle = useMemo(
+    () => getStatusPillStyles(shellStatusPill.tone, shellChrome.iconMuted),
+    [shellChrome.iconMuted, shellStatusPill.tone],
+  );
+  const bluetoothPillStyle = useMemo(
+    () => getStatusPillStyles(bluetoothPill.tone, shellChrome.iconMuted),
+    [bluetoothPill.tone, shellChrome.iconMuted],
+  );
+  const bluetoothAccessibilityLabel = useMemo(() => {
+    switch (bluetoothPill.tone) {
+      case 'active':
+        return 'Bluetooth connected';
+      case 'sync':
+        return 'Bluetooth connecting';
+      case 'degraded':
+        return 'Bluetooth unavailable';
+      case 'neutral':
+      default:
+        return 'Bluetooth available';
+    }
+  }, [bluetoothPill.tone]);
+  const accountUx = useMemo(
+    () =>
+      resolveAccountUx({
+        operatorInfo,
+        accessState,
+        authenticated: !!user,
+        isOnline,
+      }),
+    [accessState, isOnline, operatorInfo, user],
+  );
+
+  const dashboardBannerLayout = getEcsTopBannerLayoutMetrics(insets.top, topBannerHeight, {
+    isTablet: adaptive.isTablet,
+    shortHeight: adaptive.shortHeight,
   });
-  const goldUnderlineHeight = goldUnderlineAnim.interpolate({
+  const dashboardTopPadding = dashboardBannerLayout.topPadding;
+  const dashboardHeaderVisibleHeight = dashboardBannerLayout.visibleHeight;
+  const dashboardBannerOverscan = dashboardBannerLayout.bannerOverscan;
+  const dashboardBannerOffset = dashboardBannerLayout.bannerOffset;
+  const expandedHeight = dashboardHeaderVisibleHeight;
+  const collapsedHeight = 0;
+  const headerHeight = collapseAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 2],
+    outputRange: [expandedHeight, collapsedHeight],
   });
+  const headerOpacity = collapseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+  });
+  const headerTranslateY = collapseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -12],
+  });
+  useEffect(() => {
+    const nextKey = [
+      titleText,
+      bannerStatus.statusLabel,
+      bannerStatus.source,
+      bannerStatus.priority,
+    ].join('|');
+
+    if (shellMessageLogKeyRef.current === nextKey) return;
+    shellMessageLogKeyRef.current = nextKey;
+
+    ecsLog.debug('SHELL', '[DashboardShellMessage]', {
+      shellMessageSource: bannerStatus.source,
+      shellMessageReason: bannerStatus.reason,
+      shellMessagePriority: bannerStatus.priority,
+      suppressedShellSources: bannerStatus.suppressedSources,
+      shellTitle: titleText,
+      shellStatusLabel: bannerStatus.statusLabel,
+      gpsLive: bannerStatus.diagnostics.gpsLive,
+      routeActive: bannerStatus.diagnostics.routeUsable && hasRouteSelected,
+      connectivityState: connectivityStatus,
+      hasConfiguredVehicle: bannerStatus.diagnostics.hasConfiguredVehicle,
+      offlineMode,
+      cloudEnhancementAvailable: bannerStatus.diagnostics.cloudEnhancementAvailable,
+    });
+  }, [
+    bannerStatus,
+    connectivityStatus,
+    hasRouteSelected,
+    offlineMode,
+    titleText,
+  ]);
 
   return (
-    <View style={[styles.container, layoutMode && styles.containerDimmed]}>
-      {/* Radial gradient overlay behind title area */}
-      <DashHeaderRadialGradient />
-
-      {/* Vertical depth shift — lighter strip above gold rail */}
-      <View style={styles.barBottomEdge} />
-
-      {/* Structural gold rail — bottom edge of header */}
-      <View style={styles.goldRailLine} />
-
-      {/* ── Expedition Gold Underline ──────────────────────────
-           Animated gold accent line that appears above the structural
-           gold rail when expedition is active. 150ms fade-in, 220ms
-           fade-out. Sits at the very bottom of the header. */}
-      <Animated.View
+    <Animated.View
+      style={[
+        styles.collapseShell,
+        {
+          height: headerHeight,
+          opacity: headerOpacity,
+          transform: [{ translateY: headerTranslateY }],
+        },
+      ]}
+      pointerEvents={collapsed ? 'none' : 'auto'}
+    >
+      <View
         style={[
-          styles.expeditionGoldUnderline,
+          styles.container,
           {
-            opacity: goldUnderlineOpacity,
-            height: goldUnderlineHeight,
+            height: dashboardHeaderVisibleHeight,
+            paddingTop: dashboardTopPadding,
+            minHeight: dashboardHeaderVisibleHeight,
           },
         ]}
-        pointerEvents="none"
-      />
-
-      {/* Left: Active Expedition + State Pill
-           Triple-tap on this area opens hidden ECS Diagnostics Panel (dev only).
-           The Pressable does not interfere with normal interactions — single taps
-           are absorbed silently, only triple-tap triggers the diagnostics. */}
-      <Pressable style={styles.left} onPress={handleTitlePress}>
-        <View style={styles.leftColumn}>
-          <View style={styles.leftRow}>
-            {expeditionState === 'active' ? (
-              <>
-                <View style={[styles.activeDot, { backgroundColor: DHDR.expeditionGold }]} />
-                <Text style={[styles.tripName, { color: palette.text }]}>
-                  {expeditionRecord?.vehicleName || 'Expedition Active'}
-                </Text>
-              </>
-            ) : activeTrip ? (
-              <>
-                <View style={[styles.activeDot, { backgroundColor: isOnline ? '#4CAF50' : DHDR.iconActive }]} />
-                <Text style={[styles.tripName, { color: palette.text }]}>{activeTrip.name}</Text>
-              </>
-            ) : (
-              <Text style={[styles.noTrip, { color: DHDR.iconMuted }]}>NO ACTIVE EXPEDITION</Text>
-            )}
-
-          </View>
-          <ExpeditionStatePill phase={expeditionPhase} />
-        </View>
-      </Pressable>
-
-
-      {/* Center: Sync/Connectivity Indicator */}
-      <TouchableOpacity
-        style={[styles.center, { backgroundColor: DHDR.syncPillBg, borderColor: DHDR.syncPillBorder }]}
-        onPress={triggerSync}
-        activeOpacity={0.7}
       >
-        <Ionicons name={sync.icon} size={12} color={sync.color} />
-        <Text style={[styles.syncLabel, { color: sync.color }]}>{sync.label}</Text>
-      </TouchableOpacity>
+        <TopBannerBackground
+          variant="dashboard"
+          resizeMode="cover"
+          verticalOffset={dashboardBannerOffset}
+          overscan={dashboardBannerOverscan}
+        />
 
-      {/* Right: Theme Toggle + Viewer Settings + Options + Account or DONE */}
-      <View style={styles.right}>
-        {layoutMode ? (
-          <TouchableOpacity style={[styles.doneBtn, { backgroundColor: palette.accent, borderColor: palette.borderFocus }]} onPress={onDone} activeOpacity={0.7}>
-            <Text style={[styles.doneText, { color: palette.text }]}>DONE</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.rightIcons}>
-            <ThemeToggle
-              size={26}
-              compact
-              onLongPress={() => setAppearanceModalVisible(true)}
-            />
-            {/* Viewer Settings Button */}
-            <TouchableOpacity
-              onPress={() => setViewerSettingsVisible(true)}
-              style={styles.viewerBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="eye-outline"
-                size={20}
-                color={isNonDefault ? DHDR.iconActive : DHDR.iconMuted}
-              />
-              {isNonDefault && (
-                <View style={[styles.viewerDot, { backgroundColor: DHDR.iconActive, borderColor: DHDR.bar }]} />
-              )}
-            </TouchableOpacity>
-
-            {/* Options Dropdown Button (shows End Expedition when active) */}
-            <TouchableOpacity
-              onPress={toggleDropdown}
-              style={styles.optionsBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="ellipsis-vertical"
-                size={18}
-                color={showEndExpedition ? DHDR.expeditionGold : DHDR.iconMuted}
-              />
-              {/* Active expedition indicator dot */}
-              {showEndExpedition && (
-                <View style={[styles.optionsDot, { backgroundColor: DHDR.expeditionGold, borderColor: DHDR.bar }]} />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={onAuthPress} style={styles.authBtn} activeOpacity={0.7}>
-              <Ionicons
-                name={user ? 'person-circle' : 'person-circle-outline'}
-                size={24}
-                color={user ? DHDR.iconActive : DHDR.iconMuted}
-              />
-              {/* Connectivity dot on avatar */}
-              <View style={[
-                styles.connDot,
-                {
-                  backgroundColor: isOnline ? '#4CAF50' : DHDR.iconMuted,
-                  borderColor: DHDR.bar,
-                },
-              ]} />
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* ── Dropdown Menu ──────────────────────────────────────
-           Appears below the options button when tapped.
-           Shows "End Expedition" when expedition is active. */}
-      {dropdownVisible && (
-        <Modal
-          transparent
-          visible={dropdownVisible}
-          animationType="none"
-          onRequestClose={closeDropdown}
-          statusBarTranslucent
+        <View
+          style={[
+            styles.contentRow,
+            {
+              maxWidth: adaptive.shell.headerMaxWidth,
+              paddingHorizontal: adaptive.shell.headerHorizontalPadding,
+            },
+          ]}
         >
-          <Pressable style={styles.dropdownOverlay} onPress={closeDropdown}>
-            <View style={styles.dropdownContainer}>
-              <View style={[styles.dropdown, { backgroundColor: '#1A1E22', borderColor: '#2A2E34' }]}>
-                {/* End Expedition option — only when active */}
-                {showEndExpedition && (
-                  <TouchableOpacity
-                    style={styles.dropdownItem}
-                    onPress={handleEndExpedition}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="flag-outline" size={14} color={DHDR.expeditionGold} />
-                    <Text style={[styles.dropdownItemText, { color: DHDR.expeditionGold }]}>
-                      End Expedition
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Divider if both items present */}
-                {showEndExpedition && (
-                  <View style={styles.dropdownDivider} />
-                )}
-
-                {/* Appearance Settings */}
-                <TouchableOpacity
-                  style={styles.dropdownItem}
-                  onPress={() => {
-                    closeDropdown();
-                    setAppearanceModalVisible(true);
-                  }}
-                  activeOpacity={0.7}
+          <View style={[styles.edgeSlotBase, styles.edgeSlotStart, { width: leftControlSlotWidth }]}>
+            <View style={styles.statusPillCluster}>
+              <TouchableOpacity
+                style={[
+                  styles.statusPill,
+                  shellStatusPillStyle,
+                ]}
+                onPress={openSyncManagement}
+                activeOpacity={0.78}
+                hitSlop={CLOSE_BTN.hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel={`${shellStatusPill.label} sync controls`}
+                accessibilityHint="Opens sync management and offline readiness controls"
+              >
+                <Ionicons
+                  name={shellStatusPill.icon}
+                  size={8}
+                  color={shellStatusPillStyle.color}
+                />
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    { color: shellStatusPillStyle.color },
+                  ]}
                 >
-                  <Ionicons name="color-palette-outline" size={14} color="#8B949E" />
-                  <Text style={[styles.dropdownItemText, { color: '#E6EDF3' }]}>
-                    Appearance
-                  </Text>
-                </TouchableOpacity>
+                  {shellStatusPill.label}
+                </Text>
+              </TouchableOpacity>
 
-                {/* Viewer Settings */}
-                <TouchableOpacity
-                  style={styles.dropdownItem}
-                  onPress={() => {
-                    closeDropdown();
-                    setViewerSettingsVisible(true);
-                  }}
-                  activeOpacity={0.7}
+              <TouchableOpacity
+                style={[
+                  styles.statusPill,
+                  bluetoothPillStyle,
+                ]}
+                onPress={openBluetoothConnections}
+                activeOpacity={0.78}
+                hitSlop={CLOSE_BTN.hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel={bluetoothAccessibilityLabel}
+                accessibilityHint="Opens device connections and Bluetooth controls"
+              >
+                <Ionicons
+                  name={bluetoothPill.icon}
+                  size={8}
+                  color={bluetoothPillStyle.color}
+                  style={bluetoothPill.tone === 'sync' ? styles.statusPillSyncIcon : null}
+                />
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    { color: bluetoothPillStyle.color },
+                  ]}
                 >
-                  <Ionicons name="eye-outline" size={14} color="#8B949E" />
-                  <Text style={[styles.dropdownItemText, { color: '#E6EDF3' }]}>
-                    Viewer Settings
-                  </Text>
-                </TouchableOpacity>
+                  {bluetoothPill.label}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-                {/* Divider before Geofence Radius */}
-                <View style={styles.dropdownDivider} />
-
-                {/* Geofence Radius — opens settings panel */}
-                <TouchableOpacity
-                  style={styles.dropdownItem}
-                  onPress={() => {
-                    closeDropdown();
-                    setGeofenceRadiusPanelVisible(true);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="locate-outline" size={14} color="#8B949E" />
-                  <View style={styles.dropdownItemWithBadge}>
-                    <Text style={[styles.dropdownItemText, { color: '#E6EDF3' }]}>
-                      Geofence Radius
-                    </Text>
-                    <View style={styles.radiusBadge}>
-                      <Text style={styles.radiusBadgeText}>{geofenceRadius}m</Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              </View>
+          <Pressable
+            style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
+            onPress={handleTitlePress}
+            accessibilityRole="button"
+            accessibilityLabel="ECS diagnostics"
+          >
+            <View style={styles.bannerTitleStack} pointerEvents="none">
+              <Text
+                style={styles.bannerTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.74}
+              >
+                expedition command
+              </Text>
+              <Text
+                style={styles.bannerMotto}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+              >
+                explore with confidence
+              </Text>
             </View>
           </Pressable>
-        </Modal>
-      )}
 
-      <AppearanceSettingsModal
-        visible={appearanceModalVisible}
-        onClose={() => setAppearanceModalVisible(false)}
-      />
+          <View style={[styles.edgeSlotBase, styles.edgeSlotEnd, { width: rightControlSlotWidth }]}>
+            <View style={styles.rightControlCluster}>
+              <ThemeToggle
+                compact
+                size={30}
+                iconMode="eye"
+                cycleModes={VISIBILITY_THEME_CYCLE}
+              />
+            {layoutMode ? (
+              <TouchableOpacity
+                style={[
+                  styles.doneBtn,
+                  { backgroundColor: palette.accent, borderColor: palette.borderFocus },
+                ]}
+                onPress={onDone}
+                activeOpacity={0.7}
+                hitSlop={CLOSE_BTN.hitSlop}
+              >
+                <Text style={[styles.doneText, { color: palette.text }]}>DONE</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={openProfilePanel}
+                style={[
+                  styles.authBtn,
+                  {
+                    backgroundColor: shellChrome.controlSurface,
+                    borderColor: shellChrome.controlBorder,
+                  },
+                ]}
+                activeOpacity={0.7}
+                hitSlop={CLOSE_BTN.hitSlop}
+              >
+                <Ionicons
+                  name={user ? 'person-circle' : 'person-circle-outline'}
+                  size={18}
+                  color={user ? shellChrome.iconActive : shellChrome.iconMuted}
+                />
+                {bannerStatus.processingActive && (
+                  <View
+                    style={[
+                      styles.syncBadge,
+                      {
+                        backgroundColor: shellChrome.syncBadgeSurface,
+                        borderColor: shellChrome.syncBadgeBorder,
+                      },
+                    ]}
+                  >
+                    <Animated.View
+                      style={{
+                        transform: [
+                          {
+                            rotate: syncSpin.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: ['0deg', '360deg'],
+                            }),
+                          },
+                        ],
+                      }}
+                    >
+                      <Ionicons name="sync-outline" size={9} color={toneColor} />
+                    </Animated.View>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            </View>
+          </View>
+        </View>
+        <View
+          pointerEvents="none"
+          style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}
+        />
+      </View>
 
-      <ViewerSettingsPanel
-        visible={viewerSettingsVisible}
-        onClose={() => setViewerSettingsVisible(false)}
-        onSettingsApplied={onViewerSettingsApplied}
-      />
-
-      <GeofenceRadiusPanel
-        visible={geofenceRadiusPanelVisible}
-        onClose={() => {
-          setGeofenceRadiusPanelVisible(false);
-          // Refresh the cached radius value for next dropdown display
-          setGeofenceRadius(expeditionStateStore.getGeofenceRadius());
+      <ProfileSettingsPanel
+        visible={profilePanelVisible}
+        onClose={() => setProfilePanelVisible(false)}
+        anchorTop={getShellHeaderAnchorTop(insets.top)}
+        userEmail={user?.email ?? null}
+        accessLabel={accountUx.title}
+        accessStatusLabel={accountUx.stateLabel}
+        accessDetail={accountUx.detail}
+        accountActions={user ? [
+          {
+            id: 'reset_password',
+            label: 'Reset Password',
+            detail: 'Send reset instructions to your signed-in ECS email.',
+            icon: 'key-outline',
+            tone: 'default',
+          },
+          {
+            id: 'sign_out',
+            label: 'Sign Out',
+            detail: 'End this device session and return to the secure ECS login screen.',
+            icon: 'log-out-outline',
+            tone: 'danger',
+          },
+        ] : []}
+        accountActionBusyId={accountActionBusyId}
+        onAccountAction={user ? handleAccountAction : undefined}
+        statusLabel={profileStatus.statusLabel}
+        statusDetail={profileStatus.statusDetail}
+        statusTone={profileStatus.tone}
+        processingActive={profileStatus.processingActive}
+        syncActionLabel={syncActionLabel}
+        syncLabel={bannerStatus.processingLabel ?? bannerStatus.statusDetail}
+        syncDisabled={!isOnline || bannerStatus.processingActive}
+        onManualSync={triggerSync}
+        geofenceRadius={geofenceRadius}
+        onSelectGeofence={(meters) => {
+          setGeofenceRadius(meters);
+          expeditionStateStore.setGeofenceRadius(meters);
         }}
+        appearanceMode={appearanceMode}
+        onSelectTheme={setAppearanceMode}
+        operatorTrustMode={operatorTrustMode}
+        onSelectOperatorTrustMode={(mode) => {
+          setOperatorTrustMode(mode);
+          operatorTrustModeStore.setMode(mode);
+        }}
+        onProfilePress={onAuthPress}
+        endActionLabel={showEndExpedition ? 'END EXPEDITION' : undefined}
+        onEndAction={showEndExpedition ? handleEndExpedition : undefined}
       />
 
-      {/* ── ECS Diagnostics Panel (Hidden Developer Mode) ──────
-           Full-screen modal accessible only via triple-tap on the
-           expedition title area. Only renders in __DEV__ mode.
-           Does not affect normal app operation or performance. */}
+      <FleetSyncModal
+        visible={syncModalVisible}
+        onClose={() => setSyncModalVisible(false)}
+        eyebrow="ECS COMMAND"
+        title="Sync Management"
+        subtitle="Queue health, pending field changes, conflicts, and offline readiness."
+      />
+
       <EcsDiagnosticsPanel
         visible={diagnosticsPanelVisible}
         onClose={() => setDiagnosticsPanelVisible(false)}
       />
-    </View>
+    </Animated.View>
   );
 }
 
-
+function getStatusPillStyles(tone: ShellStatusPillTone, neutralColor: string) {
+  switch (tone) {
+    case 'active':
+      return {
+        color: '#4CAF50',
+        borderColor: '#4CAF50' + '45',
+        backgroundColor: '#4CAF50' + '12',
+      };
+    case 'sync':
+      return {
+        color: '#5AC8FA',
+        borderColor: '#5AC8FA' + '45',
+        backgroundColor: '#5AC8FA' + '12',
+      };
+    case 'degraded':
+      return {
+        color: '#D6A04B',
+        borderColor: '#D6A04B' + '45',
+        backgroundColor: '#D6A04B' + '12',
+      };
+    case 'neutral':
+    default:
+      return {
+        color: neutralColor,
+        borderColor: neutralColor + '45',
+        backgroundColor: neutralColor + '10',
+      };
+  }
+}
 
 const styles = StyleSheet.create({
+  collapseShell: {
+    overflow: 'hidden',
+  },
   container: {
-    flexDirection: 'row',
+    width: '100%',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'web' ? 12 : 52,
-    paddingBottom: 12,
-    backgroundColor: DHDR.bar,
-    borderBottomWidth: 0,
-    overflow: 'visible',
+    paddingTop: 0,
+    paddingBottom: 3,
+    overflow: 'hidden',
+    backgroundColor: '#020304',
   },
-  containerDimmed: {
-    opacity: 0.85,
-  },
-
-  // ── Structural gold rail — bottom edge (1.5px, solid, no glow) ──
   goldRailLine: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 1.5,
+    height: 2,
     backgroundColor: DHDR.goldRail,
-    zIndex: 2,
+    opacity: 0.78,
+    zIndex: 4,
   },
-
-  // ── Expedition Gold Underline ──────────────────────────────
-  // Animated gold accent that appears above the structural rail
-  // when expedition is active. Brighter than the structural rail
-  // to signal operational state.
   expeditionGoldUnderline: {
     position: 'absolute',
-    bottom: 1.5, // sits directly above the structural gold rail
+    bottom: 1.5,
     left: 0,
     right: 0,
     backgroundColor: DHDR.expeditionGold,
     zIndex: 3,
   },
-
-  // ── Vertical depth shift — lighter strip just above gold rail ──
   barBottomEdge: {
     position: 'absolute',
     bottom: 1.5,
@@ -622,209 +907,189 @@ const styles = StyleSheet.create({
     backgroundColor: DHDR.barBottomEdge,
     zIndex: 1,
   },
-
-  // ── Radial gradient container — centered on left title area ──
   radialContainer: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingLeft: '10%',
     zIndex: 0,
     overflow: 'hidden',
   },
-
   radialRing: {
     position: 'absolute',
   },
-
-  left: {
-    flex: 1,
-    zIndex: 3,
-  },
-  leftColumn: {
-    gap: 4,
-  },
-  leftRow: {
+  contentRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    width: '100%',
+    alignSelf: 'center',
+    flex: 1,
+    minHeight: ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  },
+  edgeSlotBase: {
+    justifyContent: 'center',
+    paddingBottom: 0,
+    zIndex: 3,
+  },
+  edgeSlotStart: {
+    alignItems: 'flex-start',
+  },
+  edgeSlotEnd: {
+    alignItems: 'flex-end',
+  },
+  rightControlCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 6,
   },
-  activeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  tripName: {
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    flex: 1,
-    flexWrap: 'wrap',
-  },
-  noTrip: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-  },
-
-  center: {
+  statusPillCluster: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    zIndex: 3,
+    maxWidth: '100%',
+    flexShrink: 1,
   },
-  syncLabel: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-
-  right: {
+  centerContent: {
     flex: 1,
-    alignItems: 'flex-end',
+    minWidth: 0,
     zIndex: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingBottom: 0,
+    backgroundColor: 'transparent',
   },
-  rightIcons: {
+  bannerTitleStack: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  bannerTitle: {
+    maxWidth: '100%',
+    color: DHDR.iconActive,
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
+    letterSpacing: 0.65,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  bannerMotto: {
+    maxWidth: '100%',
+    marginTop: 1,
+    color: 'rgba(234,222,190,0.88)',
+    fontSize: 9.5,
+    lineHeight: 11,
+    fontWeight: '800',
+    letterSpacing: 0.85,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.68)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  shellTitle: {
+    fontSize: 15,
+    lineHeight: 18,
+    fontWeight: '700',
+    letterSpacing: 0.22,
+    color: DHDR.iconActive,
+    textAlign: 'center',
+  },
+  shellTitleStack: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shellTitlePrimary: {
+    fontSize: 12.5,
+    lineHeight: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: DHDR.iconActive,
+    textAlign: 'center',
+  },
+  shellTitleSecondary: {
+    marginTop: -1,
+    fontSize: 10.5,
+    lineHeight: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    color: DHDR.iconActive,
+    textAlign: 'center',
+  },
+  statusPill: {
+    minHeight: 16,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    gap: 4,
+    flexShrink: 0,
   },
-  viewerBtn: {
-    padding: 2,
-    position: 'relative',
+  statusPillSyncIcon: {
+    opacity: 0.96,
   },
-  viewerDot: {
-    position: 'absolute',
-    top: 0,
-    right: -1,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    borderWidth: 1.5,
+  statusPillDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
   },
-  optionsBtn: {
-    padding: 2,
-    position: 'relative',
-  },
-  optionsDot: {
-    position: 'absolute',
-    top: 0,
-    right: -1,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    borderWidth: 1.5,
+  statusPillText: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.72,
   },
   authBtn: {
-    padding: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderWidth: 1,
+    borderColor: 'rgba(201,162,76,0.20)',
   },
-  connDot: {
+  syncBadge: {
     position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    borderWidth: 1.5,
+    right: -4,
+    top: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(17,20,24,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.25)',
   },
   doneBtn: {
-    paddingHorizontal: 14,
+    minWidth: 70,
+    minHeight: 34,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   doneText: {
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.5,
   },
-
-  // ── Dropdown Menu ─────────────────────────────────────────
-  dropdownOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-  },
-  dropdownContainer: {
-    position: 'absolute',
-    top: Platform.OS === 'web' ? 56 : 96,
-    right: 16,
-    zIndex: 100,
-  },
-  dropdown: {
-    minWidth: 200,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingVertical: 4,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
-        shadowRadius: 12,
-      },
-      android: { elevation: 8 },
-      default: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
-        shadowRadius: 12,
-      },
-    }),
-  },
-  dropdownItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-  },
-  dropdownItemText: {
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  dropdownDivider: {
-    height: 0.75,
-    backgroundColor: 'rgba(212,160,23,0.12)',
-    marginHorizontal: 12,
-  },
-
-  // ── Dropdown item with badge (Geofence Radius) ────────────
-  dropdownItemWithBadge: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  radiusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(212,160,23,0.10)',
-    borderWidth: 0.75,
-    borderColor: 'rgba(212,160,23,0.25)',
-  },
-  radiusBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#D4A017',
-    letterSpacing: 0.5,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
 });
-
-
-
-
-
-

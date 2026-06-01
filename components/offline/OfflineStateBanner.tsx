@@ -14,7 +14,7 @@ import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngi
 import {
   CONNECTIVITY_STATE_DISPLAY,
   type OfflineConnectivityState,
-} from '../../lib/offlineConnectivityState';
+} from '../../lib/offlineExpeditionModeTypes';
 
 interface OfflineStateBannerProps {
   expanded?: boolean;

@@ -10,7 +10,8 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL } from '../../lib/theme';
 import type { DailyForecast } from '../../lib/weatherTypes';
-import { getWeatherIcon } from '../../lib/weatherTypes';
+import { getWeatherIcon, getWindDirection } from '../../lib/weatherTypes';
+import { normalizeDailyForecastRows } from '../../lib/weatherForecastTimeline';
 
 interface Props {
   forecast: DailyForecast[];
@@ -45,13 +46,25 @@ function getTempBarWidth(temp: number | null, minAll: number, maxAll: number): n
   return Math.max(0, Math.min(100, ((temp - minAll) / (maxAll - minAll)) * 100));
 }
 
-export default function ForecastTimeline({ forecast, units = 'imperial' }: Props) {
-  if (!forecast || forecast.length === 0) return null;
+function finiteTemperature(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
 
-  const speedUnit = units === 'imperial' ? 'mph' : 'm/s';
+function formatForecastTemperature(value: number | null | undefined): string {
+  const temp = finiteTemperature(value);
+  return temp != null ? `${Math.round(temp)}°` : '—';
+}
+
+export default function ForecastTimeline({ forecast }: Props) {
+  const dailyForecast = React.useMemo(
+    () => normalizeDailyForecastRows(forecast ?? []),
+    [forecast],
+  );
+
+  if (dailyForecast.length === 0) return null;
 
   // Compute global min/max for temperature bar scaling
-  const allTemps = forecast.flatMap(d => [d.temp_min, d.temp_max].filter(t => t != null) as number[]);
+  const allTemps = dailyForecast.flatMap(d => [d.temp_min, d.temp_max].filter(t => t != null) as number[]);
   const globalMin = allTemps.length > 0 ? Math.min(...allTemps) : 0;
   const globalMax = allTemps.length > 0 ? Math.max(...allTemps) : 100;
 
@@ -60,14 +73,27 @@ export default function ForecastTimeline({ forecast, units = 'imperial' }: Props
       <View style={styles.header}>
         <Ionicons name="calendar-outline" size={13} color={TACTICAL.amber} />
         <Text style={styles.headerTitle}>FORECAST</Text>
-        <Text style={styles.headerSub}>{forecast.length}-DAY</Text>
+        <Text style={styles.headerSub}>{dailyForecast.length}-DAY</Text>
       </View>
 
-      {forecast.map((day, idx) => {
+      {dailyForecast.map((day, idx) => {
         const icon = getWeatherIcon(day.weather_main, day.weather_id);
         const isToday = getDayLabel(day.date) === 'TODAY';
-        const lowPct = getTempBarWidth(day.temp_min, globalMin, globalMax);
-        const highPct = getTempBarWidth(day.temp_max, globalMin, globalMax);
+        const dailyLow = finiteTemperature(day.temp_min);
+        const dailyHigh = finiteTemperature(day.temp_max);
+        const lowPct = getTempBarWidth(dailyLow, globalMin, globalMax);
+        const highPct = getTempBarWidth(dailyHigh, globalMin, globalMax);
+        const windMax = typeof day.wind_max === 'number' && Number.isFinite(day.wind_max) ? day.wind_max : null;
+        const gustMax = typeof day.wind_gust_max === 'number' && Number.isFinite(day.wind_gust_max) ? day.wind_gust_max : null;
+        const windDir = typeof day.wind_deg === 'number' && Number.isFinite(day.wind_deg)
+          ? getWindDirection(day.wind_deg)
+          : null;
+        const dayTemp = typeof day.temp_day === 'number' && Number.isFinite(day.temp_day)
+          ? day.temp_day
+          : dailyLow != null && dailyHigh != null
+            ? Math.round((dailyLow + dailyHigh) / 2)
+            : dailyHigh ?? dailyLow ?? null;
+        const hasPrecipChance = typeof day.pop === 'number' && Number.isFinite(day.pop) && day.pop > 0;
 
         return (
           <View
@@ -75,7 +101,7 @@ export default function ForecastTimeline({ forecast, units = 'imperial' }: Props
             style={[
               styles.dayRow,
               isToday && styles.dayRowToday,
-              idx < forecast.length - 1 && styles.dayRowBorder,
+              idx < dailyForecast.length - 1 && styles.dayRowBorder,
             ]}
           >
             {/* Day label */}
@@ -89,26 +115,27 @@ export default function ForecastTimeline({ forecast, units = 'imperial' }: Props
             {/* Weather icon + condition */}
             <View style={styles.conditionCol}>
               <Ionicons name={icon as any} size={16} color={isToday ? TACTICAL.amber : TACTICAL.textMuted} />
+              <Text style={styles.dayTempText}>
+                {dayTemp != null ? `${Math.round(dayTemp)}°` : '--'}
+              </Text>
             </View>
 
             {/* Precipitation */}
             <View style={styles.precipCol}>
-              {day.pop > 0 ? (
+              {hasPrecipChance ? (
                 <View style={styles.precipRow}>
                   <Ionicons name="water-outline" size={9} color={getPrecipColor(day.pop)} />
                   <Text style={[styles.precipText, { color: getPrecipColor(day.pop) }]}>
                     {day.pop}%
                   </Text>
                 </View>
-              ) : (
-                <Text style={styles.precipNone}>--</Text>
-              )}
+              ) : null}
             </View>
 
             {/* Temperature range bar */}
             <View style={styles.tempBarCol}>
               <Text style={styles.tempLow}>
-                {day.temp_min != null ? `${day.temp_min}°` : '--'}
+                {formatForecastTemperature(dailyLow)}
               </Text>
               <View style={styles.tempBarTrack}>
                 <View
@@ -122,7 +149,7 @@ export default function ForecastTimeline({ forecast, units = 'imperial' }: Props
                 />
               </View>
               <Text style={styles.tempHigh}>
-                {day.temp_max != null ? `${day.temp_max}°` : '--'}
+                {formatForecastTemperature(dailyHigh)}
               </Text>
             </View>
 
@@ -131,14 +158,19 @@ export default function ForecastTimeline({ forecast, units = 'imperial' }: Props
               <Ionicons
                 name="flag-outline"
                 size={9}
-                color={day.wind_max > 25 ? '#FF7043' : TACTICAL.textMuted}
+                color={(gustMax ?? windMax) != null && (gustMax ?? windMax)! > 25 ? '#FF7043' : TACTICAL.textMuted}
               />
               <Text style={[
                 styles.windText,
-                day.wind_max > 25 && { color: '#FF7043' },
+                (gustMax ?? windMax) != null && (gustMax ?? windMax)! > 25 && { color: '#FF7043' },
               ]}>
-                {day.wind_max}
+                {windMax != null ? `${Math.round(windMax)}${windDir ? ` ${windDir}` : ''}` : '--'}
               </Text>
+              {gustMax != null && (
+                <Text style={styles.gustText}>
+                  G{Math.round(gustMax)}
+                </Text>
+              )}
             </View>
           </View>
         );
@@ -211,6 +243,13 @@ const styles = StyleSheet.create({
   conditionCol: {
     width: 24,
     alignItems: 'center',
+    gap: 2,
+  },
+  dayTempText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    fontFamily: 'Courier',
   },
   precipCol: {
     width: 36,
@@ -224,11 +263,6 @@ const styles = StyleSheet.create({
   precipText: {
     fontSize: 9,
     fontWeight: '700',
-    fontFamily: 'Courier',
-  },
-  precipNone: {
-    fontSize: 9,
-    color: TACTICAL.textMuted,
     fontFamily: 'Courier',
   },
   tempBarCol: {
@@ -268,9 +302,8 @@ const styles = StyleSheet.create({
     width: 28,
   },
   windCol: {
-    width: 32,
-    flexDirection: 'row',
-    alignItems: 'center',
+    width: 46,
+    alignItems: 'flex-end',
     justifyContent: 'flex-end',
     gap: 3,
   },
@@ -280,7 +313,11 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontFamily: 'Courier',
   },
+  gustText: {
+    fontSize: 7,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    fontFamily: 'Courier',
+  },
 });
-
-
 

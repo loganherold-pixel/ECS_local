@@ -18,8 +18,8 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { offlineExpeditionModeEngine } from '../../app/lib/offlineExpeditionModeEngine';
-import type { ExpeditionPack } from '../../app/lib/offlineExpeditionModeTypes';
+import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
+import type { ExpeditionPack } from '../../lib/offlineExpeditionModeTypes';
 
 interface ExpeditionPackManagerProps {
   onClose?: () => void;

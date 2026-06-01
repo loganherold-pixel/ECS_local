@@ -1,0 +1,15 @@
+{
+  "id": "active-1001",
+  "name": "Juniper Flats Campground",
+  "latitude": 38.71236,
+  "longitude": -119.81235,
+  "facilityType": "campground",
+  "managingAgency": "USFS",
+  "operatorName": "ACTIVE Network",
+  "reservationUrl": "https://www.active.com/camping/juniper-flats",
+  "detailUrl": "https://www.active.com/facilities/active-1001",
+  "status": "open",
+  "siteCount": 24,
+  "siteTypes": ["standard", "tent"],
+  "amenities": ["Drinking Water", "Vault Toilet", "Picnic Tables"]
+}

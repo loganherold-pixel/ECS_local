@@ -23,6 +23,8 @@
  * Phase: Core System Stability Pass
  */
 
+import { ecsLog, type EcsLogCategory } from './ecsLogger';
+
 const TAG = '[ECS-STABILITY]';
 
 // ══════════════════════════════════════════════════════════
@@ -38,7 +40,7 @@ export function validateRouteMetadata<T extends Record<string, any>>(
   route: T,
   routeId: string,
 ): T {
-  const safe = { ...route };
+  const safe: Record<string, any> = { ...route };
 
   // String fields — default to empty or descriptive placeholder
   if (!safe.name || typeof safe.name !== 'string') {
@@ -101,7 +103,7 @@ export function validateRouteMetadata<T extends Record<string, any>>(
   safe.remotenessScore = clampScore(safe.remotenessScore, 1, 10);
   safe.estimatedDays = Math.max(1, safe.estimatedDays);
 
-  return safe;
+  return safe as T;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -464,16 +466,29 @@ export function stabilityLog(
   message: string,
   data?: any,
 ): void {
-  const prefix = `${TAG} [${system}]`;
+  const prefix = `[${system}] ${message}`;
+  const category: EcsLogCategory =
+    system === 'Discovery'
+      ? 'DISCOVERY'
+      : system === 'Navigation'
+        ? 'GPS'
+        : system === 'Telemetry'
+          ? 'TELEMETRY'
+          : 'SYSTEM';
   switch (level) {
     case 'info':
-      console.log(prefix, message, data !== undefined ? data : '');
+      ecsLog.debug(category, prefix, data !== undefined ? { data } : undefined);
       break;
     case 'warn':
-      console.warn(prefix, message, data !== undefined ? data : '');
+      ecsLog.warn(category, prefix, data !== undefined ? { data } : undefined);
       break;
     case 'error':
-      console.error(prefix, message, data !== undefined ? data : '');
+      ecsLog.error(
+        category,
+        prefix,
+        data instanceof Error ? data : undefined,
+        data !== undefined && !(data instanceof Error) ? { data } : undefined,
+      );
       break;
   }
 }

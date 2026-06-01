@@ -13,12 +13,16 @@
  * - No rapid toggling (hysteresis + time thresholds)
  */
 import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
-export type AppearanceMode = 'auto' | 'dark' | 'light' | 'driving';
+export type AppearanceMode = 'dynamic' | 'dark' | 'light' | 'driving';
 export type EffectiveTheme = 'dark' | 'light' | 'driving';
+export const VISIBILITY_THEME_CYCLE: readonly AppearanceMode[] = ['dark', 'light', 'dynamic'];
+export const DEFAULT_THEME_CYCLE: readonly AppearanceMode[] = ['dark', 'light', 'driving', 'dynamic'];
 
 const STORAGE_KEY_MODE = 'ecs_appearance_mode';
 const STORAGE_KEY_AUTO_DRIVING = 'ecs_auto_driving_enabled';
+const appearancePersistence = createPersistedKeyValueCache('ecs_appearance_preferences');
 
 // ── Auto-driving thresholds ─────────────────────────────────
 const DRIVING_ACTIVATE_SPEED_MPH = 8;
@@ -29,20 +33,27 @@ const COOLDOWN_MS = 15_000; // 15s cooldown after manual override
 
 // ── Persistence helpers ─────────────────────────────────────
 function getStored(key: string): string | null {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(key);
-    }
-  } catch {}
-  return null;
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(key);
+      }
+    } catch {}
+    return null;
+  }
+  return appearancePersistence.get(key);
 }
 
 function setStored(key: string, value: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.setItem(key, value);
-    }
-  } catch {}
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, value);
+      }
+    } catch {}
+    return;
+  }
+  appearancePersistence.set(key, value);
 }
 
 type AppearanceListener = (mode: AppearanceMode, autoDriving: boolean) => void;
@@ -57,24 +68,72 @@ class AppearanceStore {
   private _speedBelowThresholdSince: number | null = null;
   private _autoDrivingActive: boolean = false;
   private _lastManualOverrideAt: number = 0;
+  private _hydrated = Platform.OS === 'web';
 
   constructor() {
     this._load();
+    if (Platform.OS !== 'web') {
+      void this._hydrateNative();
+    }
   }
 
   private _load(): void {
     const storedMode = getStored(STORAGE_KEY_MODE);
-    if (storedMode && ['auto', 'dark', 'light', 'driving'].includes(storedMode)) {
-      this._mode = storedMode as AppearanceMode;
+    const normalizedMode = this.normalizeMode(storedMode);
+    if (normalizedMode) {
+      this._mode = normalizedMode;
     }
     const storedAutoDriving = getStored(STORAGE_KEY_AUTO_DRIVING);
     this._autoDrivingEnabled = storedAutoDriving === 'true';
+  }
+
+  private async _hydrateNative(): Promise<void> {
+    await appearancePersistence.waitForHydration();
+
+    const storedMode = appearancePersistence.get(STORAGE_KEY_MODE);
+    const storedAutoDriving = appearancePersistence.get(STORAGE_KEY_AUTO_DRIVING);
+    let changed = false;
+
+    const normalizedMode = this.normalizeMode(storedMode);
+    if (normalizedMode && normalizedMode !== this._mode) {
+      this._mode = normalizedMode;
+      changed = true;
+    }
+
+    const nextAutoDriving = storedAutoDriving === 'true';
+    if (storedAutoDriving != null && nextAutoDriving !== this._autoDrivingEnabled) {
+      this._autoDrivingEnabled = nextAutoDriving;
+      if (!nextAutoDriving) {
+        this._autoDrivingActive = false;
+      }
+      changed = true;
+    }
+
+    this._hydrated = true;
+    if (changed) {
+      this._notify();
+    }
   }
 
   // ── Getters ─────────────────────────────────────────────
   get mode(): AppearanceMode { return this._mode; }
   get autoDrivingEnabled(): boolean { return this._autoDrivingEnabled; }
   get isAutoDrivingActive(): boolean { return this._autoDrivingActive; }
+  get isHydrated(): boolean { return this._hydrated; }
+
+  private normalizeMode(mode: string | null | undefined): AppearanceMode | null {
+    switch (mode) {
+      case 'auto':
+      case 'dynamic':
+        return 'dynamic';
+      case 'dark':
+      case 'light':
+      case 'driving':
+        return mode;
+      default:
+        return null;
+    }
+  }
 
   // ── Setters ─────────────────────────────────────────────
   setMode(mode: AppearanceMode): void {
@@ -83,7 +142,7 @@ class AppearanceStore {
     // If user manually selects a mode, mark as manual override
     this._lastManualOverrideAt = Date.now();
     // If user manually selects non-driving, deactivate auto-driving
-    if (mode !== 'driving' && mode !== 'auto') {
+    if (mode !== 'driving' && mode !== 'dynamic') {
       this._autoDrivingActive = false;
     }
     this._notify();
@@ -116,7 +175,7 @@ class AppearanceStore {
     if (this._mode === 'light') return 'light';
 
     // Auto mode: follow device color scheme
-    if (this._mode === 'auto') {
+    if (this._mode === 'dynamic') {
       return deviceColorScheme === 'light' ? 'light' : 'dark';
     }
 
@@ -185,10 +244,10 @@ class AppearanceStore {
   }
 
   // ── Cycle mode (for quick toggle) ───────────────────────
-  cycleMode(): AppearanceMode {
-    const order: AppearanceMode[] = ['dark', 'light', 'driving', 'auto'];
-    const idx = order.indexOf(this._mode);
-    const next = order[(idx + 1) % order.length];
+  cycleMode(order: readonly AppearanceMode[] = DEFAULT_THEME_CYCLE): AppearanceMode {
+    const normalizedOrder = order.length > 0 ? [...order] : [...DEFAULT_THEME_CYCLE];
+    const idx = normalizedOrder.indexOf(this._mode);
+    const next = normalizedOrder[(idx + 1) % normalizedOrder.length] ?? normalizedOrder[0] ?? 'dark';
     this.setMode(next);
     return next;
   }
@@ -202,6 +261,12 @@ class AppearanceStore {
   private _notify(): void {
     this._listeners.forEach(fn => {
       try { fn(this._mode, this._autoDrivingEnabled); } catch {}
+    });
+  }
+
+  waitForHydration(): Promise<void> {
+    return appearancePersistence.waitForHydration().then(() => {
+      this._hydrated = true;
     });
   }
 }

@@ -202,7 +202,7 @@ export default function SyncQueueIndicator() {
         pulseRef.current = null;
       }
     };
-  }, [totalBadgeCount, stats.status]);
+  }, [totalBadgeCount, stats.status, pulseAnim]);
 
   // Spin animation when syncing
   useEffect(() => {
@@ -232,7 +232,7 @@ export default function SyncQueueIndicator() {
         spinRef.current = null;
       }
     };
-  }, [stats.status]);
+  }, [stats.status, spinAnim]);
 
   // Badge scale animation
   useEffect(() => {
@@ -243,7 +243,7 @@ export default function SyncQueueIndicator() {
       tension: 120,
       useNativeDriver: true,
     }).start();
-  }, [totalBadgeCount]);
+  }, [totalBadgeCount, badgeScaleAnim]);
 
   const spinRotation = spinAnim.interpolate({
     inputRange: [0, 1],

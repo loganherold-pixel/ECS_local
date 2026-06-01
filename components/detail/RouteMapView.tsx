@@ -1,17 +1,10 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 
 import { TACTICAL } from '../../lib/theme';
 import type { ExpeditionWaypoint, WaypointType } from '../../lib/types';
-
-// WebView import (conditional for web)
-let WebView: any = null;
-try {
-  WebView = require('react-native-webview').WebView;
-} catch {
-  WebView = null;
-}
 
 // ============================================================
 // MARKER COLORS BY WAYPOINT TYPE
@@ -207,8 +200,8 @@ export default function RouteMapView({
     return (
       <View style={[s.emptyMap, { height }]}>
         <Ionicons name="map-outline" size={36} color={TACTICAL.textMuted} />
-        <Text style={s.emptyTitle}>NO COORDINATES PLOTTED</Text>
-        <Text style={s.emptySub}>Add lat/lon to waypoints to display the route map</Text>
+        <Text style={s.emptyTitle}>NO ROUTE GEOMETRY</Text>
+        <Text style={s.emptySub}>Add lat/lon to route points to render the route map</Text>
       </View>
     );
   }
@@ -252,7 +245,7 @@ export default function RouteMapView({
   return (
     <View style={[s.emptyMap, { height }]}>
       <Ionicons name="map-outline" size={36} color={TACTICAL.textMuted} />
-      <Text style={s.emptyTitle}>MAP UNAVAILABLE</Text>
+      <Text style={s.emptyTitle}>MAP SURFACE UNAVAILABLE</Text>
       <Text style={s.emptySub}>WebView component not loaded</Text>
     </View>
   );
@@ -288,6 +281,5 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
   },
 });
-
 
 

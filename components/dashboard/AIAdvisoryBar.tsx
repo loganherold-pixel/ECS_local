@@ -20,7 +20,7 @@
  * a message is displayed.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -37,6 +37,7 @@ import {
   type AdvisoryState,
   type AdvisoryMode,
 } from '../../lib/advisoryStore';
+import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 
 // ── Bar Height ───────────────────────────────────────────────
 // Fixed height that never changes — prevents layout shift.
@@ -89,8 +90,10 @@ interface AIAdvisoryBarProps {
 export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
   const { palette, drivingOverrides } = useTheme();
   const [state, setState] = useState<AdvisoryState>(advisoryStore.getState());
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useStableAnimatedValue(0);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const visible = !!state.current && state.isVisible;
+  const currentMessageId = state.current?.id ?? null;
 
   // ── Reduced Motion ─────────────────────────────────────
   useEffect(() => {
@@ -102,14 +105,22 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
   // ── Subscribe to advisory store ────────────────────────
   useEffect(() => {
     const unsubscribe = advisoryStore.subscribe((newState) => {
-      setState(newState);
+      setState((current) => (
+        current.current?.id === newState.current?.id &&
+        current.isVisible === newState.isVisible &&
+        current.enabled === newState.enabled &&
+        current.simplifiedMode === newState.simplifiedMode
+          ? current
+          : newState
+      ));
     });
     return unsubscribe;
   }, []);
 
   // ── Animate fade based on visibility state ─────────────
   useEffect(() => {
-    if (!state.current) {
+    fadeAnim.stopAnimation();
+    if (!currentMessageId) {
       // No message — ensure faded out
       if (reduceMotion || drivingOverrides.disableAnimations) {
         fadeAnim.setValue(0);
@@ -123,7 +134,7 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
       return;
     }
 
-    if (state.isVisible) {
+    if (visible) {
       // Fade in
       if (reduceMotion || drivingOverrides.disableAnimations) {
         fadeAnim.setValue(1);
@@ -146,7 +157,7 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
         }).start();
       }
     }
-  }, [state.isVisible, state.current, reduceMotion, drivingOverrides.disableAnimations]);
+  }, [currentMessageId, visible, reduceMotion, drivingOverrides.disableAnimations, fadeAnim]);
 
   // ── Don't render if feature is disabled ────────────────
   if (!enabled || !state.enabled) {
@@ -213,7 +224,7 @@ export default function AIAdvisoryBar({ enabled = true }: AIAdvisoryBarProps) {
               color={MODE_COLORS.standby.icon}
             />
             <Text style={[styles.emptyText, { color: MODE_COLORS.standby.text }]}>
-              AI ADVISORY
+              ECS ADVISORY
             </Text>
           </View>
         )}

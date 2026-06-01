@@ -1,75 +1,51 @@
 /**
  * useSheetLayout — Shared hook for bottom sheet / popup panel layout
  *
- * Provides safe area-aware dimensions for bottom sheets and modal panels
- * so content is never hidden behind the Android navigation bar, iOS home
- * indicator, or the ECS CommandDock.
- *
- * NOTE: React Native <Modal> renders in a separate window, so
- * useSafeAreaInsets() from react-native-safe-area-context may not be
- * available. This hook uses conservative platform-based fallbacks
- * that work reliably inside Modals on all platforms.
- *
- * Usage:
- *   const { sheetMaxHeight, contentBottomPadding, safeBottom } = useSheetLayout();
- *
- *   <View style={{ maxHeight: sheetMaxHeight }}>
- *     <ScrollView contentContainerStyle={{ paddingBottom: contentBottomPadding }}>
- *       ...
- *     </ScrollView>
- *   </View>
+ * Keeps sheets bounded between the ECS top shell and the CommandDock so
+ * overlay content scrolls internally instead of drifting under chrome.
  */
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Dimensions, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getShellBottomClearance } from './shellLayout';
 
-// ── Default safe area fallbacks ──────────────────────────────
-// Conservative estimates that cover the most common device configurations.
-// These are intentionally generous to prevent content clipping.
 const FALLBACK_BOTTOM_INSET = Platform.select({
-  ios: 34,      // iPhone with home indicator (X and later)
-  android: 48,  // Android gesture navigation bar (3-button nav is ~48dp)
-  default: 0,   // Web
+  ios: 34,
+  android: 24,
+  default: 0,
 }) ?? 0;
 
-// Extra breathing room above the bottom inset
+const FALLBACK_TOP_INSET = Platform.select({
+  ios: 16,
+  android: 12,
+  default: 22,
+}) ?? 0;
+
 const EXTRA_BOTTOM_MARGIN = 12;
-
-// Maximum fraction of screen height a sheet should occupy
 const MAX_SHEET_FRACTION = 0.92;
-
-// Minimum fraction of screen height a sheet should occupy
-const MIN_SHEET_FRACTION = 0.50;
+const MIN_SHEET_FRACTION = 0.5;
 
 export interface SheetLayout {
-  /** Maximum height for the sheet container */
   sheetMaxHeight: number;
-  /** Bottom padding for ScrollView contentContainerStyle */
   contentBottomPadding: number;
-  /** Raw safe area bottom inset */
   safeBottom: number;
-  /** Full screen height */
+  topClearance: number;
+  bottomClearance: number;
   screenHeight: number;
-  /** Full screen width */
   screenWidth: number;
-  /** Whether the device is in landscape orientation */
   isLandscape: boolean;
 }
 
 export function useSheetLayout(options?: {
-  /** Override max fraction (default 0.92) */
   maxFraction?: number;
-  /** Override min fraction (default 0.50) */
   minFraction?: number;
-  /** Extra bottom padding beyond safe area (default 12) */
   extraBottomMargin?: number;
 }): SheetLayout {
+  const insets = useSafeAreaInsets();
   const maxFraction = options?.maxFraction ?? MAX_SHEET_FRACTION;
   const minFraction = options?.minFraction ?? MIN_SHEET_FRACTION;
   const extraMargin = options?.extraBottomMargin ?? EXTRA_BOTTOM_MARGIN;
 
-  const safeBottom = FALLBACK_BOTTOM_INSET;
-
-  // Track screen dimensions for orientation changes
   const [dims, setDims] = useState(() => Dimensions.get('window'));
 
   useEffect(() => {
@@ -79,37 +55,35 @@ export function useSheetLayout(options?: {
     return () => sub.remove();
   }, []);
 
+  const safeBottom = Math.max(insets.bottom || 0, FALLBACK_BOTTOM_INSET);
+  const safeTop = Math.max(insets.top || 0, FALLBACK_TOP_INSET);
+
   const screenHeight = dims.height;
   const screenWidth = dims.width;
   const isLandscape = screenWidth > screenHeight;
+  const topClearance = safeTop + (isLandscape ? 8 : 12);
+  const bottomClearance = getShellBottomClearance(safeBottom, extraMargin);
+  const availableHeight = Math.max(280, screenHeight - topClearance - bottomClearance);
 
-  // Calculate sheet max height — leave room for status bar + safe area
   const sheetMaxHeight = Math.max(
-    screenHeight * minFraction,
-    Math.min(screenHeight * maxFraction, screenHeight - safeBottom)
+    availableHeight * minFraction,
+    Math.min(availableHeight * maxFraction, availableHeight),
   );
 
-  // Content bottom padding = safe area + extra margin
-  // This ensures the last item in a ScrollView is fully visible
-  // above the device's bottom safe area
   const contentBottomPadding = safeBottom + extraMargin;
 
   return {
     sheetMaxHeight,
     contentBottomPadding,
     safeBottom,
+    topClearance,
+    bottomClearance,
     screenHeight,
     screenWidth,
     isLandscape,
   };
 }
 
-/**
- * getStaticSheetLayout — Non-hook version for use outside components
- *
- * Uses Dimensions API only (no safe area context).
- * Useful for StyleSheet.create() or static calculations.
- */
 export function getStaticSheetLayout(): {
   sheetMaxHeight: number;
   contentBottomPadding: number;
@@ -117,42 +91,28 @@ export function getStaticSheetLayout(): {
 } {
   const { height } = Dimensions.get('window');
   const safeBottom = FALLBACK_BOTTOM_INSET;
+  const topClearance = FALLBACK_TOP_INSET + 12;
+  const bottomClearance = getShellBottomClearance(safeBottom, EXTRA_BOTTOM_MARGIN);
+  const availableHeight = Math.max(280, height - topClearance - bottomClearance);
+
   return {
-    sheetMaxHeight: Math.min(height * MAX_SHEET_FRACTION, height - safeBottom),
+    sheetMaxHeight: Math.min(availableHeight * MAX_SHEET_FRACTION, availableHeight),
     contentBottomPadding: safeBottom + EXTRA_BOTTOM_MARGIN,
     safeBottom,
   };
 }
 
-/**
- * getDynamicMaxHeight — Calculate a safe maxHeight for any popup/panel
- *
- * Replaces hardcoded pixel values (e.g., maxHeight: 400) with a
- * screen-relative value that respects safe areas and never exceeds
- * the available viewport.
- *
- * @param fraction - Fraction of screen height (default 0.75)
- * @returns A pixel value safe for use as maxHeight
- */
 export function getDynamicMaxHeight(fraction: number = 0.75): number {
   const { height } = Dimensions.get('window');
   const safeBottom = FALLBACK_BOTTOM_INSET;
-  const safeTop = Platform.select({ ios: 50, android: 24, default: 0 }) ?? 0;
-  const available = height - safeTop - safeBottom;
-  return Math.min(available * fraction, height - safeTop - safeBottom - 20);
+  const topClearance = FALLBACK_TOP_INSET + 12;
+  const bottomClearance = getShellBottomClearance(safeBottom, EXTRA_BOTTOM_MARGIN);
+  const available = height - topClearance - bottomClearance;
+  return Math.min(available * fraction, available - 20);
 }
 
-/**
- * useDynamicMaxHeight — Hook version of getDynamicMaxHeight
- *
- * Listens for dimension changes (orientation, window resize) and
- * returns an up-to-date maxHeight value.
- *
- * Usage:
- *   const maxH = useDynamicMaxHeight(0.70);
- *   <ScrollView style={{ maxHeight: maxH }}>...</ScrollView>
- */
 export function useDynamicMaxHeight(fraction: number = 0.75): number {
+  const insets = useSafeAreaInsets();
   const [dims, setDims] = useState(() => Dimensions.get('window'));
 
   useEffect(() => {
@@ -162,14 +122,12 @@ export function useDynamicMaxHeight(fraction: number = 0.75): number {
     return () => sub.remove();
   }, []);
 
-  const safeBottom = FALLBACK_BOTTOM_INSET;
-  const safeTop = Platform.select({ ios: 50, android: 24, default: 0 }) ?? 0;
-  const available = dims.height - safeTop - safeBottom;
-  return Math.min(available * fraction, dims.height - safeTop - safeBottom - 20);
+  const safeBottom = Math.max(insets.bottom || 0, FALLBACK_BOTTOM_INSET);
+  const safeTop = Math.max(insets.top || 0, FALLBACK_TOP_INSET);
+  const topClearance = safeTop + 12;
+  const bottomClearance = getShellBottomClearance(safeBottom, EXTRA_BOTTOM_MARGIN);
+  const available = dims.height - topClearance - bottomClearance;
+  return Math.min(available * fraction, available - 20);
 }
 
-/**
- * SAFE_BOTTOM — Exported constant for components that need raw safe area bottom inset
- */
 export const SAFE_BOTTOM_INSET = FALLBACK_BOTTOM_INSET;
-

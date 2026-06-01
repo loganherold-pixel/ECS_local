@@ -50,7 +50,7 @@ export default function TelemetryStatChips({ expeditionId, onTelemetryPoll }: Pr
     );
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [pulseAnim]);
 
   // Poll telemetry
   const doPoll = useCallback(() => {

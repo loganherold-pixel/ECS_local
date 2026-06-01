@@ -232,10 +232,67 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
   const orientationListenerRef = useRef<any>(null);
   const lastStableHeadingRef = useRef<number | null>(null);
   const stationaryCountRef = useRef(0);
+  const sourceRef = useRef<'compass' | 'gps' | 'none'>('none');
+  const isAvailableRef = useRef(false);
+  const accuracyRef = useRef<HeadingAccuracy>('none');
+  const needsRecalibrationRef = useRef(false);
+  const isStationaryLockedRef = useRef(false);
+  const accuracyDegRef = useRef<number | null>(null);
+  const rawHeadingStateRef = useRef<number | null>(null);
+  const smoothedHeadingStateRef = useRef<number | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
+  }, []);
+
+  const updateSource = useCallback((next: 'compass' | 'gps' | 'none') => {
+    if (sourceRef.current === next) return;
+    sourceRef.current = next;
+    setSource(next);
+  }, []);
+
+  const updateAvailable = useCallback((next: boolean) => {
+    if (isAvailableRef.current === next) return;
+    isAvailableRef.current = next;
+    setIsAvailable(next);
+  }, []);
+
+  const updateAccuracy = useCallback((next: HeadingAccuracy) => {
+    if (accuracyRef.current === next) return;
+    accuracyRef.current = next;
+    setAccuracy(next);
+  }, []);
+
+  const updateNeedsRecalibration = useCallback((next: boolean) => {
+    if (needsRecalibrationRef.current === next) return;
+    needsRecalibrationRef.current = next;
+    setNeedsRecalibration(next);
+  }, []);
+
+  const updateStationaryLocked = useCallback((next: boolean) => {
+    if (isStationaryLockedRef.current === next) return;
+    isStationaryLockedRef.current = next;
+    setIsStationaryLocked(next);
+  }, []);
+
+  const updateAccuracyDeg = useCallback((next: number | null) => {
+    const normalized = next == null ? null : Math.round(next * 10) / 10;
+    if (accuracyDegRef.current === normalized) return;
+    accuracyDegRef.current = normalized;
+    setAccuracyDeg(normalized);
+  }, []);
+
+  const updateRawHeading = useCallback((next: number | null) => {
+    if (rawHeadingStateRef.current === next) return;
+    rawHeadingStateRef.current = next;
+    setRawHeading(next);
+  }, []);
+
+  const updateSmoothedHeading = useCallback((next: number | null) => {
+    if (smoothedHeadingStateRef.current === next) return;
+    smoothedHeadingStateRef.current = next;
+    setSmoothedHeading(next);
   }, []);
 
   // Persist compass mode
@@ -281,8 +338,8 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
 
           if (heading != null) {
             compassHeadingRef.current = heading;
-            setIsAvailable(true);
-            setSource('compass');
+            updateAvailable(true);
+            updateSource('compass');
           }
         });
       } catch {
@@ -315,8 +372,8 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
             }
             if (heading != null) {
               compassHeadingRef.current = heading;
-              setIsAvailable(true);
-              setSource('compass');
+              updateAvailable(true);
+              updateSource('compass');
             }
           };
 
@@ -341,7 +398,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         orientationListenerRef.current = null;
       }
     };
-  }, [enabled]);
+  }, [enabled, updateAvailable, updateSource]);
 
   // ── Screen orientation change listener (for upright mode offset) ──
   useEffect(() => {
@@ -367,12 +424,16 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
   // ── Main heading computation + smoothing loop ──
   useEffect(() => {
     if (!enabled) {
-      setRawHeading(null);
-      setSmoothedHeading(null);
+      updateRawHeading(null);
+      updateSmoothedHeading(null);
       smoothedRef.current = null;
-      setAccuracy('none');
-      setNeedsRecalibration(false);
-      setIsStationaryLocked(false);
+      stationaryCountRef.current = 0;
+      updateAccuracy('none');
+      updateNeedsRecalibration(false);
+      updateStationaryLocked(false);
+      updateAccuracyDeg(null);
+      updateSource('none');
+      updateAvailable(false);
       return;
     }
 
@@ -388,7 +449,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         stationaryCountRef.current++;
         // After ~1 second of being stationary (20 ticks at 50ms), lock heading
         if (stationaryCountRef.current > 20) {
-          if (!isStationaryLocked) setIsStationaryLocked(true);
+          updateStationaryLocked(true);
           // Use last stable heading — don't update from compass
           if (lastStableHeadingRef.current != null) {
             // Keep the smoothed heading frozen
@@ -397,7 +458,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         }
       } else {
         stationaryCountRef.current = 0;
-        if (isStationaryLocked) setIsStationaryLocked(false);
+        updateStationaryLocked(false);
       }
 
       // Determine raw heading from best available source
@@ -410,19 +471,22 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
       // Priority 2: GPS course heading
       else if (gpsHeadingDeg != null && gpsHeadingDeg >= 0) {
         raw = gpsHeadingDeg;
-        if (source !== 'gps') setSource('gps');
+        updateSource('gps');
       }
 
       if (raw == null) {
         // No heading source — use GPS heading if available even if compass was preferred
         if (gpsHeadingDeg != null && gpsHeadingDeg >= 0) {
           raw = gpsHeadingDeg;
-          if (source !== 'gps') setSource('gps');
+          updateSource('gps');
         } else {
-          if (source !== 'none') setSource('none');
+          updateSource('none');
+          updateAvailable(false);
           return;
         }
       }
+
+      updateAvailable(true);
 
       // Apply compass mode correction
       let corrected = raw;
@@ -435,25 +499,25 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
       // Ensure heading is always normalized to 0–360
       corrected = normalizeAngle(corrected);
 
-      setRawHeading(Math.round(corrected));
+      updateRawHeading(Math.round(corrected));
 
       // ── Phase 6: Heading accuracy tracking ──
       const accDeg = compassAccuracyRef.current;
-      setAccuracyDeg(accDeg);
+      updateAccuracyDeg(accDeg);
 
       if (accDeg == null) {
         // Unknown accuracy — assume medium if we have a heading
-        setAccuracy(raw != null ? 'medium' : 'none');
-        setNeedsRecalibration(false);
+        updateAccuracy(raw != null ? 'medium' : 'none');
+        updateNeedsRecalibration(false);
       } else if (accDeg <= 10) {
-        setAccuracy('high');
-        setNeedsRecalibration(false);
+        updateAccuracy('high');
+        updateNeedsRecalibration(false);
       } else if (accDeg <= RECALIBRATION_THRESHOLD_DEG) {
-        setAccuracy('medium');
-        setNeedsRecalibration(false);
+        updateAccuracy('medium');
+        updateNeedsRecalibration(false);
       } else {
-        setAccuracy('low');
-        setNeedsRecalibration(true);
+        updateAccuracy('low');
+        updateNeedsRecalibration(true);
       }
 
       // ── Phase 6: Adaptive smoothing ──
@@ -477,7 +541,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         // First reading — snap immediately
         smoothedRef.current = corrected;
         lastStableHeadingRef.current = corrected;
-        setSmoothedHeading(Math.round(corrected));
+        updateSmoothedHeading(Math.round(corrected));
       } else {
         // Phase 6: Prevent abrupt rotation jumps
         // If the heading change is very large (>MAX_HEADING_CHANGE_PER_TICK),
@@ -497,12 +561,26 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         const smoothed = lerpAngle(smoothedRef.current, targetHeading, effectiveSmoothingFactor);
         smoothedRef.current = smoothed;
         lastStableHeadingRef.current = smoothed;
-        setSmoothedHeading(Math.round(normalizeAngle(smoothed)));
+        updateSmoothedHeading(Math.round(normalizeAngle(smoothed)));
       }
     }, 50); // 20 Hz update rate for smooth animation
 
     return () => clearInterval(intervalId);
-  }, [enabled, compassMode, gpsHeadingDeg, smoothingFactor, source, speedMph, isStationaryLocked]);
+  }, [
+    enabled,
+    compassMode,
+    gpsHeadingDeg,
+    smoothingFactor,
+    speedMph,
+    updateAccuracy,
+    updateAccuracyDeg,
+    updateAvailable,
+    updateNeedsRecalibration,
+    updateRawHeading,
+    updateSmoothedHeading,
+    updateSource,
+    updateStationaryLocked,
+  ]);
 
   return {
     heading: smoothedHeading,

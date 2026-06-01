@@ -1,1102 +1,2288 @@
-/**
- * QuickActionsSheet — Agency-ready bottom sheet for ECS long-press
- *
- * ────────────────────────────────────────────────────────────────
- * UI SPEC:
- *   • Slides up from bottom with dim backdrop — 85-90% screen height
- *   • Dismiss: tap outside, swipe down, or tap close button
- *   • Header: "QUICK ACTIONS" left, status pill right, close button
- *   • Drag handle at top for clarity
- *   • 2-column grid, scrollable when content exceeds visible area
- *   • Each tile: icon (top), label (bottom), flat, subtle border
- *   • ECS black/gold color scheme, no shadows
- *   • Sheet sits above bottom CommandDock navigation bar
- *   • All action tiles fully visible — no clipping at bottom
- *
- * TILE ORDER (EXACT):
- *   Row 1: [Pause/Resume Expedition] [End Expedition]
- *   Row 2: [Add Waypoint] [Quick Note]
- *   Row 3: [Incident Marker] [Emergency Comms]
- *   Row 4: [Navigate Map] [Mission Dashboard]
- *
- * FUNCTIONAL:
- *   All 8 tiles perform real actions with success feedback.
- *   Expedition-aware: tiles 1–2 disabled when no expedition.
- *   Pause/Resume toggles based on expedition state.
- *   End Expedition requires confirmation.
- * ────────────────────────────────────────────────────────────────
- */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   StyleSheet,
-  Animated,
-  Dimensions,
   TextInput,
-  PanResponder,
-  Platform,
   ActivityIndicator,
-  ScrollView,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import { SafeIcon } from './SafeIcon';
-
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeIcon as Ionicons } from './SafeIcon';
+import ECSModalShell from './ECSModalShell';
+import WeatherIntelPanel from './weather/WeatherIntelPanel';
+import { EMERGENCY_PROTOCOLS } from './emergency/EmergencyData';
+import FieldUseProtocolDetail, { type FieldUseGuideProtocol } from './emergency/FieldUseProtocolDetail';
+import RecoveryProtocolDetail from './emergency/RecoveryProtocolDetail';
+import { RECOVERY_PROTOCOLS, isRecoveryProtocol, type ProtocolDefinition } from './emergency/RecoveryProtocolData';
+import { getTacticalGlyph } from './emergency/TacticalGlyphs';
 import { useApp } from '../context/AppContext';
-import { hapticMicro, hapticCommand } from '../lib/haptics';
-import { MOTION, EASING } from '../lib/motion';
-import { DENSITY, TYPO, SPACING, ECS } from '../lib/theme';
-import { CLOSE_BTN, STATUS_PILL, ICON_BOX } from '../lib/uiConstants';
+import { missionEventStore, missionNoteStore } from '../lib/missionStore';
+import { expeditionStateStore } from '../lib/expeditionStateStore';
+import { dispatchStore } from '../lib/dispatchStore';
+import { commsStore, type CustomCommsData } from '../lib/commsStore';
 import {
-  expeditionStateStore,
-  type ExpeditionState,
-  type ExpeditionRecord,
-} from '../lib/expeditionStateStore';
+  type ECSDeviceConnectionModel,
+  type ECSDiscoverySourceUiStatus,
+  type ECSScanSummary,
+  useUnifiedDeviceConnections,
+} from '../lib/unifiedScanner';
 import {
-  missionExpeditionStore,
-  missionNoteStore,
-  missionEventStore,
-  missionCheckpointStore,
-} from '../lib/missionStore';
-import { pinStore } from '../lib/pinStore';
-import type { MissionExpedition } from '../lib/missionTypes';
-import type { PinType } from './navigate/PinTypes';
+  getSourceStatusDetail,
+  getSourceStatusLabel,
+} from '../lib/deviceConnectionScanMessaging';
+import { hapticCommand, hapticMicro } from '../lib/haptics';
+import { TACTICAL, ECS } from '../lib/theme';
+import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
+import {
+  ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
+  getShellBottomClearance,
+  getShellHeaderTopPadding,
+} from '../lib/shellLayout';
+import { useOperationalWeather } from '../lib/useOperationalWeather';
 
-// ── Standardized sizing constants (from uiConstants) ─────────
-const CLOSE_BTN_SIZE = CLOSE_BTN.size; // 32
-const STATUS_PILL_GAP = STATUS_PILL.gap; // 5
-const STATUS_PILL_PAD_H = STATUS_PILL.paddingH; // 10
-const STATUS_PILL_PAD_V = STATUS_PILL.paddingV; // 4
-const ICON_BOX_MD = ICON_BOX.md.size; // 40
+type FieldUtilitiesView =
+  | 'menu'
+  | 'quickNote'
+  | 'emergencyComms'
+  | 'intel'
+  | 'protocols'
+  | 'protocolDetail'
+  | 'recoveryProtocols'
+  | 'recoveryProtocolDetail'
+  | 'team'
+  | 'bluetooth';
 
+type FieldUtilitiesReturnTarget = 'dashboard' | 'quickActions' | 'map' | string;
+type FieldUtilityActionView = Exclude<FieldUtilitiesView, 'menu' | 'protocolDetail' | 'recoveryProtocolDetail'>;
 
-// ── Constants ────────────────────────────────────────────────
-// NOTE: Use Dimensions dynamically inside the component for rotation support.
-// Module-level values are used only for initial animation offsets.
-const INITIAL_SCREEN_H = Dimensions.get('window').height;
+type FieldUtilitiesState = {
+  isOpen: boolean;
+  activeView: FieldUtilitiesView;
+  returnTarget?: FieldUtilitiesReturnTarget;
+};
 
-// CommandDock bar height (must match CommandDock.tsx BAR_HEIGHT)
-const DOCK_BAR_HEIGHT = 68;
+type QuickActionTile = {
+  key: string;
+  label: string;
+  subtitle: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  color: string;
+  onPress: () => void;
+  disabled: boolean;
+  availabilityLabel?: string;
+};
 
-// Bottom safe area inset (approximation — used for padding inside sheet)
-const BOTTOM_SAFE_INSET = Platform.OS === 'ios' ? 34 : 24;
-
-// Initial sheet max height (recalculated dynamically in component)
-const INITIAL_AVAILABLE_H = INITIAL_SCREEN_H - DOCK_BAR_HEIGHT;
-const INITIAL_SHEET_MAX_H = Math.min(INITIAL_AVAILABLE_H * 0.92, INITIAL_SCREEN_H * 0.88);
-
-// ECS palette
-const GOLD = '#D4AF37';
-const GOLD_DIM = 'rgba(212,175,55,0.10)';
-const GOLD_BORDER = 'rgba(212,175,55,0.25)';
-const AMBER = '#C48A2C';
-const BG_DARK = '#0E1216';
-const TILE_BG = '#151A1F';
-const TILE_BORDER = 'rgba(212,175,55,0.14)';
-const TILE_BORDER_DISABLED = 'rgba(138,138,133,0.12)';
-const RED = '#C0392B';
-const RED_DIM = 'rgba(192,57,43,0.10)';
-const RED_BORDER = 'rgba(192,57,43,0.25)';
-const GREEN = '#4CAF50';
-const GREEN_DIM = 'rgba(76,175,80,0.10)';
-const GREEN_BORDER = 'rgba(76,175,80,0.25)';
-const AMBER_DIM = 'rgba(196,138,44,0.10)';
-const AMBER_BORDER = 'rgba(196,138,44,0.25)';
-const MUTED = '#5A6068';
-const TEXT_PRIMARY = '#E6E6E1';
-const TEXT_MUTED = '#8A8A85';
-
-// ── Incident type options ────────────────────────────────────
-const INCIDENT_TYPES: { key: PinType; label: string; icon: string; color: string }[] = [
-  { key: 'hazard', label: 'Hazard', icon: 'warning-outline', color: '#EF5350' },
-  { key: 'medical', label: 'Medical', icon: 'medkit-outline', color: '#E53935' },
-  { key: 'mechanical', label: 'Mechanical', icon: 'cog-outline', color: '#FFA726' },
-  { key: 'recovery', label: 'Comms', icon: 'radio-outline', color: '#42A5F5' },
-  { key: 'poi', label: 'Other', icon: 'ellipsis-horizontal-circle-outline', color: '#AB47BC' },
+const DEFAULT_FREQUENCIES = [
+  { label: 'CB Ch 9', detail: 'Emergency' },
+  { label: 'CB Ch 19', detail: 'Highway' },
+  { label: 'FRS Ch 1', detail: 'General' },
+  { label: 'GMRS 462.675', detail: 'Repeater' },
+  { label: 'HAM 146.520', detail: 'VHF Call' },
+];
+const DEFAULT_SIGNALS = [
+  { label: '3 of Anything', detail: 'Distress' },
+  { label: 'SOS', detail: '3S 3L 3S' },
+  { label: 'Ground V', detail: 'Need help' },
+  { label: 'Ground X', detail: 'Medical' },
+];
+const DEFAULT_EMERGENCY_CONTACTS = [
+  { label: 'Emergency', value: '911' },
+  { label: 'Poison Control', value: '800-222-1222' },
+  { label: 'Search & Rescue', value: '911 -> SAR' },
 ];
 
-// ── GPS helper (non-hook, one-shot) ──────────────────────────
+type EditableCommsSection = 'frequencies' | 'signals' | 'contacts';
+
+type EditableCommsEntry = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+type EditingCommsEntry = EditableCommsEntry & {
+  section: EditableCommsSection;
+};
+
+const TEAM_PING_OPTIONS = [
+  { key: 'check-in', label: 'CHECK-IN', detail: 'Team check-in. All systems normal.', eventType: 'status_update' as const },
+  { key: 'holding', label: 'HOLDING', detail: 'Holding position. Awaiting next update.', eventType: 'location_checkin' as const },
+  { key: 'support', label: 'NEED SUPPORT', detail: 'Need field support. Review latest position.', eventType: 'safety_notice' as const },
+];
+
 async function getGPSPosition(): Promise<{ lat: number; lng: number } | null> {
   try {
     if (Platform.OS !== 'web') {
-      const Location = await import('expo-location' as any);
+      const Location = await import('expo-location');
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return null;
       const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy?.Balanced || 3,
+        accuracy: Location.Accuracy.Balanced,
       });
       return { lat: pos.coords.latitude, lng: pos.coords.longitude };
     }
+
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       return new Promise((resolve) => {
         navigator.geolocation.getCurrentPosition(
           (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
           () => resolve(null),
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 10000 },
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 },
         );
       });
     }
-    return null;
-  } catch {
-    return null;
-  }
+  } catch {}
+
+  return null;
 }
 
-// ── Helper: get operational mission (for notes/events) ───────
-function getOperationalMission(): MissionExpedition | null {
-  const active = missionExpeditionStore.getActive();
-  if (active) return active;
-  const all = missionExpeditionStore.getAll();
-  const staged = all.find((e) => e.status === 'staged');
-  return staged || null;
+function formatCoords(lat: number, lng: number): string {
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
-// ── Sub-views ────────────────────────────────────────────────
-type SubView = 'main' | 'quickNote' | 'incidentPicker' | 'endConfirm';
+function buildEmergencyFieldUseGuide(protocol: ProtocolDefinition): FieldUseGuideProtocol {
+  return {
+    id: protocol.id,
+    title: protocol.title,
+    subtitle: protocol.subtitle,
+    accentColor: protocol.accentColor,
+    image: protocol.fieldUtilityImage ?? protocol.image ?? null,
+    beforeLabel: 'BEFORE YOU ACT',
+    beforeItems: protocol.beforeYouPull,
+    stepCards: protocol.stepCards,
+    warningLabel: 'DO NOT',
+    warningItems: protocol.doNot,
+    completionLabel: 'SAFETY CHECK',
+    completionItems: protocol.completionCheck,
+  };
+}
+
+function mergeCommsDefaultsWithOverrides(
+  prefix: string,
+  defaults: { label: string; detail: string }[],
+  overrides: EditableCommsEntry[],
+): EditableCommsEntry[] {
+  const overrideById = new Map(overrides.map((entry) => [entry.id, entry]));
+  const defaultIds = new Set<string>();
+  const mergedDefaults = defaults.map((entry, index) => {
+    const id = `default_${prefix}_${index}`;
+    defaultIds.add(id);
+    return overrideById.get(id) ?? { id, ...entry };
+  });
+
+  return [
+    ...mergedDefaults,
+    ...overrides.filter((entry) => !defaultIds.has(entry.id)),
+  ];
+}
 
 interface Props {
   visible: boolean;
-  onClose: () => void;
+  onClose: (returnTarget?: FieldUtilitiesReturnTarget) => void;
+  returnTarget?: FieldUtilitiesReturnTarget;
 }
 
-export default function QuickActionsSheet({ visible, onClose }: Props) {
-  const router = useRouter();
-  const { showToast, user } = useApp();
-
-  // ── State declarations ─────────────────────────────────────
-  const [subView, setSubView] = useState<SubView>('main');
-  const [noteText, setNoteText] = useState('');
+export default function QuickActionsSheet({ visible, onClose, returnTarget = 'dashboard' }: Props) {
+  const insets = useSafeAreaInsets();
+  const { height: viewportHeight } = useWindowDimensions();
+  const { showToast, activeTrip, user } = useApp();
+  const [fieldUtilitiesState, setFieldUtilitiesState] = useState<FieldUtilitiesState>({
+    isOpen: visible,
+    activeView: 'menu',
+    returnTarget,
+  });
   const [busy, setBusy] = useState(false);
-  const [expState, setExpState] = useState<ExpeditionState>('idle');
-  const [expRecord, setExpRecord] = useState<ExpeditionRecord | null>(null);
-  const [mission, setMission] = useState<MissionExpedition | null>(null);
+  const [noteText, setNoteText] = useState('');
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [dispatchComms, setDispatchComms] = useState<CustomCommsData>(() => commsStore.getAll());
+  const [editingCommsEntry, setEditingCommsEntry] = useState<EditingCommsEntry | null>(null);
+  const [selectedProtocol, setSelectedProtocol] = useState<ProtocolDefinition | null>(null);
+  const [savedNotes, setSavedNotes] = useState(() =>
+    missionNoteStore.getByExpeditionId(activeTrip?.id ?? 'general'),
+  );
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
-  // ── Dynamic dimensions (updates on rotation) ───────────────
-  const [screenDims, setScreenDims] = useState(() => Dimensions.get('window'));
-  useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => setScreenDims(window));
-    return () => sub.remove();
-  }, []);
-  const SCREEN_H = screenDims.height;
-  const AVAILABLE_H = SCREEN_H - DOCK_BAR_HEIGHT;
-  const SHEET_MAX_H = Math.min(AVAILABLE_H * 0.92, SCREEN_H * 0.88);
-
-  // ── Animation ──────────────────────────────────────────────
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(INITIAL_SHEET_MAX_H)).current;
-  const [rendered, setRendered] = useState(false);
-
-
-  // ── Pan responder for swipe-to-dismiss ─────────────────────
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) => gs.dy > 12,
-      onPanResponderMove: (_, gs) => {
-        if (gs.dy > 0) slideAnim.setValue(gs.dy);
-      },
-      onPanResponderRelease: (_, gs) => {
-        if (gs.dy > 100 || gs.vy > 0.5) {
-          dismiss();
-        } else {
-          Animated.timing(slideAnim, {
-            toValue: 0,
-            duration: 150,
-            useNativeDriver: true,
-          }).start();
-        }
-      },
+  const expeditionState = expeditionStateStore.getState();
+  const hasTeam = (activeTrip?.team_size ?? 1) > 1;
+  const missionId = activeTrip?.id ?? 'general';
+  const fieldUtilitiesTopClearance = getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
+  const fieldUtilitiesBottomClearance = getShellBottomClearance(insets.bottom, 2);
+  const activeView = fieldUtilitiesState.activeView;
+  const protocolDetailActive = activeView === 'protocolDetail';
+  const recoveryProtocolDetailActive = activeView === 'recoveryProtocolDetail';
+  const protocolStaticActive =
+    activeView === 'protocols' ||
+    protocolDetailActive ||
+    activeView === 'recoveryProtocols' ||
+    recoveryProtocolDetailActive;
+  const protocolCompactMode = viewportHeight < 760;
+  const frequencyCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides('freq', DEFAULT_FREQUENCIES, dispatchComms.frequencies),
+    [dispatchComms.frequencies],
+  );
+  const signalCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides('signal', DEFAULT_SIGNALS, dispatchComms.signals),
+    [dispatchComms.signals],
+  );
+  const emergencyContactCards = useMemo(
+    () => mergeCommsDefaultsWithOverrides(
+      'contact',
+      [
+        ...(activeTrip?.emergency_contact?.trim()
+          ? [{ label: 'Primary Contact', detail: activeTrip.emergency_contact.trim() }]
+          : []),
+        ...DEFAULT_EMERGENCY_CONTACTS.map((entry) => ({ label: entry.label, detail: entry.value })),
+      ],
+      dispatchComms.contacts,
+    ),
+    [activeTrip?.emergency_contact, dispatchComms.contacts],
+  );
+  const mainPanelActive = activeView === 'menu';
+  const intelWeatherGps = useMemo(
+    () => ({
+      lat: gpsCoords?.lat ?? null,
+      lng: gpsCoords?.lng ?? null,
+      hasFix: gpsCoords != null,
+      permissionDenied: false,
     }),
-  ).current;
+    [gpsCoords],
+  );
+  const fieldUtilitiesWeather = useOperationalWeather({
+    enabled: visible && activeView === 'intel',
+    gps: intelWeatherGps,
+    units: 'imperial',
+  });
 
-  // ── Load expedition + mission state on open ────────────────
-  useEffect(() => {
-    if (visible) {
-      setRendered(true);
-      setSubView('main');
-      setNoteText('');
-      setBusy(false);
+  const refreshSavedNotes = useCallback(() => {
+    const notes = missionNoteStore.getByExpeditionId(missionId);
+    setSavedNotes(notes);
+    setSelectedNoteId((prev) => (prev && notes.some((note) => note.id === prev) ? prev : notes[0]?.id ?? null));
+  }, [missionId]);
 
-      // Read real expedition state
-      setExpState(expeditionStateStore.getState());
-      setExpRecord(expeditionStateStore.getCurrentExpedition());
+  const openFieldUtilities = useCallback((nextReturnTarget: FieldUtilitiesReturnTarget = returnTarget) => {
+    setFieldUtilitiesState({
+      isOpen: true,
+      activeView: 'menu',
+      returnTarget: nextReturnTarget,
+    });
+  }, [returnTarget]);
 
-      // Also load mission store for notes/events context
-      setMission(getOperationalMission());
+  // Main Field Utilities X closes the panel and returns to the parent menu,
+  // normally Dashboard for the dock long-press flow.
+  const closeFieldUtilities = useCallback(() => {
+    const nextReturnTarget = fieldUtilitiesState.returnTarget ?? returnTarget;
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: false,
+      activeView: 'menu',
+    }));
+    setNoteText('');
+    setSelectedNoteId(null);
+    setSelectedProtocol(null);
+    setEditingCommsEntry(null);
+    setGpsCoords(null);
+    setGpsLoading(false);
+    setBusy(false);
+    onClose(nextReturnTarget);
+  }, [fieldUtilitiesState.returnTarget, onClose, returnTarget]);
 
-      hapticCommand();
+  const openFieldUtilityAction = useCallback((action: FieldUtilityActionView) => {
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: action,
+    }));
+  }, []);
 
-      Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: MOTION.quickActionsIn,
-          easing: EASING.decelerate,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: MOTION.quickActionsIn + 40,
-          easing: EASING.decelerate,
-          useNativeDriver: true,
-        }),
-      ]).start();
+  // Child X keeps Field Utilities open and returns to its main action menu.
+  const closeFieldUtilityAction = useCallback(() => {
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      activeView: 'menu',
+    }));
+    setSelectedProtocol(null);
+    setEditingCommsEntry(null);
+  }, []);
+
+  const handleShellClose = useCallback(() => {
+    if (activeView === 'menu') {
+      closeFieldUtilities();
+      return;
     }
-  }, [visible]);
 
-  // ── Subscribe to expedition state changes while open ───────
+    closeFieldUtilityAction();
+  }, [activeView, closeFieldUtilities, closeFieldUtilityAction]);
+
+  const handleShellBack = useCallback(() => {
+    if (activeView === 'menu') {
+      closeFieldUtilities();
+      return;
+    }
+
+    if (activeView === 'protocolDetail') {
+      openFieldUtilityAction('protocols');
+      return;
+    }
+
+    if (activeView === 'recoveryProtocolDetail') {
+      openFieldUtilityAction('recoveryProtocols');
+      return;
+    }
+
+    closeFieldUtilityAction();
+  }, [activeView, closeFieldUtilities, closeFieldUtilityAction, openFieldUtilityAction]);
+
+  useEffect(() => {
+    if (!visible) {
+      setFieldUtilitiesState({
+        isOpen: false,
+        activeView: 'menu',
+        returnTarget,
+      });
+      setNoteText('');
+      setGpsCoords(null);
+      setGpsLoading(false);
+      setSelectedNoteId(null);
+      setSelectedProtocol(null);
+      setEditingCommsEntry(null);
+      return;
+    }
+
+    openFieldUtilities(returnTarget);
+  }, [openFieldUtilities, returnTarget, visible]);
+
   useEffect(() => {
     if (!visible) return;
-    const unsub = expeditionStateStore.subscribe((state, record) => {
-      setExpState(state);
-      setExpRecord(record);
+    refreshSavedNotes();
+  }, [refreshSavedNotes, visible]);
+
+  useEffect(() => {
+    if (!visible || activeView !== 'quickNote') return;
+    refreshSavedNotes();
+  }, [activeView, refreshSavedNotes, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+
+    void commsStore.waitForHydration().then(() => {
+      if (!cancelled) {
+        setDispatchComms(commsStore.getAll());
+      }
     });
-    return unsub;
+
+    return () => {
+      cancelled = true;
+    };
   }, [visible]);
 
-  const dismiss = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: MOTION.quickActionsOut,
-        easing: EASING.accelerate,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: SHEET_MAX_H,
-        duration: MOTION.quickActionsOut + 30,
-        easing: EASING.accelerate,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setRendered(false);
-      onClose();
-    });
-  }, [fadeAnim, slideAnim, onClose]);
+  useEffect(() => {
+    if (!visible || (activeView !== 'emergencyComms' && activeView !== 'intel')) return;
+    let cancelled = false;
 
-
-  if (!rendered) return null;
-
-  // ── Expedition helpers ─────────────────────────────────────
-  const hasExpedition = expState === 'active' || expState === 'paused';
-  const isExpeditionActive = expState === 'active';
-  const isExpeditionPaused = expState === 'paused';
-
-  // ── Actions ────────────────────────────────────────────────
-
-  const handlePauseResume = () => {
-    if (!hasExpedition) return;
-    hapticMicro();
-
-    if (isExpeditionActive) {
-      // Pause the expedition
-      const result = expeditionStateStore.pauseExpedition({ userId: user?.id });
-      if (result) {
-        showToast('Expedition paused');
-      } else {
-        showToast('Unable to pause expedition');
+    (async () => {
+      setGpsLoading(true);
+      const coords = await getGPSPosition();
+      if (!cancelled) {
+        setGpsCoords(coords);
+        setGpsLoading(false);
       }
-    } else if (isExpeditionPaused) {
-      // Resume the expedition
-      const result = expeditionStateStore.resumeExpedition({ userId: user?.id });
-      if (result) {
-        showToast('Expedition resumed');
-      } else {
-        showToast('Unable to resume expedition');
-      }
-    }
-  };
+    })();
 
-  const handleEndExpedition = () => {
-    if (!hasExpedition) return;
-    hapticMicro();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, visible]);
 
-    // End the real expedition state
-    const result = expeditionStateStore.endExpedition({ userId: user?.id });
-    if (result) {
-      // Also end any linked mission store expedition
-      if (mission && (mission.status === 'active' || mission.status === 'staged')) {
-        missionExpeditionStore.updateStatus(mission.id, 'completed');
-        missionEventStore.append(mission.id, 'MISSION_COMPLETED', {
-          endedAt: new Date().toISOString(),
-        });
-      }
-      showToast('Expedition ended');
-    } else {
-      showToast('Unable to end expedition');
-    }
-    dismiss();
-  };
-
-  const handleAddWaypoint = async () => {
-    setBusy(true);
-    try {
-      const gps = await getGPSPosition();
-      if (!gps) {
-        showToast('Location unavailable');
-        setBusy(false);
-        return;
-      }
-      pinStore.create({
-        type: 'poi',
-        lat: gps.lat,
-        lng: gps.lng,
-        title: `Waypoint ${new Date().toLocaleTimeString()}`,
-        notes: mission ? `Mission: ${mission.name}` : 'General waypoint',
-        expedition_id: mission?.id || null,
-      });
-      if (mission) {
-        missionCheckpointStore.create(
-          mission.id,
-          `Waypoint ${new Date().toLocaleTimeString()}`,
-          gps.lat,
-          gps.lng,
-        );
-      }
-      showToast('Waypoint saved');
-      dismiss();
-    } catch {
-      showToast('Failed to save waypoint');
-    }
-    setBusy(false);
-  };
-
-  const handleSaveNote = async () => {
+  const handleSaveNote = useCallback(async () => {
     if (!noteText.trim()) return;
     setBusy(true);
-    try {
-      const gps = await getGPSPosition();
-      const timestamp = new Date().toISOString();
-      if (mission) {
-        missionNoteStore.create(mission.id, noteText.trim(), 'quick_note');
-        missionEventStore.append(mission.id, 'NOTE_ADDED', {
-          text: noteText.trim(),
-          lat: gps?.lat || null,
-          lng: gps?.lng || null,
-          timestamp,
-        });
-      } else {
-        if (gps) {
-          pinStore.create({
-            type: 'poi',
-            lat: gps.lat,
-            lng: gps.lng,
-            title: `Note ${new Date().toLocaleTimeString()}`,
-            notes: noteText.trim(),
-          });
-        }
-        missionNoteStore.create('general', noteText.trim(), 'quick_note');
-      }
-      showToast('Note saved');
-      setNoteText('');
-      dismiss();
-    } catch {
-      showToast('Failed to save note');
-    }
-    setBusy(false);
-  };
 
-  const handleIncidentMarker = async (type: PinType, label: string) => {
-    setBusy(true);
     try {
-      const gps = await getGPSPosition();
-      if (!gps) {
-        showToast('Location unavailable');
-        setBusy(false);
+      const text = noteText.trim();
+      const savedNote = missionNoteStore.create(missionId, text, 'quick_note');
+      missionEventStore.append(missionId, 'NOTE_ADDED', {
+        text,
+        source: 'quick_actions',
+        createdBy: user?.email ?? null,
+        timestamp: new Date().toISOString(),
+      });
+      refreshSavedNotes();
+      setSelectedNoteId(savedNote.id);
+      setNoteText('');
+      showToast(ECS_TOAST_COPY.quickNoteSaved);
+    } catch {
+      showToast('Unable to save note');
+    } finally {
+      setBusy(false);
+    }
+  }, [missionId, noteText, refreshSavedNotes, showToast, user?.email]);
+
+  const handleDeleteNote = useCallback((noteId: string) => {
+    hapticMicro();
+    const removed = missionNoteStore.remove(noteId);
+    if (!removed) {
+      showToast('Unable to delete note');
+      return;
+    }
+
+    refreshSavedNotes();
+    showToast('Note deleted');
+  }, [refreshSavedNotes, showToast]);
+
+  const handleCopyCoords = useCallback(async () => {
+    if (!gpsCoords) return;
+    const value = formatCoords(gpsCoords.lat, gpsCoords.lng);
+
+    try {
+      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        showToast(ECS_TOAST_COPY.coordinatesCopied);
         return;
       }
-      pinStore.create({
-        type,
-        lat: gps.lat,
-        lng: gps.lng,
-        title: `${label} Incident`,
-        notes: mission ? `Mission: ${mission.name}` : 'General incident',
-        expedition_id: mission?.id || null,
-        severity: 'med',
-      });
-      if (mission) {
-        missionEventStore.append(mission.id, 'INCIDENT', {
-          type: label,
-          lat: gps.lat,
-          lng: gps.lng,
-          timestamp: new Date().toISOString(),
-        });
-      }
-      showToast('Incident logged');
-      dismiss();
-    } catch {
-      showToast('Failed to save incident');
+    } catch {}
+
+    showToast(`Coordinates ready: ${value}`);
+  }, [gpsCoords, showToast]);
+
+  const handleStartEditCommsEntry = useCallback((
+    section: EditableCommsSection,
+    entry: EditableCommsEntry,
+  ) => {
+    void hapticMicro();
+    setEditingCommsEntry({ section, id: entry.id, label: entry.label, detail: entry.detail });
+  }, []);
+
+  const handleCancelEditCommsEntry = useCallback(() => {
+    setEditingCommsEntry(null);
+  }, []);
+
+  const handleSaveEditCommsEntry = useCallback(() => {
+    if (!editingCommsEntry) return;
+
+    const label = editingCommsEntry.label.trim();
+    const detail = editingCommsEntry.detail.trim();
+    if (!label) {
+      showToast('Comms title is required');
+      return;
     }
-    setBusy(false);
-  };
 
-  const handleEmergencyComms = () => {
-    dismiss();
-    setTimeout(() => {
-      router.push('/(tabs)/alert');
-    }, 100);
-  };
+    const data = commsStore.getAll();
+    const currentColumn = data[editingCommsEntry.section];
+    const nextEntry = {
+      id: editingCommsEntry.id,
+      label,
+      detail: detail || '-',
+    };
+    const nextColumn = currentColumn.some((entry) => entry.id === editingCommsEntry.id)
+      ? currentColumn.map((entry) => (entry.id === editingCommsEntry.id ? nextEntry : entry))
+      : [...currentColumn, nextEntry];
 
-  // ── Tile component ─────────────────────────────────────────
-  const Tile = ({
-    icon,
-    label,
-    onPress,
-    disabled = false,
-    color = GOLD,
-  }: {
-    icon: string;
-    label: string;
-    onPress: () => void;
-    disabled?: boolean;
-    color?: string;
-  }) => (
-    <TouchableOpacity
-      style={[
-        styles.tile,
-        disabled && styles.tileDisabled,
-      ]}
-      onPress={onPress}
-      activeOpacity={0.7}
-      disabled={disabled || busy}
-    >
-      <View style={[styles.tileIconWrap, { backgroundColor: disabled ? 'rgba(138,138,133,0.06)' : `${color}10` }]}>
-        {busy && !disabled ? (
-          <ActivityIndicator size={22} color={disabled ? MUTED : color} />
-        ) : (
-          <SafeIcon name={icon} size={22} color={disabled ? MUTED : color} />
-        )}
+    const nextData = commsStore.replaceColumn(editingCommsEntry.section, nextColumn);
+    setDispatchComms(nextData);
+    setEditingCommsEntry(null);
+    showToast('Comms entry saved');
+  }, [editingCommsEntry, showToast]);
+
+  const handleTeamPing = useCallback(async (headline: string, detail: string, eventType: 'status_update' | 'location_checkin' | 'safety_notice') => {
+    if (!activeTrip || !hasTeam) return;
+
+    setBusy(true);
+    try {
+      const coords = await getGPSPosition();
+      const { error } = await dispatchStore.createEvent(activeTrip.id, {
+        event_type: eventType,
+        priority: eventType === 'safety_notice' ? 'critical' : 'normal',
+        headline,
+        detail,
+        location_enabled: Boolean(coords),
+        location_label: coords ? 'Current Position' : '',
+        latitude: coords ? String(coords.lat) : '',
+        longitude: coords ? String(coords.lng) : '',
+        metadata: { source: 'quick_actions' },
+      });
+
+      if (error) {
+        showToast('Unable to send team ping');
+        return;
+      }
+
+      showToast(ECS_TOAST_COPY.teamPingSent);
+      closeFieldUtilities();
+    } catch {
+      showToast('Unable to send team ping');
+    } finally {
+      setBusy(false);
+    }
+  }, [activeTrip, closeFieldUtilities, hasTeam, showToast]);
+
+  const tileItems: readonly QuickActionTile[] = [
+    {
+      key: 'intel',
+      label: 'Weather',
+      subtitle: 'Current weather and trail conditions',
+      icon: 'cloud-outline',
+      color: '#FFB300',
+      onPress: () => openFieldUtilityAction('intel'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'note',
+      label: 'Quick Note',
+      subtitle: 'Capture a fast field note',
+      icon: 'create-outline',
+      color: TACTICAL.amber,
+      onPress: () => openFieldUtilityAction('quickNote'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'comms',
+      label: 'Comms',
+      subtitle: 'Emergency comms and coordinates',
+      icon: 'radio-outline',
+      color: '#EF5350',
+      onPress: () => openFieldUtilityAction('emergencyComms'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'team',
+      label: 'Team Ping',
+      subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
+      icon: 'people-outline',
+      color: '#42A5F5',
+      onPress: () => openFieldUtilityAction('team'),
+      disabled: !hasTeam,
+      availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
+    },
+    {
+      key: 'bluetooth',
+      label: 'Bluetooth',
+      subtitle: 'Open device connections',
+      icon: 'bluetooth-outline',
+      color: '#5AC8FA',
+      onPress: () => openFieldUtilityAction('bluetooth'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'protocols',
+      label: 'Emergency Protocol',
+      subtitle: 'Field stabilization steps',
+      icon: 'medkit-outline',
+      color: TACTICAL.danger,
+      onPress: () => openFieldUtilityAction('protocols'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'recovery-protocol',
+      label: 'Recovery Protocol',
+      subtitle: 'Vehicle recovery procedures for field extraction.',
+      icon: 'car-sport-outline',
+      color: TACTICAL.amber,
+      onPress: () => openFieldUtilityAction('recoveryProtocols'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+  ] as const;
+
+  const renderMainPanel = () => (
+    <View style={styles.mainPanel}>
+      <View style={styles.summaryCard}>
+        <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
+        <Text style={styles.summaryTitle}>Operational shortcuts</Text>
+        <Text style={styles.summaryText}>
+          {expeditionState === 'active' || expeditionState === 'paused'
+            ? 'Fast field controls stay aligned with the current ECS session context.'
+            : 'Fast field controls stay available even when no route is active.'}
+        </Text>
       </View>
-      <Text
-        style={[styles.tileLabel, { color: disabled ? MUTED : TEXT_PRIMARY }]}
-        numberOfLines={2}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
 
-  // ── Sub-view: Quick Note ───────────────────────────────────
-  const renderQuickNote = () => (
-    <View style={styles.subViewContainer}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => setSubView('main')}>
-        <SafeIcon name="arrow-back" size={16} color={TEXT_MUTED} />
-        <Text style={styles.backText}>BACK</Text>
-      </TouchableOpacity>
+      <Text style={styles.sectionLabel}>AVAILABLE ACTIONS</Text>
 
-      <Text style={styles.subViewTitle}>QUICK NOTE</Text>
-      <Text style={styles.subViewDesc}>
-        {mission ? `Attached to: ${mission.name}` : 'General note (no active mission)'}
-      </Text>
-
-      <TextInput
-        style={styles.noteInput}
-        placeholder="Type your note..."
-        placeholderTextColor={TEXT_MUTED}
-        value={noteText}
-        onChangeText={setNoteText}
-        multiline
-        autoFocus
-        maxLength={500}
-      />
-
-      <View style={styles.noteFooter}>
-        <Text style={styles.noteCharCount}>{noteText.length}/500</Text>
-        <TouchableOpacity
-          style={[styles.saveNoteBtn, !noteText.trim() && { opacity: 0.4 }]}
-          onPress={handleSaveNote}
-          disabled={!noteText.trim() || busy}
-        >
-          {busy ? (
-            <ActivityIndicator size="small" color="#000" />
-          ) : (
-            <>
-              <SafeIcon name="checkmark" size={14} color="#000" />
-              <Text style={styles.saveNoteBtnText}>SAVE</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  // ── Sub-view: Incident Picker ──────────────────────────────
-  const renderIncidentPicker = () => (
-    <View style={styles.subViewContainer}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => setSubView('main')}>
-        <SafeIcon name="arrow-back" size={16} color={TEXT_MUTED} />
-        <Text style={styles.backText}>BACK</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.subViewTitle}>INCIDENT TYPE</Text>
-      <Text style={styles.subViewDesc}>Select category. GPS captured automatically.</Text>
-
-      <View style={styles.incidentGrid}>
-        {INCIDENT_TYPES.map((inc) => (
+      <View style={styles.tileGrid}>
+        {tileItems.map((item) => (
           <TouchableOpacity
-            key={inc.key + inc.label}
-            style={[styles.incidentCard, { borderColor: `${inc.color}30` }]}
-            onPress={() => handleIncidentMarker(inc.key, inc.label)}
-            activeOpacity={0.6}
-            disabled={busy}
+            key={item.key}
+            style={[
+              styles.tile,
+              item.key === 'protocols' && styles.emergencyProtocolTile,
+              item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
+              item.disabled && styles.tileDisabled,
+            ]}
+            onPress={item.onPress}
+            activeOpacity={0.78}
+            disabled={item.disabled || busy}
           >
-            <View style={[styles.incidentIconWrap, { backgroundColor: `${inc.color}12` }]}>
-              {busy ? (
-                <ActivityIndicator size="small" color={inc.color} />
-              ) : (
-                <SafeIcon name={inc.icon} size={22} color={inc.color} />
-              )}
+            <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
+              <Ionicons name={item.icon as any} size={20} color={item.disabled ? ECS.muted : item.color} />
             </View>
-            <Text style={[styles.incidentLabel, { color: inc.color }]}>{inc.label}</Text>
+            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]}>
+              {item.label}
+            </Text>
+            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]}>
+              {item.subtitle}
+            </Text>
+            <View style={[styles.tileStateBadge, item.disabled && styles.tileStateBadgeDisabled]}>
+              <Text style={[styles.tileStateText, item.disabled && styles.tileStateTextDisabled]}>
+                {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
       </View>
     </View>
   );
 
-  // ── Sub-view: End Confirm ──────────────────────────────────
-  const renderEndConfirm = () => (
-    <View style={styles.subViewContainer}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => setSubView('main')}>
-        <SafeIcon name="arrow-back" size={16} color={TEXT_MUTED} />
-        <Text style={styles.backText}>BACK</Text>
-      </TouchableOpacity>
+  const renderPanelIntro = (title: string, subtitle: string) => (
+    <View style={styles.panelIntro}>
+      <Text style={styles.panelTitle}>{title}</Text>
+      <Text style={styles.panelSubtitle}>{subtitle}</Text>
+    </View>
+  );
 
-      <View style={styles.endConfirmContent}>
-        <View style={styles.endConfirmIcon}>
-          <SafeIcon name="alert-circle" size={36} color={RED} />
-        </View>
-        <Text style={styles.endConfirmTitle}>End Expedition?</Text>
-        <Text style={styles.endConfirmDesc}>
-          This will close the current expedition session.{'\n'}All logged data will be preserved.
-        </Text>
+  const renderNotePanel = () => (
+    <View style={[styles.panelBody, styles.notePanelBody]}>
+      {renderPanelIntro('Quick Note', 'Capture a fast field note without leaving Dashboard.')}
+      <TextInput
+        style={styles.noteInput}
+        value={noteText}
+        onChangeText={setNoteText}
+        placeholder="Observation, reminder, trail note..."
+        placeholderTextColor={TACTICAL.textMuted}
+        multiline
+        textAlignVertical="top"
+        maxLength={240}
+        autoFocus
+      />
+      <View style={styles.noteFooter}>
+        <Text style={styles.metaText}>{noteText.length}/240</Text>
+        <TouchableOpacity
+          style={[styles.primaryBtn, !noteText.trim() && styles.primaryBtnDisabled]}
+          onPress={handleSaveNote}
+          activeOpacity={0.78}
+          disabled={!noteText.trim() || busy}
+        >
+          {busy ? <ActivityIndicator size="small" color="#0B0F12" /> : null}
+          <Text style={styles.primaryBtnText}>SAVE NOTE</Text>
+        </TouchableOpacity>
+      </View>
 
-        <View style={styles.endConfirmActions}>
-          <TouchableOpacity style={styles.endCancelBtn} onPress={() => setSubView('main')}>
-            <Text style={styles.endCancelBtnText}>CANCEL</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.endConfirmBtn} onPress={handleEndExpedition}>
-            <SafeIcon name="stop-circle-outline" size={16} color="#fff" />
-            <Text style={styles.endConfirmBtnText}>END EXPEDITION</Text>
-          </TouchableOpacity>
+      <View style={styles.savedNotesSection}>
+        <View style={styles.savedNotesHeader}>
+          <Text style={styles.savedNotesTitle}>Saved Notes</Text>
+          <Text style={styles.metaText}>{savedNotes.length}</Text>
         </View>
+
+        {savedNotes.length > 0 ? (
+          <View style={styles.savedNotesList}>
+            {savedNotes.map((note) => {
+              const selected = note.id === selectedNoteId;
+              return (
+                <TouchableOpacity
+                  key={note.id}
+                  style={[styles.savedNoteCard, selected && styles.savedNoteCardSelected]}
+                  activeOpacity={0.84}
+                  onPress={() => setSelectedNoteId(note.id)}
+                >
+                  <View style={styles.savedNoteCopy}>
+                    <Text style={styles.savedNoteText}>{note.text}</Text>
+                    <Text style={styles.savedNoteMeta}>
+                      {new Date(note.createdAt).toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.savedNoteDeleteBtn}
+                    onPress={() => handleDeleteNote(note.id)}
+                    hitSlop={8}
+                    activeOpacity={0.78}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#EF5350" />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name="document-text-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>
+              Saved field notes will appear here after you press Save Note.
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
 
-  // ── Main grid view ─────────────────────────────────────────
-  const renderMainGrid = () => {
-    // Pause/Resume button adapts to expedition state
-    const pauseResumeLabel = isExpeditionPaused ? 'Resume\nExpedition' : 'Pause\nExpedition';
-    const pauseResumeIcon = isExpeditionPaused ? 'play-outline' : 'pause-outline';
-    const pauseResumeColor = isExpeditionPaused ? GREEN : AMBER;
+  const renderLiveCoordinatesCard = () => (
+      <View style={styles.infoCard}>
+        <Text style={styles.cardTitle}>Live Coordinates</Text>
+        {gpsLoading ? (
+          <View style={styles.stateRow}>
+            <ActivityIndicator size="small" color={TACTICAL.amber} />
+            <Text style={styles.stateText}>Waiting for GPS</Text>
+          </View>
+        ) : gpsCoords ? (
+          <>
+            <Text selectable style={styles.coordsText}>
+              {formatCoords(gpsCoords.lat, gpsCoords.lng)}
+            </Text>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={handleCopyCoords} activeOpacity={0.78}>
+              <Ionicons name="copy-outline" size={14} color={TACTICAL.amber} />
+              <Text style={styles.secondaryBtnText}>COPY COORDINATES</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text style={styles.stateText}>Coordinates unavailable</Text>
+        )}
+      </View>
+  );
+
+  const renderIntelPanel = () => (
+    <View style={[styles.panelBody, styles.intelPanelBody]}>
+      {renderPanelIntro('Weather', 'Current weather, forecast, alerts, and trail conditions.')}
+      {gpsLoading && !gpsCoords ? (
+        <View style={styles.stateRow}>
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.stateText}>Waiting for GPS</Text>
+        </View>
+      ) : null}
+      <WeatherIntelPanel
+        latitude={gpsCoords?.lat ?? null}
+        longitude={gpsCoords?.lng ?? null}
+        compact={false}
+        autoFetch={false}
+        weatherSnapshot={fieldUtilitiesWeather.snapshot}
+        onRefreshWeather={fieldUtilitiesWeather.refresh}
+        frameless
+      />
+    </View>
+  );
+
+  const renderEditableCommsEntry = (
+    section: EditableCommsSection,
+    entry: EditableCommsEntry,
+  ) => {
+    const editing =
+      editingCommsEntry?.section === section &&
+      editingCommsEntry.id === entry.id;
+
+    if (editing) {
+      return (
+        <View key={entry.id} style={[styles.commsEditRow, styles.commsEntryRowEditing]}>
+          <View style={styles.commsEditFields}>
+            <TextInput
+              style={[styles.commsEditInput, styles.commsEditTitleInput]}
+              value={editingCommsEntry.label}
+              onChangeText={(label) => setEditingCommsEntry((current) =>
+                current ? { ...current, label } : current,
+              )}
+              placeholder="Title"
+              placeholderTextColor={TACTICAL.textMuted}
+              autoFocus
+            />
+            <TextInput
+              style={[styles.commsEditInput, styles.commsEditDetailInput]}
+              value={editingCommsEntry.detail}
+              onChangeText={(detail) => setEditingCommsEntry((current) =>
+                current ? { ...current, detail } : current,
+              )}
+              placeholder="Info"
+              placeholderTextColor={TACTICAL.textMuted}
+            />
+          </View>
+          <View style={styles.commsEditActions}>
+            <TouchableOpacity
+              style={styles.commsCancelBtn}
+              onPress={handleCancelEditCommsEntry}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.commsCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.commsSaveBtn}
+              onPress={handleSaveEditCommsEntry}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.commsSaveText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
 
     return (
-      <View style={styles.gridContainer}>
-        {/* Row 1 — Expedition Controls */}
-        <View style={styles.gridRow}>
-          <Tile
-            icon={pauseResumeIcon}
-            label={pauseResumeLabel}
-            onPress={handlePauseResume}
-            disabled={!hasExpedition}
-            color={pauseResumeColor}
-          />
-          <Tile
-            icon="stop-outline"
-            label={'End\nExpedition'}
-            onPress={() => setSubView('endConfirm')}
-            disabled={!hasExpedition}
-            color={RED}
-          />
-        </View>
+      <TouchableOpacity
+        key={entry.id}
+        style={styles.commsEntryRow}
+        onLongPress={() => handleStartEditCommsEntry(section, entry)}
+        delayLongPress={420}
+        activeOpacity={0.86}
+      >
+        <Text style={styles.commsEntryLabel} numberOfLines={2}>{entry.label}</Text>
+        <Text style={styles.commsEntryDetail} numberOfLines={2}>{entry.detail}</Text>
+      </TouchableOpacity>
+    );
+  };
 
-        {/* Row 2 */}
-        <View style={styles.gridRow}>
-          <Tile
-            icon="flag-outline"
-            label={'Add\nWaypoint'}
-            onPress={handleAddWaypoint}
-            color="#42A5F5"
-          />
-          <Tile
-            icon="create-outline"
-            label={'Quick\nNote'}
-            onPress={() => setSubView('quickNote')}
-            color={GOLD}
-          />
-        </View>
+  const renderCommsSection = (
+    title: string,
+    section: EditableCommsSection,
+    entries: EditableCommsEntry[],
+  ) => (
+    <View style={styles.infoCard}>
+      <View style={styles.commsSectionHeader}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={styles.commsHint}>Long press to edit</Text>
+      </View>
+      <View style={styles.commsEntryList}>
+        {entries.map((entry) => renderEditableCommsEntry(section, entry))}
+      </View>
+    </View>
+  );
 
-        {/* Row 3 */}
-        <View style={styles.gridRow}>
-          <Tile
-            icon="warning-outline"
-            label={'Incident\nMarker'}
-            onPress={() => setSubView('incidentPicker')}
-            color="#EF5350"
-          />
-          <Tile
-            icon="radio-outline"
-            label={'Emergency\nComms'}
-            onPress={handleEmergencyComms}
-            color="#FF7043"
-          />
-        </View>
+  const renderCommsPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Emergency Comms', 'Frequencies, field signals, emergency numbers, and shareable live coordinates.')}
+      <View style={styles.commsReferenceGrid}>
+        {renderCommsSection('Frequencies', 'frequencies', frequencyCards)}
+        {renderCommsSection('Signals', 'signals', signalCards)}
+        {renderCommsSection('Emergency Numbers', 'contacts', emergencyContactCards)}
+      </View>
+      {renderLiveCoordinatesCard()}
+    </View>
+  );
 
-        {/* Row 4 — Navigation shortcuts */}
-        <View style={styles.gridRow}>
-          <Tile
-            icon="compass-outline"
-            label={'Navigate\nMap'}
-            onPress={() => {
-              dismiss();
-              setTimeout(() => router.push('/(tabs)/navigate'), 100);
-            }}
-            color="#66BB6A"
-          />
-          <Tile
-            icon="analytics-outline"
-            label={'Expedition\nDashboard'}
-            onPress={() => {
-              dismiss();
-              setTimeout(() => router.push('/(tabs)/dashboard'), 100);
-            }}
-            color="#AB47BC"
-          />
+  const renderTeamPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Team Ping', hasTeam ? 'Send a fast dispatch check-in to the active team.' : 'Team Ping requires an active team.')}
+      {!hasTeam ? (
+        <View style={styles.emptyState}>
+          <Ionicons name="people-outline" size={22} color={TACTICAL.textMuted} />
+          <Text style={styles.emptyStateText}>No active team is configured for this trip.</Text>
         </View>
+      ) : (
+        <View style={styles.optionList}>
+          {TEAM_PING_OPTIONS.map((option) => (
+            <TouchableOpacity
+              key={option.key}
+              style={styles.optionCard}
+              onPress={() => handleTeamPing(option.label, option.detail, option.eventType)}
+              activeOpacity={0.78}
+              disabled={busy}
+            >
+              <View style={styles.optionCardHeader}>
+                <Text style={styles.optionCardTitle}>{option.label}</Text>
+                <Ionicons name="send-outline" size={14} color={TACTICAL.amber} />
+              </View>
+              <Text style={styles.optionCardText}>{option.detail}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
+  const openProtocolDetail = useCallback((protocol: ProtocolDefinition) => {
+    void hapticMicro();
+    setSelectedProtocol(protocol);
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: 'protocolDetail',
+    }));
+  }, []);
+
+  const openRecoveryProtocolDetail = useCallback((protocol: ProtocolDefinition) => {
+    void hapticMicro();
+    setSelectedProtocol(protocol);
+    setFieldUtilitiesState((prev) => ({
+      ...prev,
+      isOpen: true,
+      activeView: 'recoveryProtocolDetail',
+    }));
+  }, []);
+
+  const renderProtocolsPanel = () => (
+    <View style={[styles.panelBody, styles.protocolsPanelBody, styles.emergencyProtocolsPanelBody]}>
+      {renderPanelIntro('Emergency Protocol', 'Tap any card for immediate field stabilization steps.')}
+      <ProtocolActionGrid onSelectProtocol={openProtocolDetail} />
+    </View>
+  );
+
+  const renderRecoveryProtocolsPanel = () => (
+    <View style={[styles.panelBody, styles.protocolsPanelBody, styles.recoveryProtocolsPanelBody]}>
+      {renderPanelIntro('Vehicle Recovery Protocols', 'Tap any card for common recovery guidance.')}
+      <ProtocolActionGrid
+        protocols={RECOVERY_PROTOCOLS}
+        onSelectProtocol={openRecoveryProtocolDetail}
+      />
+    </View>
+  );
+
+  const renderProtocolDetailPanel = () => {
+    if (!selectedProtocol) {
+      return (
+        <View style={[styles.panelBody, styles.protocolDetailPanelBody]}>
+          {renderPanelIntro('Protocol Detail', 'Select a protocol to view stabilization steps.')}
+          <View style={styles.emptyState}>
+            <Ionicons name="medkit-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>No field protocol is selected.</Text>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={[styles.panelBody, styles.protocolDetailPanelBody, protocolCompactMode && styles.protocolDetailPanelBodyCompact]}>
+        <FieldUseProtocolDetail protocol={buildEmergencyFieldUseGuide(selectedProtocol)} />
       </View>
     );
   };
 
-
-  // ── Render ─────────────────────────────────────────────────
-  return (
-    <View style={styles.fullScreenContainer} pointerEvents="box-none">
-      {/* Backdrop — covers entire screen including dock area */}
-      <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]}>
-        <TouchableOpacity
-          style={StyleSheet.absoluteFill}
-          onPress={dismiss}
-          activeOpacity={1}
-        />
-      </Animated.View>
-
-      {/* Sheet — positioned above the CommandDock, dynamic maxHeight */}
-      <Animated.View
-        style={[
-          styles.sheet,
-          {
-            maxHeight: SHEET_MAX_H,
-            opacity: fadeAnim,
-            transform: [{ translateY: slideAnim }],
-          },
-        ]}
-      >
-
-        {/* Drag handle area — swipeable, pinned at top */}
-        <View {...panResponder.panHandlers}>
-          <View style={styles.handleBar}>
-            <View style={styles.handle} />
+  const renderRecoveryProtocolDetailPanel = () => {
+    if (!isRecoveryProtocol(selectedProtocol)) {
+      return (
+        <View style={[styles.panelBody, styles.protocolDetailPanelBody]}>
+          {renderPanelIntro('Recovery Protocol Detail', 'Select a recovery card to view field extraction steps.')}
+          <View style={styles.emptyState}>
+            <Ionicons name="car-sport-outline" size={22} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyStateText}>No recovery protocol is selected.</Text>
           </View>
-
-          {/* Header row */}
-
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>QUICK ACTIONS</Text>
-            <View style={[
-              styles.statusPill,
-              hasExpedition
-                ? (isExpeditionPaused ? styles.statusPillPaused : styles.statusPillActive)
-                : styles.statusPillInactive,
-            ]}>
-              <View style={[styles.statusDot, {
-                backgroundColor: hasExpedition
-                  ? (isExpeditionPaused ? AMBER : GREEN)
-                  : MUTED,
-              }]} />
-              <Text style={[styles.statusPillText, {
-                color: hasExpedition
-                  ? (isExpeditionPaused ? AMBER : GREEN)
-                  : MUTED,
-              }]}>
-                {hasExpedition
-                  ? (isExpeditionPaused ? 'PAUSED' : 'ACTIVE')
-                  : 'NO EXPEDITION'}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={dismiss}
-              activeOpacity={0.6}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <SafeIcon name="close" size={18} color={TEXT_MUTED} />
-            </TouchableOpacity>
-          </View>
-
         </View>
+      );
+    }
 
-        {/* Scrollable content area — fills remaining sheet height */}
-        <ScrollView
-          style={styles.scrollArea}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={true}
-          indicatorStyle="white"
-          bounces={true}
-          keyboardShouldPersistTaps="handled"
-          overScrollMode="always"
-        >
-          {subView === 'main' && renderMainGrid()}
-          {subView === 'quickNote' && renderQuickNote()}
-          {subView === 'incidentPicker' && renderIncidentPicker()}
-          {subView === 'endConfirm' && renderEndConfirm()}
-        </ScrollView>
-      </Animated.View>
+    return (
+      <View style={[styles.panelBody, styles.protocolDetailPanelBody, protocolCompactMode && styles.protocolDetailPanelBodyCompact]}>
+        <RecoveryProtocolDetail protocol={selectedProtocol} />
+      </View>
+    );
+  };
+
+  const renderBluetoothPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Device Connections', 'Identify, select, connect, retry, or clear local Bluetooth device sessions.')}
+      <FieldUtilitiesBluetoothPanel />
+    </View>
+  );
+
+  const panelContent = (() => {
+    switch (activeView) {
+      case 'quickNote':
+        return renderNotePanel();
+      case 'intel':
+        return renderIntelPanel();
+      case 'emergencyComms':
+        return renderCommsPanel();
+      case 'protocols':
+        return renderProtocolsPanel();
+      case 'protocolDetail':
+        return renderProtocolDetailPanel();
+      case 'recoveryProtocols':
+        return renderRecoveryProtocolsPanel();
+      case 'recoveryProtocolDetail':
+        return renderRecoveryProtocolDetailPanel();
+      case 'team':
+        return renderTeamPanel();
+      case 'bluetooth':
+        return renderBluetoothPanel();
+      default:
+        return renderMainPanel();
+    }
+  })();
+
+  return (
+    <ECSModalShell
+      visible={visible}
+      onClose={handleShellClose}
+      title="Field Utilities"
+      subtitle={
+        mainPanelActive
+          ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
+          : 'Focused utility actions stay inside Field Utilities without changing tabs.'
+      }
+      icon="flash-outline"
+      eyebrow="QUICK ACTIONS"
+      overlayClass="workflow"
+      maxWidth={980}
+      maxHeightFraction={1}
+      minHeightFraction={1}
+      scrollable={!protocolStaticActive}
+      keyboardAware={activeView === 'quickNote'}
+      showHandle={false}
+      dismissOnBackdrop={false}
+      allowSwipeDismiss={false}
+      onBack={mainPanelActive ? undefined : handleShellBack}
+      closeGuardKey={activeView}
+      topClearanceOverride={fieldUtilitiesTopClearance}
+      bottomClearanceOverride={fieldUtilitiesBottomClearance}
+      bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : undefined}
+      contentContainerStyle={protocolStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
+    >
+      {panelContent}
+    </ECSModalShell>
+  );
+}
+
+function ProtocolActionGrid({
+  onSelectProtocol,
+  protocols = EMERGENCY_PROTOCOLS,
+}: {
+  onSelectProtocol: (protocol: ProtocolDefinition) => void;
+  protocols?: readonly ProtocolDefinition[];
+}) {
+  return (
+    <View style={styles.protocolActionGrid}>
+      {protocols.map((protocol) => (
+        <ProtocolActionCard
+          key={protocol.id}
+          protocol={protocol}
+          onSelectProtocol={onSelectProtocol}
+        />
+      ))}
     </View>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────
-const TILE_GAP = DENSITY.internalRowGap; // 10 — consistent with rest of ECS
-const GRID_PAD = DENSITY.screenPad; // 18 — matches screen edge padding
+function ProtocolActionCard({
+  protocol,
+  onSelectProtocol,
+}: {
+  protocol: ProtocolDefinition;
+  onSelectProtocol: (protocol: ProtocolDefinition) => void;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const protocolCardImage = protocol.image ?? protocol.fieldUtilityImage ?? protocol.badgeImage;
+  const protocolCardSource = typeof protocolCardImage === 'string' ? { uri: protocolCardImage } : protocolCardImage;
+  const showProtocolImage = Boolean(protocolCardSource && !imageFailed);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.protocolActionCard,
+        { borderColor: `${protocol.accentColor}38`, backgroundColor: `${protocol.accentColor}0F` },
+      ]}
+      onPress={() => onSelectProtocol(protocol)}
+      activeOpacity={0.78}
+    >
+      {/* Protocol cards intentionally use full-card images; failed assets fall back to accent card styling. */}
+      {showProtocolImage && protocolCardSource ? (
+        <Image
+          source={protocolCardSource}
+          style={styles.protocolActionImage}
+          resizeMode="cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <View style={styles.protocolActionFallback}>
+          <View style={[styles.protocolActionFallbackIcon, { borderColor: `${protocol.accentColor}40`, backgroundColor: `${protocol.accentColor}12` }]}>
+            {getTacticalGlyph(protocol.id, protocol.accentColor, 24) ?? (
+              <Ionicons name={getProtocolFallbackIconName(protocol.id)} size={23} color={protocol.accentColor} />
+            )}
+          </View>
+        </View>
+      )}
+      <View style={styles.protocolActionScrim} />
+      <View style={styles.protocolActionCopy}>
+        <Text style={[styles.protocolActionTitle, { color: protocol.accentColor }]} numberOfLines={2}>
+          {getFieldUtilityProtocolTitle(protocol)}
+        </Text>
+        <Text style={styles.protocolActionSubtitle} numberOfLines={2}>{protocol.subtitle}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function getFieldUtilityProtocolTitle(protocol: ProtocolDefinition): string {
+  if (protocol.id === 'hypothermia') {
+    // Keep the existing protocol id/content intact; Field Utilities uses the
+    // product-facing action label requested for this cold exposure workflow.
+    return 'Cold Exposure Stabilization';
+  }
+
+  return protocol.title;
+}
+
+function getProtocolFallbackIconName(protocolId: string): React.ComponentProps<typeof Ionicons>['name'] {
+  if (protocolId.includes('winch') || protocolId.includes('snatch') || protocolId.includes('deadman')) {
+    return 'git-pull-request-outline';
+  }
+  if (protocolId.includes('vehicle') || protocolId.includes('kinetic') || protocolId.includes('multi')) {
+    return 'car-sport-outline';
+  }
+  return 'shield-checkmark-outline';
+}
+
+function getBluetoothSourceTone(status: ECSDiscoverySourceUiStatus): string {
+  switch (status) {
+    case 'success':
+      return '#4CAF50';
+    case 'scanning':
+      return '#5AC8FA';
+    case 'failed':
+      return '#FF6B6B';
+    case 'unsupported':
+    case 'disabled':
+      return TACTICAL.amber;
+    case 'pending':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function BluetoothSourceSummary({ summary }: { summary: ECSScanSummary }) {
+  const hasStarted = summary.startedAt != null;
+  if (!hasStarted) return null;
+
+  return (
+    <View style={styles.bluetoothSourceSummary}>
+      {summary.sourceStatuses
+        .map((source) => {
+          const tone = getBluetoothSourceTone(source.status);
+          return (
+            <View key={source.key} style={styles.bluetoothSourceRow}>
+              <View style={[styles.bluetoothSourceDot, { backgroundColor: tone }]} />
+              <View style={styles.bluetoothSourceCopy}>
+                <Text style={styles.bluetoothSourceLabel}>{source.label}</Text>
+                <Text style={styles.bluetoothSourceDetail} numberOfLines={2}>
+                  {getSourceStatusDetail(source)}
+                </Text>
+              </View>
+              <Text style={[styles.bluetoothSourceStatus, { color: tone }]} numberOfLines={2}>
+                {getSourceStatusLabel(source)}
+              </Text>
+            </View>
+          );
+        })}
+    </View>
+  );
+}
+
+function FieldUtilitiesBluetoothPanel() {
+  const connections = useUnifiedDeviceConnections();
+
+  useEffect(() => {
+    if (__DEV__) {
+      console.log('[BT_SOURCE] field_utilities_device_connections_panel', {
+        file: 'components/QuickActionsSheet.tsx',
+        component: 'FieldUtilitiesBluetoothPanel',
+        hook: 'lib/useUnifiedDeviceConnections.ts',
+        buttonText: 'Scan for Device Connections',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!connections.routeIntent) return;
+    connections.consumeRouteIntent(connections.routeIntent.id);
+  }, [connections]);
+
+  const visibleDevices = connections.nearbyDevices;
+
+  const handlePrimaryAction = useCallback(async (device: ECSDeviceConnectionModel) => {
+    void hapticCommand();
+    if (device.isConnected) {
+      await connections.disconnectDevice(device.id);
+      return;
+    }
+    if (device.actionKind === 'retry') {
+      await connections.retryDevice(device.id, 'user_retry');
+      return;
+    }
+    await connections.connectDevice(device.id, 'user_device_action');
+  }, [connections]);
+
+  const handleScanAgain = useCallback(() => {
+    void hapticCommand();
+    void connections.rescan();
+  }, [connections]);
+
+  const handleConnectSelected = useCallback(() => {
+    void hapticCommand();
+    void connections.connectSelected('user_selected_batch');
+  }, [connections]);
+
+  return (
+    <View style={styles.bluetoothPanel}>
+      <View style={styles.bluetoothHero}>
+        <View style={styles.bluetoothHeroTop}>
+          <View style={styles.bluetoothIconWrap}>
+            <Ionicons name="bluetooth-outline" size={20} color="#5AC8FA" />
+          </View>
+          <View style={styles.bluetoothHeroCopy}>
+            <Text style={styles.bluetoothEyebrow}>UNIFIED SCANNER</Text>
+            <Text style={styles.bluetoothTitle}>{connections.globalSummaryLabel}</Text>
+            <Text style={styles.bluetoothBody}>
+              Device discovery uses the same unified scanner as Device Connections. Only currently discovered nearby devices appear here.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.bluetoothStatsRow}>
+          <BluetoothStat label="Connected" value={connections.connectedCount} />
+          <BluetoothStat label="Nearby" value={connections.nearbyDevices.length} />
+          <BluetoothStat label="Live" value={connections.liveCount} />
+        </View>
+
+        {connections.degradedMessage ? (
+          <Text style={styles.bluetoothNotice}>{connections.degradedMessage}</Text>
+        ) : connections.infoMessage ? (
+          <Text style={styles.bluetoothNotice}>{connections.infoMessage}</Text>
+        ) : null}
+
+        {__DEV__ ? <BluetoothSourceSummary summary={connections.lastScanSummary} /> : null}
+
+        <View style={styles.bluetoothActionRow}>
+          <TouchableOpacity
+            style={styles.bluetoothSecondaryBtn}
+            onPress={handleScanAgain}
+            activeOpacity={0.78}
+            disabled={connections.isScanning}
+            accessibilityState={{ disabled: connections.isScanning }}
+          >
+            {connections.isScanning ? (
+              <ActivityIndicator size={13} color={TACTICAL.textMuted} />
+            ) : (
+              <Ionicons name="refresh-outline" size={14} color={TACTICAL.textMuted} />
+            )}
+            <Text style={styles.bluetoothSecondaryText} numberOfLines={2}>
+              {connections.isScanning ? 'Scanning...' : 'Scan for Device Connections'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.bluetoothPrimaryBtn,
+              !connections.canConnectSelected ? styles.bluetoothPrimaryBtnDisabled : null,
+            ]}
+            onPress={handleConnectSelected}
+            activeOpacity={0.78}
+            disabled={!connections.canConnectSelected || connections.isBusy}
+          >
+            {connections.isBusy ? <ActivityIndicator size={13} color="#0B0F12" /> : null}
+            <Text style={[
+              styles.bluetoothPrimaryText,
+              !connections.canConnectSelected ? styles.bluetoothPrimaryTextDisabled : null,
+            ]}>
+              Connect Selected
+            </Text>
+          </TouchableOpacity>
+          {connections.selectedCount > 0 ? (
+            <TouchableOpacity
+              style={styles.bluetoothSecondaryBtn}
+              onPress={() => {
+                void hapticMicro();
+                connections.clearSelection();
+              }}
+              activeOpacity={0.78}
+            >
+              <Ionicons name="close-outline" size={14} color={TACTICAL.textMuted} />
+              <Text style={styles.bluetoothSecondaryText}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <View style={styles.bluetoothNearbyHeader}>
+          <Text style={styles.bluetoothNearbyTitle}>Found nearby devices</Text>
+          <Text style={styles.bluetoothNearbyBody}>
+            Saved, known, failed, and cloud-only records stay out of this actionable scan list.
+          </Text>
+        </View>
+      </View>
+
+      {visibleDevices.length > 0 ? (
+        <View style={styles.bluetoothDeviceList}>
+          {visibleDevices.map((device) => (
+            <BluetoothDeviceMiniRow
+              key={device.id}
+              device={device}
+              busy={connections.isBatchBusy || device.isConnecting}
+              onToggleSelection={connections.toggleSelection}
+              onPrimaryAction={handlePrimaryAction}
+            />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Ionicons name="bluetooth-outline" size={22} color={TACTICAL.textMuted} />
+          <Text style={styles.emptyStateText}>{connections.scanAreaMessage}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function BluetoothStat({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.bluetoothStat}>
+      <Text style={styles.bluetoothStatValue}>{value}</Text>
+      <Text style={styles.bluetoothStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function BluetoothDeviceMiniRow({
+  device,
+  busy,
+  onToggleSelection,
+  onPrimaryAction,
+}: {
+  device: ECSDeviceConnectionModel;
+  busy: boolean;
+  onToggleSelection: (deviceId: string) => void;
+  onPrimaryAction: (device: ECSDeviceConnectionModel) => void;
+}) {
+  const selectable = !device.isConnected && !device.isConnecting && (device.actionKind === 'connect' || device.actionKind === 'retry');
+  const actionDisabled =
+    busy ||
+    device.actionKind === 'none' ||
+    device.actionKind === 'connected' ||
+    device.actionKind === 'selected' ||
+    device.actionKind === 'disconnecting' ||
+    device.actionKind === 'connecting';
+
+  return (
+    <View style={[styles.bluetoothDeviceRow, device.isSelected ? styles.bluetoothDeviceRowSelected : null]}>
+      <TouchableOpacity
+        style={[styles.bluetoothSelect, device.isSelected ? styles.bluetoothSelectActive : null]}
+        onPress={() => {
+          if (!selectable) return;
+          void hapticMicro();
+          onToggleSelection(device.id);
+        }}
+        activeOpacity={selectable ? 0.78 : 1}
+        disabled={!selectable}
+      >
+        {device.isSelected ? <Ionicons name="checkmark" size={12} color="#0B0F12" /> : null}
+      </TouchableOpacity>
+
+      <View style={styles.bluetoothDeviceCopy}>
+        <Text style={styles.bluetoothDeviceName} numberOfLines={1}>{device.name}</Text>
+        <Text style={styles.bluetoothDeviceMeta} numberOfLines={1}>
+          {[device.provider, device.category, device.stateLabel].filter(Boolean).join(' / ')}
+        </Text>
+        <Text style={styles.bluetoothDeviceDetail} numberOfLines={2}>{device.detailLabel}</Text>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.bluetoothDeviceAction, actionDisabled ? styles.bluetoothDeviceActionDisabled : null]}
+        onPress={() => onPrimaryAction(device)}
+        disabled={actionDisabled}
+        activeOpacity={0.78}
+      >
+        {device.isConnecting || device.actionKind === 'disconnecting' ? (
+          <ActivityIndicator size={12} color={TACTICAL.amber} />
+        ) : (
+          <Text style={[styles.bluetoothDeviceActionText, actionDisabled ? styles.bluetoothDeviceActionTextDisabled : null]}>
+            {getBluetoothActionLabel(device)}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function getBluetoothActionLabel(device: ECSDeviceConnectionModel): string {
+  switch (device.actionKind) {
+    case 'disconnect':
+      return 'Disconnect';
+    case 'disconnecting':
+      return 'Disconnecting';
+    case 'retry':
+      return 'Retry';
+    case 'connect':
+      return 'Connect';
+    case 'connecting':
+      return 'Connecting';
+    case 'connected':
+      return 'Connected';
+    case 'selected':
+      return 'Selected';
+    default:
+      return 'Unavailable';
+  }
+}
 
 const styles = StyleSheet.create({
-  // Full-screen overlay container — ABOVE the CommandDock (zIndex > 9999)
-  fullScreenContainer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10001,
-    elevation: 10001,
-  },
-
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-  },
-  // Sheet panel — sits above the CommandDock bar
-  // maxHeight is applied dynamically via inline style for rotation support
-  sheet: {
-    position: 'absolute',
-    bottom: DOCK_BAR_HEIGHT,
-    left: 0,
-    right: 0,
-    backgroundColor: BG_DARK,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderTopWidth: 1,
-    borderColor: GOLD_BORDER,
-    flexDirection: 'column',
-  },
-
-
-  handleBar: {
-    alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 4,
-  },
-  handle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-
-  // ── Header ─────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: GRID_PAD,
-    paddingBottom: DENSITY.titleBodyGap + 4, // 12
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(212,175,55,0.12)',
-  },
-  headerTitle: {
-    ...TYPO.T4,
-    fontSize: 11,
-    letterSpacing: 3,
-    fontWeight: '900',
-    color: GOLD,
-  },
-
-  // ── Close Button — standardized ────────────────────────────
-  closeBtn: {
-    width: CLOSE_BTN_SIZE,
-    height: CLOSE_BTN_SIZE,
-    borderRadius: CLOSE_BTN_SIZE / 2,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  // ── Status Pill — standardized ─────────────────────────────
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: STATUS_PILL_GAP,
-    paddingHorizontal: STATUS_PILL_PAD_H,
-    paddingVertical: STATUS_PILL_PAD_V,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  statusPillActive: {
-    backgroundColor: GREEN_DIM,
-    borderColor: GREEN_BORDER,
-  },
-  statusPillPaused: {
-    backgroundColor: AMBER_DIM,
-    borderColor: AMBER_BORDER,
-  },
-  statusPillInactive: {
-    backgroundColor: 'rgba(138,138,133,0.06)',
-    borderColor: 'rgba(138,138,133,0.15)',
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusPillText: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-
-
-  // ── Scrollable Content ─────────────────────────────────────
-  scrollArea: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingTop: DENSITY.cardGap, // 14
-    paddingBottom: 32,
+  sheetScrollContentMain: {
+    justifyContent: 'flex-start',
     flexGrow: 1,
+    minHeight: '100%',
+    paddingBottom: 12,
   },
-
-  // ── Grid ───────────────────────────────────────────────────
-  gridContainer: {
-    paddingHorizontal: GRID_PAD,
-    gap: TILE_GAP,
-  },
-  gridRow: {
-    flexDirection: 'row',
-    gap: TILE_GAP,
-  },
-
-  // ── Tile — standardized ────────────────────────────────────
-  tile: {
+  sheetStaticContent: {
     flex: 1,
-    backgroundColor: TILE_BG,
-    borderRadius: ECS.radius, // 14 — consistent
+    minHeight: 0,
+    justifyContent: 'flex-start',
+  },
+  quickProtocolStaticBody: {
+    padding: 10,
+  },
+  mainPanel: {
+    flexGrow: 1,
+    minHeight: 0,
+    gap: 10,
+  },
+  summaryCard: {
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: TILE_BORDER,
-    paddingVertical: DENSITY.cardPad + 2, // 18
-    paddingHorizontal: DENSITY.internalRowGap, // 10
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(196,138,44,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  summaryEyebrow: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 2,
+  },
+  summaryTitle: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 0.5,
+  },
+  sectionLabel: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.8,
+  },
+  summaryText: {
+    fontSize: 9,
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+  },
+  tileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignContent: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  tile: {
+    width: '48%',
+    minHeight: 82,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 96,
+    gap: 6,
   },
   tileDisabled: {
-    borderColor: TILE_BORDER_DISABLED,
-    opacity: 0.38,
+    opacity: 0.6,
+  },
+  emergencyProtocolTile: {
+    borderColor: 'rgba(239,83,80,0.24)',
+    backgroundColor: 'rgba(239,83,80,0.055)',
+  },
+  recoveryProtocolTile: {
+    borderColor: 'rgba(76,175,80,0.22)',
+    backgroundColor: 'rgba(76,175,80,0.05)',
   },
   tileIconWrap: {
-    width: ICON_BOX_MD,
-    height: ICON_BOX_MD,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: DENSITY.internalRowGap, // 10
-  },
-  tileLabel: {
-    ...TYPO.U2,
-    fontSize: 11,
-    letterSpacing: 0.8,
-    textAlign: 'center',
-    lineHeight: 15,
-    textTransform: 'none',
-  },
-
-  // ── Sub-view Container ─────────────────────────────────────
-  subViewContainer: {
-    flex: 1,
-    paddingHorizontal: GRID_PAD,
-  },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs + 1, // 5
-    marginBottom: DENSITY.titleBodyGap + 4, // 12
-    paddingVertical: 2,
-    minHeight: 44, // Tap target
-  },
-  backText: {
-    ...TYPO.U2,
-    fontSize: 9,
-    letterSpacing: 1.5,
-    color: TEXT_MUTED,
-    textTransform: 'uppercase',
-  },
-  subViewTitle: {
-    ...TYPO.T4,
-    fontSize: 13,
-    fontWeight: '900',
-    color: TEXT_PRIMARY,
-    letterSpacing: 2,
-    marginBottom: SPACING.xs,
-  },
-  subViewDesc: {
-    ...TYPO.B2,
-    fontSize: 11,
-    color: TEXT_MUTED,
-    marginBottom: DENSITY.cardGap, // 14
-    lineHeight: 16,
-  },
-
-  // ── Quick Note ─────────────────────────────────────────────
-  noteInput: {
-    backgroundColor: TILE_BG,
+    width: 34,
+    height: 34,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: TILE_BORDER,
-    color: TEXT_PRIMARY,
-    fontSize: 14,
-    padding: DENSITY.cardPad, // 16 — consistent
-    minHeight: 120,
-    textAlignVertical: 'top',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  tileLabelDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  tileSubLabel: {
+    fontSize: 8,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    textAlign: 'center',
+    letterSpacing: 0.4,
+    lineHeight: 11,
+    minHeight: 22,
+  },
+  tileSubLabelDisabled: {
+    color: ECS.muted,
+  },
+  tileStateBadge: {
+    marginTop: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  tileStateBadgeDisabled: {
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  tileStateText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.1,
+  },
+  tileStateTextDisabled: {
+    color: ECS.muted,
+  },
+  panelBody: {
+    flexGrow: 1,
+    minHeight: '100%',
+    gap: 12,
+  },
+  notePanelBody: {
+    minHeight: '100%',
+  },
+  intelPanelBody: {
+    gap: 10,
+  },
+  protocolsPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
+  },
+  emergencyProtocolsPanelBody: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(239,83,80,0.16)',
+    backgroundColor: 'rgba(239,83,80,0.035)',
+    padding: 8,
+  },
+  recoveryProtocolsPanelBody: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(76,175,80,0.15)',
+    backgroundColor: 'rgba(76,175,80,0.032)',
+    padding: 8,
+  },
+  protocolDetailPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 7,
+  },
+  protocolDetailPanelBodyCompact: {
+    gap: 5,
+  },
+  panelIntro: {
+    gap: 4,
+  },
+  panelTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 0.8,
+  },
+  panelSubtitle: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+  },
+  noteInput: {
+    minHeight: 150,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    color: TACTICAL.text,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 13,
   },
   noteFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: DENSITY.titleBodyGap + 4, // 12
+    gap: 12,
   },
-  noteCharCount: {
-    fontSize: 10,
-    color: TEXT_MUTED,
-    letterSpacing: 0.5,
+  savedNotesSection: {
+    gap: 10,
+    marginTop: 6,
   },
-  saveNoteBtn: {
+  savedNotesHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.xs + 1, // 5
-    backgroundColor: GOLD,
-    borderRadius: 10,
-    paddingHorizontal: DENSITY.cardPad, // 16
-    paddingVertical: DENSITY.internalRowGap, // 10
-    minHeight: 44, // Tap target
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  saveNoteBtnText: {
-    ...TYPO.U2,
+  savedNotesTitle: {
     fontSize: 10,
     fontWeight: '900',
-    color: '#000',
+    color: TACTICAL.amber,
     letterSpacing: 1.5,
   },
-
-  // ── Incident Picker ────────────────────────────────────────
-  incidentGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: TILE_GAP,
+  savedNotesList: {
+    gap: 8,
   },
-  incidentCard: {
-    width: '47%' as any,
-    flexGrow: 1,
-    backgroundColor: TILE_BG,
+  savedNoteCard: {
     borderRadius: 12,
     borderWidth: 1,
-    padding: DENSITY.cardPad, // 16 — consistent
-    alignItems: 'center',
-    minHeight: 80, // Ensure comfortable tap
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
   },
-  incidentIconWrap: {
-    width: ICON_BOX_MD,
-    height: ICON_BOX_MD,
-    borderRadius: 12,
+  savedNoteCardSelected: {
+    borderColor: 'rgba(196,138,44,0.34)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  savedNoteCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  savedNoteText: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  savedNoteMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  savedNoteDeleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: SPACING.sm, // 8
+    backgroundColor: 'rgba(239,83,80,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,83,80,0.18)',
   },
-  incidentLabel: {
-    ...TYPO.U2,
+  metaText: {
     fontSize: 10,
+    color: TACTICAL.textMuted,
+  },
+  primaryBtn: {
+    minHeight: 42,
+    borderRadius: 10,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  primaryBtnDisabled: {
+    opacity: 0.45,
+  },
+  primaryBtnText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 1.6,
+  },
+  infoCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 12,
+    gap: 10,
+  },
+  commsReferenceGrid: {
+    gap: 12,
+  },
+  commsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  commsHint: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
-
-  // ── End Confirm ────────────────────────────────────────────
-  endConfirmContent: {
-    alignItems: 'center',
-    paddingTop: DENSITY.cardPad, // 16
+  commsEntryList: {
+    gap: 8,
   },
-  endConfirmIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: RED_DIM,
-    borderWidth: 1,
-    borderColor: RED_BORDER,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: DENSITY.cardGap, // 14
-  },
-  endConfirmTitle: {
-    ...TYPO.T3,
-    color: RED,
-    letterSpacing: 1,
-    marginBottom: SPACING.sm, // 8
-  },
-  endConfirmDesc: {
-    ...TYPO.B2,
-    fontSize: 12,
-    color: TEXT_MUTED,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: DENSITY.screenPad + 4, // 22
-    paddingHorizontal: DENSITY.cardPad, // 16
-  },
-  endConfirmActions: {
-    flexDirection: 'row',
-    gap: DENSITY.titleBodyGap + 4, // 12
-    alignItems: 'center',
-  },
-  endConfirmBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm, // 8
-    backgroundColor: RED,
+  commsEntryRow: {
+    minHeight: 44,
     borderRadius: 10,
-    paddingHorizontal: 22,
-    paddingVertical: DENSITY.titleBodyGap + 4, // 12
-    minHeight: 44, // Tap target
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  endConfirmBtnText: {
-    ...TYPO.U2,
+  commsEntryRowEditing: {
+    borderColor: 'rgba(196,138,44,0.38)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  commsEntryLabel: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  commsEntryDetail: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    color: TACTICAL.textMuted,
+    textAlign: 'right',
+  },
+  commsEditRow: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 9,
+  },
+  commsEditFields: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  commsEditInput: {
+    minHeight: 42,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: TACTICAL.text,
+  },
+  commsEditTitleInput: {
+    flex: 1,
     fontSize: 11,
     fontWeight: '900',
-    color: '#fff',
-    letterSpacing: 1.5,
   },
-  endCancelBtn: {
-    paddingVertical: DENSITY.titleBodyGap + 4, // 12
-    paddingHorizontal: DENSITY.screenPad, // 18
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    minHeight: 44, // Tap target
-  },
-  endCancelBtnText: {
-    ...TYPO.U2,
+  commsEditDetailInput: {
+    flex: 1,
     fontSize: 11,
     fontWeight: '700',
-    color: TEXT_MUTED,
+    color: TACTICAL.textMuted,
+    textAlign: 'right',
+  },
+  commsEditActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  commsCancelBtn: {
+    minHeight: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commsCancelText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
     letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  commsSaveBtn: {
+    minHeight: 34,
+    borderRadius: 9,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commsSaveText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  protocolActionGrid: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignContent: 'space-between',
+    justifyContent: 'space-between',
+    rowGap: 8,
+    columnGap: 8,
+  },
+  protocolActionCard: {
+    width: '48.5%',
+    height: '31.2%',
+    minHeight: 86,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    justifyContent: 'flex-start',
+  },
+  protocolActionImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    opacity: 0.88,
+  },
+  protocolActionFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(5,8,10,0.92)',
+  },
+  protocolActionFallbackIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.78,
+  },
+  protocolActionScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5,8,10,0.42)',
+  },
+  protocolActionCopy: {
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    gap: 5,
+  },
+  protocolActionTitle: {
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textAlign: 'left',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  protocolActionSubtitle: {
+    fontSize: 9,
+    lineHeight: 12,
+    color: 'rgba(255,255,255,0.78)',
+    textAlign: 'left',
+  },
+  cardTitle: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.6,
+  },
+  coordsText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TACTICAL.text,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
+  },
+  secondaryBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}40`,
+    backgroundColor: `${TACTICAL.amber}10`,
+    paddingHorizontal: 12,
+  },
+  secondaryBtnText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.2,
+  },
+  stateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  stateText: {
+    fontSize: 11,
+    color: TACTICAL.textMuted,
+  },
+  emptyState: {
+    minHeight: 120,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    gap: 8,
+  },
+  emptyStateText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+    textAlign: 'center',
+  },
+  bluetoothPanel: {
+    gap: 12,
+  },
+  bluetoothHero: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 12,
+    gap: 12,
+  },
+  bluetoothHeroTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  bluetoothIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(90,200,250,0.3)',
+    backgroundColor: 'rgba(90,200,250,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluetoothHeroCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  bluetoothEyebrow: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1.8,
+  },
+  bluetoothTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  bluetoothBody: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  bluetoothStat: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  bluetoothStatValue: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
+  },
+  bluetoothStatLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  bluetoothNotice: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.text,
+  },
+  bluetoothSourceSummary: {
+    gap: 6,
+  },
+  bluetoothSourceRow: {
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bluetoothSourceDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  bluetoothSourceCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bluetoothSourceLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: TACTICAL.text,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  bluetoothSourceDetail: {
+    marginTop: 2,
+    fontSize: 9,
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothSourceStatus: {
+    maxWidth: 96,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
+  bluetoothActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  bluetoothSecondaryBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bluetoothSecondaryText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  bluetoothPrimaryBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bluetoothPrimaryBtnDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  bluetoothPrimaryText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0B0F12',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  bluetoothPrimaryTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  bluetoothNearbyHeader: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  bluetoothNearbyTitle: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#5AC8FA',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
+  },
+  bluetoothNearbyBody: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
+  },
+  bluetoothDeviceList: {
+    gap: 8,
+  },
+  bluetoothDeviceRow: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bluetoothDeviceRowSelected: {
+    borderColor: 'rgba(90,200,250,0.46)',
+    backgroundColor: 'rgba(90,200,250,0.08)',
+  },
+  bluetoothSelect: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluetoothSelectActive: {
+    borderColor: '#5AC8FA',
+    backgroundColor: '#5AC8FA',
+  },
+  bluetoothDeviceCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  bluetoothDeviceName: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  bluetoothDeviceMeta: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#5AC8FA',
+    textTransform: 'uppercase',
+  },
+  bluetoothDeviceDetail: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: TACTICAL.textMuted,
+  },
+  bluetoothDeviceAction: {
+    minHeight: 34,
+    minWidth: 82,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(90,200,250,0.34)',
+    backgroundColor: 'rgba(90,200,250,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  bluetoothDeviceActionDisabled: {
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+  },
+  bluetoothDeviceActionText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#5AC8FA',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  bluetoothDeviceActionTextDisabled: {
+    color: TACTICAL.textMuted,
+  },
+  optionList: {
+    gap: 10,
+  },
+  optionCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    padding: 12,
+    gap: 6,
+  },
+  optionCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  optionCardTitle: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.1,
+  },
+  optionCardText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: TACTICAL.textMuted,
+  },
+  radiusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  radiusChip: {
+    minWidth: 72,
+    minHeight: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  radiusChipActive: {
+    borderColor: `${TACTICAL.amber}45`,
+    backgroundColor: `${TACTICAL.amber}16`,
+  },
+  radiusChipText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.7,
+  },
+  radiusChipTextActive: {
+    color: TACTICAL.amber,
   },
 });
-
-
-
-
-
