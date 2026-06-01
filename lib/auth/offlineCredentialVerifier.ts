@@ -23,6 +23,22 @@ export type OfflineCredentialVerificationResult =
       reason: OfflineCredentialFailureReason;
     };
 
+export type OfflineCredentialStatusState = 'prepared' | 'stale' | 'unprepared';
+
+export type OfflineCredentialStatusReason =
+  | 'ready'
+  | 'missing_record'
+  | OfflineCredentialFailureReason;
+
+export interface OfflineCredentialStatusSnapshot {
+  state: OfflineCredentialStatusState;
+  reason: OfflineCredentialStatusReason;
+  email: string | null;
+  userId: string | null;
+  expiresAtMs: number | null;
+  lastVerifiedOnlineAt: string | null;
+}
+
 export interface OfflineCredentialRecord {
   version: typeof OFFLINE_CREDENTIAL_VERSION;
   email: string;
@@ -76,6 +92,34 @@ function generateSalt(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`;
 }
 
+function getRecordExpiresAtMs(record: Partial<OfflineCredentialRecord> | null | undefined): number | null {
+  return typeof record?.expiresAtMs === 'number' ? record.expiresAtMs : null;
+}
+
+function getRecordLastVerifiedOnlineAt(record: Partial<OfflineCredentialRecord> | null | undefined): string | null {
+  return typeof record?.lastVerifiedOnlineAt === 'string' ? record.lastVerifiedOnlineAt : null;
+}
+
+function getRecordUserId(record: Partial<OfflineCredentialRecord> | null | undefined): string | null {
+  return typeof record?.userId === 'string' && record.userId.trim().length > 0 ? record.userId : null;
+}
+
+function buildOfflineCredentialStatus(params: {
+  state: OfflineCredentialStatusState;
+  reason: OfflineCredentialStatusReason;
+  email: string | null;
+  record?: Partial<OfflineCredentialRecord> | null;
+}): OfflineCredentialStatusSnapshot {
+  return {
+    state: params.state,
+    reason: params.reason,
+    email: params.email,
+    userId: getRecordUserId(params.record),
+    expiresAtMs: getRecordExpiresAtMs(params.record),
+    lastVerifiedOnlineAt: getRecordLastVerifiedOnlineAt(params.record),
+  };
+}
+
 export function createOfflineCredentialRecord(params: {
   email: string;
   password: string;
@@ -114,6 +158,78 @@ export function createOfflineCredentialRecord(params: {
     lastVerifiedOnlineAt: timestamp,
     expiresAtMs,
   };
+}
+
+export function resolveOfflineCredentialRecordStatus(
+  record: Partial<OfflineCredentialRecord> | null | undefined,
+  params: {
+    email: string;
+    nowMs?: number;
+  },
+): OfflineCredentialStatusSnapshot {
+  const normalizedEmail = normalizeOfflineCredentialEmail(params.email);
+  if (!normalizedEmail) {
+    return buildOfflineCredentialStatus({
+      state: 'unprepared',
+      reason: 'invalid_email',
+      email: null,
+      record,
+    });
+  }
+
+  if (!record) {
+    return buildOfflineCredentialStatus({
+      state: 'unprepared',
+      reason: 'missing_record',
+      email: normalizedEmail,
+      record,
+    });
+  }
+
+  if (
+    record.version !== OFFLINE_CREDENTIAL_VERSION ||
+    !record.email ||
+    !record.emailHash ||
+    !record.userId ||
+    !record.salt ||
+    !record.passwordVerifier ||
+    typeof record.iterations !== 'number' ||
+    typeof record.lastVerifiedOnlineAt !== 'string'
+  ) {
+    return buildOfflineCredentialStatus({
+      state: 'unprepared',
+      reason: 'invalid_record',
+      email: normalizedEmail,
+      record,
+    });
+  }
+
+  const expectedEmailHash = hashOfflineCredentialEmail(normalizedEmail);
+  if (!expectedEmailHash || expectedEmailHash !== record.emailHash || normalizedEmail !== record.email) {
+    return buildOfflineCredentialStatus({
+      state: 'unprepared',
+      reason: 'email_mismatch',
+      email: normalizedEmail,
+      record,
+    });
+  }
+
+  const nowMs = params.nowMs ?? Date.now();
+  if (typeof record.expiresAtMs === 'number' && nowMs > record.expiresAtMs) {
+    return buildOfflineCredentialStatus({
+      state: 'stale',
+      reason: 'expired',
+      email: record.email,
+      record,
+    });
+  }
+
+  return buildOfflineCredentialStatus({
+    state: 'prepared',
+    reason: 'ready',
+    email: record.email,
+    record,
+  });
 }
 
 export function verifyOfflineCredentialRecord(

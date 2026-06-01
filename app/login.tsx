@@ -24,6 +24,10 @@ import AuthStatusBanner from '../components/login/AuthStatusBanner';
 import LegalFooter from '../components/legal/LegalFooter';
 import PasswordVisibilityToggle from '../components/login/PasswordVisibilityToggle';
 import { AUTH_COPY } from '../lib/auth/authCopy';
+import {
+  offlineCredentialStore,
+  type OfflineCredentialStatusSnapshot,
+} from '../lib/auth/offlineCredentialStore';
 import { maskAuthEmail } from '../lib/auth/authLogRedaction';
 import {
   LOGIN_LOGO_ASPECT_RATIO,
@@ -122,6 +126,8 @@ export default function LoginScreen() {
   const [importingLocalData, setImportingLocalData] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
+  const [offlineCredentialStatus, setOfflineCredentialStatus] =
+    useState<OfflineCredentialStatusSnapshot | null>(null);
   const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
   const loginCtaRenderedRef = useRef(false);
   const loginSubmitInFlightRef = useRef(false);
@@ -188,6 +194,39 @@ export default function LoginScreen() {
       if (seededEmail) setResetEmail(seededEmail);
     }
   }, [params.email, params.mode]);
+
+  useEffect(() => {
+    if (isOnline || !trimmedEmail || !isValidEmail(trimmedEmail)) {
+      setOfflineCredentialStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    setOfflineCredentialStatus(null);
+    void offlineCredentialStore
+      .getOfflineCredentialStatus({ email: trimmedEmail })
+      .then((status) => {
+        if (!cancelled) {
+          setOfflineCredentialStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOfflineCredentialStatus({
+            state: 'unprepared',
+            reason: 'invalid_record',
+            email: null,
+            userId: null,
+            expiresAtMs: null,
+            lastVerifiedOnlineAt: null,
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnline, trimmedEmail]);
 
   useEffect(() => {
     if (!statusMessage || Platform.OS === 'web') return;
@@ -432,7 +471,27 @@ export default function LoginScreen() {
     }
   }, [authPhase, loading]);
 
-  const renderMessage = statusMessage ? <AuthStatusBanner text={statusMessage} tone={statusTone} /> : !isOnline ? <AuthStatusBanner text={AUTH_COPY.login.offline} tone="neutral" /> : null;
+  const offlineCredentialBanner = useMemo<{ text: string; tone: MessageTone } | null>(() => {
+    if (isOnline) return null;
+    if (!trimmedEmail || !isValidEmail(trimmedEmail) || !offlineCredentialStatus) {
+      return { text: AUTH_COPY.login.offline, tone: 'neutral' };
+    }
+
+    if (offlineCredentialStatus.state === 'prepared') {
+      return { text: AUTH_COPY.login.offlinePrepared, tone: 'neutral' };
+    }
+
+    if (offlineCredentialStatus.state === 'stale') {
+      return { text: AUTH_COPY.login.offlineStale, tone: 'error' };
+    }
+
+    return { text: AUTH_COPY.login.offlineUnprepared, tone: 'error' };
+  }, [isOnline, offlineCredentialStatus, trimmedEmail]);
+  const renderMessage = statusMessage
+    ? <AuthStatusBanner text={statusMessage} tone={statusTone} />
+    : offlineCredentialBanner
+      ? <AuthStatusBanner text={offlineCredentialBanner.text} tone={offlineCredentialBanner.tone} />
+      : null;
   const footerMarginTop = layoutMetrics.compact ? 4 : Math.max(6, layoutMetrics.footerGap - 12);
   const shellTopPadding = loginLayout.shellTopPadding;
   const shellBottomPadding = loginLayout.shellBottomPadding;

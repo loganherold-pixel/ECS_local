@@ -6,8 +6,11 @@ const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
 const verifierPath = path.join(root, 'lib', 'auth', 'offlineCredentialVerifier.ts');
+const storeSource = fs.readFileSync(path.join(root, 'lib', 'auth', 'offlineCredentialStore.ts'), 'utf8');
 const appContextSource = fs.readFileSync(path.join(root, 'context', 'AppContext.tsx'), 'utf8');
 const loginSource = fs.readFileSync(path.join(root, 'app', 'login.tsx'), 'utf8');
+const authCopySource = fs.readFileSync(path.join(root, 'lib', 'auth', 'authCopy.ts'), 'utf8');
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function normalize(source) {
   return source.replace(/\r\n/g, '\n');
@@ -50,8 +53,15 @@ new Function('module', 'exports', 'require', compiled.outputText)(
 
 const {
   createOfflineCredentialRecord,
+  resolveOfflineCredentialRecordStatus,
   verifyOfflineCredentialRecord,
 } = moduleShim.exports;
+
+assert.strictEqual(
+  typeof resolveOfflineCredentialRecordStatus,
+  'function',
+  'Offline verifier should expose a non-password readiness snapshot for the login UI.',
+);
 
 const fixedNow = Date.UTC(2026, 4, 31, 12, 0, 0);
 const record = createOfflineCredentialRecord({
@@ -84,6 +94,54 @@ assert.deepStrictEqual(
   'Matching saved credentials should unlock the known account offline.',
 );
 
+assert.deepStrictEqual(
+  resolveOfflineCredentialRecordStatus(record, {
+    email: 'field.user@example.com',
+    nowMs: fixedNow + 1000,
+  }),
+  {
+    state: 'prepared',
+    reason: 'ready',
+    email: 'field.user@example.com',
+    userId: 'user-123',
+    expiresAtMs: record.expiresAtMs,
+    lastVerifiedOnlineAt: record.lastVerifiedOnlineAt,
+  },
+  'A valid saved verifier should surface a prepared-device state without requiring the password.',
+);
+
+assert.deepStrictEqual(
+  resolveOfflineCredentialRecordStatus(record, {
+    email: 'field.user@example.com',
+    nowMs: record.expiresAtMs + 1,
+  }),
+  {
+    state: 'stale',
+    reason: 'expired',
+    email: 'field.user@example.com',
+    userId: 'user-123',
+    expiresAtMs: record.expiresAtMs,
+    lastVerifiedOnlineAt: record.lastVerifiedOnlineAt,
+  },
+  'Expired saved verifiers should surface a stale-device state before password submit.',
+);
+
+assert.deepStrictEqual(
+  resolveOfflineCredentialRecordStatus(null, {
+    email: 'field.user@example.com',
+    nowMs: fixedNow + 1000,
+  }),
+  {
+    state: 'unprepared',
+    reason: 'missing_record',
+    email: 'field.user@example.com',
+    userId: null,
+    expiresAtMs: null,
+    lastVerifiedOnlineAt: null,
+  },
+  'Missing saved verifiers should surface an explicit unprepared-device state.',
+);
+
 assert.strictEqual(
   verifyOfflineCredentialRecord(record, {
     email: 'field.user@example.com',
@@ -114,6 +172,17 @@ assert.strictEqual(
   'Expired offline credentials should fail closed.',
 );
 
+assertIncludes(
+  storeSource,
+  'getOfflineCredentialStatus',
+  'Offline credential store should expose a login-safe readiness lookup.',
+);
+assertIncludes(
+  storeSource,
+  'resolveOfflineCredentialRecordStatus',
+  'Offline credential store should delegate readiness state to the canonical verifier module.',
+);
+
 const loginBlock = blockBetween(
   loginSource,
   "const handleLogin = useCallback(async (source: 'cta_press' | 'password_submit' | 'accessibility_activate') => {",
@@ -128,6 +197,47 @@ assertIncludes(
   loginSource,
   'const result = await signIn(trimmedEmail, password, keepSignedIn, source);',
   'Login screen should let the auth provider decide whether online or known-device offline sign-in can proceed.',
+);
+assertIncludes(
+  loginSource,
+  'offlineCredentialStore,',
+  'Login screen should read local prepared-device status through the offline credential store.',
+);
+assertIncludes(
+  loginSource,
+  'getOfflineCredentialStatus({ email: trimmedEmail })',
+  'Login screen should refresh the prepared/stale/unprepared offline state for the entered account.',
+);
+assertIncludes(
+  loginSource,
+  'AUTH_COPY.login.offlinePrepared',
+  'Login screen should explicitly tell users when this account is prepared for offline sign-in.',
+);
+assertIncludes(
+  loginSource,
+  'AUTH_COPY.login.offlineStale',
+  'Login screen should explicitly tell users when saved offline access is stale.',
+);
+assertIncludes(
+  loginSource,
+  'AUTH_COPY.login.offlineUnprepared',
+  'Login screen should explicitly tell users when this device is unprepared for the entered account.',
+);
+
+assertIncludes(
+  authCopySource,
+  'offlinePrepared',
+  'Auth copy should include prepared-device messaging.',
+);
+assertIncludes(
+  authCopySource,
+  'offlineStale',
+  'Auth copy should include stale-device messaging.',
+);
+assertIncludes(
+  authCopySource,
+  'offlineUnprepared',
+  'Auth copy should include unprepared-device messaging.',
 );
 
 assertIncludes(
@@ -174,6 +284,12 @@ assertIncludes(
   appContextSource,
   "return await tryOfflineCredentialSignIn('network_error');",
   'Network-error online sign-in should fall back to known-device offline sign-in.',
+);
+
+assert.strictEqual(
+  packageJson.scripts['test:auth-offline-sign-in'],
+  'node ./scripts/test-auth-offline-sign-in.js',
+  'package.json should expose the prepared-device offline sign-in regression.',
 );
 
 console.log('Auth offline sign-in regression checks passed.');

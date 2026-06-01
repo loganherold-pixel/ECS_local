@@ -300,6 +300,7 @@
     "test:field-utilities-weather-parity": "node ./scripts/test-field-utilities-weather-parity.js",
     "test:field-utilities-production": "node ./scripts/test-field-utilities-production-readiness.js",
     "test:auth-loading-flow": "node ./scripts/test-auth-loading-flow.js",
+    "test:auth-offline-sign-in": "node ./scripts/test-auth-offline-sign-in.js",
     "test:auth-single-login-request": "node ./scripts/test-auth-single-login-request.js",
     "test:auth-startup-route-selection": "node ./scripts/test-auth-startup-route-selection.js",
     "test:auth-audit-logging": "node ./scripts/test-auth-audit-logging.js",

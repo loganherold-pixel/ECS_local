@@ -2,10 +2,14 @@ import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import {
   createOfflineCredentialRecord,
   hashOfflineCredentialEmail,
+  resolveOfflineCredentialRecordStatus,
   verifyOfflineCredentialRecord,
   type OfflineCredentialFailureReason,
   type OfflineCredentialRecord,
+  type OfflineCredentialStatusSnapshot,
 } from './offlineCredentialVerifier';
+
+export type { OfflineCredentialStatusSnapshot } from './offlineCredentialVerifier';
 
 const cache = createPersistedKeyValueCache('ecs_offline_credentials');
 const KEY_PREFIX = 'offline_credential:';
@@ -66,6 +70,24 @@ export const offlineCredentialStore = {
 
     const result = verifyOfflineCredentialRecord(record, params);
     return result.ok ? result : { ok: false, reason: result.reason };
+  },
+
+  async getOfflineCredentialStatus(params: {
+    email: string;
+  }): Promise<OfflineCredentialStatusSnapshot> {
+    await cache.waitForHydration();
+    const key = keyForEmail(params.email);
+    if (!key) {
+      return resolveOfflineCredentialRecordStatus(null, params);
+    }
+
+    const raw = cache.get(key);
+    if (!raw) {
+      return resolveOfflineCredentialRecordStatus(null, params);
+    }
+
+    const record = parseRecord(raw);
+    return resolveOfflineCredentialRecordStatus(record ?? {}, params);
   },
 
   async clearOfflineLoginVerifier(email: string): Promise<void> {
