@@ -31,6 +31,8 @@ Michigan DNR ORV GPX ingestion starts as official state-agency route/trail geome
 
 Minnesota DNR OHV ingestion starts as official state-agency GeoPackage route/trail geometry for curation. Minnesota OHV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass; the source metadata also says the dataset is a reference layer and not for navigation.
 
+Oregon Department of Forestry OHV GPX ingestion starts with the official Tillamook State Forest Class I, Class II/IV, and Class III GPX files as state-agency curation inputs. Oregon ODF records remain out of public Suggested Routes until current ODF open/closed status, fire restrictions, vehicle class signage, permits, local rules, seasonal conditions, and ECS route curation pass.
+
 BDR and other partner/licensed GPX sources are restricted by default. Keep those source rows disabled, and do not ingest, sync, rehost, or recommend their route geometry unless written partner permission or licensing is documented.
 
 California State Parks Roads and Trails data is treated as partner-restricted metadata only because the published GIS page says commercial use requires advance approval. Keep the source disabled. Do not ingest, sync, rehost, or recommend California State Parks route geometry until ECS has documented commercial approval.

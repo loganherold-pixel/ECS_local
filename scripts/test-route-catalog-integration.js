@@ -79,6 +79,7 @@ for (const functionName of [
   'route-catalog-sync-nps-trails',
   'route-catalog-sync-michigan-orv',
   'route-catalog-sync-minnesota-ohv',
+  'route-catalog-sync-oregon-odf-ohv',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
@@ -192,6 +193,12 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('route-catalog-sync-minnesota-ohv') &&
     read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('publicRecommendationCount'),
   'Minnesota DNR OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('route-catalog-sync-oregon-odf-ohv') &&
+    read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('publicRecommendationCount'),
+  'Oregon ODF OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&
