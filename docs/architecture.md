@@ -30,3 +30,7 @@ NPS Public Trails ingestion starts as official park visitor-use trail context. N
 Michigan DNR ORV GPX ingestion starts as official state-agency route/trail geometry for curation. Michigan ORV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.
 
 Minnesota DNR OHV ingestion starts as official state-agency GeoPackage route/trail geometry for curation. Minnesota OHV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass; the source metadata also says the dataset is a reference layer and not for navigation.
+
+BDR and other partner/licensed GPX sources are restricted by default. Keep those source rows disabled, and do not ingest, sync, rehost, or recommend their route geometry unless written partner permission or licensing is documented.
+
+California State Parks Roads and Trails data is treated as partner-restricted metadata only because the published GIS page says commercial use requires advance approval. Keep the source disabled. Do not ingest, sync, rehost, or recommend California State Parks route geometry until ECS has documented commercial approval.

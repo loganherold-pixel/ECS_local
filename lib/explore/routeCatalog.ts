@@ -12,6 +12,7 @@ import type {
   ECSTrailPackRouteType,
   ECSTrailPackSource,
 } from './trailPacks';
+import { getRouteCatalogSourcePublishingBlocker } from './routeCatalogSourceRestrictions';
 
 export type RouteCatalogSourceType =
   | 'official'
@@ -727,7 +728,16 @@ export function verifyRouteCatalogRecord(
   if (route.activeClosureCount > 0) blockers.push('Route intersects an active official closure');
   if (route.restrictedAccessCoveragePct > 0) blockers.push('Route includes restricted or prohibited access');
   if (route.vehicleMismatch) blockers.push('Route vehicle fit conflicts with selected criteria');
-  if (hasRestrictedPartner) blockers.push('Partner/licensed route requires permission before publishing');
+  route.sourceRecords
+    .map(getRouteCatalogSourcePublishingBlocker)
+    .filter((blocker): blocker is string => !!blocker)
+    .forEach((blocker) => blockers.push(blocker));
+  if (
+    hasRestrictedPartner &&
+    !blockers.some((blocker) => blocker === 'Partner/licensed route requires permission before publishing')
+  ) {
+    blockers.push('Partner/licensed route requires permission before publishing');
+  }
   if (route.reviewStatus !== 'approved') blockers.push('Route is not approved for public recommendation');
   if (route.officialAccessCoveragePct < OFFICIAL_ACCESS_RECOMMENDATION_THRESHOLD) {
     blockers.push('Official legal-access coverage is below recommendation threshold');

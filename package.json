@@ -140,6 +140,7 @@
     "test:explore-readiness": "node ./scripts/test-explore-readiness-integration.js",
     "test:trail-packs": "node ./scripts/test-trail-packs.js",
     "test:route-catalog": "node ./scripts/test-route-catalog.js",
+    "test:route-catalog-source-restrictions": "node ./scripts/test-route-catalog-source-restrictions.js",
     "test:route-catalog-integration": "node ./scripts/test-route-catalog-integration.js",
     "test:route-catalog-active-guidance": "node ./scripts/test-route-catalog-active-guidance.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
