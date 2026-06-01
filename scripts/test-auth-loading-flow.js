@@ -434,6 +434,11 @@ assertIncludes(
 );
 assertIncludes(
   videoSource,
+  "safePlaybackAction('play');\n\n    const cycleTimer = setInterval(() => {",
+  'The approved loading video should start playback immediately after mount instead of waiting for the replay interval.',
+);
+assertIncludes(
+  videoSource,
   'if (!isMountedRef.current) return;',
   'The approved loading video should not call player methods after unmount.',
 );

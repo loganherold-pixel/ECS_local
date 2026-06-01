@@ -898,7 +898,7 @@ type DashboardGridZoneProps = {
   onEnterCustomizeMode: () => void;
   onExitLayoutMode: () => void;
   onEmptySlotPress: (slotIndex: number) => void;
-  onWidgetLongPress: (slot: WidgetSlot) => void;
+  onWidgetPress: (slot: WidgetSlot) => void;
   onRemoveWidget: (slotIndex: number) => void;
   onSwapSlots: (from: number, to: number) => void;
   onResizeWidget: (slotIndex: number, newSize: WidgetSize) => void;
@@ -967,7 +967,7 @@ function DashboardGridZone({
   onEnterCustomizeMode,
   onExitLayoutMode,
   onEmptySlotPress,
-  onWidgetLongPress,
+  onWidgetPress,
   onRemoveWidget,
   onSwapSlots,
   onResizeWidget,
@@ -1106,7 +1106,7 @@ function DashboardGridZone({
                     gridLayout={gridLayout}
                     layoutMode={layoutMode}
                     onEmptySlotPress={onEmptySlotPress}
-                    onWidgetLongPress={onWidgetLongPress}
+                    onWidgetPress={onWidgetPress}
                     onRemoveWidget={onRemoveWidget}
                     onSwapSlots={onSwapSlots}
                     onResizeWidget={onResizeWidget}
@@ -2628,10 +2628,10 @@ function DashboardScreenInner() {
   }, []);
   const dashboardTerrainRiskBannerEvent = useMemo(
     () => hasDashboardRouteContext
-      ? selectUpcomingTerrainRiskBannerEvent(
-          terrainRiskReferenceEvent ? [terrainRiskReferenceEvent] : [],
-          { proximityMiles: 0.75 },
-        )
+        ? selectUpcomingTerrainRiskBannerEvent(
+            terrainRiskReferenceEvent ? [terrainRiskReferenceEvent] : [],
+            { proximityMiles: 1 },
+          )
       : null,
     [hasDashboardRouteContext, terrainRiskReferenceEvent],
   );
@@ -3512,11 +3512,11 @@ function DashboardScreenInner() {
     setLibraryTargetWidgetType(null);
   }, []);
 
-  const handleWidgetLongPress = useCallback((slot: WidgetSlot) => {
+  const handleWidgetPress = useCallback((slot: WidgetSlot) => {
     if (layoutMode || !slot.widgetType) return;
     closeDashboardTransientOverlays();
-    setManageSlot(slot);
-    setManageVisible(true);
+    setDetailSlot(slot);
+    setDetailVisible(true);
   }, [closeDashboardTransientOverlays, layoutMode]);
 
   const handleEmptySlotPress = useCallback((slotIndex: number) => {
@@ -4146,7 +4146,7 @@ function DashboardScreenInner() {
         onEnterCustomizeMode={handleEnterCustomizeMode}
         onExitLayoutMode={handleExitLayoutMode}
         onEmptySlotPress={handleEmptySlotPress}
-        onWidgetLongPress={handleWidgetLongPress}
+        onWidgetPress={handleWidgetPress}
         onRemoveWidget={handleWidgetRemove}
         onSwapSlots={handleSwapSlots}
         onResizeWidget={handleResizeWidget}

@@ -205,13 +205,13 @@ assertIncludes(
 );
 assertIncludes(
   widgetGrid,
-  "slot.widgetType === 'hwy-forward-weather'",
-  'Weather widget tap should open the detail popup without changing other widget tap behavior.',
+  'onWidgetPress(slot);',
+  'Weather widget tap should use the shared detail popup path.',
 );
-assertIncludes(
+assertNotIncludes(
   widgetGrid,
   'onWidgetLongPress(slot);',
-  'Weather widget tap should use the existing detail popup path.',
+  'Weather widget tap should not route through the retired long-press manager.',
 );
 
 console.log('Dashboard weather widget polish checks passed.');

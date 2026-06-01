@@ -780,6 +780,34 @@ function getAccessoryProviderLabel(kind: Extract<DeviceKind, 'sensor' | 'generic
   return kind === 'sensor' ? 'Sensor Accessory' : 'Bluetooth Device';
 }
 
+function getAccessorySensorResourceLabel(input: {
+  providerId?: string | null;
+  provider?: string | null;
+  deviceCategory?: string | null;
+  category?: string | null;
+  name?: string | null;
+}): string | null {
+  const text = [
+    input.providerId,
+    input.provider,
+    input.deviceCategory,
+    input.category,
+    input.name,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+
+  if (/\bwater\b|\bfresh\b|\bfluid\b|\bliquid\b|\bsee\s*level\b|\bseelevel\b|\bgarnet\b/.test(text)) {
+    return 'Water Tank sensor';
+  }
+  if (/\bpropane\b|\blpg\b|\bbutane\b|\btank\s*check\b|\bpro\s*check\b|\bmopeka\b/.test(text)) {
+    return 'Propane Tank sensor';
+  }
+  return null;
+}
+
 function getAccessoryStatus(
   isConnected: boolean,
   isConnecting: boolean,
@@ -3786,6 +3814,15 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           ? rememberedDevice.utilitySensorTelemetry.levelPercent
           : null;
       const isLiveUtilitySensor = kind === 'sensor' && !!isConnected && utilityLevelPercent != null;
+      const sensorResourceLabel = kind === 'sensor'
+        ? getAccessorySensorResourceLabel({
+            providerId: rememberedDevice?.providerId ?? routed?.providerId ?? null,
+            provider: rememberedDevice?.providerLabel ?? routed?.providerLabel ?? null,
+            deviceCategory: routed?.deviceCategory ?? rememberedDevice?.categoryHint ?? null,
+            category: rememberedDevice?.categoryHint ?? routed?.categoryLabel ?? null,
+            name: rememberedDevice?.displayName ?? routed?.displayName ?? null,
+          })
+        : null;
 
       models.push({
         id: key,
@@ -3831,7 +3868,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         detailLabel:
           isConnected
             ? kind === 'sensor'
-              ? 'Connected as an ECS-managed sensor accessory.'
+              ? sensorResourceLabel
+                ? `Linked as ${sensorResourceLabel}. ECS will use live level readings when available.`
+                : 'Linked as an ECS sensor. ECS will use live readings when available.'
               : 'Connected as a generic ECS-managed Bluetooth device.'
             : hasError
               ? normalizeUiLabel(lastError) ?? 'Bluetooth accessory connection failed.'
@@ -4755,9 +4794,12 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           kind: device.kind,
           providerId: device.providerId,
         });
+        const sensorResourceLabel = device.kind === 'sensor'
+          ? getAccessorySensorResourceLabel(device)
+          : null;
         setInfoMessage(
           device.kind === 'sensor'
-            ? `${device.name} connected as an ECS-managed sensor accessory.`
+            ? `${device.name} linked as ${sensorResourceLabel ?? 'an ECS sensor'}.`
             : `${device.name} connected as a generic ECS-managed Bluetooth device.`,
         );
         enqueueRouteIntent({
@@ -4766,14 +4808,19 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           deviceName: device.name,
           providerId: device.providerId,
           providerLabel: device.provider,
-          routeKey: device.kind === 'sensor' ? 'sensor/generic' : 'bluetooth/generic',
+          routeKey:
+            device.kind === 'sensor'
+              ? sensorResourceLabel
+                ? 'sensor/fluid_level'
+                : 'sensor/generic'
+              : 'bluetooth/generic',
           suggestedPath: null,
           shouldNavigate: false,
           supportLabel: device.supportLabel,
           supportNote: device.supportNote,
           message:
             device.kind === 'sensor'
-              ? `${device.name} is now owned by the ECS accessory domain.`
+              ? `${device.name} is now linked as ${sensorResourceLabel ?? 'an ECS sensor'}.`
               : `${device.name} is now managed as a generic Bluetooth device in ECS.`,
         });
         return;

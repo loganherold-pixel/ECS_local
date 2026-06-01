@@ -36,6 +36,8 @@ export interface ConvoyMemberRow {
   user_id?: string;
   vehicle_id?: string | null;
   callsign: string;
+  display_name?: string | null;
+  expedition_badge_title?: string | null;
   role: ConvoyRole;
   revoked_at?: string | null;
 }
@@ -58,6 +60,8 @@ export interface ConvoyMemberLocationRow {
 export interface ConvoyMapVehicle {
   memberId: string;
   callsign: string;
+  displayName?: string | null;
+  expeditionBadgeTitle?: string | null;
   role: ConvoyRole;
   latitude: number;
   longitude: number;
@@ -157,6 +161,8 @@ export function normalizeConvoyLocationSnapshot(
     mapVehicles.push({
       memberId,
       callsign: member.callsign,
+      displayName: member.display_name ?? member.callsign,
+      expeditionBadgeTitle: member.expedition_badge_title ?? null,
       role: member.role,
       latitude: location.latitude,
       longitude: location.longitude,

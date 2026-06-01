@@ -756,6 +756,46 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     availabilityLabel: 'AVAILABLE',
   };
 
+  const fieldUtilityActionColumns = [tileItems.slice(0, 4), tileItems.slice(4, 8)];
+
+  const renderQuickActionTile = (item: QuickActionTile) => (
+    <TouchableOpacity
+      key={item.key}
+      style={[
+        styles.tile,
+        styles.quickActionTile,
+        item.key === 'protocols' && styles.emergencyProtocolTile,
+        item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
+        item.disabled && styles.tileDisabled,
+      ]}
+      onPress={item.onPress}
+      activeOpacity={0.78}
+      disabled={item.disabled || busy}
+    >
+      <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
+        <Ionicons name={item.icon as any} size={18} color={item.disabled ? ECS.muted : item.color} />
+      </View>
+      <View style={styles.quickActionTileCopy}>
+        <Text
+          style={[styles.tileLabel, styles.quickActionTileLabel, item.disabled && styles.tileLabelDisabled]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.78}
+        >
+          {item.label}
+        </Text>
+        <Text style={[styles.tileSubLabel, styles.quickActionTileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={1}>
+          {item.subtitle}
+        </Text>
+      </View>
+      <View style={[styles.tileStateBadge, styles.quickActionTileBadge, item.disabled && styles.tileStateBadgeDisabled]}>
+        <Text style={[styles.tileStateText, styles.quickActionTileStateText, item.disabled && styles.tileStateTextDisabled]}>
+          {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
       <View style={styles.summaryCard}>
@@ -768,40 +808,17 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         </Text>
       </View>
 
-      <Text style={styles.sectionLabel}>AVAILABLE ACTIONS</Text>
-
-      <View style={styles.tileGrid}>
-        {tileItems.map((item) => (
-          <TouchableOpacity
-            key={item.key}
-            style={[
-              styles.tile,
-              styles.quickActionTile,
-              item.key === 'protocols' && styles.emergencyProtocolTile,
-              item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
-              item.disabled && styles.tileDisabled,
-            ]}
-            onPress={item.onPress}
-            activeOpacity={0.78}
-            disabled={item.disabled || busy}
-          >
-            <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
-              <Ionicons name={item.icon as any} size={20} color={item.disabled ? ECS.muted : item.color} />
+      <View style={styles.availableActionsSection}>
+        <Text style={styles.sectionLabel}>AVAILABLE ACTIONS</Text>
+        <View style={styles.tileGrid}>
+          {fieldUtilityActionColumns.map((column, columnIndex) => (
+            <View key={`field-utilities-actions-${columnIndex}`} style={styles.tileColumn}>
+              {column.map(renderQuickActionTile)}
             </View>
-            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]} numberOfLines={2}>
-              {item.label}
-            </Text>
-            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={2}>
-              {item.subtitle}
-            </Text>
-            <View style={[styles.tileStateBadge, item.disabled && styles.tileStateBadgeDisabled]}>
-              <Text style={[styles.tileStateText, item.disabled && styles.tileStateTextDisabled]}>
-                {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+          ))}
+        </View>
       </View>
+
       <View style={styles.incidentRecoveryUtilitySlot}>
         <IncidentRecoveryPanel
           compact
@@ -1438,13 +1455,23 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     color: TACTICAL.textMuted,
   },
+  availableActionsSection: {
+    flex: 1,
+    minHeight: 0,
+    gap: 6,
+  },
   tileGrid: {
+    flex: 1,
+    minHeight: 0,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    rowGap: 6,
-    columnGap: 6,
-    alignContent: 'flex-start',
+    alignItems: 'stretch',
     justifyContent: 'space-between',
+    gap: 7,
+  },
+  tileColumn: {
+    flex: 1,
+    minHeight: 0,
+    gap: 6,
   },
   tile: {
     width: '23.5%',
@@ -1460,8 +1487,47 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   quickActionTile: {
-    flexGrow: 0,
-    flexShrink: 0,
+    width: '100%',
+    flex: 1,
+    minHeight: 0,
+    flexGrow: 1,
+    flexShrink: 1,
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 7,
+  },
+  quickActionTileCopy: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    gap: 2,
+  },
+  quickActionTileLabel: {
+    textAlign: 'left',
+    fontSize: 8.4,
+    lineHeight: 10,
+    letterSpacing: 0.2,
+  },
+  quickActionTileSubLabel: {
+    minHeight: 0,
+    textAlign: 'left',
+    fontSize: 7,
+    lineHeight: 8,
+    letterSpacing: 0.15,
+  },
+  quickActionTileBadge: {
+    marginTop: 0,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  quickActionTileStateText: {
+    fontSize: 6.3,
+    letterSpacing: 0.7,
   },
   tileDisabled: {
     opacity: 0.6,
@@ -1538,11 +1604,10 @@ const styles = StyleSheet.create({
     letterSpacing: 1.1,
   },
   incidentRecoveryUtilitySlot: {
-    flex: 1,
     width: '100%',
-    minHeight: 128,
-    maxHeight: 210,
-    flexShrink: 1,
+    height: 184,
+    flexGrow: 0,
+    flexShrink: 0,
     minWidth: 0,
     justifyContent: 'flex-start',
   },

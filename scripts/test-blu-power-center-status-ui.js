@@ -23,6 +23,7 @@ function lacks(content, needle, label) {
 
 const hook = read('lib/useUnifiedDeviceConnections.ts');
 const screen = read('app/power/blu.tsx');
+const fleetScreen = read('app/(tabs)/fleet.tsx');
 const powerIndex = read('app/power/index.tsx');
 const providers = read('lib/useEcsProviders.ts');
 
@@ -90,6 +91,31 @@ for (const fragment of [
 has(screen, '{device.detailLabel || connectionPolicy.statusDetail}', 'device-specific status detail');
 lacks(screen, 'Native BLE Diagnostics', 'Device Connections production UI');
 lacks(screen, 'Pipeline Diagnostics', 'Device Connections production UI');
+
+has(fleetScreen, '<TopoBackground>', 'Fleet visual shell reference');
+for (const fragment of [
+  "import TopoBackground from '../../components/TopoBackground'",
+  "import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme'",
+  '<TopoBackground>',
+  'styles.safeContainer',
+  "backgroundColor: 'transparent'",
+  'styles.surfaceTint',
+  'styles.fleetLikePanel',
+  'TACTICAL.goldWash',
+  'TACTICAL.borderMuted',
+]) {
+  has(screen, fragment, 'Bluestack scanner Fleet visual continuity');
+}
+lacks(screen, "style={[styles.container, { backgroundColor: colors.bg }]}", 'Bluestack scanner Fleet visual continuity');
+assert(
+  screen.includes('title="Connected devices"') &&
+    screen.includes('title="Remembered devices"') &&
+    screen.includes('title="Available devices"') &&
+    screen.includes('connections.rescan()') &&
+    screen.includes("connections.connectSelected('user_selected_batch')") &&
+    screen.includes('connections.disconnectDevice(device.id)'),
+  'Bluestack scanner visual polish must preserve existing scanner sections and actions.',
+);
 
 has(powerIndex, "import { Redirect } from 'expo-router'", 'legacy Power Center route');
 has(powerIndex, '<Redirect href="/power/blu" />', 'legacy Power Center route');

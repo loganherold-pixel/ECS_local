@@ -181,7 +181,7 @@ function createDefaultResourceData(): VehicleResourceData {
     powerSource: 'none',
     alternateFluidSource: 'none',
     supportLabel: 'Waiting for vehicle data',
-    unavailableReason: 'No live telemetry or configured fallback',
+    unavailableReason: 'No live telemetry or configured data',
   };
 }
 
@@ -458,7 +458,7 @@ function sourceLabel(source: VehicleDataSource): string {
     case 'ai_navigation':
       return 'ECS route intelligence';
     case 'manual':
-      return 'Manual fallback';
+      return 'Manual source';
     case 'cached':
       return 'Cached';
     default:
@@ -1250,9 +1250,9 @@ function buildResourceData(): VehicleResourceData {
       status === 'live'
         ? `Live ${sourceLabel(powerSource !== 'none' ? powerSource : fuelSource)}`
         : status === 'fallback'
-          ? 'Manual resource fallback'
+          ? 'Manual resource data'
           : 'No vehicle or resource profile available',
-    unavailableReason: status === 'unavailable' ? 'No live telemetry or configured fallback' : null,
+    unavailableReason: status === 'unavailable' ? 'No live telemetry or configured data' : null,
   };
 }
 

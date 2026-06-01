@@ -137,6 +137,7 @@ export default function WidgetDetailModal({
       eyebrow="WIDGET DETAIL"
       title={widgetDef.name}
       overlayClass="editor"
+      dismissOnBackdrop={false}
       maxWidth={940}
       maxHeightFraction={1}
       minHeightFraction={1}

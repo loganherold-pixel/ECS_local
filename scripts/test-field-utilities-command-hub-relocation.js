@@ -60,10 +60,14 @@ assert.ok(
 );
 
 assert.ok(
-  quickActions.includes('incidentRecoveryUtilitySlot: {\n    flex: 1,') &&
-    quickActions.includes('incidentRecoveryUtilityPanel: {\n    flex: 1,') &&
+  quickActions.includes('incidentRecoveryUtilitySlot: {') &&
+    quickActions.includes('height: 184,') &&
+    quickActions.includes('flexGrow: 0,') &&
+    quickActions.includes('flexShrink: 0,') &&
+    quickActions.includes('incidentRecoveryUtilityPanel: {') &&
+    quickActions.includes('flex: 1,') &&
     quickActions.includes("justifyContent: 'space-between'"),
-  'Field Utilities should let Incident & Recovery fill the remaining menu height instead of leaving dead space below Documentation.',
+  'Field Utilities should reserve a fixed Incident & Recovery slot directly above Documentation.',
 );
 
 assert.ok(

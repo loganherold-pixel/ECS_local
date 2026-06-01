@@ -385,11 +385,13 @@ assert.ok(
     'Attitude Command center display must not expose the deprecated long-press replacement picker.',
   );
   assert.ok(
-    widgetGridSource.includes("const widgetMenuLongPressEnabled = slot.widgetType !== 'attitude-command'") &&
+    widgetGridSource.includes('onWidgetPress: (slot: WidgetSlot) => void;') &&
+      widgetGridSource.includes('onWidgetPress(slot);') &&
+      !widgetGridSource.includes('onWidgetLongPress') &&
       !widgetGridSource.includes('onOpenWidgetReplacementPicker?.(slot)') &&
       !widgetRenderersSource.includes('accessibilityLabel="Change center module"') &&
       !widgetRenderersSource.includes('title="Change Center Module"'),
-    'Dashboard must suppress the old Attitude Command long-press widget menu and the retired Change Center menu.',
+    'Dashboard must use the tap-to-detail widget path while suppressing the old Attitude Command long-press widget menu and retired Change Center menu.',
   );
   assert.ok(
     !widgetRenderersSource.includes('const openModuleSelector = useCallback') &&
@@ -400,7 +402,7 @@ assert.ok(
       !widgetRenderersSource.includes('onPress={() => handleSelectCommandModule(moduleId)}'),
     'Attitude Command should not expose the retired center-module picker.',
   );
-  const commandModuleStoreSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ecsCommandModuleStore.ts'), 'utf8');
+  const commandModuleStoreSource = readSource('lib', 'ecsCommandModuleStore.ts');
   assert.ok(
     commandModuleStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];") &&
       commandModuleStoreSource.includes("label: '3D Nav Command'") &&
@@ -445,12 +447,14 @@ assert.ok(
   'Attitude Command renderer must compose the attitude surface with weather, daylight, route terrain risk, power, and vehicle panels.',
 );
 assert.ok(
-  widgetRenderersSource.includes("const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel, mode: AttitudeCommandFocusMode = 'summary')") &&
-    widgetRenderersSource.includes('if (current?.panel === panel && current.mode === mode) return null;') &&
+  widgetRenderersSource.includes("const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel, mode: AttitudeCommandFocusMode = 'detail')") &&
+    widgetRenderersSource.includes('setActivePanel({ panel, mode });') &&
+    widgetRenderersSource.includes('const closeFocusPanel = useCallback(() => {') &&
     widgetRenderersSource.includes('resolveAttitudeCommandExpansionGeometry') &&
     widgetRenderersSource.includes('expandedPanelLayer') &&
-    widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)'),
-  'Attitude Command surrounding panels must toggle an inline enlarged summary/detail panel over the 3D follow map.',
+    widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)') &&
+    widgetRenderersSource.includes('accessibilityLabel="Close expanded widget"'),
+  'Attitude Command surrounding panels must open an inline detail panel over the 3D follow map with an explicit close action.',
 );
 assert.ok(
   !widgetRenderersSource.includes('<TacticalPopupShell') &&

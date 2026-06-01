@@ -77,6 +77,8 @@ function LoadingTransitionVideoLayer({
 
   useEffect(() => {
     isMountedRef.current = true;
+    safePlaybackAction('play');
+
     const cycleTimer = setInterval(() => {
       safePlaybackAction('replay');
       safePlaybackAction('play');

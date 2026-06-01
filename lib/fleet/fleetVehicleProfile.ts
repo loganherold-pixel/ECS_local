@@ -269,6 +269,14 @@ export function parseFleetProfileNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+export function resolveFleetVehicleProfileFieldPlaceholder(
+  value: string,
+  examplePlaceholder: string,
+  hasAppliedPrefillOption: boolean,
+): string {
+  return hasAppliedPrefillOption && !value.trim() ? '' : examplePlaceholder;
+}
+
 function normalizeFleetProfileText(value: string | number | null | undefined): string {
   return String(value ?? '')
     .toLowerCase()

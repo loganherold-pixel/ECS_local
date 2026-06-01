@@ -1,6 +1,6 @@
 import type { ECSUtilitySensorTelemetryReading } from './ECSTelemetryTypes';
 
-export type ECSUtilitySensorResourceKind = 'water' | 'propane';
+export type ECSUtilitySensorResourceKind = 'water' | 'propane' | 'fuel';
 
 export type ECSUtilitySensorResourceStatus =
   | 'live'
@@ -27,6 +27,7 @@ export interface ECSUtilitySensorResourceState {
 export interface ECSUtilitySensorResourceSnapshot {
   water: ECSUtilitySensorResourceState | null;
   propane: ECSUtilitySensorResourceState | null;
+  fuel: ECSUtilitySensorResourceState | null;
 }
 
 function hasFinitePercent(value: unknown): value is number {
@@ -50,8 +51,9 @@ export function inferUtilitySensorResourceKind(
   reading: ECSUtilitySensorTelemetryReading,
 ): ECSUtilitySensorResourceKind | null {
   const text = normalizedText(reading);
+  if (/\bfuel\b|\bdiesel\b|\bgasoline\b|\baux\s*fuel\b|\btransfer\s*tank\b/.test(text)) return 'fuel';
   if (/\bwater\b|fresh\s*tank|see\s*level|seelevel|fluid/.test(text)) return 'water';
-  if (/\bpropane\b|\blpg\b|mopeka|tank\s*check|pro\s*check/.test(text)) return 'propane';
+  if (/\bpropane\b|\blpg\b|\bbutane\b|mopeka|tank\s*check|pro\s*check/.test(text)) return 'propane';
   return null;
 }
 
@@ -112,6 +114,7 @@ export function selectUtilitySensorResourceStates(
   return {
     water: states.find((state) => state.kind === 'water') ?? null,
     propane: states.find((state) => state.kind === 'propane') ?? null,
+    fuel: states.find((state) => state.kind === 'fuel') ?? null,
   };
 }
 

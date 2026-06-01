@@ -429,6 +429,46 @@ assert(liveAccessoryEvents.some((event) => event.metricKey === 'level_percent' &
 assert(liveAccessoryEvents.some((event) => event.metricKey === 'parser_status' && event.value === 'live'));
 assert(liveAccessoryEvents.every((event) => event.quality === 'live'));
 
+const mopekaWaterProfile = identifyBluestackUtilitySensorProfile({
+  providerId: 'water_monitor',
+  providerLabel: 'Mopeka / Liquid Level',
+  categoryLabel: 'Water / fluid level monitor',
+  deviceCategory: 'water_tank_monitor',
+  name: 'Mopeka Water Tank',
+  kind: 'sensor',
+});
+assert.strictEqual(
+  mopekaWaterProfile.id,
+  'mopeka_water_monitor',
+  'Mopeka water/liquid sensors should not be classified as propane only because Mopeka appears in the name',
+);
+assert.strictEqual(mopekaWaterProfile.category, 'water_tank_monitor');
+
+const mopekaWaterAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
+  deviceId: 'mopeka-water-live',
+  displayName: 'Water Tank',
+  providerLabel: 'Mopeka / Liquid Level',
+  providerId: 'water_monitor',
+  categoryHint: 'water_tank_monitor',
+  owner: 'sensor',
+  connectionState: 'connected',
+  supportLabel: 'Live Sensor',
+  supportNote: null,
+  signalStrength: -58,
+  utilitySensorTelemetry: {
+    levelPercent: 72,
+    parserStatus: 'live',
+    decodedAt: 1_700_000_000_500,
+    source: 'explicit_level_field',
+  },
+  lastSeenAt: new Date(1_700_000_000_000).toISOString(),
+  connectedAt: new Date(1_700_000_000_000).toISOString(),
+  lastError: null,
+});
+assert(mopekaWaterAccessoryEvents.some((event) => event.metricKey === 'sensor_category' && event.value === 'water_tank_monitor'));
+assert(mopekaWaterAccessoryEvents.some((event) => event.metricKey === 'profile_id' && event.value === 'mopeka_water_monitor'));
+assert(mopekaWaterAccessoryEvents.some((event) => event.metricKey === 'level_percent' && event.value === 72));
+
 const sensorResourceStates = selectUtilitySensorResourceStates([
   {
     deviceId: 'water-1',
@@ -469,6 +509,51 @@ assert.strictEqual(sensorResourceStates.water?.status, 'live');
 assert.strictEqual(getUtilitySensorCurrentFromCapacity(sensorResourceStates.water, 20), 10);
 assert.strictEqual(sensorResourceStates.propane?.status, 'linked');
 assert.strictEqual(getUtilitySensorCurrentFromCapacity(sensorResourceStates.propane, 30), null);
+
+const butaneResourceStates = selectUtilitySensorResourceStates([
+  {
+    deviceId: 'butane-1',
+    deviceName: 'Butane Tank',
+    provider: 'unknown_sensor',
+    providerLabel: 'Utility Sensor',
+    transport: 'ble',
+    quality: 'live',
+    lastUpdated: 1_700_000_000_002,
+    category: null,
+    profileId: null,
+    linkState: 'connected',
+    levelPercent: 44,
+    signalStrength: -60,
+    parserStatus: 'live',
+    isLive: true,
+    isStale: false,
+  },
+]);
+assert.strictEqual(butaneResourceStates.propane?.deviceId, 'butane-1');
+assert.strictEqual(butaneResourceStates.propane?.levelPercent, 44);
+
+const fuelResourceStates = selectUtilitySensorResourceStates([
+  {
+    deviceId: 'fuel-1',
+    deviceName: 'Aux Fuel Tank',
+    provider: 'water_monitor',
+    providerLabel: 'Mopeka / Liquid Level',
+    transport: 'ble',
+    quality: 'live',
+    lastUpdated: 1_700_000_000_003,
+    category: 'water_tank_monitor',
+    profileId: 'mopeka_water_monitor',
+    linkState: 'connected',
+    levelPercent: 81,
+    signalStrength: -59,
+    parserStatus: 'live',
+    isLive: true,
+    isStale: false,
+  },
+]);
+assert.strictEqual(fuelResourceStates.fuel?.deviceId, 'fuel-1');
+assert.strictEqual(fuelResourceStates.fuel?.levelPercent, 81);
+assert.strictEqual(fuelResourceStates.water, null);
 
 const seeLevelProfile = identifyBluestackUtilitySensorProfile({
   name: 'SeeLevel Fresh Water Tank Sensor',
@@ -566,6 +651,12 @@ assert(
   !unifiedConnectionsSource.includes("if (device.connection_state === 'disconnected') continue;") &&
     !unifiedConnectionsSource.includes("if (device.connectionState === 'disconnected') continue;"),
   'Remembered telemetry and accessory devices should remain visible after user disconnects.',
+);
+assert(
+  !unifiedConnectionsSource.includes('Connected as an ECS-managed sensor accessory.') &&
+    !unifiedConnectionsSource.includes('connected as an ECS-managed sensor accessory.') &&
+    unifiedConnectionsSource.includes('Linked as ${sensorResourceLabel}'),
+  'Connected utility sensors should describe their tank role instead of using generic sensor accessory copy.',
 );
 
 const bluDeviceRegistrySource = readSource('lib/BluDeviceRegistry.ts');

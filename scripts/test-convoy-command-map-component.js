@@ -91,11 +91,23 @@ assert.ok(
   'ConvoyCommandMap should render convoy members from GeoJSON with point and label layers.',
 );
 assert.ok(
-  mapSource.includes("textField: ['get', 'label']") &&
+  mapSource.includes('CONVOY_MAP_IDENTITY_LABEL_VISIBLE_MS = 5000') &&
+    mapSource.includes('revealConvoyIdentityLabels') &&
+    mapSource.includes('identityLabelOpacity') &&
+    mapSource.includes('onTouchStart={revealConvoyIdentityLabels}') &&
+    mapSource.includes('onPress={revealConvoyIdentityLabels}') &&
+    mapSource.includes('teamDisplayName') &&
+    mapSource.includes('expeditionBadgeTitle') &&
+    mapSource.includes('textOpacity: identityLabelOpacity') &&
+    mapSource.includes('textOpacityTransition'),
+  'ConvoyCommandMap should reveal team display names and badge titles on map tap or movement, then fade them after five seconds.',
+);
+assert.ok(
+  !mapSource.includes("textField: ['get', 'label']") &&
     identitySource.includes('isUnsafePersonalLabel') &&
     identitySource.includes("return 'LEAD'") &&
     identitySource.includes("return 'SWEEP'"),
-  'ConvoyCommandMap should label markers by operational callsign identity instead of raw member display names.',
+  'ConvoyCommandMap should avoid permanent marker text clutter while preserving safe operational callsign identity fallbacks.',
 );
 assert.ok(
   mapSource.includes("['==', ['get', 'role'], 'lead']") &&
@@ -152,7 +164,7 @@ assert.ok(
 );
 assert.ok(
   mapSource.includes('accessibilityLabel={`Convoy Command map.') &&
-    fallbackSource.includes('accessibilityLabel={`Convoy map fallback.'),
+    fallbackSource.includes('accessibilityLabel={`Convoy map limited view.'),
   'Map and fallback should expose accessible summaries.',
 );
 assert.ok(
@@ -268,8 +280,9 @@ const identities = buildConvoyMarkerIdentities([
 assert.strictEqual(identities[0].callsign, 'SWEEP', 'Sweep should render as SWEEP.');
 assert.strictEqual(identities[1].label, 'YOU', 'Current user should receive a single YOU identity without duplicating callsign text.');
 assert.ok(
-  mapSource.includes("label: identity.isCurrentUser ? '' : identity.label"),
-  'Current user marker should rely on visual ring/color treatment and suppress the below-marker map label.',
+  mapSource.includes('teamDisplayNameFor(member, identity)') &&
+    mapSource.includes('badgeTitleForRole(identity.role, identity.isCurrentUser)'),
+  'Current user and convoy members should resolve temporary identity text from the same revealed marker identity path.',
 );
 assert.strictEqual(identities[1].shouldShowHeading, false, 'Heading arrow should hide near zero speed.');
 assert.strictEqual(identities[2].status, 'needs_assistance', 'Needs assistance should receive emergency status.');

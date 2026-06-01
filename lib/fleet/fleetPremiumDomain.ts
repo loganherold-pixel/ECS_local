@@ -1174,6 +1174,50 @@ function maxRisk(...levels: FleetRiskLevel[]): FleetRiskLevel {
   return levels.reduce((highest, level) => (rank[level] > rank[highest] ? level : highest), 'clear' as FleetRiskLevel);
 }
 
+function interpolateFleetScore(value: number, lowValue: number, lowScore: number, highValue: number, highScore: number): number {
+  if (highValue === lowValue) return highScore;
+  const ratio = Math.max(0, Math.min(1, (value - lowValue) / (highValue - lowValue)));
+  return lowScore + (highScore - lowScore) * ratio;
+}
+
+function payloadMarginScore(marginPctOfGvwr: number | null): number {
+  if (marginPctOfGvwr == null || !Number.isFinite(marginPctOfGvwr)) return 70;
+  if (marginPctOfGvwr >= 0.25) return 95;
+  if (marginPctOfGvwr >= 0.15) return interpolateFleetScore(marginPctOfGvwr, 0.15, 80, 0.25, 95);
+  if (marginPctOfGvwr >= 0.1) return interpolateFleetScore(marginPctOfGvwr, 0.1, 65, 0.15, 80);
+  if (marginPctOfGvwr >= 0.05) return interpolateFleetScore(marginPctOfGvwr, 0.05, 45, 0.1, 65);
+  return interpolateFleetScore(Math.max(0, marginPctOfGvwr), 0, 25, 0.05, 45);
+}
+
+function scoreFleetPayloadReadiness(weightResult: FleetWeightResult): number {
+  if (!weightResult.payloadRemaining || !weightResult.gvwr || weightResult.gvwr.lbs <= 0) return 45;
+  if (weightResult.payloadRemaining.lbs < 0) return 20;
+
+  const payloadCapacity = weightResult.payloadCapacity?.lbs ?? null;
+  const marginPctOfGvwr = weightResult.payloadRemaining.lbs / weightResult.gvwr.lbs;
+  if (payloadCapacity == null || !Number.isFinite(payloadCapacity) || payloadCapacity <= 0) {
+    return Math.max(40, Math.min(85, 120 - (weightResult.gvwrUsagePct ?? 100)));
+  }
+
+  const usedPayload = Math.max(0, payloadCapacity - weightResult.payloadRemaining.lbs);
+  const payloadUseRatio = Math.max(0, Math.min(1, usedPayload / payloadCapacity));
+  const capacityScore = 95 - payloadUseRatio * 55;
+  return clampFleetConfidence(Math.min(capacityScore, payloadMarginScore(marginPctOfGvwr)));
+}
+
+function riskPenaltyForFleetScore(level: FleetRiskLevel): number {
+  switch (level) {
+    case 'critical':
+      return 25;
+    case 'caution':
+      return 12;
+    case 'watch':
+      return 5;
+    default:
+      return 0;
+  }
+}
+
 function confidenceLevelForWeight(value: FleetWeightValue | null | undefined): FleetWeightConfidenceLevel {
   if (!value || value.lbs <= 0 || value.source === 'unknown') return 'unknown';
   if (value.source === 'scale_ticket' || value.source === 'vin_oem_match') return 'verified';
@@ -1466,25 +1510,30 @@ export function scoreFleetVehicle(
     blockingIssues.push(`Required checklist incomplete: ${item.label}`);
   }
 
-  const gvwrUsage = weightResult.gvwrUsagePct ?? 100;
-  const payloadScore =
-    weightResult.payloadRemaining == null
-      ? 45
-      : weightResult.payloadRemaining.lbs < 0
-        ? 20
-        : Math.max(40, Math.min(100, 120 - gvwrUsage));
-  const checklistPenalty = Math.min(25, incompleteRequired.length * 8);
-  const readinessScore = Math.max(0, Math.min(100, payloadScore - checklistPenalty));
-  const confidenceScore = weightResult.confidence;
-  const overallScore = clampFleetConfidence(readinessScore * 0.5 + payloadScore * 0.25 + confidenceScore * 0.25);
   const riskLevel = maxRisk(
     weightResult.topHeavyRisk,
     weightResult.frontAxleRisk,
     weightResult.rearAxleRisk,
     weightResult.gvwrOverageRisk,
   );
+  const payloadScore = scoreFleetPayloadReadiness(weightResult);
+  const checklistPenalty = Math.min(25, incompleteRequired.length * 8);
+  const readinessScore = Math.max(0, Math.min(100, payloadScore - checklistPenalty - riskPenaltyForFleetScore(riskLevel)));
+  const confidenceScore = weightResult.confidence;
+  const overallScore = clampFleetConfidence(readinessScore * 0.5 + payloadScore * 0.25 + confidenceScore * 0.25);
+  const hasModifiedTiresOrLevel =
+    (vehicle.buildProfile.tireSizeInches ?? 0) >= 35 ||
+    (vehicle.buildProfile.suspensionLiftInches ?? 0) > 0 ||
+    Boolean(vehicle.buildProfile.isLeveled) ||
+    (vehicle.buildProfile.frontLevelInches ?? 0) > 0;
+  const tireSetupLabel = vehicle.buildProfile.tireSizeInches
+    ? `${Math.round(vehicle.buildProfile.tireSizeInches)} in tire`
+    : 'tire';
   const recommendations = [
     ...(weightResult.payloadRemaining && weightResult.payloadRemaining.lbs < 0 ? ['Reduce load before staging.'] : []),
+    ...(weightResult.payloadRemaining && weightResult.gvwr && weightResult.payloadRemaining.lbs >= 0 && weightResult.payloadRemaining.lbs / weightResult.gvwr.lbs <= 0.15
+      ? ['Payload margin is getting tight; remove optional cargo or move weight low and centered before harder routes.']
+      : []),
     ...(weightResult.topHeavyRisk === 'caution' || weightResult.topHeavyRisk === 'critical'
       ? ['Move roof or bed-high weight lower when possible.']
       : []),
@@ -1493,6 +1542,12 @@ export function scoreFleetVehicle(
       : []),
     ...(weightResult.activeLoadoutWeight.lbs > 0 && weightResult.activeLoadoutWeight.confidence < 75
       ? ['Replace loadout item estimates with measured item or loaded-bin weights.']
+      : []),
+    ...(weightResult.confidenceMetadata.level !== 'verified'
+      ? ['Confirm door-placard GVWR and measured operating weight with a scale ticket to raise confidence from estimate to verified.']
+      : []),
+    ...(hasModifiedTiresOrLevel
+      ? [`Verify ${tireSetupLabel} load rating, clearance, alignment, gearing/speedometer calibration, and level setup before increasing route difficulty.`]
       : []),
     ...(vehicle.buildProfile.useCases.includes('towing') && weightResult.zoneWeights.hitch.totalWeight.lbs > 0
       ? ['Review hitch and rear axle load before towing.']

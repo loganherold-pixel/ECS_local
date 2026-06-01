@@ -70,7 +70,7 @@ const QA_CAMPS: CampCandidate[] = [
     legalConfidence: 'unknown',
     accessDifficulty: 'easy',
     score: 69,
-    tags: ['Emergency fallback role only; verify posted rules before relying on it.'],
+    tags: ['Emergency endpoint role only; verify posted rules before relying on it.'],
   },
 ];
 
@@ -196,14 +196,14 @@ const QA_RECOMMENDATION_SET: CampRecommendationSet = {
       occupancyLikelihood: 'high',
       lateArrivalRisk: 'watch',
       dataConfidence: 'low',
-      dataLimitations: ['Emergency fallback role only; not a confirmed campsite.'],
+      dataLimitations: ['Emergency endpoint role only; not a confirmed campsite.'],
     },
   },
   explanations: {
     whyRecommended:
       'QA Ridge Bench is the primary fixture candidate because it has the highest available suitability score.',
     whyBackup: 'QA Basin Pullout remains a backup candidate with lower source confidence.',
-    whyEmergency: 'QA Exit Staging is only an emergency fallback in this fixture.',
+    whyEmergency: 'QA Exit Staging is only an emergency endpoint in this fixture.',
     keyTradeoffs: [
       'This viewport exists to test visible CampOps pins, Camp Intel popup actions, and cramped-screen layout with non-live fixture data.',
     ],
@@ -219,7 +219,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: On-time normal day',
     recommended: 'Recommended endpoint: Planned Ridge Camp',
     backup: 'Backup endpoint: Basin Pullout Camp',
-    emergency: 'Emergency fallback: Highway Exit Staging',
+    emergency: 'Emergency endpoint: Highway Exit Staging',
     status: 'Recommendation available',
     decisionPoint: 'Decision point: not required for on-time route',
     sourceState: 'Source transparency: visible with label-only fixture data',
@@ -240,13 +240,13 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Two-hour delay endpoint review',
     recommended: 'Recommended endpoint: Closer Valley Camp',
     backup: 'Backup endpoint: Roadside Legal Pullout',
-    emergency: 'Emergency fallback: Developed Campground Exit',
+    emergency: 'Emergency endpoint: Developed Campground Exit',
     status: 'Endpoint recommendation available',
     decisionPoint: 'Decision point: divert before final technical section',
     sourceState: 'Source transparency: sunset and late-arrival warnings visible',
     providerState: 'Provider influence: shadow/unknown',
     offlineState: 'Offline mode: cached route labels only',
-    reasons: ['Planned scenic camp is downgraded after sunset.', 'Closer camp has lower late-arrival risk.', 'Emergency fallback is present.'],
+    reasons: ['Planned scenic camp is downgraded after sunset.', 'Closer camp has lower late-arrival risk.', 'Emergency endpoint is present.'],
     warnings: ['Original planned camp is not primary.', 'Stale or missing source warnings must remain visible.'],
     chips: [
       { label: 'Late arrival', value: 'High caution', status: 'stale' },
@@ -260,14 +260,14 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     regionLabel: 'Region label: High desert turnaround cell',
     routeLabel: 'Route label: Trailer access review',
     recommended: 'Recommended endpoint: Wide Wash Camp',
-    backup: 'Backup endpoint: Gravel Lot Fallback',
-    emergency: 'Emergency fallback: Paved Exit Staging',
+    backup: 'Backup endpoint: Gravel Lot Standby',
+    emergency: 'Emergency endpoint: Paved Exit Staging',
     status: 'Recommendation available',
     decisionPoint: 'Decision point: last trailer turnaround before narrow road',
     sourceState: 'Source transparency: trailer confidence shown as limited',
     providerState: 'Provider influence: shadow/unknown',
     offlineState: 'Offline mode: online fixture',
-    reasons: ['Known narrow dead-end camp is downgraded.', 'Trailer-safe endpoint is highlighted.', 'Emergency fallback favors access certainty.'],
+    reasons: ['Known narrow dead-end camp is downgraded.', 'Trailer-safe endpoint is highlighted.', 'Emergency endpoint favors access certainty.'],
     warnings: ['Road width is not invented.', 'Unknown turnaround is not treated as good.'],
     chips: [
       { label: 'Trailer', value: 'Caution', status: 'unknown' },
@@ -282,7 +282,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Low fuel endpoint review',
     recommended: 'Recommended endpoint: Exit-adjacent Camp',
     backup: 'Backup endpoint: Service Road Camp',
-    emergency: 'Emergency fallback: Town/Exit Staging',
+    emergency: 'Emergency endpoint: Town/Exit Staging',
     status: 'Recommendation available',
     decisionPoint: 'Decision point: last fuel/resupply opportunity',
     sourceState: 'Source transparency: service status unknown shown',
@@ -303,7 +303,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Low water endpoint review',
     recommended: 'Recommended endpoint: Exit Toward Water',
     backup: 'Backup endpoint: Short Day Camp',
-    emergency: 'Emergency fallback: Developed Water Stop',
+    emergency: 'Emergency endpoint: Developed Water Stop',
     status: 'Recommendation available',
     decisionPoint: 'Decision point: decide before passing reliable exit',
     sourceState: 'Source transparency: water source confidence visible',
@@ -324,7 +324,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Cached-source endpoint review',
     recommended: 'Recommended endpoint: Cached Legal Camp',
     backup: 'Backup endpoint: Cached Backup Pullout',
-    emergency: 'Emergency fallback: Cached Exit',
+    emergency: 'Emergency endpoint: Cached Exit',
     status: 'Endpoint recommendation available',
     decisionPoint: 'Decision point: available from cached route labels',
     sourceState: 'Source transparency: cached/stale warnings visible',
@@ -345,13 +345,13 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Missing-source endpoint review',
     recommended: 'Recommended endpoint: Unknown-confidence Camp',
     backup: 'Backup endpoint: Label-only Pullout',
-    emergency: 'Emergency fallback: Last Known Exit',
+    emergency: 'Emergency endpoint: Last Known Exit',
     status: 'Recommendation with unknown confidence',
     decisionPoint: 'Decision point: unavailable without route geometry',
     sourceState: 'Source transparency: missing critical data visible',
     providerState: 'Provider influence: unknown',
     offlineState: 'Offline mode: no cached source data',
-    reasons: ['Missing data lowers confidence.', 'Unknown fields stay unknown.', 'Emergency fallback favors access labels only.'],
+    reasons: ['Missing data lowers confidence.', 'Unknown fields stay unknown.', 'Emergency endpoint favors access labels only.'],
     warnings: ['Legal status unknown.', 'Closure status unknown.', 'Fire restrictions unknown.'],
     chips: [
       { label: 'Offline', value: 'No cache', status: 'missing' },
@@ -366,7 +366,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Stale source review',
     recommended: 'Recommended endpoint: Caution Camp',
     backup: 'Backup endpoint: Lower-risk Camp',
-    emergency: 'Emergency fallback: Exit Staging',
+    emergency: 'Emergency endpoint: Exit Staging',
     status: 'Recommendation with stale-source caution',
     decisionPoint: 'Decision point: reassess before entering stale-source area',
     sourceState: 'Source transparency: closure, weather, fire, service stale states visible',
@@ -387,7 +387,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Search result conflict review',
     recommended: 'Recommended endpoint: Operational Camp B',
     backup: 'Backup endpoint: Operational Camp C',
-    emergency: 'Emergency fallback: Exit Staging',
+    emergency: 'Emergency endpoint: Exit Staging',
     status: 'CampOps recommendation differs from top search result',
     decisionPoint: 'Decision point: explain downgrade before choosing legacy top result',
     sourceState: 'Source transparency: legacy list is search results, not endpoint recommendation',
@@ -408,7 +408,7 @@ const QA_SCENARIOS: CampOpsVisualQaScenario[] = [
     routeLabel: 'Route label: Debrief privacy review',
     recommended: 'Recommended endpoint: Debriefed Camp Label',
     backup: 'Backup endpoint: Private Backup Label',
-    emergency: 'Emergency fallback: Private Exit Label',
+    emergency: 'Emergency endpoint: Private Exit Label',
     status: 'Private debrief capture reminder',
     decisionPoint: 'Decision point: not applicable after camp visit',
     sourceState: 'Source transparency: personal feedback remains private',
@@ -583,7 +583,7 @@ export function CampOpsVisualQaScreen() {
             <View style={styles.roleStack}>
               <RoleRow label="Recommended" value={scenario.recommended} color="#8BC34A" />
               <RoleRow label="Backup" value={scenario.backup} color="#64B5F6" />
-              <RoleRow label="Emergency fallback" value={scenario.emergency} color="#FFB74D" />
+              <RoleRow label="Emergency endpoint" value={scenario.emergency} color="#FFB74D" />
             </View>
 
             <View style={styles.statusBlock}>

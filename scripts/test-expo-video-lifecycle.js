@@ -63,6 +63,10 @@ assert(
   'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
 );
 assert(
+  loadingTransition.includes("safePlaybackAction('play');\n\n    const cycleTimer = setInterval(() => {"),
+  'LoadingTransitionVideo should kick playback immediately after VideoView mounts, before the 5 second replay guard.',
+);
+assert(
   loadingTransition.includes('const LOADING_FALLBACK') &&
     loadingTransition.includes('<Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />') &&
     loadingTransition.includes('flex: 1') &&

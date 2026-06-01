@@ -517,6 +517,56 @@ assertIncludes(
   'styles.incidentRecoveryUtilitySlot',
   'Incident & Recovery should occupy the open main-page space above Documentation.',
 );
+assertIncludes(
+  quickActionsSource,
+  'const fieldUtilityActionColumns = [tileItems.slice(0, 4), tileItems.slice(4, 8)];',
+  'Available Actions should be split into two fixed columns with four actions per column.',
+);
+assertIncludes(
+  quickActionsSource,
+  '<View style={styles.availableActionsSection}>',
+  'Available Actions should own the fixed space between the section label and Incident & Recovery.',
+);
+assertIncludes(
+  quickActionsSource,
+  'style={styles.tileColumn}',
+  'Available Actions should render as two equal vertical columns.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'availableActionsSection'),
+  'flex: 1',
+  'Available Actions should expand to fill the open main-page space above Incident & Recovery.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'tileGrid'),
+  'alignItems: \'stretch\'',
+  'Available Actions columns should stretch evenly inside the fixed section.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'tileColumn'),
+  'flex: 1',
+  'Each Available Actions column should take equal width.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTile'),
+  'width: \'100%\'',
+  'Each Available Actions tile should fill its column width instead of wrapping four-across.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTile'),
+  'flex: 1',
+  'Each Available Actions tile should share equal column height.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
+  'height: 184',
+  'Incident & Recovery should reserve enough height for its compact live controls.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
+  'flexGrow: 0',
+  'Incident & Recovery should sit just above Documentation without consuming the action-grid space.',
+);
 assertNotIncludes(
   quickActionsSource,
   'protocolActionNumber',

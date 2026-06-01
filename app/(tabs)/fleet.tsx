@@ -334,7 +334,8 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     .map((item) => `${item.label}: ${item.reason}`);
 
   const reasons = uniqueNoticeItems([
-    `${vehicle.name}: readiness blends payload score ${payloadScore}, source confidence ${confidenceScore}, required setup, and current loadout risk.`,
+    `${vehicle.name}: readiness starts with payload margin score ${payloadScore}, then applies required setup and current loadout risk penalties.`,
+    `Source confidence is evidence quality; it does not directly drag down readiness. Current source confidence is ${confidenceScore}.`,
     `${vehicle.name}: current risk level is ${formatFleetRiskCopy(scoringResult.riskLevel)}.`,
     payloadMargin,
     checklistDelta > 0
@@ -367,7 +368,7 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
         : score >= 85
           ? 'This vehicle has a strong readiness posture from the saved Fleet inputs. Keep verification and loadout records current before departure.'
           : 'This vehicle can be scored, but readiness is limited by payload margin, setup gaps, risk flags, or estimated source data.',
-    intelligenceSummary: `ECS sees ${formatFleetRiskCopy(scoringResult.riskLevel)} readiness risk with payload score ${payloadScore} and source confidence ${confidenceScore}.`,
+    intelligenceSummary: `ECS sees ${formatFleetRiskCopy(scoringResult.riskLevel)} readiness risk with payload score ${payloadScore}. Source confidence is evidence quality at ${confidenceScore}.`,
     intelligenceDetail:
       scoringResult.blockingIssues[0] ??
       scoringResult.recommendations[0] ??
@@ -3168,6 +3169,7 @@ function FleetScreenInner() {
           vehicleId={weightSummaryModalVehicle?.id ?? null}
           compact={false}
           hideVehicleProfile
+          transparentBackground
         />
       </ECSModalShell>
 

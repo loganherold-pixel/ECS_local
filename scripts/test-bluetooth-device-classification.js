@@ -325,7 +325,34 @@ const mopekaProSignatureRoute = routeBluetoothDevice({
 assert.strictEqual(mopekaProSignatureRoute.owner, 'sensor');
 assert.strictEqual(mopekaProSignatureRoute.providerId, 'propane_monitor');
 assert.strictEqual(mopekaProSignatureRoute.deviceCategory, 'propane_monitor');
+assert.strictEqual(
+  mopekaProSignatureRoute.displayName,
+  'Mopeka Propane Tank',
+  'Mopeka signature matches should replace platform unknown-device labels with a tank-specific name',
+);
 assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaProSignatureRoute), true);
+
+const namedMopekaPropaneRoute = routeBluetoothDevice({
+  id: 'mopeka-named-propane-route',
+  name: 'Propane Tank',
+  isLikelyOBD: false,
+  rssi: -57,
+  serviceUUIDs: ['fee5'],
+  manufacturerData: mopekaProManufacturerData,
+});
+assert.strictEqual(namedMopekaPropaneRoute.displayName, 'Propane Tank');
+assert.strictEqual(namedMopekaPropaneRoute.providerId, 'propane_monitor');
+
+const namedButaneRoute = routeBluetoothDevice({
+  id: 'butane-named-route',
+  name: 'Butane Tank',
+  isLikelyOBD: false,
+  rssi: -57,
+});
+assert.strictEqual(namedButaneRoute.owner, 'sensor');
+assert.strictEqual(namedButaneRoute.providerId, 'propane_monitor');
+assert.strictEqual(namedButaneRoute.displayName, 'Butane Tank');
+assert.strictEqual(isReleaseScannerBluetoothRoute(namedButaneRoute), true);
 
 const mopekaUniversalManufacturerData = Buffer.from([
   0x59, 0x00,
@@ -343,7 +370,40 @@ assert.strictEqual(mopekaUniversalRoute.owner, 'sensor');
 assert.strictEqual(mopekaUniversalRoute.providerId, 'water_monitor');
 assert.strictEqual(mopekaUniversalRoute.deviceCategory, 'water_tank_monitor');
 assert.strictEqual(mopekaUniversalRoute.categoryLabel, 'Water / fluid level monitor');
+assert.strictEqual(
+  mopekaUniversalRoute.displayName,
+  'Mopeka Water Tank',
+  'Mopeka liquid signatures should produce a water/fluid tank name instead of an unknown-device fallback',
+);
 assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalRoute), true);
+
+const mopekaUniversalManufacturerOnlyRoute = routeBluetoothDevice({
+  id: 'mopeka-universal-manufacturer-only-route',
+  name: 'Unknown device 95F1',
+  isLikelyOBD: false,
+  rssi: -55,
+  manufacturerData: mopekaUniversalManufacturerData,
+});
+assert.strictEqual(
+  mopekaUniversalManufacturerOnlyRoute.owner,
+  'sensor',
+  'Mopeka Universal water sensors must stay visible even when the platform omits service UUIDs',
+);
+assert.strictEqual(mopekaUniversalManufacturerOnlyRoute.providerId, 'water_monitor');
+assert.strictEqual(mopekaUniversalManufacturerOnlyRoute.deviceCategory, 'water_tank_monitor');
+assert.strictEqual(mopekaUniversalManufacturerOnlyRoute.displayName, 'Mopeka Water Tank');
+assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalManufacturerOnlyRoute), true);
+
+const namedMopekaWaterRoute = routeBluetoothDevice({
+  id: 'mopeka-named-water-route',
+  name: 'Water Tank',
+  isLikelyOBD: false,
+  rssi: -58,
+  serviceUUIDs: ['fee5'],
+  manufacturerData: mopekaUniversalManufacturerData,
+});
+assert.strictEqual(namedMopekaWaterRoute.displayName, 'Water Tank');
+assert.strictEqual(namedMopekaWaterRoute.providerId, 'water_monitor');
 
 const mopekaStdManufacturerData = Buffer.from([
   0x0d, 0x00,

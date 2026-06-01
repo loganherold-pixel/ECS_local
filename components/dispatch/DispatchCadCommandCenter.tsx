@@ -20,7 +20,6 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
-import ECSShellTexture from '../ECSShellTexture';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
 import { useApp } from '../../context/AppContext';
@@ -66,7 +65,8 @@ import { routeStore, type RouteSegment } from '../../lib/routeStore';
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import { vehicleStore } from '../../lib/vehicleStore';
 import type { Vehicle } from '../../lib/types';
-import { ECS, ECS_POPUP_SURFACE_DARK, GOLD_RAIL, TACTICAL } from '../../lib/theme';
+import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { expeditionStateStore, type ExpeditionRecord } from '../../lib/expeditionStateStore';
 import { expeditionInviteLocalAdapter } from '../../lib/expeditionInviteLocalAdapter';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
@@ -3699,7 +3699,6 @@ export default function DispatchCadCommandCenter() {
         advisoryPulseActive ? styles.advisoryLinePulseActive : null,
       ]}
     >
-      <ECSShellTexture />
       {advisoryPulseActive ? (
         <View pointerEvents="none" style={styles.advisoryTraceRail}>
           <View style={styles.advisoryTraceLine} />
@@ -3749,7 +3748,6 @@ export default function DispatchCadCommandCenter() {
 
   return (
     <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
-      {!isLandscapeDispatch ? <ECSShellTexture /> : null}
       {isLandscapeDispatch ? (
         <>
           {landscapeTitleBar}
@@ -3767,7 +3765,7 @@ export default function DispatchCadCommandCenter() {
               />
               {renderLiveStrip(true)}
             </View>
-            <View style={styles.landscapeCommandRail}>
+            <View style={styles.landscapeSummaryDock}>
               {headerStrip}
               <DispatchConvoyCommandPanel
                 connectionLabel={connectionState.label}
@@ -3807,7 +3805,6 @@ export default function DispatchCadCommandCenter() {
       )}
 
       <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeMap : null]}>
-        <ECSShellTexture />
         <View style={[styles.feedHeader, isLandscapeDispatch ? styles.feedHeaderLandscape : null]}>
           <View>
             <Text style={[styles.feedTitle, isLandscapeDispatch ? styles.feedTitleLandscape : null]}>Convoy Command</Text>
@@ -3957,7 +3954,6 @@ function DispatchConvoyTeamSetupCard({
 
   return (
     <View style={[styles.convoyTeamCard, compact ? styles.convoyTeamCardCompact : null]} testID="dispatch-convoy-team-setup-card">
-      <ECSShellTexture />
       <View style={[styles.convoyTeamHeader, compact ? styles.convoyTeamHeaderCompact : null]}>
         <View style={styles.convoyTeamTitleBlock}>
           <Text style={[styles.convoyTeamEyebrow, compact ? styles.convoyTeamEyebrowCompact : null]}>CONVOY SETUP / TEAM</Text>
@@ -4065,7 +4061,6 @@ function DispatchChannelButton({
         onPress(channel);
       }}
     >
-      <ECSShellTexture />
       <View style={styles.channelTopRow}>
         <Text
           style={[
@@ -6127,10 +6122,10 @@ const styles = StyleSheet.create({
   },
   landscapeTopRow: {
     flex: 0,
-    minHeight: 126,
-    maxHeight: 148,
+    minHeight: 0,
+    flexShrink: 0,
     flexDirection: 'row',
-    alignItems: 'stretch',
+    alignItems: 'flex-start',
     gap: 6,
   },
   landscapeSetupRail: {
@@ -6139,12 +6134,14 @@ const styles = StyleSheet.create({
     minHeight: 0,
     gap: 4,
   },
-  landscapeCommandRail: {
+  landscapeSummaryDock: {
     flex: 1.14,
     minWidth: 270,
     minHeight: 0,
     alignSelf: 'stretch',
     gap: 4,
+    maxHeight: 148,
+    overflow: 'hidden',
   },
   landscapeDockRevealButton: {
     width: 28,
@@ -6152,7 +6149,7 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}66`,
-    backgroundColor: 'rgba(5,8,10,0.84)',
+    backgroundColor: ECS_SURFACE.background.compact,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -6192,9 +6189,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 5,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 7,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
   },
   headerUtilityButtonLandscape: {
@@ -6281,9 +6278,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 7,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
   },
   profileButtonLandscape: {
@@ -6313,7 +6310,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderWidth: 1,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 7,
@@ -6361,7 +6358,8 @@ const styles = StyleSheet.create({
     columnGap: 0,
   },
   liveStripLandscape: {
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 0,
     minHeight: 0,
     justifyContent: 'space-between',
     rowGap: 4,
@@ -6378,7 +6376,7 @@ const styles = StyleSheet.create({
     gap: 7,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}44`,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: 8,
     paddingHorizontal: 9,
     paddingVertical: 7,
@@ -6400,7 +6398,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}3D`,
     borderRadius: 9,
-    backgroundColor: 'rgba(7,11,14,0.94)',
+    backgroundColor: ECS_SURFACE.background.primary,
     paddingHorizontal: 10,
     paddingVertical: 7,
     overflow: 'hidden',
@@ -6456,7 +6454,7 @@ const styles = StyleSheet.create({
     gap: 6,
     borderWidth: 1,
     borderRadius: 999,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 9,
   },
   convoyTeamStatusText: {
@@ -6477,9 +6475,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     borderWidth: 1,
-    borderColor: 'rgba(139,148,158,0.18)',
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 7,
-    backgroundColor: 'rgba(0,0,0,0.24)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
     paddingVertical: 6,
   },
@@ -6514,9 +6512,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 7,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
   },
   convoyTeamActionText: {
@@ -6530,8 +6528,8 @@ const styles = StyleSheet.create({
     width: '32%',
     minHeight: 50,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: 7,
     paddingHorizontal: 7,
     paddingVertical: 6,
@@ -6563,8 +6561,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(196,138,44,0.055)',
   },
   liveChipSubdued: {
-    borderColor: 'rgba(139,148,158,0.13)',
-    backgroundColor: 'rgba(7,10,12,0.62)',
+    borderColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.quiet,
   },
   liveChipDisabled: {
     opacity: 0.64,
@@ -6671,8 +6669,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 7,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: 8,
     paddingLeft: 9,
     paddingRight: 5,
@@ -6744,15 +6742,15 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: 9,
     overflow: 'hidden',
   },
   feedPanelLandscapeMap: {
     flex: 1,
     minHeight: 0,
-    marginTop: 10,
+    marginTop: 3,
     marginBottom: 0,
     alignSelf: 'stretch',
   },
@@ -6763,8 +6761,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: 1,
-    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.headerBg,
+    borderBottomColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.secondary,
   },
   feedHeaderLandscape: {
     minHeight: 24,
@@ -6810,8 +6808,8 @@ const styles = StyleSheet.create({
   },
   clearCadButtonDisabled: {
     opacity: 0.44,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.035)',
+    borderColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.quiet,
   },
   clearCadButtonText: {
     color: TACTICAL.amber,
@@ -6833,9 +6831,9 @@ const styles = StyleSheet.create({
     flex: 0.78,
     minHeight: 150,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
+    borderColor: ECS_SURFACE.border.default,
     borderRadius: 9,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    backgroundColor: ECS_SURFACE.background.primary,
     overflow: 'hidden',
   },
   dispatchRecoveryHeader: {
@@ -6845,8 +6843,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: 1,
-    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.headerBg,
+    borderBottomColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.secondary,
   },
   dispatchRecoveryTitleBlock: {
     flex: 1,
@@ -6884,7 +6882,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 7,
     borderBottomWidth: 1,
-    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
+    borderBottomColor: ECS_SURFACE.border.quiet,
   },
   dispatchRecoveryPrimaryButton: {
     flex: 1,
@@ -6938,7 +6936,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderBottomWidth: 1,
-    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
+    borderBottomColor: ECS_SURFACE.border.quiet,
   },
   dispatchRecoveryEventIcon: {
     width: 28,
@@ -7008,9 +7006,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 5,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.shellBorder,
+    borderColor: ECS_SURFACE.border.default,
     borderRadius: 9,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.footerBg,
+    backgroundColor: ECS_SURFACE.background.secondary,
     padding: 5,
     overflow: 'hidden',
   },
@@ -7020,14 +7018,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 8,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 4,
   },
   commandButtonInactive: {
-    borderColor: 'rgba(138,138,133,0.28)',
-    backgroundColor: 'rgba(255,255,255,0.025)',
+    borderColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.quiet,
     opacity: 0.68,
   },
   recoveryCommandButton: {
@@ -7063,9 +7061,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     minHeight: 86,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 8,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     overflow: 'hidden',
   },
   eventRowCritical: {
@@ -7096,7 +7094,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   eventType: {
     color: TACTICAL.textMuted,
@@ -7380,7 +7378,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: `${TACTICAL.danger}55`,
     borderRadius: 9,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     overflow: 'hidden',
   },
   recoveryPinPanelLarge: {
@@ -7394,8 +7392,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
     borderBottomWidth: 1,
-    borderBottomColor: ECS_POPUP_SURFACE_DARK.divider,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.headerBg,
+    borderBottomColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.secondary,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
@@ -7426,7 +7424,7 @@ const styles = StyleSheet.create({
   recoveryPinMapPreview: {
     height: 188,
     minHeight: 148,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    backgroundColor: ECS_SURFACE.background.primary,
   },
   recoveryPinMapPreviewLarge: {
     flex: 1,
@@ -7439,7 +7437,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 7,
     paddingHorizontal: 18,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.shellBg,
+    backgroundColor: ECS_SURFACE.background.primary,
   },
   recoveryPinFallbackLarge: {
     flex: 1,
@@ -7464,7 +7462,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 7,
     borderTopWidth: 1,
-    borderTopColor: ECS_POPUP_SURFACE_DARK.divider,
+    borderTopColor: ECS_SURFACE.border.quiet,
     padding: 9,
   },
   recoveryPinFact: {
@@ -7472,9 +7470,9 @@ const styles = StyleSheet.create({
     flexBasis: '45%',
     minHeight: 46,
     borderWidth: 1,
-    borderColor: ECS_POPUP_SURFACE_DARK.controlBorder,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 8,
-    backgroundColor: ECS_POPUP_SURFACE_DARK.controlBg,
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 9,
     paddingVertical: 7,
   },

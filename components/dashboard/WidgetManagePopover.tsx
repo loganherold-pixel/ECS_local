@@ -46,7 +46,7 @@ export default function WidgetManagePopover({
       onClose={onClose}
       tier="global"
       icon={widgetDef.icon as any}
-      eyebrow="LONG-PRESS WIDGET CONTROLS"
+      eyebrow="WIDGET CONTROLS"
       title="Widget Manager"
       subtitle={widgetDef.name}
       overlayClass="editor"
@@ -107,10 +107,10 @@ export default function WidgetManagePopover({
         </View>
 
         <View style={styles.ruleCard}>
-          <Text style={styles.ruleTitle}>Normal tap behavior</Text>
+          <Text style={styles.ruleTitle}>Detail tap behavior</Text>
           <Text style={styles.ruleText}>
-            Background taps stay with the widget. Use the internal controls for widget actions,
-            or long-press the widget again to return here.
+            Widget taps open the expanded detail view. Use the detail footer or layout mode for
+            widget actions.
           </Text>
         </View>
       </View>
