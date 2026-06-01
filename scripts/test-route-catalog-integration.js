@@ -126,6 +126,10 @@ assert(
     searchFunction.includes('route_geometry_mode') &&
     searchFunction.includes('preview_simplified') &&
     searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
+    searchFunction.includes('filterRecordsWithinSearchRadius') &&
+    searchFunction.includes('search_distance_miles') &&
+    searchFunction.includes('radiusMatchedCount') &&
+    searchFunction.includes('candidateLimit') &&
     searchFunction.includes(".gte('distance_miles'") &&
     searchFunction.includes(".lte('estimated_duration_minutes'") &&
     searchFunction.includes(".gte('remoteness_score'") &&
@@ -139,7 +143,9 @@ assert(
     liveCatalog.includes('latitude: criteria.latitude') &&
     liveCatalog.includes('longitude: criteria.longitude') &&
     liveCatalog.includes('radiusMiles: criteria.radiusMiles') &&
-    liveCatalog.includes('vehicleClass: criteria.vehicleClass') &&
+    liveCatalog.includes('ROUTE_CATALOG_VEHICLE_CLASS_ALIASES') &&
+    liveCatalog.includes('resolveRouteCatalogVehicleClass(criteria.vehicleClass)') &&
+    liveCatalog.includes('vehicleClass }') &&
     liveCatalog.includes('minDistanceMiles: criteria.minDistanceMiles') &&
     liveCatalog.includes('maxDurationMinutes: criteria.maxDurationMinutes') &&
     liveCatalog.includes('routeType: criteria.routeType') &&

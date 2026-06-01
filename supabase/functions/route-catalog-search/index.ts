@@ -150,6 +150,9 @@ const ROUTE_CATALOG_SEARCH_COLUMNS = [
 ];
 
 const PREVIEW_MAX_POINTS = 120;
+const ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT = 12;
+const ROUTE_CATALOG_RADIUS_CANDIDATE_MIN = 250;
+const ROUTE_CATALOG_RADIUS_CANDIDATE_MAX = 2000;
 
 function searchSelect(includeGeometry: boolean, includePreviewGeometry: boolean): string {
   const columns = [...ROUTE_CATALOG_SEARCH_COLUMNS];
@@ -174,6 +177,96 @@ function cleanCoordinate(value: unknown): number[] | null {
     return [longitude, latitude];
   }
   return null;
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function haversineMiles(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+): number {
+  const earthRadiusMiles = 3958.7613;
+  const latitude1 = degreesToRadians(a.latitude);
+  const latitude2 = degreesToRadians(b.latitude);
+  const deltaLatitude = degreesToRadians(b.latitude - a.latitude);
+  const deltaLongitude = degreesToRadians(b.longitude - a.longitude);
+  const h =
+    Math.sin(deltaLatitude / 2) ** 2 +
+    Math.cos(latitude1) * Math.cos(latitude2) * Math.sin(deltaLongitude / 2) ** 2;
+  return 2 * earthRadiusMiles * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function routeCenter(record: Record<string, unknown>): { latitude: number; longitude: number } | null {
+  const latitude = readNumber(record.center_latitude);
+  const longitude = readNumber(record.center_longitude);
+  return latitude != null && longitude != null ? { latitude, longitude } : null;
+}
+
+function withSearchDistanceMiles(
+  record: Record<string, unknown>,
+  center: { latitude: number; longitude: number },
+): Record<string, unknown> | null {
+  const route = routeCenter(record);
+  if (!route) return null;
+  return {
+    ...record,
+    search_distance_miles: Number(haversineMiles(center, route).toFixed(2)),
+  };
+}
+
+function candidateLimit(limit: number, hasRadiusCriteria: boolean): number {
+  if (!hasRadiusCriteria) return limit;
+  return Math.min(
+    ROUTE_CATALOG_RADIUS_CANDIDATE_MAX,
+    Math.max(ROUTE_CATALOG_RADIUS_CANDIDATE_MIN, limit * ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT),
+  );
+}
+
+function confidenceScore(record: Record<string, unknown>): number {
+  return readNumber(record.confidence_score) ?? 0;
+}
+
+function updatedAtTime(record: Record<string, unknown>): number {
+  const text = cleanText(record.updated_at);
+  const time = text ? Date.parse(text) : Number.NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function filterRecordsWithinSearchRadius(
+  records: Record<string, unknown>[],
+  criteria: { latitude: number | null; longitude: number | null; radiusMiles: number | null },
+): { records: Record<string, unknown>[]; radiusFilterApplied: boolean; radiusMatchedCount: number } {
+  const { latitude, longitude, radiusMiles } = criteria;
+  if (latitude == null || longitude == null || radiusMiles == null) {
+    return {
+      records,
+      radiusFilterApplied: false,
+      radiusMatchedCount: records.length,
+    };
+  }
+
+  const searchCenter = { latitude, longitude };
+  const filteredRecords = records
+    .map((record) => withSearchDistanceMiles(record, searchCenter))
+    .filter((record): record is Record<string, unknown> =>
+      !!record && readNumber(record.search_distance_miles) <= radiusMiles,
+    )
+    .sort((a, b) => {
+      const confidenceDelta = confidenceScore(b) - confidenceScore(a);
+      if (confidenceDelta !== 0) return confidenceDelta;
+      const distanceDelta = (readNumber(a.search_distance_miles) ?? Number.MAX_SAFE_INTEGER) -
+        (readNumber(b.search_distance_miles) ?? Number.MAX_SAFE_INTEGER);
+      if (distanceDelta !== 0) return distanceDelta;
+      return updatedAtTime(b) - updatedAtTime(a);
+    });
+
+  return {
+    records: filteredRecords,
+    radiusFilterApplied: true,
+    radiusMatchedCount: filteredRecords.length,
+  };
 }
 
 function sampleLine(coordinates: unknown[], maxPoints: number): number[][] {
@@ -267,6 +360,8 @@ serve(async (req) => {
     const routeType = cleanRouteType(params.routeType ?? params.route_type);
     const difficulty = cleanDifficulty(params.difficulty);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
+    const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
+    const queryLimit = candidateLimit(limit, hasRadiusCriteria);
 
     const admin = createAdminClient();
     let query = admin
@@ -276,9 +371,9 @@ serve(async (req) => {
       .eq('recommendation_status', 'recommendable')
       .order('confidence_score', { ascending: false })
       .order('updated_at', { ascending: false })
-      .limit(limit);
+      .limit(queryLimit);
 
-    if (latitude != null && longitude != null && radiusMiles != null) {
+    if (hasRadiusCriteria) {
       const degrees = Math.max(0.05, radiusMiles / 69);
       query = query
         .gte('center_latitude', latitude - degrees)
@@ -310,9 +405,12 @@ serve(async (req) => {
 
     const { data, error } = await query;
     if (error) throw new Error('Unable to search verified route catalog.');
+    const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+    const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
+    const limitedRecords = radiusFiltered.records.slice(0, limit);
 
     const records = shapeSearchRecords(
-      Array.isArray(data) ? data as Record<string, unknown>[] : [],
+      limitedRecords,
       includeGeometry,
       includePreviewGeometry,
     );
@@ -324,7 +422,11 @@ serve(async (req) => {
       meta: {
         source: 'route_catalog_public',
         recommendationOnly: true,
-        bboxFilterApplied: latitude != null && longitude != null && radiusMiles != null,
+        bboxFilterApplied: hasRadiusCriteria,
+        radiusFilterApplied: radiusFiltered.radiusFilterApplied,
+        candidateLimit: queryLimit,
+        candidateCount: candidates.length,
+        radiusMatchedCount: radiusFiltered.radiusMatchedCount,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {

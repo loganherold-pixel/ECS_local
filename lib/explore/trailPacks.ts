@@ -359,6 +359,49 @@ export function canStartTrailPackGuidance(pack: Pick<ECSTrailPack, 'routeGeometr
   return getTrailPackGuidanceReadiness(pack).canStart;
 }
 
+export function isPublicSuggestedTrailheadTrailPack(
+  pack: Pick<ECSTrailPack, 'dataState' | 'reviewStatus' | 'catalogVerification'> | null | undefined,
+): boolean {
+  if (!pack) return false;
+  if (pack.dataState === 'fixture') return false;
+  if (pack.dataState !== 'live') return false;
+  if (pack.reviewStatus !== 'approved') return false;
+  if (pack.catalogVerification?.publicRecommendation === false) return false;
+  return true;
+}
+
+function routeMetadataRecord(route: { routeMetadata?: Record<string, unknown> } | null | undefined): Record<string, unknown> {
+  return route?.routeMetadata && typeof route.routeMetadata === 'object' ? route.routeMetadata : {};
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function metadataRecord(metadata: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = metadata[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export function isPublicSuggestedTrailheadRoute(
+  route: Pick<ExpeditionOpportunity, 'id' | 'routeMetadata'> | null | undefined,
+): boolean {
+  if (!route) return false;
+  const metadata = routeMetadataRecord(route);
+  const geometrySource = metadataString(metadata, 'geometrySource');
+  if (geometrySource === 'ecs_demo_full_route_fixture') return false;
+  if (metadataString(metadata, 'trailPackDataState') === 'fixture') return false;
+  if (metadataString(metadata, 'dataState') === 'fixture') return false;
+  if (metadataString(metadata, 'source') !== 'trail_pack') return false;
+  if (metadataString(metadata, 'trailPackId').length === 0) return false;
+  const reviewStatus = metadataString(metadata, 'reviewStatus');
+  if (reviewStatus && reviewStatus !== 'approved') return false;
+  const catalogVerification = metadataRecord(metadata, 'catalogVerification');
+  if (catalogVerification?.publicRecommendation === false) return false;
+  return String(route.id ?? '').startsWith('trail-pack:');
+}
+
 export function getDiscoverableTrailPacks(
   trailPacks: ECSTrailPack[],
   userCoordinate: ECSTrailPackCoordinate,
@@ -482,6 +525,7 @@ export function trailPackToExpeditionOpportunity(
       trailPackId: pack.id,
       trailPackSource: pack.source,
       trailPackSourceLabel: getTrailPackSourceLabel(pack.source),
+      trailPackDataState: pack.dataState ?? null,
       trailPackRouteType: pack.routeType,
       confidenceScore: pack.confidenceScore,
       reviewStatus: pack.reviewStatus,

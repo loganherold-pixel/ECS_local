@@ -1,0 +1,75 @@
+const assert = require('assert');
+const path = require('path');
+const ts = require('typescript');
+
+const root = path.join(__dirname, '..');
+
+function compileTypescript(module, filename) {
+  const source = require('fs').readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+}
+
+require.extensions['.ts'] = compileTypescript;
+
+const {
+  ROUTE_CATALOG_PRESET_SEARCH_AREAS,
+  buildManualRouteCatalogSearchArea,
+  isRouteCatalogCoordinateInConus,
+  parseRouteCatalogCoordinateText,
+} = require(path.join(root, 'lib', 'explore', 'routeCatalogSearchArea.ts'));
+
+assert(
+  ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'tahoe_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mendocino_nf'),
+  'Route catalog presets should retain the current Tahoe and Mendocino field-test areas.',
+);
+
+assert.deepStrictEqual(
+  parseRouteCatalogCoordinateText('39.305, -120.49'),
+  { latitude: 39.305, longitude: -120.49 },
+  'Manual search center parser should accept latitude, longitude text.',
+);
+
+assert.deepStrictEqual(
+  parseRouteCatalogCoordinateText('lat 39.605 lon -122.835'),
+  { latitude: 39.605, longitude: -122.835 },
+  'Manual search center parser should tolerate labeled coordinate text.',
+);
+
+assert.strictEqual(
+  parseRouteCatalogCoordinateText('Tahoe National Forest'),
+  null,
+  'Manual search center parser should not pretend place names are coordinates before a geocoder exists.',
+);
+
+assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 39.305, longitude: -120.49 }), true);
+assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 21.3, longitude: -157.8 }), false);
+assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 61.2, longitude: -149.9 }), false);
+
+const manualArea = buildManualRouteCatalogSearchArea({
+  label: 'Moab area',
+  coordinateText: '38.5733, -109.5498',
+});
+assert.strictEqual(manualArea.ok, true);
+assert.strictEqual(manualArea.area.source, 'manual_search_center');
+assert.strictEqual(manualArea.area.key, 'manual_search_center');
+assert.strictEqual(manualArea.area.shortLabel, 'Moab area');
+assert.strictEqual(manualArea.area.latitude, 38.5733);
+assert.strictEqual(manualArea.area.longitude, -109.5498);
+
+const invalidArea = buildManualRouteCatalogSearchArea({
+  label: 'Anchorage',
+  coordinateText: '61.2, -149.9',
+});
+assert.strictEqual(invalidArea.ok, false);
+assert.match(invalidArea.error, /contiguous United States/i);
+
+console.log('Route catalog search-area domain checks passed');

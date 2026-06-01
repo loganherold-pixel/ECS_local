@@ -36,6 +36,8 @@ const {
   getDefaultECSTrailPacks,
   getDiscoverableTrailPacks,
   getTrailPackSourceLabel,
+  isPublicSuggestedTrailheadRoute,
+  isPublicSuggestedTrailheadTrailPack,
   trailPackToExpeditionOpportunity,
 } = require(path.join(root, 'lib', 'explore', 'trailPacks.ts'));
 
@@ -50,6 +52,10 @@ assert(
 assert(
   defaultPacks.every((pack) => pack.source !== 'partner_source' || pack.reviewStatus !== 'approved'),
   'Partner-source scaffolding must not be discoverable by default',
+);
+assert(
+  defaultPacks.every((pack) => !isPublicSuggestedTrailheadTrailPack(pack)),
+  'Fixture Trail Pack scaffolding must never qualify as public Suggested Trailheads',
 );
 assert.strictEqual(getTrailPackSourceLabel('partner_source'), 'Partner Source');
 
@@ -80,6 +86,50 @@ const opportunity = trailPackToExpeditionOpportunity(approvedWithGeometry);
 assert.strictEqual(opportunity.id, `trail-pack:${approvedWithGeometry.id}`);
 assert.strictEqual(opportunity.matchScore, approvedWithGeometry.confidenceScore);
 assert(opportunity.routeGeometry, 'Converted Trail Pack opportunity should carry route geometry for Navigate staging');
+assert.strictEqual(
+  isPublicSuggestedTrailheadRoute(opportunity),
+  false,
+  'Fixture-backed Trail Pack opportunities must not pass the public Suggested Trailheads route guard',
+);
+
+const liveCatalogPack = {
+  ...approvedWithGeometry,
+  id: 'live-route-catalog-pack',
+  dataState: 'live',
+  reviewStatus: 'approved',
+  catalogVerification: {
+    status: 'normal',
+    sourceLabel: 'Official access verified',
+    publicRecommendation: true,
+    confidenceScore: 92,
+    warnings: [],
+    blockers: [],
+    dataUsed: [],
+    lastEvaluatedAt: '2026-06-01T00:00:00.000Z',
+  },
+};
+assert.strictEqual(
+  isPublicSuggestedTrailheadTrailPack(liveCatalogPack),
+  true,
+  'Live approved route-catalog Trail Packs should qualify for public Suggested Trailheads',
+);
+assert.strictEqual(
+  isPublicSuggestedTrailheadRoute(trailPackToExpeditionOpportunity(liveCatalogPack)),
+  true,
+  'Live approved route-catalog opportunities should pass the public Suggested Trailheads route guard',
+);
+assert.strictEqual(
+  isPublicSuggestedTrailheadRoute({
+    ...opportunity,
+    id: 'demo-seed-route',
+    routeMetadata: {
+      geometrySource: 'ecs_demo_full_route_fixture',
+      sourceLabel: 'ECS demo suggested-route geometry',
+    },
+  }),
+  false,
+  'Demo full-route geometry fixtures must be blocked from public Suggested Trailheads and handoffs',
+);
 
 const missingGeometryPack = defaultPacks.find((pack) => pack.id === 'north-georgia-ridge-scout');
 assert(missingGeometryPack, 'Missing-geometry fixture should exist');

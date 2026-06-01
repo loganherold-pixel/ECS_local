@@ -51,8 +51,9 @@ assert(
 assert(
   discover.includes('DEFAULT_USER_LOCATION') &&
     discover.includes('useThrottledGPS') &&
-    discover.includes("gps.hasFix && gps.position ? 'shared_live_gps' : 'default_location_fallback'"),
-  'Explore should retain the no-location and denied-permission default-location fallback',
+    discover.includes('routeCatalogHasSearchArea') &&
+    discover.includes("'search_area_required'"),
+  'Explore should retain the default-location fallback for legacy discovery while requiring GPS or selected search area for route catalog recommendations',
 );
 assert(
   discover.includes('setTrailPackPageIndex(0);') &&
@@ -92,7 +93,7 @@ assert(
 );
 assert(
   discover.includes('Scanning approved ECS Trail Packs within selected radius…') &&
-    discover.includes('Trail Packs need your location or a selected search area to filter nearby routes.') &&
+    discover.includes('Trail Packs need GPS or a selected search area to filter verified routes by radius.') &&
     discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
     discover.includes('No live reviewed Trail Packs found within this radius.') &&
     discover.includes('Live Trail Packs are not available from the reviewed catalog yet.'),

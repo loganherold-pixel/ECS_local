@@ -204,7 +204,8 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
       'explore_ui_keeps_truthful_empty_review_and_owner_states',
       'Explore Trail Pack UI shows truthful loading, no-location, low-confidence, empty, owner-pending, confidence, preview/start/save, and issue-feedback states.',
       discover.includes('Scanning approved ECS Trail Packs within selected radius') &&
-        discover.includes('Trail Packs need your location or a selected search area to filter nearby routes.') &&
+        discover.includes('Trail Packs need GPS or a selected search area to filter verified routes by radius.') &&
+        discover.includes('ROUTE CATALOG AREA') &&
         discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
         discover.includes('No live reviewed Trail Packs found within this radius.') &&
         discover.includes('Live Trail Packs are not available from the reviewed catalog yet.') &&

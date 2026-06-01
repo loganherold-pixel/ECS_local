@@ -102,8 +102,44 @@ function cleanText(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function cleanVehicleClass(value: unknown): string | undefined {
-  return cleanText(value);
+const ROUTE_CATALOG_VEHICLE_CLASS_ALIASES: Record<string, string> = {
+  highway_legal_4x4: 'highway_legal_4x4',
+  full_size_4x4: 'full_size_4x4',
+  fullsize_4x4: 'full_size_4x4',
+  stock_suv: 'highway_legal_4x4',
+  built_4x4: 'highway_legal_4x4',
+  expedition_rig: 'highway_legal_4x4',
+  overland: 'highway_legal_4x4',
+  truck: 'full_size_4x4',
+  pickup: 'full_size_4x4',
+  full_size_truck: 'full_size_4x4',
+  fullsize_truck: 'full_size_4x4',
+  midsize_truck: 'highway_legal_4x4',
+  mid_size_truck: 'highway_legal_4x4',
+  suv: 'highway_legal_4x4',
+  suv_van: 'highway_legal_4x4',
+  jeep: 'highway_legal_4x4',
+  motorcycle: 'motorcycle',
+  dirt_bike: 'motorcycle',
+  dual_sport: 'motorcycle',
+  atv: 'atv',
+  quad: 'atv',
+  utv: 'utv',
+  sxs: 'utv',
+  side_by_side: 'utv',
+};
+
+export function resolveRouteCatalogVehicleClass(value: unknown): string | undefined {
+  const cleaned = cleanText(value);
+  if (!cleaned) return undefined;
+
+  const normalized = cleaned
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return ROUTE_CATALOG_VEHICLE_CLASS_ALIASES[normalized];
 }
 
 function emit() {
@@ -380,7 +416,7 @@ export function buildRouteCatalogSearchBody(
   const latitude = finiteNumber(criteria.latitude);
   const longitude = finiteNumber(criteria.longitude);
   const radiusMiles = finiteNumber(criteria.radiusMiles);
-  const vehicleClass = cleanVehicleClass(criteria.vehicleClass);
+  const vehicleClass = resolveRouteCatalogVehicleClass(criteria.vehicleClass);
   const minDistanceMiles = finiteNumber(criteria.minDistanceMiles);
   const maxDistanceMiles = finiteNumber(criteria.maxDistanceMiles);
   const minDurationMinutes = finiteNumber(criteria.minDurationMinutes);
@@ -406,7 +442,7 @@ export function buildRouteCatalogSearchBody(
           radiusMiles: criteria.radiusMiles,
         }
       : {}),
-    ...(vehicleClass ? { vehicleClass: criteria.vehicleClass } : {}),
+    ...(vehicleClass ? { vehicleClass } : {}),
     ...(minDistanceMiles != null ? { minDistanceMiles: criteria.minDistanceMiles } : {}),
     ...(maxDistanceMiles != null ? { maxDistanceMiles: criteria.maxDistanceMiles } : {}),
     ...(minDurationMinutes != null ? { minDurationMinutes: criteria.minDurationMinutes } : {}),
