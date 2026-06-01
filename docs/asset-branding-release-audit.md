@@ -41,9 +41,12 @@ The active release brand is now aligned to `Expedition Command System` / `ECS`, 
 - The active Expo app icon and Android adaptive foreground are safe-zone PNGs (`1024 x 1024`) generated to keep the ECS mark inside adaptive and legacy launcher masks.
 - Chrome banner assets are wide, purpose-built banner images (`top-banner-bg.png` is `1390 x 241`, `bottom-banner-bg.png` is `1385 x 237`).
 
+## Preserved Release Collateral
+
+- `docs/release-assets/ECS_Dashboard_Icon_512.png` is a release-looking asset with no code reference found. It was moved out of the runtime root and preserved as possible external store/listing material rather than runtime UI.
+
 ## Retained For Review
 
-- `ECS_Dashboard_Icon_512.png` is a tracked root-level release-looking asset with no code reference found. I retained it because it may be external store/listing material rather than runtime UI.
 - Legacy route filenames and keys remain `discover` and `alert` for route restoration and deep-link compatibility. User-facing labels are Explore and Dispatch.
 - Some internal module names still use `ai` namespaces. User-facing copy was patched where low-risk; a broad namespace rename should be a separate migration.
 
@@ -51,4 +54,4 @@ The active release brand is now aligned to `Expedition Command System` / `ECS`, 
 
 - Low: metadata display name, motto, visible Dispatch title, ECS terminology copy, and orphan title PNG removal.
 - Medium: renaming legacy route files/keys from `discover`/`alert`.
-- Medium: removing tracked root-level release artwork without confirming store/listing usage.
+- Low: release-looking dashboard icon is no longer root-level runtime clutter, but remains tracked under release assets.
