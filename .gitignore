@@ -58,6 +58,7 @@ supabase/.temp/
 tmp/
 .tmp/
 .tmp-*
+.worktrees/
 .smoke/
 .expo-export-check/
 .expo-runtime/
