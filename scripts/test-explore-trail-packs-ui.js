@@ -12,6 +12,7 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 const card = read(path.join('components', 'discover', 'TrailPackCard.tsx'));
 const feedbackPanel = read(path.join('components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'));
 const previewPanel = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
+const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
 const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
 
 assert(
@@ -139,6 +140,26 @@ assert(
     previewPanel.includes('guidanceReadiness.label') &&
     previewPanel.includes('guidanceReadiness.description'),
   'Trail Pack preview details should expose active-guidance readiness, route assessment, offline cache metadata, and preview-only reasons',
+);
+assert(
+  previewPanel.includes('detailDataUsed') &&
+    previewPanel.includes('offlineCache?.sourceTimestamps') &&
+    previewPanel.includes('offlineCache?.sourceAttribution') &&
+    previewPanel.includes('offlineCache?.freshnessWarnings') &&
+    previewPanel.includes('SOURCE TIMESTAMP') &&
+    previewPanel.includes('ATTRIBUTION') &&
+    previewPanel.includes('FRESHNESS WARNING'),
+  'Trail Pack preview offline cache section should visibly expose server-provided source timestamps, attribution, and freshness warnings',
+);
+assert(
+  offlinePrepPack.includes('routeCatalogSourceRows') &&
+    offlinePrepPack.includes('routeCatalogAttributionRows') &&
+    offlinePrepPack.includes('routeCatalogFreshnessWarnings') &&
+    offlinePrepPack.includes('routeCatalogOfflineCache') &&
+    offlinePrepPack.includes('Route Catalog Source Check') &&
+    offlinePrepPack.includes('testID="offline-prep-route-catalog-source-check"') &&
+    offlinePrepPack.includes('testID="offline-prep-route-catalog-freshness-warning"'),
+  'Offline Prep Pack should show route-catalog cacheability, source timestamps, attribution, and freshness warnings before preparing a pack',
 );
 assert(
   feedbackPanel.includes('COMPLETED') &&

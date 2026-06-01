@@ -83,6 +83,17 @@ function formatStaleDate(isoDate: string | null | undefined): string {
   })}`;
 }
 
+function formatCatalogTimestamp(isoDate: string | null | undefined): string {
+  if (!isoDate) return 'unavailable';
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return isoDate;
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<typeof getTrailPackGeometryCoordinates>): boolean {
   if (trailPack.routeType === 'loop') return true;
   if (points.length < 3) return false;
@@ -237,6 +248,12 @@ export default function TrailPackPreviewModal({
   const detailAssessment = trailPack?.catalogVerification?.detailAssessment;
   const offlineCache = trailPack?.catalogVerification?.offlineCache;
   const effectiveOfflineCacheAvailable = offlineCacheAvailable || Boolean(offlineCache?.cacheable);
+  const detailDataUsed = detailAssessment?.dataUsed?.length
+    ? detailAssessment.dataUsed
+    : trailPack?.catalogVerification?.dataUsed ?? [];
+  const offlineSourceTimestamps = offlineCache?.sourceTimestamps ?? [];
+  const offlineSourceAttribution = offlineCache?.sourceAttribution ?? [];
+  const offlineFreshnessWarnings = offlineCache?.freshnessWarnings ?? [];
   const routeTypeLabel = trailPack ? getTrailPackRouteTypeLabel(trailPack.routeType) : '';
   const difficultyLabel = trailPack ? getTrailPackDifficultyLabel(trailPack.difficulty) : '';
   const warnings = useMemo(
@@ -442,7 +459,7 @@ export default function TrailPackPreviewModal({
           </View>
         ) : null}
 
-        {offlineCache?.cacheable ? (
+        {offlineCache ? (
           <View style={s.section}>
             <View style={s.sectionHeader}>
               <Ionicons name="cloud-download-outline" size={12} color={TACTICAL.amber} />
@@ -450,12 +467,57 @@ export default function TrailPackPreviewModal({
             </View>
             <View style={s.reasonRow}>
               <View style={s.reasonDot} />
-              <Text style={s.reasonText}>Cacheable | {formatDate(offlineCache.lastVerifiedAt ?? undefined)}</Text>
+              <Text style={s.reasonText}>
+                CACHE STATUS | {offlineCache.cacheable ? 'Cacheable' : 'Unavailable'} | {formatDate(offlineCache.lastVerifiedAt ?? undefined)}
+              </Text>
             </View>
             <View style={s.reasonRow}>
               <View style={s.reasonDot} />
               <Text style={s.reasonText}>{formatStaleDate(offlineCache.staleAt)}</Text>
             </View>
+            {offlineSourceTimestamps.length > 0 ? (
+              offlineSourceTimestamps.slice(0, 4).map((timestamp) => (
+                <View key={`source-timestamp-${timestamp}`} style={s.reasonRow}>
+                  <View style={s.reasonDot} />
+                  <Text style={s.reasonText}>SOURCE TIMESTAMP | {formatCatalogTimestamp(timestamp)}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>SOURCE TIMESTAMP | unavailable</Text>
+              </View>
+            )}
+            {offlineSourceAttribution.length > 0 ? (
+              offlineSourceAttribution.slice(0, 4).map((source) => (
+                <View key={`source-attribution-${source.providerId}-${source.label}`} style={s.reasonRow}>
+                  <View style={s.reasonDot} />
+                  <Text style={s.reasonText}>
+                    ATTRIBUTION | {source.label}
+                    {source.attribution ? ` | ${source.attribution}` : ''}
+                    {source.license ? ` | ${source.license}` : ''}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>ATTRIBUTION | unavailable</Text>
+              </View>
+            )}
+            {offlineFreshnessWarnings.length > 0 ? (
+              offlineFreshnessWarnings.slice(0, 4).map((warning) => (
+                <View key={`freshness-warning-${warning}`} style={s.reasonRow}>
+                  <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
+                  <Text style={s.reasonText}>FRESHNESS WARNING | {warning}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>FRESHNESS WARNING | none reported by catalog detail</Text>
+              </View>
+            )}
           </View>
         ) : null}
 
@@ -487,17 +549,18 @@ export default function TrailPackPreviewModal({
           </View>
         ) : null}
 
-        {trailPack.catalogVerification?.dataUsed.length ? (
+        {detailDataUsed.length ? (
           <View style={s.section}>
             <View style={s.sectionHeader}>
               <Ionicons name="server-outline" size={12} color={TACTICAL.amber} />
               <Text style={s.sectionTitle}>DATA USED</Text>
             </View>
-            {trailPack.catalogVerification.dataUsed.slice(0, 4).map((source) => (
+            {detailDataUsed.slice(0, 4).map((source) => (
               <View key={`${source.providerId}-${source.label}`} style={s.reasonRow}>
                 <View style={s.reasonDot} />
                 <Text style={s.reasonText}>
-                  {source.label} | {source.freshness.toUpperCase()}
+                  {source.label} | {source.freshness.toUpperCase()} | {source.authority}
+                  {source.lastVerifiedAt ? ` | Last checked ${formatCatalogTimestamp(source.lastVerifiedAt)}` : ' | Last checked unavailable'}
                   {source.attribution ? ` | ${source.attribution}` : ''}
                 </Text>
               </View>
