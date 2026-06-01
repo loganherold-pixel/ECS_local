@@ -107,6 +107,11 @@ assert(
     searchFunction.includes('minCampabilityScore') &&
     searchFunction.includes('availableFuelRangeMiles') &&
     searchFunction.includes('availableWaterCapacityGallons') &&
+    searchFunction.includes('includePreviewGeometry') &&
+    searchFunction.includes('simplifyGeometryForPreview') &&
+    searchFunction.includes('route_geometry_mode') &&
+    searchFunction.includes('preview_simplified') &&
+    searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
     searchFunction.includes(".gte('distance_miles'") &&
     searchFunction.includes(".lte('estimated_duration_minutes'") &&
     searchFunction.includes(".gte('remoteness_score'") &&
@@ -130,6 +135,8 @@ assert(
     liveCatalog.includes('minCampabilityScore: criteria.minCampabilityScore') &&
     liveCatalog.includes('availableFuelRangeMiles: criteria.availableFuelRangeMiles') &&
     liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
+    liveCatalog.includes('includeGeometry: false') &&
+    liveCatalog.includes('includePreviewGeometry: true') &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&

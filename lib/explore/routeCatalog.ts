@@ -52,6 +52,7 @@ export type RouteCatalogRecord = {
   routeType: ECSTrailPackRouteType;
   centerCoordinate: ECSTrailPackCoordinate;
   routeGeometry?: ECSTrailPackRouteGeometry;
+  routeGeometryMode?: 'full' | 'preview_simplified' | 'omitted';
   distanceMiles?: number;
   estimatedDurationMinutes?: number;
   difficulty?: ECSTrailPackDifficulty;
@@ -265,6 +266,12 @@ function normalizeVerificationStatus(value: unknown): RouteCatalogVerificationSt
     return status;
   }
   return 'not_recommended';
+}
+
+function normalizeRouteGeometryMode(value: unknown): RouteCatalogRecord['routeGeometryMode'] {
+  const mode = String(value ?? '').trim();
+  if (mode === 'full' || mode === 'preview_simplified' || mode === 'omitted') return mode;
+  return undefined;
 }
 
 function normalizeSourceType(value: unknown): RouteCatalogSourceType {
@@ -609,6 +616,7 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
     routeType: normalizeRouteType(record.route_type ?? record.routeType),
     centerCoordinate,
     routeGeometry,
+    routeGeometryMode: normalizeRouteGeometryMode(record.route_geometry_mode ?? record.routeGeometryMode),
     distanceMiles: readNumber(record, 'distance_miles', 'distanceMiles'),
     estimatedDurationMinutes: readNumber(record, 'estimated_duration_minutes', 'estimatedDurationMinutes'),
     difficulty: normalizeDifficulty(record.difficulty),
@@ -662,6 +670,7 @@ export function verifyRouteCatalogRecord(
   const warnings: string[] = [];
   const blockers: string[] = [];
   const points = geometryCoordinates(route.routeGeometry);
+  const geometryIsPreview = route.routeGeometryMode === 'preview_simplified';
   const hasOfficialSource = route.sourceRecords.some(isAuthoritativeSource);
   const hasCommunitySource = route.sourceRecords.some((source) => source.sourceType === 'community');
   const hasOsmOnly =
@@ -689,7 +698,7 @@ export function verifyRouteCatalogRecord(
     authoritativeFreshness.every((freshness) => freshness === 'stale' || freshness === 'missing');
 
   if (points.length < 2) blockers.push('Route geometry is incomplete');
-  if (hasImpossibleJump(points)) blockers.push('Route geometry contains impossible jumps');
+  if (!geometryIsPreview && hasImpossibleJump(points)) blockers.push('Route geometry contains impossible jumps');
   if (route.activeClosureCount > 0) blockers.push('Route intersects an active official closure');
   if (route.restrictedAccessCoveragePct > 0) blockers.push('Route includes restricted or prohibited access');
   if (route.vehicleMismatch) blockers.push('Route vehicle fit conflicts with selected criteria');

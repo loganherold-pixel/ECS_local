@@ -395,7 +395,8 @@ export function buildRouteCatalogSearchBody(
   const difficulty = cleanText(criteria.difficulty);
   return {
     limit: criteria.limit ?? 200,
-    includeGeometry: true,
+    includeGeometry: false,
+    includePreviewGeometry: true,
     includeAssessment: true,
     recommendationOnly: true,
     ...(latitude != null && longitude != null && radiusMiles != null

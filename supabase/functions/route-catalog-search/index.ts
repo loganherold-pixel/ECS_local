@@ -40,6 +40,16 @@ function cleanLimit(value: unknown): number {
   return Math.max(1, Math.min(500, Math.round(limit)));
 }
 
+function readBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const text = value.trim().toLowerCase();
+    if (text === 'true' || text === '1' || text === 'yes') return true;
+    if (text === 'false' || text === '0' || text === 'no') return false;
+  }
+  return fallback;
+}
+
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -98,6 +108,135 @@ function coverageState(records: unknown[]): Record<string, string> {
   };
 }
 
+const ROUTE_CATALOG_SEARCH_COLUMNS = [
+  'id',
+  'public_id',
+  'name',
+  'description',
+  'route_type',
+  'center_latitude',
+  'center_longitude',
+  'distance_miles',
+  'estimated_duration_minutes',
+  'difficulty',
+  'vehicle_fit',
+  'official_access_coverage_pct',
+  'unknown_access_coverage_pct',
+  'restricted_access_coverage_pct',
+  'active_closure_count',
+  'seasonal_restriction_count',
+  'vehicle_mismatch',
+  'geometry_quality',
+  'verification_status',
+  'recommendation_status',
+  'review_status',
+  'confidence_score',
+  'confidence_reasons',
+  'warning_reasons',
+  'blocker_reasons',
+  'closure_summaries',
+  'community_signal',
+  'tags',
+  'last_verified_at',
+  'stale_at',
+  'created_at',
+  'updated_at',
+  'source_records',
+  'remoteness_score',
+  'campability_score',
+  'minimum_fuel_range_miles',
+  'minimum_water_capacity_gallons',
+  'route_intelligence',
+];
+
+const PREVIEW_MAX_POINTS = 120;
+
+function searchSelect(includeGeometry: boolean, includePreviewGeometry: boolean): string {
+  const columns = [...ROUTE_CATALOG_SEARCH_COLUMNS];
+  if (includeGeometry || includePreviewGeometry) columns.splice(7, 0, 'route_geometry');
+  return columns.join(',');
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function cleanCoordinate(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const longitude = Number(value[0]);
+  const latitude = Number(value[1]);
+  if (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    Math.abs(latitude) <= 90 &&
+    Math.abs(longitude) <= 180
+  ) {
+    return [longitude, latitude];
+  }
+  return null;
+}
+
+function sampleLine(coordinates: unknown[], maxPoints: number): number[][] {
+  const points = coordinates.map(cleanCoordinate).filter((point): point is number[] => !!point);
+  if (points.length <= maxPoints) return points;
+  if (maxPoints <= 2) return [points[0], points[points.length - 1]];
+
+  const sampled: number[][] = [];
+  const lastIndex = points.length - 1;
+  for (let index = 0; index < maxPoints; index += 1) {
+    const sourceIndex = Math.round((index / (maxPoints - 1)) * lastIndex);
+    const point = points[sourceIndex];
+    const previous = sampled[sampled.length - 1];
+    if (!previous || previous[0] !== point[0] || previous[1] !== point[1]) sampled.push(point);
+  }
+  return sampled.length >= 2 ? sampled : [points[0], points[lastIndex]];
+}
+
+function simplifyGeometryForPreview(value: unknown): Record<string, unknown> | null {
+  const geometry = readRecord(value);
+  if (!geometry) return null;
+
+  if (geometry.type === 'LineString' && Array.isArray(geometry.coordinates)) {
+    const coordinates = sampleLine(geometry.coordinates, PREVIEW_MAX_POINTS);
+    return coordinates.length >= 2 ? { type: 'LineString', coordinates } : null;
+  }
+
+  if (geometry.type === 'MultiLineString' && Array.isArray(geometry.coordinates)) {
+    const rawLines = geometry.coordinates.filter((line): line is unknown[] => Array.isArray(line));
+    const pointsPerLine = Math.max(2, Math.floor(PREVIEW_MAX_POINTS / Math.max(1, rawLines.length)));
+    const coordinates = rawLines
+      .map((line) => sampleLine(line, pointsPerLine))
+      .filter((line) => line.length >= 2);
+    return coordinates.length > 0 ? { type: 'MultiLineString', coordinates } : null;
+  }
+
+  return null;
+}
+
+function shapeSearchRecords(
+  records: Record<string, unknown>[],
+  includeGeometry: boolean,
+  includePreviewGeometry: boolean,
+): Record<string, unknown>[] {
+  if (includeGeometry) {
+    return records.map((record) => ({ ...record, route_geometry_mode: 'full' }));
+  }
+
+  return records.map((record) => {
+    const shaped = { ...record };
+    const previewGeometry = includePreviewGeometry ? simplifyGeometryForPreview(record.route_geometry) : null;
+    delete shaped.route_geometry;
+    if (previewGeometry) {
+      shaped.route_geometry = previewGeometry;
+      shaped.route_geometry_mode = 'preview_simplified';
+      shaped.route_geometry_preview_max_points = PREVIEW_MAX_POINTS;
+    } else {
+      shaped.route_geometry_mode = 'omitted';
+    }
+    return shaped;
+  });
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
@@ -105,6 +244,11 @@ serve(async (req) => {
   try {
     const params = await requestParams(req);
     const limit = cleanLimit(params.limit);
+    const includeGeometry = readBoolean(params.includeGeometry ?? params.include_geometry, false);
+    const includePreviewGeometry = readBoolean(
+      params.includePreviewGeometry ?? params.include_preview_geometry,
+      !includeGeometry,
+    );
     const latitude = readNumber(params.latitude ?? params.lat);
     const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
     const radiusMiles = readNumber(params.radiusMiles ?? params.radius_miles);
@@ -127,7 +271,7 @@ serve(async (req) => {
     const admin = createAdminClient();
     let query = admin
       .from('route_catalog_public')
-      .select('*')
+      .select(searchSelect(includeGeometry, includePreviewGeometry))
       .eq('review_status', 'approved')
       .eq('recommendation_status', 'recommendable')
       .order('confidence_score', { ascending: false })
@@ -167,7 +311,11 @@ serve(async (req) => {
     const { data, error } = await query;
     if (error) throw new Error('Unable to search verified route catalog.');
 
-    const records = Array.isArray(data) ? data : [];
+    const records = shapeSearchRecords(
+      Array.isArray(data) ? data as Record<string, unknown>[] : [],
+      includeGeometry,
+      includePreviewGeometry,
+    );
     return jsonResponse({
       ok: true,
       records,
@@ -177,6 +325,8 @@ serve(async (req) => {
         source: 'route_catalog_public',
         recommendationOnly: true,
         bboxFilterApplied: latitude != null && longitude != null && radiusMiles != null,
+        geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
+        previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {
           minDistanceMiles,
           maxDistanceMiles,

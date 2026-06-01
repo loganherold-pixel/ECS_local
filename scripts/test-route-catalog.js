@@ -130,6 +130,29 @@ assert(
   'Verification should expose fresh USFS MVUM as data used',
 );
 
+const previewGeometryVerification = verifyRouteCatalogRecord(
+  makeRoute({
+    routeGeometryMode: 'preview_simplified',
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-120, 39],
+        [-122, 39],
+      ],
+    },
+  }),
+  { now: freshNow },
+);
+assert(
+  !previewGeometryVerification.blockers.includes('Route geometry contains impossible jumps'),
+  'Search-preview geometry should not create false impossible-jump blockers; full detail geometry remains the authority',
+);
+assert.strictEqual(
+  previewGeometryVerification.publicRecommendation,
+  true,
+  'Search-preview geometry should preserve public recommendation when official source gates pass',
+);
+
 const trailPack = catalogRouteToTrailPack(makeRoute(), verified);
 assert.strictEqual(trailPack.source, 'ecs_validated');
 assert.strictEqual(trailPack.dataState, 'live');
