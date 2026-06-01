@@ -4,6 +4,10 @@ export type UsfsMvumForest = {
   sourceProviderId: string;
   sourceName: string;
   sourceUri: string;
+  currentConditionProviderId: string;
+  currentConditionSourceName: string;
+  currentConditionSourceUri: string;
+  currentConditionReferenceUri: string;
 };
 
 export type UsfsMvumLayer = {
@@ -29,6 +33,48 @@ export type UsfsMvumRouteContext = {
   ingestRunId?: string | null;
   minMiles?: number;
   publicRecommendation?: boolean;
+};
+
+export type UsfsMvumClosureStatus = 'active' | 'scheduled' | 'expired' | 'unknown';
+export type UsfsMvumClosureType =
+  | 'seasonal'
+  | 'emergency'
+  | 'fire'
+  | 'flood'
+  | 'maintenance'
+  | 'land_manager'
+  | 'permanent'
+  | 'unknown';
+
+export type UsfsMvumCurrentConditionClosure = {
+  id?: string;
+  title: string;
+  summary?: string;
+  sourceUrl?: string;
+  forestOrder?: string;
+  status: UsfsMvumClosureStatus;
+  closureType: UsfsMvumClosureType;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  lastVerifiedAt?: string;
+  confidenceScore?: number;
+  routePublicIds: string[];
+  segmentPublicIds: string[];
+  providerFeatureIds: string[];
+  routeIds: string[];
+  routeIdentityPatterns: string[];
+};
+
+export type UsfsMvumCurrentConditionSource = {
+  forestSlug: string;
+  forestName: string;
+  providerId: string;
+  label: string;
+  sourceUrl: string;
+  referenceUrl: string;
+  checkedAt: string;
+  staleAt: string;
+  closures: UsfsMvumCurrentConditionClosure[];
 };
 
 export type UsfsMvumRouteUpsert = NonNullable<ReturnType<typeof arcGisFeatureToVerifiedRouteUpsert>>;
@@ -62,6 +108,10 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     sourceProviderId: 'usfs_mvum_tahoe_nf',
     sourceName: 'USFS MVUM - Tahoe National Forest',
     sourceUri: 'https://www.fs.usda.gov/detail/tahoe/maps-pubs/?cid=fseprd638275',
+    currentConditionProviderId: 'usfs_current_conditions_tahoe_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Tahoe National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r05/tahoe/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/tahoe/conditions',
   },
   {
     slug: 'mendocino-national-forest',
@@ -69,6 +119,10 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     sourceProviderId: 'usfs_mvum_mendocino_nf',
     sourceName: 'USFS MVUM - Mendocino National Forest',
     sourceUri: 'https://www.fs.usda.gov/detail/mendocino/maps-pubs/?cid=stelprdb5142646',
+    currentConditionProviderId: 'usfs_current_conditions_mendocino_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Mendocino National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r05/mendocino/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/mendocino/conditions',
   },
 ];
 
@@ -91,6 +145,8 @@ export const USFS_MVUM_LAYERS: UsfsMvumLayer[] = [
 
 const ROUTE_CATALOG_MVUM_WARNING =
   'USFS MVUM is a legal baseline only; current closures, fire restrictions, weather, gates, and passability still require current checks.';
+const ROUTE_CATALOG_CURRENT_CONDITION_CAVEAT =
+  'Official current-condition overlays can block recommendation but do not establish open access, passability, or safety.';
 const ACTIVE_GUIDANCE_JOIN_GAP_MAX_METERS = 120;
 
 function cleanString(value: unknown): string {
@@ -541,6 +597,346 @@ export function routeSourceUpsertForForest(forest: UsfsMvumForest) {
     refresh_frequency: 'agency published schedule',
     status: 'active',
     last_checked_at: new Date().toISOString(),
+  };
+}
+
+export function routeCurrentConditionSourceUpsertForForest(
+  forest: UsfsMvumForest,
+  source?: UsfsMvumCurrentConditionSource,
+) {
+  return {
+    provider_id: source?.providerId ?? forest.currentConditionProviderId,
+    name: source?.label ?? forest.currentConditionSourceName,
+    source_type: 'federal_agency',
+    authority: 'official_closure',
+    source_uri: source?.sourceUrl ?? forest.currentConditionSourceUri,
+    attribution: 'USDA Forest Service alerts, notices, and current conditions',
+    license: 'agency published terms',
+    refresh_frequency: 'current condition review before recommendation sync',
+    status: 'active',
+    last_checked_at: source?.checkedAt ?? new Date().toISOString(),
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readStringList(record: Record<string, unknown>, keys: string[]): string[] {
+  return uniqueStrings(keys.flatMap((key) => {
+    const value = record[key];
+    if (Array.isArray(value)) return value.map((item) => cleanString(item));
+    return [cleanString(value)];
+  }));
+}
+
+function normalizeIsoString(value: unknown): string | null {
+  const text = cleanString(value);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizeClosureStatus(value: unknown): UsfsMvumClosureStatus {
+  const text = cleanString(value).toLowerCase();
+  if (text === 'active' || text === 'open_closure' || text === 'closed') return 'active';
+  if (text === 'scheduled' || text === 'planned') return 'scheduled';
+  if (text === 'expired' || text === 'ended' || text === 'inactive') return 'expired';
+  return 'unknown';
+}
+
+function normalizeClosureType(value: unknown): UsfsMvumClosureType {
+  const text = cleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (
+    text === 'seasonal' ||
+    text === 'emergency' ||
+    text === 'fire' ||
+    text === 'flood' ||
+    text === 'maintenance' ||
+    text === 'land_manager' ||
+    text === 'permanent' ||
+    text === 'unknown'
+  ) {
+    return text as UsfsMvumClosureType;
+  }
+  if (text === 'forest_order' || text === 'official_order' || text === 'administrative') return 'land_manager';
+  return 'unknown';
+}
+
+function currentConditionInputs(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.map(readRecord).filter((record): record is Record<string, unknown> => !!record);
+  }
+  const record = readRecord(value);
+  if (!record) return [];
+  if (
+    Array.isArray(record.closures) ||
+    cleanString(record.forestSlug) ||
+    cleanString(record.forest_slug) ||
+    cleanString(record.forestName) ||
+    cleanString(record.forest_name)
+  ) {
+    return [record];
+  }
+  return Object.entries(record)
+    .map(([forestSlug, forestValue]) => {
+      const sourceRecord = readRecord(forestValue);
+      return sourceRecord ? { forestSlug, ...sourceRecord } : null;
+    })
+    .filter((sourceRecord): sourceRecord is Record<string, unknown> => !!sourceRecord);
+}
+
+function sourceForest(record: Record<string, unknown>, forests: UsfsMvumForest[]): UsfsMvumForest | null {
+  const requested = [
+    cleanString(record.forestSlug),
+    cleanString(record.forest_slug),
+    cleanString(record.forestName),
+    cleanString(record.forest_name),
+    cleanString(record.providerId),
+    cleanString(record.provider_id),
+  ].map((value) => value.toLowerCase()).filter(Boolean);
+  if (requested.length === 0 && forests.length === 1) return forests[0];
+  return forests.find((forest) =>
+    requested.includes(forest.slug) ||
+    requested.includes(forest.forestName.toLowerCase()) ||
+    requested.includes(forest.currentConditionProviderId.toLowerCase()) ||
+    requested.includes(forest.sourceProviderId.toLowerCase()),
+  ) ?? null;
+}
+
+function normalizeCurrentConditionClosure(
+  value: unknown,
+  source: Pick<UsfsMvumCurrentConditionSource, 'sourceUrl' | 'checkedAt'>,
+): UsfsMvumCurrentConditionClosure | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const title = cleanString(record.title ?? record.name ?? record.forestOrder ?? record.forest_order);
+  if (!title) return null;
+
+  return {
+    id: cleanString(record.id ?? record.providerClosureId ?? record.provider_closure_id) || undefined,
+    title,
+    summary: cleanString(record.summary ?? record.description ?? record.notice) || undefined,
+    sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || source.sourceUrl,
+    forestOrder: cleanString(record.forestOrder ?? record.forest_order ?? record.orderNumber ?? record.order_number) || undefined,
+    status: normalizeClosureStatus(record.status),
+    closureType: normalizeClosureType(record.closureType ?? record.closure_type ?? record.type),
+    startsAt: normalizeIsoString(record.startsAt ?? record.starts_at ?? record.startDate ?? record.start_date),
+    endsAt: normalizeIsoString(record.endsAt ?? record.ends_at ?? record.endDate ?? record.end_date),
+    lastVerifiedAt: normalizeIsoString(record.lastVerifiedAt ?? record.last_verified_at) ?? source.checkedAt,
+    confidenceScore: clampNumber(Number(record.confidenceScore ?? record.confidence_score ?? 90), 0, 100),
+    routePublicIds: readStringList(record, ['routePublicId', 'route_public_id', 'routePublicIds', 'route_public_ids']),
+    segmentPublicIds: readStringList(record, ['segmentPublicId', 'segment_public_id', 'segmentPublicIds', 'segment_public_ids']),
+    providerFeatureIds: readStringList(record, ['providerFeatureId', 'provider_feature_id', 'providerFeatureIds', 'provider_feature_ids']),
+    routeIds: readStringList(record, ['routeId', 'route_id', 'routeIds', 'route_ids', 'routeNumber', 'route_number']),
+    routeIdentityPatterns: readStringList(record, [
+      'routeIdentity',
+      'route_identity',
+      'routeName',
+      'route_name',
+      'routeNamePattern',
+      'route_name_pattern',
+      'routeNameIncludes',
+      'route_name_includes',
+      'routeIdentityPatterns',
+      'route_identity_patterns',
+    ]),
+  };
+}
+
+export function normalizeUsfsMvumCurrentConditionSources(
+  value: unknown,
+  forests = USFS_MVUM_PILOT_FORESTS,
+  nowIso = new Date().toISOString(),
+): UsfsMvumCurrentConditionSource[] {
+  return currentConditionInputs(value)
+    .map((record) => {
+      const forest = sourceForest(record, forests);
+      if (!forest) return null;
+      const checkedAt = normalizeIsoString(record.checkedAt ?? record.checked_at ?? record.lastCheckedAt ?? record.last_checked_at) ?? nowIso;
+      const source: UsfsMvumCurrentConditionSource = {
+        forestSlug: forest.slug,
+        forestName: forest.forestName,
+        providerId: cleanString(record.providerId ?? record.provider_id) || forest.currentConditionProviderId,
+        label: cleanString(record.label ?? record.name) || forest.currentConditionSourceName,
+        sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || forest.currentConditionSourceUri,
+        referenceUrl: cleanString(record.referenceUrl ?? record.reference_url) || forest.currentConditionReferenceUri,
+        checkedAt,
+        staleAt: normalizeIsoString(record.staleAt ?? record.stale_at) ?? addDaysIso(checkedAt, 7),
+        closures: [],
+      };
+      const closures = Array.isArray(record.closures) ? record.closures : [];
+      source.closures = closures
+        .map((closure) => normalizeCurrentConditionClosure(closure, source))
+        .filter((closure): closure is UsfsMvumCurrentConditionClosure => !!closure);
+      return source;
+    })
+    .filter((source): source is UsfsMvumCurrentConditionSource => !!source);
+}
+
+function normalizedText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function routeIdAliases(routeId: string): string[] {
+  const cleanRouteId = cleanString(routeId);
+  const aliases = [cleanRouteId];
+  if (/^\d{1,2}$/.test(cleanRouteId)) aliases.push(`853${cleanRouteId.padStart(2, '0')}`);
+  return uniqueStrings(aliases);
+}
+
+function metadataValues(value: unknown, keys: string[]): string[] {
+  const record = readRecord(value);
+  if (!record) return [];
+  return readStringList(record, keys);
+}
+
+function routeMatchValues(target: UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert): string[] {
+  const route = target.verifiedRoute;
+  const sourceMetadata = readRecord(target.verifiedRouteSource.metadata);
+  const communitySignal = readRecord(route.community_signal);
+  return uniqueStrings([
+    cleanString(route.public_id),
+    cleanString(route.name),
+    ...(Array.isArray(route.tags) ? route.tags.map((tag) => cleanString(tag)) : []),
+    ...(Array.isArray(target.segmentPublicIds) ? target.segmentPublicIds.map((id) => cleanString(id)) : []),
+    ...(Array.isArray(target.segmentProviderFeatureIds) ? target.segmentProviderFeatureIds.map((id) => cleanString(id)) : []),
+    ...metadataValues(sourceMetadata, ['providerFeatureId', 'providerFeatureIds', 'segmentPublicIds']),
+    ...metadataValues(communitySignal, ['segmentPublicIds', 'providerFeatureIds']),
+  ]);
+}
+
+function anyExactMatch(candidates: string[], needles: string[]): boolean {
+  const candidateSet = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return needles.some((needle) => candidateSet.has(needle.toLowerCase()));
+}
+
+function anyTextMatch(candidates: string[], needles: string[]): boolean {
+  const normalizedCandidates = candidates.map(normalizedText).filter(Boolean);
+  return needles.some((needle) => {
+    const normalizedNeedle = normalizedText(needle);
+    if (normalizedNeedle.length < 2) return false;
+    const slugNeedle = slugify(needle).replace(/-/g, ' ');
+    return normalizedCandidates.some((candidate) =>
+      candidate === normalizedNeedle ||
+      candidate.includes(normalizedNeedle) ||
+      (slugNeedle.length >= 2 && candidate.includes(slugNeedle)),
+    );
+  });
+}
+
+function closureMatchesRoute(
+  closure: UsfsMvumCurrentConditionClosure,
+  target: UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert,
+): boolean {
+  const candidates = routeMatchValues(target);
+  if (anyExactMatch(candidates, closure.routePublicIds)) return true;
+  if (anyExactMatch(candidates, closure.segmentPublicIds)) return true;
+  if (anyExactMatch(candidates, closure.providerFeatureIds)) return true;
+  if (anyTextMatch(candidates, closure.routeIdentityPatterns)) return true;
+  return closure.routeIds.some((routeId) => anyTextMatch(candidates, routeIdAliases(routeId)));
+}
+
+function closureIsActive(closure: UsfsMvumCurrentConditionClosure, checkedAt: string): boolean {
+  if (closure.status !== 'active') return false;
+  const checkedTime = Date.parse(checkedAt);
+  const endTime = closure.endsAt ? Date.parse(closure.endsAt) : Number.NaN;
+  return !(Number.isFinite(checkedTime) && Number.isFinite(endTime) && endTime < checkedTime);
+}
+
+function closureSummary(source: UsfsMvumCurrentConditionSource, closure: UsfsMvumCurrentConditionClosure): string {
+  return [
+    closure.title,
+    closure.summary,
+    closure.forestOrder ? `Forest Order ${closure.forestOrder}` : '',
+    source.label,
+    closure.sourceUrl,
+  ].filter(Boolean).join(' | ');
+}
+
+export function applyUsfsMvumCurrentConditionSources<T extends UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert>(
+  target: T,
+  sources: UsfsMvumCurrentConditionSource[] = [],
+): T {
+  const routeTags = Array.isArray(target.verifiedRoute.tags) ? target.verifiedRoute.tags.map((tag) => cleanString(tag)) : [];
+  const primaryRouteTag = routeTags[0] ?? '';
+  const matchValues = routeMatchValues(target);
+  const relevantSources = sources.filter((source) =>
+    cleanString(source.forestSlug).toLowerCase() === primaryRouteTag.toLowerCase() ||
+    cleanString(source.forestName).toLowerCase() === primaryRouteTag.toLowerCase() ||
+    matchValues.some((value) => normalizedText(value).includes(normalizedText(source.forestName))),
+  );
+  if (relevantSources.length === 0) return target;
+
+  const matched = relevantSources.flatMap((source) =>
+    source.closures
+      .filter((closure) => closureMatchesRoute(closure, target))
+      .map((closure) => ({ source, closure })),
+  );
+  if (matched.length === 0) return target;
+
+  const activeMatches = matched.filter(({ source, closure }) => closureIsActive(closure, source.checkedAt));
+  const watchMatches = matched.filter(({ source, closure }) => !closureIsActive(closure, source.checkedAt));
+  const existingActiveClosureCount = Number(target.verifiedRoute.active_closure_count ?? 0);
+  const conditionSummary = {
+    sourceCount: relevantSources.length,
+    matchedClosureCount: matched.length,
+    activeClosureCount: activeMatches.length,
+    watchClosureCount: watchMatches.length,
+    checkedAt: uniqueStrings(relevantSources.map((source) => source.checkedAt)),
+    staleAt: uniqueStrings(relevantSources.map((source) => source.staleAt)),
+    caveat: ROUTE_CATALOG_CURRENT_CONDITION_CAVEAT,
+  };
+  const existingCommunitySignal = readRecord(target.verifiedRoute.community_signal) ?? {};
+  const existingMetadata = readRecord(target.verifiedRouteSource.metadata) ?? {};
+  const baseWarnings = Array.isArray(target.verifiedRoute.warning_reasons)
+    ? target.verifiedRoute.warning_reasons.map((warning) => cleanString(warning))
+    : [];
+  const baseBlockers = Array.isArray(target.verifiedRoute.blocker_reasons)
+    ? target.verifiedRoute.blocker_reasons.map((blocker) => cleanString(blocker))
+    : [];
+  const baseClosures = Array.isArray(target.verifiedRoute.closure_summaries)
+    ? target.verifiedRoute.closure_summaries.map((summary) => cleanString(summary))
+    : [];
+
+  const verifiedRoute = {
+    ...target.verifiedRoute,
+    active_closure_count: existingActiveClosureCount + activeMatches.length,
+    warning_reasons: uniqueStrings([
+      ...baseWarnings,
+      ...matched.map(({ source }) => `Official current-condition source checked: ${source.label} at ${source.checkedAt}.`),
+      ...watchMatches.map(({ closure }) => `Official current-condition notice requires review: ${closure.title}.`),
+    ]),
+    blocker_reasons: uniqueStrings([
+      ...baseBlockers,
+      ...activeMatches.map(({ closure }) => `Active official closure: ${closure.title}.`),
+    ]),
+    closure_summaries: uniqueStrings([
+      ...baseClosures,
+      ...matched.map(({ source, closure }) => closureSummary(source, closure)),
+    ]),
+    community_signal: {
+      ...existingCommunitySignal,
+      currentConditions: conditionSummary,
+    },
+  };
+
+  if (activeMatches.length > 0) {
+    verifiedRoute.recommendation_status = 'not_recommended';
+    verifiedRoute.verification_status = 'not_recommended';
+    verifiedRoute.confidence_score = Math.min(Number(verifiedRoute.confidence_score ?? 0), 74);
+  }
+
+  return {
+    ...target,
+    verifiedRoute,
+    verifiedRouteSource: {
+      ...target.verifiedRouteSource,
+      metadata: {
+        ...existingMetadata,
+        currentConditions: conditionSummary,
+      },
+    },
   };
 }
 

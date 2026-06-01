@@ -4,10 +4,13 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import {
   USFS_MVUM_LAYERS,
   USFS_MVUM_PILOT_FORESTS,
+  applyUsfsMvumCurrentConditionSources,
   aggregateUsfsMvumRouteFeatures,
   arcGisFeatureToVerifiedRouteUpsert,
   buildUsfsMvumWhereClause,
+  normalizeUsfsMvumCurrentConditionSources,
   normalizeUsfsMvumFeatureCollection,
+  routeCurrentConditionSourceUpsertForForest,
   routeSourceUpsertForForest,
   type UsfsMvumForest,
   type UsfsMvumLayer,
@@ -209,10 +212,25 @@ serve(async (req) => {
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
     const limitPerForestLayer = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerForestLayer ?? body.limit_per_forest_layer, 150))));
     const now = new Date().toISOString();
+    const currentConditionSources = normalizeUsfsMvumCurrentConditionSources(
+      body.currentConditions ?? body.current_conditions,
+      forests,
+      now,
+    );
     const admin = createAdminClient();
     const summary = [];
 
     for (const forest of forests) {
+      const forestCurrentConditionSources = currentConditionSources.filter((source) => source.forestSlug === forest.slug);
+      for (const currentConditionSource of forestCurrentConditionSources) {
+        const { error: currentConditionSourceError } = await admin
+          .from('route_sources')
+          .upsert(routeCurrentConditionSourceUpsertForForest(forest, currentConditionSource), { onConflict: 'provider_id' });
+        if (currentConditionSourceError) {
+          throw new Error(`Unable to upsert current-condition source for ${forest.forestName}`);
+        }
+      }
+
       const { data: source, error: sourceError } = await admin
         .from('route_sources')
         .upsert(routeSourceUpsertForForest(forest), { onConflict: 'provider_id' })
@@ -236,6 +254,11 @@ serve(async (req) => {
       let rawFeatureCount = 0;
       let normalizedFeatureCount = 0;
       let aggregateRouteCount = 0;
+      const currentConditionClosureCount = forestCurrentConditionSources.reduce(
+        (count, sourceRecord) => count + sourceRecord.closures.length,
+        0,
+      );
+      let currentConditionBlockedRouteCount = 0;
       const rawFeatureRows: Array<Record<string, unknown>> = [];
       const segmentRouteRows: Array<Record<string, unknown>> = [];
       const segmentSourceRefs: Array<{ publicId: string; source: Record<string, unknown> }> = [];
@@ -261,16 +284,25 @@ serve(async (req) => {
           });
           if (!upsert) continue;
 
-          rawFeatureRows.push(upsert.rawSourceFeature);
-          segmentRouteRows.push(upsert.verifiedRoute);
+          const conditionCheckedUpsert = applyUsfsMvumCurrentConditionSources(upsert, forestCurrentConditionSources);
+          if (Number(conditionCheckedUpsert.verifiedRoute.active_closure_count ?? 0) > 0) {
+            currentConditionBlockedRouteCount += 1;
+          }
+
+          rawFeatureRows.push(conditionCheckedUpsert.rawSourceFeature);
+          segmentRouteRows.push(conditionCheckedUpsert.verifiedRoute);
           segmentSourceRefs.push({
-            publicId: routePublicId(upsert.verifiedRoute),
-            source: upsert.verifiedRouteSource,
+            publicId: routePublicId(conditionCheckedUpsert.verifiedRoute),
+            source: conditionCheckedUpsert.verifiedRouteSource,
           });
           normalizedFeatureCount += 1;
         }
 
-        const aggregateUpserts = aggregateUsfsMvumRouteFeatures(features, context);
+        const aggregateUpserts = aggregateUsfsMvumRouteFeatures(features, context)
+          .map((aggregate) => applyUsfsMvumCurrentConditionSources(aggregate, forestCurrentConditionSources));
+        currentConditionBlockedRouteCount += aggregateUpserts.filter((aggregate) =>
+          Number(aggregate.verifiedRoute.active_closure_count ?? 0) > 0,
+        ).length;
         aggregateRouteRows.push(...aggregateUpserts.map((aggregate) => aggregate.verifiedRoute));
         aggregateSourceRefs.push(...aggregateUpserts.map((aggregate) => ({
           publicId: routePublicId(aggregate.verifiedRoute),
@@ -292,7 +324,15 @@ serve(async (req) => {
           finished_at: new Date().toISOString(),
           raw_feature_count: rawFeatureCount,
           normalized_feature_count: normalizedFeatureCount,
-          metadata: { forest: forest.forestName, providerId: forest.sourceProviderId, minMiles, aggregateRouteCount },
+          metadata: {
+            forest: forest.forestName,
+            providerId: forest.sourceProviderId,
+            minMiles,
+            aggregateRouteCount,
+            currentConditionSourceCount: forestCurrentConditionSources.length,
+            currentConditionClosureCount,
+            currentConditionBlockedRouteCount,
+          },
         })
         .eq('id', ingestRun.id);
 
@@ -301,6 +341,9 @@ serve(async (req) => {
         rawFeatureCount,
         normalizedFeatureCount,
         aggregateRouteCount,
+        currentConditionSourceCount: forestCurrentConditionSources.length,
+        currentConditionClosureCount,
+        currentConditionBlockedRouteCount,
       });
     }
 

@@ -27,6 +27,15 @@ assert(
 );
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');
 assert(workflow.includes('rawFeatureCount') && workflow.includes('aggregateRouteCount'), 'Workflow summary should report ingest counts');
+assert(
+  workflow.includes('current_conditions_json') &&
+    workflow.includes('payload.currentConditions = JSON.parse(currentConditionsJson)'),
+  'Workflow should support reviewed official closure overlays without requiring a local shell token',
+);
+assert(
+  workflow.includes('currentConditionBlockedRouteCount'),
+  'Workflow summary should report routes blocked by reviewed official current-condition overlays',
+);
 assert(workflow.includes('concurrency:'), 'Workflow should avoid overlapping route catalog sync runs');
 assert(!workflow.includes('supabase secrets set'), 'Workflow should not rotate production secrets during routine sync');
 assert(!workflow.includes('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='), 'Workflow must not embed the previous all-zero token');

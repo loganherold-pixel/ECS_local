@@ -17,6 +17,10 @@ on:
         description: Maximum features to request per forest/layer.
         required: false
         default: '150'
+      current_conditions_json:
+        description: Optional reviewed official current-condition overlay JSON.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -37,6 +41,7 @@ jobs:
       FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '150' }}
+      CURRENT_CONDITIONS_JSON: ${{ inputs.current_conditions_json || '' }}
 
     steps:
       - name: Validate sync secrets
@@ -65,6 +70,7 @@ jobs:
             .filter(Boolean);
           const minMiles = Number(process.env.MIN_MILES || 1);
           const limitPerForestLayer = Number(process.env.LIMIT_PER_FOREST_LAYER || 150);
+          const currentConditionsJson = String(process.env.CURRENT_CONDITIONS_JSON || '').trim();
 
           if (forests.length === 0) throw new Error('At least one forest slug is required.');
           if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
@@ -72,13 +78,23 @@ jobs:
             throw new Error('limit_per_forest_layer must be positive.');
           }
 
+          const payload = {
+            forests,
+            minMiles,
+            limitPerForestLayer: Math.min(500, Math.round(limitPerForestLayer)),
+          };
+
+          if (currentConditionsJson) {
+            try {
+              payload.currentConditions = JSON.parse(currentConditionsJson);
+            } catch (error) {
+              throw new Error(`current_conditions_json must be valid JSON: ${error.message}`);
+            }
+          }
+
           fs.writeFileSync(
             'route-catalog-usfs-mvum-sync-payload.json',
-            JSON.stringify({
-              forests,
-              minMiles,
-              limitPerForestLayer: Math.min(500, Math.round(limitPerForestLayer)),
-            }),
+            JSON.stringify(payload),
           );
           NODE
 
@@ -112,6 +128,8 @@ jobs:
             rawFeatureCount: forest.rawFeatureCount,
             normalizedFeatureCount: forest.normalizedFeatureCount,
             aggregateRouteCount: forest.aggregateRouteCount,
+            currentConditionClosureCount: forest.currentConditionClosureCount || 0,
+            currentConditionBlockedRouteCount: forest.currentConditionBlockedRouteCount || 0,
           }));
 
           console.log(JSON.stringify({ source: response.source, forests: summaryRows }, null, 2));
@@ -119,10 +137,10 @@ jobs:
           const markdown = [
             '## Route Catalog USFS MVUM Sync',
             '',
-            '| Forest | Raw Features | Normalized Features | Aggregate Routes |',
-            '| --- | ---: | ---: | ---: |',
+            '| Forest | Raw Features | Normalized Features | Aggregate Routes | Current Closures | Blocked Routes |',
+            '| --- | ---: | ---: | ---: | ---: | ---: |',
             ...summaryRows.map((forest) =>
-              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} |`
+              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
             ),
             '',
             response.caveat ? `_${response.caveat}_` : '',

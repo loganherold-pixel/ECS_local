@@ -23,10 +23,13 @@ require.extensions['.ts'] = compileTypescript;
 const {
   USFS_MVUM_LAYERS,
   USFS_MVUM_PILOT_FORESTS,
+  applyUsfsMvumCurrentConditionSources,
   aggregateUsfsMvumRouteFeatures,
   arcGisFeatureToVerifiedRouteUpsert,
   buildUsfsMvumWhereClause,
+  normalizeUsfsMvumCurrentConditionSources,
   normalizeUsfsMvumFeatureCollection,
+  routeCurrentConditionSourceUpsertForForest,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogUsfsMvum.ts'));
 
 assert.deepStrictEqual(
@@ -237,6 +240,93 @@ assert.deepStrictEqual(
   'Source attribution metadata should carry the same active-guidance assessment',
 );
 
+const normalizedCurrentConditionSources = normalizeUsfsMvumCurrentConditionSources(
+  {
+    'tahoe-national-forest': {
+      checkedAt: '2026-06-01T12:00:00.000Z',
+      sourceUrl: 'https://www.fs.usda.gov/r05/tahoe/alerts',
+      closures: [
+        {
+          routePublicId: 'usfs-mvum-tahoe-national-forest-road-0035-cal-ida-scales',
+          title: 'Cal Ida Scales temporary closure',
+          summary: 'Official alert closes the Cal Ida Scales route for public safety.',
+          status: 'active',
+          closureType: 'land_manager',
+          sourceUrl: 'https://www.fs.usda.gov/r05/tahoe/alerts/cal-ida-scales-closure',
+          forestOrder: '#17-26-99',
+        },
+      ],
+    },
+  },
+  USFS_MVUM_PILOT_FORESTS,
+  '2026-06-01T12:00:00.000Z',
+);
+assert.strictEqual(normalizedCurrentConditionSources.length, 1, 'Current-condition overlays should normalize by forest slug');
+assert.strictEqual(
+  normalizedCurrentConditionSources[0].providerId,
+  'usfs_current_conditions_tahoe_nf',
+  'Tahoe current-condition overlays should attach the official source provider id',
+);
+assert.strictEqual(
+  normalizedCurrentConditionSources[0].closures[0].closureType,
+  'land_manager',
+  'Closure type should normalize into the route_closures enum shape',
+);
+assert.strictEqual(
+  normalizeUsfsMvumCurrentConditionSources(
+    {
+      forestSlug: 'mendocino-national-forest',
+      closures: [{ title: 'Trail 34 closure', status: 'active', routeId: '34' }],
+    },
+    USFS_MVUM_PILOT_FORESTS,
+    '2026-06-01T12:00:00.000Z',
+  )[0].providerId,
+  'usfs_current_conditions_mendocino_nf',
+  'Current-condition input should accept a single source object as well as a forest-keyed object',
+);
+
+const closureSourceUpsert = routeCurrentConditionSourceUpsertForForest(
+  USFS_MVUM_PILOT_FORESTS[0],
+  normalizedCurrentConditionSources[0],
+);
+assert.strictEqual(closureSourceUpsert.provider_id, 'usfs_current_conditions_tahoe_nf');
+assert.strictEqual(closureSourceUpsert.authority, 'official_closure');
+assert.strictEqual(closureSourceUpsert.source_uri, 'https://www.fs.usda.gov/r05/tahoe/alerts');
+
+const blockedCalIdaAggregate = applyUsfsMvumCurrentConditionSources(
+  calIdaAggregate,
+  normalizedCurrentConditionSources,
+);
+assert.strictEqual(
+  blockedCalIdaAggregate.verifiedRoute.recommendation_status,
+  'not_recommended',
+  'Active official current-condition closures must remove matched routes from public recommendation',
+);
+assert.strictEqual(blockedCalIdaAggregate.verifiedRoute.verification_status, 'not_recommended');
+assert.strictEqual(blockedCalIdaAggregate.verifiedRoute.active_closure_count, 1);
+assert(
+  blockedCalIdaAggregate.verifiedRoute.blocker_reasons.some((reason) => /active official closure/i.test(reason)),
+  'Closure overlays should add deterministic blocker reasons',
+);
+assert(
+  blockedCalIdaAggregate.verifiedRoute.closure_summaries.some((summary) => /Cal Ida Scales temporary closure/i.test(summary)),
+  'Closure overlays should preserve human-readable official closure summaries',
+);
+assert(
+  blockedCalIdaAggregate.verifiedRoute.warning_reasons.some((warning) => /current-condition source/i.test(warning)),
+  'Closure overlays should expose current-condition source freshness in warnings',
+);
+assert.strictEqual(
+  blockedCalIdaAggregate.verifiedRoute.community_signal.currentConditions.activeClosureCount,
+  1,
+  'Closure overlays should expose matched current-condition counts without inventing live passability',
+);
+assert.strictEqual(
+  blockedCalIdaAggregate.verifiedRouteSource.metadata.currentConditions.activeClosureCount,
+  1,
+  'Source attribution metadata should carry the same current-condition closure counts',
+);
+
 const tahoeBranchAggregate = aggregateUsfsMvumRouteFeatures(
   [
     {
@@ -373,5 +463,15 @@ assert(syncFunction.includes('aggregateRouteCount'), 'Sync function should repor
 assert(syncFunction.includes('segmentRouteRows'), 'Sync function should batch source segment route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('aggregateRouteRows'), 'Sync function should batch aggregate route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('buildRouteIdByPublicId'), 'Sync function should map bulk-upserted public IDs back to database IDs');
+assert(
+  syncFunction.includes('normalizeUsfsMvumCurrentConditionSources') &&
+    syncFunction.includes('applyUsfsMvumCurrentConditionSources') &&
+    syncFunction.includes('routeCurrentConditionSourceUpsertForForest'),
+  'Sync function should ingest reviewed official current-condition overlays through the deterministic closure gate',
+);
+assert(
+  syncFunction.includes('currentConditionBlockedRouteCount'),
+  'Sync summaries should report how many MVUM records were blocked by current-condition closures',
+);
 
 console.log('USFS MVUM pilot ingest checks passed');
