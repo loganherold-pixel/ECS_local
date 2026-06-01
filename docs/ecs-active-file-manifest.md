@@ -116,13 +116,33 @@ npm run test:auth-offline-sign-in
 npm run smoke
 ```
 
+## Second Cleanup Batch: Local Mapbox Style Bundle
+
+Batch status: removed from source tracking on the cleanup branch after exact path-reference checks.
+
+Evidence:
+
+- `mapbox/` contains 442 files, approximately 672985 bytes.
+- The bundle is a local `Mapbox Outdoors` `style.json`, `license.txt`, and 440 SVG sprite files under `mapbox/sprite_images/`.
+- Exact path-style searches found no runtime reference to `mapbox/`, `mapbox\`, `mapbox/style.json`, `mapbox\style.json`, `sprite_images`, or `mapbox/license` outside this manifest.
+- Active Mapbox usage is still preserved through `@rnmapbox/maps`, `mapbox-gl`, `lib/mapConfig.ts`, remote `mapbox://styles/...` URLs, and the existing Mapbox token/runtime tests.
+- This removal does not remove Mapbox support from ECS. It removes only the unused checked-in local style/sprite export.
+
+Recommended verification after removing the bundle:
+
+```powershell
+npm run test:auth-offline-sign-in
+node ./scripts/test-mapbox-native-config.js
+node ./scripts/test-route-progress-minimap.js
+npm run smoke
+```
+
 ## Investigate Before Removing
 
 These are plausible cleanup targets, but they need one more evidence pass or a user decision before deletion.
 
 | Area | Evidence So Far | Next Check |
 | --- | --- | --- |
-| `mapbox/` | Contains local `style.json`, `license.txt`, and 440 sprite SVGs. No direct text reference found for `mapbox/style`, `sprite_images`, `style.json`, or `license.txt` in app/config/docs/package files. | Confirm whether this is a bundled offline map style, external release artifact, or obsolete import. Remove only after map smoke coverage confirms no runtime dependency. |
 | Maybe-unreferenced `scripts/` files | Simple text scan found 101 scripts without direct package-script or repo text references. Many are domain harnesses that may be intentionally manual. | Classify into `package gate`, `manual harness`, `migration utility`, `obsolete`, and `one-time cleanup`. Remove only obsolete/one-time scripts after owner review. |
 | `ECS_Dashboard_Icon_512.png` | No code reference found. Existing asset audit says it is release-looking and retained for external store/listing material. | User decision: keep as release collateral or move to a separate release-assets archive. |
 | `.vscode/` | Editor-local workspace config. | User decision: keep team editor settings or remove from source-only tree. |
@@ -173,12 +193,10 @@ scripts/test-command-module-selector-layout.js
 
 ## Proposed Next Commit
 
-Start with the first safe quarantine batch only:
+Classify maybe-unreferenced scripts into manual harnesses, migration utilities, active test coverage, and obsolete files before deleting any scripts:
 
 ```text
-android-build.log
-build-log.txt
-supabase/.temp/*
+scripts/
 ```
 
-Expected result: source tree loses tracked build/local temp artifacts while preserving the working ECS app, auth flow, shell ownership, tests, and release evidence.
+Expected result: the remaining cleanup work distinguishes manually useful ECS regression harnesses from genuinely old one-time files.
