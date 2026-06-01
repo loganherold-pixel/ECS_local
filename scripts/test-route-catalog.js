@@ -37,6 +37,9 @@ const {
   normalizeRouteCatalogDetailResponse,
   verifyRouteCatalogRecord,
 } = require(path.join(root, 'lib', 'explore', 'routeCatalog.ts'));
+const {
+  trailPackToOfflinePrepCatalogInput,
+} = require(path.join(root, 'lib', 'explore', 'trailPackOfflineCache.ts'));
 
 const freshNow = '2026-06-01T12:00:00.000Z';
 
@@ -171,6 +174,39 @@ assert.strictEqual(
   detailedTrailPack?.catalogVerification?.detailAssessment?.activeGuidance?.status,
   'ready',
   'Route catalog detail normalization should carry active-guidance metadata from assessment payloads',
+);
+
+const offlinePrepInput = trailPackToOfflinePrepCatalogInput({
+  ...detailedTrailPack,
+  distanceFromUserMiles: 12,
+  evaluatedConfidence: {
+    score: 91,
+    band: 'verified',
+    reasons: ['Official access verified'],
+    warnings: [],
+    blockers: [],
+    lastEvaluatedAt: freshNow,
+  },
+});
+assert.strictEqual(
+  offlinePrepInput.route.routeMetadata.routeCatalogOfflineCache.cacheable,
+  true,
+  'Trail Pack offline cache handoff should preserve route catalog cacheability metadata',
+);
+assert.strictEqual(
+  offlinePrepInput.route.routeMetadata.routeCatalogSourceTimestamps[0],
+  '2026-05-20T00:00:00.000Z',
+  'Trail Pack offline cache handoff should preserve source freshness timestamps',
+);
+assert.strictEqual(
+  offlinePrepInput.route.routeMetadata.routeCatalogAttribution[0].attribution,
+  'USDA Forest Service',
+  'Trail Pack offline cache handoff should preserve source attribution',
+);
+assert.strictEqual(
+  offlinePrepInput.route.routeMetadata.offlinePrepGeometryPointCount,
+  4,
+  'Trail Pack offline cache handoff should preserve full route geometry for Offline Prep',
 );
 
 const partialCommunity = verifyRouteCatalogRecord(

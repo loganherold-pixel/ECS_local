@@ -226,8 +226,10 @@ assert(
     discoverSource.includes('routeStartDistanceMiles') &&
     discoverSource.includes('TrailPackPreviewModal') &&
     discoverSource.includes('fetchRouteCatalogTrailPackDetail') &&
-    discoverSource.includes('trailPackPreviewDetailStatus'),
-  'Explore should stage Trail Packs into Navigate with a clear far-from-start message and fetch detail metadata for previews',
+    discoverSource.includes('trailPackPreviewDetailStatus') &&
+    discoverSource.includes('onCacheOffline={() =>') &&
+    discoverSource.includes('handleCacheTrailPackOffline(trailPackPreview)'),
+  'Explore should stage Trail Packs into Navigate with a clear far-from-start message, fetch detail metadata, and wire cache action for previews',
 );
 assert(
   discoverSource.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),

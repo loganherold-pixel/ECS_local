@@ -54,6 +54,10 @@ assertIncludes(screen, 'testID="offline-prep-partial-confirm"', 'Offline Prep pa
 assertIncludes(screen, 'testID="offline-prep-continue-partial"', 'Offline Prep partial confirmation should allow continuing.');
 assertIncludes(screen, 'shouldConfirmPartialPrepare(manifest)', 'Offline Prep partial route essentials should be reminders instead of hard blockers.');
 assertIncludes(screen, 'cacheOfflineRoute({', 'Offline Prep prepare should persist route geometry to the offline route cache.');
+assertIncludes(screen, 'routeMetadata: input.route.routeMetadata ?? null', 'Offline Prep route cache intent should preserve route metadata.');
+assertIncludes(screen, 'routeCatalogSourceTimestamps', 'Offline Prep route cache intent should preserve catalog source timestamps.');
+assertIncludes(screen, 'routeCatalogAttribution', 'Offline Prep route cache intent should preserve catalog attribution.');
+assertIncludes(screen, 'routeCatalogFreshnessWarnings', 'Offline Prep route cache intent should preserve catalog freshness warnings.');
 assertIncludes(screen, 'listOfflineCachedRoutes()', 'Offline Prep screen should reload prepared packs from the offline route cache.');
 assertIncludes(screen, 'runStore.upsert({', 'Offline Prep prepare should save the prepared route to Navigate route storage.');
 assertIncludes(screen, 'offlineCachedRouteToRunCacheManifest(updated, run)', 'Offline Prep prepare should attach cache metadata to the saved run.');

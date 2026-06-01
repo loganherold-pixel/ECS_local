@@ -182,7 +182,10 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         trailPackPreview.includes('LOOP ROUTE') &&
         trailPackPreview.includes('POINT ROUTE') &&
         trailPackPreview.includes('Offline cache unavailable for this Trail Pack.') &&
-        trailPackPreview.includes('disabled={!offlineCacheAvailable}') &&
+        trailPackPreview.includes('disabled={!effectiveOfflineCacheAvailable}') &&
+        discover.includes('trailPackToOfflinePrepCatalogInput') &&
+        discover.includes('handleCacheTrailPackOffline') &&
+        discover.includes("saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details')") &&
         trailPackPreview.includes('ECS confidence') &&
         trailPackPreview.includes('WARNINGS') &&
         trailPackPreview.includes('sourceLabel') &&

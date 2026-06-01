@@ -140,6 +140,7 @@ import {
   trailPackToExpeditionOpportunity,
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
+import { trailPackToOfflinePrepCatalogInput } from '../../lib/explore/trailPackOfflineCache';
 import {
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
@@ -1535,6 +1536,40 @@ function DiscoverScreenInner() {
     setTrailPackPreviewDetailError(null);
     setTrailPackPreview(null);
   }, []);
+
+  const handleCacheTrailPackOffline = useCallback(
+    (trailPack: ECSTrailPackDiscoveryItem) => {
+      const offlinePrepInput = trailPackToOfflinePrepCatalogInput(trailPack);
+      const offlineCache = trailPack.catalogVerification?.offlineCache;
+      if (!offlineCache?.cacheable) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Trail Pack offline cache unavailable',
+          ecsArea: 'explore',
+          message: 'Offline cache metadata is unavailable for this Trail Pack.',
+          signature: `trail_pack_offline_cache_unavailable:${trailPack.id}`,
+          metadata: {
+            trailPackId: trailPack.id,
+            trailPackName: trailPack.name,
+            source: trailPack.source,
+          },
+        });
+        return;
+      }
+
+      saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details');
+      setAnalysisVisible(false);
+      setSelectedOpportunity(null);
+      setAiPreviewVisible(false);
+      setAiPreviewRoute(null);
+      setTrailPackPreview(null);
+      router.push({
+        pathname: '/explore-offline-prep-pack',
+        params: { routeId: offlinePrepInput.route.id ?? trailPack.id },
+      } as any);
+    },
+    [router],
+  );
 
   const handleTrailPackFeedback = useCallback(
     (trailPackId: string, type: ECSTrailPackFeedbackType, note?: string) =>
@@ -4881,6 +4916,9 @@ function DiscoverScreenInner() {
               : { ok: false, reason: 'Trail Pack preview unavailable.' }
           }
           offlineCacheAvailable={Boolean(trailPackPreview?.catalogVerification?.offlineCache?.cacheable)}
+          onCacheOffline={() => {
+            if (trailPackPreview) handleCacheTrailPackOffline(trailPackPreview);
+          }}
           detailLoading={trailPackPreviewDetailStatus === 'loading'}
           detailError={trailPackPreviewDetailError}
         />

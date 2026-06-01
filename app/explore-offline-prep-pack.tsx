@@ -444,6 +444,7 @@ function buildOfflinePrepRouteIntent(
   const first = run.points[0];
   const last = run.points[run.points.length - 1];
   const preparedAt = new Date().toISOString();
+  const routeMetadata = input.route.routeMetadata ?? null;
   return {
     syncType: 'route',
     origin: first
@@ -479,6 +480,12 @@ function buildOfflinePrepRouteIntent(
     routeAnalysisSnapshot: analysis,
     readinessSnapshot: {
       offlinePrepManifest: manifest,
+      routeMetadata: input.route.routeMetadata ?? null,
+      routeCatalogSourceTimestamps: routeMetadata?.routeCatalogSourceTimestamps ?? null,
+      routeCatalogAttribution: routeMetadata?.routeCatalogAttribution ?? null,
+      routeCatalogFreshnessWarnings: routeMetadata?.routeCatalogFreshnessWarnings ?? null,
+      routeCatalogOfflineCache: routeMetadata?.routeCatalogOfflineCache ?? null,
+      catalogVerification: routeMetadata?.catalogVerification ?? null,
       tripPlan: input.tripPlan ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,
       readiness: input.readiness ?? input.tripPlan?.readinessReference ?? null,

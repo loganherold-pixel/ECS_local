@@ -57,6 +57,13 @@ assert(
   'Approved Trail Packs should stage into the existing Navigate handoff path',
 );
 assert(
+  discover.includes('trailPackToOfflinePrepCatalogInput') &&
+    discover.includes('handleCacheTrailPackOffline') &&
+    discover.includes("saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details')") &&
+    discover.includes("pathname: '/explore-offline-prep-pack'"),
+  'Trail Pack cache action should persist a route catalog Offline Prep handoff and open the Offline Prep Pack flow',
+);
+assert(
   previewPanel.includes('disabled={!canStart}') &&
     previewPanel.includes('Route geometry is unavailable for this Trail Pack.'),
   'Trail Pack preview should guard Start Guidance when geometry is missing',
