@@ -4,6 +4,21 @@ on:
   schedule:
     - cron: '28 13 * * 4'
   workflow_dispatch:
+    inputs:
+      probe_keys:
+        description: Comma-separated coverage probe keys to audit, or all.
+        required: false
+        default: all
+  workflow_run:
+    workflows:
+      - Route Catalog BLM GTLF Sync
+      - Route Catalog Michigan ORV Sync
+      - Route Catalog Minnesota OHV Sync
+      - Route Catalog NPS Trails Sync
+      - Route Catalog Oregon ODF OHV Sync
+      - Route Catalog USGS Trails Sync
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -21,12 +36,15 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+      PROBE_KEYS: ${{ github.event.inputs.probe_keys || 'all' }}
+      TRIGGER_WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate audit secret
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -35,11 +53,54 @@ jobs:
             exit 1
           fi
 
-      - name: Run Route Catalog Coverage Audit
+      - name: Build audit probe selection
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          npm run route-catalog:coverage:ci | tee route-catalog-coverage-audit.json
+          node <<'NODE'
+          const fs = require('fs');
+
+          const manualProbeKeys = String(process.env.PROBE_KEYS || 'all')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const triggerWorkflowName = String(process.env.TRIGGER_WORKFLOW_NAME || '').trim();
+          const probesByWorkflow = {
+            'Route Catalog BLM GTLF Sync': ['blm_ca_nv_pilot'],
+            'Route Catalog Michigan ORV Sync': ['michigan_dnr_orv_pilot'],
+            'Route Catalog Minnesota OHV Sync': ['minnesota_dnr_ohv_pilot'],
+            'Route Catalog NPS Trails Sync': ['usgs_nps_sierra_context'],
+            'Route Catalog Oregon ODF OHV Sync': ['oregon_odf_ohv_pilot'],
+            'Route Catalog USGS Trails Sync': ['usgs_nps_sierra_context'],
+          };
+
+          const selectedProbeKeys = triggerWorkflowName
+            ? probesByWorkflow[triggerWorkflowName] || []
+            : manualProbeKeys.some((key) => key.toLowerCase() === 'all')
+              ? []
+              : manualProbeKeys;
+          const args = selectedProbeKeys.length > 0
+            ? selectedProbeKeys.flatMap((key) => ['--probe', key])
+            : ['--all'];
+
+          fs.appendFileSync(process.env.GITHUB_ENV, `ROUTE_CATALOG_AUDIT_ARGS=${args.join(' ')}\n`);
+          fs.writeFileSync(
+            'route-catalog-coverage-audit-selection.json',
+            JSON.stringify({
+              triggerWorkflowName,
+              selectedProbeKeys,
+              auditsAllProbes: selectedProbeKeys.length === 0,
+            }, null, 2),
+          );
+          NODE
+
+      - name: Run Route Catalog Coverage Audit
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ./scripts/route-catalog-coverage-audit.js ${ROUTE_CATALOG_AUDIT_ARGS} --json --fail-on-mismatch | tee route-catalog-coverage-audit.json
 
       - name: Summarize coverage
         if: always()
@@ -56,9 +117,16 @@ jobs:
           const jsonStart = raw.indexOf('{');
           const response = JSON.parse(raw.slice(jsonStart));
           const results = Array.isArray(response.results) ? response.results : [];
+          const selection = fs.existsSync('route-catalog-coverage-audit-selection.json')
+            ? JSON.parse(fs.readFileSync('route-catalog-coverage-audit-selection.json', 'utf8'))
+            : {};
 
           const lines = [
             '## Route Catalog Coverage Audit',
+            '',
+            `Trigger workflow: ${selection.triggerWorkflowName || 'manual/scheduled'}`,
+            '',
+            `Selected probes: ${selection.auditsAllProbes ? 'all' : (selection.selectedProbeKeys || []).join(', ')}`,
             '',
             '| Probe | State | Observed posture | Matches expected | Count | Source-backed |',
             '| --- | --- | --- | --- | ---: | ---: |',
