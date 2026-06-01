@@ -84,6 +84,11 @@ assert(
 
 assert(
   liveCatalog.includes("functions.invoke('route-catalog-search'") &&
+    liveCatalog.includes('buildRouteCatalogSearchBody') &&
+    liveCatalog.includes('latitude: criteria.latitude') &&
+    liveCatalog.includes('longitude: criteria.longitude') &&
+    liveCatalog.includes('radiusMiles: criteria.radiusMiles') &&
+    liveCatalog.includes('vehicleClass: criteria.vehicleClass') &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
@@ -100,10 +105,13 @@ assert(
 assert(
   discover.includes('No verified routes yet in this area') &&
     discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
+    discover.includes('routeCatalogSearchCriteria') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
     discover.includes('fetchRouteCatalogTrailPackDetail') &&
     discover.includes('trailPackPreviewDetailStatus') &&
     discover.includes('trailPackPreviewRequestRef'),
-  'Explore should surface honest partial-coverage copy and enrich selected Trail Pack previews through route-catalog-detail',
+  'Explore should surface honest partial-coverage copy, search with current criteria, and enrich selected Trail Pack previews through route-catalog-detail',
 );
 const suggestedRoutesBlock = discover
   .split('const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]

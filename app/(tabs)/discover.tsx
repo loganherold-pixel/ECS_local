@@ -771,7 +771,6 @@ function DiscoverScreenInner() {
     const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
       setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
     });
-    void refreshLiveTrailPackCatalog();
     return unsubscribe;
   }, []);
 
@@ -967,6 +966,20 @@ function DiscoverScreenInner() {
   }, [opportunities, distanceRadius]);
   const activeDistanceRadius =
     distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
+  const routeCatalogSearchCriteria = useMemo(
+    () => ({
+      latitude: userLat,
+      longitude: userLng,
+      radiusMiles: activeDistanceRadius,
+      vehicleClass: vehicleProfile?.vehicleType ?? null,
+      locationSource: hasGPSFix ? 'live_gps' : 'default_location',
+    }),
+    [activeDistanceRadius, hasGPSFix, userLat, userLng, vehicleProfile?.vehicleType],
+  );
+
+  useEffect(() => {
+    void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria);
+  }, [routeCatalogSearchCriteria]);
 
   // ── Unified drivable trail feed ───────────────────────────
   const activeTabRoutes = useMemo<ExpeditionOpportunity[]>(

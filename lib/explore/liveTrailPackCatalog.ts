@@ -17,6 +17,15 @@ import type {
 
 export type LiveTrailPackCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
 
+export type LiveTrailPackCatalogSearchCriteria = {
+  latitude?: number | null;
+  longitude?: number | null;
+  radiusMiles?: number | null;
+  vehicleClass?: string | null;
+  locationSource?: 'live_gps' | 'default_location' | string | null;
+  limit?: number;
+};
+
 export type LiveTrailPackCatalogSnapshot = {
   trailPacks: ECSTrailPack[];
   status: LiveTrailPackCatalogStatus;
@@ -29,6 +38,7 @@ export type LiveTrailPackCatalogSnapshot = {
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
+let refreshRequestSequence = 0;
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
   status: 'idle',
@@ -63,6 +73,17 @@ const TRAIL_PACK_SELECT = [
   'created_at',
   'updated_at',
 ].join(',');
+
+function finiteNumber(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function cleanVehicleClass(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 function emit() {
   listeners.forEach((listener) => {
@@ -317,17 +338,38 @@ export function normalizeLiveTrailPackRecords(records: unknown): ECSTrailPack[] 
     .filter((pack): pack is ECSTrailPack => !!pack && pack.dataState === 'live' && pack.reviewStatus === 'approved');
 }
 
-async function fetchRouteCatalogTrailPacks(): Promise<{
+export function buildRouteCatalogSearchBody(
+  criteria: LiveTrailPackCatalogSearchCriteria = {},
+): Record<string, unknown> {
+  const latitude = finiteNumber(criteria.latitude);
+  const longitude = finiteNumber(criteria.longitude);
+  const radiusMiles = finiteNumber(criteria.radiusMiles);
+  const vehicleClass = cleanVehicleClass(criteria.vehicleClass);
+  return {
+    limit: criteria.limit ?? 200,
+    includeGeometry: true,
+    includeAssessment: true,
+    recommendationOnly: true,
+    ...(latitude != null && longitude != null && radiusMiles != null
+      ? {
+          latitude: criteria.latitude,
+          longitude: criteria.longitude,
+          radiusMiles: criteria.radiusMiles,
+        }
+      : {}),
+    ...(vehicleClass ? { vehicleClass: criteria.vehicleClass } : {}),
+    ...(typeof criteria.locationSource === 'string' && criteria.locationSource.trim().length > 0
+      ? { locationSource: criteria.locationSource }
+      : {}),
+  };
+}
+
+async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchCriteria = {}): Promise<{
   trailPacks: ECSTrailPack[];
   coverageState: RouteCatalogCoverageState;
 }> {
   const { data, error } = await supabase.functions.invoke('route-catalog-search', {
-    body: {
-      limit: 200,
-      includeGeometry: true,
-      includeAssessment: true,
-      recommendationOnly: true,
-    },
+    body: buildRouteCatalogSearchBody(criteria),
   });
 
   if (error) {
@@ -382,7 +424,11 @@ async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
   return normalizeLiveTrailPackRecords(data);
 }
 
-export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalogSnapshot> {
+export async function refreshLiveTrailPackCatalog(
+  criteria: LiveTrailPackCatalogSearchCriteria = {},
+): Promise<LiveTrailPackCatalogSnapshot> {
+  const requestId = refreshRequestSequence + 1;
+  refreshRequestSequence = requestId;
   setSnapshot({
     ...snapshot,
     status: 'loading',
@@ -393,7 +439,8 @@ export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalo
   let routeCatalogError: Error | null = null;
 
   try {
-    const routeCatalog = await fetchRouteCatalogTrailPacks();
+    const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
+    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
       trailPacks: routeCatalog.trailPacks,
       status: 'ready',
@@ -403,11 +450,13 @@ export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalo
       source: 'route_catalog',
     });
   } catch (error) {
+    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
   }
 
   try {
     const legacyTrailPacks = await fetchLegacyTrailPacks();
+    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
       trailPacks: legacyTrailPacks,
       status: 'ready',
@@ -417,6 +466,7 @@ export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalo
       source: 'trail_packs_fallback',
     });
   } catch (error) {
+    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
       trailPacks: [],
       status: 'error',

@@ -37,8 +37,10 @@ assert(
 assert(
   discover.includes('liveTrailPackCatalogStore') &&
     discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
+    discover.includes('routeCatalogSearchCriteria') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
     !discover.includes('getDefaultECSTrailPacks'),
-  'Explore Trail Packs should use live reviewed catalog content instead of default fixture packs',
+  'Explore Trail Packs should use criteria-filtered live reviewed catalog content instead of default fixture packs',
 );
 assert(
   discover.includes('DEFAULT_USER_LOCATION') &&
