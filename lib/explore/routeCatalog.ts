@@ -1,8 +1,11 @@
 import type {
   ECSTrailPack,
   ECSTrailPackActiveGuidance,
+  ECSTrailPackCatalogDataUsed,
   ECSTrailPackCoordinate,
+  ECSTrailPackDetailAssessment,
   ECSTrailPackDifficulty,
+  ECSTrailPackOfflineCacheMetadata,
   ECSTrailPackReviewStatus,
   ECSTrailPackRouteGeometry,
   ECSTrailPackRouteType,
@@ -86,6 +89,9 @@ export type RouteCatalogDataUsed = {
   attribution?: string;
   license?: string;
 };
+
+export type RouteCatalogDetailAssessment = ECSTrailPackDetailAssessment;
+export type RouteCatalogOfflineCacheMetadata = ECSTrailPackOfflineCacheMetadata;
 
 export type RouteCatalogVerification = {
   status: RouteCatalogOperationalStatus;
@@ -369,6 +375,117 @@ function normalizeCommunitySignal(value: unknown): RouteCatalogRecord['community
   } as NonNullable<RouteCatalogRecord['communitySignal']>;
   if (activeGuidance) signal.activeGuidance = activeGuidance;
   return signal;
+}
+
+function normalizeOperationalStatus(value: unknown, fallback: RouteCatalogOperationalStatus): RouteCatalogOperationalStatus {
+  const status = String(value ?? '').trim();
+  if (status === 'normal' || status === 'watch' || status === 'caution' || status === 'critical') {
+    return status;
+  }
+  return fallback;
+}
+
+function readDetailTextArray(value: unknown): string[] {
+  if (typeof value === 'string' && value.trim().length > 0) return [value.trim()];
+  return readStringArray(value) ?? [];
+}
+
+function normalizeDetailDataUsed(value: unknown, fallback: RouteCatalogDataUsed[]): ECSTrailPackCatalogDataUsed[] {
+  if (!Array.isArray(value)) return fallback;
+  const normalized: ECSTrailPackCatalogDataUsed[] = [];
+  const nowMs = Date.now();
+  value.forEach((item) => {
+    const source = sourceRecordFromValue(item);
+    if (source) {
+      normalized.push({
+        providerId: source.providerId,
+        label: source.label,
+        sourceType: source.sourceType,
+        authority: source.authority,
+        freshness: freshnessForSource(source, nowMs),
+        lastVerifiedAt: source.lastVerifiedAt,
+        attribution: source.attribution,
+        license: source.license,
+      });
+      return;
+    }
+
+    const record = readRecord(item);
+    if (!record) return;
+    const providerId = readString(record, 'provider_id', 'providerId');
+    const label = readString(record, 'label');
+    if (!providerId || !label) return;
+    const freshness = readString(record, 'freshness');
+    normalized.push({
+      providerId,
+      label,
+      sourceType: readString(record, 'source_type', 'sourceType') ?? 'supplemental',
+      authority: readString(record, 'authority') ?? 'unknown',
+      freshness:
+        freshness === 'fresh' || freshness === 'aging' || freshness === 'stale' || freshness === 'missing'
+          ? freshness
+          : 'missing',
+      lastVerifiedAt: readString(record, 'last_verified_at', 'lastVerifiedAt'),
+      attribution: readString(record, 'attribution'),
+      license: readString(record, 'license'),
+    });
+  });
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizeRouteCatalogDetailAssessment(
+  value: unknown,
+  verification: RouteCatalogVerification,
+): RouteCatalogDetailAssessment {
+  const record = readRecord(value);
+  const why = readDetailTextArray(record?.why).concat(readDetailTextArray(record?.reasons));
+  const whatToWatch = readDetailTextArray(record?.whatToWatch ?? record?.what_to_watch);
+  const toImproveStatus = readDetailTextArray(record?.toImproveStatus ?? record?.to_improve_status);
+  const recommendedAction = record
+    ? readString(record, 'recommendedAction', 'recommended_action')
+    : undefined;
+  const activeGuidance = record
+    ? normalizeActiveGuidance(record.activeGuidance ?? record.active_guidance) ?? verification.activeGuidance
+    : verification.activeGuidance;
+
+  return {
+    status: normalizeOperationalStatus(record?.status, verification.status),
+    why: unique(why.length > 0 ? why : verification.reasons, 8),
+    whatToWatch: unique(whatToWatch.length > 0 ? whatToWatch : verification.warnings, 8),
+    recommendedAction: recommendedAction ?? (verification.publicRecommendation
+      ? 'Verify current local conditions before departure and cache the route for offline use.'
+      : 'Do not recommend this route until blockers are cleared by official source review.'),
+    toImproveStatus: unique(
+      toImproveStatus.length > 0
+        ? toImproveStatus
+        : verification.blockers.length > 0
+          ? verification.blockers
+          : ['Refresh official source checks', 'Confirm seasonal restrictions for the trip date'],
+      8,
+    ),
+    confidence: clampScore(record ? readNumber(record, 'confidence') ?? verification.confidenceScore : verification.confidenceScore),
+    activeGuidance,
+    dataUsed: normalizeDetailDataUsed(record?.dataUsed ?? record?.data_used, verification.dataUsed),
+  };
+}
+
+function normalizeRouteCatalogOfflineCache(
+  value: unknown,
+  trailPack: ECSTrailPack,
+  verification: RouteCatalogVerification,
+): RouteCatalogOfflineCacheMetadata {
+  const record = readRecord(value);
+  const sourceTimestamps = readStringArray(record?.sourceTimestamps ?? record?.source_timestamps);
+  return {
+    cacheable: record
+      ? readBoolean(record, 'cacheable', 'available') ?? Boolean(trailPack.routeGeometry && verification.publicRecommendation)
+      : Boolean(trailPack.routeGeometry && verification.publicRecommendation),
+    lastVerifiedAt: record
+      ? readString(record, 'lastVerifiedAt', 'last_verified_at') ?? trailPack.lastVerifiedAt ?? null
+      : trailPack.lastVerifiedAt ?? null,
+    staleAt: record ? readString(record, 'staleAt', 'stale_at') ?? null : null,
+    sourceTimestamps,
+  };
 }
 
 function centerFromGeometry(geometry: ECSTrailPackRouteGeometry | undefined): ECSTrailPackCoordinate | null {
@@ -673,6 +790,85 @@ export function catalogRouteToTrailPack(
     },
     createdAt: route.createdAt,
     updatedAt: route.updatedAt,
+  };
+}
+
+export function normalizeRouteCatalogDetailResponse(
+  value: unknown,
+  fallbackTrailPack?: ECSTrailPack,
+): ECSTrailPack | null {
+  const response = readRecord(value);
+  const rawRecord =
+    response?.record ??
+    response?.route ??
+    response?.routeRecord ??
+    response?.route_record ??
+    response?.verifiedRoute ??
+    response?.verified_route ??
+    value;
+  const route = normalizeRouteCatalogRecord(rawRecord);
+
+  if (!route && !fallbackTrailPack) return null;
+
+  const verification = route
+    ? verifyRouteCatalogRecord(route)
+    : fallbackTrailPack?.catalogVerification
+      ? {
+          status: fallbackTrailPack.catalogVerification.status,
+          sourceLabel: fallbackTrailPack.catalogVerification.sourceLabel,
+          publicRecommendation: fallbackTrailPack.catalogVerification.publicRecommendation,
+          confidenceScore: fallbackTrailPack.catalogVerification.confidenceScore,
+          reasons: fallbackTrailPack.confidenceReasons,
+          warnings: fallbackTrailPack.catalogVerification.warnings,
+          blockers: fallbackTrailPack.catalogVerification.blockers,
+          activeGuidance: fallbackTrailPack.catalogVerification.activeGuidance,
+          dataUsed: fallbackTrailPack.catalogVerification.dataUsed,
+          lastEvaluatedAt: fallbackTrailPack.catalogVerification.lastEvaluatedAt,
+        }
+      : null;
+
+  if (!verification) return fallbackTrailPack ?? null;
+
+  const baseTrailPack = route
+    ? catalogRouteToTrailPack(route, verification)
+    : fallbackTrailPack;
+  if (!baseTrailPack) return null;
+
+  const detailAssessment = normalizeRouteCatalogDetailAssessment(
+    response?.assessment ?? response?.detailAssessment ?? response?.detail_assessment,
+    verification,
+  );
+  const offlineCache = normalizeRouteCatalogOfflineCache(
+    response?.offlineCache ?? response?.offline_cache,
+    baseTrailPack,
+    verification,
+  );
+  const baseCatalogVerification = baseTrailPack.catalogVerification ?? {
+    status: verification.status,
+    sourceLabel: verification.sourceLabel,
+    publicRecommendation: verification.publicRecommendation,
+    confidenceScore: verification.confidenceScore,
+    warnings: verification.warnings,
+    blockers: verification.blockers,
+    activeGuidance: verification.activeGuidance,
+    dataUsed: verification.dataUsed,
+    lastEvaluatedAt: verification.lastEvaluatedAt,
+  };
+
+  return {
+    ...baseTrailPack,
+    routeGeometry: baseTrailPack.routeGeometry ?? fallbackTrailPack?.routeGeometry,
+    distanceMiles: baseTrailPack.distanceMiles ?? fallbackTrailPack?.distanceMiles,
+    estimatedDurationMinutes: baseTrailPack.estimatedDurationMinutes ?? fallbackTrailPack?.estimatedDurationMinutes,
+    vehicleFit: baseTrailPack.vehicleFit ?? fallbackTrailPack?.vehicleFit,
+    catalogVerification: {
+      ...(fallbackTrailPack?.catalogVerification ?? {}),
+      ...baseCatalogVerification,
+      activeGuidance: detailAssessment.activeGuidance ?? baseCatalogVerification.activeGuidance,
+      detailAssessment,
+      offlineCache,
+      detailFetchedAt: new Date().toISOString(),
+    },
   };
 }
 

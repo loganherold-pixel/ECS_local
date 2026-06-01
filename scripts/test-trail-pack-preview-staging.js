@@ -203,23 +203,31 @@ assert(
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&
+    previewSource.includes('offlineCache?.cacheable') &&
+    previewSource.includes('Last verified') &&
+    previewSource.includes('Stale after') &&
     previewSource.includes('offlineCacheAvailable') &&
-    previewSource.includes('disabled={!offlineCacheAvailable}'),
-  'Offline cache action should be disabled when Trail Pack cache support is unavailable',
+    previewSource.includes('disabled={!effectiveOfflineCacheAvailable}'),
+  'Offline cache action should use route catalog detail metadata and be disabled when Trail Pack cache support is unavailable',
 );
 assert(
   previewSource.includes('ECS confidence') &&
     previewSource.includes('WARNINGS') &&
+    previewSource.includes('ROUTE ASSESSMENT') &&
+    previewSource.includes('WHAT TO WATCH') &&
+    previewSource.includes('TO IMPROVE STATUS') &&
     previewSource.includes('sourceLabel') &&
     previewSource.includes('communitySummary') &&
     previewSource.includes('GUIDANCE STATUS'),
-  'Trail Pack preview should show difficulty, confidence, warnings, source, verification, and community summary',
+  'Trail Pack preview should show difficulty, confidence, warnings, source, route assessment, verification, and community summary',
 );
 assert(
   discoverSource.includes('Trail Pack staged. Navigate to the route start before beginning guidance.') &&
     discoverSource.includes('routeStartDistanceMiles') &&
-    discoverSource.includes('TrailPackPreviewModal'),
-  'Explore should stage Trail Packs into Navigate with a clear far-from-start message',
+    discoverSource.includes('TrailPackPreviewModal') &&
+    discoverSource.includes('fetchRouteCatalogTrailPackDetail') &&
+    discoverSource.includes('trailPackPreviewDetailStatus'),
+  'Explore should stage Trail Packs into Navigate with a clear far-from-start message and fetch detail metadata for previews',
 );
 assert(
   discoverSource.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),

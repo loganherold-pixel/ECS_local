@@ -141,6 +141,7 @@ import {
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
 import {
+  fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
@@ -689,6 +690,9 @@ function DiscoverScreenInner() {
   const [aiPreviewRoute, setAiPreviewRoute] = useState<AIGeneratedRoute | null>(null);
   const [aiPreviewVisible, setAiPreviewVisible] = useState(false);
   const [trailPackPreview, setTrailPackPreview] = useState<ECSTrailPackDiscoveryItem | null>(null);
+  const [trailPackPreviewDetailStatus, setTrailPackPreviewDetailStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [trailPackPreviewDetailError, setTrailPackPreviewDetailError] = useState<string | null>(null);
   const [trailPackFeedbackEvents, setTrailPackFeedbackEvents] = useState(() => getTrailPackFeedbackSnapshot());
   const [trailPackSubmissionSnapshot, setTrailPackSubmissionSnapshot] = useState(() =>
     trailPackSubmissionStore.getSnapshot(),
@@ -740,6 +744,7 @@ function DiscoverScreenInner() {
   );
 
   const mountedRef = useRef(true);
+  const trailPackPreviewRequestRef = useRef(0);
   const lastHiddenGemDiagnosticsSignatureRef = useRef<string | null>(null);
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
@@ -1489,10 +1494,45 @@ function DiscoverScreenInner() {
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
     hapticMicro();
+    const requestId = trailPackPreviewRequestRef.current + 1;
+    trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(trailPack);
+
+    if (!trailPack.catalogVerification?.publicRecommendation && trailPack.source !== 'ecs_validated') {
+      setTrailPackPreviewDetailStatus('idle');
+      setTrailPackPreviewDetailError(null);
+      return;
+    }
+
+    setTrailPackPreviewDetailStatus('loading');
+    setTrailPackPreviewDetailError(null);
+    void fetchRouteCatalogTrailPackDetail(trailPack)
+      .then((detail) => {
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreview((current) => {
+          if (!current || current.id !== trailPack.id) return current;
+          return {
+            ...current,
+            ...detail,
+            distanceFromUserMiles: current.distanceFromUserMiles,
+            evaluatedConfidence: current.evaluatedConfidence,
+          };
+        });
+        setTrailPackPreviewDetailStatus('ready');
+      })
+      .catch((error) => {
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreviewDetailStatus('error');
+        setTrailPackPreviewDetailError(
+          error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        );
+      });
   }, []);
 
   const handleCloseTrailPackPreview = useCallback(() => {
+    trailPackPreviewRequestRef.current += 1;
+    setTrailPackPreviewDetailStatus('idle');
+    setTrailPackPreviewDetailError(null);
     setTrailPackPreview(null);
   }, []);
 
@@ -4840,7 +4880,9 @@ function DiscoverScreenInner() {
               ? handleTrailPackFeedback(trailPackPreview.id, type, note)
               : { ok: false, reason: 'Trail Pack preview unavailable.' }
           }
-          offlineCacheAvailable={false}
+          offlineCacheAvailable={Boolean(trailPackPreview?.catalogVerification?.offlineCache?.cacheable)}
+          detailLoading={trailPackPreviewDetailStatus === 'loading'}
+          detailError={trailPackPreviewDetailError}
         />
 
         <TrailPackSubmissionModal

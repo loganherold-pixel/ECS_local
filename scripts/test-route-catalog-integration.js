@@ -85,8 +85,11 @@ assert(
 assert(
   liveCatalog.includes("functions.invoke('route-catalog-search'") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
+    liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
+    liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
+    liveCatalog.includes('fetchRouteCatalogTrailPackDetail') &&
     liveCatalog.includes("from('trail_packs')"),
-  'Live Trail Pack catalog should prefer ECS route-catalog-search and keep trail_packs as a compatibility fallback',
+  'Live Trail Pack catalog should prefer ECS route-catalog-search, fetch route-catalog-detail for previews, and keep trail_packs as a compatibility fallback',
 );
 assert(
   supabaseClient.includes('"route-catalog-search"') &&
@@ -96,8 +99,11 @@ assert(
 );
 assert(
   discover.includes('No verified routes yet in this area') &&
-    discover.includes('liveTrailPackCatalogSnapshot.coverageState'),
-  'Explore should surface honest partial-coverage copy from the route catalog snapshot',
+    discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
+    discover.includes('fetchRouteCatalogTrailPackDetail') &&
+    discover.includes('trailPackPreviewDetailStatus') &&
+    discover.includes('trailPackPreviewRequestRef'),
+  'Explore should surface honest partial-coverage copy and enrich selected Trail Pack previews through route-catalog-detail',
 );
 const suggestedRoutesBlock = discover
   .split('const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]

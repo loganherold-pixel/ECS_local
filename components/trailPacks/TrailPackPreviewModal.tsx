@@ -57,6 +57,8 @@ type TrailPackPreviewModalProps = {
   onFeedback: (type: ECSTrailPackFeedbackType, note?: string) => ECSTrailPackFeedbackResult;
   offlineCacheAvailable?: boolean;
   onCacheOffline?: () => void;
+  detailLoading?: boolean;
+  detailError?: string | null;
 };
 
 function formatDate(isoDate: string | undefined): string {
@@ -64,6 +66,17 @@ function formatDate(isoDate: string | undefined): string {
   const timestamp = Date.parse(isoDate);
   if (!Number.isFinite(timestamp)) return 'Last verified unavailable';
   return `Last verified ${new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })}`;
+}
+
+function formatStaleDate(isoDate: string | null | undefined): string {
+  if (!isoDate) return 'Stale after unavailable';
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return 'Stale after unavailable';
+  return `Stale after ${new Date(timestamp).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -207,6 +220,8 @@ export default function TrailPackPreviewModal({
   onFeedback,
   offlineCacheAvailable = false,
   onCacheOffline,
+  detailLoading = false,
+  detailError = null,
 }: TrailPackPreviewModalProps) {
   const insets = useSafeAreaInsets();
   const shellTopClearance =
@@ -219,6 +234,9 @@ export default function TrailPackPreviewModal({
   );
   const canStart = trailPack ? canStartTrailPackGuidance(trailPack) : false;
   const sourceLabel = trailPack ? trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source) : '';
+  const detailAssessment = trailPack?.catalogVerification?.detailAssessment;
+  const offlineCache = trailPack?.catalogVerification?.offlineCache;
+  const effectiveOfflineCacheAvailable = offlineCacheAvailable || Boolean(offlineCache?.cacheable);
   const routeTypeLabel = trailPack ? getTrailPackRouteTypeLabel(trailPack.routeType) : '';
   const difficultyLabel = trailPack ? getTrailPackDifficultyLabel(trailPack.difficulty) : '';
   const warnings = useMemo(
@@ -308,18 +326,18 @@ export default function TrailPackPreviewModal({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[s.secondaryAction, !offlineCacheAvailable && s.disabledAction]}
-            activeOpacity={offlineCacheAvailable ? 0.78 : 1}
-            disabled={!offlineCacheAvailable}
-            accessibilityState={{ disabled: !offlineCacheAvailable }}
-            accessibilityHint={!offlineCacheAvailable ? 'Offline cache unavailable for this Trail Pack.' : undefined}
+            style={[s.secondaryAction, !effectiveOfflineCacheAvailable && s.disabledAction]}
+            activeOpacity={effectiveOfflineCacheAvailable ? 0.78 : 1}
+            disabled={!effectiveOfflineCacheAvailable}
+            accessibilityState={{ disabled: !effectiveOfflineCacheAvailable }}
+            accessibilityHint={!effectiveOfflineCacheAvailable ? 'Offline cache unavailable for this Trail Pack.' : undefined}
             onPress={() => {
-              if (!offlineCacheAvailable) return;
+              if (!effectiveOfflineCacheAvailable) return;
               hapticMicro();
               onCacheOffline?.();
             }}
           >
-            <Ionicons name="cloud-download-outline" size={14} color={offlineCacheAvailable ? TACTICAL.amber : TACTICAL.textMuted} />
+            <Ionicons name="cloud-download-outline" size={14} color={effectiveOfflineCacheAvailable ? TACTICAL.amber : TACTICAL.textMuted} />
             <Text style={s.secondaryActionText}>CACHE</Text>
           </TouchableOpacity>
         </ECSOverlayFooter>
@@ -338,6 +356,20 @@ export default function TrailPackPreviewModal({
           <Text style={s.metaText}>{communitySummary}</Text>
         </View>
 
+        {detailLoading ? (
+          <View style={s.notice}>
+            <ActivityIndicator color={TACTICAL.amber} size="small" />
+            <Text style={s.noticeText}>Loading verified route detail, assessment, and cache metadata.</Text>
+          </View>
+        ) : null}
+
+        {detailError ? (
+          <View style={s.notice}>
+            <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.textMuted} />
+            <Text style={s.noticeText}>{detailError}</Text>
+          </View>
+        ) : null}
+
         {!canStart ? (
           <View style={s.notice}>
             <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.textMuted} />
@@ -345,7 +377,7 @@ export default function TrailPackPreviewModal({
           </View>
         ) : null}
 
-        {!offlineCacheAvailable ? (
+        {!effectiveOfflineCacheAvailable ? (
           <View style={s.notice}>
             <Ionicons name="cloud-offline-outline" size={13} color={TACTICAL.textMuted} />
             <Text style={s.noticeText}>Offline cache unavailable for this Trail Pack.</Text>
@@ -372,6 +404,60 @@ export default function TrailPackPreviewModal({
             </Text>
           </View>
         </View>
+
+        {detailAssessment ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>ROUTE ASSESSMENT</Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>
+                STATUS | {detailAssessment.status.toUpperCase()} | Confidence {Math.round(detailAssessment.confidence)}%
+              </Text>
+            </View>
+            {detailAssessment.why.slice(0, 3).map((reason) => (
+              <View key={`why-${reason}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>WHY | {reason}</Text>
+              </View>
+            ))}
+            {detailAssessment.whatToWatch.slice(0, 3).map((watchItem) => (
+              <View key={`watch-${watchItem}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>WHAT TO WATCH | {watchItem}</Text>
+              </View>
+            ))}
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>RECOMMENDED ACTION | {detailAssessment.recommendedAction}</Text>
+            </View>
+            {detailAssessment.toImproveStatus.slice(0, 3).map((improvement) => (
+              <View key={`improve-${improvement}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>TO IMPROVE STATUS | {improvement}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {offlineCache?.cacheable ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="cloud-download-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>OFFLINE CACHE</Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>Cacheable | {formatDate(offlineCache.lastVerifiedAt ?? undefined)}</Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>{formatStaleDate(offlineCache.staleAt)}</Text>
+            </View>
+          </View>
+        ) : null}
 
         <View style={s.section}>
           <View style={s.sectionHeader}>

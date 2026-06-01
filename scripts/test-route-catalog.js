@@ -34,6 +34,7 @@ require.extensions['.tsx'] = compileTypescript;
 const {
   catalogRouteToTrailPack,
   getRouteCatalogCoverageState,
+  normalizeRouteCatalogDetailResponse,
   verifyRouteCatalogRecord,
 } = require(path.join(root, 'lib', 'explore', 'routeCatalog.ts'));
 
@@ -132,6 +133,44 @@ assert.deepStrictEqual(
   trailPack.catalogVerification?.activeGuidance,
   makeRoute().communitySignal.activeGuidance,
   'Trail Pack projection should preserve server-side active guidance topology metadata',
+);
+
+const detailedTrailPack = normalizeRouteCatalogDetailResponse({
+  record: makeRoute(),
+  assessment: {
+    status: 'normal',
+    why: ['Official access verified through MVUM source coverage.'],
+    whatToWatch: ['Seasonal gates still require day-of-trip review.'],
+    recommendedAction: 'Use as a route preview and confirm current conditions before departure.',
+    toImproveStatus: ['Attach current closure and fire restriction checks.'],
+    confidence: 91,
+    activeGuidance: makeRoute().communitySignal.activeGuidance,
+  },
+  offlineCache: {
+    cacheable: true,
+    lastVerifiedAt: '2026-05-20T00:00:00.000Z',
+    staleAt: '2026-08-18T00:00:00.000Z',
+  },
+});
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.detailAssessment?.recommendedAction,
+  'Use as a route preview and confirm current conditions before departure.',
+  'Route catalog detail normalization should preserve deterministic assessment recommendations',
+);
+assert.deepStrictEqual(
+  detailedTrailPack?.catalogVerification?.detailAssessment?.whatToWatch,
+  ['Seasonal gates still require day-of-trip review.'],
+  'Route catalog detail normalization should expose watch items from the detail engine',
+);
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.offlineCache?.cacheable,
+  true,
+  'Route catalog detail normalization should expose offline-cache eligibility',
+);
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.detailAssessment?.activeGuidance?.status,
+  'ready',
+  'Route catalog detail normalization should carry active-guidance metadata from assessment payloads',
 );
 
 const partialCommunity = verifyRouteCatalogRecord(

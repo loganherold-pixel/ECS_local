@@ -1,6 +1,7 @@
 import { supabase } from '../supabase';
 import {
   getRouteCatalogCoverageState,
+  normalizeRouteCatalogDetailResponse,
   normalizeRouteCatalogSearchResponse,
   type RouteCatalogCoverageState,
 } from './routeCatalog';
@@ -338,6 +339,32 @@ async function fetchRouteCatalogTrailPacks(): Promise<{
     trailPacks: normalized.trailPacks,
     coverageState: normalized.coverageState,
   };
+}
+
+export async function fetchRouteCatalogTrailPackDetail(trailPack: ECSTrailPack | string): Promise<ECSTrailPack> {
+  const routeId = typeof trailPack === 'string' ? trailPack : trailPack.id;
+  const { data, error } = await supabase.functions.invoke('route-catalog-detail', {
+    body: {
+      id: routeId,
+      publicId: routeId,
+      includeGeometry: true,
+      includeAssessment: true,
+      includeOfflineCache: true,
+    },
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Verified route detail unavailable.');
+  }
+
+  const normalized = normalizeRouteCatalogDetailResponse(
+    data,
+    typeof trailPack === 'string' ? undefined : trailPack,
+  );
+  if (!normalized) {
+    throw new Error('Verified route detail unavailable.');
+  }
+  return normalized;
 }
 
 async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {

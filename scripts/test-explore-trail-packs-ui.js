@@ -116,9 +116,15 @@ assert(
 assert(
   previewPanel.includes('getTrailPackGuidanceReadiness') &&
     previewPanel.includes('GUIDANCE STATUS') &&
+    previewPanel.includes('ROUTE ASSESSMENT') &&
+    previewPanel.includes('WHAT TO WATCH') &&
+    previewPanel.includes('RECOMMENDED ACTION') &&
+    previewPanel.includes('OFFLINE CACHE') &&
+    previewPanel.includes('detailLoading') &&
+    previewPanel.includes('detailError') &&
     previewPanel.includes('guidanceReadiness.label') &&
     previewPanel.includes('guidanceReadiness.description'),
-  'Trail Pack preview details should expose active-guidance readiness and preview-only reasons',
+  'Trail Pack preview details should expose active-guidance readiness, route assessment, offline cache metadata, and preview-only reasons',
 );
 assert(
   feedbackPanel.includes('COMPLETED') &&

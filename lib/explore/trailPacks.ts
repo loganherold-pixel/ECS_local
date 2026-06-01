@@ -60,6 +60,50 @@ export type ECSTrailPackActiveGuidance = {
   unavailableReason: string | null;
 };
 
+export type ECSTrailPackCatalogDataUsed = {
+  providerId: string;
+  label: string;
+  sourceType: string;
+  authority: string;
+  freshness: 'fresh' | 'aging' | 'stale' | 'missing';
+  lastVerifiedAt?: string;
+  attribution?: string;
+  license?: string;
+};
+
+export type ECSTrailPackDetailAssessment = {
+  status: 'normal' | 'watch' | 'caution' | 'critical';
+  why: string[];
+  whatToWatch: string[];
+  recommendedAction: string;
+  toImproveStatus: string[];
+  confidence: number;
+  activeGuidance?: ECSTrailPackActiveGuidance;
+  dataUsed?: ECSTrailPackCatalogDataUsed[];
+};
+
+export type ECSTrailPackOfflineCacheMetadata = {
+  cacheable: boolean;
+  lastVerifiedAt?: string | null;
+  staleAt?: string | null;
+  sourceTimestamps?: string[];
+};
+
+export type ECSTrailPackCatalogVerification = {
+  status: 'normal' | 'watch' | 'caution' | 'critical';
+  sourceLabel: string;
+  publicRecommendation: boolean;
+  confidenceScore: number;
+  warnings: string[];
+  blockers: string[];
+  activeGuidance?: ECSTrailPackActiveGuidance;
+  dataUsed: ECSTrailPackCatalogDataUsed[];
+  lastEvaluatedAt: string;
+  detailAssessment?: ECSTrailPackDetailAssessment;
+  offlineCache?: ECSTrailPackOfflineCacheMetadata;
+  detailFetchedAt?: string;
+};
+
 export type ECSTrailPack = {
   id: string;
   name: string;
@@ -81,26 +125,7 @@ export type ECSTrailPack = {
   completionCount?: number;
   reviewStatus: ECSTrailPackReviewStatus;
   tags?: string[];
-  catalogVerification?: {
-    status: 'normal' | 'watch' | 'caution' | 'critical';
-    sourceLabel: string;
-    publicRecommendation: boolean;
-    confidenceScore: number;
-    warnings: string[];
-    blockers: string[];
-    activeGuidance?: ECSTrailPackActiveGuidance;
-    dataUsed: Array<{
-      providerId: string;
-      label: string;
-      sourceType: string;
-      authority: string;
-      freshness: 'fresh' | 'aging' | 'stale' | 'missing';
-      lastVerifiedAt?: string;
-      attribution?: string;
-      license?: string;
-    }>;
-    lastEvaluatedAt: string;
-  };
+  catalogVerification?: ECSTrailPackCatalogVerification;
   createdAt: string;
   updatedAt: string;
 };
