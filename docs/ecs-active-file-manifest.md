@@ -159,6 +159,25 @@ npm run test:auth-offline-sign-in
 npm run smoke
 ```
 
+## Fourth Cleanup Batch: Editor-Local VS Code Settings
+
+Batch status: removed from source tracking on the cleanup branch.
+
+Evidence:
+
+- `.vscode/` contained only `extensions.json` and `settings.json`.
+- The settings enabled the Deno VS Code extension for `supabase/functions` and configured editor formatting/linting behavior.
+- No runtime, package script, build, or documentation path referenced `.vscode/`.
+- Supabase source remains tracked under `supabase/functions/` and `supabase/migrations/`.
+- `.vscode/` is now ignored so local editor preferences do not re-enter the source-only ECS tree.
+
+Recommended verification after removing editor-local settings:
+
+```powershell
+npm run test:auth-offline-sign-in
+npm run smoke
+```
+
 ## Investigate Before Removing
 
 These are plausible cleanup targets, but they need one more evidence pass or a user decision before deletion.
@@ -167,7 +186,6 @@ These are plausible cleanup targets, but they need one more evidence pass or a u
 | --- | --- | --- |
 | Maybe-unreferenced `scripts/` files | Strict scan found 71 scripts without package-script ownership or direct repo text references. Nearly all are regression tests; one is `scripts/trails-postgis-check.sql`. | Keep regression tests unless a domain owner explicitly retires the covered behavior. Decide whether the PostGIS one-liner should move into docs or be removed. |
 | `ECS_Dashboard_Icon_512.png` | No code reference found. Existing asset audit says it is release-looking and retained for external store/listing material. | User decision: keep as release collateral or move to a separate release-assets archive. |
-| `.vscode/` | Editor-local workspace config. | User decision: keep team editor settings or remove from source-only tree. |
 | Windows EAS and EcoFlow dev helpers | `scripts/run-eas-fieldtest-windows.mjs` and `scripts/start-ecoflow-ble-dev.ps1` are not package-script owned, but they are clearly tied to ECS field-test and hardware workflows. | Keep unless those workflows are intentionally retired or replaced by documented package scripts. |
 
 Sample scripts from the maybe-unreferenced set:

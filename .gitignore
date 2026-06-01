@@ -34,6 +34,7 @@ Thumbs.db
 !.env.sample
 !.env.template
 API Weather Sources.txt
+.vscode/
 
 # Native/build outputs
 .gradle-local*/
