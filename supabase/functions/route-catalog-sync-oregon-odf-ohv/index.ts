@@ -16,6 +16,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json',
 };
+const GEOMETRY_BATCH_SIZE = 10;
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -51,7 +52,7 @@ function readNumber(value: unknown, fallback: number): number {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function chunkRows<T>(rows: T[], size = 100): T[][] {
+function chunkRows<T>(rows: T[], size = GEOMETRY_BATCH_SIZE): T[][] {
   const chunks = [];
   for (let index = 0; index < rows.length; index += size) {
     chunks.push(rows.slice(index, index + size));
@@ -81,7 +82,7 @@ async function upsertRawFeatureRows(
     const { error } = await admin
       .from('route_raw_source_features')
       .upsert(chunk, { onConflict: 'route_source_id,provider_feature_id,source_layer' });
-    if (error) throw new Error('Unable to batch upsert Oregon ODF OHV raw source features.');
+    if (error) throw new Error(`Unable to batch upsert Oregon ODF OHV raw source features: ${error.message}`);
   }
 }
 
@@ -95,7 +96,8 @@ async function upsertRouteRows(
       .from('verified_routes')
       .upsert(chunk, { onConflict: 'public_id' })
       .select('id, public_id');
-    if (error || !Array.isArray(data)) throw new Error('Unable to batch upsert Oregon ODF OHV route rows.');
+    if (error) throw new Error(`Unable to batch upsert Oregon ODF OHV route rows: ${error.message}`);
+    if (!Array.isArray(data)) throw new Error('Unable to batch upsert Oregon ODF OHV route rows: no rows returned.');
     allRows.push(...data);
   }
   return buildRouteIdByPublicId(allRows as Array<Record<string, unknown>>);
@@ -123,13 +125,13 @@ async function upsertRouteSourceRows(
     const { error } = await admin
       .from('verified_route_sources')
       .upsert(chunk, { onConflict: 'verified_route_id,route_source_id,source_role' });
-    if (error) throw new Error('Unable to batch upsert Oregon ODF OHV route source rows.');
+    if (error) throw new Error(`Unable to batch upsert Oregon ODF OHV route source rows: ${error.message}`);
   }
 }
 
 async function fetchGpxText(source: OregonOdfOhvGpxSource): Promise<string> {
   const response = await fetch(source.url);
-  if (!response.ok) throw new Error(`Oregon ODF OHV GPX fetch failed for ${source.key}`);
+  if (!response.ok) throw new Error(`Oregon ODF OHV GPX fetch failed for ${source.key}: HTTP ${response.status}`);
   return await response.text();
 }
 
@@ -158,7 +160,8 @@ serve(async (req) => {
       .upsert(oregonOdfOhvSourceUpsert(now), { onConflict: 'provider_id' })
       .select('id')
       .single();
-    if (sourceError || !source) throw new Error('Unable to upsert Oregon ODF OHV route source');
+    if (sourceError) throw new Error(`Unable to upsert Oregon ODF OHV route source: ${sourceError.message}`);
+    if (!source) throw new Error('Unable to upsert Oregon ODF OHV route source: no source returned');
 
     const { data: ingestRun, error: ingestError } = await admin
       .from('route_source_ingest_runs')
@@ -171,7 +174,8 @@ serve(async (req) => {
       })
       .select('id')
       .single();
-    if (ingestError || !ingestRun) throw new Error('Unable to start Oregon ODF OHV ingest run');
+    if (ingestError) throw new Error(`Unable to start Oregon ODF OHV ingest run: ${ingestError.message}`);
+    if (!ingestRun) throw new Error('Unable to start Oregon ODF OHV ingest run: no ingest run returned');
 
     let rawFeatureCount = 0;
     let normalizedFeatureCount = 0;

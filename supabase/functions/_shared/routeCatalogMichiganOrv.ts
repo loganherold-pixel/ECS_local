@@ -300,21 +300,34 @@ export function parseMichiganOrvGpxTracks(gpxText: string, source: MichiganOrvGp
   const parser = new DOMParser();
   const document = parser.parseFromString(gpxText, 'application/xml');
   const tracks = Array.from(document.getElementsByTagName('trk'));
-  return tracks
-    .map((track, index) => {
-      const trackName = elementText(track, 'name') || `${source.key}_${index + 1}`;
-      const publishedDistanceMiles = cleanNumber(elementText(track, 'desc'));
-      const segments = Array.from(track.getElementsByTagName('trkseg'))
-        .map(normalizeTrackSegment)
-        .filter((segment) => segment.length >= 2);
-      return {
-        source,
-        name: trackName,
-        publishedDistanceMiles,
-        segments,
-      };
-    })
-    .filter((track) => track.segments.length > 0);
+  const groupedTracks = new Map<string, MichiganOrvGpxTrack>();
+
+  tracks.forEach((track, index) => {
+    const trackName = elementText(track, 'name') || `${source.key}_${index + 1}`;
+    const publishedDistanceMiles = cleanNumber(elementText(track, 'desc'));
+    const segments = Array.from(track.getElementsByTagName('trkseg'))
+      .map(normalizeTrackSegment)
+      .filter((segment) => segment.length >= 2);
+    if (segments.length === 0) return;
+
+    const existing = groupedTracks.get(trackName);
+    if (existing) {
+      existing.segments.push(...segments);
+      if (publishedDistanceMiles !== null) {
+        existing.publishedDistanceMiles = (existing.publishedDistanceMiles ?? 0) + publishedDistanceMiles;
+      }
+      return;
+    }
+
+    groupedTracks.set(trackName, {
+      source,
+      name: trackName,
+      publishedDistanceMiles,
+      segments,
+    });
+  });
+
+  return Array.from(groupedTracks.values());
 }
 
 export function gpxTrackToMichiganOrvRouteUpsert(
@@ -338,7 +351,7 @@ export function gpxTrackToMichiganOrvRouteUpsert(
   const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 14));
   const publicId = slugify(['michigan-dnr-orv', track.name || track.source.key].join(' '));
   const titleName = toTitleCase(track.source.name || track.name);
-  const providerId = `michigan-dnr-orv:${track.source.key}`;
+  const providerId = `michigan-dnr-orv:${track.source.key}:${slugify(track.name || 'track') || 'track'}`;
 
   const verifiedRoute = {
     public_id: publicId,

@@ -77,6 +77,17 @@ assert.strictEqual(classIITracks[0].name, '7-UP');
 assert.strictEqual(classIITracks[0].metadataTime, '2014-02-26T22:03:06Z');
 assert.strictEqual(classIITracks[0].segments[0].length, 4, 'Oregon ODF GPX parser should remove consecutive duplicate points');
 
+const splitClassIITracks = parseOregonOdfOhvGpxTracks(
+  `<gpx>
+    <metadata><time>2014-02-26T22:03:06Z</time></metadata>
+    <trk><name>7-UP</name><trkseg><trkpt lat="45.55" lon="-123.43"/><trkpt lat="45.551" lon="-123.431"/></trkseg></trk>
+    <trk><name>7-UP</name><trkseg><trkpt lat="45.552" lon="-123.432"/><trkpt lat="45.553" lon="-123.433"/></trkseg></trk>
+  </gpx>`,
+  classIISource,
+);
+assert.strictEqual(splitClassIITracks.length, 1, 'Oregon GPX parser should aggregate exact same-name split tracks before DB upsert');
+assert.strictEqual(splitClassIITracks[0].segments.length, 2);
+
 const classIIUpsert = gpxTrackToOregonOdfOhvRouteUpsert(classIITracks[0], {
   sourceId: '00000000-0000-0000-0000-000000000060',
   sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
@@ -147,11 +158,14 @@ assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Oregon ODF OHV sy
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceKeys'), 'Oregon ODF OHV sync should support bounded named GPX source keys');
 assert(syncFunction.includes('publicRecommendationCount: 0'), 'Oregon ODF OHV sync should report zero public recommendations for curation ingestion');
+assert(syncFunction.includes('GEOMETRY_BATCH_SIZE = 10'), 'Oregon ODF OHV sync should use small DB batches for geometry-heavy GPX records');
 
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml');
 assert(fs.existsSync(workflowPath), 'Oregon ODF OHV sync workflow should exist');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(workflow.includes('route-catalog-sync-oregon-odf-ohv'));
 assert(workflow.includes('publicRecommendationCount'));
+assert(workflow.includes('--write-out "%{http_code}"'), 'Oregon ODF OHV sync workflow should preserve response bodies on HTTP errors');
+assert(workflow.includes('route-catalog-oregon-odf-ohv-sync-response.json'), 'Oregon ODF OHV sync workflow should print sanitized failed sync responses');
 
 console.log('Oregon ODF OHV route catalog adapter checks passed');

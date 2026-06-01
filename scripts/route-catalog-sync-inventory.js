@@ -258,12 +258,14 @@ function validateRouteCatalogSyncInventory(root = path.join(__dirname, '..')) {
         entry.functionName,
         'ECS_SUPABASE_URL',
         'ECS_ROUTE_CATALOG_SYNC_TOKEN',
-        'curl --fail-with-body',
         'concurrency:',
         'publicRecommendationCount',
       ]) {
         if (!workflowSource.includes(required)) errors.push(`${entry.functionName} workflow missing ${required}`);
       }
+      const preservesFailureBody = workflowSource.includes('curl --fail-with-body') ||
+        (workflowSource.includes('--write-out "%{http_code}"') && workflowSource.includes('sync-response.json'));
+      if (!preservesFailureBody) errors.push(`${entry.functionName} workflow missing HTTP failure body handling`);
     }
   }
 

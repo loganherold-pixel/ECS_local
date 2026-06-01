@@ -84,7 +84,11 @@ for (const entry of ROUTE_CATALOG_SYNC_INVENTORY) {
   );
   assert(workflowSource.includes(entry.functionName), `${entry.functionName} workflow should invoke the matching Edge Function`);
   assert(workflowSource.includes('ECS_SUPABASE_URL') && workflowSource.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'));
-  assert(workflowSource.includes('curl --fail-with-body'), `${entry.functionName} workflow should fail loudly on Edge Function errors`);
+  assert(
+    workflowSource.includes('curl --fail-with-body') ||
+      (workflowSource.includes('--write-out "%{http_code}"') && workflowSource.includes('sync-response.json')),
+    `${entry.functionName} workflow should preserve response bodies and fail loudly on Edge Function errors`,
+  );
   assert(workflowSource.includes('concurrency:'), `${entry.functionName} workflow should avoid overlapping sync runs`);
   assert(workflowSource.includes('publicRecommendationCount'), `${entry.functionName} workflow summary should expose public recommendation telemetry`);
 }

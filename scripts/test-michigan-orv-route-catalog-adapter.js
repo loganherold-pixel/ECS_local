@@ -70,6 +70,17 @@ assert.strictEqual(alconaTracks[0].name, 'alcona_orv_trail');
 assert.strictEqual(alconaTracks[0].publishedDistanceMiles, 9.74795826712);
 assert.strictEqual(alconaTracks[0].segments[0].length, 3, 'Michigan GPX parser should remove consecutive duplicate track points');
 
+const splitAlconaTracks = parseMichiganOrvGpxTracks(
+  `<gpx>
+    <trk><name>alcona_orv_trail</name><desc>1.5</desc><trkseg><trkpt lon="-83.77" lat="44.58"/><trkpt lon="-83.78" lat="44.59"/></trkseg></trk>
+    <trk><name>alcona_orv_trail</name><desc>2</desc><trkseg><trkpt lon="-83.79" lat="44.6"/><trkpt lon="-83.8" lat="44.61"/></trkseg></trk>
+  </gpx>`,
+  MICHIGAN_ORV_GPX_SOURCES.find((source) => source.key === 'alcona_orv_trail'),
+);
+assert.strictEqual(splitAlconaTracks.length, 1, 'Michigan GPX parser should aggregate same-name split tracks before DB upsert');
+assert.strictEqual(splitAlconaTracks[0].publishedDistanceMiles, 3.5);
+assert.strictEqual(splitAlconaTracks[0].segments.length, 2);
+
 const alconaUpsert = gpxTrackToMichiganOrvRouteUpsert(alconaTracks[0], {
   sourceId: '00000000-0000-0000-0000-000000000040',
   sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
@@ -95,7 +106,7 @@ assert(
   alconaUpsert.verifiedRoute.blocker_reasons.some((blocker) => /not yet reviewed with current Michigan DNR closures/i.test(blocker)),
   'Michigan DNR GPX records should not become public recommendations before current-condition review',
 );
-assert.strictEqual(alconaUpsert.rawSourceFeature.provider_feature_id, 'michigan-dnr-orv:alcona_orv_trail');
+assert.strictEqual(alconaUpsert.rawSourceFeature.provider_feature_id, 'michigan-dnr-orv:alcona_orv_trail:alcona-orv-trail');
 assert.strictEqual(alconaUpsert.verifiedRouteSource.source_role, 'primary');
 
 const routeGpx = `<?xml version="1.0"?>
@@ -144,6 +155,14 @@ assert.strictEqual(
   'Michigan DNR GPX tracks below the configured minimum miles should be ignored',
 );
 
+const splitAlconaUpsert = gpxTrackToMichiganOrvRouteUpsert(splitAlconaTracks[0], {
+  sourceId: '00000000-0000-0000-0000-000000000040',
+  sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+  minMiles: 1,
+});
+assert(splitAlconaUpsert);
+assert.strictEqual(splitAlconaUpsert.rawSourceFeature.provider_feature_id, 'michigan-dnr-orv:alcona_orv_trail:alcona-orv-trail');
+
 const syncFunctionPath = path.join(root, 'supabase', 'functions', 'route-catalog-sync-michigan-orv', 'index.ts');
 assert(fs.existsSync(syncFunctionPath), 'Michigan DNR ORV sync Edge Function should exist');
 const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
@@ -151,5 +170,12 @@ assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Michigan ORV sync
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceKeys'), 'Michigan ORV sync should support bounded named GPX source keys');
 assert(syncFunction.includes('publicRecommendationCount: 0'), 'Michigan ORV sync should report zero public recommendations for curation ingestion');
+assert(syncFunction.includes('GEOMETRY_BATCH_SIZE = 10'), 'Michigan ORV sync should use small DB batches for geometry-heavy GPX records');
+
+const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-michigan-orv-sync.yml');
+assert(fs.existsSync(workflowPath), 'Michigan DNR ORV sync workflow should exist');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+assert(workflow.includes('--write-out "%{http_code}"'), 'Michigan ORV sync workflow should preserve response bodies on HTTP errors');
+assert(workflow.includes('route-catalog-michigan-orv-sync-response.json'), 'Michigan ORV sync workflow should print sanitized failed sync responses');
 
 console.log('Michigan DNR ORV route catalog adapter checks passed');

@@ -84,13 +84,43 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail-with-body --show-error --silent \
+          curl_exit=0
+          http_code=$(curl --show-error --silent \
             --request POST \
             --header "Content-Type: application/json" \
             --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
             --data @route-catalog-michigan-orv-sync-payload.json \
             "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-michigan-orv" \
-            --output route-catalog-michigan-orv-sync-response.json
+            --output route-catalog-michigan-orv-sync-response.json \
+            --write-out "%{http_code}") || curl_exit=$?
+
+          if [[ "${curl_exit}" -ne 0 || ! "${http_code}" =~ ^[0-9]+$ || "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+            echo "::error::Michigan DNR ORV sync failed with HTTP ${http_code:-unknown}"
+            node <<'NODE'
+          const fs = require('fs');
+          const responsePath = 'route-catalog-michigan-orv-sync-response.json';
+          if (!fs.existsSync(responsePath)) {
+            console.error('No response body was written by the sync request.');
+            process.exit(0);
+          }
+          const raw = fs.readFileSync(responsePath, 'utf8').trim();
+          if (!raw) {
+            console.error('Sync response body was empty.');
+            process.exit(0);
+          }
+          try {
+            const response = JSON.parse(raw);
+            console.error(JSON.stringify({
+              ok: response.ok,
+              source: response.source,
+              error: response.error,
+            }, null, 2));
+          } catch {
+            console.error(raw.slice(0, 1200));
+          }
+          NODE
+            exit 1
+          fi
 
       - name: Summarize sync result
         shell: bash

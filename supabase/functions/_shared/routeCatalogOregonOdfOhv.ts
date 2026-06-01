@@ -290,20 +290,30 @@ export function parseOregonOdfOhvGpxTracks(
   const document = parser.parseFromString(gpxText, 'application/xml');
   const metadataTime = elementText(document, 'time') || null;
   const tracks = Array.from(document.getElementsByTagName('trk'));
-  return tracks
-    .map((track, index) => {
-      const trackName = elementText(track, 'name') || `${source.key}_${index + 1}`;
-      const segments = Array.from(track.getElementsByTagName('trkseg'))
-        .map(normalizeTrackSegment)
-        .filter((segment) => segment.length >= 2);
-      return {
-        source,
-        name: trackName,
-        metadataTime,
-        segments,
-      };
-    })
-    .filter((track) => track.segments.length > 0);
+  const groupedTracks = new Map<string, OregonOdfOhvGpxTrack>();
+
+  tracks.forEach((track, index) => {
+    const trackName = elementText(track, 'name') || `${source.key}_${index + 1}`;
+    const segments = Array.from(track.getElementsByTagName('trkseg'))
+      .map(normalizeTrackSegment)
+      .filter((segment) => segment.length >= 2);
+    if (segments.length === 0) return;
+
+    const existing = groupedTracks.get(trackName);
+    if (existing) {
+      existing.segments.push(...segments);
+      return;
+    }
+
+    groupedTracks.set(trackName, {
+      source,
+      name: trackName,
+      metadataTime,
+      segments,
+    });
+  });
+
+  return Array.from(groupedTracks.values());
 }
 
 export function gpxTrackToOregonOdfOhvRouteUpsert(
