@@ -254,6 +254,65 @@ const routeReady = deriveOfflineReadiness({
 assert(routeReady.level === 'ready', 'Completed matching route sync should make road preview offline readiness Ready.');
 assert(routeReady.reason.includes('Route corridor'), 'Ready route sync should explain that the route corridor is cached.');
 
+const sourceWarningRouteIntent = {
+  ...routePreparedSync.routeIntent,
+  readinessSnapshot: {
+    routeCatalogSourceTimestamps: ['2026-05-20T00:00:00.000Z'],
+    routeCatalogAttribution: [
+      {
+        providerId: 'usfs_mvum',
+        label: 'USFS MVUM',
+        attribution: 'USDA Forest Service',
+      },
+    ],
+    routeCatalogFreshnessWarnings: ['Source stale. Refresh official source checks before offline use.'],
+    routeCatalogOfflineCache: {
+      cacheable: true,
+      lastVerifiedAt: '2026-05-20T00:00:00.000Z',
+      staleAt: '2026-05-21T00:00:00.000Z',
+    },
+  },
+};
+
+const sourceWarningRoute = deriveOfflineReadiness({
+  currentRouteContext,
+  downloadedRoutes: [
+    {
+      ...routePreparedSync,
+      routeIntent: sourceWarningRouteIntent,
+    },
+  ],
+  tileRegions: [
+    {
+      ...routeRegionComplete,
+      routeIntent: sourceWarningRouteIntent,
+    },
+  ],
+  tileSyncJobs: [],
+  routeSyncHydrated: true,
+});
+
+assert(
+  sourceWarningRoute.level === 'partial',
+  'Cached route sync with stale route catalog source metadata should downgrade offline readiness to Partial.',
+);
+assert(
+  sourceWarningRoute.label === 'Source Warning',
+  'Cached route sync with stale route catalog source metadata should use a specific Source Warning label.',
+);
+assert(
+  sourceWarningRoute.readyAssets.includes('route catalog source metadata'),
+  'Route catalog source timestamps and attribution should remain visible as ready metadata after caching.',
+);
+assert(
+  sourceWarningRoute.staleAssets.includes('route catalog source freshness'),
+  'Route catalog freshness warnings should be visible as stale offline readiness assets.',
+);
+assert(
+  sourceWarningRoute.reason.includes('Refresh official source checks'),
+  'Route catalog freshness warning should remain the primary offline readiness reason.',
+);
+
 const duplicateCancelAfterReady = deriveOfflineReadiness({
   currentRouteContext,
   downloadedRoutes: [routePreparedSync],
