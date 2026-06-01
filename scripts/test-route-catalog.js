@@ -40,6 +40,9 @@ const {
 const {
   trailPackToOfflinePrepCatalogInput,
 } = require(path.join(root, 'lib', 'explore', 'trailPackOfflineCache.ts'));
+const {
+  trailPackToExpeditionOpportunity,
+} = require(path.join(root, 'lib', 'explore', 'trailPacks.ts'));
 
 const freshNow = '2026-06-01T12:00:00.000Z';
 
@@ -63,6 +66,15 @@ function makeRoute(overrides = {}) {
     estimatedDurationMinutes: 240,
     difficulty: 'moderate',
     vehicleFit: ['high_clearance_4x4'],
+    remotenessScore: 8,
+    campabilityScore: 72,
+    minimumFuelRangeMiles: 45,
+    minimumWaterCapacityGallons: 2,
+    routeIntelligence: {
+      remotenessBasis: 'official_source_distance_and_context',
+      campabilityDataState: 'reviewed',
+      resourceMarginBasis: 'estimated_route_distance_with_buffer',
+    },
     officialAccessCoveragePct: 94,
     unknownAccessCoveragePct: 3,
     restrictedAccessCoveragePct: 0,
@@ -123,6 +135,26 @@ assert.strictEqual(trailPack.source, 'ecs_validated');
 assert.strictEqual(trailPack.dataState, 'live');
 assert.strictEqual(trailPack.reviewStatus, 'approved');
 assert.strictEqual(trailPack.confidenceScore, verified.confidenceScore);
+assert.strictEqual(
+  trailPack.remotenessScore,
+  8,
+  'Trail Pack projection should preserve catalog remoteness scores instead of deriving them from confidence',
+);
+assert.strictEqual(
+  trailPack.campabilityScore,
+  72,
+  'Trail Pack projection should preserve catalog CampOps suitability scores',
+);
+assert.strictEqual(
+  trailPack.minimumFuelRangeMiles,
+  45,
+  'Trail Pack projection should preserve minimum fuel range requirements',
+);
+assert.strictEqual(
+  trailPack.minimumWaterCapacityGallons,
+  2,
+  'Trail Pack projection should preserve minimum water capacity requirements',
+);
 assert(
   trailPack.confidenceReasons.includes('Official access verified'),
   'Trail Pack projection should carry the official verification label',
@@ -136,6 +168,34 @@ assert.deepStrictEqual(
   trailPack.catalogVerification?.activeGuidance,
   makeRoute().communitySignal.activeGuidance,
   'Trail Pack projection should preserve server-side active guidance topology metadata',
+);
+assert.deepStrictEqual(
+  trailPack.catalogVerification?.operationalCriteria,
+  {
+    remotenessScore: 8,
+    campabilityScore: 72,
+    minimumFuelRangeMiles: 45,
+    minimumWaterCapacityGallons: 2,
+    routeIntelligence: makeRoute().routeIntelligence,
+  },
+  'Trail Pack projection should expose deterministic operational criteria alongside source/confidence metadata',
+);
+
+const opportunity = trailPackToExpeditionOpportunity(trailPack);
+assert.strictEqual(
+  opportunity.remotenessScore,
+  8,
+  'Expedition opportunity projection should use the catalog remoteness score when available',
+);
+assert.strictEqual(
+  opportunity.routeMetadata.routeCatalogOperationalCriteria.minimumFuelRangeMiles,
+  45,
+  'Expedition opportunity metadata should preserve catalog fuel margin requirements for downstream planning',
+);
+assert.strictEqual(
+  opportunity.routeMetadata.routeCatalogOperationalCriteria.minimumWaterCapacityGallons,
+  2,
+  'Expedition opportunity metadata should preserve catalog water margin requirements for downstream planning',
 );
 
 const detailedTrailPack = normalizeRouteCatalogDetailResponse({

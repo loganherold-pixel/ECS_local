@@ -135,6 +135,44 @@ function addDaysIso(isoDate: string, days: number): string {
   return date.toISOString();
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function estimateMvumRemotenessScore(distanceMiles: number, sourceFeatureCount = 1): number {
+  const distanceComponent = Math.min(2.5, distanceMiles / 12);
+  const aggregateComponent = Math.min(1.5, Math.max(0, sourceFeatureCount - 1) * 0.25);
+  return Number(clampNumber(5 + distanceComponent + aggregateComponent, 1, 10).toFixed(1));
+}
+
+function estimateMinimumFuelRangeMiles(distanceMiles: number): number {
+  return Math.max(10, Math.ceil(distanceMiles * 1.5));
+}
+
+function estimateMinimumWaterCapacityGallons(estimatedDurationMinutes: number): number {
+  const routeDays = Math.max(1, Math.ceil(estimatedDurationMinutes / 480));
+  return routeDays;
+}
+
+function mvumRouteIntelligence(args: {
+  distanceMiles: number;
+  estimatedDurationMinutes: number;
+  sourceFeatureCount: number;
+  activeGuidance?: UsfsMvumTopologyAssessment;
+}) {
+  return {
+    remotenessBasis: 'estimated_from_mvum_distance_and_forest_context',
+    remotenessDataState: 'estimated',
+    campabilityDataState: 'unknown',
+    resourceMarginBasis: 'estimated_from_mvum_distance_and_duration',
+    fuelMarginDataState: 'estimated',
+    waterMarginDataState: 'estimated',
+    sourceFeatureCount: args.sourceFeatureCount,
+    activeGuidance: args.activeGuidance,
+    caveat: 'Fuel and water margins are planning estimates from route distance/duration only; they are not live resource availability or safety conclusions.',
+  };
+}
+
 function stablePayloadHash(value: unknown): string {
   const json = JSON.stringify(value);
   let hash = 2166136261;
@@ -538,6 +576,7 @@ export function arcGisFeatureToVerifiedRouteUpsert(
   ].filter(Boolean).join(' '));
   const forestTag = context.forest.forestName;
   const district = cleanString(attributes.DISTRICTNA);
+  const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 18));
 
   const verifiedRoute = {
     public_id: publicId,
@@ -548,9 +587,18 @@ export function arcGisFeatureToVerifiedRouteUpsert(
     center_longitude: center.longitude,
     route_geometry: routeGeometry,
     distance_miles: Number(distanceMiles.toFixed(3)),
-    estimated_duration_minutes: Math.max(20, Math.round(distanceMiles * 18)),
+    estimated_duration_minutes: estimatedDurationMinutes,
     difficulty: 'unknown',
     vehicle_fit: vehicleFit,
+    remoteness_score: estimateMvumRemotenessScore(distanceMiles),
+    campability_score: null,
+    minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
+    minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
+    route_intelligence: mvumRouteIntelligence({
+      distanceMiles,
+      estimatedDurationMinutes,
+      sourceFeatureCount: 1,
+    }),
     official_access_coverage_pct: 100,
     unknown_access_coverage_pct: 0,
     restricted_access_coverage_pct: 0,
@@ -655,6 +703,7 @@ export function aggregateUsfsMvumRouteFeatures(
     const activeGuidance = assessUsfsMvumAggregateTopology(lines);
     const center = centerFromPaths(lines);
     const distanceMiles = Number(segments.reduce((total, segment) => total + Number(segment.verifiedRoute.distance_miles ?? 0), 0).toFixed(3));
+    const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 18));
     const districtTags = uniqueStrings(segments.flatMap((segment) =>
       Array.isArray(segment.verifiedRoute.tags) ? segment.verifiedRoute.tags.map(String) : [],
     ).filter((tag) => tag !== context.forest.forestName && tag !== 'USFS MVUM' && tag !== context.layer.kind && tag !== 'source segment'));
@@ -690,9 +739,19 @@ export function aggregateUsfsMvumRouteFeatures(
           ? { type: 'LineString', coordinates: lines[0] }
           : { type: 'MultiLineString', coordinates: lines },
         distance_miles: distanceMiles,
-        estimated_duration_minutes: Math.max(20, Math.round(distanceMiles * 18)),
+        estimated_duration_minutes: estimatedDurationMinutes,
         difficulty: 'unknown',
         vehicle_fit: vehicleFit,
+        remoteness_score: estimateMvumRemotenessScore(distanceMiles, sourceFeatureCount),
+        campability_score: null,
+        minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
+        minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
+        route_intelligence: mvumRouteIntelligence({
+          distanceMiles,
+          estimatedDurationMinutes,
+          sourceFeatureCount,
+          activeGuidance,
+        }),
         official_access_coverage_pct: 100,
         unknown_access_coverage_pct: 0,
         restricted_access_coverage_pct: 0,

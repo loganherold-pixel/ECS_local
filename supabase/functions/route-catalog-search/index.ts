@@ -113,6 +113,13 @@ serve(async (req) => {
     const minDurationMinutes = readNumber(params.minDurationMinutes ?? params.min_duration_minutes);
     const maxDurationMinutes = readNumber(params.maxDurationMinutes ?? params.max_duration_minutes);
     const minConfidenceScore = readNumber(params.minConfidenceScore ?? params.min_confidence_score);
+    const minRemotenessScore = readNumber(params.minRemotenessScore ?? params.min_remoteness_score);
+    const maxRemotenessScore = readNumber(params.maxRemotenessScore ?? params.max_remoteness_score);
+    const minCampabilityScore = readNumber(params.minCampabilityScore ?? params.min_campability_score);
+    const availableFuelRangeMiles = readNumber(params.availableFuelRangeMiles ?? params.available_fuel_range_miles);
+    const availableWaterCapacityGallons = readNumber(
+      params.availableWaterCapacityGallons ?? params.available_water_capacity_gallons,
+    );
     const routeType = cleanRouteType(params.routeType ?? params.route_type);
     const difficulty = cleanDifficulty(params.difficulty);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
@@ -145,6 +152,15 @@ serve(async (req) => {
     if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
     if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
     if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
+    if (minRemotenessScore != null) query = query.gte('remoteness_score', minRemotenessScore);
+    if (maxRemotenessScore != null) query = query.lte('remoteness_score', maxRemotenessScore);
+    if (minCampabilityScore != null) query = query.gte('campability_score', minCampabilityScore);
+    if (availableFuelRangeMiles != null && availableFuelRangeMiles > 0) {
+      query = query.lte('minimum_fuel_range_miles', availableFuelRangeMiles);
+    }
+    if (availableWaterCapacityGallons != null && availableWaterCapacityGallons > 0) {
+      query = query.lte('minimum_water_capacity_gallons', availableWaterCapacityGallons);
+    }
     if (routeType) query = query.eq('route_type', routeType);
     if (difficulty) query = query.eq('difficulty', difficulty);
 
@@ -167,6 +183,11 @@ serve(async (req) => {
           minDurationMinutes,
           maxDurationMinutes,
           minConfidenceScore,
+          minRemotenessScore,
+          maxRemotenessScore,
+          minCampabilityScore,
+          availableFuelRangeMiles,
+          availableWaterCapacityGallons,
           routeType: routeType || null,
           difficulty: difficulty || null,
           vehicleClass: vehicleClass || null,

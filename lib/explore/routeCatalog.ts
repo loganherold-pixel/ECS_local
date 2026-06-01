@@ -6,6 +6,7 @@ import type {
   ECSTrailPackDetailAssessment,
   ECSTrailPackDifficulty,
   ECSTrailPackOfflineCacheMetadata,
+  ECSTrailPackOperationalCriteria,
   ECSTrailPackReviewStatus,
   ECSTrailPackRouteGeometry,
   ECSTrailPackRouteType,
@@ -55,6 +56,11 @@ export type RouteCatalogRecord = {
   estimatedDurationMinutes?: number;
   difficulty?: ECSTrailPackDifficulty;
   vehicleFit?: string[];
+  remotenessScore?: number;
+  campabilityScore?: number;
+  minimumFuelRangeMiles?: number;
+  minimumWaterCapacityGallons?: number;
+  routeIntelligence?: Record<string, unknown>;
   officialAccessCoveragePct: number;
   unknownAccessCoveragePct: number;
   restrictedAccessCoveragePct: number;
@@ -607,6 +613,21 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
     estimatedDurationMinutes: readNumber(record, 'estimated_duration_minutes', 'estimatedDurationMinutes'),
     difficulty: normalizeDifficulty(record.difficulty),
     vehicleFit: readStringArray(record.vehicle_fit ?? record.vehicleFit),
+    remotenessScore: readNumber(record, 'remoteness_score', 'remotenessScore'),
+    campabilityScore: readNumber(record, 'campability_score', 'campabilityScore'),
+    minimumFuelRangeMiles: readNumber(
+      record,
+      'minimum_fuel_range_miles',
+      'minimumFuelRangeMiles',
+      'minFuelRangeMiles',
+    ),
+    minimumWaterCapacityGallons: readNumber(
+      record,
+      'minimum_water_capacity_gallons',
+      'minimumWaterCapacityGallons',
+      'minWaterCapacityGallons',
+    ),
+    routeIntelligence: readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined,
     officialAccessCoveragePct: readNumber(record, 'official_access_coverage_pct', 'officialAccessCoveragePct') ?? 0,
     unknownAccessCoveragePct: readNumber(record, 'unknown_access_coverage_pct', 'unknownAccessCoveragePct') ?? 100,
     restrictedAccessCoveragePct: readNumber(record, 'restricted_access_coverage_pct', 'restrictedAccessCoveragePct') ?? 0,
@@ -752,10 +773,22 @@ function sourceForTrailPack(route: RouteCatalogRecord, verification: RouteCatalo
   return 'needs_review';
 }
 
+function operationalCriteriaForRoute(route: RouteCatalogRecord): ECSTrailPackOperationalCriteria | undefined {
+  const criteria: ECSTrailPackOperationalCriteria = {
+    remotenessScore: route.remotenessScore,
+    campabilityScore: route.campabilityScore,
+    minimumFuelRangeMiles: route.minimumFuelRangeMiles,
+    minimumWaterCapacityGallons: route.minimumWaterCapacityGallons,
+    routeIntelligence: route.routeIntelligence,
+  };
+  return Object.values(criteria).some((value) => value !== undefined) ? criteria : undefined;
+}
+
 export function catalogRouteToTrailPack(
   route: RouteCatalogRecord,
   verification: RouteCatalogVerification = verifyRouteCatalogRecord(route),
 ): ECSTrailPack {
+  const operationalCriteria = operationalCriteriaForRoute(route);
   return {
     id: route.publicId ?? route.id,
     name: route.name,
@@ -768,6 +801,11 @@ export function catalogRouteToTrailPack(
     estimatedDurationMinutes: route.estimatedDurationMinutes,
     difficulty: route.difficulty ?? 'unknown',
     vehicleFit: route.vehicleFit,
+    remotenessScore: route.remotenessScore,
+    campabilityScore: route.campabilityScore,
+    minimumFuelRangeMiles: route.minimumFuelRangeMiles,
+    minimumWaterCapacityGallons: route.minimumWaterCapacityGallons,
+    routeIntelligence: route.routeIntelligence,
     confidenceScore: verification.confidenceScore,
     confidenceReasons: verification.reasons.length > 0 ? verification.reasons : [verification.sourceLabel],
     dataState: 'live',
@@ -787,6 +825,7 @@ export function catalogRouteToTrailPack(
       activeGuidance: verification.activeGuidance,
       dataUsed: verification.dataUsed,
       lastEvaluatedAt: verification.lastEvaluatedAt,
+      operationalCriteria,
     },
     createdAt: route.createdAt,
     updatedAt: route.updatedAt,

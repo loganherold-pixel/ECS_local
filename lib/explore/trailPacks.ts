@@ -89,6 +89,14 @@ export type ECSTrailPackOfflineCacheMetadata = {
   sourceTimestamps?: string[];
 };
 
+export type ECSTrailPackOperationalCriteria = {
+  remotenessScore?: number;
+  campabilityScore?: number;
+  minimumFuelRangeMiles?: number;
+  minimumWaterCapacityGallons?: number;
+  routeIntelligence?: Record<string, unknown>;
+};
+
 export type ECSTrailPackCatalogVerification = {
   status: 'normal' | 'watch' | 'caution' | 'critical';
   sourceLabel: string;
@@ -101,6 +109,7 @@ export type ECSTrailPackCatalogVerification = {
   lastEvaluatedAt: string;
   detailAssessment?: ECSTrailPackDetailAssessment;
   offlineCache?: ECSTrailPackOfflineCacheMetadata;
+  operationalCriteria?: ECSTrailPackOperationalCriteria;
   detailFetchedAt?: string;
 };
 
@@ -116,6 +125,11 @@ export type ECSTrailPack = {
   estimatedDurationMinutes?: number;
   difficulty?: ECSTrailPackDifficulty;
   vehicleFit?: string[];
+  remotenessScore?: number;
+  campabilityScore?: number;
+  minimumFuelRangeMiles?: number;
+  minimumWaterCapacityGallons?: number;
+  routeIntelligence?: Record<string, unknown>;
   confidenceScore: number;
   confidenceReasons: string[];
   dataState?: ECSTrailPackDataState;
@@ -416,6 +430,13 @@ export function trailPackToExpeditionOpportunity(
     difficulty === 'technical' ? 7 :
     difficulty === 'extreme' ? 9 :
     5;
+  const routeCatalogOperationalCriteria: ECSTrailPackOperationalCriteria = {
+    remotenessScore: pack.remotenessScore,
+    campabilityScore: pack.campabilityScore,
+    minimumFuelRangeMiles: pack.minimumFuelRangeMiles,
+    minimumWaterCapacityGallons: pack.minimumWaterCapacityGallons,
+    routeIntelligence: pack.routeIntelligence,
+  };
 
   return {
     id: `trail-pack:${pack.id}`,
@@ -424,7 +445,7 @@ export function trailPackToExpeditionOpportunity(
     regionGroup: inferTrailPackRegionGroup(pack),
     distanceMiles: pack.distanceMiles ?? 0,
     terrainType: getTrailPackRouteTypeLabel(pack.routeType),
-    remotenessScore: Math.max(1, Math.min(10, Math.round(pack.confidenceScore / 10))),
+    remotenessScore: pack.remotenessScore ?? Math.max(1, Math.min(10, Math.round(pack.confidenceScore / 10))),
     estimatedFuelRequired: Math.max(1, Math.round((pack.distanceMiles ?? 12) / 12)),
     suggestedCamps: 0,
     rigCompatibility: pack.confidenceScore,
@@ -458,6 +479,8 @@ export function trailPackToExpeditionOpportunity(
       confidenceScore: pack.confidenceScore,
       reviewStatus: pack.reviewStatus,
       catalogVerification: pack.catalogVerification,
+      routeCatalogOperationalCriteria,
+      routeIntelligence: pack.routeIntelligence,
     },
   };
 }

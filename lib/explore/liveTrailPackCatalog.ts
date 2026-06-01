@@ -29,6 +29,11 @@ export type LiveTrailPackCatalogSearchCriteria = {
   routeType?: ECSTrailPackRouteType | string | null;
   difficulty?: ECSTrailPackDifficulty | string | null;
   minConfidenceScore?: number | null;
+  minRemotenessScore?: number | null;
+  maxRemotenessScore?: number | null;
+  minCampabilityScore?: number | null;
+  availableFuelRangeMiles?: number | null;
+  availableWaterCapacityGallons?: number | null;
   locationSource?: 'live_gps' | 'default_location' | string | null;
   limit?: number;
 };
@@ -84,6 +89,11 @@ const TRAIL_PACK_SELECT = [
 function finiteNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  const number = finiteNumber(value);
+  return number != null && number > 0 ? number : undefined;
 }
 
 function cleanText(value: unknown): string | undefined {
@@ -327,6 +337,21 @@ export function normalizeLiveTrailPackRecord(value: unknown): ECSTrailPack | nul
     estimatedDurationMinutes: readNumber(record, 'estimated_duration_minutes', 'estimatedDurationMinutes'),
     difficulty: normalizeDifficulty(record.difficulty),
     vehicleFit: readStringArray(record.vehicle_fit ?? record.vehicleFit),
+    remotenessScore: readNumber(record, 'remoteness_score', 'remotenessScore'),
+    campabilityScore: readNumber(record, 'campability_score', 'campabilityScore'),
+    minimumFuelRangeMiles: readNumber(
+      record,
+      'minimum_fuel_range_miles',
+      'minimumFuelRangeMiles',
+      'minFuelRangeMiles',
+    ),
+    minimumWaterCapacityGallons: readNumber(
+      record,
+      'minimum_water_capacity_gallons',
+      'minimumWaterCapacityGallons',
+      'minWaterCapacityGallons',
+    ),
+    routeIntelligence: readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined,
     confidenceScore,
     confidenceReasons: readStringArray(record.confidence_reasons ?? record.confidenceReasons) ?? [
       'Loaded from the live ECS Trail Pack catalog.',
@@ -361,6 +386,11 @@ export function buildRouteCatalogSearchBody(
   const minDurationMinutes = finiteNumber(criteria.minDurationMinutes);
   const maxDurationMinutes = finiteNumber(criteria.maxDurationMinutes);
   const minConfidenceScore = finiteNumber(criteria.minConfidenceScore);
+  const minRemotenessScore = finiteNumber(criteria.minRemotenessScore);
+  const maxRemotenessScore = finiteNumber(criteria.maxRemotenessScore);
+  const minCampabilityScore = finiteNumber(criteria.minCampabilityScore);
+  const availableFuelRangeMiles = positiveNumber(criteria.availableFuelRangeMiles);
+  const availableWaterCapacityGallons = positiveNumber(criteria.availableWaterCapacityGallons);
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
   return {
@@ -383,6 +413,13 @@ export function buildRouteCatalogSearchBody(
     ...(routeType ? { routeType: criteria.routeType } : {}),
     ...(difficulty ? { difficulty: criteria.difficulty } : {}),
     ...(minConfidenceScore != null ? { minConfidenceScore: criteria.minConfidenceScore } : {}),
+    ...(minRemotenessScore != null ? { minRemotenessScore: criteria.minRemotenessScore } : {}),
+    ...(maxRemotenessScore != null ? { maxRemotenessScore: criteria.maxRemotenessScore } : {}),
+    ...(minCampabilityScore != null ? { minCampabilityScore: criteria.minCampabilityScore } : {}),
+    ...(availableFuelRangeMiles != null ? { availableFuelRangeMiles: criteria.availableFuelRangeMiles } : {}),
+    ...(availableWaterCapacityGallons != null
+      ? { availableWaterCapacityGallons: criteria.availableWaterCapacityGallons }
+      : {}),
     ...(typeof criteria.locationSource === 'string' && criteria.locationSource.trim().length > 0
       ? { locationSource: criteria.locationSource }
       : {}),

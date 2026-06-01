@@ -57,6 +57,18 @@ assert(
   'Migration should seed Tahoe/Mendocino MVUM pilot sources and support repeatable raw-feature upserts',
 );
 
+const operationalCriteriaMigration = read(path.join('supabase', 'migrations', '028_route_catalog_operational_criteria.sql'));
+assert(
+  operationalCriteriaMigration.includes('remoteness_score') &&
+    operationalCriteriaMigration.includes('campability_score') &&
+    operationalCriteriaMigration.includes('minimum_fuel_range_miles') &&
+    operationalCriteriaMigration.includes('minimum_water_capacity_gallons') &&
+    operationalCriteriaMigration.includes('route_intelligence') &&
+    operationalCriteriaMigration.includes('route_catalog_public') &&
+    operationalCriteriaMigration.includes('verified_routes_operational_criteria_idx'),
+  'Route catalog should add schema-backed operational criteria for remoteness, campability, fuel range, and water margins',
+);
+
 for (const functionName of ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake', 'route-catalog-sync-usfs-mvum']) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
@@ -90,9 +102,16 @@ assert(
     searchFunction.includes('routeType') &&
     searchFunction.includes('difficulty') &&
     searchFunction.includes('minConfidenceScore') &&
+    searchFunction.includes('minRemotenessScore') &&
+    searchFunction.includes('maxRemotenessScore') &&
+    searchFunction.includes('minCampabilityScore') &&
+    searchFunction.includes('availableFuelRangeMiles') &&
+    searchFunction.includes('availableWaterCapacityGallons') &&
     searchFunction.includes(".gte('distance_miles'") &&
-    searchFunction.includes(".lte('estimated_duration_minutes'"),
-  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, and confidence',
+    searchFunction.includes(".lte('estimated_duration_minutes'") &&
+    searchFunction.includes(".gte('remoteness_score'") &&
+    searchFunction.includes(".lte('minimum_fuel_range_miles'"),
+  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, campability, and resource margins',
 );
 
 assert(
@@ -107,6 +126,10 @@ assert(
     liveCatalog.includes('routeType: criteria.routeType') &&
     liveCatalog.includes('difficulty: criteria.difficulty') &&
     liveCatalog.includes('minConfidenceScore: criteria.minConfidenceScore') &&
+    liveCatalog.includes('minRemotenessScore: criteria.minRemotenessScore') &&
+    liveCatalog.includes('minCampabilityScore: criteria.minCampabilityScore') &&
+    liveCatalog.includes('availableFuelRangeMiles: criteria.availableFuelRangeMiles') &&
+    liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
@@ -129,6 +152,9 @@ assert(
     discover.includes('maxDurationMinutes: 480') &&
     discover.includes('minDurationMinutes: 481') &&
     discover.includes('minDurationMinutes: 961') &&
+    discover.includes('minRemotenessScore: 7') &&
+    discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
+    discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
     discover.includes('fetchRouteCatalogTrailPackDetail') &&
     discover.includes('trailPackPreviewDetailStatus') &&

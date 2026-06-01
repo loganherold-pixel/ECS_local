@@ -89,6 +89,28 @@ assert.strictEqual(tahoeRoute.verifiedRoute.official_access_coverage_pct, 100);
 assert.strictEqual(tahoeRoute.verifiedRoute.unknown_access_coverage_pct, 0);
 assert.deepStrictEqual(tahoeRoute.verifiedRoute.vehicle_fit, ['highway_legal_4x4', 'full_size_4x4']);
 assert.strictEqual(tahoeRoute.verifiedRoute.route_geometry.type, 'LineString');
+assert(
+  Number.isFinite(tahoeRoute.verifiedRoute.remoteness_score),
+  'MVUM segment upserts should populate schema-backed remoteness_score for catalog filtering',
+);
+assert.strictEqual(
+  tahoeRoute.verifiedRoute.campability_score,
+  null,
+  'MVUM segment upserts should keep campability unknown until reviewed camp endpoint data exists',
+);
+assert(
+  tahoeRoute.verifiedRoute.minimum_fuel_range_miles >= tahoeRoute.verifiedRoute.distance_miles,
+  'MVUM segment upserts should populate a conservative minimum fuel range requirement',
+);
+assert(
+  tahoeRoute.verifiedRoute.minimum_water_capacity_gallons >= 1,
+  'MVUM segment upserts should populate a conservative minimum water capacity requirement',
+);
+assert.strictEqual(
+  tahoeRoute.verifiedRoute.route_intelligence.resourceMarginBasis,
+  'estimated_from_mvum_distance_and_duration',
+  'MVUM segment upserts should label estimated fuel/water margins instead of implying live resource certainty',
+);
 assert(tahoeRoute.verifiedRoute.confidence_reasons.some((reason) => /USFS MVUM/i.test(reason)));
 assert(tahoeRoute.verifiedRoute.warning_reasons.some((warning) => /legal baseline/i.test(warning)));
 assert.strictEqual(tahoeRoute.verifiedRouteSource.route_source_id, '00000000-0000-0000-0000-000000000001');
@@ -163,6 +185,24 @@ assert.strictEqual(calIdaAggregate.verifiedRoute.verification_status, 'official_
 assert.strictEqual(calIdaAggregate.verifiedRoute.route_geometry.type, 'MultiLineString');
 assert.strictEqual(calIdaAggregate.verifiedRoute.route_geometry.coordinates.length, 2);
 assert.strictEqual(calIdaAggregate.verifiedRoute.distance_miles, 3.908);
+assert(
+  Number.isFinite(calIdaAggregate.verifiedRoute.remoteness_score),
+  'Aggregate MVUM routes should carry schema-backed remoteness_score',
+);
+assert.strictEqual(
+  calIdaAggregate.verifiedRoute.campability_score,
+  null,
+  'Aggregate MVUM routes should not imply campability before CampOps data exists',
+);
+assert(
+  calIdaAggregate.verifiedRoute.minimum_fuel_range_miles >= calIdaAggregate.verifiedRoute.distance_miles,
+  'Aggregate MVUM routes should carry minimum fuel range criteria for vehicle filtering',
+);
+assert.strictEqual(
+  calIdaAggregate.verifiedRoute.route_intelligence.sourceFeatureCount,
+  2,
+  'Aggregate MVUM route intelligence should expose source feature count for transparency',
+);
 assert.deepStrictEqual(calIdaAggregate.verifiedRoute.vehicle_fit, ['highway_legal_4x4', 'full_size_4x4']);
 assert(calIdaAggregate.verifiedRoute.tags.includes('source-segment aggregate'));
 assert(calIdaAggregate.verifiedRoute.warning_reasons.some((warning) => /source-segment aggregate/i.test(warning)));

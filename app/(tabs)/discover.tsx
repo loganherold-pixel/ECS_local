@@ -968,6 +968,8 @@ function DiscoverScreenInner() {
     distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
   const routeCatalogRefinementCriteria = useMemo(() => {
     switch (exploreRefinement) {
+      case 'remoteness':
+        return { minRemotenessScore: 7 };
       case 'dayTrip':
         return { maxDurationMinutes: 480 };
       case 'weekendTrip':
@@ -984,6 +986,8 @@ function DiscoverScreenInner() {
       longitude: userLng,
       radiusMiles: activeDistanceRadius,
       vehicleClass: vehicleProfile?.vehicleType ?? null,
+      availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
+      availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
       locationSource: hasGPSFix ? 'live_gps' : 'default_location',
       ...routeCatalogRefinementCriteria,
     }),
@@ -993,6 +997,8 @@ function DiscoverScreenInner() {
       routeCatalogRefinementCriteria,
       userLat,
       userLng,
+      vehicleProfile?.fuel_range_miles,
+      vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
     ],
   );
