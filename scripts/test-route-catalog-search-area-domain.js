@@ -88,6 +88,18 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'allegheny_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'cherokee_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'daniel_boone_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'rogue_siskiyou_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'medicine_bow_routt_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'kootenai_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'gifford_pinchot_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'arapaho_roosevelt_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'umatilla_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'ochoco_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'cibola_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'eldorado_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nez_perce_clearwater_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'payette_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'superior_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_ohv') &&
@@ -194,6 +206,18 @@ assert.deepStrictEqual(
     'Allegheny National Forest',
     'Cherokee National Forest',
     'Daniel Boone National Forest',
+    'Rogue River-Siskiyou National Forests',
+    'Medicine Bow-Routt National Forest',
+    'Kootenai National Forest',
+    'Gifford Pinchot National Forest',
+    'Arapaho and Roosevelt National Forests',
+    'Umatilla National Forest',
+    'Ochoco National Forest',
+    'Cibola National Forest',
+    'Eldorado National Forest',
+    'Nez Perce-Clearwater National Forest',
+    'Payette National Forest',
+    'Superior National Forest',
     'Michigan DNR ORV',
     'Minnesota DNR OHV',
     'Oregon ODF OHV',
@@ -217,7 +241,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Huron-Manistee National Forest, Ozark-St\. Francis National Forest, Ottawa National Forest, Hiawatha National Forest, Chequamegon-Nicolet National Forest, National Forests in Florida, Ouachita National Forest, Mark Twain National Forest, National Forests in Mississippi, Kisatchie National Forest, George Washington and Jefferson National Forest, Francis Marion and Sumter National Forests, National Forests in Texas, National Forests in North Carolina, Allegheny National Forest, Cherokee National Forest, Daniel Boone National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, NPS Public Trails Joshua Tree.*In curation: BLM GTLF Wyoming.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Huron-Manistee National Forest, Ozark-St\. Francis National Forest, Ottawa National Forest, Hiawatha National Forest, Chequamegon-Nicolet National Forest, National Forests in Florida, Ouachita National Forest, Mark Twain National Forest, National Forests in Mississippi, Kisatchie National Forest, George Washington and Jefferson National Forest, Francis Marion and Sumter National Forests, National Forests in Texas, National Forests in North Carolina, Allegheny National Forest, Cherokee National Forest, Daniel Boone National Forest, Rogue River-Siskiyou National Forests, Medicine Bow-Routt National Forest, Kootenai National Forest, Gifford Pinchot National Forest, Arapaho and Roosevelt National Forests, Umatilla National Forest, Ochoco National Forest, Cibola National Forest, Eldorado National Forest, Nez Perce-Clearwater National Forest, Payette National Forest, Superior National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, NPS Public Trails Joshua Tree.*In curation: BLM GTLF Wyoming.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

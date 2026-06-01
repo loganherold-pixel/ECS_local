@@ -55,6 +55,18 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'allegheny_nf'
   | 'cherokee_nf'
   | 'daniel_boone_nf'
+  | 'rogue_siskiyou_nf'
+  | 'medicine_bow_routt_nf'
+  | 'kootenai_nf'
+  | 'gifford_pinchot_nf'
+  | 'arapaho_roosevelt_nf'
+  | 'umatilla_nf'
+  | 'ochoco_nf'
+  | 'cibola_nf'
+  | 'eldorado_nf'
+  | 'nez_perce_clearwater_nf'
+  | 'payette_nf'
+  | 'superior_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -674,6 +686,126 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Daniel Boone NF',
     latitude: 37.433,
     longitude: -84.033,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'rogue_siskiyou_nf',
+    label: 'Rogue River-Siskiyou National Forests',
+    shortLabel: 'Rogue-Siskiyou NF',
+    latitude: 42.514,
+    longitude: -123.305,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'medicine_bow_routt_nf',
+    label: 'Medicine Bow-Routt National Forest',
+    shortLabel: 'Medicine Bow-Routt NF',
+    latitude: 42.392,
+    longitude: -105.882,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'kootenai_nf',
+    label: 'Kootenai National Forest',
+    shortLabel: 'Kootenai NF',
+    latitude: 48.316,
+    longitude: -115.412,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'gifford_pinchot_nf',
+    label: 'Gifford Pinchot National Forest',
+    shortLabel: 'Gifford Pinchot NF',
+    latitude: 46.316,
+    longitude: -121.955,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'arapaho_roosevelt_nf',
+    label: 'Arapaho and Roosevelt National Forests',
+    shortLabel: 'Arapaho-Roosevelt NF',
+    latitude: 40.312,
+    longitude: -104.95,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'umatilla_nf',
+    label: 'Umatilla National Forest',
+    shortLabel: 'Umatilla NF',
+    latitude: 45.54,
+    longitude: -118.602,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'ochoco_nf',
+    label: 'Ochoco National Forest',
+    shortLabel: 'Ochoco NF',
+    latitude: 44.362,
+    longitude: -120.485,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'cibola_nf',
+    label: 'Cibola National Forest',
+    shortLabel: 'Cibola NF',
+    latitude: 35.036,
+    longitude: -104.14,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'eldorado_nf',
+    label: 'Eldorado National Forest',
+    shortLabel: 'Eldorado NF',
+    latitude: 38.776,
+    longitude: -120.393,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'nez_perce_clearwater_nf',
+    label: 'Nez Perce-Clearwater National Forest',
+    shortLabel: 'Nez Perce-Clearwater NF',
+    latitude: 46.615,
+    longitude: -115.662,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'payette_nf',
+    label: 'Payette National Forest',
+    shortLabel: 'Payette NF',
+    latitude: 44.939,
+    longitude: -116.086,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'superior_nf',
+    label: 'Superior National Forest',
+    shortLabel: 'Superior NF',
+    latitude: 47.791,
+    longitude: -91.567,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],

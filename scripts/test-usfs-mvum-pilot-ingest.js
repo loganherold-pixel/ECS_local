@@ -89,6 +89,18 @@ const expectedUsfsMvumForestSlugs = [
     'allegheny-national-forest',
     'cherokee-national-forest',
     'daniel-boone-national-forest',
+    'rogue-river-siskiyou-national-forests',
+    'medicine-bow-routt-national-forest',
+    'kootenai-national-forest',
+    'gifford-pinchot-national-forest',
+    'arapaho-roosevelt-national-forests',
+    'umatilla-national-forest',
+    'ochoco-national-forest',
+    'cibola-national-forest',
+    'eldorado-national-forest',
+    'nez-perce-clearwater-national-forest',
+    'payette-national-forest',
+    'superior-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -148,6 +160,18 @@ const expectedUsfsMvumForestNames = [
   'Allegheny National Forest',
   'Cherokee National Forest',
   'Daniel Boone National Forest',
+  'Rogue River-Siskiyou National Forests',
+  'Medicine Bow-Routt National Forest',
+  'Kootenai National Forest',
+  'Gifford Pinchot National Forest',
+  'Arapaho and Roosevelt National Forests',
+  'Umatilla National Forest',
+  'Ochoco National Forest',
+  'Cibola National Forest',
+  'Eldorado National Forest',
+  'Nez Perce-Clearwater National Forest',
+  'Payette National Forest',
+  'Superior National Forest',
 ];
 
 assert.deepStrictEqual(

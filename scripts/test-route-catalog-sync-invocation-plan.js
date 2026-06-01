@@ -148,6 +148,18 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'allegheny-national-forest',
   'cherokee-national-forest',
   'daniel-boone-national-forest',
+  'rogue-river-siskiyou-national-forests',
+  'medicine-bow-routt-national-forest',
+  'kootenai-national-forest',
+  'gifford-pinchot-national-forest',
+  'arapaho-roosevelt-national-forests',
+  'umatilla-national-forest',
+  'ochoco-national-forest',
+  'cibola-national-forest',
+  'eldorado-national-forest',
+  'nez-perce-clearwater-national-forest',
+  'payette-national-forest',
+  'superior-national-forest',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,
