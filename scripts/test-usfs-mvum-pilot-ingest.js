@@ -42,8 +42,17 @@ assert.deepStrictEqual(
     'manti-la-sal-national-forest',
     'sawtooth-national-forest',
     'deschutes-national-forest',
+    'kaibab-national-forest',
+    'prescott-national-forest',
+    'gila-national-forest',
+    'santa-fe-national-forest',
+    'carson-national-forest',
+    'rio-grande-national-forest',
+    'grand-mesa-uncompahgre-gunnison-national-forests',
+    'humboldt-toiyabe-national-forest',
+    'pike-san-isabel-national-forests',
   ],
-  'MVUM pilot forests should include the first verified public recommendation expansion batch',
+  'MVUM pilot forests should include the first two verified public recommendation expansion batches',
 );
 assert(
   USFS_MVUM_LAYERS.some((layer) => layer.kind === 'road' && layer.url.includes('Motor_Vehicle_Use_Map_Roads')) &&
@@ -53,7 +62,7 @@ assert(
 
 const where = buildUsfsMvumWhereClause(USFS_MVUM_PILOT_FORESTS, { minMiles: 1 });
 assert(
-  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest')"),
+  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest','Kaibab National Forest','Prescott National Forest','Gila National Forest','Santa Fe National Forest','Carson National Forest','Rio Grande National Forest','Grand Mesa, Uncompahgre and Gunnison National Forests','Humboldt-Toiyabe National Forest','Pike and San Isabel National Forests')"),
 );
 assert(where.includes('GIS_MILES >= 1'));
 assert(where.includes("HIGHCLEARA = 'open'") && where.includes("FOURWD_GT5 = 'open'"));

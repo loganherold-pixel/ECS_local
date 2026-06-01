@@ -39,6 +39,15 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'manti_la_sal_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sawtooth_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'deschutes_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'kaibab_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'prescott_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'gila_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'santa_fe_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'carson_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'rio_grande_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'gmug_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'humboldt_toiyabe_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'pike_san_isabel_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf'),
   'Route catalog presets should expose all verified public recommendation coverage areas.',
 );
@@ -85,6 +94,15 @@ assert.deepStrictEqual(
     'Manti-La Sal National Forest',
     'Sawtooth National Forest',
     'Deschutes National Forest',
+    'Kaibab National Forest',
+    'Prescott National Forest',
+    'Gila National Forest',
+    'Santa Fe National Forest',
+    'Carson National Forest',
+    'Rio Grande National Forest',
+    'Grand Mesa, Uncompahgre and Gunnison National Forests',
+    'Humboldt-Toiyabe National Forest',
+    'Pike and San Isabel National Forests',
     'BLM GTLF CA/NV',
   ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
@@ -98,7 +116,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, BLM GTLF CA\/NV.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, BLM GTLF CA\/NV.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

@@ -98,6 +98,15 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'manti-la-sal-national-forest',
   'sawtooth-national-forest',
   'deschutes-national-forest',
+  'kaibab-national-forest',
+  'prescott-national-forest',
+  'gila-national-forest',
+  'santa-fe-national-forest',
+  'carson-national-forest',
+  'rio-grande-national-forest',
+  'grand-mesa-uncompahgre-gunnison-national-forests',
+  'humboldt-toiyabe-national-forest',
+  'pike-san-isabel-national-forests',
 ]);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);

@@ -6,6 +6,15 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'manti_la_sal_nf'
   | 'sawtooth_nf'
   | 'deschutes_nf'
+  | 'kaibab_nf'
+  | 'prescott_nf'
+  | 'gila_nf'
+  | 'santa_fe_nf'
+  | 'carson_nf'
+  | 'rio_grande_nf'
+  | 'gmug_nf'
+  | 'humboldt_toiyabe_nf'
+  | 'pike_san_isabel_nf'
   | 'blm_ca_nv_gtlf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
@@ -125,6 +134,96 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Deschutes NF',
     latitude: 43.9,
     longitude: -121.6,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'kaibab_nf',
+    label: 'Kaibab National Forest',
+    shortLabel: 'Kaibab NF',
+    latitude: 35.98,
+    longitude: -112.15,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'prescott_nf',
+    label: 'Prescott National Forest',
+    shortLabel: 'Prescott NF',
+    latitude: 34.64,
+    longitude: -112.42,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'gila_nf',
+    label: 'Gila National Forest',
+    shortLabel: 'Gila NF',
+    latitude: 33.37,
+    longitude: -108.34,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'santa_fe_nf',
+    label: 'Santa Fe National Forest',
+    shortLabel: 'Santa Fe NF',
+    latitude: 35.88,
+    longitude: -106.11,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'carson_nf',
+    label: 'Carson National Forest',
+    shortLabel: 'Carson NF',
+    latitude: 36.51,
+    longitude: -106.19,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'rio_grande_nf',
+    label: 'Rio Grande National Forest',
+    shortLabel: 'Rio Grande NF',
+    latitude: 37.72,
+    longitude: -106.53,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'gmug_nf',
+    label: 'Grand Mesa, Uncompahgre and Gunnison National Forests',
+    shortLabel: 'GMUG NF',
+    latitude: 38.42,
+    longitude: -107.56,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'humboldt_toiyabe_nf',
+    label: 'Humboldt-Toiyabe National Forest',
+    shortLabel: 'Humboldt-Toiyabe NF',
+    latitude: 38.95,
+    longitude: -117.08,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'pike_san_isabel_nf',
+    label: 'Pike and San Isabel National Forests',
+    shortLabel: 'Pike-San Isabel NF',
+    latitude: 38.43,
+    longitude: -104.05,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],
