@@ -20,9 +20,12 @@ function compileTypescript(module, filename) {
 require.extensions['.ts'] = compileTypescript;
 
 const {
+  ROUTE_CATALOG_COVERAGE_AREAS,
+  ROUTE_CATALOG_CURATION_COVERAGE_LABELS,
   ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
   buildManualRouteCatalogSearchArea,
+  getRouteCatalogCoverageSummary,
   getRouteCatalogCoverageNotice,
   isRouteCatalogCoordinateInConus,
   parseRouteCatalogCoordinateText,
@@ -32,6 +35,20 @@ assert(
   ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'tahoe_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mendocino_nf'),
   'Route catalog presets should retain the current Tahoe and Mendocino field-test areas.',
+);
+assert(
+  ROUTE_CATALOG_PRESET_SEARCH_AREAS.every((area) => area.publicRecommendation === true),
+  'Preset search chips should only be generated from public recommendation coverage areas.',
+);
+assert(
+  ROUTE_CATALOG_COVERAGE_AREAS.every((area) =>
+    area.key &&
+    area.label &&
+    Array.isArray(area.sourceAdapters) &&
+    area.sourceAdapters.length > 0 &&
+    area.coveragePosture
+  ),
+  'Route catalog coverage areas should be data-driven records with source adapter and posture metadata.',
 );
 
 assert.deepStrictEqual(
@@ -56,6 +73,18 @@ assert.deepStrictEqual(
   ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   ['Tahoe National Forest', 'Mendocino National Forest'],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
+);
+assert(
+  ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Michigan DNR ORV') &&
+    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Minnesota DNR OHV') &&
+    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Oregon ODF OHV') &&
+    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('BLM GTLF'),
+  'Coverage registry should expose official/source-backed areas that are ingested for curation but not public recommendations yet.',
+);
+assert.match(
+  getRouteCatalogCoverageSummary(),
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 
 assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 39.305, longitude: -120.49 }), true);

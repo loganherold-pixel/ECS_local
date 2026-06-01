@@ -12,10 +12,14 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 
 assert(
   discover.includes('ROUTE_CATALOG_PRESET_SEARCH_AREAS') &&
+    discover.includes('ROUTE_CATALOG_COVERAGE_AREAS') &&
+    discover.includes('ROUTE_CATALOG_CURATION_COVERAGE_LABELS') &&
     discover.includes('buildManualRouteCatalogSearchArea') &&
+    discover.includes('getRouteCatalogCoverageSummary') &&
     discover.includes('getRouteCatalogCoverageNotice') &&
     discover.includes('ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS') &&
     discover.includes('routeCatalogManualSearchArea') &&
+    discover.includes('routeCatalogCoverageSummary') &&
     discover.includes('routeCatalogCoverageNotice') &&
     discover.includes('routeCatalogSearchAreaModalVisible') &&
     discover.includes('routeCatalogSearchAreaKey') &&
@@ -49,6 +53,7 @@ assert(
     discover.includes('Manual Center') &&
     discover.includes('Apply Center') &&
     discover.includes('VERIFIED COVERAGE') &&
+    discover.includes('IN CURATION') &&
     discover.includes('No demo routes are used') &&
     discover.includes('manual_search_center') &&
     discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.'),

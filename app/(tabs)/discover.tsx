@@ -151,7 +151,10 @@ import {
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
   buildManualRouteCatalogSearchArea,
+  getRouteCatalogCoverageSummary,
   getRouteCatalogCoverageNotice,
+  ROUTE_CATALOG_COVERAGE_AREAS,
+  ROUTE_CATALOG_CURATION_COVERAGE_LABELS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
   ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   type RouteCatalogPresetSearchAreaKey,
@@ -207,6 +210,7 @@ import {
 } from '../../lib/readiness';
 
 const TAG = '[EXPLORE]';
+void ROUTE_CATALOG_COVERAGE_AREAS;
 // Preserve the legacy categorization binding during Metro/HMR transitions while
 // the unified drivable-trail pipeline fully replaces the old category tabs.
 void categorizeRoutesExpanded;
@@ -1021,6 +1025,10 @@ function DiscoverScreenInner() {
   const routeCatalogCoverageNotice = useMemo(
     () => getRouteCatalogCoverageNotice(routeCatalogEffectiveSearchArea),
     [routeCatalogEffectiveSearchArea],
+  );
+  const routeCatalogCoverageSummary = useMemo(
+    () => getRouteCatalogCoverageSummary(),
+    [],
   );
   const routeCatalogSearchCoordinate = useMemo(
     () => routeCatalogEffectiveSearchArea
@@ -5332,7 +5340,14 @@ function DiscoverScreenInner() {
               {ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS.join(' / ')}
             </Text>
             <Text style={s.routeCatalogManualCoverageHint}>
-              Manual centers search the live catalog within radius. No demo routes are used.
+              {routeCatalogCoverageSummary}
+            </Text>
+            <Text style={s.routeCatalogManualCoverageHint}>
+              No demo routes are used.
+            </Text>
+            <Text style={s.routeCatalogManualSearchLabel}>IN CURATION</Text>
+            <Text style={s.routeCatalogManualCoverageHint} numberOfLines={3}>
+              {ROUTE_CATALOG_CURATION_COVERAGE_LABELS.join(' / ')}
             </Text>
           </View>
         </TacticalPopupShell>

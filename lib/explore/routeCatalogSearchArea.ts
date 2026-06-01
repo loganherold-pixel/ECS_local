@@ -1,6 +1,10 @@
 export type RouteCatalogPresetSearchAreaKey = 'tahoe_nf' | 'mendocino_nf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
+export type RouteCatalogCoveragePosture =
+  | 'verified_recommendation'
+  | 'official_curation'
+  | 'supplemental_context';
 
 export type RouteCatalogSearchArea = {
   key: RouteCatalogPresetSearchAreaKey | 'manual_search_center' | 'live_gps';
@@ -15,6 +19,19 @@ export type RouteCatalogPresetSearchArea = Omit<RouteCatalogSearchArea, 'key' | 
   key: RouteCatalogPresetSearchAreaKey;
   source: 'selected_search_area';
   coveragePosture: 'verified_recommendation';
+  publicRecommendation: true;
+  sourceAdapters: string[];
+};
+
+export type RouteCatalogCoverageArea = {
+  key: string;
+  label: string;
+  shortLabel: string;
+  latitude: number | null;
+  longitude: number | null;
+  coveragePosture: RouteCatalogCoveragePosture;
+  publicRecommendation: boolean;
+  sourceAdapters: string[];
 };
 
 export type ManualRouteCatalogSearchAreaInput = {
@@ -33,15 +50,16 @@ const CONUS_BOUNDS = {
   maxLongitude: -66.885444,
 };
 
-export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] = [
+export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
   {
     key: 'tahoe_nf',
     label: 'Tahoe National Forest',
     shortLabel: 'Tahoe NF',
     latitude: 39.305,
     longitude: -120.49,
-    source: 'selected_search_area',
     coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
   },
   {
     key: 'mendocino_nf',
@@ -49,14 +67,103 @@ export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] =
     shortLabel: 'Mendocino NF',
     latitude: 39.605,
     longitude: -122.835,
-    source: 'selected_search_area',
     coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'michigan_orv',
+    label: 'Michigan DNR ORV',
+    shortLabel: 'Michigan ORV',
+    latitude: null,
+    longitude: null,
+    coveragePosture: 'official_curation',
+    publicRecommendation: false,
+    sourceAdapters: ['michigan_dnr_orv_gpx'],
+  },
+  {
+    key: 'minnesota_ohv',
+    label: 'Minnesota DNR OHV',
+    shortLabel: 'Minnesota OHV',
+    latitude: null,
+    longitude: null,
+    coveragePosture: 'official_curation',
+    publicRecommendation: false,
+    sourceAdapters: ['minnesota_dnr_ohv_trails'],
+  },
+  {
+    key: 'oregon_odf_ohv',
+    label: 'Oregon ODF OHV',
+    shortLabel: 'Oregon ODF',
+    latitude: null,
+    longitude: null,
+    coveragePosture: 'official_curation',
+    publicRecommendation: false,
+    sourceAdapters: ['oregon_odf_ohv_gpx'],
+  },
+  {
+    key: 'blm_gtlf',
+    label: 'BLM GTLF',
+    shortLabel: 'BLM GTLF',
+    latitude: null,
+    longitude: null,
+    coveragePosture: 'official_curation',
+    publicRecommendation: false,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'usgs_nps_context',
+    label: 'USGS/NPS public trail context',
+    shortLabel: 'USGS/NPS',
+    latitude: null,
+    longitude: null,
+    coveragePosture: 'supplemental_context',
+    publicRecommendation: false,
+    sourceAdapters: ['usgs_trails', 'nps_public_trails'],
   },
 ];
+
+export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] = ROUTE_CATALOG_COVERAGE_AREAS
+  .filter((area): area is RouteCatalogCoverageArea & {
+    key: RouteCatalogPresetSearchAreaKey;
+    latitude: number;
+    longitude: number;
+    coveragePosture: 'verified_recommendation';
+    publicRecommendation: true;
+  } =>
+    area.publicRecommendation === true &&
+    area.coveragePosture === 'verified_recommendation' &&
+    (area.key === 'tahoe_nf' || area.key === 'mendocino_nf') &&
+    typeof area.latitude === 'number' &&
+    typeof area.longitude === 'number',
+  )
+  .map((area) => ({
+    key: area.key,
+    label: area.label,
+    shortLabel: area.shortLabel,
+    latitude: area.latitude,
+    longitude: area.longitude,
+    source: 'selected_search_area',
+    coveragePosture: area.coveragePosture,
+    publicRecommendation: true,
+    sourceAdapters: area.sourceAdapters,
+  }));
 
 export const ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS = ROUTE_CATALOG_PRESET_SEARCH_AREAS
   .filter((area) => area.coveragePosture === 'verified_recommendation')
   .map((area) => area.label);
+
+export const ROUTE_CATALOG_CURATION_COVERAGE_LABELS = ROUTE_CATALOG_COVERAGE_AREAS
+  .filter((area) => area.coveragePosture === 'official_curation')
+  .map((area) => area.label);
+
+function joinCoverageLabels(values: string[]): string {
+  return values.length > 0 ? values.join(', ') : 'none yet';
+}
+
+export function getRouteCatalogCoverageSummary(): string {
+  return `Verified recommendation coverage: ${joinCoverageLabels(ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS)}. In curation: ${joinCoverageLabels(ROUTE_CATALOG_CURATION_COVERAGE_LABELS)}. No demo routes are used.`;
+}
 
 function roundCoordinate(value: number): number {
   return Number(value.toFixed(6));
@@ -140,7 +247,7 @@ export function buildManualRouteCatalogSearchArea(
 
 export function getRouteCatalogCoverageNotice(area: RouteCatalogSearchArea | null | undefined): string {
   if (!area) {
-    return `Verified recommendation coverage: ${ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS.join(', ')}. Select GPS or a CONUS search center to search within radius.`;
+    return `${getRouteCatalogCoverageSummary()} Select GPS or a CONUS search center to search within radius.`;
   }
 
   if (area.source === 'selected_search_area') {
