@@ -146,6 +146,7 @@
     "test:route-catalog-active-guidance": "node ./scripts/test-route-catalog-active-guidance.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
     "test:route-catalog-sync-inventory": "node ./scripts/test-route-catalog-sync-inventory.js",
+    "test:route-catalog-edge-deploy": "node ./scripts/test-route-catalog-edge-function-deploy-workflow.js",
     "test:blm-gtlf-route-catalog-adapter": "node ./scripts/test-blm-gtlf-route-catalog-adapter.js",
     "test:usgs-trails-route-catalog-adapter": "node ./scripts/test-usgs-trails-route-catalog-adapter.js",
     "test:nps-trails-route-catalog-adapter": "node ./scripts/test-nps-trails-route-catalog-adapter.js",

@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
+const ROUTE_CATALOG_PUBLIC_FUNCTIONS = [
+  'route-catalog-search',
+  'route-catalog-detail',
+  'route-submission-intake',
+];
+
 const ROUTE_CATALOG_SYNC_INVENTORY = [
   {
     key: 'usfs_mvum',
@@ -92,6 +98,14 @@ function routeCatalogSyncFunctionNames() {
   return ROUTE_CATALOG_SYNC_INVENTORY.map((entry) => entry.functionName);
 }
 
+function routeCatalogPublicFunctionNames() {
+  return [...ROUTE_CATALOG_PUBLIC_FUNCTIONS];
+}
+
+function routeCatalogDeployFunctionNames() {
+  return [...ROUTE_CATALOG_PUBLIC_FUNCTIONS, ...routeCatalogSyncFunctionNames()];
+}
+
 function readIfExists(root, relativePath) {
   const filePath = path.join(root, relativePath);
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
@@ -162,11 +176,15 @@ function validateRouteCatalogSyncInventory(root = path.join(__dirname, '..')) {
     ok: errors.length === 0,
     errors,
     functionNames: routeCatalogSyncFunctionNames(),
+    deployFunctionNames: routeCatalogDeployFunctionNames(),
   };
 }
 
 module.exports = {
+  ROUTE_CATALOG_PUBLIC_FUNCTIONS,
   ROUTE_CATALOG_SYNC_INVENTORY,
+  routeCatalogDeployFunctionNames,
+  routeCatalogPublicFunctionNames,
   routeCatalogSyncFunctionNames,
   validateRouteCatalogSyncInventory,
 };
