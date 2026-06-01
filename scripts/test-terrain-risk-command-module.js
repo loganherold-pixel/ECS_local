@@ -5,7 +5,7 @@ const Module = require('module');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 function loadTsModule(relativePath, mocks = {}) {
   const filename = path.join(root, relativePath);
@@ -92,8 +92,8 @@ assert(
   /<AttitudeCommandTerrainRiskPreview[\s\S]{0,220}terrainRisk=\{terrainRiskVisual\}[\s\S]{0,220}expanded=\{expanded\}/.test(widgetRenderersSource),
   'Route Terrain Risk expansion must render the shared inline chart preview.',
 );
-assert(widgetRenderersSource.includes("accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}"), 'Route Terrain Risk tap target must describe inline expand/collapse behavior.');
-assert(widgetRenderersSource.includes('renderCommandPanel(activePanel, true)'), 'Route Terrain Risk must use the shared inline expansion path instead of opening a popup.');
+assert(widgetRenderersSource.includes("accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}"), 'Route Terrain Risk tap target must describe the expanded/detail state.');
+assert(widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)'), 'Route Terrain Risk must use the shared inline expansion path instead of opening a popup.');
 assert(!widgetRenderersSource.includes("const compactRouteFocusPanel = activePanel === 'route'"), 'Route Terrain Risk must not use the old compact bottom-sheet branch.');
 assert(!widgetRenderersSource.includes('compactRouteFocusContent'), 'Route Terrain Risk must not use compact bottom-sheet content padding.');
 assert(
@@ -146,10 +146,10 @@ assert(sideProfileSource.includes('High risk route sections are highlighted'), '
 assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
 assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
 assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
-assert(sideProfileSource.includes('left: 8'), 'Terrain Risk chart should push the graph close to the left edge while preserving readable elevation labels.');
-assert(sideProfileSource.includes('right: 0'), 'Terrain Risk chart should push the graph close to the right edge while preserving a unit label lane.');
-assert(sideProfileSource.includes('top: 0') && sideProfileSource.includes('bottom: 18'), 'Terrain Risk chart should expand upward after the readout moves into the widget header.');
-assert(sideProfileSource.includes('labelX: ratio === 1 ? x - 18 : x'), 'Terrain Risk chart should keep the final distance label clear of the MI/KM unit label.');
+assert(sideProfileSource.includes('left: 24'), 'Terrain Risk chart should preserve a readable left elevation-label lane.');
+assert(sideProfileSource.includes('right: 16'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
+assert(sideProfileSource.includes('top: 8') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');
+assert(sideProfileSource.includes('labelX: ratio === 1 ? x - 10 : ratio === 0 ? x + 2 : x'), 'Terrain Risk chart should keep first/final distance labels clear of the chart edges and unit label.');
 assert(sideProfileSource.includes('y={CHART_FRAME.baselineY + 13}'), 'Terrain Risk chart distance ticks and unit label should share a single aligned bottom axis row.');
 assert(sideProfileSource.includes('x={CHART_FRAME.left + 2}') && sideProfileSource.includes('y={CHART_FRAME.top + 8}'), 'Terrain Risk FT label should stay inside the slimmer elevation tick label lane.');
 assert(
@@ -161,6 +161,10 @@ assert(sideProfileSource.includes('isTerrainProfileReferencePoint'), 'Terrain Ri
 assert(sideProfileSource.includes('formatTerrainReferenceReason'), 'Terrain Risk chart should explain why expanded reference dots were selected.');
 assert(sideProfileSource.includes('onPress={interactive ?'), 'Terrain Risk reference dots should only become tappable in expanded mode.');
 assert(sideProfileSource.includes('Why this point was referenced'), 'Terrain Risk expanded dot callout should explain the selected point.');
+assert(sideProfileSource.includes('completedDistanceMiles?: number | null'), 'Terrain Risk side profile should accept route progress for the live GPS marker.');
+assert(sideProfileSource.includes('buildCurrentRouteMarkerPoint'), 'Terrain Risk side profile should interpolate the current GPS marker on the elevation line.');
+assert(sideProfileSource.includes('Current GPS position'), 'Terrain Risk side profile should label the moving GPS marker for assistive tech.');
+assert(widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}'), 'Expanded Terrain Risk preview should pass active route progress into the side profile.');
 assert(!sideProfileSource.includes('ROUTE SIDE PROFILE'), 'Terrain Risk chart should not spend compact dashboard space on a redundant chart title.');
 assert(!commandModuleSource.includes('<Image'), 'Terrain Risk command module must not be a static image.');
 assert(!sideProfileSource.includes('<Image'), 'Terrain Risk side profile must not be a static image.');

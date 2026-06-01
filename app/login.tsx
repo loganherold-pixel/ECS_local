@@ -498,6 +498,7 @@ export default function LoginScreen() {
   const authViewportHeight = loginLayout.authViewportHeight;
   const isLandscape = loginLayout.layoutMode === 'landscape_split';
   const loginLogoWidth = loginLayout.logoWidth;
+  const loginLogoHeight = loginLayout.logoHeight;
   const loginHeaderHeight = loginLayout.headerHeight;
 
   return (
@@ -541,6 +542,7 @@ export default function LoginScreen() {
                 isOnline={isOnline}
                 headerHeight={loginHeaderHeight}
                 logoWidth={loginLogoWidth}
+                logoHeight={loginLogoHeight}
                 frameWidth={isLandscape ? Math.max(0, loginLayout.contentMaxWidth - loginLayout.formWidth - loginLayout.contentGap) : undefined}
                 statusInline={loginLayout.statusInline}
               />
@@ -765,12 +767,14 @@ const LoginHeaderBlock = memo(function LoginHeaderBlock({
   isOnline,
   headerHeight,
   logoWidth,
+  logoHeight,
   frameWidth,
   statusInline,
 }: {
   isOnline: boolean;
   headerHeight: number;
   logoWidth: number;
+  logoHeight: number;
   frameWidth?: number;
   statusInline: boolean;
 }) {
@@ -786,7 +790,7 @@ const LoginHeaderBlock = memo(function LoginHeaderBlock({
       <Image
         source={LOGIN_LOGO}
         resizeMode="contain"
-        style={[styles.logoImage, { width: logoWidth }]}
+        style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}
       />
       <View style={statusInline ? styles.onlineRowInline : styles.onlineRow}>
         <Ionicons

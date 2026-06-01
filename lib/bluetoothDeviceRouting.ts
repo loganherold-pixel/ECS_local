@@ -64,6 +64,10 @@ function isFluidLevelSensorCategory(category: string | null | undefined): boolea
   return category === 'propane_monitor' || category === 'water_tank_monitor';
 }
 
+function isFallbackBluetoothDisplayName(value: string | null | undefined): boolean {
+  return /^(unknown device|bluetooth device)(?:\s+[a-z0-9]{4})?$/i.test(String(value ?? '').trim());
+}
+
 function getFluidSensorProviderId(providerBadge: BluetoothProviderBadge | null): string {
   if (providerBadge === 'Propane') return 'propane_monitor';
   if (providerBadge === 'Water') return 'water_monitor';
@@ -74,6 +78,28 @@ function getFluidSensorProviderLabel(providerBadge: BluetoothProviderBadge | nul
   if (providerBadge === 'Propane') return 'Propane Monitor';
   if (providerBadge === 'Water') return 'Water Monitor';
   return 'Utility Sensor';
+}
+
+function getFluidSensorDisplayName(
+  presentation: ReturnType<typeof classifyBluetoothDevice>,
+): string {
+  if (!isFallbackBluetoothDisplayName(presentation.displayName)) {
+    return presentation.displayName;
+  }
+
+  const matchedText = `${presentation.brandLabel ?? ''} ${presentation.categoryHint ?? ''}`;
+  if (presentation.providerBadge === 'Water' || presentation.deviceCategory === 'water_tank_monitor') {
+    if (/mopeka/i.test(matchedText)) return 'Mopeka Water Tank';
+    if (/see\s*level|seelevel|garnet/i.test(matchedText)) return 'SeeLevel Water Tank';
+    return 'Water Tank Sensor';
+  }
+
+  if (presentation.providerBadge === 'Propane' || presentation.deviceCategory === 'propane_monitor') {
+    if (/mopeka/i.test(matchedText)) return 'Mopeka Propane Tank';
+    return 'Propane Tank Sensor';
+  }
+
+  return presentation.displayName;
 }
 
 function getPowerSupport(
@@ -247,6 +273,7 @@ export function routeBluetoothDevice(
     presentation.providerBadge === 'Water' ||
     isFluidLevelSensorCategory(presentation.deviceCategory)
   ) {
+    const displayName = getFluidSensorDisplayName(presentation);
     return {
       owner: 'sensor',
       routeKey: 'sensor/fluid_level',
@@ -262,7 +289,7 @@ export function routeBluetoothDevice(
       deviceCategory: presentation.deviceCategory,
       suggestedPath: null,
       shouldNavigate: false,
-      displayName: presentation.displayName,
+      displayName,
       secondaryLabel: presentation.secondaryLabel,
     };
   }

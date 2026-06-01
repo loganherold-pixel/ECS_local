@@ -22,8 +22,12 @@ function notIncludes(fragment, message) {
 
 includes('const vehicleTelemetry = useVehicleTelemetry();', 'Vehicle Profile must consume the existing vehicle telemetry hook.');
 includes('resolveVehicleCommandQuickGlance(activeVehicleContext, vehicleTelemetry)', 'Vehicle Profile must derive compact OBD2 quick-glance values.');
-includes('snapshot.isLive && snapshot.sourceType === \'obd_live\'', 'Vehicle Profile live state must be OBD2-source aware.');
-includes('snapshot.sourceType !== \'simulated\'', 'Vehicle Profile must not present simulated telemetry as live OBD2 data.');
+includes('function isLiveVehicleCommandTelemetry(', 'Vehicle Profile must centralize live-only OBD2 eligibility.');
+includes("snapshot.sourceType === 'obd_live'", 'Vehicle Profile live state must be OBD2-source aware.');
+includes("snapshot.sourceType !== 'simulated'", 'Vehicle Profile must not present simulated telemetry as live OBD2 data.');
+includes('function resolveVehicleCommandLiveFuelGallons(', 'Vehicle expanded view must derive fuel gallons through a live-only helper.');
+includes('resolveVehicleCommandLiveFuelGallons(activeVehicleContext, vehicleTelemetry)', 'Vehicle expanded view must use the live-only fuel gallons resolver.');
+includes('raw.fuel_remaining_gallons', 'Vehicle live fuel gallons should support explicit adapter fuel-gallon payloads.');
 
 includes('VEHICLE_COMMAND_VOLTAGE_FALLBACK = \'--.-V\'', 'Voltage fallback must render as --.-V.');
 includes('VEHICLE_COMMAND_LOAD_FALLBACK = \'--% LOAD\'', 'Engine load fallback must render as --% LOAD.');
@@ -62,63 +66,57 @@ notIncludes('{vehicleVisual.statusChip}', 'Compact card should not render the ol
 notIncludes('{vehicleVisual.name}', 'Compact card should not render the vehicle nickname/name over the vehicle image.');
 notIncludes('vehicleBaseIdentityBlock', 'Compact card should not keep the old centered vehicle title container.');
 
-includes('onPress={() => openFocusPanel(\'vehicle\')}', 'Vehicle Profile card must remain tappable.');
-includes("accessibilityLabel={expanded ? 'Collapse vehicle profile' : 'Expand vehicle profile'}", 'Vehicle Profile tap target must remain accessible.');
-includes('setActivePanel((current) => (current === panel ? null : panel));', 'Vehicle Profile must toggle through the inline expanded focus panel state.');
-includes('renderCommandPanel(activePanel, true)', 'Vehicle Profile must expand by rendering the same command panel inline over the map.');
+includes("onPress={expanded ? undefined : () => openFocusPanel('vehicle', 'detail')}", 'Vehicle Profile card must open detail on tap.');
+includes("accessibilityLabel={expanded ? 'Vehicle profile expanded' : 'Expand vehicle profile'}", 'Vehicle Profile tap target must remain accessible.');
+includes('setActivePanel({ panel, mode });', 'Vehicle Profile must use the shared explicit expanded focus panel state.');
+includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)', 'Vehicle Profile must expand by rendering the selected command panel inline over the map.');
 includes('expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded', 'Vehicle Profile expanded mode must scale the live roll surface inside the enlarged widget.');
-includes('eyebrow="VEHICLE COMMAND"', 'Vehicle Command detail surface should retain its Vehicle Command identity.');
-includes('title="Vehicle Command"', 'Vehicle Command detail surface should retain its Vehicle Command title.');
-includes('title={undefined}', 'Compact Vehicle Profile should suppress the old instrument panel title/header copy.');
-includes('icon={null}', 'Compact Vehicle Profile should suppress the old header icon slot so telemetry corners can sit at the top.');
-
-for (const section of [
-  'Engine Overview',
-  'Voltage & Electrical',
-  'System Health',
-  'Temperatures',
-  'Diagnostics',
-]) {
-  includes(`title="${section}"`, `Vehicle Command view must include ${section}.`);
-}
-includes('<VehicleCommandDetailSection title="Engine Overview" defaultExpanded>', 'Engine Overview should default open.');
-includes('accessibilityState={{ expanded }}', 'Vehicle Command sections must expose collapsed/expanded state.');
-includes('chevron-up-outline', 'Vehicle Command sections should show an expanded affordance.');
-includes('chevron-down-outline', 'Vehicle Command sections should show a collapsed affordance.');
-notIncludes('title="Vehicle Profile"', 'Expanded Vehicle Command should not include the old Vehicle Profile section.');
 
 for (const rowLabel of [
   'RPM',
-  'Speed',
+  'Miles per hour',
   'Engine load',
-  'Throttle position',
   'Coolant temperature',
-  'Control module voltage',
-  'Charging/voltage state',
-  'Voltage trend',
-  'Low-voltage warning state',
-  'MIL/check-engine status',
-  'Readiness monitor summary',
-  'Fuel system status',
-  'Sensor/ECU health summary',
-  'Intake air temperature',
-  'Transmission temperature',
-  'Catalyst temperature',
-  'Active DTCs',
-  'Pending DTCs',
-  'Stored DTCs',
-  'Freeze-frame availability',
-  'I/M readiness state',
+  'Battery voltage',
+  'Water gallons',
+  'Propane / butane',
+  'Fuel gallons',
 ]) {
-  includes(`label="${rowLabel}"`, `Vehicle Command view must include row ${rowLabel}.`);
+  includes(rowLabel, `Vehicle live command view must include ${rowLabel}.`);
 }
 
-includes('No active vehicle profile or live telemetry is available', 'Vehicle Command view must keep the no-source empty state.');
-includes('Connected - waiting for readable OBD2 PIDs', 'Vehicle Command view must show a connected-but-not-decoded state.');
-includes('Not reported by current PID set', 'Vehicle Command view must distinguish unsupported/missing PIDs.');
-includes('ECS is showing profile safe fallbacks if configured and available.', 'Vehicle Command unavailable banner must use profile safe fallback copy.');
-notIncludes('VehicleCommandRive', 'Vehicle Command must not add a Rive dependency.');
-notIncludes('VehicleProfileRive', 'Vehicle Profile must not add a Rive dependency.');
+const vehicleDetailBlock = widgetRenderers.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction VehicleCommandLiveMetric/)?.[0] ?? '';
+assert.ok(vehicleDetailBlock, 'VehicleCommandExpandedView block should be discoverable.');
+[
+  'vehicleLiveFixedDetailSurface',
+  'vehicleLiveHeader',
+  'vehicleLiveEngineGrid',
+  'vehicleLiveLiquidGrid',
+  'vehicleLiveRollDock',
+  'isLiveVehicleCommandTelemetry(snapshot)',
+  'utilitySensorResources.water?.status === \'live\'',
+  'utilitySensorResources.propane?.status === \'live\'',
+  'hasLiveVehicleCommandData',
+  '<VehicleProfileRollAttitudeStrip',
+  'rollDeg={rollDeg}',
+  'pitchDeg={pitchDeg}',
+  'live={attitudeLive}',
+  'docked',
+].forEach((fragment) => {
+  assert.ok(vehicleDetailBlock.includes(fragment), `Vehicle expanded live surface must include ${fragment}.`);
+});
+
+[
+  '<AttitudeCommandDetailScroll>',
+  '<VehicleCommandDetailSection',
+  'Manual/Fleet fallback',
+  'Manual water entry',
+  'Fleet selected vehicle/build fallback',
+  'ECS is showing profile safe fallbacks',
+  'No active vehicle profile or live telemetry is available',
+].forEach((fragment) => {
+  assert.ok(!vehicleDetailBlock.includes(fragment), `Vehicle expanded live surface must not include fallback/scroll content: ${fragment}.`);
+});
 
 [
   "const DEFAULT_MAX_ROLL_DEG = 45",
@@ -139,6 +137,9 @@ notIncludes('VehicleProfileRive', 'Vehicle Profile must not add a Rive dependenc
   "left: 13",
   "right: 13",
   "top: '50%'",
+  "docked?: boolean",
+  "containerDocked",
+  "containerDockedExpanded",
 ].forEach((fragment) => {
   assert.ok(rollStripSource.includes(fragment), `Roll attitude strip must include ${fragment}.`);
 });

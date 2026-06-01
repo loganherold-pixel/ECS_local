@@ -427,6 +427,55 @@ assert.notStrictEqual(ramFleetVehicle.buildProfile.gvwr.lbs, ramFleetVehicle.bui
 assert.ok(ramFleetVehicle.display.iconKey, 'Fleet display metadata should provide an icon key for card rendering.');
 assert.ok(ramFleetVehicle.display.chips.length > 0, 'Fleet display metadata should provide chips for card rendering.');
 
+const leveledRamFleetVehicle = fleet.adaptLegacyVehicleToFleetVehicle({
+  vehicle: {
+    id: 'ram-2019-leveled',
+    owner_user_id: 'user-1',
+    name: '2019 Ram 2500',
+    type: 'truck',
+    make: 'Ram',
+    model: '2500',
+    year: 2019,
+  },
+  specs: {
+    engine: '6.7L Cummins',
+    drivetrain: '4x4',
+    cab: 'Crew Cab',
+    bed_length: 'Short Bed',
+  },
+  tiresLift: {
+    tireSizeInches: 37,
+    suspensionLiftInches: 0,
+    isLeveled: true,
+    frontLevelInches: 2,
+  },
+  useCases: ['overland'],
+});
+const leveledRamWeightResult = fleet.calculateFleetWeightResult(leveledRamFleetVehicle, [], []);
+const leveledRamScore = fleet.scoreFleetVehicle(leveledRamFleetVehicle, leveledRamWeightResult, []);
+assert.strictEqual(leveledRamWeightResult.payloadRemaining.lbs, 2448);
+assert.strictEqual(leveledRamWeightResult.gvwrUsagePct, 76);
+assert.ok(
+  leveledRamScore.payloadScore >= 85,
+  `Unloaded HD truck payload readiness should not be dragged to ${leveledRamScore.payloadScore} just because the diesel truck has high curb/GVWR usage.`,
+);
+assert.ok(
+  leveledRamScore.readinessScore >= 85,
+  `A catalog-backed stock Ram 2500 with only a level and 37s should score as strong readiness, not ${leveledRamScore.readinessScore}.`,
+);
+assert.ok(
+  leveledRamScore.confidenceScore >= 85,
+  'Ram 2500 catalog confidence should stay distinct from readiness scoring.',
+);
+assert.ok(
+  leveledRamScore.recommendations.some((item) => /door.?placard|scale/i.test(item)),
+  'Readiness intelligence should tell the user how to improve confidence with placard or scale evidence.',
+);
+assert.ok(
+  leveledRamScore.recommendations.some((item) => /37|tire|level/i.test(item)),
+  'Readiness intelligence should explain follow-up checks for the saved tire and level setup.',
+);
+
 const consumableFleetVehicle = fleet.adaptLegacyVehicleToFleetVehicle({
   vehicle: {
     id: 'resource-1',

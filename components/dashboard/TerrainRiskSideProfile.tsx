@@ -36,13 +36,13 @@ type ChartFrame = {
 };
 
 const CHART_FRAME: ChartFrame = {
-  left: 8,
-  right: 0,
-  top: 0,
-  bottom: 18,
-  width: VIEWBOX_WIDTH - 8 - 0,
-  height: VIEWBOX_HEIGHT - 0 - 18,
-  baselineY: VIEWBOX_HEIGHT - 18,
+  left: 24,
+  right: 16,
+  top: 8,
+  bottom: 24,
+  width: VIEWBOX_WIDTH - 24 - 16,
+  height: VIEWBOX_HEIGHT - 8 - 24,
+  baselineY: VIEWBOX_HEIGHT - 24,
 };
 
 type ElevationBounds = {
@@ -86,6 +86,7 @@ type Props = {
   profile: TerrainProfilePoint[];
   totalDistanceMiles: number;
   unit: DistanceUnit;
+  completedDistanceMiles?: number | null;
   transparentBackground?: boolean;
   interactive?: boolean;
   referenceEvents?: TerrainRiskReferenceEvent[];
@@ -246,7 +247,7 @@ function buildDistanceTicks(totalDistanceMiles: number, unit: DistanceUnit): Dis
     return {
       ratio,
       x,
-      labelX: ratio === 1 ? x - 18 : x,
+      labelX: ratio === 1 ? x - 10 : ratio === 0 ? x + 2 : x,
       label: formatDistance(totalDistanceMiles * ratio, unit).replace(` ${unit}`, ''),
       anchor: ratio === 0 ? 'start' : ratio === 1 ? 'end' : 'middle',
     };
@@ -291,15 +292,77 @@ function buildRiskSegments(points: ChartPoint[]): RiskSegment[] {
         : riskLevel === 'moderate'
           ? riskOpacity(riskScore, 0.12, 0.08)
           : 0.09,
-      strokeWidth: riskLevel === 'high' ? 4.7 : riskLevel === 'moderate' ? 4.1 : 3.4,
+      strokeWidth: riskLevel === 'high' ? 3.2 : riskLevel === 'moderate' ? 2.8 : 2.4,
     };
   });
+}
+
+function buildCurrentRouteMarkerPoint(
+  points: ChartPoint[],
+  totalDistanceMiles: number,
+  completedDistanceMiles?: number | null,
+): ChartPoint | null {
+  if (!Number.isFinite(completedDistanceMiles ?? NaN) || points.length < 2 || totalDistanceMiles <= 0) {
+    return null;
+  }
+
+  const progressMiles = clampNumber(completedDistanceMiles ?? 0, 0, totalDistanceMiles);
+  const nextIndex = points.findIndex((point) => point.distanceMiles >= progressMiles);
+  if (nextIndex <= 0) {
+    const first = points[0];
+    return {
+      ...first,
+      id: 'current-route-position',
+      distanceMiles: progressMiles,
+    };
+  }
+  if (nextIndex === -1) {
+    const last = points[points.length - 1];
+    return {
+      ...last,
+      id: 'current-route-position',
+      distanceMiles: progressMiles,
+    };
+  }
+
+  const previous = points[nextIndex - 1];
+  const next = points[nextIndex];
+  const segmentMiles = Math.max(0.001, next.distanceMiles - previous.distanceMiles);
+  const ratio = clampNumber((progressMiles - previous.distanceMiles) / segmentMiles, 0, 1);
+  const elevationFeet = previous.elevationFeet + (next.elevationFeet - previous.elevationFeet) * ratio;
+  const riskScore = previous.riskScore + (next.riskScore - previous.riskScore) * ratio;
+  const gradePercent = (previous.gradePercent ?? 0) + ((next.gradePercent ?? 0) - (previous.gradePercent ?? 0)) * ratio;
+
+  return {
+    ...next,
+    id: 'current-route-position',
+    distanceMiles: progressMiles,
+    elevationFeet,
+    gradePercent,
+    riskScore,
+    riskLevel: classifyTerrainCommandRisk(riskScore),
+    x: previous.x + (next.x - previous.x) * ratio,
+    y: previous.y + (next.y - previous.y) * ratio,
+  };
+}
+
+function buildCurrentPositionMarkerPath(point: ChartPoint): string {
+  const x = clampNumber(point.x, CHART_FRAME.left + 6, VIEWBOX_WIDTH - CHART_FRAME.right - 6);
+  const y = clampNumber(point.y, CHART_FRAME.top + 6, CHART_FRAME.baselineY - 6);
+  return [
+    `M ${x.toFixed(1)} ${(y - 6).toFixed(1)}`,
+    `L ${(x + 6).toFixed(1)} ${y.toFixed(1)}`,
+    `L ${x.toFixed(1)} ${(y + 6).toFixed(1)}`,
+    `L ${(x - 6).toFixed(1)} ${y.toFixed(1)}`,
+    'Z',
+  ].join(' ');
 }
 
 export default function TerrainRiskSideProfile({
   profile,
   totalDistanceMiles,
   unit,
+  completedDistanceMiles = null,
   transparentBackground = false,
   interactive = false,
   referenceEvents = [],
@@ -325,9 +388,11 @@ export default function TerrainRiskSideProfile({
       point.riskScore > peak.riskScore ? point : peak, points[0]);
     const highRiskSegments = segments.filter((segment) => segment.riskLevel === 'high');
     const referencePoints = points.filter(isTerrainProfileReferencePoint);
+    const currentPositionPoint = buildCurrentRouteMarkerPoint(points, totalDistanceMiles, completedDistanceMiles);
 
     return {
       areaPath,
+      currentPositionPoint,
       highRiskSegments,
       linePath,
       peakPoint,
@@ -337,7 +402,7 @@ export default function TerrainRiskSideProfile({
       xTicks,
       yTicks,
     };
-  }, [profile, totalDistanceMiles, unit]);
+  }, [completedDistanceMiles, profile, totalDistanceMiles, unit]);
 
   if (!chart) {
     return <View style={styles.emptyChart} />;
@@ -457,7 +522,7 @@ export default function TerrainRiskSideProfile({
             key={`profile-glow-${segment.id}`}
             d={buildSegmentLinePath(segment)}
             stroke={segment.color}
-            strokeWidth={14}
+            strokeWidth={10}
             strokeLinecap="round"
             strokeLinejoin="round"
             opacity={0.18}
@@ -495,6 +560,29 @@ export default function TerrainRiskSideProfile({
           />
         ))}
 
+        {chart.currentPositionPoint ? (
+          <G
+            accessible
+            accessibilityLabel="Current GPS position on terrain profile"
+            accessibilityRole="image"
+          >
+            <Path
+              d={buildCurrentPositionMarkerPath(chart.currentPositionPoint)}
+              fill={TACTICAL.amber}
+              stroke="rgba(3,6,8,0.94)"
+              strokeWidth={1.2}
+              opacity={0.98}
+            />
+            <Circle
+              cx={chart.currentPositionPoint.x}
+              cy={chart.currentPositionPoint.y}
+              r={2.4}
+              fill="#FFFFFF"
+              opacity={0.92}
+            />
+          </G>
+        ) : null}
+
         {chart.referencePoints.map((point) => {
           const color = getTerrainCommandRiskColor(point.riskLevel);
           const selected = selectedReferencePointId === point.id;
@@ -520,6 +608,10 @@ export default function TerrainRiskSideProfile({
               />
               <Circle
                 testID="terrainRiskReferenceMarker"
+                accessible={interactive}
+                accessibilityLabel={referenceEvent
+                  ? `${referenceEvent.title} ${referenceEvent.distanceAheadMiles.toFixed(1)} miles ahead`
+                  : formatTerrainReferenceReason(point)}
                 cx={point.x}
                 cy={point.y}
                 r={interactive ? 12 : 0}

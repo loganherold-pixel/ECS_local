@@ -16,6 +16,7 @@ type Props = {
   live?: boolean;
   maxRollDeg?: number;
   expanded?: boolean;
+  docked?: boolean;
 };
 
 const DEFAULT_MAX_ROLL_DEG = 45;
@@ -70,6 +71,7 @@ export default function VehicleProfileRollAttitudeStrip({
   live = false,
   maxRollDeg = DEFAULT_MAX_ROLL_DEG,
   expanded = false,
+  docked = false,
 }: Props) {
   const safeMaxRoll = Math.max(1, Math.abs(maxRollDeg));
   const clampedRoll = clamp(safeRoll(rollDeg), -safeMaxRoll, safeMaxRoll);
@@ -103,7 +105,12 @@ export default function VehicleProfileRollAttitudeStrip({
       accessible
       accessibilityRole="image"
       accessibilityLabel={`Vehicle roll monitor. Roll ${formatRoll(displayRoll)}. Pitch ${formatRoll(displayPitch)}. ${campsiteLevel ? 'Campsite level' : `${directionLabel.toLowerCase()} attitude`}. Range negative ${safeMaxRoll} to positive ${safeMaxRoll} degrees.`}
-      style={[styles.container, expanded && styles.containerExpanded]}
+      style={[
+        styles.container,
+        expanded && styles.containerExpanded,
+        docked && styles.containerDocked,
+        docked && expanded && styles.containerDockedExpanded,
+      ]}
       testID="vehicle-profile-roll-attitude-strip"
     >
       <View style={[styles.headerRow, expanded && styles.headerRowExpanded]}>
@@ -228,6 +235,19 @@ const styles = StyleSheet.create({
     right: 10,
     height: 116,
     marginTop: -58,
+  },
+  containerDocked: {
+    left: 0,
+    right: 0,
+    top: 0,
+    height: '100%',
+    marginTop: 0,
+  },
+  containerDockedExpanded: {
+    left: 0,
+    right: 0,
+    height: '100%',
+    marginTop: 0,
   },
   headerRow: {
     minHeight: 12,

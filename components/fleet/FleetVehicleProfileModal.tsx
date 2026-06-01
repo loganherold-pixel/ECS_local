@@ -29,6 +29,7 @@ import {
   calculateConfirmedPayloadRemaining,
   createEmptyFleetVehicleProfileDraft,
   parseFleetProfileNumber,
+  resolveFleetVehicleProfileFieldPlaceholder,
   resolveFleetVehicleProfilePrefillOptions,
   resolveFleetVehicleProfileSuggestion,
   validateFleetVehicleProfileDraft,
@@ -317,6 +318,7 @@ export default function FleetVehicleProfileModal({
   const [advancedDraft, setAdvancedDraft] = useState<FleetAdvancedSpecsDraft | null>(null);
   const [advancedVisible, setAdvancedVisible] = useState(false);
   const [advancedErrors, setAdvancedErrors] = useState<string[]>([]);
+  const [hasAppliedPrefillOption, setHasAppliedPrefillOption] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const profileGateShake = useRef(new Animated.Value(0)).current;
@@ -327,10 +329,12 @@ export default function FleetVehicleProfileModal({
       setAdvancedDraft(null);
       setAdvancedVisible(false);
       setAdvancedErrors([]);
+      setHasAppliedPrefillOption(false);
     } else {
       setAdvancedDraft(null);
       setAdvancedVisible(false);
       setAdvancedErrors([]);
+      setHasAppliedPrefillOption(false);
     }
   }, [vehicle, visible]);
 
@@ -359,6 +363,15 @@ export default function FleetVehicleProfileModal({
   const updateDraft = useCallback((key: keyof FleetVehicleProfileDraft, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }));
   }, []);
+
+  const profilePlaceholder = useCallback((key: keyof FleetVehicleProfileDraft, example: string) => {
+    const value = draft[key];
+    return resolveFleetVehicleProfileFieldPlaceholder(
+      typeof value === 'boolean' ? String(value) : String(value ?? ''),
+      example,
+      hasAppliedPrefillOption,
+    );
+  }, [draft, hasAppliedPrefillOption]);
 
   const updateAdvancedSetupDraft = useCallback((patch: Partial<FleetAdvancedSpecsDraft>) => {
     setAdvancedErrors([]);
@@ -406,6 +419,7 @@ export default function FleetVehicleProfileModal({
 
   const handlePrefillOption = useCallback((optionId: string) => {
     setDraft((current) => applyFleetProfilePrefillOption(current, optionId));
+    setHasAppliedPrefillOption(true);
   }, []);
 
   const confirmGearing = useCallback(() => {
@@ -765,15 +779,15 @@ export default function FleetVehicleProfileModal({
 
           <ECSPanel variant="secondary" style={styles.fieldPanel}>
             <View style={styles.fieldGrid}>
-              <ProfileField label="Nickname" value={draft.nickname} onChangeText={(value) => updateDraft('nickname', value)} placeholder="Trail Lead" required />
-              <ProfileField label="Year" value={draft.year} onChangeText={(value) => updateDraft('year', value)} placeholder="2024" keyboardType="numeric" required />
-              <ProfileField label="Make" value={draft.make} onChangeText={(value) => updateDraft('make', value)} placeholder="RAM" required />
-              <ProfileField label="Model" value={draft.model} onChangeText={(value) => updateDraft('model', value)} placeholder="2500" required />
-              <ProfileField label="Trim" value={draft.trim} onChangeText={(value) => updateDraft('trim', value)} placeholder="Laramie" optional />
-              <ProfileField label="Engine" value={draft.engine} onChangeText={(value) => updateDraft('engine', value)} placeholder="Cummins" />
-              <ProfileField label="Drivetrain" value={draft.drivetrain} onChangeText={(value) => updateDraft('drivetrain', value)} placeholder="4x4" />
-              <ProfileField label="Cab" value={draft.cab} onChangeText={(value) => updateDraft('cab', value)} placeholder="Crew Cab" />
-              <ProfileField label="Bed" value={draft.bed} onChangeText={(value) => updateDraft('bed', value)} placeholder="Short Bed" />
+              <ProfileField label="Nickname" value={draft.nickname} onChangeText={(value) => updateDraft('nickname', value)} placeholder={profilePlaceholder('nickname', 'Trail Lead')} required />
+              <ProfileField label="Year" value={draft.year} onChangeText={(value) => updateDraft('year', value)} placeholder={profilePlaceholder('year', '2024')} keyboardType="numeric" required />
+              <ProfileField label="Make" value={draft.make} onChangeText={(value) => updateDraft('make', value)} placeholder={profilePlaceholder('make', 'RAM')} required />
+              <ProfileField label="Model" value={draft.model} onChangeText={(value) => updateDraft('model', value)} placeholder={profilePlaceholder('model', '2500')} required />
+              <ProfileField label="Trim" value={draft.trim} onChangeText={(value) => updateDraft('trim', value)} placeholder={profilePlaceholder('trim', 'Laramie')} optional />
+              <ProfileField label="Engine" value={draft.engine} onChangeText={(value) => updateDraft('engine', value)} placeholder={profilePlaceholder('engine', 'Cummins')} />
+              <ProfileField label="Drivetrain" value={draft.drivetrain} onChangeText={(value) => updateDraft('drivetrain', value)} placeholder={profilePlaceholder('drivetrain', '4x4')} />
+              <ProfileField label="Cab" value={draft.cab} onChangeText={(value) => updateDraft('cab', value)} placeholder={profilePlaceholder('cab', 'Crew Cab')} />
+              <ProfileField label="Bed" value={draft.bed} onChangeText={(value) => updateDraft('bed', value)} placeholder={profilePlaceholder('bed', 'Short Bed')} />
             </View>
           </ECSPanel>
 

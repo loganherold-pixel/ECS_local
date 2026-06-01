@@ -1,9 +1,9 @@
 import { resolveAuthLayoutMetrics, type AuthLayoutMetrics } from './authResponsive';
 
-export const LOGIN_LOGO_ASPECT_RATIO = 1536 / 1024;
+export const LOGIN_LOGO_ASPECT_RATIO = 841 / 831;
 export const LOGIN_LOGO_WIDTH_RATIO = 0.72;
 export const LOGIN_LOGO_MAX_WIDTH = 260;
-export const LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.16;
+export const LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.28;
 export const LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22;
 export const LOGIN_FORM_HORIZONTAL_INSET = 24;
 export const LOGIN_STATUS_INDICATOR_HEIGHT = 24;
@@ -24,6 +24,7 @@ export type LoginScreenLayout = {
   compactLayout: boolean;
   statusInline: boolean;
   logoWidth: number;
+  logoHeight: number;
   headerHeight: number;
 };
 
@@ -59,7 +60,7 @@ export function resolveLoginScreenLayout(input: {
     const logoHeightBudget = Math.max(
       42,
       Math.min(
-        Math.floor(authViewportHeight * 0.34),
+        Math.floor(authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO),
         Math.floor((brandRailWidth * 0.9) / LOGIN_LOGO_ASPECT_RATIO),
       ),
     );
@@ -68,6 +69,7 @@ export function resolveLoginScreenLayout(input: {
       LOGIN_LOGO_MAX_WIDTH,
       Math.round(logoHeightBudget * LOGIN_LOGO_ASPECT_RATIO),
     );
+    const logoHeight = logoWidth / LOGIN_LOGO_ASPECT_RATIO;
 
     return {
       layoutMetrics,
@@ -83,6 +85,7 @@ export function resolveLoginScreenLayout(input: {
       compactLayout: true,
       statusInline: true,
       logoWidth,
+      logoHeight,
       headerHeight: Math.max(0, authViewportHeight),
     };
   }
@@ -121,6 +124,7 @@ export function resolveLoginScreenLayout(input: {
     compactLayout: false,
     statusInline: false,
     logoWidth,
+    logoHeight,
     headerHeight: Math.max(minimumHeaderHeight, Math.round(cardTopTarget - shellTopPadding - cardOuterMarginTop)),
   };
 }

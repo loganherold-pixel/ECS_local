@@ -1,4 +1,6 @@
 import { ecsLog } from './ecsLogger';
+import { matchBluetoothBrands } from './bluetoothBrandRegistry';
+import type { BluetoothProviderBadge } from './bluetoothDevicePresentation';
 
 export type ScannerDeviceSource = string;
 
@@ -56,6 +58,7 @@ export const POWER_SCANNER_BRAND_ALLOWLIST = [
   'power',
   'mopeka',
   'propane',
+  'butane',
   'lpg',
   'tank check',
   'seelevel',
@@ -63,6 +66,7 @@ export const POWER_SCANNER_BRAND_ALLOWLIST = [
   'garnet',
   'water level',
   'water tank',
+  'liquid level',
   'fluid level',
   'veepeak',
   'vee peak',
@@ -126,6 +130,27 @@ function readRawString(raw: unknown, key: string): string | null {
   return clean((raw as Record<string, unknown>)[key]);
 }
 
+function readRawSearchText(raw: unknown, key: string): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = (raw as Record<string, unknown>)[key];
+  if (Array.isArray(value)) {
+    return clean(value.map((entry) => String(entry)).join(' '));
+  }
+  return clean(value);
+}
+
+function readRawStringList(raw: unknown, key: string): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const value = (raw as Record<string, unknown>)[key];
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => clean(typeof entry === 'string' ? entry : String(entry)))
+      .filter((entry): entry is string => Boolean(entry));
+  }
+  const text = clean(value);
+  return text ? [text] : [];
+}
+
 function getSource(item: ScannerDeviceListItem): string {
   return clean(item.source) ?? clean(item.sources?.[0]) ?? 'unknown';
 }
@@ -146,18 +171,51 @@ function getScannerDeviceSearchText(item: ScannerDeviceListItem): string {
     item.model,
     getManufacturerHint(item),
     readRawString(item.raw, 'localName'),
-    readRawString(item.raw, 'serviceUUIDs'),
-    readRawString(item.raw, 'serviceUuids'),
+    readRawSearchText(item.raw, 'serviceUUIDs'),
+    readRawSearchText(item.raw, 'serviceUuids'),
   ]
     .map(normalizeSearchText)
     .filter(Boolean)
     .join(' ');
 }
 
+const RELEASE_SCANNER_PROVIDER_BADGES = new Set<BluetoothProviderBadge>([
+  'OBD',
+  'EcoFlow',
+  'Bluetti',
+  'Anker SOLIX',
+  'Jackery',
+  'Goal Zero',
+  'Renogy',
+  'Redarc',
+  'Dakota Lithium',
+  'Victron Energy',
+  'Propane',
+  'Water',
+]);
+
+function hasReleaseScannerBrandSignature(item: ScannerDeviceListItem): boolean {
+  const id = clean(item.id) ?? getScannerDeviceStableKey(item) ?? 'scanner-device';
+  const name = clean(item.displayName) ?? clean(item.name) ?? '';
+  const serviceUUIDs = [
+    ...readRawStringList(item.raw, 'serviceUUIDs'),
+    ...readRawStringList(item.raw, 'serviceUuids'),
+  ];
+  const brandMatch = matchBluetoothBrands({
+    id,
+    name,
+    isLikelyOBD: false,
+    serviceUUIDs,
+    manufacturerData: getManufacturerHint(item),
+  });
+  return brandMatch.matches.some((match) => RELEASE_SCANNER_PROVIDER_BADGES.has(match.brand.providerBadge));
+}
+
 export function isLikelyPowerScannerDevice(
   item: ScannerDeviceListItem,
   allowlist: readonly string[] = POWER_SCANNER_BRAND_ALLOWLIST,
 ): boolean {
+  if (hasReleaseScannerBrandSignature(item)) return true;
   const haystack = getScannerDeviceSearchText(item);
   if (!haystack) return false;
   return allowlist.some((entry) => {

@@ -114,6 +114,7 @@ export function classifyBluestackDevice(input: BluestackClassifyInput): Bluestac
     includesAny(searchText, [
       /\bmopeka\b/,
       /\bpropane\b/,
+      /\bbutane\b/,
       /\blpg\b/,
       /\btank\s*check\b/,
       /\bpro\s*check\b/,
@@ -134,6 +135,7 @@ export function classifyBluestackDevice(input: BluestackClassifyInput): Bluestac
       /\bgarnet\b/,
       /\bwater\s*(tank|level|monitor|sensor)\b/,
       /\bfresh\s*water\b/,
+      /\bliquid\s*(level|monitor|sensor)\b/,
       /\bfluid\s*(level|monitor|sensor)\b/,
     ])
   ) {

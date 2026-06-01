@@ -36,19 +36,39 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 const root = process.cwd();
+const loginLogoPath = path.join(root, 'assets', 'images', 'Expedition Command System Logo.png');
 const loginSource = fs.readFileSync(path.join(root, 'app', 'login.tsx'), 'utf8');
 const authInfoSource = fs.readFileSync(path.join(root, 'app', 'auth-info.tsx'), 'utf8');
 const loginHeroSource = fs.readFileSync(path.join(root, 'components', 'login', 'LoginHeroBackground.tsx'), 'utf8');
 const loginLayoutSource = fs.readFileSync(path.join(root, 'lib', 'auth', 'loginScreenLayout.ts'), 'utf8');
-const { resolveLoginScreenLayout } = require(path.join(root, 'lib', 'auth', 'loginScreenLayout.ts'));
+const {
+  LOGIN_LOGO_ASPECT_RATIO,
+  LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO,
+  resolveLoginScreenLayout,
+} = require(path.join(root, 'lib', 'auth', 'loginScreenLayout.ts'));
+
+function readPngDimensions(filePath) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const bytes = fs.readFileSync(filePath);
+  assert.ok(bytes.subarray(0, 8).equals(signature), 'Login logo should be a PNG asset.');
+  return {
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+  };
+}
+
+const loginLogoDimensions = readPngDimensions(loginLogoPath);
+const loginLogoActualAspectRatio = loginLogoDimensions.width / loginLogoDimensions.height;
 
 assert.ok(
     loginSource.includes('headerHeight={loginHeaderHeight}') &&
     loginSource.includes('logoWidth={loginLogoWidth}') &&
+    loginSource.includes('logoHeight={loginLogoHeight}') &&
     loginSource.includes('frameWidth={isLandscape') &&
     loginSource.includes('statusInline={loginLayout.statusInline}') &&
     loginSource.includes('headerHeight: number') &&
     loginSource.includes('logoWidth: number') &&
+    loginSource.includes('logoHeight: number') &&
     loginSource.includes('heroGlobalTint') &&
     loginSource.includes('resolveLoginScreenLayout') &&
     loginSource.includes("layoutMode === 'landscape_split'") &&
@@ -62,7 +82,7 @@ assert.ok(
     loginSource.includes('const { width, height } = useWindowDimensions();') &&
     loginSource.includes('authViewportHeight') &&
     loginSource.includes('aspectRatio: LOGIN_LOGO_ASPECT_RATIO') &&
-    loginSource.includes('style={[styles.logoImage, { width: logoWidth }]}') &&
+    loginSource.includes('style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}') &&
     loginSource.includes("position: 'absolute'") &&
     loginSource.includes("bottom: 3") &&
     loginSource.includes('cardCompactLandscape') &&
@@ -79,20 +99,27 @@ assert.ok(
 assert.ok(
   loginLayoutSource.includes('LOGIN_LOGO_WIDTH_RATIO = 0.72') &&
     loginLayoutSource.includes('LOGIN_LOGO_MAX_WIDTH = 260') &&
-    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.16') &&
+    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.28') &&
     loginLayoutSource.includes('LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22') &&
     loginLayoutSource.includes('LOGIN_STATUS_INDICATOR_HEIGHT = 24') &&
+    loginLayoutSource.includes('logoHeight: number') &&
     loginLayoutSource.includes("layoutMode: 'landscape_split'") &&
+    loginLayoutSource.includes('authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO') &&
     loginLayoutSource.includes('cardScrollEnabled: authViewportHeight < 520') &&
     loginLayoutSource.includes('formMaxHeight: Math.max(240, authViewportHeight)') &&
     loginLayoutSource.includes('minimumBrandRailWidth'),
   'Login responsive layout helper should own the shared sizing constants and landscape clipping guard.',
 );
 
+assert.ok(
+  Math.abs(LOGIN_LOGO_ASPECT_RATIO - loginLogoActualAspectRatio) < 0.001,
+  `Login logo layout aspect ratio should match the PNG asset (${loginLogoDimensions.width}x${loginLogoDimensions.height}).`,
+);
+
 const portrait = resolveLoginScreenLayout({ width: 390, height: 844, safeAreaTop: 47, safeAreaBottom: 34 });
 assert.equal(portrait.layoutMode, 'portrait_stack');
 assert.equal(portrait.statusInline, false);
-assert.ok(portrait.headerHeight > portrait.logoWidth / (1536 / 1024) + 24);
+assert.ok(portrait.headerHeight > portrait.logoWidth / LOGIN_LOGO_ASPECT_RATIO + 24);
 assert.ok(portrait.formMaxHeight == null);
 
 const landscape = resolveLoginScreenLayout({ width: 844, height: 390, safeAreaTop: 0, safeAreaBottom: 0 });
@@ -103,6 +130,10 @@ assert.ok(landscape.headerHeight <= landscape.authViewportHeight);
 assert.ok(landscape.formMaxHeight <= landscape.authViewportHeight);
 assert.ok(landscape.contentMaxWidth <= 844 - landscape.layoutMetrics.horizontalPadding * 2);
 assert.ok(landscape.logoWidth <= landscape.contentMaxWidth - landscape.formWidth - landscape.contentGap);
+assert.ok(
+  landscape.logoWidth / LOGIN_LOGO_ASPECT_RATIO <= landscape.authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO,
+  'Landscape logo height should respect the vertical clipping guard.',
+);
 
 const shortLandscape = resolveLoginScreenLayout({ width: 568, height: 320, safeAreaTop: 0, safeAreaBottom: 0 });
 assert.equal(shortLandscape.layoutMode, 'landscape_split');

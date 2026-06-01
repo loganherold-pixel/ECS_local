@@ -36,6 +36,54 @@ interface ConvoyCommandMapProps {
 
 type MapboxModule = any;
 
+const CONVOY_MAP_IDENTITY_LABEL_VISIBLE_MS = 5000;
+const CONVOY_MAP_IDENTITY_LABEL_FADE_MS = 520;
+const CONTACT_HANDLE_PATTERN = /@|\+?\d[\d\s().-]{6,}/;
+
+function cleanIdentityText(value: unknown, maxLength: number): string | null {
+  const trimmed = String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!trimmed || CONTACT_HANDLE_PATTERN.test(trimmed)) return null;
+  return trimmed.slice(0, maxLength);
+}
+
+function badgeTitleForRole(role: ConvoyMarkerIdentity['role'], isCurrentUser?: boolean): string {
+  if (isCurrentUser) return 'Your position';
+  switch (role) {
+    case 'lead':
+      return 'Lead';
+    case 'sweep':
+      return 'Sweep';
+    case 'scout':
+      return 'Scout';
+    case 'medic':
+      return 'Medic';
+    case 'recovery':
+      return 'Recovery';
+    case 'support':
+      return 'Support';
+    default:
+      return 'Convoy';
+  }
+}
+
+function teamDisplayNameFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
+  return (
+    cleanIdentityText(member.displayName, 24) ??
+    cleanIdentityText(member.callsign, 24) ??
+    identity.label
+  );
+}
+
+function expeditionBadgeTitleFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
+  return (
+    cleanIdentityText(member.expeditionBadgeTitle, 28) ??
+    badgeTitleForRole(identity.role, identity.isCurrentUser)
+  );
+}
+
 function formatLastUpdate(members: ConvoyMapVehicle[]): string {
   const latest = members.reduce<number | null>((value, member) => {
     const timestamp = Date.parse(member.updatedAt ?? member.capturedAt);
@@ -107,6 +155,8 @@ function featureCollection(
     type: 'FeatureCollection',
     features: members.map((member) => {
       const identity = identityByMember.get(member.memberId) ?? buildConvoyMarkerIdentities([member])[0];
+      const teamDisplayName = teamDisplayNameFor(member, identity);
+      const expeditionBadgeTitle = expeditionBadgeTitleFor(member, identity);
       return {
         type: 'Feature',
         id: member.memberId,
@@ -120,7 +170,9 @@ function featureCollection(
           heading: identity.headingDegrees ?? 0,
           headingVisible: identity.shouldShowHeading,
           iconKey: identity.iconKey,
-          label: identity.isCurrentUser ? '' : identity.label,
+          label: identity.label,
+          teamDisplayName,
+          expeditionBadgeTitle,
           shapeGlyph: identity.shapeGlyph,
           statusLabel: identity.statusLabel,
           ageLabel: identity.ageLabel ?? '',
@@ -210,8 +262,10 @@ export function ConvoyCommandMap({
   const [mapbox, setMapbox] = useState<MapboxModule | null>(null);
   const [initReason, setInitReason] = useState<MapboxNativeInitReason | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [identityLabelOpacity, setIdentityLabelOpacity] = useState(0);
   const cameraRef = useRef<any>(null);
   const hasFitInitialCameraRef = useRef(false);
+  const identityLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasMembers = members.length > 0;
   const normalizedRouteCoordinates = useMemo(
     () => normalizeRouteCoordinates(routeCoordinates),
@@ -347,14 +401,35 @@ export function ConvoyCommandMap({
     onRecenter?.();
   }, [fitDefaultCamera, onRecenter]);
 
+  const revealConvoyIdentityLabels = useCallback(() => {
+    if (!hasMembers) return;
+    if (identityLabelTimerRef.current) {
+      clearTimeout(identityLabelTimerRef.current);
+    }
+
+    setIdentityLabelOpacity(1);
+    identityLabelTimerRef.current = setTimeout(() => {
+      setIdentityLabelOpacity(0);
+      identityLabelTimerRef.current = null;
+    }, CONVOY_MAP_IDENTITY_LABEL_VISIBLE_MS);
+  }, [hasMembers]);
+
+  useEffect(() => () => {
+    if (identityLabelTimerRef.current) {
+      clearTimeout(identityLabelTimerRef.current);
+      identityLabelTimerRef.current = null;
+    }
+  }, []);
+
   const handleShapePress = useCallback(
     (event: any) => {
+      revealConvoyIdentityLabels();
       const feature = event?.features?.[0];
       const memberId = feature?.properties?.memberId;
       const member = members.find((item) => item.memberId === memberId);
       if (member) onSelectMember?.(member);
     },
-    [members, onSelectMember],
+    [members, onSelectMember, revealConvoyIdentityLabels],
   );
 
   if (!hasMembers && !showMapWhenEmpty) {
@@ -389,6 +464,7 @@ export function ConvoyCommandMap({
   return (
     <View
       style={[styles.container, compact ? styles.compactContainer : null, { backgroundColor: palette.panel, borderColor: palette.border }]}
+      onTouchStart={revealConvoyIdentityLabels}
       accessible
       accessibilityRole="summary"
       accessibilityLabel={`Convoy Command map. ${summary.activeCount} active, ${summary.staleCount} stale, ${summary.assistanceCount} needing assist.`}
@@ -400,6 +476,7 @@ export function ConvoyCommandMap({
         attributionEnabled={false}
         compassEnabled
         onDidFinishLoadingMap={() => setMapReady(true)}
+        onPress={revealConvoyIdentityLabels}
       >
         <Mapbox.Camera
           ref={cameraRef}
@@ -558,17 +635,35 @@ export function ConvoyCommandMap({
             }}
           />
           <Mapbox.SymbolLayer
-            id="convoy-members-label"
+            id="convoy-members-identity-name"
             style={{
-              textField: ['get', 'label'],
-              textSize: 11,
-              textOffset: [0, 1.35],
-              textAnchor: 'top',
+              textField: ['get', 'teamDisplayName'],
+              textSize: 10,
+              textOffset: [0, -3.05],
+              textAnchor: 'bottom',
               textColor: palette.text,
               textHaloColor: palette.bg,
-              textHaloWidth: 1.4,
-              textAllowOverlap: false,
+              textHaloWidth: 1.5,
+              textAllowOverlap: true,
               textOptional: true,
+              textOpacity: identityLabelOpacity,
+              textOpacityTransition: { duration: CONVOY_MAP_IDENTITY_LABEL_FADE_MS, delay: 0 },
+            }}
+          />
+          <Mapbox.SymbolLayer
+            id="convoy-members-identity-badge"
+            style={{
+              textField: ['get', 'expeditionBadgeTitle'],
+              textSize: 8,
+              textOffset: [0, -2.05],
+              textAnchor: 'bottom',
+              textColor: palette.amber,
+              textHaloColor: palette.bg,
+              textHaloWidth: 1.35,
+              textAllowOverlap: true,
+              textOptional: true,
+              textOpacity: identityLabelOpacity,
+              textOpacityTransition: { duration: CONVOY_MAP_IDENTITY_LABEL_FADE_MS, delay: 0 },
             }}
           />
           <Mapbox.SymbolLayer
@@ -584,8 +679,8 @@ export function ConvoyCommandMap({
             style={{
               textField: ['get', 'statusLabel'],
               textSize: 9,
-              textOffset: [0, -2.1],
-              textAnchor: 'bottom',
+              textOffset: [0, 1.45],
+              textAnchor: 'top',
               textColor: ['case', ['get', 'emergency'], palette.danger, ['get', 'offline'], palette.textMuted, palette.amber],
               textHaloColor: palette.bg,
               textHaloWidth: 1.2,

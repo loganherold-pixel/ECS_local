@@ -55,6 +55,8 @@ interface Props {
   compact?: boolean;
   /** Hide the drawn vehicle profile when the panel is embedded in a height-constrained Fleet sheet. */
   hideVehicleProfile?: boolean;
+  /** Let the parent modal's ECS popup texture show through behind the dashboard. */
+  transparentBackground?: boolean;
 }
 
 export default function WeightDashboardPanel({
@@ -62,6 +64,7 @@ export default function WeightDashboardPanel({
   vehicleId: propVehicleId,
   compact,
   hideVehicleProfile = false,
+  transparentBackground = false,
 }: Props) {
   const [loading, setLoading] = useState(true);
   const [dashData, setDashData] = useState<WeightDashboardData | null>(null);
@@ -160,7 +163,7 @@ export default function WeightDashboardPanel({
   // Loading state
   if (loading) {
     return (
-      <View style={[styles.container, compact && styles.containerCompact]}>
+      <View style={[styles.container, transparentBackground && styles.containerTransparent, compact && styles.containerCompact]}>
         <View style={styles.loadingState}>
           <ActivityIndicator size="small" color={TACTICAL.amber} />
           <Text style={styles.loadingText}>COMPUTING WEIGHT DATA...</Text>
@@ -171,7 +174,7 @@ export default function WeightDashboardPanel({
 
   if (!dashData) {
     return (
-      <View style={[styles.container, compact && styles.containerCompact]}>
+      <View style={[styles.container, transparentBackground && styles.containerTransparent, compact && styles.containerCompact]}>
         <View style={styles.emptyState}>
           <Ionicons name="scale-outline" size={32} color={TACTICAL.textMuted} />
           <Text style={styles.emptyTitle}>NO WEIGHT DATA</Text>
@@ -203,7 +206,7 @@ export default function WeightDashboardPanel({
 
   return (
     <View
-      style={[styles.container, compact && styles.containerCompact]}
+      style={[styles.container, transparentBackground && styles.containerTransparent, compact && styles.containerCompact]}
     >
       <View style={styles.fixedContent}>
       {/* Dashboard Header */}
@@ -400,6 +403,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: TACTICAL.bg,
+  },
+  containerTransparent: {
+    backgroundColor: 'transparent',
   },
   containerCompact: {
     flex: 1,

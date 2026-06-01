@@ -80,6 +80,83 @@ function clampUnit(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
 }
 
+function positiveFiniteNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function vehicleDescriptorText(vehicle: FleetVehicle): string {
+  return [
+    vehicle.vehicleType,
+    vehicle.year,
+    vehicle.make,
+    vehicle.model,
+    vehicle.trim,
+    vehicle.buildProfile.trim,
+    vehicle.buildProfile.engine,
+    vehicle.buildProfile.drivetrain,
+  ]
+    .filter((part) => part != null && String(part).trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function estimateBaseFrontAxleFraction(vehicle: FleetVehicle): number {
+  const text = vehicleDescriptorText(vehicle);
+  const isDiesel = /\b(diesel|cummins|power\s?stroke|powerstroke|duramax|tdi|ecodiesel)\b/.test(text);
+  const isHeavyDutyPickup =
+    /\b(2500|3500|4500|5500|f[-\s]?250|f[-\s]?350|super\s*duty|silverado\s*(hd|2500|3500)|sierra\s*(hd|2500|3500)|ram\s*(2500|3500)|power\s*wagon)\b/.test(text);
+  const isFullSizePickup =
+    isHeavyDutyPickup ||
+    /\b(1500|f[-\s]?150|silverado|sierra|tundra|titan|ram|pickup|truck)\b/.test(text);
+  const isMidSizePickup = /\b(tacoma|frontier|colorado|canyon|ranger|gladiator|maverick|ridgeline)\b/.test(text);
+  const isBodyOnFrameSuv = /\b(4runner|bronco|wrangler|gx|land\s*cruiser|sequoia|tahoe|suburban|yukon|expedition)\b/.test(text);
+  const isVan = /\b(van|sprinter|transit|promaster)\b/.test(text);
+
+  if (isHeavyDutyPickup && isDiesel) return 0.58;
+  if (isHeavyDutyPickup) return 0.56;
+  if (isFullSizePickup && isDiesel) return 0.56;
+  if (isFullSizePickup) return 0.54;
+  if (isMidSizePickup) return 0.53;
+  if (isBodyOnFrameSuv || /\b(suv|wagon|crossover)\b/.test(text)) return 0.53;
+  if (isVan) return 0.51;
+  return 0.52;
+}
+
+function resolveBaseAxleSplit(vehicle: FleetVehicle, baseWeight: number): {
+  frontFraction: number;
+  isEstimated: boolean;
+} {
+  const frontBase = positiveFiniteNumber(vehicle.buildProfile.frontBaseWeight?.lbs);
+  const rearBase = positiveFiniteNumber(vehicle.buildProfile.rearBaseWeight?.lbs);
+  const positiveBaseWeight = positiveFiniteNumber(baseWeight);
+
+  if (frontBase != null && rearBase != null) {
+    return {
+      frontFraction: clampUnit(frontBase / (frontBase + rearBase), 0.52),
+      isEstimated: false,
+    };
+  }
+
+  if (frontBase != null && positiveBaseWeight != null && frontBase < positiveBaseWeight) {
+    return {
+      frontFraction: clampUnit(frontBase / positiveBaseWeight, 0.52),
+      isEstimated: false,
+    };
+  }
+
+  if (rearBase != null && positiveBaseWeight != null && rearBase < positiveBaseWeight) {
+    return {
+      frontFraction: clampUnit(1 - rearBase / positiveBaseWeight, 0.52),
+      isEstimated: false,
+    };
+  }
+
+  return {
+    frontFraction: estimateBaseFrontAxleFraction(vehicle),
+    isEstimated: true,
+  };
+}
+
 function createVehicleBaseline(vehicle: FleetVehicle): VehicleBaseline {
   const baseWeight =
     vehicle.buildProfile.baseNetWeight?.lbs ??
@@ -87,13 +164,10 @@ function createVehicleBaseline(vehicle: FleetVehicle): VehicleBaseline {
     vehicle.buildProfile.emptyWeight?.lbs ??
     DEFAULT_VEHICLE_BASELINE.curbWeightLbs;
   const wheelbaseIn = vehicle.buildProfile.wheelbaseIn ?? DEFAULT_VEHICLE_BASELINE.wheelbaseIn;
-  const frontBase = vehicle.buildProfile.frontBaseWeight?.lbs ?? null;
-  const rearBase = vehicle.buildProfile.rearBaseWeight?.lbs ?? null;
-  const measuredBaseTotal = (frontBase ?? 0) + (rearBase ?? 0);
-  const baseCgXIn =
-    measuredBaseTotal > 0 && wheelbaseIn > 0
-      ? Math.max(0, Math.min(wheelbaseIn, ((frontBase ?? 0) / measuredBaseTotal) * wheelbaseIn))
-      : DEFAULT_VEHICLE_BASELINE.baseCgXIn;
+  const baseAxleSplit = resolveBaseAxleSplit(vehicle, baseWeight);
+  const baseCgXIn = wheelbaseIn > 0
+    ? Math.max(0, Math.min(wheelbaseIn, baseAxleSplit.frontFraction * wheelbaseIn))
+    : DEFAULT_VEHICLE_BASELINE.baseCgXIn;
 
   return {
     ...DEFAULT_VEHICLE_BASELINE,
@@ -255,7 +329,12 @@ export function calculateVehicleCenterOfGravity(input: {
   const x = totalKnownWeight > 0 ? clampUnit(weightedX / totalKnownWeight, 0.42) : 0.42;
   const y = totalKnownWeight > 0 ? clampUnit(weightedY / totalKnownWeight, 0.5) : 0.5;
   const z = totalKnownWeight > 0 ? clampUnit(weightedZ / totalKnownWeight, 0.25) : 0.25;
+  const baseAxleSplit = resolveBaseAxleSplit(input.vehicle, baseWeight);
   const warnings: string[] = [];
+  if (baseAxleSplit.isEstimated && baseWeight > 0) {
+    const frontPct = Math.round(baseAxleSplit.frontFraction * 100);
+    warnings.push(`Base front/rear axle split is estimated from vehicle class (${frontPct}/${100 - frontPct}). Add front/rear scale weights for exact COG.`);
+  }
   if (highMountedWeight >= 150) warnings.push('High-mounted load is raising the center of gravity.');
   if (x >= 0.64) warnings.push('Rear-biased load placement is moving COG aft.');
   if (Math.abs(y - 0.5) >= 0.04) {
@@ -269,7 +348,9 @@ export function calculateVehicleCenterOfGravity(input: {
       ? 'missing_item_weights'
       : missingZoneMetadataCount > 0
         ? 'missing_zone_metadata'
-        : input.vehicle.buildProfile.baseNetWeight?.confidence != null && input.vehicle.buildProfile.baseNetWeight.confidence >= 80
+        : baseAxleSplit.isEstimated
+          ? 'partial'
+          : input.vehicle.buildProfile.baseNetWeight?.confidence != null && input.vehicle.buildProfile.baseNetWeight.confidence >= 80
           ? 'complete'
           : 'partial';
 

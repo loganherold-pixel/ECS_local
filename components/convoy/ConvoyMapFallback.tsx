@@ -46,7 +46,7 @@ export function ConvoyMapFallback({
       style={[styles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}
       accessible
       accessibilityRole="summary"
-      accessibilityLabel={`Convoy map fallback. ${reason} ${members.length} live members listed.`}
+      accessibilityLabel={`Convoy map limited view. ${reason} ${members.length} live members listed.`}
     >
       <View style={styles.header}>
         <View>

@@ -6989,7 +6989,7 @@ const MapRenderer = React.memo(function MapRenderer({
           userLocation={dynamicPayload.userLocation}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
-          statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}
+          statusLabel={shouldLoadMap ? 'ECS map' : 'Offline map'}
         />
       ) : null}
 

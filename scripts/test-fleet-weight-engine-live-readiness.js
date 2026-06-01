@@ -10,6 +10,7 @@ const buildLoadoutPath = path.join(root, 'lib', 'fleet', 'fleetBuildLoadout.ts')
 const profilePath = path.join(root, 'lib', 'fleet', 'fleetVehicleProfile.ts');
 const weightSummaryPath = path.join(root, 'lib', 'fleet', 'fleetWeightSummary.ts');
 const activeVehicleStatePath = path.join(root, 'lib', 'fleet', 'activeVehicleState.ts');
+const operatingWeightPath = path.join(root, 'lib', 'fleet', 'fleetOperatingWeight.ts');
 
 process.env.EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://example.supabase.co';
 process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'test-anon-key';
@@ -40,6 +41,7 @@ const buildLoadout = require(buildLoadoutPath);
 const profile = require(profilePath);
 const weightSummary = require(weightSummaryPath);
 const activeVehicleState = require(activeVehicleStatePath);
+const operatingWeight = require(operatingWeightPath);
 
 function legacyVehicle(id, overrides = {}) {
   return {
@@ -111,6 +113,40 @@ const ramUserResult = resultFor(ramUserSpecs);
 assert.strictEqual(ramUserResult.baseNetWeight.lbs, 8300, 'Saved user base weight must beat Ram defaults.');
 assert.strictEqual(ramUserResult.gvwr.lbs, 12345, 'Saved user GVWR must beat Ram defaults.');
 assert.ok(ramUserResult.confidenceMetadata.copy.includes('Confirm') || ramUserResult.confidenceMetadata.copy.includes('estimated'));
+
+const stockRamCgVehicle = toFleetVehicle('ram-cg-stock', { make: 'Ram', model: '2500', type: 'truck', year: 2019 }, {
+  base_weight_lb: 7742,
+  base_weight_source: 'manufacturer_spec',
+  base_weight_confidence: 88,
+  gvwr_lb: 10190,
+  gvwr_source: 'manufacturer_spec',
+  gvwr_confidence: 88,
+  fuel_tank_capacity_gal: 31,
+  fuel_type: 'diesel',
+  wheelbase_in: 149,
+  engine: '6.7L Cummins',
+  drivetrain: '4x4',
+  cab: 'Crew Cab',
+  bed_length: 'Short Bed',
+});
+const stockRamCg = operatingWeight.calculateVehicleOperatingWeight({
+  vehicle: stockRamCgVehicle,
+  buildState: buildLoadout.createEmptyFleetBuildLoadoutState(),
+  legacyLoadoutItems: [],
+  frameworkContainerZones: [],
+});
+assert.ok(
+  stockRamCg.dashboardData.frontAxlePercent >= 55,
+  `Unloaded Ram 2500 diesel should remain front-biased without scale weights; got ${stockRamCg.dashboardData.frontAxlePercent}/${stockRamCg.dashboardData.rearAxlePercent}.`,
+);
+assert.ok(
+  stockRamCg.dashboardData.frontAxleLoad > stockRamCg.dashboardData.rearAxleLoad,
+  `Unloaded Ram 2500 diesel should not show rear axle carrying more than front; got ${stockRamCg.dashboardData.frontAxleLoad}/${stockRamCg.dashboardData.rearAxleLoad}.`,
+);
+assert.ok(
+  stockRamCg.partialDataReasons.some((reason) => /front\/rear axle split is estimated/i.test(reason)),
+  'Estimated base axle split should be disclosed until front/rear scale weights are available.',
+);
 
 const noGvwrVehicle = {
   ...toFleetVehicle('no-gvwr', { make: null, model: null, type: null }),

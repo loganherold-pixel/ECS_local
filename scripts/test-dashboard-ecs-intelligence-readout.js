@@ -212,8 +212,12 @@ assert.ok(
     !readout.includes('commandDivider') &&
     readout.includes('<Text style={[styles.commandSummary, { color: palette.text }]} numberOfLines={2}>') &&
     readout.includes('<Text style={[styles.commandDetail, { color: colors.textSecondary }]} numberOfLines={2}>') &&
-    readout.includes("backgroundColor: isLight ? 'rgba(255, 251, 245, 0.94)'"),
-  'Dashboard ECS Intelligence banner should default compact, keep expanded/critical treatments, inherit light theme surfaces, and allow concern/recommendation text to wrap.',
+    readout.includes('const surfaceAccentColor = displayedModel.toneColor;') &&
+    readout.includes('backgroundColor: `${surfaceAccentColor}12`') &&
+    readout.includes('borderColor: `${surfaceAccentColor}2E`') &&
+    !readout.includes("backgroundColor: isLight ? 'rgba(255, 251, 245, 0.94)'") &&
+    !readout.includes("backgroundColor: 'rgba(12, 15, 18, 0.94)'"),
+  'Dashboard ECS Intelligence banner should default compact, keep expanded/critical treatments, match Fleet Readiness Command transparency, and allow concern/recommendation text to wrap.',
 );
 assert.ok(
   readout.includes('buildIssueRecommendation') &&

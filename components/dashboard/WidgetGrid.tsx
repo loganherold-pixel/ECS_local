@@ -135,7 +135,7 @@ interface WidgetGridProps {
   gridLayout: GridLayout;
   layoutMode: boolean;
   onEmptySlotPress: (slotIndex: number) => void;
-  onWidgetLongPress: (slot: WidgetSlot) => void;
+  onWidgetPress: (slot: WidgetSlot) => void;
   onRemoveWidget: (slotIndex: number) => void;
   onSwapSlots: (from: number, to: number) => void;
   onResizeWidget?: (slotIndex: number, newSize: WidgetSize) => void;
@@ -1602,7 +1602,7 @@ function DragGhost({
 // ── Main Grid ──────────────────────────────────────────
 export default function WidgetGrid({
   slots, profile, gridLayout, layoutMode,
-  onEmptySlotPress, onWidgetLongPress,
+  onEmptySlotPress, onWidgetPress,
   onRemoveWidget, onSwapSlots, onResizeWidget, onRestoreDefaults,
   widgetData, dashboardMode, isCompact,
   rollDeg, pitchDeg, sensorStatus,
@@ -2223,7 +2223,6 @@ export default function WidgetGrid({
         // Check if widget can be removed
         const registryEntry = slot.widgetType ? getWidgetEntry(slot.widgetType) : null;
         const canRemove = registryEntry ? registryEntry.removable : true;
-        const widgetMenuLongPressEnabled = slot.widgetType !== 'attitude-command';
 
         // Absolute positioning with explicit pad offset for centering.
         // p.x is in content-area coordinates (0-based within the padded zone).
@@ -2270,16 +2269,8 @@ export default function WidgetGrid({
                         onOpenCommandBrief?.();
                         return;
                       }
-                      if (!layoutMode && slot.widgetType === 'hwy-forward-weather') onWidgetLongPress(slot);
+                      if (!layoutMode) onWidgetPress(slot);
                     }}
-                    onLongPress={
-                      widgetMenuLongPressEnabled
-                        ? () => {
-                          if (!layoutMode) onWidgetLongPress(slot);
-                        }
-                        : undefined
-                    }
-                    delayLongPress={500}
                     activeOpacity={1}
                     disabled={isDragging}
                   >

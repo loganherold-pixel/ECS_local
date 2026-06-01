@@ -24,6 +24,21 @@ Module._load = function patchedLoad(request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
+function compileTypeScript(mod, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  mod._compile(output.outputText, filename);
+}
+
+require.extensions['.ts'] = compileTypeScript;
+
 function loadTypeScriptModule(relPath) {
   const fullPath = path.join(process.cwd(), relPath);
   const source = fs.readFileSync(fullPath, 'utf8');
@@ -45,6 +60,7 @@ function loadTypeScriptModule(relPath) {
 const {
   clearScannerDeviceList,
   getScannerDeviceStableKey,
+  isLikelyPowerScannerDevice,
   pruneStaleScannerDevices,
   upsertScannerDeviceList,
 } = loadTypeScriptModule('lib/scannerDeviceListState.ts');
@@ -119,6 +135,36 @@ assert.strictEqual(
   obdCheckAllowlistResult.devices.length,
   1,
   'release allowlist filtering must keep OBDCheck/VeePeak BLE candidates visible',
+);
+
+const mopekaUniversalManufacturerData = Buffer.from([
+  0x59, 0x00,
+  0x0c, 0x91, 0x45, 0x44, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const anonymousMopekaWater = {
+  id: '95F1',
+  source: 'ble',
+  displayName: 'Unknown device 95F1',
+  rssi: -55,
+  lastSeenAt: NOW + 850,
+  raw: {
+    manufacturerData: mopekaUniversalManufacturerData,
+  },
+};
+assert.strictEqual(
+  isLikelyPowerScannerDevice(anonymousMopekaWater),
+  true,
+  'release allowlist filtering must recognize Mopeka Universal water sensors from manufacturer data even when service UUIDs are omitted',
+);
+const mopekaWaterAllowlistResult = upsertScannerDeviceList([], [anonymousMopekaWater], {
+  reason: 'release_scan_mopeka_water_signature',
+  now: NOW + 850,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  mopekaWaterAllowlistResult.devices.length,
+  1,
+  'release scans must keep unknown-label Mopeka water sensors visible when their BLE signature is present',
 );
 
 const anonymousWithHints = {

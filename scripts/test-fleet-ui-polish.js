@@ -115,6 +115,13 @@ assert(
 );
 
 assert(
+  fleetScreen.includes('readiness starts with payload margin') &&
+    fleetScreen.includes('Source confidence is evidence quality; it does not directly drag down readiness.') &&
+    !fleetScreen.includes('readiness blends payload score'),
+  'Fleet readiness intelligence should separate readiness score drivers from source confidence evidence quality.',
+);
+
+assert(
   fleetScreen.includes('premiumMetricTileAction') &&
     fleetScreen.includes('borderColor: TACTICAL.amber'),
   'Fleet average and vehicle confidence action tiles should use the ECS gold border affordance.',
@@ -154,6 +161,17 @@ assert(
     vehicleProfileModal.includes('handlePrefillOption') &&
     !vehicleProfileModal.includes('FLEET_PROFILE_PRESETS.map'),
   'Fleet profile setup should hide static RAM presets and show contextual prefill options only after year/make/model are available.',
+);
+
+assert(
+  vehicleProfileModal.includes('hasAppliedPrefillOption') &&
+    vehicleProfileModal.includes('setHasAppliedPrefillOption(true)') &&
+    vehicleProfileModal.includes('resolveFleetVehicleProfileFieldPlaceholder') &&
+    vehicleProfileModal.includes("placeholder={profilePlaceholder('trim', 'Laramie')}") &&
+    vehicleProfileModal.includes("placeholder={profilePlaceholder('bed', 'Short Bed')}") &&
+    vehicleProfileDomain.includes('resolveFleetVehicleProfileFieldPlaceholder') &&
+    vehicleProfileDomain.includes("hasAppliedPrefillOption && !value.trim() ? '' : examplePlaceholder"),
+  'Fleet profile setup should blank unfilled example placeholders after an ECS vehicle pick is applied.',
 );
 
 assert(
@@ -212,6 +230,15 @@ assert(
     cgVisualization.includes('showVehicleProfile = true') &&
     weightDashboardPanel.includes('showVehicleProfile={!hideVehicleProfile}'),
   'COG visualization should use the ECS drawn top-down vehicle profile instead of a generic image asset.',
+);
+
+assert(
+  fleetScreen.includes('transparentBackground') &&
+    weightDashboardPanel.includes('transparentBackground?: boolean;') &&
+    weightDashboardPanel.includes('transparentBackground = false') &&
+    weightDashboardPanel.includes('transparentBackground && styles.containerTransparent') &&
+    weightDashboardPanel.includes("backgroundColor: 'transparent'"),
+  'Fleet Weight Summary modal should let the shared ECS popup texture remain visible behind the weight dashboard.',
 );
 
 console.log('[fleet-ui-polish] Fleet UI polish checks passed');

@@ -295,7 +295,7 @@ function getCampOpsCards(recommendationSet: CampRecommendationSet): CampOpsCardS
       role: 'emergency',
       title: 'Emergency Camp',
       emptyName: 'No emergency endpoint',
-      status: recommendationSet.emergencyCamp ? 'Fallback only' : 'Unknown confidence',
+      status: recommendationSet.emergencyCamp ? 'Emergency only' : 'Unknown confidence',
       icon: 'warning-outline',
       color: '#EF5350',
       camp: recommendationSet.emergencyCamp,

@@ -107,6 +107,10 @@ assert.ok(result.dashboardData.cgResult.totalMass >= 5220, 'CG mass should be ba
 assert.ok(result.dashboardData.cgResult.modules.some((module) => module.id === 'fleet_roof'), 'Build/loadout zones should feed CG modules.');
 assert.ok(result.centerOfGravity.z > 0.25, 'Roof load should raise the live COG calculation.');
 assert.strictEqual(result.dashboardData.cgResult.yCG, result.centerOfGravity.y, 'Dashboard COG should use the live lateral COG result.');
+assert.ok(
+  !result.partialDataReasons.some((reason) => /front\/rear axle split is estimated/i.test(reason)),
+  'Verified front/rear base weights should suppress estimated axle split warnings.',
+);
 
 const canonicalState = vehicleStateSelectors.selectFleetVehicleStateFromRecord({
   vehicle: {

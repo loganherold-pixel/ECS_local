@@ -39,6 +39,7 @@ const {
 } = require(path.join(root, 'lib', 'fleet', 'oemVehicleSpecs.ts'));
 const {
   applyFleetProfilePrefillOption,
+  resolveFleetVehicleProfileFieldPlaceholder,
   resolveFleetVehicleProfileSuggestion,
   resolveFleetVehicleProfilePrefillOptions,
   createEmptyFleetVehicleProfileDraft,
@@ -286,6 +287,21 @@ assert.strictEqual(
 assert.ok(Number(prefilledTacoma.gvwr) > 0, 'Selecting an ECS vehicle pick should populate GVWR when the field was empty.');
 assert.ok(prefilledTacoma.gearingLabel, 'Selecting an ECS vehicle pick should expose probable gearing context when bundled.');
 assert.strictEqual(prefilledTacoma.gearingConfirmed, false, 'Probable gearing should require explicit confirmation.');
+assert.strictEqual(
+  resolveFleetVehicleProfileFieldPlaceholder('', 'Laramie', false),
+  'Laramie',
+  'Blank manual Fleet profile fields should keep example placeholders before an ECS vehicle pick is selected.',
+);
+assert.strictEqual(
+  resolveFleetVehicleProfileFieldPlaceholder('', 'Laramie', true),
+  '',
+  'Blank Fleet profile fields should not keep example placeholders after an ECS vehicle pick is selected.',
+);
+assert.strictEqual(
+  resolveFleetVehicleProfileFieldPlaceholder('TRD Pro', 'Laramie', true),
+  'Laramie',
+  'Filled Fleet profile fields can keep their placeholder prop because the entered value remains authoritative.',
+);
 
 const fleetVehicle = adaptLegacyVehicleToFleetVehicle({
   vehicle: {

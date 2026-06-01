@@ -103,7 +103,7 @@ export default function MapFallbackSurface({
   progressRouteCoords,
   routeCoords,
   segments,
-  statusLabel = 'Fallback map',
+  statusLabel = 'Route map',
   transparentBackground = false,
   userLocation,
 }: MapFallbackSurfaceProps) {
@@ -143,7 +143,7 @@ export default function MapFallbackSurface({
           compact && styles.compactEmpty,
         ]}
       >
-        <Text style={styles.emptyTitle}>Map fallback ready</Text>
+        <Text style={styles.emptyTitle}>Map ready</Text>
         <Text style={styles.emptyText}>Route geometry is not available yet.</Text>
       </View>
     );

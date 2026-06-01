@@ -209,7 +209,7 @@ export default function ECSIntelligenceReadout({
   hasRouteContext,
   isActiveExpedition,
 }: ECSIntelligenceReadoutProps) {
-  const { palette, colors, isLight } = useTheme();
+  const { palette, colors } = useTheme();
   const assessment = useCurrentExpeditionReadiness();
   const readinessState = useExpeditionReadinessState();
   const decision = useReadinessDecision();
@@ -298,6 +298,7 @@ export default function ECSIntelligenceReadout({
   const compactCopy = displayedModel.message
     ? cleanReadinessCopy(`${displayedModel.concern} ${displayedModel.recommendation}`, 188)
     : standbyCopy;
+  const surfaceAccentColor = displayedModel.toneColor;
 
   useEffect(() => {
     const loop = Animated.loop(
@@ -412,8 +413,8 @@ export default function ECSIntelligenceReadout({
         expandedState ? styles.surfaceExpanded : styles.surfaceCompact,
         criticalState ? styles.surfaceCritical : null,
         {
-          backgroundColor: isLight ? 'rgba(255, 251, 245, 0.94)' : 'rgba(12, 15, 18, 0.94)',
-          borderColor: criticalState ? displayedModel.toneColor : isLight ? palette.border : GOLD_RAIL.section,
+          backgroundColor: `${surfaceAccentColor}12`,
+          borderColor: `${surfaceAccentColor}2E`,
         },
       ]}
       accessibilityLabel={`${displayedModel.title}. ${displayedModel.message || standbyCopy}.`}
@@ -494,9 +495,9 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.section,
+    borderColor: `${TACTICAL.amber}2E`,
     borderRadius: 10,
-    backgroundColor: 'rgba(12, 15, 18, 0.94)',
+    backgroundColor: `${TACTICAL.amber}12`,
     overflow: 'hidden',
   },
   surfaceCompact: {

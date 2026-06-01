@@ -157,40 +157,72 @@ function extractManufacturerPayload(
   return null;
 }
 
+function hasManufacturerIdPrefix(
+  bytes: number[],
+  manufacturerId: number,
+  payloadLength: number,
+): boolean {
+  const low = manufacturerId & 0xff;
+  const high = (manufacturerId >> 8) & 0xff;
+  return bytes.length === payloadLength + 2 && bytes[0] === low && bytes[1] === high;
+}
+
 function getMopekaSignatureBrandMatch(device: BluetoothBrandMatchInput): BluetoothBrandMatch | null {
   const manufacturerBytes = decodeManufacturerDataBytes(device.manufacturerData);
   if (manufacturerBytes.length === 0) return null;
 
-  if (hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_PRO_SERVICE_UUID])) {
-    const payload = extractManufacturerPayload(
-      manufacturerBytes,
-      MOPEKA_PRO_MANUFACTURER_ID,
-      MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
-    );
-    const sensorType = payload?.[0] ?? null;
-    if (payload && sensorType != null && MOPEKA_PRO_KNOWN_SENSOR_TYPES.has(sensorType)) {
-      return {
-        brand: MOPEKA_PRO_LIQUID_SENSOR_TYPES.has(sensorType)
-          ? MOPEKA_LIQUID_SIGNATURE_BRAND
-          : MOPEKA_PROPANE_SIGNATURE_BRAND,
-        reasons: ['service_uuid', 'manufacturer_signature'],
-      };
-    }
+  const hasProServiceUuid = hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_PRO_SERVICE_UUID]);
+  const hasProManufacturerPrefix = hasManufacturerIdPrefix(
+    manufacturerBytes,
+    MOPEKA_PRO_MANUFACTURER_ID,
+    MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
+  );
+  const proPayload = extractManufacturerPayload(
+    manufacturerBytes,
+    MOPEKA_PRO_MANUFACTURER_ID,
+    MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
+  );
+  const proSensorType = proPayload?.[0] ?? null;
+  if (
+    proPayload &&
+    proSensorType != null &&
+    MOPEKA_PRO_KNOWN_SENSOR_TYPES.has(proSensorType) &&
+    (hasProServiceUuid || hasProManufacturerPrefix)
+  ) {
+    return {
+      brand: MOPEKA_PRO_LIQUID_SENSOR_TYPES.has(proSensorType)
+        ? MOPEKA_LIQUID_SIGNATURE_BRAND
+        : MOPEKA_PROPANE_SIGNATURE_BRAND,
+      reasons: hasProServiceUuid
+        ? ['service_uuid', 'manufacturer_signature']
+        : ['manufacturer_signature'],
+    };
   }
 
-  if (hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_STD_SERVICE_UUID])) {
-    const payload = extractManufacturerPayload(
-      manufacturerBytes,
-      MOPEKA_STD_MANUFACTURER_ID,
-      MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
-    );
-    const hardwareId = payload?.[0] != null ? payload[0] & 0xcf : null;
-    if (payload && hardwareId != null && MOPEKA_STD_KNOWN_SENSOR_TYPES.has(hardwareId)) {
-      return {
-        brand: MOPEKA_PROPANE_SIGNATURE_BRAND,
-        reasons: ['service_uuid', 'manufacturer_signature'],
-      };
-    }
+  const hasStdServiceUuid = hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_STD_SERVICE_UUID]);
+  const hasStdManufacturerPrefix = hasManufacturerIdPrefix(
+    manufacturerBytes,
+    MOPEKA_STD_MANUFACTURER_ID,
+    MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
+  );
+  const stdPayload = extractManufacturerPayload(
+    manufacturerBytes,
+    MOPEKA_STD_MANUFACTURER_ID,
+    MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
+  );
+  const stdHardwareId = stdPayload?.[0] != null ? stdPayload[0] & 0xcf : null;
+  if (
+    stdPayload &&
+    stdHardwareId != null &&
+    MOPEKA_STD_KNOWN_SENSOR_TYPES.has(stdHardwareId) &&
+    (hasStdServiceUuid || hasStdManufacturerPrefix)
+  ) {
+    return {
+      brand: MOPEKA_PROPANE_SIGNATURE_BRAND,
+      reasons: hasStdServiceUuid
+        ? ['service_uuid', 'manufacturer_signature']
+        : ['manufacturer_signature'],
+    };
   }
 
   return null;
@@ -373,6 +405,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     nameFragments: [
       /\bmopeka\b/i,
       /\bpropane\b/i,
+      /\bbutane\b/i,
       /\blpg\b/i,
       /\btank\s*check\b/i,
       /\bpro\s*check\b/i,
@@ -380,6 +413,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     manufacturerHints: [
       /\bmopeka\b/i,
       /\bpropane\b/i,
+      /\bbutane\b/i,
       /\blpg\b/i,
       /\btank\s*check\b/i,
     ],

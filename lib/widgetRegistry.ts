@@ -210,7 +210,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     liveSources: ['vehicle state', 'vehicle telemetry service', 'stored vehicle profile', 'gps remoteness context'],
     defaultModes: ['highway'],
     isDefaultSelectable: true,
-    fallbackBehavior: 'Falls back to configured vehicle profile data and clearly labels missing live inputs.',
+    fallbackBehavior: 'Uses configured vehicle profile data and clearly labels missing live inputs.',
     pickerEnabled: true,
   },
   {
@@ -362,7 +362,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     liveSources: ['trip state', 'consumables', 'vehicle profile'],
     defaultModes: [],
     isDefaultSelectable: false,
-    fallbackBehavior: 'Falls back to stored consumables and conservative reserve estimates when live data is partial.',
+    fallbackBehavior: 'Uses stored consumables and conservative reserve estimates when live data is partial.',
     pickerEnabled: false,
   },
   {

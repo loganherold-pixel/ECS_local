@@ -13,8 +13,9 @@ import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { useTheme } from '../../context/ThemeContext';
 import { hapticCommand, hapticMicro } from '../../lib/haptics';
-import { GOLD_RAIL, RADIUS, SPACING } from '../../lib/theme';
+import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme';
 import { ecsLog } from '../../lib/ecsLogger';
+import TopoBackground from '../../components/TopoBackground';
 import {
   ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS,
   type ECSApprovedBluetoothDeviceGroup,
@@ -104,16 +105,16 @@ function getStatusTone(status: ECSConnectionStatus): StatusTone {
 function getToneColors(tone: StatusTone) {
   switch (tone) {
     case 'active':
-      return { text: '#4CAF50', border: '#4CAF5040', background: '#4CAF5010' };
+      return { text: TACTICAL.successText, border: TACTICAL.goldSoft, background: TACTICAL.goldWash };
     case 'sync':
-      return { text: '#5AC8FA', border: '#5AC8FA40', background: '#5AC8FA12' };
+      return { text: TACTICAL.info, border: TACTICAL.borderMuted, background: TACTICAL.panelInactive };
     case 'warning':
-      return { text: '#D6A04B', border: '#D6A04B40', background: '#D6A04B12' };
+      return { text: TACTICAL.warning, border: TACTICAL.goldSoft, background: TACTICAL.goldWash };
     case 'danger':
-      return { text: '#FF6B6B', border: '#FF6B6B40', background: '#FF6B6B12' };
+      return { text: TACTICAL.danger, border: TACTICAL.borderError, background: TACTICAL.panelInactive };
     case 'neutral':
     default:
-      return { text: '#A99362', border: '#A9936240', background: '#A9936212' };
+      return { text: TACTICAL.goldMedium, border: TACTICAL.borderMuted, background: TACTICAL.panelInactive };
   }
 }
 
@@ -380,7 +381,7 @@ function EmptySection({
       style={[
         styles.emptyState,
         {
-          backgroundColor: palette.border + '18',
+          backgroundColor: TACTICAL.panelInactive,
           borderColor: palette.border,
         },
       ]}
@@ -470,8 +471,8 @@ function DeviceRow({
     <View
       style={[
         styles.deviceRow,
+        styles.fleetLikePanel,
         {
-          backgroundColor: palette.panel,
           borderColor: device.isSelected
             ? palette.amber + '4A'
             : device.isLive
@@ -496,7 +497,7 @@ function DeviceRow({
             disabled={!selectionEnabled}
           >
             {device.isSelected ? (
-              <Ionicons name="checkmark" size={12} color="#111" />
+              <Ionicons name="checkmark" size={12} color={TACTICAL.bg} />
             ) : (
               <View style={styles.selectionInner} />
             )}
@@ -606,7 +607,7 @@ function DeviceRow({
               style={[
                 styles.telemetryCell,
                 {
-                  backgroundColor: palette.border + '16',
+                  backgroundColor: TACTICAL.panelInactive,
                   borderColor: palette.border,
                 },
               ]}
@@ -678,8 +679,8 @@ function SectionBlock({
     <View
       style={[
         styles.sectionCard,
+        styles.fleetLikePanel,
         {
-          backgroundColor: palette.panel,
           borderColor: palette.border,
         },
       ]}
@@ -720,7 +721,7 @@ function ApprovedDeviceGroupRow({
       style={[
         styles.compatibilityRow,
         {
-          backgroundColor: palette.border + '14',
+          backgroundColor: TACTICAL.panelInactive,
           borderColor: palette.border,
         },
       ]}
@@ -794,8 +795,8 @@ function BluestackCompatibilityCard({ palette }: { palette: any }) {
     <View
       style={[
         styles.compatibilityCard,
+        styles.fleetLikePanel,
         {
-          backgroundColor: palette.panel,
           borderColor: palette.border,
         },
       ]}
@@ -816,7 +817,7 @@ function BluestackCompatibilityCard({ palette }: { palette: any }) {
 
 export default function BluPowerSourcesScreen() {
   const router = useRouter();
-  const { palette, colors } = useTheme();
+  const { palette } = useTheme();
   const connections = useUnifiedDeviceConnections();
   const stopScanning = connections.stopScanning;
   const [showRememberedDevices, setShowRememberedDevices] = useState(false);
@@ -983,30 +984,32 @@ export default function BluPowerSourcesScreen() {
   })();
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.header, { backgroundColor: palette.panel }]}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={handleBackPress}
-          activeOpacity={0.75}
-        >
-          <Ionicons name="chevron-back" size={22} color={palette.amber} />
-        </TouchableOpacity>
+    <TopoBackground>
+      <View style={styles.safeContainer}>
+        <View style={styles.surfaceTint} pointerEvents="none" />
+        <View style={[styles.header, styles.fleetLikePanel, { borderColor: palette.border }]}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={handleBackPress}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="chevron-back" size={22} color={palette.amber} />
+          </TouchableOpacity>
 
-        <View style={styles.headerCenter}>
-          <Text style={[styles.headerLabel, { color: palette.textMuted }]}>ECS BLUESTACK</Text>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>Bluestack Scanner</Text>
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerLabel, { color: palette.textMuted }]}>ECS BLUESTACK</Text>
+            <Text style={[styles.headerTitle, { color: palette.text }]}>Bluestack Scanner</Text>
+          </View>
+
+          <View style={styles.headerRight} />
         </View>
 
-        <View style={styles.headerRight} />
-      </View>
-
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
           <View
             style={[
               styles.heroCard,
+              styles.fleetLikePanel,
               {
-                backgroundColor: palette.panel,
                 borderColor: palette.border,
               },
             ]}
@@ -1043,7 +1046,7 @@ export default function BluPowerSourcesScreen() {
               <SummaryStat
                 label="Live"
                 value={connections.bluestackSummary.liveCount}
-                color="#4CAF50"
+                color={TACTICAL.successText}
                 mutedColor={palette.textMuted}
               />
               <SummaryStat
@@ -1058,13 +1061,13 @@ export default function BluPowerSourcesScreen() {
               <SummaryStat
                 label="Cloud/API"
                 value={connections.bluestackSummary.cloudApiCount}
-                color="#5AC8FA"
+                color={TACTICAL.info}
                 mutedColor={palette.textMuted}
               />
               <SummaryStat
                 label="Parser Pend"
                 value={connections.bluestackSummary.parserPendingCount}
-                color="#D6A04B"
+                color={TACTICAL.warning}
                 mutedColor={palette.textMuted}
               />
               <SummaryStat
@@ -1080,12 +1083,12 @@ export default function BluPowerSourcesScreen() {
                 style={[
                   styles.banner,
                   {
-                    backgroundColor: '#D6A04B12',
-                    borderColor: '#D6A04B40',
+                    backgroundColor: TACTICAL.goldWash,
+                    borderColor: TACTICAL.goldSoft,
                   },
                 ]}
               >
-                <Ionicons name="warning-outline" size={16} color="#D6A04B" />
+                <Ionicons name="warning-outline" size={16} color={TACTICAL.warning} />
                 <Text style={[styles.bannerText, { color: palette.text }]}>
                   {connections.degradedMessage}
                 </Text>
@@ -1097,8 +1100,8 @@ export default function BluPowerSourcesScreen() {
                 style={[
                   styles.banner,
                   {
-                    backgroundColor: palette.amber + '10',
-                    borderColor: palette.amber + '30',
+                    backgroundColor: TACTICAL.goldWash,
+                    borderColor: TACTICAL.goldSoft,
                   },
                 ]}
               >
@@ -1115,7 +1118,7 @@ export default function BluPowerSourcesScreen() {
                   styles.secondaryBtn,
                   {
                     borderColor: palette.border,
-                    backgroundColor: palette.border + '1C',
+                    backgroundColor: TACTICAL.panelInactive,
                   },
                 ]}
                 onPress={handleRescanPress}
@@ -1150,18 +1153,18 @@ export default function BluPowerSourcesScreen() {
                 disabled={!connections.canConnectSelected || connections.isBusy}
               >
                 {connections.isBusy ? (
-                  <ActivityIndicator size={13} color={connections.canConnectSelected ? '#121212' : palette.textMuted} />
+                  <ActivityIndicator size={13} color={connections.canConnectSelected ? TACTICAL.bg : palette.textMuted} />
                 ) : (
                   <Ionicons
                     name="flash-outline"
                     size={15}
-                    color={connections.canConnectSelected ? '#121212' : palette.textMuted}
+                    color={connections.canConnectSelected ? TACTICAL.bg : palette.textMuted}
                   />
                 )}
                 <Text
                   style={[
                     styles.primaryBtnText,
-                    { color: connections.canConnectSelected ? '#121212' : palette.textMuted },
+                    { color: connections.canConnectSelected ? TACTICAL.bg : palette.textMuted },
                   ]}
                 >
                   Connect Selected
@@ -1174,7 +1177,7 @@ export default function BluPowerSourcesScreen() {
                     styles.secondaryBtn,
                     {
                       borderColor: palette.border,
-                      backgroundColor: palette.border + '1C',
+                      backgroundColor: TACTICAL.panelInactive,
                     },
                   ]}
                   onPress={handleClearSelectionPress}
@@ -1190,7 +1193,7 @@ export default function BluPowerSourcesScreen() {
                   styles.secondaryBtn,
                   {
                     borderColor: showApprovedDevices ? palette.amber + '50' : palette.border,
-                    backgroundColor: showApprovedDevices ? palette.amber + '12' : palette.border + '1C',
+                    backgroundColor: showApprovedDevices ? TACTICAL.goldWash : TACTICAL.panelInactive,
                   },
                 ]}
                 onPress={handleApprovedDevicesPress}
@@ -1218,7 +1221,7 @@ export default function BluPowerSourcesScreen() {
                   styles.secondaryBtn,
                   {
                     borderColor: showRememberedDevices ? palette.amber + '50' : palette.border,
-                    backgroundColor: showRememberedDevices ? palette.amber + '12' : palette.border + '1C',
+                    backgroundColor: showRememberedDevices ? TACTICAL.goldWash : TACTICAL.panelInactive,
                     opacity: rememberedReleaseDevices.length > 0 ? 1 : 0.62,
                   },
                 ]}
@@ -1331,8 +1334,8 @@ export default function BluPowerSourcesScreen() {
           <View
             style={[
               styles.infoCard,
+              styles.fleetLikePanel,
               {
-                backgroundColor: palette.panel,
                 borderColor: palette.border,
               },
             ]}
@@ -1350,14 +1353,24 @@ export default function BluPowerSourcesScreen() {
           </View>
 
           <View style={{ height: 72 }} />
-      </ScrollView>
-    </View>
+        </ScrollView>
+      </View>
+    </TopoBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeContainer: {
     flex: 1,
+    backgroundColor: 'transparent',
+  },
+  surfaceTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: TACTICAL.panelInactive,
+  },
+  fleetLikePanel: {
+    backgroundColor: 'rgba(17,20,24,0.88)',
+    borderColor: TACTICAL.borderMuted,
   },
   header: {
     flexDirection: 'row',
@@ -1400,10 +1413,10 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: SPACING.lg,
-    gap: SPACING.lg,
+    gap: 12,
   },
   heroCard: {
-    borderRadius: 18,
+    borderRadius: 8,
     borderWidth: 1,
     padding: SPACING.lg,
     gap: SPACING.md,
@@ -1416,7 +1429,7 @@ const styles = StyleSheet.create({
   heroIconWrap: {
     width: 48,
     height: 48,
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1447,11 +1460,13 @@ const styles = StyleSheet.create({
   },
   summaryStat: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.borderMuted,
     paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.02)',
+    backgroundColor: TACTICAL.panelInactive,
   },
   summaryStatValue: {
     fontSize: 20,
@@ -1469,7 +1484,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 11,
@@ -1489,7 +1504,7 @@ const styles = StyleSheet.create({
   secondaryBtn: {
     minHeight: 40,
     paddingHorizontal: 14,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1507,7 +1522,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     minHeight: 40,
     paddingHorizontal: 15,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1521,7 +1536,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   sectionCard: {
-    borderRadius: 18,
+    borderRadius: 8,
     borderWidth: 1,
     padding: SPACING.lg,
     gap: SPACING.md,
@@ -1549,7 +1564,7 @@ const styles = StyleSheet.create({
     minWidth: 34,
     minHeight: 28,
     paddingHorizontal: 10,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1733,7 +1748,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   emptyState: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 14,
     flexDirection: 'row',
@@ -1755,7 +1770,7 @@ const styles = StyleSheet.create({
   inlineActionBtn: {
     minHeight: 34,
     paddingHorizontal: 12,
-    borderRadius: 9,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1769,7 +1784,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   deviceRow: {
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 14,
     gap: 12,
@@ -1782,7 +1797,7 @@ const styles = StyleSheet.create({
   selectionToggle: {
     width: 24,
     height: 24,
-    borderRadius: 7,
+    borderRadius: 6,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1803,7 +1818,7 @@ const styles = StyleSheet.create({
   deviceIconWrap: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1839,7 +1854,7 @@ const styles = StyleSheet.create({
     minWidth: 104,
     minHeight: 36,
     paddingHorizontal: 12,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1886,7 +1901,7 @@ const styles = StyleSheet.create({
     minWidth: 76,
     flexGrow: 1,
     flexBasis: '30%',
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -1904,7 +1919,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   diagnosticReasonBox: {
-    borderRadius: 11,
+    borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 11,
     paddingVertical: 9,
@@ -1937,7 +1952,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   compatibilityCard: {
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     padding: SPACING.lg,
     gap: 14,
@@ -1975,7 +1990,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   compatibilityRow: {
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 11,
     paddingVertical: 10,
@@ -1986,7 +2001,7 @@ const styles = StyleSheet.create({
   compatibilityIconWrap: {
     width: 30,
     height: 30,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2041,7 +2056,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   infoCard: {
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     padding: SPACING.lg,
     flexDirection: 'row',

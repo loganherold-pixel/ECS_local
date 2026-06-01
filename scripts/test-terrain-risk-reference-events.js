@@ -87,6 +87,22 @@ const tooFar = referenceEvents.selectUpcomingTerrainRiskBannerEvent(events, {
 });
 assert.strictEqual(tooFar, null, 'Too-distant terrain events should not show in the upper banner.');
 
+const oneMileEvents = referenceEvents.buildTerrainRiskReferenceEvents({
+  profile: [
+    { distanceMiles: 0, elevationFeet: 6100, riskScore: 18, riskLevel: 'low', gradePercent: 1 },
+    { distanceMiles: 1.95, elevationFeet: 7120, riskScore: 82, riskLevel: 'high', gradePercent: 11, hazardKinds: ['rapid_elevation_change'] },
+    { distanceMiles: 2.4, elevationFeet: 7200, riskScore: 28, riskLevel: 'low', gradePercent: 2 },
+  ],
+  completedDistanceMiles: 1.0,
+  totalDistanceMiles: 2.4,
+  weatherSnapshot: wetWeather,
+});
+const oneMileUpcoming = referenceEvents.selectUpcomingTerrainRiskBannerEvent(oneMileEvents, {
+  proximityMiles: 1,
+});
+assert(oneMileUpcoming, 'Terrain risk events within one mile should enter the ECS Intelligence banner lane.');
+assert.strictEqual(oneMileUpcoming.distanceAheadMiles, 1.0);
+
 const passed = referenceEvents.selectUpcomingTerrainRiskBannerEvent(
   referenceEvents.buildTerrainRiskReferenceEvents({
     profile,
@@ -108,22 +124,49 @@ assert(
   'TerrainRiskSideProfile should report tapped reference dots upward.',
 );
 assert(
+  sideProfileSource.includes('completedDistanceMiles?: number | null') &&
+    sideProfileSource.includes('buildCurrentRouteMarkerPoint') &&
+    sideProfileSource.includes('currentPositionPoint') &&
+    sideProfileSource.includes('Current GPS position'),
+  'TerrainRiskSideProfile should place a current GPS/progress marker on the elevation line.',
+);
+assert(
+  sideProfileSource.includes('left: 24') &&
+    sideProfileSource.includes('right: 16') &&
+    sideProfileSource.includes('top: 8') &&
+    sideProfileSource.includes('bottom: 24'),
+  'TerrainRiskSideProfile chart frame should reserve enough in-view padding to prevent axis and marker clipping.',
+);
+assert(
+  sideProfileSource.includes("riskLevel === 'high' ? 3.2") &&
+    sideProfileSource.includes("riskLevel === 'moderate' ? 2.8 : 2.4"),
+  'TerrainRiskSideProfile route stroke should stay bold but thinner than the previous heavy line treatment.',
+);
+assert(
+  sideProfileSource.includes('accessible={interactive}') &&
+    sideProfileSource.includes('accessibilityLabel={referenceEvent'),
+  'Expanded Terrain Risk pressure points should expose touch targets and labels.',
+);
+assert(
   widgetRenderersSource.includes('Why ECS flagged this point') &&
     widgetRenderersSource.includes('onTerrainRiskReferenceEvent'),
   'Expanded Terrain Risk widget should show a polished explanation and report events through render options.',
 );
 assert(
   widgetRenderersSource.includes('detailMode={mode === \'detail\'}') &&
-    widgetRenderersSource.includes('const markersInteractive = expanded && detailMode;') &&
+    widgetRenderersSource.includes('const markersInteractive = expanded;') &&
     widgetRenderersSource.includes('interactive={markersInteractive}') &&
+    widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}') &&
     widgetRenderersSource.includes('expanded && detailMode && selectedReferenceEvent') &&
     sideProfileSource.includes('r={interactive ? 12 : 0}'),
-  'Terrain Risk summary mode should keep reference markers visible but inactive until long-press detail mode.',
+  'Terrain Risk expanded mode should make reference markers tappable while showing the detailed readout in detail mode.',
 );
 assert(
   dashboardSource.includes('selectUpcomingTerrainRiskBannerEvent') &&
-    dashboardSource.includes("source: 'terrain_risk_reference'"),
-  'Dashboard ECS Intelligence lane should select upcoming terrain risk events from widget output.',
+    dashboardSource.includes("source: 'terrain_risk_reference'") &&
+    dashboardSource.includes('{ proximityMiles: 1 }') &&
+    widgetRenderersSource.includes('selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 1 })'),
+  'Dashboard ECS Intelligence lane should select upcoming terrain risk events within one mile from widget output.',
 );
 
 console.log('[terrain-risk-reference-events] event creation, weather copy, callback wiring, and banner selection checks passed');

@@ -4,6 +4,7 @@ import { Alert, Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, 
 import { ConvoyCommandMap } from '../convoy/ConvoyCommandMap';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, TYPO } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import type { ConvoyMapVehicle, ConvoyMovementStatus, ConvoyRealtimeConnectionStatus } from '../../lib/convoy/convoyRealtimeService';
 import {
   convoyMembershipService,
@@ -178,15 +179,31 @@ function roleFromCommandMember(member: ConvoyMember): ConvoyMapVehicle['role'] {
   return 'member';
 }
 
+function expeditionBadgeTitleFromRole(role: ConvoyMapVehicle['role']): string {
+  switch (role) {
+    case 'lead':
+      return 'Lead';
+    case 'sweep':
+      return 'Sweep';
+    case 'support':
+      return 'Support';
+    default:
+      return 'Convoy';
+  }
+}
+
 function fallbackVehiclesFromCommandData(commandData: ConvoyCommandData): ConvoyMapVehicle[] {
   return commandData.members.flatMap((member) => {
     if (!member.coordinates) return [];
     const timestamp = (member.lastPingAt ?? member.lastCheckInAt ?? commandData.lastUpdatedAt ?? new Date()).toISOString();
     const isStale = member.status === 'offline' || member.status === 'unknown';
+    const role = roleFromCommandMember(member);
     return [{
       memberId: member.id,
       callsign: member.displayName,
-      role: roleFromCommandMember(member),
+      displayName: member.displayName,
+      expeditionBadgeTitle: expeditionBadgeTitleFromRole(role),
+      role,
       latitude: member.coordinates.latitude,
       longitude: member.coordinates.longitude,
       accuracyMeters: null,
@@ -237,6 +254,8 @@ function localVehicleFromRouteSession(
   return {
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
+    displayName: activeContext?.callsign ?? 'YOU',
+    expeditionBadgeTitle: activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position',
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -266,6 +285,8 @@ function localVehicleFromUserLocation(
   return {
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
+    displayName: activeContext?.callsign ?? 'YOU',
+    expeditionBadgeTitle: activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position',
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -996,7 +1017,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: 'rgba(3,6,8,0.24)',
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   feedPanelStage: {
     flex: 1,
@@ -1010,8 +1031,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(139,148,158,0.16)',
-    backgroundColor: 'rgba(3,7,9,0.92)',
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: ECS_SURFACE.background.primary,
     paddingHorizontal: 18,
     paddingVertical: 16,
   },
@@ -1132,9 +1153,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     borderWidth: 1,
-    borderColor: 'rgba(139,148,158,0.16)',
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: 7,
-    backgroundColor: 'rgba(0,0,0,0.24)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
     paddingVertical: 6,
   },
@@ -1155,7 +1176,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.24)',
     borderRadius: 10,
-    backgroundColor: 'rgba(5,8,10,0.72)',
+    backgroundColor: ECS_SURFACE.background.secondary,
     paddingHorizontal: 10,
     paddingVertical: 9,
     gap: 7,
@@ -1200,7 +1221,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.14)',
     borderRadius: 7,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: ECS_SURFACE.background.compact,
     justifyContent: 'center',
     paddingHorizontal: 7,
     paddingVertical: 5,
@@ -1596,7 +1617,7 @@ const styles = StyleSheet.create({
     minHeight: 30,
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.14)',
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
     paddingVertical: 5,
   },
@@ -1617,7 +1638,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.22)',
     borderRadius: 10,
-    backgroundColor: 'rgba(5,8,10,0.66)',
+    backgroundColor: ECS_SURFACE.background.secondary,
     overflow: 'hidden',
   },
   emergencyFeedCompact: {

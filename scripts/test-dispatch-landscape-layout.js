@@ -8,6 +8,10 @@ const commandCenterSource = fs.readFileSync(path.join(root, 'components', 'dispa
 const panelSource = fs.readFileSync(path.join(root, 'components', 'dispatch', 'DispatchConvoyCommandPanel.tsx'), 'utf8');
 const mapSource = fs.readFileSync(path.join(root, 'components', 'convoy', 'ConvoyCommandMap.tsx'), 'utf8');
 const dockSource = fs.readFileSync(path.join(root, 'components', 'CommandDock.tsx'), 'utf8');
+const landscapeTopRowStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('landscapeTopRow:'),
+  commandCenterSource.indexOf('landscapeSetupRail:'),
+);
 
 assert.ok(
   dispatchTabSource.includes('const isLandscape = width > height') &&
@@ -19,11 +23,35 @@ assert.ok(
 );
 
 assert.ok(
+  dispatchTabSource.includes('<TopoBackground>') &&
+    dispatchTabSource.includes("backgroundColor: 'transparent'") &&
+    commandCenterSource.includes("import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens'") &&
+    !commandCenterSource.includes('ECSShellTexture') &&
+    !commandCenterSource.includes('ECS_POPUP_SURFACE_DARK') &&
+    commandCenterSource.includes('backgroundColor: ECS_SURFACE.background.primary') &&
+    commandCenterSource.includes('backgroundColor: ECS_SURFACE.background.secondary') &&
+    commandCenterSource.includes('backgroundColor: ECS_SURFACE.background.compact') &&
+    commandCenterSource.includes('borderColor: ECS_SURFACE.border.default') &&
+    commandCenterSource.includes('borderBottomColor: ECS_SURFACE.border.quiet'),
+  'Dispatch should share the Fleet topo background and translucent ECS surface opacity instead of the popup texture/surface background.',
+);
+
+assert.ok(
+  panelSource.includes("import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens'") &&
+    panelSource.includes('backgroundColor: ECS_SURFACE.background.primary') &&
+    panelSource.includes('backgroundColor: ECS_SURFACE.background.secondary') &&
+    panelSource.includes('backgroundColor: ECS_SURFACE.background.compact') &&
+    panelSource.includes('borderColor: ECS_SURFACE.border.default') &&
+    !panelSource.includes("backgroundColor: 'rgba(3,7,9,0.92)'") &&
+    !panelSource.includes("backgroundColor: 'rgba(5,8,10,0.72)'"),
+  'Dispatch Convoy Command panel should use the same translucent Fleet surface tokens as the Dispatch shell.',
+);
+
+assert.ok(
   commandCenterSource.includes('const isLandscapeDispatch = windowWidth > windowHeight') &&
     commandCenterSource.includes('styles.landscapeTitleBar') &&
     commandCenterSource.includes('styles.landscapeTopRow') &&
     commandCenterSource.includes('styles.landscapeSetupRail') &&
-    commandCenterSource.includes('styles.landscapeCommandRail') &&
     commandCenterSource.includes('styles.feedPanelLandscapeMap'),
   'DispatchCadCommandCenter should split landscape into a safe title bar, compact top row, and larger lower map panel.',
 );
@@ -31,9 +59,7 @@ assert.ok(
 assert.ok(
   commandCenterSource.includes('landscapeTitleCenter') &&
     !commandCenterSource.includes('<Text style={styles.channelLandscape} numberOfLines={1}>{teamStatusLabel}</Text>') &&
-    commandCenterSource.includes('{!isLandscapeDispatch ? <ECSShellTexture /> : null}') &&
     commandCenterSource.includes('advisoryLine ?? <View style={styles.landscapeSetupTopSpacer} />') &&
-    commandCenterSource.includes('<View style={styles.landscapeCommandRail}>') &&
     commandCenterSource.includes('{headerStrip}') &&
     commandCenterSource.includes('marginHorizontal: 2') &&
     commandCenterSource.includes('paddingHorizontal: 2'),
@@ -61,11 +87,16 @@ assert.ok(
 assert.ok(
   commandCenterSource.includes('rootLandscape:') &&
     commandCenterSource.includes('paddingBottom: 0') &&
+    commandCenterSource.includes('landscapeSummaryDock') &&
+    commandCenterSource.includes('styles.landscapeSummaryDock') &&
+    commandCenterSource.includes('<View style={styles.landscapeSummaryDock}>') &&
+    landscapeTopRowStyle.includes('minHeight: 0') &&
+    !landscapeTopRowStyle.includes('maxHeight: 148') &&
     commandCenterSource.includes('feedPanelLandscapeMap') &&
-    commandCenterSource.includes('marginTop: 10') &&
+    commandCenterSource.includes('marginTop: 3') &&
     commandCenterSource.includes("alignSelf: 'stretch'") &&
     commandCenterSource.includes('marginBottom: 0'),
-  'Dispatch landscape map panel should sit below the top controls and dock to the bottom of the available device surface with no hidden spacer below it.',
+  'Dispatch landscape map panel should start immediately below Resources, Vehicle, and Sync while the summary rail is docked inside the top band.',
 );
 
 assert.ok(
