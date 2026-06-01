@@ -43,6 +43,14 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
+function readString(record: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
 async function requestId(req: Request): Promise<string | null> {
   const url = new URL(req.url);
   const queryId = cleanText(url.searchParams.get('id') ?? url.searchParams.get('public_id'));
@@ -77,6 +85,66 @@ function buildAssessment(record: Record<string, unknown>) {
   };
 }
 
+function sourceRecords(record: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(record.source_records)
+    ? record.source_records.map(readRecord).filter((source): source is Record<string, unknown> => !!source)
+    : [];
+}
+
+function sourceTimestamps(record: Record<string, unknown>): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value !== 'string') return;
+    const text = value.trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    values.push(text);
+  };
+
+  push(record.last_verified_at);
+  sourceRecords(record).forEach((source) => {
+    push(source.lastVerifiedAt);
+    push(source.last_verified_at);
+  });
+  return values;
+}
+
+function sourceAttribution(record: Record<string, unknown>): Record<string, string | null>[] {
+  return sourceRecords(record)
+    .map((source) => {
+      const providerId = readString(source, 'providerId', 'provider_id');
+      const label = readString(source, 'label');
+      if (!providerId || !label) return null;
+      return {
+        providerId,
+        provider_id: providerId,
+        label,
+        attribution: readString(source, 'attribution'),
+        license: readString(source, 'license'),
+      };
+    })
+    .filter((source): source is Record<string, string | null> => !!source);
+}
+
+function freshnessWarnings(record: Record<string, unknown>): string[] {
+  const warnings = new Set<string>();
+  const staleAt = readString(record, 'stale_at', 'staleAt');
+  if (staleAt) {
+    const staleTime = Date.parse(staleAt);
+    if (Number.isFinite(staleTime) && staleTime <= Date.now()) {
+      warnings.add('Source stale. Refresh official source checks before offline use.');
+    }
+  }
+
+  sourceRecords(record).forEach((source) => {
+    const label = readString(source, 'label') ?? readString(source, 'providerId', 'provider_id') ?? 'Route source';
+    const lastVerifiedAt = readString(source, 'lastVerifiedAt', 'last_verified_at');
+    if (!lastVerifiedAt) warnings.add(`${label} source freshness is missing.`);
+  });
+  return Array.from(warnings);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
@@ -108,6 +176,9 @@ serve(async (req) => {
         cacheable: Boolean(record.route_geometry),
         lastVerifiedAt: record.last_verified_at ?? null,
         staleAt: record.stale_at ?? null,
+        sourceTimestamps: sourceTimestamps(record),
+        sourceAttribution: sourceAttribution(record),
+        freshnessWarnings: freshnessWarnings(record),
       },
     });
   } catch (error) {

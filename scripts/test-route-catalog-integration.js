@@ -91,8 +91,11 @@ const searchFunction = read(path.join('supabase', 'functions', 'route-catalog-se
 assert(
   detailFunction.includes('activeGuidance') &&
     detailFunction.includes('community_signal') &&
-    detailFunction.includes('whatToWatch'),
-  'Route catalog detail should expose server-side active-guidance topology metadata in the assessment',
+    detailFunction.includes('whatToWatch') &&
+    detailFunction.includes('sourceTimestamps') &&
+    detailFunction.includes('sourceAttribution') &&
+    detailFunction.includes('freshnessWarnings'),
+  'Route catalog detail should expose server-side active-guidance topology metadata plus offline-cache source freshness and attribution metadata',
 );
 assert(
   searchFunction.includes('minDistanceMiles') &&

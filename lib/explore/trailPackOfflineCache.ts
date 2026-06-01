@@ -66,8 +66,12 @@ export function trailPackToOfflinePrepCatalogInput(
     routeCatalogSourceTimestamps: offlineCache?.sourceTimestamps?.length
       ? offlineCache.sourceTimestamps
       : sourceTimestampValues(dataUsed),
-    routeCatalogAttribution: sourceAttributionValues(dataUsed),
-    routeCatalogFreshnessWarnings: catalogFreshnessWarnings(dataUsed, verification?.warnings ?? []),
+    routeCatalogAttribution: offlineCache?.sourceAttribution?.length
+      ? offlineCache.sourceAttribution
+      : sourceAttributionValues(dataUsed),
+    routeCatalogFreshnessWarnings: offlineCache?.freshnessWarnings?.length
+      ? offlineCache.freshnessWarnings
+      : catalogFreshnessWarnings(dataUsed, verification?.warnings ?? []),
     offlinePrepGeometrySource: verification?.detailFetchedAt
       ? 'route_catalog_detail_geometry'
       : 'route_catalog_summary_geometry',

@@ -87,6 +87,13 @@ export type ECSTrailPackOfflineCacheMetadata = {
   lastVerifiedAt?: string | null;
   staleAt?: string | null;
   sourceTimestamps?: string[];
+  sourceAttribution?: Array<{
+    providerId: string;
+    label: string;
+    attribution?: string;
+    license?: string;
+  }>;
+  freshnessWarnings?: string[];
 };
 
 export type ECSTrailPackOperationalCriteria = {

@@ -489,6 +489,29 @@ function normalizeRouteCatalogOfflineCache(
 ): RouteCatalogOfflineCacheMetadata {
   const record = readRecord(value);
   const sourceTimestamps = readStringArray(record?.sourceTimestamps ?? record?.source_timestamps);
+  const freshnessWarnings = readStringArray(record?.freshnessWarnings ?? record?.freshness_warnings);
+  const rawSourceAttribution = record?.sourceAttribution ?? record?.source_attribution;
+  type OfflineSourceAttribution = NonNullable<RouteCatalogOfflineCacheMetadata['sourceAttribution']>[number];
+  const sourceAttribution = Array.isArray(rawSourceAttribution)
+    ? rawSourceAttribution
+        .map((item): OfflineSourceAttribution | null => {
+          const attributionRecord = readRecord(item);
+          if (!attributionRecord) return null;
+          const providerId = readString(attributionRecord, 'providerId', 'provider_id');
+          const label = readString(attributionRecord, 'label');
+          if (!providerId || !label) return null;
+          const normalized: OfflineSourceAttribution = {
+            providerId,
+            label,
+          };
+          const attribution = readString(attributionRecord, 'attribution');
+          const license = readString(attributionRecord, 'license');
+          if (attribution) normalized.attribution = attribution;
+          if (license) normalized.license = license;
+          return normalized;
+        })
+        .filter((item): item is OfflineSourceAttribution => !!item)
+    : undefined;
   return {
     cacheable: record
       ? readBoolean(record, 'cacheable', 'available') ?? Boolean(trailPack.routeGeometry && verification.publicRecommendation)
@@ -498,6 +521,8 @@ function normalizeRouteCatalogOfflineCache(
       : trailPack.lastVerifiedAt ?? null,
     staleAt: record ? readString(record, 'staleAt', 'stale_at') ?? null : null,
     sourceTimestamps,
+    sourceAttribution: sourceAttribution && sourceAttribution.length > 0 ? sourceAttribution : undefined,
+    freshnessWarnings,
   };
 }
 

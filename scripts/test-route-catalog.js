@@ -236,6 +236,16 @@ const detailedTrailPack = normalizeRouteCatalogDetailResponse({
     cacheable: true,
     lastVerifiedAt: '2026-05-20T00:00:00.000Z',
     staleAt: '2026-08-18T00:00:00.000Z',
+    sourceTimestamps: ['2026-05-20T00:00:00.000Z'],
+    sourceAttribution: [
+      {
+        providerId: 'usfs_mvum',
+        label: 'USFS MVUM',
+        attribution: 'USDA Forest Service',
+        license: 'public_domain',
+      },
+    ],
+    freshnessWarnings: ['USFS MVUM source freshness is fresh.'],
   },
 });
 assert.strictEqual(
@@ -252,6 +262,21 @@ assert.strictEqual(
   detailedTrailPack?.catalogVerification?.offlineCache?.cacheable,
   true,
   'Route catalog detail normalization should expose offline-cache eligibility',
+);
+assert.deepStrictEqual(
+  detailedTrailPack?.catalogVerification?.offlineCache?.sourceTimestamps,
+  ['2026-05-20T00:00:00.000Z'],
+  'Route catalog detail normalization should preserve server-provided offline-cache source timestamps',
+);
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.offlineCache?.sourceAttribution?.[0]?.attribution,
+  'USDA Forest Service',
+  'Route catalog detail normalization should preserve server-provided offline-cache attribution',
+);
+assert.deepStrictEqual(
+  detailedTrailPack?.catalogVerification?.offlineCache?.freshnessWarnings,
+  ['USFS MVUM source freshness is fresh.'],
+  'Route catalog detail normalization should preserve server-provided offline-cache freshness warnings',
 );
 assert.strictEqual(
   detailedTrailPack?.catalogVerification?.detailAssessment?.activeGuidance?.status,
@@ -285,6 +310,11 @@ assert.strictEqual(
   offlinePrepInput.route.routeMetadata.routeCatalogAttribution[0].attribution,
   'USDA Forest Service',
   'Trail Pack offline cache handoff should preserve source attribution',
+);
+assert.deepStrictEqual(
+  offlinePrepInput.route.routeMetadata.routeCatalogFreshnessWarnings,
+  ['USFS MVUM source freshness is fresh.'],
+  'Trail Pack offline cache handoff should prefer server-provided route catalog freshness warnings',
 );
 assert.strictEqual(
   offlinePrepInput.route.routeMetadata.offlinePrepGeometryPointCount,
