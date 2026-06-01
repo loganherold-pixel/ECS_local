@@ -14,6 +14,7 @@ export type RouteCatalogSearchArea = {
 export type RouteCatalogPresetSearchArea = Omit<RouteCatalogSearchArea, 'key' | 'source'> & {
   key: RouteCatalogPresetSearchAreaKey;
   source: 'selected_search_area';
+  coveragePosture: 'verified_recommendation';
 };
 
 export type ManualRouteCatalogSearchAreaInput = {
@@ -40,6 +41,7 @@ export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] =
     latitude: 39.305,
     longitude: -120.49,
     source: 'selected_search_area',
+    coveragePosture: 'verified_recommendation',
   },
   {
     key: 'mendocino_nf',
@@ -48,8 +50,13 @@ export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] =
     latitude: 39.605,
     longitude: -122.835,
     source: 'selected_search_area',
+    coveragePosture: 'verified_recommendation',
   },
 ];
+
+export const ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS = ROUTE_CATALOG_PRESET_SEARCH_AREAS
+  .filter((area) => area.coveragePosture === 'verified_recommendation')
+  .map((area) => area.label);
 
 function roundCoordinate(value: number): number {
   return Number(value.toFixed(6));
@@ -129,4 +136,20 @@ export function buildManualRouteCatalogSearchArea(
       source: 'manual_search_center',
     },
   };
+}
+
+export function getRouteCatalogCoverageNotice(area: RouteCatalogSearchArea | null | undefined): string {
+  if (!area) {
+    return `Verified recommendation coverage: ${ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS.join(', ')}. Select GPS or a CONUS search center to search within radius.`;
+  }
+
+  if (area.source === 'selected_search_area') {
+    return `Verified recommendation coverage is active for ${area.label}.`;
+  }
+
+  if (area.source === 'manual_search_center') {
+    return 'Manual CONUS center searches the live catalog within radius. Verified routes only appear where ECS has synced and reviewed source-backed coverage. No demo routes are used.';
+  }
+
+  return 'GPS searches the live catalog within radius. Verified routes only appear where ECS has synced and reviewed source-backed coverage. No demo routes are used.';
 }

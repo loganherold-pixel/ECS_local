@@ -151,7 +151,9 @@ import {
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
   buildManualRouteCatalogSearchArea,
+  getRouteCatalogCoverageNotice,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
+  ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   type RouteCatalogPresetSearchAreaKey,
   type RouteCatalogSearchArea,
 } from '../../lib/explore/routeCatalogSearchArea';
@@ -1005,7 +1007,7 @@ function DiscoverScreenInner() {
       if (routeCatalogSelectedSearchArea) return routeCatalogSelectedSearchArea;
       if (!hasGPSFix) return null;
       return {
-        key: 'live_gps',
+        key: 'live_gps' as const,
         label: 'Current GPS location',
         shortLabel: 'GPS',
         latitude: userLat,
@@ -1016,6 +1018,10 @@ function DiscoverScreenInner() {
     [hasGPSFix, routeCatalogSelectedSearchArea, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
+  const routeCatalogCoverageNotice = useMemo(
+    () => getRouteCatalogCoverageNotice(routeCatalogEffectiveSearchArea),
+    [routeCatalogEffectiveSearchArea],
+  );
   const routeCatalogSearchCoordinate = useMemo(
     () => routeCatalogEffectiveSearchArea
       ? {
@@ -3976,6 +3982,9 @@ function DiscoverScreenInner() {
                 <Text style={s.routeCatalogSearchAreaHelper}>
                   Suggested Trailheads only show verified catalog routes within the selected radius.
                 </Text>
+                <Text style={s.routeCatalogSearchAreaCoverageNotice}>
+                  {routeCatalogCoverageNotice}
+                </Text>
                 <View style={s.routeCatalogSearchAreaChipRow}>
                   {hasGPSFix ? (
                     <TouchableOpacity
@@ -5317,6 +5326,15 @@ function DiscoverScreenInner() {
           {routeCatalogManualSearchError ? (
             <Text style={s.routeCatalogManualSearchError}>{routeCatalogManualSearchError}</Text>
           ) : null}
+          <View style={s.routeCatalogManualCoverageBlock}>
+            <Text style={s.routeCatalogManualSearchLabel}>VERIFIED COVERAGE</Text>
+            <Text style={s.routeCatalogManualCoverageText}>
+              {ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS.join(' / ')}
+            </Text>
+            <Text style={s.routeCatalogManualCoverageHint}>
+              Manual centers search the live catalog within radius. No demo routes are used.
+            </Text>
+          </View>
         </TacticalPopupShell>
 
         {/* ── Phase 18: AI Route Preview Modal with enrichment ── */}
@@ -5800,6 +5818,12 @@ const s = StyleSheet.create({
     lineHeight: 12,
     fontWeight: '700',
   },
+  routeCatalogSearchAreaCoverageNotice: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
   routeCatalogSearchAreaChipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -5858,6 +5882,27 @@ const s = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     fontWeight: '800',
+  },
+  routeCatalogManualCoverageBlock: {
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    borderRadius: ECS.radius,
+    backgroundColor: TACTICAL.amber + '10',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 5,
+  },
+  routeCatalogManualCoverageText: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+  },
+  routeCatalogManualCoverageHint: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
   },
   exploreMapHandoffCard: {
     flexDirection: 'row',

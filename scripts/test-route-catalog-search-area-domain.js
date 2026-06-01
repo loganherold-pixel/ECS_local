@@ -20,8 +20,10 @@ function compileTypescript(module, filename) {
 require.extensions['.ts'] = compileTypescript;
 
 const {
+  ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
   buildManualRouteCatalogSearchArea,
+  getRouteCatalogCoverageNotice,
   isRouteCatalogCoordinateInConus,
   parseRouteCatalogCoordinateText,
 } = require(path.join(root, 'lib', 'explore', 'routeCatalogSearchArea.ts'));
@@ -50,6 +52,12 @@ assert.strictEqual(
   'Manual search center parser should not pretend place names are coordinates before a geocoder exists.',
 );
 
+assert.deepStrictEqual(
+  ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
+  ['Tahoe National Forest', 'Mendocino National Forest'],
+  'Verified coverage labels should make the current public recommendation footprint explicit.',
+);
+
 assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 39.305, longitude: -120.49 }), true);
 assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 21.3, longitude: -157.8 }), false);
 assert.strictEqual(isRouteCatalogCoordinateInConus({ latitude: 61.2, longitude: -149.9 }), false);
@@ -64,6 +72,16 @@ assert.strictEqual(manualArea.area.key, 'manual_search_center');
 assert.strictEqual(manualArea.area.shortLabel, 'Moab area');
 assert.strictEqual(manualArea.area.latitude, 38.5733);
 assert.strictEqual(manualArea.area.longitude, -109.5498);
+assert.match(
+  getRouteCatalogCoverageNotice(manualArea.area),
+  /Manual CONUS center.*No demo routes are used/i,
+  'Manual search centers should explain that they are radius-bound searches, not verified coverage claims.',
+);
+assert.match(
+  getRouteCatalogCoverageNotice(ROUTE_CATALOG_PRESET_SEARCH_AREAS[0]),
+  /Verified recommendation coverage.*Tahoe National Forest/i,
+  'Preset pilot areas should identify active verified recommendation coverage.',
+);
 
 const invalidArea = buildManualRouteCatalogSearchArea({
   label: 'Anchorage',

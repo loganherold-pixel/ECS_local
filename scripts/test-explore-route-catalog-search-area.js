@@ -13,7 +13,10 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 assert(
   discover.includes('ROUTE_CATALOG_PRESET_SEARCH_AREAS') &&
     discover.includes('buildManualRouteCatalogSearchArea') &&
+    discover.includes('getRouteCatalogCoverageNotice') &&
+    discover.includes('ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS') &&
     discover.includes('routeCatalogManualSearchArea') &&
+    discover.includes('routeCatalogCoverageNotice') &&
     discover.includes('routeCatalogSearchAreaModalVisible') &&
     discover.includes('routeCatalogSearchAreaKey') &&
     discover.includes('setRouteCatalogSearchAreaKey'),
@@ -45,6 +48,8 @@ assert(
     discover.includes('TextInput') &&
     discover.includes('Manual Center') &&
     discover.includes('Apply Center') &&
+    discover.includes('VERIFIED COVERAGE') &&
+    discover.includes('No demo routes are used') &&
     discover.includes('manual_search_center') &&
     discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.'),
   'Explore should show a compact search-area control with a manual CONUS center path.',
