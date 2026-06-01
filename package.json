@@ -69,6 +69,7 @@
     "test:campops-live-readiness": "node scripts/test-campops-live-readiness-gate.mjs",
     "test:ai-assist-gate": "node scripts/test-ai-assist-approval-gate.mjs",
     "test:campops-publishing-telemetry-gate": "node scripts/test-campops-publishing-telemetry-gate.mjs",
+    "test:generated-artifact-hygiene": "node ./scripts/test-generated-artifact-hygiene.js",
     "test:ecs-ai-live-advisory-contract": "node ./scripts/test-ecs-ai-live-advisory-contract.js",
     "test:dashboard-widgets": "node ./scripts/test-dashboard-widget-config.js",
     "test:dashboard-production": "node ./scripts/test-dashboard-production-readiness.js",
