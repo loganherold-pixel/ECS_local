@@ -140,6 +140,7 @@
     "test:explore-readiness": "node ./scripts/test-explore-readiness-integration.js",
     "test:trail-packs": "node ./scripts/test-trail-packs.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
+    "test:supabase-db-workflow": "node ./scripts/test-supabase-db-workflow.js",
     "test:trail-pack-confidence": "node ./scripts/test-trail-pack-confidence.js",
     "test:trail-pack-feedback": "node ./scripts/test-trail-pack-feedback.js",
     "test:trail-pack-review-queue": "node ./scripts/test-trail-pack-review-queue.js",
