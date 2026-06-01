@@ -266,10 +266,12 @@ includes(
   'function RouteCommandModule',
   'Route Command center module should render as a dedicated route instrument.',
 );
-includes(
-  widgetSource,
-  '<RouteCommandModule',
-  'Command Module host should mount Route Command instead of the generic placeholder.',
+assert(
+  widgetSource.includes('<CommandCenterHost') &&
+    widgetSource.includes("externalRenderers={{") &&
+    widgetSource.includes("threeDNavigation: ({ mode }) => (") &&
+    widgetSource.includes("{renderCommandPanel('route')}"),
+  'Command Module host should mount the current 3D follow map shell with the Route Terrain Risk panel instead of the retired route-command placeholder.',
 );
 includes(
   widgetSource,

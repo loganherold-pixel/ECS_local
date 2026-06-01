@@ -667,6 +667,7 @@ function ActiveNavigationCard({
   activeGuidanceWidth,
   onToggleActiveGuidanceMinimized,
   onActiveGuidanceLayout,
+  onPrepareOffline,
   activeContext,
   activeAccessory,
   activeAccessoryMinimized = false,
@@ -683,6 +684,7 @@ function ActiveNavigationCard({
   | 'activeGuidanceWidth'
   | 'onToggleActiveGuidanceMinimized'
   | 'onActiveGuidanceLayout'
+  | 'onPrepareOffline'
   | 'activeAccessoryMinimized'
   | 'onExpandActiveAccessory'
   | 'activeContext'
@@ -777,42 +779,80 @@ function ActiveNavigationCard({
         ]}
       >
           <View style={styles.activeGuidanceHeaderRow}>
-            <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
-              {guidanceEyebrow}
-            </Text>
-            {activeContext?.progressLabel ? (
-              <View style={styles.activeGuidanceHeaderBadges}>
-                <ECSBadge
-                  label={activeContext.progressLabel}
-                  tone={isRerouting ? 'warning' : 'active'}
-                  compact
-                />
-              </View>
-            ) : null}
-            {onToggleActiveGuidanceMinimized ? (
+            <View style={styles.activeGuidanceHeaderMeta}>
+              <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
+                {guidanceEyebrow}
+              </Text>
+              {activeContext?.progressLabel ? (
+                <View style={styles.activeGuidanceHeaderBadges}>
+                  <ECSBadge
+                    label={activeContext.progressLabel}
+                    tone={isRerouting ? 'warning' : 'active'}
+                    compact
+                  />
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.activeGuidanceProtectedActionGroup}>
+              {onToggleActiveGuidanceMinimized ? (
+                <TouchableOpacity
+                  style={[styles.activeGuidanceTopActionPill, styles.activeGuidanceMinimizeButton]}
+                  onPress={onToggleActiveGuidanceMinimized}
+                  activeOpacity={0.82}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Minimize active guidance"
+                >
+                  <Ionicons name="remove" size={13} color={TACTICAL.amber} />
+                  <Text
+                    style={[styles.activeGuidanceTopActionText, styles.activeGuidanceMinimizeButtonText]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.72}
+                  >
+                    Minimize
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              {onPrepareOffline ? (
+                <TouchableOpacity
+                  style={[styles.activeGuidanceTopActionPill, styles.activeGuidanceOfflineButton]}
+                  onPress={onPrepareOffline}
+                  activeOpacity={0.82}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Prepare active route for offline use"
+                >
+                  <Ionicons name="cloud-download-outline" size={13} color={TACTICAL.amber} />
+                  <Text
+                    style={[styles.activeGuidanceTopActionText, styles.activeGuidanceOfflineButtonText]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.72}
+                  >
+                    Offline
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
-                style={styles.activeGuidanceMinimizeButton}
-                onPress={onToggleActiveGuidanceMinimized}
+                style={[styles.activeGuidanceTopActionPill, styles.activeGuidanceEndButton]}
+                onPress={onEndNavigation}
                 activeOpacity={0.82}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Minimize active guidance"
+                accessibilityLabel="End active navigation"
               >
-                <Ionicons name="remove" size={13} color={TACTICAL.amber} />
-                <Text style={styles.activeGuidanceMinimizeButtonText}>Min</Text>
+                <Ionicons name="square" size={10} color="#FFD9C7" />
+                <Text
+                  style={[styles.activeGuidanceTopActionText, styles.activeGuidanceEndButtonText]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                >
+                  End
+                </Text>
               </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity
-              style={styles.activeGuidanceEndButton}
-              onPress={onEndNavigation}
-              activeOpacity={0.82}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="End active navigation"
-            >
-              <Ionicons name="square" size={10} color="#FFD9C7" />
-              <Text style={styles.activeGuidanceEndButtonText}>End</Text>
-            </TouchableOpacity>
+            </View>
           </View>
           {activeAccessoryMinimized && onExpandActiveAccessory ? (
             <View style={styles.activeReadinessMiniRow}>
@@ -1028,6 +1068,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           activeGuidanceMinimized={props.activeGuidanceMinimized}
           onToggleActiveGuidanceMinimized={props.onToggleActiveGuidanceMinimized}
           onActiveGuidanceLayout={props.onActiveGuidanceLayout}
+          onPrepareOffline={props.onPrepareOffline}
           activeAccessoryMinimized={props.activeAccessoryMinimized}
           onExpandActiveAccessory={props.onExpandActiveAccessory}
           activeContext={props.activeContext}
@@ -1377,12 +1418,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 6,
   },
+  activeGuidanceHeaderMeta: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   activeGuidanceEyebrow: {
     ...TYPO.U2,
     color: TACTICAL.amber,
     fontSize: 7,
     letterSpacing: 1.2,
     flexShrink: 1,
+  },
+  activeGuidanceProtectedActionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 5,
+    flexShrink: 0,
   },
   activeGuidanceHeaderBadges: {
     flexDirection: 'row',
@@ -1391,8 +1446,9 @@ const styles = StyleSheet.create({
     gap: 6,
     flexShrink: 1,
   },
-  activeGuidanceMinimizeButton: {
+  activeGuidanceTopActionPill: {
     minHeight: 24,
+    minWidth: 58,
     paddingHorizontal: 7,
     borderRadius: 999,
     flexDirection: 'row',
@@ -1400,30 +1456,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
     borderWidth: 1,
+  },
+  activeGuidanceMinimizeButton: {
+    minWidth: 84,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },
-  activeGuidanceMinimizeButtonText: {
+  activeGuidanceTopActionText: {
     ...ECS_TEXT.chip,
-    color: TACTICAL.amber,
     fontSize: 7.5,
+    lineHeight: 9,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  activeGuidanceMinimizeButtonText: {
+    color: TACTICAL.amber,
+  },
+  activeGuidanceOfflineButton: {
+    minWidth: 76,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  activeGuidanceOfflineButtonText: {
+    color: TACTICAL.amber,
   },
   activeGuidanceEndButton: {
-    minHeight: 24,
-    paddingHorizontal: 7,
-    borderRadius: 999,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    borderWidth: 1,
+    minWidth: 54,
     borderColor: 'rgba(255,128,92,0.26)',
     backgroundColor: 'rgba(82,18,12,0.44)',
   },
   activeGuidanceEndButtonText: {
-    ...ECS_TEXT.chip,
     color: '#FFD9C7',
-    fontSize: 7.5,
   },
   activeGuidanceRow: {
     flexDirection: 'row',

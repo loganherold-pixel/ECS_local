@@ -170,6 +170,7 @@ interface WidgetGridProps {
   gpsAltitudeFt?: number | null;
   gpsTimestampMs?: number | null;
   onOpenCommandBrief?: () => void;
+  onTerrainRiskReferenceEvent?: WidgetRenderOptions['onTerrainRiskReferenceEvent'];
   /** Phase 6: Active expedition mode — locks layout, hides edit controls */
   isActiveMode?: boolean;
 }
@@ -1611,6 +1612,7 @@ export default function WidgetGrid({
   containerWidth: containerWidthProp,
   gpsLatitude, gpsLongitude, gpsHeadingDeg, gpsSpeedMph, gpsHasFix, gpsAccuracyM, gpsAltitudeFt, gpsTimestampMs,
   onOpenCommandBrief,
+  onTerrainRiskReferenceEvent,
 }: WidgetGridProps) {
 
   const reducedMotion = useReducedMotion();
@@ -1786,6 +1788,7 @@ export default function WidgetGrid({
     gpsAltitudeFt,
     gpsTimestampMs,
     onOpenCommandBrief,
+    onTerrainRiskReferenceEvent,
   }), [
     advancedModeEnabled,
     dashboardMode,
@@ -1801,6 +1804,7 @@ export default function WidgetGrid({
     isCompact,
     onCalibrate,
     onOpenCommandBrief,
+    onTerrainRiskReferenceEvent,
     onResetCalibration,
     pitchDeg,
     rollDeg,

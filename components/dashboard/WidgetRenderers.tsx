@@ -196,6 +196,11 @@ import {
   type TerrainRiskRouteContext,
 } from '../../lib/terrainRiskCommandProfile';
 import {
+  buildTerrainRiskReferenceEvents,
+  selectUpcomingTerrainRiskBannerEvent,
+  type TerrainRiskReferenceEvent,
+} from '../../lib/terrainRiskReferenceEvents';
+import {
   routeNeedsTerrainElevationSampling,
   sampleRouteElevationFromMapboxTerrainContours,
   terrainElevationRouteSignature,
@@ -496,6 +501,8 @@ export interface WidgetRenderOptions {
   /** Current screen dimensions for orientation-aware dashboard widget layout */
   screenWidth?: number | null;
   screenHeight?: number | null;
+  /** Reports deterministic terrain reference events to the dashboard intelligence lane. */
+  onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }
 
 function useDashboardActiveVehicleContext(): ReturnType<typeof getActiveVehicleContext> {
@@ -2389,6 +2396,8 @@ type CommandRouteVisualData = {
 type CommandTerrainRiskVisualData = {
   active: boolean;
   route: TerrainRiskRoute | null;
+  completedDistanceMiles: number | null;
+  weatherSnapshot: ECSWeatherSnapshot | null;
 };
 
 type CommandPowerVisualData = {
@@ -5648,6 +5657,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const terrainRiskVisual: CommandTerrainRiskVisualData = {
     active: Boolean(terrainRiskRouteContext.active),
     route: terrainRiskRoute,
+    completedDistanceMiles: terrainRiskRouteContext.completedDistanceMiles ?? null,
+    weatherSnapshot: snapshot,
   };
   const environmentalTerrainSnapshot = resolveElevationTerrainSnapshot({
     gpsHasFix: options?.gpsHasFix ?? false,
@@ -6033,7 +6044,11 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
           >
-            <AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} expanded={expanded} />
+            <AttitudeCommandTerrainRiskPreview
+              terrainRisk={terrainRiskVisual}
+              expanded={expanded}
+              onTerrainRiskReferenceEvent={options?.onTerrainRiskReferenceEvent}
+            />
           </AttitudeCommandPanel>
         );
       case 'power':
@@ -7564,6 +7579,46 @@ const attitudeCommandS = StyleSheet.create({
     borderWidth: 0,
     borderRadius: 10,
     backgroundColor: 'transparent',
+  },
+  terrainRiskReferenceReadout: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 7,
+    zIndex: 6,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(242, 194, 77, 0.28)',
+    backgroundColor: 'rgba(4, 8, 11, 0.90)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    gap: 3,
+  },
+  terrainRiskReferenceEyebrow: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  terrainRiskReferenceTitle: {
+    color: '#F5D27C',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+  },
+  terrainRiskReferenceMeta: {
+    color: 'rgba(230, 237, 243, 0.78)',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '800',
+  },
+  terrainRiskReferenceGuidance: {
+    color: 'rgba(230, 237, 243, 0.64)',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '700',
   },
   terrainRiskEmptyPanel: {
     flex: 1,
@@ -11378,11 +11433,38 @@ function resolveAttitudeCommandExpansionGeometry(
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
   expanded = false,
+  onTerrainRiskReferenceEvent,
 }: {
   terrainRisk: CommandTerrainRiskVisualData;
   expanded?: boolean;
+  onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }) {
   const route = terrainRisk.route;
+  const [selectedReferenceEvent, setSelectedReferenceEvent] = useState<TerrainRiskReferenceEvent | null>(null);
+  const referenceEvents = useMemo(
+    () => route
+      ? buildTerrainRiskReferenceEvents({
+          profile: route.profile,
+          totalDistanceMiles: route.totalDistanceMiles,
+          completedDistanceMiles: terrainRisk.completedDistanceMiles,
+          weatherSnapshot: terrainRisk.weatherSnapshot,
+        })
+      : [],
+    [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
+  );
+  const upcomingReferenceEvent = useMemo(
+    () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 0.75 }),
+    [referenceEvents],
+  );
+
+  useEffect(() => {
+    onTerrainRiskReferenceEvent?.(upcomingReferenceEvent);
+  }, [onTerrainRiskReferenceEvent, upcomingReferenceEvent]);
+
+  const handleReferencePointPress = useCallback((event: TerrainRiskReferenceEvent) => {
+    setSelectedReferenceEvent(event);
+    onTerrainRiskReferenceEvent?.(event);
+  }, [onTerrainRiskReferenceEvent]);
 
   return (
     <View
@@ -11410,8 +11492,30 @@ function AttitudeCommandTerrainRiskPreview({
               unit="mi"
               transparentBackground
               interactive={expanded}
+              referenceEvents={referenceEvents}
+              onReferencePointPress={handleReferencePointPress}
             />
           </View>
+          {expanded && selectedReferenceEvent ? (
+            <View style={attitudeCommandS.terrainRiskReferenceReadout}>
+              <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>
+                Why ECS flagged this point
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceTitle} numberOfLines={1}>
+                {selectedReferenceEvent.title} | {selectedReferenceEvent.distanceAheadMiles.toFixed(1)} mi ahead
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceMeta} numberOfLines={1}>
+                {[
+                  selectedReferenceEvent.gradePercent != null ? `${selectedReferenceEvent.gradePercent}% grade` : null,
+                  `${selectedReferenceEvent.elevationFeet.toLocaleString()} ft`,
+                  selectedReferenceEvent.weatherInfluence.summary,
+                ].filter(Boolean).join(' | ')}
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceGuidance} numberOfLines={2}>
+                {selectedReferenceEvent.fieldGuidance[0]}
+              </Text>
+            </View>
+          ) : null}
         </>
       ) : (
         <View style={attitudeCommandS.terrainRiskEmptyPanel}>

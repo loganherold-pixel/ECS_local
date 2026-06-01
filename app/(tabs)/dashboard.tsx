@@ -126,6 +126,10 @@ import { resolveTopBannerPresentation } from '../../lib/ui/topBannerStatusResolv
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
+import {
+  selectUpcomingTerrainRiskBannerEvent,
+  type TerrainRiskReferenceEvent,
+} from '../../lib/terrainRiskReferenceEvents';
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
 import { useECSUtilitySensorTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
 import {
@@ -900,6 +904,7 @@ type DashboardGridZoneProps = {
   onResizeWidget: (slotIndex: number, newSize: WidgetSize) => void;
   onRestoreDefaults: () => void;
   onOpenCommandBrief: () => void;
+  onTerrainRiskReferenceEvent: (event: TerrainRiskReferenceEvent | null) => void;
   onContainerLayout: (e: LayoutChangeEvent) => void;
   widgetData: any;
   gpsLatitude: number | null | undefined;
@@ -968,6 +973,7 @@ function DashboardGridZone({
   onResizeWidget,
   onRestoreDefaults,
   onOpenCommandBrief,
+  onTerrainRiskReferenceEvent,
   onContainerLayout,
   widgetData,
   gpsLatitude,
@@ -1106,6 +1112,7 @@ function DashboardGridZone({
                     onResizeWidget={onResizeWidget}
                     onRestoreDefaults={onRestoreDefaults}
                     onOpenCommandBrief={onOpenCommandBrief}
+                    onTerrainRiskReferenceEvent={onTerrainRiskReferenceEvent}
                     widgetData={widgetData}
                     dashboardMode={dashboardMode}
                     rollDeg={accel.rollDeg}
@@ -1200,6 +1207,7 @@ type DashboardModalLayerProps = {
   onOpenFleetFromDetail: () => void;
   onRemotenessNavigateFromDetail: (target: RemotenessNavigationTargetType) => void;
   onOpenCommandBriefFromDetail: () => void;
+  onTerrainRiskReferenceEvent: (event: TerrainRiskReferenceEvent | null) => void;
   onCloseAuth: () => void;
   onShrinkAndResize: () => void;
   onCancelResize: () => void;
@@ -1244,6 +1252,7 @@ function DashboardModalLayer({
   onOpenFleetFromDetail,
   onRemotenessNavigateFromDetail,
   onOpenCommandBriefFromDetail,
+  onTerrainRiskReferenceEvent,
   onCloseAuth,
   onShrinkAndResize,
   onCancelResize,
@@ -1293,6 +1302,7 @@ function DashboardModalLayer({
           gpsTimestampMs: gps.position?.timestamp ?? null,
           gpsHasFix: gps.hasFix,
           onOpenCommandBrief: onOpenCommandBriefFromDetail,
+          onTerrainRiskReferenceEvent,
         }}
         onClose={onCloseDetail}
         onReplace={onReplaceDetailWidget}
@@ -2605,6 +2615,26 @@ function DashboardScreenInner() {
       user,
     ],
   );
+  const [terrainRiskReferenceEvent, setTerrainRiskReferenceEvent] =
+    useState<TerrainRiskReferenceEvent | null>(null);
+  const handleTerrainRiskReferenceEvent = useCallback((event: TerrainRiskReferenceEvent | null) => {
+    setTerrainRiskReferenceEvent((current) => (
+      current?.id === event?.id &&
+      current?.distanceAheadMiles === event?.distanceAheadMiles &&
+      current?.banner.detail === event?.banner.detail
+        ? current
+        : event
+    ));
+  }, []);
+  const dashboardTerrainRiskBannerEvent = useMemo(
+    () => hasDashboardRouteContext
+      ? selectUpcomingTerrainRiskBannerEvent(
+          terrainRiskReferenceEvent ? [terrainRiskReferenceEvent] : [],
+          { proximityMiles: 0.75 },
+        )
+      : null,
+    [hasDashboardRouteContext, terrainRiskReferenceEvent],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -3742,6 +3772,23 @@ function DashboardScreenInner() {
   ]);
 
   const dashboardTopLaneAdvisory = useMemo<DashboardLaneState>(() => {
+    if (dashboardTerrainRiskBannerEvent) {
+      return {
+        override: {
+          title: dashboardTerrainRiskBannerEvent.banner.title,
+          detail: dashboardTerrainRiskBannerEvent.banner.detail,
+          badge: dashboardTerrainRiskBannerEvent.banner.badge,
+          icon: 'warning-outline' as const,
+          tone: dashboardTerrainRiskBannerEvent.riskLevel === 'high' ? 'warning' as const : 'info' as const,
+          live: true,
+        },
+        source: 'terrain_risk_reference',
+        reason: dashboardTerrainRiskBannerEvent.title,
+        priority: 108,
+        suppressedSources: dashboardCommandState.banner ? ['command_banner'] : [],
+      };
+    }
+
     const routeShellActive =
       hasDashboardRouteContext &&
       (dashboardShellBannerStatus.source.startsWith('route_') ||
@@ -3930,6 +3977,7 @@ function DashboardScreenInner() {
     dashboardCommandState.banner,
     dashboardPageSupportState,
     dashboardShellBannerStatus,
+    dashboardTerrainRiskBannerEvent,
     gps.fixQuality,
     gps.gpsStatus,
     gps.hasFix,
@@ -4104,6 +4152,7 @@ function DashboardScreenInner() {
         onResizeWidget={handleResizeWidget}
         onRestoreDefaults={handleRestoreDefaults}
         onOpenCommandBrief={handleOpenCommandBrief}
+        onTerrainRiskReferenceEvent={handleTerrainRiskReferenceEvent}
         onContainerLayout={handleContainerLayout}
         widgetData={widgetData}
         gpsLatitude={gps.position?.latitude}
@@ -4178,6 +4227,7 @@ function DashboardScreenInner() {
         onOpenFleetFromDetail={handleOpenFleet}
         onRemotenessNavigateFromDetail={handleRemotenessNavigateFromDetail}
         onOpenCommandBriefFromDetail={handleOpenCommandBrief}
+        onTerrainRiskReferenceEvent={handleTerrainRiskReferenceEvent}
         onCloseAuth={() => setAuthVisible(false)}
         onShrinkAndResize={handleShrinkAndResize}
         onCancelResize={handleCancelResize}

@@ -20,6 +20,7 @@ import {
   type TerrainProfilePoint,
   type TerrainRiskLevel,
 } from '../../lib/terrainRiskCommandProfile';
+import type { TerrainRiskReferenceEvent } from '../../lib/terrainRiskReferenceEvents';
 
 const VIEWBOX_WIDTH = 340;
 const VIEWBOX_HEIGHT = 154;
@@ -87,6 +88,8 @@ type Props = {
   unit: DistanceUnit;
   transparentBackground?: boolean;
   interactive?: boolean;
+  referenceEvents?: TerrainRiskReferenceEvent[];
+  onReferencePointPress?: (event: TerrainRiskReferenceEvent) => void;
 };
 
 const RISK_COLORS: Record<TerrainRiskLevel, string> = {
@@ -299,6 +302,8 @@ export default function TerrainRiskSideProfile({
   unit,
   transparentBackground = false,
   interactive = false,
+  referenceEvents = [],
+  onReferencePointPress,
 }: Props) {
   const [selectedReferencePointId, setSelectedReferencePointId] = useState<string | null>(null);
   const chart = useMemo(() => {
@@ -493,6 +498,8 @@ export default function TerrainRiskSideProfile({
         {chart.referencePoints.map((point) => {
           const color = getTerrainCommandRiskColor(point.riskLevel);
           const selected = selectedReferencePointId === point.id;
+          const referenceEvent =
+            referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05) ?? null;
           return (
             <G key={`terrain-risk-reference-${point.id}`}>
               <Circle
@@ -520,6 +527,9 @@ export default function TerrainRiskSideProfile({
                 onPress={interactive ? (event: { stopPropagation?: () => void }) => {
                   event.stopPropagation?.();
                   setSelectedReferencePointId((current) => current === point.id ? null : point.id);
+                  if (referenceEvent) {
+                    onReferencePointPress?.(referenceEvent);
+                  }
                 } : undefined}
               />
             </G>

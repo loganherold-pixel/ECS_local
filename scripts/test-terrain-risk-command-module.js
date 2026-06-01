@@ -88,7 +88,10 @@ assert(widgetRenderersSource.includes('Mapbox terrain contour estimate'), 'Sampl
 assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
 assert(widgetRenderersSource.includes("title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}"), 'Route Terrain Risk inline panel must summarize risk score or standby state.');
 assert(widgetRenderersSource.includes("detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}"), 'Route Terrain Risk inline panel must keep data source or guidance-start copy visible.');
-assert(widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} expanded={expanded} />'), 'Route Terrain Risk expansion must render the shared inline chart preview.');
+assert(
+  /<AttitudeCommandTerrainRiskPreview[\s\S]{0,220}terrainRisk=\{terrainRiskVisual\}[\s\S]{0,220}expanded=\{expanded\}/.test(widgetRenderersSource),
+  'Route Terrain Risk expansion must render the shared inline chart preview.',
+);
 assert(widgetRenderersSource.includes("accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}"), 'Route Terrain Risk tap target must describe inline expand/collapse behavior.');
 assert(widgetRenderersSource.includes('renderCommandPanel(activePanel, true)'), 'Route Terrain Risk must use the shared inline expansion path instead of opening a popup.');
 assert(!widgetRenderersSource.includes("const compactRouteFocusPanel = activePanel === 'route'"), 'Route Terrain Risk must not use the old compact bottom-sheet branch.');
