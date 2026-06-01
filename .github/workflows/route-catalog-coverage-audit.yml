@@ -1,0 +1,94 @@
+name: Route Catalog Coverage Audit
+
+on:
+  schedule:
+    - cron: '28 13 * * 4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-coverage-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit live route catalog coverage probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate audit secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+
+      - name: Run Route Catalog Coverage Audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run route-catalog:coverage:ci | tee route-catalog-coverage-audit.json
+
+      - name: Summarize coverage
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s route-catalog-coverage-audit.json ]]; then
+            echo "No route catalog coverage audit output was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
+          const jsonStart = raw.indexOf('{');
+          const response = JSON.parse(raw.slice(jsonStart));
+          const results = Array.isArray(response.results) ? response.results : [];
+
+          const lines = [
+            '## Route Catalog Coverage Audit',
+            '',
+            '| Probe | State | Observed posture | Matches expected | Count | Source-backed |',
+            '| --- | --- | --- | --- | ---: | ---: |',
+            ...results.map((result) =>
+              `| ${result.key} | ${result.coverageState} | ${result.observedPosture} | ${result.matchesExpectedPosture ? 'yes' : 'no'} | ${result.count} | ${result.anySourceBackedCandidateCount} |`
+            ),
+            '',
+            `Mismatches: ${results.filter((result) => !result.matchesExpectedPosture).length}`,
+          ];
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          NODE
+
+      - name: Check expected coverage posture
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s route-catalog-coverage-audit.json ]]; then
+            exit 1
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
+          const jsonStart = raw.indexOf('{');
+          const response = JSON.parse(raw.slice(jsonStart));
+          const results = Array.isArray(response.results) ? response.results : [];
+          const mismatches = results.filter((result) => !result.matchesExpectedPosture);
+          if (mismatches.length > 0) {
+            console.error(`Coverage posture mismatches: ${mismatches.map((result) => result.key).join(', ')}`);
+            process.exit(1);
+          }
+          NODE

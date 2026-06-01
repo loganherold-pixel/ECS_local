@@ -86,6 +86,7 @@ function parseArgs(argv) {
     all: false,
     probeKeys: [],
     json: false,
+    failOnMismatch: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -96,6 +97,8 @@ function parseArgs(argv) {
       options.all = true;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--fail-on-mismatch') {
+      options.failOnMismatch = true;
     } else if (arg === '--probe') {
       const value = argv[index + 1];
       if (!value) throw new Error('--probe requires a coverage probe key');
@@ -117,6 +120,7 @@ function usage() {
     '  node scripts/route-catalog-coverage-audit.js --dry-run --all',
     '  node scripts/route-catalog-coverage-audit.js --dry-run --probe tahoe_national_forest',
     '  node scripts/route-catalog-coverage-audit.js --all',
+    '  node scripts/route-catalog-coverage-audit.js --all --fail-on-mismatch',
     '',
     'Required for live audit:',
     '  ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL',
@@ -265,7 +269,16 @@ async function main() {
     results.push(result);
     if (!options.json) printHumanAudit(result);
   }
+  const mismatchedProbes = results.filter((result) => !result.matchesExpectedPosture);
   if (options.json) console.log(JSON.stringify({ mode: 'live-audit', results }, null, 2));
+  if (options.failOnMismatch && mismatchedProbes.length > 0) {
+    console.error(
+      `Route catalog coverage audit found ${mismatchedProbes.length} mismatched probe(s): ${
+        mismatchedProbes.map((result) => result.key).join(', ')
+      }`,
+    );
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
