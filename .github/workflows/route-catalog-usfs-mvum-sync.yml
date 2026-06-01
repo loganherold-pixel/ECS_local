@@ -17,6 +17,10 @@ on:
         description: Maximum features to request per forest/layer.
         required: false
         default: '150'
+      max_allowable_offset:
+        description: ArcGIS geometry simplification offset in degrees to keep dense MVUM sources within Edge limits.
+        required: false
+        default: '0.000025'
       current_conditions_json:
         description: Optional reviewed official current-condition overlay JSON.
         required: false
@@ -41,6 +45,7 @@ jobs:
       FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest,caribou-targhee-national-forest,klamath-national-forest,willamette-national-forest,boise-national-forest,lolo-national-forest,salmon-challis-national-forest,stanislaus-national-forest,dixie-national-forest,bitterroot-national-forest,mt-hood-national-forest,coronado-national-forest,sierra-national-forest' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '150' }}
+      MAX_ALLOWABLE_OFFSET: ${{ inputs.max_allowable_offset || '0.000025' }}
       CURRENT_CONDITIONS_JSON: ${{ inputs.current_conditions_json || '' }}
 
     steps:
@@ -70,6 +75,7 @@ jobs:
             .filter(Boolean);
           const minMiles = Number(process.env.MIN_MILES || 1);
           const limitPerForestLayer = Number(process.env.LIMIT_PER_FOREST_LAYER || 150);
+          const maxAllowableOffset = Number(process.env.MAX_ALLOWABLE_OFFSET || 0.000025);
           const currentConditionsJson = String(process.env.CURRENT_CONDITIONS_JSON || '').trim();
 
           if (forests.length === 0) throw new Error('At least one forest slug is required.');
@@ -77,8 +83,12 @@ jobs:
           if (!Number.isFinite(limitPerForestLayer) || limitPerForestLayer <= 0) {
             throw new Error('limit_per_forest_layer must be positive.');
           }
+          if (!Number.isFinite(maxAllowableOffset) || maxAllowableOffset <= 0) {
+            throw new Error('max_allowable_offset must be positive.');
+          }
 
           const boundedLimitPerForestLayer = Math.min(500, Math.round(limitPerForestLayer));
+          const boundedMaxAllowableOffset = Math.min(0.001, maxAllowableOffset);
           let currentConditions = null;
 
           if (currentConditionsJson) {
@@ -94,6 +104,7 @@ jobs:
               forests: [forest],
               minMiles,
               limitPerForestLayer: boundedLimitPerForestLayer,
+              maxAllowableOffset: boundedMaxAllowableOffset,
             };
             if (currentConditions) payload.currentConditions = currentConditions;
             return payload;

@@ -23,6 +23,9 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 };
 
+const DEFAULT_USFS_MVUM_ARCGIS_OFFSET_DEGREES = 0.000025;
+const MAX_USFS_MVUM_ARCGIS_OFFSET_DEGREES = 0.001;
+
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
@@ -66,6 +69,12 @@ function selectForests(value: unknown): UsfsMvumForest[] {
 function readNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function readMaxAllowableOffset(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return DEFAULT_USFS_MVUM_ARCGIS_OFFSET_DEGREES;
+  return Math.min(MAX_USFS_MVUM_ARCGIS_OFFSET_DEGREES, number);
 }
 
 function chunkRows<T>(rows: T[], size = 100): T[][] {
@@ -146,7 +155,13 @@ async function upsertRouteSourceRows(
   }
 }
 
-async function fetchLayerFeatures(forest: UsfsMvumForest, layer: UsfsMvumLayer, minMiles: number, limit: number) {
+async function fetchLayerFeatures(
+  forest: UsfsMvumForest,
+  layer: UsfsMvumLayer,
+  minMiles: number,
+  limit: number,
+  maxAllowableOffset: number,
+) {
   const records = [];
   const pageSize = Math.min(1000, Math.max(1, limit));
   let offset = 0;
@@ -178,6 +193,7 @@ async function fetchLayerFeatures(forest: UsfsMvumForest, layer: UsfsMvumLayer, 
       returnGeometry: 'true',
       outSR: '4326',
       geometryPrecision: '6',
+      maxAllowableOffset: String(maxAllowableOffset),
       resultOffset: String(offset),
       resultRecordCount: String(Math.min(pageSize, limit - records.length)),
     });
@@ -211,6 +227,7 @@ serve(async (req) => {
     const forests = selectForests(body.forests);
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
     const limitPerForestLayer = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerForestLayer ?? body.limit_per_forest_layer, 150))));
+    const maxAllowableOffset = readMaxAllowableOffset(body.maxAllowableOffset ?? body.max_allowable_offset);
     const now = new Date().toISOString();
     const currentConditionSources = normalizeUsfsMvumCurrentConditionSources(
       body.currentConditions ?? body.current_conditions,
@@ -245,7 +262,7 @@ serve(async (req) => {
           status: 'running',
           source_uri: forest.sourceUri,
           started_at: now,
-          metadata: { forest: forest.forestName, providerId: forest.sourceProviderId, minMiles },
+          metadata: { forest: forest.forestName, providerId: forest.sourceProviderId, minMiles, maxAllowableOffset },
         })
         .select('id')
         .single();
@@ -267,7 +284,7 @@ serve(async (req) => {
       const aggregateSourceRefs: Array<{ publicId: string; source: Record<string, unknown> }> = [];
 
       for (const layer of USFS_MVUM_LAYERS) {
-        const features = await fetchLayerFeatures(forest, layer, minMiles, limitPerForestLayer);
+        const features = await fetchLayerFeatures(forest, layer, minMiles, limitPerForestLayer, maxAllowableOffset);
         rawFeatureCount += features.length;
         const context = {
           forest,
@@ -332,6 +349,7 @@ serve(async (req) => {
             forest: forest.forestName,
             providerId: forest.sourceProviderId,
             minMiles,
+            maxAllowableOffset,
             aggregateRouteCount,
             publicRecommendationCount,
             currentConditionSourceCount: forestCurrentConditionSources.length,
@@ -347,6 +365,7 @@ serve(async (req) => {
         normalizedFeatureCount,
         aggregateRouteCount,
         publicRecommendationCount,
+        maxAllowableOffset,
         currentConditionSourceCount: forestCurrentConditionSources.length,
         currentConditionClosureCount,
         currentConditionBlockedRouteCount,
@@ -357,6 +376,7 @@ serve(async (req) => {
       ok: true,
       source: 'usfs_mvum',
       forests: summary,
+      maxAllowableOffset,
       caveat: 'USFS MVUM routes verify designated motorized access only. Current closures, weather, fire restrictions, gates, and passability still require current checks.',
     });
   } catch (error) {

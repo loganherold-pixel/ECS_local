@@ -63,6 +63,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       ],
       minMiles: 1,
       limitPerForestLayer: 150,
+      maxAllowableOffset: 0.000025,
     },
     expectedMaxPublicRecommendationCount: 10000,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],

@@ -44,6 +44,12 @@ assert(
   'Workflow should support reviewed official closure overlays without requiring a local shell token',
 );
 assert(
+  workflow.includes('max_allowable_offset') &&
+    workflow.includes('MAX_ALLOWABLE_OFFSET') &&
+    workflow.includes('maxAllowableOffset'),
+  'Workflow should pass a bounded ArcGIS geometry simplification offset to keep dense MVUM forest syncs under Edge limits',
+);
+assert(
   workflow.includes('--write-out "%{http_code}"') &&
     workflow.includes('route-catalog-usfs-mvum-sync-responses') &&
     workflow.includes('Response body:'),

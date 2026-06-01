@@ -131,6 +131,11 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'coronado-national-forest',
   'sierra-national-forest',
 ]);
+assert.strictEqual(
+  byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,
+  0.000025,
+  'USFS MVUM sync should default to bounded ArcGIS geometry simplification for dense trail sources',
+);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
 assert.strictEqual(

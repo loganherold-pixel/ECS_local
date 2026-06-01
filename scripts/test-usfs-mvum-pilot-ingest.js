@@ -547,6 +547,12 @@ assert(syncFunction.includes('aggregateUsfsMvumRouteFeatures'), 'Sync function s
 assert(syncFunction.includes('publicRecommendation: false'), 'Sync function should keep individual MVUM source segments out of public recommendations');
 assert(syncFunction.includes('aggregateRouteCount'), 'Sync function should report aggregate route counts');
 assert(syncFunction.includes('publicRecommendationCount'), 'Sync function should report public recommendation counts for recommendable MVUM aggregates');
+assert(
+  syncFunction.includes('maxAllowableOffset') &&
+    syncFunction.includes('max_allowable_offset') &&
+    syncFunction.includes('MAX_USFS_MVUM_ARCGIS_OFFSET_DEGREES'),
+  'Sync function should request bounded ArcGIS geometry simplification so dense MVUM trail geometries do not time out Edge syncs',
+);
 assert(syncFunction.includes('segmentRouteRows'), 'Sync function should batch source segment route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('aggregateRouteRows'), 'Sync function should batch aggregate route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('buildRouteIdByPublicId'), 'Sync function should map bulk-upserted public IDs back to database IDs');
