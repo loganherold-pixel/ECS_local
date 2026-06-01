@@ -1,0 +1,132 @@
+name: Route Catalog USFS MVUM Sync
+
+on:
+  schedule:
+    - cron: '17 10 * * 2'
+  workflow_dispatch:
+    inputs:
+      forests:
+        description: Comma-separated USFS MVUM forest slugs to sync.
+        required: false
+        default: tahoe-national-forest,mendocino-national-forest
+      min_miles:
+        description: Minimum MVUM segment miles to ingest.
+        required: false
+        default: '1'
+      limit_per_forest_layer:
+        description: Maximum features to request per forest/layer.
+        required: false
+        default: '150'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-usfs-mvum-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Tahoe and Mendocino MVUM catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest' }}
+      MIN_MILES: ${{ inputs.min_miles || '1' }}
+      LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '150' }}
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build bounded sync payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const forests = String(process.env.FORESTS || '')
+            .split(',')
+            .map((forest) => forest.trim())
+            .filter(Boolean);
+          const minMiles = Number(process.env.MIN_MILES || 1);
+          const limitPerForestLayer = Number(process.env.LIMIT_PER_FOREST_LAYER || 150);
+
+          if (forests.length === 0) throw new Error('At least one forest slug is required.');
+          if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
+          if (!Number.isFinite(limitPerForestLayer) || limitPerForestLayer <= 0) {
+            throw new Error('limit_per_forest_layer must be positive.');
+          }
+
+          fs.writeFileSync(
+            'route-catalog-usfs-mvum-sync-payload.json',
+            JSON.stringify({
+              forests,
+              minMiles,
+              limitPerForestLayer: Math.min(500, Math.round(limitPerForestLayer)),
+            }),
+          );
+          NODE
+
+      - name: Invoke route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-usfs-mvum-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-usfs-mvum" \
+            --output route-catalog-usfs-mvum-sync-response.json
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'USFS MVUM route catalog sync failed.');
+          }
+
+          const forests = Array.isArray(response.forests) ? response.forests : [];
+          const summaryRows = forests.map((forest) => ({
+            forest: forest.forest,
+            rawFeatureCount: forest.rawFeatureCount,
+            normalizedFeatureCount: forest.normalizedFeatureCount,
+            aggregateRouteCount: forest.aggregateRouteCount,
+          }));
+
+          console.log(JSON.stringify({ source: response.source, forests: summaryRows }, null, 2));
+
+          const markdown = [
+            '## Route Catalog USFS MVUM Sync',
+            '',
+            '| Forest | Raw Features | Normalized Features | Aggregate Routes |',
+            '| --- | ---: | ---: | ---: |',
+            ...summaryRows.map((forest) =>
+              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} |`
+            ),
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE
