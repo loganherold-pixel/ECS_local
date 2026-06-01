@@ -168,7 +168,11 @@ assert.ok(sampleSourceCount >= 3 && sampleSourceCount <= 5, 'Sample source data 
   'ecs-dispersed-camping-eligibility',
   'ecs-dispersed-camping-eligibility-fill',
   'ecs-dispersed-camping-eligibility-outline',
+  'ecs-dispersed-route-build-segments',
+  'ecs-dispersed-route-build-segments-layer',
+  'ecs-dispersed-route-build-selected-layer',
   'SET_DISPERSED_CAMPING_LAYER_ENABLED',
+  'SET_DISPERSED_ROUTE_BUILD_ENABLED',
 ].forEach((token) => {
   assert.ok(mapRendererSource.includes(token) || messagesSource.includes(token), `Missing Mapbox token: ${token}`);
 });
@@ -284,6 +288,24 @@ assert.ok(
 assert.ok(
   routeSummarySource.includes("pointerEvents={hasResults ? 'box-none' : 'none'}"),
   'Empty dispersed-camping route summary cards should pass touches through to map controls.',
+);
+
+assert.ok(
+  routeSummarySource.includes('onBuildRouteFromSegments') &&
+    routeSummarySource.includes('Build route legs') &&
+    routeSummarySource.includes('accessibilityLabel="Build dispersed camping route legs"') &&
+    navigateSource.includes('startDispersedRouteSegmentBuild') &&
+    navigateSource.includes('dispersedRouteBuildStatus'),
+  'The route-aware dispersed camping summary should expose the hybrid yellow-leg Build Route entry point and status.',
+);
+
+assert.ok(
+  navigateSource.includes('dispersedRouteBuild={dispersedRouteBuildState}') &&
+    navigateSource.includes('onDispersedRouteLegTap={handleDispersedRouteLegTap}') &&
+    navigateSource.includes('dispersedRouteLegToRouteBuilderSegment') &&
+    navigateSource.includes("kind: 'dispersed_segment_build'") &&
+    navigateSource.includes('source_metadata'),
+  'Navigate should wire tapped dispersed route legs into Build Route Save + Stage with source metadata.',
 );
 
 assert.ok(

@@ -38,7 +38,7 @@
 
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState, ScrollView } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -155,6 +155,10 @@ import PowerModuleRiveWidget from './PowerModuleRiveWidget';
 import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';
 import { PowerSystemDetailView } from './PowerSystemDetail';
 import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
+import {
+  useRouteCorridorWeather,
+  type RouteCorridorResult,
+} from '../navigate/RouteCorridorWeather';
 
 // Phase 9: OBD-II Vehicle Telemetry Widget
 import { VehicleTelemetryCompact, VehicleTelemetryCard, VehicleTelemetryDetailView } from './VehicleTelemetryWidget';
@@ -3810,8 +3814,10 @@ function AttitudeCommandPanel({
   tone = 'neutral',
   align = 'left',
   onPress,
+  onLongPress,
   accessibilityLabel,
   expanded = false,
+  detailMode = false,
   headerStatusLabel,
   headerStatusValue,
   headerStatusColor,
@@ -3829,8 +3835,10 @@ function AttitudeCommandPanel({
   tone?: WidgetTone;
   align?: 'left' | 'center' | 'right';
   onPress?: () => void;
+  onLongPress?: () => void;
   accessibilityLabel?: string;
   expanded?: boolean;
+  detailMode?: boolean;
   headerStatusLabel?: string | null;
   headerStatusValue?: string | null;
   headerStatusColor?: string;
@@ -3965,6 +3973,7 @@ function AttitudeCommandPanel({
         expanded && isPowerPanel && attitudeCommandS.powerPanelContentExpanded,
         align === 'center' && attitudeCommandS.panelContentCenter,
         align === 'right' && attitudeCommandS.panelContentRight,
+        detailMode && attitudeCommandS.panelContentDetailMode,
       ]}>
         {isSunlightPanel ? (
           <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
@@ -4039,7 +4048,7 @@ function AttitudeCommandPanel({
       <TouchableOpacity
         style={panelStyle}
         onPress={onPress}
-        onLongPress={() => {}}
+        onLongPress={onLongPress}
         delayLongPress={650}
         activeOpacity={0.78}
         accessibilityRole="button"
@@ -4086,6 +4095,160 @@ function AttitudeCommandUnavailableNotice({ message }: { message: string }) {
       <Ionicons name="information-circle-outline" size={16} color={TACTICAL.amber} />
       <Text style={attitudeCommandS.unavailableText}>{message}</Text>
     </View>
+  );
+}
+
+function AttitudeCommandDetailScroll({ children }: { children: React.ReactNode }) {
+  return (
+    <ScrollView
+      style={attitudeCommandS.detailScroll}
+      contentContainerStyle={attitudeCommandS.detailScrollContent}
+      showsVerticalScrollIndicator={false}
+      nestedScrollEnabled
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
+function formatAttitudeCommandWeatherFreshness(snapshot: ReturnType<typeof useOperationalWeather>['snapshot']): string {
+  const freshness = getWeatherSnapshotStaleness(snapshot);
+  if (freshness === 'fresh') return snapshot.status.kind === 'live' ? 'Live' : 'Fresh';
+  if (freshness === 'stale') return 'Stale';
+  if (freshness === 'very_stale') return 'Very stale';
+  if (snapshot.status.kind === 'cached') return 'Cache';
+  if (snapshot.status.kind === 'offline') return 'Offline cache';
+  return snapshot.status.label || snapshot.status.kind || 'Unknown';
+}
+
+function formatAttitudeCommandTotalDaylight(snapshot: ReturnType<typeof useOperationalWeather>['snapshot']): string {
+  const solarTimes = getWeatherSolarTimes(snapshot.raw);
+  if (solarTimes.sunrise == null || solarTimes.sunset == null) return 'Unavailable';
+  const hours = Math.max(0, (solarTimes.sunset - solarTimes.sunrise) / 3600);
+  if (!Number.isFinite(hours) || hours <= 0) return 'Unavailable';
+  return `${hours.toFixed(1)} hrs`;
+}
+
+function formatAttitudeCommandSourceState(isAvailable: boolean, freshness: string): string {
+  if (!isAvailable) return 'Missing';
+  if (/stale/i.test(freshness)) return 'Stale';
+  if (/cache/i.test(freshness)) return 'Cache';
+  if (/manual/i.test(freshness)) return 'Manual';
+  return freshness;
+}
+
+function AttitudeCommandSunlightDetail({
+  daylight,
+  snapshot,
+  weatherAvailable,
+}: {
+  daylight: ReturnType<typeof resolveAttitudeCommandDaylight>;
+  snapshot: ReturnType<typeof useOperationalWeather>['snapshot'];
+  weatherAvailable: boolean;
+}) {
+  const freshness = formatAttitudeCommandWeatherFreshness(snapshot);
+  const sourceState = formatAttitudeCommandSourceState(daylight.daylightTone !== 'unavailable', freshness);
+  return (
+    <AttitudeCommandDetailScroll>
+      {daylight.unavailableReason ? (
+        <AttitudeCommandUnavailableNotice message={daylight.support} />
+      ) : null}
+      <WidgetDetailSectionTitle>SOLAR EVENTS</WidgetDetailSectionTitle>
+      <AttitudeCommandDetailRow label="Estimated sunrise" value={daylight.sunrise} tone={daylight.sunrise === 'Unavailable' ? 'unavailable' : 'good'} />
+      <AttitudeCommandDetailRow label="Estimated sunset" value={daylight.sunset} tone={daylight.sunset === 'Unavailable' ? 'unavailable' : 'attention'} />
+      <AttitudeCommandDetailRow label="Civil twilight" value={daylight.civilTwilight} tone={daylight.civilTwilight === 'Unavailable' ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Total daylight" value={formatAttitudeCommandTotalDaylight(snapshot)} tone={daylight.daylightTone} />
+      <AttitudeCommandDetailRow label="Glare status" value={daylight.glare} tone={daylight.glareTone} />
+      <WidgetDetailSectionTitle>SOURCE STATE</WidgetDetailSectionTitle>
+      <AttitudeCommandDetailRow label="Location" value={daylight.location} tone={daylight.location === 'Current position unavailable' ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Timezone/source" value={daylight.source} tone={daylight.source.includes('No location') ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Confidence" value={sourceState} tone={daylight.daylightTone === 'unavailable' ? 'unavailable' : weatherAvailable ? 'good' : 'attention'} />
+      <AttitudeCommandDetailRow label="Data age" value={daylight.updated} tone={/stale/i.test(freshness) ? 'attention' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Weather/GPS source state" value={`${weatherAvailable ? 'Weather source available' : 'Weather missing'} | ${freshness}`} tone={weatherAvailable ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Sun elevation" value={daylight.sunElevation} tone={daylight.sunElevation === 'Unavailable' ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Sun azimuth" value={daylight.sunAzimuth} tone={daylight.sunAzimuth === 'Unavailable' ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Last updated" value={daylight.updated} tone={daylight.updated === 'Unavailable' ? 'unavailable' : 'neutral'} />
+    </AttitudeCommandDetailScroll>
+  );
+}
+
+function AttitudeCommandRouteWeatherDetail({ routeWeather }: { routeWeather: RouteCorridorResult }) {
+  const hasRouteForecast = routeWeather.hasRoute && routeWeather.points.length > 0;
+  const statusLine =
+    routeWeather.loading
+      ? 'Refreshing route forecast'
+      : routeWeather.error
+        ? routeWeather.error
+        : routeWeather.summary.statusText ?? routeWeather.source ?? 'Route weather unavailable';
+
+  return (
+    <>
+      <WidgetDetailSectionTitle>ROUTE / TRAIL FORECAST</WidgetDetailSectionTitle>
+      {!routeWeather.hasRoute ? (
+        <AttitudeCommandUnavailableNotice message="No active route geometry. ECS is showing current-position weather only." />
+      ) : null}
+      <AttitudeCommandDetailRow label="Route forecast state" value={statusLine} tone={hasRouteForecast ? 'good' : routeWeather.loading ? 'attention' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Route forecast source" value={routeWeather.source ?? 'Unavailable'} tone={routeWeather.source === 'cache_stale' ? 'attention' : hasRouteForecast ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Route forecast age" value={formatAttitudeCommandTimestamp(routeWeather.lastFetchAt)} tone={routeWeather.lastFetchAt ? 'neutral' : 'unavailable'} />
+      {routeWeather.points.slice(0, 5).map((point) => {
+        const current = point.weather?.current ?? null;
+        const temperature = current?.temp != null ? `${Math.round(current.temp)} deg` : 'Temp unavailable';
+        const condition = current?.weather_description || current?.weather_main || 'Weather unavailable';
+        const wind = current?.wind_speed != null ? `Wind ${Math.round(current.wind_speed)} mph` : 'Wind unavailable';
+        const hazards = point.hazardReasons.length > 0 ? point.hazardReasons.join(' | ') : 'No deterministic weather hazard flagged';
+        return (
+          <AttitudeCommandDetailRow
+            key={`${point.idx}-${point.distanceMi}`}
+            label={`${point.label} forecast`}
+            value={`${point.distanceMi.toFixed(1)} mi | ${temperature} | ${condition} | ${wind} | ${hazards}`}
+            tone={point.hazardLevel === 'hazardous' || point.hazardLevel === 'warning' ? 'critical' : point.hazardLevel === 'caution' ? 'attention' : current ? 'good' : 'unavailable'}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function AttitudeCommandWeatherDetail({
+  snapshot,
+  weatherAvailable,
+  weatherForecastRows,
+  routeWeather,
+}: {
+  snapshot: ReturnType<typeof useOperationalWeather>['snapshot'];
+  weatherAvailable: boolean;
+  weatherForecastRows: WeatherForecastRenderRow[];
+  routeWeather: RouteCorridorResult;
+}) {
+  const freshness = formatAttitudeCommandWeatherFreshness(snapshot);
+  const sourceLabel = getCompactWeatherSourceLabel(snapshot);
+  const alertLine = formatWeatherAlertLine(snapshot) || 'No active alerts from current weather source';
+  return (
+    <AttitudeCommandDetailScroll>
+      {!weatherAvailable ? (
+        <AttitudeCommandUnavailableNotice message={resolveAttitudeWeatherNotice(snapshot, weatherAvailable) ?? 'Weather unavailable.'} />
+      ) : null}
+      <WidgetDetailSectionTitle>CURRENT POSITION</WidgetDetailSectionTitle>
+      <AttitudeCommandDetailRow label="Condition" value={formatWeatherHeadline(snapshot)} tone={weatherAvailable ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Temperature" value={formatWeatherDegrees(getCurrentWeatherTemperatureF(snapshot))} tone={weatherAvailable ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Feels like" value={formatCommandWeatherFeelsLike(snapshot.current.feelsLike)} tone={snapshot.current.feelsLike != null ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Wind" value={formatWeatherWindLine(snapshot) || 'Wind unavailable'} tone={formatWeatherWindLine(snapshot) ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Precipitation" value={formatAttitudeWeatherPrecipitation(snapshot)} tone={formatAttitudeWeatherPrecipitation(snapshot).includes('unavailable') ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Visibility" value={formatAttitudeWeatherVisibility(snapshot.current.visibility)} tone={snapshot.current.visibility != null ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Alerts" value={alertLine} tone={snapshot.alerts.length > 0 ? 'attention' : 'good'} />
+      <WidgetDetailSectionTitle>FORECAST</WidgetDetailSectionTitle>
+      {weatherForecastRows.length > 0 ? weatherForecastRows.map((row) => (
+        <AttitudeCommandDetailRow key={row.rowKey} label={`Forecast ${row.label}`} value={row.value} tone="neutral" />
+      )) : (
+        <AttitudeCommandDetailRow label="Forecast" value="Forecast unavailable from current source" tone="unavailable" />
+      )}
+      <WidgetDetailSectionTitle>DATA USED</WidgetDetailSectionTitle>
+      <AttitudeCommandDetailRow label="Location" value={getDashboardWeatherLocationLabel(snapshot)} tone={snapshot.locationName || snapshot.location.lat != null ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Source" value={sourceLabel} tone={weatherAvailable ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Freshness" value={freshness} tone={/stale/i.test(freshness) ? 'attention' : weatherAvailable ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Last updated" value={formatAttitudeWeatherLastUpdated(snapshot)} tone={weatherAvailable ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandRouteWeatherDetail routeWeather={routeWeather} />
+    </AttitudeCommandDetailScroll>
   );
 }
 
@@ -4281,6 +4444,54 @@ function VehicleCommandExpandedView({
       : vehicleTelemetry.isConnected
         ? 'OBD2 source is connected; ECS is waiting for fresh decoded telemetry.'
         : 'ECS is showing profile safe fallbacks if configured and available.';
+  const utilitySensorResources = selectUtilitySensorResourceStates(useECSUtilitySensorTelemetryReadings());
+  const consumables = activeVehicleContext.consumables;
+  const waterCapacity = activeVehicleContext.resourceProfile.waterCapacityGal ?? null;
+  const liveWaterGal = getUtilitySensorCurrentFromCapacity(utilitySensorResources.water, waterCapacity);
+  const waterGallons =
+    waterCapacity != null
+      ? liveWaterGal ?? consumables?.water_gal_current ?? activeVehicleContext.resourceProfile.currentWaterGallons ?? null
+      : null;
+  const waterSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.water,
+    formatResourceModeLabel(consumables?.water_source),
+  );
+  const alternateFluidLabel = consumables ? formatAlternateFluidLabel(consumables) : 'Propane';
+  const alternateFluidValue =
+    consumables
+      ? formatAlternateFluidSensorValue(consumables, utilitySensorResources.propane) ?? formatAlternateFluidValue(consumables)
+      : utilitySensorResources.propane?.levelPercent != null
+        ? `${alternateFluidLabel} ${Math.round(utilitySensorResources.propane.levelPercent)}%`
+        : null;
+  const alternateFluidSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.propane,
+    formatResourceModeLabel(consumables?.alternate_fluid_source),
+  );
+  const liquidTelemetryAge = formatUpdatedLabel(
+    utilitySensorResources.water?.lastUpdated ??
+      utilitySensorResources.propane?.lastUpdated ??
+      consumables?.water_updated_at ??
+      consumables?.alternate_fluid_updated_at ??
+      null,
+  );
+  const obd2SourceState =
+    isLiveObd
+      ? 'Live decoded OBD2'
+      : vehicleTelemetry.isReconnecting
+        ? 'Stale/reconnecting OBD2'
+        : vehicleTelemetry.isConnected
+          ? 'Connected, parser waiting'
+          : activeVehicleContext.hasVehicleContext
+            ? 'Fleet selected vehicle/build fallback'
+            : 'Missing OBD2 and Fleet fallback';
+  const obd2Confidence =
+    isLiveObd
+      ? 'High - decoded live PID values'
+      : vehicleTelemetry.isConnected
+        ? 'Medium - adapter connected without decoded PID coverage'
+        : activeVehicleContext.hasVehicleContext
+          ? 'Manual/Fleet fallback - telemetry unavailable'
+          : 'Unavailable';
 
   return (
     <View style={attitudeCommandS.detailStack}>
@@ -4321,6 +4532,9 @@ function VehicleCommandExpandedView({
         <AttitudeCommandDetailRow label="Readiness monitor summary" value={readinessSummary} tone={readinessSummary === 'Unavailable' ? 'unavailable' : 'neutral'} />
         <AttitudeCommandDetailRow label="Fuel system status" value={fuelSystemStatus} tone={fuelSystemStatus === 'Unavailable' ? 'unavailable' : quickGlance.rangeFuelTone} />
         <AttitudeCommandDetailRow label="Sensor/ECU health summary" value={sensorHealth} tone={snapshot.unsupportedReason ? 'attention' : isLiveObd ? 'live' : 'neutral'} />
+        <AttitudeCommandDetailRow label="OBD2 source state" value={obd2SourceState} tone={isLiveObd ? 'live' : vehicleTelemetry.isConnected ? 'attention' : activeVehicleContext.hasVehicleContext ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="OBD2 confidence" value={obd2Confidence} tone={isLiveObd ? 'good' : vehicleTelemetry.isConnected || activeVehicleContext.hasVehicleContext ? 'attention' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Update age" value={vehicleTelemetry.lastUpdatedText ?? formatVehicleCommandTimestamp(snapshot.updatedAt)} tone={snapshot.updatedAt ? 'neutral' : 'unavailable'} />
       </VehicleCommandDetailSection>
 
       <VehicleCommandDetailSection title="Temperatures">
@@ -4328,6 +4542,15 @@ function VehicleCommandExpandedView({
         <AttitudeCommandDetailRow label="Intake air temperature" value={formatVehicleCommandTemperature(snapshot.intakeTempF)} tone={snapshot.intakeTempF != null ? quickGlance.statusTone : 'unavailable'} />
         <AttitudeCommandDetailRow label="Transmission temperature" value={formatVehicleCommandTemperature(snapshot.transmissionTempF)} tone={snapshot.transmissionTempF != null ? quickGlance.statusTone : 'unavailable'} />
         <AttitudeCommandDetailRow label="Catalyst temperature" value={formatVehicleCommandTemperature(catalystTemp)} tone={catalystTemp != null ? quickGlance.statusTone : 'unavailable'} />
+      </VehicleCommandDetailSection>
+
+      <VehicleCommandDetailSection title="Liquid & Utility Sensors">
+        <AttitudeCommandDetailRow label="Water gallons" value={waterGallons != null ? `${waterGallons.toFixed(1)} gal` : 'Unavailable'} tone={waterGallons != null ? 'good' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Water source" value={waterSourceLabel} tone={utilitySensorResources.water?.status === 'live' ? 'live' : utilitySensorResources.water ? 'attention' : consumables?.water_source === 'manual' ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Water source state" value={utilitySensorResources.water ? `${utilitySensorResources.water.providerLabel} | ${utilitySensorResources.water.status}` : consumables?.water_source === 'manual' ? 'Manual water entry' : 'No water sensor'} tone={utilitySensorResources.water?.status === 'live' ? 'live' : utilitySensorResources.water ? 'attention' : consumables?.water_source === 'manual' ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Mopeka/propane level" value={alternateFluidValue ?? 'Unavailable'} tone={alternateFluidValue ? 'good' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Mopeka/propane source" value={alternateFluidSourceLabel} tone={utilitySensorResources.propane?.status === 'live' ? 'live' : utilitySensorResources.propane ? 'attention' : consumables?.alternate_fluid_source === 'manual' ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Liquid telemetry age" value={liquidTelemetryAge} tone={/not updated/i.test(liquidTelemetryAge) ? 'unavailable' : 'neutral'} />
       </VehicleCommandDetailSection>
 
       <VehicleCommandDetailSection title="Diagnostics">
@@ -5024,6 +5247,123 @@ function AttitudePowerLiquidFlowIndicator({ flow }: { flow: AttitudePowerFlowSta
   );
 }
 
+function formatAttitudePowerRuntime(value: number | null | undefined): string {
+  return value == null ? 'Unavailable' : formatMinutesToRuntime(value);
+}
+
+function formatAttitudePowerSignal(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'Unavailable';
+  return value <= 0 ? `${value} dBm` : `${Math.round(value)}%`;
+}
+
+function AttitudeCommandPowerDeviceDetail({
+  power,
+  summary,
+  flow,
+  activeVehicleContext,
+  inputVolts,
+  inputAmps,
+  outputVolts,
+  outputAmps,
+  batteryVolts,
+  batteryAmps,
+  sources,
+  loads,
+}: {
+  power: ReturnType<typeof useUnifiedPowerDevices>;
+  summary: AttitudePowerSummary;
+  flow: AttitudePowerFlowState;
+  activeVehicleContext: ReturnType<typeof getActiveVehicleContext>;
+  inputVolts: number | null;
+  inputAmps: number | null;
+  outputVolts: number | null;
+  outputAmps: number | null;
+  batteryVolts: number | null;
+  batteryAmps: number | null;
+  sources: string;
+  loads: string;
+}) {
+  const configuredBatteryWh = activeVehicleContext.resourceProfile.batteryUsableWh ?? null;
+  const fallbackRuntimeMin = configuredBatteryWh != null && configuredBatteryWh > 0 ? Math.round((configuredBatteryWh / 50) * 60) : null;
+  const sourceState =
+    summary.sourceState.isManual || summary.truth.isManual
+      ? 'Manual entry'
+      : summary.isLive
+        ? 'Live Bluetooth telemetry'
+        : summary.isStale
+          ? 'Stale last-known telemetry'
+          : 'Missing live device telemetry';
+
+  return (
+    <AttitudeCommandDetailScroll>
+      {!summary.isLive ? (
+        <AttitudeCommandUnavailableNotice message={resolveAttitudePowerUnavailableMessage(power, summary) ?? 'Power telemetry unavailable. ECS is showing configured fallback where available.'} />
+      ) : null}
+      <WidgetDetailSectionTitle>POWER SUMMARY</WidgetDetailSectionTitle>
+      <AttitudePowerLiquidFlowIndicator flow={flow} />
+      <AttitudeCommandDetailRow label="Charge state" value={formatAttitudePowerState(summary.chargingState)} tone={summary.isLive ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Battery" value={summary.batteryPercent != null ? `${Math.round(summary.batteryPercent)}%` : 'Unavailable'} tone={summary.batteryPercent == null ? 'unavailable' : summary.batteryPercent <= 20 ? 'critical' : summary.batteryPercent <= 40 ? 'attention' : 'good'} />
+      <AttitudeCommandDetailRow label="Input watts" value={formatAttitudePowerWatts(summary.inputWatts, 'input')} tone={summary.inputWatts != null && summary.inputWatts > 0 ? 'good' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Input amps" value={formatAttitudePowerMetric(inputAmps, 'A')} tone={inputAmps == null ? 'unavailable' : 'good'} />
+      <AttitudeCommandDetailRow label="Input volts" value={formatAttitudePowerMetric(inputVolts, 'V')} tone={inputVolts == null ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Output watts" value={formatAttitudePowerWatts(summary.outputWatts, 'output')} tone={summary.outputWatts != null && summary.outputWatts > 0 ? 'attention' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Output amps" value={formatAttitudePowerMetric(outputAmps, 'A')} tone={outputAmps == null ? 'unavailable' : 'attention'} />
+      <AttitudeCommandDetailRow label="Output volts" value={formatAttitudePowerMetric(outputVolts, 'V')} tone={outputVolts == null ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Battery voltage" value={formatAttitudePowerMetric(batteryVolts, 'V')} tone={batteryVolts == null ? 'unavailable' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Battery current" value={formatAttitudePowerMetric(batteryAmps, 'A')} tone={batteryAmps == null ? 'unavailable' : batteryAmps < 0 ? 'attention' : 'good'} />
+      <AttitudeCommandDetailRow label="Solar" value={formatAttitudePowerWatts(summary.solarWatts, 'input')} tone={summary.solarWatts != null && summary.solarWatts > 0 ? 'good' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Connected sources" value={sources} tone={summary.connectedDeviceCount > 0 ? 'good' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Connected loads" value={loads} tone={summary.outputWatts != null && summary.outputWatts > 0 ? 'attention' : 'neutral'} />
+      <AttitudeCommandDetailRow label="Telemetry source" value={summary.sourceLabel || sourceState} tone={summary.isLive ? 'good' : summary.isStale ? 'attention' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Freshness" value={sourceState} tone={summary.isLive ? 'good' : summary.isStale ? 'attention' : summary.sourceState.isManual ? 'neutral' : 'unavailable'} />
+      <AttitudeCommandDetailRow label="Last updated" value={formatAttitudeCommandTimestamp(summary.lastUpdated)} tone={summary.lastUpdated ? 'neutral' : 'unavailable'} />
+
+      <WidgetDetailSectionTitle>BLUETOOTH POWER CONFIGURATIONS</WidgetDetailSectionTitle>
+      {power.devices.length > 0 ? power.devices.map((device) => {
+        const deviceState =
+          device.truth.isManual
+            ? 'Manual'
+            : device.isStale
+              ? 'Stale'
+              : device.connectionState === 'connected'
+                ? 'Live'
+                : device.connectionState;
+        return (
+          <View key={device.deviceId} style={attitudeCommandS.powerDeviceCard}>
+            <View style={attitudeCommandS.powerDeviceHeader}>
+              <Text style={attitudeCommandS.powerDeviceTitle} numberOfLines={1}>
+                {device.deviceName || device.providerDisplayName || 'Power device'}
+              </Text>
+              <Text style={[attitudeCommandS.powerDeviceState, { color: getWidgetToneColor(device.connectionState === 'connected' && !device.isStale ? 'good' : device.isStale ? 'attention' : 'unavailable') }]} numberOfLines={1}>
+                {deviceState.toUpperCase()}
+              </Text>
+            </View>
+            <AttitudeCommandDetailRow label="Provider" value={device.providerDisplayName || device.provider || 'Unavailable'} tone="neutral" />
+            <AttitudeCommandDetailRow label="Connection state" value={device.connectionState} tone={device.connectionState === 'connected' && !device.isStale ? 'good' : device.isStale ? 'attention' : 'unavailable'} />
+            <AttitudeCommandDetailRow label="SOC" value={device.batteryPercent != null ? `${Math.round(device.batteryPercent)}%` : 'Unavailable'} tone={device.batteryPercent == null ? 'unavailable' : device.batteryPercent <= 20 ? 'critical' : device.batteryPercent <= 40 ? 'attention' : 'good'} />
+            <AttitudeCommandDetailRow label="Watts in/out" value={`${formatAttitudePowerWatts(device.inputWatts, 'input')} in | ${formatAttitudePowerWatts(device.outputWatts, 'output')} out`} tone={device.inputWatts != null || device.outputWatts != null ? 'neutral' : 'unavailable'} />
+            <AttitudeCommandDetailRow label="Solar watts" value={formatAttitudePowerWatts(device.solarInputWatts, 'input')} tone={device.solarInputWatts != null && device.solarInputWatts > 0 ? 'good' : 'neutral'} />
+            <AttitudeCommandDetailRow label="Runtime" value={formatAttitudePowerRuntime(device.estimatedRuntimeMinutes)} tone={device.estimatedRuntimeMinutes != null ? 'good' : 'unavailable'} />
+            <AttitudeCommandDetailRow label="Signal" value={formatAttitudePowerSignal(device.signalStrength)} tone={device.signalStrength != null ? 'neutral' : 'unavailable'} />
+            <AttitudeCommandDetailRow label="Source labels" value={`${device.sourceTruthLabel || device.telemetrySourceLabel || 'Unavailable'} | ${deviceState}`} tone={device.isStale ? 'attention' : device.connectionState === 'connected' ? 'good' : 'unavailable'} />
+            <AttitudeCommandDetailRow label="Device update age" value={formatAttitudeCommandTimestamp(device.lastUpdated)} tone={device.lastUpdated ? 'neutral' : 'unavailable'} />
+          </View>
+        );
+      }) : (
+        <WidgetDetailStateCard
+          title="Configured Fleet fallback"
+          message={
+            configuredBatteryWh != null && configuredBatteryWh > 0
+              ? `No live Bluetooth power devices. Fleet fallback is ${Math.round(configuredBatteryWh).toLocaleString()} Wh with estimated runtime ${formatAttitudePowerRuntime(fallbackRuntimeMin)}.`
+              : 'No live Bluetooth power devices and no configured Fleet battery baseline.'
+          }
+          tone={configuredBatteryWh != null && configuredBatteryWh > 0 ? 'attention' : 'muted'}
+        />
+      )}
+    </AttitudeCommandDetailScroll>
+  );
+}
+
 function PowerCommandModule({
   definition,
   power,
@@ -5321,7 +5661,7 @@ function EnvironmentalCommandModule({
 }
 
 const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, options }: { data: WidgetData; options?: WidgetRenderOptions }) {
-  const [activePanel, setActivePanel] = useState<AttitudeCommandFocusPanel | null>(null);
+  const [activePanel, setActivePanel] = useState<AttitudeCommandActivePanel | null>(null);
   const [selectedCommandModule, setSelectedCommandModule] = useState<ECSCommandModuleId>(() => ecsCommandModuleStore.selectedModule);
   const [environmentalRevision, setEnvironmentalRevision] = useState(0);
   const moduleTransitionOpacity = useStableAnimatedValue(1);
@@ -5361,9 +5701,12 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const commandSensorLive = attitudeTelemetry.isLive && displayState.liveMotion;
   const commandStageRollDeg = commandSensorLive ? commandDisplayRollDeg : 0;
   const commandStagePitchDeg = commandSensorLive ? commandDisplayPitchDeg : 0;
-  const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel) => {
+  const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel, mode: AttitudeCommandFocusMode = 'summary') => {
     void hapticMicro();
-    setActivePanel((current) => (current === panel ? null : panel));
+    setActivePanel((current) => {
+      if (current?.panel === panel && current.mode === mode) return null;
+      return { panel, mode };
+    });
   }, []);
   const handleSelectCommandCenterMode = useCallback((mode: CommandCenterMode) => {
     ecsCommandModuleStore.setSelectedModule(centerModeToCommandModule(mode));
@@ -5450,6 +5793,27 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const weatherLastUpdated = formatAttitudeWeatherLastUpdated(snapshot);
   const daylight = resolveAttitudeCommandDaylight(snapshot, options);
   const routeProgress = useRouteProgressCommandSnapshot(options);
+  const routeWeatherRun = useMemo(
+    () => buildAttitudeCommandRouteWeatherRun(routeProgress),
+    [routeProgress],
+  );
+  const routeWeatherUserLocation = useMemo(
+    () => getAttitudeCommandRouteWeatherLocation(routeProgress, options),
+    [
+      options,
+      routeProgress,
+    ],
+  );
+  const routeWeather = useRouteCorridorWeather(
+    routeWeatherRun,
+    routeWeatherUserLocation,
+    noopRouteWeatherToast,
+    {
+      forceActive: activePanel?.panel === 'weather' && activePanel.mode === 'detail',
+      persistPreference: false,
+      emitToasts: false,
+    },
+  );
   const hasActiveRouteProgress = Boolean(routeProgress?.isActive);
   const hasRouteProgressGeometry = hasRenderableRouteProgressGeometry(routeProgress);
   const routeProgressPoints = (routeProgress?.routePoints ?? []).map((point) => ({
@@ -5877,7 +6241,9 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     ECS_COMMAND_MODULE_REGISTRY[selectedCommandModule] ?? ECS_COMMAND_MODULE_REGISTRY.follow3d!;
   const selectedCommandCenterMode = commandModuleToCenterMode(selectedCommandModule);
   const expansionGeometry = resolveAttitudeCommandExpansionGeometry(commandLayout.viewportClass);
-  const renderCommandPanel = (panel: AttitudeCommandFocusPanel, expanded = false) => {
+  const expandedPanelMode = activePanel?.mode ?? 'summary';
+  const renderCommandPanel = (panel: AttitudeCommandFocusPanel, expanded = false, mode: AttitudeCommandFocusMode = 'summary') => {
+    const detailMode = mode === 'detail';
     switch (panel) {
       case 'sunlight':
         return (
@@ -5886,9 +6252,11 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             title={daylight.daylight}
             icon="sunny-outline"
             tone={daylight.daylightTone}
-            onPress={() => openFocusPanel('sunlight')}
+            onPress={() => openFocusPanel('sunlight', 'summary')}
+            onLongPress={() => openFocusPanel('sunlight', 'detail')}
             accessibilityLabel={expanded ? 'Collapse remaining sunlight' : 'Expand remaining sunlight'}
             expanded={expanded}
+            detailMode={mode === 'detail'}
             sunlightVisual={{
               phase: daylight.phase,
               radiancePhase: daylight.radiancePhase,
@@ -5898,7 +6266,15 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               sunset: daylight.sunset,
               uvIndex: daylight.uvIndex,
             }}
-          />
+          >
+            {expanded && detailMode ? (
+              <AttitudeCommandSunlightDetail
+                daylight={daylight}
+                snapshot={snapshot}
+                weatherAvailable={weatherAvailable}
+              />
+            ) : null}
+          </AttitudeCommandPanel>
         );
       case 'weather':
         return (
@@ -5909,9 +6285,11 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             icon="partly-sunny-outline"
             tone={weatherTone}
             align="center"
-            onPress={() => openFocusPanel('weather')}
+            onPress={() => openFocusPanel('weather', 'summary')}
+            onLongPress={() => openFocusPanel('weather', 'detail')}
             accessibilityLabel={expanded ? 'Collapse current weather' : 'Expand current weather'}
             expanded={expanded}
+            detailMode={mode === 'detail'}
             weatherVisual={weatherVisual}
           >
             <View pointerEvents="none" style={[attitudeCommandS.weatherMetricStrip, expanded && attitudeCommandS.weatherMetricStripExpanded]}>
@@ -5925,6 +6303,14 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 {weatherVisual.humidity}
               </Text>
             </View>
+            {expanded && detailMode ? (
+              <AttitudeCommandWeatherDetail
+                snapshot={snapshot}
+                weatherAvailable={weatherAvailable}
+                weatherForecastRows={weatherForecastRows}
+                routeWeather={routeWeather}
+              />
+            ) : null}
           </AttitudeCommandPanel>
         );
       case 'vehicle':
@@ -5935,98 +6321,111 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             icon="car-sport-outline"
             tone={vehicleTone}
             align="left"
-            onPress={() => openFocusPanel('vehicle')}
+            onPress={() => openFocusPanel('vehicle', 'summary')}
+            onLongPress={() => openFocusPanel('vehicle', 'detail')}
             accessibilityLabel={expanded ? 'Collapse vehicle profile' : 'Expand vehicle profile'}
             expanded={expanded}
+            detailMode={mode === 'detail'}
             vehicleVisual={vehicleVisual}
           >
-            <VehicleProfileRollAttitudeStrip
-              rollDeg={commandStageRollDeg}
-              pitchDeg={commandStagePitchDeg}
-              live={commandSensorLive}
-              maxRollDeg={45}
-              expanded={expanded}
-            />
-            <View pointerEvents="none" style={attitudeCommandS.vehicleCommandCornerLayer}>
-              {vehicleVisual.hasObd2CommandTelemetry ? (
-                <>
-                  {vehicleVisual.coolantTempCorner ? (
-                    <Text
-                      style={[
-                        attitudeCommandS.vehicleCommandCornerValue,
-                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
-                        attitudeCommandS.vehicleCommandCoolantCorner,
-                        { color: getWidgetToneColor(vehicleVisual.coolantTempTone) },
-                      ]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.68}
-                    >
-                      {vehicleVisual.coolantTempCorner}
-                    </Text>
-                  ) : null}
-                  {vehicleVisual.voltageCorner ? (
+            {expanded && detailMode ? (
+              <AttitudeCommandDetailScroll>
+                <VehicleCommandExpandedView
+                  activeVehicleContext={activeVehicleContext}
+                  vehicleTelemetry={vehicleTelemetry}
+                />
+              </AttitudeCommandDetailScroll>
+            ) : (
+              <>
+                <VehicleProfileRollAttitudeStrip
+                  rollDeg={commandStageRollDeg}
+                  pitchDeg={commandStagePitchDeg}
+                  live={commandSensorLive}
+                  maxRollDeg={45}
+                  expanded={expanded}
+                />
+                <View pointerEvents="none" style={attitudeCommandS.vehicleCommandCornerLayer}>
+                  {vehicleVisual.hasObd2CommandTelemetry ? (
+                    <>
+                      {vehicleVisual.coolantTempCorner ? (
+                        <Text
+                          style={[
+                            attitudeCommandS.vehicleCommandCornerValue,
+                            expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                            attitudeCommandS.vehicleCommandCoolantCorner,
+                            { color: getWidgetToneColor(vehicleVisual.coolantTempTone) },
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.68}
+                        >
+                          {vehicleVisual.coolantTempCorner}
+                        </Text>
+                      ) : null}
+                      {vehicleVisual.voltageCorner ? (
+                        <Text
+                          style={[
+                            attitudeCommandS.vehicleCommandCornerValue,
+                            expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                            attitudeCommandS.vehicleCommandVoltageCorner,
+                            { color: getWidgetToneColor(vehicleVisual.voltageTone) },
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.68}
+                        >
+                          {vehicleVisual.voltageCorner}
+                        </Text>
+                      ) : null}
+                      {vehicleVisual.rangeFuelCorner ? (
+                        <Text
+                          style={[
+                            attitudeCommandS.vehicleCommandCornerValue,
+                            expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                            attitudeCommandS.vehicleCommandRangeCorner,
+                            { color: getWidgetToneColor(vehicleVisual.rangeFuelTone) },
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.58}
+                        >
+                          {vehicleVisual.rangeFuelCorner}
+                        </Text>
+                      ) : null}
+                      {vehicleVisual.engineLoadCorner ? (
+                        <Text
+                          style={[
+                            attitudeCommandS.vehicleCommandCornerValue,
+                            expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                            attitudeCommandS.vehicleCommandLoadCorner,
+                            { color: getWidgetToneColor(vehicleVisual.engineLoadTone) },
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.62}
+                        >
+                          {vehicleVisual.engineLoadCorner}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : (
                     <Text
                       style={[
                         attitudeCommandS.vehicleCommandCornerValue,
                         expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
                         attitudeCommandS.vehicleCommandVoltageCorner,
-                        { color: getWidgetToneColor(vehicleVisual.voltageTone) },
-                      ]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.68}
-                    >
-                      {vehicleVisual.voltageCorner}
-                    </Text>
-                  ) : null}
-                  {vehicleVisual.rangeFuelCorner ? (
-                    <Text
-                      style={[
-                        attitudeCommandS.vehicleCommandCornerValue,
-                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
-                        attitudeCommandS.vehicleCommandRangeCorner,
-                        { color: getWidgetToneColor(vehicleVisual.rangeFuelTone) },
-                      ]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.58}
-                    >
-                      {vehicleVisual.rangeFuelCorner}
-                    </Text>
-                  ) : null}
-                  {vehicleVisual.engineLoadCorner ? (
-                    <Text
-                      style={[
-                        attitudeCommandS.vehicleCommandCornerValue,
-                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
-                        attitudeCommandS.vehicleCommandLoadCorner,
-                        { color: getWidgetToneColor(vehicleVisual.engineLoadTone) },
+                        { color: getWidgetToneColor('unavailable') },
                       ]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
                       minimumFontScale={0.62}
                     >
-                      {vehicleVisual.engineLoadCorner}
+                      {vehicleVisual.obd2OfflineCorner}
                     </Text>
-                  ) : null}
-                </>
-              ) : (
-                <Text
-                  style={[
-                    attitudeCommandS.vehicleCommandCornerValue,
-                    expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
-                    attitudeCommandS.vehicleCommandVoltageCorner,
-                    { color: getWidgetToneColor('unavailable') },
-                  ]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.62}
-                >
-                  {vehicleVisual.obd2OfflineCorner}
-                </Text>
-              )}
-            </View>
+                  )}
+                </View>
+              </>
+            )}
           </AttitudeCommandPanel>
         );
       case 'route':
@@ -6037,9 +6436,11 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}
             icon="warning-outline"
             tone={terrainRiskRoute ? terrainRiskRoute.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute.overallRiskLabel === 'moderate' ? 'attention' : 'live' : 'neutral'}
-            onPress={() => openFocusPanel('route')}
+            onPress={() => openFocusPanel('route', 'summary')}
+            onLongPress={() => openFocusPanel('route', 'detail')}
             accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}
             expanded={expanded}
+            detailMode={mode === 'detail'}
             headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
             headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
@@ -6047,6 +6448,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             <AttitudeCommandTerrainRiskPreview
               terrainRisk={terrainRiskVisual}
               expanded={expanded}
+              detailMode={mode === 'detail'}
               onTerrainRiskReferenceEvent={options?.onTerrainRiskReferenceEvent}
             />
           </AttitudeCommandPanel>
@@ -6060,20 +6462,41 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             icon="battery-charging-outline"
             tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'}
             align="right"
-            onPress={() => openFocusPanel('power')}
+            onPress={() => openFocusPanel('power', 'summary')}
+            onLongPress={() => openFocusPanel('power', 'detail')}
             accessibilityLabel={expanded ? 'Collapse power monitor' : 'Expand power monitor'}
             expanded={expanded}
+            detailMode={mode === 'detail'}
             powerVisual={powerVisual}
           >
-            <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
-            <View pointerEvents="none" style={[attitudeCommandS.powerBottomStrip, expanded && attitudeCommandS.powerBottomStripExpanded]}>
-              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
-                NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
-              </Text>
-              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
-                RUN {powerVisual.runtime}
-              </Text>
-            </View>
+            {expanded && detailMode ? (
+              <AttitudeCommandPowerDeviceDetail
+                power={power}
+                summary={powerSummary}
+                flow={powerFlowState}
+                activeVehicleContext={activeVehicleContext}
+                inputVolts={powerInputVolts}
+                inputAmps={powerInputAmps}
+                outputVolts={powerOutputVolts}
+                outputAmps={powerOutputAmps}
+                batteryVolts={powerBatteryVolts}
+                batteryAmps={powerBatteryAmps}
+                sources={powerSources}
+                loads={powerLoads}
+              />
+            ) : (
+              <>
+                <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
+                <View pointerEvents="none" style={[attitudeCommandS.powerBottomStrip, expanded && attitudeCommandS.powerBottomStripExpanded]}>
+                  <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
+                    NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
+                  </Text>
+                  <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
+                    RUN {powerVisual.runtime}
+                  </Text>
+                </View>
+              </>
+            )}
           </AttitudeCommandPanel>
         );
       default:
@@ -6162,7 +6585,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                   { aspectRatio: expansionGeometry.aspectRatio },
                 ]}
               >
-                {renderCommandPanel(activePanel, true)}
+                {renderCommandPanel(activePanel.panel, true, expandedPanelMode)}
               </Animated.View>
             </View>
           ) : null}
@@ -7006,6 +7429,11 @@ const attitudeCommandS = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     gap: 5,
+  },
+  panelContentDetailMode: {
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
+    gap: 8,
   },
   panelContentCenter: {
     alignItems: 'center',
@@ -7913,6 +8341,15 @@ const attitudeCommandS = StyleSheet.create({
   powerBottomStripLive: {
     color: 'rgba(218, 255, 228, 0.9)',
   },
+  detailScroll: {
+    alignSelf: 'stretch',
+    flex: 1,
+    minHeight: 0,
+  },
+  detailScrollContent: {
+    gap: 9,
+    paddingBottom: 12,
+  },
   detailStack: { gap: 10 },
   detailRow: {
     borderWidth: 1,
@@ -7935,6 +8372,37 @@ const attitudeCommandS = StyleSheet.create({
     fontSize: 13,
     lineHeight: 17,
     fontWeight: '800',
+  },
+  powerDeviceCard: {
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 199, 73, 0.16)',
+    backgroundColor: 'rgba(3, 7, 10, 0.58)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  powerDeviceHeader: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  powerDeviceTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '900',
+  },
+  powerDeviceState: {
+    flexShrink: 0,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
   },
   powerFlowCard: {
     borderWidth: 1,
@@ -8794,6 +9262,8 @@ function SustainabilityWidget({ data, options }: { data: WidgetData; options?: W
 // Route Progress uses the shared active route progress contract from lib/activeRouteProgress.ts.
 type RouteProgressSnapshot = ActiveRouteProgressSnapshot;
 type AttitudeCommandFocusPanel = 'sunlight' | 'weather' | 'vehicle' | 'route' | 'power';
+type AttitudeCommandFocusMode = 'summary' | 'detail';
+type AttitudeCommandActivePanel = { panel: AttitudeCommandFocusPanel; mode: AttitudeCommandFocusMode };
 type DashboardWidgetViewportClass = 'phone_portrait' | 'tablet_portrait' | 'landscape_wide';
 
 type AttitudeCommandLayoutMetrics = {
@@ -8906,6 +9376,73 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
 function useRouteProgressCommandSnapshot(options?: WidgetRenderOptions): RouteProgressSnapshot | null {
   return useActiveRouteProgressSnapshot(options);
 }
+
+const noopRouteWeatherToast = (_message: string) => {};
+
+function buildAttitudeCommandRouteWeatherRun(routeProgress: RouteProgressSnapshot | null): any | null {
+  const points = (routeProgress?.routePoints ?? [])
+    .map((point, index) => {
+      const lat = typeof point.lat === 'number' ? point.lat : Number((point as any).latitude);
+      const lng = typeof point.lng === 'number' ? point.lng : Number((point as any).longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return {
+        idx: index,
+        lat,
+        lng,
+        ele_m: typeof point.ele_m === 'number' ? point.ele_m : typeof point.ele === 'number' ? point.ele : null,
+        time: null,
+        type: 'route',
+      };
+    })
+    .filter(Boolean);
+
+  if (!routeProgress?.isActive || points.length < 2) return null;
+
+  const now = new Date().toISOString();
+  return {
+    id: routeProgress.activeRouteId ?? 'attitude-command-route-weather',
+    user_id: null,
+    title: routeProgress.routeLabel || 'Active route',
+    source: routeProgress.source || 'attitude-command',
+    created_at: now,
+    updated_at: routeProgress.updatedAt ?? now,
+    vehicle_id: null,
+    build_snapshot: {},
+    stats: {
+      distance_m: routeProgress.totalDistance != null ? routeProgress.totalDistance * 1609.344 : null,
+      elevation_gain_ft: null,
+      elevation_loss_ft: null,
+      min_ele_ft: null,
+      max_ele_ft: null,
+    },
+    points,
+    waypoints: [],
+    is_active: true,
+  };
+}
+
+function getAttitudeCommandRouteWeatherLocation(
+  routeProgress: RouteProgressSnapshot | null,
+  options?: WidgetRenderOptions,
+): { lat: number; lng: number } | null {
+  if (routeProgress?.currentLocation) {
+    return {
+      lat: routeProgress.currentLocation.latitude,
+      lng: routeProgress.currentLocation.longitude,
+    };
+  }
+  if (
+    options?.gpsHasFix === true &&
+    typeof options.gpsLatitude === 'number' &&
+    Number.isFinite(options.gpsLatitude) &&
+    typeof options.gpsLongitude === 'number' &&
+    Number.isFinite(options.gpsLongitude)
+  ) {
+    return { lat: options.gpsLatitude, lng: options.gpsLongitude };
+  }
+  return null;
+}
+
 function ProgressWidget({ data: _data, options }: { data: WidgetData; options?: WidgetRenderOptions }) {
   const compact = options?.compact;
   const [, setRouteRevision] = useState(0);
@@ -11433,10 +11970,12 @@ function resolveAttitudeCommandExpansionGeometry(
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
   expanded = false,
+  detailMode = false,
   onTerrainRiskReferenceEvent,
 }: {
   terrainRisk: CommandTerrainRiskVisualData;
   expanded?: boolean;
+  detailMode?: boolean;
   onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }) {
   const route = terrainRisk.route;
@@ -11465,10 +12004,11 @@ function AttitudeCommandTerrainRiskPreview({
     setSelectedReferenceEvent(event);
     onTerrainRiskReferenceEvent?.(event);
   }, [onTerrainRiskReferenceEvent]);
+  const markersInteractive = expanded && detailMode;
 
   return (
     <View
-      pointerEvents={expanded ? 'box-none' : 'none'}
+      pointerEvents={markersInteractive ? 'box-none' : 'none'}
       style={[
         attitudeCommandS.terrainRiskPreview,
         route ? attitudeCommandS.terrainRiskPreviewActive : null,
@@ -11491,12 +12031,12 @@ function AttitudeCommandTerrainRiskPreview({
               totalDistanceMiles={route.totalDistanceMiles}
               unit="mi"
               transparentBackground
-              interactive={expanded}
+              interactive={markersInteractive}
               referenceEvents={referenceEvents}
               onReferencePointPress={handleReferencePointPress}
             />
           </View>
-          {expanded && selectedReferenceEvent ? (
+          {expanded && detailMode && selectedReferenceEvent ? (
             <View style={attitudeCommandS.terrainRiskReferenceReadout}>
               <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>
                 Why ECS flagged this point

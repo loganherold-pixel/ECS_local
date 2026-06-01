@@ -270,7 +270,11 @@ const veepBleUartCandidate = routeBluetoothDevice({
 assert.strictEqual(veepBleUartCandidate.owner, 'telemetry');
 assert.strictEqual(veepBleUartCandidate.providerId, 'obd2');
 assert.strictEqual(veepBleUartCandidate.providerLabel, 'OBD2 Telemetry');
-assert.strictEqual(isReleaseScannerBluetoothRoute(veepBleUartCandidate), true);
+assert.strictEqual(
+  isReleaseScannerBluetoothRoute(veepBleUartCandidate),
+  false,
+  'unnamed UART-only OBD hints should stay out of the approved release scanner list',
+);
 
 const propaneByName = classifyBluetoothDevice({
   id: 'propane-1',
@@ -292,6 +296,73 @@ assert.strictEqual(propaneRoute.providerId, 'propane_monitor');
 assert.strictEqual(propaneRoute.deviceCategory, 'propane_monitor');
 assert.strictEqual(propaneRoute.supportLabel, 'Live Sensor');
 assert.strictEqual(isReleaseScannerBluetoothRoute(propaneRoute), true);
+
+const mopekaProManufacturerData = Buffer.from([
+  0x59, 0x00,
+  0x03, 0x92, 0x41, 0x33, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const mopekaProByBleSignature = classifyBluetoothDevice({
+  id: 'mopeka-pro-signature',
+  name: 'Unknown device 4A21',
+  isLikelyOBD: false,
+  rssi: -57,
+  serviceUUIDs: ['0000fee5-0000-1000-8000-00805f9b34fb'],
+  manufacturerData: mopekaProManufacturerData,
+});
+assert.strictEqual(mopekaProByBleSignature.providerBadge, 'Propane');
+assert.strictEqual(mopekaProByBleSignature.brandLabel, 'Mopeka / Propane Level');
+assert.strictEqual(mopekaProByBleSignature.deviceCategory, 'propane_monitor');
+assert.strictEqual(mopekaProByBleSignature.categoryHint, 'Propane level monitor');
+
+const mopekaProSignatureRoute = routeBluetoothDevice({
+  id: 'mopeka-pro-signature-route',
+  name: 'Unknown device 4A21',
+  isLikelyOBD: false,
+  rssi: -57,
+  serviceUUIDs: ['fee5'],
+  manufacturerData: mopekaProManufacturerData,
+});
+assert.strictEqual(mopekaProSignatureRoute.owner, 'sensor');
+assert.strictEqual(mopekaProSignatureRoute.providerId, 'propane_monitor');
+assert.strictEqual(mopekaProSignatureRoute.deviceCategory, 'propane_monitor');
+assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaProSignatureRoute), true);
+
+const mopekaUniversalManufacturerData = Buffer.from([
+  0x59, 0x00,
+  0x0c, 0x91, 0x45, 0x44, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const mopekaUniversalRoute = routeBluetoothDevice({
+  id: 'mopeka-universal-signature-route',
+  name: 'Unknown device 4A22',
+  isLikelyOBD: false,
+  rssi: -58,
+  serviceUUIDs: ['fee5'],
+  manufacturerData: mopekaUniversalManufacturerData,
+});
+assert.strictEqual(mopekaUniversalRoute.owner, 'sensor');
+assert.strictEqual(mopekaUniversalRoute.providerId, 'water_monitor');
+assert.strictEqual(mopekaUniversalRoute.deviceCategory, 'water_tank_monitor');
+assert.strictEqual(mopekaUniversalRoute.categoryLabel, 'Water / fluid level monitor');
+assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalRoute), true);
+
+const mopekaStdManufacturerData = Buffer.from([
+  0x0d, 0x00,
+  0x02, 0x20, 0x64, 0x80, 0x34, 0x12, 0x01, 0x02, 0x03, 0x04, 0x05,
+  0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+  0x17,
+]).toString('base64');
+const mopekaStdRoute = routeBluetoothDevice({
+  id: 'mopeka-std-signature-route',
+  name: 'Unknown device 4A23',
+  isLikelyOBD: false,
+  rssi: -60,
+  serviceUUIDs: ['ada0'],
+  manufacturerData: mopekaStdManufacturerData,
+});
+assert.strictEqual(mopekaStdRoute.owner, 'sensor');
+assert.strictEqual(mopekaStdRoute.providerId, 'propane_monitor');
+assert.strictEqual(mopekaStdRoute.deviceCategory, 'propane_monitor');
+assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaStdRoute), true);
 
 const waterByName = classifyBluetoothDevice({
   id: 'water-1',
@@ -408,7 +479,11 @@ assert.strictEqual(unknownPowerRoute.owner, 'power');
 assert.strictEqual(unknownPowerRoute.providerId, 'unknown_power');
 assert.strictEqual(unknownPowerRoute.providerLabel, 'Unknown power device');
 assert.strictEqual(unknownPowerRoute.supportLabel, 'Needs Identification');
-assert.strictEqual(isReleaseScannerBluetoothRoute(unknownPowerRoute), true);
+assert.strictEqual(
+  isReleaseScannerBluetoothRoute(unknownPowerRoute),
+  false,
+  'generic power-looking advertisements should stay hidden until ECS recognizes an approved provider pipeline',
+);
 
 const ambiguousMatch = classifyBluetoothDevice({
   id: 'ambiguous-route',

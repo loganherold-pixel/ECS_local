@@ -286,6 +286,10 @@ const LOCAL_ONLY_UPDATE_KEYS = new Set([
   'breakover_angle_deg',
   'departure_angle_deg',
   'turning_diameter_ft',
+  'axle_ratio',
+  'gearing_label',
+  'gearing_confidence',
+  'gearing_confirmed',
   'wizard_config',
   'zones',
   'accessoryFramework',
@@ -321,6 +325,10 @@ const LOCAL_ONLY_VEHICLE_FIELDS: (keyof Vehicle)[] = [
   'breakover_angle_deg',
   'departure_angle_deg',
   'turning_diameter_ft',
+  'axle_ratio',
+  'gearing_label',
+  'gearing_confidence',
+  'gearing_confirmed',
 ];
 
 export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
@@ -361,6 +369,10 @@ export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
     breakover_angle_deg: vehicle.breakover_angle_deg ?? null,
     departure_angle_deg: vehicle.departure_angle_deg ?? null,
     turning_diameter_ft: vehicle.turning_diameter_ft ?? null,
+    axle_ratio: vehicle.axle_ratio ?? null,
+    gearing_label: vehicle.gearing_label ?? null,
+    gearing_confidence: vehicle.gearing_confidence ?? null,
+    gearing_confirmed: Boolean(vehicle.gearing_confirmed ?? false),
   };
 }
 

@@ -27,6 +27,11 @@ import type {
   DispersedCampingEligibilityLayerState,
   DispersedCampingRegionSelectionPayload,
 } from '../../lib/map/dispersedCampingTypes';
+import {
+  DISPERSED_ROUTE_LEG_PLANNING_WARNING,
+  type DispersedRouteLegSelectionPayload,
+  type RouteSegmentSourceMetadata,
+} from '../../lib/map/dispersedCampingSegmentBuild';
 import type {
   EstablishedCampsiteLayerState,
   EstablishedCampsiteSelectionPayload,
@@ -40,6 +45,7 @@ import {
   ESTABLISHED_CAMPSITE_SELECTED,
   SET_ESTABLISHED_CAMPSITES_LAYER_ENABLED,
   SET_DISPERSED_CAMPING_LAYER_ENABLED,
+  SET_DISPERSED_ROUTE_BUILD_ENABLED,
 } from '../../lib/map/mapboxLayerMessages';
 import type { RemoteMapOverlayPayload } from '../../lib/remote/mapOverlay';
 
@@ -71,6 +77,9 @@ export const CAMP_SCOUT_PIN_LAYER_ID = 'ecs-camp-scout-pins-layer';
 export const DISPERSED_CAMPING_ELIGIBILITY_SOURCE_ID = 'ecs-dispersed-camping-eligibility';
 export const DISPERSED_CAMPING_ELIGIBILITY_FILL_LAYER_ID = 'ecs-dispersed-camping-eligibility-fill';
 export const DISPERSED_CAMPING_ELIGIBILITY_OUTLINE_LAYER_ID = 'ecs-dispersed-camping-eligibility-outline';
+export const DISPERSED_ROUTE_BUILD_SOURCE_ID = 'ecs-dispersed-route-build-segments';
+export const DISPERSED_ROUTE_BUILD_LAYER_ID = 'ecs-dispersed-route-build-segments-layer';
+export const DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID = 'ecs-dispersed-route-build-selected-layer';
 export const ESTABLISHED_CAMPSITES_SOURCE_ID = 'ecs-established-campsites';
 export const ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID = 'ecs-established-campsites-backplate';
 export const ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID = 'ecs-established-campsites-symbol';
@@ -220,6 +229,8 @@ export type RouteBuilderSegmentData = {
   snapSource?: string | null;
   snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | null;
   snapMessage?: string | null;
+  sourceSegmentId?: string | null;
+  buildSource?: RouteSegmentSourceMetadata | null;
 };
 
 export type RouteBuilderUpdatePayload = {
@@ -338,7 +349,13 @@ export type MapRendererProps = {
   }) => void;
   remoteOverlay?: RemoteMapOverlayPayload | null;
   dispersedCampingEligibility?: DispersedCampingEligibilityLayerState | null;
+  dispersedRouteBuild?: {
+    enabled: boolean;
+    selectedSegmentIds: string[];
+    renderKey?: string | number;
+  } | null;
   onDispersedCampingRegionTap?: (payload: DispersedCampingRegionSelectionPayload) => void;
+  onDispersedRouteLegTap?: (payload: DispersedRouteLegSelectionPayload) => void;
   establishedCampsites?: EstablishedCampsiteLayerState | null;
   onEstablishedCampsiteTap?: (payload: EstablishedCampsiteSelectionPayload) => void;
   campsiteSearchPolygon?: {
@@ -476,6 +493,8 @@ type WebMapPayload = {
     snapSource?: string | null;
     snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | null;
     snapMessage?: string | null;
+    sourceSegmentId?: string | null;
+    buildSource?: RouteSegmentSourceMetadata | null;
   }[];
   remoteOverlay: RemoteMapOverlayPayload;
   campsiteSearchPolygon: {
@@ -1095,6 +1114,15 @@ function buildCampLayerHash(state: {
   });
 }
 
+function buildDispersedRouteBuildHash(state: MapRendererProps['dispersedRouteBuild']): string {
+  if (!state?.enabled) return 'disabled';
+  return stableStringify({
+    enabled: true,
+    selectedSegmentIds: state.selectedSegmentIds ?? [],
+    renderKey: state.renderKey ?? null,
+  });
+}
+
 function roundForHash(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return Number(value.toFixed(5));
@@ -1378,6 +1406,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       snapSource: segment.snapSource ?? null,
       snapStatus: segment.snapStatus ?? null,
       snapMessage: segment.snapMessage ?? null,
+      sourceSegmentId: segment.sourceSegmentId ?? null,
+      buildSource: segment.buildSource ?? null,
     })),
     remoteOverlay: props.remoteOverlay ?? { enabled: false, heatmapAreas: [], forecastSegments: [] },
     campsiteSearchPolygon: props.campsiteSearchPolygon
@@ -1991,6 +2021,11 @@ function makeMapHtml(
       var DISPERSED_CAMPING_OUTLINE_LAYER_ID = ${JSON.stringify(DISPERSED_CAMPING_ELIGIBILITY_OUTLINE_LAYER_ID)};
       var DISPERSED_CAMPING_MESSAGE_TYPE = ${JSON.stringify(SET_DISPERSED_CAMPING_LAYER_ENABLED)};
       var DISPERSED_CAMPING_SELECTED_MESSAGE_TYPE = ${JSON.stringify(DISPERSED_CAMPING_REGION_SELECTED)};
+      var DISPERSED_ROUTE_BUILD_SOURCE_ID = ${JSON.stringify(DISPERSED_ROUTE_BUILD_SOURCE_ID)};
+      var DISPERSED_ROUTE_BUILD_LAYER_ID = ${JSON.stringify(DISPERSED_ROUTE_BUILD_LAYER_ID)};
+      var DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID = ${JSON.stringify(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID)};
+      var DISPERSED_ROUTE_BUILD_MESSAGE_TYPE = ${JSON.stringify(SET_DISPERSED_ROUTE_BUILD_ENABLED)};
+      var DISPERSED_ROUTE_LEG_PLANNING_WARNING = ${JSON.stringify(DISPERSED_ROUTE_LEG_PLANNING_WARNING)};
       var ESTABLISHED_CAMPSITES_SOURCE_ID = ${JSON.stringify(ESTABLISHED_CAMPSITES_SOURCE_ID)};
       var ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID = ${JSON.stringify(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID)};
       var ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID = ${JSON.stringify(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID)};
@@ -2395,6 +2430,15 @@ function makeMapHtml(
       var routeBuilderGesturePointCount = 0;
       var routeBuilderGestureStartPoint = null;
       var routeBuilderFreeModeNoticeSent = false;
+      var dispersedRouteBuildState = {
+        enabled: false,
+        selectedSegmentIds: [],
+        selectedSegmentIdSet: {},
+        renderKey: null,
+        version: 0
+      };
+      var dispersedRouteBuildUpdateTimer = null;
+      var maxDispersedRouteBuildCandidates = 180;
 
       var ROUTE_BUILDER_SNAP_PX = 38;
       var ROUTE_BUILDER_STABLE_SNAP_PX = 56;
@@ -2650,6 +2694,89 @@ function makeMapHtml(
         });
       }
 
+      function removeDispersedRouteBuildLayer() {
+        try {
+          if (map && map.getLayer(DISPERSED_ROUTE_BUILD_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_ROUTE_BUILD_LAYER_ID, 'visibility', 'none');
+          }
+          if (map && map.getLayer(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID, 'visibility', 'none');
+          }
+          if (map && map.getSource(DISPERSED_ROUTE_BUILD_SOURCE_ID)) {
+            setGeoJson(DISPERSED_ROUTE_BUILD_SOURCE_ID, featureCollection([]));
+          }
+        } catch (e) {}
+      }
+
+      function buildDispersedRouteSelectedSet(ids) {
+        var selected = {};
+        (ids || []).forEach(function(id) {
+          if (id != null) selected[String(id)] = true;
+        });
+        return selected;
+      }
+
+      function ensureDispersedRouteBuildLayer() {
+        if (!isMapStyleReady()) return false;
+        ensureSource(DISPERSED_ROUTE_BUILD_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
+
+        var beforeRouteLayer = getFirstExistingLayerId([
+          'route-progress-glow-layer',
+          'route-progress-layer',
+          'route-layer',
+          'route-builder-halo-layer',
+          'route-builder-layer',
+          'segment-layer',
+          'trail-layer'
+        ]);
+
+        if (!map.getLayer(DISPERSED_ROUTE_BUILD_LAYER_ID)) {
+          map.addLayer({
+            id: DISPERSED_ROUTE_BUILD_LAYER_ID,
+            type: 'line',
+            source: DISPERSED_ROUTE_BUILD_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
+            filter: ['!=', ['get', 'selected'], true],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#F2C24D',
+              'line-width': 3.6,
+              'line-opacity': 0.78
+            }
+          }, beforeRouteLayer);
+        }
+
+        if (!map.getLayer(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID)) {
+          map.addLayer({
+            id: DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID,
+            type: 'line',
+            source: DISPERSED_ROUTE_BUILD_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
+            filter: ['==', ['get', 'selected'], true],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#F2C24D',
+              'line-width': 7.2,
+              'line-opacity': 0.98,
+              'line-blur': 0.25
+            }
+          }, beforeRouteLayer);
+        }
+
+        try {
+          map.setLayoutProperty(DISPERSED_ROUTE_BUILD_LAYER_ID, 'visibility', 'visible');
+          map.setLayoutProperty(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID, 'visibility', 'visible');
+        } catch (e) {}
+
+        return true;
+      }
+
       function removeEstablishedCampsitesLayer() {
         try {
           if (map && map.getLayer(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID)) {
@@ -2813,6 +2940,226 @@ function makeMapHtml(
           latitude: isFinite(clickLatitude) ? clickLatitude : undefined,
           longitude: isFinite(clickLongitude) ? clickLongitude : undefined
         };
+      }
+
+      function lineMidpointCoordinate(line) {
+        if (!line || line.length < 2) return null;
+        var totalLength = 0;
+        var lengths = [];
+        for (var i = 1; i < line.length; i += 1) {
+          var a = projectLngLat(line[i - 1]);
+          var b = projectLngLat(line[i]);
+          if (!a || !b) {
+            lengths.push(0);
+            continue;
+          }
+          var dx = b.x - a.x;
+          var dy = b.y - a.y;
+          var length = Math.sqrt(dx * dx + dy * dy);
+          lengths.push(length);
+          totalLength += length;
+        }
+        if (totalLength <= 0) return line[Math.floor(line.length / 2)] || null;
+        var target = totalLength / 2;
+        var traveled = 0;
+        for (var j = 1; j < line.length; j += 1) {
+          var segmentLength = lengths[j - 1] || 0;
+          if (traveled + segmentLength >= target) {
+            var t = segmentLength > 0 ? (target - traveled) / segmentLength : 0;
+            return [
+              line[j - 1][0] + (line[j][0] - line[j - 1][0]) * t,
+              line[j - 1][1] + (line[j][1] - line[j - 1][1]) * t
+            ];
+          }
+          traveled += segmentLength;
+        }
+        return line[Math.floor(line.length / 2)] || null;
+      }
+
+      function routeLegCoordinateHash(coordinates) {
+        var payload = (coordinates || []).map(function(coord) {
+          return Number(coord[0]).toFixed(5) + ',' + Number(coord[1]).toFixed(5);
+        }).join('|');
+        var hash = 2166136261;
+        for (var i = 0; i < payload.length; i += 1) {
+          hash ^= payload.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        return 'dispersed-leg-' + ((hash >>> 0).toString(36));
+      }
+
+      function sourceLabelForDispersedRouteFeature(feature) {
+        var props = feature && feature.properties ? feature.properties : {};
+        var label =
+          props.name ||
+          props.ref ||
+          props.routeName ||
+          props.route_name ||
+          props.class ||
+          props.subclass ||
+          (feature && feature.sourceLayer) ||
+          (feature && feature.layer && feature.layer.id);
+        var normalized = String(label || '').trim();
+        return normalized || 'Rendered routeable feature';
+      }
+
+      function queryEligibleDispersedCampingRegionsAtPoint(coordinate) {
+        if (!map || !coordinate || !map.getLayer(DISPERSED_CAMPING_FILL_LAYER_ID)) return [];
+        try {
+          var projected = map.project({ lng: coordinate[0], lat: coordinate[1] });
+          var regions = map.queryRenderedFeatures(projected, { layers: [DISPERSED_CAMPING_FILL_LAYER_ID] }) || [];
+          return regions
+            .map(function(regionFeature) {
+              var props = regionFeature && regionFeature.properties ? regionFeature.properties : {};
+              var confidence = String(props.confidence || 'verify').toLowerCase();
+              if (confidence === 'restricted') return null;
+              return {
+                id: String(props.id || regionFeature.id || '').trim(),
+                landManager: props.landManager ? String(props.landManager) : null,
+                confidence: confidence || 'verify'
+              };
+            })
+            .filter(function(region) { return !!(region && region.id); });
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function splitDispersedRouteBuildLine(line) {
+        var normalized = normalizeLngLatLine(line || []);
+        var deduped = [];
+        normalized.forEach(function(coord) {
+          var previous = deduped[deduped.length - 1];
+          if (!previous || previous[0] !== coord[0] || previous[1] !== coord[1]) {
+            deduped.push(coord);
+          }
+        });
+        if (deduped.length < 2) return [];
+        if (deduped.length <= 24) return [deduped];
+        var chunks = [];
+        var index = 0;
+        while (index < deduped.length - 1) {
+          var chunk = deduped.slice(index, index + 24);
+          if (chunk.length > 1) chunks.push(chunk);
+          index += 23;
+        }
+        return chunks;
+      }
+
+      function buildDispersedRouteBuildPayloadFromFeature(feature) {
+        if (!feature || !feature.geometry || !feature.geometry.coordinates) return null;
+        var props = feature.properties || {};
+        var coordinates = normalizeLngLatLine(feature.geometry.coordinates || []);
+        var id = String(props.sourceSegmentId || props.id || feature.id || '').trim();
+        if (!id || coordinates.length < 2) return null;
+        var regionIds = normalizeStringArray(props.regionIdsJson || props.regionIds);
+        return {
+          id: id,
+          coordinates: coordinates,
+          sourceLabel: String(props.sourceLabel || 'Rendered routeable feature'),
+          confidence: 'planning_geometry',
+          regionIds: regionIds,
+          landManager: props.landManager ? String(props.landManager) : null,
+          eligibilityConfidence: String(props.eligibilityConfidence || 'verify'),
+          warnings: [DISPERSED_ROUTE_LEG_PLANNING_WARNING],
+          selected: !dispersedRouteBuildState.selectedSegmentIdSet[id]
+        };
+      }
+
+      function buildDispersedRouteBuildCandidateFeature(feature, line) {
+        var midpoint = lineMidpointCoordinate(line);
+        var regions = queryEligibleDispersedCampingRegionsAtPoint(midpoint);
+        if (!regions.length) return null;
+        var id = routeLegCoordinateHash(line);
+        var selected = !!dispersedRouteBuildState.selectedSegmentIdSet[id];
+        var regionIds = regions.map(function(region) { return region.id; });
+        var landManager = regions[0] && regions[0].landManager ? regions[0].landManager : null;
+        var eligibilityConfidence = regions[0] && regions[0].confidence ? regions[0].confidence : 'verify';
+        return lineFeature(id, line, {
+          id: id,
+          sourceSegmentId: id,
+          sourceLabel: sourceLabelForDispersedRouteFeature(feature),
+          confidence: 'planning_geometry',
+          regionIdsJson: JSON.stringify(regionIds),
+          regionIds: JSON.stringify(regionIds),
+          landManager: landManager,
+          eligibilityConfidence: eligibilityConfidence,
+          selected: selected,
+          warning: DISPERSED_ROUTE_LEG_PLANNING_WARNING
+        });
+      }
+
+      function updateDispersedRouteBuildCandidates(reason) {
+        if (!dispersedRouteBuildState.enabled || !isMapStyleReady()) {
+          removeDispersedRouteBuildLayer();
+          return;
+        }
+        if (!ensureDispersedRouteBuildLayer()) return;
+        var candidates = [];
+        var seen = {};
+        try {
+          var rendered = map.queryRenderedFeatures() || [];
+          for (var featureIndex = 0; featureIndex < rendered.length; featureIndex += 1) {
+            if (candidates.length >= maxDispersedRouteBuildCandidates) break;
+            var feature = rendered[featureIndex];
+            if (!feature || !isRouteBuilderRouteableFeature(feature)) continue;
+            var lines = extractFeatureLineCoordinates(feature);
+            for (var lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+              var chunks = splitDispersedRouteBuildLine(lines[lineIndex]);
+              for (var chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+                if (candidates.length >= maxDispersedRouteBuildCandidates) break;
+                var candidate = buildDispersedRouteBuildCandidateFeature(feature, chunks[chunkIndex]);
+                if (!candidate || seen[candidate.id]) continue;
+                seen[candidate.id] = true;
+                candidates.push(candidate);
+              }
+            }
+          }
+        } catch (e) {}
+
+        setGeoJson(DISPERSED_ROUTE_BUILD_SOURCE_ID, featureCollection(candidates));
+        try {
+          map.setLayoutProperty(DISPERSED_ROUTE_BUILD_LAYER_ID, 'visibility', 'visible');
+          map.setLayoutProperty(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID, 'visibility', 'visible');
+        } catch (e) {}
+        promoteRouteGuidanceLayers();
+      }
+
+      function scheduleDispersedRouteBuildCandidateUpdate(reason) {
+        if (!dispersedRouteBuildState.enabled) return;
+        if (dispersedRouteBuildUpdateTimer) clearTimeout(dispersedRouteBuildUpdateTimer);
+        dispersedRouteBuildUpdateTimer = setTimeout(function() {
+          updateDispersedRouteBuildCandidates(reason || 'scheduled');
+        }, 90);
+      }
+
+      function setDispersedRouteBuildEnabled(payload) {
+        var enabled = !!(payload && payload.enabled);
+        dispersedRouteBuildState = {
+          enabled: enabled,
+          selectedSegmentIds: payload && Array.isArray(payload.selectedSegmentIds) ? payload.selectedSegmentIds.map(String) : [],
+          selectedSegmentIdSet: buildDispersedRouteSelectedSet(payload && payload.selectedSegmentIds),
+          renderKey: payload && payload.renderKey != null ? payload.renderKey : null,
+          version: dispersedRouteBuildState.version + 1
+        };
+        if (!enabled) {
+          removeDispersedRouteBuildLayer();
+          return;
+        }
+        updateDispersedRouteBuildCandidates('message');
+      }
+
+      function findDispersedRouteBuildFeatureAtPoint(point) {
+        if (!dispersedRouteBuildState.enabled || !map) return null;
+        if (!map.getLayer(DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID) && !map.getLayer(DISPERSED_ROUTE_BUILD_LAYER_ID)) return null;
+        try {
+          var features = map.queryRenderedFeatures(point, {
+            layers: [DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID, DISPERSED_ROUTE_BUILD_LAYER_ID]
+          }) || [];
+          return features.length ? features[0] : null;
+        } catch (e) {
+          return null;
+        }
       }
 
       function readEstablishedCampsiteNumber(value) {
@@ -3343,6 +3690,7 @@ function makeMapHtml(
         }
         if (!state.enabled) {
           removeDispersedCampingEligibilityLayer();
+          removeDispersedRouteBuildLayer();
           state.appliedVersion = state.version;
           if (reason === 'style_load') {
             sendCampLayerDebug('applied_after_style_load', {
@@ -3356,6 +3704,9 @@ function makeMapHtml(
         }
         if (ensureDispersedCampingEligibilityLayer(state.geojson)) {
           state.appliedVersion = state.version;
+          if (dispersedRouteBuildState.enabled) {
+            updateDispersedRouteBuildCandidates('eligibility_layer_applied');
+          }
           if (reason === 'style_load') {
             sendCampLayerDebug('applied_after_style_load', {
               layer: 'dispersed_camping',
@@ -3557,7 +3908,9 @@ function makeMapHtml(
               snapConfidence: segment.snapConfidence || null,
               snapSource: segment.snapSource || null,
               snapStatus: segment.snapStatus || null,
-              snapMessage: segment.snapMessage || null
+              snapMessage: segment.snapMessage || null,
+              sourceSegmentId: segment.sourceSegmentId || null,
+              buildSource: segment.buildSource || null,
             };
           })
           .filter(function(segment) { return segment.coordinates.length > 0; });
@@ -3708,6 +4061,7 @@ function makeMapHtml(
         ensureSource('ecs-remote-forecast-v1', { type: 'geojson', data: featureCollection([]) });
         ensureSource('route-builder-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('route-builder-endpoint-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource(DISPERSED_ROUTE_BUILD_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
         ensureSource('campsite-search-polygon-fill-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('campsite-search-polygon-line-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('campsite-search-polygon-point-source', { type: 'geojson', data: featureCollection([]) });
@@ -3736,6 +4090,9 @@ function makeMapHtml(
         ensureCircleLayer('campsite-search-polygon-point-layer', 'campsite-search-polygon-point-source', 'rgba(242,194,77,0.92)', 4.2, 0.95, 'rgba(8,14,18,0.96)', 1.5);
         ensureCampScoutPinLayer();
         applyDispersedCampingDesiredState('style_load');
+        if (dispersedRouteBuildState.enabled) {
+          updateDispersedRouteBuildCandidates('style_load');
+        }
         applyEstablishedCampsitesDesiredState('style_load');
         promoteRouteGuidanceLayers();
       }
@@ -4902,6 +5259,7 @@ function makeMapHtml(
       function startRouteBuilderDraw(event) {
         if (!routeBuilderActive || !map || routeBuilderPointerId !== null || routeBuilderPointerCount > 1) return false;
         var point = getRouteBuilderEventPoint(event);
+        if (dispersedRouteBuildState.enabled && findDispersedRouteBuildFeatureAtPoint(point)) return false;
         var rawCoordinate = routeBuilderRawCoordinateFromPoint(point);
         var tracePoint = snapTracePoint(point, { rawCoordinate: rawCoordinate });
         if (!tracePoint) return false;
@@ -5439,6 +5797,7 @@ function makeMapHtml(
             sendBounds();
             sendCenter();
             reportRoadClass();
+            scheduleDispersedRouteBuildCandidateUpdate('moveend');
           }, 90);
         });
 
@@ -5452,6 +5811,14 @@ function makeMapHtml(
         map.on('click', function(e) {
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
+          try {
+            var dispersedLegFeature = findDispersedRouteBuildFeatureAtPoint(e.point);
+            var dispersedLegPayload = buildDispersedRouteBuildPayloadFromFeature(dispersedLegFeature);
+            if (dispersedLegPayload) {
+              send('dispersedRouteLegTap', dispersedLegPayload);
+              return;
+            }
+          } catch (err) {}
           try {
             var segmentFeatures = map.queryRenderedFeatures(e.point, { layers: ['segment-layer'] }) || [];
             var exploreSegment = null;
@@ -5552,6 +5919,11 @@ function makeMapHtml(
 
         if (msg.type === DISPERSED_CAMPING_MESSAGE_TYPE) {
           setDispersedCampingEligibilityLayerEnabled(msg.payload || null);
+          return;
+        }
+
+        if (msg.type === DISPERSED_ROUTE_BUILD_MESSAGE_TYPE) {
+          setDispersedRouteBuildEnabled(msg.payload || null);
           return;
         }
 
@@ -5663,7 +6035,9 @@ const MapRenderer = React.memo(function MapRenderer({
   onRouteBuilderGestureStateChange,
   remoteOverlay = null,
   dispersedCampingEligibility = null,
+  dispersedRouteBuild = null,
   onDispersedCampingRegionTap,
+  onDispersedRouteLegTap,
   establishedCampsites = null,
   onEstablishedCampsiteTap,
   campsiteSearchPolygon = null,
@@ -5919,11 +6293,17 @@ const MapRenderer = React.memo(function MapRenderer({
     (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current)));
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
+  const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
+  dispersedRouteBuildRef.current = dispersedRouteBuild;
   const establishedCampsitesRef = useRef(establishedCampsites);
   establishedCampsitesRef.current = establishedCampsites;
   const dispersedCampingEligibilityHash = useMemo(
     () => buildCampLayerHash(dispersedCampingEligibility),
     [dispersedCampingEligibility],
+  );
+  const dispersedRouteBuildHash = useMemo(
+    () => buildDispersedRouteBuildHash(dispersedRouteBuild),
+    [dispersedRouteBuild],
   );
   const establishedCampsitesHash = useMemo(
     () => buildCampLayerHash(establishedCampsites),
@@ -6196,6 +6576,25 @@ const MapRenderer = React.memo(function MapRenderer({
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
 
+    const state = dispersedRouteBuildRef.current;
+    postToMap({
+      type: SET_DISPERSED_ROUTE_BUILD_ENABLED,
+      payload: {
+        enabled: !!state?.enabled,
+        selectedSegmentIds: state?.selectedSegmentIds ?? [],
+        renderKey: state?.renderKey,
+      },
+    });
+  }, [
+    shouldLoadMap,
+    webReady,
+    postToMap,
+    dispersedRouteBuildHash,
+  ]);
+
+  useEffect(() => {
+    if (!shouldLoadMap || !webReady) return;
+
     const state = establishedCampsitesRef.current;
     const enabled = !!state?.enabled;
     postToMap({
@@ -6399,6 +6798,10 @@ const MapRenderer = React.memo(function MapRenderer({
         onSegmentTap?.(payload);
         return;
 
+      case 'dispersedRouteLegTap':
+        onDispersedRouteLegTap?.(payload);
+        return;
+
       case DISPERSED_CAMPING_REGION_SELECTED:
         onDispersedCampingRegionTap?.(payload);
         return;
@@ -6461,6 +6864,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onMapTap,
     onSegmentTap,
     onDispersedCampingRegionTap,
+    onDispersedRouteLegTap,
     onEstablishedCampsiteTap,
     onPinTap,
     onMapCenterReply,

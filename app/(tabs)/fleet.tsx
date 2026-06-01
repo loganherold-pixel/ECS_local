@@ -1234,22 +1234,8 @@ function FleetPremiumVehicleCard({
       <View style={s.premiumMetricGrid}>
         <FleetMetricTile label="Operating" value={formatFleetWeightValue(weightResult.operatingWeight.lbs)} helper="base + build + load" showHelper={false} />
         <FleetMetricTile label="Payload Left" value={formatFleetWeightValue(weightResult.payloadRemaining?.lbs)} helper="GVWR margin" showHelper={false} />
-        <FleetMetricTile
-          label="Readiness"
-          value={formatFleetScore(scoringResult.readinessScore)}
-          helper={scoringResult.riskLevel}
-          showHelper={false}
-          onPress={onReadinessPress}
-          accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`}
-        />
-        <FleetMetricTile
-          label="Confidence"
-          value={formatFleetPercent(weightResult.confidence)}
-          helper={weightResult.baseNetWeight.source}
-          showHelper={false}
-          onPress={onConfidencePress}
-          accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`}
-        />
+        <FleetMetricTile label="Readiness" value={formatFleetScore(scoringResult.readinessScore)} helper={scoringResult.riskLevel} showHelper={false} onPress={onReadinessPress} accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`} />
+        <FleetMetricTile label="Confidence" value={formatFleetPercent(weightResult.confidence)} helper={weightResult.baseNetWeight.source} showHelper={false} onPress={onConfidencePress} accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`} />
       </View>
 
       <ECSPanel variant="quiet" style={s.readinessStrip}>

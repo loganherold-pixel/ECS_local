@@ -7,8 +7,11 @@ Fleet remains the ECS vehicle command center under the existing `Fleet` tab labe
 ## Production Readiness
 
 - Vehicle profile defaults include configuration-aware RAM 2500 weights, with base net/curb/empty weight kept separate from GVWR.
-- Vehicle profile setup can use the offline OEM-reference catalog to prefill likely year/make/model baseline specs for common expedition vehicles, including fuel capacity, ground clearance, wheelbase, dimensions, off-road angles, and turning diameter when bundled.
+- Vehicle profile setup can use the offline OEM-reference catalog to prefill likely year/make/model baseline specs for common expedition vehicles, including fuel capacity, ground clearance, wheelbase, dimensions, track width, off-road angles, and turning diameter/radius when bundled.
+- The offline seed catalog now includes a practical trim/config pick layer for common expedition trucks, SUVs, crossovers, wagons, and vans, including 4Runner TRD Off-Road, GX 460, Bronco Badlands, Wrangler Rubicon Unlimited, Outback Wilderness, Transit AWD high roof, Sprinter AWD high roof, Colorado ZR2, Frontier PRO-4X, and Tundra TRD Pro.
+- ECS vehicle picks now prefer specific model/trim/configuration candidates while the user is typing the model, then fill model, trim, engine, drivetrain, cab, bed, and OEM-backed specs when selected.
 - OEM references are source/confidence labeled and are not treated as VIN-specific truth. Door placard values, user-entered specs, and scale tickets remain higher authority.
+- Probable gearing can be displayed from the bundled catalog, but it must be explicitly confirmed before Fleet stores it as confirmed gearing metadata.
 - Weight math follows `base net + installed accessories + active loadout = operating weight`, and `payload remaining = GVWR - operating weight`. Saved fuel and water are counted as explicit current-loadout inputs when present, with their source/confidence labels kept visible instead of hidden in the base vehicle weight.
 - Confidence tiers are explicit for scale tickets, VIN/OEM matches, manufacturer specs, exact build matches, ECS defaults, and user estimates.
 - Build & Loadout accessories add weight, create compartments where appropriate, and preserve existing loadout state during accessory edits.
@@ -60,9 +63,10 @@ Fleet remains the ECS vehicle command center under the existing `Fleet` tab labe
   - Guard that the COG visual uses a vehicle-type silhouette and lateral COG marker placement instead of the old generic box sections.
 - `scripts/test-fleet-oem-spec-reference.js`
   - OEM reference catalog matching.
+  - Seed catalog coverage across model, trim, and configuration match levels.
   - Unsupported model-year handling.
   - Fleet profile OEM suggestion source/confidence behavior.
-  - Downstream vehicle-fit fields such as width and approach angle.
+  - Trim/config ECS vehicle pick ranking, downstream vehicle-fit fields such as width and approach angle, and unconfirmed gearing behavior.
 
 ## Production Evidence Contract
 
@@ -142,6 +146,7 @@ Do not set `productionDecision` to `accepted` until the Android evidence, source
 11. Confirm the card uses text, chips, metrics, and status badges rather than images.
 11a. Add a 2021 Ford Bronco and confirm the OEM reference panel appears with verification copy.
 11b. Try a 2019 Ford Bronco and confirm ECS does not silently apply the 2021+ Bronco reference.
+11c. Type `2024 Toyota Tac`, select the Tacoma TRD Pro ECS vehicle pick, and confirm model/trim/config fields, width/track/turning data, and unconfirmed gearing state populate without overwriting a manually entered base weight.
 12. Open Vehicle Profile advanced specs.
 13. Confirm advanced specs use the global drawer/modal/sheet container.
 14. Add SmartCap.

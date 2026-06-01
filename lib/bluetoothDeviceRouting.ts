@@ -7,6 +7,7 @@ import {
   type BluetoothProviderBadge,
 } from './bluetoothDevicePresentation';
 import { isLikelyPowerBluetoothAdvertisement } from './bluetoothBrandRegistry';
+import { isECSApprovedBluetoothRoute } from './bluetoothApprovedDeviceCatalog';
 
 export type BluetoothOwnerDomain = 'power' | 'telemetry' | 'sensor' | 'generic';
 
@@ -308,11 +309,10 @@ export function routeBluetoothDevice(
 }
 
 export function isReleaseScannerBluetoothRoute(
-  routing: Pick<BluetoothRoutingDecision, 'owner' | 'deviceCategory'>,
+  routing: Pick<
+    BluetoothRoutingDecision,
+    'owner' | 'providerId' | 'deviceCategory' | 'needsUserConfirmation' | 'displayName'
+  >,
 ): boolean {
-  return (
-    routing.owner === 'power' ||
-    routing.owner === 'telemetry' ||
-    (routing.owner === 'sensor' && isFluidLevelSensorCategory(routing.deviceCategory))
-  );
+  return isECSApprovedBluetoothRoute(routing);
 }

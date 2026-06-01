@@ -159,17 +159,16 @@ for (const marker of [
 }
 assert(
   unified.includes('isReleaseScannerBluetoothRoute') &&
-    unified.includes("entry.routing.owner === 'sensor' || entry.routing.owner === 'generic'") &&
+    unified.includes("isReleaseScannerBluetoothRoute(entry.routing) && entry.routing.owner === 'sensor'") &&
     unified.includes('releaseAccessoryDevices'),
-  'generic Bluetooth noise must stay hidden while Bluestack propane/water utility sensors can become visible release rows',
+  'generic Bluetooth noise must stay hidden while approved Bluestack propane/water utility sensors can become visible release rows',
 );
 assert(
   unified.includes('telemetryFallbackCandidateDiscoveries') &&
-    unified.includes('OBD2 Candidate') &&
-    unified.includes('Tap Connect to test the ELM327 handshake') &&
-    unified.includes('OBD2_FALLBACK_CANDIDATE_LIMIT') &&
-    unified.includes('OBD2_STRONG_UNKNOWN_CANDIDATE_MIN_RSSI'),
-  'unified scanner must surface capped OBD2 fallback candidates when no branded OBD2 adapter is found',
+    unified.includes('approvedDeviceOnlyHidden') &&
+    unified.includes('return []') &&
+    !unified.includes('Tap Connect to test the ELM327 handshake'),
+  'unified scanner must suppress generic OBD2 fallback candidates in approved-device-only release scans',
 );
 assert(
   unified.includes("await stopScan('connect_attempt')"),
@@ -223,8 +222,8 @@ assert(
     unified.includes("return obdError ?? 'Bluetooth scan failed. Check permissions and Bluetooth state, then try again.'") &&
     unified.includes("return 'API discovery failed. BLE results remain available when nearby devices are seen.'") &&
     unified.includes("return 'Classic Bluetooth unsupported in this runtime. BLE, API, and cached devices remain visible.'") &&
-    unified.includes("return 'No nearby devices found. Make sure the device is powered on, nearby, and discoverable.'") &&
-    unified.includes("return 'Tap Scan for Device Connections to search nearby Bluetooth devices.'"),
+    unified.includes("return 'No approved ECS devices found nearby. Make sure the supported device is powered on, nearby, and advertising.'") &&
+    unified.includes("return 'Tap Scan for Device Connections to search for approved ECS Bluetooth devices.'"),
   'unified Device Connections must expose exact scan-area messages for idle, empty, permission, and unavailable states',
 );
 assert(
@@ -460,7 +459,7 @@ assert(
     !deviceConnectionsScreen.includes('PremiumAccessGate') &&
     !deviceConnectionsScreen.includes('featureLabel="Device connections"') &&
     deviceConnectionsScreen.includes('BLUESTACK UNIFIED SCANNER') &&
-    deviceConnectionsScreen.includes('Scan for supported OBD2, power, propane, and water monitor connections'),
+    deviceConnectionsScreen.includes('Scan for approved OBD2, power, propane, and water monitor connections'),
   'Bluestack must remain directly available for field device setup instead of being blocked by a Pro gate',
 );
 const globalHeader = read('components/Header.tsx');
@@ -485,8 +484,8 @@ assert(
 );
 assert(
     deviceConnectionsScreen.includes('Ready to scan') &&
-    deviceConnectionsScreen.includes('Scanning nearby devices') &&
-    deviceConnectionsScreen.includes('No Bluestack devices found') &&
+    deviceConnectionsScreen.includes('Scanning approved devices') &&
+    deviceConnectionsScreen.includes('No approved devices found') &&
     deviceConnectionsScreen.includes('Permission needed') &&
     deviceConnectionsScreen.includes('Bluetooth off') &&
     deviceConnectionsScreen.includes('Runtime unsupported') &&
@@ -524,6 +523,13 @@ assert(
     deviceConnectionsScreen.includes('Connected devices are listed above') &&
     deviceConnectionsScreen.includes('title="Available devices"'),
   'Device Connections screen must render connected and remembered devices as visible controllable rows without duplicate scan buttons or failed containers',
+);
+assert(
+  deviceConnectionsScreen.includes('Approved Devices') &&
+    deviceConnectionsScreen.includes('showApprovedDevices') &&
+    deviceConnectionsScreen.includes('ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS') &&
+    deviceConnectionsScreen.includes('Scan results are limited to approved ECS device pipelines'),
+  'Device Connections screen must hide the approved device catalog behind an explicit Approved Devices action',
 );
 assert(
   deviceConnectionsScreen.includes('useFocusEffect') &&

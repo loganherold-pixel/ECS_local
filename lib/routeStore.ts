@@ -11,6 +11,7 @@
 import { Platform } from 'react-native';
 import type { LocalSyncStatus } from './loadoutStore';
 import type { RouteWaypointType } from './waypointTypes';
+import type { RouteSegmentSourceMetadata } from './map/dispersedCampingSegmentBuild';
 import { parseKML, type KmlParseResult } from './kmlParser';
 import { parseGeoJSON, type GeoJsonParseResult, type GeoJsonWaypoint, type GeoJsonRoute } from './geojsonParser';
 
@@ -69,6 +70,7 @@ export interface RouteWaypoint {
 
 export interface RouteSegment {
   points: { lat: number; lon: number; ele: number | null }[];
+  source_metadata?: RouteSegmentSourceMetadata | null;
 }
 
 export type RouteSourceFormat = 'gpx' | 'kml' | 'kmz' | 'fit' | 'geojson' | 'custom';
@@ -100,6 +102,8 @@ export interface ImportedRoute {
 
 export type CustomRouteSegmentInput = {
   coordinates: [number, number][] | { latitude: number; longitude: number }[];
+  sourceMetadata?: RouteSegmentSourceMetadata | null;
+  source_metadata?: RouteSegmentSourceMetadata | null;
 };
 
 // ── Storage keys ────────────────────────────────────────
@@ -165,7 +169,12 @@ function normalizeCustomRouteSegment(input: CustomRouteSegmentInput): RouteSegme
     points.push({ lat, lon, ele: null });
   }
 
-  return points.length > 1 ? { points } : null;
+  return points.length > 1
+    ? {
+        points,
+        source_metadata: input.source_metadata ?? input.sourceMetadata ?? null,
+      }
+    : null;
 }
 
 function countRoutePoints(segments: RouteSegment[]): number {

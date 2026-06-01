@@ -14,8 +14,10 @@ type Props = {
   left: number;
   onScoutCandidatePins?: () => void;
   onClearScoutPins?: () => void;
+  onBuildRouteFromSegments?: () => void;
   scoutDisabled?: boolean;
   scoutStatusText?: string | null;
+  segmentBuildStatusText?: string | null;
   scoutPinsVisible?: boolean;
 };
 
@@ -75,13 +77,16 @@ export default function DispersedCampingRouteSummary({
   left,
   onScoutCandidatePins,
   onClearScoutPins,
+  onBuildRouteFromSegments,
   scoutDisabled = false,
   scoutStatusText = null,
+  segmentBuildStatusText = null,
   scoutPinsVisible = false,
 }: Props) {
   if (!visible) return null;
 
   const hasResults = results.length > 0;
+  const statusText = segmentBuildStatusText || scoutStatusText;
   const bodyCopy = dataAvailable
     ? 'No likely eligible public-land regions found near this route. Try widening the search area or verify manually.'
     : 'Eligibility data unavailable for this area.';
@@ -131,26 +136,47 @@ export default function DispersedCampingRouteSummary({
         <Text style={styles.emptyText}>{bodyCopy}</Text>
       )}
 
-      {hasResults && onScoutCandidatePins ? (
+      {hasResults && (onScoutCandidatePins || onBuildRouteFromSegments) ? (
         <View style={styles.scoutActionRow}>
-          <TouchableOpacity
-            style={[styles.scoutButton, scoutDisabled && styles.scoutButtonDisabled]}
-            onPress={onScoutCandidatePins}
-            activeOpacity={0.84}
-            disabled={scoutDisabled}
-            accessibilityRole="button"
-            accessibilityLabel="Scout candidate camp pins"
-          >
-            <Ionicons name="search-outline" size={12} color={scoutDisabled ? TACTICAL.textMuted : '#091014'} />
-            <Text
-              style={[styles.scoutButtonText, scoutDisabled && styles.scoutButtonTextDisabled]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.76}
+          {onBuildRouteFromSegments ? (
+            <TouchableOpacity
+              style={styles.buildRouteButton}
+              onPress={onBuildRouteFromSegments}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              accessibilityLabel="Build dispersed camping route legs"
             >
-              Scout candidate camp pins
-            </Text>
-          </TouchableOpacity>
+              <Ionicons name="git-branch-outline" size={12} color="#091014" />
+              <Text
+                style={styles.scoutButtonText}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.76}
+              >
+                Build route legs
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          {onScoutCandidatePins ? (
+            <TouchableOpacity
+              style={[styles.scoutButton, scoutDisabled && styles.scoutButtonDisabled]}
+              onPress={onScoutCandidatePins}
+              activeOpacity={0.84}
+              disabled={scoutDisabled}
+              accessibilityRole="button"
+              accessibilityLabel="Scout candidate camp pins"
+            >
+              <Ionicons name="search-outline" size={12} color={scoutDisabled ? TACTICAL.textMuted : '#091014'} />
+              <Text
+                style={[styles.scoutButtonText, scoutDisabled && styles.scoutButtonTextDisabled]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.76}
+              >
+                Scout pins
+              </Text>
+            </TouchableOpacity>
+          ) : null}
           {scoutPinsVisible && onClearScoutPins ? (
             <TouchableOpacity
               style={styles.clearPinsButton}
@@ -166,7 +192,7 @@ export default function DispersedCampingRouteSummary({
         </View>
       ) : null}
 
-      {scoutStatusText ? <Text style={styles.statusText}>{scoutStatusText}</Text> : null}
+      {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
     </View>
   );
 }
@@ -264,6 +290,17 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   scoutButton: {
+    flex: 1,
+    minHeight: 30,
+    borderRadius: 9,
+    backgroundColor: TACTICAL.amber,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+  },
+  buildRouteButton: {
     flex: 1,
     minHeight: 30,
     borderRadius: 9,

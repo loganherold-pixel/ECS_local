@@ -65,6 +65,10 @@ const {
   getBluestackAdvertisementEvidence,
 } = loadTypeScriptModule('lib/bluestack/bluestackAdvertisementEvidence.ts');
 const {
+  ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS,
+  isECSApprovedBluetoothRoute,
+} = loadTypeScriptModule('lib/bluetoothApprovedDeviceCatalog.ts');
+const {
   bluetoothAccessoryToEcsTelemetryEvents,
 } = loadTypeScriptModule('src/telemetry/telemetryAdapters.ts');
 const {
@@ -495,6 +499,39 @@ assert.strictEqual(typeof advertisementEvidence.manufacturerDataFingerprint, 'st
 assert(!JSON.stringify(advertisementEvidence).includes('raw-manufacturer-payload'));
 
 const bluScreenSource = readSource('app/power/blu.tsx');
+const approvedBluetoothCatalogSource = readSource('lib/bluetoothApprovedDeviceCatalog.ts');
+const approvedCatalogSections = ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS.map((section) => section.title);
+assert.deepStrictEqual(
+  approvedCatalogSections,
+  ['Tested live telemetry', 'Recognized / parser pending', 'Planned power systems'],
+  'Approved Devices catalog must separate connectable devices from non-connectable pending/planned families.',
+);
+for (const plannedName of [
+  'DJI Power',
+  'Pecron',
+  'UGREEN PowerRoam',
+  'BougeRV',
+  'OUPES',
+  'Lion Energy',
+  'Zendure',
+  'Mango Power',
+  'ALLPOWERS',
+]) {
+  assert(
+    approvedBluetoothCatalogSource.includes(plannedName),
+    `${plannedName} should be visible only in the planned power systems catalog tier.`,
+  );
+}
+assert.strictEqual(
+  isECSApprovedBluetoothRoute({
+    owner: 'power',
+    providerId: 'dji_power',
+    deviceCategory: 'power_station',
+    displayName: 'DJI Power 1000',
+  }),
+  false,
+  'planned power systems must not become scan-visible until ECS has an approved provider pipeline.',
+);
 assert(
   bluScreenSource.includes('Remembered Devices ({rememberedReleaseDevices.length})') &&
     bluScreenSource.includes('title="Remembered devices"') &&
@@ -503,15 +540,24 @@ assert(
 );
 assert(
   bluScreenSource.includes('Verified Connection Set') &&
-    bluScreenSource.includes('Tested live telemetry') &&
-    bluScreenSource.includes('EcoFlow cloud/API') &&
-    bluScreenSource.includes('Native BLE power systems') &&
-    bluScreenSource.includes('OBD2 ELM327 telemetry') &&
-    bluScreenSource.includes('Utility tank sensors') &&
-    bluScreenSource.includes('Veepeak/V Peak BLE reference path') &&
-    bluScreenSource.includes('BLUETTI/Blue Eddy, Anker SOLIX') &&
-    bluScreenSource.includes('Live ready') &&
-    bluScreenSource.includes('systems={VERIFIED_BLUESTACK_SYSTEMS}'),
+    approvedBluetoothCatalogSource.includes('Tested live telemetry') &&
+    bluScreenSource.includes('Approved Devices') &&
+    bluScreenSource.includes('ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS') &&
+    bluScreenSource.includes('section.title') &&
+    approvedBluetoothCatalogSource.includes('Recognized / parser pending') &&
+    approvedBluetoothCatalogSource.includes('Planned power systems') &&
+    approvedBluetoothCatalogSource.includes('EcoFlow cloud/API') &&
+    approvedBluetoothCatalogSource.includes('Native BLE power systems') &&
+    approvedBluetoothCatalogSource.includes('OBD2 ELM327 telemetry') &&
+    approvedBluetoothCatalogSource.includes('Utility tank sensors') &&
+    approvedBluetoothCatalogSource.includes('Veepeak / V Peak / OBDCheck BLE') &&
+    approvedBluetoothCatalogSource.includes('BLUETTI / Blue Eddy') &&
+    approvedBluetoothCatalogSource.includes('BLUETTI AC / EB / EP series') &&
+    approvedBluetoothCatalogSource.includes('Victron SmartShunt, BMV, SmartSolar, Blue Smart') &&
+    approvedBluetoothCatalogSource.includes('Vgate iCar / vLinker') &&
+    approvedBluetoothCatalogSource.includes('iOS V-Link / Android V-Link') &&
+    approvedBluetoothCatalogSource.includes('KONNWEI KW902') &&
+    approvedBluetoothCatalogSource.includes("badge: 'Approved'"),
   'Bluestack scanner should publish a truthful compatibility set with utility tank sensors in the live-ready set.',
 );
 

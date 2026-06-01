@@ -46,6 +46,15 @@ assert(
   'unified disconnect must retain per-device and raw/provider manual disconnect guards until the user explicitly reconnects',
 );
 assert(
+  hook.includes('AppState.addEventListener(\'change\', setAppState)') &&
+    hook.includes('getSavedAutoReconnectDecision({') &&
+    hook.includes('appState,') &&
+    hook.includes('hasManualDisconnectRequest: hasManualDisconnectRequest(device)') &&
+    hook.includes('isCloudAuthBlocked: isEcoFlowCloudAuthBlockedDevice(device)') &&
+    hook.includes('cooldownMs: REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS'),
+  'saved auto-reconnect must use one approved policy gate for active app state, active advertisements, manual disconnects, cloud auth, and cooldowns',
+);
+assert(
   hook.includes("setDeviceUiState(device.id, 'disconnecting', null)") &&
     hook.includes("await stopScan('disconnect_attempt')"),
   'unified disconnect must enter disconnecting state and stop active scans before cleanup',

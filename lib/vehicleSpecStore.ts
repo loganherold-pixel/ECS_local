@@ -44,6 +44,10 @@ export const FUEL_WEIGHT_PER_GAL: Record<FuelType, number> = {
 export interface VehicleSpec {
   gvwr_lb: number;
   base_weight_lb: number;
+  base_weight_source?: string | null;
+  base_weight_confidence?: number | null;
+  gvwr_source?: string | null;
+  gvwr_confidence?: number | null;
   front_base_weight_lb?: number;
   rear_base_weight_lb?: number;
   front_gawr_lb?: number;
@@ -69,6 +73,10 @@ export interface VehicleSpec {
   breakover_angle_deg?: number | null;
   departure_angle_deg?: number | null;
   turning_diameter_ft?: number | null;
+  axle_ratio?: string | null;
+  gearing_label?: string | null;
+  gearing_confidence?: number | null;
+  gearing_confirmed?: boolean | null;
   oem_reference_id?: string | null;
   oem_reference_label?: string | null;
   oem_reference_confidence?: number | null;
@@ -264,6 +272,10 @@ export function migrateSpec(spec: any): VehicleSpec {
   return {
     gvwr_lb: spec.gvwr_lb || 0,
     base_weight_lb: spec.base_weight_lb || 0,
+    base_weight_source: spec.base_weight_source,
+    base_weight_confidence: spec.base_weight_confidence,
+    gvwr_source: spec.gvwr_source,
+    gvwr_confidence: spec.gvwr_confidence,
     fuel_tank_capacity_gal: spec.fuel_tank_capacity_gal ?? 0,
     fuel_type: spec.fuel_type || 'diesel',
     hardware_additions_lb: spec.hardware_additions_lb,
@@ -292,6 +304,10 @@ export function migrateSpec(spec: any): VehicleSpec {
     breakover_angle_deg: spec.breakover_angle_deg,
     departure_angle_deg: spec.departure_angle_deg,
     turning_diameter_ft: spec.turning_diameter_ft,
+    axle_ratio: spec.axle_ratio,
+    gearing_label: spec.gearing_label,
+    gearing_confidence: spec.gearing_confidence,
+    gearing_confirmed: Boolean(spec.gearing_confirmed ?? false),
     oem_reference_id: spec.oem_reference_id,
     oem_reference_label: spec.oem_reference_label,
     oem_reference_confidence: spec.oem_reference_confidence,

@@ -140,6 +140,26 @@ assertIncludes(
 );
 assertIncludes(
   mapRenderer,
+  'sourceSegmentId?: string | null;',
+  'Build Route segment data should preserve the source leg ID for tapped dispersed camping planning legs.',
+);
+assertIncludes(
+  mapRenderer,
+  'buildSource?: RouteSegmentSourceMetadata | null;',
+  'Build Route segment data should preserve source metadata for tapped dispersed camping planning legs.',
+);
+assertIncludes(
+  mapRenderer,
+  'sourceSegmentId: segment.sourceSegmentId || null,',
+  'MapRenderer should round-trip selected dispersed route leg IDs through WebView route builder sync.',
+);
+assertIncludes(
+  mapRenderer,
+  'buildSource: segment.buildSource || null,',
+  'MapRenderer should round-trip selected dispersed route leg source metadata through WebView route builder sync.',
+);
+assertIncludes(
+  mapRenderer,
   'var ROUTE_BUILDER_APPEND_MIN_PX = 4;',
   'Build Route tracing should append points densely enough for visible live feedback.',
 );

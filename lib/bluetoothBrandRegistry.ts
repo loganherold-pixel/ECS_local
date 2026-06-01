@@ -47,6 +47,41 @@ export type BluetoothBrandMatchInput = Pick<
   'id' | 'isLikelyOBD' | 'name'
 > & Partial<Pick<OBD2DiscoveredDevice, 'serviceUUIDs' | 'manufacturerData'>>;
 
+const MOPEKA_PRO_SERVICE_UUID = 'fee5';
+const MOPEKA_STD_SERVICE_UUID = 'ada0';
+const MOPEKA_PRO_MANUFACTURER_ID = 0x0059;
+const MOPEKA_STD_MANUFACTURER_ID = 0x000d;
+const MOPEKA_PRO_MANUFACTURER_DATA_LENGTH = 10;
+const MOPEKA_STD_MANUFACTURER_DATA_LENGTH = 23;
+const MOPEKA_PRO_LIQUID_SENSOR_TYPES = new Set([0x05, 0x0c]);
+const MOPEKA_PRO_KNOWN_SENSOR_TYPES = new Set([0x03, 0x04, 0x05, 0x06, 0x08, 0x0c]);
+const MOPEKA_STD_KNOWN_SENSOR_TYPES = new Set([0x02, 0x03, 0x44, 0x46]);
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+const MOPEKA_PROPANE_SIGNATURE_BRAND: BluetoothBrandRegistryEntry = {
+  id: 'mopeka_propane_signature',
+  displayName: 'Mopeka / Propane Level',
+  providerBadge: 'Propane',
+  nameFragments: [],
+  manufacturerHints: [],
+  serviceUUIDs: [],
+  connectionType: 'ble',
+  deviceCategory: 'propane_monitor',
+  categoryHint: 'Propane level monitor',
+};
+
+const MOPEKA_LIQUID_SIGNATURE_BRAND: BluetoothBrandRegistryEntry = {
+  id: 'mopeka_liquid_signature',
+  displayName: 'Mopeka / Liquid Level',
+  providerBadge: 'Water',
+  nameFragments: [],
+  manufacturerHints: [],
+  serviceUUIDs: [],
+  connectionType: 'ble',
+  deviceCategory: 'water_tank_monitor',
+  categoryHint: 'Water / fluid level monitor',
+};
+
 function normalizeUuid(uuid: string): string {
   return uuid.toLowerCase().replace(/[^a-f0-9]/g, '');
 }
@@ -62,6 +97,103 @@ function hasMatchingServiceUuid(deviceUUIDs: string[] | undefined, candidateUUID
       normalizedCandidate.includes(uuid)
     ));
   });
+}
+
+function parseHexBytes(value: string): number[] | null {
+  const trimmed = value.trim();
+  if (!trimmed || !/^(?:0x)?[0-9a-f\s:._-]+$/i.test(trimmed)) return null;
+  const compact = trimmed.replace(/0x/gi, '').replace(/[^0-9a-f]/gi, '');
+  if (compact.length < 2 || compact.length % 2 !== 0) return null;
+
+  const bytes: number[] = [];
+  for (let index = 0; index < compact.length; index += 2) {
+    bytes.push(parseInt(compact.slice(index, index + 2), 16));
+  }
+  return bytes;
+}
+
+function decodeBase64Bytes(value: string): number[] | null {
+  const compact = value.trim();
+  if (!compact || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    return null;
+  }
+
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bitCount = 0;
+
+  for (const char of compact.replace(/=+$/, '')) {
+    const next = BASE64_ALPHABET.indexOf(char);
+    if (next < 0) return null;
+    buffer = (buffer << 6) | next;
+    bitCount += 6;
+    if (bitCount >= 8) {
+      bitCount -= 8;
+      bytes.push((buffer >> bitCount) & 0xff);
+    }
+  }
+
+  return bytes.length > 0 ? bytes : null;
+}
+
+function decodeManufacturerDataBytes(value: string | null | undefined): number[] {
+  if (!value) return [];
+  return parseHexBytes(value) ?? decodeBase64Bytes(value) ?? [];
+}
+
+function extractManufacturerPayload(
+  bytes: number[],
+  manufacturerId: number,
+  payloadLength: number,
+): number[] | null {
+  if (bytes.length === payloadLength) return bytes;
+
+  const low = manufacturerId & 0xff;
+  const high = (manufacturerId >> 8) & 0xff;
+  if (bytes.length === payloadLength + 2 && bytes[0] === low && bytes[1] === high) {
+    return bytes.slice(2);
+  }
+
+  return null;
+}
+
+function getMopekaSignatureBrandMatch(device: BluetoothBrandMatchInput): BluetoothBrandMatch | null {
+  const manufacturerBytes = decodeManufacturerDataBytes(device.manufacturerData);
+  if (manufacturerBytes.length === 0) return null;
+
+  if (hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_PRO_SERVICE_UUID])) {
+    const payload = extractManufacturerPayload(
+      manufacturerBytes,
+      MOPEKA_PRO_MANUFACTURER_ID,
+      MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
+    );
+    const sensorType = payload?.[0] ?? null;
+    if (payload && sensorType != null && MOPEKA_PRO_KNOWN_SENSOR_TYPES.has(sensorType)) {
+      return {
+        brand: MOPEKA_PRO_LIQUID_SENSOR_TYPES.has(sensorType)
+          ? MOPEKA_LIQUID_SIGNATURE_BRAND
+          : MOPEKA_PROPANE_SIGNATURE_BRAND,
+        reasons: ['service_uuid', 'manufacturer_signature'],
+      };
+    }
+  }
+
+  if (hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_STD_SERVICE_UUID])) {
+    const payload = extractManufacturerPayload(
+      manufacturerBytes,
+      MOPEKA_STD_MANUFACTURER_ID,
+      MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
+    );
+    const hardwareId = payload?.[0] != null ? payload[0] & 0xcf : null;
+    if (payload && hardwareId != null && MOPEKA_STD_KNOWN_SENSOR_TYPES.has(hardwareId)) {
+      return {
+        brand: MOPEKA_PROPANE_SIGNATURE_BRAND,
+        reasons: ['service_uuid', 'manufacturer_signature'],
+      };
+    }
+  }
+
+  return null;
 }
 
 export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
@@ -294,6 +426,15 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
 ];
 
 export function matchBluetoothBrands(device: BluetoothBrandMatchInput): BluetoothBrandMatchResult {
+  const mopekaSignatureMatch = getMopekaSignatureBrandMatch(device);
+  if (mopekaSignatureMatch) {
+    return {
+      primaryMatch: mopekaSignatureMatch,
+      matches: [mopekaSignatureMatch],
+      needsUserConfirmation: false,
+    };
+  }
+
   const nameText = typeof device.name === 'string' ? device.name : '';
   const manufacturerText = typeof device.manufacturerData === 'string' ? device.manufacturerData : '';
   const searchableText = `${nameText} ${manufacturerText}`.trim();

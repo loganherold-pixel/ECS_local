@@ -216,6 +216,27 @@ assert(
   'MapRenderer must preserve Explore route category metadata and report tapped Explore route lines.',
 );
 assert(
+  mapRenderer.includes('onDispersedRouteLegTap?: (payload: DispersedRouteLegSelectionPayload) => void') &&
+    mapRenderer.includes('DISPERSED_ROUTE_BUILD_SOURCE_ID') &&
+    mapRenderer.includes('DISPERSED_ROUTE_BUILD_LAYER_ID') &&
+    mapRenderer.includes('DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID') &&
+    mapRenderer.includes("send('dispersedRouteLegTap'") &&
+    mapRenderer.includes('findDispersedRouteBuildFeatureAtPoint'),
+  'MapRenderer must render yellow dispersed route build legs and report their taps before generic map/segment taps.',
+);
+assert(
+  mapRenderer.includes('SET_DISPERSED_ROUTE_BUILD_ENABLED') &&
+    mapRenderer.includes('updateDispersedRouteBuildCandidates') &&
+    mapRenderer.includes('queryEligibleDispersedCampingRegionsAtPoint') &&
+    mapRenderer.includes('isRouteBuilderRouteableFeature(feature)') &&
+    mapRenderer.includes('maxDispersedRouteBuildCandidates'),
+  'MapRenderer should derive capped routeable yellow build candidates from rendered roads/trails inside eligible dispersed polygons.',
+);
+assert(
+  mapRenderer.includes('if (dispersedRouteBuildState.enabled && findDispersedRouteBuildFeatureAtPoint(point)) return false;'),
+  'A simple tap on a yellow dispersed build leg should not accidentally create a freehand Build Route stroke.',
+);
+assert(
   mapRenderer.includes('function normalizeLngLatCoordinate') &&
     mapRenderer.includes('return [lng, lat]') &&
     mapRenderer.includes('normalizeLngLatLine(seg.coordinates)'),

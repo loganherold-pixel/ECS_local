@@ -113,6 +113,14 @@ assert(
   'Expanded Terrain Risk widget should show a polished explanation and report events through render options.',
 );
 assert(
+  widgetRenderersSource.includes('detailMode={mode === \'detail\'}') &&
+    widgetRenderersSource.includes('const markersInteractive = expanded && detailMode;') &&
+    widgetRenderersSource.includes('interactive={markersInteractive}') &&
+    widgetRenderersSource.includes('expanded && detailMode && selectedReferenceEvent') &&
+    sideProfileSource.includes('r={interactive ? 12 : 0}'),
+  'Terrain Risk summary mode should keep reference markers visible but inactive until long-press detail mode.',
+);
+assert(
   dashboardSource.includes('selectUpcomingTerrainRiskBannerEvent') &&
     dashboardSource.includes("source: 'terrain_risk_reference'"),
   'Dashboard ECS Intelligence lane should select upcoming terrain risk events from widget output.',

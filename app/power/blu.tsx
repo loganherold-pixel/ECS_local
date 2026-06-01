@@ -16,6 +16,10 @@ import { hapticCommand, hapticMicro } from '../../lib/haptics';
 import { GOLD_RAIL, RADIUS, SPACING } from '../../lib/theme';
 import { ecsLog } from '../../lib/ecsLogger';
 import {
+  ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS,
+  type ECSApprovedBluetoothDeviceGroup,
+} from '../../lib/bluetoothApprovedDeviceCatalog';
+import {
   type ECSConnectionActionKind,
   type ECSConnectionStatus,
   type ECSDeviceConnectionModel,
@@ -29,46 +33,36 @@ import {
 
 type StatusTone = 'neutral' | 'active' | 'sync' | 'warning' | 'danger';
 
-type CompatibilitySystem = {
-  name: string;
-  detail: string;
-  badge: string;
-  tone: StatusTone;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-};
+function getApprovedGroupIcon(groupId: ECSApprovedBluetoothDeviceGroup['id']): React.ComponentProps<typeof Ionicons>['name'] {
+  switch (groupId) {
+    case 'ecoflow_cloud_api':
+      return 'flash-outline';
+    case 'native_ble_power':
+      return 'battery-charging-outline';
+    case 'vehicle_telemetry':
+      return 'speedometer-outline';
+    case 'recognized_power_pending':
+      return 'alert-circle-outline';
+    case 'planned_power_systems':
+      return 'map-outline';
+    case 'utility_tank_sensors':
+    default:
+      return 'hardware-chip-outline';
+  }
+}
 
-const VERIFIED_BLUESTACK_SYSTEMS: CompatibilitySystem[] = [
-  {
-    name: 'EcoFlow cloud/API',
-    detail: 'DELTA, RIVER, GLACIER, WAVE, and Alternator Charger telemetry when the EcoFlow account authorizes the device.',
-    badge: 'Live ready',
-    tone: 'active',
-    icon: 'flash-outline',
-  },
-  {
-    name: 'Native BLE power systems',
-    detail: 'BLUETTI/Blue Eddy, Anker SOLIX, Jackery, Goal Zero, Renogy, REDARC, Dakota Lithium, and Victron can attempt live Bluetooth telemetry and promote only decoded hardware readings.',
-    badge: 'Live ready',
-    tone: 'active',
-    icon: 'battery-charging-outline',
-  },
-  {
-    name: 'OBD2 ELM327 telemetry',
-    detail: 'Veepeak/V Peak BLE reference path plus ELM327-compatible OBD2 adapters after the PID handshake succeeds.',
-    badge: 'Live ready',
-    tone: 'active',
-    icon: 'speedometer-outline',
-  },
-  {
-    name: 'Utility tank sensors',
-    detail: 'Mopeka propane plus SeeLevel/water monitor profiles can link over native BLE and promote only decoded tank level readings.',
-    badge: 'Live ready',
-    tone: 'active',
-    icon: 'hardware-chip-outline',
-  },
-];
-
-const RECOGNIZED_BLUESTACK_SYSTEMS: CompatibilitySystem[] = [];
+function getApprovedGroupTone(group: ECSApprovedBluetoothDeviceGroup): StatusTone {
+  switch (group.badge) {
+    case 'Approved':
+      return 'active';
+    case 'Parser Pending':
+      return 'warning';
+    case 'Planned':
+      return 'neutral';
+    default:
+      return 'neutral';
+  }
+}
 
 function isVisibleReleaseDevice(device: ECSDeviceConnectionModel): boolean {
   return isBluestackReleaseDeviceModel(device);
@@ -712,14 +706,14 @@ function SectionBlock({
   );
 }
 
-function CompatibilitySystemRow({
-  system,
+function ApprovedDeviceGroupRow({
+  group,
   palette,
 }: {
-  system: CompatibilitySystem;
+  group: ECSApprovedBluetoothDeviceGroup;
   palette: any;
 }) {
-  const toneColors = getToneColors(system.tone);
+  const toneColors = getToneColors(getApprovedGroupTone(group));
 
   return (
     <View
@@ -740,12 +734,12 @@ function CompatibilitySystemRow({
           },
         ]}
       >
-        <Ionicons name={system.icon} size={16} color={toneColors.text} />
+        <Ionicons name={getApprovedGroupIcon(group.id)} size={16} color={toneColors.text} />
       </View>
       <View style={styles.compatibilityCopy}>
         <View style={styles.compatibilityTitleRow}>
           <Text style={[styles.compatibilityName, { color: palette.text }]} numberOfLines={1}>
-            {system.name}
+            {group.title}
           </Text>
           <View
             style={[
@@ -756,31 +750,40 @@ function CompatibilitySystemRow({
               },
             ]}
           >
-            <Text style={[styles.compatibilityBadgeText, { color: toneColors.text }]}>{system.badge}</Text>
+            <Text style={[styles.compatibilityBadgeText, { color: toneColors.text }]}>{group.badge}</Text>
           </View>
         </View>
         <Text style={[styles.compatibilityDetail, { color: palette.textMuted }]}>
-          {system.detail}
+          {group.detail}
         </Text>
+        <View style={styles.approvedDeviceList}>
+          {group.devices.map((device) => (
+            <View key={`${group.id}:${device.name}`} style={styles.approvedDeviceItem}>
+              <Text style={[styles.approvedDeviceName, { color: palette.text }]}>{device.name}</Text>
+              <Text style={[styles.approvedDeviceDetail, { color: palette.textMuted }]}>
+                {device.detail}
+              </Text>
+            </View>
+          ))}
+        </View>
       </View>
     </View>
   );
 }
 
-function CompatibilitySystemGroup({
-  label,
-  systems,
-  palette,
-}: {
-  label: string;
-  systems: CompatibilitySystem[];
-  palette: any;
-}) {
+function ApprovedDeviceCatalog({ palette }: { palette: any }) {
   return (
     <View style={styles.compatibilityGroup}>
-      <Text style={[styles.compatibilityGroupLabel, { color: palette.textMuted }]}>{label}</Text>
-      {systems.map((system) => (
-        <CompatibilitySystemRow key={system.name} system={system} palette={palette} />
+      {ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS.map((section) => (
+        <View key={section.id} style={styles.compatibilityGroup}>
+          <Text style={[styles.compatibilityGroupLabel, { color: palette.textMuted }]}>{section.title}</Text>
+          <Text style={[styles.compatibilitySectionDetail, { color: palette.textMuted }]}>
+            {section.detail}
+          </Text>
+          {section.groups.map((group) => (
+            <ApprovedDeviceGroupRow key={group.id} group={group} palette={palette} />
+          ))}
+        </View>
       ))}
     </View>
   );
@@ -800,24 +803,13 @@ function BluestackCompatibilityCard({ palette }: { palette: any }) {
       <View style={styles.compatibilityHeader}>
         <Ionicons name="checkmark-done-circle-outline" size={18} color={palette.amber} />
         <View style={styles.compatibilityHeaderCopy}>
-          <Text style={[styles.compatibilityCardTitle, { color: palette.text }]}>Verified Connection Set</Text>
+          <Text style={[styles.compatibilityCardTitle, { color: palette.text }]}>Approved Devices</Text>
           <Text style={[styles.compatibilityCardBody, { color: palette.textMuted }]}>
-            ECS only marks systems as live-ready when a working telemetry path exists. Recognized systems can appear in scans without being presented as verified live data.
+            Verified Connection Set. Scan results are limited to approved ECS device pipelines with power, OBD2, propane, water, or fluid telemetry wiring.
           </Text>
         </View>
       </View>
-      <CompatibilitySystemGroup
-        label="Tested live telemetry"
-        systems={VERIFIED_BLUESTACK_SYSTEMS}
-        palette={palette}
-      />
-      {RECOGNIZED_BLUESTACK_SYSTEMS.length > 0 ? (
-        <CompatibilitySystemGroup
-          label="Detected, not yet live-ready"
-          systems={RECOGNIZED_BLUESTACK_SYSTEMS}
-          palette={palette}
-        />
-      ) : null}
+      <ApprovedDeviceCatalog palette={palette} />
     </View>
   );
 }
@@ -828,6 +820,7 @@ export default function BluPowerSourcesScreen() {
   const connections = useUnifiedDeviceConnections();
   const stopScanning = connections.stopScanning;
   const [showRememberedDevices, setShowRememberedDevices] = useState(false);
+  const [showApprovedDevices, setShowApprovedDevices] = useState(false);
   const connectedReleaseDevices = useMemo(() => {
     const byId = new Map<string, ECSDeviceConnectionModel>();
     for (const device of connections.connectedDevices) {
@@ -932,6 +925,11 @@ export default function BluPowerSourcesScreen() {
     setShowRememberedDevices((current) => !current);
   }, []);
 
+  const handleApprovedDevicesPress = useCallback(() => {
+    void hapticMicro();
+    setShowApprovedDevices((current) => !current);
+  }, []);
+
   const nearbyPowerScanState =
     connections.scanAreaState === 'results' && visibleReleaseDevices.length === 0
       ? 'empty'
@@ -958,9 +956,9 @@ export default function BluPowerSourcesScreen() {
       case 'scan_failed':
         return 'Scan failed';
       case 'scanning':
-        return 'Scanning nearby devices';
+        return 'Scanning approved devices';
       case 'empty':
-        return 'No Bluestack devices found';
+        return 'No approved devices found';
       case 'idle':
       default:
         return 'Ready to scan';
@@ -968,17 +966,17 @@ export default function BluPowerSourcesScreen() {
   })();
   const nearbyEmptyBody = (() => {
     if (connectedReleaseDevices.length > 0 && nearbyPowerScanState === 'empty') {
-      return 'Connected devices are listed above. Scan again when you want to add another OBD2, power, propane, or water device.';
+      return 'Connected devices are listed above. Scan again when you want to add another approved OBD2, power, propane, or water device.';
     }
     switch (nearbyPowerScanState) {
       case 'runtime_unsupported':
-        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan real power, OBD2, propane, and water devices.';
+        return 'Native Bluetooth scanning is unavailable in this runtime. Open ECS in an installed app or Expo development build to scan approved power, OBD2, propane, and water devices.';
       case 'permission_denied':
-        return 'Bluetooth permissions are required before ECS can scan nearby power, OBD2, propane, and water advertisements.';
+        return 'Bluetooth permissions are required before ECS can scan nearby approved power, OBD2, propane, and water advertisements.';
       case 'bluetooth_unavailable':
-        return 'Turn Bluetooth on, then scan again for nearby power, OBD2, propane, and water advertisements.';
+        return 'Turn Bluetooth on, then scan again for nearby approved power, OBD2, propane, and water advertisements.';
       case 'empty':
-        return 'No nearby Bluestack-compatible advertisements were found. Make sure the device is on, nearby, and advertising over Bluetooth.';
+        return 'No nearby approved ECS device advertisements were found. Make sure the supported device is on, nearby, and advertising over Bluetooth.';
       default:
         return connections.scanAreaMessage;
     }
@@ -1030,7 +1028,7 @@ export default function BluPowerSourcesScreen() {
                 <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>BLUESTACK UNIFIED SCANNER</Text>
                 <Text style={[styles.heroTitle, { color: palette.text }]}>{connections.globalSummaryLabel}</Text>
                 <Text style={[styles.heroBody, { color: palette.textMuted }]}>
-                  Scan for supported OBD2, power, propane, and water monitor connections. Cloud/API power devices stay selectable when native Bluetooth is unavailable, while consumer Bluetooth noise stays hidden.
+                  Scan for approved OBD2, power, propane, and water monitor connections. Cloud/API power devices stay selectable when native Bluetooth is unavailable, while consumer Bluetooth noise stays hidden.
                 </Text>
               </View>
             </View>
@@ -1191,6 +1189,34 @@ export default function BluPowerSourcesScreen() {
                 style={[
                   styles.secondaryBtn,
                   {
+                    borderColor: showApprovedDevices ? palette.amber + '50' : palette.border,
+                    backgroundColor: showApprovedDevices ? palette.amber + '12' : palette.border + '1C',
+                  },
+                ]}
+                onPress={handleApprovedDevicesPress}
+                activeOpacity={0.8}
+                accessibilityState={{ selected: showApprovedDevices }}
+              >
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={15}
+                  color={showApprovedDevices ? palette.amber : palette.textMuted}
+                />
+                <Text
+                  style={[
+                    styles.secondaryBtnText,
+                    { color: showApprovedDevices ? palette.amber : palette.textMuted },
+                  ]}
+                  numberOfLines={2}
+                >
+                  Approved Devices
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.secondaryBtn,
+                  {
                     borderColor: showRememberedDevices ? palette.amber + '50' : palette.border,
                     backgroundColor: showRememberedDevices ? palette.amber + '12' : palette.border + '1C',
                     opacity: rememberedReleaseDevices.length > 0 ? 1 : 0.62,
@@ -1222,6 +1248,8 @@ export default function BluPowerSourcesScreen() {
             </View>
 
           </View>
+
+          {showApprovedDevices ? <BluestackCompatibilityCard palette={palette} /> : null}
 
           {connectedReleaseDevices.length > 0 ? (
             <SectionBlock
@@ -1300,8 +1328,6 @@ export default function BluPowerSourcesScreen() {
             )}
           </SectionBlock>
 
-          <BluestackCompatibilityCard palette={palette} />
-
           <View
             style={[
               styles.infoCard,
@@ -1315,10 +1341,10 @@ export default function BluPowerSourcesScreen() {
             <View style={styles.infoCopy}>
               <Text style={[styles.infoTitle, { color: palette.text }]}>Connection Truth</Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                Bluestack lists available EcoFlow cloud/API devices plus currently discovered nearby power, OBD2, propane, and water monitor advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
+                Bluestack lists available EcoFlow cloud/API devices plus currently discovered nearby approved power, OBD2, propane, and water monitor advertisements. EcoFlow cloud authorization problems do not create Bluetooth failure rows.
               </Text>
               <Text style={[styles.infoBody, { color: palette.textMuted }]}>
-                Generic Bluetooth accessories, TVs, headsets, and other consumer devices are suppressed unless ECS can classify them as OBD2, power, propane, or water candidates.
+                Generic Bluetooth accessories, TVs, headsets, and other consumer devices are suppressed unless ECS can classify them as approved OBD2, power, propane, or water device pipelines.
               </Text>
             </View>
           </View>
@@ -1943,6 +1969,11 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  compatibilitySectionDetail: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
   compatibilityRow: {
     borderRadius: 12,
     borderWidth: 1,
@@ -1990,6 +2021,23 @@ const styles = StyleSheet.create({
   compatibilityDetail: {
     fontSize: 11,
     lineHeight: 16,
+    fontWeight: '600',
+  },
+  approvedDeviceList: {
+    gap: 7,
+    paddingTop: 2,
+  },
+  approvedDeviceItem: {
+    gap: 2,
+  },
+  approvedDeviceName: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+  },
+  approvedDeviceDetail: {
+    fontSize: 10,
+    lineHeight: 15,
     fontWeight: '600',
   },
   infoCard: {
