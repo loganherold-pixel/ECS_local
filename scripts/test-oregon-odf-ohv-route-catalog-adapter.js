@@ -2,9 +2,6 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
-const { DOMParser } = require('@xmldom/xmldom');
-
-global.DOMParser = DOMParser;
 
 const root = path.join(__dirname, '..');
 
@@ -150,6 +147,9 @@ assert.strictEqual(
   null,
   'Oregon ODF GPX tracks below the configured minimum miles should be ignored',
 );
+
+const sharedSource = fs.readFileSync(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogOregonOdfOhv.ts'), 'utf8');
+assert(!sharedSource.includes('new DOMParser'), 'Oregon ODF OHV adapter should not depend on DOMParser in Edge Runtime');
 
 const syncFunctionPath = path.join(root, 'supabase', 'functions', 'route-catalog-sync-oregon-odf-ohv', 'index.ts');
 assert(fs.existsSync(syncFunctionPath), 'Oregon ODF OHV sync Edge Function should exist');

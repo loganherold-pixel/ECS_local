@@ -2,9 +2,6 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
-const { DOMParser } = require('@xmldom/xmldom');
-
-global.DOMParser = DOMParser;
 
 const root = path.join(__dirname, '..');
 
@@ -154,6 +151,9 @@ assert.strictEqual(
   null,
   'Michigan DNR GPX tracks below the configured minimum miles should be ignored',
 );
+
+const sharedSource = fs.readFileSync(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogMichiganOrv.ts'), 'utf8');
+assert(!sharedSource.includes('new DOMParser'), 'Michigan DNR ORV adapter should not depend on DOMParser in Edge Runtime');
 
 const splitAlconaUpsert = gpxTrackToMichiganOrvRouteUpsert(splitAlconaTracks[0], {
   sourceId: '00000000-0000-0000-0000-000000000040',

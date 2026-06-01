@@ -101,13 +101,40 @@ function stablePayloadHash(value: unknown): string {
   return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-function elementText(element: Element | Document, tagName: string): string {
-  return cleanString(element.getElementsByTagName(tagName).item(0)?.textContent);
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
 }
 
-function normalizePoint(element: Element): number[] | null {
-  const latitude = Number(element.getAttribute('lat'));
-  const longitude = Number(element.getAttribute('lon'));
+function elementBlocks(xml: string, tagName: string): string[] {
+  const blocks = [];
+  const expression = new RegExp(`<(?:[A-Za-z0-9_]+:)?${tagName}\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z0-9_]+:)?${tagName}>`, 'gi');
+  let match = expression.exec(xml);
+  while (match) {
+    blocks.push(match[1]);
+    match = expression.exec(xml);
+  }
+  return blocks;
+}
+
+function elementText(xml: string, tagName: string): string {
+  const text = elementBlocks(xml, tagName)[0] ?? '';
+  return cleanString(decodeXmlText(text.replace(/<[^>]+>/g, '')));
+}
+
+function attributeText(attributes: string, name: string): string {
+  const expression = new RegExp(`\\b${name}\\s*=\\s*(['"])(.*?)\\1`, 'i');
+  return cleanString(decodeXmlText(expression.exec(attributes)?.[2] ?? ''));
+}
+
+function normalizePointAttributes(attributes: string): number[] | null {
+  const latitude = Number(attributeText(attributes, 'lat'));
+  const longitude = Number(attributeText(attributes, 'lon'));
   if (
     !Number.isFinite(latitude) ||
     !Number.isFinite(longitude) ||
@@ -123,13 +150,14 @@ function samePoint(a: number[] | null, b: number[] | null): boolean {
   return !!a && !!b && a[0] === b[0] && a[1] === b[1];
 }
 
-function normalizeTrackSegment(segment: Element): number[][] {
+function normalizeTrackSegment(segmentXml: string): number[][] {
   const points: number[][] = [];
-  const pointNodes = Array.from(segment.getElementsByTagName('trkpt'));
-  for (const pointNode of pointNodes) {
-    const point = normalizePoint(pointNode);
-    if (!point || samePoint(points[points.length - 1], point)) continue;
-    points.push(point);
+  const pointExpression = /<(?:[A-Za-z0-9_]+:)?trkpt\b([^>]*)\/?>/gi;
+  let match = pointExpression.exec(segmentXml);
+  while (match) {
+    const point = normalizePointAttributes(match[1]);
+    if (point && !samePoint(points[points.length - 1], point)) points.push(point);
+    match = pointExpression.exec(segmentXml);
   }
   return points;
 }
@@ -286,15 +314,13 @@ export function parseOregonOdfOhvGpxTracks(
   gpxText: string,
   source: OregonOdfOhvGpxSource,
 ): OregonOdfOhvGpxTrack[] {
-  const parser = new DOMParser();
-  const document = parser.parseFromString(gpxText, 'application/xml');
-  const metadataTime = elementText(document, 'time') || null;
-  const tracks = Array.from(document.getElementsByTagName('trk'));
+  const metadataTime = elementText(gpxText, 'time') || null;
+  const tracks = elementBlocks(gpxText, 'trk');
   const groupedTracks = new Map<string, OregonOdfOhvGpxTrack>();
 
-  tracks.forEach((track, index) => {
-    const trackName = elementText(track, 'name') || `${source.key}_${index + 1}`;
-    const segments = Array.from(track.getElementsByTagName('trkseg'))
+  tracks.forEach((trackXml, index) => {
+    const trackName = elementText(trackXml, 'name') || `${source.key}_${index + 1}`;
+    const segments = elementBlocks(trackXml, 'trkseg')
       .map(normalizeTrackSegment)
       .filter((segment) => segment.length >= 2);
     if (segments.length === 0) return;
