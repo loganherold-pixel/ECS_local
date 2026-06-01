@@ -59,6 +59,18 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'fishlake_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'black_hills_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'uinta_wasatch_cache_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'caribou_targhee_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'klamath_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'willamette_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'boise_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'lolo_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'salmon_challis_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'stanislaus_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'dixie_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'bitterroot_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mt_hood_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'coronado_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sierra_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_az_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_co_gtlf') &&
@@ -132,6 +144,18 @@ assert.deepStrictEqual(
     'Fishlake National Forest',
     'Black Hills National Forest',
     'Uinta-Wasatch-Cache National Forest',
+    'Caribou-Targhee National Forest',
+    'Klamath National Forest',
+    'Willamette National Forest',
+    'Boise National Forest',
+    'Lolo National Forest',
+    'Salmon-Challis National Forest',
+    'Stanislaus National Forest',
+    'Dixie National Forest',
+    'Bitterroot National Forest',
+    'Mt. Hood National Forest',
+    'Coronado National Forest',
+    'Sierra National Forest',
     'BLM GTLF Arizona',
     'BLM GTLF CA/NV',
     'BLM GTLF Colorado',
@@ -152,7 +176,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, BLM GTLF Wyoming.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, BLM GTLF Wyoming.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

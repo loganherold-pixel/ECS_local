@@ -26,6 +26,18 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'fishlake_nf'
   | 'black_hills_nf'
   | 'uinta_wasatch_cache_nf'
+  | 'caribou_targhee_nf'
+  | 'klamath_nf'
+  | 'willamette_nf'
+  | 'boise_nf'
+  | 'lolo_nf'
+  | 'salmon_challis_nf'
+  | 'stanislaus_nf'
+  | 'dixie_nf'
+  | 'bitterroot_nf'
+  | 'mt_hood_nf'
+  | 'coronado_nf'
+  | 'sierra_nf'
   | 'blm_az_gtlf'
   | 'blm_ca_nv_gtlf'
   | 'blm_co_gtlf'
@@ -352,6 +364,126 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Uinta-Wasatch-Cache NF',
     latitude: 40.51,
     longitude: -111.41,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'caribou_targhee_nf',
+    label: 'Caribou-Targhee National Forest',
+    shortLabel: 'Caribou-Targhee NF',
+    latitude: 43.64,
+    longitude: -111.22,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'klamath_nf',
+    label: 'Klamath National Forest',
+    shortLabel: 'Klamath NF',
+    latitude: 41.62,
+    longitude: -123,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'willamette_nf',
+    label: 'Willamette National Forest',
+    shortLabel: 'Willamette NF',
+    latitude: 44.25,
+    longitude: -122.15,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'boise_nf',
+    label: 'Boise National Forest',
+    shortLabel: 'Boise NF',
+    latitude: 44.08,
+    longitude: -115.56,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'lolo_nf',
+    label: 'Lolo National Forest',
+    shortLabel: 'Lolo NF',
+    latitude: 47.05,
+    longitude: -114.75,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'salmon_challis_nf',
+    label: 'Salmon-Challis National Forest',
+    shortLabel: 'Salmon-Challis NF',
+    latitude: 45.15,
+    longitude: -114,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'stanislaus_nf',
+    label: 'Stanislaus National Forest',
+    shortLabel: 'Stanislaus NF',
+    latitude: 38.24,
+    longitude: -120,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'dixie_nf',
+    label: 'Dixie National Forest',
+    shortLabel: 'Dixie NF',
+    latitude: 37.7,
+    longitude: -112.65,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'bitterroot_nf',
+    label: 'Bitterroot National Forest',
+    shortLabel: 'Bitterroot NF',
+    latitude: 45.85,
+    longitude: -114.1,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'mt_hood_nf',
+    label: 'Mt. Hood National Forest',
+    shortLabel: 'Mt. Hood NF',
+    latitude: 45.35,
+    longitude: -121.75,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'coronado_nf',
+    label: 'Coronado National Forest',
+    shortLabel: 'Coronado NF',
+    latitude: 32.36,
+    longitude: -110.25,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'sierra_nf',
+    label: 'Sierra National Forest',
+    shortLabel: 'Sierra NF',
+    latitude: 37.1,
+    longitude: -119.2,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],

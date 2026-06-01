@@ -32,9 +32,7 @@ const {
   routeCurrentConditionSourceUpsertForForest,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogUsfsMvum.ts'));
 
-assert.deepStrictEqual(
-  USFS_MVUM_PILOT_FORESTS.map((forest) => forest.slug),
-  [
+const expectedUsfsMvumForestSlugs = [
     'tahoe-national-forest',
     'mendocino-national-forest',
     'san-juan-national-forest',
@@ -62,8 +60,66 @@ assert.deepStrictEqual(
     'fishlake-national-forest',
     'black-hills-national-forest',
     'uinta-wasatch-cache-national-forest',
-  ],
-  'MVUM pilot forests should include the first three verified public recommendation expansion batches',
+    'caribou-targhee-national-forest',
+    'klamath-national-forest',
+    'willamette-national-forest',
+    'boise-national-forest',
+    'lolo-national-forest',
+    'salmon-challis-national-forest',
+    'stanislaus-national-forest',
+    'dixie-national-forest',
+    'bitterroot-national-forest',
+    'mt-hood-national-forest',
+    'coronado-national-forest',
+    'sierra-national-forest',
+];
+
+const expectedUsfsMvumForestNames = [
+  'Tahoe National Forest',
+  'Mendocino National Forest',
+  'San Juan National Forest',
+  'Coconino National Forest',
+  'Manti-La Sal National Forest',
+  'Sawtooth National Forest',
+  'Deschutes National Forest',
+  'Kaibab National Forest',
+  'Prescott National Forest',
+  'Gila National Forest',
+  'Santa Fe National Forest',
+  'Carson National Forest',
+  'Rio Grande National Forest',
+  'Grand Mesa, Uncompahgre and Gunnison National Forests',
+  'Humboldt-Toiyabe National Forest',
+  'Pike and San Isabel National Forests',
+  'Inyo National Forest',
+  'Plumas National Forest',
+  'Lassen National Forest',
+  'Shasta-Trinity National Forest',
+  'Umpqua National Forest',
+  'Fremont-Winema National Forest',
+  'Idaho Panhandle National Forests',
+  'Helena-Lewis and Clark National Forest',
+  'Fishlake National Forest',
+  'Black Hills National Forest',
+  'Uinta-Wasatch-Cache National Forest',
+  'Caribou-Targhee National Forest',
+  'Klamath National Forest',
+  'Willamette National Forest',
+  'Boise National Forest',
+  'Lolo National Forest',
+  'Salmon-Challis National Forest',
+  'Stanislaus National Forest',
+  'Dixie National Forest',
+  'Bitterroot National Forest',
+  'Mt. Hood National Forest',
+  'Coronado National Forest',
+  'Sierra National Forest',
+];
+
+assert.deepStrictEqual(
+  USFS_MVUM_PILOT_FORESTS.map((forest) => forest.slug),
+  expectedUsfsMvumForestSlugs,
+  'MVUM pilot forests should include the first four verified public recommendation expansion batches',
 );
 assert(
   USFS_MVUM_LAYERS.some((layer) => layer.kind === 'road' && layer.url.includes('Motor_Vehicle_Use_Map_Roads')) &&
@@ -72,9 +128,9 @@ assert(
 );
 
 const where = buildUsfsMvumWhereClause(USFS_MVUM_PILOT_FORESTS, { minMiles: 1 });
-assert(
-  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest','Kaibab National Forest','Prescott National Forest','Gila National Forest','Santa Fe National Forest','Carson National Forest','Rio Grande National Forest','Grand Mesa, Uncompahgre and Gunnison National Forests','Humboldt-Toiyabe National Forest','Pike and San Isabel National Forests','Inyo National Forest','Plumas National Forest','Lassen National Forest','Shasta-Trinity National Forest','Umpqua National Forest','Fremont-Winema National Forest','Idaho Panhandle National Forests','Helena-Lewis and Clark National Forest','Fishlake National Forest','Black Hills National Forest','Uinta-Wasatch-Cache National Forest')"),
-);
+for (const forestName of expectedUsfsMvumForestNames) {
+  assert(where.includes(forestName), `MVUM where clause should include ${forestName}`);
+}
 assert(where.includes('GIS_MILES >= 1'));
 assert(where.includes("HIGHCLEARA = 'open'") && where.includes("FOURWD_GT5 = 'open'"));
 

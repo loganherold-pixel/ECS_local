@@ -118,6 +118,18 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'fishlake-national-forest',
   'black-hills-national-forest',
   'uinta-wasatch-cache-national-forest',
+  'caribou-targhee-national-forest',
+  'klamath-national-forest',
+  'willamette-national-forest',
+  'boise-national-forest',
+  'lolo-national-forest',
+  'salmon-challis-national-forest',
+  'stanislaus-national-forest',
+  'dixie-national-forest',
+  'bitterroot-national-forest',
+  'mt-hood-national-forest',
+  'coronado-national-forest',
+  'sierra-national-forest',
 ]);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
