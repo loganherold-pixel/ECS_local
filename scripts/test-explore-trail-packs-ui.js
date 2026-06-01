@@ -39,6 +39,8 @@ assert(
     discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
     discover.includes('routeCatalogSearchCriteria') &&
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('maxDurationMinutes: 480') &&
     !discover.includes('getDefaultECSTrailPacks'),
   'Explore Trail Packs should use criteria-filtered live reviewed catalog content instead of default fixture packs',
 );

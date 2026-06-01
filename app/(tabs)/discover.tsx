@@ -966,6 +966,18 @@ function DiscoverScreenInner() {
   }, [opportunities, distanceRadius]);
   const activeDistanceRadius =
     distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
+  const routeCatalogRefinementCriteria = useMemo(() => {
+    switch (exploreRefinement) {
+      case 'dayTrip':
+        return { maxDurationMinutes: 480 };
+      case 'weekendTrip':
+        return { minDurationMinutes: 481, maxDurationMinutes: 960 };
+      case 'expedition':
+        return { minDurationMinutes: 961 };
+      default:
+        return {};
+    }
+  }, [exploreRefinement]);
   const routeCatalogSearchCriteria = useMemo(
     () => ({
       latitude: userLat,
@@ -973,8 +985,16 @@ function DiscoverScreenInner() {
       radiusMiles: activeDistanceRadius,
       vehicleClass: vehicleProfile?.vehicleType ?? null,
       locationSource: hasGPSFix ? 'live_gps' : 'default_location',
+      ...routeCatalogRefinementCriteria,
     }),
-    [activeDistanceRadius, hasGPSFix, userLat, userLng, vehicleProfile?.vehicleType],
+    [
+      activeDistanceRadius,
+      hasGPSFix,
+      routeCatalogRefinementCriteria,
+      userLat,
+      userLng,
+      vehicleProfile?.vehicleType,
+    ],
   );
 
   useEffect(() => {

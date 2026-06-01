@@ -40,6 +40,38 @@ function cleanLimit(value: unknown): number {
   return Math.max(1, Math.min(500, Math.round(limit)));
 }
 
+function cleanText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function cleanRouteType(value: unknown): string {
+  const text = cleanText(value);
+  if (
+    text === 'loop' ||
+    text === 'out_and_back' ||
+    text === 'point_to_point' ||
+    text === 'area_pack' ||
+    text === 'unknown'
+  ) {
+    return text;
+  }
+  return '';
+}
+
+function cleanDifficulty(value: unknown): string {
+  const text = cleanText(value);
+  if (
+    text === 'easy' ||
+    text === 'moderate' ||
+    text === 'technical' ||
+    text === 'extreme' ||
+    text === 'unknown'
+  ) {
+    return text;
+  }
+  return '';
+}
+
 async function requestParams(req: Request): Promise<Record<string, unknown>> {
   const url = new URL(req.url);
   const body = req.method === 'POST'
@@ -76,11 +108,14 @@ serve(async (req) => {
     const latitude = readNumber(params.latitude ?? params.lat);
     const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
     const radiusMiles = readNumber(params.radiusMiles ?? params.radius_miles);
-    const vehicleClass = typeof params.vehicleClass === 'string'
-      ? params.vehicleClass.trim()
-      : typeof params.vehicle_class === 'string'
-        ? params.vehicle_class.trim()
-        : '';
+    const minDistanceMiles = readNumber(params.minDistanceMiles ?? params.min_distance_miles);
+    const maxDistanceMiles = readNumber(params.maxDistanceMiles ?? params.max_distance_miles);
+    const minDurationMinutes = readNumber(params.minDurationMinutes ?? params.min_duration_minutes);
+    const maxDurationMinutes = readNumber(params.maxDurationMinutes ?? params.max_duration_minutes);
+    const minConfidenceScore = readNumber(params.minConfidenceScore ?? params.min_confidence_score);
+    const routeType = cleanRouteType(params.routeType ?? params.route_type);
+    const difficulty = cleanDifficulty(params.difficulty);
+    const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
 
     const admin = createAdminClient();
     let query = admin
@@ -105,6 +140,14 @@ serve(async (req) => {
       query = query.contains('vehicle_fit', [vehicleClass]);
     }
 
+    if (minDistanceMiles != null) query = query.gte('distance_miles', minDistanceMiles);
+    if (maxDistanceMiles != null) query = query.lte('distance_miles', maxDistanceMiles);
+    if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
+    if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
+    if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
+    if (routeType) query = query.eq('route_type', routeType);
+    if (difficulty) query = query.eq('difficulty', difficulty);
+
     const { data, error } = await query;
     if (error) throw new Error('Unable to search verified route catalog.');
 
@@ -118,6 +161,16 @@ serve(async (req) => {
         source: 'route_catalog_public',
         recommendationOnly: true,
         bboxFilterApplied: latitude != null && longitude != null && radiusMiles != null,
+        criteria: {
+          minDistanceMiles,
+          maxDistanceMiles,
+          minDurationMinutes,
+          maxDurationMinutes,
+          minConfidenceScore,
+          routeType: routeType || null,
+          difficulty: difficulty || null,
+          vehicleClass: vehicleClass || null,
+        },
       },
     });
   } catch (error) {

@@ -75,11 +75,24 @@ for (const functionName of ['route-catalog-search', 'route-catalog-detail', 'rou
   );
 }
 const detailFunction = read(path.join('supabase', 'functions', 'route-catalog-detail', 'index.ts'));
+const searchFunction = read(path.join('supabase', 'functions', 'route-catalog-search', 'index.ts'));
 assert(
   detailFunction.includes('activeGuidance') &&
     detailFunction.includes('community_signal') &&
     detailFunction.includes('whatToWatch'),
   'Route catalog detail should expose server-side active-guidance topology metadata in the assessment',
+);
+assert(
+  searchFunction.includes('minDistanceMiles') &&
+    searchFunction.includes('maxDistanceMiles') &&
+    searchFunction.includes('minDurationMinutes') &&
+    searchFunction.includes('maxDurationMinutes') &&
+    searchFunction.includes('routeType') &&
+    searchFunction.includes('difficulty') &&
+    searchFunction.includes('minConfidenceScore') &&
+    searchFunction.includes(".gte('distance_miles'") &&
+    searchFunction.includes(".lte('estimated_duration_minutes'"),
+  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, and confidence',
 );
 
 assert(
@@ -89,6 +102,11 @@ assert(
     liveCatalog.includes('longitude: criteria.longitude') &&
     liveCatalog.includes('radiusMiles: criteria.radiusMiles') &&
     liveCatalog.includes('vehicleClass: criteria.vehicleClass') &&
+    liveCatalog.includes('minDistanceMiles: criteria.minDistanceMiles') &&
+    liveCatalog.includes('maxDurationMinutes: criteria.maxDurationMinutes') &&
+    liveCatalog.includes('routeType: criteria.routeType') &&
+    liveCatalog.includes('difficulty: criteria.difficulty') &&
+    liveCatalog.includes('minConfidenceScore: criteria.minConfidenceScore') &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
@@ -107,6 +125,10 @@ assert(
     discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
     discover.includes('routeCatalogSearchCriteria') &&
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('maxDurationMinutes: 480') &&
+    discover.includes('minDurationMinutes: 481') &&
+    discover.includes('minDurationMinutes: 961') &&
     discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
     discover.includes('fetchRouteCatalogTrailPackDetail') &&
     discover.includes('trailPackPreviewDetailStatus') &&

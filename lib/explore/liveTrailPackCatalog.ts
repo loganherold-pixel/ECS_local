@@ -22,6 +22,13 @@ export type LiveTrailPackCatalogSearchCriteria = {
   longitude?: number | null;
   radiusMiles?: number | null;
   vehicleClass?: string | null;
+  minDistanceMiles?: number | null;
+  maxDistanceMiles?: number | null;
+  minDurationMinutes?: number | null;
+  maxDurationMinutes?: number | null;
+  routeType?: ECSTrailPackRouteType | string | null;
+  difficulty?: ECSTrailPackDifficulty | string | null;
+  minConfidenceScore?: number | null;
   locationSource?: 'live_gps' | 'default_location' | string | null;
   limit?: number;
 };
@@ -79,10 +86,14 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 
-function cleanVehicleClass(value: unknown): string | undefined {
+function cleanText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function cleanVehicleClass(value: unknown): string | undefined {
+  return cleanText(value);
 }
 
 function emit() {
@@ -345,6 +356,13 @@ export function buildRouteCatalogSearchBody(
   const longitude = finiteNumber(criteria.longitude);
   const radiusMiles = finiteNumber(criteria.radiusMiles);
   const vehicleClass = cleanVehicleClass(criteria.vehicleClass);
+  const minDistanceMiles = finiteNumber(criteria.minDistanceMiles);
+  const maxDistanceMiles = finiteNumber(criteria.maxDistanceMiles);
+  const minDurationMinutes = finiteNumber(criteria.minDurationMinutes);
+  const maxDurationMinutes = finiteNumber(criteria.maxDurationMinutes);
+  const minConfidenceScore = finiteNumber(criteria.minConfidenceScore);
+  const routeType = cleanText(criteria.routeType);
+  const difficulty = cleanText(criteria.difficulty);
   return {
     limit: criteria.limit ?? 200,
     includeGeometry: true,
@@ -358,6 +376,13 @@ export function buildRouteCatalogSearchBody(
         }
       : {}),
     ...(vehicleClass ? { vehicleClass: criteria.vehicleClass } : {}),
+    ...(minDistanceMiles != null ? { minDistanceMiles: criteria.minDistanceMiles } : {}),
+    ...(maxDistanceMiles != null ? { maxDistanceMiles: criteria.maxDistanceMiles } : {}),
+    ...(minDurationMinutes != null ? { minDurationMinutes: criteria.minDurationMinutes } : {}),
+    ...(maxDurationMinutes != null ? { maxDurationMinutes: criteria.maxDurationMinutes } : {}),
+    ...(routeType ? { routeType: criteria.routeType } : {}),
+    ...(difficulty ? { difficulty: criteria.difficulty } : {}),
+    ...(minConfidenceScore != null ? { minConfidenceScore: criteria.minConfidenceScore } : {}),
     ...(typeof criteria.locationSource === 'string' && criteria.locationSource.trim().length > 0
       ? { locationSource: criteria.locationSource }
       : {}),
