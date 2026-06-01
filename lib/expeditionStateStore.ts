@@ -688,15 +688,11 @@ export const expeditionStateStore = {
   },
 
   getGeofenceRadius(): number {
-    try {
-      const raw = sGet(KEYS.geofenceRadius);
-      if (raw) return parseInt(raw, 10) || DEFAULT_GEOFENCE_RADIUS;
-    } catch {}
     return DEFAULT_GEOFENCE_RADIUS;
   },
 
-  setGeofenceRadius(meters: number): void {
-    sSet(KEYS.geofenceRadius, String(meters));
+  setGeofenceRadius(_meters: number): void {
+    sClear(KEYS.geofenceRadius);
   },
 
   // ── Check if position is outside geofence ──────────────
@@ -729,6 +725,31 @@ export const expeditionStateStore = {
 
   clearLog(): void {
     sSet(KEYS.expeditionLog, JSON.stringify([]));
+  },
+
+  importLog(entries: ExpeditionLogEntry[]): { imported: number; skipped: number } {
+    const existing = this.getLog();
+    const byId = new Map(existing.map((entry) => [entry.id, entry]));
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of entries) {
+      if (!incoming?.id) {
+        skipped++;
+        continue;
+      }
+      byId.set(incoming.id, incoming);
+      imported++;
+    }
+
+    if (imported > 0) {
+      const merged = Array.from(byId.values())
+        .sort((a, b) => new Date(b.endTime || b.startTime).getTime() - new Date(a.endTime || a.startTime).getTime())
+        .slice(0, 100);
+      sSet(KEYS.expeditionLog, JSON.stringify(merged));
+    }
+
+    return { imported, skipped };
   },
 
   clearTimeline(): void {

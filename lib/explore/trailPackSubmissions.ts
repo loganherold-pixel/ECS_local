@@ -362,6 +362,7 @@ export function createPendingTrailPackSubmission(
     name: compact(values.name) as string,
     description: compact(values.description),
     source: 'ecs_submitted',
+    dataState: 'local_review',
     routeType: values.routeType,
     centerCoordinate,
     routeGeometry: {

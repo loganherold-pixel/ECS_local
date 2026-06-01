@@ -6,6 +6,7 @@ import { routeStore } from '../routeStore';
 import { tileCacheStore } from '../tileCacheStore';
 import { gpsUIState } from '../gpsUIState';
 import { bailoutStore } from '../bailoutStore';
+import { buildRouteBailoutCandidates } from '../bailoutIntelligence';
 import {
   buildEnvironmentSnapshot,
   formatSunlightCountdownValue,
@@ -523,14 +524,24 @@ function buildRecoveryInput(
   capturedAt: string,
 ) {
   try {
-    const routeBailouts = route?.routeId ? bailoutStore.getRunBailouts(route.routeId) : [];
+    const routeSession = navigateRouteSessionStore.getSnapshot();
+    const routeId = route?.routeId ?? routeSession.routeId ?? null;
+    const importedRoute = routeId ? routeStore.getById(routeId) : routeStore.getActive();
+    const routeBailouts = routeId ? bailoutStore.getRunBailouts(routeId) : [];
     const allBailouts = bailoutStore.getAll();
+    const routeDerivedBailouts = buildRouteBailoutCandidates({
+      routeId,
+      routeName: route?.name ?? routeSession.routeTitle ?? importedRoute?.name ?? null,
+      sessionRoutePoints: routeSession.routePoints,
+      importedRoute,
+      manualBailouts: routeBailouts.length > 0 ? routeBailouts : allBailouts,
+    });
     return buildRecoveryReadinessInput({
       route,
       activeVehicle,
       communications,
       currentLocation,
-      routeBailouts: routeBailouts.length > 0 ? routeBailouts : allBailouts,
+      routeBailouts: routeDerivedBailouts.length > 0 ? routeDerivedBailouts : routeBailouts.length > 0 ? routeBailouts : allBailouts,
       allBailouts,
       capturedAt,
     });

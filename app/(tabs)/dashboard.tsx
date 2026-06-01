@@ -1,11 +1,11 @@
 /**
  * Cockpit Dashboard — /dashboard
  *
- * Tactical, clean, infrastructure-focused dashboard with Widgets/ECS Brief/Expedition tabs.
+ * Tactical, clean, infrastructure-focused dashboard with ECS Brief/Dashboard/Expedition Hub tabs.
  *
  * Features:
- * - Widgets / ECS Brief / Expedition tab toggle with smooth micro-animation
- * - Widgets default: existing Expedition profile defaults and user-selected widgets
+ * - ECS Brief / Dashboard / Expedition Hub tab toggle with smooth micro-animation
+ * - Dashboard default: existing Expedition profile defaults and user-selected widgets
  * - Former Highway widgets are selectable in the Widgets library
  * - Fill-height 2x2 grid with no dead space
 
@@ -85,7 +85,6 @@ import CreateCustomWidgetModal from '../../components/dashboard/CreateCustomWidg
 import GridLayoutPicker from '../../components/dashboard/GridLayoutPicker';
 import AuthModal from '../../components/AuthModal';
 import Toast from '../../components/Toast';
-import { ReadinessAlertToast } from '../../components/readiness';
 import { ECSStateMessage } from '../../components/ECSStateMessage';
 import CollisionWarningModal from '../../components/dashboard/CollisionWarningModal';
 import ExpeditionTimelinePanel from '../../components/expedition/ExpeditionTimelinePanel';
@@ -120,13 +119,23 @@ import {
 } from '../../lib/dashboardCommandSelectors';
 import { remotenessStore } from '../../lib/remotenessStore';
 import { routeStore } from '../../lib/routeStore';
+import { useActiveRouteProgressSnapshot } from '../../lib/activeRouteProgress';
 import { loadRoadNavigationSession } from '../../lib/roadNavigationStore';
 import { loadTrailNavigationSession } from '../../lib/trailNavigationStore';
 import { resolveTopBannerPresentation } from '../../lib/ui/topBannerStatusResolver';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
+import {
+  selectUpcomingTerrainRiskBannerEvent,
+  type TerrainRiskReferenceEvent,
+} from '../../lib/terrainRiskReferenceEvents';
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
+import { useECSUtilitySensorTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
+import {
+  getUtilitySensorCurrentFromCapacity,
+  selectUtilitySensorResourceStates,
+} from '../../src/telemetry/utilitySensorTelemetrySelectors';
 import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
 import { useRouteCorridorWeather } from '../../components/navigate/RouteCorridorWeather';
 
@@ -137,6 +146,13 @@ import {
   type ExpeditionState,
   type ExpeditionRecord,
 } from '../../lib/expeditionStateStore';
+import { buildDashboardAssessmentContext } from '../../lib/expedition/dashboardAssessmentContext';
+import type { AssessmentStatus, ExpeditionDataSource } from '../../lib/expedition/operationalAssessmentTypes';
+import {
+  refreshAssessments as refreshExpeditionAssessments,
+  setExpeditionAssessmentContextProvider,
+} from '../../stores/expeditionAssessmentStore';
+import { useConvoyTrackingStore } from '../../stores/convoyTrackingStore';
 import { getActiveVehicleContext } from '../../lib/activeVehicleContext';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
@@ -164,8 +180,11 @@ import {
   resolveRemotenessDestination,
 } from '../../lib/remotenessDestinations';
 import {
+  hideDashboardDockReveal,
+  revealDashboardDock,
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
+import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { ecsLog } from '../../lib/ecsLogger';
 import { EASING, MOTION } from '../../lib/motion';
@@ -203,6 +222,99 @@ function toFiniteNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = toFiniteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function firstPositiveNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = toFiniteNumber(value);
+    if (number !== null && number > 0) return number;
+  }
+  return null;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function minutesUntilIso(value: unknown): number | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const targetMs = Date.parse(value);
+  if (Number.isNaN(targetMs)) return null;
+  return Math.max(0, Math.round((targetMs - Date.now()) / 60000));
+}
+
+function resolveDashboardEtaIso(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+      const parsed = Date.parse(trimmed);
+      if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+    }
+
+    const clockMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!clockMatch) continue;
+    const rawHour = Number(clockMatch[1]);
+    const minute = Number(clockMatch[2]);
+    if (!Number.isFinite(rawHour) || !Number.isFinite(minute) || rawHour < 1 || rawHour > 12 || minute < 0 || minute > 59) {
+      continue;
+    }
+
+    const now = new Date();
+    const meridiem = clockMatch[3].toUpperCase();
+    const hour = (rawHour % 12) + (meridiem === 'PM' ? 12 : 0);
+    const eta = new Date(now);
+    eta.setHours(hour, minute, 0, 0);
+    if (eta.getTime() < now.getTime() - 5 * 60 * 1000) {
+      eta.setDate(eta.getDate() + 1);
+    }
+    return eta.toISOString();
+  }
+  return null;
+}
+
+function normalizeAssessmentStatusValue(value: unknown): AssessmentStatus | null {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized === 'normal' || normalized === 'watch' || normalized === 'caution' || normalized === 'critical' || normalized === 'unknown') {
+    return normalized;
+  }
+  if (['ready', 'good', 'fit'].includes(normalized)) return 'normal';
+  if (['limited', 'warning', 'warn'].includes(normalized)) return 'watch';
+  if (['risk', 'elevated', 'attention'].includes(normalized)) return 'caution';
+  return null;
+}
+
+function normalizeEngineStatusValue(value: unknown): 'nominal' | 'warning' | 'fault' | 'unknown' | null {
+  const normalized = String(value ?? '').toLowerCase();
+  if (!normalized) return null;
+  if (['nominal', 'normal', 'ok', 'ready'].includes(normalized)) return 'nominal';
+  if (['warning', 'watch', 'degraded'].includes(normalized)) return 'warning';
+  if (['fault', 'critical', 'failed', 'error'].includes(normalized)) return 'fault';
+  return 'unknown';
+}
+
+function mapExpeditionResourceSource(value: unknown): ExpeditionDataSource {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized.includes('obd') || normalized.includes('sensor') || normalized.includes('telemetry') || normalized.includes('bluetooth')) {
+    return 'vehicleObd';
+  }
+  if (normalized.includes('cache')) return 'cached';
+  if (normalized.includes('manual') || normalized.includes('user') || normalized.includes('estimate') || normalized.includes('oem')) {
+    return 'userManual';
+  }
+  return 'userManual';
 }
 
 function normalizeVisibleEcsCopy(value: string | null | undefined): string {
@@ -380,7 +492,7 @@ const readPersistedDashboardViewState = (
         : 'widgets';
 
   return {
-    expanded: uiState.expanded === true,
+    expanded: false,
     dashboardTab: persistedDashboardTab,
   };
 };
@@ -405,6 +517,7 @@ type DashboardTabBarProps = {
   autoModeManualOverride: boolean;
   autoModeSustaining: boolean;
   isDashboardExpanded: boolean;
+  showDockRevealControl: boolean;
   onSelectTab: (tab: DashboardTab) => void;
   onToggleAutoMode: () => void;
   onToggleDashboardExpanded: () => void;
@@ -419,6 +532,7 @@ function DashboardTabBar({
   autoModeManualOverride,
   autoModeSustaining,
   isDashboardExpanded,
+  showDockRevealControl,
   onSelectTab,
   onToggleAutoMode,
   onToggleDashboardExpanded,
@@ -434,9 +548,9 @@ function DashboardTabBar({
   const tabRailHeight = adaptive.shortHeight ? 32 : 34;
 
   const tabs: { key: DashboardTab; label: string; accent: string; icon?: string }[] = [
-    { key: 'widgets', label: 'WIDGETS', accent: expeditionAccent, icon: 'apps-outline' },
     { key: 'brief', label: 'ECS BRIEF', accent: palette.amber, icon: 'document-text-outline' },
-    { key: 'expedition', label: 'EXPEDITION', accent: palette.amber },
+    { key: 'widgets', label: 'DASHBOARD', accent: expeditionAccent, icon: 'apps-outline' },
+    { key: 'expedition', label: 'EXPEDITION HUB', accent: palette.amber },
   ];
 
   return (
@@ -494,6 +608,8 @@ function DashboardTabBar({
                   },
                 ]}
                 numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
               >
                 {tab.label}
               </Text>
@@ -503,29 +619,31 @@ function DashboardTabBar({
 
       </View>
 
-      <View style={styles.tabControlsSection}>
-        <TouchableOpacity
-          style={[
-            styles.dashboardExpandBtn,
-            {
-              borderColor: isDashboardExpanded ? `${palette.amber}32` : palette.border,
-              backgroundColor: isDashboardExpanded ? `${palette.amber}10` : palette.panel,
-            },
-          ]}
-          onPress={onToggleDashboardExpanded}
-          activeOpacity={0.7}
-          hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-          accessibilityRole="button"
-          accessibilityLabel={isDashboardExpanded ? 'Contract Dashboard widgets' : 'Expand Dashboard widgets'}
-          accessibilityHint="Toggles the expanded Dashboard widget surface while respecting device safe areas."
-        >
-          <Ionicons
-            name={isDashboardExpanded ? 'contract-outline' : 'expand-outline'}
-            size={14}
-            color={isDashboardExpanded ? palette.amber : palette.textMuted}
-          />
-        </TouchableOpacity>
-      </View>
+      {showDockRevealControl ? (
+        <View style={styles.tabControlsSection}>
+          <TouchableOpacity
+            style={[
+              styles.dashboardExpandBtn,
+              {
+                borderColor: `${palette.amber}32`,
+                backgroundColor: `${palette.amber}10`,
+              },
+            ]}
+            onPress={onToggleDashboardExpanded}
+            activeOpacity={0.7}
+            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel="Reveal ECS navigation dock"
+            accessibilityHint="Temporarily shows the lower ECS tab bar for five seconds."
+          >
+            <Ionicons
+              name={isDashboardExpanded ? 'chevron-up-outline' : 'menu-outline'}
+              size={14}
+              color={palette.amber}
+            />
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -786,10 +904,12 @@ type DashboardGridZoneProps = {
   onResizeWidget: (slotIndex: number, newSize: WidgetSize) => void;
   onRestoreDefaults: () => void;
   onOpenCommandBrief: () => void;
+  onTerrainRiskReferenceEvent: (event: TerrainRiskReferenceEvent | null) => void;
   onContainerLayout: (e: LayoutChangeEvent) => void;
   widgetData: any;
   gpsLatitude: number | null | undefined;
   gpsLongitude: number | null | undefined;
+  gpsHeadingDeg: number | null | undefined;
   gpsSpeedMph: number | null | undefined;
   gpsHasFix: boolean;
   gpsAccuracyM: number | null | undefined;
@@ -853,10 +973,12 @@ function DashboardGridZone({
   onResizeWidget,
   onRestoreDefaults,
   onOpenCommandBrief,
+  onTerrainRiskReferenceEvent,
   onContainerLayout,
   widgetData,
   gpsLatitude,
   gpsLongitude,
+  gpsHeadingDeg,
   gpsSpeedMph,
   gpsHasFix,
   gpsAccuracyM,
@@ -990,6 +1112,7 @@ function DashboardGridZone({
                     onResizeWidget={onResizeWidget}
                     onRestoreDefaults={onRestoreDefaults}
                     onOpenCommandBrief={onOpenCommandBrief}
+                    onTerrainRiskReferenceEvent={onTerrainRiskReferenceEvent}
                     widgetData={widgetData}
                     dashboardMode={dashboardMode}
                     rollDeg={accel.rollDeg}
@@ -1005,6 +1128,7 @@ function DashboardGridZone({
                     containerWidth={widgetContainerWidth}
                     gpsLatitude={gpsLatitude ?? undefined}
                     gpsLongitude={gpsLongitude ?? undefined}
+                    gpsHeadingDeg={gpsHeadingDeg ?? undefined}
                     gpsSpeedMph={gpsSpeedMph}
                     gpsHasFix={gpsHasFix}
                     gpsAccuracyM={gpsAccuracyM ?? undefined}
@@ -1083,6 +1207,7 @@ type DashboardModalLayerProps = {
   onOpenFleetFromDetail: () => void;
   onRemotenessNavigateFromDetail: (target: RemotenessNavigationTargetType) => void;
   onOpenCommandBriefFromDetail: () => void;
+  onTerrainRiskReferenceEvent: (event: TerrainRiskReferenceEvent | null) => void;
   onCloseAuth: () => void;
   onShrinkAndResize: () => void;
   onCancelResize: () => void;
@@ -1127,6 +1252,7 @@ function DashboardModalLayer({
   onOpenFleetFromDetail,
   onRemotenessNavigateFromDetail,
   onOpenCommandBriefFromDetail,
+  onTerrainRiskReferenceEvent,
   onCloseAuth,
   onShrinkAndResize,
   onCancelResize,
@@ -1169,12 +1295,14 @@ function DashboardModalLayer({
           advancedMode: advancedModeEnabled,
           gpsLatitude: gps.position?.latitude,
           gpsLongitude: gps.position?.longitude,
+          gpsHeadingDeg: gps.position?.headingDeg ?? null,
           gpsSpeedMph: gps.position?.speedMph ?? null,
           gpsAccuracyM: gps.position?.accuracyM ?? null,
           gpsAltitudeFt: gps.position?.altitudeFt ?? null,
           gpsTimestampMs: gps.position?.timestamp ?? null,
           gpsHasFix: gps.hasFix,
           onOpenCommandBrief: onOpenCommandBriefFromDetail,
+          onTerrainRiskReferenceEvent,
         }}
         onClose={onCloseDetail}
         onReplace={onReplaceDetailWidget}
@@ -1203,10 +1331,6 @@ function DashboardModalLayer({
         targetNewSize={pendingResizeSize}
         onShrinkAndResize={onShrinkAndResize}
         onCancel={onCancelResize}
-      />
-
-      <ReadinessAlertToast
-        onOpenCommandBrief={onOpenCommandBriefFromDetail}
       />
 
       <Toast />
@@ -1299,7 +1423,7 @@ function DashboardScreenInner() {
 
 
   // ── Dashboard Expansion ───────────────────────────────
-  const [isDashboardExpanded, setIsDashboardExpanded] = useState(initialDashboardViewState.expanded);
+  const [isDashboardExpanded, setIsDashboardExpanded] = useState(false);
 
   useLayoutEffect(() => {
     setDashboardExpanded(isDashboardExpanded);
@@ -1541,12 +1665,28 @@ function DashboardScreenInner() {
     return () => { cancelled = true; };
   }, [geofenceVehicleId, user?.id]);
 
-  // Resolve vehicle name + resource data when activeVehicleId changes
-  useEffect(() => refreshActiveVehicleData(), [refreshActiveVehicleData]);
+  // Resolve vehicle name + resource data when activeVehicleId changes, after the route frame settles.
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    const task = runAfterShellInteractions(() => {
+      cleanup = refreshActiveVehicleData();
+    });
+    return () => {
+      task.cancel();
+      cleanup?.();
+    };
+  }, [refreshActiveVehicleData]);
 
-  // Re-fetch vehicle resource data on screen focus (picks up water/fuel changes)
+  // Re-fetch vehicle resource data on screen focus (picks up water/fuel changes) after tab transitions.
   useFocusEffect(useCallback(() => {
-    return refreshActiveVehicleData();
+    let cleanup: (() => void) | undefined;
+    const task = runAfterShellInteractions(() => {
+      cleanup = refreshActiveVehicleData();
+    });
+    return () => {
+      task.cancel();
+      cleanup?.();
+    };
   }, [refreshActiveVehicleData]));
 
   useEffect(() => {
@@ -1658,8 +1798,8 @@ function DashboardScreenInner() {
   const tabSlideAnim = useStableAnimatedValue(0);
   const tabOpacityAnim = useStableAnimatedValue(1);
   const tabIndexFor = (tab: DashboardTab): number => {
-    if (tab === 'widgets') return 0;
-    if (tab === 'brief') return 1;
+    if (tab === 'brief') return 0;
+    if (tab === 'widgets') return 1;
     return 2;
   };
   const underlineAnim = useStableAnimatedValue(tabIndexFor(activeTab));
@@ -1678,9 +1818,29 @@ function DashboardScreenInner() {
   const insets = useSafeAreaInsets();
   const topBannerHeight = useEcsTopBannerHeight();
   const isLandscape = windowWidth > windowHeight;
+  const dashboardLandscapeRef = useRef(isLandscape);
+  dashboardLandscapeRef.current = isLandscape;
   const isShortHeight = windowHeight < 780;
   const isVeryShortHeight = windowHeight < 700;
   const dashboardChromeVisible = !isDashboardExpanded;
+
+  useEffect(() => {
+    setIsDashboardExpanded((current) => (
+      current === isLandscape ? current : isLandscape
+    ));
+
+    if (!isLandscape) {
+      hideDashboardDockReveal();
+    }
+  }, [isLandscape]);
+
+  useEffect(() => {
+    return () => {
+      setDashboardExpanded(false);
+      hideDashboardDockReveal();
+    };
+  }, []);
+
   const dashboardFrameInsetLeft = Math.max(
     DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
     insets.left + DASHBOARD_WIDGET_FRAME_EDGE_MARGIN,
@@ -1857,6 +2017,7 @@ function DashboardScreenInner() {
   const attitudeRecalibrationKey = isLandscape ? 'landscape' : 'portrait';
   const accel = useAccelerometer(isFocused, {
     recalibrationKey: attitudeRecalibrationKey,
+    mountOrientation: isLandscape ? 'landscape' : 'portrait',
   });
 
   // ── ECS AI Orchestrator Feed ───────────────────────────
@@ -1867,6 +2028,12 @@ function DashboardScreenInner() {
   const gps = useThrottledGPS({
     enabled: isFocused && activeTab !== 'brief',
     highAccuracy: false,
+  });
+  const dashboardRouteProgress = useActiveRouteProgressSnapshot({
+    gpsLatitude: gps.position?.latitude ?? null,
+    gpsLongitude: gps.position?.longitude ?? null,
+    gpsSpeedMph: gps.position?.speedMph ?? null,
+    gpsHasFix: gps.hasFix,
   });
 
   const aiTelemetry = useMemo(() => ({
@@ -1961,15 +2128,26 @@ function DashboardScreenInner() {
     waypoints,
     distanceRemainingMiles:
       toFiniteNumber((activeTrip as any)?.distanceRemainingMiles) ??
-      toFiniteNumber((activeTrip as any)?.stats?.distanceRemainingMiles),
+      toFiniteNumber((activeTrip as any)?.stats?.distanceRemainingMiles) ??
+      dashboardRouteProgress?.remainingMiles ??
+      dashboardRouteProgress?.milesRemaining ??
+      null,
     etaMinutes:
       toFiniteNumber((activeTrip as any)?.etaMinutes) ??
-      toFiniteNumber((activeTrip as any)?.estimatedEtaMinutes),
+      toFiniteNumber((activeTrip as any)?.estimatedEtaMinutes) ??
+      minutesUntilIso(dashboardRouteProgress?.estimatedArrival),
     offRouteMiles: toFiniteNumber((activeTrip as any)?.offRouteMiles),
     bailoutOptions: Array.isArray(waypoints) ? waypoints.length : null,
     hazardAhead: typeof riskScore === 'number' ? riskScore >= 70 : false,
     nextHazardDistanceMiles: null,
-  }), [activeTrip, riskScore, waypoints]);
+  }), [
+    activeTrip,
+    dashboardRouteProgress?.estimatedArrival,
+    dashboardRouteProgress?.milesRemaining,
+    dashboardRouteProgress?.remainingMiles,
+    riskScore,
+    waypoints,
+  ]);
   const dashboardActiveRun = useMemo(
     () => ((activeTrip as any)?.points && Array.isArray((activeTrip as any).points) ? (activeTrip as any) : null),
     [activeTrip],
@@ -2008,7 +2186,13 @@ function DashboardScreenInner() {
     },
   );
   const dashboardTelemetry = useVehicleTelemetry();
+  const utilitySensorReadings = useECSUtilitySensorTelemetryReadings();
+  const utilitySensorResources = useMemo(
+    () => selectUtilitySensorResourceStates(utilitySensorReadings),
+    [utilitySensorReadings],
+  );
   const telemetryScanner = useUnifiedOBD2Scanner();
+  const convoyTracking = useConvoyTrackingStore();
 
   const aiWeatherCorridor = useMemo(() => {
     return buildUnifiedWeatherCorridor({
@@ -2093,7 +2277,7 @@ function DashboardScreenInner() {
   }, []);
   const hasOperationalContext =
     Boolean(activeTrip) ||
-    (Array.isArray(waypoints) && waypoints.length > 0) ||
+    Boolean(dashboardRouteProgress?.hasRoute) ||
     routeIntelligence.distanceRemainingMiles != null ||
     routeIntelligence.etaMinutes != null;
   const hasDashboardRouteContext = hasOperationalContext || hasSharedRouteContext;
@@ -2102,7 +2286,12 @@ function DashboardScreenInner() {
     String((activeTrip as any)?.id ?? currentExpeditionRecord?.id ?? '').trim() || undefined;
   const expeditionRouteLabel =
     String((activeTrip as any)?.name ?? dashboardActiveRoute?.name ?? '').trim() || undefined;
-  const expeditionTeamMemberCount = Math.max(1, Number((activeTrip as any)?.team_size) || 1);
+  const expeditionTeamMemberCount = Math.max(
+    1,
+    Number((activeTrip as any)?.team_size) || 0,
+    convoyTracking.members.length,
+    convoyTracking.activeCount,
+  );
   const expeditionCampCount = Array.isArray(waypoints)
     ? waypoints.filter((waypoint: any) => {
         const type = String(waypoint?.waypointType ?? waypoint?.type ?? '').toLowerCase();
@@ -2110,6 +2299,14 @@ function DashboardScreenInner() {
         return type.includes('camp') || name.includes('camp');
       }).length
     : 0;
+  const expeditionFirstCampWaypoint = useMemo(() => {
+    if (!Array.isArray(waypoints)) return null;
+    return waypoints.find((waypoint: any) => {
+      const type = String(waypoint?.waypointType ?? waypoint?.type ?? '').toLowerCase();
+      const name = String(waypoint?.name ?? waypoint?.title ?? '').toLowerCase();
+      return type.includes('camp') || name.includes('camp');
+    }) ?? null;
+  }, [waypoints]);
   const completedExpeditionSummaryRecord =
     completedExpeditionRecord ??
     (currentExpeditionRecord?.state === 'complete' ? currentExpeditionRecord : null);
@@ -2117,6 +2314,278 @@ function DashboardScreenInner() {
     currentExpeditionState === 'complete' ||
     Boolean(completedExpeditionRecord) ||
     (currentExpeditionState === 'standby' && Boolean(latestCompletedExpeditionLog));
+  const dashboardAssessmentContext = useMemo(() => {
+    const vehicleRecord: any = activeVehicleContext.vehicle ?? activeVehicleData ?? {};
+    const liveFuelLevelPercent =
+      dashboardTelemetry.isConnected && dashboardTelemetry.isFresh
+        ? firstFiniteNumber(dashboardTelemetry.summary.fuel_level)
+        : null;
+    const fuelGallons = firstPositiveNumber(
+      activeVehicleContext.resourceProfile.currentFuelGallons,
+      (activeVehicleData as any)?.current_fuel_gal,
+      (activeTrip as any)?.fuelGallons,
+    );
+    const fuelTankCapacityGal = firstPositiveNumber(
+      activeVehicleContext.resourceProfile.fuelTankCapacityGal,
+      (activeVehicleData as any)?.fuel_tank_capacity_gal,
+      (activeTrip as any)?.fuelTankCapacityGal,
+    );
+    const configuredFuelLevelPercent = firstFiniteNumber(
+      (activeVehicleData as any)?.current_fuel_percent,
+      (activeTrip as any)?.fuelPercent,
+      activeVehicleContext.resourceProfile.currentFuelPercent,
+    );
+    const hasConfiguredFuelPercent = configuredFuelLevelPercent != null && configuredFuelLevelPercent > 0;
+    const fuelLevelPercent =
+      liveFuelLevelPercent ??
+      (fuelGallons != null || hasConfiguredFuelPercent
+        ? configuredFuelLevelPercent
+        : null);
+    const liveWaterGallons = getUtilitySensorCurrentFromCapacity(
+      utilitySensorResources.water,
+      activeVehicleContext.resourceProfile.waterCapacityGal,
+    );
+    const waterGallons = liveWaterGallons != null
+      ? liveWaterGallons
+      : firstPositiveNumber(
+          activeVehicleContext.resourceProfile.currentWaterGallons,
+          (activeVehicleData as any)?.current_water_gal,
+          (activeTrip as any)?.waterGallons,
+        );
+    const estimatedMpg = firstPositiveNumber(
+      (activeVehicleData as any)?.estimated_mpg,
+      (activeVehicleData as any)?.average_mpg,
+      (activeVehicleData as any)?.mpg,
+      vehicleRecord?.estimated_mpg,
+      vehicleRecord?.average_mpg,
+      vehicleRecord?.mpg,
+      activeVehicleContext.spec && (activeVehicleContext.spec as any).estimated_mpg,
+    );
+    const rangeRemainingMiles = firstPositiveNumber(
+      (activeTrip as any)?.fuelRangeMiles,
+      (activeTrip as any)?.rangeRemainingMiles,
+      (activeVehicleData as any)?.range_remaining_miles,
+      (activeVehicleData as any)?.estimated_range_miles,
+      vehicleRecord?.range_remaining_miles,
+      vehicleRecord?.estimated_range_miles,
+    );
+    const routeDistanceRemaining = firstFiniteNumber(
+      routeIntelligence.distanceRemainingMiles,
+      dashboardRouteProgress?.remainingMiles,
+      dashboardRouteProgress?.milesRemaining,
+    );
+    const routeEtaIso = resolveDashboardEtaIso(
+      dashboardRouteProgress?.estimatedArrival,
+      dashboardRouteProgress?.etaLabel,
+      dashboardRouteProgress?.etaText,
+    );
+    const routeEtaMinutes = firstFiniteNumber(
+      routeIntelligence.etaMinutes,
+      minutesUntilIso(routeEtaIso),
+      minutesUntilIso(dashboardRouteProgress?.estimatedArrival),
+    );
+    const routeName = firstNonEmptyString(
+      expeditionRouteLabel,
+      dashboardRouteProgress?.routeLabel,
+      dashboardRouteProgress?.destinationLabel,
+      'Active route',
+    );
+    const routeId = firstNonEmptyString(
+      expeditionId,
+      dashboardRouteProgress?.activeRouteId,
+      dashboardActiveRoute?.id,
+    );
+    const hasActiveVehicleForAssessment = Boolean(
+      activeVehicleContext.activeVehicleId ||
+        (activeVehicleData as any)?.id ||
+        activeVehicleContext.vehicle,
+    );
+    const vehicleLabel = hasActiveVehicleForAssessment
+      ? firstNonEmptyString(
+          vehicleRecord?.name,
+          vehicleRecord?.nickname,
+          geofenceVehicleName,
+          'Active vehicle',
+        )
+      : null;
+    const readinessStatus = normalizeAssessmentStatusValue(
+      (activeVehicleContext.intelligenceSnapshot as any)?.readinessStatus ??
+        (activeVehicleData as any)?.readiness_status ??
+        (activeVehicleData as any)?.readinessStatus,
+    );
+    const payloadRiskStatus = normalizeAssessmentStatusValue(
+      (activeVehicleContext.weightSnapshot as any)?.payloadRiskStatus ??
+        (activeVehicleData as any)?.payload_risk_status ??
+        (activeVehicleData as any)?.payloadRiskStatus,
+    );
+    const engineStatus =
+      normalizeEngineStatusValue(dashboardTelemetry.engineStatus) ??
+      normalizeEngineStatusValue((activeTrip as any)?.engineStatus) ??
+      (dashboardTelemetry.hasData ? 'nominal' : null);
+    const powerStatus: AssessmentStatus | null =
+      primaryPowerFreshness === 'live'
+        ? 'normal'
+        : primaryPowerFreshness === 'stale'
+          ? 'watch'
+          : primaryPowerDeviceSoc != null
+            ? 'normal'
+            : null;
+
+    return buildDashboardAssessmentContext({
+      expeditionId: routeId,
+      offlineMode,
+      route: {
+        hasActiveRoute: hasDashboardRouteContext,
+        routeCompleted: expeditionRouteCompleted,
+        routeId,
+        routeName,
+        currentLocation:
+          gps.hasFix && gps.position?.latitude != null && gps.position?.longitude != null
+            ? {
+                latitude: gps.position.latitude,
+                longitude: gps.position.longitude,
+                accuracyMeters: gps.position.accuracyM ?? null,
+                capturedAt: gps.position.timestamp ? new Date(gps.position.timestamp).toISOString() : null,
+              }
+            : dashboardRouteProgress?.currentLocation
+              ? {
+                  latitude: dashboardRouteProgress.currentLocation.latitude,
+                  longitude: dashboardRouteProgress.currentLocation.longitude,
+                  accuracyMeters: null,
+                  capturedAt: dashboardRouteProgress.lastUpdated ?? null,
+                }
+            : null,
+        currentSegmentLabel: firstNonEmptyString(dashboardRouteProgress?.currentLegLabel, dashboardRouteProgress?.nextInstruction),
+        progressPercent: firstFiniteNumber(dashboardRouteProgress?.progressPercent, dashboardRouteProgress?.percentComplete),
+        distanceRemainingMiles: routeDistanceRemaining,
+        etaIso: routeEtaIso,
+        etaMinutes: routeEtaMinutes,
+        offRouteMiles: routeIntelligence.offRouteMiles,
+        knownHazards: routeIntelligence.hazardAhead ? ['Route risk signal elevated.'] : [],
+      },
+      vehicle: hasActiveVehicleForAssessment
+        ? {
+            vehicleId: activeVehicleContext.activeVehicleId ?? (activeVehicleData as any)?.id ?? null,
+            label: vehicleLabel,
+            callsign: firstNonEmptyString((activeTrip as any)?.vehicleCallsign, vehicleRecord?.callsign),
+            readinessStatus: readinessStatus ?? 'normal',
+            engineStatus,
+            disabled: Boolean((activeVehicleData as any)?.disabled || (activeTrip as any)?.vehicleDisabled),
+            rangeRemainingMiles,
+            fuelLevelPercent,
+            fuelGallons,
+            fuelTankCapacityGal,
+            fuelSource: liveFuelLevelPercent != null
+              ? 'vehicleObd'
+              : mapExpeditionResourceSource(activeVehicleContext.consumables?.fuel_source),
+            estimatedMpg,
+            waterGallons,
+            waterSource: liveWaterGallons != null
+              ? 'vehicleObd'
+              : mapExpeditionResourceSource(activeVehicleContext.consumables?.water_source),
+            payloadRiskStatus,
+            lastTelemetryAt: dashboardTelemetry.hasData ? new Date().toISOString() : null,
+          }
+        : null,
+      convoy: {
+        teamId: convoyTracking.convoyId,
+        teamMemberCount: expeditionTeamMemberCount,
+        activeMemberCount: Math.max(1, convoyTracking.activeCount || expeditionTeamMemberCount),
+        communicationsStatus:
+          convoyTracking.connectionStatus === 'connected'
+            ? 'online'
+            : convoyTracking.connectionStatus === 'degraded'
+              ? 'degraded'
+              : isOnline
+                ? 'online'
+                : 'offline',
+      },
+      camp: {
+        campCount: expeditionCampCount,
+        firstCampName: firstNonEmptyString(
+          (expeditionFirstCampWaypoint as any)?.name,
+          (expeditionFirstCampWaypoint as any)?.title,
+        ),
+        estimatedArrivalIso: routeEtaIso,
+      },
+      power: {
+        runtimeMinutes: primaryPowerRuntimeMin,
+        batteryPowerStatus: powerStatus,
+        source: primaryPowerProviderLabel ? 'vehicleObd' : 'unknown',
+      },
+    });
+  }, [
+    activeTrip,
+    activeVehicleContext,
+    activeVehicleData,
+    convoyTracking.activeCount,
+    convoyTracking.connectionStatus,
+    convoyTracking.convoyId,
+    dashboardActiveRoute?.id,
+    dashboardRouteProgress?.activeRouteId,
+    dashboardRouteProgress?.currentLegLabel,
+    dashboardRouteProgress?.currentLocation,
+    dashboardRouteProgress?.destinationLabel,
+    dashboardRouteProgress?.estimatedArrival,
+    dashboardRouteProgress?.etaLabel,
+    dashboardRouteProgress?.etaText,
+    dashboardRouteProgress?.lastUpdated,
+    dashboardRouteProgress?.milesRemaining,
+    dashboardRouteProgress?.nextInstruction,
+    dashboardRouteProgress?.percentComplete,
+    dashboardRouteProgress?.progressPercent,
+    dashboardRouteProgress?.remainingMiles,
+    dashboardRouteProgress?.routeLabel,
+    dashboardTelemetry.engineStatus,
+    dashboardTelemetry.hasData,
+    dashboardTelemetry.isConnected,
+    dashboardTelemetry.isFresh,
+    dashboardTelemetry.summary.fuel_level,
+    expeditionCampCount,
+    expeditionFirstCampWaypoint,
+    expeditionId,
+    expeditionRouteCompleted,
+    expeditionRouteLabel,
+    expeditionTeamMemberCount,
+    geofenceVehicleName,
+    gps.hasFix,
+    gps.position?.accuracyM,
+    gps.position?.latitude,
+    gps.position?.longitude,
+    gps.position?.timestamp,
+    hasDashboardRouteContext,
+    isOnline,
+    offlineMode,
+    primaryPowerDeviceSoc,
+    primaryPowerFreshness,
+    primaryPowerProviderLabel,
+    primaryPowerRuntimeMin,
+    routeIntelligence.distanceRemainingMiles,
+    routeIntelligence.etaMinutes,
+    routeIntelligence.hazardAhead,
+    routeIntelligence.offRouteMiles,
+    utilitySensorResources.water,
+  ]);
+  const dashboardAssessmentContextRef = useRef(dashboardAssessmentContext);
+
+  useEffect(() => {
+    dashboardAssessmentContextRef.current = dashboardAssessmentContext;
+  }, [dashboardAssessmentContext]);
+
+  useEffect(() => {
+    setExpeditionAssessmentContextProvider(() => dashboardAssessmentContextRef.current);
+    return () => {
+      setExpeditionAssessmentContextProvider(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'expedition') return;
+    const refreshTimer = setTimeout(() => {
+      void refreshExpeditionAssessments();
+    }, 250);
+    return () => clearTimeout(refreshTimer);
+  }, [activeTab, dashboardAssessmentContext]);
   const dashboardShellBannerStatus = useMemo(
     () =>
       resolveTopBannerPresentation({
@@ -2146,15 +2615,41 @@ function DashboardScreenInner() {
       user,
     ],
   );
+  const [terrainRiskReferenceEvent, setTerrainRiskReferenceEvent] =
+    useState<TerrainRiskReferenceEvent | null>(null);
+  const handleTerrainRiskReferenceEvent = useCallback((event: TerrainRiskReferenceEvent | null) => {
+    setTerrainRiskReferenceEvent((current) => (
+      current?.id === event?.id &&
+      current?.distanceAheadMiles === event?.distanceAheadMiles &&
+      current?.banner.detail === event?.banner.detail
+        ? current
+        : event
+    ));
+  }, []);
+  const dashboardTerrainRiskBannerEvent = useMemo(
+    () => hasDashboardRouteContext
+      ? selectUpcomingTerrainRiskBannerEvent(
+          terrainRiskReferenceEvent ? [terrainRiskReferenceEvent] : [],
+          { proximityMiles: 0.75 },
+        )
+      : null,
+    [hasDashboardRouteContext, terrainRiskReferenceEvent],
+  );
 
   useFocusEffect(
     useCallback(() => {
-      void refreshDashboardRouteContext();
+      const task = runAfterShellInteractions(() => {
+        void refreshDashboardRouteContext();
+      });
+      return () => task.cancel();
     }, [refreshDashboardRouteContext]),
   );
 
   useEffect(() => {
-    void refreshDashboardRouteContext();
+    const task = runAfterShellInteractions(() => {
+      void refreshDashboardRouteContext();
+    });
+    return () => task.cancel();
   }, [refreshDashboardRouteContext]);
 
   const dashboardCommandState = useMemo(() => (
@@ -2349,11 +2844,15 @@ function DashboardScreenInner() {
   const restoreDashboardViewState = useCallback((): PersistedDashboardViewState => {
     const restoreProfile: DashboardProfile = 'expedition';
     const nextViewState = readPersistedDashboardViewState(restoreProfile);
+    const orientationViewState = {
+      ...nextViewState,
+      expanded: dashboardLandscapeRef.current,
+    };
     setIsDashboardExpanded((current) => (
-      current === nextViewState.expanded ? current : nextViewState.expanded
+      current === orientationViewState.expanded ? current : orientationViewState.expanded
     ));
 
-    return nextViewState;
+    return orientationViewState;
   }, []);
 
   const syncDashboardStoreState = useCallback((
@@ -2409,7 +2908,7 @@ function DashboardScreenInner() {
       activeTab === 'brief' ? 'brief' : 'expedition';
     const nextPersistedState = {
       ...dashboardStore.getUIState(activeProfile),
-      expanded: isDashboardExpanded,
+      expanded: false,
       dashboardTab: nextDashboardTab,
     };
 
@@ -2419,7 +2918,6 @@ function DashboardScreenInner() {
     activeProfile,
     activeTab,
     dashboardHydrated,
-    isDashboardExpanded,
   ]);
 
   useFocusEffect(useCallback(() => {
@@ -2431,34 +2929,38 @@ function DashboardScreenInner() {
       lastDashboardFocusSyncRef.current = now;
     }
     closeDashboardTransientOverlays();
-    if (shouldRefreshShell) {
-      refreshActiveTrip();
-      refreshActiveVehicleData();
-      syncDashboardStoreState(activeTab);
-    }
-
-    void (async () => {
-      const flow = await consumeNavigationFlow('dashboard');
-      if (cancelled || !flow) return;
-
-      closeDashboardTransientOverlays();
-      if (
-        flow.intent === 'vehicle_context_updated' ||
-        flow.intent === 'vehicle_ready_confirmed' ||
-        flow.intent === 'navigation_ended'
-      ) {
-        refreshActiveVehicleData();
+    const task = runAfterShellInteractions(() => {
+      if (cancelled) return;
+      if (shouldRefreshShell) {
         refreshActiveTrip();
+        refreshActiveVehicleData();
         syncDashboardStoreState(activeTab);
       }
 
-      if (flow.message) {
-        showToast(flow.message);
-      }
-    })();
+      void (async () => {
+        const flow = await consumeNavigationFlow('dashboard');
+        if (cancelled || !flow) return;
+
+        closeDashboardTransientOverlays();
+        if (
+          flow.intent === 'vehicle_context_updated' ||
+          flow.intent === 'vehicle_ready_confirmed' ||
+          flow.intent === 'navigation_ended'
+        ) {
+          refreshActiveVehicleData();
+          refreshActiveTrip();
+          syncDashboardStoreState(activeTab);
+        }
+
+        if (flow.message) {
+          showToast(flow.message);
+        }
+      })();
+    });
 
     return () => {
       cancelled = true;
+      task.cancel();
     };
   }, [
     refreshActiveTrip,
@@ -2527,7 +3029,7 @@ function DashboardScreenInner() {
       setActiveTab(nextViewState.dashboardTab);
       syncDashboardStoreState(newTab);
       setIsDashboardExpanded((current) => (
-        current === nextViewState.expanded ? current : nextViewState.expanded
+        current === isLandscape ? current : isLandscape
       ));
     };
 
@@ -2573,7 +3075,7 @@ function DashboardScreenInner() {
       ]).start();
     });
 
-  }, [activeTab, layoutMode, tabOpacityAnim, tabSlideAnim, underlineAnim, syncDashboardStoreState, closeDashboardTransientOverlays]);
+  }, [activeTab, isLandscape, layoutMode, tabOpacityAnim, tabSlideAnim, underlineAnim, syncDashboardStoreState, closeDashboardTransientOverlays]);
 
   // ── Keep handleTabSwitchRef in sync ───────────────────
   // The ref is used by auto-mode engine and mode switch handlers
@@ -2863,21 +3365,23 @@ function DashboardScreenInner() {
   const startupHydrating = !dashboardHydrated;
 
   const handleToggleDashboardExpanded = useCallback(() => {
-    setIsDashboardExpanded((current) => !current);
-  }, []);
+    if (isLandscape) {
+      revealDashboardDock(5000);
+      return;
+    }
+
+    setIsDashboardExpanded(false);
+    hideDashboardDockReveal();
+  }, [isLandscape]);
 
   const handleOpenPowerConnections = useCallback(() => {
-      try {
-        router.push('/power');
+    try {
+      router.push('/power/blu');
     } catch {
-      try {
-        router.push('/power/blu');
-      } catch {
-        console.warn('[dashboard] Failed to open power route');
-        showToast('Power manager unavailable');
-      }
-      }
-    }, [router, showToast]);
+      console.warn('[dashboard] Failed to open power route');
+      showToast('Power manager unavailable');
+    }
+  }, [router, showToast]);
 
   const handleOpenTelemetrySetup = useCallback(() => {
       try {
@@ -3268,6 +3772,23 @@ function DashboardScreenInner() {
   ]);
 
   const dashboardTopLaneAdvisory = useMemo<DashboardLaneState>(() => {
+    if (dashboardTerrainRiskBannerEvent) {
+      return {
+        override: {
+          title: dashboardTerrainRiskBannerEvent.banner.title,
+          detail: dashboardTerrainRiskBannerEvent.banner.detail,
+          badge: dashboardTerrainRiskBannerEvent.banner.badge,
+          icon: 'warning-outline' as const,
+          tone: dashboardTerrainRiskBannerEvent.riskLevel === 'high' ? 'warning' as const : 'info' as const,
+          live: true,
+        },
+        source: 'terrain_risk_reference',
+        reason: dashboardTerrainRiskBannerEvent.title,
+        priority: 108,
+        suppressedSources: dashboardCommandState.banner ? ['command_banner'] : [],
+      };
+    }
+
     const routeShellActive =
       hasDashboardRouteContext &&
       (dashboardShellBannerStatus.source.startsWith('route_') ||
@@ -3456,6 +3977,7 @@ function DashboardScreenInner() {
     dashboardCommandState.banner,
     dashboardPageSupportState,
     dashboardShellBannerStatus,
+    dashboardTerrainRiskBannerEvent,
     gps.fixQuality,
     gps.gpsStatus,
     gps.hasFix,
@@ -3545,7 +4067,10 @@ function DashboardScreenInner() {
         <ECSIntelligenceReadout
           hasRouteContext={hasDashboardRouteContext}
           isActiveExpedition={currentExpeditionState === 'active' || Boolean(activeTrip)}
-          onOpenCommandBrief={handleOpenCommandBrief}
+          commandTitle={dashboardTopLaneAdvisory.override.title}
+          commandDetail={dashboardTopLaneAdvisory.override.detail}
+          commandBadge={dashboardTopLaneAdvisory.override.badge}
+          commandLive={dashboardTopLaneAdvisory.override.live}
         />
       ) : null}
 
@@ -3574,6 +4099,7 @@ function DashboardScreenInner() {
         autoModeManualOverride={modeEngineState.isManualOverride}
         autoModeSustaining={modeEngineState.sustainedCondition?.isSustaining ?? false}
         isDashboardExpanded={isDashboardExpanded}
+        showDockRevealControl={isLandscape}
         onSelectTab={handleTabSwitchWithModeSync}
         onToggleAutoMode={handleToggleAutoMode}
         onToggleDashboardExpanded={handleToggleDashboardExpanded}
@@ -3626,10 +4152,12 @@ function DashboardScreenInner() {
         onResizeWidget={handleResizeWidget}
         onRestoreDefaults={handleRestoreDefaults}
         onOpenCommandBrief={handleOpenCommandBrief}
+        onTerrainRiskReferenceEvent={handleTerrainRiskReferenceEvent}
         onContainerLayout={handleContainerLayout}
         widgetData={widgetData}
         gpsLatitude={gps.position?.latitude}
         gpsLongitude={gps.position?.longitude}
+        gpsHeadingDeg={gps.position?.headingDeg ?? null}
         gpsSpeedMph={gps.position?.speedMph ?? null}
         gpsHasFix={gps.hasFix}
         gpsAccuracyM={gps.position?.accuracyM ?? null}
@@ -3699,6 +4227,7 @@ function DashboardScreenInner() {
         onOpenFleetFromDetail={handleOpenFleet}
         onRemotenessNavigateFromDetail={handleRemotenessNavigateFromDetail}
         onOpenCommandBriefFromDetail={handleOpenCommandBrief}
+        onTerrainRiskReferenceEvent={handleTerrainRiskReferenceEvent}
         onCloseAuth={() => setAuthVisible(false)}
         onShrinkAndResize={handleShrinkAndResize}
         onCancelResize={handleCancelResize}
@@ -3714,9 +4243,11 @@ function DashboardScreenInner() {
 
 // ── Exported with Error Boundary ────────────────────────
 export default function DashboardScreen() {
+  const isFocused = useIsFocused();
+
   return (
     <TabErrorBoundary tabName="DASHBOARD">
-      <DashboardScreenInner />
+      {isFocused ? <DashboardScreenInner /> : <View style={styles.inactiveDashboardScreen} />}
     </TabErrorBoundary>
   );
 }
@@ -3724,6 +4255,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
 
   container: { flex: 1, paddingTop: 0, paddingBottom: 70, overflow: 'visible' },
+  inactiveDashboardScreen: { flex: 1, backgroundColor: 'transparent' },
   dashboardLoadingShell: {
     flex: 1,
     paddingHorizontal: 14,
@@ -3750,7 +4282,7 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 
-  // ── Tabs Section — holds Widgets, ECS Brief, and Expedition labels ──
+  // ── Tabs Section — holds ECS Brief, Dashboard, and Expedition Hub labels ──
   tabsSection: {
     flex: 1,
     flexDirection: 'row',
@@ -3762,26 +4294,29 @@ const styles = StyleSheet.create({
 
   tabBtn: {
     flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     height: 28,
     marginVertical: 0,
     borderRadius: 9,
     borderWidth: 1,
     borderColor: 'transparent',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
   },
   tabLabel: {
+    flexShrink: 1,
+    minWidth: 0,
     fontSize: 9,
     fontWeight: '800',
-    letterSpacing: 1.6,
+    letterSpacing: 0,
     lineHeight: 11,
+    textAlign: 'center',
   },
   tabLabelTablet: {
     fontSize: 9.5,
-    letterSpacing: 1.8,
   },
 
   // ── Controls Section — expand/collapse button, right-aligned ──

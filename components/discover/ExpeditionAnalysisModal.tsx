@@ -3,7 +3,7 @@
 // ============================================================
 // Opens when an expedition opportunity card is selected.
 // Displays full analysis: distance, terrain, remoteness,
-// rig compatibility, factor breakdown, highlights,
+// rig compatibility, factor breakdown,
 // and RIG UPGRADE SUGGESTIONS when compatibility < 85%.
 // ============================================================
 
@@ -48,8 +48,6 @@ import {
 } from '../../lib/rigUpgradeEngine';
 import TacticalPopupShell from '../TacticalPopupShell';
 import { ECSOverlayFooter } from '../ECSModalShell';
-import { ExpeditionReadinessCard } from '../readiness';
-import { buildExploreRouteReadinessAssessment } from '../../lib/readiness/exploreRouteReadiness';
 
 interface ExpeditionAnalysisModalProps {
   visible: boolean;
@@ -365,7 +363,6 @@ export default function ExpeditionAnalysisModal({
   const rigReadoutLines = compatResult
     ? buildRigReadoutLines(compatResult, opportunity, vehicleProfile)
     : [];
-  const readinessAssessment = buildExploreRouteReadinessAssessment(opportunity, { hasVehicle });
 
   return (
     <TacticalPopupShell
@@ -422,25 +419,31 @@ export default function ExpeditionAnalysisModal({
       )}
     >
       <View style={s.scrollContent}>
-          {/* Region + Description + Distance */}
-
+          {/* Expedition Stats */}
           <View style={s.section}>
-            <View style={s.regionRow}>
-              <Ionicons name="location-outline" size={12} color={TACTICAL.amber} />
-              <Text style={s.regionText}>{opportunity.region}</Text>
+            <View style={s.sectionHeader}>
+              <Ionicons name="analytics-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>EXPEDITION DATA</Text>
             </View>
-            {opportunity.distanceFromUserMiles != null && (
-              <View style={s.distanceFromUserRow}>
-                <View style={s.distanceFromUserIcon}>
-                  <Ionicons name="navigate-outline" size={12} color={TACTICAL.amber} />
-                </View>
-                <Text style={s.distanceFromUserLabel}>Distance from you:</Text>
-                <Text style={s.distanceFromUserValue}>
-                  {opportunity.distanceFromUserMiles} mi
-                </Text>
-              </View>
-            )}
-            <Text style={s.description}>{opportunity.description}</Text>
+
+            <View style={s.statsGrid}>
+              <AnalysisStat icon="resize-outline" label="DISTANCE" value={`${opportunity.distanceMiles}`} unit="MI" />
+              <AnalysisStat icon="trending-up-outline" label="ELEV GAIN" value={`${opportunity.elevationGainFt.toLocaleString()}`} unit="FT" accentColor="#5AC8FA" />
+              <AnalysisStat icon="calendar-outline" label="EST. DAYS" value={`${opportunity.estimatedDays}`} />
+              <AnalysisStat icon="flame-outline" label="FUEL EST." value={`${opportunity.estimatedFuelRequired}`} unit="GAL" accentColor="#E67E22" />
+              <AnalysisStat
+                icon="bonfire-outline"
+                label={campsActionAvailable ? 'VIEW CAMPS' : 'CAMPS'}
+                value={`${opportunity.suggestedCamps}`}
+                accentColor="#66BB6A"
+                onPress={campsActionAvailable ? onViewCamps : undefined}
+                accessibilityLabel="View route camp pins in Navigate"
+              />
+              <AnalysisStat icon="sunny-outline" label="BEST SEASON" value={opportunity.bestSeason} />
+              <AnalysisStat icon="trail-sign-outline" label="TERRAIN" value={terrainValue} accentColor={terrainColor} />
+              <AnalysisStat icon="radio-outline" label="REMOTE" value={remotenessValue} accentColor={remotenessColor} />
+            </View>
+
             {buildRouteDisabled && buildRouteDisabledReason ? (
               <View style={s.routeUnavailableNotice}>
                 <Ionicons name="alert-circle-outline" size={12} color={TACTICAL.textMuted} />
@@ -592,58 +595,6 @@ export default function ExpeditionAnalysisModal({
               </View>
             </View>
           )}
-
-          <ExpeditionReadinessCard
-            assessment={readinessAssessment}
-            title="Explore Readiness Preview"
-            categoryLimit={6}
-            concernLimit={3}
-            compactCategories
-            interactive={false}
-          />
-
-          {/* Expedition Stats */}
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Ionicons name="analytics-outline" size={12} color={TACTICAL.amber} />
-              <Text style={s.sectionTitle}>EXPEDITION DATA</Text>
-            </View>
-
-            <View style={s.statsGrid}>
-              <AnalysisStat icon="resize-outline" label="DISTANCE" value={`${opportunity.distanceMiles}`} unit="MI" />
-              <AnalysisStat icon="trending-up-outline" label="ELEV GAIN" value={`${opportunity.elevationGainFt.toLocaleString()}`} unit="FT" accentColor="#5AC8FA" />
-              <AnalysisStat icon="calendar-outline" label="EST. DAYS" value={`${opportunity.estimatedDays}`} />
-              <AnalysisStat icon="flame-outline" label="FUEL EST." value={`${opportunity.estimatedFuelRequired}`} unit="GAL" accentColor="#E67E22" />
-              <AnalysisStat
-                icon="bonfire-outline"
-                label={campsActionAvailable ? 'VIEW CAMPS' : 'CAMPS'}
-                value={`${opportunity.suggestedCamps}`}
-                accentColor="#66BB6A"
-                onPress={campsActionAvailable ? onViewCamps : undefined}
-                accessibilityLabel="View route camp pins in Navigate"
-              />
-              <AnalysisStat icon="sunny-outline" label="BEST SEASON" value={opportunity.bestSeason} />
-              <AnalysisStat icon="trail-sign-outline" label="TERRAIN" value={terrainValue} accentColor={terrainColor} />
-              <AnalysisStat icon="radio-outline" label="REMOTE" value={remotenessValue} accentColor={remotenessColor} />
-            </View>
-          </View>
-
-          {/* Highlights */}
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Ionicons name="star-outline" size={12} color={TACTICAL.amber} />
-              <Text style={s.sectionTitle}>HIGHLIGHTS</Text>
-            </View>
-
-            <View style={s.highlightsList}>
-              {opportunity.highlights.map((h, i) => (
-                <View key={i} style={s.highlightItem}>
-                  <View style={s.highlightDot} />
-                  <Text style={s.highlightText}>{h}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
 
           {/* Permit Notice */}
           {opportunity.permitRequired && (
@@ -838,61 +789,6 @@ const s = StyleSheet.create({
     color: TACTICAL.amber,
     letterSpacing: 2.5,
   },
-
-  // ── Region + Description ──────────────────────────────
-  regionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 10,
-  },
-  regionText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: TACTICAL.amber,
-    letterSpacing: 0.5,
-  },
-  distanceFromUserRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: TACTICAL.amber + '08',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '20',
-  },
-  distanceFromUserIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    backgroundColor: TACTICAL.amber + '14',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  distanceFromUserLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.3,
-  },
-  distanceFromUserValue: {
-    fontSize: 14,
-    fontWeight: '800',
-    fontFamily: 'Courier',
-    color: TACTICAL.amber,
-    letterSpacing: 0.5,
-  },
-  description: {
-    ...TYPO.B1,
-    color: ECS.muted,
-    lineHeight: 20,
-  },
-
 
   // ── Compat Panel ──────────────────────────────────────
   compatPanel: {
@@ -1355,28 +1251,6 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,
-  },
-
-  // ── Highlights ────────────────────────────────────────
-  highlightsList: {
-    gap: 8,
-  },
-  highlightItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  highlightDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: TACTICAL.amber,
-    opacity: 0.6,
-  },
-  highlightText: {
-    ...TYPO.B1,
-    color: ECS.muted,
-    flex: 1,
   },
 
   // ── Permit Notice ─────────────────────────────────────

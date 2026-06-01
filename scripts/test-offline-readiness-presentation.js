@@ -254,6 +254,30 @@ const routeReady = deriveOfflineReadiness({
 assert(routeReady.level === 'ready', 'Completed matching route sync should make road preview offline readiness Ready.');
 assert(routeReady.reason.includes('Route corridor'), 'Ready route sync should explain that the route corridor is cached.');
 
+const duplicateCancelAfterReady = deriveOfflineReadiness({
+  currentRouteContext,
+  downloadedRoutes: [routePreparedSync],
+  tileRegions: [routeRegionComplete],
+  tileSyncJobs: [{
+    regionId: 'region-route-duplicate-cancelled',
+    source: 'route-corridor',
+    syncType: 'route',
+    status: 'cancelled',
+    progress: { percent: 4, downloadedTiles: 4, totalTiles: 100, status: 'cancelled' },
+    routeIntent: routePreparedSync.routeIntent,
+  }],
+  routeSyncHydrated: true,
+});
+
+assert(
+  duplicateCancelAfterReady.level === 'ready',
+  'Cancelling a duplicate Prepare Offline job must not downgrade an already cached route sync.',
+);
+assert(
+  duplicateCancelAfterReady.label !== 'Cancelled',
+  'Existing cached route sync should win over a newer cancelled duplicate job.',
+);
+
 const readyGuidance = buildRouteGuidanceReadinessViewModel({
   routeId: currentRouteContext.routeId,
   routeType: 'road',

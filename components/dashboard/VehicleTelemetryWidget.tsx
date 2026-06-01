@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECSButton } from '../ECSButton';
 import ECSActionRow from '../ECSActionRow';
@@ -9,7 +10,6 @@ import { resolveTelemetrySourceState } from '../../lib/telemetrySourceState';
 import { publishTelemetryBriefAdvisories } from '../../lib/telemetryBriefPublisher';
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
 import { useUnifiedOBD2Scanner } from '../../lib/unifiedScanner';
-import OBD2ScannerModal from '../vehicle-telemetry/OBD2ScannerModal';
 import { evaluateOBDTelemetry, getAlertSeverityColor } from '../../lib/obdIntelligenceEngine';
 import type { OBDIntelligenceAlert } from '../../lib/obdIntelligenceEngine';
 import {
@@ -639,12 +639,12 @@ export function VehicleTelemetryCard() {
 }
 
 export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }) {
+  const router = useRouter();
   const vt = useVehicleTelemetry();
   const scanner = useUnifiedOBD2Scanner();
   const [alerts, setAlerts] = useState<OBDIntelligenceAlert[]>([]);
   const alertsSignatureRef = useRef('');
   const latestRawTelemetryRef = useRef(vt.rawTelemetry);
-  const [scannerVisible, setScannerVisible] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const sourceState = getVehicleTelemetrySourceState(vt);
@@ -703,6 +703,11 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
     setAlerts(nextAlerts);
   }, [rawTelemetryAlertSignature, vt.snapshot.isLive]);
 
+  const openDeviceConnections = useCallback(() => {
+    onClose?.();
+    router.push('/power/blu' as any);
+  }, [onClose, router]);
+
   const fieldRows = useMemo(
     () => VEHICLE_TELEMETRY_FIELDS.map((field) => {
       const rawValue = vt.snapshot[field.key];
@@ -724,17 +729,17 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
       setActionMessage(
         restored
           ? 'Reconnect started for the last known telemetry source.'
-          : 'No saved telemetry adapter was available. Open Scan / Connect to choose a source.',
+          : 'No saved telemetry adapter was available. Open Device Connections to choose a source.',
       );
       if (!restored) {
-        setScannerVisible(true);
+        openDeviceConnections();
       }
     } catch (error: any) {
-      setActionMessage(error?.message ?? 'Reconnect failed. Open Scan / Connect to choose a source.');
+      setActionMessage(error?.message ?? 'Reconnect failed. Open Device Connections to choose a source.');
     } finally {
       setActionBusy(null);
     }
-  }, [scanner]);
+  }, [openDeviceConnections, scanner]);
 
   const handleManualProfileOnly = useCallback(async () => {
     setActionBusy('manual');
@@ -775,11 +780,11 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
         >
           <ECSActionRow style={styles.actionRow}>
             <ECSButton
-              label="Scan / Connect"
+              label="Device Connections"
               icon="bluetooth-outline"
               variant="secondary"
               size="compact"
-              onPress={() => setScannerVisible(true)}
+              onPress={openDeviceConnections}
               grow
             />
             <ECSButton
@@ -804,10 +809,6 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
           </ECSActionRow>
           {!canReconnect ? <TelemetryActionNote>No saved telemetry adapter is available for reconnect.</TelemetryActionNote> : null}
           {actionMessage ? <TelemetryActionNote>{actionMessage}</TelemetryActionNote> : null}
-          <OBD2ScannerModal
-            visible={scannerVisible}
-            onClose={() => setScannerVisible(false)}
-          />
         </WidgetDetailStateCard>
       </View>
     );
@@ -876,7 +877,7 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
               icon="refresh-outline"
               variant="secondary"
               size="compact"
-              onPress={() => setScannerVisible(true)}
+              onPress={openDeviceConnections}
             />
           </WidgetDetailStateCard>
         </>
@@ -887,11 +888,11 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
       <View style={styles.actionPanel}>
         <ECSActionRow style={styles.actionRow}>
           <ECSButton
-            label="Scan / Connect"
+            label="Device Connections"
             icon="bluetooth-outline"
             variant="secondary"
             size="compact"
-            onPress={() => setScannerVisible(true)}
+            onPress={openDeviceConnections}
             grow
           />
           <ECSButton
@@ -1024,10 +1025,6 @@ export function VehicleTelemetryDetailView({ onClose }: { onClose?: () => void }
       <MetricRow label="PROVIDER" value={vt.activeProvider?.toUpperCase() || '--'} />
       <MetricRow label="STATE" value={vt.connectionDisplayState.toUpperCase()} color={freshColor} />
       <MetricRow label="LAST UPDATE" value={vt.lastUpdatedText ?? 'No live source'} />
-      <OBD2ScannerModal
-        visible={scannerVisible}
-        onClose={() => setScannerVisible(false)}
-      />
     </View>
   );
 }

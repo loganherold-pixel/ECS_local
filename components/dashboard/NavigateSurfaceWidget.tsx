@@ -10,6 +10,10 @@ import {
   navigateRouteSessionStore,
   type NavigateRouteSessionSnapshot,
 } from '../../lib/navigateRouteSessionStore';
+import {
+  resolveDashboardNavigationChaseCamera,
+  type DashboardNavigationPoint,
+} from '../../lib/dashboardNavigationChaseCamera';
 import type { WidgetData, WidgetRenderOptions } from './WidgetRenderers';
 
 type Props = {
@@ -21,11 +25,43 @@ const ACTIVE_ROUTE_WIDGET_ZOOM = 16.4;
 const COMMAND_3D_FOLLOW_ZOOM = 16.7;
 const COMMAND_3D_FREE_DRIVE_ZOOM = 16.2;
 const COMMAND_3D_FOLLOW_PITCH = 70;
-const COMMAND_3D_FOLLOW_OFFSET: [number, number] = [0, 72];
+const COMMAND_3D_ACTIVE_FOLLOW_OFFSET: [number, number] = [0, 72];
+const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
 type NextTurnStripTone = 'active' | 'warning';
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
+type Command3DMapViewKey = 'tactical' | 'day' | 'satellite';
+
+const COMMAND_3D_MAP_VIEWS: {
+  key: Command3DMapViewKey;
+  label: string;
+  accessibilityLabel: string;
+  mapStyle: MapStyleKey;
+  icon: IconName;
+}[] = [
+  {
+    key: 'tactical',
+    label: 'TAC',
+    accessibilityLabel: 'Tactical dark 3D follow map',
+    mapStyle: 'tactical',
+    icon: 'moon-outline',
+  },
+  {
+    key: 'day',
+    label: 'DAY',
+    accessibilityLabel: 'Daytime 3D follow map',
+    mapStyle: 'ecs',
+    icon: 'sunny-outline',
+  },
+  {
+    key: 'satellite',
+    label: 'SAT',
+    accessibilityLabel: 'Satellite 3D follow map',
+    mapStyle: 'satellite',
+    icon: 'earth-outline',
+  },
+];
 
 function formatRemainingDistance(meters: number | null): string | null {
   if (meters == null || !Number.isFinite(meters)) return null;
@@ -70,6 +106,14 @@ function normalizeBearingDeg(value: number | null | undefined): number | null {
 
 function quantizeCoordinate(value: number): number {
   return Number(value.toFixed(5));
+}
+
+function quantizeGpsCameraPoint(gpsLocation: DashboardNavigationPoint | null): DashboardNavigationPoint | null {
+  if (!gpsLocation) return null;
+  return {
+    latitude: quantizeCoordinate(gpsLocation.latitude),
+    longitude: quantizeCoordinate(gpsLocation.longitude),
+  };
 }
 
 function getGuidanceModeLabel(snapshot: NavigateRouteSessionSnapshot): string {
@@ -243,6 +287,77 @@ function CompassRoseButton({
         </View>
       </View>
     </Pressable>
+  );
+}
+
+function CommandMapViewSelector({
+  activeView,
+  menuOpen,
+  onToggle,
+  onSelect,
+}: {
+  activeView: typeof COMMAND_3D_MAP_VIEWS[number];
+  menuOpen: boolean;
+  onToggle: () => void;
+  onSelect: (key: Command3DMapViewKey) => void;
+}) {
+  return (
+    <View style={styles.commandMapViewControl}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open 3D follow map view menu"
+        accessibilityHint="Switches between tactical, daytime, and satellite map views"
+        onPress={onToggle}
+        style={({ pressed }) => [
+          styles.commandMapViewButton,
+          menuOpen ? styles.commandMapViewButtonActive : null,
+          pressed ? styles.commandMapViewButtonPressed : null,
+        ]}
+      >
+        <Ionicons name={activeView.icon} size={15} color={TACTICAL.amber} />
+        <Text style={styles.commandMapViewButtonText} numberOfLines={1}>
+          {activeView.label}
+        </Text>
+        <Ionicons name={menuOpen ? 'chevron-up' : 'chevron-down'} size={12} color="rgba(236,212,150,0.86)" />
+      </Pressable>
+
+      {menuOpen ? (
+        <View style={styles.commandMapViewMenu}>
+          {COMMAND_3D_MAP_VIEWS.map((view) => {
+            const selected = view.key === activeView.key;
+            return (
+              <Pressable
+                key={view.key}
+                accessibilityRole="button"
+                accessibilityLabel={view.accessibilityLabel}
+                accessibilityState={{ selected }}
+                onPress={() => onSelect(view.key)}
+                style={({ pressed }) => [
+                  styles.commandMapViewOption,
+                  selected ? styles.commandMapViewOptionSelected : null,
+                  pressed ? styles.commandMapViewOptionPressed : null,
+                ]}
+              >
+                <Ionicons
+                  name={view.icon}
+                  size={14}
+                  color={selected ? TACTICAL.amber : 'rgba(230,237,243,0.78)'}
+                />
+                <Text
+                  style={[
+                    styles.commandMapViewOptionText,
+                    selected ? styles.commandMapViewOptionTextSelected : null,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {view.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -433,41 +548,80 @@ export function Mini3DFollowMap({
   } = useNavigateSurfaceState(options, selected);
   const lastBearingRef = useRef<number | null>(normalizeBearingDeg(routeSession.headingDeg));
   const [recenterRequestId, setRecenterRequestId] = useState(0);
-  const liveBearing = normalizeBearingDeg(routeSession.headingDeg);
+  const [followLocked, setFollowLocked] = useState(true);
+  const [mapViewKey, setMapViewKey] = useState<Command3DMapViewKey>('tactical');
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const liveGpsBearing = normalizeBearingDeg(options?.gpsHeadingDeg);
+  const routeSessionBearing = normalizeBearingDeg(routeSession.headingDeg);
+  const activeMapView = useMemo(
+    () => COMMAND_3D_MAP_VIEWS.find((view) => view.key === mapViewKey) ?? COMMAND_3D_MAP_VIEWS[0],
+    [mapViewKey],
+  );
+  const chaseCamera = useMemo(() => resolveDashboardNavigationChaseCamera({
+    currentLocation: gpsLocation,
+    routePoints,
+    gpsHeadingDeg: liveGpsBearing,
+    routeSessionHeadingDeg: routeSessionBearing,
+    fallbackBearingDeg: lastBearingRef.current,
+    hasActiveGuidance,
+    speedMph: options?.gpsSpeedMph ?? null,
+  }), [
+    gpsLocation,
+    hasActiveGuidance,
+    liveGpsBearing,
+    options?.gpsSpeedMph,
+    routePoints,
+    routeSessionBearing,
+  ]);
 
   useEffect(() => {
-    if (liveBearing != null) {
-      lastBearingRef.current = liveBearing;
+    if (chaseCamera.bearingDeg != null) {
+      lastBearingRef.current = chaseCamera.bearingDeg;
     }
-  }, [liveBearing]);
+  }, [chaseCamera.bearingDeg]);
 
-  const cameraCenter = useMemo(() => {
-    if (!gpsLocation) return null;
-    return {
-      latitude: quantizeCoordinate(gpsLocation.latitude),
-      longitude: quantizeCoordinate(gpsLocation.longitude),
-    };
-  }, [gpsLocation]);
+  const gpsCameraLatitude = gpsLocation?.latitude ?? null;
+  const gpsCameraLongitude = gpsLocation?.longitude ?? null;
+  const cameraCenter = useMemo<DashboardNavigationPoint | null>(() => {
+    if (gpsCameraLatitude == null || gpsCameraLongitude == null) return null;
+    return quantizeGpsCameraPoint({
+      latitude: gpsCameraLatitude,
+      longitude: gpsCameraLongitude,
+    });
+  }, [gpsCameraLatitude, gpsCameraLongitude]);
 
-  const cameraBearing = liveBearing ?? lastBearingRef.current ?? 0;
+  const cameraBearing = chaseCamera.bearingDeg ?? lastBearingRef.current ?? 0;
   const cameraCommand = useMemo<CameraCommand | null>(() => {
-    if (!selected || !cameraCenter) return null;
+    if (!selected || !cameraCenter || !followLocked) return null;
     return {
       mode: 'follow_user',
       center: cameraCenter,
       zoom: hasActiveGuidance ? COMMAND_3D_FOLLOW_ZOOM : COMMAND_3D_FREE_DRIVE_ZOOM,
       pitch: COMMAND_3D_FOLLOW_PITCH,
       bearing: cameraBearing,
-      offset: COMMAND_3D_FOLLOW_OFFSET,
+      offset: hasActiveGuidance ? COMMAND_3D_ACTIVE_FOLLOW_OFFSET : COMMAND_3D_FREE_DRIVE_OFFSET,
       durationMs: 650,
       animate: true,
       reason: hasActiveGuidance
-        ? `dashboard_command_3d_active_guidance:${recenterRequestId}`
-        : `dashboard_command_3d_free_drive:${recenterRequestId}`,
+        ? `dashboard_command_3d_active_guidance:${chaseCamera.bearingSource}:${recenterRequestId}`
+        : `dashboard_command_3d_free_drive:${chaseCamera.bearingSource}:${recenterRequestId}`,
     };
-  }, [cameraBearing, cameraCenter, hasActiveGuidance, recenterRequestId, selected]);
+  }, [cameraBearing, cameraCenter, chaseCamera.bearingSource, followLocked, hasActiveGuidance, recenterRequestId, selected]);
   const handleRecenter = useCallback(() => {
+    setFollowLocked(true);
+    setViewMenuOpen(false);
     setRecenterRequestId((value) => value + 1);
+  }, []);
+  const handleUserDrag = useCallback(() => {
+    setFollowLocked(false);
+    setViewMenuOpen(false);
+  }, []);
+  const handleToggleViewMenu = useCallback(() => {
+    setViewMenuOpen((open) => !open);
+  }, []);
+  const handleSelectMapView = useCallback((key: Command3DMapViewKey) => {
+    setMapViewKey(key);
+    setViewMenuOpen(false);
   }, []);
 
   if (!selected) {
@@ -489,7 +643,7 @@ export function Mini3DFollowMap({
         : routeSession.lifecycle === 'arrived'
           ? 'completed'
           : 'idle';
-  const cameraMode: CameraMode | undefined = cameraCenter
+  const cameraMode: CameraMode | undefined = cameraCenter && followLocked
     ? 'follow_user'
     : routePoints.length > 1
       ? 'route_overview'
@@ -502,7 +656,7 @@ export function Mini3DFollowMap({
         routePoints={routePoints}
         progressPoints={progressPoints}
         showUserLocation={showUserLocation}
-        shouldFollowUser={!!cameraCenter}
+        shouldFollowUser={followLocked && !!cameraCenter}
         gpsLocation={gpsLocation}
         headingDeg={cameraBearing}
         cameraMode={cameraMode}
@@ -510,11 +664,18 @@ export function Mini3DFollowMap({
         cameraCommandTrigger={recenterRequestId}
         routeSession={routeSession}
         routeRenderMode={routeRenderMode}
-        mapStyleKey="3d"
+        mapStyleKey={activeMapView.mapStyle}
         guidanceVariant="command3d"
         onRecenter={handleRecenter}
+        onUserDrag={handleUserDrag}
         frameStyle={styles.commandMapFrame}
         mapStyle={styles.commandMapRenderer}
+      />
+      <CommandMapViewSelector
+        activeView={activeMapView}
+        menuOpen={viewMenuOpen}
+        onToggle={handleToggleViewMenu}
+        onSelect={handleSelectMapView}
       />
       {!gpsLocation ? (
         <View style={styles.commandGpsNotice} pointerEvents="none">
@@ -541,6 +702,7 @@ function NavigateMiniMap({
   mapStyleKey = 'ecs',
   guidanceVariant = 'standard',
   onRecenter,
+  onUserDrag,
   frameStyle,
   mapStyle,
 }: {
@@ -559,6 +721,7 @@ function NavigateMiniMap({
   mapStyleKey?: MapStyleKey;
   guidanceVariant?: 'standard' | 'command3d';
   onRecenter?: () => void;
+  onUserDrag?: () => void;
   frameStyle?: any;
   mapStyle?: any;
 }) {
@@ -581,6 +744,7 @@ function NavigateMiniMap({
         cameraMode={cameraMode}
         cameraCommand={cameraCommand ?? null}
         cameraCommandTrigger={cameraCommandTrigger}
+        onUserDrag={onUserDrag}
         routeRenderMode={routeRenderMode}
         routeColor="#C48A2C"
         progressColor="#F7D67A"
@@ -840,6 +1004,75 @@ const styles = StyleSheet.create({
     height: 18,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  commandMapViewControl: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 4,
+    alignItems: 'flex-end',
+  },
+  commandMapViewButton: {
+    minWidth: 78,
+    height: 32,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(247,214,122,0.34)',
+    backgroundColor: 'rgba(2,4,6,0.9)',
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  commandMapViewButtonActive: {
+    borderColor: 'rgba(247,214,122,0.58)',
+    backgroundColor: 'rgba(20,15,7,0.94)',
+  },
+  commandMapViewButtonPressed: {
+    borderColor: 'rgba(247,214,122,0.72)',
+    backgroundColor: 'rgba(31,22,8,0.96)',
+  },
+  commandMapViewButtonText: {
+    color: 'rgba(236,212,150,0.94)',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  commandMapViewMenu: {
+    marginTop: 5,
+    minWidth: 92,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(247,214,122,0.26)',
+    backgroundColor: 'rgba(2,4,6,0.94)',
+    padding: 4,
+    gap: 3,
+  },
+  commandMapViewOption: {
+    minHeight: 30,
+    borderRadius: 7,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  commandMapViewOptionSelected: {
+    backgroundColor: 'rgba(247,214,122,0.12)',
+  },
+  commandMapViewOptionPressed: {
+    backgroundColor: 'rgba(247,214,122,0.18)',
+  },
+  commandMapViewOptionText: {
+    color: 'rgba(230,237,243,0.78)',
+    fontSize: 8.5,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  commandMapViewOptionTextSelected: {
+    color: TACTICAL.amber,
   },
   commandGpsNotice: {
     position: 'absolute',

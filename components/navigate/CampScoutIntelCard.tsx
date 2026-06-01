@@ -58,7 +58,7 @@ function sourceLabel(sourceType: CampScoutSourceType): string {
 function sourceDescription(sourceType: CampScoutSourceType): string {
   switch (sourceType) {
     case 'ecs_inferred':
-      return 'ECS-Inferred candidate scouting location. Dispersed camping may be allowed based on available signals; verify locally before relying on it.';
+      return 'ECS-Inferred candidate scouting location. This is a projection only from eligibility, access, remoteness, route proximity, and terrain signals; verify locally before relying on it.';
     case 'official_mapped':
       return 'This location appears in mapped campground/POI data. Verify availability, fees, and access.';
     case 'community_suggested':
@@ -71,7 +71,9 @@ function sourceDescription(sourceType: CampScoutSourceType): string {
 }
 
 const ECS_INFERRED_VERIFICATION_WARNING =
-  'This is an ECS-inferred candidate, not a confirmed legal campsite. Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.';
+  'This is an ECS-inferred projection only, not a confirmed legal campsite. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
+const CAMP_SCOUT_AREA_POTENTIAL_NOTE =
+  'This pin is not an exact campsite location. ECS is marking an area with high potential for viable campsites; verify the exact site on foot and avoid water, private land, buildings, roads, and unsafe terrain.';
 
 function gradeColor(grade: CampScoutCandidate['confidenceGrade']): string {
   switch (grade) {
@@ -196,20 +198,25 @@ export default function CampScoutIntelCard({
             maxWidth: maxWidth ?? undefined,
           },
         ]}
-        pointerEvents="auto"
+        pointerEvents="box-none"
       >
-        <View style={styles.card}>
+        <View style={styles.card} pointerEvents="auto">
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
               <Text style={styles.eyebrow}>{isCampOps ? 'CAMP INTEL' : 'CAMP SCOUT'}</Text>
-              <Text style={styles.title} numberOfLines={1}>
+              <Text
+                style={styles.title}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.86}
+              >
                 {title}
               </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
+              <Text style={styles.subtitle} numberOfLines={2}>
                 {subtitle}
               </Text>
               {activeCampOpsDetail?.campName && activeCampOpsDetail.campName !== title ? (
-                <Text style={styles.subtitle} numberOfLines={1}>
+                <Text style={styles.subtitle} numberOfLines={2}>
                   {activeCampOpsDetail.campName}
                 </Text>
               ) : null}
@@ -318,6 +325,13 @@ export default function CampScoutIntelCard({
               </View>
             ) : null}
 
+            {activeCandidate ? (
+              <View style={styles.areaPotentialNotice}>
+                <Ionicons name="navigate-circle-outline" size={14} color={TACTICAL.amber} />
+                <Text style={styles.areaPotentialNoticeText}>{CAMP_SCOUT_AREA_POTENTIAL_NOTE}</Text>
+              </View>
+            ) : null}
+
             {reasons.length > 0 ? (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Why selected</Text>
@@ -371,7 +385,9 @@ export default function CampScoutIntelCard({
               accessibilityRole="button"
               accessibilityLabel="Dismiss Camp Intel popup"
             >
-              <Text style={styles.secondaryActionText}>DISMISS</Text>
+              <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76}>
+                DISMISS
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.primaryAction, !navigateSafe && styles.actionDisabled]}
@@ -381,7 +397,9 @@ export default function CampScoutIntelCard({
               accessibilityRole="button"
               accessibilityLabel={isCampOps ? 'Navigate to CampOps camp candidate' : 'Navigate to Camp Scout candidate'}
             >
-              <Text style={styles.primaryActionText}>NAVIGATE HERE</Text>
+              <Text style={styles.primaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
+                NAVIGATE HERE
+              </Text>
             </TouchableOpacity>
             {saveSupported ? (
               <TouchableOpacity
@@ -391,7 +409,9 @@ export default function CampScoutIntelCard({
                 accessibilityRole="button"
                 accessibilityLabel={isCampOps ? 'Save CampOps camp candidate' : 'Save Camp Scout candidate'}
               >
-                <Text style={styles.secondaryActionText}>SAVE CAMP</Text>
+                <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76}>
+                  SAVE CAMP
+                </Text>
               </TouchableOpacity>
             ) : null}
             {isCampOps ? (
@@ -403,7 +423,9 @@ export default function CampScoutIntelCard({
                   accessibilityRole="button"
                   accessibilityLabel="Compare nearby CampOps candidates"
                 >
-                  <Text style={styles.secondaryActionText}>COMPARE NEARBY</Text>
+                  <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                    COMPARE NEARBY
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.secondaryAction}
@@ -412,7 +434,9 @@ export default function CampScoutIntelCard({
                   accessibilityRole="button"
                   accessibilityLabel="Mark CampOps camp candidate used"
                 >
-                  <Text style={styles.secondaryActionText}>MARK USED</Text>
+                  <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76}>
+                    MARK USED
+                  </Text>
                 </TouchableOpacity>
               </>
             ) : null}
@@ -424,7 +448,9 @@ export default function CampScoutIntelCard({
                 accessibilityRole="button"
                 accessibilityLabel={isCampOps ? 'Report CampOps camp candidate unusable' : 'Report Camp Scout candidate issue'}
               >
-                <Text style={styles.secondaryActionText}>{isCampOps ? 'REPORT UNUSABLE' : 'NOT VIABLE'}</Text>
+                <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {isCampOps ? 'REPORT UNUSABLE' : 'NOT VIABLE'}
+                </Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -445,9 +471,12 @@ const styles = StyleSheet.create({
     minHeight: 0,
     zIndex: 181,
     elevation: 181,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
   },
   card: {
-    flex: 1,
+    width: '100%',
+    maxHeight: 420,
     minHeight: 0,
     borderRadius: 16,
     borderWidth: 1,
@@ -479,6 +508,7 @@ const styles = StyleSheet.create({
     ...TYPO.T2,
     color: TACTICAL.text,
     fontSize: 15,
+    lineHeight: 19,
     marginTop: 3,
   },
   subtitle: {
@@ -490,6 +520,7 @@ const styles = StyleSheet.create({
   gradeBadge: {
     minWidth: 44,
     minHeight: 40,
+    flexShrink: 0,
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
@@ -509,6 +540,7 @@ const styles = StyleSheet.create({
   closeButton: {
     width: 28,
     height: 28,
+    flexShrink: 0,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -543,6 +575,24 @@ const styles = StyleSheet.create({
   },
   sourceNoticeText: {
     ...TYPO.B2,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  areaPotentialNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(242,194,77,0.22)',
+    backgroundColor: 'rgba(242,194,77,0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  areaPotentialNoticeText: {
+    ...TYPO.B2,
+    flex: 1,
     color: TACTICAL.text,
     fontSize: 11,
     lineHeight: 16,
@@ -657,6 +707,8 @@ const styles = StyleSheet.create({
   },
   primaryAction: {
     minHeight: 38,
+    minWidth: 96,
+    flexBasis: '30%',
     flexGrow: 1,
     borderRadius: 12,
     backgroundColor: TACTICAL.amber,
@@ -672,6 +724,8 @@ const styles = StyleSheet.create({
   },
   secondaryAction: {
     minHeight: 38,
+    minWidth: 96,
+    flexBasis: '30%',
     flexGrow: 1,
     borderRadius: 12,
     borderWidth: 1,

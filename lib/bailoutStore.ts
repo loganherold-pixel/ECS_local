@@ -55,6 +55,9 @@ export type BailoutType =
   | 'pavement'
   | 'town'
   | 'fuel'
+  | 'water'
+  | 'supplies'
+  | 'repair'
   | 'hospital'
   | 'ranger'
   | 'camp'
@@ -66,6 +69,9 @@ export const BAILOUT_TYPES: { key: BailoutType; label: string; icon: string; col
   { key: 'pavement', label: 'Pavement', icon: 'car-outline', color: '#78909C' },
   { key: 'town', label: 'Town', icon: 'business-outline', color: '#42A5F5' },
   { key: 'fuel', label: 'Fuel', icon: 'flame-outline', color: '#FFA726' },
+  { key: 'water', label: 'Water', icon: 'water-outline', color: '#4FC3F7' },
+  { key: 'supplies', label: 'Supplies', icon: 'storefront-outline', color: '#26C6DA' },
+  { key: 'repair', label: 'Repair', icon: 'construct-outline', color: '#B0BEC5' },
   { key: 'hospital', label: 'Hospital', icon: 'medkit-outline', color: '#EF5350' },
   { key: 'ranger', label: 'Ranger Station', icon: 'shield-outline', color: '#66BB6A' },
   { key: 'camp', label: 'Camp', icon: 'bonfire-outline', color: '#AB47BC' },

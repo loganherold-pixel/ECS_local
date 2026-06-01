@@ -740,8 +740,11 @@ function latestSourceTimestamp(events: GarminMapShareLocationTimelineEvent[]): s
 }
 
 function isStaleTimestamp(sourceTimestamp: string | null, polledAt: string, staleAfterMs: number): boolean {
-  if (!sourceTimestamp) return false;
-  return Date.parse(polledAt) - Date.parse(sourceTimestamp) > staleAfterMs;
+  if (!sourceTimestamp) return true;
+  const polledMs = Date.parse(polledAt);
+  const sourceMs = Date.parse(sourceTimestamp);
+  if (!Number.isFinite(polledMs) || !Number.isFinite(sourceMs)) return true;
+  return polledMs - sourceMs > staleAfterMs;
 }
 
 function feedStaleAfterMs(feed: GarminMapShareFeedConfig, config: GarminInreachIntegrationConfig): number {

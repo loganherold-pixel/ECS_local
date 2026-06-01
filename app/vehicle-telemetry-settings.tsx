@@ -36,7 +36,6 @@ import { TACTICAL } from '../lib/theme';
 import Header from '../components/Header';
 import PremiumAccessGate from '../components/premium/PremiumAccessGate';
 import TelemetryProviderCard from '../components/vehicle-telemetry/TelemetryProviderCard';
-import OBD2ScannerModal from '../components/vehicle-telemetry/OBD2ScannerModal';
 import {
   VEHICLE_TELEMETRY_PROVIDERS,
 } from '../src/vehicle-telemetry/VehicleTelemetryTypes';
@@ -69,7 +68,6 @@ export default function VehicleTelemetrySettingsScreen() {
   const vt = useVehicleTelemetry();
   const scanner = useUnifiedOBD2Scanner();
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-  const [scannerVisible, setScannerVisible] = useState(false);
   const [connectionSuccess, setConnectionSuccess] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
 
@@ -141,17 +139,8 @@ export default function VehicleTelemetrySettingsScreen() {
   }, []);
 
   const handleOpenScanner = useCallback(() => {
-    setScannerVisible(true);
-  }, []);
-
-  const handleScannerClose = useCallback(() => {
-    setScannerVisible(false);
-  }, []);
-
-  const handleScannerConnected = useCallback((deviceId: string, deviceName: string) => {
-    setConnectionSuccess(deviceName);
-    setTimeout(() => setConnectionSuccess(null), 6000);
-  }, []);
+    router.push('/power/blu' as any);
+  }, [router]);
 
   // Phase 2E: Safe disconnect that cleans up inactive devices
   const handleSafeDisconnect = useCallback(async () => {
@@ -577,7 +566,7 @@ export default function VehicleTelemetrySettingsScreen() {
                   >
                     <Ionicons name="search-outline" size={14} color={TACTICAL.bg} />
                     <Text style={styles.connectBtnText}>
-                      {scanner.isConnected ? 'SCAN FOR ANOTHER ADAPTER' : 'SCAN FOR OBD-II ADAPTER'}
+                      OPEN DEVICE CONNECTIONS
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -716,13 +705,6 @@ export default function VehicleTelemetrySettingsScreen() {
         <View style={{ height: 60 }} />
       </ScrollView>
       </PremiumAccessGate>
-
-      {/* OBD-II Scanner Modal */}
-      <OBD2ScannerModal
-        visible={scannerVisible}
-        onClose={handleScannerClose}
-        onConnected={handleScannerConnected}
-      />
     </View>
   );
 }

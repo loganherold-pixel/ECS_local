@@ -11,9 +11,14 @@ import {
   isCampgroundAvailabilityFresh,
   mapCampgroundRecordToEstablishedCampsite,
   mapCampgroundSearchRecordsToEstablishedCampsites,
+  normalizeEstablishedCampgroundDetailResponse,
   normalizeEstablishedCampgroundsSearchResponse,
 } from '../../lib/map/establishedCampgroundMobile';
-import { toEstablishedCampsiteFeatureCollection } from '../../lib/map/establishedCampsiteGeojsonAdapter';
+import {
+  ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS,
+  toEstablishedCampsiteFeatureCollection,
+} from '../../lib/map/establishedCampsiteGeojsonAdapter';
+import { resolveEstablishedCampgroundScore } from '../../lib/map/establishedCampgroundScore';
 
 const root = path.resolve(__dirname, '..', '..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -65,12 +70,74 @@ assert.strictEqual(campsite?.availabilityStatus, 'available');
 assert.strictEqual(campsite?.managingOrg, 'Sierra National Forest');
 assert.deepStrictEqual(campsite?.siteTypes, ['campground', 'tent_site']);
 assert.ok(campsite?.amenities.includes('water'));
+assert.ok(campsite?.tentAllowed, 'Tent allowance should infer from campground/tent site types.');
 
 const collection = toEstablishedCampsiteFeatureCollection(campsite ? [campsite] : []);
 assert.strictEqual(collection.features.length, 1, 'Successful search records should render as one map marker.');
 assert.strictEqual(collection.features[0].properties.type, 'established_campground');
 assert.strictEqual(collection.features[0].properties.category, 'campground');
 assert.strictEqual(collection.features[0].properties.availabilityStatus, 'available');
+
+const dedupedNearbyCampgrounds = mapCampgroundSearchRecordsToEstablishedCampsites([
+  {
+    id: 'cg-duplicate-a',
+    name: 'Twin Lakes Campground',
+    latitude: 37.72,
+    longitude: -119.62,
+    facilityType: 'campground',
+    status: 'open',
+    availabilityStatus: 'unknown',
+    siteCount: 10,
+    siteTypes: ['campground'],
+    amenities: ['water'],
+    sourceConfidence: 70,
+    primaryProvider: 'osm',
+  },
+  {
+    id: 'cg-duplicate-b',
+    name: 'Twin Lakes Campground Loop B',
+    latitude: 37.7207,
+    longitude: -119.6207,
+    facilityType: 'campground',
+    status: 'open',
+    availabilityStatus: 'unknown',
+    siteCount: 24,
+    siteTypes: ['campground'],
+    amenities: ['water', 'toilets'],
+    sourceConfidence: 94,
+    primaryProvider: 'ridb',
+  },
+  {
+    id: 'cg-separate',
+    name: 'Separate Ridge Campground',
+    latitude: 37.74,
+    longitude: -119.64,
+    facilityType: 'campground',
+    status: 'open',
+    availabilityStatus: 'unknown',
+    siteCount: 8,
+    siteTypes: ['campground'],
+    amenities: ['toilets'],
+    sourceConfidence: 80,
+    primaryProvider: 'nps',
+  },
+]);
+assert.strictEqual(ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS, 200);
+assert.strictEqual(
+  dedupedNearbyCampgrounds.length,
+  2,
+  'Mobile established campground records should suppress duplicate pins inside 200 meters.',
+);
+assert.strictEqual(
+  dedupedNearbyCampgrounds[0].id,
+  'cg-duplicate-b',
+  'Mobile duplicate suppression should keep the highest confidence campground record.',
+);
+assert.deepStrictEqual(
+  dedupedNearbyCampgrounds[0].nearbyCampgroundIds,
+  ['cg-duplicate-a', 'cg-duplicate-b'],
+  'Mobile duplicate suppression should preserve nearby campground ids for future detail UI.',
+);
 
 const normalizedSuccess = normalizeEstablishedCampgroundsSearchResponse({
   ok: true,
@@ -94,6 +161,89 @@ assert.strictEqual(
   1,
   'GeoJSON-only established campground responses should convert into records for the RN layer state.',
 );
+
+const normalizedDetail = normalizeEstablishedCampgroundDetailResponse({
+  ok: true,
+  marker: {
+    id: 'cg-detail',
+    title: 'Live Detail Campground',
+    latitude: 37.72,
+    longitude: -119.62,
+    type: 'established_campground',
+    category: 'campground',
+    facilityType: 'campground',
+    managingAgency: 'USFS',
+    status: 'open',
+    availabilityStatus: 'available',
+    siteCount: 18,
+    siteTypes: ['campground'],
+    amenities: ['water', 'toilets'],
+    sourceConfidence: 91,
+    primaryProvider: 'ridb',
+    attribution: 'RIDB / Recreation.gov',
+    lastAvailabilityCheckedAt: freshCheckedAt,
+  },
+  sources: [{ providerId: 'ridb' }, { providerId: 'campflare' }],
+  availability: {
+    effectiveStatus: 'limited',
+    rows: [{ providerId: 'campflare' }],
+  },
+  freshness: {
+    lastAvailabilityCheckedAt: freshCheckedAt,
+    lastSyncedAt: freshCheckedAt,
+  },
+});
+assert.strictEqual(normalizedDetail.ok, true);
+assert.strictEqual(
+  normalizedDetail.campsite?.availabilityStatus,
+  'limited',
+  'Live campground detail should prefer the effective availability status returned by the backend.',
+);
+assert.strictEqual(normalizedDetail.campsite?.sourceRecordCount, 2);
+assert.strictEqual(normalizedDetail.campsite?.availabilityRecordCount, 1);
+assert.ok(normalizedDetail.campsite?.liveDetailFetchedAt, 'Live campground detail should mark when it refreshed.');
+
+const enrichedDetail = normalizeEstablishedCampgroundDetailResponse({
+  ok: true,
+  marker: {
+    id: 'cg-enriched',
+    title: 'Provider Enriched Campground',
+    latitude: 37.73,
+    longitude: -119.63,
+    type: 'established_campground',
+    category: 'campground',
+    facilityType: 'campground',
+    status: 'unknown',
+    availabilityStatus: 'unknown',
+    siteTypes: ['rv park', 'tent site'],
+    amenities: ['potable water', 'vault toilet', 'fire pit'],
+    primaryProvider: 'ridb',
+    sourceConfidence: 88,
+  },
+  detailEnrichment: {
+    managingOrg: 'Provider District Office',
+    phone: '555-0199',
+    seasonDescription: 'May through October',
+    maxVehicleLengthFt: 28,
+  },
+  availability: {
+    effectiveStatus: 'available',
+    rows: [{ reservable: true, firstComeFirstServed: true, lastCheckedAt: freshCheckedAt }],
+  },
+  freshness: {
+    lastAvailabilityCheckedAt: freshCheckedAt,
+  },
+});
+assert.strictEqual(enrichedDetail.ok, true);
+assert.strictEqual(enrichedDetail.campsite?.availabilityStatus, 'available');
+assert.strictEqual(enrichedDetail.campsite?.reservationStatus, 'mixed');
+assert.strictEqual(enrichedDetail.campsite?.phone, '555-0199');
+assert.strictEqual(enrichedDetail.campsite?.seasonDescription, 'May through October');
+assert.strictEqual(enrichedDetail.campsite?.maxVehicleLengthFt, 28);
+assert.strictEqual(enrichedDetail.campsite?.rvAllowed, true);
+assert.strictEqual(enrichedDetail.campsite?.tentAllowed, true);
+assert.ok(enrichedDetail.campsite?.amenities.includes('toilets'), 'Amenity synonyms should normalize into displayed amenities.');
+assert.ok(enrichedDetail.campsite?.amenities.includes('fire_ring'), 'Fire pit amenities should normalize into fire ring display.');
 
 const normalizedEmpty = normalizeEstablishedCampgroundsSearchResponse({
   ok: true,
@@ -175,6 +325,54 @@ assert.strictEqual(
   'Generic land management offices should not render as established campground markers.',
 );
 
+const weakScoreCamp = mapCampgroundRecordToEstablishedCampsite({
+  id: 'score-weak',
+  name: 'Sparse OSM Campground',
+  latitude: 37.71,
+  longitude: -119.61,
+  facilityType: 'campground',
+  status: 'unknown',
+  availabilityStatus: 'unknown',
+  sourceConfidence: 58,
+  primaryProvider: 'osm',
+  amenities: ['unknown'],
+});
+const strongScoreCamp = mapCampgroundRecordToEstablishedCampsite({
+  id: 'score-strong',
+  name: 'Live Recreation.gov Campground',
+  latitude: 37.72,
+  longitude: -119.62,
+  facilityType: 'campground',
+  status: 'open',
+  availabilityStatus: 'available',
+  sourceConfidence: 92,
+  primaryProvider: 'ridb',
+  reservationUrl: 'https://example.com/reserve',
+  managingAgency: 'USFS',
+  siteCount: 24,
+  amenities: ['water', 'toilets', 'trash'],
+  lastAvailabilityCheckedAt: freshCheckedAt,
+  lastSyncedAt: freshCheckedAt,
+});
+assert.ok(weakScoreCamp && strongScoreCamp);
+const weakScore = resolveEstablishedCampgroundScore(weakScoreCamp, Date.now());
+const strongScore = resolveEstablishedCampgroundScore(strongScoreCamp, Date.now());
+assert.notStrictEqual(
+  weakScore.score,
+  strongScore.score,
+  'Established campground ECS score should be derived from live campground fields instead of a fixed placeholder.',
+);
+assert.ok(strongScore.score > weakScore.score, 'Fresh open campground data should score higher than sparse unknown OSM data.');
+assert.ok(
+  strongScore.dataBasis.some((basis) => basis.includes('fresh availability')) &&
+    strongScore.dataBasis.some((basis) => basis.includes('source confidence')),
+  'Established campground score should expose the live-data basis used to calculate the score.',
+);
+assert.ok(
+  strongScore.explanation.includes(`ECS score is ${strongScore.score}/100`),
+  'Established campground confidence copy should anchor explanation to the displayed ECS score.',
+);
+
 assert.strictEqual(formatCampgroundStatusLabel('unknown'), 'Status unknown');
 assert.strictEqual(formatCampgroundStatusLabel('seasonal'), 'Seasonal');
 assert.strictEqual(isCampgroundAvailabilityFresh(freshCheckedAt), true);
@@ -212,11 +410,12 @@ const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 });
 
 assert.ok(
-  navigateSource.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox })') &&
+  navigateSource.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox, logFailures: false })') &&
+    navigateSource.includes('fetchEstablishedCampgroundDetail({ id: selectedId })') &&
     navigateSource.includes("layer: 'established_campgrounds'") &&
     navigateSource.includes('CampLayerFetchCoordinator') &&
-    navigateSource.includes('toEstablishedCampsiteFeatureCollection(establishedCampgrounds)'),
-  'Navigate should schedule ECS-owned campground fetches, cache by stable bbox key, and feed MapRenderer GeoJSON.',
+    navigateSource.includes('toEstablishedCampsiteFeatureCollection(establishedCampgroundsForMap)'),
+  'Navigate should schedule ECS-owned campground fetches, refresh tapped campground detail, cache by stable bbox key, and feed MapRenderer GeoJSON.',
 );
 assert.ok(
   !navigateSource.includes('setEstablishedCampsitesEnabled((current) => {'),
@@ -233,7 +432,9 @@ assert.ok(
   'Managing org',
   'Source / attribution',
   'Reservation / info',
+  'Navigate',
   'formatCampgroundAvailabilityLabel',
+  'resolveEstablishedCampgroundScore',
 ].forEach((copy) => {
   assert.ok(sheetSource.includes(copy), `Established campground detail sheet missing: ${copy}`);
 });

@@ -1,5 +1,6 @@
 import type {
   ECSPowerTelemetryDeviceReading,
+  ECSUtilitySensorTelemetryReading,
   ECSTelemetryDeviceSnapshot,
   ECSTelemetryEvent,
   ECSTelemetryMetricSnapshot,
@@ -14,8 +15,20 @@ type StoreListener = () => void;
 const LIVE_MAX_AGE_MS = 30_000;
 const STALE_MAX_AGE_MS = 5 * 60_000;
 
-const metricKey = (event: Pick<ECSTelemetryEvent, 'sourceType' | 'sourceDeviceId' | 'metricKey'>) =>
-  `${event.sourceType}:${event.sourceDeviceId}:${event.metricKey}`;
+const metricKey = (event: Pick<ECSTelemetryEvent, 'sourceType' | 'provider' | 'sourceDeviceId' | 'metricKey'>) =>
+  `${event.sourceType}:${event.provider}:${event.sourceDeviceId}:${event.metricKey}`;
+
+function sameTelemetryDevice(
+  metric: ECSTelemetryMetricSnapshot,
+  sourceDeviceId: string,
+  sourceType?: ECSTelemetrySourceType,
+  provider?: string | null,
+): boolean {
+  if (metric.sourceDeviceId !== sourceDeviceId) return false;
+  if (sourceType && metric.sourceType !== sourceType) return false;
+  if (provider && metric.provider !== provider) return false;
+  return true;
+}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -28,6 +41,17 @@ function numericMetric(
   const metric = metrics[key];
   if (!metric || metric.quality === 'unavailable' || metric.quality === 'error') return null;
   return isFiniteNumber(metric.value) ? metric.value : null;
+}
+
+function stringMetric(
+  metrics: Record<string, ECSTelemetryMetricSnapshot>,
+  key: string,
+): string | null {
+  const metric = metrics[key];
+  if (!metric || metric.quality === 'error') return null;
+  return typeof metric.value === 'string' && metric.value.trim()
+    ? metric.value
+    : null;
 }
 
 function readMockFlag(): boolean {
@@ -142,12 +166,12 @@ class ECSTelemetryStore {
     sourceDeviceId: string,
     sourceType?: ECSTelemetrySourceType,
     reason = 'Device disconnected.',
+    provider?: string | null,
   ): void {
     const now = Date.now();
     let changed = false;
     for (const [key, metric] of this.metrics.entries()) {
-      if (metric.sourceDeviceId !== sourceDeviceId) continue;
-      if (sourceType && metric.sourceType !== sourceType) continue;
+      if (!sameTelemetryDevice(metric, sourceDeviceId, sourceType, provider)) continue;
       this.metrics.set(key, {
         ...metric,
         value: null,
@@ -164,11 +188,10 @@ class ECSTelemetryStore {
     this.notify();
   }
 
-  clearDevice(sourceDeviceId: string, sourceType?: ECSTelemetrySourceType): void {
+  clearDevice(sourceDeviceId: string, sourceType?: ECSTelemetrySourceType, provider?: string | null): void {
     let changed = false;
     for (const [key, metric] of Array.from(this.metrics.entries())) {
-      if (metric.sourceDeviceId !== sourceDeviceId) continue;
-      if (sourceType && metric.sourceType !== sourceType) continue;
+      if (!sameTelemetryDevice(metric, sourceDeviceId, sourceType, provider)) continue;
       this.metrics.delete(key);
       changed = true;
     }
@@ -189,7 +212,7 @@ class ECSTelemetryStore {
     const byDevice = new Map<string, ECSTelemetryDeviceSnapshot>();
 
     for (const metric of this.metrics.values()) {
-      const key = `${metric.sourceType}:${metric.sourceDeviceId}`;
+      const key = `${metric.sourceType}:${metric.provider}:${metric.sourceDeviceId}`;
       const existing = byDevice.get(key);
       if (!existing) {
         byDevice.set(key, {
@@ -243,7 +266,11 @@ class ECSTelemetryStore {
           batteryPercent: numericMetric(metrics, 'battery_percent'),
           capacityWh: numericMetric(metrics, 'capacity_wh'),
           inputWatts: numericMetric(metrics, 'input_watts'),
+          inputVolts: numericMetric(metrics, 'input_volts'),
+          inputAmps: numericMetric(metrics, 'input_amps'),
           outputWatts: numericMetric(metrics, 'output_watts'),
+          outputVolts: numericMetric(metrics, 'output_volts'),
+          outputAmps: numericMetric(metrics, 'output_amps'),
           solarWatts: numericMetric(metrics, 'solar_input_watts'),
           temperatureCelsius: numericMetric(metrics, 'temperature_celsius'),
           estimatedRuntimeMinutes: numericMetric(metrics, 'estimated_runtime_minutes'),
@@ -253,6 +280,34 @@ class ECSTelemetryStore {
           acOutputWatts: numericMetric(metrics, 'ac_output_watts'),
           dcOutputWatts: numericMetric(metrics, 'dc_output_watts'),
           signalStrength: numericMetric(metrics, 'signal_strength'),
+          isLive: device.quality === 'live',
+          isStale: device.quality === 'stale',
+        };
+      })
+      .filter((reading) => reading.quality !== 'unavailable' || reading.lastUpdated > 0);
+  }
+
+  getUtilitySensorReadings(): ECSUtilitySensorTelemetryReading[] {
+    return this.getSnapshot().devices
+      .filter((device) => device.sourceType === 'utility_sensor')
+      .map((device) => {
+        const metrics = device.metrics;
+        const lastUpdated = device.latestTimestamp ?? 0;
+        const providerLabel = device.providerLabel ?? formatProviderLabel(device.provider);
+        return {
+          deviceId: device.sourceDeviceId,
+          deviceName: device.sourceDeviceName ?? providerLabel,
+          provider: device.provider,
+          providerLabel,
+          transport: device.transport,
+          quality: device.quality,
+          lastUpdated,
+          category: stringMetric(metrics, 'sensor_category'),
+          profileId: stringMetric(metrics, 'profile_id'),
+          linkState: stringMetric(metrics, 'link_state'),
+          levelPercent: numericMetric(metrics, 'level_percent'),
+          signalStrength: numericMetric(metrics, 'signal_strength'),
+          parserStatus: stringMetric(metrics, 'parser_status'),
           isLive: device.quality === 'live',
           isStale: device.quality === 'stale',
         };

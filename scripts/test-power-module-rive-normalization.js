@@ -72,6 +72,32 @@ function runtimeFromTelemetry(telemetry) {
 }
 
 {
+  const adapted = adaptPowerTelemetryForRive(onlineTelemetry({
+    inputWatts: null,
+    solarWatts: 118,
+    batteryPercent: 100,
+    outputWatts: 0,
+  }));
+  const runtime = resolveBluPowerModuleRuntime(adapted);
+  assert.strictEqual(adapted.batteryPercent, 100);
+  assert.strictEqual(adapted.inputWatts, 118, 'solar-only provider input should still drive inbound power flow');
+  assert.strictEqual(runtime.leftflowopacity, 100);
+  assert.strictEqual(runtime.rightflowopacity, 0);
+}
+
+{
+  const runtime = runtimeFromTelemetry(onlineTelemetry({
+    batteryPercent: 100,
+    inputWatts: 0,
+    solarWatts: 0,
+    outputWatts: 0,
+  }));
+  assert.strictEqual(runtime.batteryPercent, 100);
+  assert.strictEqual(runtime.leftflowopacity, 0);
+  assert.strictEqual(runtime.rightflowopacity, 0);
+}
+
+{
   const runtime = runtimeFromTelemetry(onlineTelemetry({ inputWatts: 0, outputWatts: 2 }));
   assert.strictEqual(runtime.leftflowopacity, 0);
   assert.strictEqual(runtime.rightflowopacity, 100);

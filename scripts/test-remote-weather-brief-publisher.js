@@ -39,7 +39,7 @@ assert.ok(!publisherSource.includes('fetch('), 'Remote weather publisher must no
 assert.ok(!publisherSource.includes('useState') && !publisherSource.includes('react'), 'Remote weather publisher must not import UI/React.');
 assert.ok(
   publisherSource.includes('recordRemoteWeatherBriefEvent') &&
-    publisherSource.includes('REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS = 10 * 60 * 1000') &&
+    publisherSource.includes('REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS = 15 * 60 * 1000') &&
     publisherSource.includes('severity_escalation') &&
     publisherSource.includes('meaningful_change'),
   'Publisher must bridge into ECS Brief with dedupe, escalation, and meaningful-change behavior.',
@@ -191,7 +191,7 @@ briefCadLogStore.clear();
 result = publish({ createdAt: 3_000_000 });
 assert.strictEqual(result.emitted, true);
 result = publish({ createdAt: 3_000_000 + REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS + 1 });
-assert.strictEqual(result.emitted, true, 'Same hazard should emit after the 10 minute dedupe window expires.');
+assert.strictEqual(result.emitted, true, 'Same hazard should emit after the 15 minute dedupe window expires.');
 
 resetRemoteWeatherBriefPublisherForTests();
 briefCadLogStore.clear();

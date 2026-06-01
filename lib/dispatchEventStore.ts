@@ -13,6 +13,7 @@ let dispatchEvents: DispatchEvent[] = [];
 const dispatchEventListeners = new Set<DispatchEventListener>();
 let lastLiveRawEventsRef: unknown[] | null = null;
 let lastLiveRawEventsSignature: string | null = null;
+const dismissedEventIds = new Set<string>();
 
 function isLiveStoreEvent(event: DispatchEvent): boolean {
   return event.id.startsWith('live-');
@@ -172,6 +173,14 @@ function boundDispatchEvents(events: DispatchEvent[]): DispatchEvent[] {
   return sortDispatchEvents(events).slice(0, DISPATCH_EVENT_STORE_LIMIT);
 }
 
+function isDismissedEvent(event: DispatchEvent): boolean {
+  return dismissedEventIds.has(event.id);
+}
+
+function filterDismissedEvents(events: DispatchEvent[]): DispatchEvent[] {
+  return events.filter((event) => !isDismissedEvent(event));
+}
+
 export const dispatchEventStore = {
   getSnapshot,
 
@@ -184,11 +193,11 @@ export const dispatchEventStore = {
   },
 
   replaceEvents(rawEvents: unknown[]): DispatchEvent[] {
-    const nextEvents = boundDispatchEvents(dedupeDispatchEvents(
+    const nextEvents = boundDispatchEvents(filterDismissedEvents(dedupeDispatchEvents(
       rawEvents
         .map((rawEvent) => validateStoreEvent(rawEvent))
         .filter((event): event is DispatchEvent => !!event),
-    ));
+    )));
     if (sameEventList(dispatchEvents, nextEvents)) {
       return getSnapshot();
     }
@@ -213,6 +222,7 @@ export const dispatchEventStore = {
     const liveEvents = rawEvents.reduce<DispatchEvent[]>((accepted, rawEvent) => {
       const event = validateStoreEvent(rawEvent, { log: false });
       if (!event) return accepted;
+      if (isDismissedEvent(event)) return accepted;
 
       const previous = previousById.get(event.id);
       if (previous && isLiveStoreEvent(previous) && sameSemanticEvent(previous, event)) {
@@ -243,6 +253,9 @@ export const dispatchEventStore = {
     if (!event) {
       return null;
     }
+    if (isDismissedEvent(event)) {
+      return null;
+    }
 
     const duplicateEvent = dispatchEvents.find((currentEvent) => (
       isDuplicateDispatchEvent(currentEvent, event)
@@ -267,6 +280,9 @@ export const dispatchEventStore = {
   upsertEvent(rawEvent: unknown): DispatchEvent | null {
     const event = validateStoreEvent(rawEvent);
     if (!event) {
+      return null;
+    }
+    if (isDismissedEvent(event)) {
       return null;
     }
 
@@ -301,9 +317,22 @@ export const dispatchEventStore = {
     return event;
   },
 
+  clearEvent(eventId: string | null | undefined): boolean {
+    const normalizedId = typeof eventId === 'string' ? eventId.trim() : '';
+    if (!normalizedId) return false;
+
+    dismissedEventIds.add(normalizedId);
+    const beforeCount = dispatchEvents.length;
+    dispatchEvents = dispatchEvents.filter((event) => event.id !== normalizedId);
+    const changed = dispatchEvents.length !== beforeCount;
+    if (changed) emit();
+    return changed;
+  },
+
   clear(): void {
     lastLiveRawEventsRef = null;
     lastLiveRawEventsSignature = null;
+    dismissedEventIds.clear();
     dispatchEvents = [];
     emit();
   },

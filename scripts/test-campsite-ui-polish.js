@@ -3,10 +3,14 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
-const mapRendererSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'MapRenderer.tsx'), 'utf8');
-const campDetailSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'CampIntelDetailCard.tsx'), 'utf8');
-const campMarkerLayerSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'CampIntelMarkerLayer.tsx'), 'utf8');
+function readSource(...segments) {
+  return fs.readFileSync(path.join(root, ...segments), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const navigateSource = readSource('app', '(tabs)', 'navigate.tsx');
+const mapRendererSource = readSource('components', 'navigate', 'MapRenderer.tsx');
+const campDetailSource = readSource('components', 'navigate', 'CampIntelDetailCard.tsx');
+const campMarkerLayerSource = readSource('components', 'navigate', 'CampIntelMarkerLayer.tsx');
 
 function assertIncludes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);

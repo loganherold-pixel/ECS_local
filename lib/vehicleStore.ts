@@ -43,6 +43,24 @@ function logVehicleStoreDebug(message: string, details?: Record<string, unknown>
   });
 }
 
+function errorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+    };
+  }
+  return { errorMessage: String(error) };
+}
+
+function logVehicleStoreWarn(message: string, details?: Record<string, unknown>): void {
+  ecsLog.warn('CONFIG', `${TAG} ${message}`, details);
+}
+
+function logVehicleStoreError(message: string, error: unknown, details?: Record<string, unknown>): void {
+  ecsLog.error('CONFIG', `${TAG} ${message}`, error, details);
+}
+
 // ── Helper: check if userId is valid for cloud sync ─────
 // Returns true only if userId is a non-empty string that isn't the local sentinel.
 // This prevents sending owner_user_id='local' to Supabase as a UUID.
@@ -122,7 +140,7 @@ function notifyChange(type: VehicleChangeEvent['type'], vehicleId: string | null
   logVehicleStoreDebug('Change event', { type, vehicleId, revision: changeRevision });
   changeListeners.forEach(fn => {
     try { fn(event); } catch (e) {
-      console.warn(TAG, 'Change listener error:', e);
+      logVehicleStoreWarn('Change listener error', errorDetails(e));
     }
   });
 }
@@ -161,21 +179,21 @@ function cleanupRelatedData(vehicleId: string): void {
     vehicleSpecStore.remove(vehicleId);
     logVehicleStoreDebug('Removed specs for vehicle', { vehicleId });
   } catch (e) {
-    console.warn(TAG, 'Failed to remove vehicle specs:', e);
+    logVehicleStoreWarn('Failed to remove vehicle specs', { vehicleId, ...errorDetails(e) });
   }
 
   try {
     consumablesStore.remove(vehicleId);
     logVehicleStoreDebug('Removed consumables for vehicle', { vehicleId });
   } catch (e) {
-    console.warn(TAG, 'Failed to remove vehicle consumables:', e);
+    logVehicleStoreWarn('Failed to remove vehicle consumables', { vehicleId, ...errorDetails(e) });
   }
 
   try {
     tiresLiftStore.remove(vehicleId);
     logVehicleStoreDebug('Removed tires/lift config for vehicle', { vehicleId });
   } catch (e) {
-    console.warn(TAG, 'Failed to remove tires/lift config:', e);
+    logVehicleStoreWarn('Failed to remove tires/lift config', { vehicleId, ...errorDetails(e) });
   }
 
   // 2. Remove fetchVehicleZones.ts zone cache
@@ -259,6 +277,15 @@ const LOCAL_ONLY_UPDATE_KEYS = new Set([
   'is_leveled',
   'front_level_inches',
   'ground_clearance_inches',
+  'overall_length_in',
+  'overall_width_in',
+  'overall_height_in',
+  'track_width_front_in',
+  'track_width_rear_in',
+  'approach_angle_deg',
+  'breakover_angle_deg',
+  'departure_angle_deg',
+  'turning_diameter_ft',
   'wizard_config',
   'zones',
   'accessoryFramework',
@@ -285,6 +312,15 @@ const LOCAL_ONLY_VEHICLE_FIELDS: (keyof Vehicle)[] = [
   'is_leveled',
   'front_level_inches',
   'ground_clearance_inches',
+  'overall_length_in',
+  'overall_width_in',
+  'overall_height_in',
+  'track_width_front_in',
+  'track_width_rear_in',
+  'approach_angle_deg',
+  'breakover_angle_deg',
+  'departure_angle_deg',
+  'turning_diameter_ft',
 ];
 
 export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
@@ -316,6 +352,15 @@ export function normalizeVehicleRecord(vehicle: Vehicle): Vehicle {
     is_leveled: Boolean(vehicle.is_leveled ?? false),
     front_level_inches: vehicle.front_level_inches ?? null,
     ground_clearance_inches: vehicle.ground_clearance_inches ?? null,
+    overall_length_in: vehicle.overall_length_in ?? null,
+    overall_width_in: vehicle.overall_width_in ?? null,
+    overall_height_in: vehicle.overall_height_in ?? null,
+    track_width_front_in: vehicle.track_width_front_in ?? null,
+    track_width_rear_in: vehicle.track_width_rear_in ?? null,
+    approach_angle_deg: vehicle.approach_angle_deg ?? null,
+    breakover_angle_deg: vehicle.breakover_angle_deg ?? null,
+    departure_angle_deg: vehicle.departure_angle_deg ?? null,
+    turning_diameter_ft: vehicle.turning_diameter_ft ?? null,
   };
 }
 
@@ -400,6 +445,43 @@ export const vehicleStore = {
    * about vehicle count without starting an async fetch.
    */
   getLocalSnapshot: (): Vehicle[] => getLocalVehicles(),
+
+  importLocalSnapshot: async (incomingVehicles: Vehicle[]): Promise<{ imported: number; skipped: number }> => {
+    await ensureVehicleStorageHydrated();
+    const localVehicles = getLocalVehicles();
+    const byId = new Map(localVehicles.map((vehicle) => [vehicle.id, vehicle]));
+    let imported = 0;
+    let skipped = 0;
+
+    for (const incoming of incomingVehicles) {
+      if (!incoming?.id) {
+        skipped++;
+        continue;
+      }
+
+      const normalized = normalizeVehicleRecord(incoming);
+      const existing = byId.get(normalized.id);
+      if (
+        existing?.updated_at &&
+        normalized.updated_at &&
+        new Date(existing.updated_at).getTime() > new Date(normalized.updated_at).getTime()
+      ) {
+        skipped++;
+        continue;
+      }
+
+      byId.set(normalized.id, normalized);
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveLocalVehicles(Array.from(byId.values()));
+      await flushVehicleStorage();
+      notifyChange('sync', null);
+    }
+
+    return { imported, skipped };
+  },
 
 
 
@@ -493,7 +575,7 @@ export const vehicleStore = {
           return { vehicles: mergedCloudVehicles.map(normalizeVehicleRecord), source: 'cloud' };
         }
       } catch (err) {
-        console.warn(TAG, 'Cloud fetch failed, using local:', err);
+        logVehicleStoreWarn('Cloud fetch failed, using local', errorDetails(err));
       }
     }
 
@@ -556,9 +638,11 @@ export const vehicleStore = {
         }
 
         // Cloud failed — fall through to local
-        console.warn(TAG, 'Cloud create failed:', error?.message);
+        logVehicleStoreWarn('Cloud create failed', {
+          errorMessage: error?.message ?? String(error),
+        });
       } catch (err) {
-        console.warn(TAG, 'Cloud create error:', err);
+        logVehicleStoreWarn('Cloud create error', errorDetails(err));
       }
     }
 
@@ -602,6 +686,15 @@ export const vehicleStore = {
       is_leveled: false,
       front_level_inches: null,
       ground_clearance_inches: null,
+      overall_length_in: null,
+      overall_width_in: null,
+      overall_height_in: null,
+      track_width_front_in: null,
+      track_width_rear_in: null,
+      approach_angle_deg: null,
+      breakover_angle_deg: null,
+      departure_angle_deg: null,
+      turning_diameter_ft: null,
       created_at: now,
       updated_at: now,
     };
@@ -668,12 +761,15 @@ export const vehicleStore = {
             updatedVehicle = cloudData as Vehicle;
             logVehicleStoreDebug('Updated vehicle in cloud', { vehicleId });
           } else {
-            console.warn(TAG, `Cloud update failed for ${vehicleId}:`, error?.message);
+            logVehicleStoreWarn('Cloud update failed', {
+              vehicleId,
+              errorMessage: error?.message ?? String(error),
+            });
             // Fall through to local update
           }
         }
       } catch (err: any) {
-        console.warn(TAG, `Cloud update error for ${vehicleId}:`, err);
+        logVehicleStoreWarn('Cloud update error', { vehicleId, ...errorDetails(err) });
         // Fall through to local update
       }
     }
@@ -724,10 +820,10 @@ export const vehicleStore = {
         updatedLocal = true;
         logVehicleStoreDebug('Added cloud vehicle version to local storage', { vehicleId });
       } else {
-        console.warn(TAG, `Vehicle ${vehicleId} not found in local storage`);
+        logVehicleStoreWarn('Vehicle not found in local storage', { vehicleId });
       }
     } catch (err: any) {
-      console.error(TAG, `Local update error for ${vehicleId}:`, err);
+      logVehicleStoreError('Local update error', err, { vehicleId });
       if (!updatedCloud) {
         return {
           vehicle: null,
@@ -794,7 +890,10 @@ export const vehicleStore = {
           deletedCloud = true;
           logVehicleStoreDebug('Deleted vehicle from cloud', { vehicleId });
         } else {
-          console.warn(TAG, `Cloud delete failed for ${vehicleId}:`, error.message);
+          logVehicleStoreWarn('Cloud delete failed', {
+            vehicleId,
+            errorMessage: error.message,
+          });
         }
 
         // Also attempt to delete related cloud data (zones, etc.)
@@ -810,7 +909,7 @@ export const vehicleStore = {
           // Non-critical: zones may have already been cascade-deleted
         }
       } catch (err: any) {
-        console.warn(TAG, `Cloud delete error for ${vehicleId}:`, err);
+        logVehicleStoreWarn('Cloud delete error', { vehicleId, ...errorDetails(err) });
         // Continue with local deletion even if cloud fails
       }
     }
@@ -836,7 +935,7 @@ export const vehicleStore = {
         logVehicleStoreDebug('Vehicle not found in local storage', { vehicleId });
       }
     } catch (err: any) {
-      console.error(TAG, `Local delete error for ${vehicleId}:`, err);
+      logVehicleStoreError('Local delete error', err, { vehicleId });
       if (!deletedCloud) {
         return { success: false, deletedFrom: 'local', error: err?.message || 'Failed to remove from local storage' };
       }
@@ -877,7 +976,9 @@ export const vehicleStore = {
     if (!isSupabaseConfigured) return { synced: 0, errors: 0 };
     // Guard: userId must be a real UUID, not the 'local' sentinel
     if (!isSyncableUserId(userId)) {
-      console.warn(TAG, 'syncToCloud called with non-syncable userId:', String(userId).slice(0, 12));
+      logVehicleStoreWarn('syncToCloud called with non-syncable userId', {
+        userIdPrefix: String(userId).slice(0, 12),
+      });
       return { synced: 0, errors: 0 };
     }
 
@@ -897,7 +998,7 @@ export const vehicleStore = {
         );
       }
     } catch (error) {
-      console.warn(TAG, 'Unable to fetch cloud vehicle ids before sync; falling back to local ownership check:', error);
+      logVehicleStoreWarn('Unable to fetch cloud vehicle ids before sync; falling back to local ownership check', errorDetails(error));
     }
 
     const unsynced = localVehicles.filter((v) => {
@@ -1021,14 +1122,17 @@ export const vehicleStore = {
               await flushVehicleStorage();
             }
           } catch (e) {
-            console.warn(TAG, 'Failed to cache accessory data locally after cloud save:', e);
+            logVehicleStoreWarn('Failed to cache accessory data locally after cloud save', {
+              vehicleId,
+              ...errorDetails(e),
+            });
           }
           // Notify listeners that vehicle config was finalized (cloud path)
           notifyChange('finalize', vehicleId);
           return { success: true, totalSlots: data.total_slots || 20 };
         }
 
-        console.warn(TAG, 'setup-vehicle-zones cloud finalize failed; using local fallback', {
+        logVehicleStoreWarn('setup-vehicle-zones cloud finalize failed; using local fallback', {
           vehicleId,
           errorName: (error as any)?.name ?? null,
           errorMessage: (error as any)?.message ?? String(error),
@@ -1036,7 +1140,7 @@ export const vehicleStore = {
           statusText: (error as any)?.context?.statusText ?? null,
         });
       } catch (err) {
-        console.warn(TAG, 'setup-vehicle-zones cloud finalize threw; using local fallback', {
+        logVehicleStoreWarn('setup-vehicle-zones cloud finalize threw; using local fallback', {
           vehicleId,
           errorName: (err as any)?.name ?? null,
           errorMessage: (err as any)?.message ?? String(err),

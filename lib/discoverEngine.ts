@@ -181,6 +181,101 @@ export interface ExpeditionOpportunity {
   routeMetadata?: Record<string, unknown>;
 }
 
+type DemoFullRouteGeometry = {
+  type: 'LineString';
+  coordinates: [number, number][];
+};
+
+const EXPLORE_ROUTE_GEOMETRY_FIXTURES: Record<string, DemoFullRouteGeometry> = {
+  'lassen-backcountry': {
+    type: 'LineString',
+    coordinates: [
+      [-121.5100, 40.4900],
+      [-121.4550, 40.5320],
+      [-121.3850, 40.5600],
+      [-121.3100, 40.5350],
+      [-121.2600, 40.4750],
+      [-121.3000, 40.4100],
+      [-121.3900, 40.3850],
+      [-121.4700, 40.4250],
+      [-121.5100, 40.4900],
+    ],
+  },
+  'high-lakes-ohv': {
+    type: 'LineString',
+    coordinates: [
+      [-121.3500, 40.0500],
+      [-121.3150, 40.0730],
+      [-121.2780, 40.0880],
+      [-121.2400, 40.0750],
+      [-121.2200, 40.0450],
+      [-121.2550, 40.0180],
+      [-121.3050, 40.0240],
+      [-121.3500, 40.0500],
+    ],
+  },
+  'fort-sage-ohv': {
+    type: 'LineString',
+    coordinates: [
+      [-120.0100, 39.7300],
+      [-119.9600, 39.7480],
+      [-119.9100, 39.7350],
+      [-119.8750, 39.7000],
+      [-119.9050, 39.6600],
+      [-119.9650, 39.6650],
+      [-120.0150, 39.7000],
+      [-120.0100, 39.7300],
+    ],
+  },
+  'oregon-bdr-south': {
+    type: 'LineString',
+    coordinates: [
+      [-122.1500, 42.1500],
+      [-122.0500, 42.4200],
+      [-121.8950, 42.7200],
+      [-121.7600, 43.0200],
+      [-121.6550, 43.3000],
+      [-121.5200, 43.5900],
+      [-121.4250, 43.8750],
+      [-121.3100, 44.1250],
+    ],
+  },
+  'nevada-bdr': {
+    type: 'LineString',
+    coordinates: [
+      [-117.5000, 39.5000],
+      [-117.3200, 39.8400],
+      [-117.1200, 40.1800],
+      [-116.9650, 40.5200],
+      [-116.7800, 40.8600],
+      [-116.5900, 41.2050],
+      [-116.4300, 41.5400],
+      [-116.2800, 41.8650],
+    ],
+  },
+};
+
+function withDemoFullRouteGeometry(routeId: keyof typeof EXPLORE_ROUTE_GEOMETRY_FIXTURES): Pick<
+  ExpeditionOpportunity,
+  'routeGeometry' | 'destinationCoordinate' | 'endpointCoordinate' | 'routeMetadata'
+> {
+  const routeGeometry = EXPLORE_ROUTE_GEOMETRY_FIXTURES[routeId];
+  const finalCoordinate = routeGeometry.coordinates[routeGeometry.coordinates.length - 1];
+
+  return {
+    routeGeometry,
+    destinationCoordinate: { lat: finalCoordinate[1], lng: finalCoordinate[0] },
+    endpointCoordinate: { lat: finalCoordinate[1], lng: finalCoordinate[0] },
+    routeMetadata: {
+      routeScope: 'full_trail_route',
+      geometrySource: 'ecs_demo_full_route_fixture',
+      sourceLabel: 'ECS demo suggested-route geometry',
+      authorityNotice: 'Mapbox is not the legal trail authority; ECS legality must come from verified trail sources.',
+      safetyNotice: 'Demo route geometry supports field-test route flow only and does not imply safe/current trail conditions.',
+    },
+  };
+}
+
 function slugifyRouteId(value: string): string {
   const normalized = value
     .toLowerCase()
@@ -806,11 +901,11 @@ const SEED_OPPORTUNITIES: ExpeditionOpportunity[] = [
   { id: 'cathedral-valley-loop', name: 'Cathedral Valley Loop', region: 'Capitol Reef, Utah', regionGroup: 'utah-canyonlands', distanceMiles: 58, terrainType: 'Desert Canyon', remotenessScore: 8, estimatedFuelRequired: 7, suggestedCamps: 1, description: 'A remote loop through Capitol Reef\'s Cathedral Valley featuring towering monoliths, painted desert badlands, and one of Utah\'s least-visited landscapes.', highlights: ['Temple of the Sun monolith', 'Temple of the Moon', 'Bentonite Hills badlands', 'Upper Cathedral Valley overlook'], elevationGainFt: 2200, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-canyon', startLat: 38.3500, startLng: -111.2000, recommendedTireSize: 31, recommendedLift: 0, terrainDifficulty: 4, popularityScore: 20, estimatedTravelHours: 5 },
   // Weekend Trips
   { id: 'daniel-boone-backcountry', name: 'Daniel Boone Backcountry', region: 'Eastern Kentucky', regionGroup: 'kentucky-appalachians', distanceMiles: 95, terrainType: 'Forest / Mountain', remotenessScore: 4, estimatedFuelRequired: 11, suggestedCamps: 2, description: 'A network of forest service roads through the Daniel Boone National Forest with creek crossings, ridgeline views, and remote Appalachian hollows.', highlights: ['Red River Gorge approach', 'Natural Bridge overlook', 'Appalachian creek fords', 'Remote hollow camping'], elevationGainFt: 5400, estimatedDays: 2, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 37.8000, startLng: -83.6700, recommendedTireSize: 31, recommendedLift: 2, terrainDifficulty: 4, popularityScore: 20, estimatedTravelHours: 8 },
-  { id: 'lassen-backcountry', name: 'Lassen Backcountry Loop', region: 'Northern California', regionGroup: 'sierra-nevada', distanceMiles: 78, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 10, suggestedCamps: 2, description: 'A volcanic backcountry loop through Lassen National Forest with hot springs, volcanic landscapes, and pristine alpine lakes.', highlights: ['Volcanic mud pots', 'Natural hot springs', 'Alpine lake camping', 'Old-growth forest corridors'], elevationGainFt: 5600, estimatedDays: 2, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 40.4900, startLng: -121.5100, recommendedTireSize: 31, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 15, estimatedTravelHours: 7 },
+  { id: 'lassen-backcountry', name: 'Lassen Backcountry Loop', region: 'Northern California', regionGroup: 'sierra-nevada', distanceMiles: 78, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 10, suggestedCamps: 2, description: 'A volcanic backcountry loop through Lassen National Forest with hot springs, volcanic landscapes, and pristine alpine lakes.', highlights: ['Volcanic mud pots', 'Natural hot springs', 'Alpine lake camping', 'Old-growth forest corridors'], elevationGainFt: 5600, estimatedDays: 2, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 40.4900, startLng: -121.5100, recommendedTireSize: 31, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 15, estimatedTravelHours: 7, ...withDemoFullRouteGeometry('lassen-backcountry') },
   { id: 'gila-river-route', name: 'Gila River Route', region: 'Gila National Forest, New Mexico', regionGroup: 'new-mexico', distanceMiles: 110, terrainType: 'Desert Canyon', remotenessScore: 8, estimatedFuelRequired: 14, suggestedCamps: 2, description: 'A remote route through the Gila National Forest following the Gila River through deep canyons, hot springs, and ancient cliff dwellings.', highlights: ['Gila Cliff Dwellings', 'Natural hot springs', 'River canyon crossings', 'Dark sky wilderness'], elevationGainFt: 6800, estimatedDays: 2, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-canyon', startLat: 33.2300, startLng: -108.2100, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 15, estimatedTravelHours: 9 },
   // Expeditions
-  { id: 'oregon-bdr-south', name: 'Oregon BDR (South Section)', region: 'Southern Oregon', regionGroup: 'oregon-cascades', distanceMiles: 280, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 28, suggestedCamps: 5, description: 'The southern section of the Oregon Backcountry Discovery Route traverses Cascade volcanic landscapes, old-growth forests, and high desert plateaus.', highlights: ['Crater Lake approach', 'Cascade volcanic peaks', 'Old-growth forests', 'High desert plateaus'], elevationGainFt: 14000, estimatedDays: 5, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 42.1500, startLng: -122.1500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 35, estimatedTravelHours: 24 },
-  { id: 'nevada-bdr', name: 'Nevada BDR', region: 'Central Nevada', regionGroup: 'great-basin', distanceMiles: 350, terrainType: 'Desert Sand / Rock', remotenessScore: 9, estimatedFuelRequired: 35, suggestedCamps: 6, description: 'The Nevada Backcountry Discovery Route crosses the most remote and least-populated landscapes in the lower 48. Basin and range desert, ghost towns, and vast empty spaces.', highlights: ['Loneliest road in America', 'Historic ghost towns', 'Basin and range valleys', 'Dark sky wilderness'], elevationGainFt: 18000, estimatedDays: 6, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.5000, startLng: -117.5000, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 25, estimatedTravelHours: 30 },
+  { id: 'oregon-bdr-south', name: 'Oregon BDR (South Section)', region: 'Southern Oregon', regionGroup: 'oregon-cascades', distanceMiles: 280, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 28, suggestedCamps: 5, description: 'The southern section of the Oregon Backcountry Discovery Route traverses Cascade volcanic landscapes, old-growth forests, and high desert plateaus.', highlights: ['Crater Lake approach', 'Cascade volcanic peaks', 'Old-growth forests', 'High desert plateaus'], elevationGainFt: 14000, estimatedDays: 5, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 42.1500, startLng: -122.1500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 35, estimatedTravelHours: 24, ...withDemoFullRouteGeometry('oregon-bdr-south') },
+  { id: 'nevada-bdr', name: 'Nevada BDR', region: 'Central Nevada', regionGroup: 'great-basin', distanceMiles: 350, terrainType: 'Desert Sand / Rock', remotenessScore: 9, estimatedFuelRequired: 35, suggestedCamps: 6, description: 'The Nevada Backcountry Discovery Route crosses the most remote and least-populated landscapes in the lower 48. Basin and range desert, ghost towns, and vast empty spaces.', highlights: ['Loneliest road in America', 'Historic ghost towns', 'Basin and range valleys', 'Dark sky wilderness'], elevationGainFt: 18000, estimatedDays: 6, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.5000, startLng: -117.5000, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 25, estimatedTravelHours: 30, ...withDemoFullRouteGeometry('nevada-bdr') },
   { id: 'montana-bdr-north', name: 'Montana BDR (North Section)', region: 'Northern Montana', regionGroup: 'idaho-montana', distanceMiles: 240, terrainType: 'Forest / Mountain', remotenessScore: 8, estimatedFuelRequired: 24, suggestedCamps: 4, description: 'The northern section of the Montana Backcountry Discovery Route through the Northern Rockies. Grizzly country, pristine rivers, and massive mountain panoramas.', highlights: ['Glacier NP approach roads', 'Bob Marshall Wilderness edge', 'Pristine mountain rivers', 'Grizzly bear country'], elevationGainFt: 16000, estimatedDays: 4, bestSeason: 'Summer', permitRequired: false, imageTag: 'alpine-mountain', startLat: 48.2000, startLng: -113.5000, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 30, estimatedTravelHours: 20 },
   // Remote Routes
   { id: 'magruder-corridor', name: 'Magruder Corridor', region: 'Idaho–Montana Border', regionGroup: 'idaho-montana', distanceMiles: 101, terrainType: 'Forest / Mountain', remotenessScore: 9, estimatedFuelRequired: 14, suggestedCamps: 2, description: 'One of the most remote roads in the lower 48, the Magruder Corridor follows the Selway-Bitterroot Wilderness boundary through pristine mountain forests with no services for 100 miles.', highlights: ['Selway-Bitterroot Wilderness', 'No services for 100 miles', 'Pristine mountain streams', 'Historic lookout towers'], elevationGainFt: 8800, estimatedDays: 2, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 45.8000, startLng: -114.8000, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 10, estimatedTravelHours: 10 },
@@ -819,12 +914,12 @@ const SEED_OPPORTUNITIES: ExpeditionOpportunity[] = [
   { id: 'alvord-desert-loop', name: 'Alvord Desert Loop', region: 'Southeastern Oregon', regionGroup: 'oregon-cascades', distanceMiles: 120, terrainType: 'Desert Sand / Rock', remotenessScore: 9, estimatedFuelRequired: 15, suggestedCamps: 2, description: 'A remote loop through the Alvord Desert and Steens Mountain in southeastern Oregon. Playa driving, hot springs, and dramatic fault-block mountain scenery.', highlights: ['Alvord Desert playa driving', 'Steens Mountain summit', 'Wildhorse hot springs', 'Fault-block escarpment views'], elevationGainFt: 6400, estimatedDays: 2, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 42.5500, startLng: -118.5500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 5, popularityScore: 12, estimatedTravelHours: 10 },
   { id: 'mendocino-m1-ridge', name: 'Mendocino M1 Ridge Road', region: 'Mendocino National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 54, terrainType: 'Forest / Mountain', remotenessScore: 7, estimatedFuelRequired: 7, suggestedCamps: 1, description: 'A high-clearance forest road route along the Mendocino ridge network with dirt climbs, dispersed camps, and long views across the Coast Range.', highlights: ['High-clearance forest road', 'Coast Range views', 'Dispersed camp access', 'Seasonal dirt climbs'], elevationGainFt: 4200, estimatedDays: 1, bestSeason: 'Late Spring / Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.9000, startLng: -122.7400, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 18, estimatedTravelHours: 5 },
   { id: 'usal-road-lost-coast', name: 'Usal Road Lost Coast', region: 'Lost Coast, California', regionGroup: 'sierra-nevada', distanceMiles: 28, terrainType: 'Forest / Coastal', remotenessScore: 7, estimatedFuelRequired: 5, suggestedCamps: 1, description: 'A rough coastal dirt road through redwood and coastal forest with remote beach access, mud holes after rain, and narrow shelf sections.', highlights: ['Remote coastal dirt road', 'Beach camp access', 'Redwood corridors', 'Muddy seasonal sections'], elevationGainFt: 2600, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.8300, startLng: -123.8400, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 24, estimatedTravelHours: 4 },
-  { id: 'high-lakes-ohv', name: 'High Lakes OHV Network', region: 'Lassen National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 22, terrainType: 'Alpine / Rock', remotenessScore: 6, estimatedFuelRequired: 4, suggestedCamps: 1, description: 'A compact high-country OHV network with granite shelves, lake access, and connected 4WD tracks above the forest line.', highlights: ['4WD lake access', 'Granite shelves', 'High-country camps', 'Connected OHV tracks'], elevationGainFt: 2400, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 40.0500, startLng: -121.3500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 28, estimatedTravelHours: 4 },
+  { id: 'high-lakes-ohv', name: 'High Lakes OHV Network', region: 'Lassen National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 22, terrainType: 'Alpine / Rock', remotenessScore: 6, estimatedFuelRequired: 4, suggestedCamps: 1, description: 'A compact high-country OHV network with granite shelves, lake access, and connected 4WD tracks above the forest line.', highlights: ['4WD lake access', 'Granite shelves', 'High-country camps', 'Connected OHV tracks'], elevationGainFt: 2400, estimatedDays: 1, bestSeason: 'Summer / Early Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 40.0500, startLng: -121.3500, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 28, estimatedTravelHours: 4, ...withDemoFullRouteGeometry('high-lakes-ohv') },
   { id: 'fordyce-creek-trail', name: 'Fordyce Creek Trail', region: 'Tahoe National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 12, terrainType: 'Alpine / Rock', remotenessScore: 6, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A rugged 4x4 trail with creek crossings, granite ledges, and high-consequence rock obstacles in the northern Sierra.', highlights: ['Creek crossings', 'Granite ledges', 'Technical 4x4 line', 'Sierra forest access'], elevationGainFt: 2100, estimatedDays: 1, bestSeason: 'Summer', permitRequired: false, imageTag: 'alpine-mountain', startLat: 39.3700, startLng: -120.5300, recommendedTireSize: 35, recommendedLift: 3, terrainDifficulty: 9, popularityScore: 38, estimatedTravelHours: 5 },
   { id: 'bowman-lake-road', name: 'Bowman Lake Road', region: 'Tahoe National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 21, terrainType: 'Forest / Mountain', remotenessScore: 5, estimatedFuelRequired: 3, suggestedCamps: 1, description: 'A rough forest road corridor to Bowman Lake with washboard, rocky stretches, and dispersed camping near alpine water.', highlights: ['Alpine lake access', 'Rocky forest road', 'Dispersed camps', 'Sierra granite views'], elevationGainFt: 1900, estimatedDays: 1, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'forest-mountain', startLat: 39.4500, startLng: -120.6500, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 26, estimatedTravelHours: 3 },
   { id: 'pine-nut-mountain-tracks', name: 'Pine Nut Mountain Tracks', region: 'Western Nevada', regionGroup: 'great-basin', distanceMiles: 46, terrainType: 'Desert Sand / Rock', remotenessScore: 6, estimatedFuelRequired: 6, suggestedCamps: 0, description: 'A network of desert two-track and rocky ridgeline roads east of Carson Valley with broad views and multiple 4WD route options.', highlights: ['Desert two-track', 'Rocky ridge roads', 'Carson Valley views', 'Open BLM route network'], elevationGainFt: 3600, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.0500, startLng: -119.6000, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 16, estimatedTravelHours: 5 },
   { id: 'moon-rocks-ohv', name: 'Moon Rocks OHV Area', region: 'Reno, Nevada', regionGroup: 'great-basin', distanceMiles: 18, terrainType: 'Desert Sand / Rock', remotenessScore: 4, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A drivable OHV area north of Reno with slickrock-like formations, sandy washes, and short connected 4WD loops.', highlights: ['OHV slickrock formations', 'Sandy washes', 'Short 4WD loops', 'Open desert access'], elevationGainFt: 1500, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.8800, startLng: -119.7200, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 22, estimatedTravelHours: 3 },
-  { id: 'fort-sage-ohv', name: 'Fort Sage OHV Area', region: 'Lassen County, California', regionGroup: 'great-basin', distanceMiles: 34, terrainType: 'Desert Sand / Rock', remotenessScore: 5, estimatedFuelRequired: 4, suggestedCamps: 0, description: 'A high-desert OHV route network with rocky climbs, sand washes, and open BLM terrain near the California-Nevada line.', highlights: ['High-desert OHV network', 'Rocky climbs', 'Sand washes', 'BLM route access'], elevationGainFt: 2200, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.7300, startLng: -120.0100, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 5, popularityScore: 18, estimatedTravelHours: 4 },
+  { id: 'fort-sage-ohv', name: 'Fort Sage OHV Area', region: 'Lassen County, California', regionGroup: 'great-basin', distanceMiles: 34, terrainType: 'Desert Sand / Rock', remotenessScore: 5, estimatedFuelRequired: 4, suggestedCamps: 0, description: 'A high-desert OHV route network with rocky climbs, sand washes, and open BLM terrain near the California-Nevada line.', highlights: ['High-desert OHV network', 'Rocky climbs', 'Sand washes', 'BLM route access'], elevationGainFt: 2200, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 39.7300, startLng: -120.0100, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 5, popularityScore: 18, estimatedTravelHours: 4, ...withDemoFullRouteGeometry('fort-sage-ohv') },
   { id: 'black-rock-playa-loop', name: 'Black Rock Playa Loop', region: 'Black Rock Desert, Nevada', regionGroup: 'great-basin', distanceMiles: 84, terrainType: 'Desert Sand / Rock', remotenessScore: 8, estimatedFuelRequired: 9, suggestedCamps: 1, description: 'A remote desert loop across playa margins, primitive roads, and hot spring approaches in the Black Rock backcountry.', highlights: ['Primitive desert roads', 'Playa margin driving', 'Hot spring approaches', 'Dark sky camps'], elevationGainFt: 1800, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-sand', startLat: 40.7600, startLng: -119.2000, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 14, estimatedTravelHours: 7 },
   { id: 'high-rock-canyon', name: 'High Rock Canyon Route', region: 'Northern Nevada', regionGroup: 'great-basin', distanceMiles: 62, terrainType: 'Desert Canyon', remotenessScore: 9, estimatedFuelRequired: 8, suggestedCamps: 1, description: 'A remote high-desert canyon route with primitive road surfaces, volcanic cliffs, and long gaps between services.', highlights: ['Remote canyon road', 'Volcanic cliff walls', 'Primitive crossings', 'Long service gaps'], elevationGainFt: 2600, estimatedDays: 1, bestSeason: 'Spring / Fall', permitRequired: false, imageTag: 'desert-canyon', startLat: 41.3500, startLng: -119.3300, recommendedTireSize: 31, recommendedLift: 1, terrainDifficulty: 4, popularityScore: 12, estimatedTravelHours: 6 },
   { id: 'bald-mountain-ohv', name: 'Bald Mountain OHV Route', region: 'Sierra National Forest, California', regionGroup: 'sierra-nevada', distanceMiles: 15, terrainType: 'Alpine / Rock', remotenessScore: 5, estimatedFuelRequired: 3, suggestedCamps: 0, description: 'A Sierra 4WD route with granite shelves, optional rock obstacles, and forested high-country views near Shaver Lake.', highlights: ['Granite shelves', 'Optional rock obstacles', 'High-country views', 'Forest 4WD access'], elevationGainFt: 2100, estimatedDays: 1, bestSeason: 'Summer / Fall', permitRequired: false, imageTag: 'alpine-mountain', startLat: 37.0800, startLng: -119.1600, recommendedTireSize: 33, recommendedLift: 2, terrainDifficulty: 6, popularityScore: 30, estimatedTravelHours: 4 },

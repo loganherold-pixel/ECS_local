@@ -31,7 +31,7 @@ export type CampScoutAreaValidationResult = {
 
 export const CAMP_SCOUT_MIN_POLYGON_POINTS = 3;
 export const CAMP_SCOUT_MIN_AREA_SQUARE_MILES = 0.01;
-export const CAMP_SCOUT_MAX_AREA_SQUARE_MILES = 50;
+export const CAMP_SCOUT_MAX_AREA_SQUARE_MILES = 150;
 export const CAMP_SCOUT_MAX_ESTIMATED_CANDIDATES = 20;
 
 const EARTH_RADIUS_MILES = 3958.8;

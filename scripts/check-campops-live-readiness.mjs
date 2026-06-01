@@ -117,8 +117,15 @@ function checkRenderingGate(root, paths) {
     ),
     boolCheck(
       'shared_camp_pin_style_reused',
-      'MapRenderer uses the existing camp-scout marker CSS, tent icon, and rank label for CampOps pins.',
-      hasAll(renderer, [/camp-scout-marker camp-scout-grade-/, /camp-scout-tent/, /camp-scout-rank/, /pinFamily:\s*marker\.pinFamily === 'campops'/]),
+      'MapRenderer uses the shared icon-only camp-scout marker CSS, tent icon, and rank label for CampOps pins.',
+      hasAll(renderer, [
+        /camp-scout-marker camp-scout-grade-/,
+        /camp-scout-tent/,
+        /camp-scout-rank/,
+        /\b(?:item|marker)\.pinFamily === 'campops'/,
+        /'circle-radius':\s*0/,
+        /'circle-opacity':\s*0/,
+      ]),
       [rel(root, paths.source.mapRenderer)],
     ),
     boolCheck(
@@ -390,6 +397,17 @@ export function buildCampOpsLiveReadinessResult(options = {}) {
   const activeBlockers = riskAccepted ? [] : blockers;
   const status = campOpsStatusFor({ coreImplementationReady, closedFieldTestReady, riskAccepted });
   const passed = closedFieldTestReady || (riskAccepted && coreImplementationReady);
+  const evidenceGateLabels = {
+    campops_android_device_qa_gate_failed: 'Android/device QA',
+    campops_provider_source_gate_failed: 'provider/source approval',
+    campops_privacy_storage_gate_failed: 'privacy/storage approval',
+  };
+  const unresolvedEvidenceGates = blockers
+    .filter((blocker) => evidenceGateLabels[blocker])
+    .map((blocker) => evidenceGateLabels[blocker]);
+  const riskAcceptanceEvidenceNote = unresolvedEvidenceGates.length > 0
+    ? `Risk acceptance permits only a restricted closed field test; it does not approve unresolved gates: ${unresolvedEvidenceGates.join(', ')}.`
+    : 'Risk acceptance permits only a restricted closed field test; provider influence, AI assist, telemetry, and community publishing still require separate approval.';
 
   return {
     passed,
@@ -426,7 +444,7 @@ export function buildCampOpsLiveReadinessResult(options = {}) {
     },
     notes: [
       'Closed-field-test readiness requires every CampOps live gate to pass unless the missing gates are explicitly risk-accepted.',
-      'Risk acceptance permits only a restricted closed field test; it does not mark missing Android/provider/privacy evidence complete.',
+      riskAcceptanceEvidenceNote,
       'Internal beta readiness here means rendering, scoring, and safety/copy implementation gates pass; it is not closed-field-test approval.',
     ],
   };

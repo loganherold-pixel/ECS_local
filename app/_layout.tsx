@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import '../lib/androidScreensBootstrap';
 import { Stack, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
@@ -43,6 +44,7 @@ import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
 import { timelineIntelligenceEngine } from '../lib/timelineIntelligenceEngine';
 import { ecsSyncCoordinator } from '../lib/ecsSyncCoordinator';
 import { ecsOfflineInterlock } from '../lib/ecsOfflineInterlock';
+import { offlineTileSyncCoordinator } from '../lib/offlineTileSyncCoordinator';
 import { androidAutoBridge } from '../lib/androidAutoBridge';
 import {
   flushQueuedIssueEvents,
@@ -108,8 +110,11 @@ function normalizeRoutePath(path: string | null | undefined): string {
     return '/';
   }
 
-  const withoutGroups = path.replace(/\/\([^/]+\)/g, '');
-  const normalized = withoutGroups.replace(/\/index$/, '') || '/';
+  const withoutQueryAndHash = path.split(/[?#]/, 1)[0].replace(/\/\([^/]+\)/g, '');
+  const withoutTrailingSlash = withoutQueryAndHash.length > 1
+    ? withoutQueryAndHash.replace(/\/+$/, '')
+    : withoutQueryAndHash;
+  const normalized = withoutTrailingSlash.replace(/\/index$/, '') || '/';
   return normalized === '' ? '/' : normalized;
 }
 
@@ -153,6 +158,7 @@ const STARTUP_VISUAL_PALETTE = {
 } as const;
 const INITIAL_URL_RESOLUTION_TIMEOUT_MS = 1500;
 const MIN_LOADING_MS = 3000;
+const POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS = 6500;
 const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;
 const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;
 const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 12000;
@@ -240,7 +246,12 @@ function toRestorableShellRoute(path: string | null | undefined): string | null 
     return '/dashboard';
   }
 
-  if (normalized === '/discover' || normalized === '/explore') {
+  if (
+    normalized === '/discover' ||
+    normalized === '/explore' ||
+    normalized === '/explore-trip-builder' ||
+    normalized === '/explore-offline-prep-pack'
+  ) {
     return '/discover';
   }
 
@@ -274,6 +285,24 @@ function getPreferredShellRoute(): string {
     return '/fleet';
   }
   return getStoredShellRoute() ?? '/dashboard';
+}
+
+function toExpoRouterShellTarget(path: string): string {
+  switch (normalizeRoutePath(path)) {
+    case '/fleet':
+      return '/fleet';
+    case '/navigate':
+      return '/navigate';
+    case '/dashboard':
+      return '/dashboard';
+    case '/discover':
+    case '/explore':
+      return '/discover';
+    case '/alert':
+      return '/alert';
+    default:
+      return path;
+  }
 }
 
 function getPersistedSetupComplete(): boolean {
@@ -838,6 +867,10 @@ function AuthGate() {
     !!postAuthLoadingTarget &&
     (normalizedPathname === '/' || inAuthScreen) &&
     normalizedPathname !== postAuthLoadingTarget;
+  const authScreenShellRedirectPending =
+    inAuthScreen &&
+    !!postAuthLoadingTarget &&
+    normalizedPathname !== postAuthLoadingTarget;
   const postAuthLoadingGateKey = postAuthLoadingGateActive
     ? [
         user?.id ?? (rememberedOfflineAccess ? 'remembered_offline' : guestOfflineAccess ? 'guest_offline' : 'shell'),
@@ -979,7 +1012,13 @@ function AuthGate() {
     !entryResolution.shellAccessReady;
   const inPreAuthTree =
     normalizedPathname === '/' ||
-    inAuthScreen ||
+    (
+      inAuthScreen &&
+      (
+        !entryResolution.shellAccessReady ||
+        authScreenShellRedirectPending
+      )
+    ) ||
     isResetCompletionScreen ||
     (inSetup && !entryResolution.shellAccessReady);
   const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;
@@ -992,6 +1031,8 @@ function AuthGate() {
       normalizedPathname === '/dashboard' ||
       normalizedPathname === '/discover' ||
       normalizedPathname === '/explore' ||
+      normalizedPathname === '/explore-trip-builder' ||
+      normalizedPathname === '/explore-offline-prep-pack' ||
       normalizedPathname === '/alert' ||
       normalizedPathname === '/vehicle-config' ||
       normalizedPathname === '/route' ||
@@ -1062,6 +1103,14 @@ function AuthGate() {
         : entryResolution.kind === 'authenticated_restore'
           ? 'remembered_session'
           : 'cold_launch';
+  const authScreenLoadingHandoffActive =
+    !isResetCompletionScreen &&
+    inAuthScreen &&
+    (
+      authPhase === 'signing_in' ||
+      postAuthBootstrapPending ||
+      postAuthRedirectHoldingScreenActive
+    );
   useEffect(() => {
     postAuthLoadingNavigationRef.current = null;
     setMinimumLoadingElapsed(false);
@@ -1076,6 +1125,33 @@ function AuthGate() {
       clearTimeout(minimumLoadingTimer);
     };
   }, [postAuthLoadingGateKey, postAuthRedirectHoldingScreenActive]);
+
+  useEffect(() => {
+    if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return undefined;
+
+    const fallbackTimer = setTimeout(() => {
+      if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return;
+
+      markStartupPhase('post_auth_handoff_fallback_route', {
+        currentPath: normalizedPathname,
+        target: postAuthLoadingTarget,
+        dashboardReady,
+        minimumLoadingElapsed,
+      });
+      router.replace(toExpoRouterShellTarget(postAuthLoadingTarget) as any);
+    }, POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS);
+
+    return () => {
+      clearTimeout(fallbackTimer);
+    };
+  }, [
+    dashboardReady,
+    minimumLoadingElapsed,
+    normalizedPathname,
+    postAuthLoadingTarget,
+    postAuthRedirectHoldingScreenActive,
+    router,
+  ]);
 
   const handleAccessAction = useCallback(
     async (
@@ -1476,8 +1552,11 @@ function AuthGate() {
     if (isLoading || suppressRedirect) return;
 
     const replaceWithRedirectTarget = () => {
+      const target = redirectTarget;
+      if (!target) return;
+
       const run = async () => {
-        if (legacyFleetSetupRoute && redirectTarget === '/fleet') {
+        if (legacyFleetSetupRoute && target === '/fleet') {
           const legacyRedirectKey = `${setupRouteMode}:${setupRouteVehicleId ?? 'new'}`;
           if (legacyFleetSetupRedirectRef.current !== legacyRedirectKey) {
             legacyFleetSetupRedirectRef.current = legacyRedirectKey;
@@ -1499,7 +1578,7 @@ function AuthGate() {
             }
           }
         }
-        router.replace(redirectTarget as any);
+        router.replace(toExpoRouterShellTarget(target) as any);
       };
       void run();
     };
@@ -1621,7 +1700,10 @@ function AuthGate() {
     );
   }
 
-  if (postAuthRedirectHoldingScreenActive) {
+  if (
+    (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||
+    authScreenLoadingHandoffActive
+  ) {
     return <LoadingTransitionVideo />;
   }
 
@@ -1721,7 +1803,7 @@ function AuthGate() {
                     ? boundaryPrimaryAccessAction.id === 'refresh_access'
                       ? boundaryPrimaryAccessAction.label === AUTH_COPY.accessGate.retry
                         ? 'Trying again...'
-                        : 'Refreshing...'
+                        : 'Verifying access...'
                       : boundaryPrimaryAccessAction.id === 'sign_out'
                         ? AUTH_COPY.logout.primaryLoading
                       : boundaryPrimaryAccessAction.id === 'start_subscription'
@@ -1952,6 +2034,13 @@ function AuthGate() {
                 }}
               />
               <Stack.Screen
+                name="convoy-command"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: MOTION.modalSlide,
+                }}
+              />
+              <Stack.Screen
                 name="expedition-archive"
                 options={{
                   animation: 'fade_from_bottom',
@@ -2082,6 +2171,7 @@ export default function RootLayout() {
         nextState === 'active'
       ) {
         ecsSyncCoordinator.resume();
+        offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
         void flushQueuedIssueEvents();
       }
 
@@ -2093,6 +2183,10 @@ export default function RootLayout() {
     return () => {
       subscription.remove();
     };
+  }, []);
+
+  useEffect(() => {
+    offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
   }, []);
 
   useEffect(() => {

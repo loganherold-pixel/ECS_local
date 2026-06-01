@@ -1,6 +1,6 @@
 import { ecsLog } from './ecsLogger';
 
-export const ECS_ALERT_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+export const ECS_ALERT_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
 
 export type ECSUpdateDedupeEvent = {
   id?: string | number | null;

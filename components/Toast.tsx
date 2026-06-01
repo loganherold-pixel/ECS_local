@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Text, StyleSheet, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, SPACING, RADIUS } from '../lib/theme';
+import { SPACING, RADIUS, resolveEcsPopupSurfaceTheme } from '../lib/theme';
 import { useToastState } from '../context/AppContext';
 import { getCommandDockHeight } from '../lib/shellLayout';
 import { useReducedMotion, useStableAnimatedValue } from '../lib/ecsAnimations';
+import ECSShellTexture from './ECSShellTexture';
+import { useTheme } from '../context/ThemeContext';
 
 type ToastProps = {
   placement?: 'bottom' | 'top';
@@ -28,12 +30,14 @@ export default function Toast({
 }: ToastProps) {
   const insets = useSafeAreaInsets();
   const toastMsg = useToastState();
+  const { effectiveTheme, palette } = useTheme();
   const reducedMotion = useReducedMotion();
   const opacity = useStableAnimatedValue(toastMsg ? 1 : 0);
   const [displayMsg, setDisplayMsg] = useState<string | null>(toastMsg);
   const displayMsgRef = useRef<string | null>(toastMsg);
   const latestToastRef = useRef<string | null>(toastMsg);
   const mountedRef = useRef(true);
+  const surfaceTheme = useMemo(() => resolveEcsPopupSurfaceTheme(effectiveTheme), [effectiveTheme]);
 
   useEffect(() => {
     latestToastRef.current = toastMsg;
@@ -123,11 +127,16 @@ export default function Toast({
         styles.container,
         elevated && styles.elevated,
         positionStyle,
+        {
+          backgroundColor: surfaceTheme.shellBg,
+          borderColor: surfaceTheme.shellBorder,
+        },
         { opacity },
         zIndex != null && { zIndex },
       ]}
     >
-      <Text style={styles.text}>{displayMsg}</Text>
+      <ECSShellTexture />
+      <Text style={[styles.text, { color: palette.amber }]}>{displayMsg}</Text>
     </Animated.View>
   );
 }
@@ -135,9 +144,8 @@ export default function Toast({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    backgroundColor: COLORS.bgElevated,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: COLORS.goldBorder,
     borderRadius: RADIUS.md,
     padding: SPACING.md,
     alignItems: 'center',
@@ -152,9 +160,9 @@ const styles = StyleSheet.create({
     elevation: 24,
   },
   text: {
-    color: COLORS.gold,
     fontSize: 14,
     fontWeight: '600',
+    zIndex: 1,
   },
 });
 

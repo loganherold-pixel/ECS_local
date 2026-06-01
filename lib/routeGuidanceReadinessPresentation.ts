@@ -30,8 +30,8 @@ export interface RouteGuidanceReadinessDisplay {
 export type RouteGuidanceReadinessRow = RouteGuidanceReadinessDisplay;
 
 export interface RouteGuidanceRecommendedAction {
-  id: 'prepare_offline' | 'review_route';
-  label: 'Prepare Offline' | 'Review Route';
+  id: 'prepare_offline';
+  label: 'Prepare Offline';
 }
 
 export interface RouteGuidanceRouteConfidenceExplanation {
@@ -172,10 +172,6 @@ function buildRecommendedActions(args: {
     args.offlineReadiness.level === 'not_ready'
   ) {
     actions.push({ id: 'prepare_offline', label: 'Prepare Offline' });
-  }
-
-  if (args.routeConfidence.level === 'low' || args.routeConfidenceSummary?.status === 'red') {
-    actions.push({ id: 'review_route', label: 'Review Route' });
   }
 
   return actions;

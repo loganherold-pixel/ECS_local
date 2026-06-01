@@ -125,6 +125,18 @@ function fetchText(body, status = 200, headers = {}) {
   assert.ok(missingTimestamp.warnings.includes('missing_timestamp'));
   assert.ok(missingTimestamp.placemarks[0].warnings.includes('missing_timestamp'));
 
+  const missingTimestampResult = parseGarminMapShareKmlToLocationEvents({
+    kml: fixture('missing-timestamp.kml'),
+    feed: feeds[0],
+    polledAt: NOW,
+    staleAfterMs: mapshareConfig.mapShareStaleAfterMs,
+  });
+  assert.strictEqual(missingTimestampResult.status, 'parsed');
+  assert.strictEqual(missingTimestampResult.stale, true, 'MapShare points without a source timestamp must not be treated as fresh.');
+  assert.strictEqual(missingTimestampResult.events[0].metadata.stale, true);
+  assert.ok(missingTimestampResult.events[0].metadata.dataQualityWarnings.some((warning) => warning.includes('source timestamp')));
+  assert.ok(missingTimestampResult.warning.includes('recent location update'));
+
   const namespaced = parseGarminMapShareKml({ kml: fixture('namespaces.kml') });
   assert.strictEqual(namespaced.placemarks.length, 1, 'Parser should handle XML namespaces.');
   assert.strictEqual(namespaced.placemarks[0].message, 'Namespaced message.');

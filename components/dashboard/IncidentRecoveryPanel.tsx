@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
+  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -45,6 +48,7 @@ import IncidentTimelineModal from './IncidentTimelineModal';
 import ResolveDebriefModal from './ResolveDebriefModal';
 import type { IncidentCommunicationPacketAudience } from '../../lib/incidentCommunicationPacket';
 import type { ExpeditionAssessmentEscalationRequest } from '../../lib/expedition/assessmentEscalation';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type IncidentActionId =
   | 'report'
@@ -67,6 +71,9 @@ type IncidentRecoveryPanelProps = {
   routeLabel?: string;
   ecsOnline?: boolean;
   gpsLocation?: IncidentCoordinate | null;
+  compact?: boolean;
+  modalStackBehavior?: OverlayStackBehavior;
+  style?: StyleProp<ViewStyle>;
   assessmentEscalation?: ExpeditionAssessmentEscalationRequest | null;
   onAssessmentEscalationHandled?: () => void;
 };
@@ -175,6 +182,9 @@ export default function IncidentRecoveryPanel({
   routeLabel,
   ecsOnline,
   gpsLocation,
+  compact = false,
+  modalStackBehavior = 'replace',
+  style,
   assessmentEscalation,
   onAssessmentEscalationHandled,
 }: IncidentRecoveryPanelProps) {
@@ -345,22 +355,47 @@ export default function IncidentRecoveryPanel({
   const handleSaveDebrief = (input: IncidentDebriefInput) => {
     incidentRecoveryWorkflowStore.saveIncidentDebrief(input);
   };
+  const handleClearIncident = () => {
+    const incidentId = incidentState.activeIncident?.id;
+    const dispatchEventId = incidentState.activeIncident?.dispatchEventId ?? null;
+    if (!incidentId && !dispatchEventId && !expeditionId) return;
+    Alert.alert(
+      'Clear Incident & Recovery',
+      'This resets Incident & Recovery back to its original state for this incident. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            incidentRecoveryWorkflowStore.clearIncident({ incidentId, expeditionId });
+            if (dispatchEventId) {
+              dispatchEventStore.clearEvent(dispatchEventId);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <>
       <View
         style={[
           styles.panel,
+          compact && styles.panelCompact,
           copy.tone === 'clear' && styles.panelClear,
           copy.tone === 'activeIncident' && styles.panelAlert,
           copy.tone === 'incidentEnded' && styles.panelEnded,
+          style,
         ]}
       >
-        <View style={styles.header}>
+        <View style={[styles.header, compact && styles.headerCompact]}>
           <View style={styles.titleWrap}>
             <View
               style={[
                 styles.iconWrap,
+                compact && styles.iconWrapCompact,
                 copy.tone === 'clear' && styles.iconWrapClear,
                 copy.tone === 'activeIncident' && styles.iconWrapAlert,
                 copy.tone === 'incidentEnded' && styles.iconWrapEnded,
@@ -368,7 +403,7 @@ export default function IncidentRecoveryPanel({
             >
               <Ionicons
                 name={copy.icon}
-                size={19}
+                size={compact ? 16 : 19}
                 color={
                   copy.tone === 'clear'
                     ? TACTICAL.successText
@@ -379,52 +414,70 @@ export default function IncidentRecoveryPanel({
               />
             </View>
             <View style={styles.copy}>
-              <Text style={styles.title}>Incident & Recovery</Text>
+              <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={1}>Incident & Recovery</Text>
               <Text
                 style={[
                   styles.status,
+                  compact && styles.statusCompact,
                   copy.tone === 'clear' && styles.statusClear,
                   copy.tone === 'activeIncident' && styles.statusAlert,
                 ]}
+                numberOfLines={1}
               >
                 {copy.status}
               </Text>
               {copy.supportLine ? (
-                <Text style={styles.supportLine}>{copy.supportLine}</Text>
+                <Text style={[styles.supportLine, compact && styles.supportLineCompact]} numberOfLines={1}>{copy.supportLine}</Text>
               ) : null}
             </View>
           </View>
-          <View
-            style={[
-              styles.badge,
-              copy.tone === 'clear' && styles.badgeClear,
-              copy.tone === 'activeIncident' && styles.badgeAlert,
-            ]}
-          >
-            <Text
+          <View style={[styles.headerActions, compact && styles.headerActionsCompact]}>
+            {incidentState.activeIncident ? (
+              <TouchableOpacity
+                style={[styles.clearButton, compact && styles.clearButtonCompact]}
+                activeOpacity={0.78}
+                onPress={handleClearIncident}
+                accessibilityRole="button"
+                accessibilityLabel="Clear incident and recovery"
+              >
+                <Text style={[styles.clearButtonText, compact && styles.clearButtonTextCompact]}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View
               style={[
-                styles.badgeText,
-                copy.tone === 'clear' && styles.badgeTextClear,
-                copy.tone === 'activeIncident' && styles.badgeTextAlert,
+                styles.badge,
+                compact && styles.badgeCompact,
+                copy.tone === 'clear' && styles.badgeClear,
+                copy.tone === 'activeIncident' && styles.badgeAlert,
               ]}
             >
-              {copy.badge}
-            </Text>
+              <Text
+                style={[
+                  styles.badgeText,
+                  compact && styles.badgeTextCompact,
+                  copy.tone === 'clear' && styles.badgeTextClear,
+                  copy.tone === 'activeIncident' && styles.badgeTextAlert,
+                ]}
+              >
+                {copy.badge}
+              </Text>
+            </View>
           </View>
         </View>
 
-        <View style={styles.detailSlot}>
+        <View style={[styles.detailSlot, compact && styles.detailSlotCompact]}>
           {showIncidentDetails ? (
-            <View style={styles.incidentDetail}>
-              <Text style={styles.detailLocation} numberOfLines={1}>
+            <View style={[styles.incidentDetail, compact && styles.incidentDetailCompact]}>
+              <Text style={[styles.detailLocation, compact && styles.detailLocationCompact]} numberOfLines={1}>
                 {incidentState.locationLabel ?? incidentState.routeLabel ?? 'Location unknown'}
               </Text>
-              <Text style={styles.detailSummary} numberOfLines={1}>
+              <Text style={[styles.detailSummary, compact && styles.detailSummaryCompact]} numberOfLines={1}>
                 {incidentState.activeIncident?.summary ?? incidentState.nextRecommendedAction ?? 'Incident details pending'}
               </Text>
               <Text
                 style={[
                   styles.detailStatus,
+                  compact && styles.detailStatusCompact,
                   incidentState.displayMode === 'active_incident' && styles.detailStatusAlert,
                 ]}
                 numberOfLines={1}
@@ -432,32 +485,32 @@ export default function IncidentRecoveryPanel({
                 {getStatusLabel(incidentState.status)} / {getSeverityBadge(incidentState.severity)}
               </Text>
               {incidentState.nextRecommendedAction ? (
-                <Text style={styles.detailMeta} numberOfLines={1}>
+                <Text style={[styles.detailMeta, compact && styles.detailMetaCompact]} numberOfLines={1}>
                   Next: {incidentState.nextRecommendedAction}
                 </Text>
               ) : null}
               {missingCriticalData.length > 0 ? (
-                <Text style={styles.detailWarning} numberOfLines={1}>
+                <Text style={[styles.detailWarning, compact && styles.detailWarningCompact]} numberOfLines={1}>
                   Missing: {missingCriticalData.map(getStatusLabel).join(', ')}
                 </Text>
               ) : null}
             </View>
           ) : (
-            <View style={styles.incidentDetail}>
-              <Text style={styles.detailLocation} numberOfLines={1}>
+            <View style={[styles.incidentDetail, compact && styles.incidentDetailCompact]}>
+              <Text style={[styles.detailLocation, compact && styles.detailLocationCompact]} numberOfLines={1}>
                 {incidentState.nextRecommendedAction ?? 'Ready to report incident'}
               </Text>
-              <Text style={styles.detailSummary} numberOfLines={1}>
+              <Text style={[styles.detailSummary, compact && styles.detailSummaryCompact]} numberOfLines={1}>
                 {incidentState.routeLabel ?? 'No incident details active'}
               </Text>
-              <Text style={styles.detailStatus} numberOfLines={1}>
+              <Text style={[styles.detailStatus, compact && styles.detailStatusCompact]} numberOfLines={1}>
                 {ecsOnline === false ? 'ECS status unknown' : `Last checked ${lastCheckedLabel ?? 'just now'}`}
               </Text>
             </View>
           )}
         </View>
 
-        <View style={styles.actionGrid}>
+        <View style={[styles.actionGrid, compact && styles.actionGridCompact]}>
           {INCIDENT_ACTIONS.map((action) => {
             const actionState = getActionState(incidentState.buttonStates, action);
             const enabled = actionState.enabled !== false;
@@ -466,6 +519,7 @@ export default function IncidentRecoveryPanel({
                 key={action.id}
                 style={[
                   styles.action,
+                  compact && styles.actionCompact,
                   !enabled && styles.actionDisabled,
                   actionState.warning && styles.actionWarning,
                 ]}
@@ -476,17 +530,22 @@ export default function IncidentRecoveryPanel({
                 accessibilityLabel={action.label}
                 accessibilityState={{ disabled: !enabled }}
               >
+                {actionState.status === 'complete' ? (
+                  <View style={styles.completeCheck}>
+                    <Ionicons name="checkmark" size={10} color="#061008" />
+                  </View>
+                ) : null}
                 {actionState.badgeCount && actionState.badgeCount > 0 ? (
                   <View style={styles.actionBadge}>
                     <Text style={styles.actionBadgeText}>{actionState.badgeCount}</Text>
                   </View>
                 ) : null}
-                <Ionicons name={action.icon} size={15} color={enabled ? TACTICAL.amber : TACTICAL.textMuted} />
-                <Text style={[styles.actionText, !enabled && styles.actionTextDisabled]} numberOfLines={2}>
+                <Ionicons name={action.icon} size={compact ? 13 : 15} color={enabled ? TACTICAL.amber : TACTICAL.textMuted} />
+                <Text style={[styles.actionText, compact && styles.actionTextCompact, !enabled && styles.actionTextDisabled]} numberOfLines={2}>
                   {actionState.label ?? action.label}
                 </Text>
                 {actionState.status ? (
-                  <Text style={styles.actionStatus} numberOfLines={1}>
+                  <Text style={[styles.actionStatus, compact && styles.actionStatusCompact]} numberOfLines={1}>
                     {getStatusLabel(actionState.status)}
                   </Text>
                 ) : null}
@@ -499,6 +558,7 @@ export default function IncidentRecoveryPanel({
         visible={reportModalVisible}
         onClose={() => setReportModalVisible(false)}
         onSubmit={handleReportSubmit}
+        stackBehavior={modalStackBehavior}
         expeditionId={expeditionId}
         routeLabel={routeLabel ?? incidentContextSnapshot.summary?.routeLabel ?? undefined}
         gpsLocation={gpsLocation ?? incidentContextSnapshot.route?.currentLocation}
@@ -509,6 +569,7 @@ export default function IncidentRecoveryPanel({
         visible={safetyModalVisible}
         onClose={() => setSafetyModalVisible(false)}
         onSubmit={handleSafetySubmit}
+        stackBehavior={modalStackBehavior}
         activeIncident={incidentState.activeIncident}
         expeditionId={expeditionId}
         routeLabel={routeLabel ?? incidentContextSnapshot.summary?.routeLabel ?? undefined}
@@ -518,17 +579,20 @@ export default function IncidentRecoveryPanel({
       <ECSAssessmentModal
         visible={assessmentModalVisible}
         onClose={() => setAssessmentModalVisible(false)}
+        stackBehavior={modalStackBehavior}
         incident={incidentState.activeIncident}
       />
       <CommunicationPacketModal
         visible={packetModalVisible}
         onClose={() => setPacketModalVisible(false)}
+        stackBehavior={modalStackBehavior}
         incident={incidentState.activeIncident}
         onCopyPacket={handlePacketCopy}
       />
       <IncidentTimelineModal
         visible={timelineModalVisible}
         onClose={() => setTimelineModalVisible(false)}
+        stackBehavior={modalStackBehavior}
         incident={incidentState.activeIncident}
         gpsLocation={gpsLocation}
         onAddNote={handleTimelineNote}
@@ -537,6 +601,7 @@ export default function IncidentRecoveryPanel({
       <ResolveDebriefModal
         visible={resolveDebriefModalVisible}
         onClose={() => setResolveDebriefModalVisible(false)}
+        stackBehavior={modalStackBehavior}
         incident={incidentState.activeIncident}
         expeditionId={expeditionId}
         onResolveIncident={handleResolveIncident}
@@ -556,6 +621,11 @@ const styles = StyleSheet.create({
     padding: 11,
     gap: 11,
   },
+  panelCompact: {
+    minHeight: 0,
+    padding: 7,
+    gap: 5,
+  },
   panelClear: {
     borderColor: 'rgba(76,175,80,0.26)',
     backgroundColor: 'rgba(13,24,18,0.92)',
@@ -574,6 +644,42 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
   },
+  headerCompact: {
+    minHeight: 30,
+    gap: 5,
+  },
+  headerActions: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  headerActionsCompact: {
+    gap: 4,
+  },
+  clearButton: {
+    minHeight: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(192,57,43,0.36)',
+    backgroundColor: 'rgba(192,57,43,0.10)',
+    paddingHorizontal: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearButtonCompact: {
+    minHeight: 20,
+    borderRadius: 7,
+    paddingHorizontal: 7,
+  },
+  clearButtonText: {
+    color: TACTICAL.danger,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  clearButtonTextCompact: {
+    fontSize: 8,
+  },
   titleWrap: {
     flex: 1,
     minWidth: 0,
@@ -590,6 +696,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: GOLD_RAIL.subsection,
     backgroundColor: ECS.accentSoft,
+  },
+  iconWrapCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
   },
   iconWrapClear: {
     borderColor: 'rgba(76,175,80,0.28)',
@@ -612,11 +723,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  titleCompact: {
+    fontSize: 12,
+    lineHeight: 15,
+  },
   status: {
     marginTop: 2,
     color: TACTICAL.textMuted,
     fontSize: 10,
     fontWeight: '800',
+  },
+  statusCompact: {
+    marginTop: 1,
+    fontSize: 8.5,
+    lineHeight: 11,
   },
   statusClear: {
     color: TACTICAL.successText,
@@ -630,6 +750,10 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
   },
+  supportLineCompact: {
+    fontSize: 8,
+    lineHeight: 10,
+  },
   badge: {
     borderRadius: 8,
     borderWidth: 1,
@@ -637,6 +761,11 @@ const styles = StyleSheet.create({
     backgroundColor: ECS.accentSoft,
     paddingHorizontal: 7,
     paddingVertical: 4,
+  },
+  badgeCompact: {
+    borderRadius: 7,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
   },
   badgeClear: {
     borderColor: 'rgba(76,175,80,0.28)',
@@ -652,6 +781,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  badgeTextCompact: {
+    fontSize: 7,
+  },
   badgeTextClear: {
     color: TACTICAL.successText,
   },
@@ -662,6 +794,9 @@ const styles = StyleSheet.create({
     minHeight: 54,
     justifyContent: 'center',
   },
+  detailSlotCompact: {
+    minHeight: 0,
+  },
   incidentDetail: {
     borderRadius: 10,
     borderWidth: 1,
@@ -671,20 +806,38 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 3,
   },
+  incidentDetailCompact: {
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    gap: 2,
+  },
   detailLocation: {
     color: TACTICAL.text,
     fontSize: 11,
     fontWeight: '900',
+  },
+  detailLocationCompact: {
+    fontSize: 9,
+    lineHeight: 11,
   },
   detailSummary: {
     color: TACTICAL.textMuted,
     fontSize: 10,
     fontWeight: '700',
   },
+  detailSummaryCompact: {
+    fontSize: 8.5,
+    lineHeight: 10,
+  },
   detailStatus: {
     color: TACTICAL.amber,
     fontSize: 9,
     fontWeight: '900',
+  },
+  detailStatusCompact: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   detailStatusAlert: {
     color: TACTICAL.danger,
@@ -694,15 +847,26 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
   },
+  detailMetaCompact: {
+    fontSize: 8,
+    lineHeight: 10,
+  },
   detailWarning: {
     color: TACTICAL.amber,
     fontSize: 9,
     fontWeight: '900',
   },
+  detailWarningCompact: {
+    fontSize: 8,
+    lineHeight: 10,
+  },
   actionGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  actionGridCompact: {
+    gap: 5,
   },
   action: {
     width: '31%',
@@ -717,6 +881,13 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     gap: 4,
     position: 'relative',
+  },
+  actionCompact: {
+    minHeight: 36,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    gap: 2,
   },
   actionDisabled: {
     opacity: 0.62,
@@ -743,12 +914,29 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '900',
   },
+  completeCheck: {
+    position: 'absolute',
+    top: 5,
+    right: 6,
+    width: 17,
+    height: 17,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(76,175,80,0.58)',
+    backgroundColor: TACTICAL.successText,
+  },
   actionText: {
     color: TACTICAL.text,
     fontSize: 8,
     lineHeight: 10,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  actionTextCompact: {
+    fontSize: 7,
+    lineHeight: 8,
   },
   actionTextDisabled: {
     color: TACTICAL.textMuted,
@@ -758,5 +946,9 @@ const styles = StyleSheet.create({
     fontSize: 7,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  actionStatusCompact: {
+    fontSize: 6,
+    lineHeight: 7,
   },
 });

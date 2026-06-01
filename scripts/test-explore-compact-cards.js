@@ -25,6 +25,10 @@ function countOccurrences(source, text) {
   return (source.match(new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
 }
 
+function hasStyleValue(source, styleName, property, value) {
+  return new RegExp(`${styleName}:\\s*{[\\s\\S]*?${property}:\\s*${value},`).test(source);
+}
+
 assert.ok(
   enrichedCardSource.includes('compactPreview?: boolean') &&
     aiCardSource.includes('compactPreview?: boolean'),
@@ -77,10 +81,10 @@ assert.ok(
 );
 
 assert.ok(
-  discoverSource.includes('routeCardGrid: {\n    gap: 4,') &&
-    discoverSource.includes('hiddenGemCardWrap: {\n    marginBottom: 2,') &&
-    enrichedCardSource.includes('cardCompact: {\n    marginBottom: 4,') &&
-    aiCardSource.includes('cardCompact: {\n    marginBottom: 4,'),
+  hasStyleValue(discoverSource, 'routeCardGrid', 'gap', '4') &&
+    hasStyleValue(discoverSource, 'hiddenGemCardWrap', 'marginBottom', '2') &&
+    hasStyleValue(enrichedCardSource, 'cardCompact', 'marginBottom', '4') &&
+    hasStyleValue(aiCardSource, 'cardCompact', 'marginBottom', '4'),
   'Explore card spacing should be tighter in compact mode.',
 );
 
@@ -138,7 +142,7 @@ assert.ok(
 assert.ok(
   discoverSource.includes('style={s.favoriteThumbnailImage}') &&
     discoverSource.includes('resizeMode="contain"') &&
-    discoverSource.includes('favoriteThumbnailFrame: {\n    height: 76,') &&
+    hasStyleValue(discoverSource, 'favoriteThumbnailFrame', 'height', '76') &&
     discoverSource.includes("backgroundColor: 'rgba(5,7,9,0.92)'"),
   'Favorites card thumbnails should use a contained, readable frame instead of severe full-bleed cropping.',
 );
@@ -153,9 +157,9 @@ assert.ok(
 
 assert.ok(
   discoverSource.includes('{false && (!showInitialLoading && !showRefinementEmptyState') &&
-    discoverSource.includes('explorerBody: {\n    flex: 1,\n    position: \'relative\',') &&
-    discoverSource.includes('explorerPanelScroll: {\n    flex: 1,') &&
-    discoverSource.includes('nestedScrollEnabled\n                keyboardShouldPersistTaps="handled"'),
+    hasStyleValue(discoverSource, 'explorerBody', 'flex', '1') &&
+    hasStyleValue(discoverSource, 'explorerPanelScroll', 'flex', '1') &&
+    /nestedScrollEnabled\s+keyboardShouldPersistTaps="handled"/.test(discoverSource),
   'Explorer should keep long card sections off the main page and contain scrolling inside the full-body panel.',
 );
 

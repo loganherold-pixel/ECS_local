@@ -5,6 +5,9 @@ dist/
 coverage/
 npm-debug.*
 *.log
+__pycache__/
+*.py[cod]
+*.egg-info/
 *.jks
 *.keystore
 *.p8
@@ -31,11 +34,16 @@ Thumbs.db
 !.env.sample
 !.env.template
 API Weather Sources.txt
+.vscode/
 
 # Native/build outputs
 .gradle-local*/
+.gradle-*/
 .gradle-user-home/
-.npm-cache/
+.android-home/
+.android-local/
+ecs_attitude_rive_transparent_ring_bundle.zip
+.npm-cache*/
 artifacts/
 android/.gradle/
 android/.kotlin/
@@ -51,9 +59,11 @@ supabase/.temp/
 tmp/
 .tmp/
 .tmp-*
+build-log.txt
 .smoke/
 .expo-export-check/
 .expo-runtime/
+.eas-spawn-tmp/
 .cleanup-quarantine/
 .cleanup-safety/
 .codex-*

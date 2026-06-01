@@ -58,28 +58,28 @@ assertIncludes(
 
 assertIncludes(
   tabSource,
-  'getHighestActiveRemoteWeatherRisk',
-  'Expedition tab should consume the active remote/weather risk selector.',
+  'Expedition Hub',
+  'Expedition tab should now render the completed-trip Expedition Hub.',
 );
-assertIncludes(
+assertNotIncludes(
+  tabSource,
+  'getHighestActiveRemoteWeatherRisk',
+  'Expedition Hub should not consume active guidance remote/weather selector state.',
+);
+assertNotIncludes(
   tabSource,
   'subscribeRemoteWeatherRiskUpdates',
-  'Expedition tab should refresh status when ECS Brief receives new events.',
+  'Expedition Hub should not subscribe to live remote/weather events.',
 );
-assertIncludes(
+assertNotIncludes(
   tabSource,
   'No predictive hazards detected.',
-  'Active route with no hazard should show the requested status text.',
+  'Expedition Hub should not show active-route predictive hazard status text.',
 );
-assertIncludes(
+assertNotIncludes(
   tabSource,
   'formatRemoteWeatherRiskStatusLine(remoteWeatherRisk)',
-  'Active route with a hazard should show concise severity/title status text.',
-);
-assertIncludes(
-  tabSource,
-  "status: isRouteEnabled(frameworkState) ? predictiveHazardStatus : 'Start navigation to enable'",
-  'Remote/weather risk should be wired into existing Route card status text only.',
+  'Expedition Hub should not render concise active-route hazard text.',
 );
 assertNotIncludes(
   tabSource,

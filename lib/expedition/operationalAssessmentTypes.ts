@@ -143,7 +143,12 @@ export type ConvoyMemberSnapshot = {
   callsign: string;
   role?: 'lead' | 'sweep' | 'member' | 'support' | 'unknown';
   lastCheckInAt?: ExpeditionDataPoint<string>;
+  lastKnownLocation?: ExpeditionDataPoint<ExpeditionGeoPoint>;
   lastKnownLocationLabel?: ExpeditionDataPoint<string>;
+  headingDegrees?: ExpeditionDataPoint<number>;
+  speedMph?: ExpeditionDataPoint<number>;
+  batteryPercent?: ExpeditionDataPoint<number>;
+  locationStale?: ExpeditionDataPoint<boolean>;
   movementStatus?: ExpeditionDataPoint<ConvoyMemberMovementStatus>;
   distanceBehindLeadMiles?: ExpeditionDataPoint<number>;
   missedCheckpoint?: ExpeditionDataPoint<boolean>;
@@ -161,6 +166,9 @@ export type ConvoySnapshot = {
   missedCheckpointMemberLabels?: ExpeditionDataPoint<string[]>;
   assistanceNeededMemberLabels?: ExpeditionDataPoint<string[]>;
   lastCheckInAt?: ExpeditionDataPoint<string>;
+  trackingEnabled?: ExpeditionDataPoint<boolean>;
+  liveLocationMemberCount?: ExpeditionDataPoint<number>;
+  staleLocationMemberLabels?: ExpeditionDataPoint<string[]>;
   convoySpacingMinutes?: ExpeditionDataPoint<number>;
   leadSweepSeparationMiles?: ExpeditionDataPoint<number>;
   communicationsStatus?: ExpeditionDataPoint<'online' | 'degraded' | 'offline' | 'unknown'>;
@@ -198,6 +206,8 @@ export type CampSnapshot = {
 
 export type LogisticsSnapshot = {
   fuelRangeMiles?: ExpeditionDataPoint<number>;
+  fuelRemainingGallons?: ExpeditionDataPoint<number>;
+  fuelLevelPercent?: ExpeditionDataPoint<number>;
   distanceRemainingMiles?: ExpeditionDataPoint<number>;
   nextCheckpointLabel?: ExpeditionDataPoint<string>;
   distanceToNextCheckpointMiles?: ExpeditionDataPoint<number>;

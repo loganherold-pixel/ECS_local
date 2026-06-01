@@ -15,8 +15,9 @@ import {
   type RouteCoordinate,
 } from './routeGeometryUtils';
 
-export const DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES = 5;
+export const DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES = 3;
 export const DEFAULT_DISPERSED_CAMPING_ROUTE_SUMMARY_LIMIT = 3;
+export const MAX_DISPERSED_CAMPING_ROUTE_ANALYSIS_POINTS = 80;
 
 export type RouteNearbyDispersedCampingRegion = {
   regionId: string;
@@ -43,6 +44,13 @@ type SearchCandidate = RouteNearbyDispersedCampingRegion & {
   aheadOfCurrentLocation?: boolean;
 };
 
+type CoordinateBounds = {
+  minLat: number;
+  minLng: number;
+  maxLat: number;
+  maxLng: number;
+};
+
 const CONFIDENCE_RANK: Record<DispersedCampingConfidence, number> = {
   high: 0,
   medium: 1,
@@ -58,6 +66,88 @@ function clampPositiveMiles(value: number | null | undefined, fallback: number):
 function roundMiles(value: number | null | undefined): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.round(value * 10) / 10;
+}
+
+function thinRouteForCampLayerSearch(
+  route: readonly NormalizedRouteCoordinate[],
+  maxPoints = MAX_DISPERSED_CAMPING_ROUTE_ANALYSIS_POINTS,
+): NormalizedRouteCoordinate[] {
+  if (route.length <= maxPoints) return [...route];
+  const result: NormalizedRouteCoordinate[] = [];
+  const lastIndex = route.length - 1;
+  const step = lastIndex / (maxPoints - 1);
+  for (let index = 0; index < maxPoints; index += 1) {
+    const routeIndex = index === maxPoints - 1 ? lastIndex : Math.round(index * step);
+    const coordinate = route[routeIndex];
+    if (!coordinate) continue;
+    const previous = result[result.length - 1];
+    if (
+      previous &&
+      previous.latitude === coordinate.latitude &&
+      previous.longitude === coordinate.longitude
+    ) {
+      continue;
+    }
+    result.push(coordinate);
+  }
+  return result.length >= 2 ? result : [...route.slice(0, 2)];
+}
+
+function expandBounds(bounds: CoordinateBounds, miles: number): CoordinateBounds {
+  const latPad = miles / 69;
+  const averageLat = (bounds.minLat + bounds.maxLat) / 2;
+  const milesPerLngDegree = Math.max(1, Math.cos((averageLat * Math.PI) / 180) * 69);
+  const lngPad = miles / milesPerLngDegree;
+  return {
+    minLat: bounds.minLat - latPad,
+    minLng: bounds.minLng - lngPad,
+    maxLat: bounds.maxLat + latPad,
+    maxLng: bounds.maxLng + lngPad,
+  };
+}
+
+function buildCoordinateBounds(coordinates: readonly NormalizedRouteCoordinate[]): CoordinateBounds | null {
+  if (coordinates.length === 0) return null;
+  return coordinates.reduce<CoordinateBounds>(
+    (bounds, coordinate) => ({
+      minLat: Math.min(bounds.minLat, coordinate.latitude),
+      minLng: Math.min(bounds.minLng, coordinate.longitude),
+      maxLat: Math.max(bounds.maxLat, coordinate.latitude),
+      maxLng: Math.max(bounds.maxLng, coordinate.longitude),
+    }),
+    {
+      minLat: coordinates[0].latitude,
+      minLng: coordinates[0].longitude,
+      maxLat: coordinates[0].latitude,
+      maxLng: coordinates[0].longitude,
+    },
+  );
+}
+
+function regionIntersectsBounds(region: DispersedCampingRegion, bounds: CoordinateBounds): boolean {
+  const coordinates = region.geometry.type === 'Polygon'
+    ? region.geometry.coordinates.flatMap((ring) => ring)
+    : region.geometry.coordinates.flatMap((polygon) => polygon.flatMap((ring) => ring));
+  const regionCoordinates = coordinates.flatMap((position): NormalizedRouteCoordinate[] => {
+    const [longitude, latitude] = position;
+    if (
+      typeof latitude === 'number' &&
+      typeof longitude === 'number' &&
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude)
+    ) {
+      return [{ latitude, longitude }];
+    }
+    return [];
+  });
+  const regionBounds = buildCoordinateBounds(regionCoordinates);
+  if (!regionBounds) return false;
+  return !(
+    regionBounds.maxLat < bounds.minLat ||
+    regionBounds.minLat > bounds.maxLat ||
+    regionBounds.maxLng < bounds.minLng ||
+    regionBounds.minLng > bounds.maxLng
+  );
 }
 
 function getRegionCurrentLocationDistance(
@@ -85,11 +175,14 @@ export function findDispersedCampingRegionsNearRoute({
   corridorMiles = DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES,
   maxResults = DEFAULT_DISPERSED_CAMPING_ROUTE_SUMMARY_LIMIT,
 }: DispersedCampingRouteSearchOptions): RouteNearbyDispersedCampingRegion[] {
-  const route = normalizeRouteCoordinates(routeCoordinates);
-  if (route.length < 2 || !Array.isArray(regions) || regions.length === 0) return [];
+  const normalizedRoute = normalizeRouteCoordinates(routeCoordinates);
+  if (normalizedRoute.length < 2 || !Array.isArray(regions) || regions.length === 0) return [];
+  const route = thinRouteForCampLayerSearch(normalizedRoute);
 
   const corridor = clampPositiveMiles(corridorMiles, DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES);
   const limit = Math.max(1, Math.floor(maxResults || DEFAULT_DISPERSED_CAMPING_ROUTE_SUMMARY_LIMIT));
+  const routeBounds = buildCoordinateBounds(route);
+  const expandedRouteBounds = routeBounds ? expandBounds(routeBounds, corridor) : null;
   const currentRouteIndex =
     currentLocation != null
       ? (() => {
@@ -101,6 +194,7 @@ export function findDispersedCampingRegionsNearRoute({
   const candidates: SearchCandidate[] = [];
   for (const region of regions) {
     if (region.confidence === 'restricted') continue;
+    if (expandedRouteBounds && !regionIntersectsBounds(region, expandedRouteBounds)) continue;
 
     const distanceFromRoute = distanceRegionToRouteMiles(region.geometry, route);
     if (distanceFromRoute == null || distanceFromRoute > corridor) continue;
@@ -128,6 +222,11 @@ export function findDispersedCampingRegionsNearRoute({
   }
 
   candidates.sort((a, b) => {
+    const distanceDelta =
+      (a.distanceFromRouteMiles ?? Number.POSITIVE_INFINITY) -
+      (b.distanceFromRouteMiles ?? Number.POSITIVE_INFINITY);
+    if (distanceDelta !== 0) return distanceDelta;
+
     const confidenceDelta = CONFIDENCE_RANK[a.confidence] - CONFIDENCE_RANK[b.confidence];
     if (confidenceDelta !== 0) return confidenceDelta;
 
@@ -135,11 +234,6 @@ export function findDispersedCampingRegionsNearRoute({
       if (a.aheadOfCurrentLocation === true) return -1;
       if (b.aheadOfCurrentLocation === true) return 1;
     }
-
-    const distanceDelta =
-      (a.distanceFromRouteMiles ?? Number.POSITIVE_INFINITY) -
-      (b.distanceFromRouteMiles ?? Number.POSITIVE_INFINITY);
-    if (distanceDelta !== 0) return distanceDelta;
 
     return (a.routeIndexScore ?? Number.POSITIVE_INFINITY) - (b.routeIndexScore ?? Number.POSITIVE_INFINITY);
   });

@@ -107,6 +107,33 @@ function includesAny(searchText: string, keywords: readonly string[]): boolean {
   return keywords.some((keyword) => searchText.includes(keyword));
 }
 
+const FALLBACK_VAN_KEYWORDS = ['van', 'campervan', 'camper van', 'sprinter', 'cargo van'];
+const FALLBACK_SUV_KEYWORDS = [
+  'suv',
+  'sport utility',
+  'passport',
+  '4runner',
+  '4 runner',
+  'land cruiser',
+  'sequoia',
+  'gx',
+  'lx',
+  'bronco',
+  'xterra',
+  'pathfinder',
+  'pilot',
+  'highlander',
+  'wrangler',
+  'cherokee',
+  'tahoe',
+  'suburban',
+  'yukon',
+  'expedition',
+  'armada',
+  'r1s',
+];
+const FALLBACK_TRUCK_KEYWORDS = ['pickup', 'truck'];
+
 function resolveExactVehicleKey(normalized: NormalizedVehicleMakeModel): VehicleAttitudeKey | null {
   const search = normalized.searchText;
   const compact = compactText(search);
@@ -165,19 +192,27 @@ export function getFallbackAttitudeVehicleId(bodyType?: string | null): VehicleA
   const compact = compactText(normalizedBodyType);
 
   if (
-    includesAny(normalizedBodyType, ['pickup', 'truck']) ||
-    compact.includes('pickup') ||
-    compact.includes('truck')
-  ) {
-    return 'generic_pickup';
-  }
-
-  if (
-    includesAny(normalizedBodyType, ['van', 'campervan', 'camper van', 'sprinter', 'cargo van']) ||
+    includesAny(normalizedBodyType, FALLBACK_VAN_KEYWORDS) ||
     compact.includes('campervan') ||
     compact.includes('cargovan')
   ) {
     return 'generic_van';
+  }
+
+  if (
+    includesAny(normalizedBodyType, FALLBACK_SUV_KEYWORDS) ||
+    compact.includes('sportutility') ||
+    compact.includes('landcruiser')
+  ) {
+    return 'generic_suv';
+  }
+
+  if (
+    includesAny(normalizedBodyType, FALLBACK_TRUCK_KEYWORDS) ||
+    compact.includes('pickup') ||
+    compact.includes('truck')
+  ) {
+    return 'generic_pickup';
   }
 
   return 'generic_suv';
@@ -191,7 +226,7 @@ export function resolveVehicleAttitudeAssetId(
   vehicleProfile: VehicleAttitudeProfileInput,
 ): VehicleAttitudeKey {
   const normalized = normalizeVehicleMakeModel(vehicleProfile);
-  return resolveExactVehicleKey(normalized) ?? getFallbackAttitudeVehicleId(normalized.bodyType || normalized.searchText);
+  return resolveExactVehicleKey(normalized) ?? getFallbackAttitudeVehicleId(normalized.searchText || normalized.bodyType);
 }
 
 export function getVehicleAttitudeAssets(
@@ -204,5 +239,5 @@ export function getVehicleAttitudeAssets(
     return buildAssets(exactKey, false);
   }
 
-  return getFallbackAttitudeAssets(normalized.bodyType || normalized.searchText);
+  return getFallbackAttitudeAssets(normalized.searchText || normalized.bodyType);
 }

@@ -14,6 +14,8 @@ This matrix is the developer-facing visual QA checklist for CampOps recommendati
 
 | State ID | Visual State | Fixture/Test Refs | What To Verify |
 | --- | --- | --- | --- |
+| `candidate_producing_viewport` | Candidate-producing QA viewport | `components/campops/CampOpsVisualQaScreen.tsx`, `scripts/test-route-camp-pins.js` | Visible CampOps pins render from local non-live fixture data; tapping a pin opens Camp Intel. |
+| `camp_intel_popup_actions` | Camp Intel popup actions | `components/navigate/CampScoutIntelCard.tsx`, `scripts/test-campops-camp-intel-popup.js` | Save Camp, Navigate Here, and Report Unusable are visible, tappable, and captured locally for QA only. |
 | `feature_flag_off` | Feature flag off | `scripts/test-campops-search-integration.js` | Legacy camp list only; no CampOps cards or source transparency. |
 | `feature_flag_on` | Feature flag on | `fixtures/campops/evaluationFixtures.js:on_time_normal_day`, `scripts/test-campops-ui-cards.js` | CampOps cards render above legacy results and do not depend on AI output. |
 | `recommended_endpoint` | Recommended endpoint | `fixtures/campops/evaluationFixtures.js:on_time_normal_day` | Recommended Camp card shows name, score, ETA, and top reasons. |
@@ -57,6 +59,7 @@ For each pass, check:
 - missing data fields show Unknown or Unknown confidence
 - stale/missing source warnings remain visible in field mode
 - action buttons are tappable and use existing navigation/share handlers
+- visible CampOps pins, Camp Intel popup, Save Camp, Navigate Here, and Report Unusable are exercised in the dev-only candidate viewport
 - Why this recommendation expands and collapses without clipping
 - AI summary expands and collapses without changing deterministic card facts
 
@@ -71,5 +74,6 @@ The route must:
 - avoid live provider APIs
 - avoid raw user ids, vehicle ids, private debriefs, raw provider payloads, raw AI prompts, and precise private coordinates
 - keep CampOps cards renderable without AI output
+- include a candidate-producing fixture viewport without enabling providers, telemetry, community publishing, AI output, or fake live camp data
 
 The fixture manifest in `fixtures/campops/mobileQaVisualStates.js` remains the source for manual QA state staging and checklist coverage.

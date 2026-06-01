@@ -5,6 +5,33 @@ import type {
 } from './entryStateTypes';
 import { AUTH_COPY } from './authCopy';
 
+const DEV_CONVOY_RIVE_QA =
+  typeof __DEV__ !== 'undefined' &&
+  __DEV__ &&
+  process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA === '1';
+const DEV_CAMPOPS_VISUAL_QA_ROUTE =
+  typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+
+function isDevCampOpsVisualQaRoute(path: string | null | undefined): boolean {
+  return DEV_CAMPOPS_VISUAL_QA_ROUTE && path === '/dev/campops-visual-qa';
+}
+
+function isPrimaryShellRoute(path: string | null | undefined): boolean {
+  return (
+    path === '/fleet' ||
+    path === '/navigate' ||
+    path === '/dashboard' ||
+    path === '/discover' ||
+    path === '/explore' ||
+    path === '/alert' ||
+    path === '/safety' ||
+    path === '/vehicle-config' ||
+    path === '/route' ||
+    path === '/more' ||
+    path === '/intel'
+  );
+}
+
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
   setupRecoveryRequired?: boolean;
@@ -25,6 +52,14 @@ function resolveAuthenticatedShellTarget(params: {
     allowRequestedEntryRoute = false,
     allowRouteRestore,
   } = params;
+
+  if (allowRequestedEntryRoute && isDevCampOpsVisualQaRoute(requestedEntryRoute)) {
+    return {
+      target: requestedEntryRoute!,
+      destinationSource: 'requested_entry_route',
+      routeRestoreRejected: false,
+    };
+  }
 
   if (!setupComplete) {
     return {
@@ -84,7 +119,7 @@ export function resolveDistributionEntryState(
 
   const suspended = accessState?.suspended === true;
   const shellAccessReady = (authenticated || guestOfflineAccess || rememberedOfflineAccess) && !suspended;
-  const authEntryAccessReady = (authenticated || rememberedOfflineAccess) && !suspended;
+  const authEntryAccessReady = (authenticated || guestOfflineAccess || rememberedOfflineAccess) && !suspended;
   const shellRestoreEligible = shellAccessReady && setupComplete;
   const routeRestoreEligible = shellRestoreEligible && !!restorableShellRoute;
   const allowPreSetupAccountRoute =
@@ -93,15 +128,20 @@ export function resolveDistributionEntryState(
     shellAccessReady &&
     !setupComplete &&
     setupRecoveryRequired &&
-    (currentPath === '/fleet' || currentPath === '/vehicle-config');
+    isPrimaryShellRoute(currentPath);
   const allowPreSetupShellRoute =
     shellAccessReady &&
     !setupComplete &&
     !isProtectedScreen &&
     (currentPath === '/fleet' ||
+      currentPath === '/navigate' ||
+      currentPath === '/alert' ||
+      currentPath === '/safety' ||
       currentPath === '/vehicle-config' ||
       currentPath === '/more' ||
-      currentPath === '/intel');
+      currentPath === '/intel' ||
+      isDevCampOpsVisualQaRoute(currentPath) ||
+      (DEV_CONVOY_RIVE_QA && currentPath === '/dashboard'));
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
     setupRecoveryRequired,
@@ -366,6 +406,22 @@ export function resolveDistributionEntryState(
         shellRestoreEligible: false,
         routeRestoreEligible: false,
         destinationSource: 'vehicle_recovery',
+        routeRestoreRejected: false,
+        requestedRestorableRoute: restorableShellRoute,
+      };
+    }
+
+    if (setupRecoveryRequired && allowVehicleRecoveryRoute) {
+      return {
+        kind: 'steady',
+        redirectTarget: null,
+        loadingLabel,
+        loadingDetail,
+        bootstrapLabel,
+        shellAccessReady,
+        shellRestoreEligible: false,
+        routeRestoreEligible: false,
+        destinationSource: 'current_route',
         routeRestoreRejected: false,
         requestedRestorableRoute: restorableShellRoute,
       };

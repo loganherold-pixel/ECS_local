@@ -1,7 +1,7 @@
 import type { CampLayerFetchBbox } from './campLayerFetchScheduler';
 import type { CampLayerFetchFailureDiagnostic } from './campLayerFetchDiagnostics';
 
-export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom';
 
 export type CampLayerUiState = {
   enabled: boolean;
@@ -75,6 +75,16 @@ export function setCampLayerFetchSkipped(state: CampLayerUiState): CampLayerUiSt
         : state.lastSuccessfulCacheKey
           ? 'empty'
           : 'idle',
+  };
+}
+
+export function setCampLayerZoomDeferred(state: CampLayerUiState): CampLayerUiState {
+  return {
+    ...state,
+    status: 'zoom',
+    errorMessage: undefined,
+    diagnostic: undefined,
+    featureCount: 0,
   };
 }
 

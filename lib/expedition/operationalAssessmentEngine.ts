@@ -150,8 +150,14 @@ function minutesLate(etaIso?: string | null, plannedEndIso?: string | null): num
 
 function routeAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessment {
   const route = context.route;
+  const routeLifecycle = route?.lifecycleState?.value;
+  const hasActiveRouteContext =
+    routeLifecycle === 'active' ||
+    routeLifecycle === 'completed' ||
+    routeLifecycle === 'ended';
   const evidenceItems = [
-    evidence('current-location', 'Current location', route?.currentLocation, context.capturedAt, { required: true }),
+    evidence('route-lifecycle', 'Route lifecycle', route?.lifecycleState, context.capturedAt, { required: true }),
+    evidence('current-location', 'Current location', route?.currentLocation, context.capturedAt, { required: !hasActiveRouteContext }),
     evidence('off-route', 'On route status', route?.offRoute, context.capturedAt, { required: true }),
     evidence('eta', 'Estimated arrival', route?.estimatedArrivalIso, context.capturedAt, { required: true }),
     evidence('planned-window-end', 'Planned route window end', route?.plannedArrivalEndIso, context.capturedAt),
@@ -179,7 +185,10 @@ function routeAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessme
   const deviationTime = route?.deviationTimeMinutes?.value ?? 0;
   const deviationFuel = route?.deviationFuelPercent?.value ?? 0;
 
-  if (evidenceItems.some((item) => ['current-location', 'off-route', 'eta'].includes(item.id) && item.isMissing)) {
+  const missingRouteState = evidenceItems.some((item) => ['route-lifecycle', 'off-route', 'eta'].includes(item.id) && item.isMissing);
+  const missingCurrentLocationWithoutActiveRoute = evidenceItems.some((item) => item.id === 'current-location' && item.isMissing);
+
+  if (missingRouteState || missingCurrentLocationWithoutActiveRoute) {
     addStatusReason('unknown', 'Route assessment is missing current position, ETA, or on-route state.', result);
   }
   if (offRoute && !alternateAvailable) {
@@ -257,7 +266,12 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
         source: 'unknown',
       }),
       evidence(`${prefix}-last-check-in`, `${label} last check-in`, member.lastCheckInAt, context.capturedAt),
+      evidence(`${prefix}-live-location`, `${label} live location`, member.lastKnownLocation, context.capturedAt),
       evidence(`${prefix}-last-location`, `${label} last known location`, member.lastKnownLocationLabel, context.capturedAt),
+      evidence(`${prefix}-heading`, `${label} heading`, member.headingDegrees, context.capturedAt),
+      evidence(`${prefix}-speed`, `${label} speed`, member.speedMph, context.capturedAt),
+      evidence(`${prefix}-battery`, `${label} tracker battery`, member.batteryPercent, context.capturedAt),
+      evidence(`${prefix}-location-stale`, `${label} location stale`, member.locationStale, context.capturedAt),
       evidence(`${prefix}-movement-status`, `${label} movement status`, member.movementStatus, context.capturedAt),
       evidence(`${prefix}-distance-behind-lead`, `${label} distance behind lead`, member.distanceBehindLeadMiles, context.capturedAt),
       evidence(`${prefix}-missed-checkpoint`, `${label} missed checkpoint`, member.missedCheckpoint, context.capturedAt),
@@ -277,6 +291,9 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
     evidence('missed-checkpoint-members', 'Missed checkpoint members', convoy?.missedCheckpointMemberLabels, context.capturedAt),
     evidence('assistance-needed-members', 'Assistance needed members', convoy?.assistanceNeededMemberLabels, context.capturedAt),
     evidence('last-check-in', 'Last check-in', convoy?.lastCheckInAt, context.capturedAt),
+    evidence('tracking-enabled', 'Convoy tracking enabled', convoy?.trackingEnabled, context.capturedAt),
+    evidence('live-location-member-count', 'Live location member count', convoy?.liveLocationMemberCount, context.capturedAt),
+    evidence('stale-location-members', 'Stale location members', convoy?.staleLocationMemberLabels, context.capturedAt),
     evidence('convoy-spacing', 'Convoy spacing minutes', convoy?.convoySpacingMinutes, context.capturedAt),
     evidence('lead-sweep-separation', 'Lead/sweep separation', convoy?.leadSweepSeparationMiles, context.capturedAt),
     evidence('communications', 'Convoy communications', convoy?.communicationsStatus, context.capturedAt),
@@ -294,6 +311,9 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
   const spacingMinutes = convoy?.convoySpacingMinutes?.value ?? 0;
   const separationMiles = convoy?.leadSweepSeparationMiles?.value ?? 0;
   const comms = convoy?.communicationsStatus?.value;
+  const trackingEnabled = convoy?.trackingEnabled?.value === true;
+  const liveLocationMemberCount = convoy?.liveLocationMemberCount?.value;
+  const staleLocationLabels = convoy?.staleLocationMemberLabels?.value ?? [];
   const offlineMembers = members
     .filter((member) => member.movementStatus?.value === 'offline')
     .map((member) => member.callsign);
@@ -311,6 +331,26 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
     .map((member) => member.callsign);
   const assistanceNeeded = [...new Set([...assistanceNeededLabels, ...memberAssistanceNeeded])];
   const missedCheckpoints = [...new Set([...missedCheckpointMembers, ...memberMissedCheckpoints])];
+  const staleLocationMembers = [
+    ...new Set([
+      ...staleLocationLabels,
+      ...members
+        .filter((member) => member.locationStale?.value === true || isStale(member.lastKnownLocation, context.capturedAt))
+        .map((member) => member.callsign),
+    ]),
+  ];
+  const missingLiveLocationMembers = trackingEnabled
+    ? members
+        .filter((member) => member.lastKnownLocation?.value == null)
+        .map((member) => member.callsign)
+    : [];
+  const allTrackedLocationsUnavailable =
+    trackingEnabled &&
+    members.length > 0 &&
+    ((typeof liveLocationMemberCount === 'number' && liveLocationMemberCount <= 0) ||
+      missingLiveLocationMembers.length === members.length);
+  const missedCheckpointWithLocationProblem =
+    missedCheckpoints.length > 0 && (staleLocationMembers.length > 0 || missingLiveLocationMembers.length > 0);
 
   if (teamCount === null || teamCount === undefined) {
     addStatusReason('unknown', 'Convoy assessment is missing team member count.', result);
@@ -324,6 +364,25 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
   if (missingCount > 0) addStatusReason('critical', 'One or more convoy members are missing.', result);
   if (overdueMembers.length > 0) addStatusReason(overdueMembers.length > 1 ? 'caution' : 'watch', 'One or more convoy members are overdue for check-in.', result);
   if (missedCheckpoints.length > 0) addStatusReason('caution', 'A convoy member missed a checkpoint.', result);
+  if (allTrackedLocationsUnavailable) {
+    addStatusReason('caution', 'Convoy tracking is enabled but no live member coordinates are available.', result);
+  } else if (missingLiveLocationMembers.length > 0) {
+    addStatusReason('watch', 'One or more convoy members do not have live coordinates available.', result);
+  }
+  if (staleLocationMembers.length > 0) {
+    addStatusReason(
+      staleLocationMembers.length > 1 ? 'caution' : 'watch',
+      'One or more convoy member locations are stale.',
+      result,
+    );
+  }
+  if (missedCheckpointWithLocationProblem) {
+    addStatusReason(
+      comms === 'offline' ? 'critical' : 'caution',
+      'A missed checkpoint is paired with stale or unavailable member location data.',
+      result,
+    );
+  }
   if (stoppedMembers.length > 0 || stoppedStatusMembers.length > 0) addStatusReason('caution', 'A convoy member appears stopped unexpectedly.', result);
   if (offlineMembers.length > 0) addStatusReason('caution', 'A convoy member is offline or has stale position awareness.', result);
   if (delayedMembers.length > 0) addStatusReason('watch', 'A convoy member is delayed.', result);
@@ -340,9 +399,14 @@ function convoyAssessment(context: ExpeditionContextSnapshot): ExpeditionAssessm
       category: 'convoy',
       status: result.status,
       title: `Convoy ${STATUS_TITLES[result.status]}`,
-      summary: result.status === 'normal' ? 'Convoy state is stable.' : result.why[0],
+      summary:
+        result.status === 'normal' && trackingEnabled && typeof liveLocationMemberCount === 'number'
+          ? `Convoy state is stable with live positions for ${liveLocationMemberCount} members.`
+          : result.status === 'normal'
+            ? 'Convoy state is stable.'
+            : result.why[0],
       why: result.why,
-      whatToWatch: ['Overdue members, unexpected stops, spacing, and communication quality.'],
+      whatToWatch: ['Overdue members, unexpected stops, spacing, live location freshness, and communication quality.'],
       recommendedAction:
         result.status === 'critical'
           ? 'Open Incident & Recovery and start assistance workflow before continuing movement.'
@@ -551,11 +615,21 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
     null,
   );
   const groupSize = Math.max(logistics?.groupSize?.value ?? 1, 1);
+  const fuelRange = logistics?.fuelRangeMiles?.value;
+  const fuelRemainingGallons = logistics?.fuelRemainingGallons?.value;
+  const fuelLevelPercent = logistics?.fuelLevelPercent?.value;
+  const hasFuelData =
+    typeof fuelRange === 'number' ||
+    typeof fuelRemainingGallons === 'number' ||
+    typeof fuelLevelPercent === 'number';
   const water = logistics?.waterRemainingLiters?.value;
+  const hasWaterData = typeof water === 'number';
   const waterPerPerson = typeof water === 'number' ? water / groupSize : null;
   const computedWaterEnduranceDays = typeof waterPerPerson === 'number' ? waterPerPerson / 3.8 : null;
   const evidenceItems = [
-    evidence('fuel-range', 'Fuel range miles', logistics?.fuelRangeMiles, context.capturedAt, { required: true }),
+    evidence('fuel-range', 'Fuel range miles', logistics?.fuelRangeMiles, context.capturedAt, { required: !hasFuelData }),
+    evidence('fuel-remaining', 'Fuel remaining gallons', logistics?.fuelRemainingGallons, context.capturedAt),
+    evidence('fuel-level-percent', 'Fuel level percent', logistics?.fuelLevelPercent, context.capturedAt),
     evidence('distance-remaining', 'Distance remaining miles', logistics?.distanceRemainingMiles, context.capturedAt),
     evidence('fuel-status-by-vehicle', 'Fuel status by vehicle', undefined, context.capturedAt, {
       value: vehicleFuelRows,
@@ -572,7 +646,7 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
     evidence('fuel-reserve-next-checkpoint', 'Fuel reserve to next checkpoint', logistics?.fuelReserveToNextCheckpointMiles, context.capturedAt),
     evidence('fuel-reserve-camp', 'Fuel reserve to camp', logistics?.fuelReserveToCampMiles, context.capturedAt),
     evidence('fuel-reserve-resupply', 'Fuel reserve to resupply', logistics?.fuelReserveToResupplyMiles, context.capturedAt),
-    evidence('water-remaining', 'Water remaining liters', logistics?.waterRemainingLiters, context.capturedAt, { required: true }),
+    evidence('water-remaining', 'Water remaining liters', logistics?.waterRemainingLiters, context.capturedAt, { required: !hasWaterData }),
     evidence('water-per-person', 'Water per person', undefined, context.capturedAt, {
       value: waterPerPerson === null ? null : Number(waterPerPerson.toFixed(1)),
       source: waterPerPerson === null ? 'unknown' : logistics?.waterRemainingLiters?.source ?? 'unknown',
@@ -581,7 +655,7 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
       value: logistics?.waterEnduranceDays?.value ?? (computedWaterEnduranceDays === null ? null : Number(computedWaterEnduranceDays.toFixed(1))),
       source: logistics?.waterEnduranceDays?.source ?? (computedWaterEnduranceDays === null ? 'unknown' : logistics?.waterRemainingLiters?.source ?? 'unknown'),
     }),
-    evidence('food-days', 'Food days remaining', logistics?.foodDaysRemaining, context.capturedAt, { required: true }),
+    evidence('food-days', 'Food days remaining', logistics?.foodDaysRemaining, context.capturedAt),
     evidence('group-size', 'Group size', logistics?.groupSize, context.capturedAt),
     evidence('power-hours', 'Power hours remaining', logistics?.powerHoursRemaining, context.capturedAt),
     evidence('battery-power-status', 'Battery/power status', logistics?.batteryPowerStatus, context.capturedAt),
@@ -598,7 +672,6 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
     evidence('critical-supply-warnings', 'Critical supply warnings', logistics?.criticalSupplyWarnings, context.capturedAt),
   ];
   const result = { status: 'normal' as AssessmentStatus, why: [] as string[] };
-  const fuelRange = logistics?.fuelRangeMiles?.value;
   const distanceRemaining = logistics?.distanceRemainingMiles?.value;
   const fuelReserveToCheckpoint = logistics?.fuelReserveToNextCheckpointMiles?.value;
   const fuelReserveToCamp = logistics?.fuelReserveToCampMiles?.value;
@@ -609,13 +682,25 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
   const equipmentIssues = logistics?.criticalEquipmentIssues?.value ?? [];
   const warnings = logistics?.criticalSupplyWarnings?.value ?? [];
 
-  if (evidenceItems.some((item) => ['fuel-range', 'water-remaining', 'food-days'].includes(item.id) && item.isMissing)) {
-    addStatusReason('unknown', 'Logistics assessment is missing fuel, water, or food data.', result);
+  if (!hasFuelData && !hasWaterData) {
+    addStatusReason('unknown', 'Logistics assessment is missing fuel and water data.', result);
+  } else if (!hasFuelData) {
+    addStatusReason('unknown', 'Logistics assessment is missing fuel data.', result);
+  } else if (!hasWaterData) {
+    addStatusReason('unknown', 'Logistics assessment is missing water data.', result);
   }
   if (typeof fuelRange === 'number' && typeof distanceRemaining === 'number') {
     if (fuelRange < distanceRemaining) addStatusReason('critical', 'Fuel range is below distance remaining.', result);
     else if (fuelRange < distanceRemaining * 1.2) addStatusReason('caution', 'Fuel reserve is below the 20% margin.', result);
     else if (fuelRange < distanceRemaining * 1.5) addStatusReason('watch', 'Fuel reserve is narrowing.', result);
+  }
+  if (typeof fuelRemainingGallons === 'number') {
+    if (fuelRemainingGallons <= 0) addStatusReason('critical', 'Fuel remaining is empty.', result);
+  }
+  if (typeof fuelLevelPercent === 'number') {
+    if (fuelLevelPercent <= 10) addStatusReason('critical', 'Fuel level is below 10%.', result);
+    else if (fuelLevelPercent <= 20) addStatusReason('caution', 'Fuel level is below 20%.', result);
+    else if (fuelLevelPercent <= 30) addStatusReason('watch', 'Fuel level is below 30%.', result);
   }
   for (const [label, reserve] of [
     ['next checkpoint', fuelReserveToCheckpoint],
@@ -683,16 +768,16 @@ function logisticsAssessment(context: ExpeditionContextSnapshot): ExpeditionAsse
             : result.status === 'watch'
               ? 'Monitor the limiting resource and plan resupply before the next commitment point.'
             : result.status === 'unknown'
-              ? 'Refresh fuel, water, and food data.'
+              ? 'Refresh fuel and water data.'
               : 'Continue monitoring resource endurance.',
       toImproveStatus: [
         'Update fuel by vehicle.',
-        'Confirm water and food by group size.',
+        'Confirm water by group size and add food reserves when desired.',
         'Update battery and power endurance.',
         'Mark resupply complete when fuel, water, and food are replenished.',
       ],
       evidence: evidenceItems,
-      criticalEvidenceIds: ['fuel-range', 'water-remaining', 'food-days'],
+      criticalEvidenceIds: ['fuel-range', 'water-remaining'],
       escalationRecommended: result.status === 'critical',
       escalationReason: result.status === 'critical' ? result.why[0] : null,
       relatedActions: [

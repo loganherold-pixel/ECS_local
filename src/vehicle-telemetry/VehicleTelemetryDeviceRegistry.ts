@@ -27,6 +27,7 @@ import type {
   VehicleTelemetryCapabilities,
 } from './VehicleTelemetryTypes';
 import { EMPTY_CAPABILITIES, VT_STORAGE_KEYS } from './VehicleTelemetryTypes';
+import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
 
 const TAG = '[VT-DeviceRegistry]';
 
@@ -39,16 +40,27 @@ function logVehicleTelemetryRegistryDev(...args: unknown[]) {
 /** Devices not seen in 30 days are considered stale */
 const STALE_DEVICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
+function isEcoFlowBleAdvertisementName(value: unknown): boolean {
+  return typeof value === 'string' && /\bef[-_][a-z0-9]{4,}\b/i.test(value);
+}
+
+function isRestorableVehicleTelemetryDevice(device: VehicleTelemetryDevice): boolean {
+  if (device.provider === 'obd2' && isEcoFlowBleAdvertisementName(device.device_name)) {
+    return false;
+  }
+  return true;
+}
+
 // ── Storage helpers ──────────────────────────────────────
-const mem: Record<string, string> = {};
+const vehicleTelemetryDevicePersistenceCache = createPersistedKeyValueCache('ecs_vehicle_telemetry_devices');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
+    return vehicleTelemetryDevicePersistenceCache.get(key);
+  } catch { return vehicleTelemetryDevicePersistenceCache.get(key); }
 }
 
 function sSet(key: string, value: string): void {
@@ -56,8 +68,8 @@ function sSet(key: string, value: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.setItem(key, value);
     }
-    mem[key] = value;
-  } catch { mem[key] = value; }
+    vehicleTelemetryDevicePersistenceCache.set(key, value);
+  } catch { vehicleTelemetryDevicePersistenceCache.set(key, value); }
 }
 
 function sRemove(key: string): void {
@@ -65,8 +77,8 @@ function sRemove(key: string): void {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.removeItem(key);
     }
-    delete mem[key];
-  } catch { delete mem[key]; }
+    vehicleTelemetryDevicePersistenceCache.delete(key);
+  } catch { vehicleTelemetryDevicePersistenceCache.delete(key); }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -77,9 +89,18 @@ class VehicleTelemetryDeviceRegistry {
   private devices: VehicleTelemetryDevice[] = [];
   private primaryDeviceId: string | null = null;
   private listeners: (() => void)[] = [];
+  private hydrationPromise: Promise<void>;
 
   constructor() {
     this.restore();
+    this.hydrationPromise = vehicleTelemetryDevicePersistenceCache.waitForHydration()
+      .then(() => {
+        this.restore();
+        this.notify();
+      })
+      .catch((error) => {
+        console.warn(TAG, 'Failed to hydrate device registry:', error);
+      });
   }
 
   // ── Persistence ────────────────────────────────────────
@@ -91,7 +112,7 @@ class VehicleTelemetryDeviceRegistry {
         const parsed = JSON.parse(raw) as VehicleTelemetryDevice[];
 
         // Phase 2D: Validate and sanitize restored devices
-        this.devices = parsed
+        const validDevices = parsed
           .filter(d => d && d.device_id && d.provider && d.device_name)
           .map(d => ({
             ...d,
@@ -99,7 +120,15 @@ class VehicleTelemetryDeviceRegistry {
             connection_state: 'disconnected' as VehicleTelemetryConnectionState,
             // Ensure capabilities object is complete
             capabilities: { ...EMPTY_CAPABILITIES, ...d.capabilities },
-          }));
+          }))
+          .filter(isRestorableVehicleTelemetryDevice);
+
+        const invalidRemoved = parsed.length - validDevices.length;
+        if (invalidRemoved > 0) {
+          logVehicleTelemetryRegistryDev(TAG, `Pruned ${invalidRemoved} invalid restored telemetry device(s)`);
+        }
+
+        this.devices = validDevices;
 
         // Phase 2D: Remove stale devices (not seen in 30 days)
         const before = this.devices.length;
@@ -117,8 +146,14 @@ class VehicleTelemetryDeviceRegistry {
       }
       const primaryId = sGet(VT_STORAGE_KEYS.PRIMARY_DEVICE);
       if (primaryId) {
-        this.primaryDeviceId = primaryId;
-        logVehicleTelemetryRegistryDev(TAG, `Restored primary device: ${primaryId}`);
+        if (this.devices.some(device => device.device_id === primaryId)) {
+          this.primaryDeviceId = primaryId;
+          logVehicleTelemetryRegistryDev(TAG, `Restored primary device: ${primaryId}`);
+        } else {
+          this.primaryDeviceId = null;
+          logVehicleTelemetryRegistryDev(TAG, `Ignored missing or invalid restored primary device: ${primaryId}`);
+          this.persist();
+        }
       }
     } catch (e) {
       console.warn(TAG, 'Failed to restore devices:', e);
@@ -135,6 +170,7 @@ class VehicleTelemetryDeviceRegistry {
       } else {
         sRemove(VT_STORAGE_KEYS.PRIMARY_DEVICE);
       }
+      void vehicleTelemetryDevicePersistenceCache.flush();
     } catch (e) {
       console.warn(TAG, 'Failed to persist devices:', e);
     }
@@ -148,9 +184,14 @@ class VehicleTelemetryDeviceRegistry {
 
   subscribe(fn: () => void): () => void {
     this.listeners.push(fn);
+    fn();
     return () => {
       this.listeners = this.listeners.filter(l => l !== fn);
     };
+  }
+
+  async waitForHydration(): Promise<void> {
+    await this.hydrationPromise;
   }
 
   // ── Device Registration ────────────────────────────────
@@ -160,6 +201,10 @@ class VehicleTelemetryDeviceRegistry {
    * Prevents duplicates by matching on device_id.
    */
   registerDevice(device: Omit<VehicleTelemetryDevice, 'registered_at' | 'is_primary'>): VehicleTelemetryDevice {
+    if (device.provider === 'obd2' && isEcoFlowBleAdvertisementName(device.device_name)) {
+      throw new Error(`Refusing to register EcoFlow BLE advertisement as OBD2 telemetry: ${device.device_name}`);
+    }
+
     const existing = this.devices.find(d => d.device_id === device.device_id);
 
     if (existing) {

@@ -11,6 +11,7 @@ import {
   ECS_INFERRED_CAMP_CANDIDATE_WARNING,
 } from '../../lib/campops/campCandidateTypes';
 import type { DispersedCampingRegion, GeoJSON } from '../../lib/map/dispersedCampingTypes';
+import { haversineDistanceMiles } from '../../lib/map/routeGeometryUtils';
 
 function polygon(longitude: number, latitude: number): GeoJSON.Polygon {
   return {
@@ -95,9 +96,43 @@ assert.ok(generated.candidates.every((candidate) => candidate.sourceType === 'ec
 assert.ok(generated.candidates.every((candidate) => candidate.title === ECS_INFERRED_CAMP_CANDIDATE_TITLE));
 assert.ok(generated.candidates.every((candidate) => candidate.verificationWarning === ECS_INFERRED_CAMP_CANDIDATE_WARNING));
 assert.ok(generated.candidates.every((candidate) => candidate.eligibilityConfidence !== 'restricted'));
+assert.ok(generated.candidates.every((candidate) => candidate.confidenceScore >= 70));
+assert.ok(generated.candidates.every((candidate) => candidate.legalityConfidence >= 70));
 
 const unknownCandidate = generated.candidates.find((candidate) => candidate.dispersedCampingRegionId === 'unknown');
 assert.notStrictEqual(unknownCandidate?.eligibilityConfidence, 'high', 'Unknown land manager must not become high confidence.');
+
+const selectedRegionScoutCenter = { latitude: 37.225, longitude: -118.985 };
+const selectedRegionScouts = buildDispersedCampingCampScoutCandidates({
+  regions: [highBlm],
+  routeCoordinates: route,
+  scoutCenter: selectedRegionScoutCenter,
+  maxScoutRadiusMiles: 2,
+  maxCandidates: 5,
+  includeVerifyCandidates: true,
+});
+assert.strictEqual(
+  selectedRegionScouts.candidates.length,
+  5,
+  'Selected eligibility regions should fan out up to five scout pins when viable locations exist.',
+);
+assert.strictEqual(
+  new Set(selectedRegionScouts.candidates.map((candidate) => candidate.id)).size,
+  selectedRegionScouts.candidates.length,
+  'Generated selected-region scout pins should have unique IDs.',
+);
+assert.ok(
+  selectedRegionScouts.candidates.every((candidate) =>
+    haversineDistanceMiles(candidate.coordinate, selectedRegionScoutCenter) <= 2,
+  ),
+  'Selected-region scout pins should stay within two miles of the scout click point.',
+);
+assert.ok(
+  selectedRegionScouts.candidates.every((candidate) =>
+    candidate.reasons.some((reason) => reason.includes('Ranked by ECS')),
+  ),
+  'Generated selected-region scout pins should explain why ECS scored them as camp candidates.',
+);
 
 const routePrioritized = buildDispersedCampingCampScoutCandidates({
   regions: [region('far-blm', 'high', 'BLM', -119.5, 37.2), highBlm],
@@ -120,6 +155,42 @@ assert.deepStrictEqual(
   routePrioritized.candidates.map((candidate) => candidate.dispersedCampingRegionId),
   ['high-blm'],
   'Route corridor candidates should prioritize nearby eligible regions.',
+);
+
+const closeRouteRanked = buildDispersedCampingCampScoutCandidates({
+  regions: [
+    region('far-route-blm', 'high', 'BLM', -119.02, 37.2),
+    region('close-route-blm', 'high', 'BLM', -119.02, 37.22),
+  ],
+  routeNearbyRegions: [
+    {
+      regionId: 'far-route-blm',
+      confidence: 'high',
+      landManager: 'BLM',
+      distanceFromRouteMiles: 4.8,
+      eligibilityLabel: 'Likely eligible',
+      basis: [],
+      restrictions: [],
+      requiresVerification: true,
+    },
+    {
+      regionId: 'close-route-blm',
+      confidence: 'high',
+      landManager: 'BLM',
+      distanceFromRouteMiles: 0.2,
+      eligibilityLabel: 'Likely eligible',
+      basis: [],
+      restrictions: [],
+      requiresVerification: true,
+    },
+  ],
+  routeCoordinates: route,
+  maxCandidates: 5,
+});
+assert.strictEqual(
+  closeRouteRanked.candidates[0]?.dispersedCampingRegionId,
+  'close-route-blm',
+  'Route corridor candidate ranks should favor stronger scored candidates near the active route.',
 );
 
 const cardSource = fs.readFileSync(

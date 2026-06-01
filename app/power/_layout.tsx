@@ -1,9 +1,9 @@
 /**
  * Power screens layout — simple Stack navigator.
  * Routes:
- *   /power        → Power Center (index)
+ *   /power        → Redirects to Device Connections; legacy power UI is not production-facing
  *   /power/devices → Manage Devices (Phase 3F-2: full device list + multi-select)
- *   /power/blu    → Device Connections (manual Bluetooth scan + device routing)
+ *   /power/blu    → Device Connections (BlueStack unified scanner + device routing)
  *   /power/setup  → Redirects to Device Connections; legacy wizard UI is not production-facing
  *   /power/manage → Power Systems Management (Phase 8: view/edit connected devices)
  */

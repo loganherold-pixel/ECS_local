@@ -589,6 +589,7 @@ export default function NavigateRunDetail() {
     const routePoints = mapRunPoints.map((point) => ({
       lat: point.lat,
       lng: point.lng,
+      ...(Number.isFinite(point.ele_m) ? { ele: point.ele_m, ele_m: point.ele_m } : null),
     }));
 
     if (routePoints.length < 2) {

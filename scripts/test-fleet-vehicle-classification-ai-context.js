@@ -104,6 +104,22 @@ const hdSuggestions = buildVehicleIntelligenceSuggestions({
   confidenceLevel: 'catalog_estimate',
   confidenceScore: 82,
 });
+const hdSuggestionsWithGeometry = buildVehicleIntelligenceSuggestions({
+  classification: classifyVehicle({ make: 'Ram', model: '2500', vehicleType: 'truck' }),
+  payloadUsedPct: 72,
+  overallWidthIn: 79.9,
+  breakoverAngleDeg: 20,
+  turningDiameterFt: 48,
+  confidenceLevel: 'catalog_estimate',
+  confidenceScore: 82,
+});
+const modifiedVehicleSuggestions = buildVehicleIntelligenceSuggestions({
+  classification: classifyVehicle({ make: 'Jeep', model: 'Wrangler', vehicleType: 'suv' }),
+  tireSizeInches: 35,
+  suspensionLiftInches: 2,
+  confidenceLevel: 'catalog_estimate',
+  confidenceScore: 82,
+});
 const jeepSuggestions = buildVehicleIntelligenceSuggestions({
   classification: classifyVehicle({ make: 'Jeep', model: 'Wrangler', vehicleType: 'suv' }),
   payloadUsedPct: 88,
@@ -116,7 +132,9 @@ const unknownSuggestions = buildVehicleIntelligenceSuggestions({
   confidenceScore: 0,
 });
 assert.notDeepStrictEqual(hdSuggestions, jeepSuggestions, 'HD truck and Jeep suggestions should differ.');
-assert.ok(hdSuggestions.some((item) => /width|turn-around|truck capability/i.test(item)));
+assert.ok(!hdSuggestions.some((item) => /width|breakover|turn-around|turning/i.test(item)), 'HD truck trail-fit dimension prompt should not appear without saved/OEM geometry.');
+assert.ok(hdSuggestionsWithGeometry.some((item) => /width|breakover|turning/i.test(item)), 'HD truck trail-fit dimension prompt should appear when saved/OEM geometry exists.');
+assert.ok(!modifiedVehicleSuggestions.some((item) => /gearing|loaded handling|spare/i.test(item)), 'Vehicle intelligence should not ask users to verify gearing, loaded handling, or spare details ECS cannot capture.');
 assert.ok(jeepSuggestions.some((item) => /short wheelbase|roof|payload/i.test(item)));
 assert.ok(unknownSuggestions.some((item) => /add GVWR|verify/i.test(item)));
 
@@ -136,6 +154,24 @@ assert.strictEqual(tacomaPayload.vehicleIntelligence.classification.classId, 'mi
 assert.strictEqual(tacomaPayload.vehicleIntelligence.operatingWeightLbs, tacomaPayload.weight.operatingWeight.lbs);
 assert.ok(tacomaPayload.vehicleIntelligence.suggestions.length > 0);
 assert.notStrictEqual(tacomaPayload.weight.baseNetWeight.lbs, 7400, 'Tacoma must not inherit Ram 2500 base weight.');
+
+const ramWithGeometry = toFleetVehicle('ram-geometry-ai', { make: 'Ram', model: '2500', type: 'truck' }, {
+  base_weight_lb: 7400,
+  gvwr_lb: 10000,
+  fuel_tank_capacity_gal: 31,
+  fuel_type: 'diesel',
+  overall_width_in: 79.9,
+  breakover_angle_deg: 20,
+  turning_diameter_ft: 48,
+});
+const ramGeometryPayload = fabric.generatePremiumFleetFabricPayload({
+  vehicle: ramWithGeometry,
+  generatedAt: '2026-05-05T00:00:00.000Z',
+});
+assert.ok(
+  ramGeometryPayload.vehicleIntelligence.suggestions.some((item) => /saved width, breakover, and turning-space estimates/i.test(item)),
+  'OEM/spec trail-fit geometry should flow into vehicle intelligence only when saved on the vehicle profile.',
+);
 
 (async () => {
   const aiContextSource = fs.readFileSync(aiContextPath, 'utf8');

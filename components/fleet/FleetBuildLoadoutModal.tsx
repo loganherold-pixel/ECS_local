@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
 import { ECSButton } from '../ECSButton';
 import { ECSBadge } from '../ECSStatus';
 import { ECSCard, ECSPanel } from '../ECSSurface';
-import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import { ECS_TEXT } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
@@ -19,6 +18,7 @@ import { adaptLegacyVehicleToFleetVehicle } from '../../lib/fleet/fleetPremiumDo
 import {
   FLEET_ACCESSORY_CATALOG,
   FLEET_ACCESSORY_KNOWLEDGE_OPTIONS,
+  FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID,
   buildFleetAccessoryInstall,
   buildFleetCompartmentLoadoutItem,
   calculateFleetBuildLoadoutSummary,
@@ -41,6 +41,12 @@ import {
 } from '../../lib/fleet/fleetBuildLoadout';
 import { FLEET_LOAD_ZONES, toFleetLoadZone, type FleetLoadZone, type FleetWeightSource } from '../../lib/fleet/fleetPremiumDomain';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
+import {
+  FLEET_LOADOUT_QUICK_ADD_CATALOG,
+  FLEET_LOADOUT_QUICK_ADD_CATEGORIES,
+  getFleetLoadoutQuickAddItemsForCategory,
+  type FleetLoadoutQuickAddCategoryId,
+} from '../../lib/fleet/fleetLoadoutQuickAddCatalog';
 
 type Props = {
   visible: boolean;
@@ -75,6 +81,10 @@ type LoadoutDraft = {
 
 const DEFAULT_LOADOUT_CATEGORY = 'gear';
 const DEFAULT_LOADOUT_PERMANENCE: FleetLoadoutPermanence = 'trip';
+const DEFAULT_QUICK_ADD_CATEGORY: FleetLoadoutQuickAddCategoryId = 'recovery';
+const HIGH_MOUNTED_LOAD_WARNING_TITLE = 'High-mounted load risk';
+const HIGH_MOUNTED_LOAD_WARNING_COPY =
+  'High-mounted load is increasing top-heavy risk. ECS recommends moving heavier gear lower and closer to the vehicle centerline where possible. Keep roof or high-bed items light, secure tall loads, and recheck payload and axle balance after shifting weight.';
 
 function formatLbs(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '--';
@@ -84,6 +94,14 @@ function formatLbs(value: number | null | undefined): string {
 function parseWeight(value: string): number | null {
   const parsed = Number(String(value).replace(/,/g, '').trim());
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function hasHighMountedLoadRisk(summary: ReturnType<typeof calculateFleetBuildLoadoutSummary> | null): boolean {
+  if (!summary) return false;
+  const highMountedWeight =
+    summary.weightResult.zoneWeights.roof.totalWeight.lbs +
+    summary.weightResult.zoneWeights.bedHigh.totalWeight.lbs;
+  return summary.weightResult.topHeavyRisk !== 'clear' || highMountedWeight >= 90;
 }
 
 function createDraft(catalog: FleetAccessoryCatalogItem, install?: FleetBuildAccessoryInstall | null): AccessoryDraft {
@@ -110,6 +128,9 @@ export default function FleetBuildLoadoutModal({
   const [draft, setDraft] = useState<AccessoryDraft | null>(null);
   const [editingLoadoutItem, setEditingLoadoutItem] = useState<FleetCompartmentLoadoutItem | null>(null);
   const [loadoutDraft, setLoadoutDraft] = useState<LoadoutDraft | null>(null);
+  const [selectedQuickAddIds, setSelectedQuickAddIds] = useState<string[]>([]);
+  const [selectedQuickAddCategoryId, setSelectedQuickAddCategoryId] = useState<FleetLoadoutQuickAddCategoryId>(DEFAULT_QUICK_ADD_CATEGORY);
+  const [highMountedWarningVisible, setHighMountedWarningVisible] = useState(false);
 
   useEffect(() => {
     if (visible && vehicle) {
@@ -118,6 +139,9 @@ export default function FleetBuildLoadoutModal({
       setDraft(null);
       setEditingLoadoutItem(null);
       setLoadoutDraft(null);
+      setSelectedQuickAddIds([]);
+      setSelectedQuickAddCategoryId(DEFAULT_QUICK_ADD_CATEGORY);
+      setHighMountedWarningVisible(false);
     }
   }, [vehicle, visible]);
 
@@ -143,6 +167,14 @@ export default function FleetBuildLoadoutModal({
   const selectedDraftCompartment = useMemo(
     () => loadoutDraft ? activeCompartments.find((item) => item.id === loadoutDraft.compartmentId) ?? null : null,
     [activeCompartments, loadoutDraft],
+  );
+  const quickAddCategoryItems = useMemo(
+    () => getFleetLoadoutQuickAddItemsForCategory(selectedQuickAddCategoryId),
+    [selectedQuickAddCategoryId],
+  );
+  const selectedQuickAddCategory = useMemo(
+    () => FLEET_LOADOUT_QUICK_ADD_CATEGORIES.find((category) => category.id === selectedQuickAddCategoryId) ?? FLEET_LOADOUT_QUICK_ADD_CATEGORIES[0],
+    [selectedQuickAddCategoryId],
   );
   const isCustomLoadoutDraft = selectedDraftCompartment?.accessoryId === 'custom_accessory';
 
@@ -182,6 +214,7 @@ export default function FleetBuildLoadoutModal({
   const openLoadoutEditor = useCallback((compartment: FleetBuildCompartment, item?: FleetCompartmentLoadoutItem | null) => {
     const isCustomCompartment = compartment.accessoryId === 'custom_accessory';
     setEditingLoadoutItem(item ?? null);
+    setSelectedQuickAddIds([]);
     setLoadoutDraft({
       id: item?.id,
       name: item?.name ?? '',
@@ -199,6 +232,7 @@ export default function FleetBuildLoadoutModal({
   const closeLoadoutEditor = useCallback(() => {
     setEditingLoadoutItem(null);
     setLoadoutDraft(null);
+    setSelectedQuickAddIds([]);
   }, []);
 
   const saveEditor = useCallback(() => {
@@ -226,21 +260,47 @@ export default function FleetBuildLoadoutModal({
     closeEditor();
   }, [closeEditor, editingCatalog, vehicle]);
 
-  const handleSave = useCallback(async () => {
+  const persistBuildLoadout = useCallback(async (options?: { acknowledgeHighMountedRisk?: boolean }) => {
     if (!vehicle) return;
     const currentWizard = ((vehicle as any).wizard_config && typeof (vehicle as any).wizard_config === 'object')
       ? (vehicle as any).wizard_config
       : {};
+    const acknowledgedRiskIds = new Set(state.acknowledgedRiskIds ?? []);
+    if (options?.acknowledgeHighMountedRisk) {
+      acknowledgedRiskIds.add(FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID);
+    }
+    const nextState: FleetBuildLoadoutState = {
+      ...state,
+      acknowledgedRiskIds: Array.from(acknowledgedRiskIds),
+    };
     await vehicleStore.update(vehicle.id, {
       wizard_config: {
         ...currentWizard,
-        fleet_build_loadout: state,
+        fleet_build_loadout: nextState,
       },
     } as any, userId);
     showToast?.('Build & Loadout saved');
     onSaved?.();
     onClose();
   }, [onClose, onSaved, showToast, state, userId, vehicle]);
+
+  const handleSave = useCallback(async () => {
+    if (!vehicle) return;
+    const acknowledgedRiskIds = new Set(state.acknowledgedRiskIds ?? []);
+    const needsHighMountedWarning =
+      hasHighMountedLoadRisk(summary) &&
+      !acknowledgedRiskIds.has(FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID);
+    if (needsHighMountedWarning) {
+      setHighMountedWarningVisible(true);
+      return;
+    }
+    await persistBuildLoadout();
+  }, [persistBuildLoadout, state.acknowledgedRiskIds, summary, vehicle]);
+
+  const dismissHighMountedWarningAndSave = useCallback(async () => {
+    setHighMountedWarningVisible(false);
+    await persistBuildLoadout({ acknowledgeHighMountedRisk: true });
+  }, [persistBuildLoadout]);
 
   const saveLoadoutItem = useCallback(() => {
     if (!vehicle || !loadoutDraft) return;
@@ -288,6 +348,59 @@ export default function FleetBuildLoadoutModal({
     closeLoadoutEditor();
   }, [closeLoadoutEditor, editingLoadoutItem]);
 
+  const toggleQuickAddSelection = useCallback((itemId: string) => {
+    setSelectedQuickAddIds((current) =>
+      current.includes(itemId)
+        ? current.filter((id) => id !== itemId)
+        : [...current, itemId],
+    );
+  }, []);
+
+  const bulkAddLoadoutItems = useCallback(() => {
+    if (!vehicle || !loadoutDraft) return;
+    const compartment = activeCompartments.find((item) => item.id === loadoutDraft.compartmentId);
+    if (!compartment) {
+      showToast?.('Choose a compartment before bulk adding items');
+      return;
+    }
+    const selectedItems = FLEET_LOADOUT_QUICK_ADD_CATALOG.filter((item) => selectedQuickAddIds.includes(item.id));
+    if (selectedItems.length === 0) {
+      showToast?.('Select one or more quick-add items first');
+      return;
+    }
+
+    const nextItems = selectedItems.map((preset) => buildFleetCompartmentLoadoutItem({
+      vehicleId: vehicle.id,
+      name: preset.name,
+      category: preset.category,
+      typicalWeightLb: preset.typicalWeightLb,
+      quantity: preset.quantity ?? 1,
+      compartment,
+      loadZone: compartment.accessoryId === 'custom_accessory'
+        ? toFleetLoadZone(loadoutDraft.loadZone, compartment.loadZone)
+        : compartment.loadZone,
+      permanence: preset.permanence,
+      source: 'ecs_default',
+      confidence: 72,
+      presetId: 'custom',
+    }));
+
+    setState((current) => nextItems.reduce(
+      (nextState, item) => upsertFleetCompartmentLoadoutItem(nextState, item),
+      current,
+    ));
+    emitFleetTelemetryEvent('fleet_loadout_item_added', {
+      vehicleId: vehicle.id,
+      meta: {
+        source: 'bulk_quick_add',
+        itemCount: nextItems.length,
+        compartmentId: compartment.id,
+      },
+    });
+    showToast?.(`Added ${nextItems.length} item${nextItems.length === 1 ? '' : 's'} to ${compartment.name}`);
+    closeLoadoutEditor();
+  }, [activeCompartments, closeLoadoutEditor, loadoutDraft, selectedQuickAddIds, showToast, vehicle]);
+
   if (!vehicle) return null;
 
   return (
@@ -298,7 +411,7 @@ export default function FleetBuildLoadoutModal({
         title="Build & Loadout"
         subtitle="Add installed accessories, let ECS estimate weight, and create compartments for load planning."
         eyebrow="FLEET ACCESSORY FRAMEWORK"
-        icon="cube-outline"
+        icon="car-sport-outline"
         overlayClass="workflow"
         maxWidth={1040}
         minHeightFraction={0.88}
@@ -348,9 +461,6 @@ export default function FleetBuildLoadoutModal({
                 >
                   <ECSCard variant={install ? 'secondary' : 'compact'} selected={Boolean(install)} style={styles.accessoryTile}>
                     <View style={styles.tileHeader}>
-                      <View style={styles.tileIcon}>
-                        <Ionicons name={catalog.icon as any} size={17} color={install ? TACTICAL.amber : TACTICAL.textMuted} />
-                      </View>
                       <ECSBadge label={install ? 'INSTALLED' : 'ADD'} tone={install ? 'ready' : 'info'} compact />
                     </View>
                     <Text style={styles.tileTitle} numberOfLines={2}>{catalog.label}</Text>
@@ -359,7 +469,7 @@ export default function FleetBuildLoadoutModal({
                         ? `ECS estimated this at ${Math.round(install.installedWeightLb)} lb`
                         : `Default ${Math.round(catalog.defaultWeightLb)} lb`}
                     </Text>
-                    <Text style={styles.tileMeta} numberOfLines={1}>{install ? `${install.confidence}% confidence` : catalog.mountZone}</Text>
+                    {install ? <Text style={styles.tileMeta} numberOfLines={1}>{`${install.confidence}% confidence`}</Text> : null}
                   </ECSCard>
                 </TouchableOpacity>
               );
@@ -412,6 +522,51 @@ export default function FleetBuildLoadoutModal({
             </View>
           </ECSPanel>
         </View>
+      </ECSModalShell>
+
+      <ECSModalShell
+        visible={highMountedWarningVisible}
+        onClose={() => setHighMountedWarningVisible(false)}
+        title={HIGH_MOUNTED_LOAD_WARNING_TITLE}
+        subtitle="Review before saving this build"
+        eyebrow="WEIGHT SUMMARY"
+        icon="warning-outline"
+        stackBehavior="allow-stack"
+        overlayClass="dialog"
+        maxWidth={520}
+        dismissOnBackdrop={false}
+        allowSwipeDismiss={false}
+        footer={
+          <ECSOverlayFooter>
+            <ECSButton
+              label="Go Back"
+              icon="arrow-back-outline"
+              variant="tertiary"
+              size="medium"
+              onPress={() => setHighMountedWarningVisible(false)}
+              grow
+            />
+            <ECSButton
+              label="Dismiss & Continue"
+              icon="checkmark-circle-outline"
+              variant="primary"
+              size="medium"
+              onPress={dismissHighMountedWarningAndSave}
+              grow
+            />
+          </ECSOverlayFooter>
+        }
+      >
+        <ECSPanel variant="warning" style={styles.highMountedWarningPanel}>
+          <View style={styles.warningHeaderRow}>
+            <ECSBadge label="HIGH LOAD RISK" tone="warning" compact />
+            <Text style={styles.warningRiskText}>
+              {summary?.weightResult.topHeavyRisk ? summary.weightResult.topHeavyRisk.toUpperCase() : 'WATCH'}
+            </Text>
+          </View>
+          <Text style={styles.warningTitle}>{HIGH_MOUNTED_LOAD_WARNING_TITLE}</Text>
+          <Text style={styles.warningCopy}>{HIGH_MOUNTED_LOAD_WARNING_COPY}</Text>
+        </ECSPanel>
       </ECSModalShell>
 
       <ECSModalShell
@@ -505,18 +660,22 @@ export default function FleetBuildLoadoutModal({
         title={editingLoadoutItem ? 'Edit Loadout Item' : 'Add Loadout Item'}
         subtitle="What is normally carried, and where does it live?"
         eyebrow="COMPARTMENT LOADOUT"
-        icon="cube-outline"
+        icon="briefcase-outline"
         stackBehavior="allow-stack"
         overlayClass="editor"
         maxWidth={720}
+        maxHeightFraction={1}
+        minHeightFraction={1}
         scrollable
+        showHandle={false}
+        allowSwipeDismiss={false}
+        dismissOnBackdrop={false}
         footer={
           <ECSOverlayFooter>
             <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={closeLoadoutEditor} grow />
             {editingLoadoutItem ? (
               <ECSButton label="Remove" icon="trash-outline" variant="destructive" size="medium" onPress={deleteLoadoutItem} grow />
             ) : null}
-            <ECSButton label="Save Item" icon="checkmark-outline" variant="primary" size="medium" onPress={saveLoadoutItem} grow />
           </ECSOverlayFooter>
         }
       >
@@ -573,7 +732,6 @@ export default function FleetBuildLoadoutModal({
                     accessibilityLabel={`Place item in ${compartment.name}`}
                   >
                     <Text style={[styles.compartmentPickerText, loadoutDraft.compartmentId === compartment.id && styles.optionTextActive]}>{compartment.name}</Text>
-                    <Text style={styles.compartmentPickerMeta}>{compartment.loadZone}</Text>
                   </TouchableOpacity>
                 )) : (
                   <Text style={styles.tileMeta}>Add an accessory with compartments before assigning loadout placement.</Text>
@@ -599,6 +757,103 @@ export default function FleetBuildLoadoutModal({
                 </View>
               </View>
             ) : null}
+            <View style={styles.inlineSaveSection}>
+              <ECSButton
+                label="Save Item"
+                icon="checkmark-outline"
+                variant="primary"
+                size="medium"
+                onPress={saveLoadoutItem}
+                grow
+              />
+              <Text style={styles.inlineSaveHint}>
+                Saves the manually entered item above into the selected compartment.
+              </Text>
+            </View>
+            {!editingLoadoutItem ? (
+              <ECSPanel variant="secondary" style={styles.quickAddPanel}>
+                <View style={styles.quickAddHeader}>
+                  <View style={styles.quickAddHeaderCopy}>
+                    <Text style={styles.sectionTitle}>Quick Add Item List</Text>
+                    <Text style={styles.tileMeta}>
+                      Select a category, check common expedition items, then bulk add them to the selected compartment.
+                    </Text>
+                  </View>
+                  <ECSBadge
+                    label={`${selectedQuickAddIds.length} / ${FLEET_LOADOUT_QUICK_ADD_CATALOG.length}`}
+                    tone={selectedQuickAddIds.length > 0 ? 'ready' : 'info'}
+                    compact
+                  />
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.quickCategoryRail}
+                >
+                  {FLEET_LOADOUT_QUICK_ADD_CATEGORIES.map((category) => {
+                    const selected = category.id === selectedQuickAddCategoryId;
+                    return (
+                      <TouchableOpacity
+                        key={category.id}
+                        style={[styles.quickCategoryChip, selected && styles.optionActive]}
+                        onPress={() => setSelectedQuickAddCategoryId(category.id)}
+                        activeOpacity={0.82}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`Show ${category.label} loadout items`}
+                      >
+                        <Text style={[styles.quickCategoryText, selected && styles.optionTextActive]}>{category.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                <View style={styles.quickAddListHeader}>
+                  <Text style={styles.metricLabel}>{selectedQuickAddCategory?.label.toUpperCase() ?? 'LOADOUT ITEMS'}</Text>
+                  <Text style={styles.tileMeta}>{quickAddCategoryItems.length} items in this category</Text>
+                </View>
+                <ScrollView
+                  style={styles.quickAddListScroll}
+                  contentContainerStyle={styles.quickAddGrid}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                >
+                  {quickAddCategoryItems.map((item) => {
+                    const selected = selectedQuickAddIds.includes(item.id);
+                    return (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={[styles.quickAddItem, selected && styles.quickAddItemSelected]}
+                        onPress={() => toggleQuickAddSelection(item.id)}
+                        activeOpacity={0.82}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: selected }}
+                        accessibilityLabel={`Select ${item.name}`}
+                      >
+                        <View style={styles.quickAddItemTop}>
+                          <Text style={[styles.quickAddItemTitle, selected && styles.optionTextActive]} numberOfLines={1}>
+                            {item.name}
+                          </Text>
+                          <Text style={styles.quickAddWeight}>{formatLbs(item.typicalWeightLb * (item.quantity ?? 1))}</Text>
+                        </View>
+                        <View style={styles.quickAddMetaRow}>
+                          <ECSBadge label={item.category.toUpperCase()} tone={selected ? 'ready' : 'info'} compact />
+                          <Text style={styles.quickAddMetaText}>{item.permanence}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                <ECSButton
+                  label="Bulk Add"
+                  icon="add-circle-outline"
+                  variant="secondary"
+                  size="medium"
+                  onPress={bulkAddLoadoutItems}
+                  disabled={selectedQuickAddIds.length === 0}
+                  grow
+                />
+              </ECSPanel>
+            ) : null}
           </View>
         ) : null}
       </ECSModalShell>
@@ -608,7 +863,7 @@ export default function FleetBuildLoadoutModal({
 
 const styles = StyleSheet.create({
   stack: {
-    gap: 12,
+    gap: 10,
   },
   summaryPanel: {
     flexDirection: 'row',
@@ -617,7 +872,7 @@ const styles = StyleSheet.create({
   },
   summaryTile: {
     flexGrow: 1,
-    flexBasis: 150,
+    flexBasis: 132,
     gap: 3,
   },
   metricLabel: {
@@ -629,30 +884,22 @@ const styles = StyleSheet.create({
   tileGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 8,
   },
   tilePressable: {
     flexGrow: 1,
-    flexBasis: 210,
+    flexBasis: 182,
     minWidth: 0,
   },
   accessoryTile: {
-    minHeight: 142,
-    gap: 9,
+    minHeight: 116,
+    gap: 7,
   },
   tileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: 8,
-  },
-  tileIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: ECS_SURFACE.background.compact,
   },
   tileTitle: {
     ...ECS_TEXT.cardTitle,
@@ -662,6 +909,28 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
     lineHeight: 15,
+  },
+  highMountedWarningPanel: {
+    gap: 10,
+  },
+  warningHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  warningRiskText: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.danger,
+  },
+  warningTitle: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+  },
+  warningCopy: {
+    ...ECS_TEXT.body,
+    color: TACTICAL.textMuted,
+    lineHeight: 18,
   },
   optionGrid: {
     flexDirection: 'row',
@@ -690,7 +959,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
   },
   loadoutPanel: {
-    gap: 12,
+    gap: 10,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -701,10 +970,10 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.cardTitle,
   },
   compartmentGroupStack: {
-    gap: 8,
+    gap: 7,
   },
   compartmentGroup: {
-    gap: 8,
+    gap: 7,
   },
   groupTitle: {
     ...ECS_TEXT.sectionTitle,
@@ -718,15 +987,15 @@ const styles = StyleSheet.create({
     gap: 10,
     borderTopWidth: 1,
     borderTopColor: ECS_SURFACE.border.quiet,
-    paddingTop: 8,
+    paddingTop: 7,
   },
   customCompartmentRow: {
     borderWidth: 1,
     borderTopWidth: 1,
     borderColor: ECS_STATUS.tone.selected.border,
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingBottom: 9,
+    paddingHorizontal: 9,
+    paddingBottom: 8,
     backgroundColor: ECS_STATUS.tone.selected.background,
   },
   compartmentCopy: {
@@ -795,11 +1064,6 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.chip,
     color: TACTICAL.text,
   },
-  compartmentPickerMeta: {
-    ...ECS_TEXT.helper,
-    color: TACTICAL.textMuted,
-    marginTop: 2,
-  },
   field: {
     flexGrow: 1,
     flexBasis: 190,
@@ -815,6 +1079,106 @@ const styles = StyleSheet.create({
     backgroundColor: ECS_SURFACE.background.compact,
     fontSize: 13,
     fontWeight: '700',
+  },
+  inlineSaveSection: {
+    gap: 6,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: ECS_SURFACE.background.quiet,
+  },
+  inlineSaveHint: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    lineHeight: 15,
+    textAlign: 'center',
+  },
+  quickAddPanel: {
+    gap: 10,
+  },
+  quickAddHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  quickAddHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  quickCategoryRail: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  quickCategoryChip: {
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.default,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  quickCategoryText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.textMuted,
+  },
+  quickAddListHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  quickAddListScroll: {
+    maxHeight: 260,
+  },
+  quickAddGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  quickAddItem: {
+    flexGrow: 1,
+    flexBasis: 190,
+    minWidth: 0,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.default,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  quickAddItemSelected: {
+    borderColor: ECS_STATUS.tone.selected.border,
+    backgroundColor: ECS_STATUS.tone.selected.background,
+  },
+  quickAddItemTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  quickAddItemTitle: {
+    ...ECS_TEXT.body,
+    color: TACTICAL.text,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  quickAddWeight: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.textMuted,
+  },
+  quickAddMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  quickAddMetaText: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    textTransform: 'uppercase',
   },
   estimatePanel: {
     gap: 4,

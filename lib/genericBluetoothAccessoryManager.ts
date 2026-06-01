@@ -1,9 +1,22 @@
 import { Platform } from 'react-native';
 import {
   bluetoothAccessoryRegistry,
+  type BluetoothAccessoryRecord,
   type BluetoothAccessoryOwner,
 } from './bluetoothAccessoryRegistry';
 import { ecsLog } from './ecsLogger';
+import { ecsTelemetryStore } from '../src/telemetry/ECSTelemetryStore';
+import { bluetoothAccessoryToEcsTelemetryEvents } from '../src/telemetry/telemetryAdapters';
+import {
+  buildEcoFlowBleCharacteristicProbe,
+  isEcoFlowBleDiagnosticTarget,
+  recordEcoFlowBleProbeEvent,
+  type EcoFlowBleServiceProbe,
+} from './ecoflowBleDiagnosticCapture';
+import {
+  decodeUtilitySensorLiveTelemetry,
+  type UtilitySensorCharacteristicSnapshot,
+} from './utilitySensorBleTelemetry';
 
 type BleManagerDevice = any;
 type BleManagerSubscription = { remove?: () => void } | null;
@@ -18,6 +31,10 @@ interface ConnectGenericAccessoryOptions {
   supportLabel: string;
   supportNote: string | null;
   signalStrength: number | null;
+  serviceUuids?: string[];
+  manufacturerData?: string | null;
+  localName?: string | null;
+  levelPercent?: unknown;
 }
 
 interface ConnectGenericAccessoryResult {
@@ -63,12 +80,21 @@ class GenericBluetoothAccessoryManager {
   async connect(
     options: ConnectGenericAccessoryOptions,
   ): Promise<ConnectGenericAccessoryResult> {
+    const connectStartedAt = Date.now();
+    const captureEcoFlowBle = isEcoFlowBleDiagnosticTarget(options);
     ecsLog.debug('TELEMETRY', '[BT_CONNECT] start', {
       deviceId: options.deviceId,
       displayName: options.displayName,
       providerId: options.providerId,
       owner: options.owner,
     });
+    if (captureEcoFlowBle) {
+      recordEcoFlowBleProbeEvent({
+        ...options,
+        phase: 'connect_requested',
+        startedAt: connectStartedAt,
+      });
+    }
 
     await bluetoothAccessoryRegistry.upsert({
       ...options,
@@ -83,11 +109,12 @@ class GenericBluetoothAccessoryManager {
         providerId: options.providerId,
         reason: error,
       });
-      await bluetoothAccessoryRegistry.upsert({
+      const failedRecord = await bluetoothAccessoryRegistry.upsert({
         ...options,
         connectionState: 'error',
         lastError: error,
       });
+      this.publishAccessoryTelemetryState(failedRecord);
       return { success: false, error, signalStrength: null };
     }
 
@@ -98,23 +125,71 @@ class GenericBluetoothAccessoryManager {
         requestMTU: 256,
         timeout: 15_000,
       });
+      if (captureEcoFlowBle) {
+        recordEcoFlowBleProbeEvent({
+          ...options,
+          phase: 'native_transport_connected',
+          startedAt: connectStartedAt,
+          elapsedMs: Date.now() - connectStartedAt,
+        });
+        recordEcoFlowBleProbeEvent({
+          ...options,
+          phase: 'service_discovery_started',
+          startedAt: connectStartedAt,
+          elapsedMs: Date.now() - connectStartedAt,
+        });
+      }
       await device.discoverAllServicesAndCharacteristics();
       ecsLog.debug('TELEMETRY', '[BT_LIVE] device_connected', {
         deviceId: options.deviceId,
         providerId: options.providerId,
         displayName: options.displayName,
       });
-      await this.logDiscoveredServices(device, options.deviceId, options.providerId);
+      const serviceDiscovery = await this.logDiscoveredServices(device, options.deviceId, options.providerId);
+      const discoveredServiceUuids = serviceDiscovery.serviceUuids;
+      if (captureEcoFlowBle) {
+        recordEcoFlowBleProbeEvent({
+          ...options,
+          phase: 'service_discovery_completed',
+          startedAt: connectStartedAt,
+          elapsedMs: Date.now() - connectStartedAt,
+          services: serviceDiscovery.serviceProbes,
+        });
+      }
+      const characteristicSnapshots = options.owner === 'sensor'
+        ? await this.readReadableCharacteristicSnapshots(device, options.deviceId, options.providerId)
+        : [];
       this.connections.set(options.deviceId, device);
       this.attachDisconnectMonitor(options, device);
 
       const signalStrength = await this.readRssi(device, options.signalStrength);
-      await bluetoothAccessoryRegistry.upsert({
+      const serviceUuids = Array.from(new Set([
+        ...(options.serviceUuids ?? []),
+        ...discoveredServiceUuids,
+      ].map((uuid) => String(uuid ?? '').trim().toLowerCase()).filter(Boolean)));
+      const utilitySensorTelemetry = options.owner === 'sensor'
+        ? decodeUtilitySensorLiveTelemetry({
+            providerId: options.providerId,
+            providerLabel: options.providerLabel,
+            categoryHint: options.categoryHint,
+            displayName: options.displayName,
+            serviceUuids,
+            manufacturerData: options.manufacturerData ?? null,
+            localName: options.localName ?? options.displayName,
+            signalStrength,
+            levelPercent: options.levelPercent,
+            characteristics: characteristicSnapshots,
+          })
+        : null;
+      const connectedRecord = await bluetoothAccessoryRegistry.upsert({
         ...options,
         connectionState: 'connected',
         signalStrength,
+        serviceUuids,
+        utilitySensorTelemetry,
         lastError: null,
       });
+      this.publishAccessoryTelemetryState(connectedRecord);
       ecsLog.debug('TELEMETRY', '[BT_CONNECT] success', {
         deviceId: options.deviceId,
         providerId: options.providerId,
@@ -123,16 +198,26 @@ class GenericBluetoothAccessoryManager {
       return { success: true, error: null, signalStrength };
     } catch (error) {
       const message = getErrorMessage(error);
+      if (captureEcoFlowBle) {
+        recordEcoFlowBleProbeEvent({
+          ...options,
+          phase: /service|characteristic/i.test(message) ? 'service_discovery_failed' : 'connect_failed',
+          startedAt: connectStartedAt,
+          elapsedMs: Date.now() - connectStartedAt,
+          error: message,
+        });
+      }
       ecsLog.warn('TELEMETRY', '[BT_CONNECT] failure', {
         deviceId: options.deviceId,
         providerId: options.providerId,
         reason: message,
       });
-      await bluetoothAccessoryRegistry.upsert({
+      const failedRecord = await bluetoothAccessoryRegistry.upsert({
         ...options,
         connectionState: 'error',
         lastError: message,
       });
+      this.publishAccessoryTelemetryState(failedRecord);
       return { success: false, error: message, signalStrength: options.signalStrength };
     }
   }
@@ -141,6 +226,10 @@ class GenericBluetoothAccessoryManager {
     const existing = bluetoothAccessoryRegistry.getByDeviceId(deviceId);
 
     if (existing) {
+      recordEcoFlowBleProbeEvent({
+        ...existing,
+        phase: 'disconnect_requested',
+      });
       await bluetoothAccessoryRegistry.upsert({
         ...existing,
         connectionState: 'disconnecting',
@@ -167,11 +256,12 @@ class GenericBluetoothAccessoryManager {
       }
     } catch (error) {
       if (existing) {
-        await bluetoothAccessoryRegistry.upsert({
+        const failedRecord = await bluetoothAccessoryRegistry.upsert({
           ...existing,
           connectionState: 'error',
           lastError: getErrorMessage(error),
         });
+        this.publishAccessoryTelemetryState(failedRecord);
       }
       throw error;
     }
@@ -179,11 +269,28 @@ class GenericBluetoothAccessoryManager {
     this.connections.delete(deviceId);
 
     if (existing) {
-      await bluetoothAccessoryRegistry.upsert({
+      const disconnectedRecord = await bluetoothAccessoryRegistry.upsert({
         ...existing,
         connectionState: 'disconnected',
         lastError: null,
       });
+      recordEcoFlowBleProbeEvent({
+        ...existing,
+        phase: 'disconnect_completed',
+      });
+      this.publishAccessoryTelemetryState(disconnectedRecord);
+    }
+  }
+
+  private publishAccessoryTelemetryState(record: BluetoothAccessoryRecord): void {
+    const events = bluetoothAccessoryToEcsTelemetryEvents(record);
+    if (events.length > 0) {
+      ecsTelemetryStore.ingestEvents(events);
+      return;
+    }
+
+    if (record.owner === 'sensor') {
+      ecsTelemetryStore.markDeviceUnavailable(record.deviceId, 'utility_sensor', 'Utility sensor disconnected.');
     }
   }
 
@@ -200,11 +307,12 @@ class GenericBluetoothAccessoryManager {
           this.disconnectSubscriptions.get(options.deviceId)?.remove?.();
           this.disconnectSubscriptions.delete(options.deviceId);
           this.connections.delete(options.deviceId);
-          await bluetoothAccessoryRegistry.upsert({
+          const disconnectedRecord = await bluetoothAccessoryRegistry.upsert({
             ...options,
             connectionState: 'disconnected',
             lastError: null,
           });
+          this.publishAccessoryTelemetryState(disconnectedRecord);
         }),
       );
     } catch {
@@ -228,14 +336,19 @@ class GenericBluetoothAccessoryManager {
     device: BleManagerDevice,
     deviceId: string,
     providerId: string,
-  ): Promise<void> {
+  ): Promise<{ serviceUuids: string[]; serviceProbes: EcoFlowBleServiceProbe[] }> {
     try {
       const services = await device.services();
       const serviceSummaries = [];
+      const serviceUuids: string[] = [];
+      const serviceProbes: EcoFlowBleServiceProbe[] = [];
       for (const service of services ?? []) {
+        const serviceUuid = String(service?.uuid ?? '').trim().toLowerCase();
+        if (serviceUuid) serviceUuids.push(serviceUuid);
         let characteristicCount = 0;
+        let characteristics: any[] = [];
         try {
-          const characteristics = await device.characteristicsForService(service.uuid);
+          characteristics = await device.characteristicsForService(service.uuid);
           characteristicCount = Array.isArray(characteristics) ? characteristics.length : 0;
         } catch {
           characteristicCount = 0;
@@ -244,6 +357,15 @@ class GenericBluetoothAccessoryManager {
           uuid: String(service?.uuid ?? ''),
           characteristicCount,
         });
+        if (serviceUuid) {
+          serviceProbes.push({
+            uuid: serviceUuid,
+            characteristicCount,
+            characteristics: (characteristics ?? [])
+              .map((characteristic) => buildEcoFlowBleCharacteristicProbe(serviceUuid, characteristic))
+              .filter((characteristic) => characteristic.characteristicUuid.length > 0),
+          });
+        }
       }
       ecsLog.debug('TELEMETRY', '[BT_LIVE] services_discovered', {
         deviceId,
@@ -251,13 +373,63 @@ class GenericBluetoothAccessoryManager {
         count: serviceSummaries.length,
         services: serviceSummaries,
       });
+      return { serviceUuids, serviceProbes };
     } catch (error) {
       ecsLog.warn('TELEMETRY', '[BT_LIVE] services_discovered', {
         deviceId,
         providerId,
         error: getErrorMessage(error),
       });
+      return { serviceUuids: [], serviceProbes: [] };
     }
+  }
+
+  private async readReadableCharacteristicSnapshots(
+    device: BleManagerDevice,
+    deviceId: string,
+    providerId: string,
+  ): Promise<UtilitySensorCharacteristicSnapshot[]> {
+    const snapshots: UtilitySensorCharacteristicSnapshot[] = [];
+    try {
+      const services = await device.services();
+      for (const service of services ?? []) {
+        const serviceUuid = String(service?.uuid ?? '').trim().toLowerCase();
+        if (!serviceUuid) continue;
+        let characteristics: any[] = [];
+        try {
+          characteristics = await device.characteristicsForService(service.uuid);
+        } catch {
+          characteristics = [];
+        }
+        for (const characteristic of characteristics ?? []) {
+          if (characteristic?.isReadable === false) continue;
+          const characteristicUuid = String(characteristic?.uuid ?? '').trim().toLowerCase();
+          if (!characteristicUuid) continue;
+          try {
+            const value = typeof characteristic.read === 'function'
+              ? await characteristic.read()
+              : await device.readCharacteristicForService(service.uuid, characteristic.uuid);
+            snapshots.push({
+              serviceUuid,
+              characteristicUuid,
+              valueBase64: typeof value?.value === 'string' ? value.value : null,
+            });
+          } catch {}
+        }
+      }
+      ecsLog.debug('TELEMETRY', '[BT_LIVE] characteristics_sampled', {
+        deviceId,
+        providerId,
+        readableCount: snapshots.length,
+      });
+    } catch (error) {
+      ecsLog.warn('TELEMETRY', '[BT_LIVE] characteristics_sampled', {
+        deviceId,
+        providerId,
+        error: getErrorMessage(error),
+      });
+    }
+    return snapshots;
   }
 }
 

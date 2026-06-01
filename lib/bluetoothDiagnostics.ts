@@ -41,7 +41,8 @@ export type BluetoothDiagnosticEventType =
   | 'obd2_pid'
   | 'obd2_parser'
   | 'widget_telemetry_update'
-  | 'scanner_snapshot';
+  | 'scanner_snapshot'
+  | 'ecoflow_ble_probe';
 
 export interface BluetoothDiagnosticEvent {
   id: string;
@@ -62,6 +63,12 @@ export interface BluetoothDiagnosticsSnapshot {
   nativeEnvironmentSupport: string;
   permissions: string;
   bluetoothPoweredState: string;
+  bluestackReadinessSummary: {
+    cloudApiCount: number;
+    parserPendingCount: number;
+    nativeBuildRequiredCount: number;
+    liveReadyCount: number;
+  };
   activeScans: number;
   nearbyDeviceCount: number;
   activeConnection: string | null;
@@ -88,6 +95,12 @@ let nativeEnvironmentSupport = 'unknown';
 let permissions = 'unknown';
 let bluetoothPoweredState = 'unknown';
 let nearbyDeviceCount = 0;
+let bluestackReadinessSummary = {
+  cloudApiCount: 0,
+  parserPendingCount: 0,
+  nativeBuildRequiredCount: 0,
+  liveReadyCount: 0,
+};
 let activeConnection: string | null = null;
 let updatedAt: number | null = null;
 let sequence = 0;
@@ -136,6 +149,12 @@ function applyEvent(event: BluetoothDiagnosticEvent): void {
       permissions = String(event.details?.permissions ?? permissions);
       bluetoothPoweredState = String(event.details?.bluetoothPoweredState ?? bluetoothPoweredState);
       nearbyDeviceCount = Number(event.details?.nearbyDeviceCount ?? nearbyDeviceCount) || 0;
+      bluestackReadinessSummary = {
+        cloudApiCount: Number(event.details?.bluestackCloudApiCount ?? bluestackReadinessSummary.cloudApiCount) || 0,
+        parserPendingCount: Number(event.details?.bluestackParserPendingCount ?? bluestackReadinessSummary.parserPendingCount) || 0,
+        nativeBuildRequiredCount: Number(event.details?.bluestackNativeBuildRequiredCount ?? bluestackReadinessSummary.nativeBuildRequiredCount) || 0,
+        liveReadyCount: Number(event.details?.bluestackLiveReadyCount ?? bluestackReadinessSummary.liveReadyCount) || 0,
+      };
       break;
     case 'connect_start':
       activeConnection = event.deviceName ?? event.deviceId ?? null;
@@ -247,6 +266,7 @@ export function getBluetoothDiagnosticsSnapshot(): BluetoothDiagnosticsSnapshot 
     nativeEnvironmentSupport,
     permissions,
     bluetoothPoweredState,
+    bluestackReadinessSummary: { ...bluestackReadinessSummary },
     activeScans: activeScans.size,
     nearbyDeviceCount,
     activeConnection,
@@ -272,6 +292,12 @@ export function resetBluetoothDiagnosticsForTests(): void {
   permissions = 'unknown';
   bluetoothPoweredState = 'unknown';
   nearbyDeviceCount = 0;
+  bluestackReadinessSummary = {
+    cloudApiCount: 0,
+    parserPendingCount: 0,
+    nativeBuildRequiredCount: 0,
+    liveReadyCount: 0,
+  };
   activeConnection = null;
   updatedAt = null;
   notify();
@@ -284,6 +310,7 @@ export function serializeBluetoothDiagnostics(snapshot = getBluetoothDiagnostics
     nativeEnvironmentSupport: snapshot.nativeEnvironmentSupport,
     permissions: snapshot.permissions,
     bluetoothPoweredState: snapshot.bluetoothPoweredState,
+    bluestackReadinessSummary: snapshot.bluestackReadinessSummary,
     activeScans: snapshot.activeScans,
     nearbyDeviceCount: snapshot.nearbyDeviceCount,
     activeConnection: snapshot.activeConnection,
@@ -303,5 +330,123 @@ export function serializeBluetoothDiagnostics(snapshot = getBluetoothDiagnostics
     ),
     latestTelemetryTimestampByDevice: snapshot.latestTelemetryTimestampByDevice,
     recentEvents: snapshot.events.slice(0, 50),
+  }, null, 2);
+}
+
+export function serializeBluetoothProductionEvidenceDraft(snapshot = getBluetoothDiagnosticsSnapshot()): string {
+  const latestErrors = Object.fromEntries(
+    Object.entries(snapshot.latestErrorsBySource).map(([source, event]) => [
+      source,
+      event ? {
+        type: event.type,
+        message: event.message ?? null,
+        error: event.error ?? null,
+        providerId: event.providerId ?? null,
+        timestamp: event.timestamp,
+      } : null,
+    ]),
+  );
+  const recentEvents = snapshot.events.slice(0, 50);
+  const countEvents = (predicate: (event: BluetoothDiagnosticEvent) => boolean): number =>
+    recentEvents.filter(predicate).length;
+  const observedDiagnostics = {
+    nativeBleEventsObserved: countEvents((event) => event.source === 'native_ble'),
+    discoveredDeviceEventCount: countEvents((event) => event.type === 'device_discovered'),
+    telemetryFirstPacketCount: countEvents((event) => event.type === 'telemetry_first_packet'),
+    disconnectSuccessCount: countEvents((event) => event.type === 'disconnect_success'),
+    ecoflowCloudAuthFailureCount: countEvents((event) => event.type === 'ecoflow_cloud_auth_failure'),
+    obd2HandshakeCount: countEvents((event) => event.type === 'obd2_handshake'),
+    obd2PidEventCount: countEvents((event) => event.type === 'obd2_pid'),
+    providerHandshakeFailureCount: countEvents((event) => event.type === 'provider_handshake_failure'),
+  };
+
+  return JSON.stringify({
+    _instructions: 'Field-test draft only. Keep pass fields false until screenshots, diagnostics, logs, and owner review confirm the real-hardware run. Replace placeholder values before copying this JSON to .smoke/bluetooth-power-obd2-production-evidence.json.',
+    androidNativeBleDiscoveryPassed: false,
+    powerStationConnectStreamDisconnectPassed: false,
+    ecoflowCloudBleSeparationRealDevicePassed: false,
+    obd2NoDataPassed: false,
+    obd2LiveDataPassed: false,
+    obd2DisconnectClearsTelemetryPassed: false,
+    productionDecision: 'pending',
+    buildAndDevice: {
+      appBuildType: null,
+      appVersion: null,
+      androidDeviceModel: null,
+      androidOsVersion: null,
+      nativeBuild: null,
+      expoGoRuntime: null,
+    },
+    deviceMatrix: [
+      'TODO: Android native development build device',
+      'TODO: BLE power station or battery monitor',
+      'TODO: EcoFlow cloud/API device or unauthorized EcoFlow account/device',
+      'TODO: ELM327-compatible OBD2 adapter',
+    ],
+    evidenceReferences: [
+      'TODO: .smoke/bluetooth-deep/android-native-ble-scan.png',
+      'TODO: .smoke/bluetooth-deep/power-connect-stream-disconnect.log',
+      'TODO: .smoke/bluetooth-deep/ecoflow-cloud-ble-separation.png',
+      'TODO: .smoke/bluetooth-deep/obd2-live-no-data-disconnect.log',
+    ],
+    reviewerSignoff: {
+      product: null,
+      engineering: null,
+      privacy: null,
+      fieldOps: null,
+      acceptedAt: null,
+    },
+    requiredEvidenceChecklist: [
+      {
+        id: 'android_native_ble_discovery',
+        passField: 'androidNativeBleDiscoveryPassed',
+        observedInDiagnostics: observedDiagnostics.nativeBleEventsObserved > 0 && observedDiagnostics.discoveredDeviceEventCount > 0,
+        requiredReferences: ['permissions screenshot', 'scan result screenshot', 'diagnostics copy'],
+        manualReviewRequired: true,
+      },
+      {
+        id: 'power_station_connect_stream_disconnect',
+        passField: 'powerStationConnectStreamDisconnectPassed',
+        observedInDiagnostics: observedDiagnostics.telemetryFirstPacketCount > 0 && observedDiagnostics.disconnectSuccessCount > 0,
+        requiredReferences: ['scan row screenshot', 'telemetry stream log', 'disconnect/stale widget evidence'],
+        manualReviewRequired: true,
+      },
+      {
+        id: 'ecoflow_cloud_ble_separation',
+        passField: 'ecoflowCloudBleSeparationRealDevicePassed',
+        observedInDiagnostics: observedDiagnostics.ecoflowCloudAuthFailureCount > 0 || snapshot.bluestackReadinessSummary.cloudApiCount > 0,
+        requiredReferences: ['cloud/API row screenshot', 'auth success or unauthorized log', 'native BLE state screenshot'],
+        manualReviewRequired: true,
+      },
+      {
+        id: 'obd2_no_data_live_disconnect',
+        passField: 'obd2NoDataPassed + obd2LiveDataPassed + obd2DisconnectClearsTelemetryPassed',
+        observedInDiagnostics: observedDiagnostics.obd2HandshakeCount > 0 || observedDiagnostics.obd2PidEventCount > 0,
+        requiredReferences: ['no-data evidence', 'live PID evidence', 'disconnect clears/ages telemetry evidence'],
+        manualReviewRequired: true,
+      },
+    ],
+    diagnosticsSummary: {
+      generatedAt: new Date().toISOString(),
+      scannerState: snapshot.scannerState,
+      nativeEnvironmentSupport: snapshot.nativeEnvironmentSupport,
+      permissions: snapshot.permissions,
+      bluetoothPoweredState: snapshot.bluetoothPoweredState,
+      bluestackReadinessSummary: snapshot.bluestackReadinessSummary,
+      activeScans: snapshot.activeScans,
+      nearbyDeviceCount: snapshot.nearbyDeviceCount,
+      activeConnectionPresent: snapshot.activeConnection != null,
+      activeTelemetrySubscriptions: snapshot.activeTelemetrySubscriptions,
+      latestErrorSources: latestErrors,
+      latestTelemetryDeviceCount: Object.keys(snapshot.latestTelemetryTimestampByDevice).length,
+      observedDiagnostics,
+      recentEventTypes: snapshot.events.slice(0, 20).map((event) => ({
+        type: event.type,
+        source: event.source,
+        providerId: event.providerId ?? null,
+        timestamp: event.timestamp,
+      })),
+    },
+    notes: 'TODO: replace this note with field-test screenshots/log references and reviewer notes. Do not include raw provider secrets, full tokens, precise coordinates, or private payloads.',
   }, null, 2);
 }

@@ -35,21 +35,7 @@ function notIncludes(source, fragment, message) {
   "getWidgetToneColor('good')",
   "getWidgetToneColor('warning')",
 ].forEach((fragment) => {
-  includes(widgetSource, fragment, `Power widget should use semantic flow token ${fragment}`);
-});
-
-[
-  'useReducedMotion()',
-  'Animated.loop',
-  'Easing.inOut(Easing.quad)',
-  'useNativeDriver: true',
-  'const shouldAnimate = hasFlow && !reducedMotion;',
-  'pulse.stopAnimation()',
-  'const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);',
-  'const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);',
-  'isStale?: boolean;',
-].forEach((fragment) => {
-  includes(widgetSource, fragment, `Power flow animation should include ${fragment}`);
+  includes(widgetSource, fragment, `Power detail surfaces should retain semantic flow token ${fragment}`);
 });
 
 includes(
@@ -89,18 +75,43 @@ includes(
 );
 includes(
   widgetSource,
-  'height: 118',
-  'Power Rive hero should have explicit full-widget height.',
+  "height: '100%'",
+  'Power Rive hero should fill the available widget height.',
 );
 includes(
   widgetSource,
-  'height: 86',
-  'Power Rive hero should have explicit compact-widget height.',
+  'minHeight: 86',
+  'Power Rive hero should preserve a compact minimum height.',
+);
+includes(
+  widgetSource,
+  "alignSelf: 'stretch'",
+  'Power Rive hero should stretch across the monitor container while the Rive runtime preserves aspect ratio.',
+);
+includes(
+  widgetSource,
+  "overflow: 'hidden'",
+  'Power Rive hero should clip to the monitor container instead of floating outside it.',
 );
 notIncludes(
   widgetSource,
   '<PowerFlowGraphic inputWatts={totalInputWatts} outputWatts={totalOutputWatts} />',
-  'Power card should not animate raw totals without stale/live gating.',
+  'Power card should not render the legacy inline flow graphic; the blue Rive module owns power flow animation.',
+);
+notIncludes(
+  widgetSource,
+  'function PowerFlowGraphic',
+  'Power card should not keep the legacy center tick/flow graphic helper.',
+);
+notIncludes(
+  widgetSource,
+  'function usePowerFlowPulse',
+  'Power card should not keep the legacy center tick/flow pulse loop.',
+);
+notIncludes(
+  widgetSource,
+  "footer={<WidgetMetaLine",
+  'Power monitor should not show a redundant footer/live pill beneath the blue module.',
 );
 notIncludes(
   widgetSource,

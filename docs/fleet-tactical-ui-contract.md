@@ -22,6 +22,10 @@ Fleet premium cards must not use:
 
 Allowed visual identity is limited to existing ECS icon-system assets, vehicle class icons, nickname and year/make/model/trim text, use-case chips, metric tiles, readiness/confidence/payload badges, and compact status strips.
 
+## OEM Reference Presentation
+
+Fleet may surface a compact OEM-reference panel when a year/make/model/trim match exists. That panel must stay data-forward and source-labeled: matched vehicle reference, confidence, verification reminder, fuel capacity, ground clearance, wheelbase, width/height/length where known, off-road angles, and turning diameter. It must not introduce OEM photos, scraped images, dealer media, or image-heavy vehicle identity. Door placard values, user-entered specs, VIN/OEM matches, and scale tickets remain higher authority than the bundled reference catalog.
+
 ## Required Shared UI Mapping
 
 | Fleet need | Required ECS source | Contract |
@@ -71,6 +75,8 @@ Allowed visual identity is limited to existing ECS icon-system assets, vehicle c
 - Live telemetry/sync/active sensor context: use `live`.
 - Source, estimate, category, drivetrain, trim, use case, and neutral metadata: use `info` or `category`.
 - Selected vehicle or active setup context: use `selected` or `active`.
+- Weight Summary must keep the AGENTS Fleet math legible: operating weight is base net/empty plus installed accessories plus current loadout, payload remaining is GVWR minus operating weight, and GVWR usage is operating weight divided by GVWR. Saved fuel and water may be counted as current-loadout inputs only when they are visible as explicit, source/confidence-labeled consumables.
+- Android QA state must remain visible without changing the Fleet layout: Fleet should expose local/offline/sync state, source labels, confidence labels, estimated or missing-data status, and the no-photo contract through compact badges or helper lines on the existing overview/card surfaces.
 
 ## Modal And Sheet Contracts
 

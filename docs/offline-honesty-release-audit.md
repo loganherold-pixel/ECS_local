@@ -21,6 +21,13 @@ ECS already has strong offline-readiness, weather freshness, cached route, and t
 - Vehicle telemetry widgets distinguish live telemetry, last-known telemetry, manual fallback, stale telemetry, and unavailable state.
 - Dispatch/CAD and auth/session restore tests already preserve offline/queued honesty.
 
+## Offline Navigation Production Gate Notes
+
+- Offline Navigation currently passes static route/cache/departure-audit/camp-layer checks, but this does not prove field offline routing until Android no-network evidence is recorded.
+- Navigate offline mode copy must continue to say live search, live routing, and reroutes are unavailable while offline.
+- Cached route guidance and cached map coverage may be described as local/reference support only.
+- Cached CampOps, established campground, and public-land eligibility layers must remain labeled as cached/offline reference and must ask the user to verify access, rules, status, and availability when connected.
+
 ## Needs Review
 
 - Some broader dashboard strings still use optimistic readiness language when multiple systems are recovering. They are currently guarded by source state, but product review should confirm the exact tone.

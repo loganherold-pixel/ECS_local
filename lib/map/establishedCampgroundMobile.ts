@@ -14,7 +14,10 @@ import type {
   EstablishedCampsiteSource,
   EstablishedCampsiteType,
 } from './establishedCampsiteTypes';
-import { toEstablishedCampsiteFeatureCollection } from './establishedCampsiteGeojsonAdapter';
+import {
+  dedupeEstablishedCampsitesForMap,
+  toEstablishedCampsiteFeatureCollection,
+} from './establishedCampsiteGeojsonAdapter';
 
 export type EstablishedCampgroundSearchBbox = {
   minLng: number;
@@ -39,6 +42,7 @@ export type EstablishedCampgroundSearchRecord = {
   detailUrl?: string | null;
   status?: CampgroundStatus | string | null;
   availabilityStatus?: CampgroundAvailabilityStatus | string | null;
+  reservationStatus?: EstablishedCampsiteReservationStatus | string | null;
   siteCount?: number | null;
   siteTypes?: string[] | null;
   amenities?: string[] | null;
@@ -48,6 +52,15 @@ export type EstablishedCampgroundSearchRecord = {
   lastSyncedAt?: string | null;
   lastAvailabilityCheckedAt?: string | null;
   lastVerifiedAt?: string | null;
+  operatorName?: string | null;
+  bookingUrl?: string | null;
+  phone?: string | null;
+  seasonDescription?: string | null;
+  openingHours?: string | null;
+  maxVehicleLengthFt?: number | string | null;
+  tentAllowed?: boolean | string | null;
+  rvAllowed?: boolean | string | null;
+  trailersAllowed?: boolean | string | null;
 };
 
 export type EstablishedCampgroundsSearchResponse = {
@@ -78,6 +91,12 @@ export type EstablishedCampgroundsSearchResponse = {
   };
 };
 
+export type EstablishedCampgroundDetailResponse = {
+  ok: boolean;
+  campsite?: EstablishedCampsite;
+  error?: string;
+};
+
 export type EstablishedCampgroundsSearchRequest = {
   bbox: string;
   routeId?: string;
@@ -87,6 +106,7 @@ export type EstablishedCampgroundsSearchRequest = {
 };
 
 export const ESTABLISHED_CAMPGROUNDS_EDGE_FUNCTION = 'campgrounds-search';
+export const ESTABLISHED_CAMPGROUND_DETAIL_EDGE_FUNCTION = 'campground-detail';
 export const ESTABLISHED_CAMPGROUNDS_SEARCH_LIMIT = 250;
 export const ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const EMPTY_ESTABLISHED_CAMPGROUNDS_FEATURE_COLLECTION: EstablishedCampsiteFeatureCollection = {
@@ -195,6 +215,39 @@ function facilityTypeToCampsiteType(value: unknown): EstablishedCampsiteType {
 
 function amenityToCampsiteAmenity(value: unknown): EstablishedCampsiteAmenity {
   const token = normalizeToken(value);
+  if (['drinking_water', 'potable_water', 'water_spigot', 'water_available'].includes(token)) {
+    return 'water';
+  }
+  if (['toilet', 'toilets', 'restroom', 'restrooms', 'vault_toilet', 'pit_toilet', 'flush_toilet'].includes(token)) {
+    return 'toilets';
+  }
+  if (['shower', 'showers'].includes(token)) {
+    return 'showers';
+  }
+  if (['electric_hookup', 'electrical_hookups', 'water_hookup', 'sewer_hookup', 'hookup', 'hookups'].includes(token)) {
+    return 'hookups';
+  }
+  if (['dump', 'dumpstation', 'dump_station', 'sanitary_dump'].includes(token)) {
+    return 'dump_station';
+  }
+  if (['picnic_table', 'picnic_tables', 'table'].includes(token)) {
+    return 'picnic_table';
+  }
+  if (['fire_ring', 'fire_pit', 'firepit', 'grill'].includes(token)) {
+    return 'fire_ring';
+  }
+  if (['trash', 'garbage', 'refuse'].includes(token)) {
+    return 'trash';
+  }
+  if (['camp_host', 'host', 'campground_host'].includes(token)) {
+    return 'camp_host';
+  }
+  if (['store', 'camp_store', 'general_store'].includes(token)) {
+    return 'store';
+  }
+  if (['cell_service', 'cellular', 'phone_service', 'mobile_service'].includes(token)) {
+    return 'cell_service';
+  }
   if (
     [
       'water',
@@ -218,10 +271,28 @@ function amenityToCampsiteAmenity(value: unknown): EstablishedCampsiteAmenity {
 function inferReservationStatus(record: EstablishedCampgroundSearchRecord): EstablishedCampsiteReservationStatus {
   const availability = normalizeToken(record.availabilityStatus);
   if (availability === 'first_come_first_served') return 'first_come';
+  if (normalizeToken(record.reservationStatus) === 'first_come') return 'first_come';
+  if (normalizeToken(record.reservationStatus) === 'mixed') return 'mixed';
+  if (normalizeToken(record.reservationStatus) === 'required') return 'required';
+  if (normalizeToken(record.reservationStatus) === 'reservable') return 'reservable';
   if (record.reservationUrl || normalizeToken(record.primaryProvider) === 'reserveamerica') {
     return 'reservable';
   }
   return 'unknown';
+}
+
+function boolOrUndefined(value: unknown): boolean | undefined {
+  if (value === true || value === false) return value;
+  const token = normalizeToken(value);
+  if (['true', 'yes', 'y', '1', 'allowed', 'available'].includes(token)) return true;
+  if (['false', 'no', 'n', '0', 'not_allowed', 'unavailable'].includes(token)) return false;
+  return undefined;
+}
+
+function inferAllowedFromSiteTypes(siteTypes: string[] | null, patterns: RegExp[]): boolean | undefined {
+  if (!siteTypes?.length) return undefined;
+  const text = siteTypes.join(' ').toLowerCase();
+  return patterns.some((pattern) => pattern.test(text)) ? true : undefined;
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -426,8 +497,21 @@ export function mapCampgroundRecordToEstablishedCampsite(
     lastSyncedAt,
     lastAvailabilityCheckedAt,
     lastVerifiedAt: cleanText(record.lastVerifiedAt),
-    operatorName: cleanText(record.managingOrg) ?? cleanText(record.managingAgency) ?? undefined,
-    bookingUrl: reservationUrl ?? detailUrl ?? undefined,
+    operatorName: cleanText(record.operatorName) ?? cleanText(record.managingOrg) ?? cleanText(record.managingAgency) ?? undefined,
+    bookingUrl: cleanText(record.bookingUrl) ?? reservationUrl ?? detailUrl ?? undefined,
+    phone: cleanText(record.phone) ?? undefined,
+    seasonDescription: cleanText(record.seasonDescription) ?? undefined,
+    openingHours: cleanText(record.openingHours) ?? undefined,
+    maxVehicleLengthFt: numberOrNull(record.maxVehicleLengthFt) ?? undefined,
+    tentAllowed:
+      boolOrUndefined(record.tentAllowed) ??
+      inferAllowedFromSiteTypes(siteTypes, [/\btent\b/, /\bcampground\b/, /\bcampsite\b/]),
+    rvAllowed:
+      boolOrUndefined(record.rvAllowed) ??
+      inferAllowedFromSiteTypes(siteTypes, [/\brv\b/, /\btrailer\b/, /\brecreational vehicle\b/]),
+    trailersAllowed:
+      boolOrUndefined(record.trailersAllowed) ??
+      inferAllowedFromSiteTypes(siteTypes, [/\btrailer\b/, /\brv\b/]),
     sourceUpdatedAt: lastAvailabilityCheckedAt ?? lastSyncedAt ?? undefined,
     requiresVerification: true,
   };
@@ -437,9 +521,10 @@ export function mapCampgroundSearchRecordsToEstablishedCampsites(
   records: EstablishedCampgroundSearchRecord[] | null | undefined,
 ): EstablishedCampsite[] {
   if (!Array.isArray(records)) return [];
-  return records
+  const campsites = records
     .map(mapCampgroundRecordToEstablishedCampsite)
     .filter((record): record is EstablishedCampsite => !!record);
+  return dedupeEstablishedCampsitesForMap(campsites);
 }
 
 function isEstablishedCampgroundsFeatureCollection(value: unknown): value is EstablishedCampsiteFeatureCollection {
@@ -492,6 +577,15 @@ function normalizeSearchRecord(value: unknown): EstablishedCampgroundSearchRecor
     lastSyncedAt: cleanText(record.lastSyncedAt),
     lastAvailabilityCheckedAt: cleanText(record.lastAvailabilityCheckedAt),
     lastVerifiedAt: cleanText(record.lastVerifiedAt),
+    operatorName: cleanText(record.operatorName),
+    bookingUrl: cleanText(record.bookingUrl),
+    phone: cleanText(record.phone),
+    seasonDescription: cleanText(record.seasonDescription),
+    openingHours: cleanText(record.openingHours),
+    maxVehicleLengthFt: numberOrNull(record.maxVehicleLengthFt),
+    tentAllowed: boolOrUndefined(record.tentAllowed),
+    rvAllowed: boolOrUndefined(record.rvAllowed),
+    trailersAllowed: boolOrUndefined(record.trailersAllowed),
   };
 }
 
@@ -508,6 +602,54 @@ function featureToSearchRecord(
     latitude: numberOrNull(properties?.latitude) ?? coordinates[1],
     longitude: numberOrNull(properties?.longitude) ?? coordinates[0],
   });
+}
+
+function firstCleanText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return null;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = numberOrNull(value);
+    if (number != null) return number;
+  }
+  return null;
+}
+
+function firstStringList(...values: unknown[]): string[] | null {
+  for (const value of values) {
+    const list = stringList(value);
+    if (list?.length) return list;
+  }
+  return null;
+}
+
+function firstBool(...values: unknown[]): boolean | undefined {
+  for (const value of values) {
+    const bool = boolOrUndefined(value);
+    if (typeof bool === 'boolean') return bool;
+  }
+  return undefined;
+}
+
+function availabilityRowsFromDetail(value: unknown): Record<string, unknown>[] {
+  const availability = toRecord(value);
+  if (!Array.isArray(availability?.rows)) return [];
+  return availability.rows.map(toRecord).filter((row): row is Record<string, unknown> => !!row);
+}
+
+function reservationStatusFromAvailabilityRows(rows: readonly Record<string, unknown>[]): EstablishedCampsiteReservationStatus | null {
+  if (!rows.length) return null;
+  const hasReservable = rows.some((row) => boolOrUndefined(row.reservable) === true);
+  const hasFirstCome = rows.some((row) => boolOrUndefined(row.firstComeFirstServed ?? row.first_come_first_served) === true);
+  if (hasReservable && hasFirstCome) return 'mixed';
+  if (hasReservable) return 'reservable';
+  if (hasFirstCome) return 'first_come';
+  return null;
 }
 
 function normalizeSearchRecords(value: unknown): EstablishedCampgroundSearchRecord[] | null {
@@ -561,20 +703,114 @@ export function normalizeEstablishedCampgroundsSearchResponse(raw: unknown): Est
   }
 
   const campsites = mapCampgroundSearchRecordsToEstablishedCampsites(records);
-  const featureCollection =
-    geojson.features.length > 0 || !providedRecords
-      ? geojson
-      : toEstablishedCampsiteFeatureCollection(campsites);
+  const featureCollection = toEstablishedCampsiteFeatureCollection(campsites);
   const meta = toRecord(record.meta);
 
   return {
     ok: true,
     records,
     count:
-      typeof record.count === 'number'
-        ? record.count
-        : featureCollection.features.length,
+      featureCollection.features.length,
     geojson: featureCollection,
     ...(meta ? { meta: meta as EstablishedCampgroundsSearchResponse['meta'] } : {}),
+  };
+}
+
+export function normalizeEstablishedCampgroundDetailResponse(raw: unknown): EstablishedCampgroundDetailResponse {
+  const record = toRecord(raw);
+  if (!record) {
+    return { ok: false, error: ESTABLISHED_CAMPGROUNDS_MALFORMED_RESPONSE_ERROR };
+  }
+
+  if (record.ok === false) {
+    return {
+      ok: false,
+      error: typeof record.error === 'string' ? record.error : ESTABLISHED_CAMPGROUNDS_UNAVAILABLE_ERROR,
+    };
+  }
+
+  if (record.ok !== true) {
+    return { ok: false, error: ESTABLISHED_CAMPGROUNDS_MALFORMED_RESPONSE_ERROR };
+  }
+
+  const marker = toRecord(record.marker);
+  const campground = toRecord(record.campground);
+  const freshness = toRecord(record.freshness);
+  const availability = toRecord(record.availability);
+  const detailEnrichment = toRecord(record.detailEnrichment);
+  const sourceRows = Array.isArray(record.sources) ? record.sources : [];
+  const availabilityRows = availabilityRowsFromDetail(availability);
+  const detailSource: Record<string, unknown> = {
+    ...(campground ?? {}),
+    ...(marker ?? {}),
+    ...(detailEnrichment ?? {}),
+  };
+  if (!marker && !campground && !detailEnrichment) {
+    return { ok: false, error: ESTABLISHED_CAMPGROUNDS_MALFORMED_RESPONSE_ERROR };
+  }
+
+  const effectiveStatus = cleanText(availability?.effectiveStatus);
+  const reservationStatus = reservationStatusFromAvailabilityRows(availabilityRows);
+  const siteTypes = firstStringList(detailSource.siteTypes, detailSource.site_types);
+  const campsite = mapCampgroundRecordToEstablishedCampsite({
+    id: firstCleanText(detailSource.id) ?? '',
+    name: firstCleanText(detailSource.name, detailSource.title) ?? undefined,
+    title: firstCleanText(detailSource.title, detailSource.name) ?? undefined,
+    latitude: firstNumber(detailSource.latitude) ?? Number.NaN,
+    longitude: firstNumber(detailSource.longitude) ?? Number.NaN,
+    facilityType: firstCleanText(detailSource.facilityType, detailSource.facility_type),
+    managingAgency: firstCleanText(detailSource.managingAgency, detailSource.managing_agency),
+    managingOrg: firstCleanText(detailSource.managingOrg, detailSource.managing_org),
+    reservationUrl: firstCleanText(detailSource.reservationUrl, detailSource.reservation_url, record.reservationUrl),
+    detailUrl: firstCleanText(detailSource.detailUrl, detailSource.detail_url, record.detailUrl),
+    status: firstCleanText(detailSource.status),
+    availabilityStatus: effectiveStatus ?? firstCleanText(detailSource.availabilityStatus, detailSource.availability_status),
+    reservationStatus,
+    siteCount: firstNumber(detailSource.siteCount, detailSource.site_count),
+    siteTypes,
+    amenities: firstStringList(detailSource.amenities),
+    sourceConfidence: firstNumber(detailSource.sourceConfidence, detailSource.source_confidence),
+    primaryProvider: firstCleanText(detailSource.primaryProvider, detailSource.primary_provider),
+    attribution: firstCleanText(detailSource.attribution, record.attribution),
+    lastSyncedAt: firstCleanText(detailSource.lastSyncedAt, detailSource.last_synced_at, freshness?.lastSyncedAt),
+    lastAvailabilityCheckedAt: firstCleanText(
+      detailSource.lastAvailabilityCheckedAt,
+      detailSource.last_availability_checked_at,
+      freshness?.lastAvailabilityCheckedAt,
+    ),
+    lastVerifiedAt: firstCleanText(detailSource.lastVerifiedAt, detailSource.last_verified_at, freshness?.lastVerifiedAt),
+    operatorName: firstCleanText(detailSource.operatorName, detailSource.operator_name),
+    bookingUrl: firstCleanText(detailSource.bookingUrl, detailSource.booking_url),
+    phone: firstCleanText(detailSource.phone, detailSource.phoneNumber, detailSource.phone_number),
+    seasonDescription: firstCleanText(
+      detailSource.seasonDescription,
+      detailSource.season_description,
+      detailSource.openSeason,
+      detailSource.open_season,
+    ),
+    openingHours: firstCleanText(detailSource.openingHours, detailSource.opening_hours, detailSource.hours),
+    maxVehicleLengthFt: firstNumber(
+      detailSource.maxVehicleLengthFt,
+      detailSource.max_vehicle_length_ft,
+      detailSource.maxVehicleLength,
+      detailSource.max_vehicle_length,
+    ),
+    tentAllowed: firstBool(detailSource.tentAllowed, detailSource.tent_allowed),
+    rvAllowed: firstBool(detailSource.rvAllowed, detailSource.rv_allowed),
+    trailersAllowed: firstBool(detailSource.trailersAllowed, detailSource.trailers_allowed),
+  });
+
+  if (!campsite) {
+    return { ok: false, error: ESTABLISHED_CAMPGROUNDS_MALFORMED_RESPONSE_ERROR };
+  }
+
+  return {
+    ok: true,
+    campsite: {
+      ...campsite,
+      liveDetailFetchedAt: new Date().toISOString(),
+      sourceRecordCount: sourceRows.length,
+      availabilityRecordCount: availabilityRows.length,
+    },
   };
 }

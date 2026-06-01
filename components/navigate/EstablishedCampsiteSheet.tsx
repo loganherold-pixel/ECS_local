@@ -16,6 +16,7 @@ import {
   formatCampgroundAvailabilityLabel,
   formatCampgroundStatusLabel,
 } from '../../lib/map/establishedCampgroundMobile';
+import { resolveEstablishedCampgroundScore } from '../../lib/map/establishedCampgroundScore';
 
 type Props = {
   visible: boolean;
@@ -23,6 +24,7 @@ type Props = {
   topOffset: number;
   bottomOffset: number;
   onClose: () => void;
+  onNavigate: (campsite: EstablishedCampsite) => void;
 };
 
 const VERIFY_WARNING =
@@ -86,9 +88,35 @@ function DetailRow({ label, value }: { label: string; value: string | number | n
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value == null || value === '' ? 'Unknown' : String(value)}</Text>
+      <Text style={styles.detailValue}>{value == null || value === '' ? 'Not supplied by source' : String(value)}</Text>
     </View>
   );
+}
+
+function reservationCopy(campsite: EstablishedCampsite, reservationUrl?: string | null): string {
+  if (reservationUrl) return 'Reservation / info link available';
+  switch (campsite.reservationStatus) {
+    case 'reservable':
+      return 'Reservable source reported';
+    case 'first_come':
+      return 'First come / first served reported';
+    case 'mixed':
+      return 'Mixed reservable and first come reported';
+    case 'required':
+      return 'Reservation required';
+    default:
+      return 'Not supplied by source';
+  }
+}
+
+function siteCountCopy(value?: number | null): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return `${Math.round(value)} sites`;
+}
+
+function stayTypeCopy(campsite: EstablishedCampsite): string | null {
+  const values = [boolLabel(campsite.tentAllowed), boolLabel(campsite.rvAllowed), boolLabel(campsite.trailersAllowed)];
+  return values.every((value) => value === 'Unknown') ? null : values.join(' / ');
 }
 
 export default function EstablishedCampsiteSheet({
@@ -97,10 +125,11 @@ export default function EstablishedCampsiteSheet({
   topOffset,
   bottomOffset,
   onClose,
+  onNavigate,
 }: Props) {
   if (!visible || !campsite) return null;
 
-  const amenities = campsite.amenities.length ? campsite.amenities : ['unknown'];
+  const amenities = campsite.amenities.filter((amenity) => amenity !== 'unknown');
   const sourceDate = formatDate(campsite.sourceUpdatedAt || campsite.lastSyncedAt || undefined);
   const availabilityDate = formatDate(campsite.lastAvailabilityCheckedAt || undefined);
   const verifiedDate = formatDate(campsite.lastVerifiedAt || undefined);
@@ -112,6 +141,7 @@ export default function EstablishedCampsiteSheet({
     campsite.availabilityStatus,
     campsite.lastAvailabilityCheckedAt,
   );
+  const scoreSummary = resolveEstablishedCampgroundScore(campsite);
   const scrollContentStyle = WEB_SCROLL_CONTAINMENT_STYLE
     ? [styles.bodyContent, WEB_SCROLL_CONTAINMENT_STYLE]
     : styles.bodyContent;
@@ -164,6 +194,10 @@ export default function EstablishedCampsiteSheet({
           >
             <View style={styles.badgeRow}>
               <View style={styles.badge}>
+                <Text style={styles.badgeLabel}>ECS SCORE</Text>
+                <Text style={styles.badgeValue}>{scoreSummary.score}/100</Text>
+              </View>
+              <View style={styles.badge}>
                 <Text style={styles.badgeLabel}>Campground type</Text>
                 <Text style={styles.badgeValue}>{words(campsite.campsiteType)}</Text>
               </View>
@@ -177,19 +211,34 @@ export default function EstablishedCampsiteSheet({
               </View>
             </View>
 
+            <View style={styles.scoreCard}>
+              <View style={styles.scoreCardHeader}>
+                <Ionicons name="sparkles-outline" size={13} color={TACTICAL.amber} />
+                <Text style={styles.scoreCardTitle}>{scoreSummary.label} camp confidence</Text>
+              </View>
+              <Text style={styles.scoreCardText}>{scoreSummary.explanation}</Text>
+              {campsite.liveDetailFetchedAt ? (
+                <Text style={styles.scoreCardMeta}>
+                  Live detail refreshed {formatDate(campsite.liveDetailFetchedAt) ?? 'recently'}.
+                </Text>
+              ) : null}
+            </View>
+
             <View style={styles.section}>
               <DetailRow label="Managing agency" value={campsite.managingAgency || campsite.operatorName || sourceLabel(campsite.source)} />
               <DetailRow label="Managing org" value={campsite.managingOrg} />
               <DetailRow label="Source / attribution" value={campsite.attribution || sourceLabel(campsite.primaryProvider || campsite.source)} />
-              <DetailRow label="Reservation" value={reservationUrl ? 'Reservation link available' : 'Reservation status unknown'} />
-              <DetailRow label="Site count" value={campsite.siteCount} />
+              <DetailRow label="Reservation" value={reservationCopy(campsite, reservationUrl)} />
+              <DetailRow label="Site count" value={siteCountCopy(campsite.siteCount)} />
               <DetailRow label="Season / hours" value={campsite.seasonDescription || campsite.openingHours} />
               <DetailRow label="Max vehicle length" value={campsite.maxVehicleLengthFt ? `${campsite.maxVehicleLengthFt} ft` : null} />
-              <DetailRow label="Tent / RV / trailers" value={`${boolLabel(campsite.tentAllowed)} / ${boolLabel(campsite.rvAllowed)} / ${boolLabel(campsite.trailersAllowed)}`} />
+              <DetailRow label="Tent / RV / trailers" value={stayTypeCopy(campsite)} />
               <DetailRow label="Contact" value={campsite.phone} />
               {sourceDate ? <DetailRow label="Last updated" value={sourceDate} /> : null}
               {availabilityDate ? <DetailRow label="Last checked" value={availabilityDate} /> : null}
               {verifiedDate ? <DetailRow label="Last verified" value={verifiedDate} /> : null}
+              {typeof campsite.sourceRecordCount === 'number' ? <DetailRow label="Source records" value={campsite.sourceRecordCount} /> : null}
+              {typeof campsite.availabilityRecordCount === 'number' ? <DetailRow label="Availability rows" value={campsite.availabilityRecordCount} /> : null}
             </View>
 
             <View style={styles.section}>
@@ -205,13 +254,17 @@ export default function EstablishedCampsiteSheet({
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Amenities</Text>
-              <View style={styles.chipWrap}>
-                {amenities.map((amenity) => (
-                  <View key={amenity} style={styles.chip}>
-                    <Text style={styles.chipText}>{words(amenity)}</Text>
-                  </View>
-                ))}
-              </View>
+              {amenities.length > 0 ? (
+                <View style={styles.chipWrap}>
+                  {amenities.map((amenity) => (
+                    <View key={amenity} style={styles.chip}>
+                      <Text style={styles.chipText}>{words(amenity)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.emptyDetailText}>Amenities not supplied by the current source.</Text>
+              )}
             </View>
 
             <View style={styles.warningBox}>
@@ -226,11 +279,20 @@ export default function EstablishedCampsiteSheet({
               activeOpacity={0.78}
               disabled={!reservationUrl && !detailUrl}
               onPress={openBooking}
+              accessibilityRole="button"
+              accessibilityLabel="Open campground reservation or information"
             >
               <Text style={styles.secondaryButtonText}>Reservation / info</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.primaryButton} onPress={onClose} activeOpacity={0.84}>
-              <Text style={styles.primaryButtonText}>Close</Text>
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={() => onNavigate(campsite)}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              accessibilityLabel={`Navigate to ${campsite.name}`}
+            >
+              <Ionicons name="navigate-outline" size={13} color="#091014" />
+              <Text style={styles.primaryButtonText}>Navigate</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -311,6 +373,7 @@ const styles = StyleSheet.create({
   badgeRow: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   badge: {
     flex: 1,
@@ -334,6 +397,39 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     marginTop: 3,
     fontSize: 13,
+  },
+  scoreCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.07)',
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  scoreCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  scoreCardTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 9,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  scoreCardText: {
+    ...TYPO.B2,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  scoreCardMeta: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
   },
   section: {
     gap: 8,
@@ -386,6 +482,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 1.2,
   },
+  emptyDetailText: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+  },
   warningBox: {
     flexDirection: 'row',
     gap: 8,
@@ -411,6 +513,7 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(242,194,77,0.14)',
   },
   secondaryButton: {
+    flex: 1,
     minHeight: 36,
     borderRadius: 10,
     borderWidth: 1,
@@ -430,10 +533,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   primaryButton: {
+    flex: 1,
     minHeight: 36,
     borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
     paddingHorizontal: 16,
     backgroundColor: TACTICAL.amber,
   },

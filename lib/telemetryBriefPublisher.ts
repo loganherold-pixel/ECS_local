@@ -5,7 +5,7 @@ import type {
   VehicleTelemetrySnapshot,
 } from '../src/types/telemetry';
 
-export const TELEMETRY_BRIEF_SUPPRESSION_MS = 10 * 60 * 1000;
+export const TELEMETRY_BRIEF_SUPPRESSION_MS = 15 * 60 * 1000;
 export const TELEMETRY_LOW_BATTERY_WARNING_V = 11.8;
 export const TELEMETRY_LOW_BATTERY_CRITICAL_V = 11.2;
 export const TELEMETRY_HIGH_COOLANT_WARNING_F = 235;

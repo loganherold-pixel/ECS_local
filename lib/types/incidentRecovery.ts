@@ -324,7 +324,12 @@ export interface IncidentDebrief {
   weatherTerrainMismatch?: string | null;
   futureRecommendations?: string | null;
   communityHazardReportRequested?: boolean;
+  communityHazardPublicationStatus?: 'not_requested' | 'requested_review';
+  communityHazardRequiresManualReview?: boolean;
+  communityHazardPublished?: false;
   routeConfidenceAdjustmentRequested?: boolean;
+  routeConfidenceReviewStatus?: 'not_requested' | 'requested_review';
+  routeConfidenceChanged?: false;
   intelligenceHandoff?: IncidentDebriefIntelligenceHandoff;
   rootCause?: string | null;
   lessonsLearned?: string[];
@@ -354,7 +359,12 @@ export interface IncidentDebriefIntelligenceHandoff {
   planningGaps?: string | null;
   futureRecommendations?: string | null;
   communityHazardReportRequested: boolean;
+  communityHazardPublicationStatus: 'not_requested' | 'requested_review';
+  communityHazardRequiresManualReview: boolean;
+  communityHazardPublished: false;
   routeConfidenceAdjustmentRequested: boolean;
+  routeConfidenceReviewStatus: 'not_requested' | 'requested_review';
+  routeConfidenceChanged: false;
   createdAt: string;
 }
 

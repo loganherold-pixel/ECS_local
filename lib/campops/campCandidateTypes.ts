@@ -9,13 +9,16 @@ import type { RouteCoordinate } from '../map/routeGeometryUtils';
 
 export const ECS_INFERRED_CAMP_CANDIDATE_TITLE = 'ECS-Inferred Camp Candidate';
 export const ECS_INFERRED_CAMP_CANDIDATE_WARNING =
-  'This is an ECS-inferred candidate, not a confirmed legal campsite. Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.';
+  'This is an ECS-inferred projection only, not a confirmed legal campsite. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
 
 export type DispersedCampingCandidateGenerationInput = {
   regions: DispersedCampingRegion[];
   routeNearbyRegions?: RouteNearbyDispersedCampingRegion[];
   routeCoordinates?: readonly RouteCoordinate[] | null;
   currentLocation?: RouteCoordinate;
+  scoutCenter?: RouteCoordinate;
+  maxScoutRadiusMiles?: number;
+  maxRouteDistanceMiles?: number;
   maxCandidates?: number;
   includeVerifyCandidates?: boolean;
 };

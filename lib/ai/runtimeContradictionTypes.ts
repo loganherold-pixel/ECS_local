@@ -127,6 +127,7 @@ export interface ECSRuntimeSmokeCommandSnapshot {
 
 export type ECSDispersedCampingCandidateGenerationTrigger =
   | 'explicit_user_action'
+  | 'route_auto_stage'
   | 'map_pan'
   | 'filter_toggle'
   | 'route_change'

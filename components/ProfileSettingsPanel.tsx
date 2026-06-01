@@ -20,7 +20,6 @@ import type { ECSOperatorTrustMode } from '../lib/ai/operatorTrustTypes';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import type { ECSTopBannerTone } from '../lib/ui/topBannerTypes';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
-import CommandHubIntelInserts from './intel/CommandHubIntelInserts';
 
 type ThemeChoice = 'dark' | 'light' | 'dynamic';
 
@@ -52,8 +51,6 @@ interface ProfileSettingsPanelProps {
   syncLabel: string;
   syncDisabled?: boolean;
   onManualSync: () => void | Promise<void>;
-  geofenceRadius: number;
-  onSelectGeofence: (meters: number) => void;
   appearanceMode: AppearanceMode;
   onSelectTheme: (mode: AppearanceMode) => void;
   operatorTrustMode: ECSOperatorTrustMode;
@@ -64,8 +61,6 @@ interface ProfileSettingsPanelProps {
   endActionIcon?: React.ComponentProps<typeof Ionicons>['name'];
   onEndAction?: () => void;
 }
-
-const GEOFENCE_PRESETS = [200, 400, 800, 1500] as const;
 
 const PANEL = {
   bg: '#161B20',
@@ -125,8 +120,6 @@ export default function ProfileSettingsPanel({
   syncLabel,
   syncDisabled = false,
   onManualSync,
-  geofenceRadius,
-  onSelectGeofence,
   appearanceMode,
   onSelectTheme,
   operatorTrustMode,
@@ -454,39 +447,6 @@ export default function ProfileSettingsPanel({
               </View>
             </View>
 
-            <View style={styles.section}>
-              <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>GEOFENCE</Text>
-              <View style={styles.optionRow}>
-                {GEOFENCE_PRESETS.map((value) => {
-                  const active = geofenceRadius === value;
-                  return (
-                    <TouchableOpacity
-                      key={value}
-                      style={[
-                        styles.radiusPill,
-                        {
-                          backgroundColor: active ? PANEL.goldSoft : PANEL.surface,
-                          borderColor: active ? PANEL.border : PANEL.borderMuted,
-                        },
-                      ]}
-                      onPress={() => onSelectGeofence(value)}
-                      activeOpacity={0.72}
-                    >
-                      <Text style={[styles.radiusValue, { color: active ? PANEL.gold : PANEL.text }]}>
-                        {value}
-                      </Text>
-                      <Text style={[styles.radiusUnit, { color: active ? PANEL.gold : PANEL.textMuted }]}>m</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View style={styles.section}>
-              <Text style={[styles.sectionLabel, { color: PANEL.textDim }]}>INTEL</Text>
-              <CommandHubIntelInserts />
-            </View>
-
             {endActionLabel && onEndAction ? (
               <View style={styles.section}>
                 <TouchableOpacity
@@ -808,25 +768,5 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '800',
     letterSpacing: 1.3,
-  },
-  radiusPill: {
-    minWidth: 60,
-    minHeight: 36,
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'center',
-    gap: 2,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  radiusValue: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  radiusUnit: {
-    fontSize: 9,
-    fontWeight: '700',
   },
 });

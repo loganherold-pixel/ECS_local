@@ -43,7 +43,7 @@ export const ECS_TEXT: Record<ECSTextVariant, TextStyle> = {
     fontSize: 9,
     letterSpacing: 1.5,
     lineHeight: 12,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     includeFontPadding: false,
   },
   sectionSubtitle: {

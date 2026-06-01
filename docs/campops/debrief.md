@@ -95,6 +95,14 @@ The public-safe object includes only structured operational observations:
 
 The public-safe object omits user id, vehicle id, raw photo refs, exact timestamps, precise coordinates, and freeform notes. Notes can be passed through `redactCampOpsDebriefNoteForCommunity` for moderation review, but they should not be community-published automatically. Rejected, removed, draft, and pending-review debriefs must not produce community-visible output.
 
+Release gate:
+
+```bash
+npm run gate:campops-publishing-telemetry -- --json
+```
+
+This gate must pass before community debrief publishing is enabled for any field cohort. Passing while community publishing is disabled only confirms the private-by-default posture; it does not approve public/community publishing.
+
 ## Suitability Feedback
 
 `buildCampOpsDebriefSuitabilityPatch` converts a debrief into a structured suitability patch for future scoring. This keeps freeform notes out of deterministic suitability logic while allowing confirmed fields to improve access, legal confidence, trailer fit, group capacity, privacy, wind exposure, late-arrival risk, and hazard awareness.

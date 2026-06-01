@@ -26,6 +26,14 @@ CampOps telemetry cannot emit unless all of these are true:
 
 The older `enabled` and `sinkApproved` config fields remain compatibility aliases, but new callers should use `campopsTelemetryEnabled` and `campopsTelemetrySinkApproved` so product/privacy approval is visible in configuration.
 
+Release gate:
+
+```bash
+npm run gate:campops-publishing-telemetry -- --json
+```
+
+This gate must pass before telemetry or community debrief publishing is enabled for any field cohort. Passing while telemetry is disabled only confirms the restricted posture; it does not approve a telemetry sink.
+
 Do not enable a sink merely because an analytics backend exists. Each sink needs privacy/product review for payload handling, retention, joining behavior, access controls, and deletion paths.
 
 ## Events

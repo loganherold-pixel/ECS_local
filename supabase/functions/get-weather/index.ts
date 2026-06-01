@@ -2,9 +2,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const OPENWEATHER_API_KEY = Deno.env.get("OPENWEATHER_API_KEY");
-const OPENWEATHER_PREFER_ONECALL_3 = Deno.env.get("OPENWEATHER_PREFER_ONECALL_3") !== "false";
 const REQUEST_TIMEOUT_MS = 10000;
-const FORECAST_DAY_LIMIT = 16;
+const HOURLY_LIMIT = 48;
+const FORECAST_DAY_LIMIT = 8;
+const ONE_CALL_PROVIDER = {
+  id: "openweather_one_call_3_0",
+  name: "OpenWeather One Call API 3.0",
+  endpoint: "https://api.openweathermap.org/data/3.0/onecall",
+};
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -28,6 +33,18 @@ interface WeatherAlert {
   type: string;
   effective?: string | null;
   expires?: string | null;
+}
+
+class WeatherProviderError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "WeatherProviderError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 function json(body: unknown, status = 200) {
@@ -64,17 +81,31 @@ async function fetchJson(url: string) {
       signal: controller.signal,
     });
 
-    const body = await response.json().catch(() => null);
+    const text = await response.text().catch(() => "");
+    let body: any = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new WeatherProviderError(502, "invalid_json", "Invalid JSON from OpenWeather");
+      }
+    }
+
     if (!response.ok) {
-      const message =
-        typeof body?.message === "string" && body.message
-          ? body.message
-          : `Weather provider error (${response.status})`;
-      throw new Error(message);
+      if (response.status === 401) {
+        throw new WeatherProviderError(401, "openweather_unauthorized", "OpenWeather authentication failed");
+      }
+      if (response.status === 429) {
+        throw new WeatherProviderError(429, "openweather_rate_limited", "OpenWeather rate limit exceeded");
+      }
+      const providerMessage = typeof body?.message === "string" && body.message
+        ? body.message
+        : `OpenWeather request failed (${response.status})`;
+      throw new WeatherProviderError(response.status, "openweather_error", providerMessage);
     }
 
     if (!body || typeof body !== "object") {
-      throw new Error("Malformed weather provider payload");
+      throw new WeatherProviderError(502, "invalid_payload", "Malformed OpenWeather payload");
     }
 
     return body;
@@ -192,34 +223,6 @@ function deriveTrailConditions(current: any) {
   return { overall, factors };
 }
 
-function buildCurrent(currentData: any, label: string | null) {
-  return {
-    temp: safeNumber(currentData?.main?.temp),
-    feels_like: safeNumber(currentData?.main?.feels_like),
-    temp_min: safeNumber(currentData?.main?.temp_min),
-    temp_max: safeNumber(currentData?.main?.temp_max),
-    humidity: safeNumber(currentData?.main?.humidity),
-    pressure: safeNumber(currentData?.main?.pressure),
-    visibility: safeNumber(currentData?.visibility),
-    wind_speed: safeNumber(currentData?.wind?.speed),
-    wind_deg: safeNumber(currentData?.wind?.deg),
-    wind_gust: safeNumber(currentData?.wind?.gust),
-    clouds: safeNumber(currentData?.clouds?.all),
-    weather_id: safeNumber(currentData?.weather?.[0]?.id),
-    weather_main: currentData?.weather?.[0]?.main ?? null,
-    weather_description: currentData?.weather?.[0]?.description ?? null,
-    weather_icon: currentData?.weather?.[0]?.icon ?? null,
-    rain_1h: safeNumber(currentData?.rain?.["1h"]),
-    rain_3h: safeNumber(currentData?.rain?.["3h"]),
-    snow_1h: safeNumber(currentData?.snow?.["1h"]),
-    snow_3h: safeNumber(currentData?.snow?.["3h"]),
-    sunrise: safeNumber(currentData?.sys?.sunrise),
-    sunset: safeNumber(currentData?.sys?.sunset),
-    location_name: currentData?.name ?? label,
-    dt: safeNumber(currentData?.dt),
-  };
-}
-
 function buildCurrentFromOneCall(payload: any, label: string | null) {
   const current = payload?.current ?? {};
   return {
@@ -229,6 +232,7 @@ function buildCurrentFromOneCall(payload: any, label: string | null) {
     temp_max: null,
     humidity: safeNumber(current?.humidity),
     pressure: safeNumber(current?.pressure),
+    uvi: safeNumber(current?.uvi),
     visibility: safeNumber(current?.visibility),
     wind_speed: safeNumber(current?.wind_speed),
     wind_deg: safeNumber(current?.wind_deg),
@@ -247,59 +251,6 @@ function buildCurrentFromOneCall(payload: any, label: string | null) {
     location_name: label,
     dt: safeNumber(current?.dt),
   };
-}
-
-function buildDailyForecast(forecastList: any[]) {
-  const byDay = new Map<string, any[]>();
-
-  for (const item of Array.isArray(forecastList) ? forecastList : []) {
-    const key =
-      typeof item?.dt_txt === "string"
-        ? item.dt_txt.slice(0, 10)
-        : typeof item?.dt === "number"
-          ? new Date(item.dt * 1000).toISOString().slice(0, 10)
-          : null;
-    if (!key) continue;
-    const bucket = byDay.get(key) ?? [];
-    bucket.push(item);
-    byDay.set(key, bucket);
-  }
-
-  return Array.from(byDay.entries())
-    .slice(0, FORECAST_DAY_LIMIT)
-    .map(([date, entries]) => {
-      const tempsMin = entries.map(item => safeNumber(item?.main?.temp_min)).filter((value): value is number => value != null);
-      const tempsMax = entries.map(item => safeNumber(item?.main?.temp_max)).filter((value): value is number => value != null);
-      const humidities = entries.map(item => safeNumber(item?.main?.humidity)).filter((value): value is number => value != null);
-      const pressures = entries.map(item => safeNumber(item?.main?.pressure)).filter((value): value is number => value != null);
-      const temps = entries.map(item => safeNumber(item?.main?.temp)).filter((value): value is number => value != null);
-      const winds = entries.map(item => safeNumber(item?.wind?.speed) ?? 0);
-      const gusts = entries.map(item => safeNumber(item?.wind?.gust) ?? 0);
-      const windDirections = entries.map(item => safeNumber(item?.wind?.deg)).filter((value): value is number => value != null);
-      const pops = entries.map(item => clamp(Number(item?.pop ?? 0), 0, 1));
-      const rainTotal = entries.reduce((sum, item) => sum + (safeNumber(item?.rain?.["3h"]) ?? 0), 0);
-      const snowTotal = entries.reduce((sum, item) => sum + (safeNumber(item?.snow?.["3h"]) ?? 0), 0);
-      const noonish = entries.find(item => typeof item?.dt_txt === "string" && item.dt_txt.includes("12:00:00")) ?? entries[0];
-
-      return {
-        date,
-        temp_day: temps.length ? Math.round(temps.reduce((sum, value) => sum + value, 0) / temps.length) : null,
-        temp_min: tempsMin.length ? Math.round(Math.min(...tempsMin)) : null,
-        temp_max: tempsMax.length ? Math.round(Math.max(...tempsMax)) : null,
-        humidity: humidities.length ? Math.round(humidities.reduce((sum, value) => sum + value, 0) / humidities.length) : null,
-        pressure: pressures.length ? Math.round(pressures.reduce((sum, value) => sum + value, 0) / pressures.length) : null,
-        wind_max: Math.round(Math.max(...winds)),
-        wind_gust_max: Math.round(Math.max(...gusts)),
-        wind_deg: windDirections.length ? Math.round(windDirections.reduce((sum, value) => sum + value, 0) / windDirections.length) : null,
-        pop: Math.round(Math.max(...pops) * 100),
-        rain_total: Number(rainTotal.toFixed(1)),
-        snow_total: Number(snowTotal.toFixed(1)),
-        weather_id: safeNumber(noonish?.weather?.[0]?.id),
-        weather_main: noonish?.weather?.[0]?.main ?? "Unknown",
-        weather_description: noonish?.weather?.[0]?.description ?? "Unavailable",
-        weather_icon: noonish?.weather?.[0]?.icon ?? "01d",
-      };
-    });
 }
 
 function buildDailyForecastFromOneCall(dailyList: any[]) {
@@ -329,6 +280,39 @@ function buildDailyForecastFromOneCall(dailyList: any[]) {
         weather_main: weather?.main ?? "Unknown",
         weather_description: weather?.description ?? "Unavailable",
         weather_icon: weather?.icon ?? "01d",
+        summary: day?.summary ?? null,
+        temp: day?.temp ?? null,
+        feels_like: day?.feels_like ?? null,
+        rain: safeNumber(day?.rain),
+        snow: safeNumber(day?.snow),
+        weather: Array.isArray(day?.weather) ? day.weather : [],
+      };
+    });
+}
+
+function buildHourlyForecastFromOneCall(hourlyList: any[]) {
+  return (Array.isArray(hourlyList) ? hourlyList : [])
+    .slice(0, HOURLY_LIMIT)
+    .map((hour) => {
+      const weather = hour?.weather?.[0] ?? {};
+      return {
+        dt: safeNumber(hour?.dt),
+        time: typeof hour?.dt === "number" ? new Date(hour.dt * 1000).toISOString() : null,
+        temp: safeNumber(hour?.temp),
+        feels_like: safeNumber(hour?.feels_like),
+        humidity: safeNumber(hour?.humidity),
+        pressure: safeNumber(hour?.pressure),
+        wind_speed: safeNumber(hour?.wind_speed),
+        wind_deg: safeNumber(hour?.wind_deg),
+        wind_gust: safeNumber(hour?.wind_gust),
+        pop: Math.round(clamp(Number(hour?.pop ?? 0), 0, 1) * 100),
+        rain_1h: safeNumber(hour?.rain?.["1h"]),
+        snow_1h: safeNumber(hour?.snow?.["1h"]),
+        weather_id: safeNumber(weather?.id),
+        weather_main: weather?.main ?? "Unknown",
+        weather_description: weather?.description ?? "Unavailable",
+        weather_icon: weather?.icon ?? "01d",
+        weather: Array.isArray(hour?.weather) ? hour.weather : [],
       };
     });
 }
@@ -494,56 +478,38 @@ function deriveAlerts(current: any, dailyForecast: any[], units: Units): Weather
 }
 
 async function fetchCoordinateWeather(coord: InputCoordinate, units: Units) {
-  if (OPENWEATHER_PREFER_ONECALL_3) {
-    try {
-      const oneCallUrl =
-        `https://api.openweathermap.org/data/3.0/onecall?lat=${coord.lat}&lon=${coord.lng}` +
-        `&units=${units}&appid=${OPENWEATHER_API_KEY}`;
-      const oneCallData = await fetchJson(oneCallUrl);
-      const current = buildCurrentFromOneCall(oneCallData, coord.label ?? null);
-      const forecast = buildDailyForecastFromOneCall(oneCallData?.daily ?? []);
-      const providerAlerts = buildAlertsFromOneCall(oneCallData?.alerts ?? []);
-      const alerts = providerAlerts.length ? providerAlerts : deriveAlerts(current, forecast, units);
+  const params = new URLSearchParams({
+    lat: String(coord.lat),
+    lon: String(coord.lng),
+    units,
+    exclude: "minutely",
+    appid: OPENWEATHER_API_KEY ?? "",
+  });
+  const oneCallData = await fetchJson(`${ONE_CALL_PROVIDER.endpoint}?${params.toString()}`);
 
-      return {
-        lat: coord.lat,
-        lng: coord.lng,
-        label: coord.label ?? null,
-        error: null,
-        current,
-        forecast,
-        alerts,
-        trail_conditions: deriveTrailConditions(current),
-      };
-    } catch {
-      // Fall through to the existing OpenWeather 2.5 current + forecast provider path.
-    }
-  }
-
-  const currentUrl =
-    `https://api.openweathermap.org/data/2.5/weather?lat=${coord.lat}&lon=${coord.lng}` +
-    `&units=${units}&appid=${OPENWEATHER_API_KEY}`;
-  const forecastUrl =
-    `https://api.openweathermap.org/data/2.5/forecast?lat=${coord.lat}&lon=${coord.lng}` +
-    `&units=${units}&appid=${OPENWEATHER_API_KEY}`;
-
-  const [currentData, forecastData] = await Promise.all([
-    fetchJson(currentUrl),
-    fetchJson(forecastUrl),
-  ]);
-
-  const current = buildCurrent(currentData, coord.label ?? null);
-  const forecast = buildDailyForecast(forecastData?.list ?? []);
-  const alerts = deriveAlerts(current, forecast, units);
+  const current = buildCurrentFromOneCall(oneCallData, coord.label ?? null);
+  const hourly = buildHourlyForecastFromOneCall(oneCallData?.hourly ?? []);
+  const daily = buildDailyForecastFromOneCall(oneCallData?.daily ?? []);
+  const forecast = daily;
+  const providerAlerts = buildAlertsFromOneCall(oneCallData?.alerts ?? []);
+  const alerts = providerAlerts.length ? providerAlerts : deriveAlerts(current, forecast, units);
 
   return {
     lat: coord.lat,
     lng: coord.lng,
+    coordinates: { lat: coord.lat, lon: coord.lng, lng: coord.lng },
     label: coord.label ?? null,
     error: null,
     current,
+    hourly,
+    daily,
     forecast,
     alerts,
+    timezone: oneCallData?.timezone ?? null,
+    timezone_offset: safeNumber(oneCallData?.timezone_offset),
+    units,
+    fetchedAt: new Date().toISOString(),
+    provider: ONE_CALL_PROVIDER,
     trail_conditions: deriveTrailConditions(current),
   };
 }
@@ -585,24 +551,69 @@ serve(async (req) => {
         try {
           return await fetchCoordinateWeather(coord, units);
         } catch (error) {
+          const providerError = error instanceof WeatherProviderError ? error : null;
           return {
             lat: coord.lat,
             lng: coord.lng,
             label: coord.label ?? null,
             error: error instanceof Error ? error.message : "Weather fetch failed",
+            provider_status: providerError?.status ?? 502,
+            provider_error_code: providerError?.code ?? "weather_fetch_failed",
             current: null,
+            hourly: [],
+            daily: [],
             forecast: [],
             alerts: [],
+            timezone: null,
+            timezone_offset: null,
+            units,
+            fetchedAt: new Date().toISOString(),
+            provider: ONE_CALL_PROVIDER,
             trail_conditions: null,
           };
         }
       }),
     );
 
+    const errors = results
+      .filter(result => typeof result.error === "string" && result.error)
+      .map(result => {
+        const providerStatus = "provider_status" in result ? result.provider_status : 502;
+        const providerCode = "provider_error_code" in result ? result.provider_error_code : "weather_fetch_failed";
+        return {
+          lat: result.lat,
+          lon: result.lng,
+          label: result.label ?? null,
+          status: providerStatus ?? 502,
+          code: providerCode ?? "weather_fetch_failed",
+          message: result.error,
+        };
+      });
+
+    if (errors.length === results.length) {
+      const first = errors[0];
+      // Provider failures are returned as a structured weather payload so the
+      // mobile app can open Weather and show an honest unavailable state.
+      // Request/configuration failures above still return non-2xx statuses.
+      return json({
+        error: "Weather provider error",
+        details: first?.message ?? "Weather fetch failed",
+        results,
+        fetched_at: new Date().toISOString(),
+        units,
+        provider: ONE_CALL_PROVIDER.id,
+        provider_metadata: ONE_CALL_PROVIDER,
+        errors,
+      });
+    }
+
     const payload: Record<string, unknown> = {
       results,
       fetched_at: new Date().toISOString(),
       units,
+      provider: ONE_CALL_PROVIDER.id,
+      provider_metadata: ONE_CALL_PROVIDER,
+      errors,
     };
 
     if (coordinates.length === 1) {

@@ -19,17 +19,14 @@
  *   3. null (no heading available)
  *
  * Compass Modes:
- *   - 'auto'    — Use raw heading as-is (good for flat-on-dashboard)
- *   - 'upright' — Apply screen orientation offset for cradle/mount use
+ *   - 'upright' — Default. Treat the device as vertical in a cradle/mount
+ *   - 'auto'    — Legacy/raw heading mode
  *   - 'flat'    — Same as auto (phone flat on surface)
  *
  * Upright/Cradle Correction:
- *   When the phone is upright in a cradle, the magnetometer axes change.
- *   We apply an orientation offset based on device orientation:
- *     Portrait upright:    +0°
- *     Landscape left:     +90°
- *     Landscape right:    -90°
- *     Portrait upside-down: +180°
+ *   When the phone is upright in a cradle, the compass reading needs to be
+ *   mapped from screen orientation to the vehicle/front edge. GPS course over
+ *   ground is already world-relative, so it is never screen-rotated.
  *
  * Smoothing:
  *   Adaptive shortest-arc angle interpolation (lerp).
@@ -77,7 +74,7 @@ export interface VehicleHeadingOptions {
   gpsHeadingDeg?: number | null;
   /** Smoothing factor 0–1 (higher = more responsive, default: 0.2) */
   smoothingFactor?: number;
-  /** Initial compass mode (default: 'auto') */
+  /** Initial compass mode (default: 'upright') */
   initialMode?: CompassMode;
   /** Phase 6: Current speed in mph for stationary detection (default: null) */
   speedMph?: number | null;
@@ -96,6 +93,7 @@ const SMOOTHING_SLOW = 0.12;
 const RECALIBRATION_THRESHOLD_DEG = 25;
 /** Maximum heading change per tick to prevent abrupt jumps (degrees) */
 const MAX_HEADING_CHANGE_PER_TICK = 15;
+const DEFAULT_COMPASS_MODE: CompassMode = 'upright';
 
 // ── Angle Math Helpers ─────────────────────────────────
 
@@ -151,27 +149,50 @@ function clampHeadingChange(from: number, to: number, maxChange: number): number
  *
  * Returns offset in degrees to add to raw heading.
  */
-function getOrientationOffset(): number {
+function getWebOrientationOffset(): number | null {
   // On web, use window.screen.orientation if available
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     try {
       const orientation = (window.screen as any)?.orientation;
       if (orientation) {
-        const angle = orientation.angle || 0;
-        // angle: 0 = portrait, 90 = landscape-left, -90/270 = landscape-right, 180 = upside-down
-        return -angle; // Negate: if screen rotated 90° CW, heading needs -90° correction
+        const angle = Number(orientation.angle || 0);
+        if (Number.isFinite(angle)) {
+          return getUprightHeadingOrientationOffset(angle);
+        }
       }
     } catch {}
   }
 
+  return null;
+}
+
+export function getUprightHeadingOrientationOffset(screenAngleDeg: number): number {
+  const angle = normalizeAngle(screenAngleDeg);
+  if (angle === 90) return -90;
+  if (angle === 180) return 180;
+  if (angle === 270) return 90;
+  return 0;
+}
+
+/**
+ * Get screen orientation offset for upright/cradle mode.
+ * Uses screen dimensions as a proxy on native because the app does not depend
+ * on expo-screen-orientation.
+ *
+ * Returns offset in degrees to add to device compass heading.
+ */
+function getOrientationOffset(): number {
+  const webOffset = getWebOrientationOffset();
+  if (webOffset != null) return webOffset;
+
   // Native fallback: use Dimensions
   // In portrait: width < height → offset 0
-  // In landscape: width > height → offset ±90 (assume landscape-left)
+  // In landscape: width > height → offset -90 (matches the app's landscapeRight convention)
   try {
     const { Dimensions } = require('react-native');
     const { width, height } = Dimensions.get('window');
     if (width > height) {
-      return 90; // Landscape — approximate
+      return -90;
     }
   } catch {}
 
@@ -191,7 +212,7 @@ function loadCompassMode(): CompassMode {
       }
     }
   } catch {}
-  return 'auto';
+  return DEFAULT_COMPASS_MODE;
 }
 
 function saveCompassMode(mode: CompassMode): void {
@@ -461,23 +482,41 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         updateStationaryLocked(false);
       }
 
-      // Determine raw heading from best available source
+      // Determine raw heading from best available source.
+      // When the vehicle is moving, GPS course over ground is a better nose
+      // indicator than magnetometer heading because it reflects the direction
+      // of travel and is independent of the phone's cradle angle.
       let raw: number | null = null;
+      let rawSource: 'compass' | 'gps' | 'none' = 'none';
+      const hasGpsHeading = gpsHeadingDeg != null && gpsHeadingDeg >= 0;
+      const gpsHeadingUsable = hasGpsHeading && (
+        currentSpeed == null || currentSpeed >= STATIONARY_SPEED_THRESHOLD
+      );
 
-      // Priority 1: Compass heading (magnetometer / device orientation)
-      if (compassHeadingRef.current != null) {
-        raw = compassHeadingRef.current;
-      }
-      // Priority 2: GPS course heading
-      else if (gpsHeadingDeg != null && gpsHeadingDeg >= 0) {
+      // Priority 1: GPS course while moving
+      if (gpsHeadingUsable) {
         raw = gpsHeadingDeg;
+        rawSource = 'gps';
+        updateSource('gps');
+      }
+      // Priority 2: Compass heading (magnetometer / device orientation)
+      else if (compassHeadingRef.current != null) {
+        raw = compassHeadingRef.current;
+        rawSource = 'compass';
+        updateSource('compass');
+      }
+      // Priority 3: GPS course as last fallback, even if speed is low/unknown
+      else if (hasGpsHeading) {
+        raw = gpsHeadingDeg;
+        rawSource = 'gps';
         updateSource('gps');
       }
 
       if (raw == null) {
         // No heading source — use GPS heading if available even if compass was preferred
-        if (gpsHeadingDeg != null && gpsHeadingDeg >= 0) {
+        if (hasGpsHeading) {
           raw = gpsHeadingDeg;
+          rawSource = 'gps';
           updateSource('gps');
         } else {
           updateSource('none');
@@ -490,11 +529,11 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
 
       // Apply compass mode correction
       let corrected = raw;
-      if (compassMode === 'upright') {
+      if (rawSource === 'compass' && compassMode === 'upright') {
         const offset = getOrientationOffset();
         corrected = normalizeAngle(raw + offset);
       }
-      // 'flat' and 'auto' use raw heading as-is
+      // GPS course, 'flat', and 'auto' use raw heading as-is
 
       // Ensure heading is always normalized to 0–360
       corrected = normalizeAngle(corrected);
@@ -502,10 +541,13 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
       updateRawHeading(Math.round(corrected));
 
       // ── Phase 6: Heading accuracy tracking ──
-      const accDeg = compassAccuracyRef.current;
+      const accDeg = rawSource === 'compass' ? compassAccuracyRef.current : null;
       updateAccuracyDeg(accDeg);
 
-      if (accDeg == null) {
+      if (rawSource === 'gps') {
+        updateAccuracy(currentSpeed != null && currentSpeed >= MOVING_SPEED_THRESHOLD ? 'high' : 'medium');
+        updateNeedsRecalibration(false);
+      } else if (accDeg == null) {
         // Unknown accuracy — assume medium if we have a heading
         updateAccuracy(raw != null ? 'medium' : 'none');
         updateNeedsRecalibration(false);

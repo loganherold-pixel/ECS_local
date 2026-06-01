@@ -13,8 +13,10 @@ type Props = {
   bottom: number;
   left: number;
   onScoutCandidatePins?: () => void;
+  onClearScoutPins?: () => void;
   scoutDisabled?: boolean;
   scoutStatusText?: string | null;
+  scoutPinsVisible?: boolean;
 };
 
 function confidenceLabel(value: RouteNearbyDispersedCampingRegion['confidence']): string {
@@ -72,8 +74,10 @@ export default function DispersedCampingRouteSummary({
   bottom,
   left,
   onScoutCandidatePins,
+  onClearScoutPins,
   scoutDisabled = false,
   scoutStatusText = null,
+  scoutPinsVisible = false,
 }: Props) {
   if (!visible) return null;
 
@@ -84,7 +88,7 @@ export default function DispersedCampingRouteSummary({
 
   return (
     <View
-      pointerEvents="box-none"
+      pointerEvents={hasResults ? 'box-none' : 'none'}
       style={[
         styles.card,
         {
@@ -93,7 +97,7 @@ export default function DispersedCampingRouteSummary({
         },
       ]}
     >
-      <View style={styles.header}>
+      <View pointerEvents="none" style={styles.header}>
         <View style={styles.headerTitleRow}>
           <Ionicons name="map-outline" size={13} color={TACTICAL.amber} />
           <Text style={styles.title}>Dispersed Camping Near Route</Text>
@@ -102,7 +106,7 @@ export default function DispersedCampingRouteSummary({
       </View>
 
       {hasResults ? (
-        <View style={styles.resultStack}>
+        <View pointerEvents="none" style={styles.resultStack}>
           {results.map((result) => {
             const color = confidenceColor(result.confidence);
             return (
@@ -128,19 +132,38 @@ export default function DispersedCampingRouteSummary({
       )}
 
       {hasResults && onScoutCandidatePins ? (
-        <TouchableOpacity
-          style={[styles.scoutButton, scoutDisabled && styles.scoutButtonDisabled]}
-          onPress={onScoutCandidatePins}
-          activeOpacity={0.84}
-          disabled={scoutDisabled}
-          accessibilityRole="button"
-          accessibilityLabel="Scout candidate camp pins"
-        >
-          <Ionicons name="search-outline" size={12} color={scoutDisabled ? TACTICAL.textMuted : '#091014'} />
-          <Text style={[styles.scoutButtonText, scoutDisabled && styles.scoutButtonTextDisabled]}>
-            Scout candidate camp pins
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.scoutActionRow}>
+          <TouchableOpacity
+            style={[styles.scoutButton, scoutDisabled && styles.scoutButtonDisabled]}
+            onPress={onScoutCandidatePins}
+            activeOpacity={0.84}
+            disabled={scoutDisabled}
+            accessibilityRole="button"
+            accessibilityLabel="Scout candidate camp pins"
+          >
+            <Ionicons name="search-outline" size={12} color={scoutDisabled ? TACTICAL.textMuted : '#091014'} />
+            <Text
+              style={[styles.scoutButtonText, scoutDisabled && styles.scoutButtonTextDisabled]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.76}
+            >
+              Scout candidate camp pins
+            </Text>
+          </TouchableOpacity>
+          {scoutPinsVisible && onClearScoutPins ? (
+            <TouchableOpacity
+              style={styles.clearPinsButton}
+              onPress={onClearScoutPins}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              accessibilityLabel="Clear dispersed camping scout pins"
+            >
+              <Ionicons name="close-circle-outline" size={12} color="#F07D71" />
+              <Text style={styles.clearPinsButtonText}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       ) : null}
 
       {scoutStatusText ? <Text style={styles.statusText}>{scoutStatusText}</Text> : null}
@@ -234,7 +257,14 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
   },
+  scoutActionRow: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 7,
+  },
   scoutButton: {
+    flex: 1,
     minHeight: 30,
     borderRadius: 9,
     backgroundColor: TACTICAL.amber,
@@ -256,6 +286,25 @@ const styles = StyleSheet.create({
   },
   scoutButtonTextDisabled: {
     color: TACTICAL.textMuted,
+  },
+  clearPinsButton: {
+    minHeight: 30,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(240,125,113,0.38)',
+    backgroundColor: 'rgba(240,125,113,0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+  },
+  clearPinsButtonText: {
+    ...TYPO.U2,
+    color: '#F07D71',
+    fontSize: 8,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
   },
   statusText: {
     ...TYPO.B2,

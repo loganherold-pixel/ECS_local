@@ -55,7 +55,7 @@ export function setSelectedEcoFlowDevice(
     if (deviceName) {
       storageSet(DEVICE_NAME_KEY, deviceName);
     }
-    void powerDeviceStore.setSelected('EcoFlow', [deviceId]).catch(() => {});
+    void powerDeviceStore.addSelected('EcoFlow', deviceId).catch(() => {});
     return;
   }
 

@@ -133,8 +133,12 @@ includes(buildLoadoutDomain, 'placement: placementFromDescriptor(install.mountZo
 
 includes(buildLoadoutModal, 'PLACEMENT / COMPARTMENT', 'Add/Edit Loadout Item should expose compartment placement.');
 includes(buildLoadoutModal, 'activeCompartments.map', 'Add/Edit Loadout Item should let users move items between active compartments.');
-includes(buildLoadoutModal, 'fleet_build_loadout: state', 'Save Build should persist the state used by Weight Summary.');
+includes(buildLoadoutModal, 'fleet_build_loadout: nextState', 'Save Build should persist the state used by Weight Summary.');
 includes(buildLoadoutModal, 'Choose a compartment before saving this item', 'Missing placement should produce a user-facing guard.');
+includes(buildLoadoutModal, 'FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID', 'Save Build should persist high-mounted load risk acknowledgement.');
+includes(buildLoadoutModal, 'High-mounted load is increasing top-heavy risk.', 'Save Build should warn before saving high-mounted load risk.');
+includes(buildLoadoutModal, 'Dismiss & Continue', 'High-mounted load warning should allow the user to dismiss and continue saving.');
+includes(buildLoadoutDomain, 'acknowledgedRiskIds', 'Build & Loadout state should preserve acknowledged risk ids.');
 notIncludes(buildLoadoutModal, "router.push('/(tabs)/fleet')", 'Add Item should not navigate back to Fleet.');
 notIncludes(buildLoadoutModal, 'router.replace', 'Add Item should not replace the Fleet route.');
 

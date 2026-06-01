@@ -9,7 +9,31 @@ const root = path.join(__dirname, '..');
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'react-native') {
-    return { Platform: { OS: 'web' } };
+    return {
+      Platform: { OS: 'web', select: (options) => options?.web ?? options?.default },
+      StyleSheet: { create: (styles) => styles, flatten: (style) => style },
+      NativeModules: {},
+      Dimensions: { get: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }), addEventListener: () => ({ remove: () => undefined }) },
+      Appearance: { getColorScheme: () => 'dark', addChangeListener: () => ({ remove: () => undefined }) },
+      View: 'View',
+      Text: 'Text',
+      Pressable: 'Pressable',
+      ScrollView: 'ScrollView',
+    };
+  }
+  if (request.includes('codegenNativeComponent')) {
+    const componentFactory = () => 'NativeComponent';
+    componentFactory.default = componentFactory;
+    return componentFactory;
+  }
+  if (request.startsWith('react-native/')) {
+    return {};
+  }
+  if (request === '@react-navigation/native') {
+    return {
+      useFocusEffect: () => undefined,
+      useIsFocused: () => true,
+    };
   }
   if (request === 'expo-file-system' || request === 'expo-file-system/legacy') {
     return {};
@@ -101,6 +125,9 @@ assert.ok(ready.recoveryBrief.nearestBailoutSummary.includes('Mineral Bottom Roa
 assert.ok(!/official emergency contact:|call ranger/i.test(ready.recoveryBrief.officialContactSummary), 'Recovery brief must not fabricate official contact instructions.');
 assert.strictEqual(ready.powerBrief.statusLabel, 'Ready');
 assert.ok(ready.powerBrief.runtimeSummary.includes('28 h'));
+assert.ok(ready.powerBrief.stateOfChargeSummary.includes('86%'));
+assert.ok(ready.powerBrief.flowSummary.includes('Input 210W / Output 84W / Net +286W'));
+assert.ok(ready.powerBrief.solarSummary.includes('160W solar input'));
 assert.strictEqual(readiness.getReadinessDecisionLabel(ready.status), 'Ready');
 assert.strictEqual(readiness.getReadinessColorToken(ready.status), 'status.ready');
 assert.ok(readiness.getReadinessShortCopy(ready).includes('ECS Intelligence'));

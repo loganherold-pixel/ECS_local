@@ -146,12 +146,34 @@ assert.strictEqual(debriefed.debrief.status, 'complete');
 assert.strictEqual(debriefed.debrief.outcome, 'Vehicle recovered; expedition continued with modified timing.');
 assert.deepStrictEqual(debriefed.debrief.equipmentUsed, ['recovery strap', 'satellite messenger']);
 assert.strictEqual(debriefed.debrief.communityHazardReportRequested, true);
+assert.strictEqual(debriefed.debrief.communityHazardPublicationStatus, 'requested_review');
+assert.strictEqual(debriefed.debrief.communityHazardRequiresManualReview, true);
+assert.strictEqual(debriefed.debrief.communityHazardPublished, false);
 assert.strictEqual(debriefed.debrief.routeConfidenceAdjustmentRequested, true);
+assert.strictEqual(debriefed.debrief.routeConfidenceReviewStatus, 'requested_review');
+assert.strictEqual(debriefed.debrief.routeConfidenceChanged, false);
 assert(debriefed.timeline.some((event) => event.type === 'debrief_added' && event.title === 'debrief created'));
+const debriefTimelineEvent = debriefed.timeline.find(
+  (event) => event.type === 'debrief_added' && event.title === 'debrief created',
+);
+assert.strictEqual(debriefTimelineEvent.data.communityHazardPublicationStatus, 'requested_review');
+assert.strictEqual(debriefTimelineEvent.data.communityHazardPublished, false);
+assert.strictEqual(debriefTimelineEvent.data.routeConfidenceReviewStatus, 'requested_review');
+assert.strictEqual(debriefTimelineEvent.data.routeConfidenceChanged, false);
 assert.strictEqual(debriefed.debrief.intelligenceHandoff.incidentId, incident.id);
 assert.strictEqual(debriefed.debrief.intelligenceHandoff.expeditionId, 'expedition-closeout');
 assert.strictEqual(debriefed.debrief.intelligenceHandoff.communityHazardReportRequested, true);
+assert.strictEqual(debriefed.debrief.intelligenceHandoff.communityHazardPublicationStatus, 'requested_review');
+assert.strictEqual(debriefed.debrief.intelligenceHandoff.communityHazardRequiresManualReview, true);
+assert.strictEqual(debriefed.debrief.intelligenceHandoff.communityHazardPublished, false);
 assert.strictEqual(debriefed.debrief.intelligenceHandoff.routeConfidenceAdjustmentRequested, true);
+assert.strictEqual(debriefed.debrief.intelligenceHandoff.routeConfidenceReviewStatus, 'requested_review');
+assert.strictEqual(debriefed.debrief.intelligenceHandoff.routeConfidenceChanged, false);
+assert.strictEqual(debriefed.metadata.communityHazardPublishing.status, 'requested_review');
+assert.strictEqual(debriefed.metadata.communityHazardPublishing.requiresManualReview, true);
+assert.strictEqual(debriefed.metadata.communityHazardPublishing.published, false);
+assert.strictEqual(debriefed.metadata.routeConfidenceReview.status, 'requested_review');
+assert.strictEqual(debriefed.metadata.routeConfidenceReview.changed, false);
 
 const debriefContainerState = buildIncidentRecoveryContainerState([], {
   expeditionId: 'expedition-closeout',

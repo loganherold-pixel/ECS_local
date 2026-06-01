@@ -4,7 +4,7 @@ CampOps product objective:
 
 > Help users decide where they can legally, realistically, and conservatively end the day when the plan changes.
 
-This document separates engineering readiness from launch readiness. Fixture tests and typed contracts make CampOps reviewable for internal use, but public rollout still depends on real provider validation, mobile device QA, privacy review, and field evidence.
+This document separates engineering readiness from launch readiness. Fixture tests, typed contracts, guarded Android QA, and restricted risk acceptance make CampOps reviewable for a restricted closed-field test, but public rollout and provider-influenced rollout still depend on real provider validation, broader privacy/storage approval, production acceptance, and field evidence.
 
 ## Status Legend
 
@@ -20,8 +20,8 @@ This document separates engineering readiness from launch readiness. Fixture tes
 | Stage | Current status | Summary |
 | --- | --- | --- |
 | Internal dev | `pass` | Deterministic pipeline, fixture tests, docs, and disabled-by-default rollout flags are in place. |
-| Internal beta | `partial` | Ready for controlled internal tester evaluation with fixtures and source transparency, but recorded tester sessions, Android/device QA, and real provider shadow validation are incomplete. See `internal_beta_evidence.md`. |
-| Closed field test | `blocked` | Internal beta evidence recommends not ready: Android/device visual-state QA, real target-region provider readiness, and completed tester sessions are missing. |
+| Internal beta | `pass` | Ready for controlled internal tester evaluation with fixtures, source transparency, guarded Android evidence, and disabled-by-default risky surfaces. |
+| Restricted closed field test | `partial` | CampOps is risk-accepted for the approved cohort/scope only. Android/device QA and guarded privacy/storage pass for this packet; provider influence remains shadow-only/unapproved, field tester sessions remain follow-up, and AI/telemetry/community publishing stay disabled unless separately approved. |
 | Limited regional rollout | `blocked` | Real legal/access, closure, fire, weather, and service provider quality is not yet proven by region. |
 | Broad rollout | `blocked` | Requires validated providers, product/privacy approval for debrief governance and telemetry sinks, production support playbooks, and field evidence. |
 
@@ -33,10 +33,10 @@ This document separates engineering readiness from launch readiness. Fixture tes
 | Provider quality | `blocked` | TBD | Provider contracts, source adapters, fixtures, validation harness, and readiness reports exist. | Run shadow validation against real provider outputs by target region/source category before limited rollout. |
 | Source confidence/conflict handling | `partial` | TBD | Source conflict resolver, confidence aggregation, stale/missing summaries, and tests exist. | Validate conflict rates with real sources and define acceptable thresholds for each rollout cohort. |
 | Offline/stale behavior | `partial` | TBD | Offline/stale source metadata, tests, and docs exist. | Verify stale/missing warnings on Android in field-mode UI; define cache retention/deletion policy for production. |
-| Mobile QA | `blocked` | TBD | `mobile_qa.md` and visual state matrix exist; UI contract tests pass. | Run Android emulator/physical-device QA for compact screens, offline copy, expanders, action buttons, long warnings, and missing fields. |
+| Mobile QA | `partial` | TBD | `mobile_qa.md`, visual state matrix, UI contract tests, dev visual QA route, QA-only candidate pins/actions, and cramped-screen evidence exist. | Run real provider-backed route-line candidate validation and continue Android checks for field sessions. |
 | AI assist guardrails | `partial` | TBD | AI assist consumes CampOps outputs, parser guardrails and adversarial tests exist. | Continue adversarial evals with real model outputs and field-mode copy review; ensure no rejected camp is resurrected. |
-| Privacy/storage | `partial` | TBD | Privacy storage review, debrief private defaults, prompt minimization, cache-source tests, and telemetry validation exist. | Complete encryption/retention/deletion owner review before closed field test with real user data. |
-| Community debriefs | `blocked` | TBD | Private-by-default model, consent checks, redaction, and moderation state machine exist. | Product/privacy/moderation policy and tooling must be approved before community-visible publishing. |
+| Privacy/storage | `partial` | TBD | Privacy storage review, debrief private defaults, prompt minimization, cache-source tests, telemetry validation, and guarded closed-field approval exist. | Keep broad real trip/debrief data blocked until retention, encryption, deletion, access-control, durable cache, telemetry, and public-safe export owners are approved. Treat local debrief `localStorage` as unencrypted. |
+| Community debriefs | `blocked` | TBD | Private-by-default model, consent checks, redaction, and moderation state machine exist. Community-safe output is blocked unless moderation state is `approved_anonymized`. | Product/privacy/moderation policy and tooling must be approved before community-visible publishing; draft, pending-review, rejected, and removed records must stay non-public. |
 | Legacy coexistence | `partial` | TBD | CampOps cards coexist with legacy list; compatibility adapter and migration plan exist. | Validate no user-facing contradiction in mobile QA; do not enable CampOps-powered legacy ordering until parity tests and rollback are ready. |
 | Observability | `partial` | TBD | Privacy-safe telemetry helpers, payload validation, disabled defaults, and sink approval gate exist. | Approve any telemetry sink, retention, access control, and analytics joining rules before enabling. |
 | Feature flags/rollout | `pass` | TBD | Rollout flags default off; rollout flag tests pass; production callers use explicit gates. | Keep risky feature areas independently gated during beta. |
@@ -68,17 +68,17 @@ Required:
 
 Current status: `partial`.
 
-### Closed Field Test
+### Restricted Closed Field Test
 
 Required:
 
-- Android field-mode QA completed for recommendation cards, source warnings, offline states, and action buttons.
-- Provider validation shadow mode reports are available for test regions.
-- Offline storage/retention/deletion path is reviewed for real trip data.
+- Android field-mode QA completed for recommendation cards, source warnings, offline states, and action buttons in the guarded packet.
+- Provider validation shadow mode reports are available for test regions, with provider influence disabled unless separately approved.
+- Guarded privacy/storage posture is approved for private/local closed-field data only.
 - Field testers receive clear limitations for legal/access/provider confidence.
 - `field_test_plan.md` checklists and privacy-safe feedback schema are used for every test route/region label.
 
-Current status: `partial`.
+Current status: `partial`; risk-accepted for restricted cohort/scope only.
 
 ### Limited Region Rollout
 
@@ -107,14 +107,15 @@ Current status: `blocked`.
 | Blocker ID | Severity | Description | Affected rollout stage | Mitigation | Status |
 | --- | --- | --- | --- | --- | --- |
 | CO-BLOCK-001 | Critical | Real provider quality is unproven for legal/access, closure, fire, weather, and service data. | Limited regional rollout, broad rollout | Run provider validation shadow mode by region; define coverage/freshness/conflict/unknown thresholds. | Open |
-| CO-BLOCK-002 | High | Android emulator/physical-device QA has not been completed for CampOps cards and endpoint flow. | Internal beta, closed field test | Execute `mobile_qa.md` and visual state matrix on small/large Android screens and offline states. | Open |
-| CO-BLOCK-003 | High | Offline storage, retention, deletion, and encryption posture needs owner review before real trip/debrief data is used broadly. | Closed field test, limited regional rollout | Complete privacy/storage review actions and document retention constants/deletion path. | Open |
-| CO-BLOCK-004 | Critical | Community debrief publishing lacks approved product/privacy/moderation policy and tooling. | Broad rollout, any community-visible release | Keep `campopsDebriefCommunityPublishingEnabled` off until policy, review queue, redaction, and removal workflow are approved. | Open |
+| CO-BLOCK-002 | High | Android QA is complete for the guarded QA packet, but real provider-backed route-line candidate validation remains unresolved. | Limited regional rollout, provider-influenced closed field review | Execute provider-backed Navigate route-line candidate validation on Android and record pin, popup, Save Camp, Navigate Here, and Report Unusable evidence. | Guarded |
+| CO-BLOCK-003 | High | Offline storage, retention, deletion, encryption, and access-control owners are still TBD for broad real trip/debrief data; CampOps local debrief storage is unencrypted unless protected by the runtime. | Limited regional rollout, broad rollout | Assign owners, document encryption/access-control posture, and keep internal beta restricted to controlled tester data. | Open |
+| CO-BLOCK-004 | Critical | Community debrief publishing lacks approved product/privacy/moderation policy and tooling; only `approved_anonymized` records may produce community-safe output. | Broad rollout, any community-visible release | Keep `campopsDebriefCommunityPublishingEnabled` off until policy, review queue, redaction, moderation approval, and removal workflow are approved. | Open |
+| CO-BLOCK-010 | High | Future durable provider/source caches and app-layer persistence of recommendations, endpoint outputs, or AI summaries need explicit storage location, retention, redaction, clear/delete hooks, and encryption-status documentation. | Limited regional rollout, broad rollout | Do not add durable provider caches or persisted CampOps outputs without updating `privacy_storage_review.md` and the owning delete path. | Open |
 | CO-BLOCK-005 | Medium | Legacy result ranking can still coexist beside CampOps recommendations and may confuse users if copy/status annotations are incomplete. | Internal beta, closed field test | Use compatibility adapter annotations, mobile QA, and keep CampOps-powered ordering disabled until parity and rollback are ready. | Open |
 | CO-BLOCK-006 | Medium | AI guardrails are fixture-tested but need continued adversarial checks against real model outputs and evolving prompts. | Closed field test, limited regional rollout | Run adversarial evals for stale data, rejected camps, low legal confidence, and overconfident wording before enabling AI assist. | Open |
 | CO-BLOCK-007 | Medium | Observability is implemented but any real analytics sink needs explicit approval for privacy, retention, access, and joining behavior. | Internal beta if telemetry is desired, broader rollout | Keep telemetry off; require `campopsTelemetryEnabled`, configured sink, and `campopsTelemetrySinkApproved`. | Guarded |
 | CO-BLOCK-008 | High | No controlled field evidence yet proves the two-hour delay flow under real route/provider/mobile conditions. | Closed field test, limited regional rollout | Run field tests for delayed arrival, trailer, low fuel/water, stale/offline, and source-conflict scenarios. | Open |
-| CO-BLOCK-009 | High | Internal beta evidence report recommends not ready for closed field test because tester sessions, device visual evidence, and real provider readiness are incomplete. | Closed field test | Complete the required next evidence in `docs/campops/internal_beta_evidence.md` and re-review P0/P1/P2 status. | Open |
+| CO-BLOCK-009 | High | Restricted closed-field risk is accepted, but field tester sessions and real provider-backed route/provider/mobile evidence remain incomplete. | Restricted closed field follow-up, limited regional rollout | Complete the required next evidence in `docs/campops/internal_beta_evidence.md` and re-review P0/P1/P2 status after the restricted run. | Guarded |
 
 ## Closed Field-Test Package
 
@@ -135,8 +136,10 @@ It requires:
 ## Acceptance Notes
 
 - Do not mark real provider quality as ready from fixtures alone.
-- Do not mark mobile QA complete without emulator or physical-device evidence.
+- Do not mark provider-backed mobile QA complete without real provider-backed route-line candidate evidence.
 - Do not mark community publishing ready until privacy, moderation, and product policy are approved.
+- Do not treat draft, pending-review, rejected, or removed community debrief records as public-visible.
+- Do not persist recommendation sets, endpoint outputs, AI summaries, or provider/source caches without the same redaction, retention, deletion, and encryption-status rules documented for CampOps.
 - Do not allow AI to override deterministic gates or source confidence.
 - Do not call unknown legal/access status allowed.
 - Do not enable telemetry unless feature flag, sink configuration, sink approval, and payload validation are all present.

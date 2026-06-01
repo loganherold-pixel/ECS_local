@@ -33,6 +33,9 @@ const {
   createAttitudeCalibrationOffsets,
   resetAttitudeCalibrationOffsets,
 } = loadTypeScriptModule('lib/attitudeCalibration.ts');
+const {
+  computeVerticalMountAccelerometerAngles,
+} = loadTypeScriptModule('lib/accelerometerAttitudeMath.ts');
 
 function assertNear(actual, expected, label) {
   assert.ok(
@@ -64,11 +67,25 @@ applyAttitudeCalibration(rawRoll, rawPitch, offsets);
 assert.strictEqual(rawRoll, 12, 'Calibration must not mutate raw roll values.');
 assert.strictEqual(rawPitch, 39, 'Calibration must not mutate raw pitch values.');
 
+const portraitUpright = computeVerticalMountAccelerometerAngles({ x: 0, y: -1, z: 0 }, 'portrait');
+assertNear(portraitUpright.roll, 0, 'Portrait upright roll');
+assertNear(portraitUpright.pitch, 0, 'Portrait upright pitch');
+
+const landscapeRightUpright = computeVerticalMountAccelerometerAngles({ x: 1, y: 0, z: 0 }, 'landscape');
+assertNear(landscapeRightUpright.roll, 0, 'Landscape-right upright roll');
+assertNear(landscapeRightUpright.pitch, 0, 'Landscape-right upright pitch');
+
+const landscapeLeftUpright = computeVerticalMountAccelerometerAngles({ x: -1, y: 0, z: 0 }, 'landscape');
+assertNear(landscapeLeftUpright.roll, 0, 'Landscape-left upright roll');
+assertNear(landscapeLeftUpright.pitch, 0, 'Landscape-left upright pitch');
+
 const hookSource = fs.readFileSync(path.join(process.cwd(), 'lib/useAccelerometer.ts'), 'utf8');
 assert.ok(
   hookSource.includes("from './attitudeCalibration'") &&
+    hookSource.includes("from './accelerometerAttitudeMath'") &&
+    hookSource.includes('computeVerticalMountAccelerometerAngles(data, mountOrientation)') &&
     hookSource.includes('createAttitudeCalibrationOffsets(latest.roll, latest.pitch)') &&
-    hookSource.includes('applyAttitudeCalibration(rawRoll, rawPitch, calibrationOffset.current)') &&
+    hookSource.includes('applyAttitudeCalibration(rawAngles.roll, rawAngles.pitch, calibrationOffset.current)') &&
     hookSource.includes('resetAttitudeCalibrationOffsets()'),
   'useAccelerometer should route zero/apply/reset through the shared calibration utility.',
 );
@@ -93,6 +110,11 @@ const widgetGridSource = fs.readFileSync(path.join(process.cwd(), 'components/da
 const renderersSource = fs.readFileSync(path.join(process.cwd(), 'components/dashboard/WidgetRenderers.tsx'), 'utf8');
 const monitorWidgetSource = fs.readFileSync(path.join(process.cwd(), 'components/detail/AttitudeMonitorWidget.tsx'), 'utf8');
 const expandedSource = fs.readFileSync(path.join(process.cwd(), 'components/attitude/AttitudeMonitorExpandedView.tsx'), 'utf8');
+
+assert.ok(
+  dashboardSource.includes("mountOrientation: isLandscape ? 'landscape' : 'portrait'"),
+  'Dashboard should tell useAccelerometer whether widgets are in portrait or landscape mount orientation.',
+);
 
 for (const [name, source] of [
   ['Dashboard', dashboardSource],

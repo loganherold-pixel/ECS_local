@@ -176,6 +176,7 @@ assert.ok(panelSource.includes('DEMO / SYNTHETIC'), 'Demo MapShare state should 
 assert.ok(panelSource.includes('testID="garmin-sos-review-banner"'), 'SOS signals should render a visible review state.');
 
 const expeditionSource = fs.readFileSync(path.join(process.cwd(), 'components/dashboard/ExpeditionTab.tsx'), 'utf8');
-assert.ok(expeditionSource.includes('GarminInreachVisibilityPanel'), 'Expedition tab should include the Garmin visibility panel.');
+assert.ok(expeditionSource.includes('Expedition Hub'), 'Expedition tab should now render the Expedition Hub.');
+assert.ok(!expeditionSource.includes('GarminInreachVisibilityPanel'), 'Expedition Hub should not render visible Garmin placeholder widgets.');
 
 console.log('Garmin/inReach UI visibility tests passed.');

@@ -30,11 +30,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   "'setupNeeded'",
   "'attitude'",
   "'threeDNavigation'",
-  "'recoveryHazardCompass'",
-  "'trailDecision'",
-  "'campScout'",
-  "'expeditionReadiness'",
-  "'convoyCommand'",
 ].forEach((token) => {
   assert.ok(typesSource.includes(token), `Command center types missing ${token}`);
 });
@@ -43,8 +38,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
   'COMMAND_CENTER_WIDGET_REGISTRY',
   'COMMAND_CENTER_IMPLEMENTED_MODES',
   'COMMAND_CENTER_DEFAULT_MODE',
-  'convoyCommand',
-  "defaultAvailability: 'setupNeeded'",
   'getCommandCenterAvailability',
   'getSelectableCommandCenterModes',
   'resolveCommandCenterMode',
@@ -89,11 +82,6 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
 [
   'ATTITUDE',
   'NAV 3D',
-  'RECOVERY',
-  'TRAIL',
-  'CAMP',
-  'READY',
-  'CONVOY',
   'modeButtonSelected',
   'TACTICAL.amber',
   'TACTICAL.textMuted',
@@ -133,19 +121,15 @@ assert.ok(
 );
 
 assert.ok(
-  commandStoreSource.includes("'recoveryHazardCompass'") &&
-    commandStoreSource.includes("'trailDecisionCommand'") &&
-    commandStoreSource.includes("'campScoutCommand'") &&
-    commandStoreSource.includes("'expeditionReadinessCommand'") &&
-    commandStoreSource.includes("'convoyCommand'") &&
-    commandStoreSource.includes('Recovery / Hazard Compass') &&
-    commandStoreSource.includes('Trail Decision Command') &&
-    commandStoreSource.includes('Camp Scout Command') &&
-    commandStoreSource.includes('Expedition Readiness Command') &&
-    commandStoreSource.includes('Convoy Command') &&
-    commandStoreSource.includes('Recovery Vector Standby') &&
-    /'attitude',\s*'follow3d',\s*'recoveryHazardCompass',\s*'trailDecisionCommand',\s*'campScoutCommand',\s*'expeditionReadinessCommand',\s*'convoyCommand'/.test(commandStoreSource),
-  'Command module store should persist Attitude, 3D Navigation, Recovery, Trail Decision, Camp Scout, Expedition Readiness, and Convoy command-center modes.',
+  /'follow3d',\s*'attitude'/.test(commandStoreSource) &&
+    commandStoreSource.includes("label: '3D Nav Command'") &&
+    commandStoreSource.includes("label: 'Attitude Command'") &&
+    !commandStoreSource.includes("label: 'Terrain Risk'") &&
+    !commandStoreSource.includes('Recovery / Hazard Compass') &&
+    !commandStoreSource.includes('Trail Decision Command') &&
+    !commandStoreSource.includes('Camp Scout Command') &&
+    !commandStoreSource.includes('Expedition Readiness Command'),
+  'Command module store should expose only Attitude Command and 3D Nav Command in the command module selector.',
 );
 
 assert.ok(
@@ -154,15 +138,23 @@ assert.ok(
     widgetRenderersSource.includes('COMMAND_CENTER_IMPLEMENTED_MODES') &&
     widgetRenderersSource.includes('commandModuleToCenterMode') &&
     widgetRenderersSource.includes('centerModeToCommandModule') &&
+    widgetRenderersSource.includes('moduleTransitionShellFramedCommand') &&
+    widgetRenderersSource.includes("width: '100%'") &&
     !widgetRenderersSource.includes('dashboard-command-center-mode-selector') &&
     widgetRenderersSource.includes('isCommandCenterModuleId') &&
     widgetRenderersSource.includes('dataContext={commandCenterDataContext}') &&
-    registrySource.includes("label: 'Recovery / Hazard Compass'") &&
-    registrySource.includes("label: 'Trail Decision Command'") &&
-    registrySource.includes("label: 'Camp Scout Command'") &&
-    registrySource.includes("label: 'Expedition Readiness Command'") &&
-    registrySource.includes("label: 'Convoy Command'"),
-  'Dashboard Attitude Command renderer should use the reusable command-center host without the redundant in-widget mode selector.',
+    !registrySource.includes("label: 'Recovery / Hazard Compass'") &&
+    !registrySource.includes("label: 'Trail Decision Command'") &&
+    !registrySource.includes("label: 'Camp Scout Command'") &&
+    !registrySource.includes("label: 'Expedition Readiness Command'") &&
+    !registrySource.includes("label: 'Convoy Command'"),
+  'Dashboard Attitude Command renderer should use the reusable command-center host while keeping non-host modules outside the command-center mode selector.',
+);
+
+assert.ok(
+  widgetRenderersSource.includes('syncAttitudeApproachingLimitTone') &&
+    !widgetRenderersSource.includes("soundEnabled: selectedCommandModule !== 'attitude'"),
+  'Attitude rollover caution sound should remain scoped to the attitude monitor path.',
 );
 
 console.log('CommandCenterFrame checks passed.');

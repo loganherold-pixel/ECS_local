@@ -101,6 +101,16 @@ function toNumber(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeTireValues(...values: any[]): [number | null, number | null, number | null, number | null] | undefined {
+  const source = values.find((value) => Array.isArray(value));
+  if (!Array.isArray(source)) return undefined;
+  const next = [0, 1, 2, 3].map((index) => {
+    const numeric = toNumber(source[index]);
+    return numeric != null && numeric >= 0 ? numeric : null;
+  }) as [number | null, number | null, number | null, number | null];
+  return next.some((entry) => entry != null) ? next : undefined;
+}
+
 function normalizeTelemetry(raw: any, device?: DeviceLike | null): NormalizedVehicleTelemetry {
   const timestamp = toNumber(raw?.timestamp) ?? Date.now();
 
@@ -142,6 +152,20 @@ function normalizeTelemetry(raw: any, device?: DeviceLike | null): NormalizedVeh
       toNumber(raw?.engine_load) ??
       toNumber(raw?.engineLoad) ??
       null,
+    tire_pressures: normalizeTireValues(
+      raw?.tire_pressures,
+      raw?.tirePressures,
+      raw?.tirePressurePsi,
+      raw?.tpms?.pressures,
+      raw?.metrics?.tirePressures,
+    ),
+    tire_temps: normalizeTireValues(
+      raw?.tire_temps,
+      raw?.tireTemps,
+      raw?.tireTempF,
+      raw?.tpms?.temps,
+      raw?.metrics?.tireTemps,
+    ),
   } as NormalizedVehicleTelemetry;
 }
 
@@ -159,6 +183,7 @@ class VehicleTelemetryService {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastTelemetryAt = 0;
   private started = false;
+  private manualDisconnectRequested = false;
 
   private pollerEnabled = false;
   private pollerRunning = false;
@@ -413,22 +438,51 @@ class VehicleTelemetryService {
     }
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(options: { manualDisconnectRequested?: boolean } = {}): Promise<void> {
+    const manualDisconnectRequested = options.manualDisconnectRequested === true;
+    if (manualDisconnectRequested) {
+      this.manualDisconnectRequested = true;
+      this.started = false;
+      this.pollerEnabled = false;
+    }
+
     this.clearRetryTimer();
     this.stopHeartbeat();
     this.pollerRunning = false;
+    vehicleTelemetryStore.setReconnecting(false);
 
+    let disconnectError: unknown = null;
     try {
       await this.adapter?.disconnect?.();
     } catch (error) {
+      disconnectError = error;
       stabilityLog('Telemetry', 'warn', `${TAG} adapter disconnect failed`, error);
     }
 
     this.unbindAdapter();
-    this.markRegistryState('disconnected');
-    this.setConnectionState('disconnected');
-    this.emit('disconnected', { device: this.currentDevice });
-    this.emit('disconnect', { device: this.currentDevice });
+    const nextState = manualDisconnectRequested && disconnectError ? 'error' : 'disconnected';
+    this.markRegistryState(nextState);
+    this.setConnectionState(nextState);
+    this.emit('disconnected', {
+      device: this.currentDevice,
+      requested: manualDisconnectRequested,
+      manualDisconnectRequested,
+      reason: manualDisconnectRequested ? 'user_disconnect' : 'disconnect',
+    });
+    this.emit('disconnect', {
+      device: this.currentDevice,
+      requested: manualDisconnectRequested,
+      manualDisconnectRequested,
+      reason: manualDisconnectRequested ? 'user_disconnect' : 'disconnect',
+    });
+
+    if (manualDisconnectRequested) {
+      this.manualDisconnectRequested = false;
+    }
+    if (manualDisconnectRequested && disconnectError) {
+      this.emit('error', disconnectError);
+      throw disconnectError;
+    }
   }
 
   async stop(): Promise<void> {
@@ -595,10 +649,16 @@ class VehicleTelemetryService {
     this.emit('disconnected', { device: this.currentDevice });
     this.emit('disconnect', { device: this.currentDevice });
 
-    const requested = payload?.requested === true || payload?.reason === 'user_disconnect';
+    const requested =
+      this.manualDisconnectRequested ||
+      payload?.manualDisconnectRequested === true ||
+      payload?.requested === true ||
+      payload?.reason === 'user_disconnect';
     if (requested) {
       this.started = false;
       this.pollerEnabled = false;
+      this.clearRetryTimer();
+      vehicleTelemetryStore.setReconnecting(false);
       return;
     }
 
@@ -637,7 +697,7 @@ class VehicleTelemetryService {
     this.emit('reconnect_failed', { error, device: this.currentDevice });
     this.emit('error', error);
 
-    if (this.started) {
+    if (this.started && !this.manualDisconnectRequested) {
       this.scheduleReconnect();
     }
   };
@@ -653,6 +713,7 @@ class VehicleTelemetryService {
   // ── Reconnect / Health ─────────────────────────────────
 
   private scheduleReconnect(): void {
+    if (this.manualDisconnectRequested) return;
     if (!this.adapter) return;
     if (this.retryCount >= MAX_TELEMETRY_RETRIES) {
       stabilityLog('Telemetry', 'warn', `${TAG} max reconnect retries reached`);
@@ -672,6 +733,7 @@ class VehicleTelemetryService {
     const delay = calculateBackoff(this.retryCount);
     this.clearRetryTimer();
     this.retryTimer = setTimeout(async () => {
+      if (!this.started || this.manualDisconnectRequested) return;
       this.lastRetryAt = Date.now();
       this.retryCount += 1;
       try {

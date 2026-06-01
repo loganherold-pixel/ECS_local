@@ -1,0 +1,7 @@
+export const BLU_SCAN_WINDOW_MS = 10_000;
+export const BLU_SCAN_COOLDOWN_MS = 5_000;
+export const BLU_TELEMETRY_UI_UPDATE_MS = 750;
+export const BLU_CLOUD_POLL_INTERVAL_MS = 15_000;
+export const BLU_CLOUD_POLL_INTERVAL_MIN_MS = 10_000;
+export const BLU_DEBUG_LOG_THROTTLE_MS = 2_000;
+

@@ -25,6 +25,7 @@ export interface ECSRouteLifecycleInput {
   roadStatus?: string | null;
   roadPreviewLoading?: boolean;
   roadHasRoute?: boolean;
+  roadHasValidGeometry?: boolean;
   roadHasDestination?: boolean;
   roadError?: string | null;
   roadCreatedFrom?: string | null;
@@ -89,8 +90,25 @@ function buildState(
 export function normalizeRouteLifecycle(
   input: ECSRouteLifecycleInput,
 ): ECSRouteLifecycleState {
+  const roadRouteHasValidGeometry =
+    !!input.roadHasRoute && input.roadHasValidGeometry !== false;
+  const roadRouteGeometryBlocked =
+    !!input.roadHasRoute && input.roadHasValidGeometry === false;
+
   if (input.routeBuilderError) {
     return buildState('failed', 'route_builder', { error: input.routeBuilderError });
+  }
+
+  if (
+    roadRouteGeometryBlocked &&
+    ['route_preview', 'navigation_active', 'rerouting', 'arrived'].includes(String(input.roadStatus))
+  ) {
+    return buildState('failed', routeSourceFromInput(input), {
+      error: input.roadError ?? 'Route geometry unavailable',
+      canStartGuidance: false,
+      shouldRenderPreview: false,
+      shouldRenderGuidance: false,
+    });
   }
 
   if (input.roadStatus === 'error' || input.trailUiMode === 'error') {
@@ -126,6 +144,15 @@ export function normalizeRouteLifecycle(
   }
 
   if (input.roadStatus === 'navigation_active' || input.roadStatus === 'rerouting') {
+    if (!roadRouteHasValidGeometry) {
+      return buildState('failed', routeSourceFromInput(input), {
+        error: input.roadError ?? 'Route geometry unavailable',
+        canStartGuidance: false,
+        shouldRenderPreview: false,
+        shouldRenderGuidance: false,
+      });
+    }
+
     return buildState('navigating', routeSourceFromInput(input), {
       isLoading: input.roadStatus === 'rerouting',
       canStartGuidance: false,
@@ -143,10 +170,10 @@ export function normalizeRouteLifecycle(
   }
 
   if (input.roadPreviewLoading) {
-    return buildState(input.roadHasRoute ? 'preview' : 'building', routeSourceFromInput(input), {
+    return buildState(roadRouteHasValidGeometry ? 'preview' : 'building', routeSourceFromInput(input), {
       isLoading: true,
-      canStartGuidance: !!input.roadHasRoute,
-      shouldRenderPreview: !!input.roadHasRoute || !!input.roadHasDestination,
+      canStartGuidance: roadRouteHasValidGeometry,
+      shouldRenderPreview: roadRouteHasValidGeometry,
     });
   }
 
@@ -155,19 +182,37 @@ export function normalizeRouteLifecycle(
   }
 
   if (input.roadStatus === 'route_preview') {
-    return buildState(input.roadHasRoute ? 'preview' : 'ready', routeSourceFromInput(input), {
-      canStartGuidance: !!input.roadHasRoute,
+    if (!roadRouteHasValidGeometry) {
+      return buildState('failed', routeSourceFromInput(input), {
+        error: input.roadError ?? 'Route geometry unavailable',
+        canStartGuidance: false,
+        shouldRenderPreview: false,
+      });
+    }
+
+    return buildState('preview', routeSourceFromInput(input), {
+      canStartGuidance: true,
     });
   }
 
   if (input.roadStatus === 'destination_selected') {
-    return buildState('ready', routeSourceFromInput(input), {
+    return buildState('building', routeSourceFromInput(input), {
+      isLoading: false,
       canStartGuidance: false,
       error: input.roadError ?? null,
+      shouldRenderPreview: false,
     });
   }
 
-  if (input.hasActiveRun || input.hasDisplayedRouteGeometry) {
+  if (input.hasActiveRun && !input.hasDisplayedRouteGeometry) {
+    return buildState('failed', routeSourceFromInput(input), {
+      error: 'Route geometry unavailable',
+      canStartGuidance: false,
+      shouldRenderPreview: false,
+    });
+  }
+
+  if (input.hasDisplayedRouteGeometry) {
     return buildState('ready', routeSourceFromInput(input));
   }
 

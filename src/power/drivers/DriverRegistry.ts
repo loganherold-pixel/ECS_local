@@ -7,9 +7,15 @@
  * until real driver logic is implemented in future phases.
  *
  * Phase 6A: Renogy driver added (active).
+ *
+ * Bluestack production note: this legacy registry is not the release source
+ * of truth for live Bluetooth telemetry. Driver resolution is gated by the
+ * Bluestack parser registry so older parse() implementations cannot promote
+ * parser-pending brands to live telemetry before field evidence exists.
  */
 
 import type { IPowerDriver } from "./IPowerDriver";
+import { getBluestackParserDecision } from "../../../lib/bluestack";
 
 import { EcoFlowDriver } from "./vendors/EcoFlowDriver";
 import { AnkerDriver } from "./vendors/AnkerDriver";
@@ -43,6 +49,10 @@ export const registeredDrivers: IPowerDriver[] = [
  */
 export function resolveDriver(deviceInfo: unknown): IPowerDriver | null {
   for (const driver of registeredDrivers) {
+    const parserDecision = getBluestackParserDecision(driver.vendor);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      continue;
+    }
     if (driver.supports(deviceInfo)) {
       return driver;
     }

@@ -31,6 +31,7 @@ export type EcsLogCategory =
   | 'SHELL'
   | 'CONFIG'
   | 'DISCOVERY'
+  | 'ROUTE_CONTEXT'
   | 'CAMPOPS'
   | 'ATTITUDE'
   | 'MAP'
@@ -63,6 +64,8 @@ const DEBUG_CATEGORY_ALIASES = {
   telemetry: 'TELEMETRY',
   power: 'POWER',
   discovery: 'DISCOVERY',
+  route_context: 'ROUTE_CONTEXT',
+  routeContext: 'ROUTE_CONTEXT',
   campops: 'CAMPOPS',
   gps: 'GPS',
   map: 'MAP',

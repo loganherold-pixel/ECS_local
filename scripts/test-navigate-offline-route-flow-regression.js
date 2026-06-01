@@ -116,7 +116,7 @@ assertIncludes(
   [
     'searchRoadDestinations({',
     'resolveRoadDestination({',
-    "requestRouteForDestination(\n          destination,\n          'route_preview',",
+    "requestRouteForDestination(destination, 'route_preview'",
     'fetchRoadRoute({',
     'applyRoute(route, requestedStatus, destination, createdFrom',
   ],
@@ -203,7 +203,8 @@ assertInOrder(
   navigate,
   [
     'if (initialCompletedOfflineSyncNoticeIdsRef.current === null) {',
-    "offlineTileSyncSnapshot.jobs\n          .filter((job) => job.status === 'complete')",
+    'initialCompletedOfflineSyncNoticeIdsRef.current = new Set(',
+    "filter((job) => job.status === 'complete')",
     'return;',
     'if (!offlineSyncCompletionNoticePrefsHydratedRef.current) {',
     'return;',
@@ -257,10 +258,13 @@ assertIncludes(
     'onPrimaryPreviewAction ?? onStartNavigation',
     "action.id === 'prepare_offline'",
     '? onPrepareOffline',
-    "action.id === 'review_route'",
-    '? onRouteOverview',
   ],
-  'Road preview should still expose Start Route, Review Route, and Prepare Offline actions.',
+  'Road preview should still expose Start Route and Prepare Offline actions.',
+);
+
+assert(
+  !roadOverlay.includes("action.id === 'review_route'"),
+  'Road preview should not expose the redundant Review Route readiness action.',
 );
 
 assertIncludes(

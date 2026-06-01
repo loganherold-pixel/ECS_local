@@ -74,6 +74,7 @@ export type CampgroundSourceSummaryRow = {
   provider_id: ProviderId | string;
   provider_record_id: string;
   source_url: string | null;
+  raw_json?: unknown;
   payload_hash: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
@@ -121,6 +122,17 @@ export type CampgroundDetailResponse = {
       expiresAt: string | null;
       isFresh: boolean;
     }>;
+  };
+  detailEnrichment: {
+    operatorName: string | null;
+    phone: string | null;
+    seasonDescription: string | null;
+    openingHours: string | null;
+    maxVehicleLengthFt: number | null;
+    tentAllowed: boolean | null;
+    rvAllowed: boolean | null;
+    trailersAllowed: boolean | null;
+    amenities: string[] | null;
   };
   attribution: string | null;
   freshness: {
@@ -193,6 +205,81 @@ function cleanText(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const text = String(value).trim().replace(/\s+/g, ' ');
   return text.length > 0 ? text : null;
+}
+
+function normalizeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function walkJson(value: unknown, visit: (key: string, child: unknown) => void, depth = 0): void {
+  if (!value || typeof value !== 'object' || depth > 5) return;
+  if (Array.isArray(value)) {
+    value.forEach((child) => walkJson(child, visit, depth + 1));
+    return;
+  }
+  Object.entries(value as Record<string, unknown>).forEach(([key, child]) => {
+    visit(key, child);
+    walkJson(child, visit, depth + 1);
+  });
+}
+
+function firstRawField(sources: CampgroundSourceSummaryRow[], keys: string[]): unknown {
+  const wanted = new Set(keys.map(normalizeKey));
+  for (const source of sources) {
+    let found: unknown;
+    walkJson(source.raw_json, (key, child) => {
+      if (found !== undefined) return;
+      if (wanted.has(normalizeKey(key))) found = child;
+    });
+    if (found !== undefined && found !== null && cleanText(found) !== '') return found;
+  }
+  return null;
+}
+
+function rawStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => cleanText(item)).filter((item): item is string => !!item);
+  }
+  const text = cleanText(value);
+  return text ? text.split(/[,;|]/).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function rawBool(value: unknown): boolean | null {
+  if (value === true || value === false) return value;
+  const token = cleanText(value)?.toLowerCase();
+  if (!token) return null;
+  if (['true', 'yes', 'y', '1', 'allowed', 'available'].includes(token)) return true;
+  if (['false', 'no', 'n', '0', 'not allowed', 'unavailable'].includes(token)) return false;
+  return null;
+}
+
+function sourceDetailEnrichment(sources: CampgroundSourceSummaryRow[]) {
+  const maxVehicleLength = numberOrNull(firstRawField(sources, [
+    'maxVehicleLengthFt',
+    'max_vehicle_length_ft',
+    'maxVehicleLength',
+    'maxRVLength',
+    'MaxVehicleLength',
+  ]));
+  const amenities = rawStringList(firstRawField(sources, [
+    'amenities',
+    'facilityAmenities',
+    'FacilityAmenity',
+    'CampsiteAmenities',
+    'attributes',
+  ]));
+
+  return {
+    operatorName: cleanText(firstRawField(sources, ['operatorName', 'operator', 'manager', 'OrgName', 'organization'])),
+    phone: cleanText(firstRawField(sources, ['phone', 'phoneNumber', 'FacilityPhone', 'FacilityPhoneNumber', 'contactPhone'])),
+    seasonDescription: cleanText(firstRawField(sources, ['seasonDescription', 'openSeason', 'OperatingSeason', 'season', 'Season'])),
+    openingHours: cleanText(firstRawField(sources, ['openingHours', 'hours', 'OperatingHours', 'facilityHours'])),
+    maxVehicleLengthFt: maxVehicleLength,
+    tentAllowed: rawBool(firstRawField(sources, ['tentAllowed', 'tent', 'tentSitesAllowed'])),
+    rvAllowed: rawBool(firstRawField(sources, ['rvAllowed', 'rv', 'rvSitesAllowed'])),
+    trailersAllowed: rawBool(firstRawField(sources, ['trailersAllowed', 'trailerAllowed', 'trailer'])),
+    amenities: amenities.length ? amenities : null,
+  };
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -529,6 +616,7 @@ export function buildCampgroundDetailResponse(
       providerId: cleanText(source.provider_id) ?? 'unknown',
       providerRecordId: cleanText(source.provider_record_id) ?? '',
       sourceUrl: cleanText(source.source_url),
+      rawJson: null,
       payloadHash: cleanText(source.payload_hash),
       firstSeenAt: cleanText(source.first_seen_at),
       lastSeenAt: cleanText(source.last_seen_at),
@@ -547,6 +635,7 @@ export function buildCampgroundDetailResponse(
         isFresh: isAvailabilityFresh(availability, now),
       })),
     },
+    detailEnrichment: sourceDetailEnrichment(sources),
     attribution: campground.attribution,
     freshness: {
       lastSyncedAt: campground.lastSyncedAt,

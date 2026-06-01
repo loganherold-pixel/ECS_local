@@ -10,8 +10,11 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useTheme } from '../context/ThemeContext';
+import { resolveEcsPopupSurfaceTheme } from '../lib/theme';
 
 export const ECS_BANNER_DARK_BACKGROUND = '#020304';
+export const ECS_BANNER_LIGHT_BACKGROUND = '#F7F1E8';
 export const ECS_GLOBAL_BANNER_ASPECT_RATIO = 3;
 
 type ECSGlobalBannerProps = {
@@ -59,7 +62,15 @@ export function ECSGlobalBanner({
   style,
   children,
 }: ECSGlobalBannerProps) {
+  const { effectiveTheme } = useTheme();
   const resolvedResizeMode = resizeMode ?? (placement === 'top' ? 'contain' : 'cover');
+  const surfaceTheme = resolveEcsPopupSurfaceTheme(effectiveTheme);
+  const bannerBackground =
+    effectiveTheme === 'light'
+      ? ECS_BANNER_LIGHT_BACKGROUND
+      : placement === 'top'
+        ? surfaceTheme.headerBg
+        : surfaceTheme.shellBg;
 
   return (
     <View
@@ -67,6 +78,7 @@ export function ECSGlobalBanner({
       style={[
         styles.plate,
         placement === 'top' ? styles.topPlate : styles.bottomPlate,
+        { backgroundColor: bannerBackground },
         style,
       ]}
     >
@@ -93,7 +105,6 @@ export function useEcsBottomBannerHeight() {
 
 const styles = StyleSheet.create({
   plate: {
-    backgroundColor: ECS_BANNER_DARK_BACKGROUND,
     overflow: 'hidden',
   },
   topPlate: {

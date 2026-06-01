@@ -22,11 +22,17 @@ const startReadinessSource = fs.readFileSync(
 );
 
 function assertIncludes(source, fragment, message) {
-  assert.ok(source.includes(fragment), message);
+  assert.ok(
+    source.replace(/\r\n/g, '\n').includes(fragment.replace(/\r\n/g, '\n')),
+    message,
+  );
 }
 
 function assertNotIncludes(source, fragment, message) {
-  assert.ok(!source.includes(fragment), message);
+  assert.ok(
+    !source.replace(/\r\n/g, '\n').includes(fragment.replace(/\r\n/g, '\n')),
+    message,
+  );
 }
 
 for (const label of ['Vehicle Fit', 'Route Confidence', 'Offline Readiness', 'Camp Intel']) {
@@ -96,10 +102,10 @@ assertIncludes(
   "args.routeConfidence.level === 'low'",
   'Low route confidence should be detected by the presentation adapter.',
 );
-assertIncludes(
+assertNotIncludes(
   adapterSource,
   "actions.push({ id: 'review_route', label: 'Review Route' });",
-  'Low route confidence should recommend the existing route review surface.',
+  'Low route confidence should not add the redundant Review Route readiness action.',
 );
 
 assertIncludes(

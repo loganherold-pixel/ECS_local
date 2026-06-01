@@ -29,6 +29,10 @@ import {
   resetAttitudeCalibrationOffsets,
   type AttitudeCalibrationOffsets,
 } from './attitudeCalibration';
+import {
+  computeVerticalMountAccelerometerAngles,
+  type AccelerometerMountOrientation,
+} from './accelerometerAttitudeMath';
 
 // ── Types ──────────────────────────────────────────────────
 export interface AccelerometerOutput {
@@ -63,6 +67,11 @@ export interface AccelerometerOptions {
    * vehicle roll.
    */
   recalibrationKey?: string | number | null;
+  /**
+   * Physical screen orientation in the vehicle cradle. Both modes assume the
+   * screen is upright in a vertical plane facing the operator.
+   */
+  mountOrientation?: AccelerometerMountOrientation;
 }
 
 // ── Constants ──────────────────────────────────────────────
@@ -76,7 +85,6 @@ type AccelerometerAnglesState = {
 
 const UPDATE_INTERVAL_MS = 100;      // ~10fps keeps HUD motion responsive without flooding React state
 const FILTER_ALPHA = 0.18;           // Low-pass filter coefficient (lower = smoother, more lag)
-const RAD_TO_DEG = 180 / Math.PI;
 const SAMPLE_TIMESTAMP_EMIT_MS = 1000;
 const UI_EMIT_INTERVAL_MS = UPDATE_INTERVAL_MS;
 const UI_EMIT_DELTA_DEG = 0.25;      // Preserve subtle live movement while filtering sensor jitter
@@ -117,6 +125,7 @@ export function useAccelerometer(
   options: AccelerometerOptions = {},
 ): AccelerometerOutput {
   const recalibrationKey = options.recalibrationKey ?? null;
+  const mountOrientation = options.mountOrientation ?? 'portrait';
   const [angles, setAngles] = useState<AccelerometerAnglesState>({
     rollDeg: 0,
     pitchDeg: 0,
@@ -359,25 +368,12 @@ export function useAccelerometer(
             //   Roll = lateral tilt (same as flat)
             //   Pitch = forward/backward from vertical (uses z-axis)
             //
-            const { x, y, z } = data;
-
-            // Guard against degenerate cases (all zeros)
-            const magnitude = Math.sqrt(x * x + y * y + z * z);
-            if (magnitude < 0.01) return;
-
-            // Roll = lateral tilt (atan2 of x vs the vertical plane)
-            // This works the same for both flat and vertical orientations
-            const rawRoll = Math.atan2(x, Math.sqrt(y * y + z * z)) * RAD_TO_DEG;
-
-            // Pitch = fore/aft tilt FROM VERTICAL baseline
-            // For vertical mount (phone upright): z≈0 when level
-            //   Forward tilt (top of phone tips away from user) → z becomes negative → positive pitch
-            //   Backward tilt (top of phone tips toward user) → z becomes positive → negative pitch
-            const rawPitch = Math.atan2(-z, Math.sqrt(x * x + y * y)) * RAD_TO_DEG;
-            latestRawAnglesRef.current = { roll: rawRoll, pitch: rawPitch };
+            const rawAngles = computeVerticalMountAccelerometerAngles(data, mountOrientation);
+            if (!rawAngles) return;
+            latestRawAnglesRef.current = rawAngles;
 
             // Apply calibration offset
-            const calibratedAngles = applyAttitudeCalibration(rawRoll, rawPitch, calibrationOffset.current);
+            const calibratedAngles = applyAttitudeCalibration(rawAngles.roll, rawAngles.pitch, calibrationOffset.current);
             const calibratedRoll = calibratedAngles.roll;
             const calibratedPitch = calibratedAngles.pitch;
 
@@ -395,8 +391,8 @@ export function useAccelerometer(
             // Round to 1 decimal to reduce unnecessary re-renders
             const newRoll = Math.round(filteredRoll.current * 10) / 10;
             const newPitch = Math.round(filteredPitch.current * 10) / 10;
-            const nextRawRoll = Math.round(rawRoll * 10) / 10;
-            const nextRawPitch = Math.round(rawPitch * 10) / 10;
+            const nextRawRoll = Math.round(rawAngles.roll * 10) / 10;
+            const nextRawPitch = Math.round(rawAngles.pitch * 10) / 10;
             const sampleNow = Date.now();
             const nextAngles = {
               rollDeg: newRoll,
@@ -467,7 +463,7 @@ export function useAccelerometer(
         subscriptionRef.current = null;
       }
     };
-  }, [appState, emitAngles, enabled, setActiveState, setAvailableState]);
+  }, [appState, emitAngles, enabled, mountOrientation, setActiveState, setAvailableState]);
 
   // ── Sensor status label ──────────────────────────────────
   const sensorStatus: AccelerometerOutput['sensorStatus'] = !enabled

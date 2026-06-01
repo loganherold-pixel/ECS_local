@@ -26,6 +26,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -148,14 +159,54 @@ assert.deepStrictEqual(
   'Route camp rendering should dedupe repeated CampOps candidate ids before render.',
 );
 
+const structureBufferedPins = buildCampOpsCampScoutMapPins(
+  recommendationSet([
+    camp('inside-structure-buffer', 96, 1, { nearestResidentialStructureDistanceMiles: 0.9 }),
+    camp('outside-structure-buffer', 92, 2, { nearestResidentialStructureDistanceMiles: 1.15 }),
+  ]),
+);
+assert.deepStrictEqual(
+  structureBufferedPins.map((pin) => pin.campOpsCandidateId),
+  ['outside-structure-buffer'],
+  'Route camp pins should suppress any candidate inside the one-mile residential/structure buffer.',
+);
+
+assert.deepStrictEqual(
+  normalizeRenderedCampScoutMarkers([
+    {
+      id: 'renderer-structure-buffer',
+      latitude: 39.1,
+      longitude: -120.1,
+      title: 'Renderer blocked pin',
+      sourceType: 'ecs_inferred',
+      confidenceGrade: 'A',
+      confidenceScore: 95,
+      nearestStructureDistanceMiles: 0.5,
+    },
+    {
+      id: 'renderer-clear-buffer',
+      latitude: 39.2,
+      longitude: -120.2,
+      title: 'Renderer clear pin',
+      sourceType: 'ecs_inferred',
+      confidenceGrade: 'A',
+      confidenceScore: 95,
+      nearestStructureDistanceMiles: 1.25,
+    },
+  ]).map((pin) => pin.id),
+  ['camp-scout-renderer-clear-buffer'],
+  'Shared renderer should keep a final one-mile structure-buffer safety net for all ECS camp pins.',
+);
+
 const mapRendererSource = fs.readFileSync(mapRendererPath, 'utf8');
 assert(
-  mapRendererSource.includes('camp-scout-marker camp-scout-grade-') &&
+    mapRendererSource.includes('camp-scout-marker camp-scout-grade-') &&
     mapRendererSource.includes('camp-scout-tent') &&
     mapRendererSource.includes('camp-scout-rank') &&
-    mapRendererSource.includes('camp-scout-label') &&
-    mapRendererSource.includes("label.textContent = 'camp'"),
-  'Route camp pins should reuse the remote camp scout tent/rank/camp label style.',
+    mapRendererSource.includes('root.appendChild(rank)') &&
+    !mapRendererSource.includes('camp-scout-label') &&
+    !mapRendererSource.includes("label.textContent = 'camp'"),
+  'Route camp pins should reuse the remote camp scout tent style with the rank hovering above the pin.',
 );
 assert(
   mapRendererSource.includes("send('pinTap', Object.assign({ kind: 'campScout' }, item))"),

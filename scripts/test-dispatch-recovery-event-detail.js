@@ -33,8 +33,8 @@ const detailModal = source.slice(detailStart, detailEnd);
 
 assert.match(
   detailModal,
-  /isRecoveryCritical \? \([\s\S]*<RecoveryAssistPinDetail event=\{event\} detail=\{detail\} \/>/,
-  'Recovery critical event detail should render pin detail immediately.',
+  /if \(event && meta && detail && isRecoveryCritical\) \{[\s\S]*<RecoveryAssistPinDetail event=\{event\} detail=\{detail\} large \/>/,
+  'Recovery critical event detail should render the full-body pin detail immediately.',
 );
 assert.match(
   detailModal,
@@ -43,23 +43,33 @@ assert.match(
 );
 assert.match(
   detailModal,
-  /accessibilityLabel="Navigate Assist"[\s\S]*onPress=\{\(\) => onNavigateAssist\(event\)\}/,
-  'Recovery detail should expose Navigate Assist as an explicit user action.',
+  /overlayClass="workflow"[\s\S]*maxHeightFraction=\{1\}[\s\S]*minHeightFraction=\{1\}/,
+  'Recovery critical detail should use a full-body workflow overlay.',
+);
+assert.doesNotMatch(
+  detailModal,
+  /topClearanceOverride=\{0\}|bottomClearanceOverride=\{0\}/,
+  'Recovery critical detail should respect ECS body bounds instead of covering global banners.',
 );
 assert.match(
   detailModal,
-  /\(\['ping_threat', 'mark_hazard', 'request_assist'\] as ThreatActionId\[\]\)\.map/,
-  'Recovery detail should preserve Ping Threat, Mark Hazard, and Request Assist actions.',
+  /accessibilityLabel="Proceed to active ping"[\s\S]*onPress=\{\(\) => onNavigateAssist\(event\)\}/,
+  'Recovery detail should expose Proceed to Active Ping as an explicit user action.',
 );
-assert.match(
+assert.doesNotMatch(
   detailModal,
-  /onPress=\{\(\) => onThreatAction\(event, actionId\)\}/,
-  'Recovery detail secondary actions should target the currently opened CAD event.',
+  /onThreatAction\(event, actionId\)|accessibilityLabel=\{THREAT_ACTION_LABELS\[actionId\]\}/,
+  'Recovery event detail should no longer expose Ping Threat, Mark Hazard, or Request Assist actions.',
 );
 assert.doesNotMatch(
   detailModal,
   /startNavigation|previewDestination|navigationHandoffStore\.setPayload/,
   'Recovery detail should not auto-start or stage navigation when merely opened.',
+);
+assert.match(
+  detailModal,
+  /title="Active GPS Ping"[\s\S]*Proceed to Active Ping/,
+  'Recovery detail should frame the GPS pin as an active ping route target.',
 );
 
 assert.match(

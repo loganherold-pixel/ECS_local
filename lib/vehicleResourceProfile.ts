@@ -85,6 +85,9 @@ export function getVehicleResourceProfile(
       : 0);
   const currentWaterGallons =
     normalizeNonNegativeNumber(consumables?.water_gal_current ?? vehicle?.current_water_gal ?? null) ?? 0;
+  const waterCapacityGal = normalizeNumber(
+    vehicle?.water_capacity_gal ?? mirrored?.water_capacity_gal ?? null,
+  ) ?? normalizeNumber(currentWaterGallons);
   const tireSizeInches = normalizeNumber(
     tiresLift?.tireSizeInches ?? spec?.tire_size_inches ?? vehicle?.tire_size_inches ?? null,
   );
@@ -106,9 +109,7 @@ export function getVehicleResourceProfile(
     currentFuelPercent,
     currentFuelGallons,
     currentFuelWeightLb: currentFuelGallons * FUEL_DENSITY_LB_PER_GAL[fuelType],
-    waterCapacityGal: normalizeNumber(
-      vehicle?.water_capacity_gal ?? mirrored?.water_capacity_gal ?? null,
-    ),
+    waterCapacityGal,
     currentWaterGallons,
     currentWaterWeightLb: currentWaterGallons * WATER_DENSITY_LB_PER_GAL,
     batteryUsableWh: normalizeNumber(

@@ -33,11 +33,15 @@ const square = (south, west, north, east) => [
 ];
 
 const usefulArea = square(39.0, -105.0, 39.05, -104.95);
+const largerFieldArea = square(39.0, -105.0, 39.15, -104.85);
 const tinyArea = square(39.0, -105.0, 39.0001, -104.9999);
 const hugeArea = square(38.0, -106.0, 40.0, -104.0);
 
+assert.equal(CAMP_SCOUT_MAX_AREA_SQUARE_MILES, 150);
 assert.equal(validateCampScoutArea(usefulArea).status, 'valid');
 assert.equal(validateCampScoutArea(usefulArea).ok, true);
+assert.equal(validateCampScoutArea(largerFieldArea).status, 'valid');
+assert.ok(computeCampScoutPolygonAreaSquareMiles(largerFieldArea) > 50);
 assert.ok(computeCampScoutPolygonAreaSquareMiles(usefulArea) > 0.01);
 assert.equal(canScanCampScoutArea('areaReady', usefulArea), true);
 assert.equal(canScanCampScoutArea('drawing', usefulArea), false);

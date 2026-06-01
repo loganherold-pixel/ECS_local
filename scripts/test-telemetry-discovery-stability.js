@@ -48,6 +48,15 @@ assert(adapter.includes('ecsLog.dev'), 'High-frequency telemetry scan logs must 
 assert(adapter.includes('ecsLog.warnOnce'), 'Repeated scan warnings must be deduped');
 assert(adapter.includes('HIGH_FREQUENCY_SCAN_WARNINGS'), 'High-frequency scan warnings must be downgraded to debug diagnostics');
 
+const bridge = read('src/vehicle-telemetry/VehicleTelemetryAdapterBridge.ts');
+assert(bridge.includes("import { ecsLog } from '../../lib/ecsLogger';"), 'Telemetry adapter bridge must use the ECS logger');
+assert(bridge.includes("ecsLog.debug('TELEMETRY'"), 'Telemetry adapter bridge debug output must route through ecsLog.debug');
+assert(bridge.includes("ecsLog.warn('TELEMETRY'"), 'Telemetry adapter bridge warnings must route through ecsLog.warn');
+assert(!bridge.includes('console.log('), 'Telemetry adapter bridge must not emit direct console.log output');
+assert(!bridge.includes('console.warn('), 'Telemetry adapter bridge must not emit direct console.warn output');
+assert(!bridge.includes('console.error('), 'Telemetry adapter bridge must not emit direct console.error output');
+assert(bridge.includes('if (!this.debug) return;'), 'Telemetry adapter bridge routine logs must remain gated by the debug option');
+
 const scannerHook = read('src/vehicle-telemetry/useOBD2Scanner.ts');
 assert(scannerHook.includes('sourceStatus: TelemetrySourceStatus'), 'OBD scanner hook must expose sourceStatus');
 assert(scannerHook.includes('mountedRef.current'), 'OBD scanner hook must guard state updates after unmount');

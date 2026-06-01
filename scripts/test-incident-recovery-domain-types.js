@@ -137,9 +137,13 @@ assert.ok(
   incidentTypesSource.includes('resolutionSummary?: string | null') &&
     incidentTypesSource.includes('outsideAssistanceUsed?: boolean | null') &&
     incidentTypesSource.includes('communityHazardReportRequested?: boolean') &&
+    incidentTypesSource.includes("communityHazardPublicationStatus?: 'not_requested' | 'requested_review'") &&
+    incidentTypesSource.includes('communityHazardPublished?: false') &&
     incidentTypesSource.includes('routeConfidenceAdjustmentRequested?: boolean') &&
+    incidentTypesSource.includes("routeConfidenceReviewStatus?: 'not_requested' | 'requested_review'") &&
+    incidentTypesSource.includes('routeConfidenceChanged?: false') &&
     incidentTypesSource.includes('intelligenceHandoff?: IncidentDebriefIntelligenceHandoff'),
-  'Incident Debrief must capture resolution, debrief review requests, and Intelligence handoff state.',
+  'Incident Debrief must capture resolution, review-only request state, and Intelligence handoff state.',
 );
 
 console.log('Incident & Recovery domain type checks passed.');

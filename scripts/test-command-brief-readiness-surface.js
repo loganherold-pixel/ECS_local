@@ -21,7 +21,6 @@ function assertNotIncludes(source, fragment, message) {
   'No active expedition brief.',
   'Planning Brief',
   'Active Expedition Brief',
-  'Expedition Readiness Summary',
   'Preference Influence',
   'Go / Caution / Hold Decision',
   'Route Intelligence',
@@ -33,28 +32,20 @@ function assertNotIncludes(source, fragment, message) {
   'Recovery + Bailout Plan',
   'Communications / Signal Confidence',
   'Share Packet',
-  'Recommended Actions',
 ].forEach((fragment) => {
   assertIncludes(commandBrief, fragment, `Command Brief should render "${fragment}".`);
 });
 
 [
   'useCurrentExpeditionReadiness',
-  'useReadinessBriefPayload',
   'useReadinessDecision',
   'useCanStartExpedition',
-  'useReadinessConcerns',
   'useExpeditionReadinessState',
 ].forEach((fragment) => {
   assertIncludes(commandBrief, fragment, `Command Brief should consume readiness selector "${fragment}".`);
 });
 
 [
-  'Download offline route package',
-  'Review campsite access confidence',
-  'Confirm communications plan',
-  'Add fuel range estimate',
-  'Review bailout options',
   'Copy packet',
   'Share packet',
   'Save locally',
@@ -64,6 +55,19 @@ function assertNotIncludes(source, fragment, message) {
   assertIncludes(commandBrief, fragment, `Command Brief should expose action "${fragment}".`);
 });
 
+[
+  'CollapsibleBriefSection',
+  'accessibilityState={{ expanded }}',
+  'defaultExpanded = false',
+  'expanded ? badge : null',
+  "expanded ? 'chevron-up-outline' : 'chevron-down-outline'",
+].forEach((fragment) => {
+  assertIncludes(commandBrief, fragment, `Command Brief detail sections should use collapsed title-first disclosure: ${fragment}`);
+});
+
+assertNotIncludes(commandBrief, 'Expedition Readiness Summary', 'Command Brief should not duplicate the removed readiness summary card.');
+assertNotIncludes(commandBrief, 'Recommended Actions', 'Command Brief should not render the removed recommended actions container.');
+assertNotIncludes(commandBrief, 'Watch Items', 'Command Brief should not render the removed watch items container.');
 assertNotIncludes(commandBrief, 'MissionBriefCadLog', 'Command Brief should not render the obsolete visual activity log.');
 assertIncludes(
   commandBrief,

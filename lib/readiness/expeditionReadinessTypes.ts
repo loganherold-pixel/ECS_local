@@ -209,6 +209,9 @@ export type ExpeditionPowerBrief = {
   statusLabel: string;
   runtimeSummary: string;
   sourceSummary: string;
+  stateOfChargeSummary: string;
+  flowSummary: string;
+  solarSummary: string;
   freshnessSummary: string;
   recommendation: string;
   connectedSourceAvailable: boolean;
@@ -437,6 +440,9 @@ export type ExpeditionReadinessRecoveryInput = {
   nearestKnownRoadLabel?: string | null;
   nearestTrailheadMiles?: number | null;
   nearestFuelMiles?: number | null;
+  nearestWaterMiles?: number | null;
+  nearestSupplyMiles?: number | null;
+  nearestRepairMiles?: number | null;
   nearestTownMiles?: number | null;
   nearestSignalAreaMiles?: number | null;
   officialContactPointAvailable?: boolean | null;

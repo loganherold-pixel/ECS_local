@@ -34,6 +34,8 @@ export function CommandCenterFrame({
   subtitle,
   state,
   stateLabel,
+  showStateBadge = true,
+  bodyChrome = true,
   mode,
   availableModes,
   onModeChange,
@@ -73,7 +75,7 @@ export function CommandCenterFrame({
         <View style={[styles.topoLine, styles.topoLineB]} />
         <View style={[styles.topoLine, styles.topoLineC]} />
       </View>
-      <View pointerEvents="none" style={styles.innerStroke} />
+      {bodyChrome ? <View pointerEvents="none" style={styles.innerStroke} /> : null}
 
       <View style={styles.header} testID={testID ? `${testID}-header` : undefined}>
         <View style={styles.titleCluster}>
@@ -86,26 +88,31 @@ export function CommandCenterFrame({
             </Text>
           ) : null}
         </View>
-        <View
-          style={[
-            styles.statePill,
-            {
-              borderColor: `${accentColor}55`,
-              backgroundColor: state === 'offline' ? 'rgba(18,22,27,0.74)' : `${accentColor}18`,
-            },
-          ]}
-          testID={testID ? `${testID}-state-pill` : undefined}
-        >
-          <View style={[styles.stateDot, { backgroundColor: accentColor }]} />
-          <Text style={[styles.stateText, { color: accentColor }]} numberOfLines={1}>
-            {resolvedStateLabel}
-          </Text>
-        </View>
+        {showStateBadge ? (
+          <View
+            style={[
+              styles.statePill,
+              {
+                borderColor: `${accentColor}55`,
+                backgroundColor: state === 'offline' ? 'rgba(18,22,27,0.74)' : `${accentColor}18`,
+              },
+            ]}
+            testID={testID ? `${testID}-state-pill` : undefined}
+          >
+            <View style={[styles.stateDot, { backgroundColor: accentColor }]} />
+            <Text style={[styles.stateText, { color: accentColor }]} numberOfLines={1}>
+              {resolvedStateLabel}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       {renderedModeSelector ? <View style={styles.selectorSlot}>{renderedModeSelector}</View> : null}
 
-      <View style={styles.body} testID={testID ? `${testID}-body` : undefined}>
+      <View
+        style={[styles.body, !bodyChrome && styles.bodyUnframed]}
+        testID={testID ? `${testID}-body` : undefined}
+      >
         {children}
       </View>
 
@@ -247,6 +254,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(212, 160, 23, 0.24)',
     backgroundColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  bodyUnframed: {
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
   },
   footer: {
     minHeight: 28,

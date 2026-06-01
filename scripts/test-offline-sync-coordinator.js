@@ -34,13 +34,38 @@ assertIncludes(
 );
 assertIncludes(
   coordinator,
+  "resumeSupport: 'app-restart'",
+  'Offline sync coordinator should explicitly report app-restart resume support.',
+);
+assertIncludes(
+  coordinator,
   "appProcessBackgroundOnly: true",
   'Offline sync jobs should persist the app-process-only background distinction.',
 );
 assertIncludes(
   coordinator,
+  "const wasInterruptedActiveJob = isActiveStatus(value.status);",
+  'Interrupted active offline sync jobs should be detected during hydration.',
+);
+assertIncludes(
+  coordinator,
+  "? 'pending'",
+  'Interrupted active offline sync jobs should rehydrate as pending instead of failed.',
+);
+assertIncludes(
+  coordinator,
   'tileCacheStore.startDownloadWithQuota',
   'Offline sync coordinator should own the tile download lifecycle.',
+);
+assertIncludes(
+  coordinator,
+  'function launchJob(job: OfflineTileSyncJob): Promise<OfflineTileSyncJob>',
+  'Offline sync coordinator should share launch logic for new and resumed jobs.',
+);
+assertIncludes(
+  coordinator,
+  'resumePendingJobs(input: {',
+  'Offline sync coordinator should expose app-restart resume for pending jobs.',
 );
 assertIncludes(
   coordinator,
@@ -133,6 +158,16 @@ assertIncludes(
   rootLayout,
   "import OfflineSyncStatusChip from '../components/navigate/OfflineSyncStatusChip';",
   'Root shell should import the shared offline sync indicator.',
+);
+assertIncludes(
+  rootLayout,
+  "import { offlineTileSyncCoordinator } from '../lib/offlineTileSyncCoordinator';",
+  'Root shell should import the offline sync coordinator for startup resume.',
+);
+assertIncludes(
+  rootLayout,
+  "offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });",
+  'Root shell should resume queued route syncs on startup and foreground.',
 );
 assertIncludes(
   offlineSyncStatusChip,

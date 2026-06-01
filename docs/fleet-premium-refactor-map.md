@@ -263,6 +263,7 @@ Discovery document for the ECS Fleet premium refactor. This pass is inventory on
 
 ## Risk Notes
 
+- Evidence-ready status: implementation/static checks can pass while production remains blocked. The Fleet production gate now requires `.smoke/fleet-production-evidence.json` to include Android build/device metadata, source/confidence/offline QA state proof, artifact references, reviewer signoff, and a pending/accepted production decision.
 - Current Fleet empty state references `assets/attitude/vehicles/fleet/heavy-duty-truck-hero.png`. Premium Fleet rules disallow vehicle images/photo-heavy Fleet treatment, so this should be replaced in the refactor with icon/token-based empty state UI.
 - Current Fleet styles contain local raw hex and rgba values. Refactor work should migrate touched UI to existing ECS tokens and components instead of adding one-off colors.
 - `FleetLoadoutModal` uses `ECSModalShell`, but still has some local background and badge styling that should be token-aligned when touched.
@@ -295,3 +296,11 @@ Discovery document for the ECS Fleet premium refactor. This pass is inventory on
   - Confirm the global body background, shared top `Header`, and root-owned `CommandDock` still render once.
   - Confirm modals/sheets use `ECSModalShell` or `TacticalPopupShell` and respect safe-area, scroll, backdrop, and dock clearance.
   - Confirm no vehicle images, image upload fields, remote image URLs, image manifests, image resolvers, or carousels are introduced.
+
+## OEM Spec Reference Prefill
+
+Fleet now has an offline OEM-reference seed catalog in `lib/fleet/oemVehicleSpecs.ts`. The catalog is intended to prefill expedition-relevant vehicle baseline fields when a user enters year, make, model, trim, and vehicle type. The first pass is deliberately conservative: entries carry source/confidence metadata, warnings to verify trim/package and door-placard values, and manual profile values remain authoritative.
+
+The profile flow uses the OEM reference to suggest base net/empty weight, GVWR, payload context, fuel capacity, ground clearance, wheelbase, width/height/length where known, track width, off-road angles, and turning diameter. Unsupported model-year combinations are not silently matched. For example, a 2021+ Ford Bronco can match the modern Bronco reference, while a 2019 Ford Bronco is surfaced as outside the bundled OEM reference window.
+
+Future expansion should add verified source notes per catalog entry and grow coverage toward the common pickup, van, SUV, and crossover set. Do not treat the catalog as a scale ticket or VIN-specific payload authority; door placard and measured weights remain higher confidence.

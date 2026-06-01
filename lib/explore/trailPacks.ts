@@ -27,6 +27,7 @@ export type ECSTrailPackRouteType =
   | 'unknown';
 
 export type ECSTrailPackDifficulty = 'easy' | 'moderate' | 'technical' | 'extreme' | 'unknown';
+export type ECSTrailPackDataState = 'live' | 'local_review' | 'fixture';
 
 export type ECSTrailPackReviewStatus =
   | 'draft'
@@ -59,6 +60,7 @@ export type ECSTrailPack = {
   vehicleFit?: string[];
   confidenceScore: number;
   confidenceReasons: string[];
+  dataState?: ECSTrailPackDataState;
   lastVerifiedAt?: string;
   positiveFeedbackCount?: number;
   negativeFeedbackCount?: number;
@@ -350,6 +352,7 @@ const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [
     name: 'Sand Flats Connector Pack',
     description: 'ECS-native Trail Pack linking approved Sand Flats connector tracks with moderate vehicle access notes.',
     source: 'ecs_validated',
+    dataState: 'fixture',
     routeType: 'area_pack',
     centerCoordinate: { latitude: 38.5733, longitude: -109.5507 },
     routeGeometry: {
@@ -385,6 +388,7 @@ const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [
     name: 'Tahoe Forest Loop',
     description: 'Community-reviewed Sierra forest loop with compact Trail Pack guidance and seasonal access caveats.',
     source: 'community_reviewed',
+    dataState: 'fixture',
     routeType: 'loop',
     centerCoordinate: { latitude: 39.2585, longitude: -120.1789 },
     routeGeometry: {
@@ -421,6 +425,7 @@ const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [
     name: 'San Juan Alpine GPX Pack',
     description: 'Imported GPX Trail Pack reviewed by ECS for high-country route confidence.',
     source: 'imported_gpx',
+    dataState: 'fixture',
     routeType: 'point_to_point',
     centerCoordinate: { latitude: 37.9216, longitude: -107.6818 },
     routeGeometry: {
@@ -456,6 +461,7 @@ const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [
     name: 'North Georgia Ridge Scout',
     description: 'ECS-submitted out-and-back route awaiting updated geometry before guidance.',
     source: 'ecs_submitted',
+    dataState: 'fixture',
     routeType: 'out_and_back',
     centerCoordinate: { latitude: 34.7746, longitude: -83.7891 },
     distanceMiles: 12,
@@ -480,6 +486,7 @@ const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [
     id: 'partner-catalog-placeholder',
     name: 'Partner Catalog Placeholder',
     source: 'partner_source',
+    dataState: 'fixture',
     routeType: 'unknown',
     centerCoordinate: { latitude: 38.5733, longitude: -109.5507 },
     confidenceScore: 0,

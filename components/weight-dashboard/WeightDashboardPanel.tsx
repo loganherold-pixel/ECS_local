@@ -17,15 +17,12 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import {
   View,
   Text,
-  ScrollView,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  RefreshControl,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
-import { NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS } from '../../lib/nonObstructiveRefreshControl';
 import { getBuilderState } from '../../lib/expeditionCache';
 import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
 import { type WeightDashboardData } from '../../lib/weightDashboardStore';
@@ -56,15 +53,17 @@ interface Props {
   } | null;
   /** Compact mode for embedding in other screens */
   compact?: boolean;
+  /** Hide the drawn vehicle profile when the panel is embedded in a height-constrained Fleet sheet. */
+  hideVehicleProfile?: boolean;
 }
 
 export default function WeightDashboardPanel({
   loadoutId: propLoadoutId,
   vehicleId: propVehicleId,
   compact,
+  hideVehicleProfile = false,
 }: Props) {
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [dashData, setDashData] = useState<WeightDashboardData | null>(null);
   const [showMetric, setShowMetric] = useState(false);
   const [dataRevision, setDataRevision] = useState(0);
@@ -91,7 +90,6 @@ export default function WeightDashboardPanel({
         if (mountedRef.current) {
           setDashData(null);
           setLoading(false);
-          setRefreshing(false);
         }
         return;
       }
@@ -105,7 +103,6 @@ export default function WeightDashboardPanel({
 
     if (mountedRef.current) {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [
     effectiveVehicleId,
@@ -160,11 +157,6 @@ export default function WeightDashboardPanel({
     };
   }, [effectiveLoadoutId, effectiveVehicleId]);
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    loadData();
-  };
-
   // Loading state
   if (loading) {
     return (
@@ -205,20 +197,15 @@ export default function WeightDashboardPanel({
         ? '#EF5350'
         : TACTICAL.amber;
   const activeLoadZoneCount = dashData.zoneSummary.zones.filter((zone) => zone.totalWeightLbs > 0).length;
+  const primaryAdvisory = meta?.partialDataReasons[0]
+    ? enrichWeightAdvisory(meta.partialDataReasons[0])
+    : null;
 
   return (
-    <ScrollView
+    <View
       style={[styles.container, compact && styles.containerCompact]}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          {...NON_OBSTRUCTIVE_REFRESH_CONTROL_PROPS}
-          refreshing={refreshing}
-          onRefresh={handleRefresh}
-        />
-      }
     >
+      <View style={styles.fixedContent}>
       {/* Dashboard Header */}
       <View style={styles.dashHeader}>
         <View style={styles.dashHeaderLeft}>
@@ -370,11 +357,11 @@ export default function WeightDashboardPanel({
         </View>
       ) : null}
 
-      {meta?.partialDataReasons.length ? (
+      {primaryAdvisory ? (
         <View style={styles.statusBanner}>
           <Ionicons name="information-circle-outline" size={16} color={TACTICAL.amber} />
-          <Text style={styles.statusBannerText} numberOfLines={3}>
-            {meta.partialDataReasons[0]}
+          <Text style={styles.statusBannerText} numberOfLines={4}>
+            {primaryAdvisory}
           </Text>
         </View>
       ) : null}
@@ -387,6 +374,7 @@ export default function WeightDashboardPanel({
           rearAxlePercent={dashData.rearAxlePercent}
           totalWeight={dashData.totalVehicleWeight}
           vehicleType={dashData.vehicleType}
+          showVehicleProfile={!hideVehicleProfile}
         />
       </View>
 
@@ -396,8 +384,16 @@ export default function WeightDashboardPanel({
           {`ECS WEIGHT TRACKING | REAL VEHICLE + BUILD + LOADOUT | MODULES: ${dashData.cgResult.modules.length} |${dashData.stability.isAdvanced ? ' ADVANCED MODEL' : ' BASELINE MODEL'}`}
         </Text>
       </View>
-    </ScrollView>
+      </View>
+    </View>
   );
+}
+
+function enrichWeightAdvisory(reason: string): string {
+  if (/high[-\s]?mounted|top[-\s]?heavy|center of gravity/i.test(reason)) {
+    return `${reason} ECS recommends moving heavier gear lower and closer to the vehicle centerline where possible. Keep roof or high-bed items light, secure tall loads, and recheck payload and axle balance after shifting weight.`;
+  }
+  return reason;
 }
 
 const styles = StyleSheet.create({
@@ -406,10 +402,14 @@ const styles = StyleSheet.create({
     backgroundColor: TACTICAL.bg,
   },
   containerCompact: {
-    flex: 0,
+    flex: 1,
   },
-  scrollContent: {
-    paddingBottom: 100,
+  fixedContent: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 8,
   },
 
   // Loading
@@ -451,9 +451,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 4,
+    paddingTop: 2,
+    paddingBottom: 0,
   },
   dashHeaderLeft: {
     flexDirection: 'row',
@@ -489,14 +489,12 @@ const styles = StyleSheet.create({
 
   // Hero card
   heroCard: {
-    marginHorizontal: 16,
-    marginBottom: 12,
     backgroundColor: TACTICAL.panel,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: TACTICAL.border,
-    padding: 16,
-    gap: 12,
+    padding: 12,
+    gap: 9,
   },
   heroRow: {
     alignItems: 'center',
@@ -575,15 +573,13 @@ const styles = StyleSheet.create({
   supportGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 12,
+    gap: 8,
   },
   supportCard: {
     flexGrow: 1,
     flexBasis: '46%',
     minWidth: 132,
-    padding: 12,
+    padding: 9,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: TACTICAL.border,
@@ -612,8 +608,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
@@ -633,15 +627,15 @@ const styles = StyleSheet.create({
 
   // Sections
   section: {
-    paddingHorizontal: 16,
-    marginBottom: 12,
+    paddingHorizontal: 0,
+    flexShrink: 1,
   },
 
   // Footer
   footer: {
     alignItems: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 16,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
   },
   footerText: {
     fontSize: 8,

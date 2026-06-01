@@ -7,6 +7,7 @@ import {
   type PersistedRoadNavigationSession,
 } from './roadNavigationStore';
 import {
+  buildRoadRouteFromCachedGeometry,
   createRoadSearchSessionToken,
   fetchRoadRoute,
   resolveRoadDestination,
@@ -18,9 +19,17 @@ import {
   type RoadNavSourceType,
   type RoadNavStatus,
 } from './mapboxRoadNavigation';
+import {
+  cacheRouteGeometry,
+  getCachedRouteGeometry,
+  getRouteGeometryCacheKey,
+  logRouteGeometryLifecycle,
+  routeGeometryLineStringToLatLng,
+  validateRouteGeometry,
+} from './routeGeometryLifecycle';
 
 const SEARCH_DEBOUNCE_MS = 320;
-const ARRIVAL_DISTANCE_M = 40;
+const ARRIVAL_DISTANCE_M = 200;
 const APPROACH_DISTANCE_M = 180;
 const LOW_CONFIDENCE_DISTANCE_M = 26;
 const TEMP_DEVIATION_DISTANCE_M = 58;
@@ -256,6 +265,115 @@ function sameGeometry(
   return true;
 }
 
+function getRoadRouteGeometryCacheKey(
+  route: RoadNavRoute,
+  fallbackKey?: string | null,
+): string | null {
+  return getRouteGeometryCacheKey(route, fallbackKey ?? (route.id ? `road:${route.id}` : null));
+}
+
+function ensureRoadRouteGeometry(
+  route: RoadNavRoute | null,
+  context: {
+    phase: string;
+    status?: string | null;
+    source?: string | null;
+    fallbackCacheKey?: string | null;
+  },
+): RoadNavRoute | null {
+  if (!route) {
+    logRouteGeometryLifecycle('no_route_selected', {
+      phase: context.phase,
+      source: context.source,
+      status: context.status,
+      message: 'Road navigation route was not available.',
+    });
+    return null;
+  }
+
+  const cacheKey = getRoadRouteGeometryCacheKey(route, context.fallbackCacheKey);
+  const validation = validateRouteGeometry(route);
+  if (!validation.valid || !validation.lineString) {
+    logRouteGeometryLifecycle(validation.reason, {
+      routeId: route.id,
+      cacheKey,
+      phase: context.phase,
+      source: context.source,
+      status: context.status,
+      message: 'Road navigation route did not include valid drawable geometry.',
+    });
+    return null;
+  }
+
+  cacheRouteGeometry(cacheKey, validation.lineString);
+  logRouteGeometryLifecycle('geometry_successfully_loaded', {
+    routeId: route.id,
+    cacheKey,
+    phase: context.phase,
+    source: context.source,
+    status: context.status,
+    pointCount: validation.pointCount,
+    fingerprint: validation.fingerprint,
+  });
+
+  const normalizedGeometry = routeGeometryLineStringToLatLng(validation.lineString);
+  if (sameGeometry(route.geometry, normalizedGeometry)) return route;
+  return {
+    ...route,
+    geometry: normalizedGeometry,
+  };
+}
+
+function buildCachedRoadRouteFromRestoredSession(
+  restored: PersistedRoadNavigationSession,
+  currentLocation: RoadNavigationLocation | null,
+): RoadNavRoute | null {
+  const routeId = restored.routeId ?? `restored-road-route-${restored.sessionId}`;
+  const cacheKey =
+    restored.routeGeometryCacheKey ??
+    (restored.routeId ? `road:${restored.routeId}` : `road-session:${restored.sessionId}`);
+  const persistedValidation = validateRouteGeometry(restored.routeGeometry);
+  const cachedLineString =
+    persistedValidation.valid && persistedValidation.lineString
+      ? persistedValidation.lineString
+      : getCachedRouteGeometry(cacheKey);
+
+  if (!cachedLineString) {
+    logRouteGeometryLifecycle(
+      persistedValidation.reason === 'no_route_selected'
+        ? 'geometry_cache_miss'
+        : persistedValidation.reason,
+      {
+        routeId,
+        cacheKey,
+        phase: 'restore',
+        source: 'road',
+        status: restored.status,
+        message: 'Restored road route did not include cached geometry.',
+      },
+    );
+    return null;
+  }
+
+  const restoredGeometry = routeGeometryLineStringToLatLng(cachedLineString);
+  const route = buildRoadRouteFromCachedGeometry({
+    id: routeId,
+    origin: currentLocation ?? restoredGeometry[0] ?? restored.destination.coordinate,
+    destination: restored.destination,
+    geometry: restoredGeometry,
+    distanceM: restored.routeDistanceM,
+    durationS: restored.routeDurationS,
+    createdAt: restored.routeCreatedAt ?? restored.updatedAt,
+  });
+
+  return ensureRoadRouteGeometry(route, {
+    phase: 'restore',
+    source: 'road',
+    status: restored.status,
+    fallbackCacheKey: cacheKey,
+  });
+}
+
 function buildCumulativeDistances(points: RoadNavCoordinate[]): number[] {
   const cumulative: number[] = [0];
   for (let i = 1; i < points.length; i += 1) {
@@ -396,6 +514,27 @@ function computeSessionFromRoute(
   | 'updatedAt'
 > {
   const nowIso = new Date().toISOString();
+  if (!Array.isArray(route.geometry) || route.geometry.length < 2) {
+    logRouteGeometryLifecycle('geometry_malformed', {
+      routeId: route.id,
+      phase: 'progress',
+      source: 'road',
+      status: previous.status,
+      message: 'Progress update skipped because road route geometry is unavailable.',
+    });
+    return {
+      currentStepIndex: previous.currentStepIndex,
+      nextInstruction: previous.nextInstruction,
+      nextInstructionDistanceM: null,
+      remainingDistanceM: route.distanceM,
+      remainingDurationS: route.durationS,
+      etaIso: route.durationS > 0 ? new Date(Date.now() + route.durationS * 1000).toISOString() : null,
+      offRouteDistanceM: null,
+      distanceToDestinationM: null,
+      progressGeometry: [],
+      updatedAt: nowIso,
+    };
+  }
 
   if (!location) {
     return {
@@ -560,6 +699,42 @@ export function useRoadNavigation(params: {
         'arrived',
       ].includes(nextSession.status)
     ) {
+      const routeRequiresGeometry = nextSession.status !== 'destination_selected';
+      const routeCacheKey = nextSession.route
+        ? getRoadRouteGeometryCacheKey(nextSession.route)
+        : null;
+      const routeValidation = nextSession.route
+        ? validateRouteGeometry(nextSession.route)
+        : null;
+      const routeGeometry =
+        routeValidation?.valid && routeValidation.lineString
+          ? routeGeometryLineStringToLatLng(routeValidation.lineString)
+          : undefined;
+
+      if (routeRequiresGeometry) {
+        if (routeValidation?.valid && routeValidation.lineString) {
+          cacheRouteGeometry(routeCacheKey, routeValidation.lineString);
+          logRouteGeometryLifecycle('geometry_successfully_loaded', {
+            routeId: nextSession.route?.id ?? null,
+            cacheKey: routeCacheKey,
+            phase: 'persist',
+            source: 'road',
+            status: nextSession.status,
+            pointCount: routeValidation.pointCount,
+            fingerprint: routeValidation.fingerprint,
+          });
+        } else {
+          logRouteGeometryLifecycle(routeValidation?.reason ?? 'route_selected_geometry_missing', {
+            routeId: nextSession.route?.id ?? null,
+            cacheKey: routeCacheKey,
+            phase: 'persist',
+            source: 'road',
+            status: nextSession.status,
+            message: 'Road route state requires geometry before it can be persisted.',
+          });
+        }
+      }
+
       await saveRoadNavigationSession({
         sessionId: nextSession.sessionId ?? randomSessionId(),
         destination: nextSession.destination,
@@ -571,6 +746,13 @@ export function useRoadNavigation(params: {
           | 'arrived',
         createdFrom: nextSession.createdFrom,
         updatedAt: new Date().toISOString(),
+        routeId: nextSession.route?.id ?? null,
+        routeGeometry,
+        routeDistanceM: nextSession.route?.distanceM ?? null,
+        routeDurationS: nextSession.route?.durationS ?? null,
+        routeCreatedAt: nextSession.route?.createdAt ?? null,
+        routeGeometryCacheKey: routeCacheKey,
+        routeGeometryFingerprint: routeValidation?.fingerprint ?? null,
       });
       return;
     }
@@ -586,14 +768,32 @@ export function useRoadNavigation(params: {
       createdFrom: RoadNavSourceType,
       rerouteCount?: number,
     ) => {
+      const validRoute = ensureRoadRouteGeometry(route, {
+        phase: 'apply',
+        source: 'road',
+        status: nextStatus,
+      });
+      if (!validRoute) {
+        setSession((prev) => ({
+          ...prev,
+          status: 'error',
+          route: null,
+          error: 'Route geometry unavailable',
+          routeStatusLabel: 'Route unavailable',
+          routeConfidenceState: 'on_route',
+          isOffRoute: false,
+        }));
+        return;
+      }
+
       setSession((prev) => {
-        const computed = computeSessionFromRoute(route, currentLocation, prev);
+        const computed = computeSessionFromRoute(validRoute, currentLocation, prev);
         const nextSession: RoadNavigationSessionState = {
           ...prev,
           sessionId: prev.sessionId ?? randomSessionId(),
           status: nextStatus,
           destination,
-          route,
+          route: validRoute,
           rerouteCount: rerouteCount ?? prev.rerouteCount,
           error: null,
           createdFrom,
@@ -685,7 +885,16 @@ export function useRoadNavigation(params: {
           return;
         }
 
-        applyRoute(route, requestedStatus, destination, createdFrom, rerouteCount);
+        const validRoute = ensureRoadRouteGeometry(route, {
+          phase: 'fetch',
+          source: 'road',
+          status: requestedStatus,
+        });
+        if (!validRoute) {
+          throw new Error('Route geometry unavailable');
+        }
+
+        applyRoute(validRoute, requestedStatus, destination, createdFrom, rerouteCount);
       } finally {
         if (inFlightRouteKeyRef.current === routeKey) {
           inFlightRouteKeyRef.current = null;
@@ -711,26 +920,51 @@ export function useRoadNavigation(params: {
       }
 
       restoreAttemptedRef.current = true;
-      setSession((prev) => ({
-        ...prev,
-        sessionId: restored.sessionId,
-        destination: restored.destination,
-        status: restored.status,
-        createdFrom: 'restored_session',
-        routeStatusLabel:
-          restored.status === 'navigation_active'
-            ? 'Restoring guidance'
-            : restored.status === 'route_preview'
+      const restoredRoute = buildCachedRoadRouteFromRestoredSession(restored, currentLocation);
+      setSession((prev) => {
+        const restoredStatus = restoredRoute ? restored.status : 'destination_selected';
+        const computed = restoredRoute
+          ? computeSessionFromRoute(restoredRoute, currentLocation, prev)
+          : {
+              currentStepIndex: 0,
+              nextInstruction: null,
+              nextInstructionDistanceM: null,
+              remainingDistanceM: null,
+              remainingDurationS: null,
+              etaIso: null,
+              offRouteDistanceM: null,
+              distanceToDestinationM: null,
+              progressGeometry: [],
+              updatedAt: restored.updatedAt,
+            };
+
+        return {
+          ...prev,
+          sessionId: restored.sessionId,
+          destination: restored.destination,
+          route: restoredRoute,
+          status: restoredStatus,
+          error: restoredRoute || currentLocation ? null : 'GPS required',
+          createdFrom: 'restored_session',
+          routeStatusLabel: restoredRoute
+            ? restored.status === 'navigation_active'
+              ? 'Restoring guidance'
+              : restored.status === 'route_preview'
+                ? 'Restoring route'
+                : null
+            : currentLocation
               ? 'Restoring route'
-              : null,
-      }));
+              : 'GPS required',
+          ...computed,
+        };
+      });
       clearSearchUi();
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [clearSearchUi, enabled]);
+  }, [clearSearchUi, currentLocation, enabled]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -851,7 +1085,7 @@ export function useRoadNavigation(params: {
           sessionId: randomSessionId(),
           destination,
           route: null,
-          status: currentLocation ? 'route_preview' : 'destination_selected',
+          status: 'destination_selected',
           error: currentLocation ? null : 'GPS required',
           currentStepIndex: 0,
           nextInstruction: null,
@@ -897,11 +1131,11 @@ export function useRoadNavigation(params: {
       setStepListExpanded(false);
 
       setSession((prev) => ({
-        ...prev,
-        sessionId: randomSessionId(),
-        destination,
-        route: null,
-        status: currentLocation ? 'route_preview' : 'destination_selected',
+          ...prev,
+          sessionId: randomSessionId(),
+          destination,
+          route: null,
+          status: 'destination_selected',
         error: currentLocation ? null : 'GPS required',
         currentStepIndex: 0,
         nextInstruction: null,
@@ -1181,6 +1415,21 @@ export function useRoadNavigation(params: {
 
   const startNavigation = useCallback(() => {
     if (!session.route || !session.destination) return;
+    const validRoute = ensureRoadRouteGeometry(session.route, {
+      phase: 'start',
+      source: 'road',
+      status: 'navigation_active',
+    });
+    if (!validRoute) {
+      setSession((prev) => ({
+        ...prev,
+        status: 'error',
+        route: null,
+        error: 'Route geometry unavailable',
+        routeStatusLabel: 'Route unavailable',
+      }));
+      return;
+    }
 
     lowConfidenceHitCountRef.current = 0;
     tempDeviationHitCountRef.current = 0;
@@ -1192,6 +1441,7 @@ export function useRoadNavigation(params: {
       const nextSession = {
         ...prev,
         status: 'navigation_active' as const,
+        route: validRoute,
         routeStatusLabel: 'Route active',
         routeConfidenceState: 'on_route' as const,
         completionReason: null,

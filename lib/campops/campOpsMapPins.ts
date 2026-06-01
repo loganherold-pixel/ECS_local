@@ -4,6 +4,7 @@ import type {
   CampOpsDataSource,
   CampRecommendationSet,
 } from './campOpsTypes';
+import { hasCampStructurePrivacyBufferConflict } from '../campsites/campStructurePrivacyBuffer';
 import { normalizeCampOpsScore } from './campOpsTypes';
 
 export type CampOpsMapPinRole = 'recommended' | 'backup' | 'emergency';
@@ -151,6 +152,9 @@ function pinForCamp(
     !Number.isFinite(camp.location.latitude) ||
     !Number.isFinite(camp.location.longitude)
   ) {
+    return null;
+  }
+  if (hasCampStructurePrivacyBufferConflict(camp)) {
     return null;
   }
 

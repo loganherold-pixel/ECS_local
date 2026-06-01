@@ -22,6 +22,7 @@
  */
 
 import type { NormalizedVehicleTelemetry, VehicleTelemetryProviderId } from './VehicleTelemetryTypes';
+import { ecsLog } from '../../lib/ecsLogger';
 
 export type VehicleTelemetryBridgeLifecycleEvent =
   | 'telemetry'
@@ -117,6 +118,16 @@ function pickFirstString(...values: unknown[]): string | null {
   return null;
 }
 
+function pickFirstTireValues(...values: unknown[]): [number | null, number | null, number | null, number | null] | undefined {
+  const source = values.find((value) => Array.isArray(value));
+  if (!Array.isArray(source)) return undefined;
+  const next = [0, 1, 2, 3].map((index) => {
+    const n = asNumber(source[index]);
+    return n != null && n >= 0 ? n : null;
+  }) as [number | null, number | null, number | null, number | null];
+  return next.some((entry) => entry != null) ? next : undefined;
+}
+
 function normalizeProviderId(value: string | null): VehicleTelemetryProviderId {
   switch (value) {
     case 'obd2':
@@ -201,6 +212,20 @@ function normalizeTelemetry(
       readPath(raw, 'engine.load'),
       readPath(raw, 'metrics.engineLoad')
     ) ?? undefined,
+    tire_pressures: pickFirstTireValues(
+      raw?.tire_pressures,
+      raw?.tirePressures,
+      raw?.tirePressurePsi,
+      readPath(raw, 'tpms.pressures'),
+      readPath(raw, 'metrics.tirePressures')
+    ),
+    tire_temps: pickFirstTireValues(
+      raw?.tire_temps,
+      raw?.tireTemps,
+      raw?.tireTempF,
+      readPath(raw, 'tpms.temps'),
+      readPath(raw, 'metrics.tireTemps')
+    ),
   };
 }
 
@@ -228,10 +253,23 @@ export class VehicleTelemetryAdapterBridge {
     this.tag = options.tag || DEFAULT_TAG;
   }
 
-  private log(...args: any[]): void {
+  private log(message: string, details?: Record<string, unknown>): void {
     if (!this.debug) return;
-     
-    console.log(this.tag, ...args);
+    ecsLog.debug('TELEMETRY', `${this.tag} ${message}`, details);
+  }
+
+  private warn(message: string, details?: Record<string, unknown>): void {
+    ecsLog.warn('TELEMETRY', `${this.tag} ${message}`, details);
+  }
+
+  private errorDetails(error: unknown): Record<string, unknown> {
+    if (error instanceof Error) {
+      return {
+        errorName: error.name,
+        errorMessage: error.message,
+      };
+    }
+    return { errorMessage: String(error) };
   }
 
   private setConnectionState(state: VehicleTelemetryBridgeConnectionState): void {
@@ -248,8 +286,7 @@ export class VehicleTelemetryAdapterBridge {
       try {
         listener(payload);
       } catch (error) {
-         
-        console.warn(this.tag, `Listener failure for ${String(event)}`, error);
+        this.warn(`Listener failure for ${String(event)}`, this.errorDetails(error));
       }
     }
   }
@@ -390,8 +427,7 @@ export class VehicleTelemetryAdapterBridge {
         };
       }
     } catch (error) {
-       
-      console.warn(this.tag, `Failed attaching adapter listener for ${eventName}`, error);
+      this.warn(`Failed attaching adapter listener for ${eventName}`, this.errorDetails(error));
     }
     return null;
   }

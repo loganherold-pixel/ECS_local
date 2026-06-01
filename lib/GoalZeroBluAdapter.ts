@@ -32,7 +32,8 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
-import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { getBluetoothTelemetrySourceLabel, isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { withBluPowerTelemetryEnvelope } from './bluTelemetryEnvelope';
 import {
   isGoalZeroDeviceName,
   extractGoalZeroModelFromName,
@@ -230,6 +231,7 @@ class GoalZeroBluAdapter {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualDisconnectRequested = false;
 
   // Simulated state for dev/demo
   private simulatedStates = new Map<string, SimulatedGoalZeroState>();
@@ -490,6 +492,7 @@ class GoalZeroBluAdapter {
   async connect(deviceId?: string): Promise<GoalZeroConnectResult> {
     console.log(`[GoalZeroBluAdapter] Connecting to device: ${deviceId || 'first available'}...`);
 
+    this.manualDisconnectRequested = false;
     this.connectionState = 'connecting';
     this.lastError = null;
     this.lastErrorCode = null;
@@ -604,6 +607,7 @@ class GoalZeroBluAdapter {
   async disconnect(): Promise<void> {
     console.log('[GoalZeroBluAdapter] Disconnecting...');
 
+    this.manualDisconnectRequested = true;
     this.stopPolling();
     this.cancelReconnect();
     this.removeAppStateListener();
@@ -893,6 +897,7 @@ class GoalZeroBluAdapter {
     const outputW = Math.round(state.outputWatts);
     const capacityWh = modelSpec?.capacityWh;
     const socPct = Math.round(state.batteryPercent * 10) / 10;
+    const now = Date.now();
 
     // Estimate runtime from SOC and output
     let estimatedRuntimeMin: number | undefined;
@@ -901,10 +906,14 @@ class GoalZeroBluAdapter {
       estimatedRuntimeMin = Math.round((remainingWh / outputW) * 60);
     }
 
-    return {
-      timestamp: Date.now(),
+    return withBluPowerTelemetryEnvelope({
+      timestamp: now,
       provider: 'goal_zero',
       device_id: deviceId,
+      source: 'mock_dev',
+      updatedAt: now,
+      telemetrySourceLabel: getBluetoothTelemetrySourceLabel('mock_dev'),
+      isLive: false,
 
       // Core telemetry
       battery_percent: socPct,
@@ -926,7 +935,11 @@ class GoalZeroBluAdapter {
       inverter_on: state.inverterOn,
       capacity_wh: capacityWh,
       charge_cycles: state.chargeCycles,
-    };
+      raw: {
+        simulated: true,
+        mock: true,
+      },
+    });
   }
 
   private getPrimaryDeviceId(): string | null {
@@ -965,6 +978,7 @@ class GoalZeroBluAdapter {
   }
 
   private async attemptQuietReconnect(): Promise<void> {
+    if (this.manualDisconnectRequested) return;
     if (this.isReconnecting) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.isReconnecting = false;
@@ -986,6 +1000,11 @@ class GoalZeroBluAdapter {
 
     try {
       await this.simulateDelay(2000);
+      if (this.manualDisconnectRequested) {
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
+        return;
+      }
 
       // Reconnect succeeded (simulated)
       this.isReconnecting = false;
@@ -1022,6 +1041,10 @@ class GoalZeroBluAdapter {
   }
 
   private scheduleReconnect(): void {
+    if (this.manualDisconnectRequested) {
+      this.cancelReconnect();
+      return;
+    }
     this.isReconnecting = false;
     this.notify();
 
@@ -1039,6 +1062,10 @@ class GoalZeroBluAdapter {
     const delay = RECONNECT_DELAY_MS * this.reconnectAttempts;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manualDisconnectRequested) {
+        this.cancelReconnect();
+        return;
+      }
       this.attemptQuietReconnect();
     }, delay);
   }

@@ -37,19 +37,19 @@ assert(
   'Navigate readiness must route users into the Command Brief tab.',
 );
 assert(
-  navigate.includes('briefBannerBottomOffset = commandDockHeight + 6') &&
-    navigate.includes('styles.aiAssistBannerWrap') &&
-    navigate.includes('bottom: briefBannerBottomOffset'),
-  'Navigate ECS Brief assist banner must be anchored directly above the bottom command dock.',
+  navigate.includes("import { recordBriefCadEntry } from '../../lib/briefCadLogStore';") &&
+    navigate.includes("source: 'navigate-mission-brief'") &&
+    navigate.includes('ECS command brief updates now route through the top ECS Intelligence banner.'),
+  'Navigate ECS Brief assist updates must route into the central top intelligence banner.',
 );
 assert(
-  navigate.includes('renderedAiAssistBanner') &&
-    navigate.includes('aiAssistBannerOpacity') &&
-    navigate.includes('NAV_AI_ASSIST_FADE_IN_MS') &&
-    navigate.includes('NAV_AI_ASSIST_FADE_OUT_MS') &&
-    navigate.includes('<Animated.View') &&
-    navigate.includes('dismissAiAssistBannerWithFade'),
-  'Navigate ECS Brief assist banner should fade in/out instead of abruptly mounting and unmounting.',
+  !navigate.includes('accessibilityLabel="Dismiss ECS Brief banner"') &&
+    !navigate.includes('<Text style={styles.aiAssistBannerEyebrow} numberOfLines={1}>'),
+  'Navigate must not render a separate ECS Brief live banner.',
+);
+assert(
+  !navigate.includes('<ReadinessAlertToast'),
+  'Navigate must not render ECS Brief/readiness pop-up toasts outside the dashboard surface.',
 );
 assert(
   readinessToast.includes('READINESS_TOAST_FADE_IN_MS') &&
@@ -63,7 +63,7 @@ assert(
 );
 assert(
   !navigate.includes("eyebrow: 'ECS UPDATE'"),
-  'Navigate ECS Brief assist banner should not be routed through the upper header guidance fallback.',
+  'Navigate ECS Brief assist updates should not use the legacy upper header guidance fallback.',
 );
 assert(
   navigate.includes('expeditionReadinessStore.setReadinessInputPatch') &&

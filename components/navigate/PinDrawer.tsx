@@ -39,6 +39,7 @@ interface Props {
   onResolvePin: (pin: ECSPin) => void;
   onExport: (pins: ECSPin[]) => void;
   onRefresh: () => void;
+  onClearAllPins?: () => void;
   /** Category filter state from parent (controls both drawer + map) */
   activePinTypeFilters: PinType[];
   onPinTypeFilterToggle: (type: PinType) => void;
@@ -48,6 +49,7 @@ interface Props {
 export default function PinDrawer({
   pins, allPins, userLocation, activeExpeditionId,
   onSelectPin, onEditPin, onResolvePin, onExport, onRefresh,
+  onClearAllPins,
   activePinTypeFilters, onPinTypeFilterToggle, onPinTypeFilterReset,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -106,6 +108,29 @@ export default function PinDrawer({
     setUnresolvedOnly(false);
     onPinTypeFilterReset();
   }, [onPinTypeFilterReset]);
+
+  const handleClearAllPins = useCallback(() => {
+    if (!onClearAllPins || allPins.length === 0) return;
+
+    const clear = () => {
+      onClearAllPins();
+      onRefresh();
+    };
+
+    if (Platform.OS === 'web') {
+      if (confirm('Are you sure you would like to remove all pins?')) clear();
+      return;
+    }
+
+    Alert.alert(
+      'Clear all pins?',
+      'Are you sure you would like to remove all pins?',
+      [
+        { text: 'No', style: 'cancel' },
+        { text: 'Yes', style: 'destructive', onPress: clear },
+      ],
+    );
+  }, [allPins.length, onClearAllPins, onRefresh]);
 
   const pinResultSummary = useMemo(() => {
     const summary: { label: string; selected?: boolean }[] = [
@@ -326,6 +351,21 @@ export default function PinDrawer({
               />
             ))
           )}
+
+          {allPins.length > 0 && onClearAllPins ? (
+            <View style={styles.clearAllSection}>
+              <TouchableOpacity
+                style={styles.clearAllButton}
+                onPress={handleClearAllPins}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel="Clear all dropped pins"
+              >
+                <Ionicons name="trash-outline" size={13} color="#F07D71" />
+                <Text style={styles.clearAllButtonText}>CLEAR ALL PINS</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
       )}
     </View>
@@ -523,6 +563,27 @@ const styles = StyleSheet.create({
     width: 28, height: 28, borderRadius: 6,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: TACTICAL.border,
+  },
+  clearAllSection: {
+    paddingHorizontal: 10,
+    paddingTop: 10,
+  },
+  clearAllButton: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(240,125,113,0.28)',
+    backgroundColor: 'rgba(240,125,113,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  clearAllButtonText: {
+    ...TYPO.U2,
+    color: '#F07D71',
+    fontSize: 8,
+    letterSpacing: 1.4,
   },
 });
 

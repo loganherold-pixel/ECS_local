@@ -117,20 +117,58 @@ function isCoordinate(value: unknown): value is RoadNavCoordinate {
   return Number.isFinite(Number(candidate.lat)) && Number.isFinite(Number(candidate.lng));
 }
 
+function readOptionalNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function appendElevationFields(
+  coordinate: { lat: number; lng: number },
+  source: Record<string, unknown> | unknown[],
+): RoadNavCoordinate {
+  const ele = Array.isArray(source)
+    ? readOptionalNumber(source[2])
+    : readOptionalNumber(
+        source.ele,
+        source.ele_m,
+        source.elevationM,
+        source.elevation_m,
+        source.altitudeM,
+        source.altitude_m,
+      );
+  const elevationFeet = Array.isArray(source)
+    ? null
+    : readOptionalNumber(
+        source.elevationFeet,
+        source.elevation_ft,
+        source.altitudeFeet,
+        source.altitude_ft,
+      );
+
+  return {
+    ...coordinate,
+    ...(ele != null ? { ele, ele_m: ele } : null),
+    ...(elevationFeet != null ? { elevationFeet } : null),
+  };
+}
+
 function normalizeCoordinate(value: unknown): RoadNavCoordinate | null {
   if (!value) return null;
   if (isCoordinate(value)) {
-    return {
-      lat: Number(value.lat),
-      lng: Number(value.lng),
-    };
+    return appendElevationFields(
+      { lat: Number(value.lat), lng: Number(value.lng) },
+      value as unknown as Record<string, unknown>,
+    );
   }
 
   if (Array.isArray(value) && value.length >= 2) {
     const lng = Number(value[0]);
     const lat = Number(value[1]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      return { lat, lng };
+      return appendElevationFields({ lat, lng }, value);
     }
   }
 
@@ -139,7 +177,7 @@ function normalizeCoordinate(value: unknown): RoadNavCoordinate | null {
     const lat = Number(candidate.lat ?? candidate.latitude ?? candidate.y);
     const lng = Number(candidate.lng ?? candidate.lon ?? candidate.longitude ?? candidate.x);
     if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      return { lat, lng };
+      return appendElevationFields({ lat, lng }, candidate);
     }
   }
 

@@ -163,12 +163,14 @@ interface WidgetGridProps {
   containerWidth?: number;
   gpsLatitude?: number;
   gpsLongitude?: number;
+  gpsHeadingDeg?: number | null;
   gpsSpeedMph?: number | null;
   gpsHasFix?: boolean;
   gpsAccuracyM?: number | null;
   gpsAltitudeFt?: number | null;
   gpsTimestampMs?: number | null;
   onOpenCommandBrief?: () => void;
+  onTerrainRiskReferenceEvent?: WidgetRenderOptions['onTerrainRiskReferenceEvent'];
   /** Phase 6: Active expedition mode — locks layout, hides edit controls */
   isActiveMode?: boolean;
 }
@@ -919,6 +921,7 @@ function areRenderOptionsEqual(
     prev?.viewerOverrides === next?.viewerOverrides &&
     prev?.gpsLatitude === next?.gpsLatitude &&
     prev?.gpsLongitude === next?.gpsLongitude &&
+    prev?.gpsHeadingDeg === next?.gpsHeadingDeg &&
     prev?.gpsSpeedMph === next?.gpsSpeedMph &&
     prev?.gpsHasFix === next?.gpsHasFix &&
     prev?.gpsAccuracyM === next?.gpsAccuracyM &&
@@ -1047,6 +1050,7 @@ function getCompactWidgetRenderKey(
         data?.dashboardCommandState?.compactSummary ?? '',
         renderOptions?.gpsLatitude ?? '',
         renderOptions?.gpsLongitude ?? '',
+        renderOptions?.gpsHeadingDeg ?? '',
         renderOptions?.gpsSpeedMph ?? '',
         gps?.hasFix ?? renderOptions?.gpsHasFix ?? '',
       ].join(':');
@@ -1279,7 +1283,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
 
   // ── Phase 11: Hierarchy-derived title color ──
   // Primary (Attitude) → brighter amber, Secondary → standard, Support → subdued
-  const titleColor = hierarchyStyle?.titleColor ?? (isLight ? palette.amber : TACTICAL.amber);
+  const titleColor = hierarchyStyle?.titleColor ?? (isLight ? palette.goldMedium : TACTICAL.goldMedium);
   const incomingOpacity = transitionSnapshot
     ? handoffProgress.interpolate({
         inputRange: [0, 0.18, 1],
@@ -1606,8 +1610,9 @@ export default function WidgetGrid({
   advancedModeEnabled, perWidgetAutoCollapse,
   containerHeight,
   containerWidth: containerWidthProp,
-  gpsLatitude, gpsLongitude, gpsSpeedMph, gpsHasFix, gpsAccuracyM, gpsAltitudeFt, gpsTimestampMs,
+  gpsLatitude, gpsLongitude, gpsHeadingDeg, gpsSpeedMph, gpsHasFix, gpsAccuracyM, gpsAltitudeFt, gpsTimestampMs,
   onOpenCommandBrief,
+  onTerrainRiskReferenceEvent,
 }: WidgetGridProps) {
 
   const reducedMotion = useReducedMotion();
@@ -1776,18 +1781,21 @@ export default function WidgetGrid({
     viewerOverrides,
     gpsLatitude,
     gpsLongitude,
+    gpsHeadingDeg,
     gpsSpeedMph,
     gpsHasFix,
     gpsAccuracyM,
     gpsAltitudeFt,
     gpsTimestampMs,
     onOpenCommandBrief,
+    onTerrainRiskReferenceEvent,
   }), [
     advancedModeEnabled,
     dashboardMode,
     gpsAccuracyM,
     gpsAltitudeFt,
     gpsHasFix,
+    gpsHeadingDeg,
     gpsLatitude,
     gpsLongitude,
     gpsSpeedMph,
@@ -1796,6 +1804,7 @@ export default function WidgetGrid({
     isCompact,
     onCalibrate,
     onOpenCommandBrief,
+    onTerrainRiskReferenceEvent,
     onResetCalibration,
     pitchDeg,
     rollDeg,
@@ -2353,6 +2362,7 @@ export default function WidgetGrid({
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        removeClippedSubviews={false}
         scrollEnabled={dragIndex === null}
       >
         {gridContent}

@@ -38,11 +38,11 @@
 
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, AppState } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import TacticalPopupShell from '../TacticalPopupShell';
+import ECSShellTexture from '../ECSShellTexture';
 import WeatherIntelPanel from '../weather/WeatherIntelPanel';
 
 import { TACTICAL, ECS } from '../../lib/theme';
@@ -69,6 +69,7 @@ import {
 } from '../../lib/activeVehicleContext';
 import { consumablesStore, type ConsumableInputSource, type ConsumablesState } from '../../lib/consumablesStore';
 import { routeStore } from '../../lib/routeStore';
+import { getMapboxToken } from '../../lib/mapConfig';
 import { expeditionRiskStore } from '../../lib/expeditionRiskStore';
 import { useApp } from '../../context/AppContext';
 import { missionExpeditionStore } from '../../lib/missionStore';
@@ -151,7 +152,7 @@ import {
   useUnifiedPowerDevices,
 } from './PowerSystemWidget';
 import PowerModuleRiveWidget from './PowerModuleRiveWidget';
-import RouteGuidanceProgressRive from './RouteGuidanceProgressRive';
+import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';
 import { PowerSystemDetailView } from './PowerSystemDetail';
 import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
 
@@ -165,6 +166,13 @@ import {
 } from './WidgetDetailChrome';
 // Phase 2C: Vehicle Telemetry
 import { useVehicleTelemetry } from '../../src/vehicle-telemetry/useVehicleTelemetry';
+import { useECSUtilitySensorTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
+import {
+  formatUtilitySensorModeLabel,
+  getUtilitySensorCurrentFromCapacity,
+  selectUtilitySensorResourceStates,
+  type ECSUtilitySensorResourceState,
+} from '../../src/telemetry/utilitySensorTelemetrySelectors';
 
 import { remotenessStore, type ConnectivityState } from '../../lib/remotenessStore';
 import { TERRAIN_COMPLEXITY_SCORES } from '../../lib/elevationComplexity';
@@ -174,10 +182,30 @@ import { TERRAIN_COMPLEXITY_SCORES } from '../../lib/elevationComplexity';
 import { RemotenessIndexCompact, RemotenessIndexCard, RemotenessIndexDetailView } from './RemotenessIndexWidget';
 import { RouteConfidenceCompact, RouteConfidenceWidget } from './RouteConfidenceWidget';
 import NavigateSurfaceWidget, { Mini3DFollowMap, NavigateSurfaceDetailView } from './NavigateSurfaceWidget';
+import VehicleProfileRollAttitudeStrip from './VehicleProfileRollAttitudeStrip';
 
 // Phase 10: Terrain Risk Prediction Widget
 // Phase 10: Terrain Risk Prediction Widget
 import { TerrainRiskCompact, TerrainRiskCard, TerrainRiskDetailView } from './TerrainRiskWidget';
+import TerrainRiskSideProfile, { getTerrainCommandRiskColor } from './TerrainRiskSideProfile';
+import {
+  buildTerrainRiskCommandRoute,
+  formatDistance,
+  formatTerrainRiskLabel,
+  type TerrainRiskRoute,
+  type TerrainRiskRouteContext,
+} from '../../lib/terrainRiskCommandProfile';
+import {
+  buildTerrainRiskReferenceEvents,
+  selectUpcomingTerrainRiskBannerEvent,
+  type TerrainRiskReferenceEvent,
+} from '../../lib/terrainRiskReferenceEvents';
+import {
+  routeNeedsTerrainElevationSampling,
+  sampleRouteElevationFromMapboxTerrainContours,
+  terrainElevationRouteSignature,
+  type TerrainElevationSampledRoutePoint,
+} from '../../lib/terrainElevationSampling';
 
 // Phase 5: Expedition Risk Engine Widget
 import { ExpeditionRiskCompact, ExpeditionRiskCard, ExpeditionRiskDetailView } from './ExpeditionRiskWidget';
@@ -185,7 +213,6 @@ import { ExpeditionStatusSummaryWidget } from './ExpeditionStatusSummaryWidget';
 import ExpeditionReadinessWidget from './ExpeditionReadinessWidget';
 import AttitudeMonitorExpandedView from '../attitude/AttitudeMonitorExpandedView';
 import VehicleAttitudeStage from '../../src/features/attitude/components/VehicleAttitudeStage';
-import type { VehicleAttitudeStageProps } from '../../src/features/attitude/components/VehicleAttitudeStage';
 import { resolveAttitudeMonitorVehicleId } from '../../lib/attitudeMonitorVehicleVisual';
 import type { VehicleAttitudeKey } from '../../lib/vehicles/vehicleAttitudeAssets';
 import { useAttitudeMonitorDisplayState } from '../../lib/useAttitudeMonitorDisplayState';
@@ -209,7 +236,6 @@ import { resolveResourceWidgetPresentation } from '../../lib/resource/resourceCo
 import type { ECSAIState } from '../../lib/ai/aiOrchestrator';
 import type { ECSOrchestratorTargetView } from '../../lib/ai/orchestratorSelectors';
 import {
-  ECS_COMMAND_MODULE_ORDER,
   ECS_COMMAND_MODULE_REGISTRY,
   ecsCommandModuleStore,
   type ECSCommandModuleDefinition,
@@ -225,17 +251,23 @@ import {
 import type { CommandCenterMode } from './commandCenter/commandCenterTypes';
 
 type WeatherBackgroundType =
-  | 'clearDay'
-  | 'clearNight'
-  | 'cloudDay'
-  | 'cloudNight'
-  | 'rainDay'
-  | 'rainNight'
-  | 'snowDay'
-  | 'snowNight'
-  | 'fogDay'
-  | 'fogNight';
-type SunlightBackgroundType = 'dawn' | 'day' | 'dusk' | 'night';
+  | 'atmosphere'
+  | 'clear'
+  | 'clouds'
+  | 'drizzle'
+  | 'rain'
+  | 'snow'
+  | 'thunderstorm';
+type SunlightBackgroundType =
+  | 'afterSunset'
+  | 'approachingSunset'
+  | 'civilTwilight'
+  | 'dark'
+  | 'daylight'
+  | 'lowLight'
+  | 'solarNoon'
+  | 'sunrise'
+  | 'totalDaylight';
 type VehicleProfileImageKey =
   | 'jeep_wrangler'
   | 'jeep_gladiator'
@@ -262,25 +294,27 @@ type VehicleProfileImageKey =
 const COMMAND_CENTER_MODES: CommandCenterMode[] = COMMAND_CENTER_IMPLEMENTED_MODES;
 
 const WEATHER_BACKGROUND_IMAGES = {
-  clearDay: require('../../assets/weather/Weather_Clear_Sun.png'),
-  clearNight: require('../../assets/sunlight/Remaining_Sunlight_Night.png'),
-  cloudDay: require('../../assets/weather/Weather_Overcast_Cloud.png'),
-  cloudNight: require('../../assets/sunlight/Remaining_Sunlight_Night.png'),
-  rainDay: require('../../assets/weather/Weather_Rain.png'),
-  rainNight: require('../../assets/weather/Weather_Rain.png'),
-  snowDay: require('../../assets/weather/Weather_Snow.png'),
-  snowNight: require('../../assets/weather/Weather_Snow.png'),
-  fogDay: require('../../assets/weather/Weather_Overcast_Cloud.png'),
-  fogNight: require('../../assets/sunlight/Remaining_Sunlight_Night.png'),
+  atmosphere: require('../../assets/weather/atmosphere.png'),
+  clear: require('../../assets/weather/Clear.png'),
+  clouds: require('../../assets/weather/Scattered_clouds.png'),
+  drizzle: require('../../assets/weather/Drizzle.png'),
+  rain: require('../../assets/weather/Rain.png'),
+  snow: require('../../assets/weather/Snow.png'),
+  thunderstorm: require('../../assets/weather/Thunderstorms.png'),
 } as const;
 
 const WEATHER_BACKGROUND_FADE_MS = 540;
 
 const SUNLIGHT_BACKGROUND_IMAGES = {
-  dawn: require('../../assets/sunlight/Remaining_Sunlight_Dawn.png'),
-  day: require('../../assets/sunlight/Remaining_Sunlight_Day.png'),
-  dusk: require('../../assets/sunlight/Remaining_Sunlight_Dusk.png'),
-  night: require('../../assets/sunlight/Remaining_Sunlight_Night.png'),
+  afterSunset: require('../../assets/sunlight/After_sunset.png'),
+  approachingSunset: require('../../assets/sunlight/Approaching_sunset.png'),
+  civilTwilight: require('../../assets/sunlight/Civil_twilight.png'),
+  dark: require('../../assets/sunlight/Dark.png'),
+  daylight: require('../../assets/sunlight/Daylight.png'),
+  lowLight: require('../../assets/sunlight/Low_light.png'),
+  solarNoon: require('../../assets/sunlight/Solar_noon.png'),
+  sunrise: require('../../assets/sunlight/Sunrise.png'),
+  totalDaylight: require('../../assets/sunlight/Total_daylight.png'),
 } as const;
 
 const SUNLIGHT_BACKGROUND_FADE_MS = 540;
@@ -334,37 +368,11 @@ const VEHICLE_PROFILE_IMAGE_KEY_BY_ATTITUDE_KEY: Record<VehicleAttitudeKey, Vehi
 };
 
 const VEHICLE_PROFILE_IMAGE_FADE_MS = 540;
+const VEHICLE_PROFILE_BALANCED_SCRIM = 'rgba(2, 5, 7, 0.38)';
 
 const POWER_MANAGEMENT_BACKGROUND = require('../../assets/power/Power_Management_Background.png');
-const ROUTE_PROGRESS_MAP_BACKGROUND = require('../../assets/route/Route_Progress_Map_Background.png');
-const ROUTE_PROGRESS_PATH = 'M 88 332 C 184 270 238 364 346 292 C 454 220 500 284 598 204 C 696 124 728 212 818 142 C 872 100 904 92 932 84';
-const ROUTE_PROGRESS_SEGMENTS = [
-  {
-    start: { x: 88, y: 332 },
-    c1: { x: 184, y: 270 },
-    c2: { x: 238, y: 364 },
-    end: { x: 346, y: 292 },
-  },
-  {
-    start: { x: 346, y: 292 },
-    c1: { x: 454, y: 220 },
-    c2: { x: 500, y: 284 },
-    end: { x: 598, y: 204 },
-  },
-  {
-    start: { x: 598, y: 204 },
-    c1: { x: 696, y: 124 },
-    c2: { x: 728, y: 212 },
-    end: { x: 818, y: 142 },
-  },
-  {
-    start: { x: 818, y: 142 },
-    c1: { x: 872, y: 100 },
-    c2: { x: 904, y: 92 },
-    end: { x: 932, y: 84 },
-  },
-] as const;
-const ROUTE_PROGRESS_PATH_LENGTH = 1040;
+const ROUTE_PROGRESS_PLACEHOLDER = require('../../assets/dashboard/route-progress-placeholder.png');
+const TERRAIN_RISK_BACKGROUND = require('../../assets/dashboard/terrain-risk-background.png');
 
 function areAttitudeVehicleContextsEqual(
   left?: WidgetData['activeVehicleContext'],
@@ -411,6 +419,7 @@ function areAttitudeWidgetOptionsEqual(
     (left?.gpsHasFix ?? false) === (right?.gpsHasFix ?? false) &&
     (left?.gpsLatitude ?? null) === (right?.gpsLatitude ?? null) &&
     (left?.gpsLongitude ?? null) === (right?.gpsLongitude ?? null) &&
+    (left?.gpsHeadingDeg ?? null) === (right?.gpsHeadingDeg ?? null) &&
     (left?.gpsAccuracyM ?? null) === (right?.gpsAccuracyM ?? null) &&
     (left?.gpsAltitudeFt ?? null) === (right?.gpsAltitudeFt ?? null) &&
     (left?.gpsTimestampMs ?? null) === (right?.gpsTimestampMs ?? null)
@@ -461,6 +470,7 @@ export interface WidgetRenderOptions {
   /** GPS position data for Progress widget */
   gpsLatitude?: number;
   gpsLongitude?: number;
+  gpsHeadingDeg?: number | null;
   gpsSpeedMph?: number | null;
   gpsHasFix?: boolean;
   /** GPS accuracy in meters (for remoteness scoring) */
@@ -491,6 +501,8 @@ export interface WidgetRenderOptions {
   /** Current screen dimensions for orientation-aware dashboard widget layout */
   screenWidth?: number | null;
   screenHeight?: number | null;
+  /** Reports deterministic terrain reference events to the dashboard intelligence lane. */
+  onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }
 
 function useDashboardActiveVehicleContext(): ReturnType<typeof getActiveVehicleContext> {
@@ -712,6 +724,21 @@ function formatAlternateFluidValue(consumables: ConsumablesState): string | null
     return `${label} ${current.toFixed(1)} / ${capacity.toFixed(1)} ${unit}`;
   }
   return `${label} ${current.toFixed(1)} ${unit}`;
+}
+
+function formatAlternateFluidSensorValue(
+  consumables: ConsumablesState,
+  state: ECSUtilitySensorResourceState | null,
+): string | null {
+  if (!state || state.levelPercent == null) return null;
+  const label = consumables.alternate_fluid_label?.trim() || 'Propane';
+  const unit = consumables.alternate_fluid_unit?.trim() || '%';
+  const capacity = consumables.alternate_fluid_capacity;
+  if (unit === '%' || capacity == null || !Number.isFinite(capacity) || capacity <= 0) {
+    return `${label} ${Math.round(state.levelPercent)}%`;
+  }
+  const current = capacity * (state.levelPercent / 100);
+  return `${label} ${current.toFixed(1)} / ${capacity.toFixed(1)} ${unit}`;
 }
 
 function formatAlternateFluidLabel(consumables: ConsumablesState): string {
@@ -2261,12 +2288,36 @@ function formatCommandClockHour(hourValue: number): string {
   return `${hr12}:${adjustedMin.toString().padStart(2, '0')} ${ampm}`;
 }
 
+function getCommandLocalMinutes(date: Date | null, timeZone?: string | null): number | null {
+  if (!date || Number.isNaN(date.getTime())) return null;
+  if (!timeZone) {
+    return date.getHours() * 60 + date.getMinutes();
+  }
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(date);
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+    const minute = Number(parts.find((part) => part.type === 'minute')?.value);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return ((hour % 24) + 24) % 24 * 60 + minute;
+  } catch {
+    return date.getHours() * 60 + date.getMinutes();
+  }
+}
+
 type CommandSunlightRadiancePhase =
+  | 'after_sunset'
+  | 'civil_twilight'
+  | 'dark'
+  | 'daylight'
+  | 'low_light'
   | 'sunrise'
-  | 'midday'
-  | 'golden_hour'
-  | 'sunset'
-  | 'night'
+  | 'solar_noon'
+  | 'total_daylight'
   | 'unavailable';
 
 type CommandSunlightVisualData = {
@@ -2279,7 +2330,15 @@ type CommandSunlightVisualData = {
   uvIndex: string;
 };
 
-type CommandWeatherSceneKind = 'clear' | 'overcast' | 'rain' | 'snow' | 'unavailable';
+type CommandWeatherSceneKind =
+  | 'clear'
+  | 'fog'
+  | 'overcast'
+  | 'rain'
+  | 'sleet'
+  | 'snow'
+  | 'storm'
+  | 'unavailable';
 
 type CommandWeatherVisualData = {
   scene: CommandWeatherSceneKind;
@@ -2293,46 +2352,6 @@ type CommandWeatherVisualData = {
   live: boolean;
 };
 
-function AttitudeStageHexButtonChrome({
-  active = false,
-  muted = false,
-}: {
-  active?: boolean;
-  muted?: boolean;
-}) {
-  const borderColor = muted
-    ? 'rgba(139, 148, 158, 0.24)'
-    : active
-      ? 'rgba(245, 199, 73, 0.58)'
-      : 'rgba(212, 160, 23, 0.34)';
-  const fillColor = muted
-    ? 'rgba(2, 5, 7, 0.46)'
-    : active
-      ? 'rgba(42, 32, 11, 0.86)'
-      : 'rgba(9, 14, 17, 0.76)';
-
-  return (
-    <Svg
-      pointerEvents="none"
-      viewBox="0 0 34 30"
-      style={attitudeCommandS.stageHexButtonChrome}
-    >
-      <Path
-        d="M17 1.2 L31.2 8.6 L31.2 21.4 L17 28.8 L2.8 21.4 L2.8 8.6 Z"
-        fill={fillColor}
-        stroke={borderColor}
-        strokeWidth={1.25}
-      />
-      <Path
-        d="M17 4 L28.2 9.9 L28.2 20.1 L17 26 L5.8 20.1 L5.8 9.9 Z"
-        fill="transparent"
-        stroke="rgba(255, 220, 132, 0.12)"
-        strokeWidth={0.8}
-      />
-    </Svg>
-  );
-}
-
 type CommandVehicleVisualData = {
   imageKey: VehicleProfileImageKey;
   name: string;
@@ -2341,6 +2360,16 @@ type CommandVehicleVisualData = {
   drivetrain: string;
   fuel: string;
   battery: string;
+  hasObd2CommandTelemetry: boolean;
+  obd2OfflineCorner: string;
+  coolantTempCorner: string | null;
+  coolantTempTone: WidgetTone;
+  voltageCorner: string | null;
+  voltageTone: WidgetTone;
+  engineLoadCorner: string | null;
+  engineLoadTone: WidgetTone;
+  rangeFuelCorner: string | null;
+  rangeFuelTone: WidgetTone;
   source: string;
   ready: boolean;
 };
@@ -2350,6 +2379,10 @@ type CommandRouteVisualData = {
   isOffline: boolean;
   hasGeometry: boolean;
   progressPercent: number;
+  routeGeoJson: ReturnType<typeof buildRouteProgressFeatureFromPoints> | null;
+  currentLocation: { latitude: number; longitude: number } | null;
+  originLocation: { latitude: number; longitude: number } | null;
+  destinationLocation: { latitude: number; longitude: number } | null;
   remaining: string;
   eta: string;
   total: string;
@@ -2360,7 +2393,12 @@ type CommandRouteVisualData = {
   geometryStatus: string;
 };
 
-type RouteProgressPoint = { x: number; y: number };
+type CommandTerrainRiskVisualData = {
+  active: boolean;
+  route: TerrainRiskRoute | null;
+  completedDistanceMiles: number | null;
+  weatherSnapshot: ECSWeatherSnapshot | null;
+};
 
 type CommandPowerVisualData = {
   live: boolean;
@@ -2430,23 +2468,72 @@ type VehicleProfileMetricReadout = {
   source: 'live' | 'manual' | 'unavailable';
 };
 
-function readVehicleProfileNumber(source: unknown, fields: string[]): number | null {
-  if (!source || typeof source !== 'object') return null;
-  const record = source as Record<string, unknown>;
-  for (const field of fields) {
-    const path = field.split('.');
-    let value: unknown = record;
-    for (const segment of path) {
-      if (!value || typeof value !== 'object') {
-        value = undefined;
-        break;
-      }
-      value = (value as Record<string, unknown>)[segment];
+const VEHICLE_COMMAND_VOLTAGE_FALLBACK = '--.-V';
+const VEHICLE_COMMAND_LOAD_FALLBACK = '--% LOAD';
+const VEHICLE_COMMAND_RANGE_FUEL_FALLBACK = '-- mi (--.- gal)';
+const VEHICLE_COMMAND_OBD2_OFFLINE_LABEL = 'OBD2 offline';
+
+function readVehicleProfileValue(source: unknown, field: string): unknown {
+  if (!source || typeof source !== 'object') return undefined;
+  const path = field.split('.');
+  let value: unknown = source;
+  for (const segment of path) {
+    if (!value || typeof value !== 'object') {
+      return undefined;
     }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return value;
+}
+
+function readVehicleProfileNumber(source: unknown, fields: string[]): number | null {
+  for (const field of fields) {
+    const value = readVehicleProfileValue(source, field);
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string' && value.trim() !== '') {
       const parsed = Number(value);
       if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function readVehicleProfileText(source: unknown, fields: string[]): string | null {
+  for (const field of fields) {
+    const value = readVehicleProfileValue(source, field);
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function readVehicleProfileBoolean(source: unknown, fields: string[]): boolean | null {
+  for (const field of fields) {
+    const value = readVehicleProfileValue(source, field);
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
+    if (typeof value === 'string' && value.trim()) {
+      const normalized = value.trim().toLowerCase();
+      if (['true', 'yes', 'on', 'active', '1'].includes(normalized)) return true;
+      if (['false', 'no', 'off', 'inactive', '0'].includes(normalized)) return false;
+    }
+  }
+  return null;
+}
+
+function readVehicleProfileStringList(source: unknown, fields: string[]): string[] | null {
+  for (const field of fields) {
+    const value = readVehicleProfileValue(source, field);
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => String(entry ?? '').trim())
+        .filter(Boolean);
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value
+        .split(/[,\s]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
     }
   }
   return null;
@@ -2460,6 +2547,10 @@ function isValidFuelPercent(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
+function isValidVehicleCommandTemperature(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > -80 && value < 500;
+}
+
 function formatVehicleFuelGallons(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? `${rounded.toFixed(0)} gal` : `${rounded.toFixed(1)} gal`;
@@ -2471,6 +2562,353 @@ function formatVehicleFuelPercent(value: number): string {
 
 function formatVehicleVoltage(value: number): string {
   return `${value.toFixed(1)} V`;
+}
+
+function formatVehicleCommandVoltage(value: number | null | undefined): string {
+  return isValidVehicleVoltage(value) ? `${value.toFixed(1)}V` : VEHICLE_COMMAND_VOLTAGE_FALLBACK;
+}
+
+function formatVehicleCommandEngineLoad(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${Math.round(Math.max(0, Math.min(100, value)))}% LOAD`
+    : VEHICLE_COMMAND_LOAD_FALLBACK;
+}
+
+function formatVehicleCommandCoolantTemperature(value: number | null | undefined): string {
+  return isValidVehicleCommandTemperature(value) ? `${Math.round(value)}F` : 'Unavailable';
+}
+
+function formatVehicleCommandRangeFuel(rangeMiles: number | null, fuelGallons: number | null): string {
+  if (rangeMiles == null && fuelGallons == null) return VEHICLE_COMMAND_RANGE_FUEL_FALLBACK;
+  const rangeLabel = rangeMiles != null && Number.isFinite(rangeMiles)
+    ? `${Math.max(0, Math.round(rangeMiles))} mi`
+    : '-- mi';
+  const fuelLabel = fuelGallons != null && Number.isFinite(fuelGallons)
+    ? `${Math.max(0, fuelGallons).toFixed(1)} gal`
+    : '--.- gal';
+  return `${rangeLabel} (${fuelLabel})`;
+}
+
+function formatVehicleCommandRpm(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)} rpm` : '-- rpm';
+}
+
+function formatVehicleCommandSpeed(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)} mph` : '-- mph';
+}
+
+function formatVehicleCommandPercent(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}%` : '--%';
+}
+
+function formatVehicleCommandTemperature(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}F` : 'Unavailable';
+}
+
+function formatVehicleCommandNullable(value: string | number | null | undefined): string {
+  if (value == null || value === '') return 'Unavailable';
+  return String(value);
+}
+
+function formatVehicleCommandTimestamp(value: string | number | Date | null | undefined): string {
+  if (value == null || value === '') return 'Unavailable';
+  const timestamp = value instanceof Date
+    ? value.getTime()
+    : typeof value === 'number'
+      ? value
+      : Date.parse(value);
+  if (!Number.isFinite(timestamp)) return 'Unavailable';
+  const ageMs = Date.now() - timestamp;
+  if (ageMs >= 0 && ageMs < 5_000) return 'just now';
+  if (ageMs >= 0 && ageMs < 60_000) return `${Math.floor(ageMs / 1000)}s ago`;
+  if (ageMs >= 0 && ageMs < 60 * 60_000) return `${Math.floor(ageMs / 60_000)}m ago`;
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function getVehicleCommandVoltageTone(value: number | null | undefined, live: boolean): WidgetTone {
+  if (!isValidVehicleVoltage(value)) return 'unavailable';
+  if (value < 11.8) return 'critical';
+  if (value < 12.2) return 'attention';
+  return live ? 'live' : 'good';
+}
+
+function getVehicleCommandEngineLoadTone(value: number | null | undefined, live: boolean): WidgetTone {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'unavailable';
+  if (value >= 90) return 'critical';
+  if (value >= 75) return 'attention';
+  return live ? 'live' : 'neutral';
+}
+
+function getVehicleCommandCoolantTempTone(value: number | null | undefined, live: boolean): WidgetTone {
+  if (!isValidVehicleCommandTemperature(value)) return 'unavailable';
+  if (value >= 250) return 'critical';
+  if (value >= 220) return 'attention';
+  return live ? 'live' : 'neutral';
+}
+
+function getVehicleCommandFuelTone(value: number | null | undefined, live: boolean): WidgetTone {
+  if (!isValidFuelPercent(value)) return 'unavailable';
+  if (value <= 10) return 'critical';
+  if (value <= 20) return 'attention';
+  return live ? 'live' : 'neutral';
+}
+
+function resolveVehicleCommandFuelPercent(
+  context: ReturnType<typeof getActiveVehicleContext>,
+  snapshot: ReturnType<typeof useVehicleTelemetry>['snapshot'],
+): number | null {
+  const snapshotFuel = snapshot.sourceType !== 'simulated'
+    ? snapshot.fuelLevelPct ?? snapshot.fuelPercent ?? null
+    : null;
+  if (isValidFuelPercent(snapshotFuel)) return snapshotFuel;
+  if (isValidFuelPercent(context.resourceProfile.currentFuelPercent)) {
+    return context.resourceProfile.currentFuelPercent;
+  }
+  return null;
+}
+
+function resolveVehicleCommandFuelGallons(
+  context: ReturnType<typeof getActiveVehicleContext>,
+  fuelPercent: number | null,
+): number | null {
+  const manualGallons = context.resourceProfile.currentFuelGallons;
+  const tankCapacityGal = context.resourceProfile.fuelTankCapacityGal;
+  if (fuelPercent != null && typeof tankCapacityGal === 'number' && Number.isFinite(tankCapacityGal) && tankCapacityGal > 0) {
+    return tankCapacityGal * (fuelPercent / 100);
+  }
+  if (typeof manualGallons === 'number' && Number.isFinite(manualGallons) && manualGallons > 0) {
+    return manualGallons;
+  }
+  return null;
+}
+
+function resolveVehicleCommandMpg(context: ReturnType<typeof getActiveVehicleContext>): number | null {
+  const mpg = readVehicleProfileNumber(
+    {
+      vehicle: context.vehicle,
+      spec: context.spec,
+      wizardConfig: context.wizardConfig,
+      capability: context.capabilitySnapshot,
+      state: context.vehicleState,
+    },
+    [
+      'vehicle.avg_mpg',
+      'vehicle.avgMpg',
+      'vehicle.average_mpg',
+      'vehicle.averageMpg',
+      'vehicle.estimated_mpg',
+      'vehicle.estimatedMpg',
+      'vehicle.mpg',
+      'spec.avg_mpg',
+      'spec.avgMpg',
+      'spec.average_mpg',
+      'spec.averageMpg',
+      'spec.estimated_mpg',
+      'spec.estimatedMpg',
+      'spec.combined_mpg',
+      'spec.combinedMpg',
+      'spec.highway_mpg',
+      'spec.highwayMpg',
+      'spec.mpg_estimate',
+      'spec.mpgEstimate',
+      'wizardConfig.avg_mpg',
+      'wizardConfig.avgMpg',
+      'wizardConfig.mpg',
+      'wizardConfig.combined_mpg',
+      'wizardConfig.combinedMpg',
+      'capability.avgMpg',
+      'state.capability.avgMpg',
+    ],
+  );
+  return mpg != null && mpg > 0 ? mpg : null;
+}
+
+function resolveVehicleCommandTelemetryMpg(
+  vehicleTelemetry: ReturnType<typeof useVehicleTelemetry>,
+): number | null {
+  const { rawTelemetry, snapshot } = vehicleTelemetry;
+  if (snapshot.sourceType === 'simulated') return null;
+
+  const telemetryMpg = readVehicleProfileNumber(
+    { raw: rawTelemetry, snapshot },
+    [
+      'raw.avg_mpg',
+      'raw.avgMpg',
+      'raw.average_mpg',
+      'raw.averageMpg',
+      'raw.fuel_mpg',
+      'raw.fuelMpg',
+      'raw.fuel_economy_mpg',
+      'raw.fuelEconomyMpg',
+      'raw.average_fuel_consumption_mpg',
+      'raw.averageFuelConsumptionMpg',
+      'raw.instant_mpg',
+      'raw.instantMpg',
+      'snapshot.avg_mpg',
+      'snapshot.avgMpg',
+      'snapshot.average_mpg',
+      'snapshot.averageMpg',
+      'snapshot.fuelMpg',
+    ],
+  );
+  if (telemetryMpg != null && telemetryMpg > 0 && telemetryMpg < 200) return telemetryMpg;
+
+  const fuelRateGph = readVehicleProfileNumber(
+    { raw: rawTelemetry, snapshot },
+    [
+      'raw.fuel_rate',
+      'raw.fuelRate',
+      'raw.fuel_rate_gph',
+      'raw.fuelRateGph',
+      'raw.average_fuel_rate_gph',
+      'raw.averageFuelRateGph',
+      'snapshot.fuel_rate',
+      'snapshot.fuelRate',
+      'snapshot.fuelRateGph',
+    ],
+  );
+  const speedMph = snapshot.speedMph;
+  if (
+    typeof speedMph === 'number' &&
+    Number.isFinite(speedMph) &&
+    speedMph > 1 &&
+    fuelRateGph != null &&
+    fuelRateGph > 0
+  ) {
+    const mpgFromFuelRate = speedMph / fuelRateGph;
+    return mpgFromFuelRate > 0 && mpgFromFuelRate < 200 ? mpgFromFuelRate : null;
+  }
+
+  return null;
+}
+
+function resolveVehicleCommandRangeMiles(
+  context: ReturnType<typeof getActiveVehicleContext>,
+  vehicleTelemetry: ReturnType<typeof useVehicleTelemetry>,
+  fuelGallons: number | null,
+): number | null {
+  const snapshot = vehicleTelemetry.snapshot;
+  if (typeof snapshot.rangeMiles === 'number' && Number.isFinite(snapshot.rangeMiles) && snapshot.rangeMiles >= 0) {
+    return snapshot.rangeMiles;
+  }
+  const telemetryMpg = resolveVehicleCommandTelemetryMpg(vehicleTelemetry);
+  if (fuelGallons != null && telemetryMpg != null) {
+    return fuelGallons * telemetryMpg;
+  }
+  const explicitRange = readVehicleProfileNumber(
+    {
+      vehicle: context.vehicle,
+      spec: context.spec,
+      wizardConfig: context.wizardConfig,
+      capability: context.capabilitySnapshot,
+      state: context.vehicleState,
+    },
+    [
+      'vehicle.rangeMiles',
+      'vehicle.estimated_range_miles',
+      'vehicle.estimatedRangeMiles',
+      'vehicle.fuel_range_miles',
+      'vehicle.fuelRangeMiles',
+      'spec.fuel_range_miles',
+      'spec.estimated_range_miles',
+      'wizardConfig.rangeMiles',
+      'wizardConfig.estimatedRangeMiles',
+      'wizardConfig.fuel_range_miles',
+      'capability.fuelRangeMiles',
+      'state.capability.fuelRangeMiles',
+    ],
+  );
+  if (explicitRange != null && explicitRange >= 0) return explicitRange;
+  const mpg = resolveVehicleCommandMpg(context);
+  if (fuelGallons != null && mpg != null) {
+    return fuelGallons * mpg;
+  }
+  return null;
+}
+
+function resolveVehicleCommandStatus(
+  context: ReturnType<typeof getActiveVehicleContext>,
+  vehicleTelemetry: ReturnType<typeof useVehicleTelemetry>,
+): { label: string; tone: WidgetTone } {
+  const snapshot = vehicleTelemetry.snapshot;
+  const hasObdSource = snapshot.sourceType === 'obd_live' || snapshot.source === 'bluetooth_obd_live';
+  if (snapshot.isLive && hasObdSource) return { label: 'LIVE', tone: 'live' };
+  if (vehicleTelemetry.isReconnecting || vehicleTelemetry.connectionDisplayState === 'connecting') {
+    return { label: 'OBD2', tone: 'attention' };
+  }
+  if (hasObdSource || vehicleTelemetry.isConnected || vehicleTelemetry.isPolling) {
+    return { label: 'OBD2', tone: snapshot.freshness === 'stale' ? 'stale' : 'neutral' };
+  }
+  if (context.hasVehicleContext) return { label: 'READY', tone: 'neutral' };
+  return { label: 'READY', tone: 'unavailable' };
+}
+
+function resolveVehicleCommandQuickGlance(
+  context: ReturnType<typeof getActiveVehicleContext>,
+  vehicleTelemetry: ReturnType<typeof useVehicleTelemetry>,
+) {
+  const snapshot = vehicleTelemetry.snapshot;
+  const isLiveObd = snapshot.isLive && snapshot.sourceType === 'obd_live';
+  const fuelPercent = resolveVehicleCommandFuelPercent(context, snapshot);
+  const fuelGallons = resolveVehicleCommandFuelGallons(context, fuelPercent);
+  const rangeMiles = resolveVehicleCommandRangeMiles(context, vehicleTelemetry, fuelGallons);
+  const status = resolveVehicleCommandStatus(context, vehicleTelemetry);
+  const canPresentObdMetrics = isLiveObd && snapshot.sourceType !== 'simulated';
+  const liveBatteryVoltage = canPresentObdMetrics ? snapshot.batteryVoltage : null;
+  const liveEngineLoad = canPresentObdMetrics ? snapshot.engineLoadPct ?? snapshot.engineLoadPercent ?? null : null;
+  const liveCoolantTemp = canPresentObdMetrics ? snapshot.coolantTempF : null;
+  const liveFuelPercent = canPresentObdMetrics
+    ? snapshot.fuelLevelPct ?? snapshot.fuelPercent ?? null
+    : null;
+  const liveFuelPercentForRange = isValidFuelPercent(liveFuelPercent) ? liveFuelPercent : null;
+  const liveFuelGallons = liveFuelPercentForRange != null
+    ? resolveVehicleCommandFuelGallons(context, liveFuelPercentForRange)
+    : null;
+  const liveRangeMiles = canPresentObdMetrics
+    ? (
+      typeof snapshot.rangeMiles === 'number' && Number.isFinite(snapshot.rangeMiles) && snapshot.rangeMiles >= 0
+        ? snapshot.rangeMiles
+        : liveFuelGallons != null
+          ? (() => {
+              const telemetryMpg = resolveVehicleCommandTelemetryMpg(vehicleTelemetry);
+              return telemetryMpg != null ? liveFuelGallons * telemetryMpg : null;
+            })()
+          : null
+    )
+    : null;
+  const hasObd2CommandTelemetry =
+    isValidVehicleVoltage(liveBatteryVoltage) ||
+    (typeof liveEngineLoad === 'number' && Number.isFinite(liveEngineLoad)) ||
+    isValidVehicleCommandTemperature(liveCoolantTemp) ||
+    (liveRangeMiles != null && Number.isFinite(liveRangeMiles)) ||
+    (liveFuelGallons != null && Number.isFinite(liveFuelGallons));
+
+  return {
+    statusChip: status.label,
+    statusTone: status.tone,
+    hasObd2CommandTelemetry,
+    obd2OfflineCorner: VEHICLE_COMMAND_OBD2_OFFLINE_LABEL,
+    coolantTempCorner: hasObd2CommandTelemetry && isValidVehicleCommandTemperature(liveCoolantTemp)
+      ? formatVehicleCommandCoolantTemperature(liveCoolantTemp)
+      : null,
+    coolantTempTone: getVehicleCommandCoolantTempTone(liveCoolantTemp, isLiveObd),
+    voltageCorner: hasObd2CommandTelemetry && isValidVehicleVoltage(liveBatteryVoltage)
+      ? formatVehicleCommandVoltage(liveBatteryVoltage)
+      : null,
+    voltageTone: getVehicleCommandVoltageTone(liveBatteryVoltage, isLiveObd),
+    engineLoadCorner: hasObd2CommandTelemetry && typeof liveEngineLoad === 'number' && Number.isFinite(liveEngineLoad)
+      ? formatVehicleCommandEngineLoad(liveEngineLoad)
+      : null,
+    engineLoadTone: getVehicleCommandEngineLoadTone(liveEngineLoad, isLiveObd),
+    rangeFuelCorner: hasObd2CommandTelemetry && (liveRangeMiles != null || liveFuelGallons != null)
+      ? formatVehicleCommandRangeFuel(liveRangeMiles, liveFuelGallons)
+      : null,
+    rangeFuelTone: getVehicleCommandFuelTone(liveFuelPercentForRange ?? fuelPercent, isLiveObd),
+    fuelPercent,
+    fuelGallons,
+    rangeMiles,
+    sourceLabel: snapshot.sourceLabel || 'Vehicle telemetry',
+  };
 }
 
 function resolveVehicleProfileFuelReadout(
@@ -2677,26 +3115,32 @@ function resolveCommandSunlightRadiancePhase(params: {
   }
   if (params.nextEvent === 'sunrise') {
     return {
-      phase: params.status === 'before_sunrise' ? 'Before sunrise' : 'Night conditions',
-      radiancePhase: 'night',
+      phase: params.status === 'before_sunrise' ? 'Before sunrise' : 'After sunset',
+      radiancePhase: params.status === 'before_sunrise' ? 'dark' : 'after_sunset',
     };
   }
   if (params.remainingHours != null && params.remainingHours <= 0) {
-    return { phase: 'Night conditions', radiancePhase: 'night' };
+    return { phase: 'After sunset', radiancePhase: 'after_sunset' };
   }
   if (params.hour >= 5 && params.hour <= 8) {
     return { phase: 'Sunrise window', radiancePhase: 'sunrise' };
   }
-  if (params.remainingHours != null && params.remainingHours < 1) {
-    return { phase: 'Sunset window', radiancePhase: 'sunset' };
+  if (params.remainingHours != null && params.remainingHours < 0.5) {
+    return { phase: 'Low light', radiancePhase: 'low_light' };
   }
-  if ((params.hour >= 16 && params.hour <= 19) || (params.hour >= 6 && params.hour <= 9)) {
-    return { phase: 'Golden hour', radiancePhase: 'golden_hour' };
+  if (params.remainingHours != null && params.remainingHours < 1.5) {
+    return { phase: 'Approaching sunset', radiancePhase: 'low_light' };
   }
-  if (params.hour >= 10 && params.hour <= 15) {
-    return { phase: 'Daylight', radiancePhase: 'midday' };
+  if (params.hour >= 16 && params.hour <= 19) {
+    return { phase: 'Approaching sunset', radiancePhase: 'low_light' };
   }
-  return { phase: 'Civil twilight', radiancePhase: 'night' };
+  if (params.hour >= 11 && params.hour <= 14) {
+    return { phase: 'Solar noon', radiancePhase: 'solar_noon' };
+  }
+  if (params.hour >= 9 && params.hour <= 16) {
+    return { phase: 'Total daylight', radiancePhase: 'total_daylight' };
+  }
+  return { phase: 'Civil twilight', radiancePhase: 'civil_twilight' };
 }
 
 function formatCommandUvIndex(value: number | null): string {
@@ -2707,7 +3151,7 @@ function formatCommandUvIndex(value: number | null): string {
 }
 
 function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
-  if (!input || typeof input !== 'object') return 'day';
+  if (!input || typeof input !== 'object') return 'daylight';
   const record = input as Record<string, unknown>;
   const phaseText = [
     record.backgroundType,
@@ -2725,25 +3169,56 @@ function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
       ? record.hour
       : null;
 
+  if (phaseText.includes('civil_twilight') || phaseText.includes('civil twilight')) {
+    return 'civilTwilight';
+  }
+  if (phaseText.includes('after_sunset') || phaseText.includes('after sunset')) {
+    if (localHour != null && (localHour >= 22 || localHour < 4)) return 'dark';
+    if (localHour != null && localHour < 20) return 'civilTwilight';
+    return 'afterSunset';
+  }
+  if (phaseText.includes('low_light') || phaseText.includes('low light')) {
+    return 'lowLight';
+  }
+  if (phaseText.includes('before sunrise') || phaseText.includes('predawn')) {
+    if (localHour != null && localHour >= 5) return 'civilTwilight';
+    return 'dark';
+  }
   if (
     phaseText.includes('night') ||
-    phaseText.includes('civil twilight') ||
-    phaseText.includes('after sunset') ||
-    phaseText.includes('before sunrise')
+    phaseText.includes('dark')
   ) {
-    return 'night';
+    if (localHour != null && localHour >= 18 && localHour < 20) return 'lowLight';
+    if (localHour != null && localHour >= 20 && localHour < 21) return 'afterSunset';
+    return 'dark';
   }
   if (phaseText.includes('sunrise') || phaseText.includes('dawn') || phaseText.includes('early morning')) {
-    return 'dawn';
+    return 'sunrise';
   }
-  if (phaseText.includes('sunset') || phaseText.includes('dusk') || phaseText.includes('late day') || phaseText.includes('twilight')) {
-    return 'dusk';
+  if (phaseText.includes('approaching sunset')) {
+    return 'approachingSunset';
+  }
+  if (phaseText.includes('sunset')) {
+    return 'lowLight';
+  }
+  if (phaseText.includes('dusk') || phaseText.includes('late day') || phaseText.includes('twilight')) {
+    return phaseText.includes('civil twilight') ? 'civilTwilight' : 'lowLight';
   }
   if (phaseText.includes('golden_hour') || phaseText.includes('golden hour')) {
-    return localHour != null && localHour < 12 ? 'dawn' : 'dusk';
+    return localHour != null && localHour < 12 ? 'sunrise' : 'approachingSunset';
   }
-  if (phaseText.includes('midday') || phaseText.includes('daylight') || phaseText.includes('daytime') || phaseText.includes('high sun')) {
-    return 'day';
+  if (phaseText.includes('solar_noon') || phaseText.includes('solar noon') || phaseText.includes('high sun')) {
+    return 'solarNoon';
+  }
+  if (phaseText.includes('total_daylight') || phaseText.includes('total daylight')) {
+    return 'totalDaylight';
+  }
+  if (phaseText.includes('midday') || phaseText.includes('daylight') || phaseText.includes('daytime')) {
+    if (localHour != null) {
+      if (localHour >= 11 && localHour <= 14) return 'solarNoon';
+      if (localHour >= 9 && localHour < 17) return 'totalDaylight';
+    }
+    return 'daylight';
   }
 
   const nowMinutes = typeof record.nowMinutes === 'number' ? record.nowMinutes : null;
@@ -2757,19 +3232,32 @@ function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
     Number.isFinite(sunriseMinutes) &&
     Number.isFinite(sunsetMinutes)
   ) {
-    if (nowMinutes < sunriseMinutes - 45 || nowMinutes > sunsetMinutes + 45) return 'night';
-    if (nowMinutes <= sunriseMinutes + 90) return 'dawn';
-    if (nowMinutes >= sunsetMinutes - 90) return 'dusk';
-    return 'day';
+    if (nowMinutes < sunriseMinutes - 45 || nowMinutes > sunsetMinutes + 90) return 'dark';
+    if (nowMinutes < sunriseMinutes) return 'civilTwilight';
+    if (nowMinutes <= sunriseMinutes + 45) return 'sunrise';
+    if (nowMinutes <= sunriseMinutes + 150) return 'daylight';
+    if (nowMinutes > sunsetMinutes + 45) return 'afterSunset';
+    if (nowMinutes > sunsetMinutes) return 'civilTwilight';
+    if (nowMinutes >= sunsetMinutes - 45) return 'lowLight';
+    if (nowMinutes >= sunsetMinutes - 120) return 'approachingSunset';
+    if (localHour != null && localHour >= 11 && localHour <= 14) return 'solarNoon';
+    if (localHour != null && localHour >= 9 && localHour < 17) return 'totalDaylight';
+    return 'daylight';
   }
 
-  return 'day';
-}
+  if (localHour != null) {
+    if (localHour < 5 || localHour >= 22) return 'dark';
+    if (localHour < 7) return 'civilTwilight';
+    if (localHour < 9) return 'sunrise';
+    if (localHour < 11) return 'daylight';
+    if (localHour <= 14) return 'solarNoon';
+    if (localHour < 17) return 'totalDaylight';
+    if (localHour < 19) return 'approachingSunset';
+    if (localHour < 20) return 'lowLight';
+    return 'afterSunset';
+  }
 
-function getRouteProgressPercent(input: { progressPercent?: number | null }): number {
-  const raw = Number(input.progressPercent ?? 0);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(100, raw));
+  return 'daylight';
 }
 
 function hasRenderableRouteProgressGeometry(routeProgress: RouteProgressSnapshot | null | undefined): boolean {
@@ -2777,61 +3265,6 @@ function hasRenderableRouteProgressGeometry(routeProgress: RouteProgressSnapshot
   const geometryStatus = routeProgress.geometryStatus.toLowerCase();
   if (!geometryStatus.trim()) return false;
   return !geometryStatus.includes('unavailable') && !geometryStatus.includes('limited');
-}
-
-function getCubicBezierPoint(
-  start: RouteProgressPoint,
-  c1: RouteProgressPoint,
-  c2: RouteProgressPoint,
-  end: RouteProgressPoint,
-  t: number,
-): RouteProgressPoint {
-  const clamped = Math.max(0, Math.min(1, t));
-  const inv = 1 - clamped;
-  const inv2 = inv * inv;
-  const t2 = clamped * clamped;
-  return {
-    x: inv2 * inv * start.x + 3 * inv2 * clamped * c1.x + 3 * inv * t2 * c2.x + t2 * clamped * end.x,
-    y: inv2 * inv * start.y + 3 * inv2 * clamped * c1.y + 3 * inv * t2 * c2.y + t2 * clamped * end.y,
-  };
-}
-
-function getRouteMarkerPoint(progressPercent: number): RouteProgressPoint {
-  const targetRatio = Math.max(0, Math.min(100, progressPercent)) / 100;
-  const samples: { point: RouteProgressPoint; length: number }[] = [];
-  let totalLength = 0;
-  let previousPoint: RouteProgressPoint | null = null;
-
-  for (const segment of ROUTE_PROGRESS_SEGMENTS) {
-    for (let step = 0; step <= 20; step += 1) {
-      const point = getCubicBezierPoint(segment.start, segment.c1, segment.c2, segment.end, step / 20);
-      if (previousPoint) {
-        totalLength += Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
-      }
-      samples.push({ point, length: totalLength });
-      previousPoint = point;
-    }
-  }
-
-  if (samples.length === 0 || totalLength <= 0) {
-    return { x: 88, y: 332 };
-  }
-
-  const targetLength = totalLength * targetRatio;
-  for (let index = 1; index < samples.length; index += 1) {
-    const previous = samples[index - 1];
-    const current = samples[index];
-    if (current.length >= targetLength) {
-      const span = current.length - previous.length;
-      const localRatio = span > 0 ? (targetLength - previous.length) / span : 0;
-      return {
-        x: previous.point.x + (current.point.x - previous.point.x) * localRatio,
-        y: previous.point.y + (current.point.y - previous.point.y) * localRatio,
-      };
-    }
-  }
-
-  return samples[samples.length - 1].point;
 }
 
 function useAppForegroundState(): boolean {
@@ -2901,33 +3334,6 @@ function readWeatherConditionCode(value: unknown, depth = 0): number | null {
   return null;
 }
 
-function readWeatherIconCode(value: unknown, depth = 0): string | null {
-  if (value == null || depth > 4) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return /^\d{2}[dn]$/i.test(trimmed) ? trimmed : null;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const icon = readWeatherIconCode(item, depth + 1);
-      if (icon) return icon;
-    }
-    return null;
-  }
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    for (const key of ['iconCode', 'weather_icon', 'weatherIcon', 'icon']) {
-      const icon = readWeatherIconCode(record[key], depth + 1);
-      if (icon) return icon;
-    }
-    for (const key of ['current', 'weather', 'conditions']) {
-      const icon = readWeatherIconCode(record[key], depth + 1);
-      if (icon) return icon;
-    }
-  }
-  return null;
-}
-
 function readWeatherCloudCover(value: unknown, depth = 0): number | null {
   if (value == null || depth > 4) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -2956,64 +3362,58 @@ function readWeatherCloudCover(value: unknown, depth = 0): number | null {
   return null;
 }
 
-function isWeatherNight(value: unknown): boolean {
-  const iconCode = readWeatherIconCode(value)?.toLowerCase();
-  if (iconCode?.endsWith('n')) return true;
-  if (iconCode?.endsWith('d')) return false;
-
-  if (typeof value === 'object' && value != null) {
-    const dt = readAttitudeCommandNumber(value, ['dt', 'current.dt']) ?? Math.round(Date.now() / 1000);
-    const sunrise = readAttitudeCommandNumber(value, ['sunrise', 'current.sunrise']);
-    const sunset = readAttitudeCommandNumber(value, ['sunset', 'current.sunset']);
-    const hasSolarWindow =
-      sunrise != null &&
-      sunset != null &&
-      Number.isFinite(sunrise) &&
-      Number.isFinite(sunset);
-    if (hasSolarWindow) {
-      const normalizedDt = dt > 10_000_000_000 ? Math.round(dt / 1000) : dt;
-      const normalizedSunrise = sunrise > 10_000_000_000 ? Math.round(sunrise / 1000) : sunrise;
-      const normalizedSunset = sunset > 10_000_000_000 ? Math.round(sunset / 1000) : sunset;
-      return normalizedDt < normalizedSunrise || normalizedDt > normalizedSunset;
-    }
-  }
-
-  return false;
-}
-
 function getWeatherBackgroundType(condition: unknown): WeatherBackgroundType {
   const text = collectWeatherConditionText(condition).join(' ').toLowerCase();
   const weatherCode = readWeatherConditionCode(condition);
   const clouds = readWeatherCloudCover(condition);
-  const isNight = isWeatherNight(condition);
 
   if (weatherCode != null) {
-    if (weatherCode >= 600 && weatherCode < 700) return isNight ? 'snowNight' : 'snowDay';
-    if ((weatherCode >= 200 && weatherCode < 600) || weatherCode === 771 || weatherCode === 781) {
-      return isNight ? 'rainNight' : 'rainDay';
-    }
-    if (weatherCode >= 700 && weatherCode < 800) return isNight ? 'fogNight' : 'fogDay';
-    if (weatherCode >= 802 && weatherCode < 805) return isNight ? 'cloudNight' : 'cloudDay';
-    if (weatherCode === 801 && clouds != null && clouds >= 45) return isNight ? 'cloudNight' : 'cloudDay';
-    if (weatherCode === 800) return isNight ? 'clearNight' : 'clearDay';
+    if (weatherCode >= 200 && weatherCode < 300) return 'thunderstorm';
+    if (weatherCode >= 300 && weatherCode < 400) return 'drizzle';
+    if (weatherCode >= 500 && weatherCode < 600) return 'rain';
+    if (weatherCode >= 600 && weatherCode < 700) return 'snow';
+    if (weatherCode >= 700 && weatherCode < 800) return 'atmosphere';
+    if (weatherCode === 800) return 'clear';
+    if (weatherCode > 800 && weatherCode < 900) return 'clouds';
   }
 
-  if (/\b(snow|flurries|flurry|blizzard|sleet|ice pellets?|wintry mix|winter)\b/.test(text)) {
-    return isNight ? 'snowNight' : 'snowDay';
+  if (/\b(thunder|thunderstorm|lightning|severe storm)\b/.test(text)) {
+    return 'thunderstorm';
   }
-  if (/\b(freezing rain|rain|drizzle|showers?|thunderstorm|storm)\b/.test(text)) {
-    return isNight ? 'rainNight' : 'rainDay';
+  if (/\b(hail|graupel|ice pellets?)\b/.test(text)) {
+    return 'snow';
   }
-  if (/\b(fog|mist|haze|smoke|dust|sand|ash|squall)\b/.test(text)) {
-    return isNight ? 'fogNight' : 'fogDay';
+  if (/\b(sleet|freezing rain|wintry mix|winter mix)\b/.test(text)) {
+    return 'snow';
   }
-  if (/\b(clouds?|cloudy|overcast)\b/.test(text) || (clouds != null && clouds >= 45)) {
-    return isNight ? 'cloudNight' : 'cloudDay';
+  if (/\b(snow|flurries|flurry|blizzard|winter)\b/.test(text)) {
+    return 'snow';
+  }
+  if (/\b(drizzle|sprinkle|mist rain)\b/.test(text)) {
+    return 'drizzle';
+  }
+  if (/\b(heavy rain|downpour|torrential)\b/.test(text)) {
+    return 'rain';
+  }
+  if (/\b(rain|showers?|storm)\b/.test(text)) {
+    return 'rain';
+  }
+  if (/\b(atmosphere|fog|mist|haze|smoke|dust|sand|sandstorm|ash|squall|tornado)\b/.test(text)) {
+    return 'atmosphere';
+  }
+  if (/\b(few clouds|few cloud|mostly sunny)\b/.test(text) || (clouds != null && clouds > 0 && clouds < 28)) {
+    return 'clouds';
+  }
+  if (/\b(partly cloudy|scattered clouds?|broken clouds?)\b/.test(text) || (clouds != null && clouds >= 28 && clouds < 75)) {
+    return 'clouds';
+  }
+  if (/\b(overcast|clouds?|cloudy)\b/.test(text) || (clouds != null && clouds >= 75)) {
+    return 'clouds';
   }
   if (/\b(clear|sunny|mostly sunny|fair)\b/.test(text)) {
-    return isNight ? 'clearNight' : 'clearDay';
+    return 'clear';
   }
-  return isNight ? 'cloudNight' : 'cloudDay';
+  return clouds != null && clouds > 12 ? 'clouds' : 'clear';
 }
 
 function getCommandWeatherConditionSource(snapshot: ECSWeatherSnapshot): unknown {
@@ -3022,6 +3422,8 @@ function getCommandWeatherConditionSource(snapshot: ECSWeatherSnapshot): unknown
     description: snapshot.current.description,
     main: snapshot.current.condition,
     precipType: snapshot.current.precipType,
+    temp: snapshot.current.temp,
+    feelsLike: snapshot.current.feelsLike,
     iconCode: snapshot.current.iconCode,
     clouds: snapshot.raw?.current?.clouds,
     weatherId: snapshot.raw?.current?.weather_id,
@@ -3043,26 +3445,25 @@ function getCommandWeatherConditionSource(snapshot: ECSWeatherSnapshot): unknown
 }
 
 function resolveCommandWeatherBackgroundType(snapshot: ECSWeatherSnapshot, weatherAvailable: boolean): WeatherBackgroundType {
-  if (!weatherAvailable) return 'cloudDay';
+  if (!weatherAvailable) return 'clouds';
   return getWeatherBackgroundType(getCommandWeatherConditionSource(snapshot));
 }
 
 function resolveCommandWeatherScene(snapshot: ECSWeatherSnapshot, weatherAvailable: boolean): CommandWeatherSceneKind {
   if (!weatherAvailable) return 'unavailable';
   switch (resolveCommandWeatherBackgroundType(snapshot, weatherAvailable)) {
-    case 'clearDay':
-    case 'clearNight':
+    case 'clear':
       return 'clear';
-    case 'rainDay':
-    case 'rainNight':
+    case 'drizzle':
+    case 'rain':
       return 'rain';
-    case 'snowDay':
-    case 'snowNight':
+    case 'snow':
       return 'snow';
-    case 'fogDay':
-    case 'fogNight':
-    case 'cloudDay':
-    case 'cloudNight':
+    case 'thunderstorm':
+      return 'storm';
+    case 'atmosphere':
+      return 'fog';
+    case 'clouds':
     default:
       return 'overcast';
   }
@@ -3102,6 +3503,69 @@ function readAttitudeCommandNumber(source: unknown, paths: string[]): number | n
     }
   }
   return null;
+}
+
+function normalizeAttitudeCommandAngle(degrees: number): number {
+  return ((degrees % 360) + 360) % 360;
+}
+
+function calculateAttitudeCommandSolarPosition(
+  date: Date,
+  latitude: number | null,
+  longitude: number | null,
+): { elevation: number; azimuth: number } | null {
+  if (
+    latitude == null ||
+    longitude == null ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude)
+  ) {
+    return null;
+  }
+
+  const degToRad = Math.PI / 180;
+  const radToDeg = 180 / Math.PI;
+  const julianDay = date.getTime() / 86400000 + 2440587.5;
+  const daysSinceJ2000 = julianDay - 2451545.0;
+  const meanLongitude = normalizeAttitudeCommandAngle(280.46 + 0.9856474 * daysSinceJ2000);
+  const meanAnomaly = normalizeAttitudeCommandAngle(357.528 + 0.9856003 * daysSinceJ2000);
+  const eclipticLongitude =
+    meanLongitude +
+    1.915 * Math.sin(meanAnomaly * degToRad) +
+    0.02 * Math.sin(2 * meanAnomaly * degToRad);
+  const obliquity = 23.439 - 0.0000004 * daysSinceJ2000;
+
+  const rightAscension = normalizeAttitudeCommandAngle(
+    Math.atan2(
+      Math.cos(obliquity * degToRad) * Math.sin(eclipticLongitude * degToRad),
+      Math.cos(eclipticLongitude * degToRad),
+    ) * radToDeg,
+  );
+  const declination = Math.asin(
+    Math.sin(obliquity * degToRad) * Math.sin(eclipticLongitude * degToRad),
+  );
+
+  const greenwichSiderealHours = 18.697374558 + 24.06570982441908 * daysSinceJ2000;
+  const localSiderealDegrees = normalizeAttitudeCommandAngle(greenwichSiderealHours * 15 + longitude);
+  let hourAngleDegrees = normalizeAttitudeCommandAngle(localSiderealDegrees - rightAscension);
+  if (hourAngleDegrees > 180) hourAngleDegrees -= 360;
+
+  const latitudeRad = latitude * degToRad;
+  const hourAngleRad = hourAngleDegrees * degToRad;
+  const elevation = Math.asin(
+    Math.sin(latitudeRad) * Math.sin(declination) +
+      Math.cos(latitudeRad) * Math.cos(declination) * Math.cos(hourAngleRad),
+  );
+  const azimuth = Math.atan2(
+    Math.sin(hourAngleRad),
+    Math.cos(hourAngleRad) * Math.sin(latitudeRad) -
+      Math.tan(declination) * Math.cos(latitudeRad),
+  );
+
+  return {
+    elevation: elevation * radToDeg,
+    azimuth: normalizeAttitudeCommandAngle(azimuth * radToDeg + 180),
+  };
 }
 
 function resolveAttitudeCommandDaylight(
@@ -3167,6 +3631,21 @@ function resolveAttitudeCommandDaylight(
   ]);
   const updatedSource = snapshot.status.timestampMs ?? snapshot.status.cachedAt ?? snapshot.fetchedAt ?? null;
   const updated = updatedSource ? formatAttitudeCommandTimestamp(updatedSource) : 'Unavailable';
+  const coordinateLatitude =
+    hasGpsSolarFallback
+      ? options!.gpsLatitude!
+      : snapshot.location.lat ?? snapshot.raw?.lat ?? null;
+  const coordinateLongitude =
+    hasGpsSolarFallback
+      ? options!.gpsLongitude!
+      : snapshot.location.lng ?? snapshot.raw?.lng ?? null;
+  const calculatedSolarPosition = calculateAttitudeCommandSolarPosition(
+    new Date(),
+    coordinateLatitude,
+    coordinateLongitude,
+  );
+  const resolvedSunElevation = sunElevation ?? calculatedSolarPosition?.elevation ?? null;
+  const resolvedSunAzimuth = sunAzimuth ?? calculatedSolarPosition?.azimuth ?? null;
 
   if (!liveSunset && !hasGpsSolarFallback) {
     const unavailableReason =
@@ -3196,8 +3675,8 @@ function resolveAttitudeCommandDaylight(
       location: snapshot.locationName || 'Current position unavailable',
       latitude: 'Unavailable',
       longitude: 'Unavailable',
-      sunElevation: sunElevation != null ? `${Math.round(sunElevation)} deg` : 'Unavailable',
-      sunAzimuth: sunAzimuth != null ? `${Math.round(sunAzimuth)} deg` : 'Unavailable',
+      sunElevation: resolvedSunElevation != null ? `${Math.round(resolvedSunElevation)} deg` : 'Unavailable',
+      sunAzimuth: resolvedSunAzimuth != null ? `${Math.round(resolvedSunAzimuth)} deg` : 'Unavailable',
       phase: 'Unavailable',
       radiancePhase: 'unavailable',
       backgroundType: getSunlightBackgroundType({ radiancePhase: 'unavailable', phase: 'Unavailable' }),
@@ -3207,8 +3686,8 @@ function resolveAttitudeCommandDaylight(
   }
 
   const now = new Date();
-  const lat = hasGpsSolarFallback ? options!.gpsLatitude! : null;
-  const lon = hasGpsSolarFallback ? options!.gpsLongitude! : null;
+  const lat = coordinateLatitude;
+  const lon = coordinateLongitude;
   const environment = buildEnvironmentSnapshot({
     coordinate: hasGpsSolarFallback
       ? {
@@ -3245,6 +3724,15 @@ function resolveAttitudeCommandDaylight(
       })
     : null;
   const hour = hourFormatter ? Number(hourFormatter.format(now)) : now.getHours();
+  const nowMinutes = getCommandLocalMinutes(now, environment.timezone.id);
+  const sunriseMinutes = getCommandLocalMinutes(
+    environment.sunlight.sunriseIso ? new Date(environment.sunlight.sunriseIso) : liveSunrise,
+    environment.timezone.id,
+  );
+  const sunsetMinutes = getCommandLocalMinutes(
+    environment.sunlight.sunsetIso ? new Date(environment.sunlight.sunsetIso) : liveSunset,
+    environment.timezone.id,
+  );
   const glareRisk = (hour >= 6 && hour <= 9) || (hour >= 16 && hour <= 19);
   const glareLevel = glareRisk ? 'Glare' : 'No Glare';
   const glareTone: WidgetTone = glareRisk ? 'attention' : 'neutral';
@@ -3286,20 +3774,28 @@ function resolveAttitudeCommandDaylight(
     location: environment.region.label || snapshot.locationName || (hasGpsSolarFallback ? 'Current position' : 'Weather source'),
     latitude: lat != null ? `${lat.toFixed(4)} deg` : 'Weather source',
     longitude: lon != null ? `${lon.toFixed(4)} deg` : 'Weather source',
-    sunElevation: sunElevation != null ? `${Math.round(sunElevation)} deg` : 'Unavailable',
-    sunAzimuth: sunAzimuth != null ? `${Math.round(sunAzimuth)} deg` : 'Unavailable',
+    sunElevation: resolvedSunElevation != null ? `${Math.round(resolvedSunElevation)} deg` : 'Unavailable',
+    sunAzimuth: resolvedSunAzimuth != null ? `${Math.round(resolvedSunAzimuth)} deg` : 'Unavailable',
     phase: phase.phase,
     radiancePhase: phase.radiancePhase,
-    // When ECS is counting down to sunrise, it is currently night. Keep the
-    // visual state honest even near dawn, while preserving daytime behavior
-    // for sunset countdowns.
     backgroundType: isNightCountdown
-      ? 'night'
+      ? getSunlightBackgroundType({
+          radiancePhase: phase.radiancePhase,
+          phase: phase.phase,
+          status: environment.sunlight.status,
+          localHour: hour,
+          nowMinutes,
+          sunriseMinutes,
+          sunsetMinutes,
+        })
       : getSunlightBackgroundType({
           radiancePhase: phase.radiancePhase,
           phase: phase.phase,
           status: environment.sunlight.status,
           localHour: hour,
+          nowMinutes,
+          sunriseMinutes,
+          sunsetMinutes,
         }),
     uvIndex: formatCommandUvIndex(uvIndex),
     unavailableReason: null,
@@ -3315,6 +3811,10 @@ function AttitudeCommandPanel({
   align = 'left',
   onPress,
   accessibilityLabel,
+  expanded = false,
+  headerStatusLabel,
+  headerStatusValue,
+  headerStatusColor,
   sunlightVisual,
   weatherVisual,
   vehicleVisual,
@@ -3323,13 +3823,17 @@ function AttitudeCommandPanel({
   children,
 }: {
   eyebrow: string;
-  title: string;
+  title?: string;
   detail?: string | null;
   icon?: string;
   tone?: WidgetTone;
   align?: 'left' | 'center' | 'right';
   onPress?: () => void;
   accessibilityLabel?: string;
+  expanded?: boolean;
+  headerStatusLabel?: string | null;
+  headerStatusValue?: string | null;
+  headerStatusColor?: string;
   sunlightVisual?: CommandSunlightVisualData;
   weatherVisual?: CommandWeatherVisualData;
   vehicleVisual?: CommandVehicleVisualData;
@@ -3340,11 +3844,19 @@ function AttitudeCommandPanel({
   const isSunlightPanel = eyebrow === 'REMAINING SUNLIGHT';
   const isWeatherPanel = eyebrow === 'CURRENT WEATHER';
   const isVehiclePanel = eyebrow === 'VEHICLE PROFILE';
-  const isRoutePanel = eyebrow === 'ROUTE PROGRESS';
+  const isRoutePanel = eyebrow === 'ROUTE TERRAIN RISK';
   const isPowerPanel = eyebrow === 'POWER MONITOR';
   const color = getWidgetToneColor(tone);
+  const commandPanelTitle =
+    isSunlightPanel ? 'Sunlight' :
+    isWeatherPanel ? 'Weather' :
+    isVehiclePanel ? 'Vehicle Profile' :
+    isRoutePanel ? 'Terrain' :
+    isPowerPanel ? 'Power Monitor' :
+    eyebrow;
+  const usesTrailingHeaderIcon = isVehiclePanel || isPowerPanel;
   const statusPill =
-    isSunlightPanel || isWeatherPanel || isRoutePanel || isPowerPanel
+    isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel
       ? null
       : tone === 'live'
       ? { label: 'LIVE', tone }
@@ -3357,35 +3869,74 @@ function AttitudeCommandPanel({
             : null;
   const content = (
     <ECSInstrumentPanel
-      title={isSunlightPanel ? undefined : isVehiclePanel ? 'Vehicle Profile' : eyebrow}
-      header={isSunlightPanel ? (
-        <View style={attitudeCommandS.sunPanelHeader}>
-          {icon ? (
-            <View style={attitudeCommandS.sunPanelHeaderIcon}>
+      title={undefined}
+      header={(
+        <View
+          style={[
+            attitudeCommandS.commandPanelHeader,
+            align === 'center' && attitudeCommandS.commandPanelHeaderCenter,
+            align === 'right' && attitudeCommandS.commandPanelHeaderRight,
+            isWeatherPanel && attitudeCommandS.commandPanelHeaderInlineIcon,
+            usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTrailingIcon,
+          ]}
+        >
+          {icon && !usesTrailingHeaderIcon ? (
+            <View style={attitudeCommandS.commandPanelHeaderIcon}>
               <Ionicons name={icon as any} size={10} color={color} />
             </View>
           ) : null}
           <Text
-            style={attitudeCommandS.sunPanelHeaderTitle}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.64}
+            style={[
+              attitudeCommandS.commandPanelHeaderTitle,
+              isWeatherPanel && attitudeCommandS.commandPanelHeaderTitleInlineIcon,
+              isRoutePanel && headerStatusValue && attitudeCommandS.commandPanelHeaderTitleWithStatus,
+              usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTitleTrailingIcon,
+              align === 'center' && attitudeCommandS.panelTextCenter,
+              align === 'right' && attitudeCommandS.panelTextRight,
+              isVehiclePanel && attitudeCommandS.panelTextRight,
+            ]}
+            numberOfLines={isWeatherPanel ? 1 : 2}
+            adjustsFontSizeToFit={isWeatherPanel}
+            minimumFontScale={isWeatherPanel ? 0.72 : undefined}
           >
-            Remaining Sunlight
+            {commandPanelTitle}
           </Text>
+          {isRoutePanel && headerStatusValue ? (
+            <View style={attitudeCommandS.commandPanelHeaderStatus}>
+              {headerStatusLabel ? (
+                <Text style={attitudeCommandS.commandPanelHeaderStatusLabel} numberOfLines={1}>
+                  {headerStatusLabel}
+                </Text>
+              ) : null}
+              <Text
+                style={[
+                  attitudeCommandS.commandPanelHeaderStatusValue,
+                  { color: headerStatusColor ?? color },
+                ]}
+                numberOfLines={1}
+              >
+                {headerStatusValue}
+              </Text>
+            </View>
+          ) : null}
+          {icon && usesTrailingHeaderIcon ? (
+            <View style={[attitudeCommandS.commandPanelHeaderIcon, attitudeCommandS.commandPanelHeaderIconTrailing]}>
+              <Ionicons name={icon as any} size={10} color={color} />
+            </View>
+          ) : null}
         </View>
-      ) : undefined}
-      icon={icon && !isPowerPanel ? <Ionicons name={icon as any} size={11} color={color} /> : null}
+      )}
+      icon={null}
       statusPill={statusPill}
       titleAlign={align}
-      sizeVariant={eyebrow === 'ROUTE PROGRESS' || eyebrow === 'POWER MONITOR' ? 'wide' : 'compact'}
+      sizeVariant={isRoutePanel || eyebrow === 'POWER MONITOR' ? 'wide' : 'compact'}
       glowIntensity={tone === 'live' || tone === 'good' ? 'medium' : tone === 'critical' ? 'high' : 'low'}
       active={tone === 'live' || tone === 'good'}
       selected={tone === 'attention' || tone === 'warning' || tone === 'critical'}
       showActiveEdge={false}
       innerTexture={false}
-      style={attitudeCommandS.panelFrame}
-      contentStyle={attitudeCommandS.panelFrameContent}
+      style={[attitudeCommandS.panelFrame, expanded && attitudeCommandS.expandedPanelFrame]}
+      contentStyle={[attitudeCommandS.panelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
       background={(
         <AttitudeCommandPanelVisual
           icon={icon}
@@ -3401,11 +3952,17 @@ function AttitudeCommandPanel({
     >
       <View style={[
         attitudeCommandS.panelContent,
+        expanded && attitudeCommandS.expandedPanelContent,
         isSunlightPanel && attitudeCommandS.sunPanelContent,
+        expanded && isSunlightPanel && attitudeCommandS.sunPanelContentExpanded,
         isWeatherPanel && attitudeCommandS.weatherPanelContent,
+        expanded && isWeatherPanel && attitudeCommandS.weatherPanelContentExpanded,
         isVehiclePanel && attitudeCommandS.vehiclePanelContent,
+        expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded,
         isRoutePanel && attitudeCommandS.routePanelContent,
+        expanded && isRoutePanel && attitudeCommandS.routePanelContentExpanded,
         isPowerPanel && attitudeCommandS.powerPanelContent,
+        expanded && isPowerPanel && attitudeCommandS.powerPanelContentExpanded,
         align === 'center' && attitudeCommandS.panelContentCenter,
         align === 'right' && attitudeCommandS.panelContentRight,
       ]}>
@@ -3416,7 +3973,11 @@ function AttitudeCommandPanel({
                 {sunlightVisual?.countdownLabel ?? 'Daylight remaining'}
               </Text>
               <Text
-                style={[attitudeCommandS.sunlightTimeReadout, { color: 'rgba(247, 201, 104, 0.9)' }]}
+                style={[
+                  attitudeCommandS.sunlightTimeReadout,
+                  expanded && attitudeCommandS.sunlightTimeReadoutExpanded,
+                  { color: 'rgba(247, 201, 104, 0.9)' },
+                ]}
                 numberOfLines={2}
                 adjustsFontSizeToFit
                 minimumFontScale={0.68}
@@ -3433,10 +3994,11 @@ function AttitudeCommandPanel({
               </Text>
             </View>
           </View>
-        ) : !isVehiclePanel && !isPowerPanel ? (
+        ) : !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelTitle,
+              expanded && attitudeCommandS.panelTitleExpanded,
               { color },
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
@@ -3448,10 +4010,11 @@ function AttitudeCommandPanel({
             {title}
           </Text>
         ) : null}
-        {detail && !isSunlightPanel && !isVehiclePanel && !isPowerPanel ? (
+        {detail && !isSunlightPanel && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelDetail,
+              expanded && attitudeCommandS.panelDetailExpanded,
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
             ]}
@@ -3464,7 +4027,12 @@ function AttitudeCommandPanel({
       </View>
     </ECSInstrumentPanel>
   );
-  const panelStyle = [attitudeCommandS.panel, align === 'center' && attitudeCommandS.panelCenter, align === 'right' && attitudeCommandS.panelRight];
+  const panelStyle = [
+    attitudeCommandS.panel,
+    align === 'center' && attitudeCommandS.panelCenter,
+    align === 'right' && attitudeCommandS.panelRight,
+    expanded && attitudeCommandS.expandedPanel,
+  ];
 
   if (onPress) {
     return (
@@ -3517,6 +4085,258 @@ function AttitudeCommandUnavailableNotice({ message }: { message: string }) {
     <View style={attitudeCommandS.unavailableNotice}>
       <Ionicons name="information-circle-outline" size={16} color={TACTICAL.amber} />
       <Text style={attitudeCommandS.unavailableText}>{message}</Text>
+    </View>
+  );
+}
+
+function vehicleCommandDetailTone(
+  tone: WidgetTone,
+): 'neutral' | 'live' | 'attention' | 'warning' | 'critical' | 'muted' {
+  if (tone === 'live' || tone === 'good') return 'live';
+  if (tone === 'critical') return 'critical';
+  if (tone === 'attention' || tone === 'warning' || tone === 'degraded' || tone === 'stale') return 'attention';
+  if (tone === 'unavailable' || tone === 'offline' || tone === 'misconfigured') return 'muted';
+  return 'neutral';
+}
+
+function formatVehicleCommandVoltageState(voltage: number | null | undefined): string {
+  if (!isValidVehicleVoltage(voltage)) return 'Unavailable';
+  if (voltage >= 13.2) return 'Charging / engine running';
+  if (voltage >= 12.2) return 'Battery nominal';
+  if (voltage >= 11.8) return 'Low-voltage watch';
+  return 'Low-voltage critical';
+}
+
+function formatVehicleCommandLowVoltageWarning(voltage: number | null | undefined): string {
+  if (!isValidVehicleVoltage(voltage)) return 'Unavailable';
+  if (voltage < 11.8) return 'Critical low voltage';
+  if (voltage < 12.2) return 'Watch low voltage';
+  return 'No low-voltage warning';
+}
+
+function formatVehicleCommandVoltageTrend(input: unknown): string {
+  const trend = readVehicleProfileNumber(input, [
+    'raw.voltage_trend',
+    'raw.voltageTrend',
+    'raw.battery_voltage_trend',
+    'raw.batteryVoltageTrend',
+    'snapshot.voltageTrend',
+  ]);
+  if (trend == null) return 'Unavailable';
+  return `${trend >= 0 ? '+' : ''}${trend.toFixed(1)}V`;
+}
+
+function formatVehicleCommandDtcList(codes: string[] | null): string {
+  if (!codes) return 'Unavailable';
+  if (codes.length === 0) return 'None reported';
+  return codes.join(', ');
+}
+
+function formatVehicleCommandMilStatus(input: {
+  raw: ReturnType<typeof useVehicleTelemetry>['rawTelemetry'];
+  activeDtcCodes: string[] | null;
+}): string {
+  const milActive = readVehicleProfileBoolean({ raw: input.raw }, [
+    'raw.mil',
+    'raw.mil_active',
+    'raw.milActive',
+    'raw.check_engine',
+    'raw.checkEngine',
+    'raw.checkEngineLight',
+  ]);
+  if (milActive === true) return 'MIL / check engine active';
+  if (milActive === false) return 'MIL not reported active';
+  if (input.activeDtcCodes && input.activeDtcCodes.length > 0) return 'DTCs present; MIL status unavailable';
+  return 'Unavailable';
+}
+
+function formatVehicleCommandBooleanAvailability(value: boolean | null): string {
+  if (value == null) return 'Unavailable';
+  return value ? 'Available' : 'Not reported';
+}
+
+function VehicleCommandDetailSection({
+  title,
+  children,
+  defaultExpanded = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <View style={[attitudeCommandS.vehicleCommandSection, !expanded && attitudeCommandS.vehicleCommandSectionCollapsed]}>
+      <TouchableOpacity
+        style={attitudeCommandS.vehicleCommandSectionHeader}
+        activeOpacity={0.76}
+        onPress={() => setExpanded((value) => !value)}
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+        accessibilityState={{ expanded }}
+      >
+        <Text style={attitudeCommandS.vehicleCommandSectionHeaderText} numberOfLines={1}>
+          {title}
+        </Text>
+        <Ionicons
+          name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+          size={14}
+          color={TACTICAL.textMuted}
+        />
+      </TouchableOpacity>
+      {expanded ? (
+        <View style={attitudeCommandS.vehicleCommandSectionRows}>
+          {children}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function VehicleCommandExpandedView({
+  activeVehicleContext,
+  vehicleTelemetry,
+}: {
+  activeVehicleContext: ReturnType<typeof getActiveVehicleContext>;
+  vehicleTelemetry: ReturnType<typeof useVehicleTelemetry>;
+}) {
+  const snapshot = vehicleTelemetry.snapshot;
+  const quickGlance = resolveVehicleCommandQuickGlance(activeVehicleContext, vehicleTelemetry);
+  const telemetryContext = { raw: vehicleTelemetry.rawTelemetry, snapshot };
+  const isLiveObd = snapshot.isLive && snapshot.sourceType === 'obd_live';
+  const activeDtcCodes =
+    Array.isArray(snapshot.diagnosticCodes)
+      ? snapshot.diagnosticCodes
+      : readVehicleProfileStringList(telemetryContext, [
+          'raw.dtc_codes',
+          'raw.dtcCodes',
+          'raw.active_dtc_codes',
+          'raw.activeDtcCodes',
+          'raw.activeDTCs',
+        ]);
+  const pendingDtcCodes = readVehicleProfileStringList(telemetryContext, [
+    'raw.pending_dtc_codes',
+    'raw.pendingDtcCodes',
+    'raw.pendingDTCs',
+  ]);
+  const storedDtcCodes = readVehicleProfileStringList(telemetryContext, [
+    'raw.stored_dtc_codes',
+    'raw.storedDtcCodes',
+    'raw.storedDTCs',
+  ]);
+  const readinessSummary =
+    readVehicleProfileText(telemetryContext, [
+      'raw.readiness_monitor_summary',
+      'raw.readinessMonitorSummary',
+      'raw.im_readiness',
+      'raw.imReadiness',
+      'raw.readiness_state',
+      'raw.readinessState',
+    ]) ?? (isLiveObd ? 'Not reported by current PID set' : 'Unavailable');
+  const fuelSystemStatus =
+    readVehicleProfileText(telemetryContext, [
+      'raw.fuel_system_status',
+      'raw.fuelSystemStatus',
+      'raw.fuel_status',
+      'raw.fuelStatus',
+    ]) ?? (quickGlance.fuelPercent != null ? `Fuel PID ${Math.round(quickGlance.fuelPercent)}%` : 'Unavailable');
+  const sensorHealth =
+    snapshot.unsupportedReason ??
+    readVehicleProfileText(telemetryContext, [
+      'raw.ecu_health',
+      'raw.ecuHealth',
+      'raw.sensor_health',
+      'raw.sensorHealth',
+    ]) ??
+    (isLiveObd
+      ? 'ECU telemetry decoded'
+      : vehicleTelemetry.isConnected
+        ? 'Connected - waiting for readable OBD2 PIDs'
+        : 'Telemetry source unavailable');
+  const catalystTemp = readVehicleProfileNumber(telemetryContext, [
+    'raw.catalyst_temp',
+    'raw.catalystTemp',
+    'raw.catalyst_temp_f',
+    'raw.catalystTempF',
+  ]);
+  const freezeFrameAvailable = readVehicleProfileBoolean(telemetryContext, [
+    'raw.freeze_frame_available',
+    'raw.freezeFrameAvailable',
+    'raw.freeze_frame',
+    'raw.freezeFrame',
+  ]);
+  const imReadinessState =
+    readVehicleProfileText(telemetryContext, [
+      'raw.im_readiness_state',
+      'raw.imReadinessState',
+      'raw.im_readiness',
+      'raw.imReadiness',
+    ]) ?? readinessSummary;
+  const leadTone = vehicleCommandDetailTone(quickGlance.statusTone);
+  const liveSummary = isLiveObd
+    ? 'Live VeePeak/OBD2 telemetry is feeding the ECS vehicle command snapshot.'
+    : vehicleTelemetry.isReconnecting
+      ? 'OBD2 telemetry is reconnecting. Last known values remain guarded by source freshness.'
+      : vehicleTelemetry.isConnected
+        ? 'OBD2 source is connected; ECS is waiting for fresh decoded telemetry.'
+        : 'ECS is showing profile safe fallbacks if configured and available.';
+
+  return (
+    <View style={attitudeCommandS.detailStack}>
+      {!activeVehicleContext.hasVehicleContext && !snapshot.isLive ? (
+        <AttitudeCommandUnavailableNotice message="No active vehicle profile or live telemetry is available. Add or select a Fleet vehicle to improve this panel." />
+      ) : null}
+
+      <WidgetDetailLeadCard
+        eyebrow="VEHICLE COMMAND"
+        title="Vehicle Command"
+        summary={liveSummary}
+        tone={leadTone}
+        metaLines={[
+          vehicleTelemetry.primaryDevice?.device_name ? `Adapter ${vehicleTelemetry.primaryDevice.device_name}` : null,
+          snapshot.deviceId ? `Device ${snapshot.deviceId}` : null,
+          vehicleTelemetry.lastUpdatedText ? `Updated ${vehicleTelemetry.lastUpdatedText}` : `Updated ${formatVehicleCommandTimestamp(snapshot.updatedAt)}`,
+          `Connection ${vehicleTelemetry.connectionDisplayState}`,
+        ]}
+      />
+
+      <VehicleCommandDetailSection title="Engine Overview" defaultExpanded>
+        <AttitudeCommandDetailRow label="RPM" value={formatVehicleCommandRpm(snapshot.rpm)} tone={snapshot.rpm != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Speed" value={formatVehicleCommandSpeed(snapshot.speedMph)} tone={snapshot.speedMph != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Engine load" value={formatVehicleCommandEngineLoad(snapshot.engineLoadPct ?? snapshot.engineLoadPercent)} tone={quickGlance.engineLoadTone} />
+        <AttitudeCommandDetailRow label="Throttle position" value={formatVehicleCommandPercent(snapshot.throttlePct ?? snapshot.throttlePercent)} tone={(snapshot.throttlePct ?? snapshot.throttlePercent) != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Coolant temperature" value={formatVehicleCommandTemperature(snapshot.coolantTempF)} tone={snapshot.coolantTempF != null ? quickGlance.statusTone : 'unavailable'} />
+      </VehicleCommandDetailSection>
+
+      <VehicleCommandDetailSection title="Voltage & Electrical">
+        <AttitudeCommandDetailRow label="Control module voltage" value={formatVehicleCommandVoltage(snapshot.batteryVoltage)} tone={quickGlance.voltageTone} />
+        <AttitudeCommandDetailRow label="Charging/voltage state" value={formatVehicleCommandVoltageState(snapshot.batteryVoltage)} tone={quickGlance.voltageTone} />
+        <AttitudeCommandDetailRow label="Voltage trend" value={formatVehicleCommandVoltageTrend(telemetryContext)} tone="neutral" />
+        <AttitudeCommandDetailRow label="Low-voltage warning state" value={formatVehicleCommandLowVoltageWarning(snapshot.batteryVoltage)} tone={quickGlance.voltageTone} />
+      </VehicleCommandDetailSection>
+
+      <VehicleCommandDetailSection title="System Health">
+        <AttitudeCommandDetailRow label="MIL/check-engine status" value={formatVehicleCommandMilStatus({ raw: vehicleTelemetry.rawTelemetry, activeDtcCodes })} tone={activeDtcCodes && activeDtcCodes.length > 0 ? 'attention' : 'neutral'} />
+        <AttitudeCommandDetailRow label="Readiness monitor summary" value={readinessSummary} tone={readinessSummary === 'Unavailable' ? 'unavailable' : 'neutral'} />
+        <AttitudeCommandDetailRow label="Fuel system status" value={fuelSystemStatus} tone={fuelSystemStatus === 'Unavailable' ? 'unavailable' : quickGlance.rangeFuelTone} />
+        <AttitudeCommandDetailRow label="Sensor/ECU health summary" value={sensorHealth} tone={snapshot.unsupportedReason ? 'attention' : isLiveObd ? 'live' : 'neutral'} />
+      </VehicleCommandDetailSection>
+
+      <VehicleCommandDetailSection title="Temperatures">
+        <AttitudeCommandDetailRow label="Coolant temperature" value={formatVehicleCommandTemperature(snapshot.coolantTempF)} tone={snapshot.coolantTempF != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Intake air temperature" value={formatVehicleCommandTemperature(snapshot.intakeTempF)} tone={snapshot.intakeTempF != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Transmission temperature" value={formatVehicleCommandTemperature(snapshot.transmissionTempF)} tone={snapshot.transmissionTempF != null ? quickGlance.statusTone : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Catalyst temperature" value={formatVehicleCommandTemperature(catalystTemp)} tone={catalystTemp != null ? quickGlance.statusTone : 'unavailable'} />
+      </VehicleCommandDetailSection>
+
+      <VehicleCommandDetailSection title="Diagnostics">
+        <AttitudeCommandDetailRow label="Active DTCs" value={formatVehicleCommandDtcList(activeDtcCodes)} tone={activeDtcCodes && activeDtcCodes.length > 0 ? 'attention' : activeDtcCodes ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Pending DTCs" value={formatVehicleCommandDtcList(pendingDtcCodes)} tone={pendingDtcCodes && pendingDtcCodes.length > 0 ? 'attention' : pendingDtcCodes ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Stored DTCs" value={formatVehicleCommandDtcList(storedDtcCodes)} tone={storedDtcCodes && storedDtcCodes.length > 0 ? 'attention' : storedDtcCodes ? 'neutral' : 'unavailable'} />
+        <AttitudeCommandDetailRow label="Freeze-frame availability" value={formatVehicleCommandBooleanAvailability(freezeFrameAvailable)} tone={freezeFrameAvailable == null ? 'unavailable' : 'neutral'} />
+        <AttitudeCommandDetailRow label="I/M readiness state" value={formatVehicleCommandNullable(imReadinessState)} tone={imReadinessState === 'Unavailable' ? 'unavailable' : 'neutral'} />
+      </VehicleCommandDetailSection>
     </View>
   );
 }
@@ -3867,6 +4687,21 @@ function formatAttitudePowerMetric(value: number | null | undefined, unit: 'A' |
   return `${normalized.toFixed(precision)}${unit}`;
 }
 
+function deriveAttitudePowerAmps(watts: number | null | undefined, volts: number | null | undefined): number | null {
+  if (
+    watts == null ||
+    volts == null ||
+    !Number.isFinite(watts) ||
+    !Number.isFinite(volts) ||
+    watts <= 0 ||
+    volts <= 0
+  ) {
+    return null;
+  }
+
+  return Math.round((watts / volts) * 10) / 10;
+}
+
 function formatAttitudePowerState(state: AttitudePowerDevice['chargingState'] | null | undefined): string {
   switch (state) {
     case 'charging':
@@ -3894,6 +4729,26 @@ function readAttitudePowerNumber(device: AttitudePowerDevice | null | undefined,
     }
   }
   return null;
+}
+
+function resolveAttitudePowerVolts(
+  device: AttitudePowerDevice | null | undefined,
+  fields: string[],
+  _activeWatts: number | null | undefined,
+): number | null {
+  const reported = readAttitudePowerNumber(device, fields);
+  return reported;
+}
+
+function resolveAttitudePowerAmps(
+  device: AttitudePowerDevice | null | undefined,
+  fields: string[],
+  activeWatts: number | null | undefined,
+  volts: number | null | undefined,
+): number | null {
+  const reported = readAttitudePowerNumber(device, fields);
+  if (reported != null) return reported;
+  return deriveAttitudePowerAmps(activeWatts, volts);
 }
 
 function resolveAttitudePowerFlowState(summary: AttitudePowerSummary): AttitudePowerFlowState {
@@ -4465,27 +5320,9 @@ function EnvironmentalCommandModule({
   );
 }
 
-type AttitudeCommandWidgetConnectedProps = VehicleAttitudeStageProps & {
-  telemetryEnabled?: boolean;
-  activeVehicleName?: string;
-};
-
-function AttitudeCommandWidgetConnected({
-  telemetryEnabled,
-  activeVehicleName,
-  ...stageProps
-}: AttitudeCommandWidgetConnectedProps) {
-  void telemetryEnabled;
-  void activeVehicleName;
-
-  return <VehicleAttitudeStage {...stageProps} />;
-}
-
 const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, options }: { data: WidgetData; options?: WidgetRenderOptions }) {
   const [activePanel, setActivePanel] = useState<AttitudeCommandFocusPanel | null>(null);
-  const [moduleSelectorVisible, setModuleSelectorVisible] = useState(false);
   const [selectedCommandModule, setSelectedCommandModule] = useState<ECSCommandModuleId>(() => ecsCommandModuleStore.selectedModule);
-  const [commandLocalZeroOffset, setCommandLocalZeroOffset] = useState<{ rollDeg: number; pitchDeg: number } | null>(null);
   const [environmentalRevision, setEnvironmentalRevision] = useState(0);
   const moduleTransitionOpacity = useStableAnimatedValue(1);
   const reduceCommandModuleMotion = useReducedMotion();
@@ -4494,9 +5331,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const sensorStatus = options?.sensorStatus || 'OFFLINE';
   const sampleTimestampMs = options?.sampleTimestampMs ?? null;
   const advanced = options?.advancedMode;
-  const onCalibrate = options?.onCalibrate;
-  const onResetCalibration = options?.onResetCalibration;
-  const isCalibrated = options?.isCalibrated;
   const activeVehicleContext = useDashboardActiveVehicleContext();
   const attitudeVehicleId = resolveAttitudeMonitorVehicleId(activeVehicleContext);
   const attitudeTelemetry = useMemo(
@@ -4522,72 +5356,16 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     sourceChipLabelOverride: attitudeTelemetry.sourceChipLabel,
     sourceStatusLineOverride: attitudeTelemetry.sourceStatusLine,
   });
-  const { enabled: soundEnabled, toggle: toggleSoundEnabled } = useAttitudeMonitorSoundPreference();
-  const handleToggleSound = useCallback(() => {
-    void hapticMicro();
-    toggleSoundEnabled();
-  }, [toggleSoundEnabled]);
-  const hasExternalZeroAction = Boolean(onCalibrate);
   const commandDisplayRollDeg = displayState.displayRollDeg ?? 0;
   const commandDisplayPitchDeg = displayState.displayPitchDeg ?? 0;
   const commandSensorLive = attitudeTelemetry.isLive && displayState.liveMotion;
-  const commandStageRollDeg = commandSensorLive
-    ? (hasExternalZeroAction ? commandDisplayRollDeg : (attitudeTelemetry.rollDeg ?? 0) - (commandLocalZeroOffset?.rollDeg ?? 0))
-    : 0;
-  const commandStagePitchDeg = commandSensorLive
-    ? (hasExternalZeroAction ? commandDisplayPitchDeg : (attitudeTelemetry.pitchDeg ?? 0) - (commandLocalZeroOffset?.pitchDeg ?? 0))
-    : 0;
-  const commandStageStatusLabel = commandSensorLive ? displayState.postureLabel : attitudeTelemetry.sourceLabel;
-  const commandStageStatusColor =
-    displayState.tone === 'critical'
-      ? TACTICAL.danger
-      : displayState.tone === 'attention'
-        ? TACTICAL.amber
-        : commandSensorLive
-          ? TACTICAL.text
-          : TACTICAL.textMuted;
-  const commandStageStatusBorderColor = commandSensorLive ? `${commandStageStatusColor}45` : 'rgba(139, 148, 158, 0.2)';
-  const handleZeroCommandStage = useCallback(() => {
-    if (onCalibrate) {
-      onCalibrate();
-      return;
-    }
-
-    if (!attitudeTelemetry.isLive || attitudeTelemetry.rollDeg == null || attitudeTelemetry.pitchDeg == null) {
-      return;
-    }
-
-    setCommandLocalZeroOffset({ rollDeg: attitudeTelemetry.rollDeg, pitchDeg: attitudeTelemetry.pitchDeg });
-  }, [attitudeTelemetry.isLive, attitudeTelemetry.pitchDeg, attitudeTelemetry.rollDeg, onCalibrate]);
-  const handleResetCommandStageZero = useCallback(() => {
-    if (onResetCalibration) {
-      onResetCalibration();
-      return;
-    }
-
-    setCommandLocalZeroOffset(null);
-  }, [onResetCalibration]);
+  const commandStageRollDeg = commandSensorLive ? commandDisplayRollDeg : 0;
+  const commandStagePitchDeg = commandSensorLive ? commandDisplayPitchDeg : 0;
   const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel) => {
     void hapticMicro();
-    setActivePanel(panel);
-  }, []);
-  const closeFocusPanel = useCallback(() => {
-    setActivePanel(null);
-  }, []);
-  const openModuleSelector = useCallback(() => {
-    void hapticMicro();
-    setModuleSelectorVisible(true);
-  }, []);
-  const closeModuleSelector = useCallback(() => {
-    setModuleSelectorVisible(false);
-  }, []);
-  const handleSelectCommandModule = useCallback((moduleId: ECSCommandModuleId) => {
-    void hapticMicro();
-    ecsCommandModuleStore.setSelectedModule(moduleId);
-    setModuleSelectorVisible(false);
+    setActivePanel((current) => (current === panel ? null : panel));
   }, []);
   const handleSelectCommandCenterMode = useCallback((mode: CommandCenterMode) => {
-    void hapticMicro();
     ecsCommandModuleStore.setSelectedModule(centerModeToCommandModule(mode));
   }, []);
 
@@ -4615,14 +5393,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
       }
     };
   }, [selectedCommandModule]);
-
-  useEffect(() => {
-    syncAttitudeApproachingLimitTone({
-      severity: displayState.severity,
-      telemetryHealth: displayState.telemetryHealth,
-      soundEnabled,
-    });
-  }, [displayState.severity, displayState.telemetryHealth, soundEnabled]);
 
   useEffect(() => {
     if (reduceCommandModuleMotion) {
@@ -4682,11 +5452,19 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const routeProgress = useRouteProgressCommandSnapshot(options);
   const hasActiveRouteProgress = Boolean(routeProgress?.isActive);
   const hasRouteProgressGeometry = hasRenderableRouteProgressGeometry(routeProgress);
+  const routeProgressPoints = (routeProgress?.routePoints ?? []).map((point) => ({
+    latitude: point.lat,
+    longitude: point.lng,
+  }));
   const routeVisual: CommandRouteVisualData = {
     active: hasActiveRouteProgress,
     isOffline: hasActiveRouteProgress && !hasRouteProgressGeometry,
     hasGeometry: hasRouteProgressGeometry,
     progressPercent: routeProgress?.progressPercent ?? 0,
+    routeGeoJson: buildRouteProgressFeatureFromPoints(routeProgressPoints),
+    currentLocation: routeProgress?.currentLocation ?? null,
+    originLocation: routeProgress?.originLocation ?? routeProgressPoints[0] ?? null,
+    destinationLocation: routeProgress?.destinationLocation ?? routeProgressPoints[routeProgressPoints.length - 1] ?? null,
     remaining: routeProgress?.remainingMilesText ?? '--',
     eta: routeProgress?.etaLabel ?? '--',
     total: routeProgress?.totalMilesText ?? '--',
@@ -4697,6 +5475,191 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     geometryStatus: routeProgress?.geometryStatus ?? 'Route geometry unavailable',
   };
   const activeRouteForEnvironment = routeStore.getActive();
+  const terrainRiskHasLiveGuidance = Boolean(routeProgress?.status === 'navigating' && hasRouteProgressGeometry);
+  const terrainRiskProfileRoute =
+    activeRouteForEnvironment &&
+    routeProgress &&
+    (
+      routeProgress.source === 'imported-route' ||
+      routeProgress.activeRouteId === activeRouteForEnvironment.id ||
+      routeProgress.routeLabel === activeRouteForEnvironment.name ||
+      routeProgress.geometryStatus.toLowerCase().includes('saved active route')
+    )
+      ? activeRouteForEnvironment
+      : null;
+  const rawTerrainRiskRoutePoints = useMemo(
+    () => (routeProgress?.routePoints ?? []).map((point) => ({
+      lat: point.lat,
+      lng: point.lng,
+      ele: point.ele ?? point.ele_m ?? null,
+      ele_m: point.ele_m ?? point.ele ?? null,
+      elevationFeet: point.elevationFeet ?? null,
+    })),
+    [routeProgress?.routePoints],
+  );
+  const [sampledTerrainRiskRoutePoints, setSampledTerrainRiskRoutePoints] = useState<TerrainElevationSampledRoutePoint[] | null>(null);
+  const [sampledTerrainRiskSignature, setSampledTerrainRiskSignature] = useState<string | null>(null);
+  const [terrainRiskSamplingPendingSignature, setTerrainRiskSamplingPendingSignature] = useState<string | null>(null);
+  const [terrainRiskSamplingFallbackSignature, setTerrainRiskSamplingFallbackSignature] = useState<string | null>(null);
+  const terrainRiskSamplingSignature = useMemo(
+    () => terrainElevationRouteSignature(routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null, rawTerrainRiskRoutePoints),
+    [rawTerrainRiskRoutePoints, routeProgress?.activeRouteId, terrainRiskProfileRoute?.id],
+  );
+  const terrainRiskNeedsElevationSampling = routeNeedsTerrainElevationSampling(
+    terrainRiskHasLiveGuidance,
+    rawTerrainRiskRoutePoints,
+  );
+  useEffect(() => {
+    if (!terrainRiskNeedsElevationSampling) {
+      setSampledTerrainRiskRoutePoints(null);
+      setSampledTerrainRiskSignature(null);
+      setTerrainRiskSamplingPendingSignature(null);
+      setTerrainRiskSamplingFallbackSignature(null);
+      return;
+    }
+
+    const abortController = new AbortController();
+    const requestSignature = terrainRiskSamplingSignature;
+    setTerrainRiskSamplingPendingSignature(requestSignature);
+    setTerrainRiskSamplingFallbackSignature((current) => (
+      current === requestSignature ? null : current
+    ));
+
+    void (async () => {
+      try {
+        const token = await getMapboxToken();
+        if (!token || abortController.signal.aborted) {
+          if (!abortController.signal.aborted) {
+            setTerrainRiskSamplingPendingSignature(null);
+            setTerrainRiskSamplingFallbackSignature(requestSignature);
+          }
+          return;
+        }
+        const sampledPoints = await sampleRouteElevationFromMapboxTerrainContours({
+          routePoints: rawTerrainRiskRoutePoints,
+          accessToken: token,
+          signal: abortController.signal,
+        });
+        if (!abortController.signal.aborted) {
+          if (sampledPoints) {
+            setSampledTerrainRiskRoutePoints(sampledPoints);
+            setSampledTerrainRiskSignature(requestSignature);
+            setTerrainRiskSamplingFallbackSignature(null);
+          } else {
+            setTerrainRiskSamplingFallbackSignature(requestSignature);
+          }
+          setTerrainRiskSamplingPendingSignature(null);
+        }
+      } catch {
+        if (!abortController.signal.aborted) {
+          setTerrainRiskSamplingPendingSignature(null);
+          setTerrainRiskSamplingFallbackSignature(requestSignature);
+        }
+      }
+    })();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [rawTerrainRiskRoutePoints, terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);
+  const terrainRiskSampledElevationReady = Boolean(
+    sampledTerrainRiskRoutePoints &&
+    sampledTerrainRiskSignature === terrainRiskSamplingSignature,
+  );
+  const terrainRiskSamplingRequestInFlight =
+    terrainRiskSamplingPendingSignature === terrainRiskSamplingSignature;
+  const terrainRiskSamplingPending =
+    terrainRiskNeedsElevationSampling &&
+    !terrainRiskSampledElevationReady &&
+    (
+      terrainRiskSamplingRequestInFlight ||
+      terrainRiskSamplingFallbackSignature !== terrainRiskSamplingSignature
+    );
+  const terrainRiskRoutePoints = useMemo(
+    () => (
+      sampledTerrainRiskRoutePoints &&
+      sampledTerrainRiskSignature === terrainRiskSamplingSignature
+        ? sampledTerrainRiskRoutePoints
+        : rawTerrainRiskRoutePoints
+    ),
+    [
+      rawTerrainRiskRoutePoints,
+      sampledTerrainRiskRoutePoints,
+      sampledTerrainRiskSignature,
+      terrainRiskSamplingSignature,
+    ],
+  );
+  const terrainRiskRoutePointsHaveElevation = useMemo(
+    () => terrainRiskRoutePoints.some((point) => {
+      const elevationValue = point.elevationFeet ?? point.ele_m ?? point.ele;
+      return typeof elevationValue === 'number' && Number.isFinite(elevationValue);
+    }),
+    [terrainRiskRoutePoints],
+  );
+  const terrainRiskHasGpsAltitude =
+    typeof options?.gpsAltitudeFt === 'number' && Number.isFinite(options.gpsAltitudeFt);
+  const terrainRiskRouteContext = useMemo<TerrainRiskRouteContext>(() => ({
+    active: terrainRiskHasLiveGuidance,
+    routeId: routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null,
+    routeName: routeProgress?.routeLabel ?? terrainRiskProfileRoute?.name ?? null,
+    totalDistanceMiles: routeProgress?.totalDistance ?? terrainRiskProfileRoute?.total_distance_miles ?? null,
+    completedDistanceMiles: routeProgress?.completedMiles ?? null,
+    sourceLabel: terrainRiskProfileRoute
+      ? 'Live guidance elevation profile'
+      : terrainRiskRoutePointsHaveElevation
+        ? sampledTerrainRiskRoutePoints && sampledTerrainRiskSignature === terrainRiskSamplingSignature
+          ? 'Mapbox terrain contour estimate'
+          : 'Live guidance elevation profile'
+      : terrainRiskSamplingPending
+        ? 'Terrain elevation sampling pending'
+      : terrainRiskHasGpsAltitude
+        ? 'Estimated from active guidance geometry + live GPS altitude'
+        : 'Live guidance route',
+    routeSegments: terrainRiskProfileRoute?.segments ?? null,
+    routePoints: terrainRiskRoutePoints,
+    currentElevationFeet: terrainRiskHasGpsAltitude && !terrainRiskSamplingPending ? options.gpsAltitudeFt ?? null : null,
+  }), [
+    options?.gpsAltitudeFt,
+    terrainRiskHasGpsAltitude,
+    terrainRiskHasLiveGuidance,
+    routeProgress?.activeRouteId,
+    routeProgress?.completedMiles,
+    routeProgress?.routeLabel,
+    routeProgress?.totalDistance,
+    sampledTerrainRiskRoutePoints,
+    sampledTerrainRiskSignature,
+    terrainRiskRoutePoints,
+    terrainRiskRoutePointsHaveElevation,
+    terrainRiskSamplingPending,
+    terrainRiskSamplingSignature,
+    terrainRiskProfileRoute,
+  ]);
+  const hasTerrainRiskLiveProfile = Boolean(
+    terrainRiskRouteContext.active &&
+    (terrainRiskRouteContext.routeSegments?.some((segment) =>
+      (segment.points ?? []).some((point) => {
+        const elevationValue = point.elevationFeet ?? point.ele_m ?? point.ele;
+        return typeof elevationValue === 'number' && Number.isFinite(elevationValue);
+      }),
+    ) ||
+      terrainRiskRoutePointsHaveElevation ||
+      (
+        terrainRiskRouteContext.routePoints != null &&
+        terrainRiskRouteContext.routePoints.length > 1 &&
+        typeof terrainRiskRouteContext.currentElevationFeet === 'number' &&
+        Number.isFinite(terrainRiskRouteContext.currentElevationFeet)
+      )),
+  );
+  const terrainRiskRoute = useMemo(
+    () => buildTerrainRiskCommandRoute(terrainRiskRouteContext),
+    [terrainRiskRouteContext],
+  );
+  const terrainRiskVisual: CommandTerrainRiskVisualData = {
+    active: Boolean(terrainRiskRouteContext.active),
+    route: terrainRiskRoute,
+    completedDistanceMiles: terrainRiskRouteContext.completedDistanceMiles ?? null,
+    weatherSnapshot: snapshot,
+  };
   const environmentalTerrainSnapshot = resolveElevationTerrainSnapshot({
     gpsHasFix: options?.gpsHasFix ?? false,
     gpsAltitudeFt: options?.gpsAltitudeFt ?? null,
@@ -4789,18 +5752,18 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const powerFlowState = resolveAttitudePowerFlowState(powerSummary);
   const powerUnavailableMessage = resolveAttitudePowerUnavailableMessage(power, powerSummary);
   const primaryPowerDevice = powerSummary.primaryDevice;
-  const powerInputAmps = readAttitudePowerNumber(primaryPowerDevice, ['inputAmps', 'input_amps', 'inputCurrentAmps', 'input_current_amps']);
-  const powerInputVolts = readAttitudePowerNumber(primaryPowerDevice, ['inputVolts', 'input_volts', 'inputVoltage', 'input_voltage']);
-  const powerOutputAmps = readAttitudePowerNumber(primaryPowerDevice, ['outputAmps', 'output_amps', 'outputCurrentAmps', 'output_current_amps']);
-  const powerOutputVolts = readAttitudePowerNumber(primaryPowerDevice, ['outputVolts', 'output_volts', 'outputVoltage', 'output_voltage']);
-  const powerBatteryVolts = primaryPowerDevice?.batteryVolts ?? null;
-  const powerBatteryAmps = primaryPowerDevice?.batteryAmps ?? null;
-  const powerSources = resolveAttitudePowerSources(power, powerSummary);
-  const powerLoads = resolveAttitudePowerLoads(power, powerSummary);
   const powerRuntimeMinutes = primaryPowerDevice?.estimatedRuntimeMinutes ?? null;
   const powerVisibleInputWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.inputWatts : null;
   const powerVisibleOutputWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.outputWatts : null;
   const powerVisibleSolarWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.solarWatts : null;
+  const powerInputVolts = resolveAttitudePowerVolts(primaryPowerDevice, ['inputVolts', 'input_volts', 'inputVoltage', 'input_voltage'], powerVisibleInputWatts);
+  const powerInputAmps = resolveAttitudePowerAmps(primaryPowerDevice, ['inputAmps', 'input_amps', 'inputCurrentAmps', 'input_current_amps'], powerVisibleInputWatts, powerInputVolts);
+  const powerOutputVolts = resolveAttitudePowerVolts(primaryPowerDevice, ['outputVolts', 'output_volts', 'outputVoltage', 'output_voltage'], powerVisibleOutputWatts);
+  const powerOutputAmps = resolveAttitudePowerAmps(primaryPowerDevice, ['outputAmps', 'output_amps', 'outputCurrentAmps', 'output_current_amps'], powerVisibleOutputWatts, powerOutputVolts);
+  const powerBatteryVolts = primaryPowerDevice?.batteryVolts ?? null;
+  const powerBatteryAmps = primaryPowerDevice?.batteryAmps ?? null;
+  const powerSources = resolveAttitudePowerSources(power, powerSummary);
+  const powerLoads = resolveAttitudePowerLoads(power, powerSummary);
   const powerNetWatts =
     powerVisibleInputWatts != null || powerVisibleOutputWatts != null
       ? (powerVisibleInputWatts ?? 0) - (powerVisibleOutputWatts ?? 0)
@@ -4830,6 +5793,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const vehicleProfile = resolveAttitudeVehicleProfile(activeVehicleContext);
   const vehicleFuelReadout = resolveVehicleProfileFuelReadout(activeVehicleContext, vehicleTelemetry.snapshot);
   const vehicleVoltageReadout = resolveVehicleProfileVoltageReadout(activeVehicleContext, vehicleTelemetry.snapshot);
+  const vehicleQuickGlance = resolveVehicleCommandQuickGlance(activeVehicleContext, vehicleTelemetry);
   const vehicleLabel = activeVehicleContext.hasVehicleContext
     ? vehicleProfile.vehicleName
     : vehicleTelemetry.snapshot.isLive
@@ -4863,6 +5827,16 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
       : 'DRV --',
     fuel: vehicleFuelReadout.compact,
     battery: vehicleVoltageReadout.compact,
+    hasObd2CommandTelemetry: vehicleQuickGlance.hasObd2CommandTelemetry,
+    obd2OfflineCorner: vehicleQuickGlance.obd2OfflineCorner,
+    coolantTempCorner: vehicleQuickGlance.coolantTempCorner,
+    coolantTempTone: vehicleQuickGlance.coolantTempTone,
+    voltageCorner: vehicleQuickGlance.voltageCorner,
+    voltageTone: vehicleQuickGlance.voltageTone,
+    engineLoadCorner: vehicleQuickGlance.engineLoadCorner,
+    engineLoadTone: vehicleQuickGlance.engineLoadTone,
+    rangeFuelCorner: vehicleQuickGlance.rangeFuelCorner,
+    rangeFuelTone: vehicleQuickGlance.rangeFuelTone,
     source: vehicleProfile.source,
     ready: vehicleTelemetry.snapshot.isLive || activeVehicleContext.hasVehicleContext,
   };
@@ -4898,163 +5872,23 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     ],
   );
   const commandLayout = resolveAttitudeCommandLayoutMetrics(options);
-  const selectedCommandModuleDefinition =
-    ECS_COMMAND_MODULE_REGISTRY[selectedCommandModule] ?? ECS_COMMAND_MODULE_REGISTRY.attitude;
-  const selectedCommandModuleStatus = useMemo((): { label: string; tone: WidgetTone } => {
-    switch (selectedCommandModule) {
-      case 'routeCommand':
-        return hasActiveRouteProgress
-          ? { label: 'ACTIVE ROUTE', tone: 'live' }
-          : { label: 'STANDBY', tone: 'neutral' };
-      case 'powerCommand':
-        return powerSummary.isLive
-          ? { label: 'POWER LIVE', tone: powerBatteryTone }
-          : { label: powerSummary.isStale ? 'LAST KNOWN' : 'UNAVAILABLE', tone: powerSummary.isStale ? 'stale' : 'unavailable' };
-      case 'environmentalCommand':
-        return { label: environmentalVisual.statusLabel, tone: environmentalVisual.statusTone };
-      case 'follow3d':
-        return hasActiveRouteProgress
-          ? { label: 'ROUTE READY', tone: 'good' }
-          : { label: 'STANDBY', tone: 'neutral' };
-      case 'convoyCommand':
-        return { label: 'CONVOY', tone: 'neutral' };
-      case 'attitude':
-      default:
-        return { label: commandStageStatusLabel, tone: displayState.tone };
-    }
-  }, [
-    commandStageStatusLabel,
-    displayState.tone,
-    environmentalVisual.statusLabel,
-    environmentalVisual.statusTone,
-    hasActiveRouteProgress,
-    powerBatteryTone,
-    powerSummary.isLive,
-    powerSummary.isStale,
-    selectedCommandModule,
-  ]);
-  const selectedCommandModuleStatusColor =
-    selectedCommandModule === 'attitude'
-      ? commandStageStatusColor
-      : getWidgetToneColor(selectedCommandModuleStatus.tone);
-  const selectedCommandModuleStatusBorderColor =
-    selectedCommandModule === 'attitude'
-      ? commandStageStatusBorderColor
-      : `${selectedCommandModuleStatusColor}45`;
-  const selectedCommandCenterMode = commandModuleToCenterMode(selectedCommandModule);
   const commandCenterHostSelected = isCommandCenterModuleId(selectedCommandModule);
-  const commandCenterFrameSelected =
-    commandCenterHostSelected &&
-    selectedCommandCenterMode !== 'attitude' &&
-    selectedCommandCenterMode !== 'threeDNavigation';
-  const selectedCommandModuleMetrics = useMemo((): ECSCommandModuleMetric[] => {
-    switch (selectedCommandModule) {
-      case 'follow3d':
-        return [
-          { label: 'ROUTE', value: routeVisual.active ? routeVisual.status : 'No active route', tone: routeVisual.active ? 'live' : 'neutral' },
-          { label: 'GEOMETRY', value: routeVisual.hasGeometry ? 'Available' : 'Unavailable', tone: routeVisual.hasGeometry ? 'good' : 'unavailable' },
-          { label: 'HOST', value: 'Follow map ready', tone: 'neutral' },
-        ];
-      case 'routeCommand':
-        return [
-          { label: 'REMAINING', value: routeVisual.remaining, tone: routeVisual.active ? 'live' : 'unavailable' },
-          { label: 'ETA', value: routeVisual.eta, tone: routeVisual.active ? 'good' : 'neutral' },
-          { label: 'PROGRESS', value: `${routeVisual.progressPercent}%`, tone: routeVisual.active ? 'good' : 'neutral' },
-        ];
-      case 'powerCommand':
-        return [
-          { label: 'RESERVE', value: powerVisual.batteryPercent != null ? `${Math.round(powerVisual.batteryPercent)}%` : '--', tone: powerSummary.isLive ? powerBatteryTone : 'unavailable' },
-          { label: 'INPUT', value: formatAttitudePowerWattsCompact(powerVisual.inputWatts, 'input'), tone: powerVisual.inputWatts != null && powerVisual.inputWatts > 0 ? 'good' : 'neutral' },
-          { label: 'OUTPUT', value: formatAttitudePowerWattsCompact(powerVisual.outputWatts, 'output'), tone: powerVisual.outputWatts != null && powerVisual.outputWatts > 0 ? 'attention' : 'neutral' },
-        ];
-      case 'environmentalCommand':
-        return [
-          { label: 'DAYLIGHT', value: environmentalVisual.daylight, tone: environmentalVisual.daylightTone },
-          { label: 'WEATHER', value: environmentalVisual.weatherValue, tone: environmentalVisual.weatherTone },
-          { label: 'REMOTE', value: environmentalVisual.remoteness, tone: environmentalVisual.remotenessTone },
-        ];
-      case 'convoyCommand':
-        return [
-          { label: 'MODE', value: 'Plan/check-in', tone: 'neutral' },
-          { label: 'TRACKING', value: 'Not live', tone: 'neutral' },
-          { label: 'SOURCE', value: 'Convoy setup', tone: 'neutral' },
-        ];
-      case 'attitude':
-      default:
-        return [
-          { label: 'PITCH', value: formatAttitudeDegrees(commandStagePitchDeg), tone: displayState.tone },
-          { label: 'ROLL', value: formatAttitudeDegrees(commandStageRollDeg), tone: displayState.tone },
-          { label: 'SOURCE', value: commandSensorLive ? 'Live sensors' : attitudeTelemetry.sourceLabel, tone: commandSensorLive ? 'live' : 'unavailable' },
-        ];
-    }
-  }, [
-    attitudeTelemetry.sourceLabel,
-    commandSensorLive,
-    commandStagePitchDeg,
-    commandStageRollDeg,
-    displayState.tone,
-    environmentalVisual.daylight,
-    environmentalVisual.daylightTone,
-    environmentalVisual.remoteness,
-    environmentalVisual.remotenessTone,
-    environmentalVisual.weatherTone,
-    environmentalVisual.weatherValue,
-    powerBatteryTone,
-    powerSummary.isLive,
-    powerVisual.batteryPercent,
-    powerVisual.inputWatts,
-    powerVisual.outputWatts,
-    routeVisual.active,
-    routeVisual.eta,
-    routeVisual.hasGeometry,
-    routeVisual.progressPercent,
-    routeVisual.remaining,
-    routeVisual.status,
-    selectedCommandModule,
-  ]);
-  const selectedCommandModuleBackground = (() => {
-    switch (selectedCommandModule) {
-      default:
-        return null;
-    }
-  })();
-  const activeFocusConfig = useMemo(() => {
-    switch (activePanel) {
+  const selectedCommandModuleDefinition =
+    ECS_COMMAND_MODULE_REGISTRY[selectedCommandModule] ?? ECS_COMMAND_MODULE_REGISTRY.follow3d!;
+  const selectedCommandCenterMode = commandModuleToCenterMode(selectedCommandModule);
+  const expansionGeometry = resolveAttitudeCommandExpansionGeometry(commandLayout.viewportClass);
+  const renderCommandPanel = (panel: AttitudeCommandFocusPanel, expanded = false) => {
+    switch (panel) {
       case 'sunlight':
-        return { title: 'Remaining Sunlight', icon: 'sunny-outline' as const };
-      case 'weather':
-        return { title: 'Current Weather', icon: 'partly-sunny-outline' as const };
-      case 'vehicle':
-        return { title: 'Vehicle Profile', icon: 'car-sport-outline' as const };
-      case 'route':
-        return { title: 'Route Progress', icon: 'navigate-outline' as const };
-      case 'power':
-        return { title: 'Power Monitor', icon: 'battery-charging-outline' as const };
-      default:
-        return { title: 'Attitude Command', icon: 'speedometer-outline' as const };
-    }
-  }, [activePanel]);
-
-  return (
-    <>
-      <ECSInstrumentPanel
-        variant="command"
-        sizeVariant="dominant"
-        glowIntensity={commandSensorLive ? 'high' : 'medium'}
-        active={commandSensorLive}
-        showActiveEdge={false}
-        innerTexture={false}
-        style={attitudeCommandS.shellFrame}
-        contentStyle={[attitudeCommandS.shell, commandLayout.shell]}
-      >
-        <View style={[attitudeCommandS.topRow, commandLayout.topRow]}>
+        return (
           <AttitudeCommandPanel
             eyebrow="REMAINING SUNLIGHT"
             title={daylight.daylight}
             icon="sunny-outline"
             tone={daylight.daylightTone}
             onPress={() => openFocusPanel('sunlight')}
-            accessibilityLabel="Open remaining sunlight details"
+            accessibilityLabel={expanded ? 'Collapse remaining sunlight' : 'Expand remaining sunlight'}
+            expanded={expanded}
             sunlightVisual={{
               phase: daylight.phase,
               radiancePhase: daylight.radiancePhase,
@@ -5065,6 +5899,9 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               uvIndex: daylight.uvIndex,
             }}
           />
+        );
+      case 'weather':
+        return (
           <AttitudeCommandPanel
             eyebrow="CURRENT WEATHER"
             title={weatherTitle || 'Weather unavailable'}
@@ -5073,274 +5910,149 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             tone={weatherTone}
             align="center"
             onPress={() => openFocusPanel('weather')}
-            accessibilityLabel="Open current weather details"
+            accessibilityLabel={expanded ? 'Collapse current weather' : 'Expand current weather'}
+            expanded={expanded}
             weatherVisual={weatherVisual}
           >
-            <View pointerEvents="none" style={attitudeCommandS.weatherMetricStrip}>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+            <View pointerEvents="none" style={[attitudeCommandS.weatherMetricStrip, expanded && attitudeCommandS.weatherMetricStripExpanded]}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.feelsLike}
               </Text>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.wind}
               </Text>
-              <Text style={attitudeCommandS.weatherMetricText} numberOfLines={1}>
+              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
                 {weatherVisual.humidity}
               </Text>
             </View>
           </AttitudeCommandPanel>
+        );
+      case 'vehicle':
+        return (
           <AttitudeCommandPanel
             eyebrow="VEHICLE PROFILE"
-            title="Vehicle Profile"
             detail={undefined}
             icon="car-sport-outline"
             tone={vehicleTone}
             align="left"
             onPress={() => openFocusPanel('vehicle')}
-            accessibilityLabel="Open vehicle profile details"
+            accessibilityLabel={expanded ? 'Collapse vehicle profile' : 'Expand vehicle profile'}
+            expanded={expanded}
             vehicleVisual={vehicleVisual}
           >
-            <View pointerEvents="none" style={attitudeCommandS.vehicleBaseIdentityBlock}>
-              <Text
-                style={attitudeCommandS.vehicleBaseNameText}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-                adjustsFontSizeToFit
-                minimumFontScale={0.82}
-              >
-                {vehicleVisual.name}
-              </Text>
-              <Text
-                style={attitudeCommandS.vehicleBaseIdentityText}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-                adjustsFontSizeToFit
-                minimumFontScale={0.82}
-              >
-                {vehicleVisual.identity}
-              </Text>
-            </View>
-            <View pointerEvents="none" style={attitudeCommandS.vehicleBaseTelemetryRow}>
-              <Text
-                style={attitudeCommandS.vehicleBaseTelemetryText}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-              >
-                {vehicleVisual.fuel}
-              </Text>
-              <Text
-                style={[attitudeCommandS.vehicleBaseTelemetryText, attitudeCommandS.vehicleBaseTelemetryTextRight]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-              >
-                {vehicleVisual.battery}
-              </Text>
-            </View>
-          </AttitudeCommandPanel>
-        </View>
-
-        <View
-          style={[
-            attitudeCommandS.attitudeStage,
-            selectedCommandModule === 'attitude' ? attitudeCommandS.attitudeStageVehicleImageMode : null,
-            commandLayout.attitudeStage,
-          ]}
-        >
-          {selectedCommandModule !== 'attitude' ? (
-            commandCenterFrameSelected ? null : (
-              <View pointerEvents="none" style={[attitudeCommandS.commandTitleBlock, commandLayout.commandTitleBlock]}>
-                <Text style={attitudeCommandS.commandTitle} numberOfLines={1}>
-                  {selectedCommandModuleDefinition.title}
-                </Text>
-                <Text style={attitudeCommandS.commandSubtitle} numberOfLines={1}>
-                  {selectedCommandModuleDefinition.subtitle}
-                </Text>
-              </View>
-            )
-          ) : null}
-          <View style={attitudeCommandS.moduleTouchTarget}>
-            <Animated.View style={[attitudeCommandS.moduleTransitionShell, { opacity: moduleTransitionOpacity }]}>
-              {selectedCommandModule === 'attitude' ? (
-                <AttitudeCommandWidgetConnected
-                  vehicleId={attitudeVehicleId}
-                  pitchDeg={commandStagePitchDeg}
-                  rollDeg={commandStageRollDeg}
-                  telemetryEnabled={false}
-                  activeVehicleName={activeVehicleContext.vehicle?.name ?? undefined}
-                  telemetryFrame="device"
-                  mode="command"
-                  showZeroButton={false}
-                  showReadouts={commandSensorLive}
-                  showLiveHashIndicators={false}
-                  onZero={undefined}
-                />
-              ) : commandCenterHostSelected ? (
-                <CommandCenterHost
-                  mode={selectedCommandCenterMode}
-                  availableModes={COMMAND_CENTER_MODES}
-                  onModeChange={handleSelectCommandCenterMode}
-                  dataContext={commandCenterDataContext}
-                  externalRenderers={{
-                    threeDNavigation: ({ mode }) => (
-                      <Mini3DFollowMap options={options} selected={mode === 'threeDNavigation'} />
-                    ),
-                  }}
-                />
-              ) : selectedCommandModule === 'routeCommand' ? (
-                <RouteCommandModule
-                  definition={selectedCommandModuleDefinition}
-                  routeProgress={routeProgress}
-                />
-              ) : selectedCommandModule === 'powerCommand' ? (
-                <PowerCommandModule
-                  definition={selectedCommandModuleDefinition}
-                  power={powerVisual}
-                  summary={powerSummary}
-                  flow={powerFlowState}
-                  tone={powerSummary.isLive || powerSummary.canDisplayTelemetryValues ? powerBatteryTone : powerSummary.isStale ? 'stale' : 'unavailable'}
-                />
-              ) : selectedCommandModule === 'environmentalCommand' ? (
-                <EnvironmentalCommandModule
-                  definition={selectedCommandModuleDefinition}
-                  environment={environmentalVisual}
-                />
+            <VehicleProfileRollAttitudeStrip
+              rollDeg={commandStageRollDeg}
+              pitchDeg={commandStagePitchDeg}
+              live={commandSensorLive}
+              maxRollDeg={45}
+              expanded={expanded}
+            />
+            <View pointerEvents="none" style={attitudeCommandS.vehicleCommandCornerLayer}>
+              {vehicleVisual.hasObd2CommandTelemetry ? (
+                <>
+                  {vehicleVisual.coolantTempCorner ? (
+                    <Text
+                      style={[
+                        attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                        attitudeCommandS.vehicleCommandCoolantCorner,
+                        { color: getWidgetToneColor(vehicleVisual.coolantTempTone) },
+                      ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.68}
+                    >
+                      {vehicleVisual.coolantTempCorner}
+                    </Text>
+                  ) : null}
+                  {vehicleVisual.voltageCorner ? (
+                    <Text
+                      style={[
+                        attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                        attitudeCommandS.vehicleCommandVoltageCorner,
+                        { color: getWidgetToneColor(vehicleVisual.voltageTone) },
+                      ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.68}
+                    >
+                      {vehicleVisual.voltageCorner}
+                    </Text>
+                  ) : null}
+                  {vehicleVisual.rangeFuelCorner ? (
+                    <Text
+                      style={[
+                        attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                        attitudeCommandS.vehicleCommandRangeCorner,
+                        { color: getWidgetToneColor(vehicleVisual.rangeFuelTone) },
+                      ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.58}
+                    >
+                      {vehicleVisual.rangeFuelCorner}
+                    </Text>
+                  ) : null}
+                  {vehicleVisual.engineLoadCorner ? (
+                    <Text
+                      style={[
+                        attitudeCommandS.vehicleCommandCornerValue,
+                        expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                        attitudeCommandS.vehicleCommandLoadCorner,
+                        { color: getWidgetToneColor(vehicleVisual.engineLoadTone) },
+                      ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.62}
+                    >
+                      {vehicleVisual.engineLoadCorner}
+                    </Text>
+                  ) : null}
+                </>
               ) : (
-                <ECSCommandModulePlaceholder
-                  definition={selectedCommandModuleDefinition}
-                  tone={selectedCommandModuleStatus.tone}
-                  statusLabel={selectedCommandModuleStatus.label}
-                  metrics={selectedCommandModuleMetrics}
-                  background={selectedCommandModuleBackground}
-                />
-              )}
-            </Animated.View>
-          </View>
-
-          <View pointerEvents="box-none" style={attitudeCommandS.stageControlLayer}>
-            {selectedCommandModule === 'attitude' ? (
-              <TouchableOpacity
-                accessibilityLabel={soundEnabled ? 'Disable attitude monitor sound' : 'Enable attitude monitor sound'}
-                accessibilityRole="button"
-                activeOpacity={0.82}
-                hitSlop={{ top: 4, right: 4, bottom: 4, left: 4 }}
-                onPress={handleToggleSound}
-                style={[
-                  attitudeCommandS.stageSoundPill,
-                  !soundEnabled ? attitudeCommandS.stageSoundPillOff : null,
-                ]}
-              >
-                <AttitudeStageHexButtonChrome muted={!soundEnabled} />
-                <Ionicons
-                  name={soundEnabled ? 'volume-high-outline' : 'volume-off-outline'}
-                  size={15}
-                  color={soundEnabled ? TACTICAL.text : 'rgba(197, 206, 214, 0.86)'}
-                />
-              </TouchableOpacity>
-            ) : null}
-
-            {selectedCommandModule === 'attitude' ? (
-              <View pointerEvents="none" style={attitudeCommandS.stageZeroLabelSlot}>
-                <Text style={attitudeCommandS.stageZeroLabel} numberOfLines={1}>
-                  zero
-                </Text>
-              </View>
-            ) : null}
-
-            <TouchableOpacity
-              accessibilityLabel="Change center module"
-              accessibilityHint="Opens the Command Module selector"
-              accessibilityRole="button"
-              activeOpacity={0.82}
-              hitSlop={{ top: 4, right: 4, bottom: 4, left: 4 }}
-              onPress={openModuleSelector}
-              style={[
-                attitudeCommandS.stageModulePill,
-                selectedCommandModule !== 'attitude' ? attitudeCommandS.stageModulePillActive : null,
-                commandCenterFrameSelected ? attitudeCommandS.stageModulePillRecoveryMode : null,
-              ]}
-            >
-              <AttitudeStageHexButtonChrome active={selectedCommandModule !== 'attitude'} />
-              <Ionicons name="ellipsis-horizontal" size={17} color={TACTICAL.text} />
-            </TouchableOpacity>
-
-            {selectedCommandModule === 'attitude' ? (
-              <View pointerEvents="none" style={attitudeCommandS.stageStatusPillCenterSlot}>
-                <View
-                  style={[
-                    attitudeCommandS.stageStatusPillBase,
-                    attitudeCommandS.stageStatusPillCentered,
-                    { borderColor: selectedCommandModuleStatusBorderColor },
-                  ]}
-                >
-                  <Text
-                    style={[attitudeCommandS.stageStatusPillText, { color: selectedCommandModuleStatusColor }]}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.78}
-                    numberOfLines={1}
-                  >
-                    {selectedCommandModuleStatus.label}
-                  </Text>
-                </View>
-              </View>
-            ) : selectedCommandModule !== 'follow3d' && !commandCenterFrameSelected ? (
-              <View
-                pointerEvents="none"
-                style={[
-                  attitudeCommandS.stageStatusPill,
-                  { borderColor: selectedCommandModuleStatusBorderColor },
-                ]}
-              >
                 <Text
-                  style={[attitudeCommandS.stageStatusPillText, { color: selectedCommandModuleStatusColor }]}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.78}
+                  style={[
+                    attitudeCommandS.vehicleCommandCornerValue,
+                    expanded && attitudeCommandS.vehicleCommandCornerValueExpanded,
+                    attitudeCommandS.vehicleCommandVoltageCorner,
+                    { color: getWidgetToneColor('unavailable') },
+                  ]}
                   numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.62}
                 >
-                  {selectedCommandModuleStatus.label}
+                  {vehicleVisual.obd2OfflineCorner}
                 </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        <View style={[attitudeCommandS.bottomRow, commandLayout.bottomRow]}>
-          <AttitudeCommandPanel
-            eyebrow="ROUTE PROGRESS"
-            title={hasActiveRouteProgress ? `${routeProgress!.progressPercent}% | ${routeProgress!.remainingMilesText}` : 'No active route'}
-            detail={hasActiveRouteProgress ? 'Guidance active' : 'Start guidance to view route progress'}
-            icon="navigate-outline"
-            tone={hasActiveRouteProgress ? 'live' : 'neutral'}
-            onPress={() => openFocusPanel('route')}
-            accessibilityLabel="Open route progress details"
-            routeVisual={routeVisual}
-          >
-            {hasActiveRouteProgress ? (
-              <View pointerEvents="none" style={attitudeCommandS.routeMetricStrip}>
-                <Text style={attitudeCommandS.routeMetricName} numberOfLines={1}>
-                  {routeVisual.routeLabel}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  ETA {routeVisual.eta}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  TIME {routeVisual.estimatedTime}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  TOTAL {routeVisual.total}
-                </Text>
-                <Text style={attitudeCommandS.routeMetricText} numberOfLines={1}>
-                  DONE {routeVisual.completed}
-                </Text>
-              </View>
-            ) : (
-              <View pointerEvents="none" style={attitudeCommandS.routeStandbyStrip}>
-                <Text style={attitudeCommandS.routeStandbyText} numberOfLines={1}>
-                  Guidance standby
-                </Text>
-              </View>
-            )}
+              )}
+            </View>
           </AttitudeCommandPanel>
+        );
+      case 'route':
+        return (
+          <AttitudeCommandPanel
+            eyebrow="ROUTE TERRAIN RISK"
+            title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}
+            detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}
+            icon="warning-outline"
+            tone={terrainRiskRoute ? terrainRiskRoute.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute.overallRiskLabel === 'moderate' ? 'attention' : 'live' : 'neutral'}
+            onPress={() => openFocusPanel('route')}
+            accessibilityLabel={expanded ? 'Collapse route terrain risk' : 'Expand route terrain risk'}
+            expanded={expanded}
+            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
+            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
+            headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
+          >
+            <AttitudeCommandTerrainRiskPreview
+              terrainRisk={terrainRiskVisual}
+              expanded={expanded}
+              onTerrainRiskReferenceEvent={options?.onTerrainRiskReferenceEvent}
+            />
+          </AttitudeCommandPanel>
+        );
+      case 'power':
+        return (
           <AttitudeCommandPanel
             eyebrow="POWER MONITOR"
             title="Power Monitor"
@@ -5349,239 +6061,119 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'}
             align="right"
             onPress={() => openFocusPanel('power')}
-            accessibilityLabel="Open power monitor details"
+            accessibilityLabel={expanded ? 'Collapse power monitor' : 'Expand power monitor'}
+            expanded={expanded}
             powerVisual={powerVisual}
           >
-            <AttitudeCommandPowerRiveForeground power={powerVisual} />
-            <View pointerEvents="none" style={attitudeCommandS.powerBottomStrip}>
-              <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
+            <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
+            <View pointerEvents="none" style={[attitudeCommandS.powerBottomStrip, expanded && attitudeCommandS.powerBottomStripExpanded]}>
+              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
                 NET {powerVisual.netWatts != null ? `${powerVisual.netWatts >= 0 ? '+' : '-'}${Math.abs(Math.round(powerVisual.netWatts))}W` : '--'}
               </Text>
-              <Text style={[attitudeCommandS.powerBottomStripText, powerSummary.isLive && attitudeCommandS.powerBottomStripLive]} numberOfLines={1}>
-                {powerVisual.statusLabel}
-              </Text>
-              <Text style={attitudeCommandS.powerBottomStripText} numberOfLines={1}>
+              <Text style={[attitudeCommandS.powerBottomStripText, expanded && attitudeCommandS.powerBottomStripTextExpanded]} numberOfLines={1}>
                 RUN {powerVisual.runtime}
               </Text>
             </View>
           </AttitudeCommandPanel>
+        );
+      default:
+        return null;
+    }
+  };
+  return (
+    <>
+      <ECSInstrumentPanel
+        variant="command"
+        sizeVariant="dominant"
+        glowIntensity={commandSensorLive ? 'high' : 'medium'}
+        active={commandSensorLive || commandCenterHostSelected}
+        showActiveEdge={false}
+        innerTexture={false}
+        style={attitudeCommandS.shellFrame}
+        contentStyle={[attitudeCommandS.shell, commandLayout.shell]}
+      >
+        <View style={[attitudeCommandS.topRow, commandLayout.topRow]}>
+          {renderCommandPanel('sunlight')}
+          {renderCommandPanel('weather')}
+          {renderCommandPanel('vehicle')}
+        </View>
+
+        <View
+          style={[
+            attitudeCommandS.attitudeStage,
+            commandLayout.attitudeStage,
+            selectedCommandCenterMode === 'threeDNavigation' ? attitudeCommandS.attitudeStageNavigationCommandMode : null,
+          ]}
+        >
+          <View pointerEvents="none" style={[attitudeCommandS.commandTitleBlock, commandLayout.commandTitleBlock]}>
+            <Text style={attitudeCommandS.commandSubtitle} numberOfLines={1}>
+              {selectedCommandModuleDefinition.subtitle}
+            </Text>
+          </View>
+          <View style={attitudeCommandS.moduleTouchTarget}>
+            <Animated.View
+              style={[
+                attitudeCommandS.moduleTransitionShell,
+                { opacity: moduleTransitionOpacity },
+              ]}
+            >
+              <CommandCenterHost
+                mode={selectedCommandCenterMode}
+                availableModes={COMMAND_CENTER_MODES}
+                onModeChange={handleSelectCommandCenterMode}
+                dataContext={commandCenterDataContext}
+                externalRenderers={{
+                  attitude: ({ mode }) => (
+                    <View style={attitudeCommandS.commandCenterAttitudeStage}>
+                      <VehicleAttitudeStage
+                        vehicleId={attitudeVehicleId}
+                        pitchDeg={commandStagePitchDeg}
+                        rollDeg={commandStageRollDeg}
+                        telemetryFrame="device"
+                        mode="command"
+                        presentationMode="instrumentOnly"
+                        showZeroButton={false}
+                        showReadouts={mode === 'attitude'}
+                        showLiveHashIndicators={mode === 'attitude' && sensorLive}
+                      />
+                    </View>
+                  ),
+                  threeDNavigation: ({ mode }) => (
+                    <Mini3DFollowMap options={options} selected={mode === 'threeDNavigation'} />
+                  ),
+                }}
+              />
+            </Animated.View>
+          </View>
+          {activePanel ? (
+            <View
+              pointerEvents="box-none"
+              style={[
+                attitudeCommandS.expandedPanelLayer,
+                {
+                  paddingHorizontal: expansionGeometry.insetHorizontal,
+                  paddingVertical: expansionGeometry.insetVertical,
+                },
+              ]}
+            >
+              <Animated.View
+                style={[
+                  attitudeCommandS.expandedPanelCard,
+                  { aspectRatio: expansionGeometry.aspectRatio },
+                ]}
+              >
+                {renderCommandPanel(activePanel, true)}
+              </Animated.View>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={[attitudeCommandS.bottomRow, commandLayout.bottomRow]}>
+          {renderCommandPanel('route')}
+          {renderCommandPanel('power')}
         </View>
       </ECSInstrumentPanel>
 
-      <TacticalPopupShell
-        visible={activePanel != null}
-        onClose={closeFocusPanel}
-        eyebrow="ATTITUDE COMMAND"
-        title={activeFocusConfig.title}
-        icon={activeFocusConfig.icon}
-        tier="global"
-        overlayClass="editor"
-        maxWidth={560}
-        maxHeightFraction={0.76}
-        scrollable
-        showHandle
-      >
-        {activePanel === 'sunlight' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {daylight.unavailableReason ? (
-              <AttitudeCommandUnavailableNotice
-                message={
-                  daylight.unavailableReason === 'location-required'
-                    ? 'Location required. Grant location access or wait for weather solar times before ECS can show daylight detail.'
-                    : daylight.unavailableReason === 'waiting-position'
-                      ? 'Waiting for current position. Sunlight detail will populate once GPS or weather solar times are available.'
-                      : 'Sunlight data unavailable. ECS needs a current location fix or weather solar times for daylight detail.'
-                }
-              />
-            ) : null}
-            <AttitudeCommandDetailRow label={daylight.daylightLabel} value={daylight.daylight} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Estimated sunrise" value={daylight.sunrise} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Estimated sunset" value={daylight.sunset} tone={daylight.daylightTone} />
-            <AttitudeCommandDetailRow label="Civil twilight" value={daylight.civilTwilight} />
-            <AttitudeCommandDetailRow label="Glare status" value={daylight.glare} tone={daylight.glareTone} />
-            <AttitudeCommandDetailRow label="Sun elevation" value={daylight.sunElevation} />
-            <AttitudeCommandDetailRow label="Sun azimuth" value={daylight.sunAzimuth} />
-            <AttitudeCommandDetailRow label="Location context" value={daylight.location} />
-            <AttitudeCommandDetailRow label="Latitude" value={daylight.latitude} />
-            <AttitudeCommandDetailRow label="Longitude" value={daylight.longitude} />
-            <AttitudeCommandDetailRow label="Source" value={daylight.source} />
-            <AttitudeCommandDetailRow label="Last updated" value={daylight.updated} />
-          </View>
-        ) : null}
-
-        {activePanel === 'weather' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {weatherNotice ? (
-              <AttitudeCommandUnavailableNotice message={weatherNotice} />
-            ) : null}
-            <AttitudeCommandDetailRow
-              label="Condition"
-              value={snapshot.current.description || snapshot.current.condition || formatWeatherHeadline(snapshot) || weatherTitle || 'Weather unavailable'}
-              tone={weatherTone}
-            />
-            <AttitudeCommandDetailRow label="Temperature" value={formatWeatherDegrees(currentTempF)} />
-            <AttitudeCommandDetailRow label="Feels like" value={formatWeatherDegrees(snapshot.current.feelsLike)} />
-            <AttitudeCommandDetailRow label="Wind" value={formatWeatherWindLine(snapshot) || 'Wind unavailable'} />
-            <AttitudeCommandDetailRow label="Precipitation" value={formatAttitudeWeatherPrecipitation(snapshot)} />
-            <AttitudeCommandDetailRow label="Visibility" value={formatAttitudeWeatherVisibility(snapshot.current.visibility)} />
-            <AttitudeCommandDetailRow label="Alerts" value={formatWeatherAlertLine(snapshot) || (weatherAvailable ? 'No active alert in source' : 'Alerts unavailable')} tone={snapshot.alerts.length > 0 ? 'attention' : 'neutral'} />
-            {weatherForecastRows.length > 0 ? (
-              weatherForecastRows.map((row) => (
-                <AttitudeCommandDetailRow key={row.key} label={row.label} value={row.value} />
-              ))
-            ) : (
-              <AttitudeCommandDetailRow label="Forecast" value="Forecast unavailable" />
-            )}
-            <AttitudeCommandDetailRow label="Location" value={snapshot.locationName || 'Current position'} />
-            <AttitudeCommandDetailRow label="Source" value={getCompactWeatherSourceLabel(snapshot)} />
-            <AttitudeCommandDetailRow label="Freshness" value={snapshot.status.label || snapshot.status.kind || 'Unknown'} />
-            <AttitudeCommandDetailRow label="Last updated" value={weatherLastUpdated} />
-          </View>
-        ) : null}
-
-        {activePanel === 'vehicle' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {!activeVehicleContext.hasVehicleContext && !vehicleTelemetry.snapshot.isLive ? (
-              <AttitudeCommandUnavailableNotice message="No active vehicle profile or live telemetry is available. Add or select a Fleet vehicle to improve this panel." />
-            ) : null}
-            <AttitudeCommandDetailRow label="Vehicle" value={vehicleProfile.vehicleName || 'Vehicle profile unavailable'} tone={vehicleTone} />
-            <AttitudeCommandDetailRow label="Year/make/model" value={vehicleProfile.identity} />
-            <AttitudeCommandDetailRow label="Drivetrain" value={vehicleProfile.drivetrain} />
-            <AttitudeCommandDetailRow label="Engine" value={vehicleProfile.engine} />
-            <AttitudeCommandDetailRow label="Suspension" value={vehicleProfile.suspension} />
-            <AttitudeCommandDetailRow label="Tires" value={vehicleProfile.tires} />
-            <AttitudeCommandDetailRow label="Build summary" value={vehicleProfile.buildSummary} />
-            <AttitudeCommandDetailRow label="Loadout" value={vehicleProfile.loadoutSummary} />
-            <AttitudeCommandDetailRow label="Operating weight" value={vehicleProfile.operatingWeight} />
-            <AttitudeCommandDetailRow label="Base weight" value={vehicleProfile.baseWeight} />
-            <AttitudeCommandDetailRow label="GVWR" value={vehicleProfile.gvwr} />
-            <AttitudeCommandDetailRow label="Payload margin" value={vehicleProfile.payloadMargin} />
-            <AttitudeCommandDetailRow label="Readiness" value={vehicleProfile.readiness} tone={activeVehicleContext.hasVehicleContext ? 'neutral' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Confidence" value={vehicleProfile.confidence} />
-            <AttitudeCommandDetailRow label="Telemetry" value={vehicleTelemetry.snapshot.isLive ? vehicleTelemetry.engineStatus || 'Live telemetry' : 'Stored profile only'} tone={vehicleTelemetry.snapshot.isLive ? 'live' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Fuel" value={vehicleFuelReadout.detail} tone={vehicleFuelReadout.tone} />
-            <AttitudeCommandDetailRow label="Voltage" value={vehicleVoltageReadout.detail} tone={vehicleVoltageReadout.tone} />
-            <AttitudeCommandDetailRow label="Source" value={vehicleProfile.source} />
-          </View>
-        ) : null}
-
-        {activePanel === 'route' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {!routeProgress ? (
-              <AttitudeCommandUnavailableNotice message="No active route. Start or select a route to view progress." />
-            ) : routeProgress.calculationState.toLowerCase().includes('loading') ||
-              routeProgress.calculationState.toLowerCase().includes('unavailable') ? (
-              <AttitudeCommandUnavailableNotice message={routeProgress.calculationState} />
-            ) : null}
-            <AttitudeCommandDetailRow label="Route" value={routeProgress?.routeLabel || 'No active route'} tone={routeProgress?.stateTone ?? 'unavailable'} />
-            <AttitudeCommandDetailRow label="Destination" value={routeProgress?.destinationLabel || (routeProgress ? 'Destination unavailable' : 'Start or select a route to view progress')} />
-            <AttitudeCommandDetailRow label="Distance remaining" value={routeProgress?.remainingMilesText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Time remaining" value={routeProgress?.remainingDurationText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="ETA" value={routeProgress?.etaLabel || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Progress" value={routeProgress ? `${routeProgress.progressPercent}%` : 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Current leg" value={routeProgress?.currentLegLabel || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Navigation status" value={routeProgress?.navigationStatus || 'Route unavailable'} tone={routeProgress?.stateTone ?? 'unavailable'} />
-            <AttitudeCommandDetailRow label="Next" value={routeProgress?.nextInstruction || routeProgress?.footerText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Route warning" value={routeProgress?.warningLine || 'Unavailable'} tone={routeProgress?.warningLine && !routeProgress.warningLine.startsWith('No route warning') ? 'attention' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Confidence" value={routeProgress?.confidenceLine || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Route geometry" value={routeProgress?.geometryStatus || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Total route" value={routeProgress?.totalMilesText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Completed" value={routeProgress?.completedMilesText || 'Unavailable'} />
-            <AttitudeCommandDetailRow label="Calculation" value={routeProgress?.calculationState || 'Progress cannot be calculated until a route is active'} />
-            <AttitudeCommandDetailRow label="Source" value={routeProgress?.sourceDetail || 'No route source'} />
-            <AttitudeCommandDetailRow label="Last updated" value={formatAttitudeCommandTimestamp(routeProgress?.lastUpdated)} />
-          </View>
-        ) : null}
-
-        {activePanel === 'power' ? (
-          <View style={attitudeCommandS.detailStack}>
-            {powerUnavailableMessage ? (
-              <AttitudeCommandUnavailableNotice message={powerUnavailableMessage} />
-            ) : null}
-            <AttitudePowerLiquidFlowIndicator flow={powerFlowState} />
-            <AttitudeCommandDetailRow label="Charge state" value={formatAttitudePowerState(powerSummary.chargingState)} tone={powerFlowState.tone} />
-            <AttitudeCommandDetailRow label="Battery" value={powerSummary.batteryPercent != null ? `${Math.round(powerSummary.batteryPercent)}% state of charge` : 'Battery percentage unavailable'} tone={powerSummary.isLive ? powerBatteryTone : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Input watts" value={formatAttitudePowerWatts(powerSummary.inputWatts ?? 0, 'input')} tone={(powerSummary.inputWatts ?? 0) > 0 && powerSummary.isLive ? 'good' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Input amps" value={formatAttitudePowerMetric(powerInputAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Input volts" value={formatAttitudePowerMetric(powerInputVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Output watts" value={formatAttitudePowerWatts(powerSummary.outputWatts ?? 0, 'output')} tone={(powerSummary.outputWatts ?? 0) > 0 && powerSummary.isLive ? 'attention' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Output amps" value={formatAttitudePowerMetric(powerOutputAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Output volts" value={formatAttitudePowerMetric(powerOutputVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Battery voltage" value={formatAttitudePowerMetric(powerBatteryVolts, 'V')} />
-            <AttitudeCommandDetailRow label="Battery current" value={formatAttitudePowerMetric(powerBatteryAmps, 'A')} />
-            <AttitudeCommandDetailRow label="Solar" value={formatAttitudePowerWatts(powerSummary.solarWatts ?? 0, 'input')} tone={(powerSummary.solarWatts ?? 0) > 0 && powerSummary.isLive ? 'good' : 'neutral'} />
-            <AttitudeCommandDetailRow label="Connected sources" value={powerSources} tone={powerSummary.isLive ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Connected loads" value={powerLoads} />
-            <AttitudeCommandDetailRow label="Telemetry source" value={powerSummary.sourceLabel || primaryPowerDevice?.providerDisplayName || 'Power source unavailable'} />
-            <AttitudeCommandDetailRow label="Freshness" value={powerSummary.isLive ? 'Live telemetry' : powerSummary.isStale ? 'Stale or disconnected' : 'Unavailable'} tone={powerSummary.isLive ? 'live' : 'unavailable'} />
-            <AttitudeCommandDetailRow label="Last updated" value={formatAttitudeCommandTimestamp(powerSummary.lastUpdated)} />
-          </View>
-        ) : null}
-      </TacticalPopupShell>
-
-      <TacticalPopupShell
-        visible={moduleSelectorVisible}
-        onClose={closeModuleSelector}
-        eyebrow="ECS COMMAND MODULE"
-        title="Change Center Module"
-        icon="grid-outline"
-        subtitle="Choose the instrument shown inside the Command Module shell."
-        tier="global"
-        overlayClass="dialog"
-        maxWidth={540}
-        maxHeightFraction={0.72}
-        minHeightFraction={0.42}
-        scrollable
-        bodyStyle={attitudeCommandS.moduleSelectorBody}
-        contentContainerStyle={attitudeCommandS.moduleSelectorContent}
-        showHandle
-      >
-        <View style={attitudeCommandS.moduleSelectorStack}>
-          {ECS_COMMAND_MODULE_ORDER.map((moduleId) => {
-            const definition = ECS_COMMAND_MODULE_REGISTRY[moduleId];
-            const selected = selectedCommandModule === moduleId;
-            const moduleTone = selected ? TACTICAL.amber : 'rgba(230,237,243,0.76)';
-            return (
-              <TouchableOpacity
-                key={moduleId}
-                accessibilityRole="button"
-                accessibilityLabel={`${definition.label}. ${definition.description}. ${selected ? 'Selected' : 'Not selected'}`}
-                accessibilityState={{ selected }}
-                activeOpacity={0.78}
-                onPress={() => handleSelectCommandModule(moduleId)}
-                style={[
-                  attitudeCommandS.moduleSelectorOption,
-                  selected ? attitudeCommandS.moduleSelectorOptionSelected : null,
-                ]}
-              >
-                <View style={attitudeCommandS.moduleSelectorIcon}>
-                  <Ionicons
-                    name={definition.icon as any}
-                    size={18}
-                    color={moduleTone}
-                  />
-                </View>
-                <View style={attitudeCommandS.moduleSelectorText}>
-                  <Text
-                    style={[attitudeCommandS.moduleSelectorLabel, selected ? attitudeCommandS.moduleSelectorLabelSelected : null]}
-                    numberOfLines={1}
-                  >
-                    {definition.label}
-                  </Text>
-                  <Text style={attitudeCommandS.moduleSelectorDetail} numberOfLines={2}>
-                    {definition.description}
-                  </Text>
-                </View>
-                <View style={[attitudeCommandS.moduleSelectorState, selected ? attitudeCommandS.moduleSelectorStateSelected : null]}>
-                  <Text style={[attitudeCommandS.moduleSelectorStateText, selected ? attitudeCommandS.moduleSelectorStateTextSelected : null]}>
-                    {selected ? 'ACTIVE' : 'SELECT'}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </TacticalPopupShell>
     </>
   );
 }, (prev, next) => (
@@ -5643,7 +6235,8 @@ const attitudeCommandS = StyleSheet.create({
     flex: 1,
     alignSelf: 'stretch',
     minHeight: 206,
-    marginVertical: 4,
+    marginTop: 4,
+    marginBottom: -5,
     position: 'relative',
     zIndex: 2,
     overflow: 'hidden',
@@ -5655,6 +6248,22 @@ const attitudeCommandS = StyleSheet.create({
   attitudeStageVehicleImageMode: {
     borderWidth: 0,
     backgroundColor: 'transparent',
+    justifyContent: 'flex-end',
+  },
+  attitudeStageLandscapeInstrumentMode: {
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.24)',
+    backgroundColor: 'rgba(6, 9, 12, 0.72)',
+  },
+  attitudeStageNavigationCommandMode: {
+    marginTop: 2,
+    marginRight: 3,
+    marginBottom: 3,
+    marginLeft: 3,
+  },
+  landscapeInstrumentTextureLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
   },
   commandTitleBlock: {
     position: 'absolute',
@@ -5681,134 +6290,53 @@ const attitudeCommandS = StyleSheet.create({
     includeFontPadding: false,
     textAlign: 'center',
   },
-  stageControlLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 3,
-  },
-  stageSoundPill: {
-    position: 'absolute',
-    top: 4,
-    left: 12,
-    zIndex: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 34,
-    height: 30,
-    minHeight: 30,
-    borderRadius: 0,
-    borderWidth: 0,
-    backgroundColor: 'transparent',
-  },
-  stageSoundPillOff: {
-    backgroundColor: 'transparent',
-  },
-  stageHexButtonChrome: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  stageZeroLabelSlot: {
-    position: 'absolute',
-    top: 9,
-    left: 52,
-    right: 52,
-    zIndex: 4,
-    minHeight: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stageZeroLabel: {
-    color: 'rgba(230, 237, 243, 0.48)',
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '800',
-    letterSpacing: 1.15,
-    textTransform: 'uppercase',
-    includeFontPadding: false,
-    textShadowColor: 'rgba(0, 0, 0, 0.72)',
-    textShadowRadius: 5,
-    textShadowOffset: { width: 0, height: 1 },
-  },
-  stageStatusPillBase: {
-    zIndex: 1,
-    maxWidth: 150,
-    minHeight: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: 'rgba(28, 23, 14, 0.82)',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  stageStatusPill: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    zIndex: 1,
-    maxWidth: 150,
-    minHeight: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: 'rgba(28, 23, 14, 0.82)',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  stageStatusPillCenterSlot: {
-    position: 'absolute',
-    bottom: '18%',
-    left: 0,
-    right: 0,
-    zIndex: 4,
-    alignItems: 'center',
-  },
-  stageStatusPillCentered: {
-    alignSelf: 'center',
-    maxWidth: 150,
-    minHeight: 18,
-    paddingHorizontal: 9,
-    paddingVertical: 2,
-    alignItems: 'center',
-    backgroundColor: 'rgba(28, 23, 14, 0.78)',
-  },
-  stageStatusPillText: {
-    fontSize: 7.8,
-    lineHeight: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    includeFontPadding: false,
-  },
   moduleTransitionShell: {
     flex: 1,
     minHeight: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  moduleTransitionShellVehicleImageMode: {
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
+    justifyContent: 'flex-end',
+    width: '100%',
+  },
+  moduleTransitionShellInstrumentOnlyMode: {
+    justifyContent: 'center',
+    backgroundColor: 'rgba(4, 8, 10, 0.16)',
+  },
+  moduleTransitionShellFramedCommand: {
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
+    width: '100%',
+  },
+  commandCenterAttitudeStage: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minHeight: 0,
+    width: '100%',
+    paddingTop: 28,
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    backgroundColor: 'rgba(4, 8, 10, 0.72)',
+  },
   moduleTouchTarget: {
     flex: 1,
     minHeight: 0,
     zIndex: 0,
   },
-  stageModulePill: {
-    position: 'absolute',
-    right: 12,
-    top: 4,
-    zIndex: 4,
+  expandedPanelLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 8,
+    elevation: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 34,
-    height: 30,
-    minHeight: 30,
-    borderRadius: 0,
-    borderWidth: 0,
-    backgroundColor: 'transparent',
   },
-  stageModulePillActive: {
-    backgroundColor: 'transparent',
-  },
-  stageModulePillRecoveryMode: {
-    top: undefined,
-    bottom: 10,
+  expandedPanelCard: {
+    width: '100%',
+    alignSelf: 'center',
+    overflow: 'visible',
   },
   moduleHost: {
     flex: 1,
@@ -6437,105 +6965,35 @@ const attitudeCommandS = StyleSheet.create({
   environmentCommandFooterRight: {
     textAlign: 'right',
   },
-  moduleSelectorBody: {
-    flex: 1,
-    minHeight: 280,
-  },
-  moduleSelectorContent: {
-    flexGrow: 1,
-  },
-  moduleSelectorStack: {
-    alignSelf: 'stretch',
-    flexGrow: 1,
-    gap: 8,
-  },
-  moduleSelectorOption: {
-    minHeight: 72,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 160, 23, 0.16)',
-    backgroundColor: 'rgba(8, 12, 16, 0.72)',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  moduleSelectorOptionSelected: {
-    borderColor: 'rgba(245, 199, 73, 0.42)',
-    backgroundColor: 'rgba(39, 29, 10, 0.68)',
-  },
-  moduleSelectorIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.18)',
-    backgroundColor: 'rgba(2, 5, 7, 0.74)',
-  },
-  moduleSelectorText: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  moduleSelectorLabel: {
-    color: TACTICAL.text,
-    fontSize: 12,
-    lineHeight: 14,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  moduleSelectorLabelSelected: {
-    color: TACTICAL.amber,
-  },
-  moduleSelectorDetail: {
-    color: 'rgba(230, 237, 243, 0.62)',
-    fontSize: 9.5,
-    lineHeight: 12,
-    fontWeight: '700',
-  },
-  moduleSelectorState: {
-    minWidth: 70,
-    minHeight: 28,
-    flexShrink: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(139, 148, 158, 0.22)',
-    backgroundColor: 'rgba(19, 24, 30, 0.72)',
-    paddingHorizontal: 10,
-  },
-  moduleSelectorStateSelected: {
-    borderColor: 'rgba(245, 199, 73, 0.42)',
-    backgroundColor: 'rgba(42, 32, 11, 0.8)',
-  },
-  moduleSelectorStateText: {
-    color: 'rgba(230, 237, 243, 0.58)',
-    fontSize: 8,
-    lineHeight: 9,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  moduleSelectorStateTextSelected: {
-    color: TACTICAL.amber,
-  },
   panel: {
     flex: 1,
     minWidth: 0,
   },
   panelCenter: { flex: 1.18 },
   panelRight: {},
+  expandedPanel: {
+    flex: 1,
+    alignSelf: 'stretch',
+  },
   panelFrame: {
     flex: 1,
     minWidth: 0,
   },
+  expandedPanelFrame: {
+    borderColor: 'rgba(247, 201, 104, 0.78)',
+    shadowColor: 'rgba(247, 201, 104, 0.55)',
+    shadowOpacity: 0.32,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 9,
+  },
   panelFrameContent: {
     paddingHorizontal: 8,
     paddingVertical: 6,
+  },
+  expandedPanelFrameContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   panelContent: {
     position: 'relative',
@@ -6543,6 +7001,11 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     gap: 3,
     justifyContent: 'center',
+  },
+  expandedPanelContent: {
+    flex: 1,
+    minHeight: 0,
+    gap: 5,
   },
   panelContentCenter: {
     alignItems: 'center',
@@ -6582,6 +7045,88 @@ const attitudeCommandS = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(241, 199, 103, 0.11)',
   },
+  commandPanelHeader: {
+    flex: 1,
+    minWidth: 0,
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  commandPanelHeaderCenter: {
+    justifyContent: 'center',
+  },
+  commandPanelHeaderRight: {
+    justifyContent: 'flex-end',
+  },
+  commandPanelHeaderInlineIcon: {
+    justifyContent: 'center',
+    gap: 2,
+  },
+  commandPanelHeaderTrailingIcon: {
+    justifyContent: 'flex-end',
+  },
+  commandPanelHeaderIcon: {
+    width: 12,
+    minWidth: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commandPanelHeaderIconTrailing: {
+    flexShrink: 0,
+  },
+  commandPanelHeaderTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.amber,
+    fontSize: 7.8,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.35,
+    includeFontPadding: false,
+    textTransform: 'uppercase',
+  },
+  commandPanelHeaderTitleInlineIcon: {
+    flex: 0,
+    flexShrink: 1,
+    minWidth: 44,
+    maxWidth: '82%',
+  },
+  commandPanelHeaderTitleWithStatus: {
+    flex: 1,
+    maxWidth: '58%',
+  },
+  commandPanelHeaderTitleTrailingIcon: {
+    flex: 0,
+    flexShrink: 1,
+    maxWidth: '82%',
+  },
+  commandPanelHeaderStatus: {
+    marginLeft: 'auto',
+    maxWidth: '40%',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  commandPanelHeaderStatusLabel: {
+    color: 'rgba(230, 237, 243, 0.56)',
+    fontSize: 6.4,
+    lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0.38,
+    includeFontPadding: false,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
+  commandPanelHeaderStatusValue: {
+    fontSize: 7.6,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    includeFontPadding: false,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+  },
   sunPanelHeader: {
     flex: 1,
     minWidth: 0,
@@ -6611,7 +7156,9 @@ const attitudeCommandS = StyleSheet.create({
   panelEyebrowRight: { justifyContent: 'flex-end' },
   panelEyebrow: { fontSize: 7.5, fontWeight: '900', letterSpacing: 1 },
   panelTitle: { fontSize: 12.5, lineHeight: 15, fontWeight: '900' },
+  panelTitleExpanded: { fontSize: 22, lineHeight: 25 },
   panelDetail: { color: 'rgba(230, 237, 243, 0.66)', fontSize: 8.5, lineHeight: 11, fontWeight: '700' },
+  panelDetailExpanded: { fontSize: 10, lineHeight: 13 },
   panelTextCenter: { textAlign: 'center' },
   panelTextRight: { textAlign: 'right' },
   sunPanelContent: {
@@ -6622,6 +7169,9 @@ const attitudeCommandS = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
+  sunPanelContentExpanded: {
+    paddingBottom: 2,
+  },
   vehiclePanelContent: {
     flex: 1,
     minHeight: 0,
@@ -6630,11 +7180,17 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'stretch',
     paddingTop: 2,
   },
+  vehiclePanelContentExpanded: {
+    paddingTop: 4,
+  },
   weatherPanelContent: {
     flex: 1,
     minHeight: 0,
     justifyContent: 'flex-start',
     paddingBottom: 21,
+  },
+  weatherPanelContentExpanded: {
+    paddingBottom: 28,
   },
   routePanelContent: {
     flex: 1,
@@ -6642,11 +7198,17 @@ const attitudeCommandS = StyleSheet.create({
     justifyContent: 'flex-start',
     paddingBottom: 30,
   },
+  routePanelContentExpanded: {
+    paddingBottom: 36,
+  },
   powerPanelContent: {
     flex: 1,
     minHeight: 0,
     justifyContent: 'flex-end',
     paddingBottom: 22,
+  },
+  powerPanelContentExpanded: {
+    paddingBottom: 28,
   },
   sunlightTimeReadout: {
     maxWidth: '100%',
@@ -6658,6 +7220,11 @@ const attitudeCommandS = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.74)',
     textShadowRadius: 6,
     textShadowOffset: { width: 0, height: 1 },
+  },
+  sunlightTimeReadoutExpanded: {
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
   },
   sunlightBottomReadout: {
     alignSelf: 'stretch',
@@ -6781,6 +7348,10 @@ const attitudeCommandS = StyleSheet.create({
     borderColor: 'rgba(245, 199, 73, 0.16)',
     paddingTop: 3,
   },
+  weatherMetricStripExpanded: {
+    minHeight: 24,
+    paddingTop: 5,
+  },
   weatherMetricText: {
     flex: 1,
     minWidth: 0,
@@ -6791,6 +7362,10 @@ const attitudeCommandS = StyleSheet.create({
     letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
+  },
+  weatherMetricTextExpanded: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   vehicleGlyphLayer: {
     position: 'absolute',
@@ -6817,66 +7392,88 @@ const attitudeCommandS = StyleSheet.create({
     right: 0,
     top: 0,
     bottom: 0,
-    backgroundColor: 'rgba(2, 5, 7, 0.34)',
+    backgroundColor: VEHICLE_PROFILE_BALANCED_SCRIM,
     borderRadius: 12,
   },
-  vehicleBaseTelemetryRow: {
-    alignSelf: 'stretch',
+  vehicleCommandCornerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+  },
+  vehicleCommandCornerValue: {
+    position: 'absolute',
+    color: 'rgba(230, 237, 243, 0.86)',
+    fontSize: 7.2,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0, 0, 0, 0.88)',
+    textShadowRadius: 5,
+    textShadowOffset: { width: 0, height: 1 },
+  },
+  vehicleCommandCornerValueExpanded: {
+    fontSize: 9,
+    lineHeight: 11,
+  },
+  vehicleCommandVoltageCorner: {
+    top: 0,
+    right: 0,
+    maxWidth: '36%',
+    textAlign: 'right',
+  },
+  vehicleCommandCoolantCorner: {
+    top: 0,
+    left: 0,
+    maxWidth: '36%',
+    textAlign: 'left',
+  },
+  vehicleCommandRangeCorner: {
+    left: 0,
+    bottom: 0,
+    maxWidth: '64%',
+    textAlign: 'left',
+  },
+  vehicleCommandLoadCorner: {
+    right: 0,
+    bottom: 0,
+    maxWidth: '36%',
+    textAlign: 'right',
+  },
+  vehicleCommandSection: {
+    gap: 8,
+    borderTopWidth: 1,
+    borderColor: 'rgba(245, 199, 73, 0.16)',
+    paddingTop: 10,
+  },
+  vehicleCommandSectionCollapsed: {
+    gap: 0,
+  },
+  vehicleCommandSectionHeader: {
+    minHeight: 34,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 199, 73, 0.16)',
+    backgroundColor: 'rgba(3, 7, 10, 0.5)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
-  vehicleBaseIdentityBlock: {
-    alignSelf: 'flex-end',
-    width: '58%',
-    maxWidth: '58%',
-    minHeight: 0,
-    gap: 1,
-    paddingRight: 2,
-    alignItems: 'flex-end',
-  },
-  vehicleBaseNameText: {
-    maxWidth: '100%',
-    color: 'rgba(245, 199, 73, 0.94)',
-    fontSize: 6.8,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.28,
-    textTransform: 'uppercase',
-    textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.86)',
-    textShadowRadius: 6,
-    textShadowOffset: { width: 0, height: 1 },
-  },
-  vehicleBaseIdentityText: {
-    maxWidth: '100%',
-    color: 'rgba(230, 237, 243, 0.72)',
-    fontSize: 5.6,
-    lineHeight: 7,
-    fontWeight: '800',
-    letterSpacing: 0.24,
-    textTransform: 'uppercase',
-    textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.82)',
-    textShadowRadius: 5,
-    textShadowOffset: { width: 0, height: 1 },
-  },
-  vehicleBaseTelemetryText: {
+  vehicleCommandSectionHeaderText: {
     flex: 1,
     minWidth: 0,
-    color: 'rgba(230, 237, 243, 0.82)',
-    fontSize: 7.4,
-    lineHeight: 9,
+    color: TACTICAL.amber,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '900',
-    letterSpacing: 0.36,
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
-    textShadowColor: 'rgba(0, 0, 0, 0.82)',
-    textShadowRadius: 5,
-    textShadowOffset: { width: 0, height: 1 },
   },
-  vehicleBaseTelemetryTextRight: {
-    textAlign: 'right',
+  vehicleCommandSectionRows: {
+    gap: 8,
   },
   routeGlyphLayer: {
     position: 'absolute',
@@ -6889,209 +7486,172 @@ const attitudeCommandS = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(1, 7, 10, 0.38)',
   },
-  routeProgressMapBackground: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-    opacity: 0.9,
-  },
-  routeProgressRiveBackground: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-    opacity: 0.92,
-  },
-  routeProgressMapScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(1, 6, 8, 0.24)',
+  terrainRiskBackgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.96,
+    overflow: 'hidden',
     borderRadius: 12,
+    backgroundColor: 'rgba(1, 5, 8, 0.72)',
   },
-  routeProgressOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
+  terrainRiskBackgroundImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
   },
-  routeTopoLineA: {
-    position: 'absolute',
-    left: -12,
-    top: 13,
-    width: 120,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.12)',
-    transform: [{ rotate: '-9deg' }],
+  terrainRiskBackgroundImageInner: {
+    width: '100%',
+    height: '100%',
   },
-  routeTopoLineB: {
-    position: 'absolute',
-    right: -18,
-    top: 31,
-    width: 136,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.1)',
-    transform: [{ rotate: '8deg' }],
+  terrainRiskBackgroundScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(1, 5, 8, 0.32)',
   },
-  routeTopoLineC: {
-    position: 'absolute',
-    left: 18,
-    bottom: 12,
-    width: 96,
-    height: 1,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 199, 73, 0.08)',
-    transform: [{ rotate: '5deg' }],
-  },
-  routePathShadow: {
-    position: 'absolute',
-    left: 18,
-    right: 20,
-    top: 29,
-    height: 5,
-    borderRadius: 999,
-    opacity: 0.75,
-    shadowOpacity: 0.72,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routePath: {
-    position: 'absolute',
-    left: 18,
-    right: 20,
-    top: 18,
-    height: 26,
-    borderTopWidth: 2,
-    borderRightWidth: 2,
-    borderBottomWidth: 2,
-    borderTopRightRadius: 22,
-    borderBottomRightRadius: 22,
-    borderBottomLeftRadius: 16,
-    transform: [{ rotate: '-5deg' }],
-  },
-  routePathCompleted: {
-    position: 'absolute',
-    left: 21,
-    top: 30,
-    height: 3,
-    borderRadius: 999,
-    opacity: 0.82,
-    shadowOpacity: 0.72,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerStart: {
-    position: 'absolute',
-    left: 17,
-    bottom: 20,
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    shadowOpacity: 0.86,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerCheckpoint: {
-    position: 'absolute',
-    left: 76,
-    top: 18,
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    shadowOpacity: 0.72,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeMarkerEnd: {
-    position: 'absolute',
-    right: 18,
-    top: 14,
-    width: 9,
-    height: 9,
-    borderRadius: 999,
-    shadowOpacity: 0.8,
-    shadowRadius: 9,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  routeProgressPill: {
-    position: 'absolute',
-    right: 8,
-    top: 6,
-    minHeight: 14,
-    borderRadius: 999,
+  terrainRiskBackgroundVignette: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.48)',
-    backgroundColor: 'rgba(28, 20, 7, 0.68)',
-    paddingHorizontal: 5,
-    justifyContent: 'center',
+    borderColor: 'rgba(242, 194, 77, 0.12)',
+    backgroundColor: 'rgba(0, 0, 0, 0.08)',
   },
-  routeProgressPillText: {
-    fontSize: 6,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.7,
+  terrainRiskPreview: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+    paddingHorizontal: 7,
+    paddingTop: 6,
+    paddingBottom: 5,
+    gap: 4,
   },
-  routeMetricStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+  terrainRiskPreviewActive: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    gap: 0,
+  },
+  terrainRiskPreviewActiveRestored: {
+    left: -22,
+    right: -22,
+    top: -22,
+    bottom: -2,
+  },
+  terrainRiskPreviewHeader: {
+    minHeight: 11,
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
-    columnGap: 5,
-    rowGap: 2,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 3,
+    justifyContent: 'space-between',
+    gap: 6,
   },
-  routeMetricName: {
-    flexBasis: '100%',
-    color: 'rgba(247, 201, 104, 0.8)',
-    fontSize: 6.9,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.55,
-    textTransform: 'uppercase',
-  },
-  routeMetricText: {
+  terrainRiskPreviewTitle: {
     flex: 1,
     minWidth: 0,
-    color: 'rgba(230, 237, 243, 0.68)',
+    color: TACTICAL.amber,
     fontSize: 6.8,
     lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.45,
+    letterSpacing: 0.58,
     textTransform: 'uppercase',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowRadius: 4,
+    textShadowOffset: { width: 0, height: 1 },
   },
-  routeStandbyStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.12)',
-    paddingTop: 3,
-  },
-  routeStandbyText: {
-    color: 'rgba(230, 237, 243, 0.58)',
-    fontSize: 6.8,
+  terrainRiskNoRouteText: {
+    flex: 1,
+    minWidth: 0,
+    color: 'rgba(230, 237, 243, 0.7)',
+    fontSize: 6.6,
     lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+  },
+  terrainRiskChartFrame: {
+    flex: 1,
+    minHeight: 0,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.16)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+  },
+  terrainRiskChartFrameActive: {
+    borderWidth: 0,
+    borderRadius: 10,
+    backgroundColor: 'transparent',
+  },
+  terrainRiskReferenceReadout: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 7,
+    zIndex: 6,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(242, 194, 77, 0.28)',
+    backgroundColor: 'rgba(4, 8, 11, 0.90)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    gap: 3,
+  },
+  terrainRiskReferenceEyebrow: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    lineHeight: 9,
     fontWeight: '900',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
+  },
+  terrainRiskReferenceTitle: {
+    color: '#F5D27C',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+  },
+  terrainRiskReferenceMeta: {
+    color: 'rgba(230, 237, 243, 0.78)',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '800',
+  },
+  terrainRiskReferenceGuidance: {
+    color: 'rgba(230, 237, 243, 0.64)',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '700',
+  },
+  terrainRiskEmptyPanel: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 160, 23, 0.14)',
+    backgroundColor: 'rgba(0,0,0,0.24)',
+    paddingHorizontal: 9,
+  },
+  terrainRiskEmptyTitle: {
+    color: TACTICAL.textMuted,
+    fontSize: 8.4,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  terrainRiskEmptyText: {
+    marginTop: 4,
+    color: 'rgba(230, 237, 243, 0.58)',
+    fontSize: 7.2,
+    lineHeight: 9,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  routeProgressMiniMap: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
   },
   powerGlyphLayer: {
     position: 'absolute',
@@ -7218,32 +7778,6 @@ const attitudeCommandS = StyleSheet.create({
   powerFlowRowValueActiveOut: {
     color: 'rgba(255, 217, 143, 0.94)',
   },
-  powerFlowLineInput: {
-    position: 'absolute',
-    left: 72,
-    top: 49,
-    width: 28,
-    height: 3,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  powerFlowLineOutput: {
-    position: 'absolute',
-    right: 72,
-    top: 49,
-    width: 28,
-    height: 3,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  powerFlowPulseMini: {
-    position: 'absolute',
-    left: 0,
-    top: -1,
-    width: 18,
-    height: 5,
-    borderRadius: 999,
-  },
   powerModuleBlock: {
     position: 'absolute',
     left: '50%',
@@ -7272,14 +7806,29 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  powerRiveForegroundLayerExpanded: {
+    paddingTop: 8,
+    paddingHorizontal: 8,
+    paddingBottom: 20,
+  },
   powerRiveForegroundBlock: {
-    width: 128,
-    height: 76,
-    minWidth: 108,
-    minHeight: 62,
+    width: 236,
+    height: 142,
+    minWidth: 184,
+    minHeight: 110,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'visible',
+    transform: [{ translateY: -12 }],
+  },
+  powerRiveForegroundBlockExpanded: {
+    width: '100%',
+    height: '84%',
+    minWidth: 354,
+    minHeight: 213,
+    maxWidth: 660,
+    maxHeight: 396,
+    transform: [{ translateY: -4 }, { scale: 1.5 }],
   },
   powerRiveModule: {
     width: '100%',
@@ -7287,6 +7836,10 @@ const attitudeCommandS = StyleSheet.create({
     minWidth: 96,
     minHeight: 56,
     alignSelf: 'center',
+  },
+  powerRiveModuleExpanded: {
+    minWidth: 276,
+    minHeight: 165,
   },
   powerModuleLabel: {
     color: 'rgba(245, 199, 73, 0.72)',
@@ -7335,9 +7888,12 @@ const attitudeCommandS = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    borderTopWidth: 1,
-    borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 3,
+    borderTopWidth: 0,
+    borderColor: 'transparent',
+    paddingTop: 0,
+  },
+  powerBottomStripExpanded: {
+    minHeight: 20,
   },
   powerBottomStripText: {
     flex: 1,
@@ -7349,6 +7905,10 @@ const attitudeCommandS = StyleSheet.create({
     letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
+  },
+  powerBottomStripTextExpanded: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   powerBottomStripLive: {
     color: 'rgba(218, 255, 228, 0.9)',
@@ -8264,6 +8824,12 @@ type AttitudeCommandLayoutMetrics = {
   };
 };
 
+type AttitudeCommandExpansionGeometry = {
+  aspectRatio: number;
+  insetHorizontal: number;
+  insetVertical: number;
+};
+
 function clampCommandLayoutValue(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -8273,9 +8839,12 @@ function resolveDashboardWidgetViewportClass(options?: WidgetRenderOptions): Das
   const widgetHeight = typeof options?.widgetHeight === 'number' && Number.isFinite(options.widgetHeight) ? options.widgetHeight : 0;
   const screenWidth = typeof options?.screenWidth === 'number' && Number.isFinite(options.screenWidth) ? options.screenWidth : widgetWidth;
   const screenHeight = typeof options?.screenHeight === 'number' && Number.isFinite(options.screenHeight) ? options.screenHeight : widgetHeight;
-  const isLandscape = screenWidth > screenHeight || (widgetWidth > widgetHeight && widgetWidth >= 560);
+  const hasScreenDimensions = screenWidth > 0 && screenHeight > 0;
+  const isLandscape = hasScreenDimensions
+    ? screenWidth > screenHeight
+    : widgetWidth > widgetHeight && widgetWidth >= 560;
 
-  if (isLandscape || widgetWidth >= 720 || screenWidth >= 840) return 'landscape_wide';
+  if (isLandscape) return 'landscape_wide';
   if (widgetWidth >= 560 || screenWidth >= 700) return 'tablet_portrait';
   return 'phone_portrait';
 }
@@ -8292,9 +8861,9 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
       viewportClass,
       shell: { gap: 6, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 8 },
       topRow: { gap: 9, minHeight: topHeight, flexBasis: topHeight },
-      bottomRow: { gap: 9, minHeight: bottomHeight, flexBasis: bottomHeight },
+      bottomRow: { gap: 7, minHeight: bottomHeight, flexBasis: bottomHeight },
       attitudeStage: {
-        minHeight: clampCommandLayoutValue(height * 0.4, 214, 330),
+        minHeight: clampCommandLayoutValue(height * 0.48, 276, 398),
         marginHorizontal: 1 - shellPaddingHorizontal,
       },
       commandTitleBlock: { left: 150, right: 150, top: 9 },
@@ -8309,9 +8878,9 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
       viewportClass,
       shell: { gap: 6, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 7 },
       topRow: { gap: 8, minHeight: topHeight, flexBasis: topHeight },
-      bottomRow: { gap: 8, minHeight: bottomHeight, flexBasis: bottomHeight },
+      bottomRow: { gap: 6, minHeight: bottomHeight, flexBasis: bottomHeight },
       attitudeStage: {
-        minHeight: clampCommandLayoutValue(height * 0.4, 210, 320),
+        minHeight: clampCommandLayoutValue(height * 0.48, 270, 388),
         marginHorizontal: 1 - shellPaddingHorizontal,
       },
       commandTitleBlock: { left: 128, right: 128, top: 8 },
@@ -8325,9 +8894,9 @@ function resolveAttitudeCommandLayoutMetrics(options?: WidgetRenderOptions): Att
     viewportClass,
     shell: { gap: 5, paddingHorizontal: shellPaddingHorizontal, paddingVertical: 6 },
     topRow: { gap: 5, minHeight: topHeight, flexBasis: topHeight },
-    bottomRow: { gap: 6, minHeight: bottomHeight, flexBasis: bottomHeight },
+    bottomRow: { gap: 4, minHeight: bottomHeight, flexBasis: bottomHeight },
     attitudeStage: {
-      minHeight: clampCommandLayoutValue(height * 0.38, 186, 270),
+      minHeight: clampCommandLayoutValue(height * 0.46, 238, 328),
       marginHorizontal: 1 - shellPaddingHorizontal,
     },
     commandTitleBlock: { left: 88, right: 88, top: 7 },
@@ -8377,71 +8946,55 @@ function ProgressWidget({ data: _data, options }: { data: WidgetData; options?: 
     );
   }
 
-  // Ã¢-ÂÃ¢-ÂÃ¢-Â FALLBACK: No active route Ã¢-ÂÃ¢-ÂÃ¢-Â
-  if (!progressSummary) {
-    return (
-      <WidgetCardShell badge={{ label: 'NO ROUTE', tone: 'unavailable' }}>
-        <View style={progS.summaryBody}>
-          <WidgetPrimaryValue
-            label="ROUTE STATUS"
-            value="INACTIVE"
-            tone="neutral"
-          />
-          <WidgetSecondaryRow
-            items={[
-              { label: 'REMAINING', value: '--', tone: 'neutral' },
-              { label: 'TIME', value: '--', tone: 'neutral' },
-            ]}
-          />
-          <WidgetMetaLine text="Open Navigate to stage a route." tone="neutral" />
-        </View>
-      </WidgetCardShell>
-    );
-  }
-
-  const progressTone: WidgetTone = progressSummary.stateTone;
+  const routeProgressPoints = (progressSummary?.routePoints ?? []).map((point) => ({
+    latitude: point.lat,
+    longitude: point.lng,
+  }));
+  const routeCompletedPoints = (progressSummary?.progressPoints ?? []).map((point) => ({
+    latitude: point.lat,
+    longitude: point.lng,
+  }));
+  const routeEndpointFallbackPoints = [
+    progressSummary?.originLocation ?? null,
+    progressSummary?.destinationLocation ?? null,
+  ].filter((point): point is { latitude: number; longitude: number } =>
+    !!point &&
+    Number.isFinite(point.latitude) &&
+    Number.isFinite(point.longitude),
+  );
+  const miniMapRoutePoints =
+    routeProgressPoints.length > 1
+      ? routeProgressPoints
+      : routeCompletedPoints.length > 1
+        ? routeCompletedPoints
+        : routeEndpointFallbackPoints.length > 1
+          ? routeEndpointFallbackPoints
+          : [];
+  const miniMapCurrentLocation =
+    progressSummary?.currentLocation ??
+    routeCompletedPoints[routeCompletedPoints.length - 1] ??
+    null;
 
   return (
-    <WidgetCardShell badge={{
-      label: progressSummary.stateLabel,
-      tone: progressSummary.stateTone,
-    }}>
-      <View style={progS.summaryBody}>
-        <WidgetPrimaryValue
-          label="COMPLETE"
-          value={`${progressSummary.progressPercent}%`}
-          tone={progressTone}
-        />
-        <WidgetMetaLine
-          text={[
-            progressSummary.routeLabel,
-            progressSummary.destinationLabel && progressSummary.destinationLabel !== progressSummary.routeLabel
-              ? `to ${progressSummary.destinationLabel}`
-              : null,
-          ].filter(Boolean).join(' ')}
-          tone="neutral"
-        />
-        <WidgetSecondaryRow
-          items={[
-            { label: 'REMAINING', value: progressSummary.remainingMilesText, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-            { label: 'DONE', value: progressSummary.completedMilesText, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-          ]}
-        />
-        <WidgetSecondaryRow
-          items={[
-            { label: 'ETA', value: progressSummary.etaLabel, tone: progressSummary.isComplete ? 'good' : 'neutral' },
-            { label: 'LEFT', value: `${Math.max(0, 100 - progressSummary.progressPercent)}%`, tone: progressSummary.stateTone },
-          ]}
-        />
-        {progressSummary.nextInstruction ? (
-          <WidgetMetaLine text={progressSummary.nextInstruction} tone="neutral" />
-        ) : null}
-        <WidgetMetaLine
-          text={progressSummary.footerText}
-          tone={progressSummary.isComplete ? 'good' : progressSummary.isActive ? 'neutral' : 'attention'}
-        />
-      </View>
-    </WidgetCardShell>
+    <RouteProgressMiniMap
+      isGuidanceActive={Boolean(progressSummary?.isActive)}
+      routeGeoJson={buildRouteProgressFeatureFromPoints(miniMapRoutePoints)}
+      currentLocation={miniMapCurrentLocation}
+      progressPercent={progressSummary?.progressPercent ?? null}
+      destinationLocation={
+        progressSummary?.destinationLocation ??
+        miniMapRoutePoints[miniMapRoutePoints.length - 1] ??
+        null
+      }
+      originLocation={progressSummary?.originLocation ?? miniMapRoutePoints[0] ?? null}
+      remainingDistanceText={progressSummary?.remainingMilesText ?? null}
+      etaText={progressSummary?.etaLabel ?? null}
+      statusText={progressSummary?.stateLabel ?? null}
+      ecsGold={TACTICAL.amber}
+      inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+      testID="dashboard-route-progress-mini-map"
+      style={progS.routeProgressMiniMap}
+    />
   );
 }
 
@@ -10682,7 +11235,7 @@ function HwyDaylightRemainingDetail({ data, options }: { data: WidgetData; optio
 function AttitudeCommandWeatherBackgroundVisual({ weather }: { weather?: CommandWeatherVisualData }) {
   const reducedMotion = useReducedMotion();
   const fadeAnim = useStableAnimatedValue(1);
-  const targetType = weather?.backgroundType ?? 'cloudDay';
+  const targetType = weather?.backgroundType ?? 'clouds';
   const [currentType, setCurrentType] = useState<WeatherBackgroundType>(targetType);
   const [previousType, setPreviousType] = useState<WeatherBackgroundType | null>(null);
 
@@ -10712,12 +11265,12 @@ function AttitudeCommandWeatherBackgroundVisual({ weather }: { weather?: Command
     return () => animation.stop();
   }, [currentType, fadeAnim, reducedMotion, targetType]);
 
-  const currentSource = WEATHER_BACKGROUND_IMAGES[currentType] ?? WEATHER_BACKGROUND_IMAGES.cloudDay;
+  const currentSource = WEATHER_BACKGROUND_IMAGES[currentType] ?? WEATHER_BACKGROUND_IMAGES.clouds;
   const previousSource = previousType ? WEATHER_BACKGROUND_IMAGES[previousType] : null;
   const effectStyle =
-    currentType.startsWith('fog')
+    currentType === 'atmosphere'
       ? attitudeCommandS.weatherBackgroundFogScrim
-      : currentType.endsWith('Night')
+      : currentType === 'thunderstorm'
         ? attitudeCommandS.weatherBackgroundNightScrim
         : null;
 
@@ -10746,7 +11299,7 @@ function AttitudeCommandWeatherBackgroundVisual({ weather }: { weather?: Command
 function AttitudeCommandSunlightBackgroundVisual({ sunlight }: { sunlight?: CommandSunlightVisualData }) {
   const reducedMotion = useReducedMotion();
   const fadeAnim = useStableAnimatedValue(1);
-  const targetType = sunlight?.backgroundType ?? 'day';
+  const targetType = sunlight?.backgroundType ?? 'daylight';
   const [currentType, setCurrentType] = useState<SunlightBackgroundType>(targetType);
   const [previousType, setPreviousType] = useState<SunlightBackgroundType | null>(null);
 
@@ -10776,7 +11329,7 @@ function AttitudeCommandSunlightBackgroundVisual({ sunlight }: { sunlight?: Comm
     return () => animation.stop();
   }, [currentType, fadeAnim, reducedMotion, targetType]);
 
-  const currentSource = SUNLIGHT_BACKGROUND_IMAGES[currentType] ?? SUNLIGHT_BACKGROUND_IMAGES.day;
+  const currentSource = SUNLIGHT_BACKGROUND_IMAGES[currentType] ?? SUNLIGHT_BACKGROUND_IMAGES.daylight;
   const previousSource = previousType ? SUNLIGHT_BACKGROUND_IMAGES[previousType] : null;
 
   return (
@@ -10863,174 +11416,176 @@ function AttitudeCommandVehicleProfileBackgroundVisual({
   );
 }
 
-function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRouteVisualData }) {
-  const targetProgress = getRouteProgressPercent({ progressPercent: route?.progressPercent });
-  const reducedMotion = useReducedMotion();
-  const animatedProgress = useStableAnimatedValue(targetProgress);
-  const [displayProgress, setDisplayProgress] = useState(targetProgress);
-  const displayProgressRef = useRef(targetProgress);
+function resolveAttitudeCommandExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 3, insetHorizontal: 12, insetVertical: 18 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.15, insetHorizontal: 11, insetVertical: 16 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.85, insetHorizontal: 10, insetVertical: 14 };
+  }
+}
 
-  useEffect(() => {
-    const listenerId = animatedProgress.addListener(({ value }) => {
-      const nextProgress = getRouteProgressPercent({ progressPercent: value });
-      if (Math.abs(nextProgress - displayProgressRef.current) >= 0.3) {
-        displayProgressRef.current = nextProgress;
-        setDisplayProgress(nextProgress);
-      }
-    });
-
-    return () => {
-      animatedProgress.removeListener(listenerId);
-    };
-  }, [animatedProgress]);
-
-  useEffect(() => {
-    if (reducedMotion) {
-      animatedProgress.stopAnimation();
-      animatedProgress.setValue(targetProgress);
-      displayProgressRef.current = targetProgress;
-      setDisplayProgress(targetProgress);
-      return undefined;
-    }
-
-    const animation = Animated.timing(animatedProgress, {
-      toValue: targetProgress,
-      duration: 780,
-      easing: Easing.inOut(Easing.quad),
-      useNativeDriver: false,
-    });
-
-    animation.start(({ finished }) => {
-      if (finished) {
-        displayProgressRef.current = targetProgress;
-        setDisplayProgress(targetProgress);
-      }
-    });
-
-    return () => {
-      animation.stop();
-    };
-  }, [animatedProgress, reducedMotion, targetProgress]);
-
-  const progress = displayProgress;
-  const progressRatio = progress / 100;
-  const marker = getRouteMarkerPoint(progress);
-  const routeActive = Boolean(route?.active);
-  const routeCanRenderPath = routeActive && route?.hasGeometry === true;
-  const glowOpacity = routeActive ? 0.35 + progressRatio * 0.55 : 0.28;
-  const glowStrokeWidth = 9 + progressRatio * 4;
-  const baseRouteColor = routeActive ? 'rgba(245, 199, 73, 0.26)' : 'rgba(139,148,158,0.34)';
-  const progressRouteColor = routeActive ? '#F2B93F' : 'rgba(139,148,158,0.66)';
-  const markerColor = routeActive ? TACTICAL.amber : 'rgba(139,148,158,0.74)';
-  const legacyRouteVisual = (
-    <>
-      <Image
-        source={ROUTE_PROGRESS_MAP_BACKGROUND}
-        resizeMode="cover"
-        style={attitudeCommandS.routeProgressMapBackground}
-      />
-      {routeCanRenderPath ? (
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox="0 0 1000 420"
-          preserveAspectRatio="none"
-          style={attitudeCommandS.routeProgressOverlay}
-        >
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={baseRouteColor}
-            strokeWidth={22}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.34}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={baseRouteColor}
-            strokeWidth={8}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.82}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={progressRouteColor}
-            strokeWidth={glowStrokeWidth}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray={ROUTE_PROGRESS_PATH_LENGTH}
-            strokeDashoffset={ROUTE_PROGRESS_PATH_LENGTH * (1 - progressRatio)}
-            opacity={glowOpacity}
-          />
-          <Path
-            d={ROUTE_PROGRESS_PATH}
-            fill="none"
-            stroke={progressRouteColor}
-            strokeWidth={5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray={ROUTE_PROGRESS_PATH_LENGTH}
-            strokeDashoffset={ROUTE_PROGRESS_PATH_LENGTH * (1 - progressRatio)}
-            opacity={0.94}
-          />
-          <Circle cx={88} cy={332} r={13} fill={TACTICAL.success} opacity={0.92} />
-          <Circle cx={932} cy={84} r={13} fill={TACTICAL.amber} opacity={0.88} />
-          <Circle cx={598} cy={204} r={8} fill="rgba(245, 199, 73, 0.72)" opacity={0.82} />
-          <Circle
-            cx={marker.x}
-            cy={marker.y}
-            r={17}
-            fill={markerColor}
-            opacity={0.28 + progressRatio * 0.26}
-          />
-          <Circle
-            cx={marker.x}
-            cy={marker.y}
-            r={8}
-            fill={markerColor}
-            stroke="rgba(255, 238, 180, 0.9)"
-            strokeWidth={2}
-            opacity={1}
-          />
-        </Svg>
-      ) : null}
-    </>
+function AttitudeCommandTerrainRiskPreview({
+  terrainRisk,
+  expanded = false,
+  onTerrainRiskReferenceEvent,
+}: {
+  terrainRisk: CommandTerrainRiskVisualData;
+  expanded?: boolean;
+  onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
+}) {
+  const route = terrainRisk.route;
+  const [selectedReferenceEvent, setSelectedReferenceEvent] = useState<TerrainRiskReferenceEvent | null>(null);
+  const referenceEvents = useMemo(
+    () => route
+      ? buildTerrainRiskReferenceEvents({
+          profile: route.profile,
+          totalDistanceMiles: route.totalDistanceMiles,
+          completedDistanceMiles: terrainRisk.completedDistanceMiles,
+          weatherSnapshot: terrainRisk.weatherSnapshot,
+        })
+      : [],
+    [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
+  );
+  const upcomingReferenceEvent = useMemo(
+    () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 0.75 }),
+    [referenceEvents],
   );
 
+  useEffect(() => {
+    onTerrainRiskReferenceEvent?.(upcomingReferenceEvent);
+  }, [onTerrainRiskReferenceEvent, upcomingReferenceEvent]);
+
+  const handleReferencePointPress = useCallback((event: TerrainRiskReferenceEvent) => {
+    setSelectedReferenceEvent(event);
+    onTerrainRiskReferenceEvent?.(event);
+  }, [onTerrainRiskReferenceEvent]);
+
   return (
-    <View pointerEvents="none" style={attitudeCommandS.routeGlyphLayer}>
-      <RouteGuidanceProgressRive
-        progressPercent={routeActive ? targetProgress : 0}
-        isActive={routeActive}
-        isOffline={route?.isOffline ?? false}
-        style={attitudeCommandS.routeProgressRiveBackground}
-        testID="attitude-command-route-guidance-progress-rive"
-        fallback={legacyRouteVisual}
-      />
-      <View style={attitudeCommandS.routeProgressMapScrim} />
-      <View style={attitudeCommandS.routeProgressPill}>
-        <Text style={[attitudeCommandS.routeProgressPillText, { color: routeActive ? TACTICAL.amber : TACTICAL.textMuted }]} numberOfLines={1}>
-          {routeActive ? 'ACTIVE' : 'STANDBY'}
-        </Text>
-      </View>
+    <View
+      pointerEvents={expanded ? 'box-none' : 'none'}
+      style={[
+        attitudeCommandS.terrainRiskPreview,
+        route ? attitudeCommandS.terrainRiskPreviewActive : null,
+        route && !expanded ? attitudeCommandS.terrainRiskPreviewActiveRestored : null,
+      ]}
+    >
+      {!route && terrainRisk.active ? (
+        <View style={attitudeCommandS.terrainRiskPreviewHeader}>
+          <Text style={attitudeCommandS.terrainRiskNoRouteText} numberOfLines={1}>
+            TERRAIN PROFILE PENDING
+          </Text>
+        </View>
+      ) : null}
+
+      {route ? (
+        <>
+          <View style={[attitudeCommandS.terrainRiskChartFrame, attitudeCommandS.terrainRiskChartFrameActive]}>
+            <TerrainRiskSideProfile
+              profile={route.profile}
+              totalDistanceMiles={route.totalDistanceMiles}
+              unit="mi"
+              transparentBackground
+              interactive={expanded}
+              referenceEvents={referenceEvents}
+              onReferencePointPress={handleReferencePointPress}
+            />
+          </View>
+          {expanded && selectedReferenceEvent ? (
+            <View style={attitudeCommandS.terrainRiskReferenceReadout}>
+              <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>
+                Why ECS flagged this point
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceTitle} numberOfLines={1}>
+                {selectedReferenceEvent.title} | {selectedReferenceEvent.distanceAheadMiles.toFixed(1)} mi ahead
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceMeta} numberOfLines={1}>
+                {[
+                  selectedReferenceEvent.gradePercent != null ? `${selectedReferenceEvent.gradePercent}% grade` : null,
+                  `${selectedReferenceEvent.elevationFeet.toLocaleString()} ft`,
+                  selectedReferenceEvent.weatherInfluence.summary,
+                ].filter(Boolean).join(' | ')}
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskReferenceGuidance} numberOfLines={2}>
+                {selectedReferenceEvent.fieldGuidance[0]}
+              </Text>
+            </View>
+          ) : null}
+        </>
+      ) : (
+        <View style={attitudeCommandS.terrainRiskEmptyPanel}>
+          <Text style={attitudeCommandS.terrainRiskEmptyTitle} numberOfLines={1}>
+            {terrainRisk.active ? 'TERRAIN PROFILE PENDING' : 'ROUTE TERRAIN STANDBY'}
+          </Text>
+          <Text style={attitudeCommandS.terrainRiskEmptyText} numberOfLines={2}>
+            {terrainRisk.active
+              ? 'Elevation or GPS altitude is required before the side profile can be graphed.'
+              : 'Start route guidance to load terrain risk.'}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
 
-function AttitudeCommandPowerRiveForeground({ power }: { power?: CommandPowerVisualData }) {
+function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRouteVisualData }) {
   return (
-    <View pointerEvents="none" style={attitudeCommandS.powerRiveForegroundLayer}>
-      <View style={attitudeCommandS.powerRiveForegroundBlock}>
+    <View pointerEvents="none" style={attitudeCommandS.routeGlyphLayer}>
+      <RouteProgressMiniMap
+        isGuidanceActive={Boolean(route?.active)}
+        routeGeoJson={route?.routeGeoJson ?? null}
+        currentLocation={route?.currentLocation ?? null}
+        progressPercent={route?.progressPercent ?? null}
+        destinationLocation={route?.destinationLocation ?? null}
+        originLocation={route?.originLocation ?? null}
+        remainingDistanceText={route?.remaining ?? null}
+        etaText={route?.eta ?? null}
+        statusText={route?.active ? 'Guidance active' : null}
+        ecsGold={TACTICAL.amber}
+        borderRadius={12}
+        inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+        testID="attitude-command-route-progress-mini-map"
+        style={attitudeCommandS.routeProgressMiniMap}
+      />
+    </View>
+  );
+}
+
+function AttitudeCommandPowerRiveForeground({
+  power,
+  expanded = false,
+}: {
+  power?: CommandPowerVisualData;
+  expanded?: boolean;
+}) {
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        attitudeCommandS.powerRiveForegroundLayer,
+        expanded && attitudeCommandS.powerRiveForegroundLayerExpanded,
+      ]}
+    >
+      <View
+        style={[
+          attitudeCommandS.powerRiveForegroundBlock,
+          expanded && attitudeCommandS.powerRiveForegroundBlockExpanded,
+        ]}
+      >
         <PowerModuleRiveWidget
           hasEcsData={Boolean(power?.live)}
           batteryPercent={power?.batteryPercent ?? null}
           inputWatts={power?.canDisplayTelemetryValues ? power.inputWatts : null}
           outputWatts={power?.canDisplayTelemetryValues ? power.outputWatts : null}
-          style={attitudeCommandS.powerRiveModule}
+          style={[
+            attitudeCommandS.powerRiveModule,
+            expanded && attitudeCommandS.powerRiveModuleExpanded,
+          ]}
           testID="attitude-command-blu-power-module-rive"
         />
       </View>
@@ -11043,41 +11598,8 @@ function AttitudeCommandPowerManagementVisual({
 }: {
   power?: CommandPowerVisualData;
 }) {
-  const reducedMotion = useReducedMotion();
-  const isAppForeground = useAppForegroundState();
-  const flowAnim = useStableAnimatedValue(0);
   const inputActive = Boolean(power?.inputWatts != null && power.inputWatts > 0 && power.canDisplayTelemetryValues);
   const outputActive = Boolean(power?.outputWatts != null && power.outputWatts > 0 && power.canDisplayTelemetryValues);
-  const shouldAnimate = Boolean(power?.canAnimateFlow && power.live && !reducedMotion && isAppForeground && (inputActive || outputActive));
-
-  useEffect(() => {
-    flowAnim.stopAnimation();
-    if (!shouldAnimate) {
-      flowAnim.setValue(0.45);
-      return undefined;
-    }
-
-    flowAnim.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(flowAnim, {
-        toValue: 1,
-        duration: 1450,
-        easing: Easing.inOut(Easing.quad),
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-      flowAnim.stopAnimation();
-    };
-  }, [flowAnim, shouldAnimate]);
-
-  const inputPulseX = flowAnim.interpolate({ inputRange: [0, 1], outputRange: [-32, 34] });
-  const outputPulseX = flowAnim.interpolate({ inputRange: [0, 1], outputRange: [-34, 32] });
-  const pulseOpacity = shouldAnimate
-    ? flowAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.16, 0.84, 0.16] })
-    : 0.38;
   const solarSourceValue = formatAttitudePowerWattsCompact(power?.solarWatts, 'input');
 
   return (
@@ -11106,26 +11628,21 @@ function AttitudeCommandPowerManagementVisual({
           {formatAttitudePowerWattsCompact(power?.outputWatts, 'output')}
         </Text>
       </View>
-      <View style={[attitudeCommandS.powerFlowLineInput, { backgroundColor: inputActive ? `${TACTICAL.success}6E` : 'rgba(139,148,158,0.24)' }]}>
-        {shouldAnimate && inputActive ? (
-          <Animated.View
-            style={[
-              attitudeCommandS.powerFlowPulseMini,
-              { backgroundColor: TACTICAL.success, opacity: pulseOpacity, transform: [{ translateX: inputPulseX }] },
-            ]}
-          />
-        ) : null}
-      </View>
-      <View style={[attitudeCommandS.powerFlowLineOutput, { backgroundColor: outputActive ? `${TACTICAL.amber}72` : 'rgba(139,148,158,0.24)' }]}>
-        {shouldAnimate && outputActive ? (
-          <Animated.View
-            style={[
-              attitudeCommandS.powerFlowPulseMini,
-              { backgroundColor: TACTICAL.amber, opacity: pulseOpacity, transform: [{ translateX: outputPulseX }] },
-            ]}
-          />
-        ) : null}
-      </View>
+    </View>
+  );
+}
+
+function AttitudeCommandTerrainRiskBackgroundVisual() {
+  return (
+    <View pointerEvents="none" style={attitudeCommandS.terrainRiskBackgroundLayer}>
+      <ImageBackground
+        source={TERRAIN_RISK_BACKGROUND}
+        resizeMode="cover"
+        style={attitudeCommandS.terrainRiskBackgroundImage}
+        imageStyle={attitudeCommandS.terrainRiskBackgroundImageInner}
+      />
+      <View style={attitudeCommandS.terrainRiskBackgroundScrim} />
+      <View style={attitudeCommandS.terrainRiskBackgroundVignette} />
     </View>
   );
 }
@@ -11163,6 +11680,10 @@ function AttitudeCommandPanelVisual({
 
   if (icon === 'navigate-outline') {
     return <AttitudeCommandRouteProgressMapVisual route={route} />;
+  }
+
+  if (icon === 'warning-outline') {
+    return <AttitudeCommandTerrainRiskBackgroundVisual />;
   }
 
   if (icon === 'battery-charging-outline') {
@@ -13052,6 +13573,7 @@ function ResourceStatusWidget({ data, options }: { data: WidgetData; options?: W
   const activeVehicleContext = data.activeVehicleContext ?? getActiveVehicleContext();
   const activeVehicleId = activeVehicleContext.activeVehicleId;
   const consumables = useVehicleConsumables(activeVehicleId, activeVehicleContext.consumables ?? undefined);
+  const utilitySensorResources = selectUtilitySensorResourceStates(useECSUtilitySensorTelemetryReadings());
   const vt = useVehicleTelemetry();
   const spec = activeVehicleContext.spec || null;
   const hasActiveVehicle = activeVehicleContext.hasActiveVehicleId;
@@ -13069,8 +13591,20 @@ function ResourceStatusWidget({ data, options }: { data: WidgetData; options?: W
     },
   ]);
   const fuelPct = fuelResolution?.value ?? null;
-  const waterGal = activeVehicleContext.resourceProfile.waterCapacityGal != null ? consumables.water_gal_current : null;
-  const alternateFluidValue = formatAlternateFluidValue(consumables);
+  const waterCapacity = activeVehicleContext.resourceProfile.waterCapacityGal ?? null;
+  const liveWaterGal = getUtilitySensorCurrentFromCapacity(utilitySensorResources.water, waterCapacity);
+  const waterGal = waterCapacity != null ? liveWaterGal ?? consumables.water_gal_current : null;
+  const waterSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.water,
+    formatResourceModeLabel(consumables.water_source),
+  );
+  const alternateFluidValue =
+    formatAlternateFluidSensorValue(consumables, utilitySensorResources.propane)
+    ?? formatAlternateFluidValue(consumables);
+  const alternateFluidSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.propane,
+    formatResourceModeLabel(consumables.alternate_fluid_source),
+  );
   const trip = data.activeTrip;
   const fuelTankGal = spec?.fuel_tank_capacity_gal ?? 0;
   const fuelGallons = fuelPct != null ? fuelTankGal * (fuelPct / 100) : 0;
@@ -13116,10 +13650,10 @@ function ResourceStatusWidget({ data, options }: { data: WidgetData; options?: W
     fuelSourceLabel: fuelResolution?.detail ?? getDashboardSourceLabel(fuelResolution?.source ?? 'manual'),
     fuelSourceTone: fuelResolution ? getDashboardSourceTone(fuelResolution.source) : 'neutral',
     waterGallons: waterGal,
-    waterSourceLabel: formatResourceModeLabel(consumables.water_source),
+    waterSourceLabel,
     alternateFluidValue,
     alternateFluidLabel: formatAlternateFluidLabel(consumables),
-    alternateFluidSourceLabel: formatResourceModeLabel(consumables.alternate_fluid_source),
+    alternateFluidSourceLabel,
     powerPercent,
     powerRuntimeMinutes: ecsPower?.runtime_minutes ?? null,
     powerInputWatts: powerInput,
@@ -13131,7 +13665,7 @@ function ResourceStatusWidget({ data, options }: { data: WidgetData; options?: W
   });
   const footerTokens = [
     `Fuel ${compactResourceSourceLabel(fuelResolution?.detail ?? getDashboardSourceLabel(fuelResolution?.source ?? 'manual'))}`,
-    `Water ${compactResourceModeLabel(consumables.water_source)}`,
+    `Water ${utilitySensorResources.water ? 'Sensor' : compactResourceModeLabel(consumables.water_source)}`,
     `Power ${compactPowerSourceLabel(ecsPower)}`,
   ];
   const footerLine = footerTokens.join(' - ');
@@ -13237,6 +13771,7 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
   const activeVehicleContext = data.activeVehicleContext ?? getActiveVehicleContext();
   const activeVehicleId = activeVehicleContext.activeVehicleId;
   const consumables = useVehicleConsumables(activeVehicleId, activeVehicleContext.consumables ?? undefined);
+  const utilitySensorResources = selectUtilitySensorResourceStates(useECSUtilitySensorTelemetryReadings());
   const vt = useVehicleTelemetry();
   const trip = data.activeTrip;
   const spec = activeVehicleContext.spec || null;
@@ -13257,6 +13792,19 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
   ]);
   const fuelPct = fuelResolution?.value ?? null;
   const waterCapacity = activeVehicleContext.resourceProfile.waterCapacityGal ?? null;
+  const liveWaterGal = getUtilitySensorCurrentFromCapacity(utilitySensorResources.water, waterCapacity);
+  const renderedWaterGal = waterCapacity != null ? liveWaterGal ?? consumables.water_gal_current : null;
+  const waterSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.water,
+    formatResourceModeLabel(consumables.water_source),
+  );
+  const alternateFluidValue =
+    formatAlternateFluidSensorValue(consumables, utilitySensorResources.propane)
+    ?? formatAlternateFluidValue(consumables);
+  const alternateFluidSourceLabel = formatUtilitySensorModeLabel(
+    utilitySensorResources.propane,
+    formatResourceModeLabel(consumables.alternate_fluid_source),
+  );
   const fuelTankGal = spec?.fuel_tank_capacity_gal ?? 0;
   const fuelGallons = fuelPct != null ? fuelTankGal * (fuelPct / 100) : 0;
   const fuelRange = fuelGallons > 0 && (trip?.capac_mpg ?? 0) > 0 ? Math.round(fuelGallons * (trip?.capac_mpg ?? 0)) : null;
@@ -13265,11 +13813,11 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
     fuelRangeMiles: fuelRange,
     fuelSourceLabel: fuelResolution?.detail ?? getDashboardSourceLabel(fuelResolution?.source ?? 'manual'),
     fuelSourceTone: fuelResolution ? getDashboardSourceTone(fuelResolution.source) : 'neutral',
-    waterGallons: waterCapacity != null ? consumables.water_gal_current : null,
-    waterSourceLabel: formatResourceModeLabel(consumables.water_source),
-    alternateFluidValue: formatAlternateFluidValue(consumables),
+    waterGallons: renderedWaterGal,
+    waterSourceLabel,
+    alternateFluidValue,
     alternateFluidLabel: formatAlternateFluidLabel(consumables),
-    alternateFluidSourceLabel: formatResourceModeLabel(consumables.alternate_fluid_source),
+    alternateFluidSourceLabel,
     powerPercent: ecsPower?.battery_percent ?? null,
     powerRuntimeMinutes: ecsPower?.runtime_minutes ?? null,
     powerInputWatts: ecsPower?.input_watts ?? null,
@@ -13347,7 +13895,7 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
       <MetricRow label="FUEL" value={fuelPct != null ? `${Math.round(fuelPct)}%` : '--'} />
       <MetricRow label="FUEL RANGE" value={fuelRange != null ? `${fuelRange} mi` : '--'} />
       <MetricRow label="POWER" value={powerSummary.text} color={powerSummary.tone === 'good' ? '#4CAF50' : powerSummary.tone === 'critical' ? '#EF5350' : TACTICAL.text} />
-      <MetricRow label="WATER" value={`${consumables.water_gal_current.toFixed(1)} gal`} />
+      <MetricRow label="WATER" value={renderedWaterGal != null ? `${renderedWaterGal.toFixed(1)} gal` : '--'} />
       <MetricRow
         label="FUEL CONTEXT"
         value={fuelResolution?.detail ?? getDashboardSourceLabel(fuelResolution?.source ?? 'unavailable')}
@@ -13371,9 +13919,13 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
           </TouchableOpacity>
         </View>
       </View>
-      <MetricRow label="CURRENT" value={`${consumables.water_gal_current.toFixed(1)} gal`} />
-      <MetricRow label="MODE" value={formatResourceModeLabel(consumables.water_source)} />
-      <MetricRow label="UPDATED" value={formatUpdatedLabel(consumables.water_updated_at)} color={TACTICAL.textMuted} />
+      <MetricRow label="CURRENT" value={renderedWaterGal != null ? `${renderedWaterGal.toFixed(1)} gal` : '--'} />
+      <MetricRow label="MODE" value={waterSourceLabel} />
+      <MetricRow
+        label="UPDATED"
+        value={formatUpdatedLabel(utilitySensorResources.water?.lastUpdated ?? consumables.water_updated_at)}
+        color={TACTICAL.textMuted}
+      />
       {consumables.water_source === 'sensor' ? null : (
         <View style={resourceDetailS.editCard}>
           <Text style={resourceDetailS.editLabel}>Current Water</Text>
@@ -13400,9 +13952,13 @@ function ResourceStatusDetail({ data }: { data: WidgetData }) {
           </TouchableOpacity>
         </View>
       </View>
-      <MetricRow label="CURRENT" value={formatAlternateFluidValue(consumables) ?? 'No live sensor available'} />
-      <MetricRow label="MODE" value={formatResourceModeLabel(consumables.alternate_fluid_source)} />
-      <MetricRow label="UPDATED" value={formatUpdatedLabel(consumables.alternate_fluid_updated_at)} color={TACTICAL.textMuted} />
+      <MetricRow label="CURRENT" value={alternateFluidValue ?? 'No live sensor available'} />
+      <MetricRow label="MODE" value={alternateFluidSourceLabel} />
+      <MetricRow
+        label="UPDATED"
+        value={formatUpdatedLabel(utilitySensorResources.propane?.lastUpdated ?? consumables.alternate_fluid_updated_at)}
+        color={TACTICAL.textMuted}
+      />
       {consumables.alternate_fluid_source === 'sensor' ? null : (
         <View style={resourceDetailS.editCard}>
           <Text style={resourceDetailS.editLabel}>Alternate Fluid</Text>
@@ -13975,11 +14531,9 @@ const sustS = StyleSheet.create({
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Progress Widget Styles (Phase 4) Ã¢â€â‚¬Ã¢â€â‚¬
 const progS = StyleSheet.create({
-  summaryBody: {
+  routeProgressMiniMap: {
     flex: 1,
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 2,
+    minHeight: 118,
   },
 });
 

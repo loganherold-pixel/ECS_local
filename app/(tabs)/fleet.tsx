@@ -37,7 +37,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
-import { FleetIcon } from '../../components/DockIcons';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
 import TopoBackground from '../../components/TopoBackground';
@@ -79,7 +78,19 @@ import {
   type FleetScoringResult,
   type FleetWeightResult,
 } from '../../lib/fleet/fleetPremiumDomain';
-import type { FleetBuildLoadoutState } from '../../lib/fleet/fleetBuildLoadout';
+import {
+  buildFleetConfidenceNotice,
+  resolveFleetVerificationStatus,
+  resolveFleetVerificationTargets,
+  type FleetConfidenceNotice,
+  type FleetOverviewVerificationStatus,
+} from '../../lib/fleet/fleetOverviewStatus';
+import { resolveFleetPowerStorageReadiness } from '../../lib/fleet/fleetPowerStorageReadiness';
+import {
+  FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID,
+  readFleetBuildLoadoutState,
+  type FleetBuildLoadoutState,
+} from '../../lib/fleet/fleetBuildLoadout';
 import {
   fleetRiskTone,
   type FleetWeightSummary,
@@ -130,6 +141,7 @@ import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS_STATUS } from '../../lib/ecsStatusTokens';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
 
 
 
@@ -174,7 +186,8 @@ type FleetVehicleCardModel = {
   scoringResult: FleetScoringResult;
   weightSummary: FleetWeightSummary;
   fabricPayload: FleetFabricServicePayload;
-  verificationStatus: 'Verified' | 'Needs verification' | 'Estimated';
+  verificationStatus: FleetOverviewVerificationStatus;
+  verificationTargets: string[];
   needsVerification: boolean;
   activeLoadout: LocalLoadout | null;
 };
@@ -264,6 +277,113 @@ function formatFleetScore(value: number | null | undefined): string {
 function formatFleetPercent(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '--';
   return `${Math.round(value)}%`;
+}
+
+function formatFleetSourceName(value: { source?: string | null; sourceLabel?: string | null } | null | undefined): string {
+  if (!value) return 'missing';
+  return value.sourceLabel ?? value.source?.replace(/_/g, ' ') ?? 'missing';
+}
+
+function formatFleetSourceSummary(weightResult: FleetWeightResult): string {
+  return [
+    `base ${formatFleetSourceName(weightResult.baseNetWeight)}`,
+    `GVWR ${formatFleetSourceName(weightResult.gvwr)}`,
+    `load ${formatFleetSourceName(weightResult.activeLoadoutWeight)}`,
+  ].join(' / ');
+}
+
+function formatFleetRiskCopy(value: FleetScoringResult['riskLevel']): string {
+  return value.replace(/_/g, ' ');
+}
+
+function uniqueNoticeItems(values: readonly (string | null | undefined)[]): string[] {
+  return Array.from(new Set(values.map((value) => (value ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean)));
+}
+
+function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetConfidenceNotice {
+  if (!model) {
+    return {
+      score: null,
+      scoreLabel: '--',
+      title: 'Vehicle readiness is waiting on a selected vehicle.',
+      summary: 'Select or add a vehicle and ECS will explain readiness from its saved profile, payload, loadout, and checklist inputs.',
+      intelligenceSummary: null,
+      intelligenceDetail: null,
+      intelligenceConfidenceLabel: null,
+      reasons: ['No active vehicle card is selected.'],
+      improvements: ['Add a vehicle, confirm required weight values, and stage a build/loadout before relying on Fleet readiness.'],
+    };
+  }
+
+  const { vehicle, scoringResult, weightResult, weightSummary } = model;
+  const score = Number.isFinite(scoringResult.readinessScore) ? Math.round(scoringResult.readinessScore) : null;
+  const payloadScore = formatFleetScore(scoringResult.payloadScore);
+  const confidenceScore = formatFleetPercent(scoringResult.confidenceScore);
+  const payloadMargin =
+    weightSummary.payloadRemainingLb == null
+      ? 'Payload margin is unavailable until operating weight and GVWR are known.'
+      : `Payload remaining is ${formatFleetWeightValue(weightSummary.payloadRemainingLb)}.`;
+  const checklistDelta = Math.max(0, Math.round(scoringResult.payloadScore - scoringResult.readinessScore));
+  const riskFlags = weightSummary.riskFlags.map((flag) => `${flag.label}: ${flag.detail}`);
+  const verificationActions = model.verificationTargets.map(
+    (target) => `Verify ${target} so ECS can raise confidence in readiness scoring.`,
+  );
+  const checklistActions = model.checklistRecommendations
+    .filter((item) => item.status === 'recommended' || item.status === 'need_it' || item.status === 'not_sure')
+    .slice(0, 3)
+    .map((item) => `${item.label}: ${item.reason}`);
+
+  const reasons = uniqueNoticeItems([
+    `${vehicle.name}: readiness blends payload score ${payloadScore}, source confidence ${confidenceScore}, required setup, and current loadout risk.`,
+    `${vehicle.name}: current risk level is ${formatFleetRiskCopy(scoringResult.riskLevel)}.`,
+    payloadMargin,
+    checklistDelta > 0
+      ? `Required setup/checklist gaps reduced readiness by ${checklistDelta} points from payload readiness.`
+      : 'No required setup checklist penalty is currently reducing readiness.',
+    ...riskFlags,
+    ...scoringResult.blockingIssues.map((issue) => `${vehicle.name}: ${issue}`),
+    ...weightResult.validationFlags.map((flag) => `${vehicle.name}: ${flag.message}`),
+  ]).slice(0, 8);
+
+  const improvements = uniqueNoticeItems([
+    ...scoringResult.blockingIssues,
+    ...scoringResult.recommendations,
+    ...verificationActions,
+    ...checklistActions,
+    ...(weightResult.payloadRemaining && weightResult.payloadRemaining.lbs < 0
+      ? ['Remove weight or re-stage loadout before using this vehicle for a trip.']
+      : []),
+    model.needsVerification ? 'Open Weight Summary and replace estimated values with measured or manufacturer-backed values.' : null,
+    'Keep build, loadout, consumables, and recovery checklist entries current before departure.',
+  ]).slice(0, 8);
+
+  return {
+    score,
+    scoreLabel: score == null ? '--' : `${score}`,
+    title: score == null ? `${vehicle.name} readiness is waiting on data.` : `${vehicle.name} readiness is ${score}.`,
+    summary:
+      score == null
+        ? 'ECS needs more saved Fleet inputs before it can explain readiness for this vehicle.'
+        : score >= 85
+          ? 'This vehicle has a strong readiness posture from the saved Fleet inputs. Keep verification and loadout records current before departure.'
+          : 'This vehicle can be scored, but readiness is limited by payload margin, setup gaps, risk flags, or estimated source data.',
+    intelligenceSummary: `ECS sees ${formatFleetRiskCopy(scoringResult.riskLevel)} readiness risk with payload score ${payloadScore} and source confidence ${confidenceScore}.`,
+    intelligenceDetail:
+      scoringResult.blockingIssues[0] ??
+      scoringResult.recommendations[0] ??
+      (model.needsVerification
+        ? 'Verification gaps are limiting how much confidence ECS can place in this readiness score.'
+        : 'No active readiness blockers are present in the saved Fleet profile.'),
+    intelligenceConfidenceLabel: model.verificationStatus,
+    reasons,
+    improvements,
+  };
+}
+
+function resolveFleetConnectivityBadge(isOnline: boolean, offlineMode: boolean) {
+  if (offlineMode) return { label: 'OFFLINE MODE', tone: 'warning' as const };
+  if (!isOnline) return { label: 'LOCAL OFFLINE', tone: 'warning' as const };
+  return { label: 'SYNC AVAILABLE', tone: 'live' as const };
 }
 
 function resolveLoadoutSyncLabel(
@@ -412,11 +532,9 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
     (typeof accessorySummary.wizardConfig.vehicle_type === 'string'
       ? accessorySummary.wizardConfig.vehicle_type.replace(/_/g, ' ').toUpperCase()
       : 'Vehicle profile');
-  const needsVerification =
-    weightResult.baseNetWeight.source !== 'scale_ticket' ||
-    !weightResult.gvwr ||
-    weightResult.gvwr.source === 'ecs_default' ||
-    weightResult.confidence < 88;
+  const verificationTargets = resolveFleetVerificationTargets(weightResult);
+  const verificationStatus = resolveFleetVerificationStatus(weightResult);
+  const needsVerification = verificationTargets.length > 0;
 
   return {
     vehicle,
@@ -435,12 +553,8 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
     scoringResult,
     weightSummary,
     fabricPayload,
-    verificationStatus:
-      weightResult.baseNetWeight.source === 'scale_ticket'
-        ? 'Verified'
-        : needsVerification
-          ? 'Needs verification'
-          : 'Estimated',
+    verificationTargets,
+    verificationStatus,
     needsVerification,
     activeLoadout,
   };
@@ -448,6 +562,30 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
 
 function FleetCommandSurface({ state }: { state: FleetCommandState }) {
   const accent = fleetCommandAccent(state);
+  const intelligenceItems = useMemo(
+    () => state.intelligenceItems.length > 0
+      ? state.intelligenceItems
+      : [{ id: 'current', summary: state.summary, detail: state.detail }],
+    [state.detail, state.intelligenceItems, state.summary],
+  );
+  const [activeConcernIndex, setActiveConcernIndex] = useState(0);
+  const commandSignature = useMemo(
+    () => `${state.readiness}:${intelligenceItems.map((item) => item.id).join('|')}`,
+    [intelligenceItems, state.readiness],
+  );
+
+  useEffect(() => {
+    setActiveConcernIndex(0);
+  }, [commandSignature]);
+
+  const activeConcern =
+    intelligenceItems[Math.min(activeConcernIndex, Math.max(0, intelligenceItems.length - 1))] ??
+    intelligenceItems[0];
+  const canSkipConcern = intelligenceItems.length > 1;
+  const skipLabel =
+    activeConcernIndex >= intelligenceItems.length - 1
+      ? 'Restart concerns'
+      : 'Skip concern';
 
   return (
     <View style={s.commandWrap}>
@@ -466,22 +604,39 @@ function FleetCommandSurface({ state }: { state: FleetCommandState }) {
             <Text style={s.commandEyebrow}>READINESS COMMAND</Text>
             <Text style={s.commandTitle}>{state.title}</Text>
           </View>
-          <ECSBadge
-            label={state.readiness.replace(/_/g, ' ').toUpperCase()}
-            tone={fleetBadgeTone(
-              state.readiness === 'vehicle_ready' || state.readiness === 'ready_for_staging'
-                ? 'primary'
-                : state.readiness === 'ready_with_limitations' || state.readiness === 'partially_configured'
-                  ? 'warning'
-                  : 'muted',
-            )}
-            compact
-          />
+          <View style={s.commandStatusStack}>
+            <ECSBadge
+              label={state.readiness.replace(/_/g, ' ').toUpperCase()}
+              tone={fleetBadgeTone(
+                state.readiness === 'vehicle_ready' || state.readiness === 'ready_for_staging'
+                  ? 'primary'
+                  : state.readiness === 'ready_with_limitations' || state.readiness === 'partially_configured'
+                    ? 'warning'
+                    : 'muted',
+              )}
+              compact
+              style={s.commandReadinessBadge}
+              textStyle={s.commandReadinessBadgeText}
+            />
+            {canSkipConcern ? (
+              <TouchableOpacity
+                style={s.commandSkipButton}
+                onPress={() => {
+                  setActiveConcernIndex((index) => (index + 1) % intelligenceItems.length);
+                }}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={skipLabel}
+              >
+                <Text style={s.commandSkipText}>{skipLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
 
-        <Text style={s.commandSummary}>{state.summary}</Text>
-        {state.detail ? (
-          <Text style={s.commandDetail}>{state.detail}</Text>
+        <Text style={s.commandSummary}>{activeConcern.summary}</Text>
+        {activeConcern.detail ? (
+          <Text style={s.commandDetail}>{activeConcern.detail}</Text>
         ) : null}
       </ECSPanel>
     </View>
@@ -493,41 +648,63 @@ function FleetMetricTile({
   value,
   helper,
   showHelper = true,
+  onPress,
+  accessibilityHint,
 }: {
   label: string;
   value: string;
   helper?: string | null;
   showHelper?: boolean;
+  onPress?: () => void;
+  accessibilityHint?: string;
 }) {
+  const content = (
+    <>
+      <Text style={s.summaryMetricLabel} numberOfLines={2}>{label}</Text>
+      <Text style={s.summaryMetricValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>{value}</Text>
+      {helper && showHelper ? <Text style={s.metricHelper} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>{helper}</Text> : null}
+    </>
+  );
+
   return (
-    <ECSPanel variant="compact" style={s.premiumMetricTile}>
-      <View
-        style={s.metricTileContent}
-        accessible
-        accessibilityLabel={`${label}: ${value}${helper ? `. ${helper}` : ''}`}
-      >
-        <Text style={s.summaryMetricLabel} numberOfLines={2}>{label}</Text>
-        <Text style={s.summaryMetricValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>{value}</Text>
-        {helper && showHelper ? <Text style={s.metricHelper} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>{helper}</Text> : null}
-      </View>
+    <ECSPanel variant="compact" style={[s.premiumMetricTile, onPress && s.premiumMetricTileAction]}>
+      {onPress ? (
+        <TouchableOpacity
+          style={s.metricTileTouch}
+          onPress={onPress}
+          activeOpacity={0.78}
+          accessibilityRole="button"
+          accessibilityLabel={`${label}: ${value}${helper ? `. ${helper}` : ''}`}
+          accessibilityHint={accessibilityHint}
+        >
+          {content}
+        </TouchableOpacity>
+      ) : (
+        <View
+          style={s.metricTileContent}
+          accessible
+          accessibilityLabel={`${label}: ${value}${helper ? `. ${helper}` : ''}`}
+        >
+          {content}
+        </View>
+      )}
     </ECSPanel>
   );
 }
 
 function FleetVehicleCardIcon({ active }: { active: boolean }) {
-  return <FleetIcon size={22} color={active ? TACTICAL.amber : TACTICAL.textMuted} />;
+  return (
+    <Ionicons
+      name="car-sport-outline"
+      size={23}
+      color={active ? TACTICAL.amber : TACTICAL.textMuted}
+    />
+  );
 }
 
 function FleetOverviewHeader({
-  metrics,
   onAddVehicle,
 }: {
-  metrics: {
-    vehicleCount: number;
-    averageConfidence: number | null;
-    totalOperatingWeight: number;
-    needingVerification: number;
-  };
   onAddVehicle: () => void;
 }) {
   return (
@@ -549,29 +726,118 @@ function FleetOverviewHeader({
           style={s.overviewAddButton}
         />
       </View>
-      <View style={s.overviewMetricGrid}>
-        <FleetMetricTile
-          label="Active Vehicles"
-          value={`${metrics.vehicleCount}`}
-          helper={metrics.vehicleCount === 1 ? 'vehicle staged' : 'vehicles staged'}
-        />
-        <FleetMetricTile
-          label="Avg Confidence"
-          value={formatFleetPercent(metrics.averageConfidence)}
-          helper="ECS scoring trust"
-        />
-        <FleetMetricTile
-          label="Operating Weight"
-          value={metrics.vehicleCount > 0 ? formatFleetWeightValue(metrics.totalOperatingWeight) : '--'}
-          helper="fleet total"
-        />
-        <FleetMetricTile
-          label="Verify"
-          value={`${metrics.needingVerification}`}
-          helper="needs source check"
-        />
-      </View>
     </ECSCard>
+  );
+}
+
+function FleetConfidenceNoticeModal({
+  visible,
+  notice,
+  onClose,
+  title = 'Fleet Confidence',
+  subtitle = 'Why ECS assigned this score',
+  scoreEyebrow = 'AVERAGE CONFIDENCE',
+  improvementTitle = 'To Improve Confidence',
+}: {
+  visible: boolean;
+  notice: FleetConfidenceNotice;
+  onClose: () => void;
+  title?: string;
+  subtitle?: string;
+  scoreEyebrow?: string;
+  improvementTitle?: string;
+}) {
+  return (
+    <ECSModalShell
+      visible={visible}
+      onClose={onClose}
+      title={title}
+      subtitle={subtitle}
+      eyebrow="VEHICLE COMMAND CENTER"
+      icon="shield-checkmark-outline"
+      overlayClass="info"
+      maxWidth={680}
+      maxHeightFraction={0.86}
+      minHeightFraction={0.64}
+      scrollable
+      showHandle={false}
+      bodyStyle={s.confidenceNoticeModalBody}
+      contentContainerStyle={s.confidenceNoticeModalContent}
+      footer={(
+        <ECSOverlayFooter>
+          <ECSButton
+            label="Close"
+            icon="checkmark-outline"
+            variant="secondary"
+            size="compact"
+            onPress={onClose}
+            grow
+          />
+        </ECSOverlayFooter>
+      )}
+    >
+      <View style={s.confidenceNoticeStack}>
+        <View
+          style={s.confidenceScoreBand}
+          accessible
+          accessibilityLabel={`${scoreEyebrow.toLowerCase()} is ${notice.scoreLabel}`}
+        >
+          <View>
+            <Text style={s.confidenceNoticeEyebrow}>{scoreEyebrow}</Text>
+            <Text style={s.confidenceNoticeScore}>{notice.scoreLabel}</Text>
+          </View>
+          <ECSBadge
+            label={notice.score == null ? 'WAITING' : notice.score >= 88 ? 'STRONG' : 'ESTIMATED'}
+            tone={notice.score != null && notice.score >= 88 ? 'ready' : 'warning'}
+            compact
+          />
+        </View>
+
+        <View style={s.confidenceNoticeSection}>
+          <Text style={s.confidenceNoticeTitle}>{notice.title}</Text>
+          <Text style={s.confidenceNoticeCopy}>{notice.summary}</Text>
+        </View>
+
+        {notice.intelligenceSummary || notice.intelligenceDetail ? (
+          <View style={s.confidenceIntelligenceBand}>
+            <View style={s.confidenceIntelligenceHeader}>
+              <Text style={s.confidenceNoticeSectionTitle}>ECS Intelligence</Text>
+              {notice.intelligenceConfidenceLabel ? (
+                <ECSBadge label={notice.intelligenceConfidenceLabel} tone="ready" compact />
+              ) : null}
+            </View>
+            {notice.intelligenceSummary ? (
+              <Text style={s.confidenceNoticeCopy}>{notice.intelligenceSummary}</Text>
+            ) : null}
+            {notice.intelligenceDetail ? (
+              <Text style={s.confidenceNoticeCopy}>{notice.intelligenceDetail}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        <View style={s.confidenceNoticeColumns}>
+          <View style={[s.confidenceNoticeSection, s.confidenceNoticeColumn]}>
+            <Text style={s.confidenceNoticeSectionTitle}>Why This Score</Text>
+            {notice.reasons.slice(0, 8).map((reason) => (
+              <View key={reason} style={s.confidenceNoticeRow}>
+                <Ionicons name="ellipse" size={6} color={TACTICAL.amber} />
+                <Text style={s.confidenceNoticeCopy}>{reason}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={[s.confidenceNoticeSection, s.confidenceNoticeColumn]}>
+            <Text style={s.confidenceNoticeSectionTitle}>{improvementTitle}</Text>
+            {notice.improvements.slice(0, 8).map((action) => (
+              <View key={action} style={s.confidenceNoticeRow}>
+                <Ionicons name="arrow-up-circle-outline" size={14} color={ECS_STATUS.tone.ready.text} />
+                <Text style={s.confidenceNoticeCopy}>{action}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+    </ECSModalShell>
   );
 }
 
@@ -678,12 +944,13 @@ function FleetDetailPanel({
       <ECSPanel variant="secondary" style={s.detailPanel}>
         <Text style={s.detailPanelTitle} accessibilityRole="header">Weight Summary</Text>
         <Text style={s.detailCopy}>
-          GVWR is the max loaded rating. ECS estimates operating weight as base net weight plus installed accessories plus current loadout.
+          GVWR is the max loaded rating. ECS estimates operating weight as base net weight plus installed accessories plus current loadout, with saved fuel and water shown as explicit loadout inputs when present.
         </Text>
         <View style={s.detailGrid}>
           <FleetMetricTile label="Base Net/Empty" value={formatFleetWeightValue(weightSummary.baseNetWeightLb)} helper={weightResult.baseNetWeight.sourceLabel ?? weightResult.baseNetWeight.source} />
           <FleetMetricTile label="Accessories" value={formatFleetWeightValue(weightSummary.permanentAccessoryWeightLb)} helper="permanent installed weight" />
           <FleetMetricTile label="Loadout" value={formatFleetWeightValue(weightSummary.currentLoadoutWeightLb)} helper={`${model.fleetLoadoutItems.length} active items`} />
+          <FleetMetricTile label="Fuel/Water" value={formatFleetWeightValue(weightSummary.consumablesWeightLb)} helper={weightResult.consumablesWeight.sourceLabel ?? 'saved consumables'} />
           <FleetMetricTile label="Operating" value={formatFleetWeightValue(weightSummary.operatingWeightLb)} helper="base + build + load" />
           <FleetMetricTile label="GVWR" value={formatFleetWeightValue(weightSummary.gvwrLb)} helper="max loaded rating" />
           <FleetMetricTile label="Payload Left" value={formatFleetWeightValue(weightSummary.payloadRemainingLb)} helper="GVWR minus operating" />
@@ -706,7 +973,7 @@ function FleetDetailPanel({
         <ECSInlineHelper
           variant={weightSummary.confidenceScore < 88 ? 'partial_data' : 'standard'}
           icon="scale-outline"
-          text="Scale ticket or axle weights improve ECS confidence and make front/rear estimates more precise."
+          text="Measured accessory, loadout, or axle weights can refine front/rear estimates without requiring OEM or scale-ticket base weight."
         />
         <ECSButton
           label={showAdvancedMath ? 'Hide Math Detail' : 'Show Math Detail'}
@@ -718,6 +985,7 @@ function FleetDetailPanel({
         {showAdvancedMath ? (
           <View style={s.mathDetailStack}>
             <Text style={s.detailCopy}>Operating weight = base net/empty + permanent accessory weight + current loadout.</Text>
+            <Text style={s.detailCopy}>Saved fuel and water are counted as current loadout inputs when those manual or stored values exist.</Text>
             <Text style={s.detailCopy}>Payload remaining = GVWR - operating weight.</Text>
             <Text style={s.detailCopy}>High-mounted added weight = roof + bed-high zones. Rear bias watches rear-low, bed, hitch, and trailer zones.</Text>
             {weightResult.warnings.map((warning) => (
@@ -881,6 +1149,8 @@ function FleetDetailPanel({
 function FleetPremiumVehicleCard({
   model,
   isActive,
+  isOnline,
+  offlineMode,
   openPanel,
   onProfile,
   onLoadout,
@@ -888,9 +1158,13 @@ function FleetPremiumVehicleCard({
   onDelete,
   onChecklistSave,
   onMarkReady,
+  onReadinessPress,
+  onConfidencePress,
 }: {
   model: FleetVehicleCardModel;
   isActive: boolean;
+  isOnline: boolean;
+  offlineMode: boolean;
   openPanel: FleetDetailPanelKey | null;
   onProfile: () => void;
   onLoadout: () => void;
@@ -902,8 +1176,12 @@ function FleetPremiumVehicleCard({
     buildLoadoutState?: FleetBuildLoadoutState,
   ) => Promise<void> | void;
   onMarkReady: () => void;
+  onReadinessPress: () => void;
+  onConfidencePress: () => void;
 }) {
   const { vehicle, weightResult, scoringResult } = model;
+  const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
+  const verificationTone = model.verificationStatus === 'Verified' ? 'ready' : 'warning';
   return (
     <ECSCard variant="primary" selected={isActive} style={s.premiumVehicleCard}>
       <View style={s.premiumCardHeader}>
@@ -912,7 +1190,7 @@ function FleetPremiumVehicleCard({
           accessible
           accessibilityLabel={`${vehicle.name}. ${model.descriptor}.`}
         >
-          <View style={s.vehicleIcon}>
+          <View style={[s.vehicleIcon, isActive && s.vehicleIconActive]}>
             <FleetVehicleCardIcon active={isActive} />
           </View>
           <View style={s.vehicleIdentityText}>
@@ -956,8 +1234,22 @@ function FleetPremiumVehicleCard({
       <View style={s.premiumMetricGrid}>
         <FleetMetricTile label="Operating" value={formatFleetWeightValue(weightResult.operatingWeight.lbs)} helper="base + build + load" showHelper={false} />
         <FleetMetricTile label="Payload Left" value={formatFleetWeightValue(weightResult.payloadRemaining?.lbs)} helper="GVWR margin" showHelper={false} />
-        <FleetMetricTile label="Readiness" value={formatFleetScore(scoringResult.readinessScore)} helper={scoringResult.riskLevel} showHelper={false} />
-        <FleetMetricTile label="Confidence" value={formatFleetPercent(weightResult.confidence)} helper={weightResult.baseNetWeight.source} showHelper={false} />
+        <FleetMetricTile
+          label="Readiness"
+          value={formatFleetScore(scoringResult.readinessScore)}
+          helper={scoringResult.riskLevel}
+          showHelper={false}
+          onPress={onReadinessPress}
+          accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`}
+        />
+        <FleetMetricTile
+          label="Confidence"
+          value={formatFleetPercent(weightResult.confidence)}
+          helper={weightResult.baseNetWeight.source}
+          showHelper={false}
+          onPress={onConfidencePress}
+          accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`}
+        />
       </View>
 
       <ECSPanel variant="quiet" style={s.readinessStrip}>
@@ -968,6 +1260,17 @@ function FleetPremiumVehicleCard({
           </Text>
         </View>
         <ECSBadge label={`${formatFleetScore(scoringResult.overallScore)} ECS`} tone={scoringResult.riskLevel === 'critical' ? 'warning' : 'ready'} compact />
+      </ECSPanel>
+
+      <ECSPanel variant="quiet" style={s.vehicleEvidenceStrip}>
+        <View style={s.vehicleEvidenceBadges}>
+          <ECSBadge label={model.verificationStatus.toUpperCase()} tone={verificationTone} compact />
+          <ECSBadge label={`${formatFleetPercent(weightResult.confidence)} CONF`} tone={weightResult.confidence >= 88 ? 'ready' : 'warning'} compact />
+          <ECSBadge label={connectivity.label} tone={connectivity.tone} compact />
+        </View>
+        <Text style={s.vehicleEvidenceText} numberOfLines={2}>
+          Source: {formatFleetSourceSummary(weightResult)}. Missing or estimated values keep Fleet in verification until updated.
+        </Text>
       </ECSPanel>
 
       <ECSCardFooter style={s.actionSection}>
@@ -1136,11 +1439,16 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
 // ============================================================
 function FleetScreenInner() {
   const router = useRouter();
-  const { user, authLoading, showToast, activeTrip, userSettings, isOnline } = useApp();
+  const { user, authLoading, showToast, activeTrip, userSettings, isOnline, offlineMode } = useApp();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
   const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
   const fleetPremiumRollout = useMemo(() => resolveFleetPremiumReleaseConfig(), []);
+  const powerTelemetryReadings = useECSPowerTelemetryReadings();
+  const fleetPowerStorageReadiness = useMemo(
+    () => resolveFleetPowerStorageReadiness(powerTelemetryReadings),
+    [powerTelemetryReadings],
+  );
 
   // ── State ─────────────────────────────────────────────
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -1163,6 +1471,8 @@ function FleetScreenInner() {
   const [profileModalVehicle, setProfileModalVehicle] = useState<Vehicle | null>(null);
   const [weightSummaryModalVisible, setWeightSummaryModalVisible] = useState(false);
   const [weightSummaryModalVehicle, setWeightSummaryModalVehicle] = useState<Vehicle | null>(null);
+  const [vehicleConfidenceNoticeVehicleId, setVehicleConfidenceNoticeVehicleId] = useState<string | null>(null);
+  const [vehicleReadinessNoticeVehicleId, setVehicleReadinessNoticeVehicleId] = useState<string | null>(null);
 
   // ── Loadout Summary Refresh Key ───────────────────────
   // Incremented after loadout modal save to refresh Setup Summary loadout metrics.
@@ -1751,7 +2061,9 @@ function FleetScreenInner() {
     };
   }, [selectedPreviewVehicle, supportDataRevision]);
   const selectedVehicleBaseline = useMemo(() => {
-    if (!selectedPreviewVehicle) {
+    void supportDataRevision;
+    const commandVehicle = activeVehicle;
+    if (!commandVehicle) {
       return {
         hasSelectedVehicle: false,
         hasVehicleProfile: false,
@@ -1764,25 +2076,26 @@ function FleetScreenInner() {
         hasAccessoriesConfigured: false,
         hasLoadout: false,
         hasLiveTelemetry: false,
+        hasAcknowledgedHighMountedLoadRisk: false,
       };
     }
 
-    const selectedAny = selectedPreviewVehicle as any;
+    const selectedAny = commandVehicle as any;
     const accessoryData = buildVehicleAccessorySummary(selectedAny, {
       maxPills: 6,
       maxAccessorySummaryItems: 4,
     });
     const wizardConfig = accessoryData.wizardConfig ?? null;
-    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
-    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
-    const consumables = consumablesStore.get(selectedPreviewVehicle.id);
-    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any, { spec, consumables, tiresLift });
+    const spec = vehicleSpecStore.get(commandVehicle.id);
+    const tiresLift = tiresLiftStore.get(commandVehicle.id);
+    const consumables = consumablesStore.get(commandVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(commandVehicle as any, { spec, consumables, tiresLift });
     const accessoryCount = accessoryData.containerZones.length;
-    const loadoutReady = isLoadoutReadyForBuild(selectedPreviewVehicle.id, null);
+    const buildLoadoutState = readFleetBuildLoadoutState(commandVehicle as any);
+    const loadoutReady = isLoadoutReadyForBuild(commandVehicle.id, null);
+    const buildLoadoutItemCount = (buildLoadoutState.loadoutItems ?? []).filter((item) => item.typicalWeightLb > 0).length;
     const activeTripAny = activeTrip as any;
-    const selectedVehicleIsActive = !activeVehicleId || activeVehicleId === selectedPreviewVehicle.id;
     const hasLiveTelemetry = Boolean(
-      selectedVehicleIsActive &&
       activeTripAny &&
       (
         activeTripAny.fuelPercent != null ||
@@ -1796,31 +2109,40 @@ function FleetScreenInner() {
       hasSelectedVehicle: true,
       hasVehicleProfile:
         Boolean(wizardConfig) ||
-        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+        [commandVehicle.make, commandVehicle.model, commandVehicle.year]
           .filter(Boolean)
           .length >= 2,
       hasConfiguredIdentity:
-        [selectedPreviewVehicle.make, selectedPreviewVehicle.model, selectedPreviewVehicle.year]
+        [commandVehicle.make, commandVehicle.model, commandVehicle.year]
           .filter(Boolean)
           .length >= 2 ||
         typeof wizardConfig?.vehicle_type === 'string',
-      hasFuelCapacity: Number(spec?.fuel_tank_capacity_gal ?? selectedPreviewVehicle.fuel_tank_capacity_gal ?? 0) > 0,
+      hasFuelCapacity: Number(
+        resourceProfile.fuelTankCapacityGal ?? resourceProfile.currentFuelGallons ?? 0,
+      ) > 0,
       hasWaterCapacity: resourceProfile.waterCapacityGal != null && resourceProfile.waterCapacityGal >= 0,
-      hasPowerStorage: resourceProfile.batteryUsableWh != null && resourceProfile.batteryUsableWh >= 0,
+      hasPowerStorage:
+        (resourceProfile.batteryUsableWh != null && resourceProfile.batteryUsableWh >= 0) ||
+        fleetPowerStorageReadiness.hasLivePowerStorage,
       hasTireSize: Number(resourceProfile.tireSizeInches ?? 0) > 0,
       hasLiftProfile: resourceProfile.suspensionLiftInches != null || resourceProfile.isLeveled,
       hasAccessoriesConfigured: accessoryCount > 0,
-      hasLoadout: loadoutReady,
-      hasLiveTelemetry,
+      hasLoadout: loadoutReady || buildLoadoutItemCount > 0,
+      hasLiveTelemetry: hasLiveTelemetry || fleetPowerStorageReadiness.hasLivePowerStorage,
+      hasLivePowerStorage: fleetPowerStorageReadiness.hasLivePowerStorage,
+      hasAcknowledgedHighMountedLoadRisk: (buildLoadoutState.acknowledgedRiskIds ?? []).includes(
+        FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID,
+      ),
     };
-  }, [selectedPreviewVehicle, activeTrip, activeVehicleId]);
+  }, [activeVehicle, activeTrip, fleetPowerStorageReadiness.hasLivePowerStorage, supportDataRevision]);
 
   const fleetAIResources = useMemo(() => {
-    if (!selectedPreviewVehicle) return null;
-    const spec = vehicleSpecStore.get(selectedPreviewVehicle.id);
-    const tiresLift = tiresLiftStore.get(selectedPreviewVehicle.id);
-    const consumables = consumablesStore.get(selectedPreviewVehicle.id);
-    const resourceProfile = getVehicleResourceProfile(selectedPreviewVehicle as any, { spec, consumables, tiresLift });
+    void supportDataRevision;
+    if (!activeVehicle) return null;
+    const spec = vehicleSpecStore.get(activeVehicle.id);
+    const tiresLift = tiresLiftStore.get(activeVehicle.id);
+    const consumables = consumablesStore.get(activeVehicle.id);
+    const resourceProfile = getVehicleResourceProfile(activeVehicle as any, { spec, consumables, tiresLift });
     return {
       fuelTankCapacityGal: resourceProfile.fuelTankCapacityGal,
       fuelPercent: resourceProfile.currentFuelPercent,
@@ -1838,7 +2160,7 @@ function FleetScreenInner() {
       accessoryInstalledCount: selectedVehicleBaseline.hasAccessoriesConfigured ? 1 : 0,
       connectivityLevel: isOnline ? 'live' : 'offline',
     };
-  }, [selectedPreviewVehicle, selectedVehicleBaseline.hasAccessoriesConfigured, selectedVehicleBaseline.hasLoadout, isOnline]);
+  }, [activeVehicle, selectedVehicleBaseline.hasAccessoriesConfigured, selectedVehicleBaseline.hasLoadout, isOnline, supportDataRevision]);
 
   const fleetAITelemetry = useMemo(() => {
     const activeTripAny = activeTrip as any;
@@ -1853,14 +2175,14 @@ function FleetScreenInner() {
   const selectedFleetFabricPayload = useMemo(() => {
     void supportDataRevision;
     void loadoutRefreshKey;
-    return selectedPreviewVehicle ? buildFleetVehicleCardModel(selectedPreviewVehicle).fabricPayload : null;
-  }, [loadoutRefreshKey, selectedPreviewVehicle, supportDataRevision]);
+    return activeVehicle ? buildFleetVehicleCardModel(activeVehicle).fabricPayload : null;
+  }, [activeVehicle, loadoutRefreshKey, supportDataRevision]);
 
   const { aiState, fleetView } = useECSAIHook({
     activeRun: activeTrip,
     vehicleConfig: selectedFleetFabricPayload
-      ? { ...(selectedPreviewVehicle as any), fleetFabric: selectedFleetFabricPayload }
-      : selectedPreviewVehicle,
+      ? { ...(activeVehicle as any), fleetFabric: selectedFleetFabricPayload }
+      : activeVehicle,
     telemetry: fleetAITelemetry,
     resources: fleetAIResources,
     userPreferences: userSettings,
@@ -1901,6 +2223,7 @@ function FleetScreenInner() {
       hasAccessoriesConfigured: selectedVehicleBaseline.hasAccessoriesConfigured,
       hasLoadout: selectedVehicleBaseline.hasLoadout,
       hasLiveTelemetry: selectedVehicleBaseline.hasLiveTelemetry,
+      hasAcknowledgedHighMountedLoadRisk: selectedVehicleBaseline.hasAcknowledgedHighMountedLoadRisk,
     })
   ), [
     activeVehicle,
@@ -1920,26 +2243,39 @@ function FleetScreenInner() {
     void loadoutRefreshKey;
     return vehicles.map(buildFleetVehicleCardModel);
   }, [loadoutRefreshKey, supportDataRevision, vehicles]);
-
-  const fleetOverviewMetrics = useMemo(() => {
-    const vehicleCount = fleetCardModels.length;
-    const averageConfidence = vehicleCount > 0
-      ? Math.round(
-          fleetCardModels.reduce((sum, model) => sum + model.weightResult.confidence, 0) / vehicleCount,
-        )
-      : null;
-    const totalOperatingWeight = fleetCardModels.reduce(
-      (sum, model) => sum + model.weightResult.operatingWeight.lbs,
-      0,
-    );
-    const needingVerification = fleetCardModels.filter((model) => model.needsVerification).length;
-    return {
-      vehicleCount,
-      averageConfidence,
-      totalOperatingWeight,
-      needingVerification,
-    };
-  }, [fleetCardModels]);
+  const selectedVehicleConfidenceModel = useMemo(
+    () => fleetCardModels.find((model) => model.vehicle.id === vehicleConfidenceNoticeVehicleId) ?? null,
+    [fleetCardModels, vehicleConfidenceNoticeVehicleId],
+  );
+  const selectedVehicleConfidenceNotice = useMemo(
+    () => buildFleetConfidenceNotice(
+      selectedVehicleConfidenceModel
+        ? [{
+            id: selectedVehicleConfidenceModel.vehicle.id,
+            name: selectedVehicleConfidenceModel.vehicle.name,
+            weightResult: selectedVehicleConfidenceModel.weightResult,
+            vehicleSuggestions: selectedVehicleConfidenceModel.fabricPayload.vehicleIntelligence.suggestions,
+          }]
+        : [],
+      selectedVehicleConfidenceModel
+        ? {
+            confidenceLabel: selectedVehicleConfidenceModel.weightResult.confidenceMetadata.label,
+            summary: `${selectedVehicleConfidenceModel.vehicle.name} confidence is based only on this vehicle's Fleet profile, build, loadout, and verification state.`,
+            detail: selectedVehicleConfidenceModel.weightResult.confidenceMetadata.copy,
+            vehicleSuggestions: selectedVehicleConfidenceModel.fabricPayload.vehicleIntelligence.suggestions,
+          }
+        : null,
+    ),
+    [selectedVehicleConfidenceModel],
+  );
+  const selectedVehicleReadinessModel = useMemo(
+    () => fleetCardModels.find((model) => model.vehicle.id === vehicleReadinessNoticeVehicleId) ?? null,
+    [fleetCardModels, vehicleReadinessNoticeVehicleId],
+  );
+  const selectedVehicleReadinessNotice = useMemo(
+    () => buildFleetReadinessNotice(selectedVehicleReadinessModel),
+    [selectedVehicleReadinessModel],
+  );
 
   useEffect(() => {
     if (loading || authLoading) return;
@@ -1976,6 +2312,14 @@ function FleetScreenInner() {
       setWeightSummaryModalVehicle(null);
     }
 
+    if (vehicleConfidenceNoticeVehicleId) {
+      setVehicleConfidenceNoticeVehicleId(null);
+    }
+
+    if (vehicleReadinessNoticeVehicleId) {
+      setVehicleReadinessNoticeVehicleId(null);
+    }
+
     if (profileModalVehicle) {
       setProfileModalVisible(false);
       setProfileModalVehicle(null);
@@ -1989,6 +2333,8 @@ function FleetScreenInner() {
     loadoutModalVehicle,
     loadoutModalVisible,
     profileModalVehicle,
+    vehicleConfidenceNoticeVehicleId,
+    vehicleReadinessNoticeVehicleId,
     vehicles.length,
     weightSummaryModalVehicle,
     weightSummaryModalVisible,
@@ -2115,8 +2461,8 @@ function FleetScreenInner() {
                 <FleetVehicleCardIcon active={isActive} />
               </View>
               <View style={s.vehicleIdentityText}>
-                <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
-                <Text style={s.vehicleMeta} numberOfLines={1}>{vehicleDescriptor}</Text>
+                <Text style={s.vehicleName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>{v.name}</Text>
+                <Text style={s.vehicleMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.84}>{vehicleDescriptor}</Text>
               </View>
             </View>
             {isActive ? (
@@ -2324,7 +2670,6 @@ function FleetScreenInner() {
         <View style={[s.fleetMainBody, fleetFrameStyle]}>
           <FleetCommandSurface state={fleetCommandState} />
           <FleetOverviewHeader
-            metrics={fleetOverviewMetrics}
             onAddVehicle={handleAddVehicle}
           />
           {fleetCardModels.length === 0 ? (
@@ -2353,6 +2698,8 @@ function FleetScreenInner() {
                     <FleetPremiumVehicleCard
                       model={model}
                       isActive={model.vehicle.id === activeVehicleId}
+                      isOnline={isOnline}
+                      offlineMode={offlineMode}
                       openPanel={null}
                       onProfile={() => handleOpenVehicleProfile(model.vehicle)}
                       onLoadout={() => handleOpenBuildLoadoutModal(model.vehicle)}
@@ -2360,6 +2707,14 @@ function FleetScreenInner() {
                       onDelete={() => handleDeleteVehicle(model.vehicle)}
                       onChecklistSave={handleChecklistSave}
                       onMarkReady={() => handleMarkVehicleReady(model.vehicle.id)}
+                      onReadinessPress={() => {
+                        setVehicleConfidenceNoticeVehicleId(null);
+                        setVehicleReadinessNoticeVehicleId(model.vehicle.id);
+                      }}
+                      onConfidencePress={() => {
+                        setVehicleReadinessNoticeVehicleId(null);
+                        setVehicleConfidenceNoticeVehicleId(model.vehicle.id);
+                      }}
                     />
                   </View>
                 )}
@@ -2517,8 +2872,8 @@ function FleetScreenInner() {
                       <FleetVehicleCardIcon active={isActive} />
                     </View>
                     <View style={s.vehicleIdentityText}>
-                      <Text style={s.vehicleName} numberOfLines={2}>{v.name}</Text>
-                      <Text style={s.vehicleMeta} numberOfLines={1}>{vehicleDescriptor}</Text>
+                      <Text style={s.vehicleName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>{v.name}</Text>
+                      <Text style={s.vehicleMeta} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.84}>{vehicleDescriptor}</Text>
                     </View>
                   </View>
                   {isActive ? (
@@ -2786,6 +3141,25 @@ function FleetScreenInner() {
         showToast={showToast}
       />
 
+      <FleetConfidenceNoticeModal
+        visible={Boolean(vehicleConfidenceNoticeVehicleId)}
+        notice={selectedVehicleConfidenceNotice}
+        title="Vehicle Confidence"
+        subtitle={selectedVehicleConfidenceModel?.vehicle.name ?? 'Vehicle-specific confidence'}
+        scoreEyebrow="VEHICLE CONFIDENCE"
+        onClose={() => setVehicleConfidenceNoticeVehicleId(null)}
+      />
+
+      <FleetConfidenceNoticeModal
+        visible={Boolean(vehicleReadinessNoticeVehicleId)}
+        notice={selectedVehicleReadinessNotice}
+        title="Vehicle Readiness"
+        subtitle={selectedVehicleReadinessModel?.vehicle.name ?? 'Vehicle-specific readiness'}
+        scoreEyebrow="VEHICLE READINESS"
+        improvementTitle="To Improve Readiness"
+        onClose={() => setVehicleReadinessNoticeVehicleId(null)}
+      />
+
       <ECSModalShell
         visible={weightSummaryModalVisible}
         onClose={handleCloseWeightSummaryModal}
@@ -2807,6 +3181,7 @@ function FleetScreenInner() {
         <WeightDashboardPanel
           vehicleId={weightSummaryModalVehicle?.id ?? null}
           compact={false}
+          hideVehicleProfile
         />
       </ECSModalShell>
 
@@ -2862,11 +3237,34 @@ const s = StyleSheet.create({
   },
   commandEyebrow: {
     ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     marginBottom: 6,
   },
   commandTitle: {
     ...ECS_TEXT.cardTitle,
+  },
+  commandStatusStack: {
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: 220,
+    flexShrink: 0,
+  },
+  commandReadinessBadge: {
+    alignSelf: 'flex-end',
+    minWidth: 188,
+    justifyContent: 'center',
+  },
+  commandReadinessBadgeText: {
+    textAlign: 'center',
+  },
+  commandSkipButton: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  commandSkipText: {
+    ...ECS_TEXT.sectionTitle,
+    color: 'rgba(183, 191, 199, 0.74)',
+    textAlign: 'right',
   },
   commandSummary: {
     ...ECS_TEXT.body,
@@ -2934,6 +3332,14 @@ const s = StyleSheet.create({
     minHeight: 0,
     padding: 0,
   },
+  confidenceNoticeModalBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  confidenceNoticeModalContent: {
+    flexGrow: 1,
+    paddingBottom: 18,
+  },
   overviewCard: {
     gap: 12,
   },
@@ -2950,7 +3356,7 @@ const s = StyleSheet.create({
   },
   overviewEyebrow: {
     ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     marginBottom: 6,
   },
   overviewTitle: {
@@ -2966,25 +3372,105 @@ const s = StyleSheet.create({
     minWidth: 132,
     alignSelf: 'flex-start',
   },
-  overviewMetricGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
   premiumMetricTile: {
     flexGrow: 1,
     flexBasis: 132,
     minWidth: 0,
     gap: 2,
   },
+  premiumMetricTileAction: {
+    borderColor: TACTICAL.amber,
+  },
   metricTileContent: {
     minWidth: 0,
+    gap: 2,
+  },
+  metricTileTouch: {
+    minWidth: 0,
+    minHeight: 44,
+    justifyContent: 'center',
     gap: 2,
   },
   metricHelper: {
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
     marginTop: 2,
+  },
+  confidenceNoticeStack: {
+    flex: 1,
+    gap: 12,
+    minHeight: 0,
+  },
+  confidenceScoreBand: {
+    minHeight: 72,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.34)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(212, 175, 55, 0.08)',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  confidenceNoticeEyebrow: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.goldMedium,
+    marginBottom: 4,
+  },
+  confidenceNoticeScore: {
+    ...ECS_TEXT.screenTitle,
+    color: TACTICAL.text,
+  },
+  confidenceNoticeSection: {
+    minWidth: 0,
+    gap: 8,
+  },
+  confidenceNoticeColumn: {
+    flex: 1,
+    flexBasis: 260,
+  },
+  confidenceIntelligenceBand: {
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.24)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(5, 10, 12, 0.58)',
+    padding: 12,
+    gap: 8,
+  },
+  confidenceIntelligenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  confidenceNoticeColumns: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: 14,
+  },
+  confidenceNoticeTitle: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+  },
+  confidenceNoticeSectionTitle: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.goldMedium,
+  },
+  confidenceNoticeCopy: {
+    ...ECS_TEXT.body,
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    flexShrink: 1,
+  },
+  confidenceNoticeRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
   },
   premiumVehicleStack: {
     gap: 12,
@@ -3026,13 +3512,27 @@ const s = StyleSheet.create({
   },
   readinessStripTitle: {
     ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     marginBottom: 4,
   },
   readinessStripText: {
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
     lineHeight: 15,
+  },
+  vehicleEvidenceStrip: {
+    gap: 8,
+  },
+  vehicleEvidenceBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  vehicleEvidenceText: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    lineHeight: 16,
   },
   detailPanel: {
     marginTop: 2,
@@ -3089,7 +3589,7 @@ const s = StyleSheet.create({
   },
   checklistCategoryTitle: {
     ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
   },
   checklistItemPanel: {
     gap: 9,
@@ -3302,7 +3802,7 @@ const s = StyleSheet.create({
   },
   previewEyebrow: {
     ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.amber,
+    color: TACTICAL.goldMedium,
     marginBottom: 6,
   },
   previewTitle: {

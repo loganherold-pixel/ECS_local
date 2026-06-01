@@ -11,8 +11,8 @@
  *   • QuickActionsSheet long-press preserved
  *
  * Startup fix:
- *   • Uses router.replace instead of router.push so dock navigation
- *     does not create a visible Fleet → Dashboard transition.
+ *   • Uses router.navigate instead of router.push so dock navigation
+ *     selects the existing tab route without stacking screens.
  *
  * Hook-order fix:
  *   • All hooks are declared before any conditional return.
@@ -52,6 +52,7 @@ import {
 } from '../lib/shellLayout';
 import {
   getDashboardChromeState,
+  hideDashboardDockReveal,
   subscribeDashboardChrome,
 } from '../lib/dashboardChromeStore';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
@@ -62,6 +63,11 @@ import {
   ECSGlobalBanner,
   getEcsBottomSafePadding,
 } from './ECSGlobalBanner';
+import {
+  cancelShellInteractionTask,
+  deferShellRouteNavigation,
+  type ShellInteractionTask,
+} from '../lib/shellInteractionScheduler';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -73,13 +79,12 @@ const DOCK = {
 };
 
 // ── Shield sizing ────────────────────────────────────────────
-const SHIELD_ICON_SIZE = 80;
+const SHIELD_ICON_SIZE = 70;
 
 // ── Outer badge sizing ───────────────────────────────────────
 const OUTER_BADGE_SIZE_ACTIVE = 70;
 const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 6;
 const OUTER_BADGE_TO_LABEL_OFFSET = -4;
-const CENTER_DASHBOARD_BUTTON_DROP = 6;
 const BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3;
 
 // ── Bar layout ───────────────────────────────────────────────
@@ -355,6 +360,7 @@ function ShieldCenterButton({
   hintOpacity,
   hintScale,
   slotWidth,
+  verticalDrop,
 }: {
   isActive: boolean;
   onTap: () => void;
@@ -362,6 +368,7 @@ function ShieldCenterButton({
   hintOpacity?: Animated.Value;
   hintScale?: Animated.Value;
   slotWidth: number;
+  verticalDrop: number;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -414,7 +421,7 @@ function ShieldCenterButton({
   }, [onTap]);
 
   return (
-    <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: CENTER_DASHBOARD_BUTTON_DROP }] }]}>
+    <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: verticalDrop }] }]}>
       {hintOpacity && hintScale ? (
         <Animated.View
           style={[
@@ -434,7 +441,7 @@ function ShieldCenterButton({
             styles.shieldPressable,
             {
               opacity: isActive ? 1 : 0.96,
-              transform: [{ translateY: -1 }, { scale: scaleAnim }],
+              transform: [{ scale: scaleAnim }],
             },
           ]}
         >
@@ -464,17 +471,22 @@ export default function CommandDock() {
   const { palette, colors, effectiveTheme } = useTheme();
   const adaptive = useAdaptiveLayout();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<string | null>(null);
+  const pendingRouteRef = useRef<string | null>(null);
+  const routeNavigationTaskRef = useRef<ShellInteractionTask | null>(null);
   const quickActionsNavLockUntilRef = useRef(0);
-  const [dashboardExpanded, setDashboardExpanded] = useState(
-    getDashboardChromeState().expanded
-  );
+  const [dashboardChrome, setDashboardChrome] = useState(getDashboardChromeState());
   const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
   const firstLaunchHintOpacity = useRef(new Animated.Value(0)).current;
   const firstLaunchHintScale = useRef(new Animated.Value(0.96)).current;
   const firstLaunchHintRunningRef = useRef(false);
   const dockVisibilityAnim = useRef(
     new Animated.Value(
-      pathname.includes('/dashboard') && getDashboardChromeState().expanded ? 0 : 1
+      pathname.includes('/dashboard') &&
+        getDashboardChromeState().expanded &&
+        !getDashboardChromeState().dockRevealed
+        ? 0
+        : 1
     )
   ).current;
 
@@ -484,13 +496,21 @@ export default function CommandDock() {
   );
 
   const isHidden = hiddenPaths.has(pathname);
-  const hideForDashboardExpanded = pathname.includes('/dashboard') && dashboardExpanded;
+  const effectivePathname = pendingRoute ?? pathname;
+  const expandedChromePath =
+    pathname.includes('/dashboard') ||
+    pathname.includes('/alert') ||
+    pathname.includes('/navigate');
+  const hideForDashboardExpanded =
+    expandedChromePath &&
+    dashboardChrome.expanded &&
+    !dashboardChrome.dockRevealed;
 
   const isItemActive = useCallback(
     (item: DockItem): boolean => {
-      return item.pathMatch.some((p) => pathname.includes(p));
+      return item.pathMatch.some((p) => effectivePathname.includes(p));
     },
-    [pathname]
+    [effectivePathname]
   );
 
   const handleNavigate = useCallback(
@@ -505,8 +525,15 @@ export default function CommandDock() {
         }
         return;
       }
-      if (pathname === route) return;
-      router.replace(route as any);
+      if (pathname === route || pendingRouteRef.current === route) return;
+      hideDashboardDockReveal();
+      pendingRouteRef.current = route;
+      setPendingRoute(route);
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = deferShellRouteNavigation(() => {
+        if (pendingRouteRef.current !== route) return;
+        router.navigate(route as any);
+      });
     },
     [pathname, quickActionsVisible, router]
   );
@@ -526,6 +553,7 @@ export default function CommandDock() {
   const dockBackgroundDrop = Math.max(6, Math.min(dockBottomPadding, 10));
   const dockBackgroundTopOffset = BOTTOM_BANNER_BACKGROUND_DROP_OFFSET;
   const dockBackgroundHeight = dockHeight + dockBackgroundDrop;
+  const centerDashboardButtonDrop = Math.round((dockBottomPadding + BOTTOM_BANNER_BACKGROUND_DROP_OFFSET) / 2);
   const dockOuterGutter = adaptive.shell.dockOuterGutter;
   const availableDockWidth = Math.max(
     280,
@@ -553,8 +581,26 @@ export default function CommandDock() {
 
   useEffect(() => {
     return subscribeDashboardChrome((nextState) => {
-      setDashboardExpanded(nextState.expanded);
+      setDashboardChrome(nextState);
     });
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRoute) return;
+    if (pathname === pendingRoute || pathname.includes(pendingRoute)) {
+      pendingRouteRef.current = null;
+      setPendingRoute(null);
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = null;
+    }
+  }, [pathname, pendingRoute]);
+
+  useEffect(() => {
+    return () => {
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = null;
+      pendingRouteRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -793,6 +839,7 @@ export default function CommandDock() {
                     openQuickActions();
                   }}
                   slotWidth={centerSlotWidth}
+                  verticalDrop={centerDashboardButtonDrop}
                 />
               ) : (
                 <DockButton
@@ -984,7 +1031,7 @@ const styles = StyleSheet.create({
   },
 
   shieldLabelSpacer: {
-    height: ECS_COMMAND_DOCK_LABEL_HEIGHT,
+    height: 0,
     marginTop: 0,
   },
 

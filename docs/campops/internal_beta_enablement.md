@@ -94,7 +94,7 @@ const activation = resolveCampOpsInternalBetaActivation({
 
 ## Flags That Must Remain Off
 
-These must remain off for internal beta:
+These remain off for internal beta unless a named approval exists:
 
 - `campopsDebriefCommunityPublishingEnabled`
 - `campopsTelemetryEnabled`
@@ -104,8 +104,10 @@ These must remain off unless a named approval exists:
 
 - `campopsProviderAdaptersEnabled`: requires explicit provider/category/region readiness approval and `providerInfluenceApproved=true` in the activation helper.
 - `campopsAiAssistEnabled`: requires PR 52 real-output review approval for the active model/config and `aiAssistRealOutputReviewApproved=true` in the activation helper.
+- `campopsTelemetryEnabled`: requires approved sink, retention, access, and privacy posture plus `telemetrySinkPrivacyApproved=true` in the activation helper.
+- `campopsDebriefCommunityPublishingEnabled`: requires approved community publishing governance plus `communityPublishingApproved=true` in the activation helper.
 
-The internal beta activation helper forces community publishing and telemetry off even if a caller requests them.
+The internal beta activation helper rejects community publishing and telemetry unless the caller both requests the rollout flag and provides the matching approval input.
 
 ## Navigate Mapbox Internal Beta Behavior
 

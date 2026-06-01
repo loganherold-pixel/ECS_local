@@ -54,4 +54,12 @@ assert(
   'Recenter helper label should be visually subtle.',
 );
 
+assert(
+  source.includes("source = 'none'") &&
+    source.includes("source === 'gps' ? 'GPS'") &&
+    source.includes('styles.headingSourceBadge') &&
+    source.includes('styles.headingSourceText'),
+  'Compass should surface whether the live heading is coming from GPS, device compass, or no fix.',
+);
+
 console.log('navigate compass recenter hint regression passed');

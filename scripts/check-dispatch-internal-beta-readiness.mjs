@@ -37,6 +37,7 @@ function pathsFor(root) {
     source: {
       tabLayout: path.join(root, 'app', '(tabs)', '_layout.tsx'),
       dispatchTab: path.join(root, 'app', '(tabs)', 'alert.tsx'),
+      commandDock: path.join(root, 'components', 'CommandDock.tsx'),
       commandCenter: path.join(root, 'components', 'dispatch', 'DispatchCadCommandCenter.tsx'),
       modalShell: path.join(root, 'components', 'ECSModalShell.tsx'),
       rolloutConfig: path.join(root, 'lib', 'dispatchRolloutConfig.ts'),
@@ -303,7 +304,16 @@ function packageHasScript(root, scriptName) {
 function checkRouteGate(root, paths) {
   const tabSource = readIfExists(paths.source.dispatchTab);
   const layoutSource = readIfExists(paths.source.tabLayout);
+  const commandDockSource = readIfExists(paths.source.commandDock);
   const commandCenterExists = fs.existsSync(paths.source.commandCenter);
+  const nativeTabRegistration =
+    /const alertOptions:\s*BottomTabNavigationOptions\s*=\s*\{\s*title:\s*'Dispatch'\s*\}/.test(layoutSource) &&
+    /name="alert"/.test(layoutSource);
+  const shellDockRegistration =
+    /<Slot\s*\/>/.test(layoutSource) &&
+    /key:\s*'alert'/.test(commandDockSource) &&
+    /label:\s*'DISPATCH'/.test(commandDockSource) &&
+    /route:\s*'\/alert'/.test(commandDockSource);
   const checks = [
     boolCheck(
       'dispatch_tab_route_exists',
@@ -324,10 +334,9 @@ function checkRouteGate(root, paths) {
     boolCheck(
       'dispatch_tab_registered_as_dispatch',
       'Tab layout registers the alert route as the visible Dispatch tab.',
-      /const alertOptions:\s*BottomTabNavigationOptions\s*=\s*\{\s*title:\s*'Dispatch'\s*\}/.test(layoutSource) &&
-        /name="alert"/.test(layoutSource),
-      [rel(root, paths.source.tabLayout)],
-      ['Keep the visible Dispatch tab registered in app/(tabs)/_layout.tsx or update route ownership explicitly.'],
+      nativeTabRegistration || shellDockRegistration,
+      [rel(root, paths.source.tabLayout), rel(root, paths.source.commandDock)],
+      ['Keep the visible Dispatch tab registered in app/(tabs)/_layout.tsx, or keep the shell CommandDock alert route labeled DISPATCH.'],
     ),
     boolCheck(
       'dispatch_error_boundary_present',
@@ -416,22 +425,24 @@ function checkRecoveryGate(root, paths) {
   const checks = [
     boolCheck(
       'recovery_action_replaces_more',
-      'Primary Dispatch action exposes Recovery and no primary More action remains.',
-      />\s*Recovery\s*<\/Text>/.test(commandSource) && !/>\s*More\s*<\/Text>/.test(commandSource),
+      'Primary Dispatch action exposes the Convoy emergency coordinate ping and no primary More action remains.',
+      /onEmergencyPing=\{handleRecoveryAssist\}/.test(commandSource) && !/>\s*More\s*<\/Text>/.test(commandSource),
       [rel(root, paths.source.commandCenter)],
-      ['Replace any primary Dispatch More action with Recovery.'],
+      ['Wire the Dispatch Convoy panel emergency ping to Recovery Assist and keep the old More action hidden.'],
     ),
     boolCheck(
       'recovery_action_opens_panel',
-      'Recovery action opens the hazard/recovery CAD panel.',
+      'Emergency coordinate ping uses the Recovery Assist GPS flow.',
       hasAll(commandSource, [
-        /openCommand\('hazard'\)/,
+        /onEmergencyPing=\{handleRecoveryAssist\}/,
+        /createRecoveryAssistEvent/,
+        /getCurrentPosition/,
         /getHazardRecoveryForm/,
         /HazardRecoveryCadEventModal/,
         /title="Recovery CAD Event"/,
       ]),
       [rel(root, paths.source.commandCenter)],
-      ['Wire the Recovery button to the HazardRecoveryCadEventModal flow.'],
+      ['Wire the Dispatch Convoy panel emergency ping to the Recovery Assist GPS flow.'],
     ),
     boolCheck(
       'recovery_categories_present',

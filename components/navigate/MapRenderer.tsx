@@ -19,7 +19,9 @@ import {
 } from '../../lib/mapConfig';
 import { ecsLog } from '../../lib/ecsLogger';
 import { TACTICAL } from '../../lib/theme';
+import MapFallbackSurface from './MapFallbackSurface';
 import type { CampIntelMarkerPayload, CampIntelTone } from '../../lib/campIntel/campIntelTypes';
+import { hasCampStructurePrivacyBufferConflict } from '../../lib/campsites/campStructurePrivacyBuffer';
 import { MAX_CAMPSITE_MARKERS } from '../../lib/campsites/campsiteThresholds';
 import type {
   DispersedCampingEligibilityLayerState,
@@ -30,6 +32,10 @@ import type {
   EstablishedCampsiteSelectionPayload,
 } from '../../lib/map/establishedCampsiteTypes';
 import {
+  DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM,
+  ESTABLISHED_CAMPSITES_MIN_ZOOM,
+} from '../../lib/map/campLayerZoom';
+import {
   DISPERSED_CAMPING_REGION_SELECTED,
   ESTABLISHED_CAMPSITE_SELECTED,
   SET_ESTABLISHED_CAMPSITES_LAYER_ENABLED,
@@ -38,10 +44,16 @@ import {
 import type { RemoteMapOverlayPayload } from '../../lib/remote/mapOverlay';
 
 const WEBVIEW_ORIGIN_WHITELIST = ['*'];
-const WEBVIEW_FAILSAFE_TIMEOUT_MS = 15000;
-const WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS = 20000;
+const WEBVIEW_FAILSAFE_TIMEOUT_MS = 30000;
+const WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS = 45000;
+const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;
+const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
+const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
+const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
-const WEBVIEW_AUTO_RECOVERY_LIMIT = 1;
+const MAX_ROUTE_RENDER_POINTS = 2400;
+const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
+const ROUTE_RENDER_TURN_DELTA_DEGREES = 8;
 const CAMERA_EPSILON = 0.00005;
 const DEBUG_MAP_RENDERER =
   ((globalThis as typeof globalThis & { __ECS_DEBUG_MAP_RENDERER__?: boolean })
@@ -124,6 +136,8 @@ type MarkerLike = {
   type?: string;
   color?: string;
   category?: string;
+  mapChar?: string;
+  resolved?: boolean;
   confidence?: string;
   confidenceScore?: number;
   rating?: string;
@@ -145,7 +159,7 @@ export type CampScoutMapMarkerPayload = {
   confidenceScore: number;
   confidenceLabel?: string;
   rank?: number;
-  rankLabel: string;
+  rankLabel?: string;
   selected?: boolean;
   legalityStatus?: 'verified_allowed' | 'likely_allowed_needs_verification' | 'unknown_needs_verification' | 'restricted_or_not_allowed';
   warnings?: string[];
@@ -153,6 +167,24 @@ export type CampScoutMapMarkerPayload = {
   distanceFromRoadOrTrail?: number;
   slope?: number;
   accessNotes?: string;
+  nearBuildings?: boolean;
+  nearStructure?: boolean;
+  nearResidentialStructure?: boolean;
+  nearestBuildingMiles?: number;
+  nearestBuildingDistanceMiles?: number;
+  buildingDistanceMiles?: number;
+  distanceToBuildingMiles?: number;
+  distanceFromBuildingMiles?: number;
+  nearestStructureMiles?: number;
+  nearestStructureDistanceMiles?: number;
+  structureDistanceMiles?: number;
+  distanceToStructureMiles?: number;
+  distanceFromStructureMiles?: number;
+  nearestResidentialStructureMiles?: number;
+  nearestResidentialStructureDistanceMiles?: number;
+  residentialStructureDistanceMiles?: number;
+  distanceToResidentialStructureMiles?: number;
+  distanceFromResidentialStructureMiles?: number;
   pinFamily?: 'camp_scout' | 'campops';
   campOpsRole?: 'candidate' | 'recommended' | 'backup' | 'emergency';
   campOpsCandidateId?: string;
@@ -313,6 +345,7 @@ export type MapRendererProps = {
     coordinates: { latitude: number; longitude: number }[];
     closed: boolean;
   } | null;
+  surfaceMode?: 'full' | 'compact';
   style?: any;
 };
 
@@ -328,6 +361,8 @@ export type PinMarker = {
   color?: string;
   category?: string;
   mapIcon?: string;
+  mapChar?: string;
+  resolved?: boolean;
 };
 
 export type TrailSegmentData = TrailSegment;
@@ -377,6 +412,8 @@ type WebMapPayload = {
     subtitle?: string;
     type?: string;
     color?: string;
+    mapChar?: string;
+    resolved?: boolean;
   }[];
   trailSegments: {
     id: string;
@@ -480,6 +517,19 @@ function coordinatesSame(left: [number, number], right: [number, number]) {
   return Math.abs(left[0] - right[0]) < 0.000001 && Math.abs(left[1] - right[1]) < 0.000001;
 }
 
+function distanceMetersBetweenLngLat(left: [number, number], right: [number, number]) {
+  const earthRadiusM = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(right[1] - left[1]);
+  const dLng = toRad(right[0] - left[0]);
+  const lat1 = toRad(left[1]);
+  const lat2 = toRad(right[1]);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function normalizeRouteLineCoordinates(input: [number, number][]): [number, number][] {
   if (input.length < 2) return [];
   const output: [number, number][] = [];
@@ -499,6 +549,8 @@ function normalizeRouteLineCoordinates(input: [number, number][]): [number, numb
 function routeCoordinateKey(latitude: number, longitude: number) {
   return `${latitude.toFixed(6)}:${longitude.toFixed(6)}`;
 }
+
+const ROUTE_ENDPOINT_WAYPOINT_DEDUPE_METERS = 150;
 
 function toLngLatPair(
   point:
@@ -573,6 +625,86 @@ function normalizePointList(points?: RoutePoint[]): [number, number][] {
   }
 
   return normalizeRouteLineCoordinates(out);
+}
+
+function bearingDegreesBetweenLngLat(start: [number, number], end: [number, number]) {
+  if (coordinatesSame(start, end)) return null;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const startLat = toRad(start[1]);
+  const endLat = toRad(end[1]);
+  const deltaLng = toRad(end[0] - start[0]);
+  const y = Math.sin(deltaLng) * Math.cos(endLat);
+  const x =
+    Math.cos(startLat) * Math.sin(endLat) -
+    Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function bearingDeltaDegrees(
+  before: [number, number],
+  current: [number, number],
+  after: [number, number],
+) {
+  const inbound = bearingDegreesBetweenLngLat(before, current);
+  const outbound = bearingDegreesBetweenLngLat(current, after);
+  if (inbound == null || outbound == null) return 0;
+  const delta = Math.abs(inbound - outbound) % 360;
+  return delta > 180 ? 360 - delta : delta;
+}
+
+function selectEvenlyDistributedIndexes(indexes: number[], limit: number) {
+  if (limit <= 0 || indexes.length === 0) return [];
+  if (indexes.length <= limit) return indexes;
+  if (limit === 1) return [indexes[Math.floor(indexes.length / 2)]];
+
+  const selected: number[] = [];
+  const lastPosition = indexes.length - 1;
+  for (let slot = 0; slot < limit; slot += 1) {
+    const position = Math.round((slot * lastPosition) / (limit - 1));
+    const value = indexes[position];
+    if (selected[selected.length - 1] !== value) {
+      selected.push(value);
+    }
+  }
+  return selected;
+}
+
+function preserveRouteGeometryForRendering(
+  points: [number, number][],
+  maxPoints: number,
+): [number, number][] {
+  if (points.length <= maxPoints) return points;
+  if (maxPoints <= 1) return points.slice(0, Math.max(maxPoints, 0));
+
+  const lastIndex = points.length - 1;
+  const selected = new Set<number>([0, lastIndex]);
+  const turnIndexes: number[] = [];
+  const strideIndexes: number[] = [];
+  const stride = Math.max(1, Math.ceil((points.length - 2) / Math.max(maxPoints - 2, 1)));
+
+  for (let index = 1; index < lastIndex; index += 1) {
+    const turnDelta = bearingDeltaDegrees(points[index - 1], points[index], points[index + 1]);
+    if (turnDelta >= ROUTE_RENDER_TURN_DELTA_DEGREES) {
+      turnIndexes.push(index);
+    } else if (index % stride === 0) {
+      strideIndexes.push(index);
+    }
+  }
+
+  for (const index of selectEvenlyDistributedIndexes(turnIndexes, maxPoints - selected.size)) {
+    selected.add(index);
+  }
+
+  const remainingBudget = maxPoints - selected.size;
+  const fillIndexes = strideIndexes.filter((index) => !selected.has(index));
+  for (const index of selectEvenlyDistributedIndexes(fillIndexes, remainingBudget)) {
+    selected.add(index);
+  }
+
+  return Array.from(selected)
+    .sort((left, right) => left - right)
+    .map((index) => points[index]);
 }
 
 function pickRouteColor(level?: string) {
@@ -661,6 +793,7 @@ function normalizeRenderedRouteWaypoints(
   const rendered: WebMapPayload['waypoints'] = [];
   const seen = new Set<string>();
   const hasRoute = routeCoords.length > 1;
+  const startCoord = hasRoute ? routeCoords[0] : null;
   const endCoord = hasRoute ? routeCoords[routeCoords.length - 1] : null;
   const addWaypoint = (
     id: string,
@@ -676,16 +809,22 @@ function normalizeRenderedRouteWaypoints(
   };
 
   if (hasRoute) {
-    const [startLng, startLat] = routeCoords[0];
+    const [startLng, startLat] = startCoord!;
     addWaypoint('route-start', startLat, startLng, 'Start');
   }
 
   for (let index = 0; index < waypoints.length; index += 1) {
     const waypoint = waypoints[index];
-    if (
-      endCoord &&
-      coordinatesSame([waypoint.longitude, waypoint.latitude], endCoord)
-    ) {
+    const waypointCoord: [number, number] = [waypoint.longitude, waypoint.latitude];
+    const duplicatesRouteEndpoint =
+      (startCoord &&
+        distanceMetersBetweenLngLat(waypointCoord, startCoord) <=
+          ROUTE_ENDPOINT_WAYPOINT_DEDUPE_METERS) ||
+      (endCoord &&
+        distanceMetersBetweenLngLat(waypointCoord, endCoord) <=
+          ROUTE_ENDPOINT_WAYPOINT_DEDUPE_METERS);
+
+    if (duplicatesRouteEndpoint) {
       continue;
     }
     addWaypoint(
@@ -796,17 +935,19 @@ export function normalizeRenderedCampScoutMarkers(
   for (const marker of input) {
     if (rendered.length >= 10) break;
     if (!isValidCoord(marker.latitude, marker.longitude)) continue;
+    if (hasCampStructurePrivacyBufferConflict(marker)) continue;
     const identity = marker.id || `${marker.latitude.toFixed(6)}:${marker.longitude.toFixed(6)}`;
     const coordinateKey = routeCoordinateKey(marker.latitude, marker.longitude);
     const key = `${identity}:${coordinateKey}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const index = rendered.length;
+    const isCampOpsPin = marker.pinFamily === 'campops';
     rendered.push({
       id: toMarkerId('camp-scout', marker.id, index),
       latitude: marker.latitude,
       longitude: marker.longitude,
-      title: marker.title || `Camp Scout ${index + 1}`,
+      title: marker.title || 'Camp Scout candidate',
       sourceType: marker.sourceType || 'unknown',
       confidenceGrade: /^[ABCD]$/.test(marker.confidenceGrade) ? marker.confidenceGrade : 'D',
       confidenceScore:
@@ -816,13 +957,17 @@ export function normalizeRenderedCampScoutMarkers(
       rank:
         typeof marker.rank === 'number' && Number.isFinite(marker.rank) && marker.rank > 0
           ? Math.floor(marker.rank)
-          : index + 1,
+          : isCampOpsPin
+            ? index + 1
+            : undefined,
       rankLabel:
-        typeof marker.rankLabel === 'string' && marker.rankLabel.trim().length > 0
+        isCampOpsPin && typeof marker.rankLabel === 'string' && marker.rankLabel.trim().length > 0
           ? marker.rankLabel.trim().slice(0, 3)
-          : String(index + 1),
+          : isCampOpsPin
+            ? String(index + 1)
+            : undefined,
       selected: !!marker.selected,
-      pinFamily: marker.pinFamily === 'campops' ? 'campops' : 'camp_scout',
+      pinFamily: isCampOpsPin ? 'campops' : 'camp_scout',
       confidenceLabel: typeof marker.confidenceLabel === 'string' ? marker.confidenceLabel : undefined,
       legalityStatus: marker.legalityStatus ?? 'unknown_needs_verification',
       warnings: Array.isArray(marker.warnings)
@@ -900,6 +1045,56 @@ export function buildMapOverlayPayloadHash(payload: WebMapPayload) {
   return stableStringify(staticPayload);
 }
 
+function buildFeatureCollectionSummaryHash(value: unknown): string {
+  const collection = value as {
+    type?: string;
+    features?: {
+      id?: string | number;
+      geometry?: { type?: string };
+      properties?: Record<string, unknown>;
+    }[];
+  } | null | undefined;
+  const features = Array.isArray(collection?.features) ? collection.features : [];
+  const summary = features.map((feature, index) => {
+    const props = feature?.properties ?? {};
+    const id = feature?.id ?? props.id ?? index;
+    return [
+      id,
+      feature?.geometry?.type ?? '',
+      props.confidence ?? '',
+      props.landManager ?? '',
+      props.distanceFromRouteMiles ?? '',
+      props.routeNearby ?? '',
+      props.name ?? '',
+      props.source ?? '',
+    ].join(':');
+  });
+  return `${collection?.type ?? 'none'}:${features.length}:${summary.join('|')}`;
+}
+
+function buildCampLayerHash(state: {
+  enabled?: boolean;
+  status?: unknown;
+  featureCount?: number;
+  renderKey?: string;
+  lastSuccessfulCacheKey?: string;
+  lastAttemptedCacheKey?: string;
+  geojson?: unknown;
+} | null | undefined): string {
+  if (!state?.enabled) return 'disabled';
+  if (typeof state.renderKey === 'string' && state.renderKey.length > 0) {
+    return state.renderKey;
+  }
+  return stableStringify({
+    enabled: true,
+    status: state.status ?? null,
+    featureCount: state.featureCount ?? null,
+    lastSuccessfulCacheKey: state.lastSuccessfulCacheKey ?? null,
+    lastAttemptedCacheKey: state.lastAttemptedCacheKey ?? null,
+    featureSummary: buildFeatureCollectionSummaryHash(state.geojson),
+  });
+}
+
 function roundForHash(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return Number(value.toFixed(5));
@@ -943,26 +1138,10 @@ function buildCameraCommandHash(command?: CameraCommand | null, trigger?: number
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const routeCoordsRaw = normalizePointList(props.points);
   const progressCoordsRaw = normalizePointList(props.progressPoints);
-  const routeCoords =
-    routeCoordsRaw.length > 600
-      ? routeCoordsRaw.filter(
-          (_, index) =>
-            index === 0 ||
-            index === routeCoordsRaw.length - 1 ||
-            index % Math.ceil(routeCoordsRaw.length / 600) === 0,
-        )
-      : routeCoordsRaw;
-  const progressRouteCoords =
-    progressCoordsRaw.length > 600
-      ? progressCoordsRaw.filter(
-          (_, index) =>
-            index === 0 ||
-            index === progressCoordsRaw.length - 1 ||
-            index % Math.ceil(progressCoordsRaw.length / 600) === 0,
-        )
-      : progressCoordsRaw;
+  const routeCoords = preserveRouteGeometryForRendering(routeCoordsRaw, MAX_ROUTE_RENDER_POINTS);
+  const progressRouteCoords = preserveRouteGeometryForRendering(progressCoordsRaw, MAX_PROGRESS_ROUTE_RENDER_POINTS);
 
-  const routePointsForBounds = routeCoords.map(([lng, lat]) => ({ lat, lng }));
+  const routePointsForBounds = routeCoordsRaw.map(([lng, lat]) => ({ lat, lng }));
 
   const bounds =
     routePointsForBounds.length > 1
@@ -1105,6 +1284,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           subtitle: m.subtitle,
           type: m.type,
           color: m.color,
+          mapChar: typeof m.mapChar === 'string' ? m.mapChar.slice(0, 2) : undefined,
+          resolved: !!m.resolved,
         };
       }),
     trailSegments: (props.trailSegments || []).map((segment, index) => ({
@@ -1255,7 +1436,7 @@ function makeMapHtml(
     content="initial-scale=1, maximum-scale=1, user-scalable=no, width=device-width"
   />
   <link
-    href="https://api.mapbox.com/mapbox-gl-js/v3.1.2/mapbox-gl.css"
+    href="https://api.mapbox.com/mapbox-gl-js/${MAPBOX_WEBVIEW_GL_JS_VERSION}/mapbox-gl.css"
     rel="stylesheet"
   />
   <style>
@@ -1465,8 +1646,8 @@ function makeMapHtml(
     .camp-intel-cat-caution .camp-intel-core { background: #C86E68; }
     .camp-scout-marker {
       position: relative;
-      width: 24px;
-      height: 24px;
+      width: 30px;
+      height: 30px;
       border-radius: 999px;
       display: flex;
       align-items: center;
@@ -1475,116 +1656,114 @@ function makeMapHtml(
       filter: drop-shadow(0 6px 12px rgba(0,0,0,0.34));
     }
     .camp-scout-marker::before {
-      content: '';
+      content: none;
       position: absolute;
-      inset: -4px;
+      inset: 1px;
       border-radius: 999px;
-      border: 1px solid rgba(196,138,44,0.24);
-      background: rgba(8, 11, 14, 0.36);
+      border: 0;
+      background: transparent;
     }
     .camp-scout-core {
       position: relative;
-      min-width: 22px;
-      height: 22px;
-      padding: 0 4px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(196,138,44,0.94);
-      color: #091014;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border-radius: 0;
+      border: 0;
+      background: transparent;
+      color: #F2C24D;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 9px;
-      line-height: 22px;
+      font-size: 18px;
+      line-height: 24px;
       font-weight: 900;
       letter-spacing: 0;
       text-transform: uppercase;
       gap: 2px;
+      filter: drop-shadow(0 2px 3px rgba(0,0,0,0.62));
     }
     .camp-scout-tent {
       position: relative;
-      width: 8px;
-      height: 7px;
-      display: inline-block;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
+      color: currentColor;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 900;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      transform: translateY(-0.5px);
     }
     .camp-scout-tent::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 1px;
-      width: 0;
-      height: 0;
-      border-left: 4px solid transparent;
-      border-right: 4px solid transparent;
-      border-bottom: 7px solid currentColor;
-      opacity: 0.88;
+      content: none;
     }
     .camp-scout-tent::after {
-      content: '';
-      position: absolute;
-      left: 3px;
-      top: 4px;
-      width: 2px;
-      height: 4px;
-      background: rgba(9,16,20,0.72);
-      border-radius: 1px 1px 0 0;
+      content: none;
     }
     .camp-scout-rank {
-      position: relative;
-      z-index: 1;
-    }
-    .camp-scout-label {
       position: absolute;
       left: 50%;
-      top: 24px;
+      top: -14px;
       transform: translateX(-50%);
-      padding: 1px 4px;
+      z-index: 2;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
       border-radius: 999px;
-      border: 1px solid rgba(242,194,77,0.22);
-      background: rgba(8, 11, 14, 0.78);
+      border: 1px solid rgba(242,194,77,0.52);
+      background: rgba(8, 11, 14, 0.94);
       color: #F2C24D;
-      font-size: 7px;
-      line-height: 9px;
+      font-size: 9px;
+      line-height: 15px;
       font-weight: 900;
       letter-spacing: 0;
       text-transform: uppercase;
       white-space: nowrap;
       pointer-events: none;
+      text-align: center;
+    }
+    .camp-scout-marker:not(.camp-scout-campops) .camp-scout-rank {
+      display: none;
     }
     .camp-scout-grade-a { z-index: 12; }
-    .camp-scout-grade-a .camp-scout-core { background: #F2C24D; }
-    .camp-scout-grade-b .camp-scout-core { background: #D4A017; }
-    .camp-scout-grade-c .camp-scout-core { background: #9EC2B1; color: #0B1116; }
+    .camp-scout-grade-a .camp-scout-core { color: #F2C24D; }
+    .camp-scout-grade-b .camp-scout-core { color: #D4A017; }
+    .camp-scout-grade-c .camp-scout-core { color: #9EC2B1; }
     .camp-scout-source-ecs_inferred .camp-scout-core {
-      background: #F2C24D;
-      color: #091014;
-      border-color: rgba(9,16,20,0.34);
-      box-shadow: 0 0 0 2px rgba(242,194,77,0.14);
+      color: #F2C24D;
+      border-color: transparent;
+      box-shadow: none;
     }
     .camp-scout-source-ecs_inferred::before {
-      border-color: rgba(242,194,77,0.42);
-      background: rgba(242,194,77,0.10);
+      border-color: transparent;
+      background: transparent;
     }
-    .camp-scout-source-official_mapped .camp-scout-core { background: #8FD694; color: #0B1116; }
-    .camp-scout-source-community_suggested .camp-scout-core { background: #65C97A; color: #0B1116; }
-    .camp-scout-source-imported_route_context .camp-scout-core { background: #86B8FF; color: #0B1116; }
+    .camp-scout-source-official_mapped .camp-scout-core { color: #8FD694; }
+    .camp-scout-source-community_suggested .camp-scout-core { color: #65C97A; }
+    .camp-scout-source-imported_route_context .camp-scout-core { color: #86B8FF; }
     .camp-scout-selected {
-      width: 36px;
-      height: 36px;
+      width: 34px;
+      height: 34px;
       z-index: 28;
       filter: drop-shadow(0 10px 18px rgba(0,0,0,0.44));
     }
     .camp-scout-selected::before {
-      inset: 0;
-      border-color: rgba(255,248,220,0.86);
-      box-shadow: 0 0 18px rgba(242,194,77,0.36);
+      inset: 1px;
+      border-color: transparent;
+      box-shadow: none;
     }
     .camp-scout-selected .camp-scout-core {
-      min-width: 26px;
-      height: 26px;
-      line-height: 26px;
-      font-size: 10px;
+      width: 28px;
+      height: 28px;
+      line-height: 28px;
+      font-size: 22px;
+    }
+    .camp-scout-selected .camp-scout-rank {
+      top: -13px;
     }
     .camp-intel-marker.camp-intel-selected .camp-intel-core {
       background: #D9433F;
@@ -1623,7 +1802,118 @@ function makeMapHtml(
     .camp-intel-badge-info { color: #86B8FF; }
     .camp-intel-badge-neutral { color: #D9DEDF; }
     .marker-tilt { background: #FF9F43; }
-    .marker-pin { background: #6EA8FF; }
+    .marker-pin {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #6EA8FF;
+      box-shadow:
+        0 0 0 1px rgba(8,14,18,0.48),
+        0 0 12px rgba(0,0,0,0.38);
+    }
+    .marker-pin-resolved {
+      opacity: 0.58;
+      filter: saturate(0.72);
+    }
+    .pin-type-icon {
+      position: relative;
+      display: block;
+      width: 12px;
+      height: 12px;
+      color: #091014;
+      pointer-events: none;
+    }
+    .pin-type-water,
+    .pin-type-poi {
+      color: #F5F7F8;
+    }
+    .pin-type-camp::before {
+      content: '';
+      position: absolute;
+      left: 1px;
+      top: 2px;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 9px solid currentColor;
+    }
+    .pin-type-camp::after {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 7px;
+      width: 2px;
+      height: 4px;
+      border-radius: 1px 1px 0 0;
+      background: rgba(255,255,255,0.72);
+    }
+    .pin-type-fuel::before {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      width: 6px;
+      height: 9px;
+      border-radius: 1px;
+      background: currentColor;
+    }
+    .pin-type-fuel::after {
+      content: '';
+      position: absolute;
+      right: 1px;
+      top: 4px;
+      width: 4px;
+      height: 6px;
+      border-top: 2px solid currentColor;
+      border-right: 2px solid currentColor;
+      border-radius: 0 4px 4px 0;
+    }
+    .pin-type-water::before {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 1px;
+      width: 8px;
+      height: 8px;
+      border-radius: 8px 8px 8px 1px;
+      background: currentColor;
+      transform: rotate(-45deg);
+      transform-origin: 50% 65%;
+    }
+    .pin-type-poi::before {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .pin-type-poi::after {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 6px;
+      width: 0;
+      height: 0;
+      border-left: 2px solid transparent;
+      border-right: 2px solid transparent;
+      border-top: 6px solid currentColor;
+    }
+    .pin-type-fallback {
+      width: auto;
+      min-width: 10px;
+      height: 12px;
+      color: #091014;
+      font-size: 8px;
+      line-height: 12px;
+      font-weight: 900;
+      text-align: center;
+    }
     .marker-user {
       width: 34px;
       height: 34px;
@@ -1687,7 +1977,7 @@ function makeMapHtml(
   <div id="map"></div>
   <div id="crosshair" class="crosshair"></div>
 
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.1.2/mapbox-gl.js"></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/${MAPBOX_WEBVIEW_GL_JS_VERSION}/mapbox-gl.js"></script>
   <script>
     (function() {
       var RNW = window.ReactNativeWebView;
@@ -1724,6 +2014,21 @@ function makeMapHtml(
       function sendLog(msg) {
         send('log', msg);
       }
+
+      window.onerror = function(message, source, lineno, colno, error) {
+        try {
+          sendLog('window error: ' + String(message || 'unknown') + ' @ ' + String(source || 'inline') + ':' + String(lineno || 0) + ':' + String(colno || 0));
+          if (error && error.stack) sendLog('window error stack: ' + String(error.stack));
+        } catch (e) {}
+        return false;
+      };
+
+      window.addEventListener('unhandledrejection', function(event) {
+        try {
+          var reason = event && event.reason ? event.reason : 'unknown';
+          sendLog('unhandled rejection: ' + String(reason && reason.message ? reason.message : reason));
+        } catch (e) {}
+      });
 
       function sendCampScoutDebug(msg) {
         if (campScoutDebugEnabled) {
@@ -1874,6 +2179,20 @@ function makeMapHtml(
         return;
       }
 
+      try {
+        mapboxgl.workerCount = 1;
+      } catch (e) {
+        sendLog('mapboxgl worker tuning skipped: ' + String(e && e.message ? e.message : e));
+      }
+
+      try {
+        if (mapboxgl.supported && !mapboxgl.supported({ failIfMajorPerformanceCaveat: false })) {
+          sendLog('mapboxgl support check failed; attempting constructor so native WebView can report the concrete error');
+        }
+      } catch (e) {
+        sendLog('mapboxgl support check threw: ' + String(e && e.message ? e.message : e));
+      }
+
       mapboxgl.accessToken = ${escapedToken};
 
       var map = null;
@@ -1941,12 +2260,37 @@ function makeMapHtml(
         return { type: 'FeatureCollection', features: features || [] };
       }
 
+      function normalizeLngLatCoordinate(coord) {
+        if (!coord) return null;
+        if (Array.isArray(coord) && coord.length >= 2) {
+          var lngFromArray = Number(coord[0]);
+          var latFromArray = Number(coord[1]);
+          if (isFinite(lngFromArray) && isFinite(latFromArray) && Math.abs(latFromArray) <= 90 && Math.abs(lngFromArray) <= 180) {
+            return [lngFromArray, latFromArray];
+          }
+          return null;
+        }
+
+        var lat = Number(coord.latitude != null ? coord.latitude : coord.lat);
+        var lng = Number(coord.longitude != null ? coord.longitude : coord.lng);
+        if (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+          return [lng, lat];
+        }
+        return null;
+      }
+
+      function normalizeLngLatLine(coordinates) {
+        return (coordinates || [])
+          .map(function(coord) { return normalizeLngLatCoordinate(coord); })
+          .filter(function(coord) { return coord && coord.length >= 2; });
+      }
+
       function lineFeature(id, coordinates, props) {
         return {
           type: 'Feature',
           id: id,
           properties: props || {},
-          geometry: { type: 'LineString', coordinates: coordinates || [] }
+          geometry: { type: 'LineString', coordinates: normalizeLngLatLine(coordinates) }
         };
       }
 
@@ -1974,6 +2318,50 @@ function makeMapHtml(
             try { m.remove(); } catch (e) {}
           });
         } catch (e) {}
+      }
+
+      function stableMarkerHash(items) {
+        try {
+          return JSON.stringify((items || []).map(function(item) {
+            return [
+              item && item.id,
+              item && item.latitude,
+              item && item.longitude,
+              item && item.title,
+              item && item.subtitle,
+              item && item.rank,
+              item && item.rankLabel,
+              item && item.selected,
+              item && item.sourceType,
+              item && item.confidenceScore,
+              item && item.confidence,
+              item && item.markerKind,
+              item && item.pinFamily,
+              item && item.campOpsRole,
+              item && item.campOpsCandidateId,
+              item && item.type,
+              item && item.color
+            ];
+          }));
+        } catch (e) {
+          return String(Date.now());
+        }
+      }
+
+      var markerPayloadHashes = {
+        waypoints: '',
+        bailouts: '',
+        campsites: '',
+        campScoutPins: '',
+        tiltAlerts: '',
+        pins: ''
+      };
+
+      function markerPayloadChanged(key, items) {
+        var nextHash = stableMarkerHash(items);
+        if (markerPayloadHashes[key] === nextHash) return false;
+        markerPayloadHashes[key] = nextHash;
+        return true;
       }
 
       var waypointMarkers = [];
@@ -2106,7 +2494,53 @@ function makeMapHtml(
           if (dasharray) {
             map.setPaintProperty(id, 'line-dasharray', dasharray);
           }
+        } else {
+          try {
+            map.setPaintProperty(id, 'line-color', color);
+            map.setPaintProperty(id, 'line-width', width);
+            map.setPaintProperty(id, 'line-opacity', opacity);
+            map.setPaintProperty(id, 'line-dasharray', dasharray || [1, 0]);
+          } catch (e) {}
         }
+      }
+
+      function ensureExploreRouteHaloLayer() {
+        if (!map.getLayer('explore-route-halo-layer')) {
+          map.addLayer({
+            id: 'explore-route-halo-layer',
+            type: 'line',
+            source: 'segment-source',
+            filter: ['==', ['get', 'kind'], 'explore_route'],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#65D4FF',
+              'line-width': 9,
+              'line-opacity': 0.24
+            }
+          }, 'segment-layer');
+        }
+      }
+
+      function applySegmentLineStyle() {
+        if (!map.getLayer('segment-layer')) return;
+        try {
+          map.setPaintProperty('segment-layer', 'line-color', ['get', 'color']);
+          map.setPaintProperty('segment-layer', 'line-width', [
+            'case',
+            ['==', ['get', 'kind'], 'explore_route'],
+            5.75,
+            4
+          ]);
+          map.setPaintProperty('segment-layer', 'line-opacity', [
+            'case',
+            ['==', ['get', 'kind'], 'explore_route'],
+            0.98,
+            0.92
+          ]);
+        } catch (e) {}
       }
 
       function ensureCircleLayer(id, sourceId, color, radius, opacity, strokeColor, strokeWidth) {
@@ -2176,19 +2610,39 @@ function makeMapHtml(
         return undefined;
       }
 
+      function moveExistingLayerToTop(layerId) {
+        try {
+          if (map && map.getLayer(layerId)) {
+            map.moveLayer(layerId);
+          }
+        } catch (e) {}
+      }
+
+      function promoteRouteGuidanceLayers() {
+        [
+          'route-layer',
+          'segment-layer',
+          'trail-layer',
+          'speed-layer',
+          'route-progress-glow-layer',
+          'route-progress-layer',
+          'route-builder-halo-layer',
+          'route-builder-layer',
+          'route-builder-endpoint-halo-layer',
+          'route-builder-endpoint-layer'
+        ].forEach(moveExistingLayerToTop);
+      }
+
       function removeDispersedCampingEligibilityLayer() {
-        var removedOutline = removeMapLayer(DISPERSED_CAMPING_OUTLINE_LAYER_ID);
-        var removedFill = removeMapLayer(DISPERSED_CAMPING_FILL_LAYER_ID);
-        var removedSource = removeMapSource(DISPERSED_CAMPING_SOURCE_ID);
-        if (removedOutline || removedFill || removedSource) {
-          sendCampLayerDebug('layer_removed', {
-            layer: 'dispersed_camping',
-            sourceRemoved: removedSource,
-            fillLayerRemoved: removedFill,
-            outlineLayerRemoved: removedOutline
-          });
-        }
-        sendCampLayerDebug('map_layer_removed', {
+        try {
+          if (map && map.getLayer(DISPERSED_CAMPING_OUTLINE_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_CAMPING_OUTLINE_LAYER_ID, 'visibility', 'none');
+          }
+          if (map && map.getLayer(DISPERSED_CAMPING_FILL_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_CAMPING_FILL_LAYER_ID, 'visibility', 'none');
+          }
+        } catch (e) {}
+        sendCampLayerDebug('map_layer_hidden', {
           layer: 'dispersed_camping',
           sourceId: DISPERSED_CAMPING_SOURCE_ID,
           fillLayerId: DISPERSED_CAMPING_FILL_LAYER_ID,
@@ -2197,18 +2651,15 @@ function makeMapHtml(
       }
 
       function removeEstablishedCampsitesLayer() {
-        var removedSymbol = removeMapLayer(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID);
-        var removedBackplate = removeMapLayer(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID);
-        var removedSource = removeMapSource(ESTABLISHED_CAMPSITES_SOURCE_ID);
-        if (removedSymbol || removedBackplate || removedSource) {
-          sendCampLayerDebug('layer_removed', {
-            layer: 'established_campgrounds',
-            sourceRemoved: removedSource,
-            backplateLayerRemoved: removedBackplate,
-            symbolLayerRemoved: removedSymbol
-          });
-        }
-        sendCampLayerDebug('map_layer_removed', {
+        try {
+          if (map && map.getLayer(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID)) {
+            map.setLayoutProperty(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID, 'visibility', 'none');
+          }
+          if (map && map.getLayer(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID)) {
+            map.setLayoutProperty(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID, 'visibility', 'none');
+          }
+        } catch (e) {}
+        sendCampLayerDebug('map_layer_hidden', {
           layer: 'established_campgrounds',
           sourceId: ESTABLISHED_CAMPSITES_SOURCE_ID,
           backplateLayerId: ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID,
@@ -2335,10 +2786,14 @@ function makeMapHtml(
           .filter(function(item) { return item.length > 0; });
       }
 
-      function buildDispersedCampingSelectionPayload(feature) {
+      function buildDispersedCampingSelectionPayload(feature, eventLngLat) {
         var props = feature && feature.properties ? feature.properties : {};
         var regionId = String(props.id || feature.id || '').trim();
         if (!regionId) return null;
+        var distanceFromRouteMiles = Number(props.distanceFromRouteMiles);
+        var routeCorridorMiles = Number(props.routeCorridorMiles);
+        var clickLatitude = eventLngLat && Number(eventLngLat.lat);
+        var clickLongitude = eventLngLat && Number(eventLngLat.lng);
         return {
           regionId: regionId,
           name: props.name ? String(props.name) : undefined,
@@ -2351,7 +2806,12 @@ function makeMapHtml(
           source: props.source ? String(props.source) : undefined,
           sourceProvider: props.sourceProvider ? String(props.sourceProvider) : undefined,
           sourceUpdatedAt: props.sourceUpdatedAt ? String(props.sourceUpdatedAt) : undefined,
-          requiresVerification: props.requiresVerification !== false
+          requiresVerification: props.requiresVerification !== false,
+          routeNearby: props.routeNearby === true || props.routeNearby === 'true',
+          distanceFromRouteMiles: isFinite(distanceFromRouteMiles) ? distanceFromRouteMiles : undefined,
+          routeCorridorMiles: isFinite(routeCorridorMiles) ? routeCorridorMiles : undefined,
+          latitude: isFinite(clickLatitude) ? clickLatitude : undefined,
+          longitude: isFinite(clickLongitude) ? clickLongitude : undefined
         };
       }
 
@@ -2460,7 +2920,7 @@ function makeMapHtml(
         } catch (e) {}
         dispersedCampingMapTapSuppressUntil = Date.now() + 350;
         var feature = event && event.features && event.features.length ? event.features[0] : null;
-        var payload = buildDispersedCampingSelectionPayload(feature);
+        var payload = buildDispersedCampingSelectionPayload(feature, event && event.lngLat);
         if (payload) {
           send(DISPERSED_CAMPING_SELECTED_MESSAGE_TYPE, payload);
         }
@@ -2518,6 +2978,7 @@ function makeMapHtml(
             id: DISPERSED_CAMPING_FILL_LAYER_ID,
             type: 'fill',
             source: DISPERSED_CAMPING_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
             paint: {
               'fill-color': [
                 'match',
@@ -2559,6 +3020,7 @@ function makeMapHtml(
             id: DISPERSED_CAMPING_OUTLINE_LAYER_ID,
             type: 'line',
             source: DISPERSED_CAMPING_SOURCE_ID,
+            minzoom: ${DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM},
             layout: {
               'line-cap': 'round',
               'line-join': 'round'
@@ -2614,7 +3076,17 @@ function makeMapHtml(
           }, beforeRouteLayer);
         }
 
+        try {
+          if (map.getLayer(DISPERSED_CAMPING_FILL_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_CAMPING_FILL_LAYER_ID, 'visibility', 'visible');
+          }
+          if (map.getLayer(DISPERSED_CAMPING_OUTLINE_LAYER_ID)) {
+            map.setLayoutProperty(DISPERSED_CAMPING_OUTLINE_LAYER_ID, 'visibility', 'visible');
+          }
+        } catch (e) {}
+
         attachDispersedCampingLayerHandlers();
+        promoteRouteGuidanceLayers();
         sendCampLayerDebug('map_source_update', {
           layer: 'dispersed_camping',
           sourceId: DISPERSED_CAMPING_SOURCE_ID,
@@ -2676,6 +3148,7 @@ function makeMapHtml(
             id: ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID,
             type: 'circle',
             source: ESTABLISHED_CAMPSITES_SOURCE_ID,
+            minzoom: ${ESTABLISHED_CAMPSITES_MIN_ZOOM},
             paint: {
               'circle-color': [
                 'case',
@@ -2708,6 +3181,7 @@ function makeMapHtml(
             id: ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID,
             type: 'symbol',
             source: ESTABLISHED_CAMPSITES_SOURCE_ID,
+            minzoom: ${ESTABLISHED_CAMPSITES_MIN_ZOOM},
             layout: {
               'icon-image': [
                 'case',
@@ -2771,7 +3245,17 @@ function makeMapHtml(
           }, beforePinnedLayer);
         }
 
+        try {
+          if (map.getLayer(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID)) {
+            map.setLayoutProperty(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID, 'visibility', 'visible');
+          }
+          if (map.getLayer(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID)) {
+            map.setLayoutProperty(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID, 'visibility', 'visible');
+          }
+        } catch (e) {}
+
         attachEstablishedCampsiteLayerHandlers();
+        promoteRouteGuidanceLayers();
         sendCampLayerDebug('map_source_update', {
           layer: 'established_campgrounds',
           sourceId: ESTABLISHED_CAMPSITES_SOURCE_ID,
@@ -2967,11 +3451,11 @@ function makeMapHtml(
             },
             paint: {
               'circle-color': getCampScoutSourceColorExpression(),
-              'circle-radius': ['case', ['==', ['get', 'selected'], true], 10, 7],
-              'circle-opacity': 0.9,
+              'circle-radius': 0,
+              'circle-opacity': 0,
               'circle-stroke-color': '#F2C24D',
-              'circle-stroke-width': 2,
-              'circle-stroke-opacity': 0.96,
+              'circle-stroke-width': 0,
+              'circle-stroke-opacity': 0,
             },
           });
         } else {
@@ -3232,14 +3716,17 @@ function makeMapHtml(
           'ecs-remote-heatmap-fill',
           'ecs-remote-v1',
           ['match', ['get', 'label'], 'A', '#C66A4A', 'B', '#F2C24D', 'C', '#65C97A', 'D', '#5FD1FF', '#5FD1FF'],
-          0.42
+          0.32
         );
         ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
+        ensureLineLayer('route-progress-glow-layer', 'route-progress-source', ['get', 'color'], 14, 0.22);
         ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
         ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
+        ensureExploreRouteHaloLayer();
+        applySegmentLineStyle();
         ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
         ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
-        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 4, 0.96, [1.4, 1.2]);
+        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16, 0.44);
         ensureLineLayer('route-builder-halo-layer', 'route-builder-source', ['get', 'color'], 12, 0.22);
         ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
@@ -3250,6 +3737,7 @@ function makeMapHtml(
         ensureCampScoutPinLayer();
         applyDispersedCampingDesiredState('style_load');
         applyEstablishedCampsitesDesiredState('style_load');
+        promoteRouteGuidanceLayers();
       }
 
       function applyRouteRenderMode(mode) {
@@ -3286,7 +3774,8 @@ function makeMapHtml(
           (segments || [])
             .filter(function(seg) { return seg.coordinates && seg.coordinates.length > 1; })
             .map(function(seg) {
-              return lineFeature(seg.id, seg.coordinates, {
+              var normalizedCoordinates = normalizeLngLatLine(seg.coordinates);
+              return lineFeature(seg.id, normalizedCoordinates, {
                 color: seg.color || '#2ECC71',
                 kind: seg.kind || null,
                 name: seg.name || null,
@@ -3294,6 +3783,7 @@ function makeMapHtml(
                 categoryLabel: seg.categoryLabel || null
               });
             })
+            .filter(function(feature) { return feature.geometry.coordinates.length > 1; })
         );
         setGeoJson('segment-source', fc);
       }
@@ -3524,26 +4014,23 @@ function makeMapHtml(
           String(item.confidenceGrade || 'D').toLowerCase() +
           ' camp-scout-source-' +
           String(item.sourceType || 'unknown') +
+          (item.pinFamily === 'campops' ? ' camp-scout-campops' : '') +
           (item.selected ? ' camp-scout-selected' : '');
 
         var core = document.createElement('div');
         core.className = 'camp-scout-core';
         var tent = document.createElement('span');
         tent.className = 'camp-scout-tent';
-        var rank = document.createElement('span');
-        rank.className = 'camp-scout-rank';
-        rank.textContent = String(item.rankLabel || item.confidenceGrade || 'CS').slice(0, 3);
-        var label = document.createElement('span');
-        label.className = 'camp-scout-label';
-        if (String(item.sourceType || '') === 'ecs_inferred') {
-          label.textContent = 'ecs';
-        } else {
-          label.textContent = 'camp';
-        }
+        tent.textContent = '\u26FA';
+        tent.setAttribute('aria-hidden', 'true');
         core.appendChild(tent);
-        core.appendChild(rank);
         root.appendChild(core);
-        root.appendChild(label);
+        if (item.pinFamily === 'campops') {
+          var rank = document.createElement('span');
+          rank.className = 'camp-scout-rank';
+          rank.textContent = String(item.rankLabel || item.rank || item.confidenceGrade || '?').slice(0, 3);
+          root.appendChild(rank);
+        }
         root.setAttribute('role', 'button');
         root.setAttribute('tabindex', '0');
         root.setAttribute(
@@ -3551,6 +4038,33 @@ function makeMapHtml(
           String(item.accessibilityLabel || ((item.campOpsRoleLabel || 'Camp Scout pin') + ': ' + (item.title || 'camp candidate')))
         );
         return root;
+      }
+
+      function pinTypeClass(type) {
+        var normalized = String(type || 'poi').toLowerCase();
+        if (normalized === 'camp' || normalized === 'fuel' || normalized === 'water' || normalized === 'poi') {
+          return normalized;
+        }
+        return 'fallback';
+      }
+
+      function createDroppedPinMarkerElement(item) {
+        var pinType = pinTypeClass(item && item.type);
+        var el = document.createElement('div');
+        el.className =
+          'marker-dot marker-pin marker-pin-' +
+          pinType +
+          (item && item.resolved ? ' marker-pin-resolved' : '');
+        if (item && item.color) el.style.background = item.color;
+
+        var icon = document.createElement('span');
+        icon.className = 'pin-type-icon pin-type-' + pinType;
+        if (pinType === 'fallback') {
+          icon.textContent = String((item && item.mapChar) || (item && item.type) || '?').slice(0, 2).toUpperCase();
+        }
+        icon.setAttribute('aria-hidden', 'true');
+        el.appendChild(icon);
+        return el;
       }
 
       function replaceCampScoutMarkers(list, items) {
@@ -3713,9 +4227,11 @@ function makeMapHtml(
       }
 
       function projectLngLat(coord) {
-        if (!map || !coord || coord.length < 2) return null;
+        if (!map) return null;
+        var normalizedCoord = normalizeLngLatCoordinate(coord);
+        if (!normalizedCoord || normalizedCoord.length < 2) return null;
         try {
-          return map.project({ lng: coord[0], lat: coord[1] });
+          return map.project({ lng: normalizedCoord[0], lat: normalizedCoord[1] });
         } catch (e) {
           return null;
         }
@@ -4772,34 +5288,45 @@ function makeMapHtml(
         updateRemoteOverlay(payload.remoteOverlay || null);
         updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor);
         updateCampsiteSearchPolygon(payload.campsiteSearchPolygon || null);
+        promoteRouteGuidanceLayers();
 
-        replaceMarkers(waypointMarkers, payload.waypoints || [], 'marker-dot marker-waypoint', 'waypoint');
-        replaceMarkers(bailoutMarkers, payload.bailouts || [], 'marker-dot marker-bailout', 'bailout');
-        replaceCampIntelMarkers(campsiteMarkers, payload.campsites || []);
-        updateCampScoutPinLayer(payload.campScoutPins || []);
-        replaceCampScoutMarkers(campScoutMarkers, payload.campScoutPins || []);
-        replaceMarkers(tiltMarkers, payload.tiltAlerts || [], 'marker-dot marker-tilt', 'tiltAlert');
+        if (markerPayloadChanged('waypoints', payload.waypoints || [])) {
+          replaceMarkers(waypointMarkers, payload.waypoints || [], 'marker-dot marker-waypoint', 'waypoint');
+        }
+        if (markerPayloadChanged('bailouts', payload.bailouts || [])) {
+          replaceMarkers(bailoutMarkers, payload.bailouts || [], 'marker-dot marker-bailout', 'bailout');
+        }
+        if (markerPayloadChanged('campsites', payload.campsites || [])) {
+          replaceCampIntelMarkers(campsiteMarkers, payload.campsites || []);
+        }
+        if (markerPayloadChanged('campScoutPins', payload.campScoutPins || [])) {
+          updateCampScoutPinLayer(payload.campScoutPins || []);
+          replaceCampScoutMarkers(campScoutMarkers, payload.campScoutPins || []);
+        }
+        if (markerPayloadChanged('tiltAlerts', payload.tiltAlerts || [])) {
+          replaceMarkers(tiltMarkers, payload.tiltAlerts || [], 'marker-dot marker-tilt', 'tiltAlert');
+        }
 
-        safeRemoveMarkers(pinMarkers);
-        pinMarkers = [];
-        (payload.pins || []).forEach(function(item) {
-          var el = document.createElement('div');
-          el.className = 'marker-dot marker-pin';
-          if (item.color) el.style.background = item.color;
+        if (markerPayloadChanged('pins', payload.pins || [])) {
+          safeRemoveMarkers(pinMarkers);
+          pinMarkers = [];
+          (payload.pins || []).forEach(function(item) {
+            var el = createDroppedPinMarkerElement(item);
 
-          el.addEventListener('click', function(ev) {
-            try {
-              if (ev && ev.stopPropagation) ev.stopPropagation();
-            } catch (e) {}
-            send('pinTap', Object.assign({ kind: 'pin' }, item));
+            el.addEventListener('click', function(ev) {
+              try {
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+              } catch (e) {}
+              send('pinTap', Object.assign({ kind: 'pin' }, item));
+            });
+
+            var marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+              .setLngLat([item.longitude, item.latitude])
+              .addTo(map);
+
+            pinMarkers.push(marker);
           });
-
-          var marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-            .setLngLat([item.longitude, item.latitude])
-            .addTo(map);
-
-          pinMarkers.push(marker);
-        });
+        }
 
         applyDynamicState(payload);
 
@@ -4818,22 +5345,27 @@ function makeMapHtml(
         if (initialized) return;
         initialized = true;
 
-        try {
-          map = new mapboxgl.Map({
-            container: 'map',
-            style: activeStyleUrl,
-            center: [-121.0, 38.5],
-            zoom: 7,
-            attributionControl: false,
-            interactive: true,
-            dragRotate: false,
-            touchZoomRotate: true,
-            doubleClickZoom: true
-          });
-        } catch (err) {
-          sendLog('Map constructor failed: ' + String(err && err.message ? err.message : err));
-          send('mapReady', { ok: false, reason: 'constructor_failed' });
-          return;
+      try {
+        map = new mapboxgl.Map({
+          container: 'map',
+          style: activeStyleUrl,
+          center: [-121.0, 38.5],
+          zoom: 7,
+          attributionControl: false,
+          interactive: true,
+          dragRotate: false,
+          touchZoomRotate: true,
+          doubleClickZoom: true,
+          antialias: false,
+          preserveDrawingBuffer: false,
+          failIfMajorPerformanceCaveat: false,
+          fadeDuration: 0
+        });
+      } catch (err) {
+        var constructorMessage = String(err && err.message ? err.message : err);
+        sendLog('Map constructor failed: ' + constructorMessage);
+        send('mapReady', { ok: false, reason: 'constructor_failed', detail: constructorMessage });
+        return;
         }
 
         bootstrapReadyTimer = setTimeout(function() {
@@ -5135,20 +5667,26 @@ const MapRenderer = React.memo(function MapRenderer({
   establishedCampsites = null,
   onEstablishedCampsiteTap,
   campsiteSearchPolygon = null,
+  surfaceMode = 'full',
   style,
 }: MapRendererProps) {
   const webViewRef = useRef<WebView>(null);
   const [webReady, setWebReady] = useState(false);
   const [webBootTimedOut, setWebBootTimedOut] = useState(false);
+  const [webBootIssue, setWebBootIssue] = useState<string | null>(null);
   const [webViewInstanceKey, setWebViewInstanceKey] = useState(0);
   const bootstrapSentRef = useRef(false);
   const lastPayloadHashRef = useRef('');
   const lastDynamicPayloadHashRef = useRef('');
   const failSafeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hardFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const compactRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const compactRetryCountRef = useRef(0);
+  const constructorRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const constructorRetryCountRef = useRef(0);
   const lastCameraCommandHashRef = useRef('');
   const lastLegacyFollowHashRef = useRef('');
   const previousHtmlHashRef = useRef<string>('');
-  const autoRecoveryCountRef = useRef(0);
   const activeWebViewInstanceKeyRef = useRef(0);
   const activeFailSafeInstanceKeyRef = useRef<number | null>(null);
   const failSafeArmedInstanceKeyRef = useRef<number | null>(null);
@@ -5156,11 +5694,13 @@ const MapRenderer = React.memo(function MapRenderer({
   const loadStartedInstanceKeyRef = useRef<number | null>(null);
   const startupSettledRef = useRef(false);
   const definitiveReadyInstanceKeyRef = useRef<number | null>(null);
+  const hasEverReachedReadyRef = useRef(false);
 
   const shouldLoadMap = !!hasToken && !!mapboxToken;
+  const isCompactSurface = surfaceMode === 'compact';
 
   useEffect(() => {
-    onReadyStateChange?.(shouldLoadMap && webReady);
+    onReadyStateChange?.(shouldLoadMap && (webReady || hasEverReachedReadyRef.current));
   }, [onReadyStateChange, shouldLoadMap, webReady]);
 
   const initialStyleUrl = useMemo(
@@ -5194,7 +5734,10 @@ const MapRenderer = React.memo(function MapRenderer({
   }), [shouldLoadMap, webViewInstanceKey, mapboxToken, bootStyleUrl]);
 
   const webViewKey = `ecs-map-webview-${webViewInstanceKey}`;
-  const webViewSource = useMemo(() => ({ html }), [html]);
+  const webViewSource = useMemo(
+    () => ({ html, baseUrl: 'https://api.mapbox.com/' }),
+    [html],
+  );
   const hasHandledInitialCenterTriggerRef = useRef(false);
   const hasHandledInitialBoundsTriggerRef = useRef(false);
 
@@ -5206,9 +5749,32 @@ const MapRenderer = React.memo(function MapRenderer({
     activeFailSafeInstanceKeyRef.current = null;
   }, []);
 
-  const resetRuntimeState = useCallback((options?: { clearRecoveryCount?: boolean }) => {
+  const clearHardFailureTimer = useCallback(() => {
+    if (hardFailureTimerRef.current) {
+      clearTimeout(hardFailureTimerRef.current);
+      hardFailureTimerRef.current = null;
+    }
+  }, []);
+
+  const clearCompactRetryTimer = useCallback(() => {
+    if (compactRetryTimerRef.current) {
+      clearTimeout(compactRetryTimerRef.current);
+      compactRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const clearConstructorRetryTimer = useCallback(() => {
+    if (constructorRetryTimerRef.current) {
+      clearTimeout(constructorRetryTimerRef.current);
+      constructorRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const resetRuntimeState = useCallback(() => {
     setWebReady(false);
     setWebBootTimedOut(false);
+    setWebBootIssue(null);
+    hasEverReachedReadyRef.current = false;
     bootstrapSentRef.current = false;
     lastPayloadHashRef.current = '';
     lastDynamicPayloadHashRef.current = '';
@@ -5221,17 +5787,16 @@ const MapRenderer = React.memo(function MapRenderer({
     bootstrapAcknowledgedInstanceKeyRef.current = null;
     startupSettledRef.current = false;
     definitiveReadyInstanceKeyRef.current = null;
-    if (options?.clearRecoveryCount) {
-      autoRecoveryCountRef.current = 0;
-    }
     clearFailSafeTimer();
-  }, [clearFailSafeTimer]);
+    clearHardFailureTimer();
+    clearCompactRetryTimer();
+    clearConstructorRetryTimer();
+  }, [clearCompactRetryTimer, clearConstructorRetryTimer, clearFailSafeTimer, clearHardFailureTimer]);
 
   const remountWebView = useCallback((reason: string) => {
     debugLog('[MapRenderer] Remounting WebView', {
       reason,
       instanceKey: activeWebViewInstanceKeyRef.current,
-      recoveryCount: autoRecoveryCountRef.current,
     });
     resetRuntimeState();
     setWebViewInstanceKey((value) => value + 1);
@@ -5323,20 +5888,75 @@ const MapRenderer = React.memo(function MapRenderer({
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);
   const dynamicPayloadHash = useMemo(() => stableStringify(dynamicPayload), [dynamicPayload]);
+  const fallbackMarkers = useMemo(
+    () => [
+      ...(payload.waypoints || []).map((marker) => ({ ...marker, color: '#F2C24D', type: 'waypoint' })),
+      ...(payload.bailouts || []).map((marker) => ({ ...marker, color: '#FFCF5A', type: 'bailout' })),
+      ...(payload.pins || []),
+      ...(payload.campScoutPins || []).map((marker) => ({ ...marker, color: '#5EE1A0', type: 'camp' })),
+    ],
+    [payload.bailouts, payload.campScoutPins, payload.pins, payload.waypoints],
+  );
+  const fallbackSegments = useMemo(
+    () => [
+      ...(payload.segments || []),
+      ...(payload.trailSegments || []),
+      ...(payload.speedSegments || []),
+    ],
+    [payload.segments, payload.speedSegments, payload.trailSegments],
+  );
+  const hasFallbackGeometry = useMemo(
+    () =>
+      payload.routeCoords.length > 1 ||
+      payload.progressRouteCoords.length > 1 ||
+      fallbackSegments.some((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1) ||
+      fallbackMarkers.length > 0 ||
+      !!dynamicPayload.userLocation,
+    [dynamicPayload.userLocation, fallbackMarkers.length, fallbackSegments, payload.progressRouteCoords.length, payload.routeCoords.length],
+  );
+  const fallbackVisible =
+    hasFallbackGeometry &&
+    (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current)));
+  const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
+  dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
+  const establishedCampsitesRef = useRef(establishedCampsites);
+  establishedCampsitesRef.current = establishedCampsites;
   const dispersedCampingEligibilityHash = useMemo(
-    () => stableStringify(dispersedCampingEligibility ?? { enabled: false }),
+    () => buildCampLayerHash(dispersedCampingEligibility),
     [dispersedCampingEligibility],
   );
   const establishedCampsitesHash = useMemo(
-    () => stableStringify(establishedCampsites ?? { enabled: false }),
+    () => buildCampLayerHash(establishedCampsites),
     [establishedCampsites],
   );
 
   useEffect(() => {
     if (!shouldLoadMap) {
-      resetRuntimeState({ clearRecoveryCount: true });
+      compactRetryCountRef.current = 0;
+      constructorRetryCountRef.current = 0;
+      resetRuntimeState();
     }
   }, [resetRuntimeState, shouldLoadMap]);
+
+  useEffect(() => {
+    if (!isCompactSurface || !shouldLoadMap || !webBootTimedOut || webReady) return;
+    if (compactRetryCountRef.current >= 2) return;
+
+    clearCompactRetryTimer();
+    compactRetryTimerRef.current = setTimeout(() => {
+      compactRetryCountRef.current += 1;
+      remountWebView('compact_surface_boot_retry');
+    }, 1200);
+
+    return clearCompactRetryTimer;
+  }, [
+    clearCompactRetryTimer,
+    isCompactSurface,
+    remountWebView,
+    shouldLoadMap,
+    webBootTimedOut,
+    webReady,
+  ]);
 
   useEffect(() => {
     activeWebViewInstanceKeyRef.current = webViewInstanceKey;
@@ -5346,6 +5966,22 @@ const MapRenderer = React.memo(function MapRenderer({
     startupSettledRef.current = false;
     definitiveReadyInstanceKeyRef.current = null;
   }, [webViewInstanceKey]);
+
+  const scheduleConstructorRetry = useCallback((reason: string) => {
+    if (constructorRetryCountRef.current >= MAP_CONSTRUCTOR_RETRY_LIMIT) {
+      return false;
+    }
+
+    clearConstructorRetryTimer();
+    const nextAttempt = constructorRetryCountRef.current + 1;
+    const delayMs = MAP_CONSTRUCTOR_RETRY_BASE_MS * nextAttempt;
+    constructorRetryTimerRef.current = setTimeout(() => {
+      constructorRetryCountRef.current = nextAttempt;
+      remountWebView(`map_constructor_retry:${reason}:${nextAttempt}`);
+    }, delayMs);
+
+    return true;
+  }, [clearConstructorRetryTimer, remountWebView]);
 
   useEffect(() => {
     debugLog('[MapRenderer] mounted');
@@ -5398,21 +6034,6 @@ const MapRenderer = React.memo(function MapRenderer({
     routeBuilderSegments.length,
   ]);
 
-  useEffect(() => {
-    if (!shouldLoadMap) return;
-    if (!webBootTimedOut) return;
-    if (webReady) return;
-    if (startupSettledRef.current) return;
-    if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) return;
-    if (autoRecoveryCountRef.current >= WEBVIEW_AUTO_RECOVERY_LIMIT) return;
-
-    autoRecoveryCountRef.current += 1;
-    debugLog(
-      `[MapRenderer] Auto-recovery remount after cold-start timeout (${autoRecoveryCountRef.current}/${WEBVIEW_AUTO_RECOVERY_LIMIT})`,
-    );
-    remountWebView('cold_start_timeout');
-  }, [remountWebView, shouldLoadMap, webBootTimedOut, webReady, webViewInstanceKey]);
-
   const safeInject = useCallback((message: unknown) => {
     try {
       if (!webViewRef.current) return;
@@ -5464,10 +6085,45 @@ const MapRenderer = React.memo(function MapRenderer({
           instanceKey: instanceKeyAtSchedule,
           phase,
         });
-        setWebBootTimedOut(true);
+        setWebBootIssue(phase === 'bootstrap_progress' ? 'map_load_timeout' : 'webview_startup_timeout');
+        if (isCompactSurface) {
+          setWebBootTimedOut(true);
+        }
       }, timeoutMs);
     },
-    [clearFailSafeTimer],
+    [clearFailSafeTimer, isCompactSurface],
+  );
+
+  const armHardFailureTimer = useCallback(
+    (instanceKeyAtSchedule: number) => {
+      clearHardFailureTimer();
+
+      hardFailureTimerRef.current = setTimeout(() => {
+        const isCurrentInstance =
+          activeWebViewInstanceKeyRef.current === instanceKeyAtSchedule &&
+          definitiveReadyInstanceKeyRef.current !== instanceKeyAtSchedule &&
+          !startupSettledRef.current;
+
+        if (!isCurrentInstance) {
+          debugLog('[MapRenderer] Ignoring stale hard-failure timer', {
+            scheduledFor: instanceKeyAtSchedule,
+            current: activeWebViewInstanceKeyRef.current,
+          });
+          return;
+        }
+
+        debugLog('[MapRenderer] HARD FAILURE TIMER TRIGGERED', {
+          instanceKey: instanceKeyAtSchedule,
+        });
+        clearFailSafeTimer();
+        failSafeArmedInstanceKeyRef.current = null;
+        startupSettledRef.current = true;
+        setWebReady(false);
+        setWebBootTimedOut(true);
+        setWebBootIssue((current) => current ?? 'map_boot_unrecovered');
+      }, WEBVIEW_HARD_FAILURE_TIMEOUT_MS);
+    },
+    [clearFailSafeTimer, clearHardFailureTimer],
   );
 
   useEffect(() => {
@@ -5479,6 +6135,7 @@ const MapRenderer = React.memo(function MapRenderer({
     setWebBootTimedOut(false);
     const instanceKeyAtSchedule = webViewInstanceKey;
     armFailSafeTimer(instanceKeyAtSchedule, WEBVIEW_FAILSAFE_TIMEOUT_MS, 'initial');
+    armHardFailureTimer(instanceKeyAtSchedule);
 
     return () => {
       if (failSafeArmedInstanceKeyRef.current === instanceKeyAtSchedule) {
@@ -5488,8 +6145,9 @@ const MapRenderer = React.memo(function MapRenderer({
         activeFailSafeInstanceKeyRef.current = null;
       }
       clearFailSafeTimer();
+      clearHardFailureTimer();
     };
-  }, [armFailSafeTimer, clearFailSafeTimer, shouldLoadMap, webViewInstanceKey]);
+  }, [armFailSafeTimer, armHardFailureTimer, clearFailSafeTimer, clearHardFailureTimer, shouldLoadMap, webViewInstanceKey]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
@@ -5519,38 +6177,38 @@ const MapRenderer = React.memo(function MapRenderer({
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
 
-    const enabled = !!dispersedCampingEligibility?.enabled;
+    const state = dispersedCampingEligibilityRef.current;
+    const enabled = !!state?.enabled;
     postToMap({
       type: SET_DISPERSED_CAMPING_LAYER_ENABLED,
       payload: {
         enabled,
-        geojson: enabled ? dispersedCampingEligibility?.geojson : undefined,
+        geojson: enabled ? state?.geojson : undefined,
       },
     });
   }, [
     shouldLoadMap,
     webReady,
     postToMap,
-    dispersedCampingEligibility,
     dispersedCampingEligibilityHash,
   ]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
 
-    const enabled = !!establishedCampsites?.enabled;
+    const state = establishedCampsitesRef.current;
+    const enabled = !!state?.enabled;
     postToMap({
       type: SET_ESTABLISHED_CAMPSITES_LAYER_ENABLED,
       payload: {
         enabled,
-        geojson: enabled ? establishedCampsites?.geojson : undefined,
+        geojson: enabled ? state?.geojson : undefined,
       },
     });
   }, [
     shouldLoadMap,
     webReady,
     postToMap,
-    establishedCampsites,
     establishedCampsitesHash,
   ]);
 
@@ -5666,41 +6324,66 @@ const MapRenderer = React.memo(function MapRenderer({
       case 'mapReady':
         debugLog('[MapRenderer] mapReady received', payload);
         if (payload?.ok === false) {
-          if (definitiveReadyInstanceKeyRef.current === activeWebViewInstanceKeyRef.current) {
+          if (
+            definitiveReadyInstanceKeyRef.current === activeWebViewInstanceKeyRef.current ||
+            hasEverReachedReadyRef.current
+          ) {
             debugLog('[MapRenderer] Ignoring late mapReady failure after definitive ready', payload);
             return;
           }
 
           clearFailSafeTimer();
+          clearHardFailureTimer();
           failSafeArmedInstanceKeyRef.current = null;
+          if (payload?.reason === 'constructor_failed') {
+            const retryScheduled = scheduleConstructorRetry(payload.reason);
+            if (retryScheduled) {
+              setWebReady(false);
+              setWebBootTimedOut(false);
+              setWebBootIssue(`map_constructor_retry_${constructorRetryCountRef.current + 1}`);
+              return;
+            }
+          }
           startupSettledRef.current = true;
           setWebReady(false);
           setWebBootTimedOut(true);
+          setWebBootIssue(
+            typeof payload?.reason === 'string'
+              ? `${payload.reason}${typeof payload?.detail === 'string' && payload.detail.length > 0 ? `: ${payload.detail.slice(0, 72)}` : ''}`
+              : 'map_boot_failed',
+          );
           return;
         }
 
         if (payload?.reason === 'bootstrap_timeout') {
-          debugLog('[MapRenderer] Provisional bootstrap timeout received; extending startup window');
+          debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell');
           if (
             bootstrapAcknowledgedInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current &&
             definitiveReadyInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current
           ) {
             bootstrapAcknowledgedInstanceKeyRef.current = activeWebViewInstanceKeyRef.current;
+            clearFailSafeTimer();
+            clearHardFailureTimer();
+            failSafeArmedInstanceKeyRef.current = null;
+            startupSettledRef.current = true;
+            hasEverReachedReadyRef.current = true;
             setWebBootTimedOut(false);
-            armFailSafeTimer(
-              activeWebViewInstanceKeyRef.current,
-              WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS,
-              'bootstrap_progress',
-            );
+            setWebBootIssue(null);
+            setWebReady(true);
           }
           return;
         }
 
         clearFailSafeTimer();
+        clearHardFailureTimer();
         failSafeArmedInstanceKeyRef.current = null;
         startupSettledRef.current = true;
         definitiveReadyInstanceKeyRef.current = activeWebViewInstanceKeyRef.current;
+        hasEverReachedReadyRef.current = true;
+        compactRetryCountRef.current = 0;
+        constructorRetryCountRef.current = 0;
         setWebBootTimedOut(false);
+        setWebBootIssue(null);
         setWebReady(true);
         return;
 
@@ -5772,8 +6455,8 @@ const MapRenderer = React.memo(function MapRenderer({
         return;
     }
   }, [
-    armFailSafeTimer,
     clearFailSafeTimer,
+    clearHardFailureTimer,
     onLongPress,
     onMapTap,
     onSegmentTap,
@@ -5789,10 +6472,13 @@ const MapRenderer = React.memo(function MapRenderer({
     onRouteBuilderUpdate,
     onRouteBuilderGestureStateChange,
     onRoadClassification,
+    scheduleConstructorRetry,
   ]);
 
+  const showBootOverlay = !isCompactSurface && !webReady && shouldLoadMap && !hasEverReachedReadyRef.current;
+
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, isCompactSurface && styles.compactContainer, style]}>
       {shouldLoadMap ? (
         <WebView
           key={webViewKey}
@@ -5806,6 +6492,10 @@ const MapRenderer = React.memo(function MapRenderer({
           overScrollMode="never"
           bounces={false}
           androidLayerType="hardware"
+          mixedContentMode="always"
+          thirdPartyCookiesEnabled
+          allowFileAccess
+          allowUniversalAccessFromFileURLs
           cacheEnabled
           onLoadStart={() => {
             const isFirstLoadForInstance = loadStartedInstanceKeyRef.current !== webViewInstanceKey;
@@ -5813,15 +6503,18 @@ const MapRenderer = React.memo(function MapRenderer({
               definitiveReadyInstanceKeyRef.current === webViewInstanceKey;
             debugLog('[MapRenderer] WebView load start', {
               key: webViewKey,
-              recoveryCount: autoRecoveryCountRef.current,
               firstLoadForInstance: isFirstLoadForInstance,
               startupSettled: startupSettledRef.current,
               definitivelyReady: isDefinitivelyReady,
+              readyLatched: hasEverReachedReadyRef.current,
             });
             loadStartedInstanceKeyRef.current = webViewInstanceKey;
             if (!startupSettledRef.current && !isDefinitivelyReady && isFirstLoadForInstance) {
-              setWebReady(false);
+              if (!hasEverReachedReadyRef.current) {
+                setWebReady(false);
+              }
               setWebBootTimedOut(false);
+              setWebBootIssue(null);
             }
             activeFailSafeInstanceKeyRef.current = webViewInstanceKey;
           }}
@@ -5830,16 +6523,34 @@ const MapRenderer = React.memo(function MapRenderer({
           }}
           onError={(syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) {
-              console.warn('[MapRenderer] Ignoring WebView error after definitive ready', nativeEvent);
+            if (
+              definitiveReadyInstanceKeyRef.current === webViewInstanceKey ||
+              hasEverReachedReadyRef.current
+            ) {
+              console.warn('[MapRenderer] Ignoring WebView error after map reached ready', nativeEvent);
               return;
             }
             console.warn('[MapRenderer] WebView error', nativeEvent);
-            clearFailSafeTimer();
-            failSafeArmedInstanceKeyRef.current = null;
-            startupSettledRef.current = true;
-            setWebReady(false);
-            setWebBootTimedOut(true);
+            setWebBootIssue(
+              typeof nativeEvent?.description === 'string'
+                ? nativeEvent.description
+                : 'webview_error',
+            );
+          }}
+          onHttpError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.warn('[MapRenderer] WebView HTTP error', nativeEvent);
+            if (
+              definitiveReadyInstanceKeyRef.current === webViewInstanceKey ||
+              hasEverReachedReadyRef.current
+            ) {
+              return;
+            }
+            setWebBootIssue(
+              typeof nativeEvent?.description === 'string' && nativeEvent.description.length > 0
+                ? nativeEvent.description
+                : `http_${nativeEvent?.statusCode ?? 'error'}`,
+            );
           }}
           onRenderProcessGone={() => {
             console.warn('[MapRenderer] WebView crashed → remount');
@@ -5852,7 +6563,7 @@ const MapRenderer = React.memo(function MapRenderer({
           style={styles.webview}
         />
       ) : (
-        <View style={styles.placeholder}>
+        <View style={[styles.placeholder, fallbackVisible && styles.transparentPlaceholder]}>
           <Text style={styles.placeholderTitle}>Map unavailable</Text>
           <Text style={styles.placeholderText}>
             {!hasToken || !mapboxToken
@@ -5865,7 +6576,20 @@ const MapRenderer = React.memo(function MapRenderer({
         </View>
       )}
 
-      {!webReady && shouldLoadMap && (
+      {fallbackVisible ? (
+        <MapFallbackSurface
+          routeCoords={payload.routeCoords}
+          progressRouteCoords={payload.progressRouteCoords}
+          segments={fallbackSegments}
+          markers={fallbackMarkers}
+          userLocation={dynamicPayload.userLocation}
+          bootIssue={webBootIssue}
+          compact={isCompactSurface}
+          statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}
+        />
+      ) : null}
+
+      {showBootOverlay && !fallbackVisible && (
         <View style={styles.loadingOverlay}>
           {!webBootTimedOut ? (
             <>
@@ -5876,7 +6600,9 @@ const MapRenderer = React.memo(function MapRenderer({
             <>
               <Text style={styles.loadingTitle}>Map initialization delayed</Text>
               <Text style={styles.loadingSubtitle}>
-                Tactical surface is taking longer than expected to boot.
+                {webBootIssue
+                  ? `Map boot status: ${webBootIssue}. Retry after checking connectivity.`
+                  : 'Tactical surface is taking longer than expected to boot.'}
               </Text>
               {!!onRetry && (
                 <Text style={styles.loadingHint}>
@@ -5900,6 +6626,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: TACTICAL.bg,
   },
+  compactContainer: {
+    backgroundColor: 'transparent',
+  },
   webview: {
     flex: 1,
     backgroundColor: 'transparent',
@@ -5910,6 +6639,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
     backgroundColor: TACTICAL.bg,
+  },
+  transparentPlaceholder: {
+    backgroundColor: 'transparent',
   },
   placeholderTitle: {
     color: TACTICAL.text,

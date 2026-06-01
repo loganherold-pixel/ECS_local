@@ -144,12 +144,24 @@ function confidenceFrom(args: {
 function recoveryPrep(args: {
   hasLocation: boolean;
   bailoutCount: number;
+  nearestFuelLabel?: string | null;
+  nearestFuelMiles?: number | null;
+  nearestWaterLabel?: string | null;
+  nearestWaterMiles?: number | null;
+  nearestSupplyLabel?: string | null;
+  nearestSupplyMiles?: number | null;
+  nearestRepairLabel?: string | null;
+  nearestRepairMiles?: number | null;
   recoveryGearReady: boolean | null;
   routeRemoteness: ExpeditionRouteRemoteness;
   communicationsSignalConfidence?: ExpeditionReadinessConfidence | null;
 }): string[] {
   return [
     args.bailoutCount === 0 ? 'Add or review bailout points for this route.' : null,
+    args.nearestFuelLabel ? `Fuel bailout: ${args.nearestFuelLabel}${formatMiles(args.nearestFuelMiles) ? ` is ${formatMiles(args.nearestFuelMiles)} away` : ''}. Verify hours before relying on it.` : null,
+    args.nearestWaterLabel ? `Water bailout: ${args.nearestWaterLabel}${formatMiles(args.nearestWaterMiles) ? ` is ${formatMiles(args.nearestWaterMiles)} away` : ''}. Verify access and potability before relying on it.` : null,
+    args.nearestSupplyLabel ? `Supply bailout: ${args.nearestSupplyLabel}${formatMiles(args.nearestSupplyMiles) ? ` is ${formatMiles(args.nearestSupplyMiles)} away` : ''}.` : null,
+    args.nearestRepairLabel ? `Repair bailout: ${args.nearestRepairLabel}${formatMiles(args.nearestRepairMiles) ? ` is ${formatMiles(args.nearestRepairMiles)} away` : ''}.` : null,
     !args.hasLocation ? 'Acquire current coordinates before departure or incident response.' : null,
     args.recoveryGearReady !== true ? 'Confirm recovery gear in Fleet before committing to remote terrain.' : null,
     args.routeRemoteness === 'high' ? 'Review last turnaround and Plan B before entering the remote segment.' : null,
@@ -176,6 +188,9 @@ export function buildRecoveryReadinessInput(args: {
   const nearestPavement = origin ? nearestPoint(routeBailouts, origin, ['pavement', 'alternate_route', 'staging']) : null;
   const nearestRoad = nearestPavement ?? nearestAny;
   const nearestFuel = origin ? nearestPoint(routeBailouts, origin, ['fuel']) : null;
+  const nearestWater = origin ? nearestPoint(routeBailouts, origin, ['water']) : null;
+  const nearestSupply = origin ? nearestPoint(routeBailouts, origin, ['supplies', 'town']) : null;
+  const nearestRepair = origin ? nearestPoint(routeBailouts, origin, ['repair', 'town']) : null;
   const nearestTown = origin ? nearestPoint(routeBailouts, origin, ['town']) : null;
   const nearestTrailhead = origin ? nearestPoint(routeBailouts, origin, ['staging']) : null;
   const nearestContact = origin ? nearestPoint(routeBailouts, origin, ['ranger', 'hospital']) : null;
@@ -217,6 +232,9 @@ export function buildRecoveryReadinessInput(args: {
     nearestKnownRoadLabel: nearestRoad?.point.title ?? null,
     nearestTrailheadMiles: roundMiles(nearestTrailhead?.miles ?? null),
     nearestFuelMiles: roundMiles(nearestFuel?.miles ?? null),
+    nearestWaterMiles: roundMiles(nearestWater?.miles ?? null),
+    nearestSupplyMiles: roundMiles(nearestSupply?.miles ?? null),
+    nearestRepairMiles: roundMiles(nearestRepair?.miles ?? null),
     nearestTownMiles: roundMiles(nearestTown?.miles ?? null),
     nearestSignalAreaMiles: null,
     officialContactPointAvailable: nearestContact ? true : null,
@@ -237,6 +255,14 @@ export function buildRecoveryReadinessInput(args: {
     recommendedPrep: recoveryPrep({
       hasLocation: Boolean(origin),
       bailoutCount,
+      nearestFuelLabel: nearestFuel?.point.title ?? null,
+      nearestFuelMiles: roundMiles(nearestFuel?.miles ?? null),
+      nearestWaterLabel: nearestWater?.point.title ?? null,
+      nearestWaterMiles: roundMiles(nearestWater?.miles ?? null),
+      nearestSupplyLabel: nearestSupply?.point.title ?? null,
+      nearestSupplyMiles: roundMiles(nearestSupply?.miles ?? null),
+      nearestRepairLabel: nearestRepair?.point.title ?? null,
+      nearestRepairMiles: roundMiles(nearestRepair?.miles ?? null),
       recoveryGearReady,
       routeRemoteness,
       communicationsSignalConfidence: args.communications?.signalConfidence,

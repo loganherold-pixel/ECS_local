@@ -341,7 +341,11 @@ export function buildExpeditionIntelligenceContext(params: ExpeditionContextBuil
     ?? readDataPointValue<number>(operationalConvoy?.teamMemberCount);
   const waterValue = readDataPointValue<number>(operationalLogistics?.waterRemainingLiters) ?? pickNumber(logistics, ['waterRemainingLiters', 'water']);
   const foodValue = readDataPointValue<number>(operationalLogistics?.foodDaysRemaining) ?? pickNumber(logistics, ['foodDaysRemaining', 'food']);
-  const fuelValue = readDataPointValue<number>(operationalLogistics?.fuelRangeMiles) ?? pickNumber(logistics, ['fuelRangeMiles', 'fuel']);
+  const fuelValue =
+    readDataPointValue<number>(operationalLogistics?.fuelRangeMiles) ??
+    readDataPointValue<number>(operationalLogistics?.fuelRemainingGallons) ??
+    readDataPointValue<number>(operationalLogistics?.fuelLevelPercent) ??
+    pickNumber(logistics, ['fuelRangeMiles', 'fuelGallons', 'fuelPercent', 'fuel']);
   const powerValue = readDataPointValue<number>(operationalLogistics?.powerHoursRemaining) ?? pickNumber(logistics, ['powerHoursRemaining', 'power']);
   const campsiteAvailabilityValue = route?.campsiteAvailability
     ?? pickString(logistics, ['campsiteAvailability'])

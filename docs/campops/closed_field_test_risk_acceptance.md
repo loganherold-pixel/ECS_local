@@ -2,7 +2,7 @@
 
 Date: 2026-05-01
 
-Status: not accepted
+Status: accepted
 
 Risk acceptance mode:
 - restricted_closed_field_test_only
@@ -10,13 +10,13 @@ Risk acceptance mode:
 ## Required Sign-Offs
 
 - Product owner: L. Herold
-- Product approval date: 2026-05-01
+- Product approval date: 2026-05-17
 - Safety owner: L. Herold
-- Safety approval date: 2026-05-01
+- Safety approval date: 2026-05-17
 - Privacy owner: L. Herold
-- Privacy approval date: 2026-05-01
+- Privacy approval date: 2026-05-17
 - Engineering owner: L. Herold
-- Engineering approval date: 2026-05-01
+- Engineering approval date: 2026-05-17
 
 ## Approved Scope
 
@@ -27,10 +27,10 @@ Risk acceptance mode:
 - Approved region labels: Pacific, Northwest, South, Mid-West, East
 - Approved route labels: Navigated
 - Approved scenario labels: Field
-- Expiration date: N/A
+- Expiration date: 2026-06-16
 - Incident contact: L. Herold
 - Rollback owner: L. Herold
-- Rollback command/path: N/A
+- Rollback command/path: disable `ENABLE_CAMPOPS_INTERNAL_BETA` and `ECS_CAMPOPS_INTERNAL_BETA`, keep all `DEFAULT_CAMP_OPS_RECOMMENDATION_ROLLOUT_CONFIG` flags false, and verify rollback with `npm run gate:pre-closed-field-test`
 
 ## Risk-Accepted Incomplete Items
 
@@ -64,6 +64,6 @@ These items are not approved or complete. They are explicitly risk-accepted only
 
 ## Decision
 
-- Status: not accepted
-- Decision summary: Field Activation
-- Remaining concerns: Expiration date and rollback command/path are not recorded with actionable values. Closed field testing remains blocked until those required scope fields are completed or all evidence gates pass.
+- Status: accepted
+- Decision summary: Guarded closed field-test activation accepted with restrictions. This accepts the listed incomplete evidence and approval risks for the approved tester cohort only; it does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
+- Remaining concerns: CampOps remains restricted to the approved closed-field scope. Android pin/popup/action QA, cramped-screen QA, broader provider coverage, telemetry sinks, community publishing, and public-safe exports remain follow-up work before broad release.

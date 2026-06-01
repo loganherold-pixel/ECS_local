@@ -10,12 +10,14 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
 import type { IncidentContext, RecoveryIncidentAgentOutput } from '../../lib/types/incidentRecovery';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 
 type ECSAssessmentModalProps = {
   visible: boolean;
   onClose: () => void;
+  stackBehavior?: OverlayStackBehavior;
   incident?: IncidentContext | null;
 };
 
@@ -49,9 +51,11 @@ function ListBlock({
 export default function ECSAssessmentModal({
   visible,
   onClose,
+  stackBehavior,
   incident,
 }: ECSAssessmentModalProps) {
   const output = getOutput(incident);
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const footer = (
     <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.78}>
       <Text style={styles.closeButtonText}>Close</Text>
@@ -67,7 +71,8 @@ export default function ECSAssessmentModal({
       eyebrow="RECOVERY & INCIDENT AGENT"
       subtitle="Structured stabilization assessment. Not a replacement for emergency services or recovery professionals."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      {...fullBodyPopupProps}
+      stackBehavior={stackBehavior}
       footer={footer}
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

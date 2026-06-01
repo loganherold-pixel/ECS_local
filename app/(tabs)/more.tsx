@@ -37,6 +37,7 @@ import { openManageSubscription } from '../../lib/subscriptionAccess';
 import { resolveEcsAccessState } from '../../lib/auth/accessResolver';
 import { resolveRoleSurfaceScopes } from '../../lib/auth/roleScopeResolver';
 import { resolveAccountUx } from '../../lib/auth/accountUXResolver';
+import { formatBuildFingerprintTime, getEcsBuildFingerprint } from '../../lib/buildFingerprint';
 
 type SubTab =
   | 'risk'
@@ -107,6 +108,7 @@ function MoreScreenInner() {
   } = useApp();
   const { palette, colors, appearanceMode, autoDrivingEnabled, effectiveTheme, isAutoDrivingActive, setAppearanceMode, setAutoDrivingEnabled } = useTheme();
   const router = useRouter();
+  const buildFingerprint = React.useMemo(() => getEcsBuildFingerprint(), []);
 
   const [authVisible, setAuthVisible] = useState(false);
   const [subTab, setSubTab] = useState<SubTab>('risk');
@@ -726,6 +728,48 @@ Expedition Command System
           <>
             <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Settings</Text>
 
+            <View style={[styles.buildFingerprintCard, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}>
+              <View style={styles.buildFingerprintHeader}>
+                <View style={[styles.buildFingerprintIcon, { backgroundColor: colors.goldMuted }]}>
+                  <Ionicons name="finger-print-outline" size={16} color={colors.gold} />
+                </View>
+                <View style={styles.buildFingerprintTitleWrap}>
+                  <Text style={[styles.buildFingerprintTitle, { color: colors.textPrimary }]}>Build Fingerprint</Text>
+                  <Text style={[styles.buildFingerprintSubtitle, { color: colors.textMuted }]}>Visible APK provenance for field testing</Text>
+                </View>
+                <View
+                  style={[
+                    styles.buildFingerprintBadge,
+                    {
+                      borderColor: buildFingerprint.isDirty ? colors.warning : colors.success,
+                      backgroundColor: buildFingerprint.isDirty ? `${colors.warning}18` : `${colors.success}14`,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.buildFingerprintBadgeText, { color: buildFingerprint.isDirty ? colors.warning : colors.success }]}>
+                    {buildFingerprint.isDirty ? 'DIRTY' : 'CLEAN'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.buildFingerprintGrid}>
+                {[
+                  ['Commit', buildFingerprint.commitShortSha],
+                  ['Profile', buildFingerprint.profile],
+                  ['Dirty flag', buildFingerprint.dirtyState],
+                  ['Channel', buildFingerprint.channel],
+                  ['Built', formatBuildFingerprintTime(buildFingerprint.buildTime)],
+                ].map(([label, value]) => (
+                  <View key={label} style={[styles.buildFingerprintRow, { borderColor: colors.border }]}>
+                    <Text style={[styles.buildFingerprintLabel, { color: colors.textMuted }]}>{label}</Text>
+                    <Text style={[styles.buildFingerprintValue, { color: colors.textPrimary }]} numberOfLines={1}>
+                      {value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
             {/* ═══════════ DISPLAY / APPEARANCE SECTION ═══════════ */}
             <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>DISPLAY</Text>
 
@@ -795,21 +839,6 @@ Expedition Command System
 
             {/* ═══════════ POWER SYSTEMS SECTION ═══════════ */}
             <Text style={[styles.sectionLabel, { color: colors.gold, borderBottomColor: colors.goldBorder }]}>POWER SYSTEMS</Text>
-            <TouchableOpacity
-              style={[styles.powerCenterBtn, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}
-              onPress={() => router.push('/power' as any)}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.powerCenterIcon, { backgroundColor: colors.goldMuted }]}>
-                <Ionicons name="flash" size={20} color={colors.gold} />
-              </View>
-              <View style={styles.powerCenterInfo}>
-                <Text style={[styles.powerCenterTitle, { color: colors.textPrimary }]}>Power Center</Text>
-                <Text style={[styles.powerCenterDesc, { color: colors.textMuted }]}>Live telemetry, provider status, device management</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.gold} />
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.powerCenterBtn, { backgroundColor: colors.bgCard, borderColor: colors.goldBorder }]}
               onPress={() => router.push('/power/blu' as any)}
@@ -1473,6 +1502,18 @@ const styles = StyleSheet.create({
   subscriptionPrimaryBtnText: { color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 1.2 },
   subscriptionSecondaryBtn: { minHeight: 42, borderRadius: RADIUS.sm, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: SPACING.md },
   subscriptionSecondaryBtnText: { fontSize: 12, fontWeight: '800', letterSpacing: 1.1 },
+  buildFingerprintCard: { borderRadius: RADIUS.md, borderWidth: 1, padding: SPACING.md, marginBottom: SPACING.lg, gap: 12 },
+  buildFingerprintHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  buildFingerprintIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  buildFingerprintTitleWrap: { flex: 1, gap: 2 },
+  buildFingerprintTitle: { fontSize: 13, fontWeight: '900', letterSpacing: 0.7, textTransform: 'uppercase' },
+  buildFingerprintSubtitle: { fontSize: 11, lineHeight: 15 },
+  buildFingerprintBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
+  buildFingerprintBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  buildFingerprintGrid: { gap: 8 },
+  buildFingerprintRow: { borderWidth: 1, borderRadius: RADIUS.sm, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  buildFingerprintLabel: { width: 76, fontSize: 10, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' },
+  buildFingerprintValue: { flex: 1, fontSize: 11, fontWeight: '700', fontFamily: 'Courier' },
   // Settings
   aboutSection: { marginTop: 32, alignItems: 'center', paddingVertical: SPACING.xl, borderTopWidth: 1 },
   aboutBrand: { fontSize: 10, letterSpacing: 2, fontWeight: '500' },
@@ -1516,7 +1557,7 @@ const styles = StyleSheet.create({
   sharedAccountFooterSecondaryText: { fontSize: 12, fontWeight: '700' },
   sharedAccountFooterPrimary: {},
   sharedAccountFooterPrimaryText: { color: '#000', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
-  // Power Center
+  // Device Connections
   powerCenterBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: SPACING.md, borderRadius: RADIUS.md, borderWidth: 1, marginBottom: SPACING.lg },
   powerCenterIcon: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   powerCenterInfo: { flex: 1 },

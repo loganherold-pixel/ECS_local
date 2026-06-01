@@ -1,317 +1,239 @@
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import type { AssessmentCategory } from '../../lib/expedition/operationalAssessmentTypes';
-import type {
-  ExpeditionTopCardKey,
-  RouteLifecycleState,
-} from '../../lib/types/expedition';
+import { fsGetInfo } from '../../lib/fsCompat';
+import ExpeditionRecapMap from './ExpeditionRecapMap';
+import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline';
+import {
+  BadgeGrid,
+  BadgeMilestoneList,
+  BadgeUnlockSummary,
+} from './ExpeditionBadgeVisuals';
+import {
+  dismissInsight,
+  downloadExpeditionReport,
+  generateExpeditionReport,
+  getBadgeProgress,
+  getCompletedTrips,
+  getBadgesForTrip,
+  getCurrentPersonalRecords,
+  getCurrentInsights,
+  getMostRecentReports,
+  getRecordsForTrip,
+  getTripById,
+  getUnlockedBadges,
+  refreshExpeditionInsights,
+  shareExpeditionReport,
+  type ExpeditionBadge,
+  type ExpeditionInsight,
+  type ExpeditionReport,
+  type ExpeditionReportExportStatus,
+  type ExpeditionTripRecord,
+  type ExpeditionTripSummary,
+  type PersonalExpeditionRecord,
+} from '../../lib/expedition';
 import type { IncidentCoordinate } from '../../lib/types/incidentRecovery';
-import {
-  getExpeditionFrameworkState,
-  markTopCardViewed,
-  setExpeditionFrameworkPreviewState,
-  subscribeExpeditionFrameworkState,
-} from '../../stores/expeditionFrameworkStore';
-import {
-  getVisibleUnreadCount,
-  isCampEnabled,
-  isConvoyEnabled,
-  isLogisticsEnabled,
-  isOverviewEnabled,
-  isRouteEnabled,
-  isVehiclesEnabled,
-} from '../../lib/expedition/selectors';
-import {
-  formatRemoteWeatherRiskStatusLine,
-  getHighestActiveRemoteWeatherRisk,
-  subscribeRemoteWeatherRiskUpdates,
-  type HighestActiveRemoteWeatherRisk,
-} from '../../lib/expedition/expeditionStatusSelectors';
-import IncidentRecoveryPanel from './IncidentRecoveryPanel';
-import GarminInreachVisibilityPanel from '../garmin/GarminInreachVisibilityPanel';
-import ExpeditionSummaryCard from './ExpeditionSummaryCard';
-import ExpeditionPlaceholderModal, {
-  type ExpeditionPlaceholderTitle,
-} from './ExpeditionPlaceholderModal';
-import ExpeditionAssessmentDetailModal from './ExpeditionAssessmentDetailModal';
-import ExpeditionDebriefModal from './ExpeditionDebriefModal';
-import type { ExpeditionAssessmentDetailAction } from './ExpeditionAssessmentDetailView';
-import { useExpeditionAssessmentStore } from '../../stores/expeditionAssessmentStore';
-import {
-  buildAssessmentEscalationRequest,
-  type ExpeditionAssessmentEscalationRequest,
-} from '../../lib/expedition/assessmentEscalation';
-import { getIncidentRecoveryContextSnapshot } from '../../lib/incidentRecoveryContextAdapter';
-import type { ExpeditionRecord } from '../../lib/expeditionStateStore';
-
-type ExpeditionCardId = ExpeditionTopCardKey;
 
 type ExpeditionTabProps = {
   hasActiveRoute: boolean;
   teamMemberCount: number;
   campCount: number;
   routeCompleted: boolean;
-  routeLifecycleState?: RouteLifecycleState;
+  routeLifecycleState?: string;
   expeditionId?: string;
   routeLabel?: string;
-  completedExpeditionRecord?: ExpeditionRecord | null;
+  completedExpeditionRecord?: unknown;
   ecsOnline?: boolean;
   gpsLocation?: IncidentCoordinate | null;
 };
 
-type CardConfig = {
-  id: ExpeditionCardId;
-  label: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-  enabled: boolean;
-  status: string;
-  assessmentStatus?: string;
-  disabledHint?: string;
-  unreadCount?: number;
-  alertCount?: number;
-  stale?: boolean;
-  selected?: boolean;
+type ExpeditionHubStats = {
+  totalExpeditions: number;
+  totalMiles: number;
+  highestElevationFt: number;
+  totalHours: number;
 };
 
-export default function ExpeditionTab({
-  hasActiveRoute,
-  teamMemberCount,
-  campCount,
-  routeCompleted,
-  routeLifecycleState,
-  expeditionId,
-  routeLabel,
-  completedExpeditionRecord,
-  ecsOnline,
-  gpsLocation,
-}: ExpeditionTabProps) {
-  const [selectedCardId, setSelectedCardId] = useState<ExpeditionCardId | null>(null);
-  const [selectedAssessmentCategory, setSelectedAssessmentCategory] = useState<AssessmentCategory | null>(null);
-  const [placeholderTitle, setPlaceholderTitle] = useState<ExpeditionPlaceholderTitle | null>(null);
-  const [summaryVisible, setSummaryVisible] = useState(false);
-  const [assessmentEscalation, setAssessmentEscalation] = useState<ExpeditionAssessmentEscalationRequest | null>(null);
-  const [remoteWeatherRisk, setRemoteWeatherRisk] = useState<HighestActiveRemoteWeatherRisk | null>(
-    () => getHighestActiveRemoteWeatherRisk(),
-  );
-  const assessmentStore = useExpeditionAssessmentStore();
-  const { refreshAssessments } = assessmentStore;
-  const frameworkState = useSyncExternalStore(
-    subscribeExpeditionFrameworkState,
-    getExpeditionFrameworkState,
-    getExpeditionFrameworkState,
-  );
+type BadgeCollectionMode = 'recent' | 'rarity' | 'category';
 
-  const resolvedRouteLifecycleState: RouteLifecycleState =
-    routeLifecycleState ?? (routeCompleted ? 'completed' : hasActiveRoute ? 'active' : 'idle');
+type BadgeCollectionStats = {
+  totalBadgesEarned: number;
+  rarestBadgeEarned: string;
+  mostRecentUnlock: string;
+  expeditionsWithBadges: number;
+};
 
-  useEffect(() => {
-    setExpeditionFrameworkPreviewState({
-      routeLifecycleState: resolvedRouteLifecycleState,
-      hasActiveExpedition: hasActiveRoute,
-      teamMemberCount,
-      hasRouteCamps: campCount > 0,
-    });
-  }, [campCount, hasActiveRoute, resolvedRouteLifecycleState, teamMemberCount]);
+type ArchiveLifetimeStats = {
+  totalCompletedExpeditions: number;
+  totalMiles: number;
+  totalHours: number;
+  highestElevationFt: number;
+  totalBadgesEarned: number;
+  totalNotableMoments: number;
+};
 
-  useEffect(() => {
-    void refreshAssessments();
-  }, [refreshAssessments]);
+type ArchiveRecordHighlight = {
+  label: string;
+  value: string;
+  tripTitle: string;
+};
 
-  useEffect(() => {
-    const refreshRemoteWeatherRisk = () => {
-      setRemoteWeatherRisk(getHighestActiveRemoteWeatherRisk());
-    };
-    const unsubscribe = subscribeRemoteWeatherRiskUpdates(refreshRemoteWeatherRisk);
-    const interval = setInterval(refreshRemoteWeatherRisk, 60_000);
-    refreshRemoteWeatherRisk();
+type ReportFileInfo = {
+  exists: boolean;
+  size: number | null;
+};
 
-    return () => {
-      unsubscribe();
-      clearInterval(interval);
-    };
+type ExpeditionOperationalTitle = 'Overview' | 'Route' | 'Convoy' | 'Camp' | 'Logistics' | 'Vehicles';
+
+type ExpeditionOperationalAction = {
+  title: ExpeditionOperationalTitle;
+  icon: string;
+};
+
+const EXPEDITION_OPERATIONAL_ACTIONS: ExpeditionOperationalAction[] = [
+  { title: 'Overview', icon: 'compass-outline' },
+  { title: 'Route', icon: 'navigate-outline' },
+  { title: 'Convoy', icon: 'people-outline' },
+  { title: 'Camp', icon: 'bonfire-outline' },
+  { title: 'Logistics', icon: 'cube-outline' },
+  { title: 'Vehicles', icon: 'car-sport-outline' },
+];
+
+export default function ExpeditionTab(_props: ExpeditionTabProps) {
+  void _props;
+  const [completedTrips, setCompletedTrips] = useState<ExpeditionTripSummary[]>([]);
+  const [unlockedBadges, setUnlockedBadges] = useState<ExpeditionBadge[]>([]);
+  const [badgeProgress, setBadgeProgress] = useState<ExpeditionBadge[]>([]);
+  const [expeditionInsights, setExpeditionInsights] = useState<ExpeditionInsight[]>([]);
+  const [personalRecords, setPersonalRecords] = useState<PersonalExpeditionRecord[]>([]);
+  const [expeditionReports, setExpeditionReports] = useState<ExpeditionReport[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedTrip, setSelectedTrip] = useState<ExpeditionTripRecord | null>(null);
+  const [selectedTripBadges, setSelectedTripBadges] = useState<ExpeditionBadge[]>([]);
+  const [selectedTripRecords, setSelectedTripRecords] = useState<PersonalExpeditionRecord[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [showUnlockedBadgesView, setShowUnlockedBadgesView] = useState(false);
+  const [showArchiveView, setShowArchiveView] = useState(false);
+  const [showReportsView, setShowReportsView] = useState(false);
+  const [activeOperationalPanel, setActiveOperationalPanel] = useState<ExpeditionOperationalTitle | null>(null);
+
+  const loadCompletedTrips = useCallback(async () => {
+    setLoading(true);
+    const trips = await getCompletedTrips().catch(() => []);
+    const [badges, progress, currentInsights, currentRecords, recentReports] = await Promise.all([
+      getUnlockedBadges().catch(() => []),
+      getBadgeProgress().catch(() => []),
+      getCurrentInsights(3).catch(() => []),
+      getCurrentPersonalRecords().catch(() => []),
+      getMostRecentReports(5).catch(() => []),
+    ]);
+    const insights = trips.length > 0 && currentInsights.length === 0
+      ? await refreshExpeditionInsights().catch(() => [])
+      : currentInsights;
+    setCompletedTrips(trips);
+    setUnlockedBadges(badges);
+    setBadgeProgress(progress);
+    setExpeditionInsights(insights.slice(0, 3));
+    setPersonalRecords(currentRecords.slice(0, 4));
+    setExpeditionReports(recentReports);
+    setLoading(false);
   }, []);
 
-  const getAssessmentCardState = (category: AssessmentCategory, fallback: string) => {
-    const assessment = assessmentStore.assessments[category];
-    if (!assessment) {
-      return {
-        status: fallback,
-        assessmentStatus: 'unknown',
-        alertCount: 0,
-        stale: false,
-      };
+  useFocusEffect(
+    useCallback(() => {
+      void loadCompletedTrips();
+    }, [loadCompletedTrips]),
+  );
+
+  const stats = useMemo(() => buildHubStats(completedTrips), [completedTrips]);
+  const recentTrips = useMemo(() => completedTrips.slice(0, 3), [completedTrips]);
+  const hasCompletedTrips = completedTrips.length > 0;
+  const hasUnlockedBadges = unlockedBadges.some((badge) => !!badge.unlockedAt);
+  const hasReports = expeditionReports.length > 0;
+
+  const openTripDetail = useCallback(async (tripId: string) => {
+    setDetailLoading(true);
+    try {
+      const trip = await getTripById(tripId);
+      const [badges, records] = await Promise.all([
+        getBadgesForTrip(tripId).catch(() => []),
+        getRecordsForTrip(tripId).catch(() => []),
+      ]);
+      setSelectedTrip(trip);
+      setSelectedTripBadges(badges);
+      setSelectedTripRecords(records);
+    } finally {
+      setDetailLoading(false);
     }
+  }, []);
 
-    const activeConcern =
-      assessment.status === 'watch' ||
-      assessment.status === 'caution' ||
-      assessment.status === 'critical';
-    const dataConcernCount = assessment.missingDataWarnings.length + assessment.staleDataWarnings.length;
-    return {
-      status: assessment.staleDataWarnings.length > 0
-        ? `Stale: ${assessment.summary}`
-        : assessment.summary,
-      assessmentStatus: assessment.status,
-      alertCount: activeConcern ? Math.max(1, dataConcernCount, assessment.why.length) : 0,
-      stale: assessment.staleDataWarnings.length > 0,
-    };
-  };
+  const handleLongPressTrip = useCallback((_tripId: string) => {
+    // TODO Expedition Hub: connect long-press actions to archive, rename, and sharing workflows.
+  }, []);
 
-  const handleCardPress = (card: CardConfig) => {
-    if (!card.enabled) return;
-    setSelectedCardId(card.id);
-    markTopCardViewed(card.id);
-    setSelectedAssessmentCategory(card.id);
-  };
+  const handleDismissInsight = useCallback(async (insightId: string) => {
+    setExpeditionInsights((current) => current.filter((insight) => insight.id !== insightId));
+    await dismissInsight(insightId).catch(() => null);
+  }, []);
 
-  const openAssessmentCategory = (category: AssessmentCategory) => {
-    setSelectedCardId(category as ExpeditionCardId);
-    setSelectedAssessmentCategory(category);
-  };
+  if (showArchiveView) {
+    return (
+      <ExpeditionArchiveView
+        trips={completedTrips}
+        badges={unlockedBadges}
+        onBack={() => setShowArchiveView(false)}
+        onOpenTrip={(tripId) => {
+          setShowArchiveView(false);
+          void openTripDetail(tripId);
+        }}
+      />
+    );
+  }
 
-  const getTopConcernCategory = (): AssessmentCategory => {
-    const categories: AssessmentCategory[] = ['route', 'convoy', 'camp', 'logistics', 'vehicles'];
-    const weights: Record<string, number> = { normal: 0, watch: 1, unknown: 2, caution: 3, critical: 4 };
-    return categories.reduce((top, category) => {
-      const next = assessmentStore.assessments[category];
-      const current = assessmentStore.assessments[top];
-      return (weights[next?.status ?? 'unknown'] ?? 0) > (weights[current?.status ?? 'unknown'] ?? 0)
-        ? category
-        : top;
-    }, 'route' as AssessmentCategory);
-  };
+  if (showReportsView) {
+    return (
+      <ExpeditionReportsView
+        reports={expeditionReports}
+        onBack={() => setShowReportsView(false)}
+      />
+    );
+  }
 
-  const handleAssessmentAction = (action: ExpeditionAssessmentDetailAction) => {
-    if (action.id === 'open-incident-recovery') {
-      if (selectedAssessmentCategory) {
-        const assessment = assessmentStore.assessments[selectedAssessmentCategory];
-        if (assessment) {
-          setAssessmentEscalation(buildAssessmentEscalationRequest({
-            assessment,
-            contextSnapshot: assessmentStore.contextSnapshot,
-            incidentContextSnapshot: getIncidentRecoveryContextSnapshot({ gpsLocation }),
-            expeditionId,
-            routeLabel,
-            gpsLocation,
-          }));
-        }
-      }
-      setSelectedAssessmentCategory(null);
-      return;
-    }
-    if (action.id === 'open-top-concern') {
-      openAssessmentCategory(('targetCategory' in action && action.targetCategory) ? action.targetCategory : getTopConcernCategory());
-      return;
-    }
-    if (action.id.startsWith('review-') && 'targetCategory' in action && action.targetCategory) {
-      openAssessmentCategory(action.targetCategory);
-      return;
-    }
-    void assessmentStore.applyManualAssessmentAction(action.id);
-  };
+  if (showUnlockedBadgesView) {
+    return (
+      <UnlockedBadgesView
+        badges={unlockedBadges}
+        badgeProgress={badgeProgress}
+        onBack={() => setShowUnlockedBadgesView(false)}
+      />
+    );
+  }
 
-  const overviewAssessment = getAssessmentCardState('overview', 'Assessment pending');
-  const routeAssessment = getAssessmentCardState('route', 'Assessment pending');
-  const convoyAssessment = getAssessmentCardState('convoy', 'Assessment pending');
-  const campAssessment = getAssessmentCardState('camp', 'Assessment pending');
-  const logisticsAssessment = getAssessmentCardState('logistics', 'Assessment pending');
-  const vehiclesAssessment = getAssessmentCardState('vehicles', 'Assessment pending');
-  const predictiveHazardStatus = hasActiveRoute
-    ? remoteWeatherRisk
-      ? formatRemoteWeatherRiskStatusLine(remoteWeatherRisk)
-      : 'No predictive hazards detected.'
-    : routeAssessment.status;
-
-  const topCards: CardConfig[] = [
-    {
-      id: 'overview',
-      label: 'Overview',
-      icon: 'compass-outline',
-      enabled: isOverviewEnabled(frameworkState),
-      status: isOverviewEnabled(frameworkState) ? overviewAssessment.status : 'Start navigation to enable',
-      assessmentStatus: overviewAssessment.assessmentStatus,
-      disabledHint: 'Start navigation to enable',
-      unreadCount: getVisibleUnreadCount(frameworkState, 'overview'),
-      alertCount: overviewAssessment.alertCount,
-      stale: overviewAssessment.stale,
-      selected: selectedCardId === 'overview',
-    },
-    {
-      id: 'route',
-      label: 'Route',
-      icon: 'map-outline',
-      enabled: isRouteEnabled(frameworkState),
-      status: isRouteEnabled(frameworkState) ? predictiveHazardStatus : 'Start navigation to enable',
-      assessmentStatus: routeAssessment.assessmentStatus,
-      disabledHint: 'Start navigation to enable',
-      unreadCount: getVisibleUnreadCount(frameworkState, 'route'),
-      alertCount: routeAssessment.alertCount,
-      stale: routeAssessment.stale,
-      selected: selectedCardId === 'route',
-    },
-    {
-      id: 'convoy',
-      label: 'Convoy',
-      icon: 'people-outline',
-      enabled: isConvoyEnabled(frameworkState),
-      status: isConvoyEnabled(frameworkState) ? convoyAssessment.status : 'Team required',
-      assessmentStatus: convoyAssessment.assessmentStatus,
-      disabledHint: 'Team required',
-      unreadCount: getVisibleUnreadCount(frameworkState, 'convoy'),
-      alertCount: convoyAssessment.alertCount,
-      stale: convoyAssessment.stale,
-      selected: selectedCardId === 'convoy',
-    },
-  ];
-
-  const secondRowCards: CardConfig[] = [
-    {
-      id: 'camp',
-      label: 'Camp',
-      icon: 'bonfire-outline',
-      enabled: isCampEnabled(frameworkState),
-      status: isCampEnabled(frameworkState) ? campAssessment.status : 'No camps on active route',
-      assessmentStatus: campAssessment.assessmentStatus,
-      disabledHint: 'No camps on active route',
-      unreadCount: getVisibleUnreadCount(frameworkState, 'camp'),
-      alertCount: campAssessment.alertCount,
-      stale: campAssessment.stale,
-      selected: selectedCardId === 'camp',
-    },
-    {
-      id: 'logistics',
-      label: 'Logistics',
-      icon: 'cube-outline',
-      enabled: isLogisticsEnabled(frameworkState),
-      status: logisticsAssessment.status,
-      assessmentStatus: logisticsAssessment.assessmentStatus,
-      unreadCount: getVisibleUnreadCount(frameworkState, 'logistics'),
-      alertCount: logisticsAssessment.alertCount,
-      stale: logisticsAssessment.stale,
-      selected: selectedCardId === 'logistics',
-    },
-    {
-      id: 'vehicles',
-      label: 'Vehicles',
-      icon: 'car-sport-outline',
-      enabled: isVehiclesEnabled(frameworkState),
-      status: vehiclesAssessment.status,
-      assessmentStatus: vehiclesAssessment.assessmentStatus,
-      unreadCount: getVisibleUnreadCount(frameworkState, 'vehicles'),
-      alertCount: vehiclesAssessment.alertCount,
-      stale: vehiclesAssessment.stale,
-      selected: selectedCardId === 'vehicles',
-    },
-  ];
+  if (selectedTrip) {
+    return (
+      <ExpeditionDetailView
+        trip={selectedTrip}
+        earnedBadges={selectedTripBadges}
+        recordsSet={selectedTripRecords}
+        onBack={() => {
+          setSelectedTrip(null);
+          setSelectedTripBadges([]);
+          setSelectedTripRecords([]);
+          void loadCompletedTrips();
+        }}
+      />
+    );
+  }
 
   return (
     <ScrollView
@@ -320,163 +242,1251 @@ export default function ExpeditionTab({
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.surface}>
-        <TopoBackground />
-
-        <View style={styles.cardRow}>
-          {topCards.map((card) => (
-            <ExpeditionCard key={card.id} card={card} onPress={handleCardPress} />
-          ))}
+        <View style={styles.header}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="map-outline" size={18} color={TACTICAL.amber} />
+          </View>
+          <View style={styles.headerCopy}>
+            <Text style={styles.title}>Expedition Hub</Text>
+            <Text style={styles.subtitle}>
+              Your completed expeditions, milestones, and field history.
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.cardRow}>
-          {secondRowCards.map((card) => (
-            <ExpeditionCard key={card.id} card={card} onPress={handleCardPress} />
-          ))}
+        <View style={styles.operationalPanel}>
+          <View style={styles.sectionHeaderCompact}>
+            <Text style={styles.sectionTitle}>Operational Assessments</Text>
+            <Text style={styles.sectionCount}>6 views</Text>
+          </View>
+          <View style={styles.operationalGrid}>
+            {EXPEDITION_OPERATIONAL_ACTIONS.map((action) => (
+              <TouchableOpacity
+                key={action.title}
+                style={[
+                  styles.operationalButton,
+                  activeOperationalPanel === action.title && styles.operationalButtonActive,
+                ]}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${action.title} assessment`}
+                accessibilityState={{ selected: activeOperationalPanel === action.title }}
+                onPress={() => setActiveOperationalPanel(action.title)}
+              >
+                <Ionicons name={action.icon as any} size={14} color={TACTICAL.amber} />
+                <Text style={styles.operationalButtonText} numberOfLines={1}>
+                  {action.title}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
-        <IncidentRecoveryPanel
-          onOpenPlaceholder={setPlaceholderTitle}
-          expeditionId={expeditionId}
-          routeLabel={routeLabel}
-          ecsOnline={ecsOnline}
-          gpsLocation={gpsLocation}
-          assessmentEscalation={assessmentEscalation}
-          onAssessmentEscalationHandled={() => setAssessmentEscalation(null)}
+        <View style={styles.statsRow}>
+          <StatTile label="Total Expeditions" value={`${stats.totalExpeditions} ${stats.totalExpeditions === 1 ? 'Expedition' : 'Expeditions'}`} />
+          <StatTile label="Total Miles" value={formatWholeMiles(stats.totalMiles)} />
+          <StatTile label="Highest Elevation" value={formatElevation(stats.highestElevationFt)} />
+          <StatTile label="Hours Logged" value={formatHours(stats.totalHours)} />
+        </View>
+
+        {loading ? (
+          <View style={styles.loadingPanel}>
+            <ActivityIndicator size="small" color={TACTICAL.amber} />
+            <Text style={styles.loadingText}>Loading expedition history...</Text>
+          </View>
+        ) : completedTrips.length === 0 ? (
+          <EmptyHubState />
+        ) : (
+          <ExpeditionHubSection title="Recent Expeditions" count={completedTrips.length}>
+            <View style={styles.tripList}>
+              {recentTrips.map((trip) => (
+                <ExpeditionTripCard
+                  key={trip.id}
+                  trip={trip}
+                  onPress={() => openTripDetail(trip.id)}
+                  onLongPress={() => handleLongPressTrip(trip.id)}
+                />
+              ))}
+            </View>
+          </ExpeditionHubSection>
+        )}
+
+        {hasUnlockedBadges ? (
+          <BadgeUnlockSummary
+            badges={unlockedBadges}
+            onOpenCollection={() => setShowUnlockedBadgesView(true)}
+            limit={3}
+            actionLabel="Earned Badges"
+            showAction={false}
+          />
+        ) : null}
+
+        <ExpeditionInsightsSection
+          insights={expeditionInsights}
+          onDismiss={handleDismissInsight}
         />
 
-        <GarminInreachVisibilityPanel />
+        <PersonalRecordsPreview records={personalRecords} />
 
-        <ExpeditionSummaryCard
-          routeLifecycleState={frameworkState.routeLifecycleState}
-          onOpenSummary={() => setSummaryVisible(true)}
+        {hasCompletedTrips || hasUnlockedBadges || hasReports ? (
+          <View style={styles.hubActionRow}>
+            {hasCompletedTrips ? (
+              <HubActionCard
+                icon="library-outline"
+                label="Expedition Archive"
+                onPress={() => setShowArchiveView(true)}
+                accessibilityLabel="Open Expedition Archive"
+              />
+            ) : null}
+            {hasUnlockedBadges ? (
+              <HubActionCard
+                icon="ribbon-outline"
+                label="Earned Badges"
+                onPress={() => setShowUnlockedBadgesView(true)}
+                accessibilityLabel="Open Earned Badges"
+              />
+            ) : null}
+            {hasReports ? (
+              <HubActionCard
+                icon="documents-outline"
+                label="Expedition Reports"
+                onPress={() => setShowReportsView(true)}
+                accessibilityLabel="Open Expedition Reports"
+              />
+            ) : null}
+          </View>
+        ) : null}
+
+        {detailLoading ? (
+          <View style={styles.detailLoadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="small" color={TACTICAL.amber} />
+          </View>
+        ) : null}
+
+        {/* TODO Expedition Hub: add recap map region once map recap rendering exists. */}
+        {/* TODO Expedition Hub: add expanded expedition achievements once badge progress rings and artwork exist. */}
+        {/* TODO Expedition Hub: add lessons learned once historical insight generation is grounded in saved trips. */}
+        {/* TODO Expedition Insights: add insight detail view, personal record cards, seasonal trends, and terrain preference analysis. */}
+        {/* TODO Expedition Hub: add expedition exports after export contracts are ready. */}
+      </View>
+
+    </ScrollView>
+  );
+}
+
+function ExpeditionDetailView({
+  trip,
+  earnedBadges,
+  recordsSet,
+  onBack,
+}: {
+  trip: ExpeditionTripRecord;
+  earnedBadges: ExpeditionBadge[];
+  recordsSet: PersonalExpeditionRecord[];
+  onBack: () => void;
+}) {
+  const [reportStatus, setReportStatus] = useState<ExpeditionReportExportStatus>('idle');
+  const [reportMessage, setReportMessage] = useState<string | null>(null);
+
+  const handleExportReport = useCallback(async () => {
+    if (reportStatus === 'generating') return;
+    setReportStatus('generating');
+    setReportMessage(null);
+    try {
+      const report = await generateExpeditionReport(trip.id);
+      if (!report) {
+        setReportStatus('failed');
+        setReportMessage('Expedition report could not be generated.');
+        return;
+      }
+      const shareResult = await shareExpeditionReport(report.id);
+      setReportStatus('ready');
+      setReportMessage(shareResult.message);
+    } catch {
+      setReportStatus('failed');
+      setReportMessage('Expedition report export failed.');
+    }
+  }, [reportStatus, trip.id]);
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.surface}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={onBack}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Back to Expedition Hub"
+        >
+          <Ionicons name="chevron-back-outline" size={16} color={TACTICAL.amber} />
+          <Text style={styles.backButtonText}>Expedition Hub</Text>
+        </TouchableOpacity>
+
+        <View style={styles.detailHeader}>
+          <Text style={styles.detailTitle}>{trip.title}</Text>
+          <Text style={styles.detailDate}>{formatCompletedDate(trip.completedAt)}</Text>
+        </View>
+
+        <View style={styles.reportActionPanel}>
+          <TouchableOpacity
+            style={[styles.reportActionButton, reportStatus === 'generating' && styles.reportActionButtonDisabled]}
+            onPress={handleExportReport}
+            activeOpacity={0.82}
+            disabled={reportStatus === 'generating'}
+            accessibilityRole="button"
+            accessibilityLabel="Export Expedition Report"
+          >
+            {reportStatus === 'generating' ? (
+              <ActivityIndicator size="small" color="#0B0F12" />
+            ) : (
+              <Ionicons name="document-text-outline" size={15} color="#0B0F12" />
+            )}
+            <Text style={styles.reportActionButtonText}>
+              {reportStatus === 'generating' ? 'Generating Report' : 'Export Expedition Report'}
+            </Text>
+          </TouchableOpacity>
+          {reportMessage ? (
+            <Text style={[
+              styles.reportStatusText,
+              reportStatus === 'failed' && styles.reportStatusTextFailed,
+            ]}>
+              {reportMessage}
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={styles.detailMetricGrid}>
+          <DetailMetric label="Distance" value={formatDistance(trip.totalDistanceMiles)} />
+          <DetailMetric label="Duration" value={formatDuration(trip.totalDurationSeconds)} />
+          <DetailMetric label="Max Elevation" value={formatElevation(trip.maxElevationFt ?? 0)} />
+          <DetailMetric label="Elevation Gain" value={formatNullableElevation(trip.totalElevationGainFt)} />
+        </View>
+
+        <ExpeditionRecapMap
+          routeGeometry={trip.routeGeometry}
+          routeBounds={trip.recap?.routeSummary.routeBounds ?? trip.routeBounds}
+          startCoordinate={trip.startCoordinate}
+          endCoordinate={trip.endCoordinate}
+          recap={trip.recap}
+          tripStartedAt={trip.startedAt}
         />
 
-        <ExpeditionPlaceholderModal
-          visible={placeholderTitle != null}
-          title={placeholderTitle}
-          onClose={() => setPlaceholderTitle(null)}
+        <ExpeditionNotableMomentsTimeline
+          recap={trip.recap}
+          tripStartedAt={trip.startedAt}
         />
-        <ExpeditionAssessmentDetailModal
-          visible={selectedAssessmentCategory != null}
-          category={selectedAssessmentCategory}
-          assessment={
-            selectedAssessmentCategory
-              ? assessmentStore.assessments[selectedAssessmentCategory]
-              : undefined
-          }
-          narrative={
-            selectedAssessmentCategory
-              ? assessmentStore.narratives[selectedAssessmentCategory]
-              : undefined
-          }
-          loading={assessmentStore.loading}
-          usingMockData={assessmentStore.usingMockData}
-          offline={assessmentStore.offline}
-          stale={assessmentStore.stale}
-          onRefresh={() => {
-            refreshAssessments();
-          }}
-          onOpenIncidentRecovery={() => {
-            handleAssessmentAction({ id: 'open-incident-recovery', label: 'Open Incident & Recovery' });
-          }}
-          onRelatedAction={handleAssessmentAction}
-          onClose={() => setSelectedAssessmentCategory(null)}
-        />
-        <ExpeditionDebriefModal
-          visible={summaryVisible}
-          completedRecord={completedExpeditionRecord}
-          routeLabel={routeLabel}
-          expeditionId={expeditionId}
-          onClose={() => setSummaryVisible(false)}
-        />
+
+        <ExpeditionTripBadgesEarned badges={earnedBadges} tripTitle={trip.title} />
+
+        <ExpeditionTripPersonalRecords records={recordsSet} />
+
+        <View style={styles.detailSection}>
+          <Text style={styles.detailSectionTitle}>Elevation Stats</Text>
+          <View style={styles.elevationRow}>
+            <Text style={styles.elevationLabel}>Minimum</Text>
+            <Text style={styles.elevationValue}>{formatNullableElevation(trip.minElevationFt)}</Text>
+          </View>
+          <View style={styles.elevationRow}>
+            <Text style={styles.elevationLabel}>Maximum</Text>
+            <Text style={styles.elevationValue}>{formatNullableElevation(trip.maxElevationFt)}</Text>
+          </View>
+          <View style={styles.elevationRow}>
+            <Text style={styles.elevationLabel}>Gain</Text>
+            <Text style={styles.elevationValue}>{formatNullableElevation(trip.totalElevationGainFt)}</Text>
+          </View>
+        </View>
+
+        {/* TODO Expedition Detail: link badge unlocks to map markers and route timeline locations. */}
+        {/* TODO Expedition Detail: connect export-ready map snapshots and badge stamp artwork to report generation. */}
       </View>
     </ScrollView>
   );
 }
 
-function TopoBackground() {
+function ExpeditionHubSection({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: React.ReactNode;
+}) {
   return (
-    <View pointerEvents="none" style={styles.topoLayer}>
-      <View style={[styles.topoLine, styles.topoLineA]} />
-      <View style={[styles.topoLine, styles.topoLineB]} />
-      <View style={[styles.topoLine, styles.topoLineC]} />
-      <View style={styles.topoGridA} />
-      <View style={styles.topoGridB} />
+    <View style={styles.hubSection}>
+      <View style={styles.sectionHeaderCompact}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {count != null ? <Text style={styles.sectionCount}>{count}</Text> : null}
+      </View>
+      {children}
     </View>
   );
 }
 
-function ExpeditionCard({
-  card,
+function EmptyHubState() {
+  return (
+    <View style={styles.emptyState}>
+      <Ionicons name="flag-outline" size={25} color={TACTICAL.textMuted} />
+      <Text style={styles.emptyTitle}>No completed expeditions yet.</Text>
+      <Text style={styles.emptySubtext}>Your completed journeys will appear here.</Text>
+    </View>
+  );
+}
+
+function HubActionCard({
+  icon,
+  label,
+  onPress,
+  accessibilityLabel,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.hubActionButton}
+      onPress={onPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
+      <Ionicons name={icon} size={15} color={TACTICAL.amber} />
+      <Text style={styles.hubActionButtonText} numberOfLines={1}>{label}</Text>
+      <Ionicons name="chevron-forward-outline" size={14} color={TACTICAL.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
+function ExpeditionArchiveView({
+  trips,
+  badges,
+  onBack,
+  onOpenTrip,
+}: {
+  trips: ExpeditionTripSummary[];
+  badges: ExpeditionBadge[];
+  onBack: () => void;
+  onOpenTrip: (tripId: string) => void;
+}) {
+  const archiveTrips = useMemo(() => sortTripsChronologically(trips), [trips]);
+  const stats = useMemo(() => buildArchiveLifetimeStats(trips, badges), [trips, badges]);
+  const records = useMemo(() => buildArchiveRecordHighlights(trips), [trips]);
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.surface}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={onBack}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Back to Expedition Hub"
+        >
+          <Ionicons name="chevron-back-outline" size={16} color={TACTICAL.amber} />
+          <Text style={styles.backButtonText}>Expedition Hub</Text>
+        </TouchableOpacity>
+
+        <View style={styles.detailHeader}>
+          <Text style={styles.detailTitle}>Expedition Archive</Text>
+          <Text style={styles.detailDate}>A chronological logbook of completed expeditions.</Text>
+        </View>
+
+        {archiveTrips.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="library-outline" size={25} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyTitle}>No completed expeditions yet.</Text>
+            <Text style={styles.emptySubtext}>Completed journeys will build your expedition history here.</Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.archiveStatsGrid}>
+              <ArchiveStatTile label="Total Completed Expeditions" value={`${stats.totalCompletedExpeditions}`} />
+              <ArchiveStatTile label="Total Miles" value={formatDistance(stats.totalMiles)} />
+              <ArchiveStatTile label="Total Hours" value={formatHours(stats.totalHours)} />
+              <ArchiveStatTile label="Highest Elevation" value={formatElevation(stats.highestElevationFt)} />
+              <ArchiveStatTile label="Total Badges Earned" value={`${stats.totalBadgesEarned}`} />
+              <ArchiveStatTile label="Total Notable Moments" value={`${stats.totalNotableMoments}`} />
+            </View>
+
+            {records.length > 0 ? (
+              <View style={styles.archiveSection}>
+                <View style={styles.sectionHeaderCompact}>
+                  <Text style={styles.sectionTitle}>Personal Records</Text>
+                  <Text style={styles.sectionCount}>{records.length}</Text>
+                </View>
+                <View style={styles.archiveRecordList}>
+                  {records.map((record) => (
+                    <View key={record.label} style={styles.archiveRecordRow}>
+                      <View style={styles.archiveRecordIcon}>
+                        <Ionicons name="stats-chart-outline" size={13} color={TACTICAL.amber} />
+                      </View>
+                      <View style={styles.archiveRecordCopy}>
+                        <Text style={styles.archiveRecordLabel}>{record.label}</Text>
+                        <Text style={styles.archiveRecordTrip} numberOfLines={1}>{record.tripTitle}</Text>
+                      </View>
+                      <Text style={styles.archiveRecordValue}>{record.value}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.archiveSection}>
+              <View style={styles.sectionHeaderCompact}>
+                <Text style={styles.sectionTitle}>Storyline</Text>
+                <Text style={styles.sectionCount}>{archiveTrips.length}</Text>
+              </View>
+              <View style={styles.archiveTimeline}>
+                {archiveTrips.map((trip, index) => (
+                  <ArchiveTripItem
+                    key={trip.id}
+                    trip={trip}
+                    isLast={index === archiveTrips.length - 1}
+                    onPress={() => onOpenTrip(trip.id)}
+                  />
+                ))}
+              </View>
+            </View>
+          </>
+        )}
+
+        {/* TODO Expedition Archive: add regional map of all completed expeditions. */}
+        {/* TODO Expedition Archive: add year/month filters and seasonal history. */}
+        {/* TODO Expedition Archive: add exported archive report generation. */}
+        {/* TODO Expedition Archive: add personal best comparisons and route replay. */}
+      </View>
+    </ScrollView>
+  );
+}
+
+function ArchiveStatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.archiveStatTile}>
+      <Text style={styles.archiveStatValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.archiveStatLabel} numberOfLines={2}>{label}</Text>
+    </View>
+  );
+}
+
+function ArchiveTripItem({
+  trip,
+  isLast,
   onPress,
 }: {
-  card: CardConfig;
-  onPress: (card: CardConfig) => void;
+  trip: ExpeditionTripSummary;
+  isLast: boolean;
+  onPress: () => void;
 }) {
-  const badgeCount = card.unreadCount && card.unreadCount > 0
-    ? card.unreadCount
-    : card.alertCount ?? 0;
-  const showUnread = card.enabled && badgeCount > 0;
-  const statusTone = card.assessmentStatus ?? 'unknown';
+  return (
+    <TouchableOpacity
+      style={styles.archiveTripItem}
+      onPress={onPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={`Open archived expedition ${trip.title}`}
+    >
+      <View style={styles.archiveRail}>
+        <View style={styles.archiveDot} />
+        {!isLast ? <View style={styles.archiveLine} /> : null}
+      </View>
+      <View style={styles.archiveTripBody}>
+        <View style={styles.archiveTripHeader}>
+          <View style={styles.archiveTripTitleWrap}>
+            <Text style={styles.archiveTripTitle} numberOfLines={1}>{trip.title}</Text>
+            <Text style={styles.archiveTripDate}>{formatCompletedDate(trip.completedAt)}</Text>
+          </View>
+          <Ionicons name="chevron-forward-outline" size={14} color={TACTICAL.textMuted} />
+        </View>
+        <View style={styles.archiveTripMetrics}>
+          <MetricPill label="Distance" value={formatDistance(trip.totalDistanceMiles)} />
+          <MetricPill label="Duration" value={formatDuration(trip.totalDurationSeconds)} />
+          <MetricPill label="Max Elev." value={formatNullableElevation(trip.maxElevationFt)} />
+        </View>
+        <View style={styles.archiveTripMetaRow}>
+          <Text style={styles.archiveTripMeta}>{trip.badgesUnlockedCount} badges earned</Text>
+          <Text style={styles.archiveTripMeta}>{trip.notableMomentsCount} notable moments</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function ExpeditionReportsView({
+  reports,
+  onBack,
+}: {
+  reports: ExpeditionReport[];
+  onBack: () => void;
+}) {
+  const [fileInfoByReportId, setFileInfoByReportId] = useState<Record<string, ReportFileInfo>>({});
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadReportFileInfo() {
+      const entries = await Promise.all(
+        reports.map(async (report): Promise<[string, ReportFileInfo]> => {
+          if (!report.localUri) return [report.id, { exists: false, size: null }];
+          const info = await fsGetInfo(report.localUri).catch(() => ({ exists: false, isDirectory: false, size: 0 }));
+          return [report.id, {
+            exists: !!info.exists && !info.isDirectory,
+            size: Number.isFinite(info.size) ? info.size : null,
+          }];
+        }),
+      );
+      if (!cancelled) setFileInfoByReportId(Object.fromEntries(entries));
+    }
+    void loadReportFileInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [reports]);
+
+  const handleOpenReport = useCallback(async (report: ExpeditionReport) => {
+    setShareMessage(null);
+    if (!report.localUri) {
+      setFileInfoByReportId((current) => ({
+        ...current,
+        [report.id]: { exists: false, size: null },
+      }));
+      setShareMessage('Report file unavailable.');
+      return;
+    }
+
+    const info = await fsGetInfo(report.localUri).catch(() => ({ exists: false, isDirectory: false, size: 0 }));
+    if (!info.exists || info.isDirectory) {
+      setFileInfoByReportId((current) => ({
+        ...current,
+        [report.id]: { exists: false, size: null },
+      }));
+      setShareMessage('Report file unavailable.');
+      return;
+    }
+
+    setFileInfoByReportId((current) => ({
+      ...current,
+      [report.id]: { exists: true, size: Number.isFinite(info.size) ? info.size : null },
+    }));
+    const result = await downloadExpeditionReport(report.id);
+    setShareMessage(result.message);
+  }, []);
+
+  const handleLongPressReport = useCallback((_reportId: string) => {
+    // TODO Expedition Reports Library: reserve long-press actions for rename, delete, regenerate, and batch workflows.
+  }, []);
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.surface}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={onBack}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Back to Expedition Hub"
+        >
+          <Ionicons name="chevron-back-outline" size={16} color={TACTICAL.amber} />
+          <Text style={styles.backButtonText}>Expedition Hub</Text>
+        </TouchableOpacity>
+
+        <View style={styles.detailHeader}>
+          <Text style={styles.detailTitle}>Expedition Reports</Text>
+          <Text style={styles.detailDate}>{reports.length} generated</Text>
+        </View>
+
+        {reports.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="documents-outline" size={25} color={TACTICAL.textMuted} />
+            <Text style={styles.emptyTitle}>No exported reports yet.</Text>
+            <Text style={styles.emptySubtext}>Generate a report from an expedition detail screen.</Text>
+          </View>
+        ) : (
+          <View style={styles.reportLibraryList}>
+            {reports.map((report) => (
+              <ReportLibraryItem
+                key={report.id}
+                report={report}
+                fileInfo={fileInfoByReportId[report.id]}
+                onPress={() => handleOpenReport(report)}
+                onLongPress={() => handleLongPressReport(report.id)}
+              />
+            ))}
+          </View>
+        )}
+
+        {shareMessage ? (
+          <Text style={styles.reportLibraryMessage}>{shareMessage}</Text>
+        ) : null}
+
+        {/* TODO Expedition Reports Library: add cloud backup without blocking local report access. */}
+        {/* TODO Expedition Reports Library: add report search, regeneration from library, batch export, and print-specific formatting. */}
+      </View>
+    </ScrollView>
+  );
+}
+
+function ReportLibraryItem({
+  report,
+  fileInfo,
+  onPress,
+  onLongPress,
+}: {
+  report: ExpeditionReport;
+  fileInfo?: ReportFileInfo;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  const fileUnavailable = fileInfo ? !fileInfo.exists : !report.localUri;
 
   return (
     <TouchableOpacity
-      style={[
-        styles.card,
-        card.enabled ? styles.cardActive : styles.cardDisabled,
-        card.selected && card.enabled && styles.cardSelected,
-      ]}
-      disabled={!card.enabled}
-      activeOpacity={0.78}
-      onPress={() => onPress(card)}
+      style={styles.reportLibraryItem}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      activeOpacity={0.82}
       accessibilityRole="button"
-      accessibilityLabel={card.label}
-      accessibilityState={{ disabled: !card.enabled, selected: card.selected && card.enabled }}
+      accessibilityLabel={`Download report ${report.title}`}
+      accessibilityHint="Downloads the local expedition export when available."
     >
-      <View style={styles.cardHeader}>
-        <View style={[styles.cardIconWrap, !card.enabled && styles.disabledIconWrap]}>
-          <Ionicons
-            name={card.icon}
-            size={16}
-            color={card.enabled ? TACTICAL.amber : TACTICAL.textMuted}
-          />
+      <View style={styles.reportLibraryTop}>
+        <View style={styles.reportLibraryIcon}>
+          <Ionicons name="document-text-outline" size={15} color={TACTICAL.amber} />
         </View>
-        <View style={[
-          styles.cardStatusPill,
-          statusTone === 'critical' && styles.cardStatusCritical,
-          statusTone === 'caution' && styles.cardStatusCaution,
-          statusTone === 'watch' && styles.cardStatusWatch,
-          statusTone === 'unknown' && styles.cardStatusUnknown,
-          !card.enabled && styles.cardStatusDisabled,
-        ]}>
-          <Text style={[
-            styles.cardStatusPillText,
-            !card.enabled && styles.disabledHintText,
-          ]}>
-            {String(statusTone).toUpperCase()}
+        <View style={styles.reportLibraryTitleWrap}>
+          <Text style={styles.reportLibraryTitle} numberOfLines={1}>{report.title}</Text>
+          <Text style={styles.reportLibraryDate}>{formatCompletedDate(report.generatedAt)}</Text>
+        </View>
+        <Ionicons name="download-outline" size={14} color={TACTICAL.textMuted} />
+      </View>
+      <View style={styles.reportLibraryMetaRow}>
+        <MetricPill label="Format" value={formatReportFormat(report.exportFormat)} />
+        <MetricPill label="Status" value={formatReportFileStatus(report, fileInfo)} />
+        <MetricPill label="Size" value={formatFileSize(fileInfo?.size ?? null)} />
+      </View>
+      {fileUnavailable ? (
+        <View style={styles.reportUnavailablePanel}>
+          <Text style={styles.reportUnavailableTitle}>Report file unavailable.</Text>
+          <Text style={styles.reportUnavailableSubtext}>
+            You can regenerate this report from the expedition detail screen.
           </Text>
         </View>
-      </View>
-      {showUnread ? (
-        <View style={styles.cardUnreadBadge}>
-          <Text style={styles.cardUnreadBadgeText}>{badgeCount}</Text>
-        </View>
       ) : null}
-      <Text style={[styles.cardLabel, !card.enabled && styles.disabledText]} numberOfLines={1}>
-        {card.label}
-      </Text>
-      <Text
-        style={[
-          styles.cardStatus,
-          card.stale && card.enabled && styles.cardStatusStale,
-          !card.enabled && styles.disabledHintText,
-        ]}
-        numberOfLines={1}
-      >
-        {card.status}
+    </TouchableOpacity>
+  );
+}
+
+function UnlockedBadgesView({
+  badges,
+  badgeProgress,
+  onBack,
+}: {
+  badges: ExpeditionBadge[];
+  badgeProgress: ExpeditionBadge[];
+  onBack: () => void;
+}) {
+  const [mode, setMode] = useState<BadgeCollectionMode>('recent');
+  const unlockedBadges = useMemo(() => badges.filter((badge) => !!badge.unlockedAt), [badges]);
+  const stats = useMemo(() => buildBadgeCollectionStats(unlockedBadges), [unlockedBadges]);
+  const sections = useMemo(() => buildBadgeCollectionSections(unlockedBadges, mode), [unlockedBadges, mode]);
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.surface}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={onBack}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Back to Expedition Hub"
+        >
+          <Ionicons name="chevron-back-outline" size={16} color={TACTICAL.amber} />
+          <Text style={styles.backButtonText}>Expedition Hub</Text>
+        </TouchableOpacity>
+
+        <View style={styles.detailHeader}>
+          <Text style={styles.detailTitle}>Unlocked Badges</Text>
+          <Text style={styles.detailDate}>{unlockedBadges.length} earned</Text>
+        </View>
+
+        {unlockedBadges.length === 0 ? (
+          <BadgeGrid
+            badges={unlockedBadges}
+            emptyTitle="No badges earned yet."
+            emptySubtext="Complete expeditions to begin earning field accomplishments."
+          />
+        ) : (
+          <>
+            <View style={styles.collectionStatsRow}>
+              <CollectionStatTile label="Total Badges Earned" value={`${stats.totalBadgesEarned}`} />
+              <CollectionStatTile label="Rarest Badge Earned" value={stats.rarestBadgeEarned} />
+              <CollectionStatTile label="Most Recent Unlock" value={stats.mostRecentUnlock} />
+              <CollectionStatTile label="Expeditions With Badges" value={`${stats.expeditionsWithBadges}`} />
+            </View>
+
+            <View style={styles.collectionModeRow}>
+              <CollectionModeButton label="Recent" active={mode === 'recent'} onPress={() => setMode('recent')} />
+              <CollectionModeButton label="Rarity" active={mode === 'rarity'} onPress={() => setMode('rarity')} />
+              <CollectionModeButton label="Category" active={mode === 'category'} onPress={() => setMode('category')} />
+            </View>
+
+            <View style={styles.collectionSections}>
+              {sections.map((section) => (
+                <View key={section.title} style={styles.collectionSection}>
+                  <View style={styles.sectionHeaderCompact}>
+                    <Text style={styles.sectionTitle}>{section.title}</Text>
+                    <Text style={styles.sectionCount}>{section.badges.length}</Text>
+                  </View>
+                  <BadgeGrid badges={section.badges} />
+                </View>
+              ))}
+            </View>
+
+            <BadgeMilestoneList badges={badgeProgress} />
+          </>
+        )}
+
+        {/* TODO Expedition Badges: add badge search once the collection grows beyond compact review. */}
+        {/* TODO Expedition Badges: add badge artwork upgrade and rare badge showcase. */}
+        {/* TODO Expedition Badges: add badge sharing and badge export stamps. */}
+        {/* TODO Expedition Badges: add seasonal badge collections without exposing hidden locked badges. */}
+      </View>
+    </ScrollView>
+  );
+}
+
+function CollectionStatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.collectionStatTile}>
+      <Text style={styles.collectionStatValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.collectionStatLabel} numberOfLines={2}>{label}</Text>
+    </View>
+  );
+}
+
+function CollectionModeButton({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.collectionModeButton, active && styles.collectionModeButtonActive]}
+      onPress={onPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={`Show badges by ${label}`}
+    >
+      <Text style={[styles.collectionModeButtonText, active && styles.collectionModeButtonTextActive]}>
+        {label}
       </Text>
     </TouchableOpacity>
   );
+}
+
+function ExpeditionTripBadgesEarned({
+  badges,
+  tripTitle,
+}: {
+  badges: ExpeditionBadge[];
+  tripTitle: string;
+}) {
+  return (
+    <View style={styles.detailSection}>
+      <Text style={styles.detailSectionTitle}>Badges Earned</Text>
+      <BadgeGrid
+        badges={badges}
+        emptyTitle="No badges earned on this expedition."
+        emptySubtext="Field honors earned on this expedition will appear here."
+        relatedTripTitle={tripTitle}
+      />
+    </View>
+  );
+}
+
+function ExpeditionTripPersonalRecords({ records }: { records: PersonalExpeditionRecord[] }) {
+  if (records.length === 0) return null;
+
+  return (
+    <View style={styles.detailSection}>
+      <Text style={styles.detailSectionTitle}>Personal Records</Text>
+      <View style={styles.personalRecordList}>
+        {records.map((record) => (
+          <PersonalRecordRow key={record.id} record={record} showPrevious />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function PersonalRecordsPreview({ records }: { records: PersonalExpeditionRecord[] }) {
+  if (records.length === 0) return null;
+
+  return (
+    <View style={styles.personalRecordsPreview}>
+      <View style={styles.sectionHeaderCompact}>
+        <Text style={styles.sectionTitle}>Personal Records</Text>
+        <Text style={styles.sectionCount}>{records.length}</Text>
+      </View>
+      <View style={styles.personalRecordList}>
+        {records.slice(0, 4).map((record) => (
+          <PersonalRecordRow key={record.id} record={record} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function PersonalRecordRow({
+  record,
+  showPrevious = false,
+}: {
+  record: PersonalExpeditionRecord;
+  showPrevious?: boolean;
+}) {
+  return (
+    <View style={styles.personalRecordRow}>
+      <View style={styles.personalRecordIcon}>
+        <Ionicons name="medal-outline" size={13} color={TACTICAL.amber} />
+      </View>
+      <View style={styles.personalRecordCopy}>
+        <Text style={styles.personalRecordTitle} numberOfLines={1}>{record.title}</Text>
+        {showPrevious && record.previousValue != null ? (
+          <Text style={styles.personalRecordPrevious} numberOfLines={1}>
+            Previous {formatPersonalRecordValue(record.previousValue, record.unit)}
+          </Text>
+        ) : (
+          <Text style={styles.personalRecordPrevious} numberOfLines={1}>
+            Set {formatCompletedDate(record.achievedAt)}
+          </Text>
+        )}
+      </View>
+      <Text style={styles.personalRecordValue}>{formatPersonalRecordValue(record.value, record.unit)}</Text>
+    </View>
+  );
+}
+
+function ExpeditionInsightsSection({
+  insights,
+  onDismiss,
+}: {
+  insights: ExpeditionInsight[];
+  onDismiss: (insightId: string) => void;
+}) {
+  if (insights.length === 0) return null;
+
+  return (
+    <View style={styles.insightsSection}>
+      <View style={styles.sectionHeaderCompact}>
+        <Text style={styles.sectionTitle}>Expedition Insights</Text>
+        <Text style={styles.sectionCount}>{insights.length}</Text>
+      </View>
+      <View style={styles.insightList}>
+        {insights.slice(0, 3).map((insight) => (
+          <InsightCard
+            key={insight.id}
+            insight={insight}
+            onDismiss={() => onDismiss(insight.id)}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function InsightCard({
+  insight,
+  onDismiss,
+}: {
+  insight: ExpeditionInsight;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={styles.insightCard}>
+      <View style={styles.insightIcon}>
+        <Ionicons name={iconForInsightType(insight.type)} size={15} color={TACTICAL.amber} />
+      </View>
+      <View style={styles.insightCopy}>
+        <Text style={styles.insightTitle} numberOfLines={1}>{insight.title}</Text>
+        <Text style={styles.insightDescription} numberOfLines={2}>{insight.description}</Text>
+      </View>
+      <TouchableOpacity
+        style={styles.insightDismissButton}
+        onPress={onDismiss}
+        activeOpacity={0.78}
+        accessibilityRole="button"
+        accessibilityLabel={`Dismiss ${insight.title}`}
+      >
+        <Ionicons name="close-outline" size={15} color={TACTICAL.textMuted} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function ExpeditionTripCard({
+  trip,
+  onPress,
+  onLongPress,
+}: {
+  trip: ExpeditionTripSummary;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.tripCard}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${trip.title}`}
+    >
+      <View style={styles.tripCardTop}>
+        <View style={styles.tripIcon}>
+          <Ionicons name="flag-outline" size={15} color={TACTICAL.amber} />
+        </View>
+        <View style={styles.tripTitleWrap}>
+          <Text style={styles.tripTitle} numberOfLines={1}>{trip.title}</Text>
+          <Text style={styles.tripDate}>{formatCompletedDate(trip.completedAt)}</Text>
+        </View>
+        <Ionicons name="chevron-forward-outline" size={15} color={TACTICAL.textMuted} />
+      </View>
+      <View style={styles.tripMetrics}>
+        <MetricPill label="Distance" value={formatDistance(trip.totalDistanceMiles)} />
+        <MetricPill label="Duration" value={formatDuration(trip.totalDurationSeconds)} />
+        <MetricPill label="Max Elev." value={formatNullableElevation(trip.maxElevationFt)} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function StatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.statTile}>
+      <Text style={styles.statValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.statLabel} numberOfLines={2}>{label}</Text>
+    </View>
+  );
+}
+
+function MetricPill({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metricPill}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{value}</Text>
+    </View>
+  );
+}
+
+function DetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailMetric}>
+      <Text style={styles.detailMetricValue}>{value}</Text>
+      <Text style={styles.detailMetricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function iconForInsightType(type: ExpeditionInsight['type']): string {
+  switch (type) {
+    case 'distance_pattern':
+      return 'git-branch-outline';
+    case 'elevation_pattern':
+    case 'personal_record':
+      return 'trending-up-outline';
+    case 'weather_pattern':
+      return 'partly-sunny-outline';
+    case 'time_of_day_pattern':
+      return 'time-outline';
+    case 'route_deviation_pattern':
+      return 'swap-horizontal-outline';
+    case 'recovery_usage':
+      return 'construct-outline';
+    case 'milestone_progress':
+      return 'flag-outline';
+    case 'expedition_frequency':
+      return 'calendar-outline';
+    case 'badge_progress':
+      return 'ribbon-outline';
+    default:
+      return 'compass-outline';
+  }
+}
+
+function buildHubStats(trips: ExpeditionTripSummary[]): ExpeditionHubStats {
+  return trips.reduce<ExpeditionHubStats>(
+    (stats, trip) => ({
+      totalExpeditions: stats.totalExpeditions + 1,
+      totalMiles: stats.totalMiles + (trip.totalDistanceMiles ?? 0),
+      highestElevationFt: Math.max(stats.highestElevationFt, trip.maxElevationFt ?? 0),
+      totalHours: stats.totalHours + ((trip.totalDurationSeconds ?? 0) / 3600),
+    }),
+    { totalExpeditions: 0, totalMiles: 0, highestElevationFt: 0, totalHours: 0 },
+  );
+}
+
+function buildArchiveLifetimeStats(
+  trips: ExpeditionTripSummary[],
+  badges: ExpeditionBadge[],
+): ArchiveLifetimeStats {
+  return trips.reduce<ArchiveLifetimeStats>(
+    (stats, trip) => ({
+      totalCompletedExpeditions: stats.totalCompletedExpeditions + 1,
+      totalMiles: stats.totalMiles + (trip.totalDistanceMiles ?? 0),
+      totalHours: stats.totalHours + ((trip.totalDurationSeconds ?? 0) / 3600),
+      highestElevationFt: Math.max(stats.highestElevationFt, trip.maxElevationFt ?? 0),
+      totalBadgesEarned: stats.totalBadgesEarned,
+      totalNotableMoments: stats.totalNotableMoments + trip.notableMomentsCount,
+    }),
+    {
+      totalCompletedExpeditions: 0,
+      totalMiles: 0,
+      totalHours: 0,
+      highestElevationFt: 0,
+      totalBadgesEarned: badges.filter((badge) => !!badge.unlockedAt).length,
+      totalNotableMoments: 0,
+    },
+  );
+}
+
+function buildArchiveRecordHighlights(trips: ExpeditionTripSummary[]): ArchiveRecordHighlight[] {
+  const completedTrips = trips.filter((trip) => !!trip.completedAt);
+  if (completedTrips.length === 0) return [];
+
+  return [
+    buildArchiveRecord(
+      'Longest Expedition',
+      completedTrips,
+      (trip) => trip.totalDistanceMiles ?? 0,
+      (trip) => formatDistance(trip.totalDistanceMiles),
+    ),
+    buildArchiveRecord(
+      'Highest Route',
+      completedTrips,
+      (trip) => trip.maxElevationFt ?? 0,
+      (trip) => formatNullableElevation(trip.maxElevationFt),
+    ),
+    buildArchiveRecord(
+      'Longest Duration',
+      completedTrips,
+      (trip) => trip.totalDurationSeconds ?? 0,
+      (trip) => formatDuration(trip.totalDurationSeconds),
+    ),
+    buildArchiveRecord(
+      'Most Badges Earned on One Trip',
+      completedTrips,
+      (trip) => trip.badgesUnlockedCount,
+      (trip) => `${trip.badgesUnlockedCount}`,
+    ),
+    buildArchiveRecord(
+      'Most Notable Moments on One Trip',
+      completedTrips,
+      (trip) => trip.notableMomentsCount,
+      (trip) => `${trip.notableMomentsCount}`,
+    ),
+  ].filter((record): record is ArchiveRecordHighlight => !!record);
+}
+
+function buildArchiveRecord(
+  label: string,
+  trips: ExpeditionTripSummary[],
+  scoreForTrip: (trip: ExpeditionTripSummary) => number,
+  valueForTrip: (trip: ExpeditionTripSummary) => string,
+): ArchiveRecordHighlight | null {
+  const bestTrip = trips.reduce((best, trip) => (scoreForTrip(trip) > scoreForTrip(best) ? trip : best), trips[0]);
+  if (scoreForTrip(bestTrip) <= 0) return null;
+  return {
+    label,
+    value: valueForTrip(bestTrip),
+    tripTitle: bestTrip.title,
+  };
+}
+
+function sortTripsChronologically(trips: ExpeditionTripSummary[]): ExpeditionTripSummary[] {
+  return [...trips].sort((a, b) => timestampForTrip(a.completedAt) - timestampForTrip(b.completedAt));
+}
+
+function timestampForTrip(value: string | null): number {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+const BADGE_RARITY_RANK: Record<ExpeditionBadge['rarity'], number> = {
+  common: 1,
+  uncommon: 2,
+  rare: 3,
+  epic: 4,
+  legendary: 5,
+  hidden: 6,
+};
+
+function buildBadgeCollectionStats(badges: ExpeditionBadge[]): BadgeCollectionStats {
+  const sortedNewest = [...badges].sort(sortBadgesNewest);
+  const rarest = [...badges].sort((a, b) => {
+    const rankDelta = BADGE_RARITY_RANK[b.rarity] - BADGE_RARITY_RANK[a.rarity];
+    return rankDelta !== 0 ? rankDelta : sortBadgesNewest(a, b);
+  })[0] ?? null;
+  const tripIds = new Set(
+    badges
+      .map((badge) => badge.unlockedTripId)
+      .filter((tripId): tripId is string => typeof tripId === 'string' && tripId.trim().length > 0),
+  );
+  return {
+    totalBadgesEarned: badges.length,
+    rarestBadgeEarned: rarest ? formatRarity(rarest.rarity) : 'None',
+    mostRecentUnlock: sortedNewest[0]?.title ?? 'None',
+    expeditionsWithBadges: tripIds.size,
+  };
+}
+
+function buildBadgeCollectionSections(
+  badges: ExpeditionBadge[],
+  mode: BadgeCollectionMode,
+): { title: string; badges: ExpeditionBadge[] }[] {
+  if (mode === 'recent') {
+    return [{ title: 'Recent', badges: [...badges].sort(sortBadgesNewest) }];
+  }
+  if (mode === 'rarity') {
+    const orderedRarities: ExpeditionBadge['rarity'][] = ['hidden', 'legendary', 'epic', 'rare', 'uncommon', 'common'];
+    return orderedRarities
+      .map((rarity) => ({
+        title: formatRarity(rarity),
+        badges: badges.filter((badge) => badge.rarity === rarity).sort(sortBadgesNewest),
+      }))
+      .filter((section) => section.badges.length > 0);
+  }
+
+  const categories = Array.from(new Set(badges.map((badge) => badge.category))).sort((a, b) =>
+    formatCategory(a).localeCompare(formatCategory(b)),
+  );
+  return categories.map((category) => ({
+    title: formatCategory(category),
+    badges: badges.filter((badge) => badge.category === category).sort(sortBadgesNewest),
+  }));
+}
+
+function sortBadgesNewest(a: ExpeditionBadge, b: ExpeditionBadge): number {
+  return new Date(b.unlockedAt ?? b.updatedAt).getTime() - new Date(a.unlockedAt ?? a.updatedAt).getTime();
+}
+
+function formatRarity(rarity: ExpeditionBadge['rarity']): string {
+  return rarity.charAt(0).toUpperCase() + rarity.slice(1);
+}
+
+function formatCategory(category: string): string {
+  return category
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatCompletedDate(value: string | null): string {
+  if (!value) return 'Date unavailable';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Date unavailable';
+  return parsed.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function formatWholeMiles(value: number): string {
+  return `${Math.round(value).toLocaleString()} Miles`;
+}
+
+function formatDistance(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '0 mi';
+  if (value < 10 && value > 0) return `${value.toFixed(1)} mi`;
+  return `${Math.round(value).toLocaleString()} mi`;
+}
+
+function formatHours(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 hrs';
+  if (value < 10) return `${Math.round(value * 10) / 10} hrs`;
+  return `${Math.round(value).toLocaleString()} hrs`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '0 hrs';
+  const hours = seconds / 3600;
+  if (hours < 1) return `${Math.max(1, Math.round(seconds / 60))} min`;
+  return formatHours(hours);
+}
+
+function formatPersonalRecordValue(value: number, unit: PersonalExpeditionRecord['unit']): string {
+  if (!Number.isFinite(value)) return '--';
+  switch (unit) {
+    case 'miles':
+      return formatDistance(value);
+    case 'seconds':
+      return formatDuration(value);
+    case 'feet':
+      return formatElevation(value);
+    case 'mph':
+      return `${Math.round(value * 10) / 10} mph`;
+    case 'minutes_after_midnight':
+      return formatMinutesAfterMidnight(value);
+    case 'count':
+    default:
+      return `${Math.round(value)}`;
+  }
+}
+
+function formatMinutesAfterMidnight(value: number): string {
+  if (!Number.isFinite(value)) return '--';
+  const minutes = Math.max(0, Math.min(1439, Math.round(value)));
+  const hours24 = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const suffix = hours24 >= 12 ? 'PM' : 'AM';
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${hours12}:${minute.toString().padStart(2, '0')} ${suffix}`;
+}
+
+function formatReportFormat(format: ExpeditionReport['exportFormat']): string {
+  return format.toUpperCase();
+}
+
+function formatReportFileStatus(report: ExpeditionReport, fileInfo?: ReportFileInfo): string {
+  if (!report.localUri) return 'Unavailable';
+  if (!fileInfo) return 'Checking';
+  return fileInfo.exists ? 'Ready' : 'Missing';
+}
+
+function formatFileSize(size: number | null): string {
+  if (size == null || !Number.isFinite(size) || size <= 0) return '--';
+  if (size < 1024) return `${Math.round(size)} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
+  return `${Math.round(size / 104857.6) / 10} MB`;
+}
+
+function formatElevation(value: number): string {
+  return `${Math.round(value || 0).toLocaleString()} ft`;
+}
+
+function formatNullableElevation(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? '0 ft' : formatElevation(value);
 }
 
 const styles = StyleSheet.create({
@@ -492,133 +1502,23 @@ const styles = StyleSheet.create({
   surface: {
     flex: 1,
     minHeight: 0,
-    gap: 10,
+    gap: 12,
     overflow: 'hidden',
     borderRadius: ECS.radius,
     borderWidth: 1,
     borderColor: GOLD_RAIL.section,
     backgroundColor: 'rgba(11,14,18,0.96)',
-    padding: 10,
+    padding: 12,
   },
-  topoLayer: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.42,
-  },
-  topoLine: {
-    position: 'absolute',
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    borderRadius: 999,
-  },
-  topoLineA: {
-    width: 260,
-    height: 120,
-    top: -30,
-    right: -70,
-    transform: [{ rotate: '-12deg' }],
-  },
-  topoLineB: {
-    width: 220,
-    height: 96,
-    top: 130,
-    left: -80,
-    transform: [{ rotate: '18deg' }],
-  },
-  topoLineC: {
-    width: 300,
-    height: 150,
-    bottom: -70,
-    right: -110,
-    transform: [{ rotate: '9deg' }],
-  },
-  topoGridA: {
-    position: 'absolute',
-    width: 1,
-    top: 0,
-    bottom: 0,
-    left: '33%',
-    backgroundColor: GOLD_RAIL.internal,
-  },
-  topoGridB: {
-    position: 'absolute',
-    height: 1,
-    left: 0,
-    right: 0,
-    top: '58%',
-    backgroundColor: GOLD_RAIL.internal,
-  },
-  cardRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  card: {
-    flex: 1,
-    minHeight: 78,
-    position: 'relative',
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 9,
-    gap: 7,
-  },
-  cardActive: {
-    borderColor: GOLD_RAIL.section,
-    backgroundColor: 'rgba(17,20,24,0.92)',
-  },
-  cardSelected: {
-    borderColor: GOLD_RAIL.major,
-    backgroundColor: 'rgba(212,160,23,0.10)',
-  },
-  cardDisabled: {
-    borderColor: 'rgba(139,148,158,0.16)',
-    backgroundColor: 'rgba(17,20,24,0.46)',
-    opacity: 0.62,
-  },
-  cardHeader: {
-    minHeight: 22,
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
+    gap: 10,
+    paddingBottom: 4,
   },
-  cardStatusPill: {
-    maxWidth: 66,
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.subsection,
-    backgroundColor: 'rgba(212,160,23,0.08)',
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-  },
-  cardStatusWatch: {
-    borderColor: GOLD_RAIL.subsection,
-    backgroundColor: 'rgba(212,160,23,0.08)',
-  },
-  cardStatusCaution: {
-    borderColor: 'rgba(230,126,34,0.36)',
-    backgroundColor: 'rgba(230,126,34,0.10)',
-  },
-  cardStatusCritical: {
-    borderColor: 'rgba(192,57,43,0.42)',
-    backgroundColor: 'rgba(192,57,43,0.10)',
-  },
-  cardStatusUnknown: {
-    borderColor: 'rgba(139,148,158,0.22)',
-    backgroundColor: 'rgba(139,148,158,0.08)',
-  },
-  cardStatusDisabled: {
-    borderColor: 'rgba(139,148,158,0.16)',
-    backgroundColor: 'rgba(139,148,158,0.06)',
-  },
-  cardStatusPillText: {
-    color: TACTICAL.textMuted,
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  cardIconWrap: {
-    width: 25,
-    height: 25,
+  headerIcon: {
+    width: 34,
+    height: 34,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -626,47 +1526,736 @@ const styles = StyleSheet.create({
     borderColor: GOLD_RAIL.subsection,
     backgroundColor: ECS.accentSoft,
   },
-  disabledIconWrap: {
-    borderColor: 'rgba(139,148,158,0.18)',
-    backgroundColor: 'rgba(139,148,158,0.08)',
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
   },
-  cardUnreadBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.subsection,
-    backgroundColor: 'rgba(212,160,23,0.14)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5,
-  },
-  cardUnreadBadgeText: {
-    color: TACTICAL.amber,
-    fontSize: 8,
+  title: {
+    color: TACTICAL.text,
+    fontSize: 18,
     fontWeight: '900',
     letterSpacing: 0,
   },
-  cardLabel: {
-    color: TACTICAL.text,
-    fontSize: 12,
-    fontWeight: '800',
+  subtitle: {
+    marginTop: 3,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
   },
-  cardStatus: {
+  operationalPanel: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    gap: 8,
+  },
+  operationalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  operationalButton: {
+    flexGrow: 1,
+    flexBasis: '30%',
+    minHeight: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  operationalButtonActive: {
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  operationalButtonText: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  statTile: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    paddingHorizontal: 7,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  statValue: {
+    color: TACTICAL.amber,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  statLabel: {
+    marginTop: 4,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 10,
+  },
+  sectionTitle: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  sectionCount: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  sectionHeaderCompact: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  hubSection: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    gap: 8,
+  },
+  insightsSection: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    gap: 8,
+  },
+  insightList: {
+    gap: 7,
+  },
+  insightCard: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.78)',
+    padding: 9,
+  },
+  insightIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  insightCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  insightTitle: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  insightDescription: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 12,
+  },
+  insightDismissButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  personalRecordsPreview: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    gap: 8,
+  },
+  personalRecordList: {
+    gap: 7,
+  },
+  personalRecordRow: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.72)',
+    padding: 8,
+  },
+  personalRecordIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  personalRecordCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  personalRecordTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  personalRecordPrevious: {
     color: TACTICAL.textMuted,
     fontSize: 9,
     fontWeight: '700',
   },
-  cardStatusStale: {
+  personalRecordValue: {
+    color: TACTICAL.amber,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  loadingPanel: {
+    minHeight: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  loadingText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  emptyState: {
+    minHeight: 170,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+  },
+  emptyTitle: {
+    color: TACTICAL.text,
+    fontSize: 14,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  tripList: {
+    gap: 9,
+  },
+  tripCard: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.9)',
+    padding: 10,
+    gap: 10,
+  },
+  tripCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  tripIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  tripTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  tripTitle: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  tripDate: {
+    marginTop: 2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  tripMetrics: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  metricPill: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    paddingHorizontal: 7,
+    paddingVertical: 6,
+  },
+  metricLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+  },
+  metricValue: {
+    marginTop: 2,
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  hubActionRow: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  hubActionButton: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    paddingHorizontal: 11,
+  },
+  hubActionButtonText: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  detailLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11,14,18,0.28)',
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  backButtonText: {
+    color: TACTICAL.amber,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  detailHeader: {
+    gap: 3,
+  },
+  detailTitle: {
+    color: TACTICAL.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  detailDate: {
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  reportActionPanel: {
+    gap: 7,
+  },
+  reportActionButton: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 8,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 12,
+  },
+  reportActionButtonDisabled: {
+    opacity: 0.74,
+  },
+  reportActionButtonText: {
+    color: '#0B0F12',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  reportStatusText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 14,
+  },
+  reportStatusTextFailed: {
+    color: TACTICAL.danger,
+  },
+  reportLibraryList: {
+    gap: 9,
+  },
+  reportLibraryItem: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.86)',
+    padding: 10,
+    gap: 10,
+  },
+  reportLibraryTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  reportLibraryIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  reportLibraryTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reportLibraryTitle: {
+    color: TACTICAL.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  reportLibraryDate: {
+    marginTop: 2,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  reportLibraryMetaRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  reportLibraryMessage: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 14,
+  },
+  reportUnavailablePanel: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 8,
+    gap: 2,
+  },
+  reportUnavailableTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  reportUnavailableSubtext: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 12,
+  },
+  detailMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  detailMetric: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.84)',
+    padding: 10,
+    justifyContent: 'center',
+  },
+  detailMetricValue: {
+    color: TACTICAL.amber,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  detailMetricLabel: {
+    marginTop: 4,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  detailSection: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.7)',
+    padding: 10,
+    gap: 8,
+  },
+  detailSectionTitle: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  elevationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 8,
+  },
+  elevationLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  elevationValue: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  collectionStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  collectionStatTile: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  collectionStatValue: {
+    color: TACTICAL.amber,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  collectionStatLabel: {
+    marginTop: 4,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 10,
+  },
+  collectionModeRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    gap: 7,
+  },
+  collectionModeButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.72)',
+    paddingHorizontal: 8,
+  },
+  collectionModeButtonActive: {
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  collectionModeButtonText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  collectionModeButtonTextActive: {
     color: TACTICAL.amber,
   },
-  disabledText: {
-    color: TACTICAL.textMuted,
+  collectionSections: {
+    gap: 10,
   },
-  disabledHintText: {
-    color: 'rgba(139,148,158,0.82)',
+  collectionSection: {
+    gap: 8,
+  },
+  archiveStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  archiveStatTile: {
+    flexGrow: 1,
+    flexBasis: '30%',
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  archiveStatValue: {
+    color: TACTICAL.amber,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  archiveStatLabel: {
+    marginTop: 4,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 10,
+  },
+  archiveSection: {
+    borderTopWidth: 1,
+    borderTopColor: GOLD_RAIL.internal,
+    paddingTop: 10,
+    gap: 8,
+  },
+  archiveRecordList: {
+    gap: 7,
+  },
+  archiveRecordRow: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(17,20,24,0.72)',
+    padding: 8,
+  },
+  archiveRecordIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: ECS.accentSoft,
+  },
+  archiveRecordCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  archiveRecordLabel: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  archiveRecordTrip: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  archiveRecordValue: {
+    color: TACTICAL.amber,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  archiveTimeline: {
+    gap: 0,
+  },
+  archiveTripItem: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  archiveRail: {
+    width: 16,
+    alignItems: 'center',
+  },
+  archiveDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber,
+    backgroundColor: ECS.accentSoft,
+    marginTop: 12,
+  },
+  archiveLine: {
+    flex: 1,
+    width: 1,
+    minHeight: 74,
+    backgroundColor: GOLD_RAIL.internal,
+  },
+  archiveTripBody: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.82)',
+    padding: 9,
+    gap: 8,
+    marginBottom: 8,
+  },
+  archiveTripHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  archiveTripTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  archiveTripTitle: {
+    color: TACTICAL.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  archiveTripDate: {
+    marginTop: 2,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  archiveTripMetrics: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  archiveTripMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  archiveTripMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '800',
   },
 });

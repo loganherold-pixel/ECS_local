@@ -16,9 +16,9 @@ Scope: living map for the first Dashboard/system bug pass. Updated with implemen
 - `components/dashboard/PowerSystemWidget.tsx` - ECS power widget, BLU authority subscriptions, flow graphic.
 - `components/dashboard/PowerSystemDetail.tsx` - ECS power detail view.
 - `components/dashboard/TerrainRiskWidget.tsx` - Terrain risk card/detail using default/simulated inputs.
-- `components/QuickActionsSheet.tsx` - Field Utilities panel, emergency protocol quick-action detail, Device Connections embedded panel.
+- `components/QuickActionsSheet.tsx` - Field Utilities panel, emergency protocol quick-action detail, Device Connections launcher.
 - `components/emergency/EmergencyProtocolModal.tsx` - Standalone emergency protocol modal.
-- `components/vehicle-telemetry/OBD2ScannerModal.tsx` - OBD scanner modal path.
+- `app/power/blu.tsx` - Canonical Device Connections scanner for power devices and OBD2 telemetry adapters.
 - `app/power/blu.tsx` - Device Connections screen and scan visibility/debug summary.
 - `lib/useUnifiedDeviceConnections.ts` - Unified scanner, source summaries, native BLE/OBD2/API/mock source states.
 - `src/vehicle-telemetry/OBD2Adapter.ts` - OBD2 native BLE scan/readiness/callback handling.

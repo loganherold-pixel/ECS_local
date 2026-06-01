@@ -28,6 +28,7 @@ export interface CurrentConditions {
   temp_max: number | null;
   humidity: number | null;
   pressure: number | null;
+  uvi?: number | null;
   visibility: number | null;
   wind_speed: number | null;
   wind_deg: number | null;
@@ -68,6 +69,30 @@ export interface DailyForecast {
   weather_icon: string;
 }
 
+export interface HourlyForecast {
+  date: string;
+  time?: string | null;
+  dt?: number | null;
+  temp?: number | null;
+  temp_day?: number | null;
+  feels_like?: number | null;
+  temp_min?: number | null;
+  temp_max?: number | null;
+  humidity: number | null;
+  pressure: number | null;
+  wind_max: number | null;
+  wind_speed?: number | null;
+  wind_gust_max: number | null;
+  wind_deg?: number | null;
+  pop: number;
+  rain_total: number;
+  snow_total: number;
+  weather_id: number | null;
+  weather_main: string;
+  weather_description: string;
+  weather_icon: string;
+}
+
 export type TrailFactorStatus = 'good' | 'caution' | 'warning' | 'danger';
 export type TrailOverall = 'good' | 'fair' | 'poor' | 'hazardous';
 
@@ -99,6 +124,8 @@ export interface WaypointWeather {
   label: string | null;
   error: string | null;
   current: CurrentConditions | null;
+  hourly?: HourlyForecast[] | null;
+  daily?: DailyForecast[] | null;
   forecast: DailyForecast[] | null;
   alerts: WeatherAlert[];
   trail_conditions: TrailConditions | null;
@@ -108,6 +135,15 @@ export interface WeatherResponse {
   results: WaypointWeather[];
   fetched_at: string;
   units: 'imperial' | 'metric';
+  provider?: string | null;
+  errors?: Array<{
+    lat?: number | null;
+    lon?: number | null;
+    label?: string | null;
+    status?: number | null;
+    code?: string | null;
+    message?: string | null;
+  }>;
 }
 
 export interface CachedWeather {

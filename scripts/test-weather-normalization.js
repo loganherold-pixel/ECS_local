@@ -148,6 +148,7 @@ assert.strictEqual(liveSnapshot.normalized.current.sunrise, 1777132800);
 assert.strictEqual(liveSnapshot.normalized.current.sunset, 1777183200);
 assert.strictEqual(liveSnapshot.normalized.current.highTemperatureF, 78);
 assert.strictEqual(liveSnapshot.normalized.current.lowTemperatureF, 64);
+assert.strictEqual(liveSnapshot.current.precipChance, 20, 'Absent current rain fields should use forecast precipitation chance, not force 100%.');
 assert.strictEqual(liveSnapshot.normalized.forecast.length, 1);
 assert.strictEqual(liveSnapshot.normalized.forecast[0].temperatureF, 76);
 assert.strictEqual(liveSnapshot.normalized.forecast[0].highTemperatureF, 76);
@@ -189,6 +190,49 @@ assert.strictEqual(calmWindSnapshot.normalized.current.temperatureF, 0, 'zero-de
 assert.strictEqual(calmWindSnapshot.normalized.current.windMph, 0, 'calm wind at 0 mph should remain a valid weather value');
 assert.strictEqual(calmWindSnapshot.normalized.current.pressureHpa, 0, 'zero pressure should be preserved by normalization when explicitly supplied');
 assert.strictEqual(calmWindSnapshot.current.windSpeed, 0, 'canonical current weather should preserve 0 mph wind');
+
+const clearZeroRainSnapshot = buildECSWeatherSnapshot({
+  result: {
+    source: 'live',
+    cachedAt: Date.now(),
+    error: null,
+    data: {
+      fetched_at: '2026-04-25T12:00:00.000Z',
+      units: 'imperial',
+      results: [{
+        lat: 38.781,
+        lng: -121.208,
+        label: 'Clear Local',
+        error: null,
+        current: {
+          temp: 74,
+          wind_speed: 3,
+          weather_main: 'Clear',
+          weather_description: 'clear sky',
+          rain_1h: 0,
+          rain_3h: 0,
+          snow_1h: 0,
+          snow_3h: 0,
+        },
+        forecast: [{
+          date: '2026-04-25',
+          temp_min: 59,
+          temp_max: 78,
+          pop: 5,
+          rain_total: 0,
+          snow_total: 0,
+          weather_main: 'Clear',
+          weather_description: 'clear sky',
+        }],
+        alerts: [],
+      }],
+    },
+  },
+  sourceType: 'current_location',
+});
+
+assert.strictEqual(clearZeroRainSnapshot.current.precipChance, 5, 'Zero measured rain should not force a 100% dashboard rain chance.');
+assert.strictEqual(clearZeroRainSnapshot.current.precipType, null, 'Zero measured rain should not label current precipitation as rain.');
 
 const unifiedSurface = buildUnifiedWeatherCorridor({
   snapshot: liveSnapshot,

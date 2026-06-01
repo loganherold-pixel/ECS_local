@@ -264,6 +264,10 @@ function getRouteStatusText(source: RouteCorridorResult['source'], error: string
   return null;
 }
 
+function shouldEmitRouteWeatherHazardToast(source: RouteCorridorResult['source']): boolean {
+  return source === 'live' || source === 'cache_fresh';
+}
+
 // ── Route Sampling ───────────────────────────────────────────
 
 function sampleRoutePoints(
@@ -513,7 +517,7 @@ export function useRouteCorridorWeather(
         }
       }
 
-      if (emitToasts && newHazards.length > 0) {
+      if (emitToasts && shouldEmitRouteWeatherHazardToast(result.source) && newHazards.length > 0) {
         hapticWarning();
         const worst = newHazards.find(h => h.hazardLevel === 'hazardous') || newHazards[0];
         const label = worst.hazardLevel === 'hazardous' ? 'HAZARDOUS' : 'SEVERE';

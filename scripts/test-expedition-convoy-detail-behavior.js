@@ -8,6 +8,8 @@ const enginePath = path.join(root, 'lib', 'expedition', 'operationalAssessmentEn
 const fixturesPath = path.join(root, 'lib', 'expedition', 'operationalAssessmentFixtures.ts');
 const storePath = path.join(root, 'stores', 'expeditionAssessmentStore.ts');
 const detailViewPath = path.join(root, 'components', 'dashboard', 'ExpeditionAssessmentDetailView.tsx');
+const dispatchConvoyCommandPath = path.join(root, 'components', 'dispatch', 'DispatchConvoyCommandPanel.tsx');
+const convoyCommandDataPath = path.join(root, 'lib', 'navigation', 'convoyCommandData.ts');
 
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -30,6 +32,8 @@ const {
   getExpeditionAssessmentStoreSnapshot,
 } = require(storePath);
 const detailViewSource = fs.readFileSync(detailViewPath, 'utf8');
+const dispatchConvoyCommandSource = fs.readFileSync(dispatchConvoyCommandPath, 'utf8');
+const convoyCommandDataSource = fs.readFileSync(convoyCommandDataPath, 'utf8');
 
 function dp(value, options = {}) {
   return {
@@ -39,6 +43,7 @@ function dp(value, options = {}) {
     confidence: options.confidence || 'high',
     reliability: options.confidence || 'high',
     isStale: options.isStale,
+    staleAfterMinutes: options.staleAfterMinutes,
   };
 }
 
@@ -62,6 +67,14 @@ async function main() {
   assert.ok(normal.summary.toLowerCase().includes('stable'));
   assert.ok(normal.dataUsed.some((item) => item.id === 'member-list' && String(item.value).includes('Lead Tacoma')));
   assert.ok(normal.dataUsed.some((item) => item.id.endsWith('-movement-status') && item.value === 'moving'));
+  assert.ok(
+    normal.dataUsed.some((item) => item.id === 'live-location-member-count' && item.value === 3 && item.source === 'liveGps'),
+    'Convoy assessment should capture live location member count when tracking is available.',
+  );
+  assert.ok(
+    normal.dataUsed.some((item) => item.id === 'member-lead-live-location' && String(item.value).includes('38.10242')),
+    'Convoy assessment should capture live member coordinates in dataUsed.',
+  );
 
   const overdueOnly = convoyFor(withConvoy({
     overdueMemberLabels: dp(['Vehicle 3']),
@@ -90,6 +103,75 @@ async function main() {
   assert.ok(
     offlineWithStaleLocation.staleDataWarnings.some((item) => item.includes('last known location')),
     'Offline member with stale location should surface stale location data.',
+  );
+
+  const staleLiveLocation = convoyFor(withConvoy({
+    members: fixtures.allSystemsNormalFixture.convoy.members.map((member) =>
+      member.id === 'sweep'
+        ? {
+            ...member,
+            lastKnownLocation: dp(
+              { latitude: 38.084, longitude: -109.425, accuracyMeters: 40 },
+              {
+                source: 'liveGps',
+                updatedAt: '2026-04-28T17:00:00.000Z',
+                staleAfterMinutes: 20,
+              },
+            ),
+            locationStale: dp(true, { source: 'liveGps' }),
+          }
+        : member,
+    ),
+    liveLocationMemberCount: dp(3, { source: 'liveGps' }),
+    staleLocationMemberLabels: dp(['Sweep vehicle'], { source: 'liveGps' }),
+  }));
+  assert.ok(['watch', 'caution'].includes(staleLiveLocation.status));
+  assert.notStrictEqual(staleLiveLocation.status, 'critical', 'Stale live location alone should not become critical.');
+  assert.ok(
+    staleLiveLocation.why.join(' ').toLowerCase().includes('stale'),
+    'Stale live location should create a convoy warning reason.',
+  );
+  assert.ok(
+    staleLiveLocation.staleDataWarnings.some((item) => item.includes('Sweep vehicle live location')),
+    'Stale live coordinates should surface in stale data warnings.',
+  );
+
+  const missingLiveLocations = convoyFor(withConvoy({
+    members: fixtures.allSystemsNormalFixture.convoy.members.map((member) => ({
+      ...member,
+      lastKnownLocation: undefined,
+      locationStale: undefined,
+    })),
+    trackingEnabled: dp(true, { source: 'liveGps' }),
+    liveLocationMemberCount: dp(0, { source: 'liveGps' }),
+    staleLocationMemberLabels: dp([], { source: 'liveGps' }),
+  }));
+  assert.strictEqual(missingLiveLocations.status, 'caution', 'Missing live coordinates should contribute caution, not critical.');
+  assert.ok(
+    missingLiveLocations.why.join(' ').toLowerCase().includes('coordinates'),
+    'Missing live coordinate state should be explained.',
+  );
+
+  const missedCheckpointNoLocationOffline = convoyFor(withConvoy({
+    members: fixtures.allSystemsNormalFixture.convoy.members.map((member) =>
+      member.id === 'sweep'
+        ? {
+            ...member,
+            lastKnownLocation: undefined,
+            missedCheckpoint: dp(true),
+          }
+        : member,
+    ),
+    missedCheckpointMemberLabels: dp(['Sweep vehicle']),
+    trackingEnabled: dp(true, { source: 'liveGps' }),
+    liveLocationMemberCount: dp(2, { source: 'liveGps' }),
+    staleLocationMemberLabels: dp([]),
+    communicationsStatus: dp('offline'),
+  }));
+  assert.strictEqual(
+    missedCheckpointNoLocationOffline.status,
+    'critical',
+    'Missed checkpoint plus unavailable location and offline comms should escalate.',
   );
 
   const split = convoyFor(withConvoy({
@@ -160,6 +242,24 @@ async function main() {
   ]) {
     assert.ok(detailViewSource.includes(text), `Convoy detail view should include ${text}.`);
   }
+
+  assert.ok(
+    !dispatchConvoyCommandSource.includes('ECSConvoyCommandPanelRive') &&
+      !dispatchConvoyCommandSource.includes('testID={`${testID}-rive`'),
+    'Convoy Command should no longer render the Rive panel surface.',
+  );
+  assert.ok(
+    dispatchConvoyCommandSource.includes('ConvoyCommandMap') &&
+      dispatchConvoyCommandSource.includes('fallbackVehiclesFromCommandData') &&
+      dispatchConvoyCommandSource.includes('Start live sharing') &&
+      dispatchConvoyCommandSource.includes('Stop live sharing'),
+    'Convoy Command map/fallback and explicit live sharing controls should be reachable.',
+  );
+  assert.ok(
+    convoyCommandDataSource.includes('valueOf(member.lastKnownLocation)') &&
+      convoyCommandDataSource.includes('lastPingAt: locationUpdatedAt'),
+    'Convoy Command fallback should keep assessment/snapshot coordinates available for map rendering.',
+  );
 
   console.log('Expedition convoy detail behavior checks passed.');
 }

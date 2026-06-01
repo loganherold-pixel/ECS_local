@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   TextInput,
+  ScrollView,
   ActivityIndicator,
   Platform,
   useWindowDimensions,
@@ -19,30 +20,31 @@ import FieldUseProtocolDetail, { type FieldUseGuideProtocol } from './emergency/
 import RecoveryProtocolDetail from './emergency/RecoveryProtocolDetail';
 import { RECOVERY_PROTOCOLS, isRecoveryProtocol, type ProtocolDefinition } from './emergency/RecoveryProtocolData';
 import { getTacticalGlyph } from './emergency/TacticalGlyphs';
+import DocumentPreviewModal from './intel/DocumentPreviewModal';
+import DocumentationCenter from './intel/DocumentationCenter';
+import PermitsAccessPanel from './intel/PermitsAccessPanel';
+import TripSummaries from './intel/TripSummaries';
+import IncidentRecoveryPanel from './dashboard/IncidentRecoveryPanel';
 import { useApp } from '../context/AppContext';
+import { calculateRisk, getPackingStats, getRiskColor } from '../lib/calculations';
+import { getBuilderState, getCachedExpeditions } from '../lib/expeditionCache';
 import { missionEventStore, missionNoteStore } from '../lib/missionStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { dispatchStore } from '../lib/dispatchStore';
 import { commsStore, type CustomCommsData } from '../lib/commsStore';
-import {
-  type ECSDeviceConnectionModel,
-  type ECSDiscoverySourceUiStatus,
-  type ECSScanSummary,
-  useUnifiedDeviceConnections,
-} from '../lib/unifiedScanner';
-import {
-  getSourceStatusDetail,
-  getSourceStatusLabel,
-} from '../lib/deviceConnectionScanMessaging';
-import { hapticCommand, hapticMicro } from '../lib/haptics';
+import { routeStore, type ImportedRoute } from '../lib/routeStore';
+import type { EcsExpedition } from '../lib/expeditionTypes';
+import { hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
+import type { IncidentCoordinate } from '../lib/types/incidentRecovery';
 import {
   ECS_TOP_SHELL_COMMAND_PILL_HEIGHT,
   getShellBottomClearance,
   getShellHeaderTopPadding,
 } from '../lib/shellLayout';
 import { useOperationalWeather } from '../lib/useOperationalWeather';
+import type { WeatherCoordinate } from '../lib/weatherTypes';
 
 type FieldUtilitiesView =
   | 'menu'
@@ -53,8 +55,10 @@ type FieldUtilitiesView =
   | 'protocolDetail'
   | 'recoveryProtocols'
   | 'recoveryProtocolDetail'
-  | 'team'
-  | 'bluetooth';
+  | 'permitsAccess'
+  | 'tripSummaries'
+  | 'documentation'
+  | 'team';
 
 type FieldUtilitiesReturnTarget = 'dashboard' | 'quickActions' | 'map' | string;
 type FieldUtilityActionView = Exclude<FieldUtilitiesView, 'menu' | 'protocolDetail' | 'recoveryProtocolDetail'>;
@@ -143,6 +147,30 @@ function formatCoords(lat: number, lng: number): string {
   return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
+function resolveRouteTrailheadCoordinate(route: ImportedRoute | null): WeatherCoordinate | null {
+  if (!route) return null;
+  const firstSegmentPoint = route.segments
+    ?.find((segment) => Array.isArray(segment.points) && segment.points.length > 0)
+    ?.points?.[0];
+  const firstWaypoint = route.waypoints?.[0];
+  const lat = firstSegmentPoint?.lat ?? firstWaypoint?.lat;
+  const lng = firstSegmentPoint?.lon ?? firstWaypoint?.lon;
+  if (
+    typeof lat !== 'number' ||
+    typeof lng !== 'number' ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng)
+  ) {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    label: `${route.name || 'Active Route'} Trailhead`,
+  };
+}
+
 function buildEmergencyFieldUseGuide(protocol: ProtocolDefinition): FieldUseGuideProtocol {
   return {
     id: protocol.id,
@@ -188,12 +216,28 @@ interface Props {
 export default function QuickActionsSheet({ visible, onClose, returnTarget = 'dashboard' }: Props) {
   const insets = useSafeAreaInsets();
   const { height: viewportHeight } = useWindowDimensions();
-  const { showToast, activeTrip, user } = useApp();
+  const {
+    showToast,
+    activeTrip,
+    isOnline,
+    user,
+    loadItems,
+    riskScore,
+    refreshActiveTrip,
+  } = useApp();
   const [fieldUtilitiesState, setFieldUtilitiesState] = useState<FieldUtilitiesState>({
     isOpen: visible,
     activeView: 'menu',
     returnTarget,
   });
+  const [builderState, setBuilderState] = useState(() => getBuilderState());
+  const [activeRoute, setActiveRoute] = useState<ImportedRoute | null>(() => routeStore.getActive());
+  const [expeditions, setExpeditions] = useState<EcsExpedition[]>(() => getCachedExpeditions());
+  const [docPreviewVisible, setDocPreviewVisible] = useState(false);
+  const [docPreviewId, setDocPreviewId] = useState('');
+  const [docPreviewTitle, setDocPreviewTitle] = useState('');
+  const [docPreviewCategory, setDocPreviewCategory] = useState<'system' | 'operational'>('system');
+  const [docPreviewContent, setDocPreviewContent] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -212,6 +256,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   const fieldUtilitiesTopClearance = getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
   const fieldUtilitiesBottomClearance = getShellBottomClearance(insets.bottom, 2);
   const activeView = fieldUtilitiesState.activeView;
+  const mainPanelActive = activeView === 'menu';
   const protocolDetailActive = activeView === 'protocolDetail';
   const recoveryProtocolDetailActive = activeView === 'recoveryProtocolDetail';
   const protocolStaticActive =
@@ -219,6 +264,13 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     protocolDetailActive ||
     activeView === 'recoveryProtocols' ||
     recoveryProtocolDetailActive;
+  const commsStaticActive = activeView === 'emergencyComms';
+  const mainPanelStaticActive = mainPanelActive;
+  const fixedStaticActive = mainPanelStaticActive || protocolStaticActive || commsStaticActive;
+  const gpsBackedUtilityActive =
+    activeView === 'menu' ||
+    activeView === 'emergencyComms' ||
+    activeView === 'intel';
   const protocolCompactMode = viewportHeight < 760;
   const frequencyCards = useMemo(
     () => mergeCommsDefaultsWithOverrides('freq', DEFAULT_FREQUENCIES, dispatchComms.frequencies),
@@ -241,7 +293,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     ),
     [activeTrip?.emergency_contact, dispatchComms.contacts],
   );
-  const mainPanelActive = activeView === 'menu';
   const intelWeatherGps = useMemo(
     () => ({
       lat: gpsCoords?.lat ?? null,
@@ -251,11 +302,50 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     }),
     [gpsCoords],
   );
+  const trailheadWeatherCoordinate = useMemo(
+    () => resolveRouteTrailheadCoordinate(activeRoute),
+    [activeRoute],
+  );
   const fieldUtilitiesWeather = useOperationalWeather({
     enabled: visible && activeView === 'intel',
     gps: intelWeatherGps,
     units: 'imperial',
   });
+  const risk = useMemo(() => {
+    if (riskScore) {
+      return calculateRisk(riskScore);
+    }
+
+    return { score: 0, level: 'N/A' as any };
+  }, [riskScore]);
+  const loadoutStats = useMemo(() => {
+    if (activeTrip) {
+      return getPackingStats(loadItems, activeTrip.active_mode || 'Trip');
+    }
+
+    return { totalActive: 0, packedActive: 0, pct: 0 };
+  }, [activeTrip, loadItems]);
+  const incidentRecoveryExpeditionId = useMemo(
+    () => String((activeTrip as any)?.id ?? '').trim() || undefined,
+    [activeTrip],
+  );
+  const incidentRecoveryRouteLabel = useMemo(
+    () => String((activeTrip as any)?.name ?? (activeTrip as any)?.title ?? activeRoute?.name ?? '').trim() || undefined,
+    [activeRoute?.name, activeTrip],
+  );
+  const incidentRecoveryGpsLocation = useMemo<IncidentCoordinate | null>(
+    () => (
+      gpsCoords
+        ? {
+            latitude: gpsCoords.lat,
+            longitude: gpsCoords.lng,
+            source: 'gps',
+            capturedAt: new Date().toISOString(),
+          }
+        : null
+    ),
+    [gpsCoords],
+  );
 
   const refreshSavedNotes = useCallback(() => {
     const notes = missionNoteStore.getByExpeditionId(missionId);
@@ -358,7 +448,18 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   useEffect(() => {
     if (!visible) return;
     refreshSavedNotes();
-  }, [refreshSavedNotes, visible]);
+    refreshActiveTrip();
+    setBuilderState(getBuilderState());
+    setActiveRoute(routeStore.getActive());
+    setExpeditions(getCachedExpeditions());
+  }, [refreshActiveTrip, refreshSavedNotes, visible]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    return routeStore.subscribe(() => {
+      setActiveRoute(routeStore.getActive());
+    });
+  }, [visible]);
 
   useEffect(() => {
     if (!visible || activeView !== 'quickNote') return;
@@ -381,7 +482,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || (activeView !== 'emergencyComms' && activeView !== 'intel')) return;
+    if (!visible || !gpsBackedUtilityActive) return;
     let cancelled = false;
 
     (async () => {
@@ -396,7 +497,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     return () => {
       cancelled = true;
     };
-  }, [activeView, visible]);
+  }, [gpsBackedUtilityActive, visible]);
 
   const handleSaveNote = useCallback(async () => {
     if (!noteText.trim()) return;
@@ -448,6 +549,47 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
     showToast(`Coordinates ready: ${value}`);
   }, [gpsCoords, showToast]);
+
+  const handleViewDocument = useCallback((
+    id: string,
+    title: string,
+    category: 'system' | 'operational',
+    content?: string,
+  ) => {
+    setDocPreviewId(id);
+    setDocPreviewTitle(title);
+    setDocPreviewCategory(category);
+    setDocPreviewContent(content);
+    setDocPreviewVisible(true);
+  }, []);
+
+  const handleCloseDocPreview = useCallback(() => {
+    setDocPreviewVisible(false);
+  }, []);
+
+  const handleExportContent = useCallback((content: string, filename?: string) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename || 'ecs-export'}-${new Date().toISOString().split('T')[0]}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('DOCUMENT EXPORTED');
+      return;
+    }
+
+    showToast('Export available on web');
+  }, [showToast]);
+
+  const handleTripSummaryViewDoc = useCallback((id: string, title: string, content: string) => {
+    handleViewDocument(id, title, 'operational', content);
+  }, [handleViewDocument]);
+
+  const handleTripSummaryExport = useCallback((content: string) => {
+    handleExportContent(content, 'ecs-trip-summary');
+  }, [handleExportContent]);
 
   const handleStartEditCommsEntry = useCallback((
     section: EditableCommsSection,
@@ -552,6 +694,16 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: 'AVAILABLE',
     },
     {
+      key: 'recovery-protocol',
+      label: 'Recovery Protocol',
+      subtitle: 'Vehicle recovery procedures for field extraction.',
+      icon: 'car-sport-outline',
+      color: TACTICAL.amber,
+      onPress: () => openFieldUtilityAction('recoveryProtocols'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
       key: 'team',
       label: 'Team Ping',
       subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
@@ -562,12 +714,22 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
     },
     {
-      key: 'bluetooth',
-      label: 'Bluetooth',
-      subtitle: 'Open device connections',
-      icon: 'bluetooth-outline',
-      color: '#5AC8FA',
-      onPress: () => openFieldUtilityAction('bluetooth'),
+      key: 'permits-access',
+      label: 'Permits & Access',
+      subtitle: 'Permits, restrictions, and closure notes',
+      icon: 'key-outline',
+      color: '#9CCC65',
+      onPress: () => openFieldUtilityAction('permitsAccess'),
+      disabled: false,
+      availabilityLabel: 'AVAILABLE',
+    },
+    {
+      key: 'trip-summaries',
+      label: 'Trip Summaries',
+      subtitle: 'Expedition reports and history',
+      icon: 'analytics-outline',
+      color: '#64B5F6',
+      onPress: () => openFieldUtilityAction('tripSummaries'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
@@ -581,24 +743,25 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       disabled: false,
       availabilityLabel: 'AVAILABLE',
     },
-    {
-      key: 'recovery-protocol',
-      label: 'Recovery Protocol',
-      subtitle: 'Vehicle recovery procedures for field extraction.',
-      icon: 'car-sport-outline',
-      color: TACTICAL.amber,
-      onPress: () => openFieldUtilityAction('recoveryProtocols'),
-      disabled: false,
-      availabilityLabel: 'AVAILABLE',
-    },
   ] as const;
+
+  const documentationTile: QuickActionTile = {
+    key: 'documentation',
+    label: 'Documentation',
+    subtitle: 'System and operational documents',
+    icon: 'folder-open-outline',
+    color: '#BCAAA4',
+    onPress: () => openFieldUtilityAction('documentation'),
+    disabled: false,
+    availabilityLabel: 'AVAILABLE',
+  };
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
       <View style={styles.summaryCard}>
         <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
         <Text style={styles.summaryTitle}>Operational shortcuts</Text>
-        <Text style={styles.summaryText}>
+        <Text style={styles.summaryText} numberOfLines={2}>
           {expeditionState === 'active' || expeditionState === 'paused'
             ? 'Fast field controls stay aligned with the current ECS session context.'
             : 'Fast field controls stay available even when no route is active.'}
@@ -613,6 +776,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             key={item.key}
             style={[
               styles.tile,
+              styles.quickActionTile,
               item.key === 'protocols' && styles.emergencyProtocolTile,
               item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
               item.disabled && styles.tileDisabled,
@@ -624,10 +788,10 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
               <Ionicons name={item.icon as any} size={20} color={item.disabled ? ECS.muted : item.color} />
             </View>
-            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]}>
+            <Text style={[styles.tileLabel, item.disabled && styles.tileLabelDisabled]} numberOfLines={2}>
               {item.label}
             </Text>
-            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]}>
+            <Text style={[styles.tileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={2}>
               {item.subtitle}
             </Text>
             <View style={[styles.tileStateBadge, item.disabled && styles.tileStateBadgeDisabled]}>
@@ -638,6 +802,36 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
           </TouchableOpacity>
         ))}
       </View>
+      <View style={styles.incidentRecoveryUtilitySlot}>
+        <IncidentRecoveryPanel
+          compact
+          modalStackBehavior="allow-stack"
+          style={styles.incidentRecoveryUtilityPanel}
+          onOpenPlaceholder={() => undefined}
+          expeditionId={incidentRecoveryExpeditionId}
+          routeLabel={incidentRecoveryRouteLabel}
+          ecsOnline={isOnline}
+          gpsLocation={incidentRecoveryGpsLocation}
+        />
+      </View>
+      <TouchableOpacity
+        key={documentationTile.key}
+        style={[styles.tile, styles.documentationTile]}
+        onPress={documentationTile.onPress}
+        activeOpacity={0.78}
+        disabled={busy}
+      >
+        <View style={[styles.tileIconWrap, { borderColor: `${documentationTile.color}35`, backgroundColor: `${documentationTile.color}12` }]}>
+          <Ionicons name={documentationTile.icon as any} size={20} color={documentationTile.color} />
+        </View>
+        <View style={styles.documentationTileCopy}>
+          <Text style={styles.tileLabel} numberOfLines={1}>{documentationTile.label}</Text>
+          <Text style={styles.tileSubLabel} numberOfLines={1}>{documentationTile.subtitle}</Text>
+        </View>
+        <View style={styles.tileStateBadge}>
+          <Text style={styles.tileStateText}>{documentationTile.availabilityLabel}</Text>
+        </View>
+      </TouchableOpacity>
     </View>
   );
 
@@ -728,27 +922,27 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   );
 
   const renderLiveCoordinatesCard = () => (
-      <View style={styles.infoCard}>
-        <Text style={styles.cardTitle}>Live Coordinates</Text>
-        {gpsLoading ? (
-          <View style={styles.stateRow}>
-            <ActivityIndicator size="small" color={TACTICAL.amber} />
-            <Text style={styles.stateText}>Waiting for GPS</Text>
-          </View>
-        ) : gpsCoords ? (
-          <>
-            <Text selectable style={styles.coordsText}>
-              {formatCoords(gpsCoords.lat, gpsCoords.lng)}
-            </Text>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={handleCopyCoords} activeOpacity={0.78}>
-              <Ionicons name="copy-outline" size={14} color={TACTICAL.amber} />
-              <Text style={styles.secondaryBtnText}>COPY COORDINATES</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <Text style={styles.stateText}>Coordinates unavailable</Text>
-        )}
-      </View>
+    <View style={[styles.infoCard, styles.commsCoordinatesCard]}>
+      <Text style={styles.cardTitle}>Live Coordinates</Text>
+      {gpsLoading ? (
+        <View style={styles.stateRow}>
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.stateText}>Waiting for GPS</Text>
+        </View>
+      ) : gpsCoords ? (
+        <View style={styles.coordinatesActionRow}>
+          <Text selectable style={styles.coordsText} numberOfLines={1} adjustsFontSizeToFit>
+            {formatCoords(gpsCoords.lat, gpsCoords.lng)}
+          </Text>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={handleCopyCoords} activeOpacity={0.78}>
+            <Ionicons name="copy-outline" size={13} color={TACTICAL.amber} />
+            <Text style={styles.secondaryBtnText}>COPY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <Text style={styles.stateText}>Coordinates unavailable</Text>
+      )}
+    </View>
   );
 
   const renderIntelPanel = () => (
@@ -767,6 +961,9 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         autoFetch={false}
         weatherSnapshot={fieldUtilitiesWeather.snapshot}
         onRefreshWeather={fieldUtilitiesWeather.refresh}
+        mergeForecastIntoConditions
+        trailCoordinate={trailheadWeatherCoordinate}
+        trailAssessmentActive={trailheadWeatherCoordinate != null}
         frameless
       />
     </View>
@@ -843,19 +1040,24 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     section: EditableCommsSection,
     entries: EditableCommsEntry[],
   ) => (
-    <View style={styles.infoCard}>
+    <View style={[styles.infoCard, styles.commsSectionCard]}>
       <View style={styles.commsSectionHeader}>
         <Text style={styles.cardTitle}>{title}</Text>
-        <Text style={styles.commsHint}>Long press to edit</Text>
       </View>
-      <View style={styles.commsEntryList}>
+      <ScrollView
+        style={styles.commsEntryScroller}
+        contentContainerStyle={styles.commsEntryList}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
         {entries.map((entry) => renderEditableCommsEntry(section, entry))}
-      </View>
+      </ScrollView>
     </View>
   );
 
   const renderCommsPanel = () => (
-    <View style={styles.panelBody}>
+    <View style={[styles.panelBody, styles.commsPanelBody]}>
       {renderPanelIntro('Emergency Comms', 'Frequencies, field signals, emergency numbers, and shareable live coordinates.')}
       <View style={styles.commsReferenceGrid}>
         {renderCommsSection('Frequencies', 'frequencies', frequencyCards)}
@@ -863,6 +1065,9 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         {renderCommsSection('Emergency Numbers', 'contacts', emergencyContactCards)}
       </View>
       {renderLiveCoordinatesCard()}
+      <Text style={styles.commsAdvisoryText}>
+        Long press to edit frequencies, signals, or emergency numbers.
+      </Text>
     </View>
   );
 
@@ -933,6 +1138,45 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     </View>
   );
 
+  const renderPermitsAccessPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Permits & Access', 'Permits, restrictions, closures, and access notes for field planning.')}
+      <PermitsAccessPanel onToast={showToast} />
+    </View>
+  );
+
+  const renderTripSummariesPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Trip Summaries', 'Generate and review expedition reports from the current ECS context.')}
+      <TripSummaries
+        builderState={builderState}
+        activeRoute={activeRoute}
+        riskScore={riskScore ? risk.score : null}
+        riskLevel={risk.level}
+        riskColor={getRiskColor(risk.level)}
+        loadoutStats={loadoutStats}
+        expeditions={expeditions}
+        onExport={handleTripSummaryExport}
+        onViewDocument={handleTripSummaryViewDoc}
+        onToast={showToast}
+      />
+    </View>
+  );
+
+  const renderDocumentationPanel = () => (
+    <View style={styles.panelBody}>
+      {renderPanelIntro('Documentation', 'System policy documents and operational exports.')}
+      <DocumentationCenter
+        builderState={builderState}
+        activeRoute={activeRoute}
+        loadoutStats={loadoutStats}
+        onViewDocument={handleViewDocument}
+        onExportDocument={handleExportContent}
+        onToast={showToast}
+      />
+    </View>
+  );
+
   const renderProtocolDetailPanel = () => {
     if (!selectedProtocol) {
       return (
@@ -973,13 +1217,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     );
   };
 
-  const renderBluetoothPanel = () => (
-    <View style={styles.panelBody}>
-      {renderPanelIntro('Device Connections', 'Identify, select, connect, retry, or clear local Bluetooth device sessions.')}
-      <FieldUtilitiesBluetoothPanel />
-    </View>
-  );
-
   const panelContent = (() => {
     switch (activeView) {
       case 'quickNote':
@@ -996,45 +1233,60 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         return renderRecoveryProtocolsPanel();
       case 'recoveryProtocolDetail':
         return renderRecoveryProtocolDetailPanel();
+      case 'permitsAccess':
+        return renderPermitsAccessPanel();
+      case 'tripSummaries':
+        return renderTripSummariesPanel();
+      case 'documentation':
+        return renderDocumentationPanel();
       case 'team':
         return renderTeamPanel();
-      case 'bluetooth':
-        return renderBluetoothPanel();
       default:
         return renderMainPanel();
     }
   })();
 
   return (
-    <ECSModalShell
-      visible={visible}
-      onClose={handleShellClose}
-      title="Field Utilities"
-      subtitle={
-        mainPanelActive
-          ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
-          : 'Focused utility actions stay inside Field Utilities without changing tabs.'
-      }
-      icon="flash-outline"
-      eyebrow="QUICK ACTIONS"
-      overlayClass="workflow"
-      maxWidth={980}
-      maxHeightFraction={1}
-      minHeightFraction={1}
-      scrollable={!protocolStaticActive}
-      keyboardAware={activeView === 'quickNote'}
-      showHandle={false}
-      dismissOnBackdrop={false}
-      allowSwipeDismiss={false}
-      onBack={mainPanelActive ? undefined : handleShellBack}
-      closeGuardKey={activeView}
-      topClearanceOverride={fieldUtilitiesTopClearance}
-      bottomClearanceOverride={fieldUtilitiesBottomClearance}
-      bodyStyle={protocolStaticActive ? styles.quickProtocolStaticBody : undefined}
-      contentContainerStyle={protocolStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
-    >
-      {panelContent}
-    </ECSModalShell>
+    <>
+      <ECSModalShell
+        visible={visible}
+        onClose={handleShellClose}
+        title="Field Utilities"
+        subtitle={
+          mainPanelActive
+            ? 'Fast field controls stay dock-safe and ready inside the ECS body.'
+            : 'Focused utility actions stay inside Field Utilities without changing tabs.'
+        }
+        icon="flash-outline"
+        eyebrow="QUICK ACTIONS"
+        overlayClass="workflow"
+        maxWidth={980}
+        maxHeightFraction={1}
+        minHeightFraction={1}
+        scrollable={!fixedStaticActive}
+        keyboardAware={activeView === 'quickNote'}
+        showHandle={false}
+        dismissOnBackdrop={false}
+        allowSwipeDismiss={false}
+        onBack={mainPanelActive ? undefined : handleShellBack}
+        closeGuardKey={activeView}
+        topClearanceOverride={fieldUtilitiesTopClearance}
+        bottomClearanceOverride={fieldUtilitiesBottomClearance}
+        bodyStyle={mainPanelStaticActive ? styles.quickMainStaticBody : protocolStaticActive ? styles.quickProtocolStaticBody : commsStaticActive ? styles.quickCommsStaticBody : undefined}
+        contentContainerStyle={fixedStaticActive ? styles.sheetStaticContent : styles.sheetScrollContentMain}
+      >
+        {panelContent}
+      </ECSModalShell>
+      <DocumentPreviewModal
+        visible={docPreviewVisible}
+        onClose={handleCloseDocPreview}
+        documentId={docPreviewId}
+        documentTitle={docPreviewTitle}
+        documentCategory={docPreviewCategory}
+        customContent={docPreviewContent}
+        onExport={(content) => handleExportContent(content, `ecs-${docPreviewId}`)}
+      />
+    </>
   );
 }
 
@@ -1127,294 +1379,6 @@ function getProtocolFallbackIconName(protocolId: string): React.ComponentProps<t
   return 'shield-checkmark-outline';
 }
 
-function getBluetoothSourceTone(status: ECSDiscoverySourceUiStatus): string {
-  switch (status) {
-    case 'success':
-      return '#4CAF50';
-    case 'scanning':
-      return '#5AC8FA';
-    case 'failed':
-      return '#FF6B6B';
-    case 'unsupported':
-    case 'disabled':
-      return TACTICAL.amber;
-    case 'pending':
-    default:
-      return TACTICAL.textMuted;
-  }
-}
-
-function BluetoothSourceSummary({ summary }: { summary: ECSScanSummary }) {
-  const hasStarted = summary.startedAt != null;
-  if (!hasStarted) return null;
-
-  return (
-    <View style={styles.bluetoothSourceSummary}>
-      {summary.sourceStatuses
-        .map((source) => {
-          const tone = getBluetoothSourceTone(source.status);
-          return (
-            <View key={source.key} style={styles.bluetoothSourceRow}>
-              <View style={[styles.bluetoothSourceDot, { backgroundColor: tone }]} />
-              <View style={styles.bluetoothSourceCopy}>
-                <Text style={styles.bluetoothSourceLabel}>{source.label}</Text>
-                <Text style={styles.bluetoothSourceDetail} numberOfLines={2}>
-                  {getSourceStatusDetail(source)}
-                </Text>
-              </View>
-              <Text style={[styles.bluetoothSourceStatus, { color: tone }]} numberOfLines={2}>
-                {getSourceStatusLabel(source)}
-              </Text>
-            </View>
-          );
-        })}
-    </View>
-  );
-}
-
-function FieldUtilitiesBluetoothPanel() {
-  const connections = useUnifiedDeviceConnections();
-
-  useEffect(() => {
-    if (__DEV__) {
-      console.log('[BT_SOURCE] field_utilities_device_connections_panel', {
-        file: 'components/QuickActionsSheet.tsx',
-        component: 'FieldUtilitiesBluetoothPanel',
-        hook: 'lib/useUnifiedDeviceConnections.ts',
-        buttonText: 'Scan for Device Connections',
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!connections.routeIntent) return;
-    connections.consumeRouteIntent(connections.routeIntent.id);
-  }, [connections]);
-
-  const visibleDevices = connections.nearbyDevices;
-
-  const handlePrimaryAction = useCallback(async (device: ECSDeviceConnectionModel) => {
-    void hapticCommand();
-    if (device.isConnected) {
-      await connections.disconnectDevice(device.id);
-      return;
-    }
-    if (device.actionKind === 'retry') {
-      await connections.retryDevice(device.id, 'user_retry');
-      return;
-    }
-    await connections.connectDevice(device.id, 'user_device_action');
-  }, [connections]);
-
-  const handleScanAgain = useCallback(() => {
-    void hapticCommand();
-    void connections.rescan();
-  }, [connections]);
-
-  const handleConnectSelected = useCallback(() => {
-    void hapticCommand();
-    void connections.connectSelected('user_selected_batch');
-  }, [connections]);
-
-  return (
-    <View style={styles.bluetoothPanel}>
-      <View style={styles.bluetoothHero}>
-        <View style={styles.bluetoothHeroTop}>
-          <View style={styles.bluetoothIconWrap}>
-            <Ionicons name="bluetooth-outline" size={20} color="#5AC8FA" />
-          </View>
-          <View style={styles.bluetoothHeroCopy}>
-            <Text style={styles.bluetoothEyebrow}>UNIFIED SCANNER</Text>
-            <Text style={styles.bluetoothTitle}>{connections.globalSummaryLabel}</Text>
-            <Text style={styles.bluetoothBody}>
-              Device discovery uses the same unified scanner as Device Connections. Only currently discovered nearby devices appear here.
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.bluetoothStatsRow}>
-          <BluetoothStat label="Connected" value={connections.connectedCount} />
-          <BluetoothStat label="Nearby" value={connections.nearbyDevices.length} />
-          <BluetoothStat label="Live" value={connections.liveCount} />
-        </View>
-
-        {connections.degradedMessage ? (
-          <Text style={styles.bluetoothNotice}>{connections.degradedMessage}</Text>
-        ) : connections.infoMessage ? (
-          <Text style={styles.bluetoothNotice}>{connections.infoMessage}</Text>
-        ) : null}
-
-        {__DEV__ ? <BluetoothSourceSummary summary={connections.lastScanSummary} /> : null}
-
-        <View style={styles.bluetoothActionRow}>
-          <TouchableOpacity
-            style={styles.bluetoothSecondaryBtn}
-            onPress={handleScanAgain}
-            activeOpacity={0.78}
-            disabled={connections.isScanning}
-            accessibilityState={{ disabled: connections.isScanning }}
-          >
-            {connections.isScanning ? (
-              <ActivityIndicator size={13} color={TACTICAL.textMuted} />
-            ) : (
-              <Ionicons name="refresh-outline" size={14} color={TACTICAL.textMuted} />
-            )}
-            <Text style={styles.bluetoothSecondaryText} numberOfLines={2}>
-              {connections.isScanning ? 'Scanning...' : 'Scan for Device Connections'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.bluetoothPrimaryBtn,
-              !connections.canConnectSelected ? styles.bluetoothPrimaryBtnDisabled : null,
-            ]}
-            onPress={handleConnectSelected}
-            activeOpacity={0.78}
-            disabled={!connections.canConnectSelected || connections.isBusy}
-          >
-            {connections.isBusy ? <ActivityIndicator size={13} color="#0B0F12" /> : null}
-            <Text style={[
-              styles.bluetoothPrimaryText,
-              !connections.canConnectSelected ? styles.bluetoothPrimaryTextDisabled : null,
-            ]}>
-              Connect Selected
-            </Text>
-          </TouchableOpacity>
-          {connections.selectedCount > 0 ? (
-            <TouchableOpacity
-              style={styles.bluetoothSecondaryBtn}
-              onPress={() => {
-                void hapticMicro();
-                connections.clearSelection();
-              }}
-              activeOpacity={0.78}
-            >
-              <Ionicons name="close-outline" size={14} color={TACTICAL.textMuted} />
-              <Text style={styles.bluetoothSecondaryText}>Clear</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        <View style={styles.bluetoothNearbyHeader}>
-          <Text style={styles.bluetoothNearbyTitle}>Found nearby devices</Text>
-          <Text style={styles.bluetoothNearbyBody}>
-            Saved, known, failed, and cloud-only records stay out of this actionable scan list.
-          </Text>
-        </View>
-      </View>
-
-      {visibleDevices.length > 0 ? (
-        <View style={styles.bluetoothDeviceList}>
-          {visibleDevices.map((device) => (
-            <BluetoothDeviceMiniRow
-              key={device.id}
-              device={device}
-              busy={connections.isBatchBusy || device.isConnecting}
-              onToggleSelection={connections.toggleSelection}
-              onPrimaryAction={handlePrimaryAction}
-            />
-          ))}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Ionicons name="bluetooth-outline" size={22} color={TACTICAL.textMuted} />
-          <Text style={styles.emptyStateText}>{connections.scanAreaMessage}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function BluetoothStat({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.bluetoothStat}>
-      <Text style={styles.bluetoothStatValue}>{value}</Text>
-      <Text style={styles.bluetoothStatLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function BluetoothDeviceMiniRow({
-  device,
-  busy,
-  onToggleSelection,
-  onPrimaryAction,
-}: {
-  device: ECSDeviceConnectionModel;
-  busy: boolean;
-  onToggleSelection: (deviceId: string) => void;
-  onPrimaryAction: (device: ECSDeviceConnectionModel) => void;
-}) {
-  const selectable = !device.isConnected && !device.isConnecting && (device.actionKind === 'connect' || device.actionKind === 'retry');
-  const actionDisabled =
-    busy ||
-    device.actionKind === 'none' ||
-    device.actionKind === 'connected' ||
-    device.actionKind === 'selected' ||
-    device.actionKind === 'disconnecting' ||
-    device.actionKind === 'connecting';
-
-  return (
-    <View style={[styles.bluetoothDeviceRow, device.isSelected ? styles.bluetoothDeviceRowSelected : null]}>
-      <TouchableOpacity
-        style={[styles.bluetoothSelect, device.isSelected ? styles.bluetoothSelectActive : null]}
-        onPress={() => {
-          if (!selectable) return;
-          void hapticMicro();
-          onToggleSelection(device.id);
-        }}
-        activeOpacity={selectable ? 0.78 : 1}
-        disabled={!selectable}
-      >
-        {device.isSelected ? <Ionicons name="checkmark" size={12} color="#0B0F12" /> : null}
-      </TouchableOpacity>
-
-      <View style={styles.bluetoothDeviceCopy}>
-        <Text style={styles.bluetoothDeviceName} numberOfLines={1}>{device.name}</Text>
-        <Text style={styles.bluetoothDeviceMeta} numberOfLines={1}>
-          {[device.provider, device.category, device.stateLabel].filter(Boolean).join(' / ')}
-        </Text>
-        <Text style={styles.bluetoothDeviceDetail} numberOfLines={2}>{device.detailLabel}</Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.bluetoothDeviceAction, actionDisabled ? styles.bluetoothDeviceActionDisabled : null]}
-        onPress={() => onPrimaryAction(device)}
-        disabled={actionDisabled}
-        activeOpacity={0.78}
-      >
-        {device.isConnecting || device.actionKind === 'disconnecting' ? (
-          <ActivityIndicator size={12} color={TACTICAL.amber} />
-        ) : (
-          <Text style={[styles.bluetoothDeviceActionText, actionDisabled ? styles.bluetoothDeviceActionTextDisabled : null]}>
-            {getBluetoothActionLabel(device)}
-          </Text>
-        )}
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function getBluetoothActionLabel(device: ECSDeviceConnectionModel): string {
-  switch (device.actionKind) {
-    case 'disconnect':
-      return 'Disconnect';
-    case 'disconnecting':
-      return 'Disconnecting';
-    case 'retry':
-      return 'Retry';
-    case 'connect':
-      return 'Connect';
-    case 'connecting':
-      return 'Connecting';
-    case 'connected':
-      return 'Connected';
-    case 'selected':
-      return 'Selected';
-    default:
-      return 'Unavailable';
-  }
-}
-
 const styles = StyleSheet.create({
   sheetScrollContentMain: {
     justifyContent: 'flex-start',
@@ -1427,31 +1391,38 @@ const styles = StyleSheet.create({
     minHeight: 0,
     justifyContent: 'flex-start',
   },
+  quickMainStaticBody: {
+    padding: 8,
+  },
   quickProtocolStaticBody: {
     padding: 10,
   },
+  quickCommsStaticBody: {
+    padding: 10,
+  },
   mainPanel: {
-    flexGrow: 1,
+    flex: 1,
     minHeight: 0,
-    gap: 10,
+    gap: 6,
+    justifyContent: 'flex-start',
   },
   summaryCard: {
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.14)',
     backgroundColor: 'rgba(196,138,44,0.06)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 3,
   },
   summaryEyebrow: {
-    fontSize: 8,
+    fontSize: 7,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 2,
   },
   summaryTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     color: TACTICAL.text,
     letterSpacing: 0.5,
@@ -1463,29 +1434,34 @@ const styles = StyleSheet.create({
     letterSpacing: 1.8,
   },
   summaryText: {
-    fontSize: 9,
-    lineHeight: 13,
+    fontSize: 8,
+    lineHeight: 11,
     color: TACTICAL.textMuted,
   },
   tileGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    rowGap: 6,
+    columnGap: 6,
     alignContent: 'flex-start',
     justifyContent: 'space-between',
   },
   tile: {
-    width: '48%',
-    minHeight: 82,
-    borderRadius: 14,
+    width: '23.5%',
+    minHeight: 70,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgElev,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
+  },
+  quickActionTile: {
+    flexGrow: 0,
+    flexShrink: 0,
   },
   tileDisabled: {
     opacity: 0.6,
@@ -1495,19 +1471,33 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,83,80,0.055)',
   },
   recoveryProtocolTile: {
-    borderColor: 'rgba(76,175,80,0.22)',
-    backgroundColor: 'rgba(76,175,80,0.05)',
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.06)',
+  },
+  documentationTile: {
+    width: '100%',
+    minHeight: 54,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 0,
+  },
+  documentationTileCopy: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
   },
   tileIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   tileLabel: {
-    fontSize: 10,
+    fontSize: 8.8,
+    lineHeight: 11,
     fontWeight: '800',
     color: TACTICAL.text,
     textAlign: 'center',
@@ -1517,21 +1507,21 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
   },
   tileSubLabel: {
-    fontSize: 8,
+    fontSize: 7.1,
     fontWeight: '600',
     color: TACTICAL.textMuted,
     textAlign: 'center',
     letterSpacing: 0.4,
-    lineHeight: 11,
-    minHeight: 22,
+    lineHeight: 9,
+    minHeight: 18,
   },
   tileSubLabelDisabled: {
     color: ECS.muted,
   },
   tileStateBadge: {
-    marginTop: 2,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    marginTop: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.22)',
@@ -1542,10 +1532,23 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
   tileStateText: {
-    fontSize: 8,
+    fontSize: 7,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.1,
+  },
+  incidentRecoveryUtilitySlot: {
+    flex: 1,
+    width: '100%',
+    minHeight: 128,
+    maxHeight: 210,
+    flexShrink: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+  },
+  incidentRecoveryUtilityPanel: {
+    flex: 1,
+    justifyContent: 'space-between',
   },
   tileStateTextDisabled: {
     color: ECS.muted,
@@ -1560,6 +1563,11 @@ const styles = StyleSheet.create({
   },
   intelPanelBody: {
     gap: 10,
+  },
+  commsPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
   },
   protocolsPanelBody: {
     flex: 1,
@@ -1711,7 +1719,16 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   commsReferenceGrid: {
-    gap: 12,
+    flex: 1,
+    minHeight: 0,
+    gap: 8,
+  },
+  commsSectionCard: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
   },
   commsSectionHeader: {
     flexDirection: 'row',
@@ -1719,15 +1736,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  commsHint: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+  commsEntryScroller: {
+    flex: 1,
+    minHeight: 0,
   },
   commsEntryList: {
-    gap: 8,
+    gap: 7,
+    paddingBottom: 2,
   },
   commsEntryRow: {
     minHeight: 44,
@@ -1830,6 +1845,26 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  commsCoordinatesCard: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
+  },
+  coordinatesActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  commsAdvisoryText: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
   protocolActionGrid: {
     flex: 1,
     minHeight: 0,
@@ -1853,9 +1888,14 @@ const styles = StyleSheet.create({
   },
   protocolActionImage: {
     ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
+    top: -10,
+    right: -10,
+    bottom: -10,
+    left: -10,
+    width: undefined,
+    height: undefined,
     opacity: 0.88,
+    transform: [{ scale: 1.08 }],
   },
   protocolActionFallback: {
     ...StyleSheet.absoluteFillObject,
@@ -1904,25 +1944,27 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
   },
   coordsText: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 16,
     fontWeight: '800',
     color: TACTICAL.text,
     fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
   },
   secondaryBtn: {
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    minHeight: 38,
+    minHeight: 32,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}40`,
     backgroundColor: `${TACTICAL.amber}10`,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   secondaryBtnText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.2,
@@ -1952,282 +1994,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: TACTICAL.textMuted,
     textAlign: 'center',
-  },
-  bluetoothPanel: {
-    gap: 12,
-  },
-  bluetoothHero: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    padding: 12,
-    gap: 12,
-  },
-  bluetoothHeroTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  bluetoothIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(90,200,250,0.3)',
-    backgroundColor: 'rgba(90,200,250,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bluetoothHeroCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  bluetoothEyebrow: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1.8,
-  },
-  bluetoothTitle: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: TACTICAL.text,
-  },
-  bluetoothBody: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothStatsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  bluetoothStat: {
-    flex: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  bluetoothStatValue: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
-  },
-  bluetoothStatLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  bluetoothNotice: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.22)',
-    backgroundColor: 'rgba(196,138,44,0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 11,
-    lineHeight: 16,
-    color: TACTICAL.text,
-  },
-  bluetoothSourceSummary: {
-    gap: 6,
-  },
-  bluetoothSourceRow: {
-    minHeight: 42,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  bluetoothSourceDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  bluetoothSourceCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  bluetoothSourceLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  bluetoothSourceDetail: {
-    marginTop: 2,
-    fontSize: 9,
-    lineHeight: 13,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothSourceStatus: {
-    maxWidth: 96,
-    fontSize: 8,
-    lineHeight: 11,
-    fontWeight: '900',
-    textAlign: 'right',
-    textTransform: 'uppercase',
-  },
-  bluetoothActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  bluetoothSecondaryBtn: {
-    minHeight: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bluetoothSecondaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: TACTICAL.textMuted,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-    flexShrink: 1,
-  },
-  bluetoothPrimaryBtn: {
-    minHeight: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber,
-    backgroundColor: TACTICAL.amber,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bluetoothPrimaryBtnDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  bluetoothPrimaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#0B0F12',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  bluetoothPrimaryTextDisabled: {
-    color: TACTICAL.textMuted,
-  },
-  bluetoothNearbyHeader: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
-  },
-  bluetoothNearbyTitle: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#5AC8FA',
-    letterSpacing: 1.3,
-    textTransform: 'uppercase',
-  },
-  bluetoothNearbyBody: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: TACTICAL.textMuted,
-    lineHeight: 15,
-  },
-  bluetoothDeviceList: {
-    gap: 8,
-  },
-  bluetoothDeviceRow: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  bluetoothDeviceRowSelected: {
-    borderColor: 'rgba(90,200,250,0.46)',
-    backgroundColor: 'rgba(90,200,250,0.08)',
-  },
-  bluetoothSelect: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bluetoothSelectActive: {
-    borderColor: '#5AC8FA',
-    backgroundColor: '#5AC8FA',
-  },
-  bluetoothDeviceCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  bluetoothDeviceName: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: TACTICAL.text,
-  },
-  bluetoothDeviceMeta: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#5AC8FA',
-    textTransform: 'uppercase',
-  },
-  bluetoothDeviceDetail: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: TACTICAL.textMuted,
-  },
-  bluetoothDeviceAction: {
-    minHeight: 34,
-    minWidth: 82,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: 'rgba(90,200,250,0.34)',
-    backgroundColor: 'rgba(90,200,250,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-  bluetoothDeviceActionDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-  },
-  bluetoothDeviceActionText: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: '#5AC8FA',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  bluetoothDeviceActionTextDisabled: {
-    color: TACTICAL.textMuted,
   },
   optionList: {
     gap: 10,

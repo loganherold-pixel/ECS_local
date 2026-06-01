@@ -24,6 +24,9 @@ export type RoadNavSourceType =
 export interface RoadNavCoordinate {
   lat: number;
   lng: number;
+  ele?: number | null;
+  ele_m?: number | null;
+  elevationFeet?: number | null;
 }
 
 export interface RoadNavDestination {
@@ -137,7 +140,28 @@ function toCoordinate(input: any): RoadNavCoordinate | null {
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
-  return { lat, lng };
+  const ele = Number(
+    input.ele ??
+      input.ele_m ??
+      input.elevationM ??
+      input.elevation_m ??
+      input.altitudeM ??
+      input.altitude_m ??
+      input.center?.[2] ??
+      input.geometry?.coordinates?.[2],
+  );
+  const elevationFeet = Number(
+    input.elevationFeet ??
+      input.elevation_ft ??
+      input.altitudeFeet ??
+      input.altitude_ft,
+  );
+  return {
+    lat,
+    lng,
+    ...(Number.isFinite(ele) ? { ele, ele_m: ele } : null),
+    ...(Number.isFinite(elevationFeet) ? { elevationFeet } : null),
+  };
 }
 
 function toTitle(value: any): string {
@@ -211,6 +235,12 @@ export async function searchRoadDestinations(params: {
   query: string;
   sessionToken: string;
   proximity?: RoadNavCoordinate | null;
+  bbox?: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  } | null;
   limit?: number;
 }): Promise<RoadNavSearchSuggestion[]> {
   const trimmed = params.query.trim();
@@ -225,6 +255,12 @@ export async function searchRoadDestinations(params: {
   searchboxUrl.searchParams.set('limit', String(limit));
   searchboxUrl.searchParams.set('language', 'en');
   searchboxUrl.searchParams.set('types', 'address,poi,place,locality,neighborhood');
+  if (params.bbox) {
+    searchboxUrl.searchParams.set(
+      'bbox',
+      `${params.bbox.west},${params.bbox.south},${params.bbox.east},${params.bbox.north}`,
+    );
+  }
   if (params.proximity) {
     searchboxUrl.searchParams.set(
       'proximity',
@@ -251,6 +287,12 @@ export async function searchRoadDestinations(params: {
   geocodeUrl.searchParams.set('limit', String(limit));
   geocodeUrl.searchParams.set('types', 'address,poi,place,locality,neighborhood');
   geocodeUrl.searchParams.set('language', 'en');
+  if (params.bbox) {
+    geocodeUrl.searchParams.set(
+      'bbox',
+      `${params.bbox.west},${params.bbox.south},${params.bbox.east},${params.bbox.north}`,
+    );
+  }
   if (params.proximity) {
     geocodeUrl.searchParams.set(
       'proximity',

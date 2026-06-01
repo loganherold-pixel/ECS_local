@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ecsTelemetryStore } from './ECSTelemetryStore';
-import type { ECSPowerTelemetryDeviceReading, ECSTelemetrySnapshot } from './ECSTelemetryTypes';
+import type {
+  ECSPowerTelemetryDeviceReading,
+  ECSTelemetrySnapshot,
+  ECSUtilitySensorTelemetryReading,
+} from './ECSTelemetryTypes';
 
 export function useECSTelemetrySnapshot(): ECSTelemetrySnapshot {
   const [, setRev] = useState(0);
@@ -19,5 +23,10 @@ export function useECSTelemetrySnapshot(): ECSTelemetrySnapshot {
 export function useECSPowerTelemetryReadings(): ECSPowerTelemetryDeviceReading[] {
   useECSTelemetrySnapshot();
   return ecsTelemetryStore.getPowerDeviceReadings();
+}
+
+export function useECSUtilitySensorTelemetryReadings(): ECSUtilitySensorTelemetryReading[] {
+  useECSTelemetrySnapshot();
+  return ecsTelemetryStore.getUtilitySensorReadings();
 }
 

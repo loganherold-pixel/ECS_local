@@ -37,6 +37,12 @@ const {
 const {
   buildExpeditionReadiness,
 } = require(path.join(root, 'lib', 'readiness', 'expeditionReadinessScoring.ts'));
+const {
+  selectFleetCommandState,
+} = require(path.join(root, 'lib', 'fleet', 'fleetCommandSelectors.ts'));
+const {
+  getVehicleResourceProfile,
+} = require(path.join(root, 'lib', 'vehicleResourceProfile.ts'));
 
 function vehicleState(overrides) {
   const classification = overrides.classification;
@@ -249,5 +255,149 @@ assert.ok(briefSource.includes('Select vehicle for personalized readiness'), 'Co
 const storeSource = read('lib', 'readiness', 'expeditionReadinessStore.ts');
 assert.ok(storeSource.includes('subscribeActiveVehicleState'), 'Readiness store should subscribe to active vehicle changes.');
 assert.ok(storeSource.includes('buildReadinessVehicleInputFromFleetState'), 'Readiness store should build vehicle input from Fleet state.');
+
+function fleetCommandArgs(overrides = {}) {
+  return {
+    fleetView: { primary: null, secondary: [], passive: [], suppressed: [] },
+    expeditionPhase: null,
+    expeditionPhaseLabel: null,
+    operationalState: null,
+    operationalSummary: null,
+    liveStatus: null,
+    isOnline: true,
+    vehicleCount: 1,
+    hasActiveVehicle: true,
+    hasSelectedVehicle: true,
+    hasVehicleProfile: true,
+    hasConfiguredIdentity: true,
+    hasFuelCapacity: true,
+    hasWaterCapacity: true,
+    hasPowerStorage: true,
+    hasTireSize: true,
+    hasLiftProfile: true,
+    hasAccessoriesConfigured: true,
+    hasLoadout: true,
+    hasLiveTelemetry: false,
+    ...overrides,
+  };
+}
+
+const missingFuelCommand = selectFleetCommandState(fleetCommandArgs({ hasFuelCapacity: false }));
+assert.ok(/Key concern:/i.test(missingFuelCommand.summary), 'Fleet command should present missing fuel as a key concern.');
+assert.ok(/Recommendation:/i.test(missingFuelCommand.detail), 'Fleet command should pair missing fuel with a recommendation.');
+assert.ok(/fuel capacity|current fuel gallons/i.test(missingFuelCommand.detail), 'Missing fuel recommendation should tell the user where to fix fuel context.');
+
+const currentWaterOnlyProfile = getVehicleResourceProfile({
+  id: 'water-current-only',
+  name: 'Water Current Only',
+  current_water_gal: 8,
+});
+assert.strictEqual(
+  currentWaterOnlyProfile.waterCapacityGal,
+  8,
+  'Manual water gallons from Advanced Specs should qualify as water capacity context.',
+);
+
+const waterConfiguredCommand = selectFleetCommandState(fleetCommandArgs({
+  hasWaterCapacity: true,
+  hasPowerStorage: false,
+}));
+assert.ok(
+  !/water capacity is still estimated/i.test(waterConfiguredCommand.summary),
+  'Fleet command should not show water-capacity concern when manual water gallons are configured.',
+);
+
+const waterMissingCommand = selectFleetCommandState(fleetCommandArgs({ hasWaterCapacity: false }));
+assert.ok(
+  waterMissingCommand.intelligenceItems.some((item) => /water capacity is still estimated/i.test(item.summary)),
+  'Fleet command concern list should include water only when water context is missing.',
+);
+assert.ok(
+  waterMissingCommand.intelligenceItems.some((item) => /For additional concerns, see the ECS Brief/i.test(item.detail || '')),
+  'Fleet command concern cycle should end with a friendly reviewed-current-concerns message that points to ECS Brief.',
+);
+
+const topHeavyCommand = selectFleetCommandState(fleetCommandArgs({
+  fleetView: {
+    primary: {
+      id: 'top-heavy',
+      source: 'deterministic',
+      title: 'Top-heavy load risk',
+      summary: 'Top-heavy load risk is elevated from Fleet weight distribution',
+      timestamp: Date.now(),
+      priority: { level: 'warning', title: 'Watch' },
+    },
+    secondary: [],
+    passive: [],
+    suppressed: [],
+  },
+}));
+assert.ok(/top-heavy load risk/i.test(topHeavyCommand.summary), 'Fleet command should surface top-heavy weight distribution as a key concern.');
+assert.ok(/heavy gear lower|roof|bed-high/i.test(topHeavyCommand.detail), 'Top-heavy concern should recommend lowering or reducing high-mounted weight.');
+
+const acknowledgedTopHeavyCommand = selectFleetCommandState(fleetCommandArgs({
+  hasAcknowledgedHighMountedLoadRisk: true,
+  fleetView: {
+    primary: {
+      id: 'top-heavy',
+      source: 'deterministic',
+      title: 'Top-heavy load risk',
+      summary: 'Top-heavy load risk is elevated from Fleet weight distribution',
+      timestamp: Date.now(),
+      priority: { level: 'warning', title: 'Watch' },
+    },
+    secondary: [],
+    passive: [],
+    suppressed: [],
+  },
+}));
+assert.ok(
+  !/top-heavy load risk/i.test(acknowledgedTopHeavyCommand.summary),
+  'Acknowledged high-mounted load risk should no longer be the active Fleet command concern.',
+);
+assert.strictEqual(
+  acknowledgedTopHeavyCommand.primary,
+  null,
+  'Acknowledged high-mounted load risk should be removed from the Fleet command primary signal.',
+);
+assert.ok(
+  /risk review is acknowledged|verify scale weight/i.test(acknowledgedTopHeavyCommand.detail || ''),
+  'Acknowledged high-mounted load risk should keep useful scale-weight guidance without repeating lower-heavy-gear advice.',
+);
+assert.ok(
+  !/keep heavy cargo low|heavy items low|bed-high/i.test(acknowledgedTopHeavyCommand.detail || ''),
+  'Acknowledged high-mounted load risk should suppress repeated high-mounted load advice.',
+);
+
+const readyCommand = selectFleetCommandState(fleetCommandArgs());
+assert.ok(/configuration looks fit/i.test(readyCommand.summary), 'Ready Fleet command should read as user-friendly intelligence, not just a raw status.');
+assert.ok(/verify scale weight|heavy cargo low/i.test(readyCommand.detail), 'Ready Fleet command should still offer a practical improvement recommendation.');
+
+const fleetSource = read('app', '(tabs)', 'fleet.tsx');
+assert.ok(fleetSource.includes('commandSkipButton'), 'Fleet command should render a quiet concern skip control.');
+assert.ok(fleetSource.includes('Skip concern'), 'Fleet command skip control should use concise user-facing copy.');
+assert.ok(
+  fleetSource.includes('setActiveConcernIndex((index) => (index + 1) % intelligenceItems.length)'),
+  'Fleet command skip control should cycle through current concerns without mutating readiness logic.',
+);
+assert.ok(
+  fleetSource.includes('readFleetBuildLoadoutState(commandVehicle as any)') &&
+    fleetSource.includes('buildLoadoutItemCount > 0') &&
+    fleetSource.includes('hasAcknowledgedHighMountedLoadRisk') &&
+    fleetSource.includes('FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID'),
+  'Fleet readiness should count saved build/loadout items and pass high-mounted risk acknowledgement into command state.',
+);
+assert.ok(
+  fleetSource.includes('useECSPowerTelemetryReadings') &&
+    fleetSource.includes('resolveFleetPowerStorageReadiness') &&
+    fleetSource.includes('fleetPowerStorageReadiness.hasLivePowerStorage'),
+  'Fleet readiness should satisfy the power storage baseline from live BLU power telemetry.',
+);
+
+const profileModalSource = read('components', 'fleet', 'FleetVehicleProfileModal.tsx');
+assert.ok(
+  profileModalSource.includes('water_capacity_gal: waterGallons > 0 ? waterGallons'),
+  'Advanced Specs save should mirror manual water gallons into water capacity context.',
+);
 
 console.log('Fleet readiness personalization checks passed.');

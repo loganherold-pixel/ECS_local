@@ -173,6 +173,15 @@ export interface PowerTelemetry {
   /** Solar input data (optional) */
   solar?: PowerSolar;
 
+  /** Dedicated input voltage when the provider reports it. */
+  inputVolts?: number;
+  /** Dedicated input current when the provider reports it. */
+  inputAmps?: number;
+  /** Dedicated output voltage when the provider reports it. */
+  outputVolts?: number;
+  /** Dedicated output current when the provider reports it. */
+  outputAmps?: number;
+
   /** Quick boolean flags for UI gating */
   flags?: PowerFlags;
 

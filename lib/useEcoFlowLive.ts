@@ -336,16 +336,16 @@ export function useEcoFlowLive(): EcoFlowLiveData {
     }
 
     try {
-      // Keep the cloud provider pinned to the selected EcoFlow device.
-      if (selectedFromStore.length !== 1 || selectedFromStore[0] !== persistedId) {
-        await powerDeviceStore.setSelected('EcoFlow', [persistedId]);
+      // Keep the legacy selected device included without collapsing the
+      // multi-device EcoFlow Cloud selection used by Bluestack.
+      if (!selectedFromStore.includes(persistedId)) {
+        await powerDeviceStore.addSelected('EcoFlow', persistedId);
       }
       const activeDeviceIds = provider.getActiveDeviceIds();
       const needsConnect =
         !provider.isConnected() ||
         cloudConnectDeviceIdRef.current !== persistedId ||
-        activeDeviceIds.length !== 1 ||
-        activeDeviceIds[0] !== persistedId;
+        !activeDeviceIds.includes(persistedId);
       if (needsConnect) {
         await provider.connect(persistedId, CLOUD_CONNECT_TOKEN);
         cloudConnectDeviceIdRef.current = persistedId;

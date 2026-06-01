@@ -131,6 +131,7 @@ import {
   canReuseOperatorInfoSnapshot,
   resolveCachedOperatorAccessSnapshot,
 } from '../lib/auth/offlineAccessPolicy';
+import { offlineCredentialStore } from '../lib/auth/offlineCredentialStore';
 import type { ECSAccessResolution } from '../lib/auth/entitlementTypes';
 import { connectivity, type ConnectivityStatus } from "../lib/connectivity";
 import { offlineQueue } from "../lib/offlineQueue";
@@ -170,6 +171,8 @@ const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
 const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;
 const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 6000;
 const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;
+const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;
+const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;
 
 interface StartupHydrationResult {
   persistedOfflineMode: boolean;
@@ -246,6 +249,24 @@ function withStartupTimeout<T>(
       }),
     timeoutPromise,
   ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
+function withAuthRequestTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeout) clearTimeout(timeout);
   });
 }
@@ -355,6 +376,51 @@ function isMissingRefreshTokenError(error: unknown): boolean {
     .toLowerCase();
 
   return message.includes('invalid refresh token') || message.includes('refresh token not found');
+}
+
+function isRecoverableStartupSessionRestoreError(error: unknown): boolean {
+  const message = String((error as { message?: string } | null | undefined)?.message ?? error ?? '')
+    .trim()
+    .toLowerCase();
+
+  return (
+    message.includes('network request failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('fetch failed') ||
+    message.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('body is unusable')
+  );
+}
+
+function buildOfflineAuthUser(userId: string, email: string) {
+  const now = new Date().toISOString();
+  return {
+    id: userId,
+    email,
+    aud: 'authenticated',
+    role: 'authenticated',
+    app_metadata: { provider: 'ecs_offline' },
+    user_metadata: {},
+    created_at: now,
+    updated_at: now,
+    ecs_offline_session: true,
+  };
+}
+
+function getOfflineCredentialErrorMessage(reason: string): string {
+  switch (reason) {
+    case 'invalid_password':
+    case 'email_mismatch':
+      return AUTH_COPY.login.invalidCredentials;
+    case 'expired':
+      return AUTH_COPY.login.offlineExpired;
+    case 'missing_record':
+    case 'invalid_record':
+    case 'invalid_email':
+    default:
+      return AUTH_COPY.login.offlineNotPrepared;
+  }
 }
 
 interface AppContextValue {
@@ -761,6 +827,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     realtimeSync.destroy();
     syncActionQueue.stopAutoProcess();
     loadoutSyncQueue.stopAutoProcess();
+    void import('../lib/convoy/convoyLocationPublisher')
+      .then(({ stopConvoyLocationSharing }) =>
+        stopConvoyLocationSharing('Auth session ended. Live sharing stopped.'),
+      )
+      .catch(() => {});
 
     setUser(null);
     setOperatorInfo(null);
@@ -1225,7 +1296,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       } else {
       // Step 1: Check existing Supabase session
-      supabase.auth.getSession().then(({ data: { session } }) => {
+      withAuthRequestTimeout(
+        'startup_session_restore',
+        supabase.auth.getSession(),
+        STARTUP_PROVIDER_SESSION_TIMEOUT_MS,
+      ).then(({ data: { session } }) => {
         const currentUser = session?.user || null;
 
       if (currentUser) {
@@ -1297,6 +1372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setStartupSessionRestored(false);
           setSignInPending(false);
           setOfflineMode(true);
+          setPersistedOfflineMode(true);
           setUser(null);
           setAuthLoading(false);
         } else {
@@ -1340,19 +1416,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (!connectivity.isOnline() && hasPersistentSession) {
+      if (hasPersistentSession && (!connectivity.isOnline() || isRecoverableStartupSessionRestoreError(err))) {
         // Network error but we have a stored session — allow offline access
         console.log('[Auth] Session check failed but offline session exists — entering offline mode');
+        sessionRestoreInFlightRef.current = false;
+        setSignInPending(false);
         setOfflineMode(true);
+        setPersistedOfflineMode(true);
         recordAuthDiagnostic('auth_session_restore_succeeded', {
           entry_mode: 'remembered_session',
           result: 'success',
           duration_ms: consumeAuthTiming('auth_session_restore') ?? getAppLaunchDurationMs(),
-          network_state: 'offline',
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
           access_state: 'offline_mode',
-          metadata: { restoredOfflineSession: true, recoveredFromRestoreFailure: true },
+          metadata: {
+            restoredOfflineSession: true,
+            recoveredFromRestoreFailure: true,
+            providerSessionRestoreTimedOut: String(err instanceof Error ? err.message : err ?? '').includes('startup_session_restore timed out'),
+          },
         });
         setStartupSessionRestored(false);
+        setUser(null);
+        setAuthLoading(false);
+        return;
       } else if (connectivity.isOnline()) {
         recordAuthDiagnostic('auth_session_restore_failed', {
           entry_mode: 'cold_launch',
@@ -1800,8 +1886,72 @@ export function AppProvider({ children }: { children: ReactNode }) {
       emailHash: hashAuthIdentifier(loginEmail),
     };
     const attemptSource = source;
+    const offlineCredentialEmail = loginEmail;
 
     const attempt = (async (): Promise<SignInResult> => {
+      const tryOfflineCredentialSignIn = async (fallbackReason: 'offline' | 'network_timeout' | 'network_error'): Promise<SignInResult> => {
+        setSignInPending(true);
+        console.log('[Auth] Offline login attempt start', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+          fallbackReason,
+        });
+
+        const offlineResult = await offlineCredentialStore.verifyOfflineLogin({
+          email: offlineCredentialEmail,
+          password,
+        });
+
+        if (!offlineResult.ok) {
+          setSignInPending(false);
+          console.log('[Auth] Offline login attempt failure', {
+            source: attemptSource,
+            ...loginLogIdentity,
+            keepSignedIn,
+            fallbackReason,
+            reason: offlineResult.reason,
+          });
+          return { error: getOfflineCredentialErrorMessage(offlineResult.reason) };
+        }
+
+        sessionStore.saveLoginPreferences(keepSignedIn, offlineResult.userId, offlineResult.email);
+        sessionStore.extendExpiry();
+        setAuthNotice(AUTH_COPY.login.offlineSignedIn);
+        setOperatorInfo(
+          resolveCachedOperatorAccessSnapshot({
+            snapshot: operatorInfoRef.current,
+            currentUserEmail: offlineResult.email,
+            isOnline: false,
+          }) ?? buildDefaultOperatorInfo(offlineResult.email),
+        );
+        setStartupSessionRestored(false);
+        setSignInPending(false);
+        setUser(buildOfflineAuthUser(offlineResult.userId, offlineResult.email));
+        setAuthLoading(false);
+        setOfflineMode(true);
+        setPersistedOfflineMode(true);
+        recordAuthDiagnostic('auth_login_succeeded', {
+          entry_mode: 'manual_login',
+          result: 'success',
+          network_state: 'offline',
+          access_state: 'offline_mode',
+          metadata: {
+            source: attemptSource,
+            fallbackReason,
+            knownDeviceOffline: true,
+          },
+        });
+        console.log('[Auth] Offline login attempt success', {
+          source: attemptSource,
+          ...loginLogIdentity,
+          keepSignedIn,
+          fallbackReason,
+          userId: redactAuthUserId(offlineResult.userId),
+        });
+        return {};
+      };
+
       // Check connectivity
       if (!connectivity.isOnline()) {
         console.log('[Auth] Login attempt failure', {
@@ -1810,7 +1960,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           keepSignedIn,
           reason: 'offline',
         });
-        return { error: "You're offline. Check your connection and try again." };
+        return await tryOfflineCredentialSignIn('offline');
       }
 
       try {
@@ -1821,7 +1971,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           keepSignedIn,
         });
         // Step 1: Authenticate with Supabase
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await withAuthRequestTimeout(
+          'sign_in_request',
+          supabase.auth.signInWithPassword({ email, password }),
+          SIGN_IN_REQUEST_TIMEOUT_MS,
+        );
 
         console.log('[Auth] Auth request response', {
           source: attemptSource,
@@ -1841,6 +1995,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
               reason: 'supabase_not_configured',
             });
             return { error: "Cloud services are initializing. Try again in a moment." };
+          }
+          const providerError = error.message.toLowerCase();
+          if (
+            providerError.includes('network') ||
+            providerError.includes('fetch') ||
+            providerError.includes('timed out') ||
+            providerError.includes('timeout')
+          ) {
+            setSignInPending(false);
+            console.log('[Auth] Login attempt failure', {
+              source: attemptSource,
+              ...loginLogIdentity,
+              keepSignedIn,
+              reason: providerError.includes('timeout') || providerError.includes('timed out')
+                ? 'auth_request_timeout'
+                : 'network_error',
+            });
+            return await tryOfflineCredentialSignIn(
+              providerError.includes('timeout') || providerError.includes('timed out')
+                ? 'network_timeout'
+                : 'network_error',
+            );
           }
           // Fire-and-forget audit log
           logLoginFailed(email).catch(() => {});
@@ -1865,19 +2041,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return { error: "Couldn't sign in. Please try again." };
         }
 
+        const authenticatedUserId = data.user.id;
+
         // Step 2: Save session preferences to session store
         setStartupSessionRestored(false);
-        sessionStore.saveLoginPreferences(keepSignedIn, data.user.id, email);
+        sessionStore.saveLoginPreferences(keepSignedIn, authenticatedUserId, email);
         sessionStore.extendExpiry();
         setAuthNotice(null);
         console.log('[Auth] Session preferences saved:', {
           keepSignedIn,
-          userId: redactAuthUserId(data.user.id),
+          userId: redactAuthUserId(authenticatedUserId),
         });
 
         // Step 3: Post-login check (with timeout — NEVER blocks)
         try {
-          const postResult = await postLogin(data.user.id, email);
+          const postResult = await postLogin(authenticatedUserId, email);
 
           if (postResult.suspended) {
             await supabase.auth.signOut();
@@ -1904,6 +2082,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         }
 
+        await offlineCredentialStore.saveOnlineLoginVerifier({
+          email: offlineCredentialEmail,
+          password,
+          userId: authenticatedUserId,
+          keepSignedIn,
+        }).catch((error) => {
+          console.warn('[Auth] Offline credential preparation failed:', sanitizeAuthLogPayload(error));
+        });
+
         // Step 4: Promote the authenticated session immediately so routing does not
         // wait on a later provider callback before leaving the login surface.
         setSignInPending(false);
@@ -1919,12 +2106,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           source: attemptSource,
           ...loginLogIdentity,
           keepSignedIn,
-          userId: redactAuthUserId(data.user.id),
+          userId: redactAuthUserId(authenticatedUserId),
         });
         return {};
       } catch (err: any) {
         const msg = err?.message || 'Unknown error';
         setSignInPending(false);
+        if (msg.includes('sign_in_request timed out')) {
+          console.log('[Auth] Login attempt failure', {
+            source: attemptSource,
+            ...loginLogIdentity,
+            keepSignedIn,
+            reason: 'auth_request_timeout',
+          });
+          return await tryOfflineCredentialSignIn('network_timeout');
+        }
         if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
           console.log('[Auth] Login attempt failure', {
             source: attemptSource,
@@ -1932,7 +2128,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             keepSignedIn,
             reason: 'network_error',
           });
-          return { error: "Network error. Check your connection and try again." };
+          return await tryOfflineCredentialSignIn('network_error');
         }
         console.log('[Auth] Login attempt failure', {
           source: attemptSource,

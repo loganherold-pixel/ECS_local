@@ -53,6 +53,7 @@ import {
   shouldAcceptBluetoothTelemetry,
 } from './bluetoothLiveTelemetry';
 import { describeEcoFlowBluEligibility } from './ecoflowBluTelemetryEligibility';
+import { withBluPowerTelemetryEnvelope } from './bluTelemetryEnvelope';
 import { ecsTelemetryStore } from '../src/telemetry/ECSTelemetryStore';
 import { bluTelemetryToEcsTelemetryEvents } from '../src/telemetry/telemetryAdapters';
 
@@ -78,10 +79,8 @@ type DeviceKey = string; // `${provider}:${device_id}`
 type TelemetryRejectReason =
   | 'missing_device_id'
   | 'unregistered_device'
-  | 'non_primary_device'
   | 'unauthorized_cloud_telemetry'
-  | 'unsupported_product_type'
-  | 'stale_session_primary';
+  | 'unsupported_product_type';
 
 type TelemetryValidationResult =
   | { ok: true; device: BluDevice }
@@ -92,6 +91,24 @@ type TelemetryValidationResult =
       activePrimaryDeviceId: string | null;
       productType?: string | null;
     };
+
+function hasEcoFlowBridgeTelemetry(data: {
+  batteryPct: number | null;
+  solarWatts: number | null;
+  inputWatts: number | null;
+  outputWatts: number | null;
+  estimatedRuntimeMinutes?: number | null;
+  capacityWh?: number | null;
+}): boolean {
+  return [
+    data.batteryPct,
+    data.solarWatts,
+    data.inputWatts,
+    data.outputWatts,
+    data.estimatedRuntimeMinutes,
+    data.capacityWh,
+  ].some((value) => typeof value === 'number' && Number.isFinite(value));
+}
 
 function makeKey(provider: BluProviderId, deviceId: string): DeviceKey {
   return `${provider}:${deviceId}`;
@@ -178,6 +195,22 @@ class BluStateStore {
    */
   getAllTelemetry(): BluTelemetry[] {
     return Array.from(this.telemetryCache.values());
+  }
+
+  /**
+   * Return the newest cached telemetry packet across connected BLU providers.
+   * Dashboard authority uses this as a stable last-known fallback when a
+   * provider emits through the shared state store instead of an adapter-local
+   * telemetry cache.
+   */
+  getLatestTelemetry(): BluTelemetry | null {
+    let latest: BluTelemetry | null = null;
+    for (const telemetry of this.telemetryCache.values()) {
+      if (!latest || (telemetry.timestamp ?? 0) > (latest.timestamp ?? 0)) {
+        latest = telemetry;
+      }
+    }
+    return latest ? { ...latest } : null;
   }
 
   /**
@@ -313,7 +346,7 @@ class BluStateStore {
     }
 
     const now = Date.now();
-    const enrichedTelemetry: BluTelemetry = {
+    const enrichedTelemetry: BluTelemetry = withBluPowerTelemetryEnvelope({
       ...telemetry,
       source,
       updatedAt: telemetry.updatedAt ?? telemetry.timestamp ?? now,
@@ -324,7 +357,7 @@ class BluStateStore {
         deviceName: validation.device.display_name,
         model: validation.device.model,
       },
-    };
+    });
 
     const key = makeKey(enrichedTelemetry.provider, enrichedTelemetry.device_id);
     this.telemetryCache.set(key, enrichedTelemetry);
@@ -369,8 +402,7 @@ class BluStateStore {
   ): TelemetryValidationResult {
     const provider = telemetry.provider;
     const deviceId = String(telemetry.device_id ?? '').trim();
-    const primary = bluDeviceRegistry.getPrimary();
-    const activePrimaryDeviceId = primary?.device_id ?? null;
+    const activePrimaryDeviceId = bluDeviceRegistry.getPrimary()?.device_id ?? null;
 
     if (!deviceId) {
       return {
@@ -386,31 +418,6 @@ class BluStateStore {
         ok: false,
         reason: 'unregistered_device',
         activePrimaryDeviceId,
-      };
-    }
-
-    if (!primary || primary.provider !== provider || primary.device_id !== deviceId) {
-      return {
-        ok: false,
-        reason: 'non_primary_device',
-        device,
-        activePrimaryDeviceId,
-        productType: device.product_type ?? null,
-      };
-    }
-
-    const sessionPrimaryDeviceId = bluSessionStore.getSession().primaryDeviceId;
-    if (
-      telemetry.sessionPrimaryDeviceId &&
-      sessionPrimaryDeviceId &&
-      telemetry.sessionPrimaryDeviceId !== sessionPrimaryDeviceId
-    ) {
-      return {
-        ok: false,
-        reason: 'stale_session_primary',
-        device,
-        activePrimaryDeviceId,
-        productType: device.product_type ?? null,
       };
     }
 
@@ -434,7 +441,9 @@ class BluStateStore {
         };
       }
 
-      if (device.telemetry_capable === false || !eligibility.telemetryCapable) {
+      const unknownCloudProductType =
+        device.telemetry_capable !== false && eligibility.productType === 'unknown';
+      if (device.telemetry_capable === false || (!eligibility.telemetryCapable && !unknownCloudProductType)) {
         return {
           ok: false,
           reason: 'unsupported_product_type',
@@ -506,8 +515,15 @@ class BluStateStore {
 
     for (const key of Array.from(this.telemetryCache.keys())) {
       if (key.startsWith(`${provider}:`)) {
-        const [, deviceId] = key.split(':');
-        if (deviceId) ecsTelemetryStore.markDeviceUnavailable(deviceId, 'power_device', `${provider} disconnected.`);
+        const deviceId = key.slice(`${provider}:`.length);
+        if (deviceId) {
+          ecsTelemetryStore.markDeviceUnavailable(
+            deviceId,
+            'power_device',
+            `${provider} disconnected.`,
+            provider,
+          );
+        }
         this.telemetryCache.delete(key);
         removed = true;
       }
@@ -547,6 +563,42 @@ class BluStateStore {
     this.recomputeSummary();
   }
 
+  clearDeviceTelemetry(
+    provider: BluProviderId,
+    deviceId: string,
+    reason = `${provider} device disconnected.`,
+  ): void {
+    const key = makeKey(provider, deviceId);
+    const removed = this.telemetryCache.delete(key);
+    ecsTelemetryStore.markDeviceUnavailable(deviceId, 'power_device', reason, provider);
+
+    if (!removed && this.summary.active_provider !== provider) return;
+
+    let latestTimestamp: number | null = null;
+    for (const telemetry of this.telemetryCache.values()) {
+      if (!latestTimestamp || telemetry.timestamp > latestTimestamp) {
+        latestTimestamp = telemetry.timestamp;
+      }
+    }
+
+    this.lastIngestAt = latestTimestamp;
+    this.freshnessState = latestTimestamp === null
+      ? 'stale'
+      : this.getFreshnessStateForAge(Date.now() - latestTimestamp);
+
+    if (this.telemetryCache.size === 0) {
+      this.summary = { ...EMPTY_BLU_SUMMARY };
+      this.lastIngestAt = null;
+      this.freshnessState = 'stale';
+      this.isReconnecting = false;
+      this.connectionSuccessAt = null;
+      this.notify();
+      return;
+    }
+
+    this.recomputeSummary();
+  }
+
   /**
    * Phase 1D: Set reconnecting state.
    * Called when the adapter detects a stale session and starts reconnecting.
@@ -574,7 +626,12 @@ class BluStateStore {
    */
   reset(): void {
     for (const telemetry of this.telemetryCache.values()) {
-      ecsTelemetryStore.markDeviceUnavailable(telemetry.device_id, 'power_device', 'Power telemetry reset.');
+      ecsTelemetryStore.markDeviceUnavailable(
+        telemetry.device_id,
+        'power_device',
+        'Power telemetry reset.',
+        telemetry.provider,
+      );
     }
     this.telemetryCache.clear();
     this.summary = { ...EMPTY_BLU_SUMMARY };
@@ -604,24 +661,42 @@ class BluStateStore {
     solarWatts: number | null;
     inputWatts: number | null;
     outputWatts: number | null;
+    estimatedRuntimeMinutes?: number | null;
+    capacityWh?: number | null;
     status: string;
   }): void {
     if (!data.deviceId) return;
 
+    const now = Date.now();
+    const hasDecodedTelemetry = hasEcoFlowBridgeTelemetry(data);
+    const isLive =
+      data.status === 'telemetry_active' ||
+      (data.status === 'cloud_available' && hasDecodedTelemetry);
+    const knownInputWatts = data.inputWatts ?? 0;
+    const knownSolarWatts = data.solarWatts ?? 0;
+    const knownOutputWatts = data.outputWatts ?? 0;
+
     const telemetry: BluTelemetry = {
-      timestamp: Date.now(),
+      timestamp: now,
       provider: 'ecoflow',
       device_id: data.deviceId,
       source: 'provider_cloud',
-      isLive: false,
+      updatedAt: now,
+      telemetrySourceLabel: getBluetoothTelemetrySourceLabel('provider_cloud'),
+      isLive,
       battery_percent: data.batteryPct ?? undefined,
       solar_input_watts: data.solarWatts ?? undefined,
       input_watts: data.inputWatts ?? undefined,
       output_watts: data.outputWatts ?? undefined,
+      estimated_runtime_minutes: data.estimatedRuntimeMinutes ?? undefined,
+      capacity_wh: data.capacityWh ?? undefined,
       battery_watts:
-        data.inputWatts != null && data.outputWatts != null
-          ? data.inputWatts - data.outputWatts
+        data.inputWatts != null || data.solarWatts != null || data.outputWatts != null
+          ? knownInputWatts + knownSolarWatts - knownOutputWatts
           : undefined,
+      status_text: isLive
+        ? 'EcoFlow Cloud telemetry active.'
+        : 'EcoFlow Cloud connected; waiting on telemetry.',
     };
 
     this.ingestTelemetry(telemetry);
@@ -731,9 +806,9 @@ class BluStateStore {
     }
 
     const t = this.telemetryCache.get(targetKey)!;
-    const device = primary || bluDeviceRegistry.getAll().find(
+    const device = bluDeviceRegistry.getAll().find(
       (d) => makeKey(d.provider, d.device_id) === targetKey,
-    );
+    ) ?? primary;
 
     const newSummary: BluSummary = {
       available: true,

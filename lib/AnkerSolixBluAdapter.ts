@@ -32,7 +32,8 @@ import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
 import { bluStateStore } from './BluStateStore';
 import { bluSessionStore } from './BluSessionStore';
-import { isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { getBluetoothTelemetrySourceLabel, isDevMockTelemetryAllowed } from './bluetoothLiveTelemetry';
+import { withBluPowerTelemetryEnvelope } from './bluTelemetryEnvelope';
 import {
   isAnkerSolixDeviceName,
   extractAnkerModelFromName,
@@ -214,6 +215,7 @@ class AnkerSolixBluAdapter {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualDisconnectRequested = false;
 
   // Simulated state for dev/demo
   private simulatedStates = new Map<string, SimulatedAnkerSolixState>();
@@ -482,6 +484,7 @@ class AnkerSolixBluAdapter {
   async connect(deviceId?: string): Promise<AnkerSolixConnectResult> {
     console.log(`[AnkerSolixBluAdapter] Connecting to device: ${deviceId || 'first available'}...`);
 
+    this.manualDisconnectRequested = false;
     this.connectionState = 'connecting';
     this.lastError = null;
     this.lastErrorCode = null;
@@ -596,6 +599,7 @@ class AnkerSolixBluAdapter {
   async disconnect(): Promise<void> {
     console.log('[AnkerSolixBluAdapter] Disconnecting...');
 
+    this.manualDisconnectRequested = true;
     this.stopPolling();
     this.cancelReconnect();
     this.removeAppStateListener();
@@ -888,11 +892,16 @@ class AnkerSolixBluAdapter {
   ): BluTelemetry {
     const inputW = Math.round(state.inputWatts);
     const outputW = Math.round(state.outputWatts);
+    const now = Date.now();
 
-    return {
-      timestamp: Date.now(),
+    return withBluPowerTelemetryEnvelope({
+      timestamp: now,
       provider: 'anker_solix',
       device_id: deviceId,
+      source: 'mock_dev',
+      updatedAt: now,
+      telemetrySourceLabel: getBluetoothTelemetrySourceLabel('mock_dev'),
+      isLive: false,
 
       // Core telemetry
       battery_percent: Math.round(state.batteryPercent * 10) / 10,
@@ -912,7 +921,11 @@ class AnkerSolixBluAdapter {
       battery_volts: Math.round(state.batteryVolts * 10) / 10,
       inverter_on: state.acOutputOn,
       capacity_wh: modelSpec?.capacityWh,
-    };
+      raw: {
+        simulated: true,
+        mock: true,
+      },
+    });
   }
 
   private getPrimaryDeviceId(): string | null {
@@ -953,6 +966,7 @@ class AnkerSolixBluAdapter {
   }
 
   private async attemptQuietReconnect(): Promise<void> {
+    if (this.manualDisconnectRequested) return;
     if (this.isReconnecting) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.isReconnecting = false;
@@ -974,6 +988,11 @@ class AnkerSolixBluAdapter {
 
     try {
       await this.simulateDelay(2000);
+      if (this.manualDisconnectRequested) {
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
+        return;
+      }
 
       // Reconnect succeeded (simulated)
       this.isReconnecting = false;
@@ -1010,6 +1029,10 @@ class AnkerSolixBluAdapter {
   }
 
   private scheduleReconnect(): void {
+    if (this.manualDisconnectRequested) {
+      this.cancelReconnect();
+      return;
+    }
     this.isReconnecting = false;
     this.notify();
 
@@ -1029,6 +1052,10 @@ class AnkerSolixBluAdapter {
     this.emitStatus({ phase: 'reconnect_scheduled', delay, attempt: this.reconnectAttempts });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manualDisconnectRequested) {
+        this.cancelReconnect();
+        return;
+      }
       this.attemptQuietReconnect();
     }, delay);
   }

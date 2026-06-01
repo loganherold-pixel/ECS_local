@@ -155,6 +155,15 @@ function isFiniteMetric(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function normalizeTireTelemetryValues(value: unknown): [number | null, number | null, number | null, number | null] | null {
+  if (!Array.isArray(value)) return null;
+  const values = [0, 1, 2, 3].map((index) => {
+    const numeric = Number(value[index]);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+  }) as [number | null, number | null, number | null, number | null];
+  return values.some((entry) => entry != null) ? values : null;
+}
+
 function readEnvFlag(name: string): string | null {
   try {
     const value = typeof process !== 'undefined' ? process.env?.[name] : undefined;
@@ -208,9 +217,11 @@ function getDecodedTelemetryFields(telemetry: NormalizedVehicleTelemetry): strin
     ['throttle_position', 'throttlePercent'],
   ];
 
-  return fields
+  const decoded = fields
     .filter(([key]) => isFiniteMetric(telemetry[key]))
     .map(([, label]) => label);
+  if (normalizeTireTelemetryValues(telemetry.tire_pressures)) decoded.push('tirePressuresPsi');
+  return decoded;
 }
 
 function buildVehicleTelemetrySnapshotSignature(snapshot: VehicleTelemetrySnapshot): string {
@@ -237,6 +248,8 @@ function buildVehicleTelemetrySnapshotSignature(snapshot: VehicleTelemetrySnapsh
     snapshot.rangeMiles ?? '',
     snapshot.oilTempF ?? '',
     snapshot.transmissionTempF ?? '',
+    snapshot.tirePressuresPsi?.join(',') ?? '',
+    snapshot.tireTempsF?.join(',') ?? '',
     snapshot.pitchDeg ?? '',
     snapshot.rollDeg ?? '',
     snapshot.headingDeg ?? '',
@@ -508,6 +521,8 @@ class VehicleTelemetryStore {
     const fuelLevelPct = isFiniteMetric(t.fuel_level) ? t.fuel_level : null;
     const engineLoadPct = isFiniteMetric(t.engine_load) ? t.engine_load : null;
     const throttlePct = isFiniteMetric(t.throttle_position) ? t.throttle_position : null;
+    const tirePressuresPsi = normalizeTireTelemetryValues(t.tire_pressures);
+    const tireTempsF = normalizeTireTelemetryValues(t.tire_temps);
     const warnings = Array.isArray((t as NormalizedVehicleTelemetry & { diagnosticCodes?: unknown }).diagnosticCodes)
       ? (t as NormalizedVehicleTelemetry & { diagnosticCodes?: string[] }).diagnosticCodes?.map((code) => ({
           id: `dtc:${code}`,
@@ -531,6 +546,8 @@ class VehicleTelemetryStore {
       rangeMiles: null,
       oilTempF: isFiniteMetric(t.oil_temp) ? t.oil_temp : null,
       transmissionTempF: isFiniteMetric(t.transmission_temp) ? t.transmission_temp : null,
+      tirePressuresPsi,
+      tireTempsF,
       pitchDeg: null,
       rollDeg: null,
       headingDeg: null,

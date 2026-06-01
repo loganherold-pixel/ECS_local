@@ -12,7 +12,8 @@ import {
 import TacticalPopupShell from '../TacticalPopupShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
-import { EXPEDITION_FULL_BODY_POPUP_PROPS } from './expeditionPopupLayout';
+import { useExpeditionFullBodyPopupProps } from './expeditionPopupLayout';
+import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 import type {
   IncidentCommunicationStatus,
   IncidentCoordinate,
@@ -33,6 +34,7 @@ type ReportIncidentModalProps = {
   visible: boolean;
   onClose: () => void;
   onSubmit: (input: ReportIncidentInput) => void;
+  stackBehavior?: OverlayStackBehavior;
   expeditionId?: string;
   routeLabel?: string;
   gpsLocation?: IncidentCoordinate | null;
@@ -156,12 +158,14 @@ export default function ReportIncidentModal({
   visible,
   onClose,
   onSubmit,
+  stackBehavior,
   expeditionId,
   routeLabel,
   gpsLocation,
   contextSnapshot,
   prefill,
 }: ReportIncidentModalProps) {
+  const fullBodyPopupProps = useExpeditionFullBodyPopupProps();
   const [incidentType, setIncidentType] = useState<IncidentType>('vehicle_stuck');
   const [safety, setSafety] = useState<ReportIncidentSafetyState>(DEFAULT_SAFETY);
   const [useGpsLocation, setUseGpsLocation] = useState(true);
@@ -263,7 +267,8 @@ export default function ReportIncidentModal({
       eyebrow="INCIDENT & RECOVERY"
       subtitle="Capture the facts ECS needs before safety checklist and recovery assessment."
       overlayClass="workflow"
-      {...EXPEDITION_FULL_BODY_POPUP_PROPS}
+      stackBehavior={stackBehavior}
+      {...fullBodyPopupProps}
       footer={footer}
     >
       <ScrollView

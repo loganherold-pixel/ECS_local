@@ -95,9 +95,10 @@ for (const uiFile of [
 }
 
 const powerCenter = read('app/power/index.tsx');
-assertContains(powerCenter, 'useEcoFlowPowerLive', 'Power Center should consume feature-level EcoFlow telemetry hook');
-assertContains(powerCenter, 'getEcoFlowPowerDeviceCatalog', 'Power Center should load device catalog through feature service');
-assertContains(powerCenter, 'setPrimaryEcoFlowPowerDevice', 'Power Center should persist primary device through feature service');
+assertContains(powerCenter, '<Redirect href="/power/blu" />', 'legacy Power Center route should redirect to Device Connections');
+assertNotContains(powerCenter, 'useEcoFlowPowerLive', 'legacy Power Center route should not keep old telemetry wiring');
+assertNotContains(powerCenter, 'getEcoFlowPowerDeviceCatalog', 'legacy Power Center route should not load the old device catalog UI');
+assertNotContains(powerCenter, 'setPrimaryEcoFlowPowerDevice', 'legacy Power Center route should not persist primary devices directly');
 
 const devicePicker = read('app/power/devices.tsx');
 assertContains(devicePicker, 'getEcoFlowPowerDeviceCatalog', 'Device picker should load catalog through feature service');

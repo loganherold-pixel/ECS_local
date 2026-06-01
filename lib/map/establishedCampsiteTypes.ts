@@ -77,6 +77,12 @@ export type EstablishedCampsite = {
   rvAllowed?: boolean;
   trailersAllowed?: boolean;
   sourceUpdatedAt?: string;
+  nearbyCampgroundCount?: number;
+  nearbyCampgroundIds?: string[];
+  nearbyCampgroundNames?: string[];
+  liveDetailFetchedAt?: string;
+  sourceRecordCount?: number;
+  availabilityRecordCount?: number;
   requiresVerification: true;
 };
 
@@ -97,7 +103,7 @@ export type EstablishedCampsiteFeatureCollection = {
   features: EstablishedCampsiteFeature[];
 };
 
-export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+export type CampLayerUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom';
 
 export type EstablishedCampsiteLayerState = {
   enabled: boolean;

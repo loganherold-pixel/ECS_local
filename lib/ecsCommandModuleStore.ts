@@ -3,11 +3,7 @@ import { createPersistedKeyValueCache } from './keyValuePersistence';
 export type ECSCommandModuleId =
   | 'attitude'
   | 'follow3d'
-  | 'recoveryHazardCompass'
-  | 'trailDecisionCommand'
-  | 'campScoutCommand'
-  | 'expeditionReadinessCommand'
-  | 'convoyCommand'
+  | 'terrainRisk'
   | 'routeCommand'
   | 'powerCommand'
   | 'environmentalCommand';
@@ -25,114 +21,64 @@ export type ECSCommandModuleDefinition = {
 type ECSCommandModuleListener = (moduleId: ECSCommandModuleId) => void;
 
 const STORAGE_KEY_SELECTED_MODULE = 'ecs_command_center_module';
+const STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED = 'ecs_command_center_default_follow3d_migrated';
 const commandModuleCache = createPersistedKeyValueCache('ecs_command_preferences');
-const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'attitude';
+const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d';
 
 export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [
-  'attitude',
   'follow3d',
-  'recoveryHazardCompass',
-  'trailDecisionCommand',
-  'campScoutCommand',
-  'expeditionReadinessCommand',
-  'convoyCommand',
+  'attitude',
 ];
 
-export const ECS_COMMAND_MODULE_REGISTRY: Record<ECSCommandModuleId, ECSCommandModuleDefinition> = {
+export const ECS_COMMAND_MODULE_REGISTRY: Partial<Record<ECSCommandModuleId, ECSCommandModuleDefinition>> = {
   attitude: {
     id: 'attitude',
     label: 'Attitude Command',
     title: 'ATTITUDE COMMAND',
     subtitle: 'Fleet Vehicle Profile',
     icon: 'speedometer-outline',
-    statusLabel: 'ATTITUDE',
-    description: 'Current Fleet vehicle side and rear profile view with attitude instrumentation.',
+    statusLabel: 'ATT',
+    description: 'Deterministic pitch and roll command surface from visible device attitude telemetry.',
   },
   follow3d: {
     id: 'follow3d',
-    label: 'Navigation Command',
+    label: '3D Nav Command',
     title: 'NAVIGATION COMMAND',
     subtitle: '3D Follow Map',
     icon: 'map-outline',
     statusLabel: 'NAV',
-    description: 'Centralized 3D follow map inside the fixed Attitude Command shell.',
-  },
-  recoveryHazardCompass: {
-    id: 'recoveryHazardCompass',
-    label: 'Recovery / Hazard Compass',
-    title: 'RECOVERY / HAZARD COMPASS',
-    subtitle: 'Recovery Vector Standby',
-    icon: 'compass-outline',
-    statusLabel: 'RECOVERY',
-    description: 'Shared command-center slot for recovery bearing, hazard direction, and response guidance.',
-  },
-  trailDecisionCommand: {
-    id: 'trailDecisionCommand',
-    label: 'Trail Decision Command',
-    title: 'TRAIL DECISION COMMAND',
-    subtitle: 'Go / No-Go Terrain Assessment',
-    icon: 'analytics-outline',
-    statusLabel: 'TRAIL',
-    description: 'Deterministic go/no-go trail decision surface for route, terrain, daylight, vehicle, and recovery margin.',
-  },
-  campScoutCommand: {
-    id: 'campScoutCommand',
-    label: 'Camp Scout Command',
-    title: 'CAMP SCOUT COMMAND',
-    subtitle: 'Campsite Viability Intelligence',
-    icon: 'bonfire-outline',
-    statusLabel: 'CAMP',
-    description: 'Campsite viability command surface for saved, established, and staged camp candidates.',
-  },
-  expeditionReadinessCommand: {
-    id: 'expeditionReadinessCommand',
-    label: 'Expedition Readiness Command',
-    title: 'EXPEDITION READINESS COMMAND',
-    subtitle: 'Continuation Readiness Assessment',
-    icon: 'shield-checkmark-outline',
-    statusLabel: 'READY',
-    description: 'Command-level synthesis of vehicle, route, power, weather, daylight, recovery, communications, and incident readiness.',
-  },
-  convoyCommand: {
-    id: 'convoyCommand',
-    label: 'Convoy Command',
-    title: 'CONVOY COMMAND',
-    subtitle: 'Group Expedition Coordination',
-    icon: 'people-outline',
-    statusLabel: 'CONVOY',
-    description: 'Manual convoy plan and shared check-in coordination without fake live tracking.',
-  },
-  routeCommand: {
-    id: 'routeCommand',
-    label: 'Route Command',
-    title: 'ROUTE COMMAND',
-    subtitle: 'Guidance and Progress',
-    icon: 'navigate-outline',
-    statusLabel: 'ROUTE',
-    description: 'Active guidance summary using the existing route progress contract.',
-  },
-  powerCommand: {
-    id: 'powerCommand',
-    label: 'Power Command',
-    title: 'POWER COMMAND',
-    subtitle: 'Energy Flow Overview',
-    icon: 'battery-charging-outline',
-    statusLabel: 'POWER',
-    description: 'BLU and power telemetry summary from the existing power pipeline.',
-  },
-  environmentalCommand: {
-    id: 'environmentalCommand',
-    label: 'Environmental Command',
-    title: 'ENVIRONMENTAL COMMAND',
-    subtitle: 'Weather and Daylight',
-    icon: 'partly-sunny-outline',
-    statusLabel: 'ENV',
-    description: 'Sunlight and weather context from the current environment and weather sources.',
+    description: 'Centralized 3D follow map inside the fixed command shell.',
   },
 };
 
+export function normalizeECSCommandModuleId(value: unknown): ECSCommandModuleId | null {
+  if (value === 'convoyCommand' || value === 'convoy-command') return null;
+  if (value === 'expeditionReadinessCommand' || value === 'expedition-readiness-command') return null;
+  if (typeof value !== 'string') return null;
+  return ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId)
+    ? (value as ECSCommandModuleId)
+    : null;
+}
+
 export function isECSCommandModuleId(value: unknown): value is ECSCommandModuleId {
-  return typeof value === 'string' && ECS_COMMAND_MODULE_ORDER.includes(value as ECSCommandModuleId);
+  return normalizeECSCommandModuleId(value) != null;
+}
+
+function resolveStoredCommandModule(stored: string | null): ECSCommandModuleId {
+  const normalized = normalizeECSCommandModuleId(stored);
+  const migratedToFollow3d = commandModuleCache.get(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED) === 'true';
+
+  if (normalized === 'attitude' && !migratedToFollow3d) {
+    commandModuleCache.set(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED, 'true');
+    commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    return DEFAULT_ECS_COMMAND_MODULE;
+  }
+
+  if (!migratedToFollow3d) {
+    commandModuleCache.set(STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED, 'true');
+  }
+
+  return normalized ?? DEFAULT_ECS_COMMAND_MODULE;
 }
 
 class ECSCommandModuleStore {
@@ -147,21 +93,27 @@ class ECSCommandModuleStore {
 
   private _load(): void {
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    if (isECSCommandModuleId(stored)) {
-      this._selectedModule = stored;
-    } else if (stored != null) {
-      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    if (!commandModuleCache.isHydrated() && stored == null) {
+      this._selectedModule = DEFAULT_ECS_COMMAND_MODULE;
+      return;
+    }
+
+    const resolved = resolveStoredCommandModule(stored);
+    this._selectedModule = resolved;
+
+    if (stored !== resolved) {
+      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, resolved);
     }
   }
 
   private async _hydrate(): Promise<void> {
     await commandModuleCache.waitForHydration();
     const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-    const hydratedModule = isECSCommandModuleId(stored) ? stored : DEFAULT_ECS_COMMAND_MODULE;
+    const hydratedModule = resolveStoredCommandModule(stored);
     const changed = hydratedModule !== this._selectedModule;
 
-    if (!isECSCommandModuleId(stored) && stored != null) {
-      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+    if (stored !== hydratedModule) {
+      commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, hydratedModule);
     }
 
     this._selectedModule = hydratedModule;
@@ -187,10 +139,11 @@ class ECSCommandModuleStore {
   }
 
   setSelectedModule(moduleId: ECSCommandModuleId): void {
-    if (moduleId === this._selectedModule) return;
+    const normalized = normalizeECSCommandModuleId(moduleId) ?? DEFAULT_ECS_COMMAND_MODULE;
+    if (normalized === this._selectedModule) return;
 
-    this._selectedModule = moduleId;
-    commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, moduleId);
+    this._selectedModule = normalized;
+    commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized);
     this._notify();
   }
 
@@ -205,11 +158,10 @@ class ECSCommandModuleStore {
     await commandModuleCache.waitForHydration();
     if (!this._hydrated) {
       const stored = commandModuleCache.get(STORAGE_KEY_SELECTED_MODULE);
-      if (isECSCommandModuleId(stored)) {
-        this._selectedModule = stored;
-      } else if (stored != null) {
-        this._selectedModule = DEFAULT_ECS_COMMAND_MODULE;
-        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, DEFAULT_ECS_COMMAND_MODULE);
+      const hydratedModule = resolveStoredCommandModule(stored);
+      this._selectedModule = hydratedModule;
+      if (stored !== hydratedModule) {
+        commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, hydratedModule);
       }
       this._hydrated = true;
     }

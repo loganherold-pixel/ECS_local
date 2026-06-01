@@ -6,7 +6,7 @@ import {
   type RouteIntelligenceSummary,
 } from './ecs5RouteIntelligence';
 
-export const ROUTE_BRIEF_SUPPRESSION_MS = 10 * 60 * 1000;
+export const ROUTE_BRIEF_SUPPRESSION_MS = 15 * 60 * 1000;
 
 export type RouteBriefAdvisory = {
   kind: string;

@@ -176,7 +176,7 @@ assert.ok(!Object.prototype.hasOwnProperty.call(patch, 'offline'), 'Explore patc
 assertIncludes(enrichedCard, 'ExploreReadinessSummary', 'Known, Hidden Gem, and Popular Trail cards should render compact readiness.');
 assertIncludes(aiCard, 'ExploreReadinessSummary', 'ECS Route Idea cards should render compact readiness.');
 assertIncludes(trailPackCard, 'ExploreReadinessSummary', 'Trail Pack route cards should render compact readiness.');
-assertIncludes(analysisModal, 'ExpeditionReadinessCard', 'Route detail analysis should include expanded readiness.');
+assertNotIncludes(analysisModal, 'ExpeditionReadinessCard', 'Route detail analysis should not duplicate route readiness preview.');
 assertIncludes(routePreviewModal, 'ExpeditionReadinessCard', 'Route preview should include expanded readiness.');
 assertIncludes(aiPreviewModal, 'ExpeditionReadinessCard', 'ECS Route Idea preview should include expanded readiness.');
 assertIncludes(
@@ -184,10 +184,10 @@ assertIncludes(
   'interactive?: boolean',
   'Shared readiness card should expose an explicit non-interactive mode.',
 );
-assertIncludes(
+assertNotIncludes(
   analysisModal,
   'interactive={false}',
-  'Explorer detail readiness preview should render as informational, not clickable.',
+  'Explorer detail modal should no longer render the redundant readiness preview.',
 );
 assertIncludes(
   readinessCard,
@@ -201,17 +201,19 @@ assertIncludes(
 );
 
 const descriptionIndex = analysisModal.indexOf('<Text style={s.description}>{opportunity.description}</Text>');
+const highlightsIndex = analysisModal.indexOf('HIGHLIGHTS');
 const rigCompatibilityIndex = analysisModal.indexOf('RIG COMPATIBILITY');
 const rigUpgradeIndex = analysisModal.indexOf('RIG UPGRADE SUGGESTIONS', rigCompatibilityIndex);
 const readinessIndex = analysisModal.indexOf('title="Explore Readiness Preview"');
 const expeditionDataIndex = analysisModal.indexOf('EXPEDITION DATA');
 assert.ok(
-  descriptionIndex > -1 &&
-    rigCompatibilityIndex > descriptionIndex &&
-    rigUpgradeIndex > rigCompatibilityIndex &&
-    readinessIndex > rigUpgradeIndex &&
-    expeditionDataIndex > readinessIndex,
-  'Explorer detail modal should order description, Rig Compatibility, Rig Upgrade Suggestions, Explore Readiness Preview, then Expedition Data.',
+  descriptionIndex === -1 &&
+    highlightsIndex === -1 &&
+    readinessIndex === -1 &&
+    expeditionDataIndex > -1 &&
+    rigCompatibilityIndex > expeditionDataIndex &&
+    rigUpgradeIndex > rigCompatibilityIndex,
+  'Explorer detail modal should start with Expedition Data, then Rig Compatibility and Rig Upgrade Suggestions without description, highlights, or readiness preview sections.',
 );
 assert.ok(
   analysisModal.includes('label="TERRAIN"') &&

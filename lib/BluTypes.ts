@@ -66,6 +66,124 @@ export type BluConnectionState =
   | 'error'
   | 'unsupported';
 
+/**
+ * Shared live-device lifecycle contract for BLU-adjacent telemetry sources.
+ *
+ * This intentionally extends beyond legacy power-only `BluConnectionState` so
+ * vehicle telemetry, cloud-backed power devices, and future local BLE power
+ * parsers can report the same scan -> handshake -> stream -> stale lifecycle.
+ */
+export type BluConnectionStatus =
+  | 'idle'
+  | 'scanning'
+  | 'discovered'
+  | 'connecting'
+  | 'handshaking'
+  | 'connected'
+  | 'streaming'
+  | 'stale'
+  | 'recovering'
+  | 'timeout'
+  | 'failed'
+  | 'disconnecting'
+  | 'disconnected';
+
+/**
+ * Source truth for a live telemetry packet after transport-specific data has
+ * been normalized. `mock` is never production-live.
+ */
+export type BluTelemetryHealth =
+  | 'live'
+  | 'recent'
+  | 'stale'
+  | 'unavailable'
+  | 'mock';
+
+export type BluTelemetryEnvelopeSource =
+  | 'local-ble'
+  | 'cloud-api'
+  | 'obd2'
+  | 'mock'
+  | 'unknown';
+
+export interface BluTelemetryEnvelopeError {
+  phase: string;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Provider-agnostic envelope for live device telemetry.
+ *
+ * The VeePeak/OBD2 path is the reference producer today: native BLE connects,
+ * ELM327/PID handshake succeeds, then normalized data is emitted as
+ * `source: 'obd2'` with `health: 'live'`. Power-device adapters should copy
+ * that shape instead of presenting connected devices as live before decoded
+ * telemetry exists.
+ */
+export type BluTelemetryEnvelope<TData extends Record<string, unknown> = Record<string, unknown>> = {
+  deviceId: string;
+  vendor: string;
+  deviceType: string;
+  connectionStatus: BluConnectionStatus;
+  health: BluTelemetryHealth;
+  source: BluTelemetryEnvelopeSource;
+  timestamp: number;
+  staleAfterMs: number;
+  data: TData;
+  error?: BluTelemetryEnvelopeError;
+};
+
+export type BluMultiDeviceCapability =
+  | 'supported'
+  | 'limited'
+  | 'unsupported';
+
+export interface BluMultiDeviceCapabilityStatus {
+  multiDeviceCapability: BluMultiDeviceCapability;
+  reason?: string;
+  maxActiveConnections?: number | null;
+  supportsScanWhileConnected?: boolean;
+}
+
+export type BluStreamPhase =
+  | 'idle'
+  | 'starting'
+  | 'awaitingFirstPacket'
+  | 'streaming'
+  | 'stale'
+  | 'recovering'
+  | 'failed'
+  | 'stopped';
+
+export type BluStreamHealth = {
+  phase: BluStreamPhase;
+  lastPacketAt?: number;
+  firstPacketAt?: number;
+  packetCount: number;
+  staleAfterMs: number;
+  reconnectAttempts: number;
+  lastError?: {
+    phase: string;
+    message: string;
+    code?: string;
+  };
+};
+
+export interface BluStreamState {
+  deviceId: string;
+  provider: string;
+  phase: BluStreamPhase;
+  streamHealth: BluStreamHealth;
+  connectionStatus: BluConnectionStatus;
+  health: BluTelemetryHealth;
+  source: BluTelemetryEnvelopeSource;
+  lastPacketAt: number | null;
+  staleAfterMs: number;
+  updatedAt: number;
+  error?: BluTelemetryEnvelopeError;
+}
+
 // ── BLU Device Capabilities ─────────────────────────────────────────────
 
 /**
@@ -110,7 +228,7 @@ export interface BluDevice {
   display_name: string;
   /** Model name, e.g. "DELTA 2 Max" */
   model: string;
-  /** Provider product category. For EcoFlow BLU telemetry, only power_station is eligible. */
+  /** Provider product category. EcoFlow cloud telemetry supports known EcoFlow catalog classes when authorized. */
   product_type?: string;
   /** Whether this device can be used as a BLU telemetry primary. */
   telemetry_capable?: boolean;
@@ -146,8 +264,16 @@ export interface BluTelemetry {
   battery_percent?: number;
   /** Total input power (W) — all sources combined */
   input_watts?: number;
+  /** Input voltage when reported by the provider */
+  input_volts?: number;
+  /** Input current when reported by the provider */
+  input_amps?: number;
   /** Total output power (W) — all loads combined */
   output_watts?: number;
+  /** Output voltage when reported by the provider */
+  output_volts?: number;
+  /** Output current when reported by the provider */
+  output_amps?: number;
   /** Net battery power (W) — positive = charging, negative = discharging */
   battery_watts?: number;
   /** Estimated remaining runtime in minutes at current draw */
@@ -213,6 +339,8 @@ export interface BluTelemetry {
   telemetryUnsupported?: boolean;
   /** Short explanation when telemetry is unavailable or undecoded. */
   telemetryUnsupportedReason?: string;
+  /** Shared BLU live telemetry contract envelope for diagnostics and future consumers. */
+  bluTelemetryEnvelope?: BluTelemetryEnvelope;
 }
 
 // ── BLU Summary Object ──────────────────────────────────────────────────

@@ -48,7 +48,7 @@ export default function AuthModal({ visible, onClose }: AuthModalProps) {
     if (offlineMode) {
       exitOfflineMode();
     }
-    router.push('/login');
+    router.replace('/login');
   };
 
   return (

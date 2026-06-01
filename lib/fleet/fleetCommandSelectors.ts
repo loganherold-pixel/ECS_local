@@ -22,11 +22,18 @@ export type FleetCommandBadge = {
   tone: FleetCommandBadgeTone;
 };
 
+export type FleetCommandConcern = {
+  id: string;
+  summary: string;
+  detail: string | null;
+};
+
 export type FleetCommandState = {
   readiness: FleetReadinessStatus;
   title: string;
   summary: string;
   detail: string | null;
+  intelligenceItems: FleetCommandConcern[];
   confidence: ECSConfidenceResult;
   phaseLabel: string | null;
   operationalLabel: string | null;
@@ -62,10 +69,23 @@ type SelectFleetCommandStateArgs = {
   hasAccessoriesConfigured: boolean;
   hasLoadout: boolean;
   hasLiveTelemetry: boolean;
+  hasAcknowledgedHighMountedLoadRisk?: boolean;
 };
 
 function cleanText(value: string | null | undefined): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function simplifyFleetConcern(value: string | null | undefined): string {
+  const text = cleanText(value);
+  const lower = text.toLowerCase();
+  if (lower.includes('limited live inputs') && lower.includes('vehicle score')) {
+    return 'Vehicle guidance is based on saved profile data, so confidence is limited';
+  }
+  if (lower.includes('vehicle score is estimated')) {
+    return 'Vehicle score is estimated from saved Fleet inputs';
+  }
+  return text;
 }
 
 function toTitle(value: string): string {
@@ -160,11 +180,253 @@ function buildReadinessSummary(status: FleetReadinessStatus, missingCritical: st
   return 'Vehicle ready with confirmed baseline data for staging and downstream assessment.';
 }
 
+function sentenceCase(value: string): string {
+  const clean = cleanText(value).replace(/\.$/, '');
+  return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : '';
+}
+
+function isHighMountedLoadConcern(value: string | null | undefined): boolean {
+  const normalized = cleanText(value).toLowerCase();
+  return (
+    normalized.includes('top-heavy') ||
+    normalized.includes('top heavy') ||
+    normalized.includes('center of gravity') ||
+    normalized.includes('high-mounted') ||
+    normalized.includes('high mounted')
+  );
+}
+
+function buildConcernRecommendation(issue: string, options?: { highMountedLoadRiskAcknowledged?: boolean }): string {
+  const normalized = issue.toLowerCase();
+  if (isHighMountedLoadConcern(normalized)) {
+    return 'Move heavy gear lower and closer to the center of the vehicle. Reduce roof or bed-high loads before technical terrain.';
+  }
+  if (normalized.includes('payload') || normalized.includes('gvwr')) {
+    return 'Keep optional cargo low and centered, then verify operating weight against GVWR before departure.';
+  }
+  if (normalized.includes('accessory') || normalized.includes('cargo') || normalized.includes('loadout')) {
+    if (options?.highMountedLoadRiskAcknowledged) {
+      return 'Build & Loadout risk review is acknowledged. Verify scale weight for stronger recommendations before remote or technical routes.';
+    }
+    return 'Review Build & Loadout, remove unnecessary high-mounted weight, and verify scale weight for stronger recommendations.';
+  }
+  if (normalized.includes('fuel')) {
+    return 'Enter fuel capacity or current fuel gallons in Advanced Specs so range and resource guidance can use your actual rig.';
+  }
+  if (normalized.includes('tire')) {
+    return 'Confirm tire diameter in Advanced Specs so clearance, fit, and route-readiness guidance can be more specific.';
+  }
+  if (normalized.includes('vehicle profile')) {
+    return 'Finish the active vehicle profile first; ECS needs a confirmed rig before it can personalize readiness.';
+  }
+  if (normalized.includes('identity')) {
+    return 'Confirm year, make, model, or vehicle class so ECS can apply the right vehicle assumptions.';
+  }
+  if (normalized.includes('water')) {
+    return 'Enter carried water capacity and current gallons if water range matters for this route or camp plan.';
+  }
+  if (normalized.includes('power')) {
+    return 'Add usable battery capacity or connect a power source so ECS can estimate reserve and runtime.';
+  }
+  if (normalized.includes('lift')) {
+    return 'Confirm lift, level, and tire setup in Advanced Specs to improve clearance and stability guidance.';
+  }
+  if (options?.highMountedLoadRiskAcknowledged) {
+    return 'Build & Loadout risk review is acknowledged. Verify scale weight for stronger recommendations before remote or technical routes.';
+  }
+  return 'Verify the active vehicle setup, keep heavy items low and centered, and update any estimated values before harder routes.';
+}
+
+function buildPrimaryConcern(
+  primary: ECSOrchestratorCandidate | null,
+  options?: { highMountedLoadRiskAcknowledged?: boolean },
+): string | null {
+  if (!primary) return null;
+  const text = simplifyFleetConcern(sentenceCase(primary.summary || primary.title));
+  if (!text) return null;
+  if (options?.highMountedLoadRiskAcknowledged && isHighMountedLoadConcern(text)) {
+    return null;
+  }
+  const priority = primary.priority?.level;
+  const lower = text.toLowerCase();
+  const looksFleetRelevant =
+    isHighMountedLoadConcern(lower) ||
+    lower.includes('payload') ||
+    lower.includes('gvwr') ||
+    lower.includes('accessory') ||
+    lower.includes('cargo') ||
+    lower.includes('loadout') ||
+    lower.includes('weight') ||
+    lower.includes('fuel') ||
+    lower.includes('tire') ||
+    lower.includes('vehicle');
+  if (looksFleetRelevant || priority === 'warning' || priority === 'critical') {
+    return text;
+  }
+  return null;
+}
+
+function buildFleetIntelligenceCopy(args: {
+  readiness: FleetReadinessStatus;
+  missingCritical: string[];
+  limitations: string[];
+  primary: ECSOrchestratorCandidate | null;
+  selectionRequired: boolean;
+  highMountedLoadRiskAcknowledged?: boolean;
+}): { summary: string; detail: string | null } {
+  if (args.selectionRequired) {
+    return {
+      summary: 'Key concern: ECS needs one active rig selected before it can personalize this readiness command.',
+      detail: 'Recommendation: select the vehicle you are staging now, then review profile, fuel, tires, and loadout guidance.',
+    };
+  }
+
+  const primaryConcern = buildPrimaryConcern(args.primary, {
+    highMountedLoadRiskAcknowledged: args.highMountedLoadRiskAcknowledged,
+  });
+  const issue = simplifyFleetConcern(args.missingCritical[0] ?? args.limitations[0] ?? primaryConcern ?? '');
+
+  if (issue) {
+    const isMissingCritical = args.missingCritical.map((item) => simplifyFleetConcern(item)).includes(issue);
+    const concern = isMissingCritical
+      ? `${sentenceCase(issue)} is still missing from the active vehicle setup`
+      : sentenceCase(issue);
+    return {
+      summary: `Key concern: ${concern}.`,
+      detail: `Recommendation: ${buildConcernRecommendation(issue, {
+        highMountedLoadRiskAcknowledged: args.highMountedLoadRiskAcknowledged,
+      })}`,
+    };
+  }
+
+  if (args.readiness === 'ready_for_staging' || args.readiness === 'vehicle_ready') {
+    if (args.highMountedLoadRiskAcknowledged) {
+      return {
+        summary: 'Vehicle configuration looks fit for most routine staging checks.',
+        detail: 'Recommendation: build and loadout risk review is acknowledged. Verify scale weight before remote or technical routes.',
+      };
+    }
+    return {
+      summary: 'Vehicle configuration looks fit for most routine staging checks.',
+      detail: 'Recommendation: keep heavy cargo low and centered, and verify scale weight before remote or technical routes.',
+    };
+  }
+
+  return {
+    summary: 'Vehicle setup is usable, but ECS is still relying on some estimated Fleet values.',
+    detail: 'Recommendation: confirm fuel, tires, payload, and loadout values to make guidance more specific to this rig.',
+  };
+}
+
+function concernIdFromIssue(issue: string, index: number): string {
+  const id = cleanText(issue)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return id || `concern-${index}`;
+}
+
+function buildFleetConcernItem(
+  issue: string,
+  missingCritical: string[],
+  index: number,
+  options?: { highMountedLoadRiskAcknowledged?: boolean },
+): FleetCommandConcern {
+  const simplifiedIssue = simplifyFleetConcern(issue);
+  const isMissingCritical = missingCritical.map((item) => simplifyFleetConcern(item)).includes(simplifiedIssue);
+  const concern = isMissingCritical
+    ? `${sentenceCase(simplifiedIssue)} is still missing from the active vehicle setup`
+    : sentenceCase(simplifiedIssue);
+  return {
+    id: concernIdFromIssue(simplifiedIssue, index),
+    summary: `Key concern: ${concern}.`,
+    detail: `Recommendation: ${buildConcernRecommendation(simplifiedIssue, {
+      highMountedLoadRiskAcknowledged: options?.highMountedLoadRiskAcknowledged,
+    })}`,
+  };
+}
+
+function buildFleetIntelligenceItems(args: {
+  readiness: FleetReadinessStatus;
+  missingCritical: string[];
+  limitations: string[];
+  primary: ECSOrchestratorCandidate | null;
+  selectionRequired: boolean;
+  highMountedLoadRiskAcknowledged?: boolean;
+}): FleetCommandConcern[] {
+  if (args.selectionRequired) {
+    return [{
+      id: 'select-active-rig',
+      summary: 'Key concern: ECS needs one active rig selected before it can personalize this readiness command.',
+      detail: 'Recommendation: select the vehicle you are staging now, then review profile, fuel, tires, and loadout guidance.',
+    }];
+  }
+
+  const primaryConcern = buildPrimaryConcern(args.primary, {
+    highMountedLoadRiskAcknowledged: args.highMountedLoadRiskAcknowledged,
+  });
+  const seen = new Set<string>();
+  const issues = [...args.missingCritical, ...args.limitations, primaryConcern]
+    .map((item) => simplifyFleetConcern(item))
+    .filter((item) => {
+      if (!item) return false;
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  const concernItems = issues.map((issue, index) =>
+    buildFleetConcernItem(issue, args.missingCritical, index, {
+      highMountedLoadRiskAcknowledged: args.highMountedLoadRiskAcknowledged,
+    }),
+  );
+
+  if (concernItems.length > 0) {
+    concernItems.push({
+      id: 'reviewed-current-concerns',
+      summary: 'Current Fleet concerns reviewed. Vehicle setup is ready based on the preferences and values entered so far.',
+      detail: 'For additional concerns, see the ECS Brief.',
+    });
+    return concernItems;
+  }
+
+  if (args.readiness === 'ready_for_staging' || args.readiness === 'vehicle_ready') {
+    if (args.highMountedLoadRiskAcknowledged) {
+      return [{
+        id: 'vehicle-ready-baseline',
+        summary: 'Vehicle configuration looks fit for most routine staging checks.',
+        detail: 'Recommendation: build and loadout risk review is acknowledged. Verify scale weight before remote or technical routes.',
+      }];
+    }
+    return [{
+      id: 'vehicle-ready-baseline',
+      summary: 'Vehicle configuration looks fit for most routine staging checks.',
+      detail: 'Recommendation: keep heavy cargo low and centered, and verify scale weight before remote or technical routes.',
+    }];
+  }
+
+  return [{
+    id: 'estimated-fleet-values',
+    summary: 'Vehicle setup is usable, but ECS is still relying on some estimated Fleet values.',
+    detail: 'Recommendation: confirm fuel, tires, payload, and loadout values to make guidance more specific to this rig.',
+  }];
+}
+
 export function selectFleetCommandState(
   args: SelectFleetCommandStateArgs,
 ): FleetCommandState {
   const missingCritical = buildMissingCritical(args);
   const limitations = buildLimitations(args);
+  const highMountedLoadRiskAcknowledged = Boolean(args.hasAcknowledgedHighMountedLoadRisk);
+  const rawPrimary = args.fleetView.primary ?? null;
+  const primary =
+    highMountedLoadRiskAcknowledged && isHighMountedLoadConcern(rawPrimary?.summary || rawPrimary?.title)
+      ? null
+      : rawPrimary;
+  const secondary = highMountedLoadRiskAcknowledged
+    ? args.fleetView.secondary.filter((candidate) => !isHighMountedLoadConcern(candidate.summary || candidate.title))
+    : args.fleetView.secondary;
   const readiness = buildReadinessStatus({
     vehicleCount: args.vehicleCount,
     missingCritical,
@@ -285,7 +547,7 @@ export function selectFleetCommandState(
     type: 'vehicle_assessment',
     drivers: explanationDrivers,
     confidenceLevel: confidence.level,
-    priorityLevel: args.fleetView.primary?.priority?.level,
+    priorityLevel: primary?.priority?.level,
     degradedState: args.operationalState ?? undefined,
   });
 
@@ -297,13 +559,27 @@ export function selectFleetCommandState(
       ? toTitle(args.operationalState)
       : null;
 
-  const primary = args.fleetView.primary ?? null;
-  const secondary = args.fleetView.secondary ?? [];
   const readinessStatus = args.liveStatus?.readiness ?? null;
   const telemetryStatus = args.liveStatus?.telemetry ?? null;
   const title = labelForReadiness(readiness);
-  const summary = buildReadinessSummary(readiness, missingCritical, limitations);
   const selectionRequired = args.vehicleCount > 1 && !args.hasActiveVehicle;
+  const intelligenceItems = buildFleetIntelligenceItems({
+    readiness,
+    missingCritical,
+    limitations,
+    primary,
+    selectionRequired,
+    highMountedLoadRiskAcknowledged,
+  });
+  const intelligenceCopy = intelligenceItems[0] ?? buildFleetIntelligenceCopy({
+    readiness,
+    missingCritical,
+    limitations,
+    primary,
+    selectionRequired,
+    highMountedLoadRiskAcknowledged,
+  });
+  const summary = intelligenceCopy.summary || buildReadinessSummary(readiness, missingCritical, limitations);
   const canConfirmVehicleReady =
     args.vehicleCount > 0 &&
     args.hasSelectedVehicle &&
@@ -391,7 +667,8 @@ export function selectFleetCommandState(
     readiness,
     title,
     summary,
-    detail: explanation?.text ?? (cleanText(primary?.summary) || null),
+    detail: intelligenceCopy.detail ?? explanation?.text ?? (cleanText(primary?.summary) || null),
+    intelligenceItems,
     confidence,
     phaseLabel,
     operationalLabel,

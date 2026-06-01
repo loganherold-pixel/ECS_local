@@ -4,6 +4,8 @@ This runbook defines repeatable acquisition for the ECS Established Campgrounds 
 
 Mobile clients must never call provider APIs directly. The mobile map calls ECS-owned endpoints (`campgrounds-search`, `campground-detail`) and receives canonical campground records only.
 
+`campgrounds-search` is a cached canonical database endpoint. It must not call RIDB, NPS, Campflare, ACTIVE, ReserveAmerica, Aspira, OSM Overpass, or any other provider during a mobile map request. Provider acquisition belongs to the sync functions and deployment scheduler so mobile performance, attribution, freshness, and rate-limit behavior remain predictable.
+
 ## Provider Sync Schedule
 
 Use `campground_provider_configs.sync_interval_minutes` as the backend schedule contract and keep scheduler cadence aligned with those rows.
@@ -222,6 +224,95 @@ Availability rows must include `expires_at` or recent `last_checked_at`. When ro
 7. For OSM, confirm the bbox was explicit and small enough; global/unbounded requests are intentionally unsupported.
 8. For availability, confirm `campground_availability.expires_at` is in the future or `last_checked_at` is within TTL.
 9. Confirm mobile uses `campgrounds-search` and not provider APIs.
+
+Provider enabled/configured:
+
+```sql
+select
+  provider_id,
+  enabled,
+  health_status,
+  last_synced_at,
+  sync_interval_minutes,
+  attribution_text,
+  secret_ref
+from public.campground_provider_configs
+where provider_id = '<provider_id>';
+```
+
+Recent sync result:
+
+```sql
+select
+  provider_id,
+  status,
+  started_at,
+  finished_at,
+  records_read,
+  records_upserted,
+  records_failed,
+  error_count,
+  notes
+from public.campground_sync_runs
+where provider_id = '<provider_id>'
+order by started_at desc
+limit 20;
+```
+
+Source provenance:
+
+```sql
+select
+  campground_id,
+  provider_id,
+  provider_record_id,
+  source_url,
+  payload_hash,
+  first_seen_at,
+  last_seen_at
+from public.campground_source_records
+where provider_id = '<provider_id>'
+  and provider_record_id = '<provider_record_id>';
+```
+
+Canonical lookup by bbox/name:
+
+```sql
+select
+  id,
+  name,
+  latitude,
+  longitude,
+  status,
+  availability_status,
+  source_confidence,
+  primary_provider,
+  attribution,
+  last_synced_at,
+  last_availability_checked_at
+from public.campgrounds
+where longitude between <min_lng> and <max_lng>
+  and latitude between <min_lat> and <max_lat>
+  and name ilike '%' || <name_fragment> || '%'
+order by source_confidence desc, name;
+```
+
+Availability freshness:
+
+```sql
+select
+  campground_id,
+  provider_id,
+  availability_status,
+  available_site_count,
+  reservable,
+  first_come_first_served,
+  last_checked_at,
+  expires_at
+from public.campground_availability
+where campground_id = '<canonical_campground_id>'
+order by last_checked_at desc nulls last;
+```
 
 ## Attribution Requirements
 

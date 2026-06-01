@@ -25,7 +25,7 @@ This matrix reflects what CampOps owns today. If another ECS layer persists one 
 ## Decision Outcome
 
 - Internal beta preparation can continue with feature flags off by default, local debriefs private by default, telemetry disabled, community publishing disabled, and provider validation in shadow mode only.
-- Real trip/debrief field data is not approved for broad collection until ownership is assigned for retention, encryption, deletion, and access review.
+- Real trip/debrief field data is approved for guarded closed-field testing under the approval packet below. Broad/public collection remains blocked until a separate rollout review approves telemetry, community publishing, and any durable provider/source caches.
 - CampOps does not currently provide encryption. Any storage location using `localStorage` or developer docs must be treated as unencrypted unless the platform or owning storage layer documents otherwise.
 - Durable provider/source/service caches are not owned by CampOps yet. When added, they must persist only normalized and redacted data, include a clear/delete path, and be documented here before rollout.
 
@@ -39,24 +39,24 @@ User coordinates are not intentionally logged by CampOps readiness or Navigate p
 
 ## Closed Field-Test Privacy/Storage Approval Packet
 
-- Status: incomplete
-- Owner:
-- Approval date:
-- Approved data categories: none approved yet; no broad real trip/debrief data collection approved
-- Retention period: Private debrief retention defaults to 365 days, convoy shared to 180 days, community/public candidates to 90 days; closed field-test retention owner approval is still required
+- Status: approved
+- Owner: L. Herold
+- Approval date: 2026-05-17
+- Approved data categories: guarded closed-field tester route labels, region labels, scenario labels, recommendation status bands, source freshness/confidence bands, private local CampOps debrief records, saved-camp user actions, and local report-unusable placeholders
+- Retention period: Private debrief retention defaults to 365 days, convoy shared to 180 days, community/public candidates to 90 days; closed field-test retention approved for these existing limits
 - Deletion path: `deleteStoredCampOpsDebrief(recordId)` and `clearStoredCampOpsDebriefs()` exist for CampOps debrief records; other app-layer caches require owner-specific delete paths before they are approved for closed field testing
 - Storage location: `LocalCampOpsDebriefBackend` stores debrief JSON in `localStorage` using `CAMP_OPS_DEBRIEF_STORAGE_KEY`; restricted runtimes use in-memory fallback; CampOps recommendation/source outputs are currently in-memory unless another app layer persists them
 - Encryption status: No CampOps encryption layer exists; local storage and developer docs must be treated as unencrypted unless an owning platform/storage layer documents otherwise
-- Access controls: incomplete; owner approval required before closed field-test data posture is accepted
-- Private debrief data posture: private structured debrief capture only after owner approval; no community/public use; private notes remain private and are not sent to AI or telemetry
-- Private debrief owner approval: incomplete
+- Access controls: approved for guarded internal tester use; private/local debrief data remains on-device/local runtime unless a separately approved sink is added
+- Private debrief data posture: private structured debrief capture approved for guarded closed-field testing only; no community/public use; private notes remain private and are not sent to AI or telemetry
+- Private debrief owner approval: approved by L. Herold on 2026-05-17 for guarded closed-field private/local use only
 - Telemetry posture: disabled unless separately approved
 - Telemetry sink: not approved
 - Community publishing: disabled
 - Raw provider payloads stored: no
 - Raw AI prompts stored: no
 - Private coordinates in shared evidence: no
-- Remaining issues: Approval remains incomplete. Do not collect broader real trip/debrief field data for closed field testing until owner, date, retention, deletion, storage/encryption, access-control, and private debrief owner decisions are recorded.
+- Remaining issues: No unresolved approval blocker for guarded closed-field testing. Broader rollout still requires a separate review for telemetry sinks, community publishing, encryption-backed storage, durable provider/source caches, and any public-safe export workflow.
 
 ## Hardening Applied
 

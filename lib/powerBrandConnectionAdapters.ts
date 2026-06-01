@@ -6,6 +6,19 @@ import type { EcsConnectResult, EcsNormalizedReading } from './IEcsPowerProvider
 import { getProviderMeta } from './BluProviderRegistry';
 import { getBluetoothTelemetrySourceLabel } from './bluetoothLiveTelemetry';
 import { recordBluetoothDiagnosticEvent } from './bluetoothDiagnostics';
+import { getBluestackParserDecision } from './bluestack';
+import {
+  buildPowerBluTelemetryEnvelope,
+  withBluPowerTelemetryEnvelope,
+} from './bluTelemetryEnvelope';
+import {
+  bluLog,
+  bluLogThrottled,
+  buildBluConnectionAttemptLogDetails,
+  buildBluTelemetryLogDetails,
+  buildBluTimeoutLogDetails,
+  getBluVendorPrefix,
+} from './bluDiagnosticsLog';
 
 export type PowerBrandAdapterCapability =
   | 'connectable'
@@ -107,6 +120,7 @@ export interface PowerBrandConnectionAdapter {
 }
 
 const SCANNER_POWER_PROVIDER_IDS: BluProviderId[] = [
+  'ecoflow',
   'bluetti',
   'anker_solix',
   'jackery',
@@ -114,9 +128,8 @@ const SCANNER_POWER_PROVIDER_IDS: BluProviderId[] = [
   'renogy',
   'redarc',
   'dakota_lithium',
+  'victron',
 ];
-
-const CONNECTABLE_PROVIDER_IDS = new Set<BluProviderId>();
 
 const PROVIDER_PENDING_COPY: Partial<Record<BluProviderId, string>> = {
   redarc: 'REDARC devices are discoverable. ECS will connect when a compatible Bluetooth telemetry profile is available for this model.',
@@ -156,10 +169,10 @@ function makeStatus(
         ? 'Connectable'
         : capability === 'capability_error'
           ? 'Capability Error'
-          : capability === 'api_required'
-            ? 'API Required'
+            : capability === 'api_required'
+              ? 'API Required'
             : capability === 'connection_support_pending'
-              ? 'Support Pending'
+              ? 'Parser Pending'
               : 'Unsupported';
 
   return {
@@ -170,6 +183,24 @@ function makeStatus(
     label,
     detail: detail ?? `${displayName} connection support is ${label.toLowerCase()}.`,
   };
+}
+
+function getAdapterCapabilityForProvider(providerId: BluProviderId): PowerBrandAdapterCapability {
+  const parserDecision = getBluestackParserDecision(providerId);
+  if (parserDecision.action === 'use_ecoflow_cloud') return 'api_required';
+  if (parserDecision.canDecodeLiveTelemetry) return 'connectable';
+  return parserDecision.status === 'profile_only' ? 'unsupported' : 'connection_support_pending';
+}
+
+function getParserPendingStatus(providerId: BluProviderId, state: PowerBrandAdapterStatus['state'] = 'discovered'): PowerBrandAdapterStatus {
+  const parserDecision = getBluestackParserDecision(providerId);
+  return makeStatus(
+    providerId,
+    state,
+    getAdapterCapabilityForProvider(providerId),
+    PROVIDER_PENDING_COPY[providerId] ?? parserDecision.reason,
+    state === 'error' ? 'error' : 'discovered',
+  );
 }
 
 function normalizeNumber(value: unknown): number | null {
@@ -222,7 +253,7 @@ function normalizeRawPowerTelemetry(
     acOutputWatts != null ||
     dcOutputWatts != null;
 
-  return {
+  const reading: EcsNormalizedReading = {
     provider: providerId,
     providerDisplayName: displayName,
     providerAccentColor: getProviderMeta(providerId)?.accentColor ?? '#64748B',
@@ -260,6 +291,10 @@ function normalizeRawPowerTelemetry(
       ? undefined
       : 'Connected, but ECS has not decoded telemetry for this model yet.',
   };
+  return {
+    ...reading,
+    bluTelemetryEnvelope: buildPowerBluTelemetryEnvelope(reading),
+  };
 }
 
 class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
@@ -270,7 +305,7 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
   constructor(providerId: BluProviderId) {
     this.providerId = providerId;
     this.displayName = getProviderDisplayName(providerId);
-    this.capability = CONNECTABLE_PROVIDER_IDS.has(providerId) ? 'connectable' : 'connection_support_pending';
+    this.capability = getAdapterCapabilityForProvider(providerId);
   }
 
   canClassifyAdvertisement(advertisement: PowerBrandAdvertisement): boolean {
@@ -285,9 +320,80 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
   }
 
   async connect(device: PowerBrandAdapterDevice): Promise<PowerBrandConnectResult> {
+    const parserDecision = getBluestackParserDecision(this.providerId);
+    bluLog('[BLU_CONNECT]', 'power_brand_adapter_connect_start', buildBluConnectionAttemptLogDetails({
+      deviceId: device.rawId,
+      vendor: this.providerId,
+      deviceType: device.model ?? 'power_device',
+      connectionMode: device.connectionType ?? 'ble',
+      startedAt: Date.now(),
+      timeoutMs: null,
+      attempt: 1,
+      driverMode: parserDecision.canDecodeLiveTelemetry ? 'real_ble_or_provider' : 'local_ble_incomplete',
+      parserId: parserDecision.parserId,
+      parserStatus: parserDecision.status,
+    }));
+    bluLog(getBluVendorPrefix(this.providerId), 'adapter_connect_start', {
+      deviceId: device.rawId,
+      vendor: this.providerId,
+      connectionMode: device.connectionType ?? 'ble',
+      driverMode: parserDecision.canDecodeLiveTelemetry ? 'real_ble_or_provider' : 'local_ble_incomplete',
+    });
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      const status = getParserPendingStatus(this.providerId);
+      bluLog('[BLU_VENDOR]', 'parser_pending_connection_blocked', {
+        deviceId: device.rawId,
+        vendor: this.providerId,
+        deviceType: device.model ?? 'power_device',
+        connectionMode: device.connectionType ?? 'ble',
+        phase: 'parser_readiness',
+        driverMode: parserDecision.action === 'profile_only' ? 'profile_only' : 'local_ble_incomplete',
+        parserId: parserDecision.parserId,
+        parserAction: parserDecision.action,
+        parserStatus: parserDecision.status,
+        message: parserDecision.reason,
+      });
+      bluLog(getBluVendorPrefix(this.providerId), 'parser_pending_connection_blocked', {
+        deviceId: device.rawId,
+        vendor: this.providerId,
+        driverMode: parserDecision.action === 'profile_only' ? 'profile_only' : 'local_ble_incomplete',
+        parserStatus: parserDecision.status,
+      });
+      recordBluetoothDiagnosticEvent({
+        type: 'provider_handshake_failure',
+        source: 'provider_handshake',
+        deviceId: device.rawId,
+        deviceName: device.name,
+        providerId: this.providerId,
+        message: `${this.displayName} live parser is not release-ready.`,
+        error: parserDecision.reason,
+        details: {
+          parserId: parserDecision.parserId,
+          parserAction: parserDecision.action,
+          parserStatus: parserDecision.status,
+        },
+      });
+      return {
+        success: false,
+        deviceCount: 0,
+        devices: [],
+        status,
+        error: status.detail,
+        errorCode: 'PARSER_PENDING',
+      };
+    }
+
     ensureEcsPowerProvidersRegistered();
     const provider = ecsProviderRegistry.getProvider(this.providerId);
     if (!provider) {
+      bluLog('[BLU_VENDOR]', 'provider_runtime_unavailable', {
+        deviceId: device.rawId,
+        vendor: this.providerId,
+        deviceType: device.model ?? 'power_device',
+        connectionMode: device.connectionType ?? 'ble',
+        phase: 'provider_lookup',
+        driverMode: 'disconnected_from_runtime',
+      });
       const status = makeStatus(
         this.providerId,
         'discovered',
@@ -323,6 +429,27 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
 
     const result = await provider.connect(device.rawId);
     if (!result.success) {
+      bluLog(getBluVendorPrefix(this.providerId), 'provider_connect_failed', {
+        deviceId: device.rawId,
+        vendor: this.providerId,
+        deviceType: device.model ?? 'power_device',
+        connectionMode: connection.transport,
+        phase: connection.phase,
+        errorCode: result.errorCode ?? null,
+        message: result.error ?? 'Unable to connect this power device.',
+      });
+      if (/timeout|timed out|unavailable|failed/i.test(String(result.error ?? ''))) {
+        bluLog('[BLU_TIMEOUT]', 'power_provider_connect_failed', buildBluTimeoutLogDetails({
+          deviceId: device.rawId,
+          vendor: this.providerId,
+          phase: connection.phase,
+          timeoutMs: null,
+          lastSuccessfulPhase: 'connect_requested',
+          lastPacketAt: null,
+          errorCode: result.errorCode ?? null,
+          message: result.error ?? 'Unable to connect this power device.',
+        }));
+      }
       recordBluetoothDiagnosticEvent({
         type: 'connect_failure',
         source: 'provider_handshake',
@@ -361,6 +488,13 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       details: { phase: connection.phase },
     });
     connection.phase = 'provider_handshake';
+    bluLog('[BLU_HANDSHAKE]', 'power_provider_handshake_succeeded', {
+      deviceId: device.rawId,
+      vendor: this.providerId,
+      phase: connection.phase,
+      connectionMode: connection.transport,
+      driverMode: 'provider_adapter',
+    });
     recordBluetoothDiagnosticEvent({
       type: 'provider_handshake_success',
       source: 'provider_handshake',
@@ -371,10 +505,10 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       details: { phase: connection.phase },
     });
     connection.phase = 'telemetry_setup';
-    if (!provider.isPolling()) {
-      provider.startPolling(15_000);
-    }
-    const readings = await ecsProviderRegistry.fetchAllTelemetry().catch(() => []);
+    const snapshotReadings = provider.getLatestReadings?.();
+    const readings = snapshotReadings && snapshotReadings.length > 0
+      ? snapshotReadings
+      : await ecsProviderRegistry.fetchAllTelemetry().catch(() => []);
     const hasLiveTelemetry = readings.some((reading) => (
       reading.provider === this.providerId &&
       reading.isLive === true &&
@@ -382,9 +516,24 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     ));
 
     if (!hasLiveTelemetry) {
-      provider.stopPolling();
+      if (provider.isPolling()) {
+        provider.stopPolling();
+      }
       await provider.disconnect().catch(() => undefined);
-      const detail = `${this.displayName} connected at the provider layer, but ECS did not receive decoded live telemetry for this model. The device stays nearby, not connected.`;
+      const detail =
+        this.providerId === 'ecoflow'
+          ? 'EcoFlow BLE connected and negotiated the local session, but ECS has not decoded live telemetry fields for this model yet. The device stays nearby, not connected.'
+          : `${this.displayName} connected at the provider layer, but ECS did not receive decoded live telemetry for this model. The device stays nearby, not connected.`;
+      bluLog('[BLU_TIMEOUT]', 'power_provider_no_live_telemetry', buildBluTimeoutLogDetails({
+        deviceId: device.rawId,
+        vendor: this.providerId,
+        phase: 'telemetry_setup',
+        timeoutMs: 15_000,
+        lastSuccessfulPhase: 'provider_handshake',
+        lastPacketAt: null,
+        errorCode: 'TELEMETRY_UNAVAILABLE',
+        message: detail,
+      }));
       recordBluetoothDiagnosticEvent({
         type: 'provider_handshake_failure',
         source: 'provider_handshake',
@@ -405,7 +554,17 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       };
     }
 
+    if (!provider.isPolling()) {
+      provider.startPolling(15_000);
+    }
     connection.phase = 'streaming';
+    bluLog('[BLU_STREAM]', 'power_provider_streaming', {
+      deviceId: device.rawId,
+      vendor: this.providerId,
+      phase: connection.phase,
+      connectionMode: connection.transport,
+      streamMode: provider.transportType === 'cloud' ? 'cloud_poll' : 'provider_poll',
+    });
     recordBluetoothDiagnosticEvent({
       type: 'telemetry_first_packet',
       source: 'widget_telemetry',
@@ -438,6 +597,19 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     _connection: PowerBrandProviderConnection,
     callback: (telemetry: EcsNormalizedReading) => void,
   ): Promise<PowerTelemetryUnsubscribe> {
+    const parserDecision = getBluestackParserDecision(this.providerId);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      bluLog(getBluVendorPrefix(this.providerId), 'telemetry_subscription_blocked_parser_pending', {
+        deviceId: _connection.deviceId,
+        vendor: this.providerId,
+        phase: 'telemetry_subscription',
+        driverMode: parserDecision.action === 'profile_only' ? 'profile_only' : 'local_ble_incomplete',
+        parserStatus: parserDecision.status,
+        message: parserDecision.reason,
+      });
+      throw new Error(parserDecision.reason);
+    }
+
     ensureEcsPowerProvidersRegistered();
     const provider = ecsProviderRegistry.getProvider(this.providerId);
     if (!provider) {
@@ -445,6 +617,13 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     }
 
     const unsubscribe = provider.onTelemetry(callback);
+    bluLog('[BLU_STREAM]', 'power_telemetry_subscription_start', {
+      deviceId: _connection.deviceId,
+      vendor: this.providerId,
+      phase: _connection.phase,
+      connectionMode: _connection.transport,
+      streamMode: provider.transportType === 'cloud' ? 'cloud_poll' : 'provider_poll',
+    });
     recordBluetoothDiagnosticEvent({
       type: 'telemetry_subscription_start',
       source: 'widget_telemetry',
@@ -465,12 +644,29 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
       reading.telemetryUnsupported !== true
     ));
     for (const reading of liveReadings) {
+      bluLogThrottled('[BLU_TELEMETRY]', `power-reading:${this.providerId}:${reading.deviceId}`, 'power_provider_live_reading', buildBluTelemetryLogDetails({
+        deviceId: reading.deviceId,
+        vendor: this.providerId,
+        telemetry: reading,
+        streamMode: provider.transportType === 'cloud' ? 'cloud_poll' : 'provider_poll',
+        lastPacketAt: reading.lastUpdated ?? reading.updatedAt ?? Date.now(),
+      }), 10_000);
       callback(reading);
     }
 
     if (liveReadings.length === 0) {
       unsubscribe();
       provider.stopPolling();
+      bluLog('[BLU_TIMEOUT]', 'power_telemetry_subscription_no_live_readings', buildBluTimeoutLogDetails({
+        deviceId: _connection.deviceId,
+        vendor: this.providerId,
+        phase: 'telemetry_subscription',
+        timeoutMs: 15_000,
+        lastSuccessfulPhase: 'provider_handshake',
+        lastPacketAt: null,
+        errorCode: 'TELEMETRY_UNAVAILABLE',
+        message: `${this.displayName} telemetry subscription did not produce live decoded readings.`,
+      }));
       recordBluetoothDiagnosticEvent({
         type: 'provider_handshake_failure',
         source: 'provider_handshake',
@@ -486,6 +682,12 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     return () => {
       unsubscribe();
       provider.stopPolling();
+      bluLog('[BLU_DISCONNECT]', 'power_telemetry_subscription_stop', {
+        deviceId: _connection.deviceId,
+        vendor: this.providerId,
+        phase: 'telemetry_subscription',
+        streamMode: provider.transportType === 'cloud' ? 'cloud_poll' : 'provider_poll',
+      });
       recordBluetoothDiagnosticEvent({
         type: 'telemetry_subscription_stop',
         source: 'widget_telemetry',
@@ -514,7 +716,11 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
     ensureEcsPowerProvidersRegistered();
     const provider = ecsProviderRegistry.getProvider(this.providerId);
     if (!provider) {
-      return makeStatus(this.providerId, 'discovered', 'connection_support_pending');
+      return getParserPendingStatus(this.providerId);
+    }
+    const parserDecision = getBluestackParserDecision(this.providerId);
+    if (!parserDecision.canDecodeLiveTelemetry) {
+      return getParserPendingStatus(this.providerId);
     }
     const state = provider.reportConnectionState();
     const hasTelemetry = ecsProviderRegistry
@@ -534,14 +740,15 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
   }
 
   getCapabilities(): PowerBrandProviderCapabilities {
+    const parserDecision = getBluestackParserDecision(this.providerId);
     return {
-      supportsLiveTelemetry: false,
+      supportsLiveTelemetry: parserDecision.canDecodeLiveTelemetry,
       supportsControl: false,
-      supportsBle: true,
+      supportsBle: parserDecision.action !== 'profile_only',
       supportsCloud: false,
-      supportsBatteryPercent: false,
-      supportsInputWatts: false,
-      supportsOutputWatts: false,
+      supportsBatteryPercent: parserDecision.canDecodeLiveTelemetry,
+      supportsInputWatts: parserDecision.canDecodeLiveTelemetry,
+      supportsOutputWatts: parserDecision.canDecodeLiveTelemetry,
       supportsRuntimeEstimate: false,
     };
   }
@@ -556,6 +763,8 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
   }
 
   normalizeTelemetry(raw: unknown, device?: PowerBrandAdapterDevice): EcsNormalizedReading | null {
+    const parserDecision = getBluestackParserDecision(this.providerId);
+    if (!parserDecision.canDecodeLiveTelemetry) return null;
     return normalizeRawPowerTelemetry(this.providerId, this.displayName, raw, device);
   }
 }
@@ -568,7 +777,14 @@ class ApiRequiredPowerAdapter implements PowerBrandConnectionAdapter {
   canClassifyAdvertisement(advertisement: PowerBrandAdvertisement): boolean {
     if (advertisement.providerId === 'ecoflow') return true;
     const combinedName = `${advertisement.localName ?? ''} ${advertisement.name ?? ''}`.toLowerCase();
-    return combinedName.includes('ecoflow') || combinedName.includes('delta') || combinedName.includes('river');
+    return (
+      combinedName.includes('ecoflow') ||
+      combinedName.includes('delta') ||
+      combinedName.includes('river') ||
+      combinedName.includes('glacier') ||
+      combinedName.includes('refrigerator') ||
+      combinedName.includes('fridge')
+    );
   }
 
   canHandle(device: PowerBrandAdapterDevice): boolean {
@@ -576,6 +792,15 @@ class ApiRequiredPowerAdapter implements PowerBrandConnectionAdapter {
   }
 
   async connect(device: PowerBrandAdapterDevice): Promise<PowerBrandConnectResult> {
+    bluLog('[BLU_ECOFLOW]', 'api_required_adapter_blocked_local_ble', {
+      deviceId: device.rawId,
+      vendor: 'ecoflow',
+      deviceType: device.model ?? 'power_device',
+      connectionMode: device.connectionType ?? 'ble',
+      phase: 'local_ble_parser',
+      driverMode: 'cloud_only',
+      message: 'EcoFlow local Bluetooth requires a validated provider telemetry handshake. Cloud authorization is not Bluetooth proof.',
+    });
     return {
       success: false,
       deviceCount: 0,
@@ -631,6 +856,9 @@ class ApiRequiredPowerAdapter implements PowerBrandConnectionAdapter {
   }
 
   normalizeTelemetry(raw: unknown, device?: PowerBrandAdapterDevice): EcsNormalizedReading | null {
+    const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const source = String(record.source ?? record.telemetrySource ?? record.telemetry_source ?? '').toLowerCase();
+    if (source !== 'cloud' && source !== 'api' && source !== 'ecoflow_cloud') return null;
     return normalizeRawPowerTelemetry('ecoflow', this.displayName, raw, device);
   }
 }
@@ -671,7 +899,13 @@ export function normalizePowerTelemetryForScanner(
   raw: unknown,
   device?: PowerBrandAdapterDevice,
 ): EcsNormalizedReading | null {
-  const adapter = REGISTERED_POWER_ADAPTERS.find((entry) => entry.providerId === providerId);
+  const parserDecision = getBluestackParserDecision(providerId);
+  if (!parserDecision.canDecodeLiveTelemetry && parserDecision.action !== 'use_ecoflow_cloud') return null;
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const source = String(record.source ?? record.telemetrySource ?? record.telemetry_source ?? '').toLowerCase();
+  const adapter = providerId === 'ecoflow' && (source === 'cloud' || source === 'api' || source === 'ecoflow_cloud')
+    ? REGISTERED_POWER_ADAPTERS.find((entry) => entry instanceof ApiRequiredPowerAdapter)
+    : REGISTERED_POWER_ADAPTERS.find((entry) => entry.providerId === providerId);
   return adapter?.normalizeTelemetry(raw, device) ?? null;
 }
 
@@ -680,7 +914,8 @@ export function makePendingPowerTelemetry(
   device: PowerBrandAdapterDevice,
 ): BluTelemetry {
   const now = Date.now();
-  return {
+  const parserDecision = getBluestackParserDecision(providerId);
+  return withBluPowerTelemetryEnvelope({
     timestamp: now,
     provider: providerId,
     device_id: device.rawId,
@@ -689,15 +924,18 @@ export function makePendingPowerTelemetry(
     telemetrySourceLabel: getBluetoothTelemetrySourceLabel('unavailable'),
     isLive: false,
     telemetryUnsupported: true,
-    telemetryUnsupportedReason: 'Connection support is pending for this device model.',
+    telemetryUnsupportedReason: parserDecision.reason,
     status_text: 'Discovered. Connection support pending.',
     raw: {
       providerId,
       deviceName: device.name,
       model: device.model ?? null,
       signalStrength: device.signalStrength ?? null,
+      parserId: parserDecision.parserId,
+      parserAction: parserDecision.action,
+      parserStatus: parserDecision.status,
     },
-  };
+  });
 }
 
 export function getPendingPowerCapabilities() {

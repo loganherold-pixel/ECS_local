@@ -12,7 +12,7 @@ import { classifyDispersedCampingRegion } from '../../lib/map/dispersedCampingEl
 const root = path.resolve(__dirname, '..', '..');
 
 function read(relativePath: string): string {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -172,7 +172,7 @@ assert.strictEqual(
 assert.ok(
   navigateSource.includes('onScoutCandidatePins={handleScoutDispersedCampingCandidatePins}') &&
     routeSummarySource.includes('Scout candidate camp pins'),
-  'Candidate pin generation should be tied to an explicit Scout action.',
+  'Candidate pin generation should keep an explicit Scout action available.',
 );
 
 assert.ok(
@@ -185,7 +185,8 @@ assert.ok(
 
 assert.ok(
   navigateSource.includes('const bottomLeftMapOverlayStackBottom = routeBuilderControlBottomOffset') &&
-    navigateSource.includes('const dispersedCampingLegendBottom =\n    bottomLeftMapOverlayStackBottom +'),
+    navigateSource.includes('const dispersedCampingLegendBottom = bottomLeftMapOverlayStackBottom') &&
+    navigateSource.includes('campLayerRouteSummaryStackBottom'),
   'Dispersed Camping legend should anchor from the bottom-left overlay base instead of the right-side Tools stack.',
 );
 
@@ -272,4 +273,37 @@ assert.deepStrictEqual(
   }),
   [],
   'Healthy runtime smoke snapshot should pass without contradictions.',
+);
+
+assert.deepStrictEqual(
+  detectDispersedCampingRuntimeContradictions({
+    featureAvailable: true,
+    betaFlagEnabled: true,
+    toggleVisible: true,
+    layerEnabled: true,
+    sourceLoaded: true,
+    fillLayerPresent: true,
+    outlineLayerPresent: true,
+    unavailableStateVisible: false,
+    selectedRegionSheetVisible: false,
+    selectedRegionId: null,
+    routeExists: true,
+    routeAwareSummaryVisible: true,
+    candidatePinCount: 1,
+    candidateGenerationTrigger: 'explicit_user_action',
+    dataFreshnessState: 'cached',
+    dataFreshnessLabel: 'Cached eligibility data',
+    offlineMode: false,
+    createdEligibilityClaimsWithoutData: false,
+    candidatePins: [
+      {
+        id: 'route-stage-candidate',
+        landManager: 'BLM',
+        confidence: 'high',
+        verificationWarning: 'Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.',
+      },
+    ],
+  }),
+  [],
+  'Explicit route candidate scouting should be allowed when an active or preview route exists.',
 );

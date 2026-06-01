@@ -22,6 +22,7 @@ import { getCommandDockHeight } from '../../lib/shellLayout';
 import { ECS, GOLD_RAIL } from '../../lib/theme';
 import { useReducedMotion } from '../../lib/ecsAnimations';
 import { readinessInnerSurfaceStyle } from './readinessUi';
+import { useTheme } from '../../context/ThemeContext';
 
 export type ReadinessAlertToastProps = {
   onOpenCommandBrief?: () => void;
@@ -58,6 +59,7 @@ export function ReadinessAlertToast({
   style,
 }: ReadinessAlertToastProps) {
   const insets = useSafeAreaInsets();
+  const { palette, colors, isLight } = useTheme();
   const alert = useActiveReadinessAlert();
   const [renderedAlert, setRenderedAlert] = useState<ExpeditionReadinessAlert | null>(alert);
   const renderedAlertRef = useRef<ExpeditionReadinessAlert | null>(renderedAlert);
@@ -176,7 +178,18 @@ export function ReadinessAlertToast({
 
   return (
     <Animated.View pointerEvents="box-none" style={[styles.host, positionStyle, { opacity }]}>
-      <View style={[styles.toast, readinessInnerSurfaceStyle, renderedAlert.severity === 'hold' && styles.holdToast, style]}>
+      <View
+        style={[
+          styles.toast,
+          readinessInnerSurfaceStyle,
+          {
+            backgroundColor: isLight ? 'rgba(255, 251, 245, 0.97)' : ECS.bgElev,
+            borderColor: isLight ? palette.border : GOLD_RAIL.section,
+          },
+          renderedAlert.severity === 'hold' && styles.holdToast,
+          style,
+        ]}
+      >
         <View style={styles.iconWrap}>
           <ECSIcon name={severityIcon(renderedAlert)} tier="compact" tone={severityTone(renderedAlert)} />
         </View>
@@ -186,10 +199,10 @@ export function ReadinessAlertToast({
           accessibilityRole="button"
           accessibilityLabel={`${renderedAlert.title}. ${renderedAlert.message}. Open Command Brief.`}
         >
-          <ECSText variant="body" style={styles.title} numberOfLines={1}>
+          <ECSText variant="body" style={[styles.title, { color: palette.text }]} numberOfLines={1}>
             {renderedAlert.title}
           </ECSText>
-          <ECSText variant="helper" style={styles.message} numberOfLines={2}>
+          <ECSText variant="helper" style={[styles.message, { color: colors.textSecondary }]} numberOfLines={2}>
             {renderedAlert.message}
           </ECSText>
         </Pressable>
@@ -199,7 +212,7 @@ export function ReadinessAlertToast({
           accessibilityRole="button"
           accessibilityLabel={renderedAlert.actionLabel}
         >
-          <ECSText variant="chip" style={styles.actionText} numberOfLines={1}>
+          <ECSText variant="chip" style={[styles.actionText, { color: palette.amber }]} numberOfLines={1}>
             Brief
           </ECSText>
         </Pressable>

@@ -27,6 +27,17 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native-webview') {
     return { WebView() { return null; } };
   }
+  if (request === 'react-native-svg') {
+    function Svg() { return null; }
+    return {
+      __esModule: true,
+      default: Svg,
+      Circle() { return null; },
+      Line() { return null; },
+      Polyline() { return null; },
+      Rect() { return null; },
+    };
+  }
   if (request === 'expo-constants') {
     return { default: { expoConfig: { extra: {} }, manifest: { extra: {} } } };
   }
@@ -64,7 +75,7 @@ const {
 } = require(adapterPath);
 const { normalizeRenderedCampScoutMarkers } = require(mapRendererPath);
 
-function makeCamp(id, name, source, sourceConfidence, latitude, longitude, score) {
+function makeCamp(id, name, source, sourceConfidence, latitude, longitude, score, overrides = {}) {
   return {
     id,
     name,
@@ -72,6 +83,7 @@ function makeCamp(id, name, source, sourceConfidence, latitude, longitude, score
     sourceConfidence,
     location: { latitude, longitude },
     score,
+    ...overrides,
   };
 }
 
@@ -184,6 +196,27 @@ assert.strictEqual(
   'Low-confidence ranked candidates should not create route camp pins.',
 );
 
+const structureBufferPins = buildCampOpsCampScoutMapPins({
+  ...recommendationSet,
+  rankedCandidates: [
+    makeCamp('near-structure', 'Too Close To Structure', 'route_candidate', 'high', 39.7, -120.7, 95, {
+      nearestStructureDistanceMiles: 0.8,
+    }),
+    makeCamp('clear-structure', 'Clear Structure Buffer', 'route_candidate', 'high', 39.8, -120.8, 94, {
+      nearestStructureDistanceMiles: 1.2,
+    }),
+  ],
+  scoresByCandidateId: {
+    'near-structure': { overall: 95 },
+    'clear-structure': { overall: 94 },
+  },
+});
+assert.deepStrictEqual(
+  structureBufferPins.map((pin) => pin.campOpsCandidateId),
+  ['clear-structure'],
+  'CampOps route pins must suppress candidates inside the one-mile structure privacy buffer.',
+);
+
 const renderedPins = normalizeRenderedCampScoutMarkers(pins);
 assert.strictEqual(renderedPins.length, 5, 'Shared renderer should accept CampOps pins through campScoutMarkers.');
 assert.strictEqual(renderedPins[0].pinFamily, 'campops', 'Renderer payload should preserve CampOps behavior tag.');
@@ -208,9 +241,10 @@ assert(
     mapRendererSource.includes('camp-scout-selected') &&
     mapRendererSource.includes('camp-scout-tent') &&
     mapRendererSource.includes('camp-scout-rank') &&
-    mapRendererSource.includes('camp-scout-label') &&
-    mapRendererSource.includes("label.textContent = 'camp'"),
-  'Remote Camp Pin Scout base marker style should remain the renderer source of truth.',
+    mapRendererSource.includes('root.appendChild(rank)') &&
+    !mapRendererSource.includes('camp-scout-label') &&
+    !mapRendererSource.includes("label.textContent = 'camp'"),
+  'Remote Camp Pin Scout base marker style should render a tent icon with a hovering rank badge.',
 );
 assert(
   !mapRendererSource.includes('campops-marker') &&

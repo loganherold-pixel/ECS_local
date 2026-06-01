@@ -1777,10 +1777,18 @@ function DispatchMetricCard({
   detail?: string;
   tone?: 'default' | 'danger';
 }) {
-  const accent = tone === 'danger' && value > 0 ? TACTICAL.danger : TACTICAL.amber;
+  const hasSignal = value > 0;
+  const accent = tone === 'danger' && hasSignal
+    ? TACTICAL.danger
+    : hasSignal
+      ? TACTICAL.goldStrong
+      : TACTICAL.textMuted;
+  const borderColor = hasSignal
+    ? `${accent}44`
+    : ECS.strokeMuted;
 
   return (
-    <View style={[styles.metricCard, { borderColor: value > 0 ? `${accent}44` : GOLD_RAIL.subsection }]}>
+    <View style={[styles.metricCard, { borderColor }]}>
       <View style={styles.metricTopRow}>
         <Ionicons name={icon} size={13} color={accent} />
         <Text style={styles.metricValue}>{value}</Text>
@@ -1802,7 +1810,7 @@ function ReadinessChip({
   score: number;
   inverse?: boolean;
 }) {
-  const tone = score >= 65 ? TACTICAL.amber : inverse ? '#D9903D' : TACTICAL.danger;
+  const tone = score >= 65 ? TACTICAL.goldMedium : inverse ? '#D9903D' : TACTICAL.danger;
 
   return (
     <View style={[styles.readinessChip, { borderColor: `${tone}44` }]}>

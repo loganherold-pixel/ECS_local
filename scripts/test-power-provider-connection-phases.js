@@ -15,6 +15,8 @@ function assert(condition, message) {
 
 const adapters = read('lib/powerBrandConnectionAdapters.ts');
 const hook = read('lib/useUnifiedDeviceConnections.ts');
+const bootstrap = read('lib/ecsLiveSystemBootstrap.ts');
+const registry = read('lib/EcsProviderRegistry.ts');
 
 for (const phase of [
   "'discovered'",
@@ -60,6 +62,12 @@ assert(
 );
 
 assert(
+  adapters.includes('has not decoded live telemetry fields for this model yet') &&
+    hook.includes('ecoflow_ble_parser_pending'),
+  'EcoFlow local BLE fallback must surface parser support as the remaining gate after local session negotiation',
+);
+
+assert(
   adapters.includes("`${this.displayName} is connected and decoded telemetry is streaming.`") &&
     adapters.includes("'telemetry_active'") &&
     adapters.includes("'streaming'"),
@@ -75,11 +83,11 @@ assert(
 );
 
 assert(
-  hook.includes("await genericBluetoothAccessoryManager.disconnect(device.rawId).catch(() => undefined)") &&
-    hook.includes("setDeviceUiState(device.id, 'failed', capabilityError)") &&
-    hook.includes('[BT_CONNECT] provider_capability_unavailable') &&
+  !hook.includes("await genericBluetoothAccessoryManager.disconnect(device.rawId).catch(() => undefined)") &&
+    hook.includes("setDeviceUiState(device.id, 'failed', localBleAuthGate)") &&
+    hook.includes('ecoflow_ble_parser_pending') &&
     !hook.includes('EcoFlow BLE connected; telemetry parser not yet decoded.'),
-  'EcoFlow BLE fallback must not mark a battery connected when no telemetry handshake exists',
+  'EcoFlow BLE fallback should fail clearly at the parser-support gate without claiming decoded telemetry',
 );
 
 assert(
@@ -88,6 +96,22 @@ assert(
     adapters.includes('unsubscribe();') &&
     adapters.includes('provider.stopPolling();'),
   'telemetry subscription cleanup must unsubscribe and stop provider polling',
+);
+
+assert(
+  bootstrap.includes('getBluestackParserDecision(entry.providerId)') &&
+    bootstrap.includes('!parserDecision.canDecodeLiveTelemetry') &&
+    bootstrap.includes('continue;') &&
+    bootstrap.includes('loadPowerProvider(entry.label, entry.exportName, entry.loadModule)'),
+  'provider bootstrap must skip parser-pending legacy modules before loading them',
+);
+
+assert(
+  registry.includes('getBluestackParserDecision(id)') &&
+    registry.includes('getBluestackParserDecision(reading.provider)') &&
+    registry.includes('if (!parserDecision.canDecodeLiveTelemetry)') &&
+    registry.includes('return null;'),
+  'provider registry must reject parser-pending providers and readings even if manually registered',
 );
 
 console.log('Power provider connection phase checks passed.');

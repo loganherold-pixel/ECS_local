@@ -18,7 +18,8 @@ const renderers = read('components/dashboard/WidgetRenderers.tsx');
 const detailModal = read('components/dashboard/WidgetDetailModal.tsx');
 
 assert(widget.includes('export function VehicleTelemetryDetailView({ onClose }'), 'telemetry detail panel must accept an explicit close action from the host modal');
-assert(widget.includes('OBD2ScannerModal'), 'telemetry detail panel must reuse the existing OBD2 scanner modal for Scan / Connect');
+assert(!widget.includes('OBD2ScannerModal'), 'telemetry detail panel must not embed a separate OBD scanner modal');
+assert(widget.includes("router.push('/power/blu' as any)"), 'telemetry detail panel must launch canonical Device Connections for scans');
 assert(widget.includes('getTelemetryDetailSourceLabel'), 'telemetry detail panel must centralize user-facing source labels');
 
 for (const label of [
@@ -34,7 +35,7 @@ for (const label of [
 }
 
 for (const action of [
-  'Scan / Connect',
+  'Device Connections',
   'Reconnect',
   'Use Manual Profile Only',
   'Disable Telemetry',

@@ -779,7 +779,15 @@ export default function OfflineCacheModal({
           </View>
         </View>
       ) : (
-        <View style={styles.downloadedSyncsList}>
+        <ScrollView
+          style={[
+            styles.downloadedSyncsList,
+            compact && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable,
+          ]}
+          contentContainerStyle={styles.downloadedSyncsListContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={downloadedSyncCards.length > 1}
+        >
           {downloadedSyncCards.map((item) => {
             const accentColor = item.tone === 'route' ? TACTICAL.amber : '#66BB6A';
             return (
@@ -885,7 +893,7 @@ export default function OfflineCacheModal({
               </View>
             );
           })}
-        </View>
+        </ScrollView>
       )}
     </View>
   ), [downloadedSyncCards, handleCheckFreshness, handleDeleteDownloadedSync, handleOpenDownloadedSync]);
@@ -2475,6 +2483,13 @@ const styles = StyleSheet.create({
   },
   downloadedSyncsList: {
     gap: 10,
+  },
+  downloadedSyncsListScrollable: {
+    maxHeight: 220,
+  },
+  downloadedSyncsListContent: {
+    gap: 10,
+    paddingBottom: 2,
   },
   downloadedSyncCard: {
     position: 'relative',

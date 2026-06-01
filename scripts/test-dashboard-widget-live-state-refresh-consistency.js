@@ -4,15 +4,19 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 
+function readSource(...segments) {
+  return fs.readFileSync(path.join(root, ...segments), 'utf8').replace(/\r\n/g, '\n');
+}
+
 const sources = {
-  widget: fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8'),
-  activeRouteProgress: fs.readFileSync(path.join(root, 'lib', 'activeRouteProgress.ts'), 'utf8'),
-  weather: fs.readFileSync(path.join(root, 'lib', 'useOperationalWeather.ts'), 'utf8'),
-  routeStore: fs.readFileSync(path.join(root, 'lib', 'routeStore.ts'), 'utf8'),
-  elevation: fs.readFileSync(path.join(root, 'lib', 'dashboardElevationTerrain.ts'), 'utf8'),
-  powerWidget: fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8'),
-  riveAdapter: fs.readFileSync(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'), 'utf8'),
-  powerDetail: fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8'),
+  widget: readSource('components', 'dashboard', 'WidgetRenderers.tsx'),
+  activeRouteProgress: readSource('lib', 'activeRouteProgress.ts'),
+  weather: readSource('lib', 'useOperationalWeather.ts'),
+  routeStore: readSource('lib', 'routeStore.ts'),
+  elevation: readSource('lib', 'dashboardElevationTerrain.ts'),
+  powerWidget: readSource('components', 'dashboard', 'PowerSystemWidget.tsx'),
+  riveAdapter: readSource('lib', 'powerModuleRiveTelemetry.ts'),
+  powerDetail: readSource('components', 'dashboard', 'PowerSystemDetail.tsx'),
 };
 
 function includes(source, fragment, message) {
@@ -54,16 +58,13 @@ includes(sources.elevation, 'const hasLiveElevation = hasGpsAltitude && hasFresh
 includes(sources.elevation, "badgeLabel: 'STALE ELEVATION'", 'Elevation resolver should expose stale state copy.');
 includes(sources.elevation, "badgeLabel: 'ELEVATION PENDING'", 'Elevation resolver should expose unavailable state copy.');
 
-// Power: live telemetry should be normalized, stale-gated, manually refreshable, and reduced-motion aware.
+// Power: live telemetry should be normalized, stale-gated, manually refreshable, and owned visually by the Rive module.
 includes(sources.powerWidget, 'export interface PowerTelemetrySummary', 'Power widget should normalize telemetry summary.');
 includes(sources.powerWidget, 'export function normalizePowerTelemetrySummary', 'Power widget should share normalized power data.');
-includes(sources.powerWidget, 'useReducedMotion()', 'Power flow animation should respect reduced motion.');
-includes(sources.powerWidget, 'const activeInput = inputWatts > 0 && !isStale && allowAnimation;', 'Power input animation should stop when stale/inactive or not truth-approved.');
-includes(sources.powerWidget, 'const activeOutput = outputWatts > 0 && !isStale && allowAnimation;', 'Power output animation should stop when stale/inactive or not truth-approved.');
-includes(sources.powerWidget, 'function usePowerFlowPulse(active: boolean, duration: number)', 'Power flow animation should use ref-driven Animated values, not state loops.');
-includes(sources.powerWidget, 'const inputFlowPulse = usePowerFlowPulse(activeInput && shouldAnimate, 1250);', 'Power input flow should animate independently.');
-includes(sources.powerWidget, 'const outputFlowPulse = usePowerFlowPulse(activeOutput && shouldAnimate, 1250);', 'Power output flow should animate independently.');
-includes(sources.powerWidget, 'outputRange: [-28, 28]', 'Power flow pulses should travel toward the battery for input and away for output.');
+notIncludes(sources.powerWidget, 'function PowerFlowGraphic', 'Power monitor should not render the old center tick/flow graphic.');
+notIncludes(sources.powerWidget, 'function usePowerFlowPulse', 'Power monitor should not keep the old inline flow animation loop.');
+notIncludes(sources.powerWidget, 'useReducedMotion()', 'Power monitor flow animation should be handled by the blue Rive module, not an extra overlay.');
+notIncludes(sources.powerWidget, "footer={<WidgetMetaLine", 'Power monitor should not show redundant live/source footer pills.');
 includes(
   sources.powerWidget,
   "import PowerModuleRiveWidget from './PowerModuleRiveWidget'",

@@ -80,7 +80,11 @@ export interface ConvoyCommandInput {
   teamSnapshot?: TeamStoreSnapshot | null;
   convoySnapshot?: ConvoySnapshot | null;
   activeRouteId?: string | null;
+  activeRouteLabel?: string | null;
+  activeExpeditionId?: string | null;
   isOffline?: boolean | null;
+  connectivityStatus?: 'online' | 'offline' | 'reconnecting' | null;
+  connectivityLevel?: 'no_service' | 'limited' | 'normal' | 'unknown' | null;
   liveSharingAvailable?: boolean | null;
   nowMs?: number;
 }
@@ -145,15 +149,25 @@ function normalizeManualMember(member: ConvoyMemberSnapshot): ConvoyMember {
   const lastCheckInAt = dateFrom(valueOf(member.lastCheckInAt));
   const status = normalizeManualStatus(member);
   const locationLabel = valueOf(member.lastKnownLocationLabel);
+  const location = valueOf(member.lastKnownLocation);
+  const latitude = finite(location?.latitude);
+  const longitude = finite(location?.longitude);
+  const locationUpdatedAt = dateFrom(member.lastKnownLocation?.updatedAt);
   return {
     id: member.id,
     displayName: member.callsign || 'Convoy member',
     role: normalizeManualRole(member.role),
     vehicleName: member.callsign || 'Vehicle not assigned',
     status,
-    coordinates: null,
+    coordinates:
+      latitude != null && longitude != null
+        ? {
+            latitude,
+            longitude,
+          }
+        : null,
     lastCheckInAt,
-    lastPingAt: null,
+    lastPingAt: locationUpdatedAt,
     spacingFromPrevious: finite(valueOf(member.distanceBehindLeadMiles)),
     distanceFromRoute: null,
     note: hasText(locationLabel) ? `Last known: ${locationLabel}` : null,
@@ -232,6 +246,7 @@ function spacingLabel(convoy: ConvoySnapshot | null): string | null {
 
 function resolveDataState(params: {
   isOffline: boolean;
+  hasLimitedConnectivity: boolean;
   hasPlan: boolean;
   hasPartialPlan: boolean;
   hasCheckIns: boolean;
@@ -240,6 +255,9 @@ function resolveDataState(params: {
 }): ConvoyCommandDataState {
   if (params.isOffline && (params.hasPlan || params.hasPartialPlan || params.hasMembers)) {
     return 'offline';
+  }
+  if (params.hasLimitedConnectivity && (params.hasCheckIns || params.hasMembers || params.hasPartialPlan)) {
+    return 'partial';
   }
   if (params.hasLiveSharing && params.hasMembers && params.hasCheckIns) return 'live';
   if (params.hasCheckIns) return 'checkIn';
@@ -408,10 +426,17 @@ export function normalizeConvoyCommandData(
       manualMembers.some((member) => member.lastCheckInAt || member.status !== 'unknown') ||
       teamMembers.some((member) => member.lastPingAt),
   );
-  const isOffline = Boolean(input.isOffline);
+  const connectivityOffline =
+    input.connectivityStatus === 'offline' ||
+    input.connectivityLevel === 'no_service';
+  const hasLimitedConnectivity =
+    input.connectivityStatus === 'reconnecting' ||
+    input.connectivityLevel === 'limited';
+  const isOffline = Boolean(input.isOffline || connectivityOffline);
   const hasLiveSharing = Boolean(input.liveSharingAvailable);
   const dataState = resolveDataState({
     isOffline,
+    hasLimitedConnectivity,
     hasPlan,
     hasPartialPlan,
     hasCheckIns,

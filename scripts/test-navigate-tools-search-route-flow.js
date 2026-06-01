@@ -6,9 +6,10 @@ const navigatePath = path.join(root, 'app/(tabs)/navigate.tsx');
 const roadNavigationPath = path.join(root, 'lib/useRoadNavigation.ts');
 const roadOverlayPath = path.join(root, 'components/navigate/RoadNavigationOverlay.tsx');
 
-const navigateSource = fs.readFileSync(navigatePath, 'utf8');
-const roadNavigationSource = fs.readFileSync(roadNavigationPath, 'utf8');
-const roadOverlaySource = fs.readFileSync(roadOverlayPath, 'utf8');
+const normalize = (value) => value.replace(/\r\n/g, '\n');
+const navigateSource = normalize(fs.readFileSync(navigatePath, 'utf8'));
+const roadNavigationSource = normalize(fs.readFileSync(roadNavigationPath, 'utf8'));
+const roadOverlaySource = normalize(fs.readFileSync(roadOverlayPath, 'utf8'));
 
 function assert(condition, message) {
   if (!condition) {
@@ -99,11 +100,14 @@ assertIncludes(
     'onPrimaryPreviewAction ?? onStartNavigation',
     "action.id === 'prepare_offline'",
     '? onPrepareOffline',
-    "action.id === 'review_route'",
-    '? onRouteOverview',
     'readinessStack.rows.map((row)',
   ],
-  'Road navigation overlay should still expose Start, Review, Prepare Offline, and readiness actions.',
+  'Road navigation overlay should still expose Start, Prepare Offline, and readiness actions.',
+);
+
+assert(
+  !roadOverlaySource.includes("action.id === 'review_route'"),
+  'Road navigation overlay should not render the redundant Review Route readiness action.',
 );
 
 console.log('navigate tools search route-flow regression passed');

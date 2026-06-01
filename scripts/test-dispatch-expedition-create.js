@@ -62,11 +62,14 @@ try {
   const validationSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
   assert.ok(validationSource.includes('function validateCreateExpeditionForm'), 'Dispatch Connect should validate create-expedition form input.');
   assert.ok(validationSource.includes('Expedition name is required.'), 'Empty expedition names should be rejected.');
-  assert.ok(validationSource.includes('Create Expedition'), 'Dispatch Connect should expose a Create Expedition form.');
-  assert.ok(validationSource.includes('Date / Time'), 'Create Expedition form should expose date/time input.');
-  assert.ok(validationSource.includes('Radio / Comms Notes'), 'Create Expedition form should expose comms notes input.');
-  assert.ok(validationSource.includes('Privacy / Join Mode'), 'Create Expedition form should expose join/privacy mode input.');
+  assert.ok(validationSource.includes('accessibilityLabel="Open convoy setup"'), 'Dispatch should expose Convoy setup from the top-right action bar.');
+  assert.ok(validationSource.includes('Start Convoy'), 'Dispatch Convoy setup should expose a start-convoy form.');
+  assert.ok(validationSource.includes('Date / Time'), 'Start Convoy form should expose date/time input.');
+  assert.ok(validationSource.includes('Radio / Comms Notes'), 'Start Convoy form should expose comms notes input.');
+  assert.ok(validationSource.includes('Invite Mode'), 'Start Convoy form should expose join/privacy mode input.');
   assert.ok(validationSource.includes('teamStore.createLocalTeam'), 'Creating an expedition should create a local team context for existing invite flow.');
+  assert.ok(validationSource.includes('Share.share'), 'Convoy invites should use the native share sheet for text/email/nearby sharing.');
+  assert.ok(validationSource.includes("router.push('/join-expedition' as any)"), 'Convoy setup should link to the join-by-code screen.');
 
   const record = expeditionStateStore.beginExpedition({
     activeVehicleId: 'dispatch-local',

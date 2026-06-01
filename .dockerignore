@@ -1,0 +1,11 @@
+*
+!apps
+!apps/web
+!apps/web/**
+!packages
+!packages/shared
+!packages/shared/**
+!.dockerignore
+apps/web/.next
+apps/web/node_modules
+apps/web/out

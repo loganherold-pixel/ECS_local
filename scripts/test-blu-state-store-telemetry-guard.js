@@ -117,11 +117,84 @@ async function registerDevice(bluDeviceRegistry, device) {
     deviceId: 'GLACIER123',
     displayName: 'GLACIER refrigerator',
     productType: 'refrigerator',
+    telemetryCapable: true,
+  });
+  bluStateStore.ingestTelemetry(telemetry('GLACIER123', {
+    temperature_celsius: 1.5,
+    output_watts: undefined,
+    input_watts: undefined,
+  }));
+  assert.strictEqual(bluStateStore.getSummary().available, true, 'EcoFlow Glacier cloud telemetry should update summary when authorized');
+  assert.strictEqual(bluStateStore.getSummary().battery_percent, 82);
+
+  await reset(bluStateStore, bluDeviceRegistry);
+  await registerDevice(bluDeviceRegistry, {
+    deviceId: 'GLACIER_PARTIAL',
+    displayName: 'GLACIER refrigerator partial telemetry',
+    productType: 'refrigerator',
+    telemetryCapable: true,
+  });
+  bluStateStore.ingestEcoFlowData({
+    deviceId: 'GLACIER_PARTIAL',
+    deviceName: 'GLACIER refrigerator partial telemetry',
+    batteryPct: 100,
+    solarWatts: null,
+    inputWatts: 128,
+    outputWatts: null,
+    estimatedRuntimeMinutes: null,
+    capacityWh: null,
+    status: 'cloud_available',
+  });
+  const glacierPartialSummary = bluStateStore.getSummary();
+  const glacierPartialTelemetry = bluStateStore.getDeviceTelemetry('ecoflow', 'GLACIER_PARTIAL');
+  assert.strictEqual(glacierPartialSummary.available, true, 'partial EcoFlow cloud telemetry should still make power available');
+  assert.strictEqual(glacierPartialSummary.isLive, true, 'partial EcoFlow cloud telemetry should be live when values are decoded');
+  assert.strictEqual(glacierPartialSummary.live_input, 128);
+  assert.strictEqual(glacierPartialSummary.battery_percent, 100);
+  assert.strictEqual(glacierPartialSummary.battery_watts, 128, 'net battery watts should use known partial flow values');
+  assert.strictEqual(glacierPartialTelemetry?.isLive, true);
+  assert.strictEqual(glacierPartialTelemetry?.source, 'provider_cloud');
+
+  await reset(bluStateStore, bluDeviceRegistry);
+  await registerDevice(bluDeviceRegistry, {
+    deviceId: 'CHARGER123',
+    displayName: 'EcoFlow alternator charger',
+    productType: 'charger',
+    telemetryCapable: true,
+  });
+  bluStateStore.ingestTelemetry(telemetry('CHARGER123', {
+    battery_percent: undefined,
+    input_watts: undefined,
+    output_watts: undefined,
+    status_text: 'Charging source available',
+  }));
+  assert.strictEqual(bluStateStore.getSummary().available, true, 'EcoFlow charger cloud telemetry should not be rejected when authorized');
+
+  await reset(bluStateStore, bluDeviceRegistry);
+  await registerDevice(bluDeviceRegistry, {
+    deviceId: 'SOLAR_TRACKER123',
+    displayName: 'EcoFlow unsupported accessory',
+    productType: 'solar_tracker',
     telemetryCapable: false,
   });
-  bluStateStore.ingestTelemetry(telemetry('GLACIER123'));
-  assert.strictEqual(bluStateStore.getSummary().available, false, 'unsupported productType must not update summary');
+  bluStateStore.ingestTelemetry(telemetry('SOLAR_TRACKER123'));
+  assert.strictEqual(bluStateStore.getSummary().available, false, 'known unsupported productType must not update summary');
   assertRejected('unsupported_product_type');
+
+  await reset(bluStateStore, bluDeviceRegistry);
+  await registerDevice(bluDeviceRegistry, {
+    deviceId: 'USER_RENAMED_DELTA',
+    displayName: 'Camp Power',
+    productType: 'unknown',
+    telemetryCapable: true,
+  });
+  bluStateStore.ingestTelemetry(telemetry('USER_RENAMED_DELTA'));
+  assert.strictEqual(
+    bluStateStore.getSummary().available,
+    true,
+    'EcoFlow cloud telemetry from unknown catalog types should be accepted after a successful quota decode',
+  );
+  assert.strictEqual(bluStateStore.getSummary().battery_percent, 82);
 
   await reset(bluStateStore, bluDeviceRegistry);
   await registerDevice(bluDeviceRegistry, {
@@ -137,8 +210,9 @@ async function registerDevice(bluDeviceRegistry, device) {
     telemetryCapable: true,
   });
   bluStateStore.ingestTelemetry(telemetry('DELTA_SECONDARY'));
-  assert.strictEqual(bluStateStore.getSummary().available, false, 'non-primary telemetry must not update summary');
-  assertRejected('non_primary_device');
+  assert.strictEqual(bluStateStore.getDeviceTelemetry('ecoflow', 'DELTA_SECONDARY')?.battery_percent, 82, 'non-primary telemetry must remain cached per device');
+  assert.strictEqual(bluStateStore.getSummary().available, true, 'non-primary telemetry may populate summary when the primary has no packet yet');
+  assert.strictEqual(bluStateStore.getSummary().active_device_name, 'DELTA Secondary');
 
   await reset(bluStateStore, bluDeviceRegistry);
   await registerDevice(bluDeviceRegistry, {

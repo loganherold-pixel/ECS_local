@@ -132,6 +132,8 @@ export const EMPTY_VEHICLE_TELEMETRY_SNAPSHOT: VehicleTelemetrySnapshot = {
   rangeMiles: null,
   oilTempF: null,
   transmissionTempF: null,
+  tirePressuresPsi: null,
+  tireTempsF: null,
   pitchDeg: null,
   rollDeg: null,
   headingDeg: null,

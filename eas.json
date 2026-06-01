@@ -11,34 +11,43 @@
     "preview": {
       "distribution": "internal",
       "environment": "preview",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "NODE_ENV": "production",
-        "EXPO_NO_TELEMETRY": "1"
+        "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
       }
     },
     "fieldtest": {
       "distribution": "internal",
       "environment": "preview",
+      "channel": "fieldtest",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "NODE_ENV": "production",
-        "EXPO_NO_TELEMETRY": "1"
+        "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
+        "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
+        "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
       }
     },
     "campops-preview": {
       "distribution": "internal",
       "environment": "preview",
+      "channel": "campops-preview",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "NODE_ENV": "production",
-        "EXPO_NO_TELEMETRY": "1"
+        "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
       }
     },
     "production": {
@@ -48,7 +57,6 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "NODE_ENV": "production",
         "EXPO_NO_TELEMETRY": "1"
       }
     }

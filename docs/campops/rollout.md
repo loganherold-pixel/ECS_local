@@ -44,13 +44,13 @@ The internal beta activation helper may enable only the controlled beta surfaces
 - `campopsSourceTransparencyEnabled`
 - `campopsProviderValidationShadowModeEnabled`
 
-The helper keeps community publishing and telemetry off. Provider adapters can influence recommendations only when `providerInfluenceApproved=true` is provided for the active provider/category/region. AI assist can be enabled only when `aiAssistRealOutputReviewApproved=true` is provided for the active model/config.
+The helper keeps community publishing and telemetry off unless their own approval inputs are provided. Provider adapters can influence recommendations only when `providerInfluenceApproved=true` is provided for the active provider/category/region. AI assist can be enabled only when `aiAssistRealOutputReviewApproved=true` is provided for the active model/config. Telemetry can be enabled only when `telemetrySinkPrivacyApproved=true` is provided, and community publishing can be enabled only when `communityPublishingApproved=true` is provided.
 
 Use `rollbackCampOpsInternalBetaActivation()` for a full internal beta rollback. It returns every CampOps rollout flag to false and preserves the legacy camp search path.
 
 ## Risk-Accepted Restricted Closed Field Test
 
-Risk-accepted closed field-test builds should use `resolveCampOpsRiskAcceptedRestrictedFieldTestActivation()` instead of raw rollout flags. This is not full readiness and does not complete Android/device QA, provider readiness, privacy/storage approval, or private debrief owner approval. It only allows a restricted field test when risk acceptance is explicitly accepted and the active tester cohort, build identifier, region label, route label, and scenario label match the approved risk-acceptance scope.
+Risk-accepted closed field-test builds should use `resolveCampOpsRiskAcceptedRestrictedFieldTestActivation()` instead of raw rollout flags. This is not full readiness and does not approve provider influence, public release, AI assist, telemetry, community publishing, or broad privacy/storage rollout. It only allows a restricted field test when risk acceptance is explicitly accepted and the active tester cohort, build identifier, region label, route label, and scenario label match the approved risk-acceptance scope.
 
 When accepted and scoped correctly, the helper may enable only deterministic field-test surfaces:
 
@@ -66,9 +66,9 @@ The helper keeps risky surfaces off unless their own exact approvals exist:
 - `campopsProviderAdaptersEnabled=false` unless exact category/region provider influence approval exists.
 - `campopsAiAssistEnabled=false` unless exact model/config real-output approval exists.
 - `campopsTelemetryEnabled=false` unless sink/privacy approval exists.
-- `campopsDebriefCommunityPublishingEnabled=false` for restricted field tests.
+- `campopsDebriefCommunityPublishingEnabled=false` unless exact community governance approval exists.
 
-Restricted field-test activation must use labels only, approved testers only, approved builds only, and manual privacy-safe feedback after every session. Provider validation may run in shadow mode, but unapproved provider output must remain shadow-only/unknown and must not influence recommendations.
+Restricted field-test activation must use labels only, approved testers only, approved builds only, and manual privacy-safe feedback after every session. Provider validation may run in shadow mode, but unapproved provider output must remain shadow-only/unknown and must not influence recommendations. Region/category approval must be based on real upstream provider evidence; fixture-backed readiness is not enough to enable provider adapters.
 
 ## Production Caller Behavior
 
@@ -117,23 +117,25 @@ Rollout decisions should reference `docs/campops/product_acceptance_review.md` b
 | --- | --- |
 | Internal dev | Core pipeline, feature flags, fixture tests, and docs are `pass`. |
 | Internal beta | Mobile QA is at least partially executed, community publishing remains off, and AI/telemetry are explicitly gated. |
-| Closed field test | `closed_field_test_readiness.md` gates pass: no unresolved P0/P1, provider readiness approved for the target region, Android/device QA complete, privacy/storage approved, rollback verified, community publishing off, telemetry off unless approved, and AI assist approved or disabled. |
+| Restricted closed field test | `closed_field_test_readiness.md` reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`: no unresolved P0/P1, Android/device QA complete for the guarded packet, guarded privacy/storage approved, rollback path present, community publishing off, telemetry off unless approved, AI assist disabled unless approved, and provider influence shadow-only unless exact provider/category/region approval exists. |
+| Closed field test without risk acceptance | All closed-field gates pass without risk acceptance: provider readiness approved for the target region/category, Android/device QA complete, privacy/storage approved, rollback verified, community publishing off, telemetry off unless approved, and AI assist approved or disabled. |
 | Limited region rollout | Provider quality, source freshness, stale/unknown/conflict rates, support plan, and rollback plan are accepted for the region. |
 | Broad rollout | Multiple regions pass provider readiness, community governance is approved if used, and field evidence supports user comprehension of confidence/missing-data copy. |
 
 Current product acceptance status is tracked in the launch blocker registry in `product_acceptance_review.md`. A feature flag being technically available does not mean the corresponding product area is launch-ready.
 
-A risk-accepted restricted closed field test is not the same as full closed-field readiness. If evidence gates remain incomplete, the only acceptable alternate path is an explicitly accepted `docs/campops/closed_field_test_risk_acceptance.md` with product, safety, privacy, and engineering sign-offs, a recorded expiration date, approved tester cohort, approved build, approved labels, incident contact, and rollback owner/path. Risk acceptance does not mark Android/device QA, provider readiness, privacy/storage approval, or debrief owner approval complete.
+A risk-accepted restricted closed field test is not the same as full closed-field readiness. The current packet has accepted restricted risk, Android/device QA for the guarded packet, and guarded privacy/storage approval, but provider influence remains unapproved and broad rollout remains blocked. Any alternate restricted path requires an explicitly accepted `docs/campops/closed_field_test_risk_acceptance.md` with product, safety, privacy, and engineering sign-offs, a recorded expiration date, approved tester cohort, approved build, approved labels, incident contact, and rollback owner/path.
 
 ## Executable Closed Field-Test Gate
 
 Before any closed field-test build review, run:
 
 ```bash
-npm run gate:pre-closed-field-test
+npm run gate:campops-live-readiness:json
+npm run gate:closed-field-test:json
 ```
 
-This aggregate gate runs:
+The JSON closed-field gate reads the evidence docs and currently reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test` for the accepted restricted packet. The aggregate gate remains useful for broader release review:
 
 1. `npm run smoke`
 2. `npm run gate:android-qa`
@@ -141,8 +143,6 @@ This aggregate gate runs:
 4. `npm run gate:privacy-storage`
 5. `npm run gate:ai-assist`
 6. `npm run gate:closed-field-test`
-
-The command is expected to fail while `closed_field_test_readiness.md` says closed field testing is blocked or any blocker gate remains incomplete. That failure blocks closed field-test promotion only; it does not block normal internal beta development or fixture-based CampOps work.
 
 The aggregate may pass for a restricted closed field test only when all gates pass or when `docs/campops/closed_field_test_risk_acceptance.md` is explicitly accepted with real sign-offs and scope. That posture is restricted to approved testers, approved labels only, and the recorded expiration date. It must preserve rollback, manual privacy-safe feedback after every session, and all non-negotiable restrictions.
 
@@ -160,6 +160,9 @@ Provider readiness guard:
 - Fixture-backed validation is not approval.
 - Real-shadow validation is not approval unless the target region/category approval fields are complete.
 - Provider influence must remain shadow-only or unknown for every unapproved category.
+- `campopsProviderAdaptersEnabled` must remain false outside the exact approved region/category/route scope.
+- Source transparency must stay visible during any closed field-test provider review.
+- Legal/access, closure, fire, weather, and service/resupply data must not be marked ready for broader regional rollout until real provider coverage, freshness, unknown, stale, and conflict rates are validated and accepted.
 
 Privacy/storage guard:
 
@@ -191,7 +194,7 @@ Closed field-test posture remains restricted:
 - Rollback must remain verified for the active build.
 - Risk-accepted field tests must use labels only and expire on the recorded expiration date.
 
-No CI workflow is configured in this repository for closed field-test readiness. Release visibility is documented in `docs/release/closed_field_test_ci_guard.md`. If CI is added later, this aggregate should be a manual, release-only, or informational field-test visibility gate, not a blocker for ordinary development builds while the current readiness status is intentionally blocked.
+No CI workflow is configured in this repository for closed field-test readiness. Release visibility is documented in `docs/release/closed_field_test_ci_guard.md`. If CI is added later, this aggregate should be a manual, release-only, or informational field-test visibility gate, not a blocker for ordinary development builds.
 
 ## Legacy Camp Ranking Migration
 

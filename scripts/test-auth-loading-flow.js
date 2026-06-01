@@ -91,6 +91,21 @@ assertIncludes(
 );
 assertIncludes(
   appContextSource,
+  'const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;',
+  'Manual sign-in requests should have a bounded timeout so the auth-screen loading handoff cannot stall forever.',
+);
+assertIncludes(
+  appContextSource,
+  'await withAuthRequestTimeout(\n          \'sign_in_request\',\n          supabase.auth.signInWithPassword({ email, password }),\n          SIGN_IN_REQUEST_TIMEOUT_MS,\n        )',
+  'Supabase password sign-in should be wrapped by the bounded auth request timeout.',
+);
+assertIncludes(
+  appContextSource,
+  "reason: 'auth_request_timeout'",
+  'Timed-out sign-in requests should clear pending auth state and report a recoverable auth timeout.',
+);
+assertIncludes(
+  appContextSource,
   'let connectivityIntelInitializedForAppSession = false;',
   'Connectivity Intelligence initialization should have an app-session singleton guard.',
 );
@@ -103,6 +118,31 @@ assertIncludes(
   appContextSource,
   'const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;',
   'Auth restore should have a bounded fallback so session checks cannot hang root loading forever.',
+);
+assertIncludes(
+  appContextSource,
+  'const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;',
+  'Supabase startup session restore should have a shorter provider-call timeout before the outer loading watchdog fires.',
+);
+assertIncludes(
+  appContextSource,
+  "withAuthRequestTimeout(\n        'startup_session_restore',\n        supabase.auth.getSession(),\n        STARTUP_PROVIDER_SESSION_TIMEOUT_MS,\n      )",
+  'Startup Supabase session restore should be bounded so fetch failures cannot leave authReady unresolved.',
+);
+assertIncludes(
+  appContextSource,
+  'function isRecoverableStartupSessionRestoreError',
+  'Startup auth restore should classify network and timeout failures as recoverable for stored offline sessions.',
+);
+assertIncludes(
+  appContextSource,
+  'if (hasPersistentSession && (!connectivity.isOnline() || isRecoverableStartupSessionRestoreError(err)))',
+  'Stored sessions should enter offline mode when provider session restore fails from network or timeout errors.',
+);
+assertIncludes(
+  appContextSource,
+  'setPersistedOfflineMode(true);',
+  'Offline startup recovery should persist offline mode so AuthGate can resolve remembered offline access.',
 );
 assertIncludes(
   appContextSource,
@@ -231,33 +271,28 @@ assertIncludes(
 );
 assertIncludes(
   tabsLayoutSource,
-  'const tabScreenOptions = useMemo<BottomTabNavigationOptions>(',
-  'Tabs layout should memoize screenOptions so React Navigation does not receive fresh options every commit.',
+  "import { Slot } from 'expo-router';",
+  'Shell route layout should render the active tab group child directly.',
 );
 assertIncludes(
   tabsLayoutSource,
-  'lazy: true,',
-  'Tabs should lazy-mount non-active tabs so Dispatch/connectivity effects cannot run during Dashboard boot.',
+  '<Slot />',
+  'Shell route layout should avoid hidden native tab screens during Android tab switches.',
 );
 assertNotIncludes(
   tabsLayoutSource,
-  'lazy: false,',
-  'Tabs must not eagerly mount every tab during startup.',
+  "import { Tabs } from 'expo-router';",
+  'Shell route layout must not reintroduce the hidden native Tabs wrapper.',
+);
+assertNotIncludes(
+  tabsLayoutSource,
+  '<Tabs',
+  'Shell route layout must not mount hidden tab screens that can reparent native views on Android.',
 );
 assertIncludes(
   tabsLayoutSource,
-  'const hiddenOptions = useMemo<BottomTabNavigationOptions & { href: null }>(',
-  'Hidden tab route options should be memoized to avoid navigation layout-effect update loops.',
-);
-assertNotIncludes(
-  tabsLayoutSource,
-  'screenOptions={{\n        ...primaryScreenOptions,',
-  'Tabs layout must not create a fresh screenOptions object inline.',
-);
-assertNotIncludes(
-  tabsLayoutSource,
-  'options={{ ...hiddenRouteOptions, sceneStyle:',
-  'Hidden tab routes must not create fresh options objects inline.',
+  'avoids Android/Fabric native tab reparenting faults',
+  'Shell route layout should document why native Tabs are intentionally avoided.',
 );
 assertIncludes(
   layoutSource,
@@ -338,8 +373,28 @@ assertIncludes(
 );
 assertIncludes(
   layoutSource,
-  'if (postAuthRedirectHoldingScreenActive) {\n    return <LoadingTransitionVideo />;\n  }',
-  'Authenticated redirects pending from /login should render the loading video instead of the sign-in screen.',
+  'const authScreenShellRedirectPending =',
+  'AuthGate should explicitly model authenticated auth-screen redirects so second logins cannot fall through to a blank shell stack.',
+);
+assertIncludes(
+  layoutSource,
+  'inAuthScreen &&\n      (\n        !entryResolution.shellAccessReady ||\n        authScreenShellRedirectPending',
+  'Auth screens should remain mounted while an authenticated shell redirect is pending.',
+);
+assertIncludes(
+  layoutSource,
+  'const authScreenLoadingHandoffActive =\n    !isResetCompletionScreen &&\n    inAuthScreen &&',
+  'AuthGate should cover manual login/auth screens with the loading handoff once sign-in starts.',
+);
+assertIncludes(
+  layoutSource,
+  "authPhase === 'signing_in' ||\n      postAuthBootstrapPending ||\n      postAuthRedirectHoldingScreenActive",
+  'Auth-screen handoff loading should cover sign-in, post-auth bootstrap, and final redirect waits.',
+);
+assertIncludes(
+  layoutSource,
+  "(postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||\n    authScreenLoadingHandoffActive",
+  'Root and auth-screen authenticated redirects should render the loading video while the final shell route becomes ready.',
 );
 assertIncludes(
   redirectEffect,
@@ -353,8 +408,13 @@ assertIncludes(
 );
 assertIncludes(
   redirectEffect,
-  'router.replace(redirectTarget as any);',
+  'router.replace(toExpoRouterShellTarget(target) as any);',
   'AuthGate should use route replacement for the final dashboard transition.',
+);
+assertIncludes(
+  layoutSource,
+  "const withoutTrailingSlash = withoutQueryAndHash.length > 1\n    ? withoutQueryAndHash.replace(/\\/+$/, '')\n    : withoutQueryAndHash;",
+  'Auth route normalization should remove trailing slashes so /login/ is treated like /login during second-login handoff.',
 );
 
 assertIncludes(

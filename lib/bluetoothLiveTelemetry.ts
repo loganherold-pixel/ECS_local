@@ -67,7 +67,8 @@ export function getBluetoothTelemetrySourceLabel(source: unknown): string {
 }
 
 export function isBluetoothSourceLive(source: unknown): boolean {
-  return normalizeBluetoothTelemetrySource(source) === 'ble_live';
+  const normalized = normalizeBluetoothTelemetrySource(source);
+  return normalized === 'ble_live' || normalized === 'provider_cloud';
 }
 
 export function shouldAcceptBluetoothTelemetry(source: unknown): boolean {

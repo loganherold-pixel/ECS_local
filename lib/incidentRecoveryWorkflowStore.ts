@@ -165,6 +165,11 @@ export type IncidentStatusTransitionInput = {
   actor?: string | null;
 };
 
+export type ClearIncidentInput = {
+  incidentId?: string | null;
+  expeditionId?: string;
+};
+
 type IncidentWorkflowListener = () => void;
 
 const listeners = new Set<IncidentWorkflowListener>();
@@ -926,6 +931,9 @@ function buildDebriefCreatedTimelineEvent(
   now: string,
 ): IncidentTimelineEvent {
   const summary = cleanText(input.outcome) ?? 'Incident debrief saved.';
+  const communityHazardRequested = input.communityHazardReportRequested === true;
+  const routeConfidenceRequested = input.routeConfidenceAdjustmentRequested === true;
+
   return {
     id: `${incidentId}-debrief-${Date.now().toString(36)}`,
     incidentId,
@@ -940,8 +948,13 @@ function buildDebriefCreatedTimelineEvent(
     actorId: input.actor ?? null,
     source: 'operator',
     data: {
-      communityHazardReportRequested: input.communityHazardReportRequested === true,
-      routeConfidenceAdjustmentRequested: input.routeConfidenceAdjustmentRequested === true,
+      communityHazardReportRequested: communityHazardRequested,
+      communityHazardPublicationStatus: communityHazardRequested ? 'requested_review' : 'not_requested',
+      communityHazardRequiresManualReview: communityHazardRequested,
+      communityHazardPublished: false,
+      routeConfidenceAdjustmentRequested: routeConfidenceRequested,
+      routeConfidenceReviewStatus: routeConfidenceRequested ? 'requested_review' : 'not_requested',
+      routeConfidenceChanged: false,
     },
   };
 }
@@ -952,6 +965,9 @@ function buildDebriefIntelligenceHandoff(
   input: IncidentDebriefInput,
   now: string,
 ): NonNullable<IncidentDebrief['intelligenceHandoff']> {
+  const communityHazardRequested = input.communityHazardReportRequested === true;
+  const routeConfidenceRequested = input.routeConfidenceAdjustmentRequested === true;
+
   return {
     id: `${debriefId}-intelligence-handoff`,
     incidentId: incident.id,
@@ -971,8 +987,13 @@ function buildDebriefIntelligenceHandoff(
     weatherTerrainMismatch: cleanText(input.weatherTerrainMismatch) ?? null,
     planningGaps: cleanText(input.planningGaps) ?? null,
     futureRecommendations: cleanText(input.futureRecommendations) ?? null,
-    communityHazardReportRequested: input.communityHazardReportRequested === true,
-    routeConfidenceAdjustmentRequested: input.routeConfidenceAdjustmentRequested === true,
+    communityHazardReportRequested: communityHazardRequested,
+    communityHazardPublicationStatus: communityHazardRequested ? 'requested_review' : 'not_requested',
+    communityHazardRequiresManualReview: communityHazardRequested,
+    communityHazardPublished: false,
+    routeConfidenceAdjustmentRequested: routeConfidenceRequested,
+    routeConfidenceReviewStatus: routeConfidenceRequested ? 'requested_review' : 'not_requested',
+    routeConfidenceChanged: false,
     createdAt: now,
   };
 }
@@ -1040,6 +1061,8 @@ function updateIncidentWithDebrief(
 ): IncidentContext {
   const now = new Date().toISOString();
   const debriefId = incident.debrief?.id ?? `${incident.id}-debrief`;
+  const communityHazardRequested = input.communityHazardReportRequested === true;
+  const routeConfidenceRequested = input.routeConfidenceAdjustmentRequested === true;
   const lessonsLearned = [
     cleanText(input.whatWorked),
     cleanText(input.whatFailed),
@@ -1066,8 +1089,13 @@ function updateIncidentWithDebrief(
     communicationIssues: cleanText(input.communicationIssues) ?? null,
     weatherTerrainMismatch: cleanText(input.weatherTerrainMismatch) ?? null,
     futureRecommendations: cleanText(input.futureRecommendations) ?? null,
-    communityHazardReportRequested: input.communityHazardReportRequested === true,
-    routeConfidenceAdjustmentRequested: input.routeConfidenceAdjustmentRequested === true,
+    communityHazardReportRequested: communityHazardRequested,
+    communityHazardPublicationStatus: communityHazardRequested ? 'requested_review' : 'not_requested',
+    communityHazardRequiresManualReview: communityHazardRequested,
+    communityHazardPublished: false,
+    routeConfidenceAdjustmentRequested: routeConfidenceRequested,
+    routeConfidenceReviewStatus: routeConfidenceRequested ? 'requested_review' : 'not_requested',
+    routeConfidenceChanged: false,
     rootCause: cleanText(input.planningGaps) ?? incident.debrief?.rootCause ?? null,
     lessonsLearned,
     intelligenceHandoff: buildDebriefIntelligenceHandoff(incident, debriefId, input, now),
@@ -1084,6 +1112,15 @@ function updateIncidentWithDebrief(
     metadata: {
       ...(incident.metadata ?? {}),
       debriefIntelligenceHandoff: debrief.intelligenceHandoff,
+      communityHazardPublishing: {
+        status: debrief.communityHazardPublicationStatus,
+        requiresManualReview: debrief.communityHazardRequiresManualReview,
+        published: false,
+      },
+      routeConfidenceReview: {
+        status: debrief.routeConfidenceReviewStatus,
+        changed: false,
+      },
     },
   };
 }
@@ -1409,6 +1446,20 @@ export const incidentRecoveryWorkflowStore = {
   },
 
   canTransitionIncidentStatus,
+
+  clearIncident(input: ClearIncidentInput = {}): boolean {
+    const beforeCount = incidents.length;
+    if (input.incidentId) {
+      incidents = incidents.filter((incident) => incident.id !== input.incidentId);
+    } else if (input.expeditionId) {
+      incidents = incidents.filter((incident) => incident.expeditionId && incident.expeditionId !== input.expeditionId);
+    } else {
+      incidents = [];
+    }
+    const changed = incidents.length !== beforeCount;
+    if (changed) emit();
+    return changed;
+  },
 
   clear(): void {
     incidents = [];

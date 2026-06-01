@@ -1,5 +1,11 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
+import org.gradle.authentication.http.BasicAuthentication
+
+def mapboxDownloadsToken = System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: findProperty("MAPBOX_DOWNLOADS_TOKEN")
+def hasMapboxDownloadsToken = mapboxDownloadsToken != null && mapboxDownloadsToken.toString().trim().length() > 0
+logger.lifecycle("Mapbox downloads token present: ${hasMapboxDownloadsToken}")
+
 buildscript {
   repositories {
     google()
@@ -16,6 +22,16 @@ allprojects {
   repositories {
     google()
     mavenCentral()
+    maven {
+      url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
+      authentication {
+        basic(BasicAuthentication)
+      }
+      credentials {
+        username = "mapbox"
+        password = mapboxDownloadsToken != null ? mapboxDownloadsToken.toString() : ""
+      }
+    }
     maven { url 'https://www.jitpack.io' }
   }
 }

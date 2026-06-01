@@ -74,6 +74,12 @@ function isApprovalDate(value) {
   return /^\d{4}-\d{2}-\d{2}(?:$|T)/.test(value ?? '');
 }
 
+function isApprovalDateOnOrBefore(value, now) {
+  if (!isApprovalDate(value)) return false;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp <= now.getTime();
+}
+
 function detectFeatureFlagDefault(config) {
   if (!config) return 'unknown';
   if (/campopsAiAssistEnabled:\s*false\b/.test(config)) return false;
@@ -115,25 +121,33 @@ function detectPrivateEvidence(markdown) {
     /\b(?:private debrief notes?|raw provider payloads?)\s*[:=]\s*\S+/i.test(markdown);
 }
 
+function detectRealModelExecuted(markdown) {
+  const match = markdown.match(/Real model executed in this report:\s*(yes|no|true|false)/i);
+  if (!match) return false;
+  return /^(yes|true)$/i.test(match[1]);
+}
+
 function detectAiHardGateGuardrails(aiAssistCode) {
   return /Do not override hard-gate rejections/i.test(aiAssistCode) &&
     /Hard-gate warnings .* must remain visible/i.test(aiAssistCode) &&
     /Unknown legal status must never be narrated as allowed/i.test(aiAssistCode);
 }
 
-function approvalComplete({ status, approvalStatus, activeModelConfig, approvalDate, approver }) {
+function approvalComplete({ status, approvalStatus, activeModelConfig, approvalDate, approver, realModelExecuted, now }) {
   return /^completed?|run|approved$/i.test(status ?? '') &&
     /^approved$/i.test(approvalStatus ?? '') &&
     isFilled(activeModelConfig) &&
-    isApprovalDate(approvalDate) &&
-    isFilled(approver);
+    isApprovalDateOnOrBefore(approvalDate, now) &&
+    isFilled(approver) &&
+    realModelExecuted === true;
 }
 
-function realOutputReviewApproved({ status, approvalStatus, approvalDate, approver }) {
+function realOutputReviewApproved({ status, approvalStatus, approvalDate, approver, realModelExecuted, now }) {
   return /^completed?|run|approved$/i.test(status ?? '') &&
     /^approved$/i.test(approvalStatus ?? '') &&
-    isApprovalDate(approvalDate) &&
-    isFilled(approver);
+    isApprovalDateOnOrBefore(approvalDate, now) &&
+    isFilled(approver) &&
+    realModelExecuted === true;
 }
 
 export function buildAiAssistApprovalResult(options = {}) {
@@ -171,6 +185,7 @@ export function buildAiAssistApprovalResult(options = {}) {
   const rawPromptsExcluded = yesNo(extractField(reviewSection, 'Raw prompts excluded from shared docs'));
   const privateDataExcluded = yesNo(extractField(reviewSection, 'Private data excluded'));
   const aiMayOverrideHardGates = yesNo(extractField(reviewSection, 'AI may override hard gates'));
+  const realModelExecuted = detectRealModelExecuted(review);
   const aiAssistEnabledForClosedFieldTest = detectAiEnabledForClosedFieldTest({
     reviewSection,
     readiness,
@@ -183,6 +198,8 @@ export function buildAiAssistApprovalResult(options = {}) {
     approvalStatus,
     approvalDate,
     approver,
+    realModelExecuted,
+    now,
   });
   const approvedForActiveConfig = approvalComplete({
     status: reviewStatus,
@@ -190,6 +207,8 @@ export function buildAiAssistApprovalResult(options = {}) {
     activeModelConfig,
     approvalDate,
     approver,
+    realModelExecuted,
+    now,
   });
   const featureFlagDefault = detectFeatureFlagDefault(config);
   const runtimeApprovalGatePresent = detectRuntimeApprovalGate(config);
@@ -211,6 +230,12 @@ export function buildAiAssistApprovalResult(options = {}) {
   if (privateEvidencePresent) blockers.push('private_data_evidence_found_in_shared_review');
   if (aiAssistEnabledForClosedFieldTest && !approvedForActiveConfig) {
     blockers.push('ai_assist_enabled_without_exact_model_config_real_output_approval');
+  }
+  if (aiAssistEnabledForClosedFieldTest && !realModelExecuted) {
+    blockers.push('ai_assist_enabled_without_real_model_execution_evidence');
+  }
+  if (aiAssistEnabledForClosedFieldTest && !isApprovalDateOnOrBefore(approvalDate, now)) {
+    blockers.push('ai_assist_enabled_without_current_or_past_approval_date');
   }
 
   const hardGateOverrideAllowed = aiMayOverrideHardGates !== false;
@@ -239,6 +264,7 @@ export function buildAiAssistApprovalResult(options = {}) {
       approver: approver ?? null,
       realOutputReviewApproved: realOutputApproved,
       approvedForActiveConfig,
+      realModelExecuted,
       aiAssistEnabledForClosedFieldTest,
       rawPromptsExcluded,
       privateDataExcluded,
@@ -282,6 +308,7 @@ export function formatAiAssistApprovalResult(result, options = {}) {
     `- Active model/config: ${result.approval.activeModelConfig || 'not approved'}`,
     `- Approval status: ${result.approval.approvalStatus ?? 'missing'}`,
     `- AI assist enabled for closed field test: ${result.approval.aiAssistEnabledForClosedFieldTest ? 'yes' : 'no'}`,
+    `- Real model executed in this report: ${result.approval.realModelExecuted ? 'yes' : 'no'}`,
     `- Real-output review approved: ${result.realOutputReviewApproved ? 'yes' : 'no'}`,
     `- Active model/config approved: ${result.activeModelConfigApproved ? 'yes' : 'no'}`,
     `- AI may override hard gates: ${result.hardGateOverrideAllowed ? 'yes' : 'no'}`,

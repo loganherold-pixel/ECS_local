@@ -109,6 +109,16 @@ export interface EcsDeviceSummary {
   solarInputWatts: number | null;
   /** Temperature in °C */
   temperatureCelsius: number | null;
+  /** Battery voltage */
+  batteryVolts: number | null;
+  /** Battery current */
+  batteryAmps: number | null;
+  /** Battery watts */
+  batteryWatts: number | null;
+  /** AC output watts */
+  acOutputWatts: number | null;
+  /** DC output watts */
+  dcOutputWatts: number | null;
   /** Estimated runtime in minutes */
   estimatedRuntimeMinutes: number | null;
   /** Warning state */
@@ -284,6 +294,13 @@ export function useEcsProviders(): EcsProvidersHookResult {
       outputWatts: reading.outputWatts,
       solarInputWatts: reading.solarInputWatts,
       temperatureCelsius: reading.temperatureCelsius,
+      batteryVolts: reading.batteryVolts,
+      batteryAmps: reading.batteryAmps,
+      batteryWatts: reading.batteryVolts != null && reading.batteryAmps != null
+        ? Math.round(reading.batteryVolts * reading.batteryAmps * 100) / 100
+        : null,
+      acOutputWatts: reading.acOutputWatts,
+      dcOutputWatts: reading.dcOutputWatts,
       estimatedRuntimeMinutes: reading.estimatedRuntimeMinutes,
       warningState: reading.warningState,
       freshness: getTelemetryFreshness(reading.lastUpdated),

@@ -63,15 +63,22 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-const projectRootPattern = escapeRegExp(__dirname);
-const rootDirBlock = (name) => new RegExp(`${projectRootPattern}[/\\\\]${escapeRegExp(name)}[/\\\\].*`);
+function absolutePathPattern(value) {
+  const normalized = path.resolve(value).replace(/\\/g, '/');
+  const hasLeadingSlash = normalized.startsWith('/');
+  const segments = normalized.replace(/^\//, '').split('/').map(escapeRegExp);
+  return `${hasLeadingSlash ? '[/\\\\]' : ''}${segments.join('[/\\\\]')}`;
+}
+
+const projectRootPattern = absolutePathPattern(__dirname);
+const rootDirBlock = (name) => new RegExp(`${projectRootPattern}[/\\\\]${escapeRegExp(name)}(?:[/\\\\].*)?$`);
 const rootDirPrefixBlock = (prefix) =>
-  new RegExp(`${projectRootPattern}[/\\\\]${escapeRegExp(prefix)}(?:-[^/\\\\]+)?[/\\\\].*`);
+  new RegExp(`${projectRootPattern}[/\\\\]${escapeRegExp(prefix)}(?:-[^/\\\\]+)?(?:[/\\\\].*)?$`);
 const androidDirBlock = (...segments) =>
   new RegExp(
     `${projectRootPattern}[/\\\\]android${segments
       .map((segment) => `[/\\\\]${escapeRegExp(segment)}`)
-      .join('')}[/\\\\].*`,
+      .join('')}(?:[/\\\\].*)?$`,
   );
 
 const generatedPathBlockList = [

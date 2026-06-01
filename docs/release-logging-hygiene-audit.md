@@ -31,8 +31,13 @@ Low-risk traces now gated behind dev-only logging:
 - `components/vehicle-wizard/LoadoutWizardStep.tsx`: loadout init/link success traces.
 - `components/weather/WeatherIntelPanel.tsx`: weather fetch/cache/autofetch success traces.
 - `lib/campsites/campsiteLocatorService.ts`: campsite locator summary trace.
+- `lib/vehicleCompanionManager.ts`: companion action, restore, start/stop, reconnect, and quick-command breadcrumbs.
+- `lib/vehicleStore.ts`: local/cloud vehicle success breadcrumbs and change events.
+- `lib/vehicleSessionState.ts`: companion/session mode, expedition, route, waypoint, reconnect, and reset success breadcrumbs.
 - `lib/viewerSettingsStore.ts`: QA widget/layout setting traces.
 - `lib/widgetRegistry.ts`: registry audit success trace.
+- `src/power/cloud/providers/EcoFlowCloudProvider.ts`: cloud connection, catalog, eligibility, pending-approval, authorization, fallback, and telemetry mapping diagnostics.
+- `src/vehicle-telemetry/VehicleTelemetryAdapterBridge.ts`: adapter binding/connection debug traces and listener attach/failure warnings.
 - `src/vehicle-telemetry/useVehicleTelemetry.ts`: provider disconnect success trace.
 - `src/vehicle-telemetry/VehicleTelemetryDeviceRegistry.ts`: registry lifecycle success traces.
 
@@ -43,14 +48,15 @@ Patched in this pass:
 - Success-path `console.log` calls listed above.
 - Existing dev-only logs left as-is where they already had `__DEV__` checks.
 - Weather panel debug logs now route through the existing dev-only `logWeatherPanelRetention` helper.
+- `lib/vehicleCompanionManager.ts`: success breadcrumbs now use `ecsLog.dev('SYSTEM', ...)` behind `ECS_DEBUG_VEHICLE_COMPANION`; warning paths now route through `ecsLog.warn`.
+- `lib/vehicleStore.ts`: vehicle CRUD/cache success breadcrumbs now use `ecsLog.dev('CONFIG', ...)` behind `ECS_DEBUG_VEHICLE_STORE`; warning and error paths now route through `ecsLog.warn/error`.
+- `lib/vehicleSessionState.ts`: success lifecycle breadcrumbs now use `ecsLog.dev('SYSTEM', ...)` behind `ECS_DEBUG_VEHICLE_SESSION`.
+- `src/power/cloud/providers/EcoFlowCloudProvider.ts`: routine diagnostics now use `ecsLog.dev('POWER', ...)` behind `ECS_DEBUG_ECOFLOW_CLOUD`; unauthorized cloud telemetry warnings remain production-visible through `ecsLog.warn`.
+- `src/vehicle-telemetry/VehicleTelemetryAdapterBridge.ts`: `debug` option output now routes through `ecsLog.debug('TELEMETRY', ...)`; bridge listener warnings route through `ecsLog.warn`.
 
 Remaining candidates for a follow-up dev-gating pass:
 
-- `lib/vehicleStore.ts`: change events and local/cloud success breadcrumbs are still direct `console.log`. Risk is medium because the store mixes release-useful cloud fallback warnings with noisy success logs.
-- `lib/vehicleSessionState.ts`: session mode, route, waypoint, and companion lifecycle success logs. Risk is medium because these are useful for field session replay but noisy for release console output.
-- `lib/vehicleCompanionManager.ts`: companion action/start/stop success logs. Risk is medium because companion integrations are intentionally retained for future field testing.
-- `src/power/cloud/providers/EcoFlowCloudProvider.ts`: provider diagnostics should be reviewed with power integration owners before gating broadly.
-- `src/vehicle-telemetry/VehicleTelemetryAdapterBridge.ts`: direct logging is already controlled by the bridge `debug` option, but should eventually route through `ecsLog.debug('TELEMETRY', ...)`.
+None in this release logging audit section.
 
 ## Keep For Release
 
@@ -71,7 +77,7 @@ Recommended follow-up:
 
 - Replace high-value `console.warn/error` paths with `ecsLog.warn/error` so diagnostics are buffered and category-filterable.
 - Add categories or subcategories for `AUTH`, `SYNC`, `DISPATCH`, and `ROUTE_IMPORT` if the existing `ecsLog` categories are too coarse.
-- Convert `vehicleStore`, `vehicleSessionState`, `vehicleCompanionManager`, `EcoFlowCloudProvider`, and `VehicleTelemetryAdapterBridge` success/failure diagnostics to `ecsLog.debug/warn/error`.
+- Continue moving high-value warning/error paths into structured ECS diagnostics as each subsystem is reviewed.
 - Keep user-facing toasts and state messages unchanged; structured diagnostics should supplement, not replace, the UI.
 
 ## Risk Notes

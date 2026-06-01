@@ -268,13 +268,38 @@ assert.strictEqual(approvedTesterWithNarrowApprovals.rolloutConfig.campopsAiAssi
 assert.strictEqual(
   approvedTesterWithNarrowApprovals.rolloutConfig.campopsDebriefCommunityPublishingEnabled,
   false,
-  'Community publishing remains off even for approved internal beta testers.',
+  'Community publishing remains off without explicit community publishing approval.',
 );
 assert.strictEqual(
   approvedTesterWithNarrowApprovals.rolloutConfig.campopsTelemetryEnabled,
   false,
-  'Telemetry remains off even for approved internal beta testers.',
+  'Telemetry remains off without explicit sink/privacy approval.',
 );
+
+const approvedTesterWithDesignApprovals = campops.resolveCampOpsInternalBetaActivation({
+  tester: {
+    email: 'tester@example.com',
+  },
+  allowlistedEmails: ['tester@example.com'],
+  providerInfluenceApproved: true,
+  aiAssistRealOutputReviewApproved: true,
+  telemetrySinkPrivacyApproved: true,
+  communityPublishingApproved: true,
+  requestedFlags: {
+    campopsRecommendationsEnabled: true,
+    campopsProviderAdaptersEnabled: true,
+    campopsAiAssistEnabled: true,
+    campopsEndpointRecommendationEnabled: true,
+    campopsDecisionPointsEnabled: true,
+    campopsSourceTransparencyEnabled: true,
+    campopsDebriefCommunityPublishingEnabled: true,
+    campopsTelemetryEnabled: true,
+  },
+});
+assert.strictEqual(approvedTesterWithDesignApprovals.rolloutConfig.campopsProviderAdaptersEnabled, true);
+assert.strictEqual(approvedTesterWithDesignApprovals.rolloutConfig.campopsAiAssistEnabled, true);
+assert.strictEqual(approvedTesterWithDesignApprovals.rolloutConfig.campopsTelemetryEnabled, true);
+assert.strictEqual(approvedTesterWithDesignApprovals.rolloutConfig.campopsDebriefCommunityPublishingEnabled, true);
 
 const cohortActivation = campops.resolveCampOpsInternalBetaActivation({
   tester: {
@@ -409,8 +434,41 @@ assert.strictEqual(
 assert.strictEqual(
   restrictedFieldTest.rolloutConfig.campopsDebriefCommunityPublishingEnabled,
   false,
-  'Restricted field test must keep community publishing off.',
+  'Restricted field test must keep community publishing off without exact governance approval.',
 );
+
+const restrictedFieldTestWithDesignApprovals = campops.resolveCampOpsRiskAcceptedRestrictedFieldTestActivation({
+  riskAcceptanceAccepted: true,
+  tester: { cohorts: ['campops-restricted-field-test'] },
+  approvedCohorts: ['campops-restricted-field-test'],
+  buildIdentifier: 'fieldtest-build-001',
+  approvedBuildIdentifiers: ['fieldtest-build-001'],
+  regionLabel: 'Region 001',
+  routeLabel: 'Route Alpha',
+  scenarioLabel: 'Two-hour delay',
+  approvedRegionLabels: ['Region 001'],
+  approvedRouteLabels: ['Route Alpha'],
+  approvedScenarioLabels: ['Two-hour delay'],
+  approvedDelayedDayScenarioLabels: ['Two-hour delay'],
+  routeProgressSupportsDecisionPointReview: true,
+  providerInfluenceApprovedForExactCategoryRegion: true,
+  aiAssistApprovedForExactModelConfig: true,
+  telemetrySinkPrivacyApproved: true,
+  communityPublishingApprovedForExactGovernance: true,
+  requestedFlags: {
+    campopsEndpointRecommendationEnabled: true,
+    campopsDecisionPointsEnabled: true,
+    campopsProviderAdaptersEnabled: true,
+    campopsAiAssistEnabled: true,
+    campopsDebriefCommunityPublishingEnabled: true,
+    campopsTelemetryEnabled: true,
+  },
+});
+assert.strictEqual(restrictedFieldTestWithDesignApprovals.enabled, true);
+assert.strictEqual(restrictedFieldTestWithDesignApprovals.rolloutConfig.campopsProviderAdaptersEnabled, true);
+assert.strictEqual(restrictedFieldTestWithDesignApprovals.rolloutConfig.campopsAiAssistEnabled, true);
+assert.strictEqual(restrictedFieldTestWithDesignApprovals.rolloutConfig.campopsTelemetryEnabled, true);
+assert.strictEqual(restrictedFieldTestWithDesignApprovals.rolloutConfig.campopsDebriefCommunityPublishingEnabled, true);
 
 const restrictedUnapprovedLabels = campops.resolveCampOpsRiskAcceptedRestrictedFieldTestActivation({
   riskAcceptanceAccepted: true,

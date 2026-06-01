@@ -12,7 +12,6 @@ import {
 
 import { hapticMicro } from '../../../../lib/haptics';
 import { TACTICAL } from '../../../../lib/theme';
-import AttitudeGauge from '../../../components/attitudeCommand/AttitudeGauge';
 import AttitudeReadout from '../../../components/attitudeCommand/AttitudeReadout';
 import { formatSignedDegrees } from '../../../components/attitudeCommand/attitudeReadoutUtils';
 import {
@@ -31,6 +30,7 @@ import {
   type EcsScreenOrientation,
 } from '../attitudeOrientation';
 import AttitudeLiveHashOverlay from './AttitudeLiveHashOverlay';
+import AttitudeMonitor from './AttitudeMonitor';
 
 export type VehicleAttitudeStageProps = {
   vehicleId: string;
@@ -43,9 +43,14 @@ export type VehicleAttitudeStageProps = {
   maxPitchDeg?: number;
   maxRollDeg?: number;
 
-  fitMode?: 'contain' | 'cover';
+  fitMode?: VehicleAttitudeFitMode;
+  stageVerticalAlign?: 'center' | 'bottom';
+  presentationMode?: 'vehicleImage' | 'instrumentOnly';
 
   showReadouts?: boolean;
+  showGaugeOverlay?: boolean;
+  showDegreeReadouts?: boolean;
+  showLevelReadout?: boolean;
   showZeroButton?: boolean;
   showLiveHashIndicators?: boolean;
 
@@ -62,24 +67,32 @@ export type VehicleAttitudeStageProps = {
 };
 
 type AttitudeAxis = 'pitch' | 'roll';
+type VehicleAttitudeFitMode = 'contain' | 'cover' | 'containWidth';
 type StageSize = { width: number; height: number };
+
+export const ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO = 1448 / 1086;
 
 const READOUT_TEXT_COLOR = TACTICAL.text;
 const COMMAND_LEVEL_READOUT_Y = 948;
 const DEFAULT_LEVEL_READOUT_Y = 900;
+export const COMMAND_ATTITUDE_AXIS_X_NUDGE = {
+  pitch: 36,
+  roll: 18,
+} as const;
 
 const ATTITUDE_GAUGE_LAYOUT = {
   pitch: {
     centerX: 438.25,
-    topY: 214,
+    centerY: 430,
   },
   roll: {
     centerX: 1314.75,
-    topY: 214,
+    centerY: 430,
   },
-  gaugeWidth: 650,
-  gaugeHeight: 208,
+  gaugeSize: 260,
 } as const;
+const COMMAND_VEHICLE_IMAGE_GAUGE_SCALE = 2;
+const COMMAND_VEHICLE_IMAGE_GAUGE_Y_OFFSET = -104;
 
 function formatStageDegrees(value: number): string {
   return formatSignedDegrees(safeDeg(value));
@@ -127,14 +140,23 @@ function toStagePoint(
 function fitStageToContainer(
   asset: VehicleAttitudeAsset,
   bounds: StageSize,
-  fitMode: 'contain' | 'cover' = 'contain',
+  fitMode: VehicleAttitudeFitMode = 'contain',
 ): StageSize {
   const fallbackWidth = 420;
-  const fallbackHeight = fallbackWidth / asset.aspectRatio;
+  const imageAspect = fitMode === 'containWidth'
+    ? ATTITUDE_COMMAND_IMAGE_SNAP_ASPECT_RATIO
+    : asset.aspectRatio;
+  const fallbackHeight = fallbackWidth / imageAspect;
   const containerWidth = bounds.width > 0 ? bounds.width : fallbackWidth;
   const containerHeight = bounds.height > 0 ? bounds.height : fallbackHeight;
-  const imageAspect = asset.aspectRatio;
   const containerAspect = containerWidth / containerHeight;
+
+  if (fitMode === 'containWidth') {
+    return {
+      width: containerWidth,
+      height: containerWidth / imageAspect,
+    };
+  }
 
   if (fitMode === 'cover') {
     if (containerAspect > imageAspect) {
@@ -175,7 +197,12 @@ function VehicleAttitudeStage({
   maxPitchDeg = DEFAULT_MAX_PITCH_DEG,
   maxRollDeg = DEFAULT_MAX_ROLL_DEG,
   fitMode = 'contain',
+  stageVerticalAlign = 'center',
+  presentationMode = 'vehicleImage',
   showReadouts = true,
+  showGaugeOverlay,
+  showDegreeReadouts,
+  showLevelReadout,
   showZeroButton = true,
   showLiveHashIndicators = true,
   onZero,
@@ -195,6 +222,7 @@ function VehicleAttitudeStage({
   const buttonDrop = useRef(new Animated.Value(0)).current;
   const longPressHandledRef = useRef(false);
   const { width: boundsWidth, height: boundsHeight } = bounds;
+  const instrumentOnly = presentationMode === 'instrumentOnly';
 
   void className;
 
@@ -259,6 +287,9 @@ function VehicleAttitudeStage({
   const rollLabel = formatStageDegrees(safeRoll);
   const pitchStatusLabel = getAxisStatusLabel('pitch', safePitch);
   const rollStatusLabel = getAxisStatusLabel('roll', safeRoll);
+  const renderGaugeOverlay = showGaugeOverlay ?? showReadouts;
+  const renderDegreeReadouts = showDegreeReadouts ?? showReadouts;
+  const renderLevelReadout = showLevelReadout ?? showReadouts;
   const stageLevelLabel =
     pitchStatusLabel === 'LEVEL' && rollStatusLabel === 'LEVEL'
       ? 'LEVEL'
@@ -270,7 +301,12 @@ function VehicleAttitudeStage({
       return null;
     }
 
-    const fittedStage = fitStageToContainer(asset, { width: boundsWidth, height: boundsHeight }, fitMode);
+    const fittedStage = instrumentOnly
+      ? {
+          width: boundsWidth > 0 ? boundsWidth : 420,
+          height: boundsHeight > 0 ? boundsHeight : 236,
+        }
+      : fitStageToContainer(asset, { width: boundsWidth, height: boundsHeight }, fitMode);
     const width = fittedStage.width;
     const height = fittedStage.height;
     const compact = mode === 'monitor'
@@ -305,7 +341,7 @@ function VehicleAttitudeStage({
       zeroButtonHeight,
       zeroButtonWidth,
     };
-  }, [asset, boundsHeight, boundsWidth, fitMode, mode]);
+  }, [asset, boundsHeight, boundsWidth, fitMode, instrumentOnly, mode]);
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -361,12 +397,18 @@ function VehicleAttitudeStage({
   const pitchReadoutPoint = toStagePoint(
     asset,
     stage,
-    { x: asset.pitchPanel.labelX, y: asset.pitchPanel.labelY + 44 },
+    {
+      x: asset.pitchPanel.labelX + (mode === 'command' ? COMMAND_ATTITUDE_AXIS_X_NUDGE.pitch : 0),
+      y: asset.pitchPanel.labelY + 44,
+    },
   );
   const rollReadoutPoint = toStagePoint(
     asset,
     stage,
-    { x: asset.rollPanel.labelX, y: asset.rollPanel.labelY + 44 },
+    {
+      x: asset.rollPanel.labelX + (mode === 'command' ? COMMAND_ATTITUDE_AXIS_X_NUDGE.roll : 0),
+      y: asset.rollPanel.labelY + 44,
+    },
   );
   const zeroPoint = toStagePoint(asset, stage, asset.zeroButtonAnchor);
   const levelPoint = toStagePoint(asset, stage, {
@@ -381,7 +423,7 @@ function VehicleAttitudeStage({
       testID="vehicle-attitude-stage"
       accessibilityLabel={accessibilityLabel}
       pointerEvents="box-none"
-      style={styles.shell}
+      style={[styles.shell, stageVerticalAlign === 'bottom' ? styles.shellBottom : null]}
       onLayout={handleLayout}
     >
       <View
@@ -395,37 +437,37 @@ function VehicleAttitudeStage({
           },
         ]}
       >
-        <View
-          pointerEvents="none"
-          style={styles.vehicleImageLayer}
-        >
-          {/* The active Fleet vehicle controls this composite artwork; gauge needles are layered separately. */}
-          <Image
-            testID="vehicle-attitude-stage-image"
-            source={asset.attitudeImageSource}
-            resizeMode="contain"
-            fadeDuration={0}
-            style={styles.vehicleImage}
-          />
-        </View>
+        {!instrumentOnly ? (
+          <View
+            pointerEvents="none"
+            style={styles.vehicleImageLayer}
+          >
+            {/* The active Fleet vehicle controls this composite artwork; gauge needles are layered separately. */}
+            <Image
+              testID="vehicle-attitude-stage-image"
+              source={asset.attitudeImageSource}
+              resizeMode="contain"
+              fadeDuration={0}
+              style={styles.vehicleImage}
+            />
+          </View>
+        ) : null}
 
-        {showReadouts ? (
+        {renderGaugeOverlay ? (
           <View
             testID="vehicle-attitude-stage-gauge-overlay"
             pointerEvents="none"
             style={styles.gaugeOverlay}
           >
             <VehicleAttitudeGauge
-              axis="pitch"
-              value={safePitch}
+              pitchDeg={safePitch}
+              rollDeg={safeRoll}
+              maxPitchDeg={maxPitchDeg}
+              maxRollDeg={maxRollDeg}
               asset={asset}
+              mode={mode}
               stage={stage}
-            />
-            <VehicleAttitudeGauge
-              axis="roll"
-              value={safeRoll}
-              asset={asset}
-              stage={stage}
+              presentationMode={presentationMode}
             />
           </View>
         ) : null}
@@ -446,7 +488,7 @@ function VehicleAttitudeStage({
           </View>
         ) : null}
 
-        {showReadouts ? (
+        {renderDegreeReadouts ? (
           <View
             testID="vehicle-attitude-stage-readout-overlay"
             pointerEvents="none"
@@ -471,7 +513,7 @@ function VehicleAttitudeStage({
           </View>
         ) : null}
 
-        {showReadouts ? (
+        {renderLevelReadout ? (
           <View
             testID="vehicle-attitude-stage-level-readout"
             pointerEvents="none"
@@ -538,33 +580,101 @@ function VehicleAttitudeStage({
 }
 
 function VehicleAttitudeGauge({
-  axis,
-  value,
   asset,
+  maxPitchDeg,
+  maxRollDeg,
+  mode,
+  pitchDeg,
+  rollDeg,
   stage,
+  presentationMode,
 }: {
-  axis: AttitudeAxis;
-  value: number;
   asset: VehicleAttitudeAsset;
+  maxPitchDeg: number;
+  maxRollDeg: number;
+  mode: 'monitor' | 'command';
+  pitchDeg: number;
+  rollDeg: number;
   stage: StageSize;
+  presentationMode: NonNullable<VehicleAttitudeStageProps['presentationMode']>;
 }) {
-  const layout = ATTITUDE_GAUGE_LAYOUT[axis];
-  const gaugeWidth = toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.gaugeWidth);
-  const gaugeHeight = toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.gaugeHeight);
-  const gaugeLeft = toStageScalar(asset, stage, 'x', layout.centerX) - gaugeWidth / 2;
-  const gaugeTop = toStageScalar(asset, stage, 'y', layout.topY);
+  if (presentationMode === 'instrumentOnly') {
+    const gaugeSize = Math.max(116, Math.min(stage.height * 0.78, stage.width * 0.28, 260));
+    const monitorWidth = Math.min(stage.width * 0.84, gaugeSize * 2.55);
+    return (
+      <AttitudeMonitor
+        rollDeg={rollDeg}
+        pitchDeg={pitchDeg}
+        rollMinDeg={-maxRollDeg}
+        rollMaxDeg={maxRollDeg}
+        pitchMinDeg={-maxPitchDeg}
+        pitchMaxDeg={maxPitchDeg}
+        size={gaugeSize}
+        ecsGold={TACTICAL.amber}
+        style={[
+          styles.gauge,
+          styles.instrumentOnlyGauge,
+          {
+            left: (stage.width - monitorWidth) / 2,
+            top: (stage.height - gaugeSize) / 2,
+            width: monitorWidth,
+            height: gaugeSize,
+          },
+        ]}
+      />
+    );
+  }
+
+  const commandVehicleImageMode = mode === 'command' && presentationMode === 'vehicleImage';
+  const gaugeSize = Math.min(
+    toStageScalar(asset, stage, 'x', ATTITUDE_GAUGE_LAYOUT.gaugeSize),
+    toStageScalar(asset, stage, 'y', ATTITUDE_GAUGE_LAYOUT.gaugeSize),
+  ) * (commandVehicleImageMode ? COMMAND_VEHICLE_IMAGE_GAUGE_SCALE : 1);
+  const pitchCenterX = toStageScalar(
+    asset,
+    stage,
+    'x',
+    ATTITUDE_GAUGE_LAYOUT.pitch.centerX + (mode === 'command' ? COMMAND_ATTITUDE_AXIS_X_NUDGE.pitch : 0),
+  );
+  const rollCenterX = toStageScalar(
+    asset,
+    stage,
+    'x',
+    ATTITUDE_GAUGE_LAYOUT.roll.centerX + (mode === 'command' ? COMMAND_ATTITUDE_AXIS_X_NUDGE.roll : 0),
+  );
+  const pitchCenterY = toStageScalar(
+    asset,
+    stage,
+    'y',
+    ATTITUDE_GAUGE_LAYOUT.pitch.centerY + (commandVehicleImageMode ? COMMAND_VEHICLE_IMAGE_GAUGE_Y_OFFSET : 0),
+  );
+  const rollCenterY = toStageScalar(
+    asset,
+    stage,
+    'y',
+    ATTITUDE_GAUGE_LAYOUT.roll.centerY + (commandVehicleImageMode ? COMMAND_VEHICLE_IMAGE_GAUGE_Y_OFFSET : 0),
+  );
+  const gaugeLeft = Math.min(pitchCenterX, rollCenterX) - gaugeSize / 2;
+  const gaugeTop = (pitchCenterY + rollCenterY) / 2 - gaugeSize / 2;
+  const monitorWidth = Math.abs(rollCenterX - pitchCenterX) + gaugeSize;
 
   return (
-    <AttitudeGauge
-      label={axis.toUpperCase()}
-      valueDeg={value}
+    <AttitudeMonitor
+      rollDeg={rollDeg}
+      pitchDeg={pitchDeg}
+      rollMinDeg={-maxRollDeg}
+      rollMaxDeg={maxRollDeg}
+      pitchMinDeg={-maxPitchDeg}
+      pitchMaxDeg={maxPitchDeg}
+      size={gaugeSize}
+      ecsGold={TACTICAL.amber}
       style={[
         styles.gauge,
         {
           left: gaugeLeft,
           top: gaugeTop,
-          width: gaugeWidth,
-          height: gaugeHeight,
+          width: monitorWidth,
+          height: gaugeSize,
         },
       ]}
     />
@@ -620,13 +730,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  shellBottom: {
+    justifyContent: 'flex-end',
+  },
   fittedStage: {
     position: 'relative',
     flexShrink: 0,
     minHeight: 0,
     minWidth: 0,
-    maxWidth: '100%',
-    maxHeight: '100%',
     overflow: 'hidden',
   },
   vehicleImageLayer: {
@@ -653,6 +764,10 @@ const styles = StyleSheet.create({
   gauge: {
     position: 'absolute',
     overflow: 'visible',
+  },
+  instrumentOnlyGauge: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   zeroControl: {
     position: 'absolute',

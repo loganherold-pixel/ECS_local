@@ -1,4 +1,4 @@
-export type ECSTelemetrySourceType = 'power_device' | 'obd2';
+export type ECSTelemetrySourceType = 'power_device' | 'obd2' | 'utility_sensor';
 
 export type ECSTelemetryQuality =
   | 'live'
@@ -66,7 +66,11 @@ export interface ECSPowerTelemetryDeviceReading {
   batteryPercent: number | null;
   capacityWh: number | null;
   inputWatts: number | null;
+  inputVolts: number | null;
+  inputAmps: number | null;
   outputWatts: number | null;
+  outputVolts: number | null;
+  outputAmps: number | null;
   solarWatts: number | null;
   temperatureCelsius: number | null;
   estimatedRuntimeMinutes: number | null;
@@ -76,6 +80,24 @@ export interface ECSPowerTelemetryDeviceReading {
   acOutputWatts: number | null;
   dcOutputWatts: number | null;
   signalStrength: number | null;
+  isLive: boolean;
+  isStale: boolean;
+}
+
+export interface ECSUtilitySensorTelemetryReading {
+  deviceId: string;
+  deviceName: string;
+  provider: string;
+  providerLabel: string;
+  transport: ECSTelemetryTransport;
+  quality: ECSTelemetryQuality;
+  lastUpdated: number;
+  category: string | null;
+  profileId: string | null;
+  linkState: string | null;
+  levelPercent: number | null;
+  signalStrength: number | null;
+  parserStatus: string | null;
   isLive: boolean;
   isStale: boolean;
 }

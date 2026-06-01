@@ -221,6 +221,7 @@ class EcoFlowBluAdapter {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualDisconnectRequested = false;
   private eventListeners = new Map<EcoFlowAdapterEventName, Set<EcoFlowAdapterEventListener>>();
   private lastTelemetry: BluTelemetry | null = null;
   private unauthorizedDeviceIds = new Set<string>();
@@ -361,6 +362,7 @@ class EcoFlowBluAdapter {
   async connect(): Promise<EcoFlowConnectResult> {
     console.log('[EcoFlowBluAdapter] Starting connection...');
 
+    this.manualDisconnectRequested = false;
     this.connectionState = 'connecting';
     this.emit('connect', this.getECSBridgeState());
     this.lastError = null;
@@ -506,6 +508,7 @@ class EcoFlowBluAdapter {
   async disconnect(): Promise<void> {
     console.log('[EcoFlowBluAdapter] Disconnecting...');
 
+    this.manualDisconnectRequested = true;
     this.stopPolling();
     this.cancelReconnect();
     this.removeAppStateListener();
@@ -618,6 +621,7 @@ class EcoFlowBluAdapter {
    * Does not disturb the UI — operates in the background.
    */
   private async attemptQuietReconnect(): Promise<void> {
+    if (this.manualDisconnectRequested) return;
     if (this.isReconnecting) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       console.log(
@@ -655,6 +659,11 @@ class EcoFlowBluAdapter {
       if (error || !data?.ok) {
         console.log('[EcoFlowBluAdapter] Reconnect failed — provider error.');
         this.scheduleReconnect();
+        return;
+      }
+      if (this.manualDisconnectRequested) {
+        this.isReconnecting = false;
+        bluStateStore.setReconnecting(false);
         return;
       }
 
@@ -720,6 +729,10 @@ class EcoFlowBluAdapter {
    * Schedule the next reconnect attempt after a delay.
    */
   private scheduleReconnect(): void {
+    if (this.manualDisconnectRequested) {
+      this.cancelReconnect();
+      return;
+    }
     this.isReconnecting = false;
     this.notify();
 
@@ -734,6 +747,10 @@ class EcoFlowBluAdapter {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this.manualDisconnectRequested) {
+        this.cancelReconnect();
+        return;
+      }
       this.attemptQuietReconnect();
     }, delay);
   }
@@ -768,8 +785,9 @@ class EcoFlowBluAdapter {
     this.isPolling = true;
 
     try {
-      // Determine which device to poll. The target must match the current
-      // eligible primary so stale async callers cannot reroute the session.
+      // Determine which device to poll. Telemetry is stored per device, so
+      // non-primary EcoFlow devices can update their own cache entry without
+      // overwriting the dashboard's primary summary.
       const activePrimaryDeviceId = this.getPrimaryDeviceId();
       const targetDeviceId = deviceId || this.pollingTargetDeviceId || activePrimaryDeviceId;
       if (!targetDeviceId) {
@@ -778,16 +796,6 @@ class EcoFlowBluAdapter {
           success: false,
           telemetry: null,
           error: 'No eligible EcoFlow power station available for BLU telemetry',
-        };
-      }
-      if (activePrimaryDeviceId && targetDeviceId !== activePrimaryDeviceId) {
-        console.warn(
-          `[EcoFlowBluAdapter] Ignoring stale EcoFlow poll target ${targetDeviceId}; active primary is ${activePrimaryDeviceId}.`,
-        );
-        return {
-          success: false,
-          telemetry: null,
-          error: 'Stale EcoFlow polling target ignored',
         };
       }
       const targetDevice = bluDeviceRegistry.getDevice('ecoflow', targetDeviceId);
@@ -838,22 +846,11 @@ class EcoFlowBluAdapter {
         }
       }
 
-      if (this.getPrimaryDeviceId() !== targetDeviceId) {
-        console.warn(
-          `[EcoFlowBluAdapter] Ignoring stale EcoFlow telemetry response for ${targetDeviceId}; primary changed before ingest.`,
-        );
-        return {
-          success: false,
-          telemetry: null,
-          error: 'Stale EcoFlow telemetry response ignored',
-        };
-      }
-
       // ── Normalize telemetry ────────────────────────────────────
       const telemetry: BluTelemetry = {
         ...this.normalizeTelemetry(targetDeviceId, data as EcoFlowRawTelemetry),
         pollToken: `${targetDeviceId}:${pollStartedAt}`,
-        sessionPrimaryDeviceId: activePrimaryDeviceId,
+        sessionPrimaryDeviceId: targetDeviceId,
         pollStartedAt,
       };
 
@@ -1312,13 +1309,23 @@ class EcoFlowBluAdapter {
   ): BluTelemetry {
     const inputW = typeof raw.inputWatts === 'number' ? raw.inputWatts : undefined;
     const outputW = typeof raw.outputWatts === 'number' ? raw.outputWatts : undefined;
+    const solarW = typeof raw.solarWatts === 'number' ? raw.solarWatts : undefined;
+    const hasDecodedTelemetry = [
+      raw.batteryPercent,
+      inputW,
+      outputW,
+      solarW,
+      raw.volts,
+      raw.tempC,
+      raw.remainTimeMin,
+    ].some((value) => typeof value === 'number' && Number.isFinite(value));
 
     return {
       timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
       provider: 'ecoflow',
       device_id: deviceId,
       source: 'provider_cloud',
-      isLive: false,
+      isLive: hasDecodedTelemetry,
       telemetrySourceLabel: 'Provider Cloud',
 
       // Core fields
@@ -1329,15 +1336,15 @@ class EcoFlowBluAdapter {
       input_watts: inputW,
       output_watts: outputW,
       battery_watts:
-        inputW !== undefined && outputW !== undefined
-          ? inputW - outputW
+        inputW !== undefined || outputW !== undefined || solarW !== undefined
+          ? (inputW ?? 0) + (solarW ?? 0) - (outputW ?? 0)
           : undefined,
       estimated_runtime_minutes:
         typeof raw.remainTimeMin === 'number' ? raw.remainTimeMin : undefined,
 
       // Source-specific
       solar_input_watts:
-        typeof raw.solarWatts === 'number' ? raw.solarWatts : undefined,
+        solarW,
 
       // Environmental — only when provider actually provides it
       temperature_celsius:

@@ -4,7 +4,7 @@ import {
   type ECSVehicularState,
 } from './fleet/activeVehicleState';
 
-export const VEHICLE_ADVISORY_SUPPRESSION_MS = 10 * 60 * 1000;
+export const VEHICLE_ADVISORY_SUPPRESSION_MS = 15 * 60 * 1000;
 
 export type VehicleSuitabilityLevel = 'strong' | 'workable' | 'caution' | 'limited' | 'unknown';
 
