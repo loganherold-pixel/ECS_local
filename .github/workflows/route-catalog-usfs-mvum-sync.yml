@@ -128,6 +128,7 @@ jobs:
             rawFeatureCount: forest.rawFeatureCount,
             normalizedFeatureCount: forest.normalizedFeatureCount,
             aggregateRouteCount: forest.aggregateRouteCount,
+            publicRecommendationCount: forest.publicRecommendationCount || 0,
             currentConditionClosureCount: forest.currentConditionClosureCount || 0,
             currentConditionBlockedRouteCount: forest.currentConditionBlockedRouteCount || 0,
           }));
@@ -137,10 +138,10 @@ jobs:
           const markdown = [
             '## Route Catalog USFS MVUM Sync',
             '',
-            '| Forest | Raw Features | Normalized Features | Aggregate Routes | Current Closures | Blocked Routes |',
-            '| --- | ---: | ---: | ---: | ---: | ---: |',
+            '| Forest | Raw Features | Normalized Features | Aggregate Routes | Public Recommendations | Current Closures | Blocked Routes |',
+            '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
             ...summaryRows.map((forest) =>
-              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
+              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.publicRecommendationCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
             ),
             '',
             response.caveat ? `_${response.caveat}_` : '',

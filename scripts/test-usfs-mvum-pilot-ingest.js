@@ -460,6 +460,7 @@ assert(syncFunction.includes('payload.error'), 'Sync function should fail loudly
 assert(syncFunction.includes('aggregateUsfsMvumRouteFeatures'), 'Sync function should publish named MVUM aggregate route records');
 assert(syncFunction.includes('publicRecommendation: false'), 'Sync function should keep individual MVUM source segments out of public recommendations');
 assert(syncFunction.includes('aggregateRouteCount'), 'Sync function should report aggregate route counts');
+assert(syncFunction.includes('publicRecommendationCount'), 'Sync function should report public recommendation counts for recommendable MVUM aggregates');
 assert(syncFunction.includes('segmentRouteRows'), 'Sync function should batch source segment route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('aggregateRouteRows'), 'Sync function should batch aggregate route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('buildRouteIdByPublicId'), 'Sync function should map bulk-upserted public IDs back to database IDs');

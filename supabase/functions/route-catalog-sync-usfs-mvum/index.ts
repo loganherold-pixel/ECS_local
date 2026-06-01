@@ -254,6 +254,7 @@ serve(async (req) => {
       let rawFeatureCount = 0;
       let normalizedFeatureCount = 0;
       let aggregateRouteCount = 0;
+      let publicRecommendationCount = 0;
       const currentConditionClosureCount = forestCurrentConditionSources.reduce(
         (count, sourceRecord) => count + sourceRecord.closures.length,
         0,
@@ -303,6 +304,9 @@ serve(async (req) => {
         currentConditionBlockedRouteCount += aggregateUpserts.filter((aggregate) =>
           Number(aggregate.verifiedRoute.active_closure_count ?? 0) > 0,
         ).length;
+        publicRecommendationCount += aggregateUpserts.filter((aggregate) =>
+          aggregate.verifiedRoute.recommendation_status === 'recommendable',
+        ).length;
         aggregateRouteRows.push(...aggregateUpserts.map((aggregate) => aggregate.verifiedRoute));
         aggregateSourceRefs.push(...aggregateUpserts.map((aggregate) => ({
           publicId: routePublicId(aggregate.verifiedRoute),
@@ -329,6 +333,7 @@ serve(async (req) => {
             providerId: forest.sourceProviderId,
             minMiles,
             aggregateRouteCount,
+            publicRecommendationCount,
             currentConditionSourceCount: forestCurrentConditionSources.length,
             currentConditionClosureCount,
             currentConditionBlockedRouteCount,
@@ -341,6 +346,7 @@ serve(async (req) => {
         rawFeatureCount,
         normalizedFeatureCount,
         aggregateRouteCount,
+        publicRecommendationCount,
         currentConditionSourceCount: forestCurrentConditionSources.length,
         currentConditionClosureCount,
         currentConditionBlockedRouteCount,

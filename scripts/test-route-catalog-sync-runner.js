@@ -28,6 +28,10 @@ assert(
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');
 assert(workflow.includes('rawFeatureCount') && workflow.includes('aggregateRouteCount'), 'Workflow summary should report ingest counts');
 assert(
+  workflow.includes('publicRecommendationCount'),
+  'Workflow summary should report public recommendation counts for recommendable MVUM aggregates',
+);
+assert(
   workflow.includes('current_conditions_json') &&
     workflow.includes('payload.currentConditions = JSON.parse(currentConditionsJson)'),
   'Workflow should support reviewed official closure overlays without requiring a local shell token',
