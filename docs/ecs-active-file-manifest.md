@@ -137,21 +137,43 @@ node ./scripts/test-route-progress-minimap.js
 npm run smoke
 ```
 
+## Third Cleanup Batch: Obsolete Vehicle Attitude Asset Cleaner
+
+Batch status: removed from source tracking on the cleanup branch.
+
+Evidence:
+
+- `scripts/clean-vehicle-attitude-assets.py` generated cleaned PNGs under `assets/vehicles/attitude/clean/`.
+- The original uncleaned source PNGs are no longer tracked; the tracked attitude assets are the 21 cleaned runtime PNGs only.
+- Runtime code references the cleaned files through `src/features/attitude/vehicleAttitudeAssetManifest.ts`.
+- Existing tests protect the cleaned asset manifest and resolver behavior through `npm run test:vehicle-attitude-assets`.
+- The cleaner depends on Python/Pillow and is not package-script owned. Keeping it in the source tree implies a regeneration workflow that no longer has tracked inputs.
+
+Recommended action: remove only the obsolete cleaner, keep all cleaned attitude assets.
+
+Recommended verification after removing the cleaner:
+
+```powershell
+npm run test:vehicle-attitude-assets
+npm run test:auth-offline-sign-in
+npm run smoke
+```
+
 ## Investigate Before Removing
 
 These are plausible cleanup targets, but they need one more evidence pass or a user decision before deletion.
 
 | Area | Evidence So Far | Next Check |
 | --- | --- | --- |
-| Maybe-unreferenced `scripts/` files | Simple text scan found 101 scripts without direct package-script or repo text references. Many are domain harnesses that may be intentionally manual. | Classify into `package gate`, `manual harness`, `migration utility`, `obsolete`, and `one-time cleanup`. Remove only obsolete/one-time scripts after owner review. |
+| Maybe-unreferenced `scripts/` files | Strict scan found 71 scripts without package-script ownership or direct repo text references. Nearly all are regression tests; one is `scripts/trails-postgis-check.sql`. | Keep regression tests unless a domain owner explicitly retires the covered behavior. Decide whether the PostGIS one-liner should move into docs or be removed. |
 | `ECS_Dashboard_Icon_512.png` | No code reference found. Existing asset audit says it is release-looking and retained for external store/listing material. | User decision: keep as release collateral or move to a separate release-assets archive. |
 | `.vscode/` | Editor-local workspace config. | User decision: keep team editor settings or remove from source-only tree. |
+| Windows EAS and EcoFlow dev helpers | `scripts/run-eas-fieldtest-windows.mjs` and `scripts/start-ecoflow-ble-dev.ps1` are not package-script owned, but they are clearly tied to ECS field-test and hardware workflows. | Keep unless those workflows are intentionally retired or replaced by documented package scripts. |
 
 Sample scripts from the maybe-unreferenced set:
 
 ```text
 scripts/campops-react-native-test-shim.js
-scripts/clean-vehicle-attitude-assets.py
 scripts/run-eas-fieldtest-windows.mjs
 scripts/start-ecoflow-ble-dev.ps1
 scripts/test-account-command-hub-geofence-default.js
