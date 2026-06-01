@@ -34,6 +34,11 @@ const {
 const requiredProbeKeys = [
   'tahoe_national_forest',
   'mendocino_national_forest',
+  'san_juan_national_forest',
+  'coconino_national_forest',
+  'manti_la_sal_national_forest',
+  'sawtooth_national_forest',
+  'deschutes_national_forest',
   'michigan_dnr_orv_pilot',
   'minnesota_dnr_ohv_pilot',
   'oregon_odf_ohv_pilot',

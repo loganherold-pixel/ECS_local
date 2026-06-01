@@ -34,8 +34,16 @@ const {
 
 assert.deepStrictEqual(
   USFS_MVUM_PILOT_FORESTS.map((forest) => forest.slug),
-  ['tahoe-national-forest', 'mendocino-national-forest'],
-  'Tahoe and Mendocino should be the first MVUM pilot forests',
+  [
+    'tahoe-national-forest',
+    'mendocino-national-forest',
+    'san-juan-national-forest',
+    'coconino-national-forest',
+    'manti-la-sal-national-forest',
+    'sawtooth-national-forest',
+    'deschutes-national-forest',
+  ],
+  'MVUM pilot forests should include the first verified public recommendation expansion batch',
 );
 assert(
   USFS_MVUM_LAYERS.some((layer) => layer.kind === 'road' && layer.url.includes('Motor_Vehicle_Use_Map_Roads')) &&
@@ -44,7 +52,9 @@ assert(
 );
 
 const where = buildUsfsMvumWhereClause(USFS_MVUM_PILOT_FORESTS, { minMiles: 1 });
-assert(where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest')"));
+assert(
+  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest')"),
+);
 assert(where.includes('GIS_MILES >= 1'));
 assert(where.includes("HIGHCLEARA = 'open'") && where.includes("FOURWD_GT5 = 'open'"));
 

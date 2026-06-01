@@ -22,8 +22,8 @@ assert(
   'Workflow should read the Supabase URL from GitHub secrets',
 );
 assert(
-  workflow.includes('tahoe-national-forest,mendocino-national-forest'),
-  'Workflow defaults should sync the current Tahoe and Mendocino pilot forests',
+  workflow.includes('tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest'),
+  'Workflow defaults should sync the current MVUM public recommendation coverage forests',
 );
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');
 assert(workflow.includes('rawFeatureCount') && workflow.includes('aggregateRouteCount'), 'Workflow summary should report ingest counts');

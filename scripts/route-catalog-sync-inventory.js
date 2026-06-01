@@ -20,7 +20,15 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
-      forests: ['tahoe-national-forest', 'mendocino-national-forest'],
+      forests: [
+        'tahoe-national-forest',
+        'mendocino-national-forest',
+        'san-juan-national-forest',
+        'coconino-national-forest',
+        'manti-la-sal-national-forest',
+        'sawtooth-national-forest',
+        'deschutes-national-forest',
+      ],
       minMiles: 1,
       limitPerForestLayer: 150,
     },

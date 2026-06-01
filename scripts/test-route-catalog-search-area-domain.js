@@ -33,8 +33,13 @@ const {
 
 assert(
   ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'tahoe_nf') &&
-    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mendocino_nf'),
-  'Route catalog presets should retain the current Tahoe and Mendocino field-test areas.',
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mendocino_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'san_juan_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'coconino_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'manti_la_sal_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sawtooth_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'deschutes_nf'),
+  'Route catalog presets should expose all verified MVUM recommendation coverage areas.',
 );
 assert(
   ROUTE_CATALOG_PRESET_SEARCH_AREAS.every((area) => area.publicRecommendation === true),
@@ -71,7 +76,15 @@ assert.strictEqual(
 
 assert.deepStrictEqual(
   ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
-  ['Tahoe National Forest', 'Mendocino National Forest'],
+  [
+    'Tahoe National Forest',
+    'Mendocino National Forest',
+    'San Juan National Forest',
+    'Coconino National Forest',
+    'Manti-La Sal National Forest',
+    'Sawtooth National Forest',
+    'Deschutes National Forest',
+  ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
 );
 assert(
@@ -83,7 +96,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

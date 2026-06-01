@@ -1,4 +1,11 @@
-export type RouteCatalogPresetSearchAreaKey = 'tahoe_nf' | 'mendocino_nf';
+export type RouteCatalogPresetSearchAreaKey =
+  | 'tahoe_nf'
+  | 'mendocino_nf'
+  | 'san_juan_nf'
+  | 'coconino_nf'
+  | 'manti_la_sal_nf'
+  | 'sawtooth_nf'
+  | 'deschutes_nf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -72,6 +79,56 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['usfs_mvum'],
   },
   {
+    key: 'san_juan_nf',
+    label: 'San Juan National Forest',
+    shortLabel: 'San Juan NF',
+    latitude: 37.45,
+    longitude: -107.8,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'coconino_nf',
+    label: 'Coconino National Forest',
+    shortLabel: 'Coconino NF',
+    latitude: 35.22,
+    longitude: -111.65,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'manti_la_sal_nf',
+    label: 'Manti-La Sal National Forest',
+    shortLabel: 'Manti-La Sal NF',
+    latitude: 38.55,
+    longitude: -109.55,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'sawtooth_nf',
+    label: 'Sawtooth National Forest',
+    shortLabel: 'Sawtooth NF',
+    latitude: 43.9,
+    longitude: -114.8,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'deschutes_nf',
+    label: 'Deschutes National Forest',
+    shortLabel: 'Deschutes NF',
+    latitude: 43.9,
+    longitude: -121.6,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
     key: 'michigan_orv',
     label: 'Michigan DNR ORV',
     shortLabel: 'Michigan ORV',
@@ -133,7 +190,6 @@ export const ROUTE_CATALOG_PRESET_SEARCH_AREAS: RouteCatalogPresetSearchArea[] =
   } =>
     area.publicRecommendation === true &&
     area.coveragePosture === 'verified_recommendation' &&
-    (area.key === 'tahoe_nf' || area.key === 'mendocino_nf') &&
     typeof area.latitude === 'number' &&
     typeof area.longitude === 'number',
   )

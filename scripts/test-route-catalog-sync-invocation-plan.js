@@ -93,6 +93,11 @@ for (const entry of plan) {
 assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'tahoe-national-forest',
   'mendocino-national-forest',
+  'san-juan-national-forest',
+  'coconino-national-forest',
+  'manti-la-sal-national-forest',
+  'sawtooth-national-forest',
+  'deschutes-national-forest',
 ]);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
