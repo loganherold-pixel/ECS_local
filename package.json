@@ -147,6 +147,7 @@
     "test:usgs-trails-route-catalog-adapter": "node ./scripts/test-usgs-trails-route-catalog-adapter.js",
     "test:nps-trails-route-catalog-adapter": "node ./scripts/test-nps-trails-route-catalog-adapter.js",
     "test:michigan-orv-route-catalog-adapter": "node ./scripts/test-michigan-orv-route-catalog-adapter.js",
+    "test:minnesota-ohv-route-catalog-adapter": "node ./scripts/test-minnesota-ohv-route-catalog-adapter.js",
     "test:supabase-db-workflow": "node ./scripts/test-supabase-db-workflow.js",
     "test:usfs-mvum-pilot-ingest": "node ./scripts/test-usfs-mvum-pilot-ingest.js",
     "test:trail-pack-confidence": "node ./scripts/test-trail-pack-confidence.js",

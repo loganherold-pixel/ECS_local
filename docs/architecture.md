@@ -28,3 +28,5 @@ USGS National Digital Trails ingestion starts as supplemental geometry and trail
 NPS Public Trails ingestion starts as official park visitor-use trail context. NPS trail-use geometry can support review inside park units, but it must stay out of public Suggested Routes until park-unit legal access, current alerts, closures, and ECS route curation pass.
 
 Michigan DNR ORV GPX ingestion starts as official state-agency route/trail geometry for curation. Michigan ORV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.
+
+Minnesota DNR OHV ingestion starts as official state-agency GeoPackage route/trail geometry for curation. Minnesota OHV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass; the source metadata also says the dataset is a reference layer and not for navigation.

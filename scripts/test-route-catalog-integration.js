@@ -78,6 +78,7 @@ for (const functionName of [
   'route-catalog-sync-usgs-trails',
   'route-catalog-sync-nps-trails',
   'route-catalog-sync-michigan-orv',
+  'route-catalog-sync-minnesota-ohv',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
@@ -185,6 +186,12 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('route-catalog-sync-michigan-orv') &&
     read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('publicRecommendationCount'),
   'Michigan DNR ORV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('route-catalog-sync-minnesota-ohv') &&
+    read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('publicRecommendationCount'),
+  'Minnesota DNR OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&

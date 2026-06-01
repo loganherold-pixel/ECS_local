@@ -526,3 +526,10 @@ enabled = true
 # writes and stores Michigan DNR ORV GPX records as state curation inputs only.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-michigan-orv/index.ts"
+
+[functions.route-catalog-sync-minnesota-ohv]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and stores Minnesota DNR OHV GeoPackage records as curation inputs only.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-minnesota-ohv/index.ts"
