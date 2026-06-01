@@ -143,6 +143,7 @@
     "test:route-catalog-integration": "node ./scripts/test-route-catalog-integration.js",
     "test:route-catalog-active-guidance": "node ./scripts/test-route-catalog-active-guidance.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
+    "test:blm-gtlf-route-catalog-adapter": "node ./scripts/test-blm-gtlf-route-catalog-adapter.js",
     "test:supabase-db-workflow": "node ./scripts/test-supabase-db-workflow.js",
     "test:usfs-mvum-pilot-ingest": "node ./scripts/test-usfs-mvum-pilot-ingest.js",
     "test:trail-pack-confidence": "node ./scripts/test-trail-pack-confidence.js",

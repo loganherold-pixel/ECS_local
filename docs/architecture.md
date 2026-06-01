@@ -20,3 +20,5 @@ Trail segments must never be routed as vehicle-usable unless ECS classifies them
 The initial authoritative source targets are USFS MVUM Roads, USFS MVUM Trails, and BLM GTLF public motorized roads and trails. OSM can supplement geometry or discovery workflows, but OSM alone does not establish legal vehicle access.
 
 The route catalog also treats official Forest Service alerts and current-condition pages as closure/conflict overlays. These sources can remove a matched route from public recommendation, but they do not prove that unmatched routes are open, passable, safe, or free of local hazards.
+
+BLM GTLF ingestion starts as official source-segment evidence only. GTLF segments remain out of public Suggested Routes until ECS route aggregation, current-condition checks, and review produce a curated route record.

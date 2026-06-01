@@ -498,3 +498,10 @@ enabled = true
 # writes and must not be callable as a public read endpoint.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-usfs-mvum/index.ts"
+
+[functions.route-catalog-sync-blm-gtlf]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and must not be callable as a public read endpoint.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-blm-gtlf/index.ts"

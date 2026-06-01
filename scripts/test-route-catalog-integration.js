@@ -69,7 +69,7 @@ assert(
   'Route catalog should add schema-backed operational criteria for remoteness, campability, fuel range, and water margins',
 );
 
-for (const functionName of ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake', 'route-catalog-sync-usfs-mvum']) {
+for (const functionName of ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake', 'route-catalog-sync-usfs-mvum', 'route-catalog-sync-blm-gtlf']) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
   const source = fs.readFileSync(functionPath, 'utf8');
@@ -152,6 +152,12 @@ assert(
     supabaseClient.includes('"route-catalog-detail"') &&
     supabaseClient.includes('"route-submission-intake"'),
   'Supabase client deployed-function guard should allow the route catalog functions',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('route-catalog-sync-blm-gtlf') &&
+    read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('publicRecommendationCount'),
+  'BLM GTLF route catalog sync should have a durable workflow that reports zero public recommendations for the initial source-segment adapter',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&
