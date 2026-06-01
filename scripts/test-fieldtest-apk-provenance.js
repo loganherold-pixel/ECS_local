@@ -25,6 +25,7 @@ const easJson = readJson('eas.json');
 const appJson = readJson('app.json');
 const moreScreen = read('app/(tabs)/more.tsx');
 const buildScript = read('scripts/eas-cloud-build-android-apk.mjs');
+const easIgnore = read('.easignore');
 
 assertIncludes(appConfig, 'buildFingerprint', 'Expo config should expose a buildFingerprint in extra.');
 assertIncludes(appConfig, 'ECS_BUILD_COMMIT_SHA', 'Build fingerprint should accept an explicit commit SHA from the build environment.');
@@ -59,6 +60,22 @@ assertIncludes(buildScript, 'ECS_BUILD_COMMIT_SHA', 'Cloud APK helper should sta
 assertIncludes(buildScript, 'ECS_BUILD_TIME', 'Cloud APK helper should stamp a build time into the build env.');
 assertIncludes(buildScript, 'ECS_BUILD_DIRTY', 'Cloud APK helper should stamp dirty state into the build env.');
 assertIncludes(buildScript, '"--clear-cache"', 'Cloud APK helper should always pass --clear-cache.');
+
+for (const ignoredPath of [
+  'apps/web/.next/',
+  '.worktrees/',
+  '.cleanup-quarantine/',
+  '.cleanup-safety/',
+  '.ruff_cache/',
+  '.expo-home/',
+  'android/.gradle-codex/',
+]) {
+  assertIncludes(
+    easIgnore,
+    ignoredPath,
+    `Field-test APK archive should exclude local/generated ${ignoredPath} payloads.`,
+  );
+}
 
 assertIncludes(moreScreen, 'getEcsBuildFingerprint', 'More > Settings should read the visible ECS build fingerprint.');
 assertIncludes(moreScreen, 'Build Fingerprint', 'More > Settings should display a Build Fingerprint row/card.');
