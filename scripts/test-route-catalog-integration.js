@@ -69,7 +69,14 @@ assert(
   'Route catalog should add schema-backed operational criteria for remoteness, campability, fuel range, and water margins',
 );
 
-for (const functionName of ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake', 'route-catalog-sync-usfs-mvum', 'route-catalog-sync-blm-gtlf']) {
+for (const functionName of [
+  'route-catalog-search',
+  'route-catalog-detail',
+  'route-submission-intake',
+  'route-catalog-sync-usfs-mvum',
+  'route-catalog-sync-blm-gtlf',
+  'route-catalog-sync-usgs-trails',
+]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
   const source = fs.readFileSync(functionPath, 'utf8');
@@ -158,6 +165,12 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('route-catalog-sync-blm-gtlf') &&
     read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('publicRecommendationCount'),
   'BLM GTLF route catalog sync should have a durable workflow that reports zero public recommendations for the initial source-segment adapter',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('route-catalog-sync-usgs-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('publicRecommendationCount'),
+  'USGS Trails route catalog sync should have a durable workflow that reports zero public recommendations for supplemental geometry-only ingestion',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&

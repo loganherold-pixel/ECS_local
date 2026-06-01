@@ -22,3 +22,5 @@ The initial authoritative source targets are USFS MVUM Roads, USFS MVUM Trails, 
 The route catalog also treats official Forest Service alerts and current-condition pages as closure/conflict overlays. These sources can remove a matched route from public recommendation, but they do not prove that unmatched routes are open, passable, safe, or free of local hazards.
 
 BLM GTLF ingestion starts as official source-segment evidence only. GTLF segments remain out of public Suggested Routes until ECS route aggregation, current-condition checks, and review produce a curated route record.
+
+USGS National Digital Trails ingestion starts as supplemental geometry and trail-context evidence only. USGS Trails records can help fill map/review context, but they do not establish legal motorized access and must stay out of public Suggested Routes until authoritative access overlays and review pass.

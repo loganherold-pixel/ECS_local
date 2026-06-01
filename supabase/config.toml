@@ -505,3 +505,10 @@ enabled = true
 # writes and must not be callable as a public read endpoint.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-blm-gtlf/index.ts"
+
+[functions.route-catalog-sync-usgs-trails]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and stores USGS Trails as supplemental geometry only.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-usgs-trails/index.ts"
