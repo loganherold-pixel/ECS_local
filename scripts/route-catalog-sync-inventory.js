@@ -18,6 +18,13 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_access',
     publicRecommendationPolicy: 'aggregate_recommendable_with_closure_gate',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      forests: ['tahoe-national-forest', 'mendocino-national-forest'],
+      minMiles: 1,
+      limitPerForestLayer: 150,
+    },
+    expectedMaxPublicRecommendationCount: 10000,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -30,6 +37,14 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_access',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      states: ['CA', 'NV'],
+      layers: [0, 1, 2, 3],
+      minMiles: 1,
+      limitPerStateLayer: 100,
+    },
+    expectedMaxPublicRecommendationCount: 0,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -42,6 +57,13 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'supplemental_geometry',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      bbox: { xmin: -123.2, ymin: 38.2, xmax: -118.6, ymax: 41.8 },
+      minMiles: 1,
+      limit: 150,
+    },
+    expectedMaxPublicRecommendationCount: 0,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -54,6 +76,13 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_context',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      bbox: { xmin: -124.8, ymin: 32.5, xmax: -113.8, ymax: 42.2 },
+      minMiles: 0.1,
+      limit: 150,
+    },
+    expectedMaxPublicRecommendationCount: 0,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -66,6 +95,13 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_access',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      sourceKeys: ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail'],
+      minMiles: 1,
+      maxTracksPerSource: 20,
+    },
+    expectedMaxPublicRecommendationCount: 0,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -78,6 +114,10 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_access',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'workflow_preprocess_required',
+    defaultPayload: null,
+    expectedMaxPublicRecommendationCount: 0,
+    preprocessReason: 'Minnesota DNR OHV sync requires the durable GitHub workflow to download and convert the official GeoPackage into bounded GeoJSON sourceFeatures before invoking the Edge Function.',
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -90,6 +130,13 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     sourceAuthority: 'official_access',
     publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
     publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      sourceKeys: ['tillamook_class_i', 'tillamook_class_ii_iv', 'tillamook_class_iii'],
+      minMiles: 0.25,
+      maxTracksPerSource: 50,
+    },
+    expectedMaxPublicRecommendationCount: 0,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
 ];
@@ -104,6 +151,34 @@ function routeCatalogPublicFunctionNames() {
 
 function routeCatalogDeployFunctionNames() {
   return [...ROUTE_CATALOG_PUBLIC_FUNCTIONS, ...routeCatalogSyncFunctionNames()];
+}
+
+function cloneJson(value) {
+  return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
+function buildRouteCatalogSyncInvocationPlan() {
+  return ROUTE_CATALOG_SYNC_INVENTORY.map((entry) => ({
+    key: entry.key,
+    providerId: entry.providerId,
+    functionName: entry.functionName,
+    functionPath: entry.functionPath,
+    workflowPath: entry.workflowPath,
+    sourceAuthority: entry.sourceAuthority,
+    publicRecommendationPolicy: entry.publicRecommendationPolicy,
+    invocationMode: entry.invocationMode,
+    defaultPayload: cloneJson(entry.defaultPayload),
+    expectedMaxPublicRecommendationCount: entry.expectedMaxPublicRecommendationCount,
+    preprocessReason: entry.preprocessReason || '',
+    safetyNotes: [
+      'Requires ECS_ROUTE_CATALOG_SYNC_TOKEN via x-ecs-sync-token; never print or embed the sync token.',
+      'Runs server-side with service-role credentials only inside the Supabase Edge Function.',
+      'Uses a bounded payload so source syncs cannot accidentally ingest an unbounded national feed.',
+      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations'
+        ? 'Curation-only ingestion must produce zero public recommendations until deterministic review promotes records.'
+        : 'USFS MVUM aggregates may create public recommendations only behind deterministic closure/access gates.',
+    ],
+  }));
 }
 
 function readIfExists(root, relativePath) {
@@ -130,6 +205,26 @@ function validateRouteCatalogSyncInventory(root = path.join(__dirname, '..')) {
       errors.push(`Duplicate route catalog sync function inventory entry: ${entry.functionName}`);
     }
     seenFunctions.add(entry.functionName);
+
+    if (!['direct_edge_function', 'workflow_preprocess_required'].includes(entry.invocationMode)) {
+      errors.push(`${entry.functionName} has an invalid invocation mode`);
+    }
+    if (entry.invocationMode === 'direct_edge_function' && (!entry.defaultPayload || typeof entry.defaultPayload !== 'object')) {
+      errors.push(`${entry.functionName} direct invocation is missing a default payload`);
+    }
+    if (entry.invocationMode === 'workflow_preprocess_required') {
+      if (entry.defaultPayload !== null) errors.push(`${entry.functionName} workflow-preprocess invocation should not define a direct payload`);
+      if (!entry.preprocessReason) errors.push(`${entry.functionName} workflow-preprocess invocation should explain its preprocessing requirement`);
+    }
+    if (!Number.isInteger(entry.expectedMaxPublicRecommendationCount) || entry.expectedMaxPublicRecommendationCount < 0) {
+      errors.push(`${entry.functionName} missing expected public recommendation upper bound`);
+    }
+    if (
+      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' &&
+      entry.expectedMaxPublicRecommendationCount !== 0
+    ) {
+      errors.push(`${entry.functionName} curation-only sync should expect zero public recommendations`);
+    }
 
     const functionSource = readIfExists(root, entry.functionPath);
     const workflowSource = readIfExists(root, entry.workflowPath);
@@ -183,6 +278,7 @@ function validateRouteCatalogSyncInventory(root = path.join(__dirname, '..')) {
 module.exports = {
   ROUTE_CATALOG_PUBLIC_FUNCTIONS,
   ROUTE_CATALOG_SYNC_INVENTORY,
+  buildRouteCatalogSyncInvocationPlan,
   routeCatalogDeployFunctionNames,
   routeCatalogPublicFunctionNames,
   routeCatalogSyncFunctionNames,

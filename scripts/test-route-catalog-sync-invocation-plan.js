@@ -1,0 +1,108 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const root = path.join(__dirname, '..');
+const packageJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+
+const {
+  ROUTE_CATALOG_SYNC_INVENTORY,
+  buildRouteCatalogSyncInvocationPlan,
+} = require(path.join(root, 'scripts', 'route-catalog-sync-inventory.js'));
+
+assert(
+  packageJson.includes('"route-catalog:sync:dry-run"'),
+  'package.json should expose a route catalog sync dry-run command',
+);
+assert(
+  packageJson.includes('"route-catalog:sync:invoke"'),
+  'package.json should expose an explicit route catalog sync invocation command',
+);
+assert(
+  packageJson.includes('"test:route-catalog-sync-invocation-plan"'),
+  'package.json should expose the route catalog sync invocation-plan test',
+);
+
+const runnerPath = path.join(root, 'scripts', 'route-catalog-sync-invoke.js');
+assert(fs.existsSync(runnerPath), 'Route catalog sync invocation runner should exist');
+
+const runnerSource = fs.readFileSync(runnerPath, 'utf8');
+for (const required of [
+  'ECS_SUPABASE_URL',
+  'ECS_ROUTE_CATALOG_SYNC_TOKEN',
+  'x-ecs-sync-token',
+  '--dry-run',
+  '--adapter',
+  '--all-direct',
+  'redactSecret',
+]) {
+  assert(runnerSource.includes(required), `Sync invocation runner should include ${required}`);
+}
+assert(!runnerSource.includes('console.log(process.env.ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Runner must not print sync tokens');
+
+const plan = buildRouteCatalogSyncInvocationPlan();
+assert.strictEqual(
+  plan.length,
+  ROUTE_CATALOG_SYNC_INVENTORY.length,
+  'Invocation plan should include every route catalog sync inventory entry',
+);
+
+const byKey = new Map(plan.map((entry) => [entry.key, entry]));
+
+for (const entry of plan) {
+  assert(entry.key && entry.providerId && entry.functionName, 'Plan entries should preserve inventory identity');
+  assert(entry.workflowPath && entry.functionPath, `${entry.key} should keep workflow/function paths available for operators`);
+  assert(
+    entry.invocationMode === 'direct_edge_function' || entry.invocationMode === 'workflow_preprocess_required',
+    `${entry.key} should declare how it can be invoked safely`,
+  );
+  assert(
+    entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate' ||
+      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations',
+    `${entry.key} should declare recommendation policy in the invocation plan`,
+  );
+  assert(
+    Number.isInteger(entry.expectedMaxPublicRecommendationCount) && entry.expectedMaxPublicRecommendationCount >= 0,
+    `${entry.key} should declare expected public recommendation upper bound`,
+  );
+  assert(
+    entry.safetyNotes.some((note) => note.includes('sync token')) &&
+      entry.safetyNotes.some((note) => note.includes('service-role')) &&
+      entry.safetyNotes.some((note) => note.includes('bounded')),
+    `${entry.key} should carry operator-facing safety notes`,
+  );
+
+  if (entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations') {
+    assert.strictEqual(
+      entry.expectedMaxPublicRecommendationCount,
+      0,
+      `${entry.key} curation-only sync must not produce public recommendations`,
+    );
+  }
+
+  if (entry.invocationMode === 'direct_edge_function') {
+    assert(entry.defaultPayload && typeof entry.defaultPayload === 'object', `${entry.key} direct sync should have a default payload`);
+  } else {
+    assert.strictEqual(entry.defaultPayload, null, `${entry.key} workflow-preprocess sync should not pretend to have a direct payload`);
+    assert(entry.preprocessReason, `${entry.key} workflow-preprocess sync should explain why direct invocation is blocked`);
+  }
+}
+
+assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
+  'tahoe-national-forest',
+  'mendocino-national-forest',
+]);
+assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
+assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
+assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKeys, [
+  'alcona_orv_trail',
+  'atlanta_route',
+  'evart_motorcycle_trail',
+]);
+assert.strictEqual(byKey.get('minnesota_dnr_ohv_trails').invocationMode, 'workflow_preprocess_required');
+assert(
+  byKey.get('minnesota_dnr_ohv_trails').preprocessReason.includes('GeoPackage'),
+  'Minnesota sync should explain that the durable workflow converts the GeoPackage before invocation',
+);
+
+console.log('Route catalog sync invocation plan checks passed');
