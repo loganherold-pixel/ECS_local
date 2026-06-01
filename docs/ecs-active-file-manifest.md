@@ -95,6 +95,8 @@ These looked tempting because they are large, nested, or separate from the main 
 
 These files are the lowest-risk removal candidates because they are build logs or local Supabase temp metadata. They should be quarantined or deleted in one small commit, then verified with auth/smoke gates.
 
+Batch status: removed from source tracking on the cleanup branch after the manifest commit. The ignore rules keep these artifacts from being re-added.
+
 | Candidate | Why It Can Move First | Suggested Action |
 | --- | --- | --- |
 | `android-build.log` | Tracked log artifact and already ignored by git. | Remove from source tracking. |

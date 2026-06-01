@@ -58,6 +58,7 @@ supabase/.temp/
 tmp/
 .tmp/
 .tmp-*
+build-log.txt
 .smoke/
 .expo-export-check/
 .expo-runtime/
