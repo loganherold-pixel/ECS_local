@@ -74,6 +74,10 @@ function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<strin
   return routeIdByPublicId;
 }
 
+function countPublicRecommendations(routeRows: Array<Record<string, unknown>>): number {
+  return routeRows.filter((row) => row.recommendation_status === 'recommendable').length;
+}
+
 async function upsertRawFeatureRows(
   admin: ReturnType<typeof createAdminClient>,
   rawFeatureRows: Array<Record<string, unknown>>,
@@ -219,6 +223,7 @@ serve(async (req) => {
     await upsertRawFeatureRows(admin, rawFeatureRows);
     const routeIdByPublicId = await upsertRouteRows(admin, routeRows);
     await upsertRouteSourceRows(admin, sourceRefs, routeIdByPublicId);
+    const publicRecommendationCount = countPublicRecommendations(routeRows);
 
     await admin
       .from('route_source_ingest_runs')
@@ -227,7 +232,7 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: rawFeatureCount,
         normalized_feature_count: normalizedFeatureCount,
-        metadata: { providerId: 'michigan_dnr_orv_gpx', sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource, sources: sourceSummaries, publicRecommendationCount: 0 },
+        metadata: { providerId: 'michigan_dnr_orv_gpx', sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource, sources: sourceSummaries, publicRecommendationCount },
       })
       .eq('id', ingestRun.id);
 
@@ -238,8 +243,8 @@ serve(async (req) => {
       sources: sourceSummaries,
       rawFeatureCount,
       normalizedFeatureCount,
-      publicRecommendationCount: 0,
-      caveat: 'Michigan DNR ORV GPX records are official state source inputs for curation only. They do not become public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.',
+      publicRecommendationCount,
+      caveat: 'Michigan DNR ORV GPX records are official state source-backed public recommendations with visible warnings. Current DNR closures, permits, local rules, seasonal conditions, and vehicle fit still require trip-date checks.',
     });
   } catch (error) {
     console.error('[route-catalog-sync-michigan-orv]', {

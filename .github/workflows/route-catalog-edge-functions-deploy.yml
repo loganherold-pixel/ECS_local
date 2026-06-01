@@ -82,10 +82,10 @@ jobs:
           | route-catalog-sync-usfs-mvum | Protected official-access sync |
           | route-catalog-sync-blm-gtlf | Protected official-access curation sync |
           | route-catalog-sync-usgs-trails | Protected supplemental geometry sync |
-          | route-catalog-sync-nps-trails | Protected park-context curation sync |
-          | route-catalog-sync-michigan-orv | Protected state OHV curation sync |
-          | route-catalog-sync-minnesota-ohv | Protected state OHV curation sync |
-          | route-catalog-sync-oregon-odf-ohv | Protected state OHV curation sync |
+          | route-catalog-sync-nps-trails | Protected park-context recommendation sync |
+          | route-catalog-sync-michigan-orv | Protected state OHV recommendation sync |
+          | route-catalog-sync-minnesota-ohv | Protected state OHV recommendation sync |
+          | route-catalog-sync-oregon-odf-ohv | Protected state OHV recommendation sync |
 
           Deploys only the Edge Function code. Source ingestion remains token-protected and is invoked by the dedicated sync workflows.
           MARKDOWN

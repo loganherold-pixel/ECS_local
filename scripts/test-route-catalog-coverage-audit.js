@@ -82,6 +82,7 @@ const requiredProbeKeys = [
   'blm_nm_gtlf',
   'blm_ut_gtlf',
   'blm_wy_gtlf',
+  'nps_public_trails_joshua_tree',
   'usgs_nps_sierra_context',
   'conus_empty_control',
 ];
@@ -120,7 +121,16 @@ const verifiedSummary = summarizeSearchResponse(ROUTE_CATALOG_COVERAGE_PROBES[0]
 assert.strictEqual(verifiedSummary.observedPosture, 'verified_public_recommendations');
 assert.strictEqual(verifiedSummary.matchesExpectedPosture, true);
 
-const curationProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_pilot');
+const michiganProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_pilot');
+const minnesotaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_pilot');
+const oregonProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_ohv_pilot');
+const npsProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_joshua_tree');
+assert.strictEqual(michiganProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(minnesotaProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(oregonProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsProbe.expectedPosture, 'verified_public_recommendations');
+
+const curationProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
 const curationSummary = summarizeSearchResponse(curationProbe, {
   count: 0,
   coverageState: { state: 'lower_confidence_nearby', title: 'Source-backed routes in curation' },
@@ -168,34 +178,33 @@ assert.strictEqual(
   'Supplemental context probes should not pass on verified public routes alone when no source-backed context is present.',
 );
 
-const oregonProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_ohv_pilot');
-const curationOverlapSummary = summarizeSearchResponse(oregonProbe, {
+const promotedOverlapSummary = summarizeSearchResponse(oregonProbe, {
   count: 4,
   coverageState: { state: 'ready', title: 'Verified routes available' },
   meta: { radiusMatchedCount: 4, curationCandidateCount: 43, anySourceBackedCandidateCount: 47 },
   records: [{ public_id: 'verified-willamette-1', name: 'Verified Willamette Route', confidence_score: 92 }],
 });
 assert.strictEqual(
-  curationOverlapSummary.observedPosture,
+  promotedOverlapSummary.observedPosture,
   'verified_public_recommendations',
-  'Curation probes should still report verified public routes when nearby official recommendations overlap.',
+  'Promoted state probes should report verified public routes when official recommendations are nearby.',
 );
 assert.strictEqual(
-  curationOverlapSummary.matchesExpectedPosture,
+  promotedOverlapSummary.matchesExpectedPosture,
   true,
-  'Curation probes should pass when source-backed curation candidates exist even if verified public recommendations also exist nearby.',
+  'Promoted state probes should pass when verified public recommendations exist.',
 );
 
-const curationWithoutCandidatesSummary = summarizeSearchResponse(oregonProbe, {
+const promotedWithoutCurationCandidatesSummary = summarizeSearchResponse(oregonProbe, {
   count: 4,
   coverageState: { state: 'ready', title: 'Verified routes available' },
   meta: { radiusMatchedCount: 4, curationCandidateCount: 0, anySourceBackedCandidateCount: 4 },
   records: [{ public_id: 'verified-only-2', name: 'Verified Route Only', confidence_score: 92 }],
 });
 assert.strictEqual(
-  curationWithoutCandidatesSummary.matchesExpectedPosture,
-  false,
-  'Curation probes should not pass on nearby verified routes alone when no curation candidates are present.',
+  promotedWithoutCurationCandidatesSummary.matchesExpectedPosture,
+  true,
+  'Promoted state probes should pass on nearby verified routes even when no curation-only candidates remain.',
 );
 
 const blmProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_ca_nv_pilot');

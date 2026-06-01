@@ -74,6 +74,10 @@ function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<strin
   return routeIdByPublicId;
 }
 
+function countPublicRecommendations(routeRows: Array<Record<string, unknown>>): number {
+  return routeRows.filter((row) => row.recommendation_status === 'recommendable').length;
+}
+
 async function upsertRawFeatureRows(
   admin: ReturnType<typeof createAdminClient>,
   rawFeatureRows: Array<Record<string, unknown>>,
@@ -253,6 +257,7 @@ serve(async (req) => {
     await upsertRawFeatureRows(admin, rawFeatureRows);
     const routeIdByPublicId = await upsertRouteRows(admin, routeRows);
     await upsertRouteSourceRows(admin, sourceRefs, routeIdByPublicId);
+    const publicRecommendationCount = countPublicRecommendations(routeRows);
 
     await admin
       .from('route_source_ingest_runs')
@@ -261,7 +266,7 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: features.length,
         normalized_feature_count: routeRows.length,
-        metadata: { providerId: 'nps_public_trails', bbox, minMiles, limit, publicRecommendationCount: 0 },
+        metadata: { providerId: 'nps_public_trails', bbox, minMiles, limit, publicRecommendationCount },
       })
       .eq('id', ingestRun.id);
 
@@ -271,8 +276,8 @@ serve(async (req) => {
       bbox,
       rawFeatureCount: features.length,
       normalizedFeatureCount: routeRows.length,
-      publicRecommendationCount: 0,
-      caveat: 'NPS public trails records are official park-context curation inputs only. They do not become public Suggested Routes unless park-unit legal access, current alerts, closures, and ECS route curation pass.',
+      publicRecommendationCount,
+      caveat: 'NPS public trails records are official park-context public recommendations when filtered to public-display, unrestricted, existing/open, terra, motorized-use records. Park-unit rules, current alerts, closures, permits, and passability still require trip-date checks.',
     });
   } catch (error) {
     console.error('[route-catalog-sync-nps-trails]', {

@@ -84,11 +84,11 @@ const alconaUpsert = gpxTrackToMichiganOrvRouteUpsert(alconaTracks[0], {
   minMiles: 1,
 });
 
-assert(alconaUpsert, 'A named Michigan DNR ORV trail GPX track should produce a route-catalog curation record');
+assert(alconaUpsert, 'A named Michigan DNR ORV trail GPX track should produce a public route-catalog recommendation record');
 assert.strictEqual(alconaUpsert.verifiedRoute.public_id, 'michigan-dnr-orv-alcona-orv-trail');
 assert.strictEqual(alconaUpsert.verifiedRoute.name, 'Michigan DNR ORV Trail Alcona ORV Trail');
-assert.strictEqual(alconaUpsert.verifiedRoute.recommendation_status, 'not_recommended');
-assert.strictEqual(alconaUpsert.verifiedRoute.verification_status, 'partially_verified');
+assert.strictEqual(alconaUpsert.verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(alconaUpsert.verifiedRoute.verification_status, 'official_verified');
 assert.strictEqual(alconaUpsert.verifiedRoute.review_status, 'approved');
 assert.strictEqual(alconaUpsert.verifiedRoute.official_access_coverage_pct, 80);
 assert.strictEqual(alconaUpsert.verifiedRoute.unknown_access_coverage_pct, 20);
@@ -99,10 +99,7 @@ assert(
   alconaUpsert.verifiedRoute.warning_reasons.some((warning) => /current closures, permits, local rules/i.test(warning)),
   'Michigan DNR GPX records must retain current-closure and permit caveats',
 );
-assert(
-  alconaUpsert.verifiedRoute.blocker_reasons.some((blocker) => /not yet reviewed with current Michigan DNR closures/i.test(blocker)),
-  'Michigan DNR GPX records should not become public recommendations before current-condition review',
-);
+assert.deepStrictEqual(alconaUpsert.verifiedRoute.blocker_reasons, []);
 assert.strictEqual(alconaUpsert.rawSourceFeature.provider_feature_id, 'michigan-dnr-orv:alcona_orv_trail:alcona-orv-trail');
 assert.strictEqual(alconaUpsert.verifiedRouteSource.source_role, 'primary');
 
@@ -125,7 +122,7 @@ const routeUpsert = gpxTrackToMichiganOrvRouteUpsert(routeTrack, {
   sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
   minMiles: 1,
 });
-assert(routeUpsert, 'A Michigan DNR ORV route should normalize as a source-backed curation route');
+assert(routeUpsert, 'A Michigan DNR ORV route should normalize as a source-backed recommendation route');
 assert.deepStrictEqual(routeUpsert.verifiedRoute.vehicle_fit, ['full_size_4x4', 'atv', 'utv', 'motorcycle']);
 assert.strictEqual(routeUpsert.verifiedRoute.official_access_coverage_pct, 85);
 
@@ -169,7 +166,7 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Michigan ORV sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceKeys'), 'Michigan ORV sync should support bounded named GPX source keys');
-assert(syncFunction.includes('publicRecommendationCount: 0'), 'Michigan ORV sync should report zero public recommendations for curation ingestion');
+assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'Michigan ORV sync should report promoted public recommendation telemetry');
 assert(syncFunction.includes('GEOMETRY_BATCH_SIZE = 10'), 'Michigan ORV sync should use small DB batches for geometry-heavy GPX records');
 
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-michigan-orv-sync.yml');

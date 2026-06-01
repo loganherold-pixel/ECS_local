@@ -59,7 +59,7 @@ export const MICHIGAN_ORV_GPX_SOURCES: MichiganOrvGpxSource[] = [
 ];
 
 const MICHIGAN_ORV_CAVEAT =
-  'Michigan DNR ORV GPX files are official state route/trail geometry, but current closures, permits, local rules, vehicle width/fit, and seasonal conditions must be checked before ECS can publicly recommend a route.';
+  'Michigan DNR ORV GPX files are official state route/trail geometry. Current closures, permits, local rules, vehicle width/fit, and seasonal conditions still require trip-date checks before travel.';
 
 function cleanString(value: unknown): string {
   return String(value ?? '').trim();
@@ -247,7 +247,7 @@ function vehicleFitForKind(kind: MichiganOrvGpxSource['routeKind']): string[] {
 
 function coverageForKind(kind: MichiganOrvGpxSource['routeKind']): number {
   if (kind === 'route') return 85;
-  if (kind === 'motorcycle') return 78;
+  if (kind === 'motorcycle') return 80;
   return 80;
 }
 
@@ -382,7 +382,7 @@ export function gpxTrackToMichiganOrvRouteUpsert(
   const verifiedRoute = {
     public_id: publicId,
     name: `Michigan DNR ORV ${routeKindLabel(routeKind)} ${titleName}`,
-    description: 'Michigan DNR official ORV GPX geometry. ECS stores this as state source-backed curation input, not as a finished expedition route recommendation.',
+    description: 'Michigan DNR official ORV GPX geometry. ECS publishes this as an official source-backed route recommendation with visible current-condition caveats.',
     route_type: 'point_to_point',
     center_latitude: center.latitude,
     center_longitude: center.longitude,
@@ -403,8 +403,8 @@ export function gpxTrackToMichiganOrvRouteUpsert(
     seasonal_restriction_count: 0,
     vehicle_mismatch: false,
     geometry_quality: 'good',
-    verification_status: 'partially_verified',
-    recommendation_status: 'not_recommended',
+    verification_status: 'official_verified',
+    recommendation_status: 'recommendable',
     review_status: 'approved',
     confidence_score: confidenceForKind(routeKind),
     confidence_reasons: [
@@ -413,9 +413,9 @@ export function gpxTrackToMichiganOrvRouteUpsert(
     ],
     warning_reasons: [
       MICHIGAN_ORV_CAVEAT,
-      'Michigan DNR ORV GPX source awaits ECS route curation before public recommendation.',
+      'Check current Michigan DNR closures, permits, local rules, vehicle fit, and seasonal conditions before travel.',
     ],
-    blocker_reasons: ['Michigan DNR ORV GPX geometry is not yet reviewed with current Michigan DNR closures, local rules, seasonal conditions, and ECS route curation.'],
+    blocker_reasons: [],
     closure_summaries: [],
     community_signal: {
       sourceAdapter: 'michigan_dnr_orv_gpx',

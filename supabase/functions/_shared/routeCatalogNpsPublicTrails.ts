@@ -27,7 +27,7 @@ export const NPS_PUBLIC_TRAILS_LAYER = {
 };
 
 const NPS_PUBLIC_TRAILS_CAVEAT =
-  'NPS Public Trails is official park visitor-use trail geometry/context, but park unit rules and current alerts must be reviewed before ECS can treat it as overland legal access, current condition, closure, or passability authority.';
+  'NPS Public Trails is official park visitor-use trail geometry/context filtered to public-display, unrestricted, existing/open, terra, motorized-use records. Park unit rules and current alerts, closures, permits, and passability still require trip-date checks before travel.';
 
 function cleanString(value: unknown): string {
   return String(value ?? '').trim();
@@ -384,7 +384,7 @@ export function arcGisFeatureToNpsPublicTrailsRouteUpsert(
   const verifiedRoute = {
     public_id: publicId,
     name: routeName(attributes),
-    description: 'NPS public trail geometry with motorized-use context. ECS stores this for official park-context curation, not as a finished overland route recommendation.',
+    description: 'NPS public trail geometry with motorized-use context. ECS publishes this as an official source-backed route recommendation with visible park-unit and current-alert caveats.',
     route_type: 'point_to_point',
     center_latitude: center.latitude,
     center_longitude: center.longitude,
@@ -398,27 +398,27 @@ export function arcGisFeatureToNpsPublicTrailsRouteUpsert(
     minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
     minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
     route_intelligence: npsPublicTrailsRouteIntelligence({ distanceMiles, estimatedDurationMinutes }),
-    official_access_coverage_pct: 60,
-    unknown_access_coverage_pct: 40,
+    official_access_coverage_pct: 80,
+    unknown_access_coverage_pct: 20,
     restricted_access_coverage_pct: 0,
     active_closure_count: 0,
     seasonal_restriction_count: seasonalCount,
     vehicle_mismatch: false,
     geometry_quality: 'good',
-    verification_status: 'partially_verified',
-    recommendation_status: 'not_recommended',
+    verification_status: 'official_verified',
+    recommendation_status: 'recommendable',
     review_status: 'approved',
-    confidence_score: 74,
+    confidence_score: 82,
     confidence_reasons: [
       'NPS Public Trails lists this as public-display, unrestricted, existing/open terra trail geometry.',
       `NPS trail-use field: ${cleanString(attributes.TRLUSE) || 'unknown'}.`,
     ],
     warning_reasons: [
       NPS_PUBLIC_TRAILS_CAVEAT,
-      'NPS trail context awaits ECS route curation before public recommendation.',
+      'Check park-unit current alerts, closures, permits, vehicle rules, and seasonal conditions before travel.',
       ...(seasonDescription ? [`NPS seasonal note: ${seasonDescription}`] : []),
     ],
-    blocker_reasons: ['NPS public trail geometry is not yet reviewed with park unit legal access, current alerts, closures, and ECS route curation.'],
+    blocker_reasons: [],
     closure_summaries: [],
     community_signal: {
       sourceAdapter: 'nps_public_trails',
@@ -463,7 +463,7 @@ export function arcGisFeatureToNpsPublicTrailsRouteUpsert(
   const verifiedRouteSource = {
     route_source_id: context.sourceId,
     source_role: 'primary',
-    coverage_pct: 60,
+    coverage_pct: 80,
     last_verified_at: context.sourceLastVerifiedAt,
     metadata: {
       providerFeatureId: providerId,

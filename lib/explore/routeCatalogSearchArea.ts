@@ -38,13 +38,17 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'mt_hood_nf'
   | 'coronado_nf'
   | 'sierra_nf'
+  | 'michigan_orv'
+  | 'minnesota_ohv'
+  | 'oregon_odf_ohv'
   | 'blm_az_gtlf'
   | 'blm_ca_nv_gtlf'
   | 'blm_co_gtlf'
   | 'blm_id_gtlf'
   | 'blm_mt_gtlf'
   | 'blm_nm_gtlf'
-  | 'blm_ut_gtlf';
+  | 'blm_ut_gtlf'
+  | 'nps_public_trails_joshua_tree';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -491,30 +495,30 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     key: 'michigan_orv',
     label: 'Michigan DNR ORV',
     shortLabel: 'Michigan ORV',
-    latitude: null,
-    longitude: null,
-    coveragePosture: 'official_curation',
-    publicRecommendation: false,
+    latitude: 44.98,
+    longitude: -84.13,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
     sourceAdapters: ['michigan_dnr_orv_gpx'],
   },
   {
     key: 'minnesota_ohv',
     label: 'Minnesota DNR OHV',
     shortLabel: 'Minnesota OHV',
-    latitude: null,
-    longitude: null,
-    coveragePosture: 'official_curation',
-    publicRecommendation: false,
+    latitude: 47.49,
+    longitude: -92.46,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
     sourceAdapters: ['minnesota_dnr_ohv_trails'],
   },
   {
     key: 'oregon_odf_ohv',
     label: 'Oregon ODF OHV',
     shortLabel: 'Oregon ODF',
-    latitude: null,
-    longitude: null,
-    coveragePosture: 'official_curation',
-    publicRecommendation: false,
+    latitude: 45.55,
+    longitude: -123.55,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
     sourceAdapters: ['oregon_odf_ohv_gpx'],
   },
   {
@@ -598,14 +602,24 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['blm_gtlf'],
   },
   {
-    key: 'usgs_nps_context',
-    label: 'USGS/NPS public trail context',
-    shortLabel: 'USGS/NPS',
+    key: 'nps_public_trails_joshua_tree',
+    label: 'NPS Public Trails Joshua Tree',
+    shortLabel: 'NPS Joshua Tree',
+    latitude: 34,
+    longitude: -116.03,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'usgs_trails_context',
+    label: 'USGS Digital Trails context',
+    shortLabel: 'USGS Trails',
     latitude: null,
     longitude: null,
     coveragePosture: 'supplemental_context',
     publicRecommendation: false,
-    sourceAdapters: ['usgs_trails', 'nps_public_trails'],
+    sourceAdapters: ['usgs_trails'],
   },
 ];
 

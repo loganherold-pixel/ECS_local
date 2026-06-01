@@ -91,11 +91,11 @@ const classIIUpsert = gpxTrackToOregonOdfOhvRouteUpsert(classIITracks[0], {
   minMiles: 0.01,
 });
 
-assert(classIIUpsert, 'An Oregon ODF Tillamook Class II/IV GPX track should produce a route-catalog curation record');
+assert(classIIUpsert, 'An Oregon ODF Tillamook Class II/IV GPX track should produce a public route-catalog recommendation record');
 assert.strictEqual(classIIUpsert.verifiedRoute.public_id, 'oregon-odf-ohv-tillamook-class-ii-iv-7-up');
 assert.strictEqual(classIIUpsert.verifiedRoute.name, 'Oregon ODF OHV Class II/IV 7-UP - Tillamook State Forest');
-assert.strictEqual(classIIUpsert.verifiedRoute.recommendation_status, 'not_recommended');
-assert.strictEqual(classIIUpsert.verifiedRoute.verification_status, 'partially_verified');
+assert.strictEqual(classIIUpsert.verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(classIIUpsert.verifiedRoute.verification_status, 'official_verified');
 assert.strictEqual(classIIUpsert.verifiedRoute.review_status, 'approved');
 assert.strictEqual(classIIUpsert.verifiedRoute.official_access_coverage_pct, 84);
 assert.strictEqual(classIIUpsert.verifiedRoute.unknown_access_coverage_pct, 16);
@@ -105,10 +105,7 @@ assert(
   classIIUpsert.verifiedRoute.warning_reasons.some((warning) => /open\/closed|fire restrictions/i.test(warning)),
   'Oregon ODF GPX records must retain current open/closed and fire-restriction caveats',
 );
-assert(
-  classIIUpsert.verifiedRoute.blocker_reasons.some((blocker) => /not yet reviewed with current Oregon ODF closures/i.test(blocker)),
-  'Oregon ODF GPX records should not become public recommendations before current-condition review',
-);
+assert.deepStrictEqual(classIIUpsert.verifiedRoute.blocker_reasons, []);
 assert.strictEqual(classIIUpsert.rawSourceFeature.provider_feature_id, 'oregon-odf-ohv:tillamook_class_ii_iv:7-up');
 assert.strictEqual(classIIUpsert.verifiedRouteSource.source_role, 'primary');
 
@@ -157,7 +154,7 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Oregon ODF OHV sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceKeys'), 'Oregon ODF OHV sync should support bounded named GPX source keys');
-assert(syncFunction.includes('publicRecommendationCount: 0'), 'Oregon ODF OHV sync should report zero public recommendations for curation ingestion');
+assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'Oregon ODF OHV sync should report promoted public recommendation telemetry');
 assert(syncFunction.includes('GEOMETRY_BATCH_SIZE = 10'), 'Oregon ODF OHV sync should use small DB batches for geometry-heavy GPX records');
 
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml');

@@ -72,6 +72,10 @@ function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<strin
   return routeIdByPublicId;
 }
 
+function countPublicRecommendations(routeRows: Array<Record<string, unknown>>): number {
+  return routeRows.filter((row) => row.recommendation_status === 'recommendable').length;
+}
+
 async function upsertRawFeatureRows(
   admin: ReturnType<typeof createAdminClient>,
   rawFeatureRows: Array<Record<string, unknown>>,
@@ -201,6 +205,7 @@ serve(async (req) => {
     await upsertRawFeatureRows(admin, rawFeatureRows);
     const routeIdByPublicId = await upsertRouteRows(admin, routeRows);
     await upsertRouteSourceRows(admin, sourceRefs, routeIdByPublicId);
+    const publicRecommendationCount = countPublicRecommendations(routeRows);
 
     await admin
       .from('route_source_ingest_runs')
@@ -215,7 +220,7 @@ serve(async (req) => {
           minMiles,
           maxFeatures,
           sourceFeatures: features.length,
-          publicRecommendationCount: 0,
+          publicRecommendationCount,
         },
       })
       .eq('id', ingestRun.id);
@@ -225,9 +230,9 @@ serve(async (req) => {
       source: 'minnesota_dnr_ohv_trails',
       rawFeatureCount: features.length,
       normalizedFeatureCount: routeRows.length,
-      publicRecommendationCount: 0,
+      publicRecommendationCount,
       officialDownloadUrl: MINNESOTA_OHV_DOWNLOADS.geopackage,
-      caveat: 'Minnesota DNR OHV records are official state source inputs for curation only. They do not become public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.',
+      caveat: 'Minnesota DNR OHV records are official state source-backed public recommendations with visible warnings. Current DNR closures, permits, local rules, seasonal conditions, vehicle fit, and the dataset navigation caveat still require trip-date checks.',
     });
   } catch (error) {
     console.error('[route-catalog-sync-minnesota-ohv]', {

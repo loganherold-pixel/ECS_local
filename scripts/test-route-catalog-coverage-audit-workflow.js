@@ -93,6 +93,7 @@ for (const requiredMapping of [
   "'blm_nm_gtlf',",
   "'blm_ut_gtlf',",
   "'blm_wy_gtlf',",
+  "['nps_public_trails_joshua_tree']",
   "['usgs_nps_sierra_context']",
 ]) {
   assert(workflow.includes(requiredMapping), `Coverage audit workflow should map source syncs to ${requiredMapping}`);

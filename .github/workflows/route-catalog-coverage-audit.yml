@@ -121,7 +121,7 @@ jobs:
             ],
             'Route Catalog Michigan ORV Sync': ['michigan_dnr_orv_pilot'],
             'Route Catalog Minnesota OHV Sync': ['minnesota_dnr_ohv_pilot'],
-            'Route Catalog NPS Trails Sync': ['usgs_nps_sierra_context'],
+            'Route Catalog NPS Trails Sync': ['nps_public_trails_joshua_tree'],
             'Route Catalog Oregon ODF OHV Sync': ['oregon_odf_ohv_pilot'],
             'Route Catalog USGS Trails Sync': ['usgs_nps_sierra_context'],
           };

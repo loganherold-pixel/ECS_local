@@ -115,7 +115,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     workflowPath: path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml'),
     adapterTestScript: 'test:nps-trails-route-catalog-adapter',
     sourceAuthority: 'official_context',
-    publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
+    publicRecommendationPolicy: 'official_source_recommendable_with_condition_warnings',
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
@@ -123,7 +123,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       minMiles: 0.1,
       limit: 150,
     },
-    expectedMaxPublicRecommendationCount: 0,
+    expectedMaxPublicRecommendationCount: 500,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -134,7 +134,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     workflowPath: path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml'),
     adapterTestScript: 'test:michigan-orv-route-catalog-adapter',
     sourceAuthority: 'official_access',
-    publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
+    publicRecommendationPolicy: 'official_source_recommendable_with_condition_warnings',
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
@@ -142,7 +142,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       minMiles: 1,
       maxTracksPerSource: 20,
     },
-    expectedMaxPublicRecommendationCount: 0,
+    expectedMaxPublicRecommendationCount: 100,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -153,11 +153,11 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     workflowPath: path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml'),
     adapterTestScript: 'test:minnesota-ohv-route-catalog-adapter',
     sourceAuthority: 'official_access',
-    publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
+    publicRecommendationPolicy: 'official_source_recommendable_with_condition_warnings',
     publicRuntimeCallable: false,
     invocationMode: 'workflow_preprocess_required',
     defaultPayload: null,
-    expectedMaxPublicRecommendationCount: 0,
+    expectedMaxPublicRecommendationCount: 1000,
     preprocessReason: 'Minnesota DNR OHV sync requires the durable GitHub workflow to download and convert the official GeoPackage into bounded GeoJSON sourceFeatures before invoking the Edge Function.',
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
@@ -169,7 +169,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     workflowPath: path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml'),
     adapterTestScript: 'test:oregon-odf-ohv-route-catalog-adapter',
     sourceAuthority: 'official_access',
-    publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
+    publicRecommendationPolicy: 'official_source_recommendable_with_condition_warnings',
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
@@ -177,7 +177,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       minMiles: 0.25,
       maxTracksPerSource: 50,
     },
-    expectedMaxPublicRecommendationCount: 0,
+    expectedMaxPublicRecommendationCount: 200,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
 ];
@@ -217,7 +217,9 @@ function buildRouteCatalogSyncInvocationPlan() {
       'Uses a bounded payload so source syncs cannot accidentally ingest an unbounded national feed.',
       entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations'
         ? 'Curation-only ingestion must produce zero public recommendations until deterministic review promotes records.'
-        : 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.',
+        : entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate'
+          ? 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.'
+          : 'Official source records may create public recommendations when the adapter applies deterministic public-use filters and keeps current-condition warnings visible.',
     ],
   }));
 }

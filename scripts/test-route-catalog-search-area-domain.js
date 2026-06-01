@@ -71,6 +71,9 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mt_hood_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'coronado_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sierra_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_ohv') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_az_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_co_gtlf') &&
@@ -78,6 +81,7 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_mt_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_nm_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_joshua_tree') &&
     !ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_wy_gtlf'),
   'Route catalog presets should expose all verified public recommendation coverage areas.',
 );
@@ -156,6 +160,9 @@ assert.deepStrictEqual(
     'Mt. Hood National Forest',
     'Coronado National Forest',
     'Sierra National Forest',
+    'Michigan DNR ORV',
+    'Minnesota DNR OHV',
+    'Oregon ODF OHV',
     'BLM GTLF Arizona',
     'BLM GTLF CA/NV',
     'BLM GTLF Colorado',
@@ -163,19 +170,20 @@ assert.deepStrictEqual(
     'BLM GTLF Montana',
     'BLM GTLF New Mexico',
     'BLM GTLF Utah',
+    'NPS Public Trails Joshua Tree',
   ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
 );
 assert(
-  ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Michigan DNR ORV') &&
-    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Minnesota DNR OHV') &&
-    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Oregon ODF OHV') &&
-    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('BLM GTLF Wyoming'),
-  'Coverage registry should expose official/source-backed areas that are ingested for curation but not public recommendations yet.',
+  ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('BLM GTLF Wyoming') &&
+    !ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Michigan DNR ORV') &&
+    !ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Minnesota DNR OHV') &&
+    !ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Oregon ODF OHV'),
+  'Coverage registry should promote official state OHV/NPS sources while leaving only unpromoted official pilots in curation.',
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah.*In curation:.*Michigan DNR ORV.*BLM GTLF Wyoming.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, NPS Public Trails Joshua Tree.*In curation: BLM GTLF Wyoming.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

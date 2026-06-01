@@ -193,25 +193,25 @@ assert(
   fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-nps-trails-sync.yml')) &&
     read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('route-catalog-sync-nps-trails') &&
     read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('publicRecommendationCount'),
-  'NPS public trails route catalog sync should have a durable workflow that reports zero public recommendations for park-context curation ingestion',
+  'NPS public trails route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')) &&
     read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('route-catalog-sync-michigan-orv') &&
     read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('publicRecommendationCount'),
-  'Michigan DNR ORV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+  'Michigan DNR ORV route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')) &&
     read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('route-catalog-sync-minnesota-ohv') &&
     read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('publicRecommendationCount'),
-  'Minnesota DNR OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+  'Minnesota DNR OHV route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')) &&
     read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('route-catalog-sync-oregon-odf-ohv') &&
     read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('publicRecommendationCount'),
-  'Oregon ODF OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+  'Oregon ODF OHV route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&

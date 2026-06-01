@@ -54,7 +54,7 @@ export const OREGON_ODF_OHV_GPX_SOURCES: OregonOdfOhvGpxSource[] = [
 ];
 
 const OREGON_ODF_OHV_CAVEAT =
-  'Oregon ODF OHV GPX files are official state forest trail geometry, but current open/closed status, fire restrictions, vehicle class signage, permits, local rules, and seasonal conditions must be checked before ECS can publicly recommend a route.';
+  'Oregon ODF OHV GPX files are official state forest trail geometry. Current open/closed status, fire restrictions, vehicle class signage, permits, local rules, and seasonal conditions still require trip-date checks before travel.';
 
 function cleanString(value: unknown): string {
   return String(value ?? '').trim();
@@ -365,7 +365,7 @@ export function gpxTrackToOregonOdfOhvRouteUpsert(
   const verifiedRoute = {
     public_id: publicId,
     name: `Oregon ODF OHV ${label} ${track.name} - ${area}`,
-    description: 'Oregon Department of Forestry official OHV GPX geometry. ECS stores this as state source-backed curation input, not as a finished expedition route recommendation.',
+    description: 'Oregon Department of Forestry official OHV GPX geometry. ECS publishes this as an official source-backed route recommendation with visible current-condition caveats.',
     route_type: 'point_to_point',
     center_latitude: center.latitude,
     center_longitude: center.longitude,
@@ -390,8 +390,8 @@ export function gpxTrackToOregonOdfOhvRouteUpsert(
     seasonal_restriction_count: 0,
     vehicle_mismatch: false,
     geometry_quality: 'good',
-    verification_status: 'partially_verified',
-    recommendation_status: 'not_recommended',
+    verification_status: 'official_verified',
+    recommendation_status: 'recommendable',
     review_status: 'approved',
     confidence_score: confidenceForClass(track.source.vehicleClass),
     confidence_reasons: [
@@ -400,9 +400,9 @@ export function gpxTrackToOregonOdfOhvRouteUpsert(
     ],
     warning_reasons: [
       OREGON_ODF_OHV_CAVEAT,
-      'Oregon ODF OHV GPX source awaits ECS route curation before public recommendation.',
+      'Check current Oregon ODF closures, fire restrictions, vehicle class signage, permits, and seasonal conditions before travel.',
     ],
-    blocker_reasons: ['Oregon ODF OHV GPX geometry is not yet reviewed with current Oregon ODF closures, fire restrictions, vehicle class signage, seasonal conditions, and ECS route curation.'],
+    blocker_reasons: [],
     closure_summaries: [],
     community_signal: {
       sourceAdapter: 'oregon_odf_ohv_gpx',

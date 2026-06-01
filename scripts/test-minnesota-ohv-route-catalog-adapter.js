@@ -75,11 +75,11 @@ const fullAccessUpsert = featureToMinnesotaOhvRouteUpsert(fullAccessFeature, {
   minMiles: 1,
 });
 
-assert(fullAccessUpsert, 'A Minnesota DNR OHV feature with public OHV classes and geometry should produce a curation record');
+assert(fullAccessUpsert, 'A Minnesota DNR OHV feature with public OHV classes and geometry should produce a public route-catalog recommendation record');
 assert.strictEqual(fullAccessUpsert.verifiedRoute.public_id, 'minnesota-dnr-ohv-appleton-area-recreational-park-feature-2001');
 assert.strictEqual(fullAccessUpsert.verifiedRoute.name, 'Minnesota DNR OHV Appleton Area Recreational Park - ORV Scramble Loop');
-assert.strictEqual(fullAccessUpsert.verifiedRoute.recommendation_status, 'not_recommended');
-assert.strictEqual(fullAccessUpsert.verifiedRoute.verification_status, 'partially_verified');
+assert.strictEqual(fullAccessUpsert.verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(fullAccessUpsert.verifiedRoute.verification_status, 'official_verified');
 assert.strictEqual(fullAccessUpsert.verifiedRoute.review_status, 'approved');
 assert.strictEqual(fullAccessUpsert.verifiedRoute.official_access_coverage_pct, 86);
 assert.strictEqual(fullAccessUpsert.verifiedRoute.unknown_access_coverage_pct, 14);
@@ -90,10 +90,7 @@ assert(
   fullAccessUpsert.verifiedRoute.warning_reasons.some((warning) => /not to be used for navigation/i.test(warning)),
   'Minnesota OHV records should surface the metadata navigation/reference caveat',
 );
-assert(
-  fullAccessUpsert.verifiedRoute.blocker_reasons.some((blocker) => /current Minnesota DNR closures/i.test(blocker)),
-  'Minnesota OHV records should not become public recommendations before current-condition review',
-);
+assert.deepStrictEqual(fullAccessUpsert.verifiedRoute.blocker_reasons, []);
 assert.strictEqual(fullAccessUpsert.rawSourceFeature.provider_feature_id, 'minnesota-dnr-ohv:2001');
 assert.strictEqual(fullAccessUpsert.verifiedRouteSource.source_role, 'primary');
 
@@ -173,6 +170,6 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Minnesota OHV sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceFeatures'), 'Minnesota OHV sync should accept GeoPackage-converted sourceFeatures from the durable workflow');
-assert(syncFunction.includes('publicRecommendationCount: 0'), 'Minnesota OHV sync should report zero public recommendations for curation ingestion');
+assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'Minnesota OHV sync should report promoted public recommendation telemetry');
 
 console.log('Minnesota DNR OHV route catalog adapter checks passed');

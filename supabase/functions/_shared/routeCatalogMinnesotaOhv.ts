@@ -27,7 +27,7 @@ export const MINNESOTA_OHV_DOWNLOADS = {
 };
 
 const MINNESOTA_OHV_CAVEAT =
-  'Minnesota DNR OHV Trails is official state source data for public OHV opportunities, but the dataset metadata says it is not to be used for navigation and is a reference layer only; current closures, permits, local rules, vehicle class fit, and seasonal conditions must be checked before ECS can publicly recommend a route.';
+  'Minnesota DNR OHV Trails is official state source data for public OHV opportunities, but the dataset metadata says it is not to be used for navigation and is a reference layer only; current closures, permits, local rules, vehicle class fit, and seasonal conditions still require trip-date checks before travel.';
 
 function cleanString(value: unknown): string {
   return String(value ?? '').trim();
@@ -283,7 +283,7 @@ export function featureToMinnesotaOhvRouteUpsert(
   const verifiedRoute = {
     public_id: publicId,
     name: routeName(properties),
-    description: 'Minnesota DNR official OHV trail geometry. ECS stores this as state source-backed curation input, not as a finished expedition route recommendation.',
+    description: 'Minnesota DNR official OHV trail geometry. ECS publishes this as an official source-backed route recommendation with visible current-condition caveats.',
     route_type: 'point_to_point',
     center_latitude: center.latitude,
     center_longitude: center.longitude,
@@ -304,8 +304,8 @@ export function featureToMinnesotaOhvRouteUpsert(
     seasonal_restriction_count: 0,
     vehicle_mismatch: false,
     geometry_quality: 'good',
-    verification_status: 'partially_verified',
-    recommendation_status: 'not_recommended',
+    verification_status: 'official_verified',
+    recommendation_status: 'recommendable',
     review_status: 'approved',
     confidence_score: confidenceForProperties(properties),
     confidence_reasons: [
@@ -314,9 +314,9 @@ export function featureToMinnesotaOhvRouteUpsert(
     ],
     warning_reasons: [
       MINNESOTA_OHV_CAVEAT,
-      'Minnesota DNR OHV source awaits ECS route curation before public recommendation.',
+      'Check current Minnesota DNR closures, permits, local rules, vehicle class fit, and seasonal conditions before travel.',
     ],
-    blocker_reasons: ['Minnesota DNR OHV geometry is not yet reviewed with current Minnesota DNR closures, local rules, seasonal conditions, and ECS route curation.'],
+    blocker_reasons: [],
     closure_summaries: [],
     community_signal: {
       sourceAdapter: 'minnesota_dnr_ohv_trails',

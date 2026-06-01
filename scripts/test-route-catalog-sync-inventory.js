@@ -42,7 +42,8 @@ for (const entry of ROUTE_CATALOG_SYNC_INVENTORY) {
   assert.strictEqual(entry.publicRuntimeCallable, false, `${entry.functionName} should not be marked public-runtime callable`);
   assert(
     entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate' ||
-      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations',
+      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
+      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings',
     `${entry.functionName} should declare a public recommendation policy`,
   );
   assert(

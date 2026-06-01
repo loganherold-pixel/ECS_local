@@ -83,14 +83,14 @@ const fourWheelDriveUpsert = arcGisFeatureToNpsPublicTrailsRouteUpsert(fourWheel
   minMiles: 0.1,
 });
 
-assert(fourWheelDriveUpsert, 'A public NPS terra trail with motorized-use text and geometry should produce a curation record');
+assert(fourWheelDriveUpsert, 'A public NPS terra trail with motorized-use text and geometry should produce a public route-catalog recommendation record');
 assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.public_id, 'nps-public-trails-shen-knob-mtn-trail-feature-10785');
 assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.name, 'NPS Trail Knob Mtn Trail - Shenandoah National Park');
-assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.recommendation_status, 'not_recommended');
-assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.verification_status, 'partially_verified');
+assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.verification_status, 'official_verified');
 assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.review_status, 'approved');
-assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.official_access_coverage_pct, 60);
-assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.unknown_access_coverage_pct, 40);
+assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.official_access_coverage_pct, 80);
+assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.unknown_access_coverage_pct, 20);
 assert.deepStrictEqual(fourWheelDriveUpsert.verifiedRoute.vehicle_fit, ['full_size_4x4']);
 assert(fourWheelDriveUpsert.verifiedRoute.distance_miles > 0.1);
 assert.strictEqual(fourWheelDriveUpsert.verifiedRoute.route_geometry.type, 'LineString');
@@ -98,10 +98,7 @@ assert(
   fourWheelDriveUpsert.verifiedRoute.warning_reasons.some((warning) => /park unit rules and current alerts/i.test(warning)),
   'NPS records must retain the park-unit/current-alert verification caveat',
 );
-assert(
-  fourWheelDriveUpsert.verifiedRoute.blocker_reasons.some((blocker) => /not yet reviewed with park unit legal access/i.test(blocker)),
-  'NPS public trail records should not become public recommendations before legal/current-condition review',
-);
+assert.deepStrictEqual(fourWheelDriveUpsert.verifiedRoute.blocker_reasons, []);
 assert.strictEqual(fourWheelDriveUpsert.rawSourceFeature.provider_feature_id, 'nps-public-trails:10785');
 assert.strictEqual(fourWheelDriveUpsert.verifiedRouteSource.source_role, 'primary');
 
@@ -170,6 +167,6 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'NPS Trails sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('bbox'), 'NPS Trails sync should require bounded spatial sync input');
-assert(syncFunction.includes('publicRecommendationCount: 0'), 'NPS Trails sync should report zero public recommendations for context-only ingestion');
+assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'NPS Trails sync should report promoted public recommendation telemetry');
 
 console.log('NPS public trails route catalog adapter checks passed');

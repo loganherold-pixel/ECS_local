@@ -60,7 +60,8 @@ for (const entry of plan) {
   );
   assert(
     entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate' ||
-      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations',
+      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
+      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings',
     `${entry.key} should declare recommendation policy in the invocation plan`,
   );
   assert(
@@ -152,6 +153,31 @@ assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKe
   'atlanta_route',
   'evart_motorcycle_trail',
 ]);
+assert.strictEqual(
+  byKey.get('michigan_dnr_orv_gpx').publicRecommendationPolicy,
+  'official_source_recommendable_with_condition_warnings',
+  'Michigan DNR ORV should now allow bounded official-source public recommendations with current-condition warnings',
+);
+assert.strictEqual(
+  byKey.get('minnesota_dnr_ohv_trails').publicRecommendationPolicy,
+  'official_source_recommendable_with_condition_warnings',
+  'Minnesota DNR OHV should now allow bounded official-source public recommendations with current-condition warnings',
+);
+assert.strictEqual(
+  byKey.get('oregon_odf_ohv_gpx').publicRecommendationPolicy,
+  'official_source_recommendable_with_condition_warnings',
+  'Oregon ODF OHV should now allow bounded official-source public recommendations with current-condition warnings',
+);
+assert.strictEqual(
+  byKey.get('nps_public_trails').publicRecommendationPolicy,
+  'official_source_recommendable_with_condition_warnings',
+  'NPS public trails should now allow bounded official-source public recommendations with park-unit/current-alert warnings',
+);
+assert.strictEqual(
+  byKey.get('usgs_digital_trails').publicRecommendationPolicy,
+  'curation_only_zero_public_recommendations',
+  'USGS Digital Trails should remain supplemental geometry and produce zero public recommendations without authoritative access corroboration',
+);
 assert.strictEqual(byKey.get('minnesota_dnr_ohv_trails').invocationMode, 'workflow_preprocess_required');
 assert(
   byKey.get('minnesota_dnr_ohv_trails').preprocessReason.includes('GeoPackage'),
