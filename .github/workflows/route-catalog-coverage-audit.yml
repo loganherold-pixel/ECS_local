@@ -11,6 +11,7 @@ on:
         default: all
   workflow_run:
     workflows:
+      - Route Catalog USFS MVUM Sync
       - Route Catalog BLM GTLF Sync
       - Route Catalog Michigan ORV Sync
       - Route Catalog Minnesota OHV Sync
@@ -67,6 +68,15 @@ jobs:
             .filter(Boolean);
           const triggerWorkflowName = String(process.env.TRIGGER_WORKFLOW_NAME || '').trim();
           const probesByWorkflow = {
+            'Route Catalog USFS MVUM Sync': [
+              'tahoe_national_forest',
+              'mendocino_national_forest',
+              'san_juan_national_forest',
+              'coconino_national_forest',
+              'manti_la_sal_national_forest',
+              'sawtooth_national_forest',
+              'deschutes_national_forest',
+            ],
             'Route Catalog BLM GTLF Sync': ['blm_ca_nv_pilot'],
             'Route Catalog Michigan ORV Sync': ['michigan_dnr_orv_pilot'],
             'Route Catalog Minnesota OHV Sync': ['minnesota_dnr_ohv_pilot'],

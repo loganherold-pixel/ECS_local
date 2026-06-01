@@ -23,6 +23,7 @@ for (const required of [
   'workflow_dispatch:',
   'probe_keys:',
   'workflow_run:',
+  'Route Catalog USFS MVUM Sync',
   'Route Catalog Michigan ORV Sync',
   'Route Catalog Minnesota OHV Sync',
   'Route Catalog Oregon ODF OHV Sync',
@@ -42,6 +43,13 @@ for (const required of [
   assert(workflow.includes(required), `Coverage audit workflow should include ${required}`);
 }
 for (const requiredMapping of [
+  "'tahoe_national_forest',",
+  "'mendocino_national_forest',",
+  "'san_juan_national_forest',",
+  "'coconino_national_forest',",
+  "'manti_la_sal_national_forest',",
+  "'sawtooth_national_forest',",
+  "'deschutes_national_forest',",
   "['michigan_dnr_orv_pilot']",
   "['minnesota_dnr_ohv_pilot']",
   "['oregon_odf_ohv_pilot']",
