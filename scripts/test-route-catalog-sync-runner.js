@@ -14,6 +14,12 @@ assert(workflow.includes('schedule:') && workflow.includes('cron:'), 'Workflow s
 assert(workflow.includes('workflow_dispatch:'), 'Workflow should support manual dispatch without a local shell token');
 assert(workflow.includes('route-catalog-sync-usfs-mvum'), 'Workflow should invoke the protected USFS MVUM sync function');
 assert(
+  workflow.includes('Build bounded sync payloads') &&
+    workflow.includes('route-catalog-usfs-mvum-sync-payloads.json') &&
+    workflow.includes('forests: [forest]'),
+  'Workflow should split the USFS batch into per-forest Edge Function payloads to avoid runtime timeouts',
+);
+assert(
   workflow.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}'),
   'Workflow should read the sync token from GitHub secrets',
 );
@@ -33,8 +39,15 @@ assert(
 );
 assert(
   workflow.includes('current_conditions_json') &&
-    workflow.includes('payload.currentConditions = JSON.parse(currentConditionsJson)'),
+    workflow.includes('currentConditions = JSON.parse(currentConditionsJson)') &&
+    workflow.includes('payload.currentConditions = currentConditions'),
   'Workflow should support reviewed official closure overlays without requiring a local shell token',
+);
+assert(
+  workflow.includes('--write-out "%{http_code}"') &&
+    workflow.includes('route-catalog-usfs-mvum-sync-responses') &&
+    workflow.includes('Response body:'),
+  'Workflow should preserve bounded Edge Function failure response bodies for source sync debugging',
 );
 assert(
   workflow.includes('currentConditionBlockedRouteCount'),
