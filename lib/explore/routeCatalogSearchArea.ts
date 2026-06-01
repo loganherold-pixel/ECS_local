@@ -15,6 +15,17 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'gmug_nf'
   | 'humboldt_toiyabe_nf'
   | 'pike_san_isabel_nf'
+  | 'inyo_nf'
+  | 'plumas_nf'
+  | 'lassen_nf'
+  | 'shasta_trinity_nf'
+  | 'umpqua_nf'
+  | 'fremont_winema_nf'
+  | 'idaho_panhandle_nf'
+  | 'helena_lewis_clark_nf'
+  | 'fishlake_nf'
+  | 'black_hills_nf'
+  | 'uinta_wasatch_cache_nf'
   | 'blm_ca_nv_gtlf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
@@ -224,6 +235,116 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Pike-San Isabel NF',
     latitude: 38.43,
     longitude: -104.05,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'inyo_nf',
+    label: 'Inyo National Forest',
+    shortLabel: 'Inyo NF',
+    latitude: 37.51,
+    longitude: -118.55,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'plumas_nf',
+    label: 'Plumas National Forest',
+    shortLabel: 'Plumas NF',
+    latitude: 39.9,
+    longitude: -120.91,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'lassen_nf',
+    label: 'Lassen National Forest',
+    shortLabel: 'Lassen NF',
+    latitude: 40.32,
+    longitude: -121.47,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'shasta_trinity_nf',
+    label: 'Shasta-Trinity National Forest',
+    shortLabel: 'Shasta-Trinity NF',
+    latitude: 40.88,
+    longitude: -122.41,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'umpqua_nf',
+    label: 'Umpqua National Forest',
+    shortLabel: 'Umpqua NF',
+    latitude: 43.28,
+    longitude: -122.59,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'fremont_winema_nf',
+    label: 'Fremont-Winema National Forest',
+    shortLabel: 'Fremont-Winema NF',
+    latitude: 42.52,
+    longitude: -121.05,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'idaho_panhandle_nf',
+    label: 'Idaho Panhandle National Forests',
+    shortLabel: 'Idaho Panhandle NF',
+    latitude: 47.94,
+    longitude: -116.22,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'helena_lewis_clark_nf',
+    label: 'Helena-Lewis and Clark National Forest',
+    shortLabel: 'Helena-Lewis Clark NF',
+    latitude: 46.6,
+    longitude: -111.32,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'fishlake_nf',
+    label: 'Fishlake National Forest',
+    shortLabel: 'Fishlake NF',
+    latitude: 38.59,
+    longitude: -112.01,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'black_hills_nf',
+    label: 'Black Hills National Forest',
+    shortLabel: 'Black Hills NF',
+    latitude: 44.02,
+    longitude: -103.77,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'uinta_wasatch_cache_nf',
+    label: 'Uinta-Wasatch-Cache National Forest',
+    shortLabel: 'Uinta-Wasatch-Cache NF',
+    latitude: 40.51,
+    longitude: -111.41,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],

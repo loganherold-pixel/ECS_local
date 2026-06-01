@@ -51,8 +51,19 @@ assert.deepStrictEqual(
     'grand-mesa-uncompahgre-gunnison-national-forests',
     'humboldt-toiyabe-national-forest',
     'pike-san-isabel-national-forests',
+    'inyo-national-forest',
+    'plumas-national-forest',
+    'lassen-national-forest',
+    'shasta-trinity-national-forest',
+    'umpqua-national-forest',
+    'fremont-winema-national-forest',
+    'idaho-panhandle-national-forests',
+    'helena-lewis-and-clark-national-forest',
+    'fishlake-national-forest',
+    'black-hills-national-forest',
+    'uinta-wasatch-cache-national-forest',
   ],
-  'MVUM pilot forests should include the first two verified public recommendation expansion batches',
+  'MVUM pilot forests should include the first three verified public recommendation expansion batches',
 );
 assert(
   USFS_MVUM_LAYERS.some((layer) => layer.kind === 'road' && layer.url.includes('Motor_Vehicle_Use_Map_Roads')) &&
@@ -62,7 +73,7 @@ assert(
 
 const where = buildUsfsMvumWhereClause(USFS_MVUM_PILOT_FORESTS, { minMiles: 1 });
 assert(
-  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest','Kaibab National Forest','Prescott National Forest','Gila National Forest','Santa Fe National Forest','Carson National Forest','Rio Grande National Forest','Grand Mesa, Uncompahgre and Gunnison National Forests','Humboldt-Toiyabe National Forest','Pike and San Isabel National Forests')"),
+  where.includes("FORESTNAME in ('Tahoe National Forest','Mendocino National Forest','San Juan National Forest','Coconino National Forest','Manti-La Sal National Forest','Sawtooth National Forest','Deschutes National Forest','Kaibab National Forest','Prescott National Forest','Gila National Forest','Santa Fe National Forest','Carson National Forest','Rio Grande National Forest','Grand Mesa, Uncompahgre and Gunnison National Forests','Humboldt-Toiyabe National Forest','Pike and San Isabel National Forests','Inyo National Forest','Plumas National Forest','Lassen National Forest','Shasta-Trinity National Forest','Umpqua National Forest','Fremont-Winema National Forest','Idaho Panhandle National Forests','Helena-Lewis and Clark National Forest','Fishlake National Forest','Black Hills National Forest','Uinta-Wasatch-Cache National Forest')"),
 );
 assert(where.includes('GIS_MILES >= 1'));
 assert(where.includes("HIGHCLEARA = 'open'") && where.includes("FOURWD_GT5 = 'open'"));

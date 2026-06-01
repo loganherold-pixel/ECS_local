@@ -8,7 +8,7 @@ on:
       forests:
         description: Comma-separated USFS MVUM forest slugs to sync.
         required: false
-        default: tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests
+        default: tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest
       min_miles:
         description: Minimum MVUM segment miles to ingest.
         required: false
@@ -38,7 +38,7 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests' }}
+      FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '150' }}
       CURRENT_CONDITIONS_JSON: ${{ inputs.current_conditions_json || '' }}

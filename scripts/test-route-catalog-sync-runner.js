@@ -28,7 +28,7 @@ assert(
   'Workflow should read the Supabase URL from GitHub secrets',
 );
 assert(
-  workflow.includes('tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests'),
+  workflow.includes('tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest'),
   'Workflow defaults should sync the current MVUM public recommendation coverage forests',
 );
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');

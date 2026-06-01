@@ -107,6 +107,17 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'grand-mesa-uncompahgre-gunnison-national-forests',
   'humboldt-toiyabe-national-forest',
   'pike-san-isabel-national-forests',
+  'inyo-national-forest',
+  'plumas-national-forest',
+  'lassen-national-forest',
+  'shasta-trinity-national-forest',
+  'umpqua-national-forest',
+  'fremont-winema-national-forest',
+  'idaho-panhandle-national-forests',
+  'helena-lewis-and-clark-national-forest',
+  'fishlake-national-forest',
+  'black-hills-national-forest',
+  'uinta-wasatch-cache-national-forest',
 ]);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
