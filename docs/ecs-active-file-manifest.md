@@ -6,9 +6,28 @@ Baseline commit: `7541e88 feat: finish prepared-device offline sign-in`
 
 Baseline tag: `ecs-working-baseline-2026-06-01`
 
-Purpose: define the current ECS source surface, separate clearly active files from cleanup candidates, and keep deletion work small enough to review. This manifest is intentionally conservative. It identifies the first safe quarantine batch and the areas that need owner review before removal.
+Purpose: define the ECS source surface, separate clearly active files from cleanup candidates, and keep deletion work small enough to review. This manifest is intentionally conservative. It records the cleanup batches applied after the working baseline and the files intentionally retained.
 
-## Current Source Inventory
+## Cleanup Result
+
+Current tracked files after cleanup: 2568
+
+Net tracked file reduction from the baseline inventory: 458 files. This includes 459 removed files and one added manifest file.
+
+Removed or relocated cleanup groups:
+
+| Batch | Result |
+| --- | --- |
+| Build/temp artifacts | Removed tracked logs and Supabase temp metadata. |
+| Local Mapbox style bundle | Removed unused `mapbox/` style and sprite export. |
+| Vehicle attitude asset cleaner | Removed obsolete one-time Python cleaner; kept runtime cleaned PNGs. |
+| Editor-local VS Code settings | Removed `.vscode/` from tracking and ignored future local settings. |
+| Dashboard icon collateral | Moved root-level release-looking PNG to `docs/release-assets/`. |
+| Retired cleanup utility workflow | Removed old quarantine cleanup scripts/docs and one unowned PostGIS check. |
+
+Remaining standalone script files are intentionally retained when they are regression harnesses, field-test helpers, hardware helpers, or manual operational checks.
+
+## Baseline Source Inventory Before Cleanup
 
 Tracked files at the baseline: 3026
 
@@ -197,47 +216,56 @@ npm run test:auth-offline-sign-in
 npm run smoke
 ```
 
+## Sixth Cleanup Batch: Retired Cleanup Utility Workflow
+
+Batch status: removed from source tracking on the cleanup branch.
+
+Evidence:
+
+- `scripts/safe-cleanup.mjs` and `scripts/validate-cleanup.mjs` supported an older quarantine-based cleanup workflow.
+- `docs/safe-cleanup-utility.md` and `docs/cleanup-validation-checklist.md` documented that older workflow.
+- This cleanup branch now uses the locked baseline tag, isolated worktree, one candidate group per commit, and auth/smoke verification documented here.
+- `scripts/trails-postgis-check.sql` was an unowned one-line manual check. PostGIS ownership is now covered by Supabase migrations and API tests such as `apps/api/tests/test_trail_migrations.py` and `apps/api/tests/test_trail_domain_contract.py`.
+
+Recommended verification after removing the retired cleanup workflow:
+
+```powershell
+npm run test:auth-offline-sign-in
+npm run smoke
+```
+
 ## Investigate Before Removing
 
 These are plausible cleanup targets, but they need one more evidence pass or a user decision before deletion.
 
 | Area | Evidence So Far | Next Check |
 | --- | --- | --- |
-| Maybe-unreferenced `scripts/` files | Strict scan found 71 scripts without package-script ownership or direct repo text references. Nearly all are regression tests; one is `scripts/trails-postgis-check.sql`. | Keep regression tests unless a domain owner explicitly retires the covered behavior. Decide whether the PostGIS one-liner should move into docs or be removed. |
+| Standalone `scripts/` regression harnesses | Strict scan after cleanup found 70 scripts without package-script ownership or direct repo text references. They are regression-style test harnesses, not obvious generated artifacts. | Keep unless a domain owner explicitly retires the covered behavior. |
 | Windows EAS and EcoFlow dev helpers | `scripts/run-eas-fieldtest-windows.mjs` and `scripts/start-ecoflow-ble-dev.ps1` are not package-script owned, but they are clearly tied to ECS field-test and hardware workflows. | Keep unless those workflows are intentionally retired or replaced by documented package scripts. |
 
-Sample scripts from the maybe-unreferenced set:
+Representative retained standalone regression harnesses:
 
 ```text
-scripts/campops-react-native-test-shim.js
-scripts/run-eas-fieldtest-windows.mjs
-scripts/start-ecoflow-ble-dev.ps1
-scripts/test-account-command-hub-geofence-default.js
-scripts/test-account-command-hub-signin.js
-scripts/test-attitude-command-active-vehicle-resolver.js
-scripts/test-attitude-command-connected.js
-scripts/test-attitude-command-tire-pressure.js
-scripts/test-attitude-command-widget.js
-scripts/test-attitude-gauge.js
-scripts/test-attitude-readout.js
-scripts/test-bailout-intelligence-pipeline.js
-scripts/test-bailout-route-confidence-resolver.js
-scripts/test-blu-diagnostics-log.js
-scripts/test-blu-veepeak-reference-pipeline.js
-scripts/test-camp-scout-aggregator.js
-scripts/test-camp-scout-area-selection.js
-scripts/test-camp-scout-command.js
-scripts/test-camp-scout-community-adapter.js
-scripts/test-camp-scout-scoring.js
-scripts/test-campops-ai-real-output-review-harness.js
-scripts/test-campops-dispersed-camping-candidates.js
-scripts/test-campops-domain-model.js
-scripts/test-campops-internal-beta-feedback.js
-scripts/test-campsite-photo-support.js
-scripts/test-campsite-published-lifecycle.js
-scripts/test-campsite-submissions-ui.js
-scripts/test-command-dock-center-icon-layout.js
-scripts/test-command-module-selector-layout.js
+scripts/test-communication-packet-workflow.js
+scripts/test-dashboard-ecs-intelligence-readout.js
+scripts/test-dispatch-route-terrain-fallback.js
+scripts/test-dispersed-camping-route-search.js
+scripts/test-documentation-center-refresh.js
+scripts/test-ecs-assessment-workflow.js
+scripts/test-ecs-logger-hygiene.js
+scripts/test-expedition-readiness-command.js
+scripts/test-fleet-first-vehicle-flow.js
+scripts/test-fleet-housekeeping.js
+scripts/test-fuel-range-confidence-resolver.js
+scripts/test-login-visual-polish.js
+scripts/test-navigate-pin-system.js
+scripts/test-offline-mode-hysteresis.js
+scripts/test-route-geometry-lifecycle.js
+scripts/test-shell-tab-transition-performance.js
+scripts/test-terrain-risk-command-module.js
+scripts/test-trail-route-geometry-resolver.js
+scripts/test-trip-builder-live-wiring.js
+scripts/test-weather-forecast-timeline-dedupe.js
 ```
 
 ## Recommended Cleanup Workflow
@@ -251,10 +279,12 @@ scripts/test-command-module-selector-layout.js
 
 ## Proposed Next Commit
 
-Classify maybe-unreferenced scripts into manual harnesses, migration utilities, active test coverage, and obsolete files before deleting any scripts:
+Stop source deletion here unless a domain owner explicitly retires a remaining feature, test harness, or manual hardware workflow:
 
 ```text
-scripts/
+scripts/*.js regression harnesses
+scripts/run-eas-fieldtest-windows.mjs
+scripts/start-ecoflow-ble-dev.ps1
 ```
 
-Expected result: the remaining cleanup work distinguishes manually useful ECS regression harnesses from genuinely old one-time files.
+Expected result: the remaining tree is ECS source, release evidence, active assets, backend/app code, and intentionally retained regression or field-test harnesses.
