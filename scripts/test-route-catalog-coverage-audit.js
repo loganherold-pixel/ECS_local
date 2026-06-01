@@ -100,6 +100,13 @@ const mismatchSummary = summarizeSearchResponse(curationProbe, {
 assert.strictEqual(mismatchSummary.observedPosture, 'no_verified_routes_expected');
 assert.strictEqual(mismatchSummary.matchesExpectedPosture, false);
 
+const blmProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_ca_nv_pilot');
+assert.strictEqual(
+  blmProbe.expectedPosture,
+  'verified_public_recommendations',
+  'BLM CA/NV pilot should audit public aggregate recommendations after sync',
+);
+
 const auditSource = fs.readFileSync(auditPath, 'utf8');
 for (const required of [
   'ECS_SUPABASE_URL',

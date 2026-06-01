@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import {
   BLM_GTLF_LAYERS,
+  aggregateBlmGtlfRouteFeatures,
   arcGisFeatureToBlmGtlfRouteUpsert,
   blmGtlfSourceUpsert,
   buildBlmGtlfWhereClause,
@@ -255,6 +256,7 @@ serve(async (req) => {
 
     let rawFeatureCount = 0;
     let normalizedFeatureCount = 0;
+    let aggregateRouteCount = 0;
     const layerSummaries = [];
     const rawFeatureRows: Array<Record<string, unknown>> = [];
     const routeRows: Array<Record<string, unknown>> = [];
@@ -288,11 +290,28 @@ serve(async (req) => {
         layerNormalizedFeatureCount += 1;
       }
 
+      const aggregates = aggregateBlmGtlfRouteFeatures(features, {
+        layer,
+        sourceId: source.id,
+        sourceLastVerifiedAt: now,
+        ingestRunId: ingestRun.id,
+        minMiles,
+      });
+      for (const aggregate of aggregates) {
+        routeRows.push(aggregate.verifiedRoute);
+        sourceRefs.push({
+          publicId: routePublicId(aggregate.verifiedRoute),
+          source: aggregate.verifiedRouteSource,
+        });
+      }
+      aggregateRouteCount += aggregates.length;
+
       layerSummaries.push({
         layerId: layer.id,
         layerName: layer.name,
         rawFeatureCount: features.length,
         normalizedFeatureCount: layerNormalizedFeatureCount,
+        aggregateRouteCount: aggregates.length,
       });
     }
 
@@ -307,7 +326,7 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: rawFeatureCount,
         normalized_feature_count: normalizedFeatureCount,
-        metadata: { providerId: 'blm_gtlf', states, minMiles, limitPerStateLayer, layers: layerSummaries },
+        metadata: { providerId: 'blm_gtlf', states, minMiles, limitPerStateLayer, aggregateRouteCount, layers: layerSummaries },
       })
       .eq('id', ingestRun.id);
 
@@ -318,8 +337,9 @@ serve(async (req) => {
       layers: layerSummaries,
       rawFeatureCount,
       normalizedFeatureCount,
-      publicRecommendationCount: 0,
-      caveat: 'BLM GTLF records are official source segments for curation only in this release. They do not become public Suggested Routes until ECS aggregation, current-condition checks, and review pass.',
+      aggregateRouteCount,
+      publicRecommendationCount: aggregateRouteCount,
+      caveat: 'BLM GTLF public recommendations are strict aggregates of open public motorized source segments only. Limited, seasonal, restricted, incomplete, or ungrouped records remain curation-only.',
     });
   } catch (error) {
     console.error('[route-catalog-sync-blm-gtlf]', {

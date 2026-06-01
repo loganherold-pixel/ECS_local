@@ -38,8 +38,9 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'coconino_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'manti_la_sal_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sawtooth_nf') &&
-    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'deschutes_nf'),
-  'Route catalog presets should expose all verified MVUM recommendation coverage areas.',
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'deschutes_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf'),
+  'Route catalog presets should expose all verified public recommendation coverage areas.',
 );
 assert(
   ROUTE_CATALOG_PRESET_SEARCH_AREAS.every((area) => area.publicRecommendation === true),
@@ -84,6 +85,7 @@ assert.deepStrictEqual(
     'Manti-La Sal National Forest',
     'Sawtooth National Forest',
     'Deschutes National Forest',
+    'BLM GTLF CA/NV',
   ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
 );
@@ -91,12 +93,12 @@ assert(
   ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Michigan DNR ORV') &&
     ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Minnesota DNR OHV') &&
     ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('Oregon ODF OHV') &&
-    ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('BLM GTLF'),
+    !ROUTE_CATALOG_CURATION_COVERAGE_LABELS.includes('BLM GTLF'),
   'Coverage registry should expose official/source-backed areas that are ingested for curation but not public recommendations yet.',
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, BLM GTLF CA\/NV.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

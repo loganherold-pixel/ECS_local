@@ -23,6 +23,7 @@ require.extensions['.ts'] = compileTypescript;
 const {
   BLM_GTLF_LAYERS,
   BLM_GTLF_SOURCE,
+  aggregateBlmGtlfRouteFeatures,
   arcGisFeatureToBlmGtlfRouteUpsert,
   blmGtlfSourceUpsert,
   buildBlmGtlfWhereClause,
@@ -105,6 +106,66 @@ assert(
 assert.strictEqual(publicRoadUpsert.verifiedRouteSource.route_source_id, '00000000-0000-0000-0000-000000000010');
 assert.strictEqual(publicRoadUpsert.rawSourceFeature.provider_feature_id, 'blm-gtlf:0:153800');
 
+const publicRoadContinuation = {
+  attributes: {
+    OBJECTID: 153801,
+    ADMIN_ST: 'CA',
+    PLAN_ROUTE_DSGNTN_AUTH: 'BLM',
+    PLAN_ASSET_CLASS: 'TRANSPORTATION SYSTEM - PRIMITIVE ROAD',
+    PLAN_OHV_ROUTE_DSGNTN: 'Open',
+    PLAN_MODE_TRNSPRT: 'MOTORIZED',
+    PLAN_ALLOW_MODE_TRNSPRT: 'TECH_VEH_SHARED',
+    PLAN_ACCESS_RSTRCT: 'UNKNOWN',
+    ROUTE_PLAN_ID: '403',
+    ROUTE_PRMRY_NM: 'Panoche Access',
+    GIS_MILES: 1.75,
+    BLM_MILES: 1.74,
+    OBSRVE_SRFCE_TYPE: 'NATURAL',
+    GlobalID: '{BCA40300-219D-4F3C-9762-77780E574612}',
+  },
+  geometry: {
+    paths: [
+      [
+        [-120.154512, 36.030747],
+        [-120.15401, 36.03012],
+        [-120.1535, 36.02955],
+      ],
+    ],
+  },
+};
+
+const publicBlmAggregates = aggregateBlmGtlfRouteFeatures(
+  [publicRoad, publicRoadContinuation],
+  {
+    layer: BLM_GTLF_LAYERS.find((layer) => layer.id === 0),
+    sourceId: '00000000-0000-0000-0000-000000000010',
+    sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+    minMiles: 1,
+  },
+);
+assert.strictEqual(publicBlmAggregates.length, 1, 'Open BLM public motorized segments with one route identity should aggregate');
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.public_id, 'blm-gtlf-ca-road-403-panoche-access');
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.verification_status, 'official_verified');
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.review_status, 'approved');
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.official_access_coverage_pct, 90);
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.unknown_access_coverage_pct, 10);
+assert.deepStrictEqual(publicBlmAggregates[0].verifiedRoute.vehicle_fit, ['full_size_4x4', 'atv', 'utv', 'motorcycle']);
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.distance_miles, 3);
+assert.deepStrictEqual(publicBlmAggregates[0].segmentPublicIds, [
+  'blm-gtlf-ca-road-403-panoche-access-feature-153800',
+  'blm-gtlf-ca-road-403-panoche-access-feature-153801',
+]);
+assert(
+  publicBlmAggregates[0].verifiedRoute.confidence_reasons.some((reason) => /2 BLM GTLF source segments/i.test(reason)),
+  'BLM aggregate confidence should cite the official source-segment count',
+);
+assert(
+  publicBlmAggregates[0].verifiedRoute.warning_reasons.some((warning) => /verify current use limitations/i.test(warning)),
+  'BLM aggregate recommendations should retain the current-conditions caveat',
+);
+assert.strictEqual(publicBlmAggregates[0].verifiedRoute.blocker_reasons.length, 0);
+
 const limitedTrail = arcGisFeatureToBlmGtlfRouteUpsert(
   {
     attributes: {
@@ -135,6 +196,36 @@ assert.deepStrictEqual(limitedTrail.verifiedRoute.vehicle_fit, ['atv', 'utv', 'm
 assert(
   limitedTrail.verifiedRoute.warning_reasons.some((warning) => /limited by season/i.test(warning)),
   'Limited BLM route designations should expose their limitation text',
+);
+assert.strictEqual(
+  aggregateBlmGtlfRouteFeatures(
+    [
+      {
+        attributes: {
+          OBJECTID: 330,
+          ADMIN_ST: 'NV',
+          PLAN_ROUTE_DSGNTN_AUTH: 'BLM',
+          PLAN_ASSET_CLASS: 'TRANSPORTATION SYSTEM - TRAIL',
+          PLAN_OHV_ROUTE_DSGNTN: 'Limited',
+          OHV_ROUTE_DSGNTN_LIM: 'LIMITED BY SEASON',
+          OHV_DSGNTN_LIM_EXPLAIN: 'Seasonal wildlife closure may apply.',
+          PLAN_MODE_TRNSPRT: 'MOTORIZED',
+          PLAN_ALLOW_MODE_TRNSPRT: 'MTC_ATV_UTV_ONLY',
+          ROUTE_PRMRY_NM: 'Desert Trail',
+          GIS_MILES: 2.5,
+        },
+        geometry: { paths: [[[-116.1, 37.1], [-116.2, 37.2]]] },
+      },
+    ],
+    {
+      layer: BLM_GTLF_LAYERS.find((layer) => layer.id === 3),
+      sourceId: '00000000-0000-0000-0000-000000000010',
+      sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+      minMiles: 1,
+    },
+  ).length,
+  0,
+  'Limited BLM GTLF records must stay curation-only instead of becoming public aggregates',
 );
 
 assert.strictEqual(
@@ -171,6 +262,20 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'BLM sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('limitPerStateLayer'), 'BLM sync should bound live ArcGIS page sizes');
+assert(
+  syncFunction.includes('aggregateBlmGtlfRouteFeatures') &&
+    syncFunction.includes('aggregateRouteCount') &&
+    syncFunction.includes('publicRecommendationCount: aggregateRouteCount'),
+  'BLM sync should promote strict public-motorized aggregates and report public recommendation telemetry',
+);
 assert(!syncFunction.includes('RIDB_API_KEY') && !syncFunction.includes('NPS_API_KEY'), 'BLM sync must not expose campground provider secrets');
+
+const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml');
+assert(fs.existsSync(workflowPath), 'BLM GTLF durable sync workflow should exist');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+assert(
+  workflow.includes('aggregateRouteCount') && workflow.includes('Public aggregate routes'),
+  'BLM sync workflow summary should expose aggregate route counts separately from raw source segments',
+);
 
 console.log('BLM GTLF route catalog adapter checks passed');

@@ -126,6 +126,7 @@ jobs:
             layerName: layer.layerName,
             rawFeatureCount: layer.rawFeatureCount,
             normalizedFeatureCount: layer.normalizedFeatureCount,
+            aggregateRouteCount: layer.aggregateRouteCount,
           }));
 
           console.log(JSON.stringify({
@@ -133,6 +134,7 @@ jobs:
             states: response.states,
             rawFeatureCount: response.rawFeatureCount,
             normalizedFeatureCount: response.normalizedFeatureCount,
+            aggregateRouteCount: response.aggregateRouteCount,
             publicRecommendationCount: response.publicRecommendationCount,
             layers: summaryRows,
           }, null, 2));
@@ -142,12 +144,13 @@ jobs:
             '',
             `States: ${(response.states || []).join(', ')}`,
             '',
-            '| Layer | Raw Features | Normalized Source Segments |',
-            '| --- | ---: | ---: |',
+            '| Layer | Raw Features | Normalized Source Segments | Public aggregate routes |',
+            '| --- | ---: | ---: | ---: |',
             ...summaryRows.map((layer) =>
-              `| ${layer.layerId} - ${layer.layerName} | ${layer.rawFeatureCount} | ${layer.normalizedFeatureCount} |`
+              `| ${layer.layerId} - ${layer.layerName} | ${layer.rawFeatureCount} | ${layer.normalizedFeatureCount} | ${layer.aggregateRouteCount || 0} |`
             ),
             '',
+            `Public aggregate routes: ${response.aggregateRouteCount || 0}`,
             `Public recommendations created: ${response.publicRecommendationCount || 0}`,
             '',
             response.caveat ? `_${response.caveat}_` : '',

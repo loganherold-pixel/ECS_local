@@ -101,6 +101,15 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
 ]);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
+assert.strictEqual(
+  byKey.get('blm_gtlf').publicRecommendationPolicy,
+  'aggregate_recommendable_with_closure_gate',
+  'BLM GTLF should expose a bounded aggregate public-recommendation pilot instead of curation-only source segments',
+);
+assert(
+  byKey.get('blm_gtlf').expectedMaxPublicRecommendationCount > 0,
+  'BLM GTLF aggregate pilot should allow bounded public recommendation telemetry',
+);
 assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKeys, [
   'alcona_orv_trail',
   'atlanta_route',

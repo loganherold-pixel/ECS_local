@@ -95,9 +95,9 @@ const ROUTE_CATALOG_COVERAGE_PROBES = [
   },
   {
     key: 'blm_ca_nv_pilot',
-    label: 'BLM GTLF CA/NV curation pilot',
+    label: 'BLM GTLF CA/NV verified aggregate pilot',
     sourceAdapter: 'blm_gtlf',
-    expectedPosture: 'source_backed_curation_only',
+    expectedPosture: 'verified_public_recommendations',
     latitude: 36.45,
     longitude: -116.85,
     radiusMiles: 120,

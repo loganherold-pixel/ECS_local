@@ -43,7 +43,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     workflowPath: path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml'),
     adapterTestScript: 'test:blm-gtlf-route-catalog-adapter',
     sourceAuthority: 'official_access',
-    publicRecommendationPolicy: 'curation_only_zero_public_recommendations',
+    publicRecommendationPolicy: 'aggregate_recommendable_with_closure_gate',
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
@@ -52,7 +52,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       minMiles: 1,
       limitPerStateLayer: 100,
     },
-    expectedMaxPublicRecommendationCount: 0,
+    expectedMaxPublicRecommendationCount: 1000,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
   {
@@ -184,7 +184,7 @@ function buildRouteCatalogSyncInvocationPlan() {
       'Uses a bounded payload so source syncs cannot accidentally ingest an unbounded national feed.',
       entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations'
         ? 'Curation-only ingestion must produce zero public recommendations until deterministic review promotes records.'
-        : 'USFS MVUM aggregates may create public recommendations only behind deterministic closure/access gates.',
+        : 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.',
     ],
   }));
 }

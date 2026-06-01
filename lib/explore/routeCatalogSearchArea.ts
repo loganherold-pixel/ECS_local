@@ -5,7 +5,8 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'coconino_nf'
   | 'manti_la_sal_nf'
   | 'sawtooth_nf'
-  | 'deschutes_nf';
+  | 'deschutes_nf'
+  | 'blm_ca_nv_gtlf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -159,13 +160,13 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['oregon_odf_ohv_gpx'],
   },
   {
-    key: 'blm_gtlf',
-    label: 'BLM GTLF',
-    shortLabel: 'BLM GTLF',
-    latitude: null,
-    longitude: null,
-    coveragePosture: 'official_curation',
-    publicRecommendation: false,
+    key: 'blm_ca_nv_gtlf',
+    label: 'BLM GTLF CA/NV',
+    shortLabel: 'BLM CA/NV',
+    latitude: 36.45,
+    longitude: -116.85,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
     sourceAdapters: ['blm_gtlf'],
   },
   {

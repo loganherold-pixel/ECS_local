@@ -23,6 +23,12 @@ export type BlmGtlfRouteContext = {
 };
 
 export type BlmGtlfRouteUpsert = NonNullable<ReturnType<typeof arcGisFeatureToBlmGtlfRouteUpsert>>;
+export type BlmGtlfAggregateRouteUpsert = {
+  verifiedRoute: Record<string, unknown>;
+  verifiedRouteSource: Record<string, unknown>;
+  segmentPublicIds: string[];
+  segmentProviderFeatureIds: string[];
+};
 
 export const BLM_GTLF_SOURCE = {
   providerId: 'blm_gtlf',
@@ -268,6 +274,22 @@ function publicIdForFeature(layer: BlmGtlfLayer, attributes: Record<string, unkn
   ].filter(Boolean).join(' '));
 }
 
+function aggregationIdentity(layer: BlmGtlfLayer, attributes: Record<string, unknown>) {
+  const adminState = cleanString(attributes.ADMIN_ST).toLowerCase();
+  const planId = routePlanId(attributes);
+  const rawName = cleanString(attributes.ROUTE_PRMRY_NM);
+  const name = rawName ? toTitleCase(rawName) : '';
+  const keyParts = [adminState, layer.kind, planId, name].filter(Boolean);
+  if (!adminState || keyParts.length <= 2) return null;
+  return {
+    key: slugify(keyParts.join(' ')),
+    publicIdParts: ['blm-gtlf', adminState, layer.kind, planId, name].filter(Boolean),
+    adminState,
+    planId,
+    name,
+  };
+}
+
 function limitationWarning(attributes: Record<string, unknown>): string | null {
   const limitation = cleanString(attributes.OHV_ROUTE_DSGNTN_LIM);
   const explanation = cleanString(attributes.OHV_DSGNTN_LIM_EXPLAIN);
@@ -292,6 +314,39 @@ function blmGtlfRouteIntelligence(args: {
     waterMarginDataState: 'estimated',
     caveat: BLM_GTLF_CAVEAT,
   };
+}
+
+function lineStringsFromRouteGeometry(routeGeometry: Record<string, unknown>): number[][][] {
+  if (routeGeometry.type === 'LineString' && Array.isArray(routeGeometry.coordinates)) {
+    const path = normalizePath(routeGeometry.coordinates);
+    return path.length >= 2 ? [path] : [];
+  }
+  if (routeGeometry.type === 'MultiLineString' && Array.isArray(routeGeometry.coordinates)) {
+    return routeGeometry.coordinates
+      .map(normalizePath)
+      .filter((path) => path.length >= 2);
+  }
+  return [];
+}
+
+function sourceAttributes(segment: BlmGtlfRouteUpsert): Record<string, unknown> {
+  const properties = segment.rawSourceFeature.properties;
+  return properties && typeof properties === 'object' && 'attributes' in properties &&
+    properties.attributes && typeof properties.attributes === 'object'
+    ? properties.attributes as Record<string, unknown>
+    : {};
+}
+
+function isRecommendableBlmAggregateSegment(layer: BlmGtlfLayer, segment: BlmGtlfRouteUpsert): boolean {
+  const attributes = sourceAttributes(segment);
+  if (layer.motorizedUse !== 'public') return false;
+  if (!/^open$/i.test(cleanString(attributes.PLAN_OHV_ROUTE_DSGNTN))) return false;
+  if (cleanString(attributes.PLAN_SEASON_RSTRCT_CODE)) return false;
+  if (limitationWarning(attributes)) return false;
+  if (Number(segment.verifiedRoute.active_closure_count ?? 0) > 0) return false;
+  if (!Array.isArray(segment.verifiedRoute.vehicle_fit) || segment.verifiedRoute.vehicle_fit.length === 0) return false;
+  if (lineStringsFromRouteGeometry(segment.verifiedRoute.route_geometry as Record<string, unknown>).length === 0) return false;
+  return true;
 }
 
 export function blmGtlfSourceUpsert(lastCheckedAt = new Date().toISOString()) {
@@ -470,4 +525,141 @@ export function arcGisFeatureToBlmGtlfRouteUpsert(
     verifiedRouteSource,
     rawSourceFeature,
   };
+}
+
+export function aggregateBlmGtlfRouteFeatures(
+  features: BlmGtlfArcGisFeature[],
+  context: BlmGtlfRouteContext,
+): BlmGtlfAggregateRouteUpsert[] {
+  const groups = new Map<string, {
+    identity: NonNullable<ReturnType<typeof aggregationIdentity>>;
+    segments: BlmGtlfRouteUpsert[];
+  }>();
+
+  for (const feature of features) {
+    const attributes = feature.attributes ?? {};
+    const identity = aggregationIdentity(context.layer, attributes);
+    if (!identity) continue;
+
+    const segment = arcGisFeatureToBlmGtlfRouteUpsert(feature, context);
+    if (!segment || !isRecommendableBlmAggregateSegment(context.layer, segment)) continue;
+
+    const key = `${context.layer.id}:${identity.key}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.segments.push(segment);
+    } else {
+      groups.set(key, { identity, segments: [segment] });
+    }
+  }
+
+  return Array.from(groups.values()).map(({ identity, segments }) => {
+    const segmentPublicIds = segments.map((segment) => String(segment.verifiedRoute.public_id));
+    const segmentProviderFeatureIds = segments.map((segment) => String(segment.rawSourceFeature.provider_feature_id));
+    const lines = segments.flatMap((segment) =>
+      lineStringsFromRouteGeometry(segment.verifiedRoute.route_geometry as Record<string, unknown>),
+    );
+    const center = centerFromPaths(lines);
+    const sourceFeatureCount = segments.length;
+    const distanceMiles = Number(segments.reduce((total, segment) => total + Number(segment.verifiedRoute.distance_miles ?? 0), 0).toFixed(3));
+    const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 16));
+    const vehicleFit = orderedVehicleFit(segments.flatMap((segment) =>
+      Array.isArray(segment.verifiedRoute.vehicle_fit) ? segment.verifiedRoute.vehicle_fit.map(String) : [],
+    ));
+    const firstAttributes = sourceAttributes(segments[0]);
+    const districtTags = uniqueStrings(segments.flatMap((segment) =>
+      Array.isArray(segment.verifiedRoute.tags) ? segment.verifiedRoute.tags.map(String) : [],
+    ).filter((tag) => tag !== 'BLM GTLF' && tag !== context.layer.kind && tag !== 'public motorized use'));
+    const routeGeometry = lines.length === 1
+      ? { type: 'LineString', coordinates: lines[0] }
+      : { type: 'MultiLineString', coordinates: lines };
+    const publicId = slugify(identity.publicIdParts.join(' '));
+
+    return {
+      verifiedRoute: {
+        public_id: publicId,
+        name: routeName(context.layer, firstAttributes),
+        description: `${context.layer.sourceLayer} aggregate built from ${sourceFeatureCount} official BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'}. ECS treats this as official public motorized-access geometry that still requires current local checks.`,
+        route_type: 'point_to_point',
+        center_latitude: center?.latitude ?? Number(segments[0].verifiedRoute.center_latitude),
+        center_longitude: center?.longitude ?? Number(segments[0].verifiedRoute.center_longitude),
+        route_geometry: routeGeometry,
+        distance_miles: distanceMiles,
+        estimated_duration_minutes: estimatedDurationMinutes,
+        difficulty: 'unknown',
+        vehicle_fit: vehicleFit,
+        remoteness_score: estimateBlmRemotenessScore(distanceMiles),
+        campability_score: null,
+        minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
+        minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
+        route_intelligence: {
+          ...blmGtlfRouteIntelligence({
+            layer: context.layer,
+            distanceMiles,
+            estimatedDurationMinutes,
+          }),
+          sourceFeatureCount,
+          aggregation: 'blm_gtlf_route_identity',
+        },
+        official_access_coverage_pct: 90,
+        unknown_access_coverage_pct: 10,
+        restricted_access_coverage_pct: 0,
+        active_closure_count: 0,
+        seasonal_restriction_count: 0,
+        vehicle_mismatch: false,
+        geometry_quality: sourceFeatureCount > 1 ? 'partial' : 'good',
+        verification_status: 'official_verified',
+        recommendation_status: 'recommendable',
+        review_status: 'approved',
+        confidence_score: sourceFeatureCount > 1 ? 86 : 84,
+        confidence_reasons: [
+          `BLM GTLF lists this ${context.layer.kind} identity in a public motorized-use layer.`,
+          `Combined ${sourceFeatureCount} BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'} with matching route identity.`,
+          'All aggregated source segments are open public motorized records without encoded seasonal or limitation text.',
+        ],
+        warning_reasons: [
+          BLM_GTLF_CAVEAT,
+          'BLM GTLF public recommendation is source-backed, but ECS has not ingested local closure orders for this BLM unit yet.',
+        ],
+        blocker_reasons: [],
+        closure_summaries: [],
+        community_signal: {
+          aggregation: 'blm_gtlf_route_identity',
+          sourceFeatureCount,
+          segmentPublicIds,
+          providerFeatureIds: segmentProviderFeatureIds,
+          routePlanId: identity.planId || null,
+        },
+        tags: uniqueStrings([
+          'BLM GTLF',
+          identity.adminState.toUpperCase(),
+          context.layer.kind,
+          'public motorized use',
+          'source-segment aggregate',
+          ...districtTags,
+        ]),
+        last_verified_at: context.sourceLastVerifiedAt,
+        stale_at: addDaysIso(context.sourceLastVerifiedAt, 120),
+      },
+      verifiedRouteSource: {
+        route_source_id: context.sourceId,
+        source_role: 'primary',
+        coverage_pct: 90,
+        last_verified_at: context.sourceLastVerifiedAt,
+        metadata: {
+          providerFeatureIds: segmentProviderFeatureIds,
+          segmentPublicIds,
+          sourceFeatureCount,
+          sourceLayer: context.layer.sourceLayer,
+          sourceLayerId: context.layer.id,
+          adminState: identity.adminState.toUpperCase(),
+          routePlanId: identity.planId || null,
+          aggregation: 'blm_gtlf_route_identity',
+          caveat: BLM_GTLF_CAVEAT,
+        },
+      },
+      segmentPublicIds,
+      segmentProviderFeatureIds,
+    };
+  });
 }
