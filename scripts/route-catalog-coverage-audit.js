@@ -580,9 +580,14 @@ function summarizeSearchResponse(probe, body) {
     : curationCandidateCount > 0 || (count === 0 && anySourceBackedCandidateCount > 0)
       ? 'source_backed_curation_only'
       : 'no_verified_routes_expected';
+  const supplementalContextPresent =
+    probe.expectedPosture === 'supplemental_context_only' &&
+    anySourceBackedCandidateCount > 0;
   const matchesExpectedPosture =
     probe.expectedPosture === observedPosture ||
-    (probe.expectedPosture === 'supplemental_context_only' && observedPosture === 'source_backed_curation_only');
+    (supplementalContextPresent &&
+      (observedPosture === 'source_backed_curation_only' ||
+        observedPosture === 'verified_public_recommendations'));
   return {
     key: probe.key,
     label: probe.label,

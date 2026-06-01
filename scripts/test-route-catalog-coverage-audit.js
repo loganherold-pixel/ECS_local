@@ -139,6 +139,35 @@ const mismatchSummary = summarizeSearchResponse(curationProbe, {
 assert.strictEqual(mismatchSummary.observedPosture, 'no_verified_routes_expected');
 assert.strictEqual(mismatchSummary.matchesExpectedPosture, false);
 
+const supplementalOverlapSummary = summarizeSearchResponse(sierraProbe, {
+  count: 10,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 10, curationCandidateCount: 0, anySourceBackedCandidateCount: 483 },
+  records: [{ public_id: 'verified-sierra-1', name: 'Verified Sierra Route', confidence_score: 92 }],
+});
+assert.strictEqual(
+  supplementalOverlapSummary.observedPosture,
+  'verified_public_recommendations',
+  'Supplemental context probes should still report verified public routes when official MVUM coverage overlaps.',
+);
+assert.strictEqual(
+  supplementalOverlapSummary.matchesExpectedPosture,
+  true,
+  'Supplemental context probes should pass when source-backed context exists even if verified public recommendations also exist nearby.',
+);
+
+const supplementalWithoutContextSummary = summarizeSearchResponse(sierraProbe, {
+  count: 10,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 10, curationCandidateCount: 0, anySourceBackedCandidateCount: 0 },
+  records: [{ public_id: 'verified-only-1', name: 'Verified Route Only', confidence_score: 92 }],
+});
+assert.strictEqual(
+  supplementalWithoutContextSummary.matchesExpectedPosture,
+  false,
+  'Supplemental context probes should not pass on verified public routes alone when no source-backed context is present.',
+);
+
 const blmProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_ca_nv_pilot');
 assert.strictEqual(
   blmProbe.expectedPosture,
