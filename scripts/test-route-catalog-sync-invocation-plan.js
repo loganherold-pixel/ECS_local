@@ -131,6 +131,11 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'mt-hood-national-forest',
   'coronado-national-forest',
   'sierra-national-forest',
+  'huron-manistee-national-forest',
+  'ozark-st-francis-national-forest',
+  'ottawa-national-forest',
+  'hiawatha-national-forest',
+  'chequamegon-nicolet-national-forest',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,

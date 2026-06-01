@@ -72,6 +72,11 @@ const expectedUsfsMvumForestSlugs = [
     'mt-hood-national-forest',
     'coronado-national-forest',
     'sierra-national-forest',
+    'huron-manistee-national-forest',
+    'ozark-st-francis-national-forest',
+    'ottawa-national-forest',
+    'hiawatha-national-forest',
+    'chequamegon-nicolet-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -114,6 +119,11 @@ const expectedUsfsMvumForestNames = [
   'Mt. Hood National Forest',
   'Coronado National Forest',
   'Sierra National Forest',
+  'Huron-Manistee National Forest',
+  'Ozark-St. Francis National Forest',
+  'Ottawa National Forest',
+  'Hiawatha National Forest',
+  'Chequamegon-Nicolet National Forest',
 ];
 
 assert.deepStrictEqual(

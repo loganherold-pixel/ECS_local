@@ -71,6 +71,11 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'mt_hood_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'coronado_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'sierra_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'huron_manistee_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'ozark_st_francis_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'ottawa_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'hiawatha_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'chequamegon_nicolet_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_ohv') &&
@@ -160,6 +165,11 @@ assert.deepStrictEqual(
     'Mt. Hood National Forest',
     'Coronado National Forest',
     'Sierra National Forest',
+    'Huron-Manistee National Forest',
+    'Ozark-St. Francis National Forest',
+    'Ottawa National Forest',
+    'Hiawatha National Forest',
+    'Chequamegon-Nicolet National Forest',
     'Michigan DNR ORV',
     'Minnesota DNR OHV',
     'Oregon ODF OHV',
@@ -183,7 +193,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, NPS Public Trails Joshua Tree.*In curation: BLM GTLF Wyoming.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Huron-Manistee National Forest, Ozark-St\. Francis National Forest, Ottawa National Forest, Hiawatha National Forest, Chequamegon-Nicolet National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, NPS Public Trails Joshua Tree.*In curation: BLM GTLF Wyoming.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

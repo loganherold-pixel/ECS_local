@@ -38,6 +38,11 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'mt_hood_nf'
   | 'coronado_nf'
   | 'sierra_nf'
+  | 'huron_manistee_nf'
+  | 'ozark_st_francis_nf'
+  | 'ottawa_nf'
+  | 'hiawatha_nf'
+  | 'chequamegon_nicolet_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -487,6 +492,56 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Sierra NF',
     latitude: 37.1,
     longitude: -119.2,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'huron_manistee_nf',
+    label: 'Huron-Manistee National Forest',
+    shortLabel: 'Huron-Manistee NF',
+    latitude: 44.44,
+    longitude: -85.84,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'ozark_st_francis_nf',
+    label: 'Ozark-St. Francis National Forest',
+    shortLabel: 'Ozark-St. Francis NF',
+    latitude: 35.65,
+    longitude: -93.35,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'ottawa_nf',
+    label: 'Ottawa National Forest',
+    shortLabel: 'Ottawa NF',
+    latitude: 46.45,
+    longitude: -89.25,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'hiawatha_nf',
+    label: 'Hiawatha National Forest',
+    shortLabel: 'Hiawatha NF',
+    latitude: 46.22,
+    longitude: -86.65,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'chequamegon_nicolet_nf',
+    label: 'Chequamegon-Nicolet National Forest',
+    shortLabel: 'Chequamegon-Nicolet NF',
+    latitude: 45.95,
+    longitude: -90.55,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],
