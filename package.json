@@ -145,6 +145,7 @@
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
     "test:blm-gtlf-route-catalog-adapter": "node ./scripts/test-blm-gtlf-route-catalog-adapter.js",
     "test:usgs-trails-route-catalog-adapter": "node ./scripts/test-usgs-trails-route-catalog-adapter.js",
+    "test:nps-trails-route-catalog-adapter": "node ./scripts/test-nps-trails-route-catalog-adapter.js",
     "test:supabase-db-workflow": "node ./scripts/test-supabase-db-workflow.js",
     "test:usfs-mvum-pilot-ingest": "node ./scripts/test-usfs-mvum-pilot-ingest.js",
     "test:trail-pack-confidence": "node ./scripts/test-trail-pack-confidence.js",

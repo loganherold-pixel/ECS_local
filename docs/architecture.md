@@ -24,3 +24,5 @@ The route catalog also treats official Forest Service alerts and current-conditi
 BLM GTLF ingestion starts as official source-segment evidence only. GTLF segments remain out of public Suggested Routes until ECS route aggregation, current-condition checks, and review produce a curated route record.
 
 USGS National Digital Trails ingestion starts as supplemental geometry and trail-context evidence only. USGS Trails records can help fill map/review context, but they do not establish legal motorized access and must stay out of public Suggested Routes until authoritative access overlays and review pass.
+
+NPS Public Trails ingestion starts as official park visitor-use trail context. NPS trail-use geometry can support review inside park units, but it must stay out of public Suggested Routes until park-unit legal access, current alerts, closures, and ECS route curation pass.

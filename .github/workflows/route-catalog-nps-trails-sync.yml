@@ -1,0 +1,133 @@
+name: Route Catalog NPS Trails Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: Bounded sync bbox as west,south,east,north.
+        required: false
+        default: '-124.8,32.5,-113.8,42.2'
+      min_miles:
+        description: Minimum calculated NPS trail segment miles to ingest.
+        required: false
+        default: '0.1'
+      limit:
+        description: Maximum features to request for the bbox.
+        required: false
+        default: '150'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-nps-trails-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync NPS public trails context
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      BBOX: ${{ inputs.bbox || '-124.8,32.5,-113.8,42.2' }}
+      MIN_MILES: ${{ inputs.min_miles || '0.1' }}
+      LIMIT: ${{ inputs.limit || '150' }}
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build bounded sync payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const bboxValues = String(process.env.BBOX || '')
+            .split(',')
+            .map((value) => Number(value.trim()));
+          const minMiles = Number(process.env.MIN_MILES || 0.1);
+          const limit = Number(process.env.LIMIT || 150);
+
+          if (bboxValues.length !== 4 || bboxValues.some((value) => !Number.isFinite(value))) {
+            throw new Error('bbox must be west,south,east,north.');
+          }
+          const [xmin, ymin, xmax, ymax] = bboxValues;
+          if (xmin >= xmax || ymin >= ymax || Math.abs(xmin) > 180 || Math.abs(xmax) > 180 || Math.abs(ymin) > 90 || Math.abs(ymax) > 90) {
+            throw new Error('bbox values are out of range or inverted.');
+          }
+          if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
+          if (!Number.isFinite(limit) || limit <= 0) throw new Error('limit must be positive.');
+
+          fs.writeFileSync(
+            'route-catalog-nps-trails-sync-payload.json',
+            JSON.stringify({
+              bbox: { xmin, ymin, xmax, ymax },
+              minMiles,
+              limit: Math.min(500, Math.round(limit)),
+            }),
+          );
+          NODE
+
+      - name: Invoke NPS public trails route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-nps-trails-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-nps-trails" \
+            --output route-catalog-nps-trails-sync-response.json
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-nps-trails-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'NPS public trails route catalog sync failed.');
+          }
+
+          console.log(JSON.stringify({
+            source: response.source,
+            bbox: response.bbox,
+            rawFeatureCount: response.rawFeatureCount,
+            normalizedFeatureCount: response.normalizedFeatureCount,
+            publicRecommendationCount: response.publicRecommendationCount,
+          }, null, 2));
+
+          const markdown = [
+            '## Route Catalog NPS Public Trails Sync',
+            '',
+            `BBox: ${JSON.stringify(response.bbox)}`,
+            '',
+            `Raw features: ${response.rawFeatureCount}`,
+            '',
+            `Normalized park-context records: ${response.normalizedFeatureCount}`,
+            '',
+            `Public recommendations created: ${response.publicRecommendationCount || 0}`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE

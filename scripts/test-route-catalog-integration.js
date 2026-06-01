@@ -76,6 +76,7 @@ for (const functionName of [
   'route-catalog-sync-usfs-mvum',
   'route-catalog-sync-blm-gtlf',
   'route-catalog-sync-usgs-trails',
+  'route-catalog-sync-nps-trails',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
@@ -171,6 +172,12 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('route-catalog-sync-usgs-trails') &&
     read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('publicRecommendationCount'),
   'USGS Trails route catalog sync should have a durable workflow that reports zero public recommendations for supplemental geometry-only ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-nps-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('route-catalog-sync-nps-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('publicRecommendationCount'),
+  'NPS public trails route catalog sync should have a durable workflow that reports zero public recommendations for park-context curation ingestion',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&
