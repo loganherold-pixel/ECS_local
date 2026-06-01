@@ -128,6 +128,7 @@ assert(
     searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
     searchFunction.includes('filterRecordsWithinSearchRadius') &&
     searchFunction.includes('countRouteCatalogCurationCandidates') &&
+    searchFunction.includes(".from('verified_routes')") &&
     searchFunction.includes('curationCandidateCount') &&
     searchFunction.includes('anySourceBackedCandidateCount') &&
     searchFunction.includes('lower_confidence_nearby') &&

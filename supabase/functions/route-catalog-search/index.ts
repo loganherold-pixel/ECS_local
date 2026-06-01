@@ -303,7 +303,7 @@ async function countRouteCatalogCurationCandidates(
 ): Promise<{ curationCandidateCount: number }> {
   const hasRadiusCriteria = args.latitude != null && args.longitude != null && args.radiusMiles != null;
   let query = admin
-    .from('route_catalog_public')
+    .from('verified_routes')
     .select([
       'id',
       'center_latitude',
