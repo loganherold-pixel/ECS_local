@@ -119,7 +119,7 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'black-hills-national-forest',
   'uinta-wasatch-cache-national-forest',
 ]);
-assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['CA', 'NV']);
+assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
 assert.strictEqual(
   byKey.get('blm_gtlf').publicRecommendationPolicy,

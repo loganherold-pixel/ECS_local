@@ -67,7 +67,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     publicRuntimeCallable: false,
     invocationMode: 'direct_edge_function',
     defaultPayload: {
-      states: ['CA', 'NV'],
+      states: ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'],
       layers: [0, 1, 2, 3],
       minMiles: 1,
       limitPerStateLayer: 100,

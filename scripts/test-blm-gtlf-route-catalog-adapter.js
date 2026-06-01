@@ -274,6 +274,21 @@ const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-blm-
 assert(fs.existsSync(workflowPath), 'BLM GTLF durable sync workflow should exist');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(
+  syncFunction.includes("const DEFAULT_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];"),
+  'BLM GTLF sync should default to the verified western-state public recommendation batch',
+);
+assert(
+  workflow.includes('default: AZ,CA,CO,ID,MT,NV,NM,UT,WY') &&
+    workflow.includes("STATES: ${{ inputs.states || 'AZ,CA,CO,ID,MT,NV,NM,UT,WY' }}"),
+  'BLM GTLF workflow defaults should sync the verified western-state batch',
+);
+assert(
+  workflow.includes('route-catalog-blm-gtlf-sync-payloads.json') &&
+    workflow.includes('states: [state]') &&
+    workflow.includes('route-catalog-blm-gtlf-sync-responses'),
+  'BLM GTLF workflow should split expanded batches into per-state Edge Function payloads',
+);
+assert(
   workflow.includes('aggregateRouteCount') && workflow.includes('Public aggregate routes'),
   'BLM sync workflow summary should expose aggregate route counts separately from raw source segments',
 );

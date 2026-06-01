@@ -26,7 +26,14 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'fishlake_nf'
   | 'black_hills_nf'
   | 'uinta_wasatch_cache_nf'
-  | 'blm_ca_nv_gtlf';
+  | 'blm_az_gtlf'
+  | 'blm_ca_nv_gtlf'
+  | 'blm_co_gtlf'
+  | 'blm_id_gtlf'
+  | 'blm_mt_gtlf'
+  | 'blm_nm_gtlf'
+  | 'blm_ut_gtlf'
+  | 'blm_wy_gtlf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -380,11 +387,81 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['oregon_odf_ohv_gpx'],
   },
   {
+    key: 'blm_az_gtlf',
+    label: 'BLM GTLF Arizona',
+    shortLabel: 'BLM AZ',
+    latitude: 33.31,
+    longitude: -111.73,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
     key: 'blm_ca_nv_gtlf',
     label: 'BLM GTLF CA/NV',
     shortLabel: 'BLM CA/NV',
     latitude: 36.45,
     longitude: -116.85,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_co_gtlf',
+    label: 'BLM GTLF Colorado',
+    shortLabel: 'BLM CO',
+    latitude: 38.58,
+    longitude: -105.89,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_id_gtlf',
+    label: 'BLM GTLF Idaho',
+    shortLabel: 'BLM ID',
+    latitude: 43.11,
+    longitude: -116.3,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_mt_gtlf',
+    label: 'BLM GTLF Montana',
+    shortLabel: 'BLM MT',
+    latitude: 47.01,
+    longitude: -109.82,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_nm_gtlf',
+    label: 'BLM GTLF New Mexico',
+    shortLabel: 'BLM NM',
+    latitude: 33.65,
+    longitude: -107.37,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_gtlf',
+    label: 'BLM GTLF Utah',
+    shortLabel: 'BLM UT',
+    latitude: 37.37,
+    longitude: -111.78,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_wy_gtlf',
+    label: 'BLM GTLF Wyoming',
+    shortLabel: 'BLM WY',
+    latitude: 44.51,
+    longitude: -107.94,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['blm_gtlf'],

@@ -73,7 +73,14 @@ for (const requiredMapping of [
   "['michigan_dnr_orv_pilot']",
   "['minnesota_dnr_ohv_pilot']",
   "['oregon_odf_ohv_pilot']",
-  "['blm_ca_nv_pilot']",
+  "'blm_az_gtlf',",
+  "'blm_ca_nv_pilot',",
+  "'blm_co_gtlf',",
+  "'blm_id_gtlf',",
+  "'blm_mt_gtlf',",
+  "'blm_nm_gtlf',",
+  "'blm_ut_gtlf',",
+  "'blm_wy_gtlf',",
   "['usgs_nps_sierra_context']",
 ]) {
   assert(workflow.includes(requiredMapping), `Coverage audit workflow should map source syncs to ${requiredMapping}`);

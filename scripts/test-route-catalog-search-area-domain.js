@@ -59,7 +59,14 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'fishlake_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'black_hills_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'uinta_wasatch_cache_nf') &&
-    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf'),
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_az_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_co_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_id_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_mt_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_nm_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_wy_gtlf'),
   'Route catalog presets should expose all verified public recommendation coverage areas.',
 );
 assert(
@@ -125,7 +132,14 @@ assert.deepStrictEqual(
     'Fishlake National Forest',
     'Black Hills National Forest',
     'Uinta-Wasatch-Cache National Forest',
+    'BLM GTLF Arizona',
     'BLM GTLF CA/NV',
+    'BLM GTLF Colorado',
+    'BLM GTLF Idaho',
+    'BLM GTLF Montana',
+    'BLM GTLF New Mexico',
+    'BLM GTLF Utah',
+    'BLM GTLF Wyoming',
   ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
 );
@@ -138,7 +152,7 @@ assert(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, BLM GTLF CA\/NV.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, BLM GTLF Wyoming.*In curation:.*Michigan DNR ORV.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

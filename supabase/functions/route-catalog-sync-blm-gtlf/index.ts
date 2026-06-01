@@ -18,7 +18,7 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 };
 
-const DEFAULT_STATES = ['CA', 'NV'];
+const DEFAULT_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
