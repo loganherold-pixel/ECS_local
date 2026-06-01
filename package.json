@@ -156,7 +156,7 @@
     "route-catalog:sync:dry-run": "node ./scripts/route-catalog-sync-invoke.js --dry-run --all-direct",
     "route-catalog:sync:invoke": "node ./scripts/route-catalog-sync-invoke.js",
     "route-catalog:coverage:dry-run": "node ./scripts/route-catalog-coverage-audit.js --dry-run --all",
-    "route-catalog:coverage:audit": "node ./scripts/route-catalog-coverage-audit.js",
+    "route-catalog:coverage:audit": "node ./scripts/route-catalog-coverage-audit.js --all",
     "test:route-catalog-edge-deploy": "node ./scripts/test-route-catalog-edge-function-deploy-workflow.js",
     "test:blm-gtlf-route-catalog-adapter": "node ./scripts/test-blm-gtlf-route-catalog-adapter.js",
     "test:usgs-trails-route-catalog-adapter": "node ./scripts/test-usgs-trails-route-catalog-adapter.js",

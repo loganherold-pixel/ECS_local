@@ -14,6 +14,10 @@ assert(
   'package.json should expose a live coverage audit command',
 );
 assert(
+  packageJson.includes('"route-catalog:coverage:audit": "node ./scripts/route-catalog-coverage-audit.js --all"'),
+  'live coverage audit npm command should audit all probes by default for PowerShell-friendly operation',
+);
+assert(
   packageJson.includes('"test:route-catalog-coverage-audit"'),
   'package.json should expose the route catalog coverage audit test',
 );
@@ -24,6 +28,7 @@ assert(fs.existsSync(auditPath), 'Route catalog coverage audit script should exi
 const {
   ROUTE_CATALOG_COVERAGE_PROBES,
   buildRouteCatalogCoverageAuditPlan,
+  summarizeSearchResponse,
 } = require(auditPath);
 
 const requiredProbeKeys = [
@@ -58,6 +63,37 @@ for (const probe of plan) {
   assert.strictEqual(probe.requestBody.includeGeometry, false);
   assert.strictEqual(probe.requestBody.limit, 10);
 }
+
+const sierraProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'usgs_nps_sierra_context');
+assert(sierraProbe.radiusMiles <= 75, 'Supplemental Sierra context probe should not overlap Tahoe verified MVUM coverage');
+
+const verifiedSummary = summarizeSearchResponse(ROUTE_CATALOG_COVERAGE_PROBES[0], {
+  count: 3,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 12, curationCandidateCount: 0, anySourceBackedCandidateCount: 12 },
+  records: [{ public_id: 'verified-1', name: 'Verified Route', confidence_score: 92 }],
+});
+assert.strictEqual(verifiedSummary.observedPosture, 'verified_public_recommendations');
+assert.strictEqual(verifiedSummary.matchesExpectedPosture, true);
+
+const curationProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_pilot');
+const curationSummary = summarizeSearchResponse(curationProbe, {
+  count: 0,
+  coverageState: { state: 'lower_confidence_nearby', title: 'Source-backed routes in curation' },
+  meta: { radiusMatchedCount: 0, curationCandidateCount: 7, anySourceBackedCandidateCount: 7 },
+  records: [],
+});
+assert.strictEqual(curationSummary.observedPosture, 'source_backed_curation_only');
+assert.strictEqual(curationSummary.matchesExpectedPosture, true);
+
+const mismatchSummary = summarizeSearchResponse(curationProbe, {
+  count: 0,
+  coverageState: { state: 'no_verified_routes', title: 'No verified routes yet in this area' },
+  meta: { radiusMatchedCount: 0, curationCandidateCount: 0, anySourceBackedCandidateCount: 0 },
+  records: [],
+});
+assert.strictEqual(mismatchSummary.observedPosture, 'no_verified_routes_expected');
+assert.strictEqual(mismatchSummary.matchesExpectedPosture, false);
 
 const auditSource = fs.readFileSync(auditPath, 'utf8');
 for (const required of [

@@ -63,7 +63,7 @@ const ROUTE_CATALOG_COVERAGE_PROBES = [
     expectedPosture: 'supplemental_context_only',
     latitude: 37.75,
     longitude: -119.6,
-    radiusMiles: 120,
+    radiusMiles: 60,
   },
   {
     key: 'conus_empty_control',
@@ -170,17 +170,31 @@ function summarizeSearchResponse(probe, body) {
   const meta = body && typeof body.meta === 'object' ? body.meta : {};
   const coverageState = body && typeof body.coverageState === 'object' ? body.coverageState : {};
   const records = Array.isArray(body.records) ? body.records : [];
+  const count = Number(body.count || records.length || 0);
+  const radiusMatchedCount = Number(meta.radiusMatchedCount || 0);
+  const curationCandidateCount = Number(meta.curationCandidateCount || 0);
+  const anySourceBackedCandidateCount = Number(meta.anySourceBackedCandidateCount || 0);
+  const observedPosture = count > 0 && coverageState.state === 'ready'
+    ? 'verified_public_recommendations'
+    : curationCandidateCount > 0 || (count === 0 && anySourceBackedCandidateCount > 0)
+      ? 'source_backed_curation_only'
+      : 'no_verified_routes_expected';
+  const matchesExpectedPosture =
+    probe.expectedPosture === observedPosture ||
+    (probe.expectedPosture === 'supplemental_context_only' && observedPosture === 'source_backed_curation_only');
   return {
     key: probe.key,
     label: probe.label,
     sourceAdapter: probe.sourceAdapter,
     expectedPosture: probe.expectedPosture,
-    count: Number(body.count || records.length || 0),
+    observedPosture,
+    matchesExpectedPosture,
+    count,
     coverageState: coverageState.state || 'unknown',
     coverageTitle: coverageState.title || '',
-    radiusMatchedCount: Number(meta.radiusMatchedCount || 0),
-    curationCandidateCount: Number(meta.curationCandidateCount || 0),
-    anySourceBackedCandidateCount: Number(meta.anySourceBackedCandidateCount || 0),
+    radiusMatchedCount,
+    curationCandidateCount,
+    anySourceBackedCandidateCount,
     sampleRoutes: records.slice(0, 3).map((record) => ({
       publicId: record.public_id || record.publicId || '',
       name: record.name || record.title || '',
@@ -215,6 +229,8 @@ async function auditProbe(probe, env) {
 function printHumanAudit(result) {
   console.log(`${result.label}`);
   console.log(`  state: ${result.coverageState}`);
+  console.log(`  observed posture: ${result.observedPosture}`);
+  console.log(`  matches expected: ${result.matchesExpectedPosture ? 'yes' : 'no'}`);
   console.log(`  count: ${result.count}`);
   console.log(`  radius matches: ${result.radiusMatchedCount}`);
   console.log(`  curation candidates: ${result.curationCandidateCount}`);
