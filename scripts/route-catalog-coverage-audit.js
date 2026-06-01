@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { inspect } = require('util');
+const { loadRouteCatalogEnv } = require('./route-catalog-env.js');
 
 const ROUTE_CATALOG_COVERAGE_PROBES = [
   {
@@ -242,6 +243,7 @@ function printHumanAudit(result) {
 }
 
 async function main() {
+  loadRouteCatalogEnv();
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(usage());

@@ -29,7 +29,9 @@ assert(fs.existsSync(runnerPath), 'Route catalog sync invocation runner should e
 const runnerSource = fs.readFileSync(runnerPath, 'utf8');
 for (const required of [
   'ECS_SUPABASE_URL',
+  'EXPO_PUBLIC_SUPABASE_URL',
   'ECS_ROUTE_CATALOG_SYNC_TOKEN',
+  'resolveSyncSupabaseUrl',
   'x-ecs-sync-token',
   '--dry-run',
   '--adapter',

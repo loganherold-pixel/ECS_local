@@ -149,6 +149,7 @@
     "test:route-catalog-search-area": "node ./scripts/test-explore-route-catalog-search-area.js",
     "test:route-catalog-search-area-domain": "node ./scripts/test-route-catalog-search-area-domain.js",
     "test:route-catalog-active-guidance": "node ./scripts/test-route-catalog-active-guidance.js",
+    "test:route-catalog-env-loader": "node ./scripts/test-route-catalog-env-loader.js",
     "test:route-catalog-coverage-audit": "node ./scripts/test-route-catalog-coverage-audit.js",
     "test:route-catalog-coverage-audit-workflow": "node ./scripts/test-route-catalog-coverage-audit-workflow.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",

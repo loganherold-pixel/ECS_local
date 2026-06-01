@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { loadRouteCatalogEnv } = require('./route-catalog-env.js');
 
 const {
   buildRouteCatalogSyncInvocationPlan,
@@ -87,10 +88,14 @@ function invocationUrl(baseUrl, functionName) {
   return `${String(baseUrl).replace(/\/+$/, '')}/functions/v1/${functionName}`;
 }
 
+function resolveSyncSupabaseUrl(env) {
+  return env.ECS_SUPABASE_URL || env.EXPO_PUBLIC_SUPABASE_URL || '';
+}
+
 function summarizeDryRun(selected, env) {
   return {
     mode: 'dry-run',
-    supabaseUrl: env.ECS_SUPABASE_URL ? '(present)' : '(missing)',
+    supabaseUrl: resolveSyncSupabaseUrl(env) ? '(present)' : '(missing)',
     syncToken: redactSecret(env.ECS_ROUTE_CATALOG_SYNC_TOKEN),
     adapters: selected.map((entry) => ({
       key: entry.key,
@@ -112,9 +117,9 @@ async function invokeEntry(entry, env, payloadOverride) {
     throw new Error(`${entry.key} cannot be invoked directly: ${entry.preprocessReason}`);
   }
 
-  const supabaseUrl = env.ECS_SUPABASE_URL;
+  const supabaseUrl = resolveSyncSupabaseUrl(env);
   const syncToken = env.ECS_ROUTE_CATALOG_SYNC_TOKEN;
-  if (!supabaseUrl) throw new Error('Missing ECS_SUPABASE_URL');
+  if (!supabaseUrl) throw new Error('Missing ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL');
   if (!syncToken) throw new Error('Missing ECS_ROUTE_CATALOG_SYNC_TOKEN');
 
   const payload = payloadOverride || entry.defaultPayload;
@@ -156,6 +161,7 @@ async function invokeEntry(entry, env, payloadOverride) {
 }
 
 async function main() {
+  loadRouteCatalogEnv();
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(usage());
