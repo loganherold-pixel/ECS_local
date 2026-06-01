@@ -93,12 +93,22 @@ async function requestParams(req: Request): Promise<Record<string, unknown>> {
   return body;
 }
 
-function coverageState(records: unknown[]): Record<string, string> {
+function coverageState(
+  records: unknown[],
+  metadata: { curationCandidateCount?: number } = {},
+): Record<string, string> {
   if (records.length > 0) {
     return {
       state: 'ready',
       title: 'Verified routes available',
       message: 'Source-backed ECS route catalog records match the current criteria.',
+    };
+  }
+  if ((metadata.curationCandidateCount ?? 0) > 0) {
+    return {
+      state: 'lower_confidence_nearby',
+      title: 'Source-backed routes in curation',
+      message: 'ECS found official or source-backed route records nearby, but none are verified enough for public recommendation under the current criteria.',
     };
   }
   return {
@@ -269,6 +279,95 @@ function filterRecordsWithinSearchRadius(
   };
 }
 
+async function countRouteCatalogCurationCandidates(
+  admin: ReturnType<typeof createAdminClient>,
+  args: {
+    latitude: number | null;
+    longitude: number | null;
+    radiusMiles: number | null;
+    queryLimit: number;
+    minDistanceMiles: number | null;
+    maxDistanceMiles: number | null;
+    minDurationMinutes: number | null;
+    maxDurationMinutes: number | null;
+    minConfidenceScore: number | null;
+    minRemotenessScore: number | null;
+    maxRemotenessScore: number | null;
+    minCampabilityScore: number | null;
+    availableFuelRangeMiles: number | null;
+    availableWaterCapacityGallons: number | null;
+    routeType: string;
+    difficulty: string;
+    vehicleClass: string;
+  },
+): Promise<{ curationCandidateCount: number }> {
+  const hasRadiusCriteria = args.latitude != null && args.longitude != null && args.radiusMiles != null;
+  let query = admin
+    .from('route_catalog_public')
+    .select([
+      'id',
+      'center_latitude',
+      'center_longitude',
+      'distance_miles',
+      'estimated_duration_minutes',
+      'vehicle_fit',
+      'recommendation_status',
+      'review_status',
+      'confidence_score',
+      'updated_at',
+      'remoteness_score',
+      'campability_score',
+      'minimum_fuel_range_miles',
+      'minimum_water_capacity_gallons',
+    ].join(','))
+    .eq('review_status', 'approved')
+    .neq('recommendation_status', 'recommendable')
+    .order('confidence_score', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(args.queryLimit);
+
+  if (hasRadiusCriteria) {
+    const degrees = Math.max(0.05, args.radiusMiles / 69);
+    query = query
+      .gte('center_latitude', args.latitude - degrees)
+      .lte('center_latitude', args.latitude + degrees)
+      .gte('center_longitude', args.longitude - degrees)
+      .lte('center_longitude', args.longitude + degrees);
+  }
+
+  if (args.vehicleClass) query = query.contains('vehicle_fit', [args.vehicleClass]);
+  if (args.minDistanceMiles != null) query = query.gte('distance_miles', args.minDistanceMiles);
+  if (args.maxDistanceMiles != null) query = query.lte('distance_miles', args.maxDistanceMiles);
+  if (args.minDurationMinutes != null) query = query.gte('estimated_duration_minutes', args.minDurationMinutes);
+  if (args.maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', args.maxDurationMinutes);
+  if (args.minConfidenceScore != null) query = query.gte('confidence_score', args.minConfidenceScore);
+  if (args.minRemotenessScore != null) query = query.gte('remoteness_score', args.minRemotenessScore);
+  if (args.maxRemotenessScore != null) query = query.lte('remoteness_score', args.maxRemotenessScore);
+  if (args.minCampabilityScore != null) query = query.gte('campability_score', args.minCampabilityScore);
+  if (args.availableFuelRangeMiles != null && args.availableFuelRangeMiles > 0) {
+    query = query.lte('minimum_fuel_range_miles', args.availableFuelRangeMiles);
+  }
+  if (args.availableWaterCapacityGallons != null && args.availableWaterCapacityGallons > 0) {
+    query = query.lte('minimum_water_capacity_gallons', args.availableWaterCapacityGallons);
+  }
+  if (args.routeType) query = query.eq('route_type', args.routeType);
+  if (args.difficulty) query = query.eq('difficulty', args.difficulty);
+
+  const { data, error } = await query;
+  if (error) throw new Error('Unable to inspect route catalog curation coverage.');
+
+  const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+  const radiusFiltered = filterRecordsWithinSearchRadius(candidates, {
+    latitude: args.latitude,
+    longitude: args.longitude,
+    radiusMiles: args.radiusMiles,
+  });
+
+  return {
+    curationCandidateCount: radiusFiltered.radiusMatchedCount,
+  };
+}
+
 function sampleLine(coordinates: unknown[], maxPoints: number): number[][] {
   const points = coordinates.map(cleanCoordinate).filter((point): point is number[] => !!point);
   if (points.length <= maxPoints) return points;
@@ -408,6 +507,26 @@ serve(async (req) => {
     const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
     const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
     const limitedRecords = radiusFiltered.records.slice(0, limit);
+    const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
+      latitude,
+      longitude,
+      radiusMiles,
+      queryLimit,
+      minDistanceMiles,
+      maxDistanceMiles,
+      minDurationMinutes,
+      maxDurationMinutes,
+      minConfidenceScore,
+      minRemotenessScore,
+      maxRemotenessScore,
+      minCampabilityScore,
+      availableFuelRangeMiles,
+      availableWaterCapacityGallons,
+      routeType,
+      difficulty,
+      vehicleClass,
+    });
+    const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
 
     const records = shapeSearchRecords(
       limitedRecords,
@@ -418,7 +537,7 @@ serve(async (req) => {
       ok: true,
       records,
       count: records.length,
-      coverageState: coverageState(records),
+      coverageState: coverageState(records, curationCoverage),
       meta: {
         source: 'route_catalog_public',
         recommendationOnly: true,
@@ -427,6 +546,8 @@ serve(async (req) => {
         candidateLimit: queryLimit,
         candidateCount: candidates.length,
         radiusMatchedCount: radiusFiltered.radiusMatchedCount,
+        curationCandidateCount: curationCoverage.curationCandidateCount,
+        anySourceBackedCandidateCount,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {
