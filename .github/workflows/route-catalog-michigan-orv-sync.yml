@@ -1,0 +1,139 @@
+name: Route Catalog Michigan ORV Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_keys:
+        description: Comma-separated Michigan DNR ORV GPX source keys.
+        required: false
+        default: alcona_orv_trail,atlanta_route,evart_motorcycle_trail
+      min_miles:
+        description: Minimum GPX track miles to ingest.
+        required: false
+        default: '1'
+      max_tracks_per_source:
+        description: Maximum tracks to normalize per named GPX source.
+        required: false
+        default: '20'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-michigan-orv-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Michigan DNR ORV GPX records
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      SOURCE_KEYS: ${{ inputs.source_keys || 'alcona_orv_trail,atlanta_route,evart_motorcycle_trail' }}
+      MIN_MILES: ${{ inputs.min_miles || '1' }}
+      MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '20' }}
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build bounded sync payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const sourceKeys = String(process.env.SOURCE_KEYS || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const minMiles = Number(process.env.MIN_MILES || 1);
+          const maxTracksPerSource = Number(process.env.MAX_TRACKS_PER_SOURCE || 20);
+
+          if (sourceKeys.length === 0) throw new Error('At least one Michigan DNR ORV GPX source key is required.');
+          if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
+          if (!Number.isFinite(maxTracksPerSource) || maxTracksPerSource <= 0) {
+            throw new Error('max_tracks_per_source must be positive.');
+          }
+
+          fs.writeFileSync(
+            'route-catalog-michigan-orv-sync-payload.json',
+            JSON.stringify({
+              sourceKeys,
+              minMiles,
+              maxTracksPerSource: Math.min(100, Math.round(maxTracksPerSource)),
+            }),
+          );
+          NODE
+
+      - name: Invoke Michigan DNR ORV route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-michigan-orv-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-michigan-orv" \
+            --output route-catalog-michigan-orv-sync-response.json
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-michigan-orv-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'Michigan DNR ORV route catalog sync failed.');
+          }
+
+          const sources = Array.isArray(response.sources) ? response.sources : [];
+          const summaryRows = sources.map((source) => ({
+            sourceKey: source.sourceKey,
+            sourceName: source.sourceName,
+            rawFeatureCount: source.rawFeatureCount,
+            normalizedFeatureCount: source.normalizedFeatureCount,
+          }));
+
+          console.log(JSON.stringify({
+            source: response.source,
+            sourceKeys: response.sourceKeys,
+            rawFeatureCount: response.rawFeatureCount,
+            normalizedFeatureCount: response.normalizedFeatureCount,
+            publicRecommendationCount: response.publicRecommendationCount,
+            sources: summaryRows,
+          }, null, 2));
+
+          const markdown = [
+            '## Route Catalog Michigan DNR ORV Sync',
+            '',
+            '| Source | Raw Tracks | Normalized Curation Records |',
+            '| --- | ---: | ---: |',
+            ...summaryRows.map((source) =>
+              `| ${source.sourceKey} - ${source.sourceName} | ${source.rawFeatureCount} | ${source.normalizedFeatureCount} |`
+            ),
+            '',
+            `Public recommendations created: ${response.publicRecommendationCount || 0}`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE

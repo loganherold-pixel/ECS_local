@@ -23,6 +23,8 @@ jobs:
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
+        with:
+          version: 2.75.0
 
       - name: Start local Supabase
         run: supabase start
@@ -31,4 +33,3 @@ jobs:
       - name: Run database tests
         run: supabase test db
         timeout-minutes: 5
-

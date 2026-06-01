@@ -1,0 +1,157 @@
+name: Route Catalog BLM GTLF Sync
+
+on:
+  schedule:
+    - cron: '43 10 * * 3'
+  workflow_dispatch:
+    inputs:
+      states:
+        description: Comma-separated BLM administrative state codes to sync.
+        required: false
+        default: CA,NV
+      layers:
+        description: Comma-separated GTLF layer IDs. Defaults to 0,1,2,3 motorized road/trail layers.
+        required: false
+        default: '0,1,2,3'
+      min_miles:
+        description: Minimum GTLF segment miles to ingest.
+        required: false
+        default: '1'
+      limit_per_state_layer:
+        description: Maximum features to request per state/layer.
+        required: false
+        default: '100'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-blm-gtlf-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync BLM GTLF source segments
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      STATES: ${{ inputs.states || 'CA,NV' }}
+      LAYERS: ${{ inputs.layers || '0,1,2,3' }}
+      MIN_MILES: ${{ inputs.min_miles || '1' }}
+      LIMIT_PER_STATE_LAYER: ${{ inputs.limit_per_state_layer || '100' }}
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build bounded sync payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const states = String(process.env.STATES || '')
+            .split(',')
+            .map((state) => state.trim().toUpperCase())
+            .filter(Boolean);
+          const layers = String(process.env.LAYERS || '')
+            .split(',')
+            .map((layer) => Number(layer.trim()))
+            .filter((layer) => Number.isInteger(layer));
+          const minMiles = Number(process.env.MIN_MILES || 1);
+          const limitPerStateLayer = Number(process.env.LIMIT_PER_STATE_LAYER || 100);
+
+          if (states.length === 0) throw new Error('At least one BLM administrative state code is required.');
+          if (states.some((state) => !/^[A-Z]{2}$/.test(state))) throw new Error('states must be two-letter administrative state codes.');
+          if (layers.length === 0 || layers.some((layer) => ![0, 1, 2, 3].includes(layer))) {
+            throw new Error('layers must be a comma-separated subset of 0,1,2,3.');
+          }
+          if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
+          if (!Number.isFinite(limitPerStateLayer) || limitPerStateLayer <= 0) {
+            throw new Error('limit_per_state_layer must be positive.');
+          }
+
+          fs.writeFileSync(
+            'route-catalog-blm-gtlf-sync-payload.json',
+            JSON.stringify({
+              states,
+              layers,
+              minMiles,
+              limitPerStateLayer: Math.min(500, Math.round(limitPerStateLayer)),
+            }),
+          );
+          NODE
+
+      - name: Invoke BLM GTLF route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-blm-gtlf-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-blm-gtlf" \
+            --output route-catalog-blm-gtlf-sync-response.json
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-blm-gtlf-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'BLM GTLF route catalog sync failed.');
+          }
+
+          const layers = Array.isArray(response.layers) ? response.layers : [];
+          const summaryRows = layers.map((layer) => ({
+            layerId: layer.layerId,
+            layerName: layer.layerName,
+            rawFeatureCount: layer.rawFeatureCount,
+            normalizedFeatureCount: layer.normalizedFeatureCount,
+          }));
+
+          console.log(JSON.stringify({
+            source: response.source,
+            states: response.states,
+            rawFeatureCount: response.rawFeatureCount,
+            normalizedFeatureCount: response.normalizedFeatureCount,
+            publicRecommendationCount: response.publicRecommendationCount,
+            layers: summaryRows,
+          }, null, 2));
+
+          const markdown = [
+            '## Route Catalog BLM GTLF Sync',
+            '',
+            `States: ${(response.states || []).join(', ')}`,
+            '',
+            '| Layer | Raw Features | Normalized Source Segments |',
+            '| --- | ---: | ---: |',
+            ...summaryRows.map((layer) =>
+              `| ${layer.layerId} - ${layer.layerName} | ${layer.rawFeatureCount} | ${layer.normalizedFeatureCount} |`
+            ),
+            '',
+            `Public recommendations created: ${response.publicRecommendationCount || 0}`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE

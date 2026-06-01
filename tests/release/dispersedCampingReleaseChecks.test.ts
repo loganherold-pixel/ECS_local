@@ -144,10 +144,10 @@ assert.ok(
 
 assert.ok(
   mapRendererSource.includes('removeDispersedCampingEligibilityLayer') &&
-    mapRendererSource.includes('removeMapLayer(DISPERSED_CAMPING_OUTLINE_LAYER_ID)') &&
-    mapRendererSource.includes('removeMapLayer(DISPERSED_CAMPING_FILL_LAYER_ID)') &&
-    mapRendererSource.includes('removeMapSource(DISPERSED_CAMPING_SOURCE_ID)'),
-  'MapRenderer should remove eligibility layers and source cleanly when disabled.',
+    mapRendererSource.includes("map.setLayoutProperty(DISPERSED_CAMPING_OUTLINE_LAYER_ID, 'visibility', 'none')") &&
+    mapRendererSource.includes("map.setLayoutProperty(DISPERSED_CAMPING_FILL_LAYER_ID, 'visibility', 'none')") &&
+    mapRendererSource.includes('removeDispersedRouteBuildLayer()'),
+  'MapRenderer should hide eligibility layers and clear dependent route-leg overlays cleanly when disabled.',
 );
 
 assert.ok(

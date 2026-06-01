@@ -71,7 +71,7 @@ assertIncludes(
     'resolveRoadDestination({',
     "requestRouteForDestination(\n          destination,\n          'route_preview',",
     'fetchRoadRoute({',
-    'applyRoute(route, requestedStatus, destination, createdFrom',
+    'applyRoute(validRoute, requestedStatus, destination, createdFrom',
   ],
   'Road navigation hook should still geocode, resolve, route, and enter route preview.',
 );

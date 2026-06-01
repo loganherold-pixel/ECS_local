@@ -196,6 +196,10 @@ export interface Vehicle {
   breakover_angle_deg?: number | null;
   departure_angle_deg?: number | null;
   turning_diameter_ft?: number | null;
+  axle_ratio?: string | null;
+  gearing_label?: string | null;
+  gearing_confidence?: number | null;
+  gearing_confirmed?: boolean | null;
   created_at: string;
   updated_at: string;
 }

@@ -6,7 +6,10 @@ import {
 } from './fleetPremiumDomain';
 import {
   resolveFleetOemSpecReference,
+  resolveFleetOemSpecSuggestionCandidates,
   type FleetOemSpecMatch,
+  type FleetOemMatchLevel,
+  type FleetOemSpecSuggestionCandidate,
   type FleetOemVehicleSpecReference,
 } from './oemVehicleSpecs';
 
@@ -20,6 +23,10 @@ export type FleetVehicleProfileDraft = {
   drivetrain: string;
   cab: string;
   bed: string;
+  axleRatio: string;
+  gearingLabel: string;
+  gearingConfidence: string;
+  gearingConfirmed: boolean;
   vehicleType: string;
   baseNetWeight: string;
   gvwr: string;
@@ -42,7 +49,23 @@ export type FleetVehicleProfilePrefillOption = {
   id: string;
   label: string;
   detail: string;
-  draft: Pick<FleetVehicleProfileDraft, 'trim' | 'engine' | 'drivetrain' | 'cab' | 'bed' | 'vehicleType'>;
+  matchLevel: FleetOemMatchLevel;
+  draft: Partial<Pick<
+    FleetVehicleProfileDraft,
+    | 'year'
+    | 'make'
+    | 'model'
+    | 'trim'
+    | 'engine'
+    | 'drivetrain'
+    | 'cab'
+    | 'bed'
+    | 'axleRatio'
+    | 'gearingLabel'
+    | 'gearingConfidence'
+    | 'gearingConfirmed'
+    | 'vehicleType'
+  >>;
 };
 
 type FleetVehicleProfileVariantTemplate = {
@@ -227,6 +250,10 @@ export function createEmptyFleetVehicleProfileDraft(): FleetVehicleProfileDraft 
     drivetrain: '',
     cab: '',
     bed: '',
+    axleRatio: '',
+    gearingLabel: '',
+    gearingConfidence: '',
+    gearingConfirmed: false,
     vehicleType: 'truck',
     baseNetWeight: '',
     gvwr: '',
@@ -256,8 +283,60 @@ function titleCaseProfileText(value: string): string {
     .replace(/\s+/g, ' ')
     .split(' ')
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .map((part) => {
+      const upper = part.toUpperCase();
+      if (/^(TRD|SR5|4X4|AWD|FWD|RWD|HD|PRO|MAX|V6|V8)$/.test(upper)) return upper;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
     .join(' ');
+}
+
+function formatOemCandidateLabel(candidate: FleetOemSpecSuggestionCandidate, year: string): string {
+  const yearPrefix = year.trim() ? `${year.trim()} ` : '';
+  const configParts = [
+    candidate.trim,
+    candidate.cab,
+    candidate.drivetrain,
+    candidate.bed,
+  ]
+    .filter(Boolean)
+    .map((part) => String(part).trim())
+    .filter(Boolean);
+  const modelLabel = `${titleCaseProfileText(candidate.make)} ${titleCaseProfileText(candidate.model)}`.trim();
+  return `${yearPrefix}${modelLabel}${configParts.length ? ` ${configParts.join(' ')}` : ''}`.replace(/\s+/g, ' ').trim();
+}
+
+function oemCandidateToPrefillOption(
+  candidate: FleetOemSpecSuggestionCandidate,
+  draft: FleetVehicleProfileDraft,
+): FleetVehicleProfilePrefillOption {
+  return {
+    id: `oem:${candidate.id}`,
+    label: formatOemCandidateLabel(candidate, draft.year),
+    detail: candidate.detail,
+    matchLevel: candidate.matchLevel,
+    draft: {
+      year: draft.year.trim(),
+      make: titleCaseProfileText(candidate.make),
+      model: titleCaseProfileText(candidate.model),
+      trim: candidate.trim ? String(candidate.trim).trim() : draft.trim.trim(),
+      engine: candidate.engine ?? draft.engine.trim(),
+      drivetrain: candidate.drivetrain ?? draft.drivetrain.trim(),
+      cab: candidate.cab ?? draft.cab.trim(),
+      bed: candidate.bed ?? draft.bed.trim(),
+      axleRatio: candidate.axleRatio ?? '',
+      gearingLabel: candidate.gearingLabel ?? '',
+      gearingConfidence: candidate.gearingConfidence != null ? String(candidate.gearingConfidence) : '',
+      gearingConfirmed: false,
+      vehicleType: candidate.vehicleType || draft.vehicleType,
+    },
+  };
+}
+
+function shouldReplaceSuggestedWeight(currentValue: string, previousSuggestion: FleetWeightValue | null): boolean {
+  const normalized = currentValue.replace(/,/g, '').trim();
+  if (!normalized) return true;
+  return previousSuggestion ? normalized === String(Math.round(previousSuggestion.lbs)) : false;
 }
 
 function templateMatchesDraft(template: FleetVehicleProfileVariantTemplate, draft: FleetVehicleProfileDraft, year: number): boolean {
@@ -290,6 +369,7 @@ function buildGenericPrefillOptions(
       id: 'oem-standard',
       label: `${make} ${model} Standard ${drivetrain}`,
       detail: `Likely ${bodyLabel} configuration for OEM reference matching.`,
+      matchLevel: 'model',
       draft: {
         trim: draft.trim.trim(),
         engine,
@@ -303,6 +383,7 @@ function buildGenericPrefillOptions(
       id: 'oem-trail',
       label: `${make} ${model} Trail / Off-Road`,
       detail: `Trail-oriented ${bodyLabel} prefill when the exact trim is still unknown.`,
+      matchLevel: 'model',
       draft: {
         trim: draft.trim.trim() || (isTruck ? 'Off-Road' : 'Trail'),
         engine,
@@ -316,6 +397,7 @@ function buildGenericPrefillOptions(
       id: 'oem-premium',
       label: `${make} ${model} Premium / Touring`,
       detail: `Premium trim prefill; confirm exact trim and placard values before final payload decisions.`,
+      matchLevel: 'model',
       draft: {
         trim: draft.trim.trim() || (isTruck ? 'Premium' : 'Touring'),
         engine,
@@ -348,8 +430,31 @@ export function resolveFleetVehicleProfileSuggestion(
     model: draft.model,
     year,
     trim: draft.trim,
+    engine: draft.engine,
+    drivetrain: draft.drivetrain,
+    cab: draft.cab,
+    bed: draft.bed,
     vehicleType: draft.vehicleType,
   });
+
+  if (oemMatch.status === 'matched' && oemMatch.reference.matchLevel && oemMatch.reference.matchLevel !== 'model') {
+    const reference = oemMatch.reference;
+    const sourceLabel = `${reference.label} (${reference.yearStart}${reference.yearEnd ? `-${reference.yearEnd}` : '+'})`;
+    return {
+      baseNetWeight: createFleetWeightValue(reference.specs.base_weight_lb, 'manufacturer_spec', {
+        confidence: reference.confidence,
+        sourceLabel: `${sourceLabel} base weight reference`,
+      }),
+      gvwr: createFleetWeightValue(reference.specs.gvwr_lb, 'manufacturer_spec', {
+        confidence: reference.confidence,
+        sourceLabel: `${sourceLabel} GVWR reference`,
+      }),
+      oemReference: reference,
+      oemMatchStatus: oemMatch.status,
+      oemMessage: oemMatch.message,
+      confidenceExplanation: `ECS estimated this from vehicle configuration. ${oemMatch.message} Specific trim/config picks improve catalog confidence; manual entries and saved placard values still override this reference.`,
+    };
+  }
 
   if (defaultMatch?.confidenceTier === 'exact_build_match') {
     return {
@@ -399,34 +504,58 @@ export function resolveFleetVehicleProfilePrefillOptions(
   const year = parseFleetProfileNumber(draft.year);
   if (year == null || !draft.make.trim() || !draft.model.trim()) return [];
 
+  const oemCandidates = resolveFleetOemSpecSuggestionCandidates({
+    make: draft.make,
+    model: draft.model,
+    year,
+    trim: draft.trim,
+    engine: draft.engine,
+    drivetrain: draft.drivetrain,
+    cab: draft.cab,
+    bed: draft.bed,
+    vehicleType: draft.vehicleType,
+    limit: 3,
+  }).map((candidate) => oemCandidateToPrefillOption(candidate, draft));
+  const seenOptionIds = new Set(oemCandidates.map((option) => normalizeFleetProfileText(option.id.replace(/^oem:/, ''))));
+
   const templates = FLEET_PROFILE_VARIANT_TEMPLATES
     .filter((template) => templateMatchesDraft(template, draft, year))
+    .filter((template) => !seenOptionIds.has(normalizeFleetProfileText(template.id)))
     .slice(0, 3)
     .map((template) => ({
       id: template.id,
       label: `${draft.year.trim()} ${titleCaseProfileText(draft.make)} ${titleCaseProfileText(draft.model)} ${template.label}`.trim(),
       detail: template.detail,
+      matchLevel: 'configuration' as const,
       draft: template.draft,
     }));
-  if (templates.length >= 3) return templates;
+  const prioritized = [
+    ...(templates.length > 0 ? templates : oemCandidates),
+    ...(templates.length > 0 ? oemCandidates : templates),
+  ].slice(0, 3);
+  if (prioritized.length >= 3) return prioritized;
 
   const oemMatch = resolveFleetOemSpecReference({
     make: draft.make,
     model: draft.model,
     year,
     trim: draft.trim,
+    engine: draft.engine,
+    drivetrain: draft.drivetrain,
+    cab: draft.cab,
+    bed: draft.bed,
     vehicleType: draft.vehicleType,
   });
-  if (oemMatch.status !== 'matched') return templates;
+  if (oemMatch.status !== 'matched') return prioritized;
 
   const generic = buildGenericPrefillOptions(draft, oemMatch.reference.vehicleType)
     .filter((option) => {
       const optionTrim = normalizeFleetProfileText(option.draft.trim);
       if (!optionTrim) return true;
-      return !templates.some((template) => normalizeFleetProfileText(template.label).includes(optionTrim));
+      return !prioritized.some((template) => normalizeFleetProfileText(template.label).includes(optionTrim));
     })
-    .slice(0, 3 - templates.length);
-  return [...templates, ...generic];
+    .slice(0, 3 - prioritized.length);
+  return [...prioritized, ...generic];
 }
 
 export function applyFleetProfilePreset(
@@ -454,6 +583,7 @@ export function applyFleetProfilePrefillOption(
 ): FleetVehicleProfileDraft {
   const option = resolveFleetVehicleProfilePrefillOptions(draft).find((item) => item.id === optionId);
   if (!option) return draft;
+  const previousSuggestion = resolveFleetVehicleProfileSuggestion(draft);
   const next = {
     ...draft,
     ...option.draft,
@@ -461,8 +591,14 @@ export function applyFleetProfilePrefillOption(
   const suggestion = resolveFleetVehicleProfileSuggestion(next);
   return {
     ...next,
-    baseNetWeight: suggestion.baseNetWeight ? String(Math.round(suggestion.baseNetWeight.lbs)) : next.baseNetWeight,
-    gvwr: suggestion.gvwr ? String(Math.round(suggestion.gvwr.lbs)) : next.gvwr,
+    baseNetWeight:
+      shouldReplaceSuggestedWeight(draft.baseNetWeight, previousSuggestion.baseNetWeight) && suggestion.baseNetWeight
+        ? String(Math.round(suggestion.baseNetWeight.lbs))
+        : next.baseNetWeight,
+    gvwr:
+      shouldReplaceSuggestedWeight(draft.gvwr, previousSuggestion.gvwr) && suggestion.gvwr
+        ? String(Math.round(suggestion.gvwr.lbs))
+        : next.gvwr,
   };
 }
 

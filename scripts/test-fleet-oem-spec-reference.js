@@ -33,11 +33,14 @@ function read(relativePath) {
 
 const {
   resolveFleetOemSpecReference,
+  resolveFleetOemSpecSuggestionCandidates,
   FLEET_OEM_SPEC_REFERENCES,
   getFleetOemSpecReferenceCatalogStats,
 } = require(path.join(root, 'lib', 'fleet', 'oemVehicleSpecs.ts'));
 const {
+  applyFleetProfilePrefillOption,
   resolveFleetVehicleProfileSuggestion,
+  resolveFleetVehicleProfilePrefillOptions,
   createEmptyFleetVehicleProfileDraft,
 } = require(path.join(root, 'lib', 'fleet', 'fleetVehicleProfile.ts'));
 const {
@@ -56,6 +59,46 @@ assert.ok(catalogStats.vehicleTypes.includes('suv'), 'Fleet OEM catalog should i
 assert.ok(catalogStats.vehicleTypes.includes('crossover'), 'Fleet OEM catalog should include crossovers.');
 assert.ok(catalogStats.vehicleTypes.includes('van'), 'Fleet OEM catalog should include vans.');
 assert.strictEqual(catalogStats.earliestYearStart, 2010, 'Fleet OEM catalog should include 2010-era generation windows.');
+assert.ok(
+  catalogStats.matchLevelCounts.configuration >= 12,
+  'Fleet OEM catalog should include a practical seed set of trim/configuration-specific ECS vehicle picks.',
+);
+assert.ok(
+  catalogStats.matchLevelCounts.trim >= 3,
+  'Fleet OEM catalog should include trim-specific ECS vehicle picks where full configuration is not bundled.',
+);
+
+const configurationSeedTypes = new Set(
+  FLEET_OEM_SPEC_REFERENCES
+    .filter((reference) => reference.matchLevel === 'configuration')
+    .map((reference) => reference.vehicleType),
+);
+assert.ok(configurationSeedTypes.has('truck'), 'Configuration seed catalog should include trucks.');
+assert.ok(configurationSeedTypes.has('suv'), 'Configuration seed catalog should include SUVs.');
+assert.ok(configurationSeedTypes.has('crossover'), 'Configuration seed catalog should include crossovers.');
+assert.ok(configurationSeedTypes.has('van'), 'Configuration seed catalog should include vans.');
+
+const requiredSeedIds = [
+  'toyota-4runner-trd-off-road-4wd-2014-reference',
+  'lexus-gx-460-4wd-2010-reference',
+  'ford-bronco-badlands-4door-4x4-2021-reference',
+  'jeep-wrangler-rubicon-unlimited-4x4-2018-reference',
+  'subaru-outback-wilderness-2022-reference',
+  'ford-transit-awd-148-high-roof-2020-reference',
+  'mercedes-sprinter-2500-awd-144-high-roof-2023-reference',
+  'chevrolet-colorado-zr2-crew-4wd-2023-reference',
+  'nissan-frontier-pro-4x-crew-4wd-2022-reference',
+  'toyota-tundra-trd-pro-crewmax-4x4-2022-reference',
+];
+for (const seedId of requiredSeedIds) {
+  const seed = FLEET_OEM_SPEC_REFERENCES.find((reference) => reference.id === seedId);
+  assert.ok(seed, `Fleet OEM configuration seed catalog should include ${seedId}.`);
+  assert.ok(seed.confidence >= 88, `${seedId} should carry manufacturer-spec confidence.`);
+  assert.ok(seed.engine, `${seedId} should include bundled engine identity.`);
+  assert.ok(seed.drivetrain, `${seedId} should include bundled drivetrain identity.`);
+  assert.ok(seed.specs.overall_width_in > 0, `${seedId} should include OEM width for vehicle fit.`);
+  assert.ok(seed.specs.turning_diameter_ft > 0, `${seedId} should include turning diameter for maneuverability planning.`);
+}
 
 function assertOemMatch(input, expected) {
   const match = resolveFleetOemSpecReference(input);
@@ -147,6 +190,103 @@ assert.strictEqual(passportSuggestion.oemMatchStatus, 'matched', 'Passport profi
 assert.strictEqual(passportSuggestion.oemReference.vehicleType, 'suv', 'Passport profile suggestions should override the default draft truck type.');
 assert.strictEqual(passportSuggestion.oemReference.specs.fuel_tank_capacity_gal, 19.5, 'Passport profile suggestions should carry OEM fuel capacity.');
 
+const partialTacomaCandidates = resolveFleetOemSpecSuggestionCandidates({
+  year: 2024,
+  make: 'Toyota',
+  model: 'Tac',
+  vehicleType: 'truck',
+});
+assert.ok(
+  partialTacomaCandidates.length > 0,
+  'Partial model typing should return ECS vehicle pick candidates.',
+);
+assert.strictEqual(
+  partialTacomaCandidates[0].matchLevel,
+  'configuration',
+  'Trim/configuration-specific ECS vehicle picks should rank above generic model matches.',
+);
+assert.ok(
+  /Tacoma/i.test(partialTacomaCandidates[0].label) && /TRD Pro/i.test(partialTacomaCandidates[0].label),
+  'Top partial Tacoma pick should include the vehicle model and trim in the selectable label.',
+);
+
+const partial4RunnerCandidates = resolveFleetOemSpecSuggestionCandidates({
+  year: 2024,
+  make: 'Toyota',
+  model: '4r',
+  vehicleType: 'suv',
+});
+assert.ok(partial4RunnerCandidates.length > 0, 'Partial 4Runner typing should return ECS vehicle pick candidates.');
+assert.strictEqual(
+  partial4RunnerCandidates[0].id,
+  'toyota-4runner-trd-off-road-4wd-2014-reference',
+  'Trim/configuration seed picks should rank above the generic 4Runner model reference.',
+);
+
+const partialSprinterCandidates = resolveFleetOemSpecSuggestionCandidates({
+  year: 2024,
+  make: 'Mercedes',
+  model: 'Spr',
+  vehicleType: 'van',
+});
+assert.strictEqual(
+  partialSprinterCandidates[0].id,
+  'mercedes-sprinter-2500-awd-144-high-roof-2023-reference',
+  'Van seed picks should support partial model typing and rank a full configuration first.',
+);
+
+const genericTacomaMatch = resolveFleetOemSpecReference({
+  year: 2024,
+  make: 'Toyota',
+  model: 'Tacoma',
+  vehicleType: 'truck',
+});
+const trimTacomaMatch = resolveFleetOemSpecReference({
+  year: 2024,
+  make: 'Toyota',
+  model: 'Tacoma',
+  trim: 'TRD Pro',
+  engine: 'i-FORCE MAX hybrid turbo',
+  drivetrain: '4x4',
+  cab: 'Double Cab',
+  bed: 'Short Bed',
+  vehicleType: 'truck',
+});
+assert.strictEqual(trimTacomaMatch.status, 'matched', 'Trim/configuration Tacoma pick should resolve to an OEM reference.');
+assert.strictEqual(trimTacomaMatch.reference.matchLevel, 'configuration', 'Trim/configuration pick should expose configuration match level.');
+assert.ok(
+  trimTacomaMatch.reference.confidence > genericTacomaMatch.reference.confidence,
+  'Specific trim/config picks should carry higher catalog confidence than generic model matches.',
+);
+
+const partialProfileDraft = {
+  ...createEmptyFleetVehicleProfileDraft(),
+  nickname: 'Trail Tacoma',
+  year: '2024',
+  make: 'Toyota',
+  model: 'Tac',
+  vehicleType: 'truck',
+  baseNetWeight: '6123',
+};
+const prefillOptions = resolveFleetVehicleProfilePrefillOptions(partialProfileDraft);
+const tacomaPrefill = prefillOptions.find((option) => /Tacoma/i.test(option.label) && /TRD Pro/i.test(option.label));
+assert.ok(tacomaPrefill, 'Fleet profile prefill should expose a trim-specific Tacoma ECS vehicle pick.');
+const prefilledTacoma = applyFleetProfilePrefillOption(partialProfileDraft, tacomaPrefill.id);
+assert.strictEqual(prefilledTacoma.model, 'Tacoma', 'Selecting an ECS vehicle pick should complete the model field.');
+assert.strictEqual(prefilledTacoma.trim, 'TRD Pro', 'Selecting an ECS vehicle pick should populate trim.');
+assert.ok(prefilledTacoma.engine, 'Selecting an ECS vehicle pick should populate engine when bundled.');
+assert.strictEqual(prefilledTacoma.drivetrain, '4x4', 'Selecting an ECS vehicle pick should populate drivetrain when bundled.');
+assert.strictEqual(prefilledTacoma.cab, 'Double Cab', 'Selecting an ECS vehicle pick should populate cab when bundled.');
+assert.strictEqual(prefilledTacoma.bed, 'Short Bed', 'Selecting an ECS vehicle pick should populate bed when bundled.');
+assert.strictEqual(
+  prefilledTacoma.baseNetWeight,
+  '6123',
+  'Selecting an ECS vehicle pick should preserve manually entered base weight values.',
+);
+assert.ok(Number(prefilledTacoma.gvwr) > 0, 'Selecting an ECS vehicle pick should populate GVWR when the field was empty.');
+assert.ok(prefilledTacoma.gearingLabel, 'Selecting an ECS vehicle pick should expose probable gearing context when bundled.');
+assert.strictEqual(prefilledTacoma.gearingConfirmed, false, 'Probable gearing should require explicit confirmation.');
+
 const fleetVehicle = adaptLegacyVehicleToFleetVehicle({
   vehicle: {
     id: 'bronco-oem-test',
@@ -169,10 +309,24 @@ const fleetVehicle = adaptLegacyVehicleToFleetVehicle({
   specs: {
     ...modernBronco.reference.specs,
     base_weight_lb: modernBronco.reference.specs.base_weight_lb,
+    base_weight_source: 'manufacturer_spec',
+    base_weight_confidence: modernBronco.reference.confidence,
     gvwr_lb: modernBronco.reference.specs.gvwr_lb,
+    gvwr_source: 'manufacturer_spec',
+    gvwr_confidence: modernBronco.reference.confidence,
     fuel_tank_capacity_gal: modernBronco.reference.specs.fuel_tank_capacity_gal,
   },
 });
+assert.strictEqual(
+  fleetVehicle.buildProfile.baseNetWeight.source,
+  'manufacturer_spec',
+  'Saved OEM base weight should remain manufacturer-sourced downstream instead of degrading to a user estimate.',
+);
+assert.strictEqual(
+  fleetVehicle.buildProfile.baseNetWeight.confidence,
+  modernBronco.reference.confidence,
+  'Saved OEM base weight should preserve catalog confidence downstream.',
+);
 assert.strictEqual(
   fleetVehicle.buildProfile.overallWidthIn,
   modernBronco.reference.specs.overall_width_in,
@@ -184,10 +338,48 @@ assert.strictEqual(
   'Fleet build profile should carry OEM approach angle into downstream vehicle-fit data.',
 );
 
+const unconfirmedGearVehicle = adaptLegacyVehicleToFleetVehicle({
+  vehicle: {
+    id: 'tacoma-gearing-test',
+    owner_user_id: 'local',
+    name: 'Trail Tacoma',
+    type: 'truck',
+    make: 'Toyota',
+    model: 'Tacoma',
+    year: 2024,
+    notes: null,
+    fuel_tank_capacity_gal: 18.2,
+    avg_mpg: null,
+    current_fuel_percent: 100,
+    water_capacity_gal: null,
+    current_water_gal: 0,
+    water_updated_at: null,
+    created_at: '2026-05-22T00:00:00.000Z',
+    updated_at: '2026-05-22T00:00:00.000Z',
+  },
+  specs: {
+    base_weight_lb: 5100,
+    gvwr_lb: 6780,
+    fuel_tank_capacity_gal: 18.2,
+    gearing_label: 'Probable gearing context',
+    gearing_confidence: 88,
+    gearing_confirmed: false,
+  },
+});
+assert.strictEqual(
+  unconfirmedGearVehicle.buildProfile.gearingConfirmed,
+  false,
+  'Probable gearing should remain unconfirmed until the user explicitly confirms it.',
+);
+
 const profileModal = read('components/fleet/FleetVehicleProfileModal.tsx');
 assert.ok(profileModal.includes('OEM REFERENCE'), 'Fleet profile modal should present OEM reference state.');
 assert.ok(profileModal.includes('suggestion.oemReference.specs.ground_clearance_inches'), 'Fleet profile modal should show OEM clearance.');
 assert.ok(profileModal.includes('oem_reference_id'), 'Fleet profile save should persist OEM reference metadata.');
 assert.ok(profileModal.includes('overall_width_in'), 'Fleet profile save should persist OEM vehicle fit dimensions.');
+assert.ok(profileModal.includes('ECS vehicle picks'), 'Fleet profile modal should label selectable model/trim suggestions as ECS vehicle picks.');
+assert.ok(profileModal.includes('Confirm gearing'), 'Fleet profile modal should require confirmation before probable gearing is saved.');
+assert.ok(profileModal.includes('track_width_front_in'), 'Fleet profile modal should persist/display front track width when bundled.');
+assert.ok(profileModal.includes('turning_radius_ft'), 'Fleet profile modal should surface derived turning radius from OEM turning diameter.');
 
 console.log('Fleet OEM spec reference checks passed.');

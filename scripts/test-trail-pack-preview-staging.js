@@ -66,6 +66,7 @@ const {
 const {
   canStartTrailPackGuidance,
   getDefaultECSTrailPacks,
+  getTrailPackGuidanceReadiness,
   trailPackToExpeditionOpportunity,
 } = require(path.join(root, 'lib', 'explore', 'trailPacks.ts'));
 
@@ -124,8 +125,72 @@ const missingGeometryPack = {
 };
 assert.strictEqual(canStartTrailPackGuidance(missingGeometryPack), false, 'Missing geometry should disable Start Guidance');
 
+const disconnectedAggregatePack = {
+  ...loopTrailPack,
+  id: 'disconnected-aggregate-preview',
+  routeGeometry: {
+    type: 'MultiLineString',
+    coordinates: [
+      [
+        [-120, 39],
+        [-120.001, 39.001],
+      ],
+      [
+        [-121, 40],
+        [-121.001, 40.001],
+      ],
+    ],
+  },
+};
+assert.strictEqual(
+  canStartTrailPackGuidance(disconnectedAggregatePack),
+  false,
+  'Disconnected aggregate Trail Pack geometry should be preview-only and disable Start Guidance',
+);
+assert.strictEqual(
+  getTrailPackGuidanceReadiness(disconnectedAggregatePack).label,
+  'Preview only',
+  'Disconnected aggregate Trail Pack geometry should produce explicit Preview only status',
+);
+
+const catalogPreviewOnlyPack = {
+  ...loopTrailPack,
+  id: 'catalog-preview-only-topology',
+  catalogVerification: {
+    status: 'watch',
+    sourceLabel: 'Official access verified',
+    publicRecommendation: true,
+    confidenceScore: 88,
+    warnings: [],
+    blockers: [],
+    activeGuidance: {
+      status: 'preview_only',
+      topologyResolved: false,
+      sourceSegmentCount: 3,
+      componentCount: 1,
+      branchDetected: true,
+      joinedSegmentGapCount: 2,
+      disjointSegmentGapCount: 0,
+      maxJoinGapMeters: 0,
+      maxSegmentGapMeters: 0,
+      unavailableReason: 'Active guidance is preview-only because this aggregate contains a branching source network.',
+    },
+    dataUsed: [],
+    lastEvaluatedAt: new Date().toISOString(),
+  },
+};
+const catalogPreviewReadiness = getTrailPackGuidanceReadiness(catalogPreviewOnlyPack);
+assert.strictEqual(
+  canStartTrailPackGuidance(catalogPreviewOnlyPack),
+  false,
+  'Catalog preview-only topology should block Start Guidance even when geometry itself is present',
+);
+assert.strictEqual(catalogPreviewReadiness.label, 'Preview only');
+assert.match(catalogPreviewReadiness.description, /branching source network/i);
+
 assert(
   previewSource.includes('MapRenderer') &&
+    previewSource.includes('trailSegments={sourceTrailSegments}') &&
     previewSource.includes('DEFAULT_MAP_STYLE') &&
     previewSource.includes('getMapboxToken') &&
     previewSource.includes('cameraMode="route_overview"') &&
@@ -138,22 +203,33 @@ assert(
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&
+    previewSource.includes('offlineCache?.cacheable') &&
+    previewSource.includes('Last verified') &&
+    previewSource.includes('Stale after') &&
     previewSource.includes('offlineCacheAvailable') &&
-    previewSource.includes('disabled={!offlineCacheAvailable}'),
-  'Offline cache action should be disabled when Trail Pack cache support is unavailable',
+    previewSource.includes('disabled={!effectiveOfflineCacheAvailable}'),
+  'Offline cache action should use route catalog detail metadata and be disabled when Trail Pack cache support is unavailable',
 );
 assert(
   previewSource.includes('ECS confidence') &&
     previewSource.includes('WARNINGS') &&
+    previewSource.includes('ROUTE ASSESSMENT') &&
+    previewSource.includes('WHAT TO WATCH') &&
+    previewSource.includes('TO IMPROVE STATUS') &&
     previewSource.includes('sourceLabel') &&
-    previewSource.includes('communitySummary'),
-  'Trail Pack preview should show difficulty, confidence, warnings, source, verification, and community summary',
+    previewSource.includes('communitySummary') &&
+    previewSource.includes('GUIDANCE STATUS'),
+  'Trail Pack preview should show difficulty, confidence, warnings, source, route assessment, verification, and community summary',
 );
 assert(
   discoverSource.includes('Trail Pack staged. Navigate to the route start before beginning guidance.') &&
     discoverSource.includes('routeStartDistanceMiles') &&
-    discoverSource.includes('TrailPackPreviewModal'),
-  'Explore should stage Trail Packs into Navigate with a clear far-from-start message',
+    discoverSource.includes('TrailPackPreviewModal') &&
+    discoverSource.includes('fetchRouteCatalogTrailPackDetail') &&
+    discoverSource.includes('trailPackPreviewDetailStatus') &&
+    discoverSource.includes('onCacheOffline={() =>') &&
+    discoverSource.includes('handleCacheTrailPackOffline(trailPackPreview)'),
+  'Explore should stage Trail Packs into Navigate with a clear far-from-start message, fetch detail metadata, and wire cache action for previews',
 );
 assert(
   discoverSource.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),

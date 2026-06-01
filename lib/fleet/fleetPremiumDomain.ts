@@ -153,6 +153,10 @@ export interface VehicleBuildProfile {
   breakoverAngleDeg?: number | null;
   departureAngleDeg?: number | null;
   turningDiameterFt?: number | null;
+  axleRatio?: string | null;
+  gearingLabel?: string | null;
+  gearingConfidence?: number | null;
+  gearingConfirmed?: boolean | null;
   resourceProfile?: FleetResourceProfile;
   drivetrain?: string | null;
   engine?: string | null;
@@ -353,6 +357,10 @@ type LegacyVehicleInput = {
   breakover_angle_deg?: number | null;
   departure_angle_deg?: number | null;
   turning_diameter_ft?: number | null;
+  axle_ratio?: string | null;
+  gearing_label?: string | null;
+  gearing_confidence?: number | null;
+  gearing_confirmed?: boolean | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -360,6 +368,10 @@ type LegacyVehicleInput = {
 type LegacyVehicleSpecInput = {
   gvwr_lb?: number | null;
   base_weight_lb?: number | null;
+  base_weight_source?: string | null;
+  base_weight_confidence?: number | null;
+  gvwr_source?: string | null;
+  gvwr_confidence?: number | null;
   curb_weight_lb?: number | null;
   empty_weight_lb?: number | null;
   front_base_weight_lb?: number | null;
@@ -403,6 +415,14 @@ type LegacyVehicleSpecInput = {
   departureAngleDeg?: number | null;
   turning_diameter_ft?: number | null;
   turningDiameterFt?: number | null;
+  axle_ratio?: string | null;
+  axleRatio?: string | null;
+  gearing_label?: string | null;
+  gearingLabel?: string | null;
+  gearing_confidence?: number | null;
+  gearingConfidence?: number | null;
+  gearing_confirmed?: boolean | null;
+  gearingConfirmed?: boolean | null;
   cab?: string | null;
   bed_length?: string | null;
   trim?: string | null;
@@ -1009,6 +1029,19 @@ function nonNegativeNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function normalizeFleetWeightSource(value: unknown, fallback: FleetWeightSource): FleetWeightSource {
+  return value === 'scale_ticket' ||
+    value === 'vin_oem_match' ||
+    value === 'manufacturer_spec' ||
+    value === 'exact_build_match' ||
+    value === 'ecs_default' ||
+    value === 'user_estimate' ||
+    value === 'calculated' ||
+    value === 'unknown'
+    ? value
+    : fallback;
+}
+
 function normalizeFuelType(value: unknown): FleetFuelType {
   return value === 'diesel' || value === 'gas' ? value : 'unknown';
 }
@@ -1539,7 +1572,10 @@ export function adaptLegacyVehicleToFleetVehicle(input: {
     useCases,
     baseNetWeight:
       specs?.base_weight_lb != null
-        ? createFleetWeightValue(specs.base_weight_lb, 'user_estimate', { sourceLabel: 'User-entered base weight' })
+        ? createFleetWeightValue(specs.base_weight_lb, normalizeFleetWeightSource(specs.base_weight_source, 'user_estimate'), {
+            confidence: positiveNumber(specs.base_weight_confidence),
+            sourceLabel: specs.base_weight_source === 'manufacturer_spec' ? 'OEM reference base weight' : 'User-entered base weight',
+          })
         : cloneWeightValue(weightDefault?.netEmptyWeight),
     curbWeight:
       specs?.curb_weight_lb != null
@@ -1551,7 +1587,10 @@ export function adaptLegacyVehicleToFleetVehicle(input: {
         : null,
     gvwr:
       specs?.gvwr_lb != null
-        ? createFleetWeightValue(specs.gvwr_lb, 'user_estimate', { sourceLabel: 'User-entered GVWR' })
+        ? createFleetWeightValue(specs.gvwr_lb, normalizeFleetWeightSource(specs.gvwr_source, 'user_estimate'), {
+            confidence: positiveNumber(specs.gvwr_confidence),
+            sourceLabel: specs.gvwr_source === 'manufacturer_spec' ? 'OEM reference GVWR' : 'User-entered GVWR',
+          })
         : cloneWeightValue(weightDefault?.gvwr),
     frontBaseWeight:
       specs?.front_base_weight_lb != null
@@ -1625,6 +1664,13 @@ export function adaptLegacyVehicleToFleetVehicle(input: {
       positiveNumber(specs?.turningDiameterFt)
       ?? positiveNumber(specs?.turning_diameter_ft)
       ?? positiveNumber(vehicle.turning_diameter_ft),
+    axleRatio: specs?.axleRatio ?? specs?.axle_ratio ?? vehicle.axle_ratio ?? null,
+    gearingLabel: specs?.gearingLabel ?? specs?.gearing_label ?? vehicle.gearing_label ?? null,
+    gearingConfidence:
+      positiveNumber(specs?.gearingConfidence)
+      ?? positiveNumber(specs?.gearing_confidence)
+      ?? positiveNumber(vehicle.gearing_confidence),
+    gearingConfirmed: Boolean(specs?.gearingConfirmed ?? specs?.gearing_confirmed ?? vehicle.gearing_confirmed ?? false),
     resourceProfile,
     drivetrain: specs?.drivetrain ?? null,
     engine: specs?.engine ?? null,

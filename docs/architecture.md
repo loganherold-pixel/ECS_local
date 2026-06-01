@@ -18,3 +18,21 @@ Trail segments must never be routed as vehicle-usable unless ECS classifies them
 ## Source Posture
 
 The initial authoritative source targets are USFS MVUM Roads, USFS MVUM Trails, and BLM GTLF public motorized roads and trails. OSM can supplement geometry or discovery workflows, but OSM alone does not establish legal vehicle access.
+
+The route catalog also treats official Forest Service alerts and current-condition pages as closure/conflict overlays. These sources can remove a matched route from public recommendation, but they do not prove that unmatched routes are open, passable, safe, or free of local hazards.
+
+BLM GTLF ingestion starts as official source-segment evidence only. GTLF segments remain out of public Suggested Routes until ECS route aggregation, current-condition checks, and review produce a curated route record.
+
+USGS National Digital Trails ingestion starts as supplemental geometry and trail-context evidence only. USGS Trails records can help fill map/review context, but they do not establish legal motorized access and must stay out of public Suggested Routes until authoritative access overlays and review pass.
+
+NPS Public Trails ingestion starts as official park visitor-use trail context. NPS trail-use geometry can support review inside park units, but it must stay out of public Suggested Routes until park-unit legal access, current alerts, closures, and ECS route curation pass.
+
+Michigan DNR ORV GPX ingestion starts as official state-agency route/trail geometry for curation. Michigan ORV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.
+
+Minnesota DNR OHV ingestion starts as official state-agency GeoPackage route/trail geometry for curation. Minnesota OHV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass; the source metadata also says the dataset is a reference layer and not for navigation.
+
+Oregon Department of Forestry OHV GPX ingestion starts with the official Tillamook State Forest Class I, Class II/IV, and Class III GPX files as state-agency curation inputs. Oregon ODF records remain out of public Suggested Routes until current ODF open/closed status, fire restrictions, vehicle class signage, permits, local rules, seasonal conditions, and ECS route curation pass.
+
+BDR and other partner/licensed GPX sources are restricted by default. Keep those source rows disabled, and do not ingest, sync, rehost, or recommend their route geometry unless written partner permission or licensing is documented.
+
+California State Parks Roads and Trails data is treated as partner-restricted metadata only because the published GIS page says commercial use requires advance approval. Keep the source disabled. Do not ingest, sync, rehost, or recommend California State Parks route geometry until ECS has documented commercial approval.

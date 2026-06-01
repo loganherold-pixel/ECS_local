@@ -1,6 +1,7 @@
 import type { FuelType } from '../vehicleSpecStore';
 
 export type FleetOemSpecSource = 'ecs_oem_reference' | 'ecs_model_estimate';
+export type FleetOemMatchLevel = 'model' | 'trim' | 'configuration';
 
 export type FleetOemVehicleSpec = {
   base_weight_lb: number;
@@ -27,6 +28,15 @@ export type FleetOemVehicleSpecReference = {
   make: string;
   model: string;
   trim?: string | null;
+  matchLevel?: FleetOemMatchLevel;
+  engine?: string | null;
+  drivetrain?: string | null;
+  cab?: string | null;
+  bed?: string | null;
+  axleRatio?: string | null;
+  gearingLabel?: string | null;
+  gearingConfidence?: number | null;
+  gearingRequiresConfirmation?: boolean | null;
   vehicleType: string;
   yearStart: number;
   yearEnd?: number | null;
@@ -47,6 +57,11 @@ export type FleetOemSpecMatch =
       reference: null;
       message: string;
     };
+
+export type FleetOemSpecSuggestionCandidate = FleetOemVehicleSpecReference & {
+  matchLevel: FleetOemMatchLevel;
+  detail: string;
+};
 
 function normalizeVehicleText(value: string | number | null | undefined): string {
   return String(value ?? '')
@@ -77,6 +92,88 @@ function yearInRange(year: number | null, reference: FleetOemVehicleSpecReferenc
   if (year < reference.yearStart) return false;
   if (reference.yearEnd != null && year > reference.yearEnd) return false;
   return true;
+}
+
+function getReferenceMatchLevel(reference: FleetOemVehicleSpecReference): FleetOemMatchLevel {
+  if (reference.matchLevel) return reference.matchLevel;
+  return reference.trim ? 'trim' : 'model';
+}
+
+function titleCaseVehicleText(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => {
+      const upper = part.toUpperCase();
+      if (/^(TRD|SR5|4X4|AWD|FWD|RWD|HD|PRO|MAX|V6|V8)$/.test(upper)) return upper;
+      if (/^F-\d/i.test(part)) return upper.replace(/^F(\d)/, 'F-$1');
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
+function normalizedValueMatches(inputValue: string, referenceValue: string | null | undefined): boolean {
+  const reference = normalizeVehicleText(referenceValue);
+  if (!reference) return true;
+  if (!inputValue) return false;
+  return inputValue === reference || inputValue.includes(reference) || reference.includes(inputValue);
+}
+
+function referenceModelPartiallyMatches(inputModel: string, reference: FleetOemVehicleSpecReference, search: string): boolean {
+  const referenceModel = normalizeVehicleText(reference.model);
+  if (!inputModel) return false;
+  if (modelMatches(inputModel, referenceModel, search)) return true;
+  return referenceModel.startsWith(inputModel) || referenceModel.includes(inputModel);
+}
+
+function referenceSpecificityMatchesInput(
+  reference: FleetOemVehicleSpecReference,
+  input: {
+    trim?: string | null;
+    engine?: string | null;
+    drivetrain?: string | null;
+    cab?: string | null;
+    bed?: string | null;
+  },
+): boolean {
+  const matchLevel = getReferenceMatchLevel(reference);
+  if (matchLevel === 'model') return true;
+
+  const trim = normalizeVehicleText(input.trim);
+  if (reference.trim && !normalizedValueMatches(trim, reference.trim)) return false;
+
+  if (matchLevel !== 'configuration') return true;
+
+  const referenceConfigFields = [
+    ['engine', reference.engine],
+    ['drivetrain', reference.drivetrain],
+    ['cab', reference.cab],
+    ['bed', reference.bed],
+  ] as const;
+
+  const hasReferenceConfig = referenceConfigFields.some(([, value]) => Boolean(normalizeVehicleText(value)));
+  if (!hasReferenceConfig) return true;
+
+  return referenceConfigFields.every(([key, value]) => {
+    const normalizedReference = normalizeVehicleText(value);
+    if (!normalizedReference) return true;
+    const inputValue = normalizeVehicleText(input[key]);
+    return normalizedValueMatches(inputValue, normalizedReference);
+  });
+}
+
+function buildCandidateDetail(reference: FleetOemVehicleSpecReference): string {
+  const matchLevel = getReferenceMatchLevel(reference);
+  const parts = [
+    matchLevel === 'configuration' ? 'Configuration match' : matchLevel === 'trim' ? 'Trim match' : 'Model match',
+    reference.engine,
+    reference.drivetrain,
+    reference.cab,
+    reference.bed,
+  ].filter(Boolean);
+  return `${parts.join(' | ')}. ${reference.confidence}% catalog confidence; verify placard and package details.`;
 }
 
 const currentModelYear = new Date().getFullYear() + 1;
@@ -162,6 +259,44 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'toyota-tacoma-trd-pro-double-cab-4x4-2024-reference',
+    label: 'Toyota Tacoma TRD Pro Double Cab 4x4 OEM reference',
+    make: 'toyota',
+    model: 'tacoma',
+    trim: 'TRD Pro',
+    matchLevel: 'configuration',
+    engine: 'i-FORCE MAX hybrid turbo',
+    drivetrain: '4x4',
+    cab: 'Double Cab',
+    bed: 'Short Bed',
+    gearingLabel: '4x4 transfer case high/low reference: 1.00:1 / 2.57:1',
+    gearingConfidence: 88,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2024,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 92,
+    notes: 'Tacoma TRD Pro Double Cab 4x4 trim/configuration reference. Verify options, tire package, door placard payload, and gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 5100,
+      gvwr_lb: 6780,
+      payload_capacity_lb: 1680,
+      fuel_tank_capacity_gal: 18.2,
+      fuel_type: 'gas',
+      ground_clearance_inches: 11.5,
+      wheelbase_in: 131.9,
+      overall_length_in: 214.2,
+      overall_width_in: 80.1,
+      overall_height_in: 75.8,
+      track_width_front_in: 68.8,
+      track_width_rear_in: 68.8,
+      approach_angle_deg: 35.7,
+      departure_angle_deg: 22.6,
+      turning_diameter_ft: 46.6,
+    },
+  },
+  {
     id: 'toyota-4runner-2010-reference',
     label: 'Toyota 4Runner OEM reference',
     make: 'toyota',
@@ -182,6 +317,41 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       wheelbase_in: 109.8,
       overall_width_in: 75.8,
       overall_height_in: 71.5,
+      turning_diameter_ft: 37.4,
+    },
+  },
+  {
+    id: 'toyota-4runner-trd-off-road-4wd-2014-reference',
+    label: 'Toyota 4Runner TRD Off-Road 4WD OEM reference',
+    make: 'toyota',
+    model: '4runner',
+    trim: 'TRD Off-Road',
+    matchLevel: 'configuration',
+    engine: '4.0L V6',
+    drivetrain: '4WD',
+    axleRatio: '3.727 probable axle ratio',
+    gearingLabel: 'Part-time 4WD transfer case with low range; confirm axle/package on placard or VIN build sheet.',
+    gearingConfidence: 82,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'suv',
+    yearStart: 2014,
+    yearEnd: 2024,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: '4Runner TRD Off-Road 4WD seed reference. Verify options, tire package, third-row deletion, door placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4750,
+      gvwr_lb: 6300,
+      payload_capacity_lb: 1550,
+      fuel_tank_capacity_gal: 23.0,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.6,
+      wheelbase_in: 109.8,
+      overall_length_in: 191.3,
+      overall_width_in: 75.8,
+      overall_height_in: 71.5,
+      approach_angle_deg: 33.0,
+      departure_angle_deg: 26.0,
       turning_diameter_ft: 37.4,
     },
   },
@@ -234,6 +404,40 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'ram-2500-cummins-crew-4x4-short-bed-2019-reference',
+    label: 'RAM 2500 Cummins Crew Cab 4x4 Short Bed OEM reference',
+    make: 'ram',
+    model: '2500',
+    trim: null,
+    matchLevel: 'configuration',
+    engine: 'Cummins',
+    drivetrain: '4x4',
+    cab: 'Crew Cab',
+    bed: 'Short Bed',
+    axleRatio: '3.73 probable axle ratio',
+    gearingLabel: 'Cummins 4x4 short-bed HD truck probable axle/gearing reference',
+    gearingConfidence: 76,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2019,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'RAM 2500 Cummins crew 4x4 short-bed configuration reference. Heavy-duty axle ratio and payload depend on option package; confirm door placard and axle tag.',
+    specs: {
+      base_weight_lb: 7742,
+      gvwr_lb: 10190,
+      payload_capacity_lb: 2448,
+      fuel_tank_capacity_gal: 32.0,
+      fuel_type: 'diesel',
+      ground_clearance_inches: 8.5,
+      wheelbase_in: 149.0,
+      overall_width_in: 79.4,
+      overall_height_in: 80.2,
+      turning_diameter_ft: 49.2,
+    },
+  },
+  {
     id: 'jeep-wrangler-2018-reference',
     label: 'Jeep Wrangler OEM reference',
     make: 'jeep',
@@ -258,6 +462,43 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       breakover_angle_deg: 22.6,
       departure_angle_deg: 37.0,
       turning_diameter_ft: 40.8,
+    },
+  },
+  {
+    id: 'jeep-wrangler-rubicon-unlimited-4x4-2018-reference',
+    label: 'Jeep Wrangler Rubicon Unlimited 4x4 OEM reference',
+    make: 'jeep',
+    model: 'wrangler',
+    trim: 'Rubicon',
+    matchLevel: 'configuration',
+    engine: '3.6L V6',
+    drivetrain: '4x4',
+    cab: 'Unlimited',
+    axleRatio: '4.10 probable axle ratio',
+    gearingLabel: 'Rock-Trac 4x4 low-range reference with probable Rubicon axle ratio; confirm engine, axle, and tire package.',
+    gearingConfidence: 82,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'suv',
+    yearStart: 2018,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Wrangler Rubicon Unlimited 4x4 seed reference. Verify engine, hardtop/soft-top, tire package, 4xe/392 exclusion, payload placard, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4449,
+      gvwr_lb: 5800,
+      payload_capacity_lb: 1350,
+      fuel_tank_capacity_gal: 21.5,
+      fuel_type: 'gas',
+      ground_clearance_inches: 10.8,
+      wheelbase_in: 118.4,
+      overall_length_in: 188.4,
+      overall_width_in: 73.9,
+      overall_height_in: 73.6,
+      approach_angle_deg: 43.9,
+      breakover_angle_deg: 22.6,
+      departure_angle_deg: 37.0,
+      turning_diameter_ft: 38.8,
     },
   },
   {
@@ -340,7 +581,10 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     label: 'Honda Passport TrailSport OEM reference',
     make: 'honda',
     model: 'passport',
-    trim: 'trailsport',
+    trim: 'TrailSport',
+    matchLevel: 'trim',
+    engine: 'Gas V6',
+    drivetrain: 'AWD',
     vehicleType: 'suv',
     yearStart: 2022,
     yearEnd: currentModelYear,
@@ -386,6 +630,44 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'subaru-outback-wilderness-2022-reference',
+    label: 'Subaru Outback Wilderness AWD OEM reference',
+    make: 'subaru',
+    model: 'outback',
+    trim: 'Wilderness',
+    matchLevel: 'configuration',
+    engine: '2.4L turbo flat-4',
+    drivetrain: 'AWD',
+    axleRatio: '4.44 final drive reference',
+    gearingLabel: 'CVT with Wilderness final-drive calibration; confirm model year and tire package.',
+    gearingConfidence: 78,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'wagon',
+    yearStart: 2022,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Outback Wilderness AWD seed reference. Verify model year, tire package, roof load assumptions, placard payload, and drivetrain calibration before final readiness decisions.',
+    specs: {
+      base_weight_lb: 3934,
+      gvwr_lb: 5026,
+      payload_capacity_lb: 1092,
+      fuel_tank_capacity_gal: 18.5,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.5,
+      wheelbase_in: 108.1,
+      overall_length_in: 191.3,
+      overall_width_in: 74.6,
+      overall_height_in: 66.9,
+      track_width_front_in: 62.0,
+      track_width_rear_in: 63.0,
+      approach_angle_deg: 20.0,
+      breakover_angle_deg: 21.2,
+      departure_angle_deg: 23.6,
+      turning_diameter_ft: 36.1,
+    },
+  },
+  {
     id: 'ford-transit-awd-2020-reference',
     label: 'Ford Transit AWD OEM reference',
     make: 'ford',
@@ -406,6 +688,41 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       wheelbase_in: 148.0,
       overall_width_in: 81.3,
       overall_height_in: 100.8,
+      turning_diameter_ft: 48.0,
+    },
+  },
+  {
+    id: 'ford-transit-awd-148-high-roof-2020-reference',
+    label: 'Ford Transit 148 High Roof AWD OEM reference',
+    make: 'ford',
+    model: 'transit',
+    trim: 'High Roof',
+    matchLevel: 'configuration',
+    engine: '3.5L V6',
+    drivetrain: 'AWD',
+    cab: 'Cargo Van',
+    bed: '148 in wheelbase high roof',
+    axleRatio: '3.73 probable axle ratio',
+    gearingLabel: 'Transit AWD high-roof probable axle package; confirm axle code and GVWR on door placard.',
+    gearingConfidence: 72,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'van',
+    yearStart: 2020,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Transit 148 high-roof AWD seed reference. Van GVWR, roof height, cargo/passenger body, axle, and conversion weight vary materially; verify placard and scale weight before final readiness decisions.',
+    specs: {
+      base_weight_lb: 6300,
+      gvwr_lb: 9500,
+      payload_capacity_lb: 3200,
+      fuel_tank_capacity_gal: 25.0,
+      fuel_type: 'gas',
+      ground_clearance_inches: 6.0,
+      wheelbase_in: 148.0,
+      overall_length_in: 235.5,
+      overall_width_in: 81.3,
+      overall_height_in: 109.6,
       turning_diameter_ft: 48.0,
     },
   },
@@ -434,6 +751,41 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'mercedes-sprinter-2500-awd-144-high-roof-2023-reference',
+    label: 'Mercedes Sprinter 2500 AWD 144 High Roof OEM reference',
+    make: 'mercedes',
+    model: 'sprinter',
+    trim: '2500 High Roof',
+    matchLevel: 'configuration',
+    engine: 'High-output diesel I4',
+    drivetrain: 'AWD',
+    cab: 'Cargo Van',
+    bed: '144 in wheelbase high roof',
+    axleRatio: '3.923 probable axle ratio',
+    gearingLabel: 'Sprinter AWD high-roof probable axle/gearing package; confirm VIN build sheet and placard.',
+    gearingConfidence: 72,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'van',
+    yearStart: 2023,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Sprinter 2500 AWD 144 high-roof seed reference. Roof height, passenger/cargo body, axle package, GVWR, and conversion weight vary materially; verify placard and scale weight.',
+    specs: {
+      base_weight_lb: 5225,
+      gvwr_lb: 9050,
+      payload_capacity_lb: 3825,
+      fuel_tank_capacity_gal: 24.5,
+      fuel_type: 'diesel',
+      ground_clearance_inches: 6.9,
+      wheelbase_in: 144.0,
+      overall_length_in: 233.5,
+      overall_width_in: 80.0,
+      overall_height_in: 107.5,
+      turning_diameter_ft: 40.7,
+    },
+  },
+  {
     id: 'toyota-rav4-2019-reference',
     label: 'Toyota RAV4 OEM reference',
     make: 'toyota',
@@ -452,6 +804,35 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       fuel_type: 'gas',
       ground_clearance_inches: 8.6,
       wheelbase_in: 105.9,
+      overall_width_in: 73.0,
+      overall_height_in: 68.6,
+      turning_diameter_ft: 36.1,
+    },
+  },
+  {
+    id: 'toyota-rav4-trd-off-road-awd-2020-reference',
+    label: 'Toyota RAV4 TRD Off-Road AWD OEM reference',
+    make: 'toyota',
+    model: 'rav4',
+    trim: 'TRD Off-Road',
+    matchLevel: 'trim',
+    engine: '2.5L I4',
+    drivetrain: 'AWD',
+    vehicleType: 'crossover',
+    yearStart: 2020,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'RAV4 TRD Off-Road AWD trim seed reference. Verify hybrid/non-hybrid, tire package, roof load assumptions, and placard payload before final readiness decisions.',
+    specs: {
+      base_weight_lb: 3655,
+      gvwr_lb: 4610,
+      payload_capacity_lb: 955,
+      fuel_tank_capacity_gal: 14.5,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.6,
+      wheelbase_in: 105.9,
+      overall_length_in: 181.5,
       overall_width_in: 73.0,
       overall_height_in: 68.6,
       turning_diameter_ft: 36.1,
@@ -505,6 +886,45 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       overall_width_in: 80.2,
       overall_height_in: 78.0,
       turning_diameter_ft: 48.6,
+    },
+  },
+  {
+    id: 'toyota-tundra-trd-pro-crewmax-4x4-2022-reference',
+    label: 'Toyota Tundra TRD Pro CrewMax 4x4 OEM reference',
+    make: 'toyota',
+    model: 'tundra',
+    trim: 'TRD Pro',
+    matchLevel: 'configuration',
+    engine: 'i-FORCE MAX hybrid twin-turbo V6',
+    drivetrain: '4x4',
+    cab: 'CrewMax',
+    bed: 'Short Bed',
+    axleRatio: '3.31 probable axle ratio',
+    gearingLabel: 'Tundra TRD Pro hybrid 4x4 probable axle package; confirm axle code, tow package, and placard.',
+    gearingConfidence: 76,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2022,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Tundra TRD Pro CrewMax 4x4 seed reference. Verify hybrid equipment, bed, tire package, door placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 6015,
+      gvwr_lb: 7660,
+      payload_capacity_lb: 1645,
+      fuel_tank_capacity_gal: 32.2,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.0,
+      wheelbase_in: 145.7,
+      overall_length_in: 233.6,
+      overall_width_in: 80.2,
+      overall_height_in: 78.0,
+      track_width_front_in: 68.6,
+      track_width_rear_in: 68.4,
+      approach_angle_deg: 26.2,
+      departure_angle_deg: 24.2,
+      turning_diameter_ft: 49.8,
     },
   },
   {
@@ -633,6 +1053,41 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'lexus-gx-460-4wd-2010-reference',
+    label: 'Lexus GX 460 4WD OEM reference',
+    make: 'lexus',
+    model: 'gx',
+    trim: '460',
+    matchLevel: 'configuration',
+    engine: '4.6L V8',
+    drivetrain: '4WD',
+    axleRatio: '3.909 axle ratio reference',
+    gearingLabel: 'Full-time 4WD GX 460 axle/gearing reference; confirm trim, KDSS, and VIN build sheet.',
+    gearingConfidence: 84,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'suv',
+    yearStart: 2010,
+    yearEnd: 2023,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'GX 460 4WD seed reference. Verify trim, third-row equipment, tire package, payload placard, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 5192,
+      gvwr_lb: 6600,
+      payload_capacity_lb: 1295,
+      fuel_tank_capacity_gal: 23.0,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.1,
+      wheelbase_in: 109.8,
+      overall_length_in: 192.1,
+      overall_width_in: 74.2,
+      overall_height_in: 74.2,
+      approach_angle_deg: 21.0,
+      departure_angle_deg: 23.0,
+      turning_diameter_ft: 41.1,
+    },
+  },
+  {
     id: 'lexus-lx-2010-reference',
     label: 'Lexus LX 2010-2021 OEM reference',
     make: 'lexus',
@@ -708,6 +1163,41 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'ford-ranger-lariat-supercrew-4x4-2024-reference',
+    label: 'Ford Ranger Lariat SuperCrew 4x4 OEM reference',
+    make: 'ford',
+    model: 'ranger',
+    trim: 'Lariat',
+    matchLevel: 'configuration',
+    engine: '2.3L EcoBoost turbo',
+    drivetrain: '4x4',
+    cab: 'SuperCrew',
+    bed: 'Short Bed',
+    axleRatio: '3.73 probable axle ratio',
+    gearingLabel: 'Ranger SuperCrew 4x4 probable axle package; confirm axle code, FX4/Tremor package, and placard.',
+    gearingConfidence: 76,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2024,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Ranger Lariat SuperCrew 4x4 seed reference. Verify engine, FX4/Tremor equipment, bed, tire package, door placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4415,
+      gvwr_lb: 6050,
+      payload_capacity_lb: 1635,
+      fuel_tank_capacity_gal: 18.0,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.3,
+      wheelbase_in: 128.7,
+      overall_length_in: 210.6,
+      overall_width_in: 75.5,
+      overall_height_in: 74.4,
+      turning_diameter_ft: 42.0,
+    },
+  },
+  {
     id: 'ford-expedition-2018-reference',
     label: 'Ford Expedition 2018+ OEM reference',
     make: 'ford',
@@ -754,6 +1244,79 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       wheelbase_in: 105.1,
       overall_width_in: 74.3,
       overall_height_in: 70.2,
+      turning_diameter_ft: 37.4,
+    },
+  },
+  {
+    id: 'ford-bronco-badlands-4door-4x4-2021-reference',
+    label: 'Ford Bronco Badlands 4-door 4x4 OEM reference',
+    make: 'ford',
+    model: 'bronco',
+    trim: 'Badlands',
+    matchLevel: 'configuration',
+    engine: '2.3L EcoBoost turbo',
+    drivetrain: '4x4',
+    cab: '4-door',
+    axleRatio: '4.46 probable axle ratio',
+    gearingLabel: 'Bronco Badlands 4x4 low-range and probable axle package; confirm engine, Sasquatch, and axle code.',
+    gearingConfidence: 78,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'suv',
+    yearStart: 2021,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Bronco Badlands 4-door 4x4 seed reference. Verify Sasquatch package, engine, tire package, roof/door equipment, placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4880,
+      gvwr_lb: 6180,
+      payload_capacity_lb: 1300,
+      fuel_tank_capacity_gal: 20.8,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.4,
+      wheelbase_in: 116.1,
+      overall_length_in: 189.4,
+      overall_width_in: 75.9,
+      overall_height_in: 73.8,
+      approach_angle_deg: 40.1,
+      breakover_angle_deg: 20.5,
+      departure_angle_deg: 37.2,
+      turning_diameter_ft: 40.0,
+    },
+  },
+  {
+    id: 'ford-bronco-sport-badlands-4x4-2021-reference',
+    label: 'Ford Bronco Sport Badlands 4x4 OEM reference',
+    make: 'ford',
+    model: 'bronco sport',
+    trim: 'Badlands',
+    matchLevel: 'configuration',
+    engine: '2.0L EcoBoost turbo',
+    drivetrain: '4x4',
+    axleRatio: '3.80 probable final drive',
+    gearingLabel: 'Bronco Sport Badlands AWD/4x4 final-drive reference; confirm package and tire size.',
+    gearingConfidence: 72,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'crossover',
+    yearStart: 2021,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Bronco Sport Badlands 4x4 seed reference. Verify tire package, roof load assumptions, placard payload, and drivetrain package before final readiness decisions.',
+    specs: {
+      base_weight_lb: 3707,
+      gvwr_lb: 4630,
+      payload_capacity_lb: 923,
+      fuel_tank_capacity_gal: 16.0,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.8,
+      wheelbase_in: 105.1,
+      overall_length_in: 172.7,
+      overall_width_in: 74.3,
+      overall_height_in: 70.2,
+      approach_angle_deg: 30.4,
+      breakover_angle_deg: 20.4,
+      departure_angle_deg: 33.1,
       turning_diameter_ft: 37.4,
     },
   },
@@ -929,6 +1492,46 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       wheelbase_in: 131.4,
       overall_width_in: 74.9,
       overall_height_in: 79.8,
+      turning_diameter_ft: 42.3,
+    },
+  },
+  {
+    id: 'chevrolet-colorado-zr2-crew-4wd-2023-reference',
+    label: 'Chevrolet Colorado ZR2 Crew Cab 4WD OEM reference',
+    make: 'chevrolet',
+    model: 'colorado',
+    trim: 'ZR2',
+    matchLevel: 'configuration',
+    engine: '2.7L TurboMax I4',
+    drivetrain: '4WD',
+    cab: 'Crew Cab',
+    bed: 'Short Bed',
+    axleRatio: '3.42 axle ratio reference',
+    gearingLabel: 'Colorado ZR2 4WD axle/gearing reference; confirm Bison package, tire package, and placard.',
+    gearingConfidence: 78,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2023,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Colorado ZR2 Crew Cab 4WD seed reference. Verify ZR2/Bison package, tire package, door placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4827,
+      gvwr_lb: 6250,
+      payload_capacity_lb: 1423,
+      fuel_tank_capacity_gal: 21.4,
+      fuel_type: 'gas',
+      ground_clearance_inches: 10.7,
+      wheelbase_in: 131.4,
+      overall_length_in: 213.2,
+      overall_width_in: 78.1,
+      overall_height_in: 81.8,
+      track_width_front_in: 66.3,
+      track_width_rear_in: 66.3,
+      approach_angle_deg: 38.3,
+      breakover_angle_deg: 24.6,
+      departure_angle_deg: 25.1,
       turning_diameter_ft: 42.3,
     },
   },
@@ -1183,6 +1786,45 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'nissan-frontier-pro-4x-crew-4wd-2022-reference',
+    label: 'Nissan Frontier PRO-4X Crew Cab 4WD OEM reference',
+    make: 'nissan',
+    model: 'frontier',
+    trim: 'PRO-4X',
+    matchLevel: 'configuration',
+    engine: '3.8L V6',
+    drivetrain: '4x4',
+    cab: 'Crew Cab',
+    bed: 'Short Bed',
+    axleRatio: '3.692 probable axle ratio',
+    gearingLabel: 'Frontier PRO-4X 4x4 probable axle/gearing reference; confirm axle code and tire package.',
+    gearingConfidence: 78,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'truck',
+    yearStart: 2022,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Frontier PRO-4X Crew Cab 4WD seed reference. Verify model year, tire package, door placard payload, and axle/gearing before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4728,
+      gvwr_lb: 6012,
+      payload_capacity_lb: 1284,
+      fuel_tank_capacity_gal: 21.1,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.9,
+      wheelbase_in: 126.0,
+      overall_length_in: 210.2,
+      overall_width_in: 74.7,
+      overall_height_in: 72.9,
+      track_width_front_in: 62.6,
+      track_width_rear_in: 62.6,
+      approach_angle_deg: 32.3,
+      departure_angle_deg: 23.0,
+      turning_diameter_ft: 42.4,
+    },
+  },
+  {
     id: 'nissan-xterra-2010-reference',
     label: 'Nissan Xterra 2010-2015 OEM reference',
     make: 'nissan',
@@ -1308,6 +1950,43 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'honda-pilot-trailsport-awd-2023-reference',
+    label: 'Honda Pilot TrailSport AWD OEM reference',
+    make: 'honda',
+    model: 'pilot',
+    trim: 'TrailSport',
+    matchLevel: 'configuration',
+    engine: '3.5L V6',
+    drivetrain: 'AWD',
+    axleRatio: 'i-VTM4 AWD reference',
+    gearingLabel: 'Honda i-VTM4 AWD TrailSport drivetrain reference; confirm trim and tire package.',
+    gearingConfidence: 74,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'suv',
+    yearStart: 2023,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 90,
+    notes: 'Pilot TrailSport AWD seed reference. Verify model year, tire package, seating configuration, door placard payload, and drivetrain package before final readiness decisions.',
+    specs: {
+      base_weight_lb: 4685,
+      gvwr_lb: 6195,
+      payload_capacity_lb: 1510,
+      fuel_tank_capacity_gal: 18.5,
+      fuel_type: 'gas',
+      ground_clearance_inches: 8.3,
+      wheelbase_in: 113.8,
+      overall_length_in: 200.2,
+      overall_width_in: 78.5,
+      overall_height_in: 72.0,
+      track_width_front_in: 67.2,
+      track_width_rear_in: 67.4,
+      approach_angle_deg: 19.8,
+      departure_angle_deg: 19.0,
+      turning_diameter_ft: 37.7,
+    },
+  },
+  {
     id: 'subaru-forester-2019-reference',
     label: 'Subaru Forester 2019+ OEM reference',
     make: 'subaru',
@@ -1333,6 +2012,44 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
     },
   },
   {
+    id: 'subaru-forester-wilderness-awd-2022-reference',
+    label: 'Subaru Forester Wilderness AWD OEM reference',
+    make: 'subaru',
+    model: 'forester',
+    trim: 'Wilderness',
+    matchLevel: 'configuration',
+    engine: '2.5L flat-4',
+    drivetrain: 'AWD',
+    axleRatio: '4.11 probable final drive',
+    gearingLabel: 'Forester Wilderness AWD final-drive reference; confirm model year and tire package.',
+    gearingConfidence: 74,
+    gearingRequiresConfirmation: true,
+    vehicleType: 'crossover',
+    yearStart: 2022,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Forester Wilderness AWD seed reference. Verify model year, roof load assumptions, tire package, placard payload, and drivetrain calibration before final readiness decisions.',
+    specs: {
+      base_weight_lb: 3620,
+      gvwr_lb: 4891,
+      payload_capacity_lb: 1271,
+      fuel_tank_capacity_gal: 16.6,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.2,
+      wheelbase_in: 105.1,
+      overall_length_in: 182.7,
+      overall_width_in: 72.2,
+      overall_height_in: 68.9,
+      track_width_front_in: 61.6,
+      track_width_rear_in: 61.8,
+      approach_angle_deg: 23.5,
+      breakover_angle_deg: 21.0,
+      departure_angle_deg: 25.4,
+      turning_diameter_ft: 35.4,
+    },
+  },
+  {
     id: 'subaru-crosstrek-2018-reference',
     label: 'Subaru Crosstrek 2018+ OEM reference',
     make: 'subaru',
@@ -1353,6 +2070,35 @@ export const FLEET_OEM_SPEC_REFERENCES: readonly FleetOemVehicleSpecReference[] 
       ground_clearance_inches: 8.7,
       wheelbase_in: 104.9,
       overall_width_in: 71.0,
+      overall_height_in: 63.6,
+      turning_diameter_ft: 35.4,
+    },
+  },
+  {
+    id: 'subaru-crosstrek-wilderness-awd-2024-reference',
+    label: 'Subaru Crosstrek Wilderness AWD OEM reference',
+    make: 'subaru',
+    model: 'crosstrek',
+    trim: 'Wilderness',
+    matchLevel: 'trim',
+    engine: '2.5L flat-4',
+    drivetrain: 'AWD',
+    vehicleType: 'crossover',
+    yearStart: 2024,
+    yearEnd: currentModelYear,
+    source: 'ecs_oem_reference',
+    confidence: 88,
+    notes: 'Crosstrek Wilderness AWD trim seed reference. Verify tire package, roof load assumptions, placard payload, and drivetrain calibration before final readiness decisions.',
+    specs: {
+      base_weight_lb: 3369,
+      gvwr_lb: 4850,
+      payload_capacity_lb: 1100,
+      fuel_tank_capacity_gal: 16.6,
+      fuel_type: 'gas',
+      ground_clearance_inches: 9.3,
+      wheelbase_in: 104.9,
+      overall_length_in: 176.4,
+      overall_width_in: 71.7,
       overall_height_in: 63.6,
       turning_diameter_ft: 35.4,
     },
@@ -1505,15 +2251,84 @@ export function getFleetOemSpecReferenceCatalogStats(): {
   vehicleTypes: string[];
   earliestYearStart: number;
   latestYearEnd: number;
+  matchLevelCounts: Record<FleetOemMatchLevel, number>;
 } {
   const years = FLEET_OEM_SPEC_REFERENCES.flatMap((reference) => [reference.yearStart, reference.yearEnd ?? currentModelYear]);
+  const matchLevelCounts = FLEET_OEM_SPEC_REFERENCES.reduce<Record<FleetOemMatchLevel, number>>(
+    (counts, reference) => {
+      counts[getReferenceMatchLevel(reference)] += 1;
+      return counts;
+    },
+    { model: 0, trim: 0, configuration: 0 },
+  );
   return {
     referenceCount: FLEET_OEM_SPEC_REFERENCES.length,
     makeCount: new Set(FLEET_OEM_SPEC_REFERENCES.map((reference) => normalizeVehicleText(reference.make))).size,
     vehicleTypes: Array.from(new Set(FLEET_OEM_SPEC_REFERENCES.map((reference) => normalizeVehicleText(reference.vehicleType)))).sort(),
     earliestYearStart: Math.min(...years),
     latestYearEnd: Math.max(...years),
+    matchLevelCounts,
   };
+}
+
+export function resolveFleetOemSpecSuggestionCandidates(input: {
+  year?: number | null;
+  make?: string | null;
+  model?: string | null;
+  trim?: string | null;
+  engine?: string | null;
+  drivetrain?: string | null;
+  cab?: string | null;
+  bed?: string | null;
+  vehicleType?: string | null;
+  limit?: number | null;
+}): FleetOemSpecSuggestionCandidate[] {
+  const make = normalizeVehicleText(input.make);
+  const model = normalizeVehicleText(input.model);
+  const trim = normalizeVehicleText(input.trim);
+  const vehicleType = normalizeVehicleText(input.vehicleType);
+  const year = typeof input.year === 'number' && Number.isFinite(input.year) ? input.year : null;
+  const limit = Math.max(1, Math.min(8, Math.round(input.limit ?? 5)));
+  if (!make || !model) return [];
+
+  const search = normalizeVehicleText([
+    input.make,
+    input.model,
+    input.trim,
+    input.engine,
+    input.drivetrain,
+    input.cab,
+    input.bed,
+    input.vehicleType,
+  ].filter(Boolean).join(' '));
+  const indexedReferences = getReferenceIndexByMake().get(make) ?? FLEET_OEM_SPEC_REFERENCES;
+  const scored = indexedReferences
+    .filter((reference) => makeMatches(make, reference.make))
+    .filter((reference) => yearInRange(year, reference))
+    .filter((reference) => referenceModelPartiallyMatches(model, reference, search))
+    .map((reference) => {
+      const matchLevel = getReferenceMatchLevel(reference);
+      const referenceModel = normalizeVehicleText(reference.model);
+      let score = matchLevel === 'configuration' ? 50 : matchLevel === 'trim' ? 35 : 10;
+      if (model === referenceModel) score += 16;
+      else if (referenceModel.startsWith(model)) score += 12;
+      else if (referenceModel.includes(model)) score += 8;
+      if (reference.trim && trim && normalizedValueMatches(trim, reference.trim)) score += 10;
+      if (reference.vehicleType && vehicleType && vehicleType.includes(normalizeVehicleText(reference.vehicleType))) score += 3;
+      score += Math.round(reference.confidence / 10);
+      return {
+        reference,
+        matchLevel,
+        score,
+      };
+    })
+    .sort((a, b) => b.score - a.score || b.reference.confidence - a.reference.confidence);
+
+  return scored.slice(0, limit).map(({ reference, matchLevel }) => ({
+    ...reference,
+    matchLevel,
+    detail: buildCandidateDetail(reference),
+  }));
 }
 
 export function resolveFleetOemSpecReference(input: {
@@ -1521,6 +2336,10 @@ export function resolveFleetOemSpecReference(input: {
   make?: string | null;
   model?: string | null;
   trim?: string | null;
+  engine?: string | null;
+  drivetrain?: string | null;
+  cab?: string | null;
+  bed?: string | null;
   vehicleType?: string | null;
 }): FleetOemSpecMatch {
   const make = normalizeVehicleText(input.make);
@@ -1536,11 +2355,21 @@ export function resolveFleetOemSpecReference(input: {
     };
   }
 
-  const search = normalizeVehicleText([input.make, input.model, input.trim, input.vehicleType].filter(Boolean).join(' '));
+  const search = normalizeVehicleText([
+    input.make,
+    input.model,
+    input.trim,
+    input.engine,
+    input.drivetrain,
+    input.cab,
+    input.bed,
+    input.vehicleType,
+  ].filter(Boolean).join(' '));
   const indexedReferences = getReferenceIndexByMake().get(make) ?? FLEET_OEM_SPEC_REFERENCES;
   const candidates = indexedReferences
     .filter((reference) => makeMatches(make, reference.make))
-    .filter((reference) => modelMatches(model, reference.model, search));
+    .filter((reference) => modelMatches(model, reference.model, search))
+    .filter((reference) => referenceSpecificityMatchesInput(reference, input));
 
   if (candidates.length === 0) {
     return {
@@ -1564,11 +2393,16 @@ export function resolveFleetOemSpecReference(input: {
 
   const scored = inYear
     .map((reference) => {
-      let score = 10;
+      const matchLevel = getReferenceMatchLevel(reference);
+      let score = matchLevel === 'configuration' ? 30 : matchLevel === 'trim' ? 20 : 10;
       const referenceModel = normalizeVehicleText(reference.model);
       if (model === referenceModel) score += 12;
       else if (model.includes(referenceModel)) score += Math.min(8, referenceModel.length);
       if (reference.trim && trim && trim.includes(normalizeVehicleText(reference.trim))) score += 8;
+      if (reference.engine && normalizedValueMatches(normalizeVehicleText(input.engine), reference.engine)) score += 4;
+      if (reference.drivetrain && normalizedValueMatches(normalizeVehicleText(input.drivetrain), reference.drivetrain)) score += 4;
+      if (reference.cab && normalizedValueMatches(normalizeVehicleText(input.cab), reference.cab)) score += 4;
+      if (reference.bed && normalizedValueMatches(normalizeVehicleText(input.bed), reference.bed)) score += 4;
       if (reference.vehicleType && vehicleType && vehicleType.includes(normalizeVehicleText(reference.vehicleType))) score += 3;
       return { reference, score };
     })

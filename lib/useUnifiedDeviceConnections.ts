@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 import type { BluMultiDeviceCapability, BluProviderId } from './BluTypes';
 import { DEFAULT_BLU_CAPABILITIES } from './BluTypes';
 import { bluDeviceRegistry } from './BluDeviceRegistry';
@@ -60,6 +60,7 @@ import {
 } from './deviceConnectionSourceRouting';
 import {
   getDeviceConnectionRouteLabel,
+  getSavedAutoReconnectDecision,
   isUserInitiatedConnectionSource,
   shouldSkipAutoConnection,
   type DeviceConnectionRequestSource,
@@ -611,9 +612,6 @@ interface DeviceUiState {
 const CONNECT_RETRY_BASE_DELAY_MS = 450;
 const CONNECT_RETRY_MAX_DELAY_MS = 2_500;
 const CONNECT_RETRY_ATTEMPTS = 3;
-const OBD2_FALLBACK_CANDIDATE_LIMIT = 6;
-const OBD2_FALLBACK_CANDIDATE_MIN_RSSI = -82;
-const OBD2_STRONG_UNKNOWN_CANDIDATE_MIN_RSSI = -70;
 const DEFAULT_DISCOVERED_RSSI = -90;
 const UNIFIED_BLUETOOTH_SCAN_DURATION_MS = BLU_SCAN_WINDOW_MS;
 const POWER_DEVICE_ADVERTISEMENT_STALE_MS = SCANNER_DEVICE_STALE_TIMEOUT_MS;
@@ -1625,41 +1623,6 @@ function sortDevices(devices: ECSDeviceConnectionModel[]): ECSDeviceConnectionMo
   });
 }
 
-function isFallbackObd2CandidateName(name: string | null | undefined): boolean {
-  if (!name) return false;
-  const normalized = name.trim();
-  return /^(Unknown device|Bluetooth Device|BLE Device|OBD2 Adapter)( [A-Z0-9]{4})?$/i.test(normalized);
-}
-
-function isObviousBluetoothNoiseName(name: string | null | undefined): boolean {
-  if (!name) return false;
-  return /\b(tv|roku|airpods?|earbuds?|headphones?|speaker|keyboard|mouse|watch|remote|printer|thermostat|light|bulb|soundbar)\b/i.test(name);
-}
-
-function hasObd2FallbackEvidence(device: OBD2DiscoveredDevice): boolean {
-  const serviceCount = device.serviceUUIDs?.length ?? 0;
-  const hasManufacturerData = typeof device.manufacturerData === 'string' && device.manufacturerData.trim().length > 0;
-  const hasSpecificName = !isFallbackObd2CandidateName(device.name) && !isObviousBluetoothNoiseName(device.name);
-  return device.isLikelyOBD || serviceCount > 0 || hasManufacturerData || hasSpecificName;
-}
-
-function isObd2FallbackCandidate(device: OBD2DiscoveredDevice): boolean {
-  const rssi = typeof device.rssi === 'number' && Number.isFinite(device.rssi) ? device.rssi : null;
-  if (rssi != null && rssi < OBD2_FALLBACK_CANDIDATE_MIN_RSSI) return false;
-  if (hasObd2FallbackEvidence(device)) return true;
-  return rssi != null && rssi >= OBD2_STRONG_UNKNOWN_CANDIDATE_MIN_RSSI;
-}
-
-function getObd2FallbackCandidateName(device: OBD2DiscoveredDevice, index: number): string {
-  if (device.name && !isFallbackObd2CandidateName(device.name)) {
-    return device.name;
-  }
-  const suffix = device.id.trim().replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase();
-  return suffix
-    ? `OBD2 candidate ${suffix}`
-    : `OBD2 candidate ${index + 1}`;
-}
-
 async function ensureManagedPowerOwnership(
   providerId: BluProviderId,
   deviceId: string,
@@ -2088,6 +2051,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   const [scanBeganAt, setScanBeganAt] = useState<number | null>(null);
   const [scanDurationMs, setScanDurationMs] = useState(UNIFIED_BLUETOOTH_SCAN_DURATION_MS);
   const [scannerClock, setScannerClock] = useState(() => Date.now());
+  const [appState, setAppState] = useState<AppStateStatus>(() => AppState.currentState);
   const [sourceStatuses, setSourceStatuses] = useState<ECSDiscoverySourceSummary[]>(() => getInitialDiscoverySourceStatuses());
   const [registeredPowerDevices, setRegisteredPowerDevices] = useState(() => bluDeviceRegistry.getAll());
   const [rememberedAccessoryDevices, setRememberedAccessoryDevices] = useState(
@@ -2137,6 +2101,11 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       userDisconnectedDeviceIdsRef.current.delete(key);
       delete manualDisconnectRequestedRef.current[key];
     }
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', setAppState);
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
@@ -2359,30 +2328,18 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     [routedBluetoothDiscoveries],
   );
 
-  const telemetryFallbackCandidateDiscoveries = useMemo(() => {
-    if (routedTelemetryDiscoveries.length > 0) return [];
-
-    const nonTelemetryReleaseIds = new Set(
-      routedBluetoothDiscoveries
-        .filter((entry) => isReleaseScannerBluetoothRoute(entry.routing) && entry.routing.owner !== 'telemetry')
-        .map((entry) => entry.device.id),
-    );
-
-    return discoveredTelemetryDevices
-      .filter((device) => !nonTelemetryReleaseIds.has(device.id))
-      .filter(isObd2FallbackCandidate)
-      .sort((left, right) => (right.rssi ?? -100) - (left.rssi ?? -100))
-      .slice(0, OBD2_FALLBACK_CANDIDATE_LIMIT);
-  }, [discoveredTelemetryDevices, routedBluetoothDiscoveries, routedTelemetryDiscoveries.length]);
-
-  const telemetryFallbackCandidateIds = useMemo(
-    () => new Set(telemetryFallbackCandidateDiscoveries.map((device) => device.id)),
-    [telemetryFallbackCandidateDiscoveries],
+  const approvedDeviceOnlyHidden = useMemo(
+    () => routedBluetoothDiscoveries.filter((entry) => !isReleaseScannerBluetoothRoute(entry.routing)).length,
+    [routedBluetoothDiscoveries],
   );
+
+  const telemetryFallbackCandidateDiscoveries = useMemo<OBD2DiscoveredDevice[]>(() => {
+    return [];
+  }, []);
 
   const routedAccessoryDiscoveries = useMemo(
     () => routedBluetoothDiscoveries.filter((entry) => (
-      entry.routing.owner === 'sensor' || entry.routing.owner === 'generic'
+      isReleaseScannerBluetoothRoute(entry.routing) && entry.routing.owner === 'sensor'
     )),
     [routedBluetoothDiscoveries],
   );
@@ -2447,11 +2404,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     for (const { device } of routedTelemetryDiscoveries) {
       next.set(`telemetry:obd2:${device.id}`, device);
     }
-    for (const device of telemetryFallbackCandidateDiscoveries) {
-      next.set(`telemetry:obd2:${device.id}`, device);
-    }
     return next;
-  }, [routedTelemetryDiscoveries, telemetryFallbackCandidateDiscoveries]);
+  }, [routedTelemetryDiscoveries]);
 
   const telemetryRememberedByKey = useMemo(() => {
     const next = new Map<string, VehicleTelemetryDevice>();
@@ -3136,28 +3090,25 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       current,
       'obd2',
       obdIsScanning || isRefreshing ? 'scanning' : 'success',
-      routedTelemetryDiscoveries.length + telemetryFallbackCandidateDiscoveries.length,
+      routedTelemetryDiscoveries.length,
       routedTelemetryDiscoveries.length > 0
-        ? 'OBD2 telemetry adapters are visible in the device list.'
-        : telemetryFallbackCandidateDiscoveries.length > 0
-          ? 'OBD2 candidate devices are visible. Connect one to test the ELM327 telemetry handshake.'
+        ? 'Approved OBD2 telemetry adapters are visible in the device list.'
         : obdIsScanning || isRefreshing
           ? 'Checking for OBD2 telemetry adapters.'
-          : 'No OBD2 telemetry adapters were reported by this scan.',
+          : 'No approved OBD2 telemetry adapters were reported by this scan.',
       {
-        rawCount: routedTelemetryDiscoveries.length + telemetryFallbackCandidateDiscoveries.length,
-        normalizedCount: routedTelemetryDiscoveries.length + telemetryFallbackCandidateDiscoveries.length,
-        addedCount: routedTelemetryDiscoveries.length + telemetryFallbackCandidateDiscoveries.length,
+        rawCount: routedTelemetryDiscoveries.length,
+        normalizedCount: routedTelemetryDiscoveries.length,
+        addedCount: routedTelemetryDiscoveries.length,
       },
     ));
-  }, [bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, manualScanStatus, obdError, obdIsScanning, routedTelemetryDiscoveries.length, telemetryFallbackCandidateDiscoveries.length]);
+  }, [bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, manualScanStatus, obdError, obdIsScanning, routedTelemetryDiscoveries.length]);
 
   useEffect(() => {
     if (manualScanStatus === 'idle') return;
     if (
       routedPowerDiscoveries.length === 0 &&
       routedTelemetryDiscoveries.length === 0 &&
-      telemetryFallbackCandidateDiscoveries.length === 0 &&
       routedAccessoryDiscoveries.length === 0
     ) {
       return;
@@ -3168,7 +3119,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     routedAccessoryDiscoveries.length,
     routedPowerDiscoveries.length,
     routedTelemetryDiscoveries.length,
-    telemetryFallbackCandidateDiscoveries.length,
   ]);
 
   useEffect(() => {
@@ -3564,10 +3514,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       keys.add(`telemetry:obd2:${device.id}`);
     }
 
-    for (const device of telemetryFallbackCandidateDiscoveries) {
-      keys.add(`telemetry:obd2:${device.id}`);
-    }
-
     if (obdLastDevice?.id) {
       keys.add(`telemetry:obd2:${obdLastDevice.id}`);
     }
@@ -3580,7 +3526,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       const rawId = parts.slice(2).join(':');
       const rememberedDevice = telemetryRememberedByKey.get(key) ?? null;
       const discoveredDevice = telemetryDiscoveredByKey.get(`telemetry:obd2:${rawId}`) ?? null;
-      const isFallbackObd2Candidate = telemetryFallbackCandidateIds.has(rawId);
       const uiState = deviceUiStateById[key];
       const isSelected = selectedIds.includes(key);
       const isDisconnecting = uiState?.phase === 'disconnecting';
@@ -3646,9 +3591,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               : rememberedDevice && !discoveredDevice
                 ? 'Previously connected. Not currently live.'
                 : discoveredDevice
-                  ? isFallbackObd2Candidate
-                    ? 'Nearby BLE device may be an OBD2 adapter. Tap Connect to test the ELM327 handshake.'
-                    : 'Nearby OBD2 adapter ready to connect.'
+                  ? 'Nearby approved OBD2 adapter ready to connect.'
                   : 'Previously connected. Not currently live.';
       const telemetrySource = isLive ? 'ble_live' : isShowingLastKnown ? 'cache' : 'unavailable';
       const statusPillLabel = getStatusPillLabel({
@@ -3702,9 +3645,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         kind: 'telemetry',
         name:
           normalizeUiLabel(rememberedDevice?.device_name) ||
-          (discoveredDevice && isFallbackObd2Candidate
-            ? getObd2FallbackCandidateName(discoveredDevice, models.length)
-            : normalizeUiLabel(discoveredDevice?.name)) ||
+          normalizeUiLabel(discoveredDevice?.name) ||
           normalizeUiLabel(obdLastDevice?.name) ||
           'OBD2 Adapter',
         provider: getTelemetryProviderLabel(),
@@ -3715,10 +3656,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         status,
         section,
         supportLevel: 'telemetry',
-        supportLabel: isFallbackObd2Candidate ? 'OBD2 Candidate' : 'Telemetry',
-        supportNote: isFallbackObd2Candidate
-          ? 'This BLE advertisement was not branded, but it is close enough to test as an OBD2/ELM327 adapter. ECS will only mark it live after the vehicle telemetry handshake succeeds.'
-          : 'Vehicle telemetry connections currently support one active OBD2 adapter at a time.',
+        supportLabel: 'Telemetry',
+        supportNote: 'Vehicle telemetry connections currently support one active OBD2 adapter at a time.',
         stateLabel: getTelemetryStateLabel(status, !!isLive),
         detailLabel,
         actionKind,
@@ -3742,7 +3681,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         telemetryFields: vehicleTelemetryFields,
         isRemembered: !!rememberedDevice || obdLastDevice?.id === rawId,
         isSupported: true,
-        sourceBadges: discoveredDevice ? [isFallbackObd2Candidate ? 'BLE Candidate' : 'BLE'] : rememberedDevice ? ['Cached'] : [],
+        sourceBadges: discoveredDevice ? ['BLE'] : rememberedDevice ? ['Cached'] : [],
         lastError: hasError ? lastError : null,
         lastSeenAt,
         supportsPowerData: false,
@@ -3774,8 +3713,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     isShowingLastKnown,
     telemetryRememberedByKey,
     telemetryDiscoveredByKey,
-    telemetryFallbackCandidateDiscoveries,
-    telemetryFallbackCandidateIds,
     routedTelemetryDiscoveries,
   ]);
 
@@ -5348,18 +5285,20 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     powerProviderSummaries.some((provider) => provider.isScanning);
 
   useEffect(() => {
-    if (isBusy || isScanning) return;
-
     const now = Date.now();
     const candidate = devices.find((device) => {
-      if (device.kind !== 'power') return false;
-      if (!device.isRemembered || !device.isDiscoverable) return false;
-      if (device.isConnected || device.isConnecting) return false;
-      if (device.actionKind !== 'connect' && device.actionKind !== 'retry') return false;
-      if (hasManualDisconnectRequest(device)) return false;
-      if (isEcoFlowCloudAuthBlockedDevice(device)) return false;
       const previousAttemptAt = autoReconnectAttemptedAtRef.current.get(device.id) ?? 0;
-      return now - previousAttemptAt >= REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS;
+      return getSavedAutoReconnectDecision({
+        device,
+        appState,
+        isBusy,
+        isScanning,
+        hasManualDisconnectRequest: hasManualDisconnectRequest(device),
+        isCloudAuthBlocked: isEcoFlowCloudAuthBlockedDevice(device),
+        previousAttemptAt,
+        now,
+        cooldownMs: REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS,
+      }).allowed;
     });
 
     if (!candidate) return;
@@ -5373,7 +5312,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       cooldownMs: REMEMBERED_DEVICE_AUTO_RECONNECT_COOLDOWN_MS,
     });
     void connectDevice(candidate.id, 'saved_auto_reconnect');
-  }, [connectDevice, devices, hasManualDisconnectRequest, isBusy, isScanning]);
+  }, [appState, connectDevice, devices, hasManualDisconnectRequest, isBusy, isScanning]);
 
   useEffect(() => {
     if (manualScanStatus !== 'scanning') return;
@@ -5519,12 +5458,14 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       routedTelemetry: routedTelemetryDiscoveries.length,
       fallbackObd2Candidates: telemetryFallbackCandidateDiscoveries.length,
       routedAccessories: routedAccessoryDiscoveries.length,
+      approvedDeviceOnlyHidden,
       hiddenAccessoryModels: accessoryDevices.length,
       isScanning,
       obdError: obdError ?? null,
     });
   }, [
     accessoryDevices.length,
+    approvedDeviceOnlyHidden,
     attentionDevices.length,
     connectedDevices.length,
     discoveredTelemetryDevices.length,
@@ -5634,14 +5575,14 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       case 'scan_failed':
         return obdError ?? 'Bluetooth scan failed. Check permissions and Bluetooth state, then try again.';
       case 'scanning':
-        return 'Scanning nearby devices. Available devices populate here as results arrive.';
+        return 'Scanning for approved ECS devices. Available approved devices populate here as results arrive.';
       case 'empty':
-        return 'No nearby devices found. Make sure the device is powered on, nearby, and discoverable.';
+        return 'No approved ECS devices found nearby. Make sure the supported device is powered on, nearby, and advertising.';
       case 'results':
-        return 'Found selectable Bluestack devices. Cloud/API devices remain available when native Bluetooth is unavailable.';
+        return 'Found approved Bluestack devices. Cloud/API devices remain available when native Bluetooth is unavailable.';
       case 'idle':
       default:
-        return 'Tap Scan for Device Connections to search nearby Bluetooth devices.';
+        return 'Tap Scan for Device Connections to search for approved ECS Bluetooth devices.';
     }
   }, [visibleScanResultCount, obdError, scanAreaState]);
 
@@ -5667,6 +5608,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     }
     if (filteredDevicesCount > 0) {
       filterReasons.add('duplicate_or_unsupported_rows_collapsed');
+    }
+    if (approvedDeviceOnlyHidden > 0) {
+      filterReasons.add('approved_device_only_hidden');
     }
     if (routedAccessoryDiscoveries.length > 0) {
       filterReasons.add('unsupported_bluetooth_noise_hidden');
@@ -5694,6 +5638,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     scanDurationMs,
     scanBeganAt,
     sourceStatuses,
+    approvedDeviceOnlyHidden,
     routedAccessoryDiscoveries.length,
   ]);
 
@@ -5714,7 +5659,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       return 'Ready to scan';
     }
     if (devices.length === 0) {
-      return 'No nearby devices found';
+      return 'No approved devices found';
     }
     return 'Ready to connect';
   }, [connectedDevices, devices.length, isCheckingScanReadiness, isScanning, manualScanStatus]);

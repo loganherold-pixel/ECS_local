@@ -15,7 +15,7 @@ function assert(condition, message) {
 
 function walk(dir, results = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.worktrees') continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walk(fullPath, results);
@@ -32,6 +32,7 @@ const unifiedExport = read('lib/unifiedScanner.ts');
 const hook = read('lib/useUnifiedDeviceConnections.ts');
 const aggregator = read('lib/unifiedDeviceDiscoveryAggregator.ts');
 const deviceConnectionsScreen = read('app/power/blu.tsx');
+const approvedBluetoothCatalog = read('lib/bluetoothApprovedDeviceCatalog.ts');
 const quickActions = read('components/QuickActionsSheet.tsx');
 const connectionStep = read('components/power-setup/ConnectionStep.tsx');
 const powerSetupScreen = read('app/power/setup.tsx');
@@ -213,16 +214,21 @@ assert(
     deviceConnectionsScreen.includes('Remembered Devices ({rememberedReleaseDevices.length})') &&
     deviceConnectionsScreen.includes('title="Remembered devices"') &&
     deviceConnectionsScreen.includes('title="Available devices"') &&
+    deviceConnectionsScreen.includes('Approved Devices') &&
+    deviceConnectionsScreen.includes('showApprovedDevices') &&
+    deviceConnectionsScreen.includes('ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS') &&
     deviceConnectionsScreen.includes('Verified Connection Set') &&
-    deviceConnectionsScreen.includes('Tested live telemetry') &&
-    deviceConnectionsScreen.includes('EcoFlow cloud/API') &&
-    deviceConnectionsScreen.includes('Native BLE power systems') &&
-    deviceConnectionsScreen.includes('OBD2 ELM327 telemetry') &&
-    deviceConnectionsScreen.includes('Utility tank sensors') &&
+    approvedBluetoothCatalog.includes('Tested live telemetry') &&
+    approvedBluetoothCatalog.includes('Recognized / parser pending') &&
+    approvedBluetoothCatalog.includes('Planned power systems') &&
+    approvedBluetoothCatalog.includes('EcoFlow cloud/API') &&
+    approvedBluetoothCatalog.includes('Native BLE power systems') &&
+    approvedBluetoothCatalog.includes('OBD2 ELM327 telemetry') &&
+    approvedBluetoothCatalog.includes('Utility tank sensors') &&
     deviceConnectionsScreen.includes('propane, and water') &&
     bluestackAdapter.includes('device.connectableViaCloud === true') &&
     bluestackAdapter.includes('device.requiresNativeBluetooth === false') &&
-    bluestackAdapter.includes('Available cloud/API power devices plus nearby Bluetooth power, OBD2, propane, and water monitor advertisements') &&
+    bluestackAdapter.includes('Available cloud/API power devices plus nearby approved Bluetooth power, OBD2, propane, and water monitor advertisements') &&
     !deviceConnectionsScreen.includes('Failed / Needs Attention') &&
     !deviceConnectionsScreen.includes('Failed and needs attention') &&
     !deviceConnectionsScreen.includes('connections.attentionDevices.map') &&
@@ -231,15 +237,23 @@ assert(
   'Device Connections screen must show connected, remembered, and unified available Bluestack rows without failed production containers',
 );
 assert(
+  deviceConnectionsScreen.includes('Scan results are limited to approved ECS device pipelines') &&
+    hook.includes('approvedDeviceOnlyHidden') &&
+    hook.includes('telemetryFallbackCandidateDiscoveries') &&
+    hook.includes('return []') &&
+    !hook.includes('Tap Connect to test the ELM327 handshake'),
+  'Device Connections must hide generic BLE/OBD fallback rows and keep the approved device catalog behind an explicit user action',
+);
+assert(
   deviceConnectionsScreen.includes("return device.actionLabel || 'Unavailable'") &&
     deviceConnectionsScreen.includes("policy.telemetryTruthLabel || 'Parser Pending'"),
   'Device Connections rows must show Bluestack parser-pending labels instead of generic unavailable/unsupported copy',
 );
 assert(
-  hook.indexOf('if (visibleScanResultCount > 0)') > -1 &&
+    hook.indexOf('if (visibleScanResultCount > 0)') > -1 &&
     hook.indexOf('if (visibleScanResultCount > 0)') <
       hook.indexOf("return 'runtime_unsupported'") &&
-    hook.includes('Found selectable Bluestack devices. Cloud/API devices remain available when native Bluetooth is unavailable.'),
+    hook.includes('Found approved Bluestack devices. Cloud/API devices remain available when native Bluetooth is unavailable.'),
   'Unified scanner must keep cloud/API results selectable instead of replacing them with the runtime-unsupported empty state',
 );
 assert(

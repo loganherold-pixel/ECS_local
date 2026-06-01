@@ -12,6 +12,7 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 const card = read(path.join('components', 'discover', 'TrailPackCard.tsx'));
 const feedbackPanel = read(path.join('components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'));
 const previewPanel = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
+const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
 const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
 
 assert(
@@ -37,8 +38,15 @@ assert(
 assert(
   discover.includes('liveTrailPackCatalogStore') &&
     discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
+    discover.includes('routeCatalogSearchCriteria') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('maxDurationMinutes: 480') &&
+    discover.includes('minRemotenessScore: 7') &&
+    discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
+    discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     !discover.includes('getDefaultECSTrailPacks'),
-  'Explore Trail Packs should use live reviewed catalog content instead of default fixture packs',
+  'Explore Trail Packs should use criteria-filtered live reviewed catalog content instead of default fixture packs, including operational resource criteria when available',
 );
 assert(
   discover.includes('DEFAULT_USER_LOCATION') &&
@@ -55,6 +63,13 @@ assert(
 assert(
   discover.includes('trailPackToExpeditionOpportunity') && discover.includes('handleStartTrailPackGuidance'),
   'Approved Trail Packs should stage into the existing Navigate handoff path',
+);
+assert(
+  discover.includes('trailPackToOfflinePrepCatalogInput') &&
+    discover.includes('handleCacheTrailPackOffline') &&
+    discover.includes("saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details')") &&
+    discover.includes("pathname: '/explore-offline-prep-pack'"),
+  'Trail Pack cache action should persist a route catalog Offline Prep handoff and open the Offline Prep Pack flow',
 );
 assert(
   previewPanel.includes('disabled={!canStart}') &&
@@ -105,6 +120,46 @@ assert(
   card.includes('disabled={!canStartGuidance}') &&
     card.includes('Route geometry is unavailable for this Trail Pack.'),
   'Trail Pack card should disable Start Guidance when geometry is missing',
+);
+assert(
+  card.includes('getTrailPackGuidanceReadiness') &&
+    card.includes('Active guidance ready') &&
+    card.includes('Preview only') &&
+    card.includes('guidanceReadiness.description'),
+  'Trail Pack cards should surface active-guidance readiness before users tap Navigate',
+);
+assert(
+  previewPanel.includes('getTrailPackGuidanceReadiness') &&
+    previewPanel.includes('GUIDANCE STATUS') &&
+    previewPanel.includes('ROUTE ASSESSMENT') &&
+    previewPanel.includes('WHAT TO WATCH') &&
+    previewPanel.includes('RECOMMENDED ACTION') &&
+    previewPanel.includes('OFFLINE CACHE') &&
+    previewPanel.includes('detailLoading') &&
+    previewPanel.includes('detailError') &&
+    previewPanel.includes('guidanceReadiness.label') &&
+    previewPanel.includes('guidanceReadiness.description'),
+  'Trail Pack preview details should expose active-guidance readiness, route assessment, offline cache metadata, and preview-only reasons',
+);
+assert(
+  previewPanel.includes('detailDataUsed') &&
+    previewPanel.includes('offlineCache?.sourceTimestamps') &&
+    previewPanel.includes('offlineCache?.sourceAttribution') &&
+    previewPanel.includes('offlineCache?.freshnessWarnings') &&
+    previewPanel.includes('SOURCE TIMESTAMP') &&
+    previewPanel.includes('ATTRIBUTION') &&
+    previewPanel.includes('FRESHNESS WARNING'),
+  'Trail Pack preview offline cache section should visibly expose server-provided source timestamps, attribution, and freshness warnings',
+);
+assert(
+  offlinePrepPack.includes('routeCatalogSourceRows') &&
+    offlinePrepPack.includes('routeCatalogAttributionRows') &&
+    offlinePrepPack.includes('routeCatalogFreshnessWarnings') &&
+    offlinePrepPack.includes('routeCatalogOfflineCache') &&
+    offlinePrepPack.includes('Route Catalog Source Check') &&
+    offlinePrepPack.includes('testID="offline-prep-route-catalog-source-check"') &&
+    offlinePrepPack.includes('testID="offline-prep-route-catalog-freshness-warning"'),
+  'Offline Prep Pack should show route-catalog cacheability, source timestamps, attribution, and freshness warnings before preparing a pack',
 );
 assert(
   feedbackPanel.includes('COMPLETED') &&

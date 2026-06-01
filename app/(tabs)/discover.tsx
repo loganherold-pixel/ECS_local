@@ -140,7 +140,9 @@ import {
   trailPackToExpeditionOpportunity,
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
+import { trailPackToOfflinePrepCatalogInput } from '../../lib/explore/trailPackOfflineCache';
 import {
+  fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
@@ -689,6 +691,9 @@ function DiscoverScreenInner() {
   const [aiPreviewRoute, setAiPreviewRoute] = useState<AIGeneratedRoute | null>(null);
   const [aiPreviewVisible, setAiPreviewVisible] = useState(false);
   const [trailPackPreview, setTrailPackPreview] = useState<ECSTrailPackDiscoveryItem | null>(null);
+  const [trailPackPreviewDetailStatus, setTrailPackPreviewDetailStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [trailPackPreviewDetailError, setTrailPackPreviewDetailError] = useState<string | null>(null);
   const [trailPackFeedbackEvents, setTrailPackFeedbackEvents] = useState(() => getTrailPackFeedbackSnapshot());
   const [trailPackSubmissionSnapshot, setTrailPackSubmissionSnapshot] = useState(() =>
     trailPackSubmissionStore.getSnapshot(),
@@ -740,6 +745,7 @@ function DiscoverScreenInner() {
   );
 
   const mountedRef = useRef(true);
+  const trailPackPreviewRequestRef = useRef(0);
   const lastHiddenGemDiagnosticsSignatureRef = useRef<string | null>(null);
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
@@ -765,7 +771,6 @@ function DiscoverScreenInner() {
     const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
       setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
     });
-    void refreshLiveTrailPackCatalog();
     return unsubscribe;
   }, []);
 
@@ -961,6 +966,46 @@ function DiscoverScreenInner() {
   }, [opportunities, distanceRadius]);
   const activeDistanceRadius =
     distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
+  const routeCatalogRefinementCriteria = useMemo(() => {
+    switch (exploreRefinement) {
+      case 'remoteness':
+        return { minRemotenessScore: 7 };
+      case 'dayTrip':
+        return { maxDurationMinutes: 480 };
+      case 'weekendTrip':
+        return { minDurationMinutes: 481, maxDurationMinutes: 960 };
+      case 'expedition':
+        return { minDurationMinutes: 961 };
+      default:
+        return {};
+    }
+  }, [exploreRefinement]);
+  const routeCatalogSearchCriteria = useMemo(
+    () => ({
+      latitude: userLat,
+      longitude: userLng,
+      radiusMiles: activeDistanceRadius,
+      vehicleClass: vehicleProfile?.vehicleType ?? null,
+      availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
+      availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
+      locationSource: hasGPSFix ? 'live_gps' : 'default_location',
+      ...routeCatalogRefinementCriteria,
+    }),
+    [
+      activeDistanceRadius,
+      hasGPSFix,
+      routeCatalogRefinementCriteria,
+      userLat,
+      userLng,
+      vehicleProfile?.fuel_range_miles,
+      vehicleProfile?.water_capacity_gal,
+      vehicleProfile?.vehicleType,
+    ],
+  );
+
+  useEffect(() => {
+    void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria);
+  }, [routeCatalogSearchCriteria]);
 
   // ── Unified drivable trail feed ───────────────────────────
   const activeTabRoutes = useMemo<ExpeditionOpportunity[]>(
@@ -1080,6 +1125,8 @@ function DiscoverScreenInner() {
       trailPackLiveCatalogCount: liveTrailPackCatalogSnapshot.trailPacks.length,
       trailPackLiveCatalogError: liveTrailPackCatalogSnapshot.error,
       trailPackLiveCatalogLastLoadedAt: liveTrailPackCatalogSnapshot.lastLoadedAt,
+      trailPackLiveCatalogSource: liveTrailPackCatalogSnapshot.source,
+      trailPackCoverageState: liveTrailPackCatalogSnapshot.coverageState.state,
       locationSourceMode: gps.hasFix && gps.position ? 'shared_live_gps' : 'default_location_fallback',
       offlineModeActive,
       vehicleGateApplied: false,
@@ -1095,8 +1142,10 @@ function DiscoverScreenInner() {
     discoverRouteSourceFailureReason,
     liveTrailPackCatalogSnapshot.error,
     liveTrailPackCatalogSnapshot.lastLoadedAt,
+    liveTrailPackCatalogSnapshot.source,
     liveTrailPackCatalogSnapshot.status,
     liveTrailPackCatalogSnapshot.trailPacks.length,
+    liveTrailPackCatalogSnapshot.coverageState.state,
     gps.hasFix,
     gps.position,
   ]);
@@ -1190,6 +1239,56 @@ function DiscoverScreenInner() {
       userLocation: tripBuilderHandoffUserLocation,
     });
   }, [tripBuilderHandoffUserLocation]);
+
+  const hydrateRouteCatalogOpportunityForHandoff = useCallback(
+    async (route: ExpeditionOpportunity): Promise<ExpeditionOpportunity> => {
+      const routeRecord = route as ExpeditionOpportunity & { routeMetadata?: Record<string, unknown> };
+      const routeMetadata = routeRecord.routeMetadata ?? {};
+      const trailPackId = typeof routeMetadata.trailPackId === 'string'
+        ? routeMetadata.trailPackId
+        : null;
+      const catalogVerification =
+        routeMetadata.catalogVerification && typeof routeMetadata.catalogVerification === 'object'
+          ? routeMetadata.catalogVerification as Record<string, unknown>
+          : null;
+
+      if (routeMetadata.source !== 'trail_pack' || !trailPackId) return route;
+      if (catalogVerification?.detailFetchedAt && routeRecord.routeGeometry) return route;
+
+      try {
+        const detailTrailPack = await fetchRouteCatalogTrailPackDetail(trailPackId);
+        const hydratedRoute = trailPackToExpeditionOpportunity(detailTrailPack);
+        return {
+          ...route,
+          ...hydratedRoute,
+          id: route.id,
+          distanceFromUserMiles: route.distanceFromUserMiles ?? hydratedRoute.distanceFromUserMiles,
+          routeMetadata: {
+            ...(routeMetadata ?? {}),
+            ...(hydratedRoute.routeMetadata ?? {}),
+            routeCatalogHydratedForHandoff: true,
+            routeCatalogHydratedAt: new Date().toISOString(),
+          },
+        } as ExpeditionOpportunity;
+      } catch (error) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Route catalog detail hydration unavailable',
+          ecsArea: 'explore',
+          message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+          signature: `route_catalog_detail_handoff_hydration_unavailable:${trailPackId}`,
+          metadata: {
+            trailPackId,
+            routeId: route.id,
+            routeName: route.name,
+            source: 'route_catalog',
+          },
+        });
+        return route;
+      }
+    },
+    [],
+  );
 
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
@@ -1328,18 +1427,19 @@ function DiscoverScreenInner() {
       } = {},
     ) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
       if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
         reportRecoverableFailure({
           severity: 'low',
           issueTitle: 'Explore route handoff unavailable',
           ecsArea: 'explore',
           message: unavailableReason ?? 'Route path unavailable.',
-          signature: `explore_route_handoff_unavailable:${route.id}`,
+          signature: `explore_route_handoff_unavailable:${routeForHandoff.id}`,
           metadata: {
-            routeId: route.id,
-            routeName: route.name,
+            routeId: routeForHandoff.id,
+            routeName: routeForHandoff.name,
             source: 'explore',
           },
         });
@@ -1372,14 +1472,15 @@ function DiscoverScreenInner() {
       });
       router.push('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handleBuildTripFromRoute = useCallback(
-    (route: ExpeditionOpportunity) => {
+    async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
-      stageTripBuilderItineraryHandoff(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      stageTripBuilderItineraryHandoff(routeForHandoff);
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
@@ -1387,19 +1488,20 @@ function DiscoverScreenInner() {
       setTrailPackPreview(null);
       router.push({
         pathname: '/explore-trip-builder',
-        params: { routeId: route.id },
+        params: { routeId: routeForHandoff.id },
       } as any);
     },
-    [router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
+    [hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );
 
   const handlePrepareOfflineFromRoute = useCallback(
-    (route: ExpeditionOpportunity) => {
+    async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
       saveOfflinePrepPackHandoff({
-        route: route as any,
-        campsiteCandidates: extractExploreRouteCampMarkers(route).map((marker) => ({
+        route: routeForHandoff as any,
+        campsiteCandidates: extractExploreRouteCampMarkers(routeForHandoff).map((marker) => ({
           id: marker.id,
           name: marker.title,
           location: { latitude: marker.latitude, longitude: marker.longitude },
@@ -1417,30 +1519,31 @@ function DiscoverScreenInner() {
       setTrailPackPreview(null);
       router.push({
         pathname: '/explore-offline-prep-pack',
-        params: { routeId: route.id },
+        params: { routeId: routeForHandoff.id },
       } as any);
     },
-    [router, stageExploreReadinessPreview],
+    [hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handleViewRouteCamps = useCallback(
     async (route: ExpeditionOpportunity) => {
-      const campMarkers = extractExploreRouteCampMarkers(route);
+      hapticMicro();
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      const campMarkers = extractExploreRouteCampMarkers(routeForHandoff);
       if (campMarkers.length === 0) return;
 
-      hapticMicro();
-      stageExploreReadinessPreview(route);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
       if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
         reportRecoverableFailure({
           severity: 'low',
           issueTitle: 'Explore route camp handoff unavailable',
           ecsArea: 'explore',
           message: unavailableReason ?? 'Route camp pins unavailable.',
-          signature: `explore_route_camp_handoff_unavailable:${route.id}`,
+          signature: `explore_route_camp_handoff_unavailable:${routeForHandoff.id}`,
           metadata: {
-            routeId: route.id,
-            routeName: route.name,
+            routeId: routeForHandoff.id,
+            routeName: routeForHandoff.name,
             source: 'explore',
           },
         });
@@ -1480,17 +1583,86 @@ function DiscoverScreenInner() {
       });
       router.push('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
     hapticMicro();
+    const requestId = trailPackPreviewRequestRef.current + 1;
+    trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(trailPack);
+
+    if (!trailPack.catalogVerification?.publicRecommendation && trailPack.source !== 'ecs_validated') {
+      setTrailPackPreviewDetailStatus('idle');
+      setTrailPackPreviewDetailError(null);
+      return;
+    }
+
+    setTrailPackPreviewDetailStatus('loading');
+    setTrailPackPreviewDetailError(null);
+    void fetchRouteCatalogTrailPackDetail(trailPack)
+      .then((detail) => {
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreview((current) => {
+          if (!current || current.id !== trailPack.id) return current;
+          return {
+            ...current,
+            ...detail,
+            distanceFromUserMiles: current.distanceFromUserMiles,
+            evaluatedConfidence: current.evaluatedConfidence,
+          };
+        });
+        setTrailPackPreviewDetailStatus('ready');
+      })
+      .catch((error) => {
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreviewDetailStatus('error');
+        setTrailPackPreviewDetailError(
+          error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        );
+      });
   }, []);
 
   const handleCloseTrailPackPreview = useCallback(() => {
+    trailPackPreviewRequestRef.current += 1;
+    setTrailPackPreviewDetailStatus('idle');
+    setTrailPackPreviewDetailError(null);
     setTrailPackPreview(null);
   }, []);
+
+  const handleCacheTrailPackOffline = useCallback(
+    (trailPack: ECSTrailPackDiscoveryItem) => {
+      const offlinePrepInput = trailPackToOfflinePrepCatalogInput(trailPack);
+      const offlineCache = trailPack.catalogVerification?.offlineCache;
+      if (!offlineCache?.cacheable) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Trail Pack offline cache unavailable',
+          ecsArea: 'explore',
+          message: 'Offline cache metadata is unavailable for this Trail Pack.',
+          signature: `trail_pack_offline_cache_unavailable:${trailPack.id}`,
+          metadata: {
+            trailPackId: trailPack.id,
+            trailPackName: trailPack.name,
+            source: trailPack.source,
+          },
+        });
+        return;
+      }
+
+      saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details');
+      setAnalysisVisible(false);
+      setSelectedOpportunity(null);
+      setAiPreviewVisible(false);
+      setAiPreviewRoute(null);
+      setTrailPackPreview(null);
+      router.push({
+        pathname: '/explore-offline-prep-pack',
+        params: { routeId: offlinePrepInput.route.id ?? trailPack.id },
+      } as any);
+    },
+    [router],
+  );
 
   const handleTrailPackFeedback = useCallback(
     (trailPackId: string, type: ECSTrailPackFeedbackType, note?: string) =>
@@ -2134,11 +2306,7 @@ function DiscoverScreenInner() {
   const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
     const seen = new Set<string>();
     return [
-      ...exploreMapPreviewRouteSets.hiddenGemRoutes,
-      ...exploreMapPreviewRouteSets.popularTrailRoutes,
       ...exploreMapPreviewRouteSets.trailPackRoutes,
-      ...exploreMapPreviewRouteSets.favoriteRoutes,
-      ...exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
     ].filter((route) => {
       const key = String(route.id ?? route.name).trim().toLowerCase();
       if (!key || seen.has(key)) return false;
@@ -3426,8 +3594,8 @@ function DiscoverScreenInner() {
           return (
             <ExplorerStateCard
               icon="albums-outline"
-              title="No Trail Packs Found"
-              message="No live reviewed Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems."
+              title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
+              message={liveTrailPackCatalogSnapshot.coverageState.message || 'No live reviewed Trail Packs found within this radius. No verified routes yet in this area. Try expanding your radius or import a GPX as a private pending suggestion.'}
             />
           );
         }
@@ -4542,8 +4710,8 @@ function DiscoverScreenInner() {
               {exploreSuggestedRouteOptions.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.explorePlanningEmpty}
-                  title="No Trailheads In Current Context"
-                  message="Adjust Suggested Trailheads range or refinements, then return here to build a trip plan."
+                  title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
+                  message={liveTrailPackCatalogSnapshot.coverageState.message || 'No live reviewed Trail Packs found within this radius. No verified routes yet in this area. Try expanding your radius or import a GPX as a private pending suggestion.'}
                   icon="map-outline"
                   variant="compact"
                 />
@@ -4840,7 +5008,12 @@ function DiscoverScreenInner() {
               ? handleTrailPackFeedback(trailPackPreview.id, type, note)
               : { ok: false, reason: 'Trail Pack preview unavailable.' }
           }
-          offlineCacheAvailable={false}
+          offlineCacheAvailable={Boolean(trailPackPreview?.catalogVerification?.offlineCache?.cacheable)}
+          onCacheOffline={() => {
+            if (trailPackPreview) handleCacheTrailPackOffline(trailPackPreview);
+          }}
+          detailLoading={trailPackPreviewDetailStatus === 'loading'}
+          detailError={trailPackPreviewDetailError}
         />
 
         <TrailPackSubmissionModal

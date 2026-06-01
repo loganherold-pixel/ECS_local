@@ -445,11 +445,12 @@ assert.ok(
   'Attitude Command renderer must compose the attitude surface with weather, daylight, route terrain risk, power, and vehicle panels.',
 );
 assert.ok(
-  widgetRenderersSource.includes('setActivePanel((current) => (current === panel ? null : panel));') &&
+  widgetRenderersSource.includes("const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel, mode: AttitudeCommandFocusMode = 'summary')") &&
+    widgetRenderersSource.includes('if (current?.panel === panel && current.mode === mode) return null;') &&
     widgetRenderersSource.includes('resolveAttitudeCommandExpansionGeometry') &&
     widgetRenderersSource.includes('expandedPanelLayer') &&
-    widgetRenderersSource.includes('renderCommandPanel(activePanel, true)'),
-  'Attitude Command surrounding panels must toggle an inline enlarged panel over the 3D follow map.',
+    widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)'),
+  'Attitude Command surrounding panels must toggle an inline enlarged summary/detail panel over the 3D follow map.',
 );
 assert.ok(
   !widgetRenderersSource.includes('<TacticalPopupShell') &&

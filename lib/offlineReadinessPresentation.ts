@@ -106,6 +106,16 @@ function getRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+function getString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(getString).filter((item): item is string => Boolean(item))
+    : [];
+}
+
 function getCoordinate(value: unknown): OfflineReadinessCoordinate | null {
   const record = getRecord(value);
   if (!record) return null;
@@ -252,6 +262,89 @@ function resolveProgressPercent(
   return null;
 }
 
+function isActionableCatalogFreshnessWarning(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes('stale') ||
+    normalized.includes('missing') ||
+    normalized.includes('unavailable') ||
+    normalized.includes('expired') ||
+    normalized.includes('refresh')
+  );
+}
+
+function routeCatalogSourceMetadata(intent: unknown): {
+  sourceMetadataAvailable: boolean;
+  freshnessWarnings: string[];
+} {
+  const readinessSnapshot = getRecord(getRecord(intent)?.readinessSnapshot);
+  if (!readinessSnapshot) {
+    return { sourceMetadataAvailable: false, freshnessWarnings: [] };
+  }
+
+  const sourceTimestamps = getStringArray(readinessSnapshot.routeCatalogSourceTimestamps);
+  const attributionAvailable =
+    Array.isArray(readinessSnapshot.routeCatalogAttribution) &&
+    readinessSnapshot.routeCatalogAttribution.some((entry) => Boolean(getRecord(entry)));
+  const cache = getRecord(readinessSnapshot.routeCatalogOfflineCache);
+  const explicitWarnings = getStringArray(readinessSnapshot.routeCatalogFreshnessWarnings)
+    .filter(isActionableCatalogFreshnessWarning);
+  const staleAt = getString(cache?.staleAt) ?? getString(cache?.stale_at);
+  const staleWarnings = [...explicitWarnings];
+
+  if (staleAt) {
+    const staleTime = Date.parse(staleAt);
+    if (Number.isFinite(staleTime) && staleTime <= Date.now()) {
+      staleWarnings.push('Route catalog source metadata is stale. Refresh official source checks before offline use.');
+    }
+  }
+
+  return {
+    sourceMetadataAvailable: sourceTimestamps.length > 0 || attributionAvailable || Boolean(cache),
+    freshnessWarnings: dedupe(staleWarnings),
+  };
+}
+
+function mergeRouteCatalogSourceMetadata(
+  ...items: Array<ReturnType<typeof routeCatalogSourceMetadata>>
+): ReturnType<typeof routeCatalogSourceMetadata> {
+  return {
+    sourceMetadataAvailable: items.some((item) => item.sourceMetadataAvailable),
+    freshnessWarnings: dedupe(items.flatMap((item) => item.freshnessWarnings)),
+  };
+}
+
+function routeSpecificReadyResult(
+  readyAssets: string[],
+  catalog: ReturnType<typeof routeCatalogSourceMetadata>,
+): OfflineReadinessResult {
+  const finalReadyAssets = dedupe([
+    ...readyAssets,
+    catalog.sourceMetadataAvailable ? 'route catalog source metadata' : null,
+  ]);
+
+  if (catalog.freshnessWarnings.length > 0) {
+    return {
+      level: 'partial',
+      label: 'Source Warning',
+      readyAssets: finalReadyAssets,
+      missingAssets: [],
+      staleAssets: ['route catalog source freshness'],
+      reason: catalog.freshnessWarnings[0],
+      recommendedAction: ACTION_PREPARE_OFFLINE,
+    };
+  }
+
+  return {
+    level: 'ready',
+    label: 'Ready',
+    readyAssets: finalReadyAssets,
+    missingAssets: [],
+    staleAssets: [],
+    reason: 'Route corridor and active map style are cached for this preview.',
+  };
+}
+
 function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResult | null {
   const current = input.currentRouteContext;
   if (!current) return null;
@@ -274,6 +367,10 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   const matchingJob = findMatchingJob(current, matchingRoute, jobs);
   const progress = resolveProgressPercent(matchingJob, matchingRegion);
   const manifestIntent = input.runCacheManifest?.gpx_metadata?.route_intent ?? null;
+  const matchingCatalog = mergeRouteCatalogSourceMetadata(
+    routeCatalogSourceMetadata(matchingRoute?.routeIntent),
+    routeCatalogSourceMetadata(manifestIntent),
+  );
   const manifestDestination = getCoordinate(input.runCacheManifest?.gpx_metadata?.final_destination);
   const manifestMatches =
     routeContextMatchesIntent(current, manifestIntent) || destinationMatches(current, manifestDestination);
@@ -314,14 +411,10 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
       };
     }
 
-    return {
-      level: 'ready',
-      label: 'Ready',
-      readyAssets: ['route geometry', 'route corridor tiles', 'active map style'],
-      missingAssets: [],
-      staleAssets: [],
-      reason: 'Route corridor and active map style are cached for this preview.',
-    };
+    return routeSpecificReadyResult(
+      ['route geometry', 'route corridor tiles', 'active map style'],
+      routeCatalogSourceMetadata(manifestIntent),
+    );
   }
 
   const regionComplete = matchingRegion?.status === 'complete';
@@ -355,14 +448,10 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
       };
     }
 
-    return {
-      level: 'ready',
-      label: 'Ready',
-      readyAssets: ['route geometry', 'route corridor tiles', 'active map style'],
-      missingAssets: [],
-      staleAssets: [],
-      reason: 'Route corridor and active map style are cached for this preview.',
-    };
+    return routeSpecificReadyResult(
+      ['route geometry', 'route corridor tiles', 'active map style'],
+      matchingCatalog,
+    );
   }
 
   if (matchingJob?.status === 'running' || matchingJob?.status === 'pending') {
@@ -462,14 +551,10 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
     };
   }
 
-  return {
-    level: 'ready',
-    label: 'Ready',
-    readyAssets: ['route geometry', 'route corridor tiles', 'active map style'],
-    missingAssets: [],
-    staleAssets: [],
-    reason: 'Route corridor and active map style are cached for this preview.',
-  };
+  return routeSpecificReadyResult(
+    ['route geometry', 'route corridor tiles', 'active map style'],
+    matchingCatalog,
+  );
 }
 
 function dedupeRoutes(routes: (OfflineCachedRoute | null | undefined)[]): OfflineCachedRoute[] {

@@ -7,10 +7,12 @@ import { TACTICAL, ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
 import {
   canStartTrailPackGuidance,
+  getTrailPackGuidanceReadiness,
   getTrailPackDifficultyLabel,
   getTrailPackRouteTypeLabel,
   getTrailPackSourceLabel,
   trailPackToExpeditionOpportunity,
+  type ECSTrailPackGuidanceReadiness,
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
 import type { ExploreTrailThumbnailAssignment } from '../../lib/exploreTrailThumbnails';
@@ -59,6 +61,12 @@ function getSourceTone(sourceLabel: string): 'live' | 'category' | 'warning' {
   return 'category';
 }
 
+function getGuidanceCardLabel(readiness: ECSTrailPackGuidanceReadiness): string {
+  if (readiness.status === 'ready') return 'Active guidance ready';
+  if (readiness.status === 'unavailable') return 'Guidance unavailable';
+  return 'Preview only';
+}
+
 export default function TrailPackCard({
   trailPack,
   hasVehicle = false,
@@ -70,9 +78,10 @@ export default function TrailPackCard({
   thumbnailOverride,
 }: TrailPackCardProps) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const sourceLabel = getTrailPackSourceLabel(trailPack.source);
+  const sourceLabel = trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source);
   const routeTypeLabel = getTrailPackRouteTypeLabel(trailPack.routeType);
   const difficultyLabel = getTrailPackDifficultyLabel(trailPack.difficulty);
+  const guidanceReadiness = getTrailPackGuidanceReadiness(trailPack);
   const canStartGuidance = canStartTrailPackGuidance(trailPack);
   const routeMiles = formatMiles(trailPack.distanceMiles);
   const distanceAway = formatMiles(trailPack.distanceFromUserMiles);
@@ -140,6 +149,24 @@ export default function TrailPackCard({
         <Text style={s.confidenceText}>
           ECS confidence {Math.round(trailPack.confidenceScore)}% | {feedbackText}
         </Text>
+        <View style={[
+          s.guidanceStrip,
+          guidanceReadiness.status === 'ready' ? s.guidanceStripReady : s.guidanceStripPreview,
+        ]}>
+          <Ionicons
+            name={guidanceReadiness.status === 'ready' ? 'navigate-circle-outline' : 'map-outline'}
+            size={13}
+            color={guidanceReadiness.status === 'ready' ? TACTICAL.amber : TACTICAL.textMuted}
+          />
+          <View style={s.guidanceTextBlock}>
+            <Text style={s.guidanceLabel}>
+              {getGuidanceCardLabel(guidanceReadiness)}
+            </Text>
+            <Text style={s.guidanceDescription} numberOfLines={2}>
+              {guidanceReadiness.description}
+            </Text>
+          </View>
+        </View>
         <ExploreReadinessSummary
           assessment={readinessAssessment}
           summary={readinessSummary}
@@ -147,6 +174,11 @@ export default function TrailPackCard({
         />
         {statLine ? <Text style={s.subtleText}>{statLine}</Text> : null}
         {lastVerified ? <Text style={s.subtleText}>{lastVerified}</Text> : null}
+        {trailPack.catalogVerification?.warnings.length ? (
+          <Text style={s.subtleText} numberOfLines={2}>
+            {trailPack.catalogVerification.warnings[0]}
+          </Text>
+        ) : null}
 
         <View style={s.reasonList}>
           {trailPack.confidenceReasons.slice(0, 2).map((reason) => (
@@ -160,7 +192,7 @@ export default function TrailPackCard({
         {!canStartGuidance ? (
           <View style={s.guardNotice}>
             <Ionicons name="alert-circle-outline" size={12} color={TACTICAL.textMuted} />
-            <Text style={s.guardText}>Guidance needs route geometry. Preview remains available.</Text>
+            <Text style={s.guardText}>{guidanceReadiness.description}</Text>
           </View>
         ) : null}
 
@@ -312,6 +344,41 @@ const s = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 12,
     fontWeight: '900',
+    letterSpacing: 0,
+  },
+  guidanceStrip: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+  },
+  guidanceStripReady: {
+    borderColor: TACTICAL.amber + '28',
+    backgroundColor: TACTICAL.amber + '10',
+  },
+  guidanceStripPreview: {
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  guidanceTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  guidanceLabel: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  guidanceDescription: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
     letterSpacing: 0,
   },
   subtleText: {

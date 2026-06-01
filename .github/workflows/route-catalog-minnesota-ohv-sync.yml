@@ -1,0 +1,227 @@
+name: Route Catalog Minnesota OHV Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_miles:
+        description: Minimum Minnesota OHV feature miles to ingest.
+        required: false
+        default: '1'
+      max_features:
+        description: Maximum GeoPackage features to convert and send.
+        required: false
+        default: '250'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-minnesota-ohv-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Minnesota DNR OHV GeoPackage records
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      MIN_MILES: ${{ inputs.min_miles || '1' }}
+      MAX_FEATURES: ${{ inputs.max_features || '250' }}
+      MINNESOTA_OHV_GPKG_URL: https://resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/trans_ohv_trails_mn/gpkg_trans_ohv_trails_mn.zip
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Download Minnesota DNR OHV GeoPackage
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent --location \
+            "${MINNESOTA_OHV_GPKG_URL}" \
+            --output minnesota-ohv-gpkg.zip
+          unzip -o minnesota-ohv-gpkg.zip trans_ohv_trails_mn.gpkg
+
+      - name: Convert GeoPackage features to bounded GeoJSON payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import json
+          import math
+          import os
+          import sqlite3
+          import struct
+
+          min_miles = float(os.environ.get("MIN_MILES", "1"))
+          max_features = max(1, min(1000, int(float(os.environ.get("MAX_FEATURES", "250")))))
+          gpkg_path = "trans_ohv_trails_mn.gpkg"
+
+          def utm15n_to_lonlat(easting, northing):
+              a = 6378137.0
+              ecc_sq = 0.00669438
+              k0 = 0.9996
+              ecc_prime_sq = ecc_sq / (1 - ecc_sq)
+              e1 = (1 - math.sqrt(1 - ecc_sq)) / (1 + math.sqrt(1 - ecc_sq))
+              x = easting - 500000.0
+              y = northing
+              long_origin = -93.0
+              m = y / k0
+              mu = m / (a * (1 - ecc_sq / 4 - 3 * ecc_sq ** 2 / 64 - 5 * ecc_sq ** 3 / 256))
+              j1 = 3 * e1 / 2 - 27 * e1 ** 3 / 32
+              j2 = 21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32
+              j3 = 151 * e1 ** 3 / 96
+              j4 = 1097 * e1 ** 4 / 512
+              fp = mu + j1 * math.sin(2 * mu) + j2 * math.sin(4 * mu) + j3 * math.sin(6 * mu) + j4 * math.sin(8 * mu)
+              sin_fp = math.sin(fp)
+              cos_fp = math.cos(fp)
+              tan_fp = math.tan(fp)
+              c1 = ecc_prime_sq * cos_fp ** 2
+              t1 = tan_fp ** 2
+              n1 = a / math.sqrt(1 - ecc_sq * sin_fp ** 2)
+              r1 = a * (1 - ecc_sq) / (1 - ecc_sq * sin_fp ** 2) ** 1.5
+              d = x / (n1 * k0)
+              lat = fp - (n1 * tan_fp / r1) * (
+                  d ** 2 / 2
+                  - (5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * ecc_prime_sq) * d ** 4 / 24
+                  + (61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * ecc_prime_sq - 3 * c1 ** 2) * d ** 6 / 720
+              )
+              lon = math.radians(long_origin) + (
+                  d
+                  - (1 + 2 * t1 + c1) * d ** 3 / 6
+                  + (5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ecc_prime_sq + 24 * t1 ** 2) * d ** 5 / 120
+              ) / cos_fp
+              return [round(math.degrees(lon), 6), round(math.degrees(lat), 6)]
+
+          def gpkg_wkb(blob):
+              if blob[:2] != b"GP":
+                  raise ValueError("Invalid GeoPackage geometry header")
+              flags = blob[3]
+              envelope_code = (flags >> 1) & 0b111
+              envelope_lengths = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}
+              offset = 8 + envelope_lengths.get(envelope_code, 0)
+              return blob[offset:]
+
+          def parse_wkb_geometry(data, offset=0):
+              endian = "<" if data[offset] == 1 else ">"
+              wkb_type = struct.unpack(endian + "I", data[offset + 1:offset + 5])[0]
+              base_type = wkb_type % 1000
+              cursor = offset + 5
+              if base_type == 2:
+                  count = struct.unpack(endian + "I", data[cursor:cursor + 4])[0]
+                  cursor += 4
+                  points = []
+                  for _ in range(count):
+                      x, y = struct.unpack(endian + "dd", data[cursor:cursor + 16])
+                      cursor += 16
+                      points.append(utm15n_to_lonlat(x, y))
+                  return {"type": "LineString", "coordinates": points}, cursor
+              if base_type == 5:
+                  count = struct.unpack(endian + "I", data[cursor:cursor + 4])[0]
+                  cursor += 4
+                  lines = []
+                  for _ in range(count):
+                      line, cursor = parse_wkb_geometry(data, cursor)
+                      if line["type"] == "LineString" and len(line["coordinates"]) >= 2:
+                          lines.append(line["coordinates"])
+                  return {"type": "MultiLineString", "coordinates": lines}, cursor
+              raise ValueError(f"Unsupported WKB geometry type: {wkb_type}")
+
+          conn = sqlite3.connect(gpkg_path)
+          conn.row_factory = sqlite3.Row
+          rows = conn.execute(
+              """
+              select OBJECTID, SHAPE, TRAIL_NAME, SEGMENT_NAME, SURFACE_TYPE, FUNDING_TYPE,
+                     TRAIL_WIDTH, ATV_CLASS_1, ATV_CLASS_2, OFF_HIGHWAY_MOTORCYCLE,
+                     OFF_ROAD_VEHICLE, ROAD_CLASS, MILES, WEB_SITE, STABLE_PROD_GUID,
+                     PROGRAM_PROJECT
+              from ohv_trails_mn
+              where MILES >= ?
+              order by OBJECTID
+              limit ?
+              """,
+              (min_miles, max_features),
+          ).fetchall()
+
+          features = []
+          for row in rows:
+              properties = {key: row[key] for key in row.keys() if key != "SHAPE"}
+              geometry, _ = parse_wkb_geometry(gpkg_wkb(row["SHAPE"]))
+              if geometry["type"] == "MultiLineString" and not geometry["coordinates"]:
+                  continue
+              features.append({
+                  "type": "Feature",
+                  "properties": properties,
+                  "geometry": geometry,
+              })
+
+          with open("route-catalog-minnesota-ohv-sync-payload.json", "w", encoding="utf-8") as handle:
+              json.dump({
+                  "minMiles": min_miles,
+                  "maxFeatures": max_features,
+                  "sourceFeatures": features,
+                  "officialDownloadUrl": os.environ["MINNESOTA_OHV_GPKG_URL"],
+              }, handle, separators=(",", ":"))
+          PY
+
+      - name: Invoke Minnesota DNR OHV route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-minnesota-ohv-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-minnesota-ohv" \
+            --output route-catalog-minnesota-ohv-sync-response.json
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-minnesota-ohv-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'Minnesota DNR OHV route catalog sync failed.');
+          }
+
+          console.log(JSON.stringify({
+            source: response.source,
+            rawFeatureCount: response.rawFeatureCount,
+            normalizedFeatureCount: response.normalizedFeatureCount,
+            publicRecommendationCount: response.publicRecommendationCount,
+            officialDownloadUrl: response.officialDownloadUrl,
+          }, null, 2));
+
+          const markdown = [
+            '## Route Catalog Minnesota DNR OHV Sync',
+            '',
+            `Official download: ${response.officialDownloadUrl}`,
+            '',
+            `Raw converted features: ${response.rawFeatureCount}`,
+            '',
+            `Normalized curation records: ${response.normalizedFeatureCount}`,
+            '',
+            `Public recommendations created: ${response.publicRecommendationCount || 0}`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE

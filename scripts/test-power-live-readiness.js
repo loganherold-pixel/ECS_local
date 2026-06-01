@@ -455,7 +455,7 @@ assert.ok(
   'scanner diagnostics should not render raw discovery wording in the field scanner UI',
 );
 assert.ok(!scannerScreenSource.includes('Major reasons'), 'scanner diagnostics should not expose old debug-style Major reasons copy');
-assert.ok(bluestackAdapterSource.includes('Available cloud/API power devices plus nearby Bluetooth power, OBD2, propane, and water monitor advertisements'), 'scanner copy should explain cloud/API and nearby advertisement filtering');
+assert.ok(bluestackAdapterSource.includes('Available cloud/API power devices plus nearby approved Bluetooth power, OBD2, propane, and water monitor advertisements'), 'scanner copy should explain cloud/API and approved nearby advertisement filtering');
 assert.strictEqual(typeof SCANNER_SCAN_WINDOW_DEBOUNCE_MS, 'number', 'scanner debounce constant should be exported');
 
 console.log('Power live-readiness checks passed.');

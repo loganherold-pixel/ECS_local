@@ -1,0 +1,1208 @@
+export type UsfsMvumForest = {
+  slug: string;
+  forestName: string;
+  sourceProviderId: string;
+  sourceName: string;
+  sourceUri: string;
+  currentConditionProviderId: string;
+  currentConditionSourceName: string;
+  currentConditionSourceUri: string;
+  currentConditionReferenceUri: string;
+};
+
+export type UsfsMvumLayer = {
+  kind: 'road' | 'trail';
+  sourceLayer: string;
+  url: string;
+  statusField: 'ROUTESTATU' | 'TRAILSTATU';
+  namePrefix: 'FR' | 'Trail';
+};
+
+export type UsfsMvumArcGisFeature = {
+  attributes?: Record<string, unknown>;
+  geometry?: {
+    paths?: unknown;
+  };
+};
+
+export type UsfsMvumRouteContext = {
+  forest: UsfsMvumForest;
+  layer: UsfsMvumLayer;
+  sourceId: string;
+  sourceLastVerifiedAt: string;
+  ingestRunId?: string | null;
+  minMiles?: number;
+  publicRecommendation?: boolean;
+};
+
+export type UsfsMvumClosureStatus = 'active' | 'scheduled' | 'expired' | 'unknown';
+export type UsfsMvumClosureType =
+  | 'seasonal'
+  | 'emergency'
+  | 'fire'
+  | 'flood'
+  | 'maintenance'
+  | 'land_manager'
+  | 'permanent'
+  | 'unknown';
+
+export type UsfsMvumCurrentConditionClosure = {
+  id?: string;
+  title: string;
+  summary?: string;
+  sourceUrl?: string;
+  forestOrder?: string;
+  status: UsfsMvumClosureStatus;
+  closureType: UsfsMvumClosureType;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  lastVerifiedAt?: string;
+  confidenceScore?: number;
+  routePublicIds: string[];
+  segmentPublicIds: string[];
+  providerFeatureIds: string[];
+  routeIds: string[];
+  routeIdentityPatterns: string[];
+};
+
+export type UsfsMvumCurrentConditionSource = {
+  forestSlug: string;
+  forestName: string;
+  providerId: string;
+  label: string;
+  sourceUrl: string;
+  referenceUrl: string;
+  checkedAt: string;
+  staleAt: string;
+  closures: UsfsMvumCurrentConditionClosure[];
+};
+
+export type UsfsMvumRouteUpsert = NonNullable<ReturnType<typeof arcGisFeatureToVerifiedRouteUpsert>>;
+
+export type UsfsMvumAggregateRouteUpsert = {
+  verifiedRoute: Record<string, unknown>;
+  verifiedRouteSource: Record<string, unknown>;
+  segmentPublicIds: string[];
+  segmentProviderFeatureIds: string[];
+};
+
+export type UsfsMvumActiveGuidanceStatus = 'ready' | 'preview_only' | 'unavailable';
+
+export type UsfsMvumTopologyAssessment = {
+  status: UsfsMvumActiveGuidanceStatus;
+  topologyResolved: boolean;
+  sourceSegmentCount: number;
+  componentCount: number;
+  branchDetected: boolean;
+  joinedSegmentGapCount: number;
+  disjointSegmentGapCount: number;
+  maxJoinGapMeters: number | null;
+  maxSegmentGapMeters: number | null;
+  unavailableReason: string | null;
+};
+
+export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
+  {
+    slug: 'tahoe-national-forest',
+    forestName: 'Tahoe National Forest',
+    sourceProviderId: 'usfs_mvum_tahoe_nf',
+    sourceName: 'USFS MVUM - Tahoe National Forest',
+    sourceUri: 'https://www.fs.usda.gov/detail/tahoe/maps-pubs/?cid=fseprd638275',
+    currentConditionProviderId: 'usfs_current_conditions_tahoe_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Tahoe National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r05/tahoe/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/tahoe/conditions',
+  },
+  {
+    slug: 'mendocino-national-forest',
+    forestName: 'Mendocino National Forest',
+    sourceProviderId: 'usfs_mvum_mendocino_nf',
+    sourceName: 'USFS MVUM - Mendocino National Forest',
+    sourceUri: 'https://www.fs.usda.gov/detail/mendocino/maps-pubs/?cid=stelprdb5142646',
+    currentConditionProviderId: 'usfs_current_conditions_mendocino_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Mendocino National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r05/mendocino/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/mendocino/conditions',
+  },
+];
+
+export const USFS_MVUM_LAYERS: UsfsMvumLayer[] = [
+  {
+    kind: 'road',
+    sourceLayer: 'Motor Vehicle Use Map: Roads',
+    url: 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/Motor_Vehicle_Use_Map_Roads/FeatureServer/0',
+    statusField: 'ROUTESTATU',
+    namePrefix: 'FR',
+  },
+  {
+    kind: 'trail',
+    sourceLayer: 'Motor Vehicle Use Map: Trails',
+    url: 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/Motor_Vehicle_Use_Maps_Trails/FeatureServer/0',
+    statusField: 'TRAILSTATU',
+    namePrefix: 'Trail',
+  },
+];
+
+const ROUTE_CATALOG_MVUM_WARNING =
+  'USFS MVUM is a legal baseline only; current closures, fire restrictions, weather, gates, and passability still require current checks.';
+const ROUTE_CATALOG_CURRENT_CONDITION_CAVEAT =
+  'Official current-condition overlays can block recommendation but do not establish open access, passability, or safety.';
+const ACTIVE_GUIDANCE_JOIN_GAP_MAX_METERS = 120;
+
+function cleanString(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function cleanNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 140);
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function normalizeOpenFlag(value: unknown): boolean {
+  return /^open$/i.test(cleanString(value));
+}
+
+function addDaysIso(isoDate: string, days: number): string {
+  const date = new Date(isoDate);
+  if (!Number.isFinite(date.getTime())) return isoDate;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function estimateMvumRemotenessScore(distanceMiles: number, sourceFeatureCount = 1): number {
+  const distanceComponent = Math.min(2.5, distanceMiles / 12);
+  const aggregateComponent = Math.min(1.5, Math.max(0, sourceFeatureCount - 1) * 0.25);
+  return Number(clampNumber(5 + distanceComponent + aggregateComponent, 1, 10).toFixed(1));
+}
+
+function estimateMinimumFuelRangeMiles(distanceMiles: number): number {
+  return Math.max(10, Math.ceil(distanceMiles * 1.5));
+}
+
+function estimateMinimumWaterCapacityGallons(estimatedDurationMinutes: number): number {
+  const routeDays = Math.max(1, Math.ceil(estimatedDurationMinutes / 480));
+  return routeDays;
+}
+
+function mvumRouteIntelligence(args: {
+  distanceMiles: number;
+  estimatedDurationMinutes: number;
+  sourceFeatureCount: number;
+  activeGuidance?: UsfsMvumTopologyAssessment;
+}) {
+  return {
+    remotenessBasis: 'estimated_from_mvum_distance_and_forest_context',
+    remotenessDataState: 'estimated',
+    campabilityDataState: 'unknown',
+    resourceMarginBasis: 'estimated_from_mvum_distance_and_duration',
+    fuelMarginDataState: 'estimated',
+    waterMarginDataState: 'estimated',
+    sourceFeatureCount: args.sourceFeatureCount,
+    activeGuidance: args.activeGuidance,
+    caveat: 'Fuel and water margins are planning estimates from route distance/duration only; they are not live resource availability or safety conclusions.',
+  };
+}
+
+function stablePayloadHash(value: unknown): string {
+  const json = JSON.stringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < json.length; index += 1) {
+    hash ^= json.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function normalizePath(value: unknown): number[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((point) => {
+      if (!Array.isArray(point) || point.length < 2) return null;
+      const longitude = Number(point[0]);
+      const latitude = Number(point[1]);
+      if (
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude) ||
+        Math.abs(latitude) > 90 ||
+        Math.abs(longitude) > 180
+      ) {
+        return null;
+      }
+      return [Number(longitude.toFixed(6)), Number(latitude.toFixed(6))];
+    })
+    .filter((point): point is number[] => !!point);
+}
+
+function normalizePaths(feature: UsfsMvumArcGisFeature): number[][][] {
+  const rawPaths = feature.geometry?.paths;
+  if (!Array.isArray(rawPaths)) return [];
+  return rawPaths.map(normalizePath).filter((path) => path.length >= 2);
+}
+
+function centerFromPaths(paths: number[][][]): { latitude: number; longitude: number } | null {
+  const points = paths.flat();
+  if (points.length === 0) return null;
+  const totals = points.reduce(
+    (acc, point) => ({
+      longitude: acc.longitude + point[0],
+      latitude: acc.latitude + point[1],
+    }),
+    { latitude: 0, longitude: 0 },
+  );
+  return {
+    latitude: Number((totals.latitude / points.length).toFixed(6)),
+    longitude: Number((totals.longitude / points.length).toFixed(6)),
+  };
+}
+
+function routeGeometryFromPaths(paths: number[][][]): { type: 'LineString' | 'MultiLineString'; coordinates: number[][] | number[][][] } | null {
+  if (paths.length === 0) return null;
+  if (paths.length === 1) return { type: 'LineString', coordinates: paths[0] };
+  return { type: 'MultiLineString', coordinates: paths };
+}
+
+function vehicleFitFromAttributes(attributes: Record<string, unknown>): string[] {
+  const fit = new Set<string>();
+  if (normalizeOpenFlag(attributes.PASSENGERV)) fit.add('highway_legal_4x4');
+  if (normalizeOpenFlag(attributes.HIGHCLEARA) || normalizeOpenFlag(attributes.FOURWD_GT5)) {
+    fit.add('full_size_4x4');
+  }
+  if (normalizeOpenFlag(attributes.ATV)) fit.add('atv');
+  if (normalizeOpenFlag(attributes.OTHER_OHV_) || normalizeOpenFlag(attributes.OTHER_OHV1)) fit.add('utv');
+  if (normalizeOpenFlag(attributes.MOTORCYCLE)) fit.add('motorcycle');
+  return Array.from(fit);
+}
+
+function orderedVehicleFit(values: string[]): string[] {
+  const order = ['highway_legal_4x4', 'full_size_4x4', 'atv', 'utv', 'motorcycle'];
+  const unique = new Set(values);
+  return order.filter((value) => unique.has(value));
+}
+
+function routeName(layer: UsfsMvumLayer, attributes: Record<string, unknown>): string {
+  const id = cleanString(attributes.ID || attributes.FIELD_ID || attributes.RTE_CN);
+  const rawName = cleanString(attributes.NAME);
+  const titleName = rawName ? toTitleCase(rawName) : '';
+  if (id && titleName) return `${layer.namePrefix} ${id} ${titleName}`;
+  if (id) return `${layer.namePrefix} ${id}`;
+  if (titleName) return `${layer.namePrefix} ${titleName}`;
+  return `${layer.namePrefix} MVUM Route`;
+}
+
+function providerFeatureId(layer: UsfsMvumLayer, attributes: Record<string, unknown>): string {
+  const id = cleanString(attributes.ID || attributes.FIELD_ID || attributes.RTE_CN || attributes.GLOBALID || 'unknown');
+  const fid = cleanString(attributes.FID || attributes.OBJECTID || attributes.GLOBALID || '0');
+  return `${layer.kind}:${id || 'unknown'}:${fid || '0'}`;
+}
+
+function sourceFeatureKey(attributes: Record<string, unknown>): string {
+  return cleanString(attributes.FID || attributes.OBJECTID || attributes.GLOBALID || '0') || '0';
+}
+
+function aggregationIdentity(layer: UsfsMvumLayer, attributes: Record<string, unknown>) {
+  const id = cleanString(attributes.ID || attributes.FIELD_ID || attributes.RTE_CN);
+  const rawName = cleanString(attributes.NAME);
+  const name = rawName ? toTitleCase(rawName) : '';
+  const keyParts = [layer.kind, id, name].filter(Boolean);
+  if (keyParts.length === 1) return null;
+  return {
+    key: slugify(keyParts.join(' ')),
+    publicIdParts: ['usfs-mvum', layer.kind, id, name].filter(Boolean),
+    id,
+    name,
+  };
+}
+
+function lineStringsFromRouteGeometry(routeGeometry: Record<string, unknown>): number[][][] {
+  if (routeGeometry.type === 'LineString' && Array.isArray(routeGeometry.coordinates)) {
+    const path = normalizePath(routeGeometry.coordinates);
+    return path.length >= 2 ? [path] : [];
+  }
+  if (routeGeometry.type === 'MultiLineString' && Array.isArray(routeGeometry.coordinates)) {
+    return routeGeometry.coordinates
+      .map(normalizePath)
+      .filter((path) => path.length >= 2);
+  }
+  return [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function distanceMeters(left: number[], right: number[]): number {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const [leftLng, leftLat] = left;
+  const [rightLng, rightLat] = right;
+  const dLat = toRadians(rightLat - leftLat);
+  const dLng = toRadians(rightLng - leftLng);
+  const lat1 = toRadians(leftLat);
+  const lat2 = toRadians(rightLat);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return 6_371_008.8 * c;
+}
+
+function roundedMeters(value: number): number {
+  return Number(value.toFixed(1));
+}
+
+class TopologyDisjointSet {
+  private parents: number[];
+
+  constructor(size: number) {
+    this.parents = Array.from({ length: size }, (_, index) => index);
+  }
+
+  find(index: number): number {
+    const parent = this.parents[index];
+    if (parent === index) return index;
+    const root = this.find(parent);
+    this.parents[index] = root;
+    return root;
+  }
+
+  union(left: number, right: number) {
+    const leftRoot = this.find(left);
+    const rightRoot = this.find(right);
+    if (leftRoot !== rightRoot) this.parents[rightRoot] = leftRoot;
+  }
+}
+
+function componentGapMeters(
+  endpoints: Array<{ point: number[]; component: number }>,
+  components: number[],
+): number | null {
+  if (components.length <= 1) return 0;
+
+  let maxNearestComponentGap = 0;
+  for (const component of components) {
+    const componentEndpoints = endpoints.filter((endpoint) => endpoint.component === component);
+    const otherEndpoints = endpoints.filter((endpoint) => endpoint.component !== component);
+    let nearestGap = Number.POSITIVE_INFINITY;
+    for (const left of componentEndpoints) {
+      for (const right of otherEndpoints) {
+        nearestGap = Math.min(nearestGap, distanceMeters(left.point, right.point));
+      }
+    }
+    if (Number.isFinite(nearestGap)) {
+      maxNearestComponentGap = Math.max(maxNearestComponentGap, nearestGap);
+    }
+  }
+
+  return roundedMeters(maxNearestComponentGap);
+}
+
+export function assessUsfsMvumAggregateTopology(lines: number[][][]): UsfsMvumTopologyAssessment {
+  const sourceSegmentCount = lines.length;
+  if (sourceSegmentCount === 0) {
+    return {
+      status: 'unavailable',
+      topologyResolved: false,
+      sourceSegmentCount,
+      componentCount: 0,
+      branchDetected: false,
+      joinedSegmentGapCount: 0,
+      disjointSegmentGapCount: 0,
+      maxJoinGapMeters: null,
+      maxSegmentGapMeters: null,
+      unavailableReason: 'Active guidance is unavailable because this aggregate has no usable route geometry.',
+    };
+  }
+
+  const endpoints = lines.flatMap((line, segmentIndex) => [
+    { segmentIndex, point: line[0] },
+    { segmentIndex, point: line[line.length - 1] },
+  ]);
+  const endpointSets = new TopologyDisjointSet(endpoints.length);
+
+  for (let leftIndex = 0; leftIndex < endpoints.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < endpoints.length; rightIndex += 1) {
+      if (distanceMeters(endpoints[leftIndex].point, endpoints[rightIndex].point) <= ACTIVE_GUIDANCE_JOIN_GAP_MAX_METERS) {
+        endpointSets.union(leftIndex, rightIndex);
+      }
+    }
+  }
+
+  const endpointClusterByIndex = endpoints.map((_, index) => endpointSets.find(index));
+  const clusterMembers = new Map<number, number[]>();
+  endpointClusterByIndex.forEach((clusterId, endpointIndex) => {
+    const existing = clusterMembers.get(clusterId) ?? [];
+    existing.push(endpointIndex);
+    clusterMembers.set(clusterId, existing);
+  });
+
+  const clusterIds = Array.from(clusterMembers.keys());
+  const clusterIndexById = new Map(clusterIds.map((clusterId, index) => [clusterId, index]));
+  const nodeSets = new TopologyDisjointSet(clusterIds.length);
+  const clusterDegree = new Map<number, number>();
+
+  for (let segmentIndex = 0; segmentIndex < sourceSegmentCount; segmentIndex += 1) {
+    const startCluster = endpointClusterByIndex[segmentIndex * 2];
+    const endCluster = endpointClusterByIndex[segmentIndex * 2 + 1];
+    clusterDegree.set(startCluster, (clusterDegree.get(startCluster) ?? 0) + 1);
+    clusterDegree.set(endCluster, (clusterDegree.get(endCluster) ?? 0) + 1);
+    const startNode = clusterIndexById.get(startCluster);
+    const endNode = clusterIndexById.get(endCluster);
+    if (startNode != null && endNode != null && startNode !== endNode) {
+      nodeSets.union(startNode, endNode);
+    }
+  }
+
+  const componentIds = Array.from(new Set(clusterIds.map((clusterId) => {
+    const nodeIndex = clusterIndexById.get(clusterId) ?? 0;
+    return nodeSets.find(nodeIndex);
+  })));
+  const componentByClusterId = new Map(clusterIds.map((clusterId) => {
+    const nodeIndex = clusterIndexById.get(clusterId) ?? 0;
+    return [clusterId, nodeSets.find(nodeIndex)];
+  }));
+
+  let maxJoinGapMeters = 0;
+  let joinedSegmentGapCount = 0;
+  clusterMembers.forEach((memberIndexes) => {
+    if (memberIndexes.length < 2) return;
+    joinedSegmentGapCount += memberIndexes.length - 1;
+    for (let left = 0; left < memberIndexes.length; left += 1) {
+      for (let right = left + 1; right < memberIndexes.length; right += 1) {
+        maxJoinGapMeters = Math.max(
+          maxJoinGapMeters,
+          distanceMeters(endpoints[memberIndexes[left]].point, endpoints[memberIndexes[right]].point),
+        );
+      }
+    }
+  });
+
+  const componentCount = componentIds.length;
+  const branchDetected = Array.from(clusterDegree.values()).some((degree) => degree > 2);
+  const disjointSegmentGapCount = Math.max(0, componentCount - 1);
+  const maxSegmentGapMeters = componentGapMeters(
+    endpoints.map((endpoint, index) => ({
+      point: endpoint.point,
+      component: componentByClusterId.get(endpointClusterByIndex[index]) ?? 0,
+    })),
+    componentIds,
+  );
+
+  if (branchDetected) {
+    return {
+      status: 'preview_only',
+      topologyResolved: false,
+      sourceSegmentCount,
+      componentCount,
+      branchDetected,
+      joinedSegmentGapCount,
+      disjointSegmentGapCount,
+      maxJoinGapMeters: roundedMeters(maxJoinGapMeters),
+      maxSegmentGapMeters,
+      unavailableReason: 'Active guidance is preview-only because this aggregate contains a branching source network. Select or curate one route path before active guidance.',
+    };
+  }
+
+  if (componentCount > 1) {
+    return {
+      status: 'preview_only',
+      topologyResolved: false,
+      sourceSegmentCount,
+      componentCount,
+      branchDetected,
+      joinedSegmentGapCount,
+      disjointSegmentGapCount,
+      maxJoinGapMeters: joinedSegmentGapCount > 0 ? roundedMeters(maxJoinGapMeters) : null,
+      maxSegmentGapMeters,
+      unavailableReason: 'Active guidance is preview-only because this aggregate contains disconnected source segments. ECS will show source geometry without inventing connectors.',
+    };
+  }
+
+  return {
+    status: 'ready',
+    topologyResolved: true,
+    sourceSegmentCount,
+    componentCount,
+    branchDetected,
+    joinedSegmentGapCount,
+    disjointSegmentGapCount,
+    maxJoinGapMeters: roundedMeters(maxJoinGapMeters),
+    maxSegmentGapMeters,
+    unavailableReason: null,
+  };
+}
+
+export function buildUsfsMvumWhereClause(
+  forests: UsfsMvumForest[],
+  options: { minMiles?: number } = {},
+): string {
+  const minMiles = Math.max(0, Number(options.minMiles ?? 1));
+  const forestNames = forests.map((forest) => sqlString(forest.forestName)).join(',');
+  return [
+    `FORESTNAME in (${forestNames})`,
+    `GIS_MILES >= ${Number(minMiles.toFixed(3))}`,
+    "(HIGHCLEARA = 'open' OR FOURWD_GT5 = 'open' OR PASSENGERV = 'open' OR ATV = 'open' OR MOTORCYCLE = 'open')",
+  ].join(' AND ');
+}
+
+export function normalizeUsfsMvumFeatureCollection(payload: unknown): UsfsMvumArcGisFeature[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const features = (payload as { features?: unknown }).features;
+  if (!Array.isArray(features)) return [];
+  return features
+    .filter((feature): feature is UsfsMvumArcGisFeature => !!feature && typeof feature === 'object')
+    .map((feature) => ({
+      attributes: feature.attributes && typeof feature.attributes === 'object'
+        ? feature.attributes as Record<string, unknown>
+        : {},
+      geometry: feature.geometry && typeof feature.geometry === 'object'
+        ? feature.geometry as UsfsMvumArcGisFeature['geometry']
+        : undefined,
+    }));
+}
+
+export function routeSourceUpsertForForest(forest: UsfsMvumForest) {
+  return {
+    provider_id: forest.sourceProviderId,
+    name: forest.sourceName,
+    source_type: 'federal_agency',
+    authority: 'official_access',
+    source_uri: forest.sourceUri,
+    attribution: 'USDA Forest Service Motor Vehicle Use Maps',
+    license: 'agency published terms',
+    refresh_frequency: 'agency published schedule',
+    status: 'active',
+    last_checked_at: new Date().toISOString(),
+  };
+}
+
+export function routeCurrentConditionSourceUpsertForForest(
+  forest: UsfsMvumForest,
+  source?: UsfsMvumCurrentConditionSource,
+) {
+  return {
+    provider_id: source?.providerId ?? forest.currentConditionProviderId,
+    name: source?.label ?? forest.currentConditionSourceName,
+    source_type: 'federal_agency',
+    authority: 'official_closure',
+    source_uri: source?.sourceUrl ?? forest.currentConditionSourceUri,
+    attribution: 'USDA Forest Service alerts, notices, and current conditions',
+    license: 'agency published terms',
+    refresh_frequency: 'current condition review before recommendation sync',
+    status: 'active',
+    last_checked_at: source?.checkedAt ?? new Date().toISOString(),
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readStringList(record: Record<string, unknown>, keys: string[]): string[] {
+  return uniqueStrings(keys.flatMap((key) => {
+    const value = record[key];
+    if (Array.isArray(value)) return value.map((item) => cleanString(item));
+    return [cleanString(value)];
+  }));
+}
+
+function normalizeIsoString(value: unknown): string | null {
+  const text = cleanString(value);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizeClosureStatus(value: unknown): UsfsMvumClosureStatus {
+  const text = cleanString(value).toLowerCase();
+  if (text === 'active' || text === 'open_closure' || text === 'closed') return 'active';
+  if (text === 'scheduled' || text === 'planned') return 'scheduled';
+  if (text === 'expired' || text === 'ended' || text === 'inactive') return 'expired';
+  return 'unknown';
+}
+
+function normalizeClosureType(value: unknown): UsfsMvumClosureType {
+  const text = cleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (
+    text === 'seasonal' ||
+    text === 'emergency' ||
+    text === 'fire' ||
+    text === 'flood' ||
+    text === 'maintenance' ||
+    text === 'land_manager' ||
+    text === 'permanent' ||
+    text === 'unknown'
+  ) {
+    return text as UsfsMvumClosureType;
+  }
+  if (text === 'forest_order' || text === 'official_order' || text === 'administrative') return 'land_manager';
+  return 'unknown';
+}
+
+function currentConditionInputs(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.map(readRecord).filter((record): record is Record<string, unknown> => !!record);
+  }
+  const record = readRecord(value);
+  if (!record) return [];
+  if (
+    Array.isArray(record.closures) ||
+    cleanString(record.forestSlug) ||
+    cleanString(record.forest_slug) ||
+    cleanString(record.forestName) ||
+    cleanString(record.forest_name)
+  ) {
+    return [record];
+  }
+  return Object.entries(record)
+    .map(([forestSlug, forestValue]) => {
+      const sourceRecord = readRecord(forestValue);
+      return sourceRecord ? { forestSlug, ...sourceRecord } : null;
+    })
+    .filter((sourceRecord): sourceRecord is Record<string, unknown> => !!sourceRecord);
+}
+
+function sourceForest(record: Record<string, unknown>, forests: UsfsMvumForest[]): UsfsMvumForest | null {
+  const requested = [
+    cleanString(record.forestSlug),
+    cleanString(record.forest_slug),
+    cleanString(record.forestName),
+    cleanString(record.forest_name),
+    cleanString(record.providerId),
+    cleanString(record.provider_id),
+  ].map((value) => value.toLowerCase()).filter(Boolean);
+  if (requested.length === 0 && forests.length === 1) return forests[0];
+  return forests.find((forest) =>
+    requested.includes(forest.slug) ||
+    requested.includes(forest.forestName.toLowerCase()) ||
+    requested.includes(forest.currentConditionProviderId.toLowerCase()) ||
+    requested.includes(forest.sourceProviderId.toLowerCase()),
+  ) ?? null;
+}
+
+function normalizeCurrentConditionClosure(
+  value: unknown,
+  source: Pick<UsfsMvumCurrentConditionSource, 'sourceUrl' | 'checkedAt'>,
+): UsfsMvumCurrentConditionClosure | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const title = cleanString(record.title ?? record.name ?? record.forestOrder ?? record.forest_order);
+  if (!title) return null;
+
+  return {
+    id: cleanString(record.id ?? record.providerClosureId ?? record.provider_closure_id) || undefined,
+    title,
+    summary: cleanString(record.summary ?? record.description ?? record.notice) || undefined,
+    sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || source.sourceUrl,
+    forestOrder: cleanString(record.forestOrder ?? record.forest_order ?? record.orderNumber ?? record.order_number) || undefined,
+    status: normalizeClosureStatus(record.status),
+    closureType: normalizeClosureType(record.closureType ?? record.closure_type ?? record.type),
+    startsAt: normalizeIsoString(record.startsAt ?? record.starts_at ?? record.startDate ?? record.start_date),
+    endsAt: normalizeIsoString(record.endsAt ?? record.ends_at ?? record.endDate ?? record.end_date),
+    lastVerifiedAt: normalizeIsoString(record.lastVerifiedAt ?? record.last_verified_at) ?? source.checkedAt,
+    confidenceScore: clampNumber(Number(record.confidenceScore ?? record.confidence_score ?? 90), 0, 100),
+    routePublicIds: readStringList(record, ['routePublicId', 'route_public_id', 'routePublicIds', 'route_public_ids']),
+    segmentPublicIds: readStringList(record, ['segmentPublicId', 'segment_public_id', 'segmentPublicIds', 'segment_public_ids']),
+    providerFeatureIds: readStringList(record, ['providerFeatureId', 'provider_feature_id', 'providerFeatureIds', 'provider_feature_ids']),
+    routeIds: readStringList(record, ['routeId', 'route_id', 'routeIds', 'route_ids', 'routeNumber', 'route_number']),
+    routeIdentityPatterns: readStringList(record, [
+      'routeIdentity',
+      'route_identity',
+      'routeName',
+      'route_name',
+      'routeNamePattern',
+      'route_name_pattern',
+      'routeNameIncludes',
+      'route_name_includes',
+      'routeIdentityPatterns',
+      'route_identity_patterns',
+    ]),
+  };
+}
+
+export function normalizeUsfsMvumCurrentConditionSources(
+  value: unknown,
+  forests = USFS_MVUM_PILOT_FORESTS,
+  nowIso = new Date().toISOString(),
+): UsfsMvumCurrentConditionSource[] {
+  return currentConditionInputs(value)
+    .map((record) => {
+      const forest = sourceForest(record, forests);
+      if (!forest) return null;
+      const checkedAt = normalizeIsoString(record.checkedAt ?? record.checked_at ?? record.lastCheckedAt ?? record.last_checked_at) ?? nowIso;
+      const source: UsfsMvumCurrentConditionSource = {
+        forestSlug: forest.slug,
+        forestName: forest.forestName,
+        providerId: cleanString(record.providerId ?? record.provider_id) || forest.currentConditionProviderId,
+        label: cleanString(record.label ?? record.name) || forest.currentConditionSourceName,
+        sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || forest.currentConditionSourceUri,
+        referenceUrl: cleanString(record.referenceUrl ?? record.reference_url) || forest.currentConditionReferenceUri,
+        checkedAt,
+        staleAt: normalizeIsoString(record.staleAt ?? record.stale_at) ?? addDaysIso(checkedAt, 7),
+        closures: [],
+      };
+      const closures = Array.isArray(record.closures) ? record.closures : [];
+      source.closures = closures
+        .map((closure) => normalizeCurrentConditionClosure(closure, source))
+        .filter((closure): closure is UsfsMvumCurrentConditionClosure => !!closure);
+      return source;
+    })
+    .filter((source): source is UsfsMvumCurrentConditionSource => !!source);
+}
+
+function normalizedText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function routeIdAliases(routeId: string): string[] {
+  const cleanRouteId = cleanString(routeId);
+  const aliases = [cleanRouteId];
+  if (/^\d{1,2}$/.test(cleanRouteId)) aliases.push(`853${cleanRouteId.padStart(2, '0')}`);
+  return uniqueStrings(aliases);
+}
+
+function metadataValues(value: unknown, keys: string[]): string[] {
+  const record = readRecord(value);
+  if (!record) return [];
+  return readStringList(record, keys);
+}
+
+function routeMatchValues(target: UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert): string[] {
+  const route = target.verifiedRoute;
+  const sourceMetadata = readRecord(target.verifiedRouteSource.metadata);
+  const communitySignal = readRecord(route.community_signal);
+  return uniqueStrings([
+    cleanString(route.public_id),
+    cleanString(route.name),
+    ...(Array.isArray(route.tags) ? route.tags.map((tag) => cleanString(tag)) : []),
+    ...(Array.isArray(target.segmentPublicIds) ? target.segmentPublicIds.map((id) => cleanString(id)) : []),
+    ...(Array.isArray(target.segmentProviderFeatureIds) ? target.segmentProviderFeatureIds.map((id) => cleanString(id)) : []),
+    ...metadataValues(sourceMetadata, ['providerFeatureId', 'providerFeatureIds', 'segmentPublicIds']),
+    ...metadataValues(communitySignal, ['segmentPublicIds', 'providerFeatureIds']),
+  ]);
+}
+
+function anyExactMatch(candidates: string[], needles: string[]): boolean {
+  const candidateSet = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return needles.some((needle) => candidateSet.has(needle.toLowerCase()));
+}
+
+function anyTextMatch(candidates: string[], needles: string[]): boolean {
+  const normalizedCandidates = candidates.map(normalizedText).filter(Boolean);
+  return needles.some((needle) => {
+    const normalizedNeedle = normalizedText(needle);
+    if (normalizedNeedle.length < 2) return false;
+    const slugNeedle = slugify(needle).replace(/-/g, ' ');
+    return normalizedCandidates.some((candidate) =>
+      candidate === normalizedNeedle ||
+      candidate.includes(normalizedNeedle) ||
+      (slugNeedle.length >= 2 && candidate.includes(slugNeedle)),
+    );
+  });
+}
+
+function closureMatchesRoute(
+  closure: UsfsMvumCurrentConditionClosure,
+  target: UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert,
+): boolean {
+  const candidates = routeMatchValues(target);
+  if (anyExactMatch(candidates, closure.routePublicIds)) return true;
+  if (anyExactMatch(candidates, closure.segmentPublicIds)) return true;
+  if (anyExactMatch(candidates, closure.providerFeatureIds)) return true;
+  if (anyTextMatch(candidates, closure.routeIdentityPatterns)) return true;
+  return closure.routeIds.some((routeId) => anyTextMatch(candidates, routeIdAliases(routeId)));
+}
+
+function closureIsActive(closure: UsfsMvumCurrentConditionClosure, checkedAt: string): boolean {
+  if (closure.status !== 'active') return false;
+  const checkedTime = Date.parse(checkedAt);
+  const endTime = closure.endsAt ? Date.parse(closure.endsAt) : Number.NaN;
+  return !(Number.isFinite(checkedTime) && Number.isFinite(endTime) && endTime < checkedTime);
+}
+
+function closureSummary(source: UsfsMvumCurrentConditionSource, closure: UsfsMvumCurrentConditionClosure): string {
+  return [
+    closure.title,
+    closure.summary,
+    closure.forestOrder ? `Forest Order ${closure.forestOrder}` : '',
+    source.label,
+    closure.sourceUrl,
+  ].filter(Boolean).join(' | ');
+}
+
+export function applyUsfsMvumCurrentConditionSources<T extends UsfsMvumRouteUpsert | UsfsMvumAggregateRouteUpsert>(
+  target: T,
+  sources: UsfsMvumCurrentConditionSource[] = [],
+): T {
+  const routeTags = Array.isArray(target.verifiedRoute.tags) ? target.verifiedRoute.tags.map((tag) => cleanString(tag)) : [];
+  const primaryRouteTag = routeTags[0] ?? '';
+  const matchValues = routeMatchValues(target);
+  const relevantSources = sources.filter((source) =>
+    cleanString(source.forestSlug).toLowerCase() === primaryRouteTag.toLowerCase() ||
+    cleanString(source.forestName).toLowerCase() === primaryRouteTag.toLowerCase() ||
+    matchValues.some((value) => normalizedText(value).includes(normalizedText(source.forestName))),
+  );
+  if (relevantSources.length === 0) return target;
+
+  const matched = relevantSources.flatMap((source) =>
+    source.closures
+      .filter((closure) => closureMatchesRoute(closure, target))
+      .map((closure) => ({ source, closure })),
+  );
+  if (matched.length === 0) return target;
+
+  const activeMatches = matched.filter(({ source, closure }) => closureIsActive(closure, source.checkedAt));
+  const watchMatches = matched.filter(({ source, closure }) => !closureIsActive(closure, source.checkedAt));
+  const existingActiveClosureCount = Number(target.verifiedRoute.active_closure_count ?? 0);
+  const conditionSummary = {
+    sourceCount: relevantSources.length,
+    matchedClosureCount: matched.length,
+    activeClosureCount: activeMatches.length,
+    watchClosureCount: watchMatches.length,
+    checkedAt: uniqueStrings(relevantSources.map((source) => source.checkedAt)),
+    staleAt: uniqueStrings(relevantSources.map((source) => source.staleAt)),
+    caveat: ROUTE_CATALOG_CURRENT_CONDITION_CAVEAT,
+  };
+  const existingCommunitySignal = readRecord(target.verifiedRoute.community_signal) ?? {};
+  const existingMetadata = readRecord(target.verifiedRouteSource.metadata) ?? {};
+  const baseWarnings = Array.isArray(target.verifiedRoute.warning_reasons)
+    ? target.verifiedRoute.warning_reasons.map((warning) => cleanString(warning))
+    : [];
+  const baseBlockers = Array.isArray(target.verifiedRoute.blocker_reasons)
+    ? target.verifiedRoute.blocker_reasons.map((blocker) => cleanString(blocker))
+    : [];
+  const baseClosures = Array.isArray(target.verifiedRoute.closure_summaries)
+    ? target.verifiedRoute.closure_summaries.map((summary) => cleanString(summary))
+    : [];
+
+  const verifiedRoute = {
+    ...target.verifiedRoute,
+    active_closure_count: existingActiveClosureCount + activeMatches.length,
+    warning_reasons: uniqueStrings([
+      ...baseWarnings,
+      ...matched.map(({ source }) => `Official current-condition source checked: ${source.label} at ${source.checkedAt}.`),
+      ...watchMatches.map(({ closure }) => `Official current-condition notice requires review: ${closure.title}.`),
+    ]),
+    blocker_reasons: uniqueStrings([
+      ...baseBlockers,
+      ...activeMatches.map(({ closure }) => `Active official closure: ${closure.title}.`),
+    ]),
+    closure_summaries: uniqueStrings([
+      ...baseClosures,
+      ...matched.map(({ source, closure }) => closureSummary(source, closure)),
+    ]),
+    community_signal: {
+      ...existingCommunitySignal,
+      currentConditions: conditionSummary,
+    },
+  };
+
+  if (activeMatches.length > 0) {
+    verifiedRoute.recommendation_status = 'not_recommended';
+    verifiedRoute.verification_status = 'not_recommended';
+    verifiedRoute.confidence_score = Math.min(Number(verifiedRoute.confidence_score ?? 0), 74);
+  }
+
+  return {
+    ...target,
+    verifiedRoute,
+    verifiedRouteSource: {
+      ...target.verifiedRouteSource,
+      metadata: {
+        ...existingMetadata,
+        currentConditions: conditionSummary,
+      },
+    },
+  };
+}
+
+export function arcGisFeatureToVerifiedRouteUpsert(
+  feature: UsfsMvumArcGisFeature,
+  context: UsfsMvumRouteContext,
+) {
+  const attributes = feature.attributes ?? {};
+  const distanceMiles = cleanNumber(attributes.GIS_MILES ?? attributes.SEG_LENGTH);
+  const minMiles = Math.max(0, Number(context.minMiles ?? 1));
+  if (distanceMiles == null || distanceMiles < minMiles) return null;
+
+  const paths = normalizePaths(feature);
+  const routeGeometry = routeGeometryFromPaths(paths);
+  const center = centerFromPaths(paths);
+  if (!routeGeometry || !center) return null;
+
+  const vehicleFit = orderedVehicleFit(vehicleFitFromAttributes(attributes));
+  if (vehicleFit.length === 0) return null;
+
+  const id = cleanString(attributes.ID || attributes.FIELD_ID || attributes.RTE_CN);
+  const providerId = providerFeatureId(context.layer, attributes);
+  const featureKey = sourceFeatureKey(attributes);
+  const name = routeName(context.layer, attributes);
+  const publicRecommendation = context.publicRecommendation !== false;
+  const publicId = slugify([
+    'usfs-mvum',
+    context.forest.slug,
+    context.layer.kind,
+    id,
+    cleanString(attributes.NAME),
+    `feature ${featureKey}`,
+  ].filter(Boolean).join(' '));
+  const forestTag = context.forest.forestName;
+  const district = cleanString(attributes.DISTRICTNA);
+  const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 18));
+
+  const verifiedRoute = {
+    public_id: publicId,
+    name,
+    description: `${context.forest.forestName} ${context.layer.sourceLayer} record from USFS MVUM. ECS treats this as official motorized-access geometry, not current passability.`,
+    route_type: 'point_to_point',
+    center_latitude: center.latitude,
+    center_longitude: center.longitude,
+    route_geometry: routeGeometry,
+    distance_miles: Number(distanceMiles.toFixed(3)),
+    estimated_duration_minutes: estimatedDurationMinutes,
+    difficulty: 'unknown',
+    vehicle_fit: vehicleFit,
+    remoteness_score: estimateMvumRemotenessScore(distanceMiles),
+    campability_score: null,
+    minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
+    minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
+    route_intelligence: mvumRouteIntelligence({
+      distanceMiles,
+      estimatedDurationMinutes,
+      sourceFeatureCount: 1,
+    }),
+    official_access_coverage_pct: 100,
+    unknown_access_coverage_pct: 0,
+    restricted_access_coverage_pct: 0,
+    active_closure_count: 0,
+    seasonal_restriction_count: cleanString(attributes.SEASONAL) ? 1 : 0,
+    vehicle_mismatch: false,
+    geometry_quality: 'good',
+    verification_status: 'official_verified',
+    recommendation_status: publicRecommendation ? 'recommendable' : 'not_recommended',
+    review_status: 'approved',
+    confidence_score: 92,
+    confidence_reasons: [
+      `USFS MVUM designates this ${context.layer.kind} for listed motorized vehicle classes.`,
+      `Official MVUM source: ${context.forest.forestName}.`,
+    ],
+    warning_reasons: [
+      ROUTE_CATALOG_MVUM_WARNING,
+      ...(!publicRecommendation ? ['Source segment retained for traceability; ECS recommends the named aggregate route record when available.'] : []),
+      ...(cleanString(attributes.SEASONAL) ? ['Seasonal designation requires trip-date review against the current MVUM.'] : []),
+    ],
+    blocker_reasons: [],
+    closure_summaries: [],
+    community_signal: {},
+    tags: [forestTag, 'USFS MVUM', context.layer.kind, district, ...(!publicRecommendation ? ['source segment'] : [])].filter(Boolean),
+    last_verified_at: context.sourceLastVerifiedAt,
+    stale_at: addDaysIso(context.sourceLastVerifiedAt, 180),
+  };
+
+  const rawSourceFeature = {
+    route_source_id: context.sourceId,
+    ingest_run_id: context.ingestRunId ?? null,
+    provider_feature_id: providerId,
+    source_layer: context.layer.sourceLayer,
+    source_uri: context.layer.url,
+    payload_hash: stablePayloadHash(feature),
+    geometry: null,
+    properties: {
+      attributes,
+      geometry: routeGeometry,
+      forest: context.forest.forestName,
+      routeCatalogPublicId: publicId,
+    },
+    last_seen_at: context.sourceLastVerifiedAt,
+  };
+
+  const verifiedRouteSource = {
+    route_source_id: context.sourceId,
+    source_role: 'primary',
+    coverage_pct: 100,
+    last_verified_at: context.sourceLastVerifiedAt,
+    metadata: {
+      providerFeatureId: providerId,
+      sourceLayer: context.layer.sourceLayer,
+      forest: context.forest.forestName,
+      mvumStatus: cleanString(attributes[context.layer.statusField]),
+      caveat: ROUTE_CATALOG_MVUM_WARNING,
+    },
+  };
+
+  return {
+    verifiedRoute,
+    verifiedRouteSource,
+    rawSourceFeature,
+  };
+}
+
+export function aggregateUsfsMvumRouteFeatures(
+  features: UsfsMvumArcGisFeature[],
+  context: UsfsMvumRouteContext,
+): UsfsMvumAggregateRouteUpsert[] {
+  const groups = new Map<string, {
+    identity: NonNullable<ReturnType<typeof aggregationIdentity>>;
+    segments: UsfsMvumRouteUpsert[];
+  }>();
+
+  for (const feature of features) {
+    const attributes = feature.attributes ?? {};
+    const identity = aggregationIdentity(context.layer, attributes);
+    if (!identity) continue;
+
+    const segment = arcGisFeatureToVerifiedRouteUpsert(feature, {
+      ...context,
+      publicRecommendation: false,
+    });
+    if (!segment) continue;
+
+    const key = `${context.forest.slug}:${identity.key}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.segments.push(segment);
+    } else {
+      groups.set(key, { identity, segments: [segment] });
+    }
+  }
+
+  return Array.from(groups.values()).map(({ identity, segments }) => {
+    const segmentPublicIds = segments.map((segment) => String(segment.verifiedRoute.public_id));
+    const segmentProviderFeatureIds = segments.map((segment) => String(segment.rawSourceFeature.provider_feature_id));
+    const lines = segments.flatMap((segment) =>
+      lineStringsFromRouteGeometry(segment.verifiedRoute.route_geometry as Record<string, unknown>),
+    );
+    const activeGuidance = assessUsfsMvumAggregateTopology(lines);
+    const center = centerFromPaths(lines);
+    const distanceMiles = Number(segments.reduce((total, segment) => total + Number(segment.verifiedRoute.distance_miles ?? 0), 0).toFixed(3));
+    const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 18));
+    const districtTags = uniqueStrings(segments.flatMap((segment) =>
+      Array.isArray(segment.verifiedRoute.tags) ? segment.verifiedRoute.tags.map(String) : [],
+    ).filter((tag) => tag !== context.forest.forestName && tag !== 'USFS MVUM' && tag !== context.layer.kind && tag !== 'source segment'));
+    const seasonalRestrictionCount = segments.reduce(
+      (count, segment) => count + Number(segment.verifiedRoute.seasonal_restriction_count ?? 0),
+      0,
+    );
+    const vehicleFit = orderedVehicleFit(segments.flatMap((segment) =>
+      Array.isArray(segment.verifiedRoute.vehicle_fit) ? segment.verifiedRoute.vehicle_fit.map(String) : [],
+    ));
+    const warningReasons = [
+      ROUTE_CATALOG_MVUM_WARNING,
+      'Source-segment aggregate: ECS combines MVUM features with the same route identity without inventing connector geometry.',
+      ...(activeGuidance.unavailableReason ? [activeGuidance.unavailableReason] : []),
+      ...(seasonalRestrictionCount > 0 ? ['One or more source segments has a seasonal designation that requires trip-date review against the current MVUM.'] : []),
+    ];
+    const publicId = slugify([
+      'usfs-mvum',
+      context.forest.slug,
+      ...identity.publicIdParts.slice(1),
+    ].filter(Boolean).join(' '));
+    const sourceFeatureCount = segments.length;
+
+    return {
+      verifiedRoute: {
+        public_id: publicId,
+        name: routeName(context.layer, segments[0].rawSourceFeature.properties.attributes as Record<string, unknown>),
+        description: `${context.forest.forestName} ${context.layer.sourceLayer} aggregate built from ${sourceFeatureCount} USFS MVUM source segment${sourceFeatureCount === 1 ? '' : 's'}. ECS treats this as official motorized-access geometry, not current passability.`,
+        route_type: 'point_to_point',
+        center_latitude: center?.latitude ?? Number(segments[0].verifiedRoute.center_latitude),
+        center_longitude: center?.longitude ?? Number(segments[0].verifiedRoute.center_longitude),
+        route_geometry: lines.length === 1
+          ? { type: 'LineString', coordinates: lines[0] }
+          : { type: 'MultiLineString', coordinates: lines },
+        distance_miles: distanceMiles,
+        estimated_duration_minutes: estimatedDurationMinutes,
+        difficulty: 'unknown',
+        vehicle_fit: vehicleFit,
+        remoteness_score: estimateMvumRemotenessScore(distanceMiles, sourceFeatureCount),
+        campability_score: null,
+        minimum_fuel_range_miles: estimateMinimumFuelRangeMiles(distanceMiles),
+        minimum_water_capacity_gallons: estimateMinimumWaterCapacityGallons(estimatedDurationMinutes),
+        route_intelligence: mvumRouteIntelligence({
+          distanceMiles,
+          estimatedDurationMinutes,
+          sourceFeatureCount,
+          activeGuidance,
+        }),
+        official_access_coverage_pct: 100,
+        unknown_access_coverage_pct: 0,
+        restricted_access_coverage_pct: 0,
+        active_closure_count: 0,
+        seasonal_restriction_count: seasonalRestrictionCount,
+        vehicle_mismatch: false,
+        geometry_quality: sourceFeatureCount > 1 ? 'partial' : 'good',
+        verification_status: 'official_verified',
+        recommendation_status: 'recommendable',
+        review_status: 'approved',
+        confidence_score: sourceFeatureCount > 1 ? 90 : 92,
+        confidence_reasons: [
+          `USFS MVUM designates this ${context.layer.kind} identity for listed motorized vehicle classes.`,
+          `Combined ${sourceFeatureCount} MVUM source segment${sourceFeatureCount === 1 ? '' : 's'} with matching route identity.`,
+          ...(activeGuidance.status === 'ready' ? ['Active guidance topology resolved from official source segment endpoints.'] : []),
+          `Official MVUM source: ${context.forest.forestName}.`,
+        ],
+        warning_reasons: warningReasons,
+        blocker_reasons: [],
+        closure_summaries: [],
+        community_signal: {
+          aggregation: 'usfs_mvum_route_identity',
+          activeGuidance,
+          sourceFeatureCount,
+          segmentPublicIds,
+          providerFeatureIds: segmentProviderFeatureIds,
+        },
+        tags: uniqueStrings([
+          context.forest.forestName,
+          'USFS MVUM',
+          context.layer.kind,
+          'source-segment aggregate',
+          ...districtTags,
+        ]),
+        last_verified_at: context.sourceLastVerifiedAt,
+        stale_at: addDaysIso(context.sourceLastVerifiedAt, 180),
+      },
+      verifiedRouteSource: {
+        route_source_id: context.sourceId,
+        source_role: 'primary',
+        coverage_pct: 100,
+        last_verified_at: context.sourceLastVerifiedAt,
+        metadata: {
+          providerFeatureIds: segmentProviderFeatureIds,
+          segmentPublicIds,
+          sourceFeatureCount,
+          sourceLayer: context.layer.sourceLayer,
+          forest: context.forest.forestName,
+          aggregation: 'usfs_mvum_route_identity',
+          activeGuidance,
+          caveat: ROUTE_CATALOG_MVUM_WARNING,
+        },
+      },
+      segmentPublicIds,
+      segmentProviderFeatureIds,
+    };
+  });
+}

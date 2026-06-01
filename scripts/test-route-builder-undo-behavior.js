@@ -64,6 +64,16 @@ assertIncludes(
   'Undo should restore any low-confidence/raw fallback hint from the previous segment.',
 );
 assertIncludes(
+  navigateTab,
+  'syncSelectedDispersedRouteLegIds(nextSegments);',
+  'Undo should keep selected yellow dispersed leg styling in sync with the remaining Build Route draft.',
+);
+assertIncludes(
+  navigateTab,
+  'segment.sourceSegmentId',
+  'Undo and equality paths should preserve tapped dispersed route leg identity on draft segments.',
+);
+assertIncludes(
   mapRenderer,
   'routeBuilderRawTraceSegments = [];\n          routeBuilderActiveRawSegmentId = null;\n          routeBuilderTraceSessionId = null;\n          routeBuilderDraftSegments = cloneBuilderSegments(payload.routeBuilderSegments || []);',
   'MapRenderer should drop stale raw trace sessions when React syncs an undo/clear result.',

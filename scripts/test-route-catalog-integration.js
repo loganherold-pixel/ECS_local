@@ -1,0 +1,244 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const root = path.join(__dirname, '..');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+}
+
+const migration = read(path.join('supabase', 'migrations', '027_verified_route_catalog.sql'));
+const liveCatalog = read(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'));
+const supabaseClient = read(path.join('lib', 'supabase.ts'));
+const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
+
+for (const table of [
+  'route_sources',
+  'route_source_ingest_runs',
+  'route_raw_source_features',
+  'route_segments',
+  'route_segment_sources',
+  'route_access_rules',
+  'route_closures',
+  'verified_routes',
+  'verified_route_segments',
+  'route_community_submissions',
+]) {
+  assert(
+    migration.includes(`public.${table}`),
+    `Verified route catalog migration should create ${table}`,
+  );
+}
+
+assert(
+  migration.includes('route_catalog_public') &&
+    migration.includes("review_status = 'approved'") &&
+    migration.includes("recommendation_status = 'recommendable'"),
+  'Migration should expose only approved/recommendable records through the public catalog view',
+);
+assert(
+  migration.includes('alter table public.route_sources enable row level security') &&
+    migration.includes('route_community_submissions_select_own') &&
+    migration.includes('route_community_submissions_insert_own'),
+  'Migration should enable RLS and keep community submissions private to their owner/admin flow',
+);
+assert(
+  migration.includes('provider_id') &&
+    migration.includes('source_uri') &&
+    migration.includes('attribution') &&
+    migration.includes('payload_hash'),
+  'Migration should preserve raw source identity, attribution, URI, and checksum metadata',
+);
+assert(
+  migration.includes('usfs_mvum_tahoe_nf') &&
+    migration.includes('usfs_mvum_mendocino_nf') &&
+    migration.includes('unique (route_source_id, provider_feature_id, source_layer)'),
+  'Migration should seed Tahoe/Mendocino MVUM pilot sources and support repeatable raw-feature upserts',
+);
+
+const operationalCriteriaMigration = read(path.join('supabase', 'migrations', '028_route_catalog_operational_criteria.sql'));
+assert(
+  operationalCriteriaMigration.includes('remoteness_score') &&
+    operationalCriteriaMigration.includes('campability_score') &&
+    operationalCriteriaMigration.includes('minimum_fuel_range_miles') &&
+    operationalCriteriaMigration.includes('minimum_water_capacity_gallons') &&
+    operationalCriteriaMigration.includes('route_intelligence') &&
+    operationalCriteriaMigration.includes('route_catalog_public') &&
+    operationalCriteriaMigration.includes('verified_routes_operational_criteria_idx'),
+  'Route catalog should add schema-backed operational criteria for remoteness, campability, fuel range, and water margins',
+);
+
+for (const functionName of [
+  'route-catalog-search',
+  'route-catalog-detail',
+  'route-submission-intake',
+  'route-catalog-sync-usfs-mvum',
+  'route-catalog-sync-blm-gtlf',
+  'route-catalog-sync-usgs-trails',
+  'route-catalog-sync-nps-trails',
+  'route-catalog-sync-michigan-orv',
+  'route-catalog-sync-minnesota-ohv',
+  'route-catalog-sync-oregon-odf-ohv',
+]) {
+  const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
+  assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
+  const source = fs.readFileSync(functionPath, 'utf8');
+  assert(
+    source.includes('ECS_SERVICE_ROLE_KEY') || source.includes('SUPABASE_SERVICE_ROLE_KEY'),
+    `${functionName} should use server-side service role access`,
+  );
+  assert(
+    !source.includes('RIDB_API_KEY') &&
+      !source.includes('NPS_API_KEY') &&
+      !source.includes('CAMPFLARE_API_KEY') &&
+      !source.includes('ACTIVE_API_KEY') &&
+      !source.includes('RESERVEAMERICA_API_KEY'),
+    `${functionName} should not expose campground/provider API keys`,
+  );
+}
+const detailFunction = read(path.join('supabase', 'functions', 'route-catalog-detail', 'index.ts'));
+const searchFunction = read(path.join('supabase', 'functions', 'route-catalog-search', 'index.ts'));
+assert(
+  detailFunction.includes('activeGuidance') &&
+    detailFunction.includes('community_signal') &&
+    detailFunction.includes('whatToWatch') &&
+    detailFunction.includes('sourceTimestamps') &&
+    detailFunction.includes('sourceAttribution') &&
+    detailFunction.includes('freshnessWarnings'),
+  'Route catalog detail should expose server-side active-guidance topology metadata plus offline-cache source freshness and attribution metadata',
+);
+assert(
+  searchFunction.includes('minDistanceMiles') &&
+    searchFunction.includes('maxDistanceMiles') &&
+    searchFunction.includes('minDurationMinutes') &&
+    searchFunction.includes('maxDurationMinutes') &&
+    searchFunction.includes('routeType') &&
+    searchFunction.includes('difficulty') &&
+    searchFunction.includes('minConfidenceScore') &&
+    searchFunction.includes('minRemotenessScore') &&
+    searchFunction.includes('maxRemotenessScore') &&
+    searchFunction.includes('minCampabilityScore') &&
+    searchFunction.includes('availableFuelRangeMiles') &&
+    searchFunction.includes('availableWaterCapacityGallons') &&
+    searchFunction.includes('includePreviewGeometry') &&
+    searchFunction.includes('simplifyGeometryForPreview') &&
+    searchFunction.includes('route_geometry_mode') &&
+    searchFunction.includes('preview_simplified') &&
+    searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
+    searchFunction.includes(".gte('distance_miles'") &&
+    searchFunction.includes(".lte('estimated_duration_minutes'") &&
+    searchFunction.includes(".gte('remoteness_score'") &&
+    searchFunction.includes(".lte('minimum_fuel_range_miles'"),
+  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, campability, and resource margins',
+);
+
+assert(
+  liveCatalog.includes("functions.invoke('route-catalog-search'") &&
+    liveCatalog.includes('buildRouteCatalogSearchBody') &&
+    liveCatalog.includes('latitude: criteria.latitude') &&
+    liveCatalog.includes('longitude: criteria.longitude') &&
+    liveCatalog.includes('radiusMiles: criteria.radiusMiles') &&
+    liveCatalog.includes('vehicleClass: criteria.vehicleClass') &&
+    liveCatalog.includes('minDistanceMiles: criteria.minDistanceMiles') &&
+    liveCatalog.includes('maxDurationMinutes: criteria.maxDurationMinutes') &&
+    liveCatalog.includes('routeType: criteria.routeType') &&
+    liveCatalog.includes('difficulty: criteria.difficulty') &&
+    liveCatalog.includes('minConfidenceScore: criteria.minConfidenceScore') &&
+    liveCatalog.includes('minRemotenessScore: criteria.minRemotenessScore') &&
+    liveCatalog.includes('minCampabilityScore: criteria.minCampabilityScore') &&
+    liveCatalog.includes('availableFuelRangeMiles: criteria.availableFuelRangeMiles') &&
+    liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
+    liveCatalog.includes('includeGeometry: false') &&
+    liveCatalog.includes('includePreviewGeometry: true') &&
+    liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
+    liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
+    liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
+    liveCatalog.includes('fetchRouteCatalogTrailPackDetail') &&
+    liveCatalog.includes("from('trail_packs')"),
+  'Live Trail Pack catalog should prefer ECS route-catalog-search, fetch route-catalog-detail for previews, and keep trail_packs as a compatibility fallback',
+);
+assert(
+  supabaseClient.includes('"route-catalog-search"') &&
+    supabaseClient.includes('"route-catalog-detail"') &&
+    supabaseClient.includes('"route-submission-intake"'),
+  'Supabase client deployed-function guard should allow the route catalog functions',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('route-catalog-sync-blm-gtlf') &&
+    read(path.join('.github', 'workflows', 'route-catalog-blm-gtlf-sync.yml')).includes('publicRecommendationCount'),
+  'BLM GTLF route catalog sync should have a durable workflow that reports zero public recommendations for the initial source-segment adapter',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('route-catalog-sync-usgs-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-usgs-trails-sync.yml')).includes('publicRecommendationCount'),
+  'USGS Trails route catalog sync should have a durable workflow that reports zero public recommendations for supplemental geometry-only ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-nps-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('route-catalog-sync-nps-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-nps-trails-sync.yml')).includes('publicRecommendationCount'),
+  'NPS public trails route catalog sync should have a durable workflow that reports zero public recommendations for park-context curation ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('route-catalog-sync-michigan-orv') &&
+    read(path.join('.github', 'workflows', 'route-catalog-michigan-orv-sync.yml')).includes('publicRecommendationCount'),
+  'Michigan DNR ORV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('route-catalog-sync-minnesota-ohv') &&
+    read(path.join('.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml')).includes('publicRecommendationCount'),
+  'Minnesota DNR OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('route-catalog-sync-oregon-odf-ohv') &&
+    read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('publicRecommendationCount'),
+  'Oregon ODF OHV route catalog sync should have a durable workflow that reports zero public recommendations for state-agency curation ingestion',
+);
+assert(
+  discover.includes('No verified routes yet in this area') &&
+    discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
+    discover.includes('routeCatalogSearchCriteria') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('maxDurationMinutes: 480') &&
+    discover.includes('minDurationMinutes: 481') &&
+    discover.includes('minDurationMinutes: 961') &&
+    discover.includes('minRemotenessScore: 7') &&
+    discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
+    discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
+    discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
+    discover.includes('fetchRouteCatalogTrailPackDetail') &&
+    discover.includes('hydrateRouteCatalogOpportunityForHandoff') &&
+    discover.includes('await hydrateRouteCatalogOpportunityForHandoff(route)') &&
+    discover.includes('stageExploreReadinessPreview(routeForHandoff)') &&
+    discover.includes('buildValidatedExploreNavigationPayload(routeForHandoff)') &&
+    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
+    discover.includes('saveOfflinePrepPackHandoff({') &&
+    discover.includes('route: routeForHandoff as any') &&
+    discover.includes('trailPackPreviewDetailStatus') &&
+    discover.includes('trailPackPreviewRequestRef'),
+  'Explore should surface honest partial-coverage copy, search with current criteria, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
+);
+const suggestedRoutesBlock = discover
+  .split('const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]
+  ?.split('const exploreMapHandoffBuild = useMemo')[0] ?? '';
+assert(
+  suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.trailPackRoutes') &&
+    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.hiddenGemRoutes') &&
+    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.popularTrailRoutes') &&
+    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.ecsRouteIdeaRoutes'),
+  'Explore planning/offline Suggested Trailheads should only use source-backed catalog Trail Pack routes',
+);
+assert(
+  !discover.includes('ecs_demo_full_route_fixture') &&
+    !liveCatalog.includes('ecs_demo_full_route_fixture'),
+  'Public Explore catalog flow should not depend on demo full-route geometry fixtures',
+);
+
+console.log('Verified route catalog integration checks passed');

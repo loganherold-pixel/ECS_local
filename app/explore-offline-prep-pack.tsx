@@ -98,6 +98,94 @@ function routeDistance(route: TripBuilderRouteInput): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(readString).filter((item): item is string => Boolean(item))
+    : [];
+}
+
+function formatCatalogTimestamp(value: unknown): string {
+  const text = readString(value);
+  if (!text) return 'unavailable';
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) return text;
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function hasRouteCatalogMetadata(metadata: Record<string, unknown> | null | undefined): boolean {
+  const record = readRecord(metadata);
+  return Boolean(
+    record?.routeCatalogOfflineCache ||
+      record?.routeCatalogSourceTimestamps ||
+      record?.routeCatalogAttribution ||
+      record?.routeCatalogFreshnessWarnings ||
+      record?.catalogVerification,
+  );
+}
+
+function buildRouteCatalogSourceRows(metadata: Record<string, unknown> | null | undefined): string[] {
+  if (!hasRouteCatalogMetadata(metadata)) return [];
+  const timestamps = readStringArray(readRecord(metadata)?.routeCatalogSourceTimestamps);
+  return timestamps.length > 0
+    ? timestamps.slice(0, 4).map((timestamp) => `SOURCE TIMESTAMP | ${formatCatalogTimestamp(timestamp)}`)
+    : ['SOURCE TIMESTAMP | unavailable'];
+}
+
+function buildRouteCatalogAttributionRows(metadata: Record<string, unknown> | null | undefined): string[] {
+  if (!hasRouteCatalogMetadata(metadata)) return [];
+  const rows = Array.isArray(readRecord(metadata)?.routeCatalogAttribution)
+    ? (readRecord(metadata)?.routeCatalogAttribution as unknown[])
+        .map((item) => {
+          const record = readRecord(item);
+          if (!record) return null;
+          const label = readString(record.label);
+          if (!label) return null;
+          const attribution = readString(record.attribution);
+          const license = readString(record.license);
+          return `ATTRIBUTION | ${label}${attribution ? ` | ${attribution}` : ''}${license ? ` | ${license}` : ''}`;
+        })
+        .filter((item): item is string => Boolean(item))
+    : [];
+  return rows.length > 0 ? rows.slice(0, 4) : ['ATTRIBUTION | unavailable'];
+}
+
+function readRouteCatalogFreshnessWarnings(metadata: Record<string, unknown> | null | undefined): string[] {
+  if (!hasRouteCatalogMetadata(metadata)) return [];
+  return readStringArray(readRecord(metadata)?.routeCatalogFreshnessWarnings).slice(0, 4);
+}
+
+function readRouteCatalogOfflineCache(metadata: Record<string, unknown> | null | undefined): {
+  cacheable: boolean | null;
+  lastVerifiedAt: string | null;
+  staleAt: string | null;
+} | null {
+  const cache = readRecord(readRecord(metadata)?.routeCatalogOfflineCache);
+  if (!cache) return null;
+  return {
+    cacheable: readBoolean(cache.cacheable),
+    lastVerifiedAt: readString(cache.lastVerifiedAt) ?? readString(cache.last_verified_at),
+    staleAt: readString(cache.staleAt) ?? readString(cache.stale_at),
+  };
+}
+
 type RouteImportState = {
   status: 'idle' | 'loading' | 'success' | 'error';
   message: string | null;
@@ -444,6 +532,7 @@ function buildOfflinePrepRouteIntent(
   const first = run.points[0];
   const last = run.points[run.points.length - 1];
   const preparedAt = new Date().toISOString();
+  const routeMetadata = input.route.routeMetadata ?? null;
   return {
     syncType: 'route',
     origin: first
@@ -479,6 +568,12 @@ function buildOfflinePrepRouteIntent(
     routeAnalysisSnapshot: analysis,
     readinessSnapshot: {
       offlinePrepManifest: manifest,
+      routeMetadata: input.route.routeMetadata ?? null,
+      routeCatalogSourceTimestamps: routeMetadata?.routeCatalogSourceTimestamps ?? null,
+      routeCatalogAttribution: routeMetadata?.routeCatalogAttribution ?? null,
+      routeCatalogFreshnessWarnings: routeMetadata?.routeCatalogFreshnessWarnings ?? null,
+      routeCatalogOfflineCache: routeMetadata?.routeCatalogOfflineCache ?? null,
+      catalogVerification: routeMetadata?.catalogVerification ?? null,
       tripPlan: input.tripPlan ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,
       readiness: input.readiness ?? input.tripPlan?.readinessReference ?? null,
@@ -891,6 +986,28 @@ export default function ExploreOfflinePrepPackScreen() {
     () => resolveOfflinePrepMapQueueState({ manifest, syncSnapshot, regions: tileRegions }),
     [manifest, syncSnapshot, tileRegions],
   );
+  const selectedRouteCatalogMetadata = selectedInput?.route.routeMetadata ?? null;
+  const routeCatalogSourceRows = useMemo(
+    () => buildRouteCatalogSourceRows(selectedRouteCatalogMetadata),
+    [selectedRouteCatalogMetadata],
+  );
+  const routeCatalogAttributionRows = useMemo(
+    () => buildRouteCatalogAttributionRows(selectedRouteCatalogMetadata),
+    [selectedRouteCatalogMetadata],
+  );
+  const routeCatalogFreshnessWarnings = useMemo(
+    () => readRouteCatalogFreshnessWarnings(selectedRouteCatalogMetadata),
+    [selectedRouteCatalogMetadata],
+  );
+  const routeCatalogOfflineCache = useMemo(
+    () => readRouteCatalogOfflineCache(selectedRouteCatalogMetadata),
+    [selectedRouteCatalogMetadata],
+  );
+  const showRouteCatalogSourceCheck =
+    routeCatalogSourceRows.length > 0 ||
+    routeCatalogAttributionRows.length > 0 ||
+    routeCatalogFreshnessWarnings.length > 0 ||
+    routeCatalogOfflineCache != null;
 
   const handleSelectOfflinePrepRoute = useCallback((route: TripBuilderRouteInput) => {
     hapticMicro();
@@ -1432,6 +1549,67 @@ export default function ExploreOfflinePrepPackScreen() {
                     {manifest.progress.readyItems}/{manifest.progress.totalItems} ready | {manifest.progress.unavailableItems} unavailable | {manifest.progress.failedItems} need review
                   </Text>
 
+                  {showRouteCatalogSourceCheck ? (
+                    <View style={styles.sourceCheckBlock} testID="offline-prep-route-catalog-source-check">
+                      <View style={styles.sourceCheckHeader}>
+                        <View style={styles.sourceCheckTitleRow}>
+                          <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
+                          <Text style={styles.sourceCheckTitle}>Route Catalog Source Check</Text>
+                        </View>
+                        {routeCatalogOfflineCache ? (
+                          <Text style={styles.sourceCheckStatus}>
+                            {routeCatalogOfflineCache.cacheable ? 'CACHEABLE' : 'REVIEW'}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {routeCatalogOfflineCache ? (
+                        <>
+                          <View style={styles.sourceCheckRow}>
+                            <View style={styles.sourceCheckDot} />
+                            <Text style={styles.sourceCheckText}>
+                              CACHE STATUS | {routeCatalogOfflineCache.cacheable ? 'Cacheable' : 'Unavailable'} | Last verified {formatCatalogTimestamp(routeCatalogOfflineCache.lastVerifiedAt)}
+                            </Text>
+                          </View>
+                          <View style={styles.sourceCheckRow}>
+                            <View style={styles.sourceCheckDot} />
+                            <Text style={styles.sourceCheckText}>
+                              STALE AFTER | {formatCatalogTimestamp(routeCatalogOfflineCache.staleAt)}
+                            </Text>
+                          </View>
+                        </>
+                      ) : null}
+                      {routeCatalogSourceRows.map((row) => (
+                        <View key={`route-catalog-source-${row}`} style={styles.sourceCheckRow}>
+                          <View style={styles.sourceCheckDot} />
+                          <Text style={styles.sourceCheckText}>{row}</Text>
+                        </View>
+                      ))}
+                      {routeCatalogAttributionRows.map((row) => (
+                        <View key={`route-catalog-attribution-${row}`} style={styles.sourceCheckRow}>
+                          <View style={styles.sourceCheckDot} />
+                          <Text style={styles.sourceCheckText}>{row}</Text>
+                        </View>
+                      ))}
+                      {routeCatalogFreshnessWarnings.length > 0 ? (
+                        routeCatalogFreshnessWarnings.map((warning) => (
+                          <View
+                            key={`route-catalog-freshness-warning-${warning}`}
+                            style={styles.sourceCheckRow}
+                            testID="offline-prep-route-catalog-freshness-warning"
+                          >
+                            <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
+                            <Text style={styles.sourceCheckText}>FRESHNESS WARNING | {warning}</Text>
+                          </View>
+                        ))
+                      ) : (
+                        <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-freshness-warning">
+                          <View style={styles.sourceCheckDot} />
+                          <Text style={styles.sourceCheckText}>FRESHNESS WARNING | none reported by catalog detail</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
+
                   <MapPrepQueueCard state={mapQueueState} retrying={mapRetrying} onRetry={handleRetry} />
 
                   <View style={styles.itemList}>
@@ -1656,6 +1834,59 @@ const styles = StyleSheet.create({
   progressTrack: { height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 4, backgroundColor: TACTICAL.amber },
   progressMeta: { color: TACTICAL.textMuted, fontSize: 9, fontWeight: '800' },
+  sourceCheckBlock: {
+    gap: 7,
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
+  sourceCheckHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  sourceCheckTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sourceCheckTitle: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+  },
+  sourceCheckStatus: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.9,
+  },
+  sourceCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+  },
+  sourceCheckDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: TACTICAL.amber,
+    marginTop: 5,
+  },
+  sourceCheckWarningDot: {
+    backgroundColor: '#E6A23C',
+  },
+  sourceCheckText: {
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
   mapQueueCard: {
     gap: 7,
     borderRadius: 12,

@@ -21,7 +21,9 @@ import {
   canStartTrailPackGuidance,
   distanceMilesBetween,
   getTrailPackDifficultyLabel,
+  getTrailPackGeometryCoordinateSegments,
   getTrailPackGeometryCoordinates,
+  getTrailPackGuidanceReadiness,
   getTrailPackRouteTypeLabel,
   getTrailPackSourceLabel,
   type ECSTrailPackDiscoveryItem,
@@ -55,6 +57,8 @@ type TrailPackPreviewModalProps = {
   onFeedback: (type: ECSTrailPackFeedbackType, note?: string) => ECSTrailPackFeedbackResult;
   offlineCacheAvailable?: boolean;
   onCacheOffline?: () => void;
+  detailLoading?: boolean;
+  detailError?: string | null;
 };
 
 function formatDate(isoDate: string | undefined): string {
@@ -68,6 +72,28 @@ function formatDate(isoDate: string | undefined): string {
   })}`;
 }
 
+function formatStaleDate(isoDate: string | null | undefined): string {
+  if (!isoDate) return 'Stale after unavailable';
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return 'Stale after unavailable';
+  return `Stale after ${new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })}`;
+}
+
+function formatCatalogTimestamp(isoDate: string | null | undefined): string {
+  if (!isoDate) return 'unavailable';
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return isoDate;
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<typeof getTrailPackGeometryCoordinates>): boolean {
   if (trailPack.routeType === 'loop') return true;
   if (points.length < 3) return false;
@@ -77,10 +103,21 @@ function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<ty
 function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
   const [tokenLoading, setTokenLoading] = useState(() => !getMapboxTokenSync());
-  const geometry = useMemo(() => getTrailPackGeometryCoordinates(trailPack), [trailPack]);
+  const geometrySegments = useMemo(() => getTrailPackGeometryCoordinateSegments(trailPack), [trailPack]);
+  const geometry = useMemo(() => geometrySegments.flat(), [geometrySegments]);
   const routePoints = useMemo<ExplorePreviewCoordinate[]>(
     () => geometry.map((point) => ({ lat: point.latitude, lng: point.longitude })),
     [geometry],
+  );
+  const mapRoutePoints = geometrySegments.length === 1 ? routePoints : [];
+  const sourceTrailSegments = useMemo(
+    () =>
+      geometrySegments.map((segment, index) => ({
+        id: `${trailPack.id}-source-segment-${index}`,
+        coordinates: segment.map((point) => [point.longitude, point.latitude] as [number, number]),
+        color: TACTICAL.amber,
+      })),
+    [geometrySegments, trailPack.id],
   );
   const loop = isLoopRoute(trailPack, geometry);
   const hasGeometry = routePoints.length >= 2;
@@ -149,7 +186,8 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
           </>
         ) : hasGeometry ? (
           <MapRenderer
-            points={routePoints}
+            points={mapRoutePoints}
+            trailSegments={sourceTrailSegments}
             waypoints={waypoints}
             routeColor={TACTICAL.amber}
             mapStyle={DEFAULT_MAP_STYLE}
@@ -193,14 +231,29 @@ export default function TrailPackPreviewModal({
   onFeedback,
   offlineCacheAvailable = false,
   onCacheOffline,
+  detailLoading = false,
+  detailError = null,
 }: TrailPackPreviewModalProps) {
   const insets = useSafeAreaInsets();
   const shellTopClearance =
     getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
   const shellBottomClearance = getShellBottomClearance(insets.bottom, 2);
 
+  const guidanceReadiness = useMemo(
+    () => (trailPack ? getTrailPackGuidanceReadiness(trailPack) : null),
+    [trailPack],
+  );
   const canStart = trailPack ? canStartTrailPackGuidance(trailPack) : false;
-  const sourceLabel = trailPack ? getTrailPackSourceLabel(trailPack.source) : '';
+  const sourceLabel = trailPack ? trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source) : '';
+  const detailAssessment = trailPack?.catalogVerification?.detailAssessment;
+  const offlineCache = trailPack?.catalogVerification?.offlineCache;
+  const effectiveOfflineCacheAvailable = offlineCacheAvailable || Boolean(offlineCache?.cacheable);
+  const detailDataUsed = detailAssessment?.dataUsed?.length
+    ? detailAssessment.dataUsed
+    : trailPack?.catalogVerification?.dataUsed ?? [];
+  const offlineSourceTimestamps = offlineCache?.sourceTimestamps ?? [];
+  const offlineSourceAttribution = offlineCache?.sourceAttribution ?? [];
+  const offlineFreshnessWarnings = offlineCache?.freshnessWarnings ?? [];
   const routeTypeLabel = trailPack ? getTrailPackRouteTypeLabel(trailPack.routeType) : '';
   const difficultyLabel = trailPack ? getTrailPackDifficultyLabel(trailPack.difficulty) : '';
   const warnings = useMemo(
@@ -208,7 +261,7 @@ export default function TrailPackPreviewModal({
     [trailPack],
   );
 
-  if (!trailPack) return null;
+  if (!trailPack || !guidanceReadiness) return null;
 
   const feedbackCount = trailPack.positiveFeedbackCount ?? 0;
   const completionCount = trailPack.completionCount ?? 0;
@@ -272,7 +325,7 @@ export default function TrailPackPreviewModal({
             style={[s.primaryAction, !canStart && s.primaryActionDisabled]}
             disabled={!canStart}
             accessibilityState={{ disabled: !canStart }}
-            accessibilityHint={!canStart ? 'Route geometry is unavailable for this Trail Pack.' : undefined}
+              accessibilityHint={!canStart ? 'Route geometry is unavailable for this Trail Pack.' : undefined}
             activeOpacity={canStart ? 0.84 : 1}
             onPress={() => {
               if (!canStart) return;
@@ -290,18 +343,18 @@ export default function TrailPackPreviewModal({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[s.secondaryAction, !offlineCacheAvailable && s.disabledAction]}
-            activeOpacity={offlineCacheAvailable ? 0.78 : 1}
-            disabled={!offlineCacheAvailable}
-            accessibilityState={{ disabled: !offlineCacheAvailable }}
-            accessibilityHint={!offlineCacheAvailable ? 'Offline cache unavailable for this Trail Pack.' : undefined}
+            style={[s.secondaryAction, !effectiveOfflineCacheAvailable && s.disabledAction]}
+            activeOpacity={effectiveOfflineCacheAvailable ? 0.78 : 1}
+            disabled={!effectiveOfflineCacheAvailable}
+            accessibilityState={{ disabled: !effectiveOfflineCacheAvailable }}
+            accessibilityHint={!effectiveOfflineCacheAvailable ? 'Offline cache unavailable for this Trail Pack.' : undefined}
             onPress={() => {
-              if (!offlineCacheAvailable) return;
+              if (!effectiveOfflineCacheAvailable) return;
               hapticMicro();
               onCacheOffline?.();
             }}
           >
-            <Ionicons name="cloud-download-outline" size={14} color={offlineCacheAvailable ? TACTICAL.amber : TACTICAL.textMuted} />
+            <Ionicons name="cloud-download-outline" size={14} color={effectiveOfflineCacheAvailable ? TACTICAL.amber : TACTICAL.textMuted} />
             <Text style={s.secondaryActionText}>CACHE</Text>
           </TouchableOpacity>
         </ECSOverlayFooter>
@@ -316,20 +369,155 @@ export default function TrailPackPreviewModal({
             {routeTypeLabel} | {difficultyLabel} | ECS confidence {Math.round(trailPack.confidenceScore)}%
           </Text>
           <Text style={s.metaText}>{sourceLabel} | {formatDate(trailPack.lastVerifiedAt)}</Text>
+          <Text style={s.metaText}>{guidanceReadiness.label} | {guidanceReadiness.description}</Text>
           <Text style={s.metaText}>{communitySummary}</Text>
         </View>
+
+        {detailLoading ? (
+          <View style={s.notice}>
+            <ActivityIndicator color={TACTICAL.amber} size="small" />
+            <Text style={s.noticeText}>Loading verified route detail, assessment, and cache metadata.</Text>
+          </View>
+        ) : null}
+
+        {detailError ? (
+          <View style={s.notice}>
+            <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.textMuted} />
+            <Text style={s.noticeText}>{detailError}</Text>
+          </View>
+        ) : null}
 
         {!canStart ? (
           <View style={s.notice}>
             <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.textMuted} />
-            <Text style={s.noticeText}>Missing geometry is handled safely: this Trail Pack can be reviewed, but Start Guidance is disabled.</Text>
+            <Text style={s.noticeText}>{guidanceReadiness.description}</Text>
           </View>
         ) : null}
 
-        {!offlineCacheAvailable ? (
+        {!effectiveOfflineCacheAvailable ? (
           <View style={s.notice}>
             <Ionicons name="cloud-offline-outline" size={13} color={TACTICAL.textMuted} />
             <Text style={s.noticeText}>Offline cache unavailable for this Trail Pack.</Text>
+          </View>
+        ) : null}
+
+        <View style={s.section}>
+          <View style={s.sectionHeader}>
+            <Ionicons
+              name={guidanceReadiness.status === 'ready' ? 'navigate-circle-outline' : 'map-outline'}
+              size={12}
+              color={guidanceReadiness.status === 'ready' ? TACTICAL.amber : TACTICAL.textMuted}
+            />
+            <Text style={s.sectionTitle}>GUIDANCE STATUS</Text>
+          </View>
+          <View style={s.reasonRow}>
+            <View style={[
+              s.reasonDot,
+              guidanceReadiness.status !== 'ready' && { backgroundColor: TACTICAL.textMuted },
+            ]} />
+            <Text style={s.reasonText}>
+              {guidanceReadiness.label} | {guidanceReadiness.description}
+              {guidanceReadiness.sourceSegmentCount ? ` | ${guidanceReadiness.sourceSegmentCount} source segment${guidanceReadiness.sourceSegmentCount === 1 ? '' : 's'}` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {detailAssessment ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>ROUTE ASSESSMENT</Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>
+                STATUS | {detailAssessment.status.toUpperCase()} | Confidence {Math.round(detailAssessment.confidence)}%
+              </Text>
+            </View>
+            {detailAssessment.why.slice(0, 3).map((reason) => (
+              <View key={`why-${reason}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>WHY | {reason}</Text>
+              </View>
+            ))}
+            {detailAssessment.whatToWatch.slice(0, 3).map((watchItem) => (
+              <View key={`watch-${watchItem}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>WHAT TO WATCH | {watchItem}</Text>
+              </View>
+            ))}
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>RECOMMENDED ACTION | {detailAssessment.recommendedAction}</Text>
+            </View>
+            {detailAssessment.toImproveStatus.slice(0, 3).map((improvement) => (
+              <View key={`improve-${improvement}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>TO IMPROVE STATUS | {improvement}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {offlineCache ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="cloud-download-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>OFFLINE CACHE</Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>
+                CACHE STATUS | {offlineCache.cacheable ? 'Cacheable' : 'Unavailable'} | {formatDate(offlineCache.lastVerifiedAt ?? undefined)}
+              </Text>
+            </View>
+            <View style={s.reasonRow}>
+              <View style={s.reasonDot} />
+              <Text style={s.reasonText}>{formatStaleDate(offlineCache.staleAt)}</Text>
+            </View>
+            {offlineSourceTimestamps.length > 0 ? (
+              offlineSourceTimestamps.slice(0, 4).map((timestamp) => (
+                <View key={`source-timestamp-${timestamp}`} style={s.reasonRow}>
+                  <View style={s.reasonDot} />
+                  <Text style={s.reasonText}>SOURCE TIMESTAMP | {formatCatalogTimestamp(timestamp)}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>SOURCE TIMESTAMP | unavailable</Text>
+              </View>
+            )}
+            {offlineSourceAttribution.length > 0 ? (
+              offlineSourceAttribution.slice(0, 4).map((source) => (
+                <View key={`source-attribution-${source.providerId}-${source.label}`} style={s.reasonRow}>
+                  <View style={s.reasonDot} />
+                  <Text style={s.reasonText}>
+                    ATTRIBUTION | {source.label}
+                    {source.attribution ? ` | ${source.attribution}` : ''}
+                    {source.license ? ` | ${source.license}` : ''}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>ATTRIBUTION | unavailable</Text>
+              </View>
+            )}
+            {offlineFreshnessWarnings.length > 0 ? (
+              offlineFreshnessWarnings.slice(0, 4).map((warning) => (
+                <View key={`freshness-warning-${warning}`} style={s.reasonRow}>
+                  <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
+                  <Text style={s.reasonText}>FRESHNESS WARNING | {warning}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>FRESHNESS WARNING | none reported by catalog detail</Text>
+              </View>
+            )}
           </View>
         ) : null}
 
@@ -356,6 +544,25 @@ export default function TrailPackPreviewModal({
               <View key={warning} style={s.reasonRow}>
                 <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
                 <Text style={s.reasonText}>{warning}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {detailDataUsed.length ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="server-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>DATA USED</Text>
+            </View>
+            {detailDataUsed.slice(0, 4).map((source) => (
+              <View key={`${source.providerId}-${source.label}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>
+                  {source.label} | {source.freshness.toUpperCase()} | {source.authority}
+                  {source.lastVerifiedAt ? ` | Last checked ${formatCatalogTimestamp(source.lastVerifiedAt)}` : ' | Last checked unavailable'}
+                  {source.attribution ? ` | ${source.attribution}` : ''}
+                </Text>
               </View>
             ))}
           </View>

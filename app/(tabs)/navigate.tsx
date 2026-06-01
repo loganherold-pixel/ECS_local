@@ -163,6 +163,12 @@ import {
   type RouteNearbyDispersedCampingRegion,
 } from '../../lib/map/dispersedCampingRouteSearch';
 import {
+  DISPERSED_ROUTE_LEG_PLANNING_WARNING,
+  dispersedRouteLegToRouteBuilderSegment,
+  type DispersedRouteLegSelectionPayload,
+  type RouteSegmentSourceMetadata,
+} from '../../lib/map/dispersedCampingSegmentBuild';
+import {
   buildRoadRouteFromCachedGeometry,
   type RoadNavCoordinate,
   type RoadNavDestination,
@@ -533,6 +539,7 @@ import {
   classifyNavigationHandoff,
   clearNavigationHandoffPayload,
   computeTrailLengthMiles,
+  getNavigationHandoffActiveGuidanceUnavailableReason,
   getNavigationHandoffRouteUnavailableReason,
   getRoadDestinationCoordinate,
   loadNavigationHandoffPayload,
@@ -2164,6 +2171,7 @@ function buildNavigationPayloadSignature(payload: NavigationHandoffPayload | nul
       : null,
     trailLengthMiles: payload.trailLengthMiles ?? null,
     trailGeometryCount: safeArray(payload.trailGeometry).length,
+    trailGeometrySegmentCount: safeArray(payload.trailGeometrySegments).length,
     waypointCount: safeArray(payload.trailWaypoints).length,
     decisionPointCount: safeArray(payload.trailDecisionPoints).length,
     campMarkerCount: safeArray(payload.campMarkers).length,
@@ -2174,6 +2182,10 @@ function buildNavigationPayloadSignature(payload: NavigationHandoffPayload | nul
     previewSource:
       payload.routeMetadata && typeof payload.routeMetadata === 'object'
         ? (payload.routeMetadata as Record<string, unknown>).previewSource ?? null
+        : null,
+    activeGuidanceUnavailableReason:
+      payload.routeMetadata && typeof payload.routeMetadata === 'object'
+        ? (payload.routeMetadata as Record<string, unknown>).activeGuidanceUnavailableReason ?? null
         : null,
     runId:
       payload.routeMetadata && typeof payload.routeMetadata === 'object'
@@ -2203,7 +2215,8 @@ function isRestorableNavigationHandoffPayload(
     !!payload.coordinate ||
     !!payload.trailheadCoordinate ||
     !!payload.roadDestinationCoordinate ||
-    safeArray(payload.trailGeometry).length > 1
+    safeArray(payload.trailGeometry).length > 1 ||
+    safeArray(payload.trailGeometrySegments).some((segment) => safeArray(segment).length > 1)
   );
 }
 
@@ -2323,6 +2336,8 @@ function sameRouteBuilderSegments(
     const right = b[index];
     if (
       left.id !== right.id ||
+      left.sourceSegmentId !== right.sourceSegmentId ||
+      JSON.stringify(left.buildSource ?? null) !== JSON.stringify(right.buildSource ?? null) ||
       !sameCoordinateList(left.coordinates, right.coordinates) ||
       !sameCoordinateList(left.rawSegment, right.rawSegment) ||
       !sameCoordinateList(left.snappedSegment, right.snappedSegment)
@@ -2341,6 +2356,21 @@ function sameRouteBuilderSegments(
   return true;
 }
 
+function sourceMetadataForRouteBuilderSegment(segment: RouteBuilderSegmentData): RouteSegmentSourceMetadata {
+  if (segment.buildSource) return segment.buildSource;
+  const snapSource = String(segment.snapSource ?? '').trim();
+  const isSnappedTrace =
+    snapSource.length > 0 &&
+    snapSource !== 'free' &&
+    snapSource !== 'raw-smoothed' &&
+    snapSource !== 'ambiguous-local-routeable';
+  return {
+    kind: isSnappedTrace ? 'snapped_trace' : 'freehand_trace',
+    sourceLabel: isSnappedTrace ? snapSource : 'ECS Build Route trace',
+    confidence: 'unknown',
+  };
+}
+
 function toTrailSegmentData(
   segments: { segment_id: string; coordinates: [number, number][] }[],
 ): TrailSegmentData[] {
@@ -2349,6 +2379,23 @@ function toTrailSegmentData(
     coordinates: safeArray(segment.coordinates),
     color: '#D4A017',
   }));
+}
+
+function routePointsFromTrailSegment(segment: TrailSegmentData): RoadNavCoordinate[] {
+  const coordinates = Array.isArray(segment.coordinates)
+    ? (segment.coordinates as ([number, number] | { latitude: number; longitude: number })[])
+    : [];
+  return coordinates
+    .map((coordinate) => ({
+      lat: Number(Array.isArray(coordinate) ? coordinate[1] : coordinate.latitude),
+      lng: Number(Array.isArray(coordinate) ? coordinate[0] : coordinate.longitude),
+    }))
+    .filter((point) =>
+      Number.isFinite(point.lat) &&
+      Number.isFinite(point.lng) &&
+      Math.abs(point.lat) <= 90 &&
+      Math.abs(point.lng) <= 180,
+    );
 }
 
 type NavigateOperationalMode =
@@ -3525,6 +3572,10 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
   const [routeBuilderSnapMessage, setRouteBuilderSnapMessage] = useState<string | null>(null);
+  const [dispersedRouteBuildActive, setDispersedRouteBuildActive] = useState(false);
+  const [selectedDispersedRouteLegIds, setSelectedDispersedRouteLegIds] = useState<string[]>([]);
+  const [dispersedRouteBuildStatus, setDispersedRouteBuildStatus] = useState<string | null>(null);
+  const [dispersedRouteBuildRenderKey, setDispersedRouteBuildRenderKey] = useState(0);
   const [campsiteDrawMode, setCampsiteDrawMode] = useState(false);
   const [campsiteDrawingPoints, setCampsiteDrawingPoints] = useState<CampsiteSearchPolygonPoint[]>([]);
   const [campsiteDrawingClosed, setCampsiteDrawingClosed] = useState(false);
@@ -3802,7 +3853,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         .map((point) => ({
           lat: Number((point as RoadNavCoordinate).lat),
           lng: Number((point as RoadNavCoordinate).lng),
-        }));
+        }))
+        .concat(
+          safeArray(payload.trailGeometrySegments).flatMap((segment) =>
+            safeArray(segment).map((point) => ({
+              lat: Number((point as RoadNavCoordinate).lat),
+              lng: Number((point as RoadNavCoordinate).lng),
+            })),
+          ),
+        );
       const anchorPoints = [
         payload.trailheadCoordinate,
         payload.roadDestinationCoordinate,
@@ -9358,22 +9417,33 @@ const handleCreateRun = useCallback(() => {
   const explorePreviewTrailSegments = useMemo<TrailSegmentData[]>(() => {
     if (
       !exploreNavigationPayload ||
-      exploreNavigationPayload.trailGeometry.length < 2 ||
       (explorePreviewMode !== 'trail' && explorePreviewMode !== 'hybrid')
     ) {
       return [];
     }
 
-    return [
-      {
-        id: `explore-preview-${exploreNavigationPayload.id}`,
-        coordinates: exploreNavigationPayload.trailGeometry.map((point) => [
-          point.lng,
-          point.lat,
-        ]) as [number, number][],
+    const sourceSegments =
+      Array.isArray(exploreNavigationPayload.trailGeometrySegments) &&
+      exploreNavigationPayload.trailGeometrySegments.length > 0
+        ? exploreNavigationPayload.trailGeometrySegments
+        : exploreNavigationPayload.trailGeometry.length > 1
+          ? [exploreNavigationPayload.trailGeometry]
+          : [];
+
+    return sourceSegments
+      .map((segment, index) => ({
+        id: `explore-preview-${exploreNavigationPayload.id}-${index}`,
+        coordinates: safeArray(segment)
+          .map((point) => [point.lng, point.lat] as [number, number])
+          .filter(([lng, lat]) =>
+            Number.isFinite(lng) &&
+            Number.isFinite(lat) &&
+            Math.abs(lat) <= 90 &&
+            Math.abs(lng) <= 180,
+          ),
         color: '#D4A017',
-      },
-    ];
+      }))
+      .filter((segment) => segment.coordinates.length > 1);
   }, [exploreNavigationPayload, explorePreviewMode]);
 
   const explorePreviewWaypoints = useMemo<
@@ -9411,11 +9481,14 @@ const handleCreateRun = useCallback(() => {
     };
 
     const roadCoordinate = getRoadDestinationCoordinate(exploreNavigationPayload);
+    const previewSegmentCoordinates = explorePreviewTrailSegments.flatMap((segment) =>
+      routePointsFromTrailSegment(segment),
+    );
     const finalCoordinate =
       exploreNavigationPayload.coordinate ??
       (exploreNavigationPayload.trailGeometry.length > 0
         ? exploreNavigationPayload.trailGeometry[exploreNavigationPayload.trailGeometry.length - 1]
-        : null);
+        : previewSegmentCoordinates[previewSegmentCoordinates.length - 1] ?? null);
 
     if (explorePreviewMode === 'hybrid' && roadCoordinate) {
       pushMarker(
@@ -9434,10 +9507,19 @@ const handleCreateRun = useCallback(() => {
     );
 
     return markers;
-  }, [exploreNavigationPayload, explorePreviewMode]);
+  }, [exploreNavigationPayload, explorePreviewMode, explorePreviewTrailSegments]);
 
   const trailOnlyPreviewActive =
     explorePreviewMode === 'trail' && !!exploreNavigationPayload;
+  const activeGuidanceUnavailableReason = useMemo(() => {
+    if (
+      !exploreNavigationPayload ||
+      (explorePreviewMode !== 'trail' && explorePreviewMode !== 'hybrid')
+    ) {
+      return null;
+    }
+    return getNavigationHandoffActiveGuidanceUnavailableReason(exploreNavigationPayload);
+  }, [exploreNavigationPayload, explorePreviewMode]);
 
   useEffect(() => {
     if (!exploreNavigationPayload || !explorePreviewMode) {
@@ -9569,10 +9651,16 @@ const handleCreateRun = useCallback(() => {
     }
 
     pendingAutoStartRouteIdRef.current = null;
+    if (activeGuidanceUnavailableReason) {
+      showToast('ROUTE PREVIEW ONLY - ACTIVE GUIDANCE NEEDS CONTINUOUS GEOMETRY');
+      return;
+    }
     setFollowUser(true);
     requestStartExpedition('trail');
   }, [
+    activeGuidanceUnavailableReason,
     requestStartExpedition,
+    showToast,
     trailSession.payload?.id,
     trailSession.status,
   ]);
@@ -9621,6 +9709,7 @@ const handleCreateRun = useCallback(() => {
     hybridTrailTransitionRef.current = transitionKey;
     void transitionTrailFromRoad();
   }, [
+    activeGuidanceUnavailableReason,
     exploreNavigationPayload,
     explorePreviewMode,
     roadNavigation.session.status,
@@ -11627,6 +11716,7 @@ const handleTopToolboxLayout = useCallback(
     const routeHasGeometry =
       (route?.geometry?.length ?? 0) > 1 ||
       (exploreNavigationPayload?.trailGeometry?.length ?? 0) > 1 ||
+      safeArray(exploreNavigationPayload?.trailGeometrySegments).some((segment) => safeArray(segment).length > 1) ||
       (activeRun?.points?.length ?? 0) > 1;
     const routeConfidence = deriveRouteConfidence(
       buildRouteConfidenceInputFromPreview({
@@ -11876,31 +11966,39 @@ const handleTopToolboxLayout = useCallback(
 
     if (explorePreviewMode === 'trail') {
       const hasTrailGeometry = explorePreviewTrailSegments.length > 0;
+      const activeGuidanceReady = !activeGuidanceUnavailableReason;
       return {
         tripMode: 'trail' as const,
         eyebrow: 'TRAIL PREVIEW',
         title: exploreNavigationPayload.title,
         subtitle: exploreNavigationPayload.subtitle,
         sourceLabel: importedPreviewSourceLabel,
-        phaseLabel: hasTrailGeometry ? 'STAGED' : 'SELECTED',
+        phaseLabel: activeGuidanceReady
+          ? 'STAGED'
+          : hasTrailGeometry
+            ? 'PREVIEW ONLY'
+            : 'SELECTED',
         metrics: [
           { label: 'TRIP', value: 'Trail' },
           { label: 'LENGTH', value: trailLengthText },
           { label: 'TYPE', value: categoryText },
         ],
         statusText:
-          previewOperationalStatus ?? (hasTrailGeometry ? 'Trail staged' : 'Trail preview unavailable'),
+          activeGuidanceUnavailableReason ??
+          previewOperationalStatus ??
+          (hasTrailGeometry ? 'Trail staged' : 'Trail preview unavailable'),
         noteText:
+          activeGuidanceUnavailableReason ??
           previewOperationalNote ??
           (hasTrailGeometry
             ? 'Ready to start this trail? Review the highlighted line, then begin guidance when ready.'
             : 'Destination marker loaded. Trail geometry is not available for this route yet.'),
-        primaryActionLabel: hasTrailGeometry
+        primaryActionLabel: activeGuidanceReady
           ? importedPreviewSourceLabel
             ? `Start ${importedPreviewSourceLabel}`
             : 'Start Trail'
           : 'Preview Only',
-        primaryActionDisabled: !hasTrailGeometry,
+        primaryActionDisabled: !activeGuidanceReady,
         showSteps: false,
         showOverview: hasTrailGeometry,
         overviewLabel: 'Route Preview',
@@ -11912,6 +12010,7 @@ const handleTopToolboxLayout = useCallback(
     }
 
     if (explorePreviewMode === 'hybrid') {
+      const activeGuidanceReady = !activeGuidanceUnavailableReason;
       return {
         tripMode: 'hybrid' as const,
         eyebrow: 'HYBRID PREVIEW',
@@ -11925,14 +12024,21 @@ const handleTopToolboxLayout = useCallback(
           { label: 'TRAIL', value: trailLengthText },
         ],
         statusText:
-          roadNavigation.previewLoading
+          activeGuidanceUnavailableReason ??
+          (roadNavigation.previewLoading
             ? 'Preparing road approach'
             : (previewOperationalStatus ??
               roadNavigation.session.error ??
-            'Hybrid route staged'),
-        noteText: previewOperationalNote ?? 'Ready to start this hybrid route? Preview the road approach and trail transition, then begin when ready.',
-        primaryActionLabel: 'Start Hybrid',
-        primaryActionDisabled: !route || (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
+            'Hybrid route staged')),
+        noteText:
+          activeGuidanceUnavailableReason ??
+          previewOperationalNote ??
+          'Ready to start this hybrid route? Preview the road approach and trail transition, then begin when ready.',
+        primaryActionLabel: activeGuidanceReady ? 'Start Hybrid' : 'Preview Only',
+        primaryActionDisabled:
+          !activeGuidanceReady ||
+          !route ||
+          (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
         showSteps: false,
         showOverview: true,
         overviewLabel: 'Route Preview',
@@ -11977,6 +12083,7 @@ const handleTopToolboxLayout = useCallback(
       routeConfidenceSummary: navigateRouteConfidenceSummary,
     };
   }, [
+    activeGuidanceUnavailableReason,
     exploreNavigationPayload,
     explorePreviewMode,
     explorePreviewTrailLengthMiles,
@@ -12629,7 +12736,9 @@ const handleTopToolboxLayout = useCallback(
 
     const geometryPoints =
       explorePreviewTrailSegments.length > 0
-        ? exploreNavigationPayload.trailGeometry
+        ? explorePreviewTrailSegments.flatMap((segment) =>
+            routePointsFromTrailSegment(segment),
+          )
         : [];
     const roadCoordinate = getRoadDestinationCoordinate(exploreNavigationPayload);
     const previewPoints = [
@@ -12679,7 +12788,7 @@ const handleTopToolboxLayout = useCallback(
   }, [
     exploreNavigationPayload,
     explorePreviewMode,
-    explorePreviewTrailSegments.length,
+    explorePreviewTrailSegments,
     fitMapToCoordinatePreview,
     queueMapCameraCommand,
     roadNavigation.session.route?.bounds,
@@ -13837,6 +13946,45 @@ const routeBuilderCanUndo = routeBuilderSegments.some(
   (segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1,
 );
 
+const syncSelectedDispersedRouteLegIds = useCallback((segments: RouteBuilderSegmentData[]) => {
+  const remainingIds = new Set(
+    segments
+      .map((segment) => segment.sourceSegmentId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
+  setSelectedDispersedRouteLegIds((current) => {
+    const next = current.filter((id) => remainingIds.has(id));
+    return next.length === current.length && next.every((id, index) => id === current[index])
+      ? current
+      : next;
+  });
+  setDispersedRouteBuildRenderKey((key) => key + 1);
+}, []);
+
+const dispersedRouteBuildState = useMemo(
+  () => ({
+    enabled:
+      dispersedRouteBuildActive &&
+      routeBuilderActive &&
+      dispersedCampingEligibilityLayer.enabled &&
+      !roadNavigationActive &&
+      !trailNavigationActive &&
+      !pendingHybridTrailTransition,
+    selectedSegmentIds: selectedDispersedRouteLegIds,
+    renderKey: dispersedRouteBuildRenderKey,
+  }),
+  [
+    dispersedCampingEligibilityLayer.enabled,
+    dispersedRouteBuildActive,
+    dispersedRouteBuildRenderKey,
+    pendingHybridTrailTransition,
+    roadNavigationActive,
+    routeBuilderActive,
+    selectedDispersedRouteLegIds,
+    trailNavigationActive,
+  ],
+);
+
   const campsiteDrawingCanFinish =
     campScoutAreaMode === 'drawing' && !campsiteDrawingClosed && campsiteDrawingPoints.length >= 3;
   const campsiteDrawingCanUndo =
@@ -14002,6 +14150,10 @@ const startCampScoutDrawing = useCallback(() => {
     setRouteBuilderSegments([]);
     setRouteBuilderSnapStatus(null);
     setRouteBuilderSnapMessage(null);
+    setDispersedRouteBuildActive(false);
+    setSelectedDispersedRouteLegIds([]);
+    setDispersedRouteBuildStatus(null);
+    setDispersedRouteBuildRenderKey((key) => key + 1);
     setCustomRouteRefreshKey((key) => key + 1);
   }
   setPinDropMode(false);
@@ -14214,6 +14366,12 @@ const toggleRouteBuilder = useCallback(() => {
   setFollowUser(false);
   setUserHasManuallyMovedMap(true);
   setRouteBuilderActive(nextRouteBuilderActive);
+  if (!nextRouteBuilderActive) {
+    setDispersedRouteBuildActive(false);
+    setSelectedDispersedRouteLegIds([]);
+    setDispersedRouteBuildStatus(null);
+    setDispersedRouteBuildRenderKey((key) => key + 1);
+  }
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
   setRouteBuilderSnapStatus(null);
@@ -14234,17 +14392,136 @@ const toggleRouteBuilder = useCallback(() => {
 const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boolean; keepActive?: boolean }) => {
   if (!options?.keepActive) {
     setRouteBuilderActive(false);
+    setDispersedRouteBuildActive(false);
+    setDispersedRouteBuildStatus(null);
   }
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
   setRouteBuilderSnapStatus(null);
   setRouteBuilderSnapMessage(null);
   setRouteBuilderSegments([]);
+  setSelectedDispersedRouteLegIds([]);
+  setDispersedRouteBuildRenderKey((key) => key + 1);
   if (options?.clearDesignContext) {
     setRouteDesignContext(null);
   }
   setCustomRouteRefreshKey((key) => key + 1);
 }, []);
+
+const startDispersedRouteSegmentBuild = useCallback(() => {
+  hapticCommand();
+  if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
+    setDispersedRouteBuildStatus('End active navigation before building dispersed route legs.');
+    showToast('END ACTIVE NAVIGATION TO BUILD A ROUTE');
+    return;
+  }
+  if (!dispersedCampingEligibilityLayerAvailable) {
+    setDispersedRouteBuildStatus('Dispersed camping route legs are unavailable in this build.');
+    return;
+  }
+  if (!dispersedCampingEligibilityZoomReady) {
+    setDispersedRouteBuildStatus(`${dispersedCampingZoomPrompt} Then tap Build route legs again.`);
+    showToast('ZOOM TO LOAD DISPERSED AREAS');
+    return;
+  }
+  if (!dispersedCampingEligibilityLayer.enabled) {
+    setDispersedRouteBuildStatus('Turn on Dispersed Camping Eligibility before building yellow route legs.');
+    showToast('ENABLE DISPERSED CAMPING LAYER');
+    return;
+  }
+  if ((dispersedCampingEligibilityLayer.geojson?.features.length ?? 0) === 0) {
+    setDispersedRouteBuildStatus('No eligible dispersed polygons are loaded here yet. Pan or zoom, then retry.');
+    showToast('NO DISPERSED ROUTE LEGS LOADED');
+    return;
+  }
+
+  closeNavigateDetailSurfaces();
+  setToolsMenuOpen(false);
+  setActiveTopPopup(null);
+  setPinDropMode(false);
+  setCampsiteDrawMode(false);
+  setShowCrosshair(false);
+  setFollowUser(false);
+  setUserHasManuallyMovedMap(true);
+  setRouteBuilderActive(true);
+  setRouteBuilderDrawing(false);
+  setRouteBuilderSnapSource(null);
+  setRouteBuilderSnapStatus(null);
+  setRouteBuilderSnapMessage(null);
+  setDispersedRouteBuildActive(true);
+  setSelectedDispersedRouteLegIds(
+    routeBuilderSegments
+      .map((segment) => segment.sourceSegmentId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
+  setDispersedRouteBuildRenderKey((key) => key + 1);
+  setDispersedRouteBuildStatus(
+    'Tap yellow route legs or draw a trace. Planning geometry - verify locally before travel or camping.',
+  );
+  showToast('TAP YELLOW LEGS OR TRACE ROUTE');
+}, [
+  closeNavigateDetailSurfaces,
+  dispersedCampingEligibilityLayer.enabled,
+  dispersedCampingEligibilityLayer.geojson,
+  dispersedCampingEligibilityLayerAvailable,
+  dispersedCampingEligibilityZoomReady,
+  dispersedCampingZoomPrompt,
+  pendingHybridTrailTransition,
+  roadNavigationActive,
+  routeBuilderSegments,
+  showToast,
+  trailNavigationActive,
+]);
+
+const handleDispersedRouteLegTap = useCallback((payload: DispersedRouteLegSelectionPayload) => {
+  const segmentId = String(payload?.id ?? '').trim();
+  if (!segmentId) return;
+  hapticMicro();
+  if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
+    setDispersedRouteBuildActive(false);
+    setDispersedRouteBuildStatus('End active navigation before editing dispersed route legs.');
+    showToast('END ACTIVE NAVIGATION TO BUILD A ROUTE');
+    return;
+  }
+
+  const alreadySelected = selectedDispersedRouteLegIds.includes(segmentId);
+  const nextSegments = alreadySelected
+    ? routeBuilderSegments.filter((segment) => segment.sourceSegmentId !== segmentId)
+    : [
+        ...routeBuilderSegments,
+        dispersedRouteLegToRouteBuilderSegment(payload) as RouteBuilderSegmentData,
+      ];
+  const previousEndpointSegment = [...nextSegments]
+    .reverse()
+    .find((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1);
+
+  setRouteBuilderActive(true);
+  setDispersedRouteBuildActive(true);
+  setRouteBuilderSegments(nextSegments);
+  setSelectedDispersedRouteLegIds((current) =>
+    alreadySelected
+      ? current.filter((id) => id !== segmentId)
+      : current.includes(segmentId)
+        ? current
+        : [...current, segmentId],
+  );
+  setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
+  setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
+  setRouteBuilderSnapMessage(previousEndpointSegment?.snapMessage ?? null);
+  setDispersedRouteBuildRenderKey((key) => key + 1);
+  setDispersedRouteBuildStatus(
+    alreadySelected
+      ? 'Yellow route leg removed. Planning geometry - verify locally before travel or camping.'
+      : `Yellow route leg added from ${payload.sourceLabel || 'rendered routeable feature'}. Verify locally before travel or camping.`,
+  );
+}, [
+  pendingHybridTrailTransition,
+  roadNavigationActive,
+  routeBuilderSegments,
+  selectedDispersedRouteLegIds,
+  showToast,
+  trailNavigationActive,
+]);
 
 const clearStagedBuildRoutePreview = useCallback(() => {
   const stagedRunId = routeBuilderStagedRunIdRef.current;
@@ -14296,7 +14573,18 @@ const finishRouteBuilder = useCallback(async () => {
   }
 
   try {
-    const savedRoute = routeStore.createCustomRoute(routeBuilderSavableSegments);
+    const hasDispersedSegmentBuild = routeBuilderSavableSegments.some(
+      (segment) => segment.buildSource?.kind === 'dispersed_route_leg',
+    );
+    const customRouteSegments = routeBuilderSavableSegments.map((segment) => ({
+      coordinates: segment.coordinates,
+      source_metadata: sourceMetadataForRouteBuilderSegment(segment),
+    }));
+    const savedRoute = routeStore.createCustomRoute(customRouteSegments, {
+      description: hasDispersedSegmentBuild
+        ? `kind: 'dispersed_segment_build'. ${DISPERSED_ROUTE_LEG_PLANNING_WARNING} Source confidence: planning_geometry for tapped yellow legs.`
+        : undefined,
+    });
     const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
     routeBuilderStagedRouteIdRef.current = savedRoute.id;
     routeBuilderStagedRunIdRef.current = savedRun.id;
@@ -14356,11 +14644,12 @@ const undoLastRouteBuilderSegment = useCallback(() => {
     .find((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1);
 
   setRouteBuilderSegments(nextSegments);
+  syncSelectedDispersedRouteLegIds(nextSegments);
   setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
   setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
   setRouteBuilderSnapMessage(previousEndpointSegment?.snapMessage ?? null);
   showToast('LAST BUILD SEGMENT UNDONE');
-}, [routeBuilderCanUndo, routeBuilderDrawing, routeBuilderSegments, showToast]);
+}, [routeBuilderCanUndo, routeBuilderDrawing, routeBuilderSegments, showToast, syncSelectedDispersedRouteLegIds]);
 
 const clearRouteBuilderDraft = useCallback(() => {
   hapticCommand();
@@ -14833,6 +15122,10 @@ useEffect(() => {
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
   setRouteBuilderSegments([]);
+  setDispersedRouteBuildActive(false);
+  setSelectedDispersedRouteLegIds([]);
+  setDispersedRouteBuildStatus(null);
+  setDispersedRouteBuildRenderKey((key) => key + 1);
 }, [pendingHybridTrailTransition, roadNavigationActive, routeBuilderActive, trailNavigationActive]);
 
 useFocusEffect(
@@ -14844,6 +15137,10 @@ useFocusEffect(
       setRouteBuilderDrawing(false);
       setRouteBuilderSnapSource(null);
       setRouteBuilderSegments([]);
+      setDispersedRouteBuildActive(false);
+      setSelectedDispersedRouteLegIds([]);
+      setDispersedRouteBuildStatus(null);
+      setDispersedRouteBuildRenderKey((key) => key + 1);
     };
   }, []),
 );
@@ -15536,14 +15833,20 @@ const recentSearchesEmptyMessage =
   'Search for an address, place, or trail and it will appear here for fast relaunch.';
 
 const handleRoadOverlayStartNavigation = useCallback(() => {
+  if (activeGuidanceUnavailableReason) {
+    showToast('ROUTE PREVIEW ONLY - ACTIVE GUIDANCE NEEDS CONTINUOUS GEOMETRY');
+    return;
+  }
   if (explorePreviewMode === 'trail') {
     requestStartExpedition('trail');
     return;
   }
   requestStartExpedition('road');
 }, [
+  activeGuidanceUnavailableReason,
   explorePreviewMode,
   requestStartExpedition,
+  showToast,
 ]);
 
 const previewReadinessAccessory = useMemo(() => {
@@ -15684,6 +15987,8 @@ const stableMapSurface = useMemo(() => {
         onCampScoutTap={handleCampScoutTap}
         onMapTap={handleDirectMapTapForPin}
         onDispersedCampingRegionTap={handleDispersedCampingRegionTap}
+        dispersedRouteBuild={dispersedRouteBuildState}
+        onDispersedRouteLegTap={handleDispersedRouteLegTap}
         onEstablishedCampsiteTap={handleEstablishedCampsiteTap}
         onMapCenterReply={handleMapCenterReply}
         onMapBoundsReply={handleMapBoundsReply}
@@ -16488,6 +16793,8 @@ const stableMapSurface = useMemo(() => {
                 <Text style={styles.routeBuilderStatusHint} numberOfLines={1}>
                   {routeBuilderSnapSource === 'snapping'
                     ? 'Snapping segment...'
+                    : dispersedRouteBuildActive && dispersedRouteBuildStatus
+                      ? dispersedRouteBuildStatus
                     : routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'
                       ? routeBuilderSnapMessage ?? 'Raw kept - undo and retry if needed'
                       : routeBuilderSnapStatus === 'too_short'
@@ -16545,7 +16852,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!routeBuilderCanSave}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Save and preview Build Route"
+                accessibilityLabel="Save and stage Build Route"
               >
                 <Text
                   style={[
@@ -16553,7 +16860,7 @@ const stableMapSurface = useMemo(() => {
                     !routeBuilderCanSave && styles.routeBuilderStatusActionTextDisabled,
                   ]}
                 >
-                  PREVIEW
+                  SAVE + STAGE
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -16610,6 +16917,8 @@ const stableMapSurface = useMemo(() => {
   handleCampScoutTap,
   handleDirectMapTapForPin,
   handleDispersedCampingRegionTap,
+  dispersedRouteBuildState,
+  handleDispersedRouteLegTap,
   handleEstablishedCampsiteTap,
   handleMapCenterReply,
   handleMapBoundsReply,
@@ -16782,6 +17091,8 @@ const stableMapSurface = useMemo(() => {
   routeBuilderSnapSource,
   routeBuilderSnapStatus,
   routeBuilderSnapMessage,
+  dispersedRouteBuildActive,
+  dispersedRouteBuildStatus,
   routeBuilderSavableSegments.length,
   routeDesignContext,
   routeBuilderCanSave,
@@ -17527,8 +17838,10 @@ const stableMapSurface = useMemo(() => {
     left={OVERLAY_EDGE}
     onScoutCandidatePins={handleScoutDispersedCampingCandidatePins}
     onClearScoutPins={handleClearDispersedCampingCampScoutPins}
+    onBuildRouteFromSegments={startDispersedRouteSegmentBuild}
     scoutDisabled={dispersedCampingRouteResults.length === 0}
     scoutStatusText={dispersedCampingCampScoutStatus}
+    segmentBuildStatusText={dispersedRouteBuildStatus}
     scoutPinsVisible={dispersedCampingCampScoutCandidates.length > 0}
   />
 
