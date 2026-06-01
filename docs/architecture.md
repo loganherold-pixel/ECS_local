@@ -26,3 +26,5 @@ BLM GTLF ingestion starts as official source-segment evidence only. GTLF segment
 USGS National Digital Trails ingestion starts as supplemental geometry and trail-context evidence only. USGS Trails records can help fill map/review context, but they do not establish legal motorized access and must stay out of public Suggested Routes until authoritative access overlays and review pass.
 
 NPS Public Trails ingestion starts as official park visitor-use trail context. NPS trail-use geometry can support review inside park units, but it must stay out of public Suggested Routes until park-unit legal access, current alerts, closures, and ECS route curation pass.
+
+Michigan DNR ORV GPX ingestion starts as official state-agency route/trail geometry for curation. Michigan ORV records remain out of public Suggested Routes until current DNR closures, local rules, seasonal conditions, vehicle fit, and ECS route curation pass.

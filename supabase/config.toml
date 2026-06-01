@@ -519,3 +519,10 @@ enabled = true
 # writes and stores NPS public trails as park-context curation records only.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-nps-trails/index.ts"
+
+[functions.route-catalog-sync-michigan-orv]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and stores Michigan DNR ORV GPX records as state curation inputs only.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-michigan-orv/index.ts"
