@@ -149,6 +149,23 @@ assert.ok(
   notice.improvements.some((action) => action.includes('Confirm payload after accessories')),
   'Confidence notice should still include actionable non-source improvement guidance.',
 );
+const trailFitSuggestion = 'Use saved width, breakover, and turning-space estimates before treating truck capability as trail fit.';
+const trailFitNotice = overview.buildFleetConfidenceNotice([
+  {
+    id: 'vehicle-truck',
+    name: 'HD Trail Truck',
+    weightResult: completeUserEntered,
+    vehicleSuggestions: [trailFitSuggestion],
+  },
+]);
+assert.ok(
+  trailFitNotice.reasons.some((reason) => reason.includes(trailFitSuggestion)),
+  'Saved trail-fit geometry should be explained as confidence evidence.',
+);
+assert.ok(
+  !trailFitNotice.improvements.some((action) => action.includes('width, breakover')),
+  'Saved trail-fit geometry should not appear as an improvable confidence action.',
+);
 assert.ok(
   !notice.reasons.some((reason) => reason.includes('Base vehicle weight is missing')),
   'Complete user-entered weights should not produce missing-base copy.',

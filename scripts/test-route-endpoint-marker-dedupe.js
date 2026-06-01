@@ -6,11 +6,11 @@ const root = path.resolve(__dirname, '..');
 const mapRendererSource = fs.readFileSync(
   path.join(root, 'components', 'navigate', 'MapRenderer.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 const navigateSource = fs.readFileSync(
   path.join(root, 'app', '(tabs)', 'navigate.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 assert(
   mapRendererSource.includes('ROUTE_ENDPOINT_WAYPOINT_DEDUPE_METERS = 150'),

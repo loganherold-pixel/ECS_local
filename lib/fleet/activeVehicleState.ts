@@ -423,6 +423,9 @@ export function buildActiveVehicleStateFromFleetState(
     tireSizeInches: resourceProfile.tireSizeInches,
     suspensionLiftInches: resourceProfile.suspensionLiftInches,
     groundClearanceInches: fleetVehicle.buildProfile.groundClearanceInches ?? null,
+    overallWidthIn: fleetVehicle.buildProfile.overallWidthIn ?? null,
+    breakoverAngleDeg: fleetVehicle.buildProfile.breakoverAngleDeg ?? null,
+    turningDiameterFt: fleetVehicle.buildProfile.turningDiameterFt ?? null,
   });
   const intelligence: ECSVehicleIntelligenceSnapshot = {
     classification,
@@ -435,6 +438,9 @@ export function buildActiveVehicleStateFromFleetState(
       tireSizeInches: resourceProfile.tireSizeInches,
       suspensionLiftInches: resourceProfile.suspensionLiftInches,
       groundClearanceInches: fleetVehicle.buildProfile.groundClearanceInches ?? null,
+      overallWidthIn: fleetVehicle.buildProfile.overallWidthIn ?? null,
+      breakoverAngleDeg: fleetVehicle.buildProfile.breakoverAngleDeg ?? null,
+      turningDiameterFt: fleetVehicle.buildProfile.turningDiameterFt ?? null,
       accessoryWeightLbs,
       cargoLoadoutWeightLbs,
       confidenceLevel: weight.confidenceLevel,

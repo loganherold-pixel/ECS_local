@@ -19,7 +19,6 @@ const COMMAND_CENTER_MODULE_IDS: ECSCommandModuleId[] = [
   'attitude',
 ];
 
-// Detached command component contract: component: ExpeditionReadinessCommand
 // Expedition Readiness is owned by its dashboard surface, so it stays out of the selectable command menu.
 export const COMMAND_CENTER_WIDGET_REGISTRY: Partial<Record<CommandCenterWidgetId, CommandCenterWidgetDefinition>> = {
   attitude: {

@@ -110,8 +110,11 @@ function normalizeRoutePath(path: string | null | undefined): string {
     return '/';
   }
 
-  const withoutGroups = path.replace(/\/\([^/]+\)/g, '');
-  const normalized = withoutGroups.replace(/\/index$/, '') || '/';
+  const withoutQueryAndHash = path.split(/[?#]/, 1)[0].replace(/\/\([^/]+\)/g, '');
+  const withoutTrailingSlash = withoutQueryAndHash.length > 1
+    ? withoutQueryAndHash.replace(/\/+$/, '')
+    : withoutQueryAndHash;
+  const normalized = withoutTrailingSlash.replace(/\/index$/, '') || '/';
   return normalized === '' ? '/' : normalized;
 }
 
@@ -864,6 +867,10 @@ function AuthGate() {
     !!postAuthLoadingTarget &&
     (normalizedPathname === '/' || inAuthScreen) &&
     normalizedPathname !== postAuthLoadingTarget;
+  const authScreenShellRedirectPending =
+    inAuthScreen &&
+    !!postAuthLoadingTarget &&
+    normalizedPathname !== postAuthLoadingTarget;
   const postAuthLoadingGateKey = postAuthLoadingGateActive
     ? [
         user?.id ?? (rememberedOfflineAccess ? 'remembered_offline' : guestOfflineAccess ? 'guest_offline' : 'shell'),
@@ -1005,7 +1012,13 @@ function AuthGate() {
     !entryResolution.shellAccessReady;
   const inPreAuthTree =
     normalizedPathname === '/' ||
-    (inAuthScreen && !entryResolution.shellAccessReady) ||
+    (
+      inAuthScreen &&
+      (
+        !entryResolution.shellAccessReady ||
+        authScreenShellRedirectPending
+      )
+    ) ||
     isResetCompletionScreen ||
     (inSetup && !entryResolution.shellAccessReady);
   const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;

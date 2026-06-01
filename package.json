@@ -13,6 +13,7 @@
     "ios": "expo run:ios",
     "web": "node ./scripts/start-expo-safe.mjs --web",
     "lint": "expo lint",
+    "typecheck": "tsc --noEmit --pretty false && npm --prefix apps/web run build",
     "build": "node node_modules/expo/bin/cli export --platform web --clear",
     "smoke": "node scripts/smoke-app.mjs",
     "smoke:bundle": "node scripts/smoke-app.mjs --bundle",

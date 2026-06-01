@@ -43,6 +43,9 @@ export type ECSVehicleClassificationInput = {
   tireSizeInches?: number | null;
   suspensionLiftInches?: number | null;
   groundClearanceInches?: number | null;
+  overallWidthIn?: number | null;
+  breakoverAngleDeg?: number | null;
+  turningDiameterFt?: number | null;
 };
 
 export type ECSVehicleSuggestionInput = {
@@ -54,6 +57,9 @@ export type ECSVehicleSuggestionInput = {
   tireSizeInches?: number | null;
   suspensionLiftInches?: number | null;
   groundClearanceInches?: number | null;
+  overallWidthIn?: number | null;
+  breakoverAngleDeg?: number | null;
+  turningDiameterFt?: number | null;
   accessoryWeightLbs?: number | null;
   cargoLoadoutWeightLbs?: number | null;
   confidenceLevel?: FleetWeightResult['confidenceMetadata']['level'] | string | null;
@@ -358,15 +364,22 @@ export function buildVehicleIntelligenceSuggestions(input: ECSVehicleSuggestionI
     tireSizeInches,
     suspensionLiftInches,
     groundClearanceInches,
+    overallWidthIn,
+    breakoverAngleDeg,
+    turningDiameterFt,
     accessoryWeightLbs,
     cargoLoadoutWeightLbs,
     confidenceLevel,
     confidenceScore,
   } = input;
+  const hasTrailFitGeometry =
+    [overallWidthIn, breakoverAngleDeg, turningDiameterFt].every((value) => Number.isFinite(value) && Number(value) > 0);
 
   switch (classification.classId) {
     case 'full_size_hd_truck':
-      suggestions.push('Verify width, breakover, and turn-around space before treating truck capability as trail fit.');
+      if (hasTrailFitGeometry) {
+        suggestions.push('Use saved width, breakover, and turning-space estimates before treating truck capability as trail fit.');
+      }
       break;
     case 'full_size_half_ton_truck':
       suggestions.push('Use payload margin and rear load bias as primary checks after armor, drawers, and camp cargo.');
@@ -415,7 +428,7 @@ export function buildVehicleIntelligenceSuggestions(input: ECSVehicleSuggestionI
   }
 
   if ((tireSizeInches ?? 0) >= 35 || (suspensionLiftInches ?? 0) >= 2) {
-    suggestions.push('Modified tire/lift data is included; verify spare, gearing, and loaded handling after changes.');
+    suggestions.push('Keep tire size, suspension lift, and loadout weight updated after modifications so ECS does not overstate trail fit.');
   }
 
   const confidence = String(confidenceLevel ?? '').toLowerCase();

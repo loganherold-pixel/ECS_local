@@ -233,6 +233,9 @@ function buildFleetFabricVehicleIntelligence(
     tireSizeInches: vehicle.buildProfile.tireSizeInches ?? null,
     suspensionLiftInches: vehicle.buildProfile.suspensionLiftInches ?? null,
     groundClearanceInches: vehicle.buildProfile.groundClearanceInches ?? null,
+    overallWidthIn: vehicle.buildProfile.overallWidthIn ?? null,
+    breakoverAngleDeg: vehicle.buildProfile.breakoverAngleDeg ?? null,
+    turningDiameterFt: vehicle.buildProfile.turningDiameterFt ?? null,
   });
   return {
     classification,
@@ -245,6 +248,9 @@ function buildFleetFabricVehicleIntelligence(
       tireSizeInches: vehicle.buildProfile.tireSizeInches ?? null,
       suspensionLiftInches: vehicle.buildProfile.suspensionLiftInches ?? null,
       groundClearanceInches: vehicle.buildProfile.groundClearanceInches ?? null,
+      overallWidthIn: vehicle.buildProfile.overallWidthIn ?? null,
+      breakoverAngleDeg: vehicle.buildProfile.breakoverAngleDeg ?? null,
+      turningDiameterFt: vehicle.buildProfile.turningDiameterFt ?? null,
       accessoryWeightLbs: weight.installedAccessoryWeight.lbs,
       cargoLoadoutWeightLbs: weight.activeLoadoutWeight.lbs,
       confidenceLevel: weight.confidenceMetadata.level,

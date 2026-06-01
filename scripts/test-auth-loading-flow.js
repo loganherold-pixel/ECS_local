@@ -373,6 +373,16 @@ assertIncludes(
 );
 assertIncludes(
   layoutSource,
+  'const authScreenShellRedirectPending =',
+  'AuthGate should explicitly model authenticated auth-screen redirects so second logins cannot fall through to a blank shell stack.',
+);
+assertIncludes(
+  layoutSource,
+  'inAuthScreen &&\n      (\n        !entryResolution.shellAccessReady ||\n        authScreenShellRedirectPending',
+  'Auth screens should remain mounted while an authenticated shell redirect is pending.',
+);
+assertIncludes(
+  layoutSource,
   'const authScreenLoadingHandoffActive =\n    !isResetCompletionScreen &&\n    inAuthScreen &&',
   'AuthGate should cover manual login/auth screens with the loading handoff once sign-in starts.',
 );
@@ -400,6 +410,11 @@ assertIncludes(
   redirectEffect,
   'router.replace(toExpoRouterShellTarget(target) as any);',
   'AuthGate should use route replacement for the final dashboard transition.',
+);
+assertIncludes(
+  layoutSource,
+  "const withoutTrailingSlash = withoutQueryAndHash.length > 1\n    ? withoutQueryAndHash.replace(/\\/+$/, '')\n    : withoutQueryAndHash;",
+  'Auth route normalization should remove trailing slashes so /login/ is treated like /login during second-login handoff.',
 );
 
 assertIncludes(

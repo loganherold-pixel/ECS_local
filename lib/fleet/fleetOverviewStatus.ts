@@ -96,6 +96,27 @@ function normalizeSentence(value: string | null | undefined): string | null {
   return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
+function isConfidenceEvidenceSuggestion(value: string): boolean {
+  return /\bsaved width, breakover, and turning-space estimates\b/i.test(value);
+}
+
+function addVehicleSuggestion(
+  reasons: string[],
+  improvements: string[],
+  suggestion: string,
+  vehicleName?: string,
+) {
+  const clean = cleanCopy(suggestion);
+  if (!clean) return;
+  if (isConfidenceEvidenceSuggestion(clean)) {
+    if (!reasons.some((reason) => reason.includes(clean))) {
+      reasons.unshift(vehicleName ? `${vehicleName}: ${clean}` : clean);
+    }
+    return;
+  }
+  improvements.push(vehicleName ? `${vehicleName}: ${clean}` : clean);
+}
+
 function buildIntelligenceNoticeCopy(
   intelligence: FleetConfidenceIntelligenceInput | null | undefined,
 ): Pick<FleetConfidenceNotice, 'intelligenceSummary' | 'intelligenceDetail' | 'intelligenceConfidenceLabel'> {
@@ -236,10 +257,10 @@ export function buildFleetConfidenceNotice(
       reasons.push(`${vehicle.name}: ECS readiness is limited because ${limitation}.`);
     }
     for (const suggestion of intelligence?.vehicleSuggestions ?? []) {
-      improvements.push(suggestion);
+      addVehicleSuggestion(reasons, improvements, suggestion);
     }
     for (const suggestion of vehicle.vehicleSuggestions ?? []) {
-      improvements.push(`${vehicle.name}: ${suggestion}`);
+      addVehicleSuggestion(reasons, improvements, suggestion, vehicle.name);
     }
 
     if (weightResult.installedAccessoryWeight.lbs > 0 && weightResult.installedAccessoryWeight.confidence < 80) {

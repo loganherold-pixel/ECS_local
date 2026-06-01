@@ -32,6 +32,12 @@ function packageBin(packageName, binPath) {
   return path.join(root, 'node_modules', packageName, binPath);
 }
 
+function npmCliPath() {
+  const execPath = process.env.npm_execpath;
+  if (execPath && fs.existsSync(execPath)) return execPath;
+  return path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+}
+
 function commandText(command, commandArgs = []) {
   const display = path.relative(root, command) || command;
   return [display, ...commandArgs].join(' ');
@@ -256,8 +262,13 @@ export async function buildSmokeResult() {
   const packageJson = inspected.packageJson;
   if (stages.every((stage) => stage.status !== 'failed' && stage.status !== 'timeout')) {
     if (packageJson?.scripts?.typecheck) {
-      const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-      stages.push(await runCommandStage('typecheck', npmCmd, ['run', '--silent', 'typecheck'], STAGE_TIMEOUTS.typecheck));
+      const npmCli = npmCliPath();
+      if (fs.existsSync(npmCli)) {
+        stages.push(await runCommandStage('typecheck', process.execPath, [npmCli, 'run', '--silent', 'typecheck'], STAGE_TIMEOUTS.typecheck));
+      } else {
+        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        stages.push(await runCommandStage('typecheck', npmCmd, ['run', '--silent', 'typecheck'], STAGE_TIMEOUTS.typecheck));
+      }
     } else if (
       (packageJson?.dependencies?.typescript || packageJson?.devDependencies?.typescript) &&
       fs.existsSync(inspected.tscBin) &&

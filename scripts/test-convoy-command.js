@@ -6,9 +6,13 @@ const ts = require('typescript');
 
 const repoRoot = path.resolve(__dirname, '..');
 
+function readSource(relativePath) {
+  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
 function loadTsModule(relativePath) {
   const filename = path.join(repoRoot, relativePath);
-  const source = fs.readFileSync(filename, 'utf8');
+  const source = readSource(relativePath);
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -200,10 +204,7 @@ assert(
   'Old dashboard Convoy Command Rive contract should be removed.',
 );
 
-const hookSource = fs.readFileSync(
-  path.join(repoRoot, 'components/dashboard/commandCenter/useConvoyCommandData.ts'),
-  'utf8',
-);
+const hookSource = readSource('components/dashboard/commandCenter/useConvoyCommandData.ts');
 assert(hookSource.includes('routeStore.getActive()'), 'Convoy adapter hook should use the active route store');
 assert(hookSource.includes('navigateRouteSessionStore'), 'Convoy adapter hook should use the Navigate route session store');
 assert(hookSource.includes('connectivity.getDetailedState()'), 'Convoy adapter hook should use connectivity state');
@@ -212,10 +213,7 @@ assert(
   'Convoy adapter hook must not label current team/check-in data as live sharing',
 );
 
-const convoyCommandDataSource = fs.readFileSync(
-  path.join(repoRoot, 'lib/navigation/convoyCommandData.ts'),
-  'utf8',
-);
+const convoyCommandDataSource = readSource('lib/navigation/convoyCommandData.ts');
 assert(
   convoyCommandDataSource.includes('valueOf(member.lastKnownLocation)') &&
     convoyCommandDataSource.includes('coordinates:') &&
@@ -223,14 +221,8 @@ assert(
   'Convoy Command data should preserve assessment GPS coordinates for map fallback rendering.',
 );
 
-const dispatchPanelSource = fs.readFileSync(
-  path.join(repoRoot, 'components/dispatch/DispatchConvoyCommandPanel.tsx'),
-  'utf8',
-);
-const dispatchCommandCenterSource = fs.readFileSync(
-  path.join(repoRoot, 'components/dispatch/DispatchCadCommandCenter.tsx'),
-  'utf8',
-);
+const dispatchPanelSource = readSource('components/dispatch/DispatchConvoyCommandPanel.tsx');
+const dispatchCommandCenterSource = readSource('components/dispatch/DispatchCadCommandCenter.tsx');
 assert(
   !dispatchPanelSource.includes('ECSConvoyCommandPanelRive') &&
     !dispatchPanelSource.includes("from '../rive/ECSConvoyCommandPanelRive'") &&
@@ -341,10 +333,7 @@ assert(
   'Dispatch Convoy Command should avoid mock/fake live convoy claims',
 );
 
-const registrySource = fs.readFileSync(
-  path.join(repoRoot, 'components/dashboard/commandCenter/commandCenterRegistry.ts'),
-  'utf8',
-);
+const registrySource = readSource('components/dashboard/commandCenter/commandCenterRegistry.ts');
 assert(
   !registrySource.includes('ConvoyCommandWidget') &&
     !registrySource.includes("id: 'convoyCommand'") &&

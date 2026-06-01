@@ -63,6 +63,11 @@ import {
   ECSGlobalBanner,
   getEcsBottomSafePadding,
 } from './ECSGlobalBanner';
+import {
+  cancelShellInteractionTask,
+  deferShellRouteNavigation,
+  type ShellInteractionTask,
+} from '../lib/shellInteractionScheduler';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -466,6 +471,9 @@ export default function CommandDock() {
   const { palette, colors, effectiveTheme } = useTheme();
   const adaptive = useAdaptiveLayout();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<string | null>(null);
+  const pendingRouteRef = useRef<string | null>(null);
+  const routeNavigationTaskRef = useRef<ShellInteractionTask | null>(null);
   const quickActionsNavLockUntilRef = useRef(0);
   const [dashboardChrome, setDashboardChrome] = useState(getDashboardChromeState());
   const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
@@ -488,6 +496,7 @@ export default function CommandDock() {
   );
 
   const isHidden = hiddenPaths.has(pathname);
+  const effectivePathname = pendingRoute ?? pathname;
   const expandedChromePath =
     pathname.includes('/dashboard') ||
     pathname.includes('/alert') ||
@@ -499,9 +508,9 @@ export default function CommandDock() {
 
   const isItemActive = useCallback(
     (item: DockItem): boolean => {
-      return item.pathMatch.some((p) => pathname.includes(p));
+      return item.pathMatch.some((p) => effectivePathname.includes(p));
     },
-    [pathname]
+    [effectivePathname]
   );
 
   const handleNavigate = useCallback(
@@ -516,9 +525,15 @@ export default function CommandDock() {
         }
         return;
       }
-      if (pathname === route) return;
+      if (pathname === route || pendingRouteRef.current === route) return;
       hideDashboardDockReveal();
-      router.navigate(route as any);
+      pendingRouteRef.current = route;
+      setPendingRoute(route);
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = deferShellRouteNavigation(() => {
+        if (pendingRouteRef.current !== route) return;
+        router.navigate(route as any);
+      });
     },
     [pathname, quickActionsVisible, router]
   );
@@ -568,6 +583,24 @@ export default function CommandDock() {
     return subscribeDashboardChrome((nextState) => {
       setDashboardChrome(nextState);
     });
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRoute) return;
+    if (pathname === pendingRoute || pathname.includes(pendingRoute)) {
+      pendingRouteRef.current = null;
+      setPendingRoute(null);
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = null;
+    }
+  }, [pathname, pendingRoute]);
+
+  useEffect(() => {
+    return () => {
+      cancelShellInteractionTask(routeNavigationTaskRef.current);
+      routeNavigationTaskRef.current = null;
+      pendingRouteRef.current = null;
+    };
   }, []);
 
   useEffect(() => {

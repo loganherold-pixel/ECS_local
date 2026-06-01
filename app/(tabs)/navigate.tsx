@@ -199,6 +199,7 @@ import {
   revealDashboardDock,
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
+import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 
 
 
@@ -6875,7 +6876,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      const restoreTimer = setTimeout(() => {
+      const restoreTask = runAfterShellInteractions(() => {
         void (async () => {
           const flow = await consumeNavigationFlow('navigate');
           if (flow?.intent === 'prepare_offline_route_package') {
@@ -6906,11 +6907,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
           if (!flow || flow.target === 'navigate') return;
         })();
-      }, NAVIGATION_HANDOFF_RESTORE_DELAY_MS);
+      }, { delayMs: NAVIGATION_HANDOFF_RESTORE_DELAY_MS });
 
       return () => {
         cancelled = true;
-        clearTimeout(restoreTimer);
+        restoreTask.cancel();
       };
     }, [applyExploreNavigationPayload, isRecoveryAssistNavigationPayload, shouldAutoStartNavigationPayload, showToast]),
   );
@@ -15854,7 +15855,7 @@ const stableMapSurface = useMemo(() => {
         rank={selectedCampIntelRank}
         searchContext={selectedCampIntelSearchContext}
         topOffset={campsiteDetailTopOffset}
-        bottomOffset={campLayerDetailBottomOffset}
+        bottomOffset={LOWER_DOCK_EXCLUSION}
         rightInset={0}
         onNavigateHere={handleCampIntelNavigateHere}
         onSaveCamp={handleCampIntelSave}
@@ -16108,6 +16109,8 @@ const stableMapSurface = useMemo(() => {
               { bottom: TOOLS_TRIGGER_BOTTOM, right: TOOLS_TRIGGER_RIGHT },
             ]}
             pointerEvents="box-none"
+            accessible
+            accessibilityLabel="Draw area to search for campsites"
           >
             {campLayerControlsAvailable && campLayerMenuOpen ? (
               <View style={styles.campLayerMenuPanel}>
@@ -16702,6 +16705,7 @@ const stableMapSurface = useMemo(() => {
   adaptive.windowWidth,
   campsiteDetailTopOffset,
   campLayerDetailBottomOffset,
+  LOWER_DOCK_EXCLUSION,
   handleCampIntelNavigateHere,
   handleCampIntelSave,
   handleCampIntelCompareNearby,
@@ -18086,10 +18090,10 @@ const stableMapSurface = useMemo(() => {
                   onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
                   activeOpacity={0.85}
                   accessibilityRole="button"
-                  accessibilityLabel={routeBuilderActive ? 'Exit Draw Route mode' : 'Draw a route'}
+                  accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
                 >
                   <Ionicons
-                    name="git-branch-outline"
+                    name={routeBuilderActive ? 'close' : 'map-outline'}
                     size={15}
                     color={routeBuilderActive ? '#091014' : TACTICAL.amber}
                   />
@@ -18099,7 +18103,7 @@ const stableMapSurface = useMemo(() => {
                       routeBuilderActive && styles.quickActionButtonTextActive,
                     ]}
                   >
-                    {routeBuilderActive ? 'EXIT DRAW' : 'DRAW ROUTE'}
+                    {routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}
                   </Text>
                 </TouchableOpacity>
 

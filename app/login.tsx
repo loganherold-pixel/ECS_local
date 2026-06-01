@@ -25,7 +25,11 @@ import LegalFooter from '../components/legal/LegalFooter';
 import PasswordVisibilityToggle from '../components/login/PasswordVisibilityToggle';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { maskAuthEmail } from '../lib/auth/authLogRedaction';
-import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
+import {
+  LOGIN_LOGO_ASPECT_RATIO,
+  LOGIN_STATUS_INDICATOR_HEIGHT,
+  resolveLoginScreenLayout,
+} from '../lib/auth/loginScreenLayout';
 import { exportLocalData, importLocalData } from '../lib/localDataExport';
 import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
 import { sessionStore } from '../lib/sessionStore';
@@ -37,13 +41,6 @@ import { EASING, MOTION, PRESS } from '../lib/motion';
 import { useApp } from '../context/AppContext';
 
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
-const LOGIN_LOGO_ASPECT_RATIO = 1536 / 1024;
-const LOGIN_LOGO_WIDTH_RATIO = 0.72;
-const LOGIN_LOGO_MAX_WIDTH = 260;
-const LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.16;
-const LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22;
-const LOGIN_FORM_HORIZONTAL_INSET = 24;
-const LOGIN_STATUS_INDICATOR_HEIGHT = 24;
 
 type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
@@ -60,7 +57,12 @@ function isValidEmail(value: string) {
 
 function normalizeLoginError(rawError: string | undefined, isOnline: boolean) {
   const normalized = (rawError || '').trim().toLowerCase();
-  if (!isOnline || normalized.includes('offline') || normalized.includes('network')) return AUTH_COPY.login.offline;
+  if (
+    normalized.includes('not prepared for offline sign-in') ||
+    normalized.includes('offline sign-in for this account has expired')
+  ) {
+    return rawError || AUTH_COPY.login.offlineNotPrepared;
+  }
   if (
     normalized.includes('invalid login credentials') ||
     normalized.includes('email and password') ||
@@ -70,6 +72,7 @@ function normalizeLoginError(rawError: string | undefined, isOnline: boolean) {
   if (normalized.includes('too many requests') || normalized.includes('rate limit') || normalized.includes('too many attempts')) {
     return AUTH_COPY.login.rateLimited;
   }
+  if (!isOnline || normalized.includes('offline') || normalized.includes('network')) return AUTH_COPY.login.offline;
   return AUTH_COPY.login.genericFailure;
 }
 
@@ -90,7 +93,16 @@ export default function LoginScreen() {
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
-  const layoutMetrics = useMemo(() => resolveAuthLayoutMetrics(width, height), [height, width]);
+  const loginLayout = useMemo(
+    () => resolveLoginScreenLayout({
+      width,
+      height,
+      safeAreaTop: insets.top,
+      safeAreaBottom: insets.bottom,
+    }),
+    [height, insets.bottom, insets.top, width],
+  );
+  const layoutMetrics = loginLayout.layoutMetrics;
 
   const passwordRef = useRef<TextInput>(null);
   const primaryPressScale = useRef(new Animated.Value(1)).current;
@@ -345,19 +357,10 @@ export default function LoginScreen() {
       setStatusTone('error');
       return;
     }
-    if (!isOnline) {
-      logAuthDev('[Auth] SignIn validation failed', {
-        source,
-        reason: 'offline',
-      });
-      setStatusMessage(AUTH_COPY.login.offline);
-      setStatusTone('neutral');
-      return;
-    }
-
     logAuthDev('[Auth] SignIn validation passed', {
       source,
       email: maskAuthEmail(trimmedEmail),
+      offlineCredentialFallbackAllowed: !isOnline,
     });
     Keyboard.dismiss();
     loginSubmitInFlightRef.current = true;
@@ -431,38 +434,12 @@ export default function LoginScreen() {
 
   const renderMessage = statusMessage ? <AuthStatusBanner text={statusMessage} tone={statusTone} /> : !isOnline ? <AuthStatusBanner text={AUTH_COPY.login.offline} tone="neutral" /> : null;
   const footerMarginTop = layoutMetrics.compact ? 4 : Math.max(6, layoutMetrics.footerGap - 12);
-  const shellTopPadding = insets.top + layoutMetrics.topPadding;
-  const shellBottomPadding = insets.bottom + layoutMetrics.bottomPadding;
-  const authViewportHeight = Math.max(0, height - shellTopPadding - shellBottomPadding);
-  const isLandscape = width > height;
-  const compactPortrait = !isLandscape && authViewportHeight < 620;
-  const landscapeFormWidth = isLandscape ? Math.min(layoutMetrics.columnMaxWidth, 430) : layoutMetrics.columnMaxWidth;
-  const authContentWidth = Math.min(
-    landscapeFormWidth,
-    Math.max(0, width - layoutMetrics.horizontalPadding * 2),
-  );
-  const authFormInnerWidth = Math.max(0, authContentWidth - LOGIN_FORM_HORIZONTAL_INSET);
-  const logoHeightBudget = isLandscape
-    ? Math.max(38, Math.floor(authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO))
-    : compactPortrait
-      ? Math.max(74, Math.floor(authViewportHeight * LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO))
-      : Number.POSITIVE_INFINITY;
-  const loginLogoWidth = Math.min(
-    authFormInnerWidth,
-    LOGIN_LOGO_MAX_WIDTH,
-    Math.round(authContentWidth * LOGIN_LOGO_WIDTH_RATIO),
-    Math.round(logoHeightBudget * LOGIN_LOGO_ASPECT_RATIO),
-  );
-  const loginHeaderHeight = useMemo(() => {
-    const cardTopTarget = height * 0.5;
-    const cardOuterMarginTop = 2;
-    const logoHeight = loginLogoWidth / LOGIN_LOGO_ASPECT_RATIO;
-    const minimumHeaderHeight = Math.ceil(logoHeight) + LOGIN_STATUS_INDICATOR_HEIGHT + (layoutMetrics.compact ? 28 : 38);
-    if (isLandscape) {
-      return Math.min(Math.max(minimumHeaderHeight, 92), Math.max(86, authViewportHeight * 0.32));
-    }
-    return Math.max(minimumHeaderHeight, Math.round(cardTopTarget - shellTopPadding - cardOuterMarginTop));
-  }, [authViewportHeight, height, isLandscape, layoutMetrics.compact, loginLogoWidth, shellTopPadding]);
+  const shellTopPadding = loginLayout.shellTopPadding;
+  const shellBottomPadding = loginLayout.shellBottomPadding;
+  const authViewportHeight = loginLayout.authViewportHeight;
+  const isLandscape = loginLayout.layoutMode === 'landscape_split';
+  const loginLogoWidth = loginLayout.logoWidth;
+  const loginHeaderHeight = loginLayout.headerHeight;
 
   return (
     <View style={styles.heroScreen}>
@@ -482,72 +459,95 @@ export default function LoginScreen() {
         >
           <ScrollView
             style={styles.screenTopRegion}
-            contentContainerStyle={[styles.screenTopContent, { minHeight: authViewportHeight }]}
+            contentContainerStyle={[
+              styles.screenTopContent,
+              isLandscape ? styles.screenTopContentLandscape : null,
+              { minHeight: authViewportHeight },
+            ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
-            <View style={[styles.contentShell, { maxWidth: layoutMetrics.columnMaxWidth }]}>
+            <View
+              style={[
+                styles.contentShell,
+                isLandscape ? styles.contentShellLandscape : null,
+                {
+                  maxWidth: loginLayout.contentMaxWidth,
+                  gap: loginLayout.contentGap,
+                },
+              ]}
+            >
               <LoginHeaderBlock
                 isOnline={isOnline}
                 headerHeight={loginHeaderHeight}
                 logoWidth={loginLogoWidth}
+                frameWidth={isLandscape ? Math.max(0, loginLayout.contentMaxWidth - loginLayout.formWidth - loginLayout.contentGap) : undefined}
+                statusInline={loginLayout.statusInline}
               />
               {mode === 'login' ? (
-                <LoginCard
-                  email={email}
-                  emailError={emailError}
-                  password={password}
-                  passwordError={passwordError}
-                  showPassword={showPassword}
-                  keepSignedIn={keepSignedIn}
-                  loading={loading}
-                  utilityBusy={utilityBusy}
-                  loginDisabled={loginDisabled}
-                  renderMessage={renderMessage}
-                  hasMessage={!!renderMessage}
-                  primaryPressScale={primaryPressScale}
-                  passwordRef={passwordRef}
-                  onClearStatus={clearStatus}
-                  onSetEmail={setEmail}
-                  onSetPassword={setPassword}
-                  onSetKeepSignedIn={setKeepSignedIn}
-                  onSetMode={setMode}
-                  onTogglePassword={handleTogglePassword}
-                  onPrimaryPressIn={handlePrimaryPressIn}
-                  onPrimaryPressOut={handlePrimaryPressOut}
-                  onLoginSubmit={handleLoginSubmit}
-                  onContinueFree={handleContinueFree}
-                  onViewPro={handleViewPro}
-                  onExport={handleExport}
-                  onImport={handleImport}
-                  exportingLocalData={exportingLocalData}
-                  importingLocalData={importingLocalData}
-                  footerMaxWidth={layoutMetrics.footerMaxWidth}
-                  compactLayout={isLandscape}
-                  onOpenAuthInfo={handleOpenAuthInfo}
-                  onCreateAccount={handleCreateAccount}
-                />
+                <View style={[styles.formColumn, { width: loginLayout.formWidth }]}>
+                  <LoginCard
+                    email={email}
+                    emailError={emailError}
+                    password={password}
+                    passwordError={passwordError}
+                    showPassword={showPassword}
+                    keepSignedIn={keepSignedIn}
+                    loading={loading}
+                    utilityBusy={utilityBusy}
+                    loginDisabled={loginDisabled}
+                    renderMessage={renderMessage}
+                    hasMessage={!!renderMessage}
+                    primaryPressScale={primaryPressScale}
+                    passwordRef={passwordRef}
+                    onClearStatus={clearStatus}
+                    onSetEmail={setEmail}
+                    onSetPassword={setPassword}
+                    onSetKeepSignedIn={setKeepSignedIn}
+                    onSetMode={setMode}
+                    onTogglePassword={handleTogglePassword}
+                    onPrimaryPressIn={handlePrimaryPressIn}
+                    onPrimaryPressOut={handlePrimaryPressOut}
+                    onLoginSubmit={handleLoginSubmit}
+                    onContinueFree={handleContinueFree}
+                    onViewPro={handleViewPro}
+                    onExport={handleExport}
+                    onImport={handleImport}
+                    exportingLocalData={exportingLocalData}
+                    importingLocalData={importingLocalData}
+                    footerMaxWidth={layoutMetrics.footerMaxWidth}
+                    compactLayout={loginLayout.compactLayout}
+                    cardMaxHeight={loginLayout.formMaxHeight}
+                    cardScrollEnabled={loginLayout.cardScrollEnabled}
+                    onOpenAuthInfo={handleOpenAuthInfo}
+                    onCreateAccount={handleCreateAccount}
+                  />
+                </View>
               ) : (
-                <ForgotPasswordCard
-                  resetEmail={resetEmail}
-                  resetEmailError={resetEmailError}
-                  resetLoading={resetLoading}
-                  forgotDisabled={forgotDisabled}
-                  renderMessage={renderMessage}
-                  hasMessage={!!renderMessage}
-                  primaryPressScale={primaryPressScale}
-                  onClearStatus={clearStatus}
-                  onSetResetEmail={setResetEmail}
-                  onPrimaryPressIn={handlePrimaryPressIn}
-                  onPrimaryPressOut={handlePrimaryPressOut}
-                  onForgotPassword={handleForgotPassword}
-                  onBackToLogin={() => setMode('login')}
-                  onCreateAccount={handleCreateAccount}
-                  compactLayout={isLandscape}
-                />
+                <View style={[styles.formColumn, { width: loginLayout.formWidth }]}>
+                  <ForgotPasswordCard
+                    resetEmail={resetEmail}
+                    resetEmailError={resetEmailError}
+                    resetLoading={resetLoading}
+                    forgotDisabled={forgotDisabled}
+                    renderMessage={renderMessage}
+                    hasMessage={!!renderMessage}
+                    primaryPressScale={primaryPressScale}
+                    onClearStatus={clearStatus}
+                    onSetResetEmail={setResetEmail}
+                    onPrimaryPressIn={handlePrimaryPressIn}
+                    onPrimaryPressOut={handlePrimaryPressOut}
+                    onForgotPassword={handleForgotPassword}
+                    onBackToLogin={() => setMode('login')}
+                    onCreateAccount={handleCreateAccount}
+                    compactLayout={loginLayout.compactLayout}
+                    cardMaxHeight={loginLayout.formMaxHeight}
+                    cardScrollEnabled={loginLayout.cardScrollEnabled}
+                  />
+                </View>
               )}
-              {mode !== 'login' ? (
+              {mode !== 'login' && !isLandscape ? (
                 <LoginFooterBlock
                   footerMaxWidth={layoutMetrics.footerMaxWidth}
                   marginTop={footerMarginTop}
@@ -575,13 +575,23 @@ const styles = StyleSheet.create({
   screenShell: { flex: 1, justifyContent: 'flex-start' },
   screenTopRegion: { flex: 1 },
   screenTopContent: { flexGrow: 1, justifyContent: 'flex-start' },
+  screenTopContentLandscape: { justifyContent: 'center' },
   contentShell: { width: '100%', alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-start' },
+  contentShellLandscape: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  formColumn: { width: '100%', alignItems: 'stretch', justifyContent: 'center' },
   logoFrame: {
     width: '100%',
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
     paddingBottom: LOGIN_STATUS_INDICATOR_HEIGHT + 12,
+  },
+  logoFrameLandscape: {
+    paddingBottom: 0,
   },
   logoImage: {
     maxWidth: '100%',
@@ -592,6 +602,14 @@ const styles = StyleSheet.create({
     bottom: 3,
     alignSelf: 'center',
     minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  onlineRowInline: {
+    minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
+    marginTop: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -611,6 +629,8 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     borderRadius: 17,
   },
+  cardScroll: { width: '100%' },
+  cardScrollContent: { flexGrow: 0 },
   fieldBlock: { marginBottom: 6 },
   fieldBlockCompactLandscape: { marginBottom: 4 },
   fieldLabel: { marginBottom: 4, fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(230,237,243,0.9)', letterSpacing: 1.6 },
@@ -686,19 +706,30 @@ const LoginHeaderBlock = memo(function LoginHeaderBlock({
   isOnline,
   headerHeight,
   logoWidth,
+  frameWidth,
+  statusInline,
 }: {
   isOnline: boolean;
   headerHeight: number;
   logoWidth: number;
+  frameWidth?: number;
+  statusInline: boolean;
 }) {
   return (
-    <View style={[styles.logoFrame, { height: headerHeight }]}>
+    <View
+      style={[
+        styles.logoFrame,
+        statusInline ? styles.logoFrameLandscape : null,
+        { height: headerHeight },
+        frameWidth != null ? { width: frameWidth } : null,
+      ]}
+    >
       <Image
         source={LOGIN_LOGO}
         resizeMode="contain"
         style={[styles.logoImage, { width: logoWidth }]}
       />
-      <View style={styles.onlineRow}>
+      <View style={statusInline ? styles.onlineRowInline : styles.onlineRow}>
         <Ionicons
           name={isOnline ? 'wifi' : 'cloud-offline-outline'}
           size={12}
@@ -780,6 +811,8 @@ type LoginCardProps = {
   importingLocalData: boolean;
   footerMaxWidth: number;
   compactLayout: boolean;
+  cardMaxHeight: number | null;
+  cardScrollEnabled: boolean;
   onClearStatus: () => void;
   onSetEmail: React.Dispatch<React.SetStateAction<string>>;
   onSetPassword: React.Dispatch<React.SetStateAction<string>>;
@@ -815,6 +848,8 @@ const LoginCard = memo(function LoginCard({
   importingLocalData,
   footerMaxWidth,
   compactLayout,
+  cardMaxHeight,
+  cardScrollEnabled,
   onClearStatus,
   onSetEmail,
   onSetPassword,
@@ -831,8 +866,8 @@ const LoginCard = memo(function LoginCard({
   onOpenAuthInfo,
   onCreateAccount,
 }: LoginCardProps) {
-  return (
-    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null]}>
+  const cardContent = (
+    <>
       <View style={[styles.fieldBlock, compactLayout ? styles.fieldBlockCompactLandscape : null]}>
         <Text style={styles.fieldLabel}>EMAIL</Text>
         <View style={[styles.inputShell, compactLayout ? styles.inputShellCompactLandscape : null]}>
@@ -1004,6 +1039,23 @@ const LoginCard = memo(function LoginCard({
         onCreateAccount={onCreateAccount}
         compactLayout={compactLayout}
       />
+    </>
+  );
+
+  return (
+    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null, cardMaxHeight ? { maxHeight: cardMaxHeight } : null]}>
+      {cardScrollEnabled ? (
+        <ScrollView
+          style={styles.cardScroll}
+          contentContainerStyle={styles.cardScrollContent}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
+          {cardContent}
+        </ScrollView>
+      ) : cardContent}
     </View>
   );
 });
@@ -1024,6 +1076,8 @@ type ForgotPasswordCardProps = {
   onBackToLogin: () => void;
   onCreateAccount: () => void;
   compactLayout: boolean;
+  cardMaxHeight: number | null;
+  cardScrollEnabled: boolean;
 };
 
 const ForgotPasswordCard = memo(function ForgotPasswordCard({
@@ -1042,9 +1096,11 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
   onBackToLogin,
   onCreateAccount,
   compactLayout,
+  cardMaxHeight,
+  cardScrollEnabled,
 }: ForgotPasswordCardProps) {
-  return (
-    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null]}>
+  const cardContent = (
+    <>
       <Text style={[styles.recoveryTitle, compactLayout ? styles.recoveryTitleCompactLandscape : null]}>{AUTH_COPY.forgotPassword.title}</Text>
       <Text style={[styles.recoverySupporting, compactLayout ? styles.recoverySupportingCompactLandscape : null]}>{AUTH_COPY.forgotPassword.supporting}</Text>
       <View style={[styles.fieldBlock, compactLayout ? styles.fieldBlockCompactLandscape : null]}>
@@ -1116,6 +1172,23 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
       >
         {renderMessage}
       </View>
+    </>
+  );
+
+  return (
+    <View style={[styles.card, compactLayout ? styles.cardCompactLandscape : null, cardMaxHeight ? { maxHeight: cardMaxHeight } : null]}>
+      {cardScrollEnabled ? (
+        <ScrollView
+          style={styles.cardScroll}
+          contentContainerStyle={styles.cardScrollContent}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
+          {cardContent}
+        </ScrollView>
+      ) : cardContent}
     </View>
   );
 });

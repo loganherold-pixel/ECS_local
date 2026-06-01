@@ -54,11 +54,17 @@ assert(
     !fleetScreen.includes('ECS scoring trust') &&
     !fleetScreen.includes('fleet total') &&
     !fleetScreen.includes('needs source check') &&
-    fleetScreen.includes('verificationHelper') &&
+    !fleetScreen.includes('label="Active Vehicles"') &&
+    !fleetScreen.includes('label="Avg Confidence"') &&
+    !fleetScreen.includes('label="Average Confidence"') &&
+    !fleetScreen.includes('label="Operating Weight"') &&
+    !fleetScreen.includes('label="Verify"') &&
+    !fleetScreen.includes('ANDROID QA STATE') &&
+    !fleetScreen.includes('verificationHelper') &&
     fleetOverviewStatus.includes("targets.push('base weight')") &&
     fleetOverviewStatus.includes("targets.push('base estimate')") &&
     fleetOverviewStatus.includes("targets.push('GVWR')"),
-  'Fleet overview command metrics should keep first three tiles clean and resolve real verification targets.',
+  'Fleet overview header should omit noisy summary/QA tiles while Fleet domain logic still resolves real verification targets.',
 );
 
 assert(
@@ -87,13 +93,25 @@ assert(
     fleetScreen.includes('paddingBottom: 18') &&
     fleetScreen.includes('ECS Intelligence') &&
     fleetScreen.includes('To Improve Confidence') &&
-    fleetScreen.includes('FleetConfidenceIntelligenceInput') &&
     fleetOverviewStatus.includes('buildFleetConfidenceNotice') &&
     fleetOverviewStatus.includes('FleetConfidenceIntelligenceInput') &&
     fleetOverviewStatus.includes('intelligenceSummary') &&
     fleetOverviewStatus.includes('incomplete accessory, loadout, consumable, or validation inputs') &&
     !fleetOverviewStatus.includes('Upgrade the user-entered'),
-  'Fleet average confidence metric should open a scroll-safe ECS intelligence explanation with improvement actions.',
+  'Fleet vehicle confidence action should open a scroll-safe ECS intelligence explanation with improvement actions.',
+);
+
+assert(
+    fleetScreen.includes('buildFleetReadinessNotice') &&
+    fleetScreen.includes('vehicleReadinessNoticeVehicleId') &&
+    fleetScreen.includes('selectedVehicleReadinessNotice') &&
+    fleetScreen.includes('onReadinessPress') &&
+    fleetScreen.includes('setVehicleReadinessNoticeVehicleId(model.vehicle.id)') &&
+    fleetScreen.includes('accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`}') &&
+    fleetScreen.includes('title="Vehicle Readiness"') &&
+    fleetScreen.includes('scoreEyebrow="VEHICLE READINESS"') &&
+    fleetScreen.includes('improvementTitle="To Improve Readiness"'),
+  'Fleet vehicle readiness tile should open a vehicle-specific readiness explanation with score drivers and improvement actions.',
 );
 
 assert(

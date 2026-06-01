@@ -180,6 +180,7 @@ import {
   revealDashboardDock,
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
+import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { ecsLog } from '../../lib/ecsLogger';
 import { EASING, MOTION } from '../../lib/motion';
@@ -1654,12 +1655,28 @@ function DashboardScreenInner() {
     return () => { cancelled = true; };
   }, [geofenceVehicleId, user?.id]);
 
-  // Resolve vehicle name + resource data when activeVehicleId changes
-  useEffect(() => refreshActiveVehicleData(), [refreshActiveVehicleData]);
+  // Resolve vehicle name + resource data when activeVehicleId changes, after the route frame settles.
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    const task = runAfterShellInteractions(() => {
+      cleanup = refreshActiveVehicleData();
+    });
+    return () => {
+      task.cancel();
+      cleanup?.();
+    };
+  }, [refreshActiveVehicleData]);
 
-  // Re-fetch vehicle resource data on screen focus (picks up water/fuel changes)
+  // Re-fetch vehicle resource data on screen focus (picks up water/fuel changes) after tab transitions.
   useFocusEffect(useCallback(() => {
-    return refreshActiveVehicleData();
+    let cleanup: (() => void) | undefined;
+    const task = runAfterShellInteractions(() => {
+      cleanup = refreshActiveVehicleData();
+    });
+    return () => {
+      task.cancel();
+      cleanup?.();
+    };
   }, [refreshActiveVehicleData]));
 
   useEffect(() => {
@@ -2591,12 +2608,18 @@ function DashboardScreenInner() {
 
   useFocusEffect(
     useCallback(() => {
-      void refreshDashboardRouteContext();
+      const task = runAfterShellInteractions(() => {
+        void refreshDashboardRouteContext();
+      });
+      return () => task.cancel();
     }, [refreshDashboardRouteContext]),
   );
 
   useEffect(() => {
-    void refreshDashboardRouteContext();
+    const task = runAfterShellInteractions(() => {
+      void refreshDashboardRouteContext();
+    });
+    return () => task.cancel();
   }, [refreshDashboardRouteContext]);
 
   const dashboardCommandState = useMemo(() => (
@@ -2876,34 +2899,38 @@ function DashboardScreenInner() {
       lastDashboardFocusSyncRef.current = now;
     }
     closeDashboardTransientOverlays();
-    if (shouldRefreshShell) {
-      refreshActiveTrip();
-      refreshActiveVehicleData();
-      syncDashboardStoreState(activeTab);
-    }
-
-    void (async () => {
-      const flow = await consumeNavigationFlow('dashboard');
-      if (cancelled || !flow) return;
-
-      closeDashboardTransientOverlays();
-      if (
-        flow.intent === 'vehicle_context_updated' ||
-        flow.intent === 'vehicle_ready_confirmed' ||
-        flow.intent === 'navigation_ended'
-      ) {
-        refreshActiveVehicleData();
+    const task = runAfterShellInteractions(() => {
+      if (cancelled) return;
+      if (shouldRefreshShell) {
         refreshActiveTrip();
+        refreshActiveVehicleData();
         syncDashboardStoreState(activeTab);
       }
 
-      if (flow.message) {
-        showToast(flow.message);
-      }
-    })();
+      void (async () => {
+        const flow = await consumeNavigationFlow('dashboard');
+        if (cancelled || !flow) return;
+
+        closeDashboardTransientOverlays();
+        if (
+          flow.intent === 'vehicle_context_updated' ||
+          flow.intent === 'vehicle_ready_confirmed' ||
+          flow.intent === 'navigation_ended'
+        ) {
+          refreshActiveVehicleData();
+          refreshActiveTrip();
+          syncDashboardStoreState(activeTab);
+        }
+
+        if (flow.message) {
+          showToast(flow.message);
+        }
+      })();
+    });
 
     return () => {
       cancelled = true;
+      task.cancel();
     };
   }, [
     refreshActiveTrip,
