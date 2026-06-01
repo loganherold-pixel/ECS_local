@@ -34,6 +34,7 @@ Thumbs.db
 !.env.sample
 !.env.template
 API Weather Sources.txt
+.vscode/
 
 # Native/build outputs
 .gradle-local*/
@@ -59,6 +60,7 @@ tmp/
 .tmp/
 .tmp-*
 .worktrees/
+build-log.txt
 .smoke/
 .expo-export-check/
 .expo-runtime/
