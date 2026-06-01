@@ -168,11 +168,48 @@ assert.strictEqual(
   'Supplemental context probes should not pass on verified public routes alone when no source-backed context is present.',
 );
 
+const oregonProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_ohv_pilot');
+const curationOverlapSummary = summarizeSearchResponse(oregonProbe, {
+  count: 4,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 4, curationCandidateCount: 43, anySourceBackedCandidateCount: 47 },
+  records: [{ public_id: 'verified-willamette-1', name: 'Verified Willamette Route', confidence_score: 92 }],
+});
+assert.strictEqual(
+  curationOverlapSummary.observedPosture,
+  'verified_public_recommendations',
+  'Curation probes should still report verified public routes when nearby official recommendations overlap.',
+);
+assert.strictEqual(
+  curationOverlapSummary.matchesExpectedPosture,
+  true,
+  'Curation probes should pass when source-backed curation candidates exist even if verified public recommendations also exist nearby.',
+);
+
+const curationWithoutCandidatesSummary = summarizeSearchResponse(oregonProbe, {
+  count: 4,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 4, curationCandidateCount: 0, anySourceBackedCandidateCount: 4 },
+  records: [{ public_id: 'verified-only-2', name: 'Verified Route Only', confidence_score: 92 }],
+});
+assert.strictEqual(
+  curationWithoutCandidatesSummary.matchesExpectedPosture,
+  false,
+  'Curation probes should not pass on nearby verified routes alone when no curation candidates are present.',
+);
+
 const blmProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_ca_nv_pilot');
 assert.strictEqual(
   blmProbe.expectedPosture,
   'verified_public_recommendations',
   'BLM CA/NV pilot should audit public aggregate recommendations after sync',
+);
+
+const blmWyProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
+assert.strictEqual(
+  blmWyProbe.expectedPosture,
+  'source_backed_curation_only',
+  'BLM Wyoming should audit as source-backed curation until deterministic aggregate recommendations exist.',
 );
 
 const auditSource = fs.readFileSync(auditPath, 'utf8');

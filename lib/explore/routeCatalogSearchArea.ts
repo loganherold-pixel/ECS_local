@@ -44,8 +44,7 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'blm_id_gtlf'
   | 'blm_mt_gtlf'
   | 'blm_nm_gtlf'
-  | 'blm_ut_gtlf'
-  | 'blm_wy_gtlf';
+  | 'blm_ut_gtlf';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -594,8 +593,8 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'BLM WY',
     latitude: 44.51,
     longitude: -107.94,
-    coveragePosture: 'verified_recommendation',
-    publicRecommendation: true,
+    coveragePosture: 'official_curation',
+    publicRecommendation: false,
     sourceAdapters: ['blm_gtlf'],
   },
   {

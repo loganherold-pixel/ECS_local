@@ -446,9 +446,9 @@ const ROUTE_CATALOG_COVERAGE_PROBES = [
   },
   {
     key: 'blm_wy_gtlf',
-    label: 'BLM GTLF Wyoming verified aggregate pilot',
+    label: 'BLM GTLF Wyoming curation pilot',
     sourceAdapter: 'blm_gtlf',
-    expectedPosture: 'verified_public_recommendations',
+    expectedPosture: 'source_backed_curation_only',
     latitude: 44.51,
     longitude: -107.94,
     radiusMiles: 160,
@@ -583,9 +583,15 @@ function summarizeSearchResponse(probe, body) {
   const supplementalContextPresent =
     probe.expectedPosture === 'supplemental_context_only' &&
     anySourceBackedCandidateCount > 0;
+  const curationContextPresent =
+    probe.expectedPosture === 'source_backed_curation_only' &&
+    curationCandidateCount > 0;
   const matchesExpectedPosture =
     probe.expectedPosture === observedPosture ||
     (supplementalContextPresent &&
+      (observedPosture === 'source_backed_curation_only' ||
+        observedPosture === 'verified_public_recommendations')) ||
+    (curationContextPresent &&
       (observedPosture === 'source_backed_curation_only' ||
         observedPosture === 'verified_public_recommendations'));
   return {
