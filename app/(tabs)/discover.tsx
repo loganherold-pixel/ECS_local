@@ -1240,6 +1240,56 @@ function DiscoverScreenInner() {
     });
   }, [tripBuilderHandoffUserLocation]);
 
+  const hydrateRouteCatalogOpportunityForHandoff = useCallback(
+    async (route: ExpeditionOpportunity): Promise<ExpeditionOpportunity> => {
+      const routeRecord = route as ExpeditionOpportunity & { routeMetadata?: Record<string, unknown> };
+      const routeMetadata = routeRecord.routeMetadata ?? {};
+      const trailPackId = typeof routeMetadata.trailPackId === 'string'
+        ? routeMetadata.trailPackId
+        : null;
+      const catalogVerification =
+        routeMetadata.catalogVerification && typeof routeMetadata.catalogVerification === 'object'
+          ? routeMetadata.catalogVerification as Record<string, unknown>
+          : null;
+
+      if (routeMetadata.source !== 'trail_pack' || !trailPackId) return route;
+      if (catalogVerification?.detailFetchedAt && routeRecord.routeGeometry) return route;
+
+      try {
+        const detailTrailPack = await fetchRouteCatalogTrailPackDetail(trailPackId);
+        const hydratedRoute = trailPackToExpeditionOpportunity(detailTrailPack);
+        return {
+          ...route,
+          ...hydratedRoute,
+          id: route.id,
+          distanceFromUserMiles: route.distanceFromUserMiles ?? hydratedRoute.distanceFromUserMiles,
+          routeMetadata: {
+            ...(routeMetadata ?? {}),
+            ...(hydratedRoute.routeMetadata ?? {}),
+            routeCatalogHydratedForHandoff: true,
+            routeCatalogHydratedAt: new Date().toISOString(),
+          },
+        } as ExpeditionOpportunity;
+      } catch (error) {
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Route catalog detail hydration unavailable',
+          ecsArea: 'explore',
+          message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+          signature: `route_catalog_detail_handoff_hydration_unavailable:${trailPackId}`,
+          metadata: {
+            trailPackId,
+            routeId: route.id,
+            routeName: route.name,
+            source: 'route_catalog',
+          },
+        });
+        return route;
+      }
+    },
+    [],
+  );
+
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
     stageExploreReadinessPreview(op);
@@ -1377,18 +1427,19 @@ function DiscoverScreenInner() {
       } = {},
     ) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
       if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
         reportRecoverableFailure({
           severity: 'low',
           issueTitle: 'Explore route handoff unavailable',
           ecsArea: 'explore',
           message: unavailableReason ?? 'Route path unavailable.',
-          signature: `explore_route_handoff_unavailable:${route.id}`,
+          signature: `explore_route_handoff_unavailable:${routeForHandoff.id}`,
           metadata: {
-            routeId: route.id,
-            routeName: route.name,
+            routeId: routeForHandoff.id,
+            routeName: routeForHandoff.name,
             source: 'explore',
           },
         });
@@ -1421,14 +1472,15 @@ function DiscoverScreenInner() {
       });
       router.push('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handleBuildTripFromRoute = useCallback(
-    (route: ExpeditionOpportunity) => {
+    async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
-      stageTripBuilderItineraryHandoff(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      stageTripBuilderItineraryHandoff(routeForHandoff);
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
@@ -1436,19 +1488,20 @@ function DiscoverScreenInner() {
       setTrailPackPreview(null);
       router.push({
         pathname: '/explore-trip-builder',
-        params: { routeId: route.id },
+        params: { routeId: routeForHandoff.id },
       } as any);
     },
-    [router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
+    [hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );
 
   const handlePrepareOfflineFromRoute = useCallback(
-    (route: ExpeditionOpportunity) => {
+    async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      stageExploreReadinessPreview(route);
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      stageExploreReadinessPreview(routeForHandoff);
       saveOfflinePrepPackHandoff({
-        route: route as any,
-        campsiteCandidates: extractExploreRouteCampMarkers(route).map((marker) => ({
+        route: routeForHandoff as any,
+        campsiteCandidates: extractExploreRouteCampMarkers(routeForHandoff).map((marker) => ({
           id: marker.id,
           name: marker.title,
           location: { latitude: marker.latitude, longitude: marker.longitude },
@@ -1466,30 +1519,31 @@ function DiscoverScreenInner() {
       setTrailPackPreview(null);
       router.push({
         pathname: '/explore-offline-prep-pack',
-        params: { routeId: route.id },
+        params: { routeId: routeForHandoff.id },
       } as any);
     },
-    [router, stageExploreReadinessPreview],
+    [hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handleViewRouteCamps = useCallback(
     async (route: ExpeditionOpportunity) => {
-      const campMarkers = extractExploreRouteCampMarkers(route);
+      hapticMicro();
+      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
+      const campMarkers = extractExploreRouteCampMarkers(routeForHandoff);
       if (campMarkers.length === 0) return;
 
-      hapticMicro();
-      stageExploreReadinessPreview(route);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(route);
+      stageExploreReadinessPreview(routeForHandoff);
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
       if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
         reportRecoverableFailure({
           severity: 'low',
           issueTitle: 'Explore route camp handoff unavailable',
           ecsArea: 'explore',
           message: unavailableReason ?? 'Route camp pins unavailable.',
-          signature: `explore_route_camp_handoff_unavailable:${route.id}`,
+          signature: `explore_route_camp_handoff_unavailable:${routeForHandoff.id}`,
           metadata: {
-            routeId: route.id,
-            routeName: route.name,
+            routeId: routeForHandoff.id,
+            routeName: routeForHandoff.name,
             source: 'explore',
           },
         });
@@ -1529,7 +1583,7 @@ function DiscoverScreenInner() {
       });
       router.push('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
   );
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {

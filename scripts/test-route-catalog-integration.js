@@ -164,9 +164,16 @@ assert(
     discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
     discover.includes('fetchRouteCatalogTrailPackDetail') &&
+    discover.includes('hydrateRouteCatalogOpportunityForHandoff') &&
+    discover.includes('await hydrateRouteCatalogOpportunityForHandoff(route)') &&
+    discover.includes('stageExploreReadinessPreview(routeForHandoff)') &&
+    discover.includes('buildValidatedExploreNavigationPayload(routeForHandoff)') &&
+    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
+    discover.includes('saveOfflinePrepPackHandoff({') &&
+    discover.includes('route: routeForHandoff as any') &&
     discover.includes('trailPackPreviewDetailStatus') &&
     discover.includes('trailPackPreviewRequestRef'),
-  'Explore should surface honest partial-coverage copy, search with current criteria, and enrich selected Trail Pack previews through route-catalog-detail',
+  'Explore should surface honest partial-coverage copy, search with current criteria, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
 );
 const suggestedRoutesBlock = discover
   .split('const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]
