@@ -19,6 +19,7 @@
     "smoke": "node scripts/smoke-app.mjs",
     "smoke:bundle": "node scripts/smoke-app.mjs --bundle",
     "smoke:android": "node scripts/smoke-app.mjs --bundle --platform android",
+    "test:smoke-app-web-timeout": "node ./scripts/test-smoke-app-web-timeout.mjs",
     "gate:closed-field-test": "node scripts/check-closed-field-test-readiness.mjs",
     "gate:closed-field-test:json": "node scripts/check-closed-field-test-readiness.mjs --json",
     "gate:fieldtest-user-visible-features": "node scripts/check-fieldtest-user-visible-features.js",

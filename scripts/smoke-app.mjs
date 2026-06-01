@@ -21,7 +21,12 @@ const STAGE_TIMEOUTS = {
   typecheck: 120_000,
   lint: 120_000,
   bundle: 180_000,
+  bundleWeb: 360_000,
 };
+
+export function bundleTimeoutForPlatform(targetPlatform = platform) {
+  return targetPlatform === 'web' ? STAGE_TIMEOUTS.bundleWeb : STAGE_TIMEOUTS.bundle;
+}
 
 function localBin(name) {
   const suffix = process.platform === 'win32' ? '.cmd' : '';
@@ -300,7 +305,7 @@ export async function buildSmokeResult() {
           'expo-export',
           process.execPath,
           [inspected.expoCli, 'export', '--platform', platform, '--dev', '--output-dir', path.join('.smoke', 'export')],
-          STAGE_TIMEOUTS.bundle,
+          bundleTimeoutForPlatform(platform),
         ),
       );
     }
