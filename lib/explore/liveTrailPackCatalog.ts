@@ -1,4 +1,9 @@
 import { supabase } from '../supabase';
+import {
+  getRouteCatalogCoverageState,
+  normalizeRouteCatalogSearchResponse,
+  type RouteCatalogCoverageState,
+} from './routeCatalog';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -16,6 +21,8 @@ export type LiveTrailPackCatalogSnapshot = {
   status: LiveTrailPackCatalogStatus;
   error: string | null;
   lastLoadedAt: string | null;
+  coverageState: RouteCatalogCoverageState;
+  source: 'route_catalog' | 'trail_packs_fallback' | 'unavailable';
 };
 
 type Listener = () => void;
@@ -26,6 +33,8 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   status: 'idle',
   error: null,
   lastLoadedAt: null,
+  coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
+  source: 'unavailable',
 };
 
 const TRAIL_PACK_SELECT = [
@@ -307,6 +316,45 @@ export function normalizeLiveTrailPackRecords(records: unknown): ECSTrailPack[] 
     .filter((pack): pack is ECSTrailPack => !!pack && pack.dataState === 'live' && pack.reviewStatus === 'approved');
 }
 
+async function fetchRouteCatalogTrailPacks(): Promise<{
+  trailPacks: ECSTrailPack[];
+  coverageState: RouteCatalogCoverageState;
+}> {
+  const { data, error } = await supabase.functions.invoke('route-catalog-search', {
+    body: {
+      limit: 200,
+      includeGeometry: true,
+      includeAssessment: true,
+      recommendationOnly: true,
+    },
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Verified route catalog unavailable.');
+  }
+
+  const normalized = normalizeRouteCatalogSearchResponse(data);
+  return {
+    trailPacks: normalized.trailPacks,
+    coverageState: normalized.coverageState,
+  };
+}
+
+async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
+  const { data, error } = await supabase
+    .from('trail_packs')
+    .select(TRAIL_PACK_SELECT)
+    .eq('review_status', 'approved')
+    .order('updated_at', { ascending: false })
+    .limit(200);
+
+  if (error) {
+    throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
+  }
+
+  return normalizeLiveTrailPackRecords(data);
+}
+
 export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalogSnapshot> {
   setSnapshot({
     ...snapshot,
@@ -314,30 +362,41 @@ export async function refreshLiveTrailPackCatalog(): Promise<LiveTrailPackCatalo
     error: null,
   });
 
+  const loadedAt = new Date().toISOString();
+  let routeCatalogError: Error | null = null;
+
   try {
-    const { data, error } = await supabase
-      .from('trail_packs')
-      .select(TRAIL_PACK_SELECT)
-      .eq('review_status', 'approved')
-      .order('updated_at', { ascending: false })
-      .limit(200);
-
-    if (error) {
-      throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
-    }
-
+    const routeCatalog = await fetchRouteCatalogTrailPacks();
     return setSnapshot({
-      trailPacks: normalizeLiveTrailPackRecords(data),
+      trailPacks: routeCatalog.trailPacks,
       status: 'ready',
       error: null,
-      lastLoadedAt: new Date().toISOString(),
+      lastLoadedAt: loadedAt,
+      coverageState: routeCatalog.coverageState,
+      source: 'route_catalog',
+    });
+  } catch (error) {
+    routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
+  }
+
+  try {
+    const legacyTrailPacks = await fetchLegacyTrailPacks();
+    return setSnapshot({
+      trailPacks: legacyTrailPacks,
+      status: 'ready',
+      error: routeCatalogError.message,
+      lastLoadedAt: loadedAt,
+      coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
+      source: 'trail_packs_fallback',
     });
   } catch (error) {
     return setSnapshot({
       trailPacks: [],
       status: 'error',
-      error: error instanceof Error ? error.message : 'Live Trail Pack catalog unavailable.',
-      lastLoadedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : routeCatalogError.message,
+      lastLoadedAt: loadedAt,
+      coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
+      source: 'unavailable',
     });
   }
 }
@@ -349,6 +408,8 @@ export const liveTrailPackCatalogStore = {
       status: snapshot.status,
       error: snapshot.error,
       lastLoadedAt: snapshot.lastLoadedAt,
+      coverageState: snapshot.coverageState,
+      source: snapshot.source,
     };
   },
 

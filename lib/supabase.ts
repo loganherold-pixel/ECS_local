@@ -23,6 +23,9 @@ const DEPLOYED_EDGE_FUNCTIONS = new Set([
   "get-map-token",
   "campgrounds-search",
   "campground-detail",
+  "route-catalog-search",
+  "route-catalog-detail",
+  "route-submission-intake",
   "dispersed-camping-eligibility",
   "convoy-membership",
 ]);

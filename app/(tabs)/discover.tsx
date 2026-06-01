@@ -1080,6 +1080,8 @@ function DiscoverScreenInner() {
       trailPackLiveCatalogCount: liveTrailPackCatalogSnapshot.trailPacks.length,
       trailPackLiveCatalogError: liveTrailPackCatalogSnapshot.error,
       trailPackLiveCatalogLastLoadedAt: liveTrailPackCatalogSnapshot.lastLoadedAt,
+      trailPackLiveCatalogSource: liveTrailPackCatalogSnapshot.source,
+      trailPackCoverageState: liveTrailPackCatalogSnapshot.coverageState.state,
       locationSourceMode: gps.hasFix && gps.position ? 'shared_live_gps' : 'default_location_fallback',
       offlineModeActive,
       vehicleGateApplied: false,
@@ -1095,8 +1097,10 @@ function DiscoverScreenInner() {
     discoverRouteSourceFailureReason,
     liveTrailPackCatalogSnapshot.error,
     liveTrailPackCatalogSnapshot.lastLoadedAt,
+    liveTrailPackCatalogSnapshot.source,
     liveTrailPackCatalogSnapshot.status,
     liveTrailPackCatalogSnapshot.trailPacks.length,
+    liveTrailPackCatalogSnapshot.coverageState.state,
     gps.hasFix,
     gps.position,
   ]);
@@ -2134,11 +2138,7 @@ function DiscoverScreenInner() {
   const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
     const seen = new Set<string>();
     return [
-      ...exploreMapPreviewRouteSets.hiddenGemRoutes,
-      ...exploreMapPreviewRouteSets.popularTrailRoutes,
       ...exploreMapPreviewRouteSets.trailPackRoutes,
-      ...exploreMapPreviewRouteSets.favoriteRoutes,
-      ...exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
     ].filter((route) => {
       const key = String(route.id ?? route.name).trim().toLowerCase();
       if (!key || seen.has(key)) return false;
@@ -3426,8 +3426,8 @@ function DiscoverScreenInner() {
           return (
             <ExplorerStateCard
               icon="albums-outline"
-              title="No Trail Packs Found"
-              message="No live reviewed Trail Packs found within this radius. Try expanding your radius or checking Hidden Gems."
+              title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
+              message={liveTrailPackCatalogSnapshot.coverageState.message || 'No live reviewed Trail Packs found within this radius. No verified routes yet in this area. Try expanding your radius or import a GPX as a private pending suggestion.'}
             />
           );
         }
@@ -4542,8 +4542,8 @@ function DiscoverScreenInner() {
               {exploreSuggestedRouteOptions.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.explorePlanningEmpty}
-                  title="No Trailheads In Current Context"
-                  message="Adjust Suggested Trailheads range or refinements, then return here to build a trip plan."
+                  title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
+                  message={liveTrailPackCatalogSnapshot.coverageState.message || 'No live reviewed Trail Packs found within this radius. No verified routes yet in this area. Try expanding your radius or import a GPX as a private pending suggestion.'}
                   icon="map-outline"
                   variant="compact"
                 />

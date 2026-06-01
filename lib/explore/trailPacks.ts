@@ -9,6 +9,7 @@ import {
   isTrailPackPubliclyDiscoverable,
   type ECSTrailPackReviewState,
 } from './trailPackReviewQueue';
+import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 
 export type ECSTrailPackSource =
   | 'ecs_submitted'
@@ -46,6 +47,19 @@ export type ECSTrailPackRouteGeometry = {
   coordinates: number[][] | number[][][];
 };
 
+export type ECSTrailPackActiveGuidance = {
+  status: 'ready' | 'preview_only' | 'unavailable';
+  topologyResolved: boolean;
+  sourceSegmentCount: number;
+  componentCount: number;
+  branchDetected: boolean;
+  joinedSegmentGapCount: number;
+  disjointSegmentGapCount: number;
+  maxJoinGapMeters: number | null;
+  maxSegmentGapMeters: number | null;
+  unavailableReason: string | null;
+};
+
 export type ECSTrailPack = {
   id: string;
   name: string;
@@ -67,6 +81,26 @@ export type ECSTrailPack = {
   completionCount?: number;
   reviewStatus: ECSTrailPackReviewStatus;
   tags?: string[];
+  catalogVerification?: {
+    status: 'normal' | 'watch' | 'caution' | 'critical';
+    sourceLabel: string;
+    publicRecommendation: boolean;
+    confidenceScore: number;
+    warnings: string[];
+    blockers: string[];
+    activeGuidance?: ECSTrailPackActiveGuidance;
+    dataUsed: Array<{
+      providerId: string;
+      label: string;
+      sourceType: string;
+      authority: string;
+      freshness: 'fresh' | 'aging' | 'stale' | 'missing';
+      lastVerifiedAt?: string;
+      attribution?: string;
+      license?: string;
+    }>;
+    lastEvaluatedAt: string;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -74,6 +108,15 @@ export type ECSTrailPack = {
 export type ECSTrailPackDiscoveryItem = ECSTrailPack & {
   distanceFromUserMiles: number;
   evaluatedConfidence: ECSTrailPackConfidence;
+};
+
+export type ECSTrailPackGuidanceReadiness = {
+  status: 'ready' | 'preview_only' | 'unavailable';
+  label: 'Active guidance ready' | 'Preview only' | 'Guidance unavailable';
+  description: string;
+  canStart: boolean;
+  sourceSegmentCount?: number;
+  topologyResolved?: boolean;
 };
 
 export type ECSTrailPackDiscoveryOptions = {
@@ -163,24 +206,40 @@ export function distanceMilesBetween(
   return Math.round(EARTH_RADIUS_MILES * c * 10) / 10;
 }
 
-export function getTrailPackGeometryCoordinates(pack: Pick<ECSTrailPack, 'routeGeometry'>): ECSTrailPackCoordinate[] {
+function normalizeTrailPackCoordinatePair(coordinate: number[]): ECSTrailPackCoordinate | null {
+  const [longitude, latitude] = coordinate;
+  if (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    Math.abs(latitude) <= 90 &&
+    Math.abs(longitude) <= 180
+  ) {
+    return { latitude, longitude };
+  }
+  return null;
+}
+
+export function getTrailPackGeometryCoordinateSegments(
+  pack: Pick<ECSTrailPack, 'routeGeometry'>,
+): ECSTrailPackCoordinate[][] {
   const geometry = pack.routeGeometry;
   if (!geometry) return [];
-  const rawCoordinates = geometry.type === 'MultiLineString'
-    ? (geometry.coordinates as number[][][]).flat()
-    : (geometry.coordinates as number[][]);
 
-  return rawCoordinates
-    .map((coordinate) => {
-      const [longitude, latitude] = coordinate;
-      return { latitude, longitude };
-    })
-    .filter((coordinate) =>
-      Number.isFinite(coordinate.latitude) &&
-      Number.isFinite(coordinate.longitude) &&
-      Math.abs(coordinate.latitude) <= 90 &&
-      Math.abs(coordinate.longitude) <= 180,
-    );
+  const rawSegments = geometry.type === 'MultiLineString'
+    ? (geometry.coordinates as number[][][])
+    : [geometry.coordinates as number[][]];
+
+  return rawSegments
+    .map((segment) =>
+      segment
+        .map(normalizeTrailPackCoordinatePair)
+        .filter((coordinate): coordinate is ECSTrailPackCoordinate => !!coordinate),
+    )
+    .filter((segment) => segment.length >= 2);
+}
+
+export function getTrailPackGeometryCoordinates(pack: Pick<ECSTrailPack, 'routeGeometry'>): ECSTrailPackCoordinate[] {
+  return getTrailPackGeometryCoordinateSegments(pack).flat();
 }
 
 export function getTrailPackDistanceFromUserMiles(
@@ -198,8 +257,60 @@ export function getTrailPackDistanceFromUserMiles(
   }, Number.POSITIVE_INFINITY);
 }
 
-export function canStartTrailPackGuidance(pack: Pick<ECSTrailPack, 'routeGeometry'>): boolean {
-  return getTrailPackGeometryCoordinates(pack).length >= 2;
+export function getTrailPackGuidanceReadiness(
+  pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'>,
+): ECSTrailPackGuidanceReadiness {
+  const guidanceGeometry = normalizeNavigationGuidanceGeometry(pack.routeGeometry);
+  const activeGuidance = pack.catalogVerification?.activeGuidance;
+
+  if (activeGuidance?.status === 'preview_only') {
+    return {
+      status: 'preview_only',
+      label: 'Preview only',
+      description: activeGuidance.unavailableReason ??
+        'Active guidance needs continuous route topology review before it can start.',
+      canStart: false,
+      sourceSegmentCount: activeGuidance.sourceSegmentCount,
+      topologyResolved: activeGuidance.topologyResolved,
+    };
+  }
+
+  if (activeGuidance?.status === 'unavailable') {
+    return {
+      status: 'unavailable',
+      label: 'Guidance unavailable',
+      description: activeGuidance.unavailableReason ?? 'Route geometry is unavailable for this Trail Pack.',
+      canStart: false,
+      sourceSegmentCount: activeGuidance.sourceSegmentCount,
+      topologyResolved: activeGuidance.topologyResolved,
+    };
+  }
+
+  if (guidanceGeometry.status === 'ready' && guidanceGeometry.points.length >= 2) {
+    return {
+      status: 'ready',
+      label: 'Active guidance ready',
+      description: activeGuidance?.topologyResolved
+        ? 'Topology resolved from official source geometry. Start Guidance is available.'
+        : 'Route geometry is continuous. Start Guidance is available.',
+      canStart: true,
+      sourceSegmentCount: activeGuidance?.sourceSegmentCount ?? guidanceGeometry.sourceSegmentCount,
+      topologyResolved: activeGuidance?.topologyResolved ?? guidanceGeometry.topologyResolved,
+    };
+  }
+
+  return {
+    status: guidanceGeometry.status === 'unavailable' ? 'unavailable' : 'preview_only',
+    label: guidanceGeometry.status === 'unavailable' ? 'Guidance unavailable' : 'Preview only',
+    description: guidanceGeometry.unavailableReason ?? 'Route geometry is unavailable for this Trail Pack.',
+    canStart: false,
+    sourceSegmentCount: activeGuidance?.sourceSegmentCount ?? guidanceGeometry.sourceSegmentCount,
+    topologyResolved: activeGuidance?.topologyResolved ?? guidanceGeometry.topologyResolved,
+  };
+}
+
+export function canStartTrailPackGuidance(pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'>): boolean {
+  return getTrailPackGuidanceReadiness(pack).canStart;
 }
 
 export function getDiscoverableTrailPacks(
@@ -321,6 +432,7 @@ export function trailPackToExpeditionOpportunity(
       trailPackRouteType: pack.routeType,
       confidenceScore: pack.confidenceScore,
       reviewStatus: pack.reviewStatus,
+      catalogVerification: pack.catalogVerification,
     },
   };
 }

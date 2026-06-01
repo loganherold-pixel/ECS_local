@@ -21,7 +21,9 @@ import {
   canStartTrailPackGuidance,
   distanceMilesBetween,
   getTrailPackDifficultyLabel,
+  getTrailPackGeometryCoordinateSegments,
   getTrailPackGeometryCoordinates,
+  getTrailPackGuidanceReadiness,
   getTrailPackRouteTypeLabel,
   getTrailPackSourceLabel,
   type ECSTrailPackDiscoveryItem,
@@ -77,10 +79,21 @@ function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<ty
 function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
   const [tokenLoading, setTokenLoading] = useState(() => !getMapboxTokenSync());
-  const geometry = useMemo(() => getTrailPackGeometryCoordinates(trailPack), [trailPack]);
+  const geometrySegments = useMemo(() => getTrailPackGeometryCoordinateSegments(trailPack), [trailPack]);
+  const geometry = useMemo(() => geometrySegments.flat(), [geometrySegments]);
   const routePoints = useMemo<ExplorePreviewCoordinate[]>(
     () => geometry.map((point) => ({ lat: point.latitude, lng: point.longitude })),
     [geometry],
+  );
+  const mapRoutePoints = geometrySegments.length === 1 ? routePoints : [];
+  const sourceTrailSegments = useMemo(
+    () =>
+      geometrySegments.map((segment, index) => ({
+        id: `${trailPack.id}-source-segment-${index}`,
+        coordinates: segment.map((point) => [point.longitude, point.latitude] as [number, number]),
+        color: TACTICAL.amber,
+      })),
+    [geometrySegments, trailPack.id],
   );
   const loop = isLoopRoute(trailPack, geometry);
   const hasGeometry = routePoints.length >= 2;
@@ -149,7 +162,8 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
           </>
         ) : hasGeometry ? (
           <MapRenderer
-            points={routePoints}
+            points={mapRoutePoints}
+            trailSegments={sourceTrailSegments}
             waypoints={waypoints}
             routeColor={TACTICAL.amber}
             mapStyle={DEFAULT_MAP_STYLE}
@@ -199,8 +213,12 @@ export default function TrailPackPreviewModal({
     getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
   const shellBottomClearance = getShellBottomClearance(insets.bottom, 2);
 
+  const guidanceReadiness = useMemo(
+    () => (trailPack ? getTrailPackGuidanceReadiness(trailPack) : null),
+    [trailPack],
+  );
   const canStart = trailPack ? canStartTrailPackGuidance(trailPack) : false;
-  const sourceLabel = trailPack ? getTrailPackSourceLabel(trailPack.source) : '';
+  const sourceLabel = trailPack ? trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source) : '';
   const routeTypeLabel = trailPack ? getTrailPackRouteTypeLabel(trailPack.routeType) : '';
   const difficultyLabel = trailPack ? getTrailPackDifficultyLabel(trailPack.difficulty) : '';
   const warnings = useMemo(
@@ -208,7 +226,7 @@ export default function TrailPackPreviewModal({
     [trailPack],
   );
 
-  if (!trailPack) return null;
+  if (!trailPack || !guidanceReadiness) return null;
 
   const feedbackCount = trailPack.positiveFeedbackCount ?? 0;
   const completionCount = trailPack.completionCount ?? 0;
@@ -272,7 +290,7 @@ export default function TrailPackPreviewModal({
             style={[s.primaryAction, !canStart && s.primaryActionDisabled]}
             disabled={!canStart}
             accessibilityState={{ disabled: !canStart }}
-            accessibilityHint={!canStart ? 'Route geometry is unavailable for this Trail Pack.' : undefined}
+              accessibilityHint={!canStart ? 'Route geometry is unavailable for this Trail Pack.' : undefined}
             activeOpacity={canStart ? 0.84 : 1}
             onPress={() => {
               if (!canStart) return;
@@ -316,13 +334,14 @@ export default function TrailPackPreviewModal({
             {routeTypeLabel} | {difficultyLabel} | ECS confidence {Math.round(trailPack.confidenceScore)}%
           </Text>
           <Text style={s.metaText}>{sourceLabel} | {formatDate(trailPack.lastVerifiedAt)}</Text>
+          <Text style={s.metaText}>{guidanceReadiness.label} | {guidanceReadiness.description}</Text>
           <Text style={s.metaText}>{communitySummary}</Text>
         </View>
 
         {!canStart ? (
           <View style={s.notice}>
             <Ionicons name="alert-circle-outline" size={13} color={TACTICAL.textMuted} />
-            <Text style={s.noticeText}>Missing geometry is handled safely: this Trail Pack can be reviewed, but Start Guidance is disabled.</Text>
+            <Text style={s.noticeText}>{guidanceReadiness.description}</Text>
           </View>
         ) : null}
 
@@ -332,6 +351,27 @@ export default function TrailPackPreviewModal({
             <Text style={s.noticeText}>Offline cache unavailable for this Trail Pack.</Text>
           </View>
         ) : null}
+
+        <View style={s.section}>
+          <View style={s.sectionHeader}>
+            <Ionicons
+              name={guidanceReadiness.status === 'ready' ? 'navigate-circle-outline' : 'map-outline'}
+              size={12}
+              color={guidanceReadiness.status === 'ready' ? TACTICAL.amber : TACTICAL.textMuted}
+            />
+            <Text style={s.sectionTitle}>GUIDANCE STATUS</Text>
+          </View>
+          <View style={s.reasonRow}>
+            <View style={[
+              s.reasonDot,
+              guidanceReadiness.status !== 'ready' && { backgroundColor: TACTICAL.textMuted },
+            ]} />
+            <Text style={s.reasonText}>
+              {guidanceReadiness.label} | {guidanceReadiness.description}
+              {guidanceReadiness.sourceSegmentCount ? ` | ${guidanceReadiness.sourceSegmentCount} source segment${guidanceReadiness.sourceSegmentCount === 1 ? '' : 's'}` : ''}
+            </Text>
+          </View>
+        </View>
 
         <View style={s.section}>
           <View style={s.sectionHeader}>
@@ -356,6 +396,24 @@ export default function TrailPackPreviewModal({
               <View key={warning} style={s.reasonRow}>
                 <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
                 <Text style={s.reasonText}>{warning}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {trailPack.catalogVerification?.dataUsed.length ? (
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <Ionicons name="server-outline" size={12} color={TACTICAL.amber} />
+              <Text style={s.sectionTitle}>DATA USED</Text>
+            </View>
+            {trailPack.catalogVerification.dataUsed.slice(0, 4).map((source) => (
+              <View key={`${source.providerId}-${source.label}`} style={s.reasonRow}>
+                <View style={s.reasonDot} />
+                <Text style={s.reasonText}>
+                  {source.label} | {source.freshness.toUpperCase()}
+                  {source.attribution ? ` | ${source.attribution}` : ''}
+                </Text>
               </View>
             ))}
           </View>

@@ -1,0 +1,137 @@
+/* eslint-disable import/no-unresolved */
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Content-Type': 'application/json',
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: corsHeaders });
+}
+
+function getEnvAny(names: string[]): string {
+  for (const name of names) {
+    const value = Deno.env.get(name);
+    if (value) return value;
+  }
+  throw new Error(`Missing environment variable: ${names.join(' or ')}`);
+}
+
+function createAdminClient() {
+  return createClient(
+    getEnvAny(['ECS_SUPABASE_URL', 'SUPABASE_URL']),
+    getEnvAny(['ECS_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_ROLE_KEY']),
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
+}
+
+function readNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function cleanLimit(value: unknown): number {
+  const limit = readNumber(value);
+  if (!limit) return 200;
+  return Math.max(1, Math.min(500, Math.round(limit)));
+}
+
+async function requestParams(req: Request): Promise<Record<string, unknown>> {
+  const url = new URL(req.url);
+  const body = req.method === 'POST'
+    ? ((await req.json().catch(() => ({}))) as Record<string, unknown>)
+    : {};
+  url.searchParams.forEach((value, key) => {
+    if (body[key] == null) body[key] = value;
+  });
+  return body;
+}
+
+function coverageState(records: unknown[]): Record<string, string> {
+  if (records.length > 0) {
+    return {
+      state: 'ready',
+      title: 'Verified routes available',
+      message: 'Source-backed ECS route catalog records match the current criteria.',
+    };
+  }
+  return {
+    state: 'no_verified_routes',
+    title: 'No verified routes yet in this area',
+    message: 'ECS has no source-backed route catalog records matching the current criteria. Try a wider radius or import a GPX as a private pending suggestion.',
+  };
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
+
+  try {
+    const params = await requestParams(req);
+    const limit = cleanLimit(params.limit);
+    const latitude = readNumber(params.latitude ?? params.lat);
+    const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
+    const radiusMiles = readNumber(params.radiusMiles ?? params.radius_miles);
+    const vehicleClass = typeof params.vehicleClass === 'string'
+      ? params.vehicleClass.trim()
+      : typeof params.vehicle_class === 'string'
+        ? params.vehicle_class.trim()
+        : '';
+
+    const admin = createAdminClient();
+    let query = admin
+      .from('route_catalog_public')
+      .select('*')
+      .eq('review_status', 'approved')
+      .eq('recommendation_status', 'recommendable')
+      .order('confidence_score', { ascending: false })
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+
+    if (latitude != null && longitude != null && radiusMiles != null) {
+      const degrees = Math.max(0.05, radiusMiles / 69);
+      query = query
+        .gte('center_latitude', latitude - degrees)
+        .lte('center_latitude', latitude + degrees)
+        .gte('center_longitude', longitude - degrees)
+        .lte('center_longitude', longitude + degrees);
+    }
+
+    if (vehicleClass) {
+      query = query.contains('vehicle_fit', [vehicleClass]);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new Error('Unable to search verified route catalog.');
+
+    const records = Array.isArray(data) ? data : [];
+    return jsonResponse({
+      ok: true,
+      records,
+      count: records.length,
+      coverageState: coverageState(records),
+      meta: {
+        source: 'route_catalog_public',
+        recommendationOnly: true,
+        bboxFilterApplied: latitude != null && longitude != null && radiusMiles != null,
+      },
+    });
+  } catch (error) {
+    console.error('[route-catalog-search]', {
+      message: error instanceof Error ? error.message : 'Unknown route catalog search failure.',
+    });
+    return jsonResponse({
+      ok: false,
+      error: 'Verified route catalog is temporarily unavailable. No seed or mock routes are shown as verified.',
+      coverageState: {
+        state: 'unavailable',
+        title: 'Verified route catalog unavailable',
+        message: 'ECS could not reach the source-backed route catalog. No seed or mock routes are shown as verified.',
+      },
+    }, 503);
+  }
+});

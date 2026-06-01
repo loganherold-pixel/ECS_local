@@ -472,3 +472,29 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/convoy-membership/deno.json"
 entrypoint = "./functions/convoy-membership/index.ts"
+
+[functions.route-catalog-search]
+enabled = true
+# Mobile clients call this public catalog endpoint with the project publishable
+# key. Source-backed filtering and service-role reads stay server-side.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-search/index.ts"
+
+[functions.route-catalog-detail]
+enabled = true
+# Public route detail reads expose approved/recommendable catalog records only.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-detail/index.ts"
+
+[functions.route-submission-intake]
+enabled = true
+# Private user route suggestions require an authenticated caller.
+verify_jwt = true
+entrypoint = "./functions/route-submission-intake/index.ts"
+
+[functions.route-catalog-sync-usfs-mvum]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and must not be callable as a public read endpoint.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-usfs-mvum/index.ts"

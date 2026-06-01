@@ -107,6 +107,20 @@ assert(
   'Trail Pack card should disable Start Guidance when geometry is missing',
 );
 assert(
+  card.includes('getTrailPackGuidanceReadiness') &&
+    card.includes('Active guidance ready') &&
+    card.includes('Preview only') &&
+    card.includes('guidanceReadiness.description'),
+  'Trail Pack cards should surface active-guidance readiness before users tap Navigate',
+);
+assert(
+  previewPanel.includes('getTrailPackGuidanceReadiness') &&
+    previewPanel.includes('GUIDANCE STATUS') &&
+    previewPanel.includes('guidanceReadiness.label') &&
+    previewPanel.includes('guidanceReadiness.description'),
+  'Trail Pack preview details should expose active-guidance readiness and preview-only reasons',
+);
+assert(
   feedbackPanel.includes('COMPLETED') &&
     feedbackPanel.includes('RECOMMEND') &&
     feedbackPanel.includes('REPORT ISSUE') &&
