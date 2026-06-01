@@ -47,4 +47,12 @@ assert(
   'Selected search areas should be visibly labeled so Tahoe/Mendocino pilots are radius-filtered catalog searches, not nearby GPS recommendations.',
 );
 
+assert(
+  discover.includes('routeCatalogCurationCoverageNotice') &&
+    discover.includes('liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount') &&
+    discover.includes('source-backed route record') &&
+    discover.includes('under ECS review'),
+  'Explore should surface curation-only route catalog coverage without treating those records as public Suggested Trailheads.',
+);
+
 console.log('Explore route catalog field-test visibility checks passed');

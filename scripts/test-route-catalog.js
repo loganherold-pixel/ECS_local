@@ -35,6 +35,7 @@ const {
   catalogRouteToTrailPack,
   getRouteCatalogCoverageState,
   normalizeRouteCatalogDetailResponse,
+  normalizeRouteCatalogSearchResponse,
   verifyRouteCatalogRecord,
 } = require(path.join(root, 'lib', 'explore', 'routeCatalog.ts'));
 const {
@@ -440,5 +441,25 @@ assert.deepStrictEqual(
   },
   'Empty catalog searches should produce the honest partial-coverage empty state',
 );
+
+const curationOnlySearch = normalizeRouteCatalogSearchResponse({
+  records: [],
+  coverageState: {
+    state: 'lower_confidence_nearby',
+    title: 'Source-backed routes in curation',
+    message: 'ECS found official or source-backed route records nearby, but none are verified enough for public recommendation under the current criteria.',
+  },
+  meta: {
+    candidateCount: 0,
+    radiusMatchedCount: 0,
+    curationCandidateCount: 7,
+    anySourceBackedCandidateCount: 7,
+    radiusFilterApplied: true,
+  },
+});
+assert.strictEqual(curationOnlySearch.trailPacks.length, 0);
+assert.strictEqual(curationOnlySearch.coverageState.state, 'lower_confidence_nearby');
+assert.strictEqual(curationOnlySearch.searchMeta.curationCandidateCount, 7);
+assert.strictEqual(curationOnlySearch.searchMeta.anySourceBackedCandidateCount, 7);
 
 console.log('Verified route catalog checks passed');

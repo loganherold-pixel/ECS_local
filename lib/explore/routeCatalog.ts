@@ -120,10 +120,19 @@ export type RouteCatalogCoverageState = {
   message: string;
 };
 
+export type RouteCatalogSearchMeta = {
+  candidateCount: number;
+  radiusMatchedCount: number;
+  curationCandidateCount: number;
+  anySourceBackedCandidateCount: number;
+  radiusFilterApplied: boolean;
+};
+
 export type RouteCatalogSearchResult = {
   trailPacks: ECSTrailPack[];
   records: RouteCatalogRecord[];
   coverageState: RouteCatalogCoverageState;
+  searchMeta: RouteCatalogSearchMeta;
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -1006,6 +1015,22 @@ function normalizeCoverageState(value: unknown, fallback: RouteCatalogCoverageSt
   return fallback;
 }
 
+function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta {
+  const record = readRecord(value);
+  const radiusMatchedCount = record ? readNumber(record, 'radiusMatchedCount', 'radius_matched_count') ?? 0 : 0;
+  const curationCandidateCount = record ? readNumber(record, 'curationCandidateCount', 'curation_candidate_count') ?? 0 : 0;
+  return {
+    candidateCount: record ? readNumber(record, 'candidateCount', 'candidate_count') ?? 0 : 0,
+    radiusMatchedCount,
+    curationCandidateCount,
+    anySourceBackedCandidateCount: record
+      ? readNumber(record, 'anySourceBackedCandidateCount', 'any_source_backed_candidate_count') ??
+        radiusMatchedCount + curationCandidateCount
+      : 0,
+    radiusFilterApplied: record ? readBoolean(record, 'radiusFilterApplied', 'radius_filter_applied') ?? false : false,
+  };
+}
+
 export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalogSearchResult {
   const record = readRecord(value);
   const rawRecords = Array.isArray(record?.records)
@@ -1034,5 +1059,6 @@ export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalo
     trailPacks,
     records,
     coverageState: normalizeCoverageState(record?.coverageState ?? record?.coverage_state, fallbackCoverage),
+    searchMeta: normalizeRouteCatalogSearchMeta(record?.meta),
   };
 }

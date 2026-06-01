@@ -162,6 +162,8 @@ assert(
     liveCatalog.includes('includeGeometry: false') &&
     liveCatalog.includes('includePreviewGeometry: true') &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
+    liveCatalog.includes('searchMeta: normalized.searchMeta') &&
+    liveCatalog.includes('searchMeta: routeCatalog.searchMeta') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
     liveCatalog.includes('fetchRouteCatalogTrailPackDetail') &&

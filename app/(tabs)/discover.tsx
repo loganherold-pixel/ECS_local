@@ -1030,6 +1030,16 @@ function DiscoverScreenInner() {
     () => getRouteCatalogCoverageSummary(),
     [],
   );
+  const routeCatalogCurationCoverageNotice = useMemo(() => {
+    const curationCount = liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount ?? 0;
+    if (liveTrailPackCatalogSnapshot.coverageState.state !== 'lower_confidence_nearby' || curationCount <= 0) {
+      return null;
+    }
+    return `${curationCount} source-backed route record${curationCount === 1 ? '' : 's'} found nearby are under ECS review and not public Suggested Trailheads yet.`;
+  }, [
+    liveTrailPackCatalogSnapshot.coverageState.state,
+    liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount,
+  ]);
   const routeCatalogSearchCoordinate = useMemo(
     () => routeCatalogEffectiveSearchArea
       ? {
@@ -3732,6 +3742,15 @@ function DiscoverScreenInner() {
                 icon="shield-half-outline"
                 title="Lower Confidence Nearby"
                 message="Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results."
+              />
+            );
+          }
+          if (routeCatalogCurationCoverageNotice) {
+            return (
+              <ExplorerStateCard
+                icon="shield-half-outline"
+                title={liveTrailPackCatalogSnapshot.coverageState.title || 'Source-backed routes in curation'}
+                message={routeCatalogCurationCoverageNotice}
               />
             );
           }

@@ -4,6 +4,7 @@ import {
   normalizeRouteCatalogDetailResponse,
   normalizeRouteCatalogSearchResponse,
   type RouteCatalogCoverageState,
+  type RouteCatalogSearchMeta,
 } from './routeCatalog';
 import type {
   ECSTrailPack,
@@ -44,6 +45,7 @@ export type LiveTrailPackCatalogSnapshot = {
   error: string | null;
   lastLoadedAt: string | null;
   coverageState: RouteCatalogCoverageState;
+  searchMeta: RouteCatalogSearchMeta | null;
   source: 'route_catalog' | 'trail_packs_fallback' | 'unavailable';
 };
 
@@ -57,6 +59,7 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   error: null,
   lastLoadedAt: null,
   coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
+  searchMeta: null,
   source: 'unavailable',
 };
 
@@ -466,6 +469,7 @@ export function buildRouteCatalogSearchBody(
 async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchCriteria = {}): Promise<{
   trailPacks: ECSTrailPack[];
   coverageState: RouteCatalogCoverageState;
+  searchMeta: RouteCatalogSearchMeta;
 }> {
   const { data, error } = await supabase.functions.invoke('route-catalog-search', {
     body: buildRouteCatalogSearchBody(criteria),
@@ -479,6 +483,7 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
   return {
     trailPacks: normalized.trailPacks,
     coverageState: normalized.coverageState,
+    searchMeta: normalized.searchMeta,
   };
 }
 
@@ -546,6 +551,7 @@ export async function refreshLiveTrailPackCatalog(
       error: null,
       lastLoadedAt: loadedAt,
       coverageState: routeCatalog.coverageState,
+      searchMeta: routeCatalog.searchMeta,
       source: 'route_catalog',
     });
   } catch (error) {
@@ -562,6 +568,7 @@ export async function refreshLiveTrailPackCatalog(
       error: routeCatalogError.message,
       lastLoadedAt: loadedAt,
       coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
+      searchMeta: null,
       source: 'trail_packs_fallback',
     });
   } catch (error) {
@@ -572,6 +579,7 @@ export async function refreshLiveTrailPackCatalog(
       error: error instanceof Error ? error.message : routeCatalogError.message,
       lastLoadedAt: loadedAt,
       coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
+      searchMeta: null,
       source: 'unavailable',
     });
   }
@@ -585,6 +593,7 @@ export const liveTrailPackCatalogStore = {
       error: snapshot.error,
       lastLoadedAt: snapshot.lastLoadedAt,
       coverageState: snapshot.coverageState,
+      searchMeta: snapshot.searchMeta,
       source: snapshot.source,
     };
   },
