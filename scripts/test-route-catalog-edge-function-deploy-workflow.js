@@ -24,8 +24,8 @@ const deployFunctionNames = routeCatalogDeployFunctionNames();
 
 assert.deepStrictEqual(
   routeCatalogPublicFunctionNames(),
-  ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake'],
-  'Route catalog public runtime function inventory should include search, detail, and authenticated submission intake',
+  ['route-catalog-search', 'route-catalog-detail', 'route-submission-intake', 'route-catalog-summary'],
+  'Route catalog public runtime function inventory should include search, detail, authenticated submission intake, and summary reporting',
 );
 
 assert.deepStrictEqual(
@@ -43,6 +43,7 @@ for (const requiredPath of [
   'supabase/functions/route-catalog-search/**',
   'supabase/functions/route-catalog-detail/**',
   'supabase/functions/route-submission-intake/**',
+  'supabase/functions/route-catalog-summary/**',
   'supabase/functions/route-catalog-sync-*/**',
   'supabase/functions/_shared/routeCatalog*.ts',
   'supabase/config.toml',

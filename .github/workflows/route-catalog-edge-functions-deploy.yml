@@ -7,6 +7,7 @@ on:
       - 'supabase/functions/route-catalog-search/**'
       - 'supabase/functions/route-catalog-detail/**'
       - 'supabase/functions/route-submission-intake/**'
+      - 'supabase/functions/route-catalog-summary/**'
       - 'supabase/functions/route-catalog-sync-*/**'
       - 'supabase/functions/_shared/routeCatalog*.ts'
       - 'supabase/config.toml'
@@ -59,6 +60,7 @@ jobs:
           supabase functions deploy "route-catalog-search" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-detail" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-submission-intake" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
+          supabase functions deploy "route-catalog-summary" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-sync-usfs-mvum" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-sync-blm-gtlf" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-sync-usgs-trails" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
@@ -79,6 +81,7 @@ jobs:
           | route-catalog-search | Public catalog search |
           | route-catalog-detail | Public approved route detail |
           | route-submission-intake | Authenticated private submission intake |
+          | route-catalog-summary | Public catalog coverage and curation summary |
           | route-catalog-sync-usfs-mvum | Protected official-access sync |
           | route-catalog-sync-blm-gtlf | Protected official-access curation sync |
           | route-catalog-sync-usgs-trails | Protected supplemental geometry sync |

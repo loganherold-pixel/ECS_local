@@ -5,6 +5,7 @@ const ROUTE_CATALOG_PUBLIC_FUNCTIONS = [
   'route-catalog-search',
   'route-catalog-detail',
   'route-submission-intake',
+  'route-catalog-summary',
 ];
 
 const ROUTE_CATALOG_SYNC_INVENTORY = [

@@ -1,0 +1,87 @@
+name: Route Catalog Summary Report
+
+on:
+  schedule:
+    - cron: '44 14 * * 4'
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Route Catalog USFS MVUM Sync
+      - Route Catalog BLM GTLF Sync
+      - Route Catalog Michigan ORV Sync
+      - Route Catalog Minnesota OHV Sync
+      - Route Catalog Oregon ODF OHV Sync
+      - Route Catalog USGS Trails Sync
+      - Route Catalog NPS Trails Sync
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-summary-report
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    name: Summarize live route catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate summary endpoint configuration
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${EXPO_PUBLIC_SUPABASE_ANON_KEY}" ]]; then
+            echo "::warning::Missing GitHub secret EXPO_PUBLIC_SUPABASE_ANON_KEY; invoking public function without a publishable key"
+          fi
+
+      - name: Run Route Catalog Summary Report
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ./scripts/route-catalog-summary-report.js --json | tee route-catalog-summary-report.json
+
+      - name: Summarize route catalog
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s route-catalog-summary-report.json ]]; then
+            echo "No route catalog summary output was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const { formatSummaryMarkdown } = require('./scripts/route-catalog-summary-report.js');
+
+          const raw = fs.readFileSync('route-catalog-summary-report.json', 'utf8');
+          const jsonStart = raw.indexOf('{');
+          if (jsonStart === -1) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Route catalog summary output did not contain JSON.\n');
+            process.exit(0);
+          }
+          const response = JSON.parse(raw.slice(jsonStart));
+          const sourceSummaries = Array.isArray(response.sourceSummaries) ? response.sourceSummaries : [];
+          const publicRecommendationCount = response.totals && response.totals.publicRecommendationCount;
+          const curationOnlyCount = response.totals && response.totals.curationOnlyCount;
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `${formatSummaryMarkdown(response)}\n\nSources: ${sourceSummaries.length}\nPublic recommendation count: ${publicRecommendationCount || 0}\nCuration only count: ${curationOnlyCount || 0}\n`,
+          );
+          NODE

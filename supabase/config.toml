@@ -492,6 +492,13 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/route-submission-intake/index.ts"
 
+[functions.route-catalog-summary]
+enabled = true
+# Public aggregate catalog health report. Service-role metadata reads stay
+# server-side and response rows intentionally omit route coordinate data.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-summary/index.ts"
+
 [functions.route-catalog-sync-usfs-mvum]
 enabled = true
 # Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
