@@ -112,6 +112,235 @@ function formatBoolean(value) {
   return value ? 'yes' : 'no';
 }
 
+function readRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function readSourceProviderId(source) {
+  return source.providerId || source.provider_id || source.id || 'unknown';
+}
+
+function readLatestSyncAt(run) {
+  if (!run || typeof run !== 'object') return null;
+  return run.finishedAt || run.finished_at || run.startedAt || run.started_at || null;
+}
+
+function failedSyncStatus(status) {
+  const value = String(status || '').toLowerCase();
+  return ['failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'aborted', 'timed_out', 'timeout'].includes(value);
+}
+
+function maxIsoTimestamp(values) {
+  const valid = values.filter(Boolean).map(String).sort();
+  return valid.length > 0 ? valid[valid.length - 1] : null;
+}
+
+function minIsoTimestamp(values) {
+  const valid = values.filter(Boolean).map(String).sort();
+  return valid.length > 0 ? valid[0] : null;
+}
+
+function buildOperatorReport(summary) {
+  const existing = readRecord(summary && summary.operatorReport);
+  const totals = readRecord(summary && summary.totals);
+  const sourceSummaries = Array.isArray(summary && summary.sourceSummaries) ? summary.sourceSummaries : [];
+
+  const routeCountsBySource = Array.isArray(existing.routeCountsBySource)
+    ? existing.routeCountsBySource
+    : sourceSummaries.map((source) => {
+        const latestIngestRun = readRecord(source.latestIngestRun || source.latest_ingest_run);
+        return {
+          providerId: readSourceProviderId(source),
+          name: source.name || readSourceProviderId(source),
+          authority: source.authority || 'unknown',
+          status: source.status || 'unknown',
+          routeCount: Number(source.routeCount || source.route_count || 0),
+          publicRecommendationCount: Number(source.publicRecommendationCount || source.public_recommendation_count || 0),
+          curationOnlyCount: Number(source.curationOnlyCount || source.curation_only_count || 0),
+          staleRouteCount: Number(source.staleRouteCount || source.stale_route_count || 0),
+          activeClosureRouteCount: Number(source.activeClosureRouteCount || source.active_closure_route_count || 0),
+          lastCheckedAt: source.lastCheckedAt || source.last_checked_at || null,
+          lastVerifiedAt: source.lastVerifiedAt || source.last_verified_at || null,
+          oldestVerifiedAt: source.oldestVerifiedAt || source.oldest_verified_at || null,
+          latestSyncStatus: latestIngestRun.status || null,
+          latestSyncFinishedAt: readLatestSyncAt(latestIngestRun),
+          latestSyncError: latestIngestRun.errorMessage || latestIngestRun.error_message || null,
+        };
+      }).sort((left, right) => {
+        const routeDelta = Number(right.routeCount || 0) - Number(left.routeCount || 0);
+        if (routeDelta !== 0) return routeDelta;
+        return String(left.providerId || '').localeCompare(String(right.providerId || ''));
+      });
+
+  const staleSources = Array.isArray(existing.staleSources)
+    ? existing.staleSources
+    : routeCountsBySource.filter((source) => Number(source.staleRouteCount || 0) > 0);
+  const failedSyncAreas = Array.isArray(existing.failedSyncAreas)
+    ? existing.failedSyncAreas
+    : routeCountsBySource
+        .filter((source) => failedSyncStatus(source.latestSyncStatus) || Boolean(source.latestSyncError))
+        .map((source) => ({
+          providerId: source.providerId,
+          name: source.name,
+          status: source.latestSyncStatus || 'failed',
+          finishedAt: source.latestSyncFinishedAt,
+          errorMessage: source.latestSyncError || '',
+        }));
+  const verificationRequiredSources = routeCountsBySource.filter((source) => Number(source.routeCount || 0) > 0);
+  const lastVerifiedValues = verificationRequiredSources.map((source) => source.lastVerifiedAt);
+
+  return {
+    postureTotals: {
+      routeCount: Number(totals.routeCount || existing.postureTotals?.routeCount || 0),
+      publicRecommendationCount: Number(
+        totals.publicRecommendationCount || existing.postureTotals?.publicRecommendationCount || 0,
+      ),
+      curationOnlyCount: Number(totals.curationOnlyCount || existing.postureTotals?.curationOnlyCount || 0),
+      needsReviewCount: Number(totals.needsReviewCount || existing.postureTotals?.needsReviewCount || 0),
+      blockedRouteCount: Number(totals.blockedRouteCount || existing.postureTotals?.blockedRouteCount || 0),
+    },
+    lastVerified: {
+      latestVerifiedAt: existing.lastVerified?.latestVerifiedAt || maxIsoTimestamp(lastVerifiedValues),
+      oldestVerifiedAt: existing.lastVerified?.oldestVerifiedAt || minIsoTimestamp(lastVerifiedValues),
+      sourceCountWithVerification: verificationRequiredSources.filter((source) => Boolean(source.lastVerifiedAt)).length,
+      sourceCountMissingVerification: verificationRequiredSources.filter((source) => !source.lastVerifiedAt).length,
+      sourceCountVerificationNotApplicable: routeCountsBySource.length - verificationRequiredSources.length,
+    },
+    routeCountsBySource,
+    staleSources,
+    failedSyncAreas,
+  };
+}
+
+function buildOperatorHealth(summary) {
+  const operatorReport = buildOperatorReport(summary);
+  const postureTotals = readRecord(operatorReport.postureTotals);
+  const staleSources = Array.isArray(operatorReport.staleSources) ? operatorReport.staleSources : [];
+  const failedSyncAreas = Array.isArray(operatorReport.failedSyncAreas) ? operatorReport.failedSyncAreas : [];
+  const lastVerified = readRecord(operatorReport.lastVerified);
+
+  const failedSyncCount = failedSyncAreas.length;
+  const staleSourceCount = staleSources.length;
+  const missingVerificationCount = Number(lastVerified.sourceCountMissingVerification || 0);
+  const publicRecommendationCount = Number(postureTotals.publicRecommendationCount || 0);
+  const curationOnlyCount = Number(postureTotals.curationOnlyCount || 0);
+  const routeCount = Number(postureTotals.routeCount || 0);
+  const reasons = [];
+
+  if (failedSyncCount > 0) reasons.push(`Failed latest sync areas: ${formatCount(failedSyncCount)}`);
+  if (staleSourceCount > 0) reasons.push(`Stale sources: ${formatCount(staleSourceCount)}`);
+  if (missingVerificationCount > 0) {
+    reasons.push(`Sources missing verification timestamps: ${formatCount(missingVerificationCount)}`);
+  }
+  if (routeCount > 0 && publicRecommendationCount === 0 && curationOnlyCount > 0) {
+    reasons.push(`No public recommendations in sampled report; curation-only routes: ${formatCount(curationOnlyCount)}`);
+  }
+
+  if (failedSyncCount > 0) return { status: 'critical', reasons };
+  if (reasons.length > 0) return { status: 'watch', reasons };
+
+  return {
+    status: 'healthy',
+    reasons: ['No stale sources, failed sync areas, or missing source verification timestamps detected.'],
+  };
+}
+
+function buildWorkflowRunTriggerHealth(eventName, eventPayload) {
+  if (eventName !== 'workflow_run') return { status: 'healthy', reasons: [] };
+  const workflowRun = readRecord(readRecord(eventPayload).workflow_run);
+  const conclusion = String(workflowRun.conclusion || '').toLowerCase();
+  const name = workflowRun.name || workflowRun.workflow_name || 'unknown workflow';
+  const url = workflowRun.html_url || workflowRun.url || '';
+
+  if (conclusion === 'success') return { status: 'healthy', reasons: [] };
+
+  const detail = url ? `${name} completed with ${conclusion || 'unknown'}: ${url}` : `${name} completed with ${conclusion || 'unknown'}`;
+  return {
+    status: 'critical',
+    reasons: [`Trigger workflow ${detail}`],
+  };
+}
+
+function formatOperatorReportMarkdown(summary) {
+  const operatorReport = buildOperatorReport(summary);
+  const operatorHealth = buildOperatorHealth(summary);
+  const routeCountsBySource = Array.isArray(operatorReport.routeCountsBySource)
+    ? operatorReport.routeCountsBySource
+    : [];
+  const staleSources = Array.isArray(operatorReport.staleSources) ? operatorReport.staleSources : [];
+  const failedSyncAreas = Array.isArray(operatorReport.failedSyncAreas) ? operatorReport.failedSyncAreas : [];
+  const postureTotals = readRecord(operatorReport.postureTotals);
+  const lastVerified = readRecord(operatorReport.lastVerified);
+
+  const routeRows = routeCountsBySource.length > 0
+    ? routeCountsBySource.map((source) => [
+        source.providerId || 'unknown',
+        source.name || source.providerId || 'unknown',
+        source.authority || 'unknown',
+        formatCount(source.routeCount),
+        formatCount(source.publicRecommendationCount),
+        formatCount(source.curationOnlyCount),
+        formatCount(source.staleRouteCount),
+        source.lastVerifiedAt || 'none',
+        source.latestSyncStatus || 'unknown',
+      ])
+    : [['none', 'none', 'none', '0', '0', '0', '0', 'none', 'none']];
+
+  const staleRows = staleSources.length > 0
+    ? staleSources.map((source) => [
+        source.providerId || 'unknown',
+        source.name || source.providerId || 'unknown',
+        formatCount(source.staleRouteCount),
+        source.lastCheckedAt || 'none',
+        source.lastVerifiedAt || 'none',
+      ])
+    : [['none', 'none', '0', 'none', 'none']];
+
+  const failedRows = failedSyncAreas.length > 0
+    ? failedSyncAreas.map((source) => [
+        source.providerId || 'unknown',
+        source.status || 'failed',
+        source.finishedAt || 'none',
+        source.errorMessage || '',
+      ])
+    : [['none', 'none', 'none', '']];
+
+  return [
+    '### Operator Report',
+    '',
+    `Operator health: ${operatorHealth.status}`,
+    ...operatorHealth.reasons.map((reason) => `- ${reason}`),
+    '',
+    `Public recommendations: ${formatCount(postureTotals.publicRecommendationCount)}`,
+    `Curation only: ${formatCount(postureTotals.curationOnlyCount)}`,
+    `Needs review: ${formatCount(postureTotals.needsReviewCount)}`,
+    `Blocked: ${formatCount(postureTotals.blockedRouteCount)}`,
+    `Latest verified: ${lastVerified.latestVerifiedAt || 'none'}`,
+    `Oldest verified: ${lastVerified.oldestVerifiedAt || 'none'}`,
+    `Sources with verification timestamps: ${formatCount(lastVerified.sourceCountWithVerification)}`,
+    `Sources missing verification timestamps: ${formatCount(lastVerified.sourceCountMissingVerification)}`,
+    `Sources not requiring route verification timestamps: ${formatCount(lastVerified.sourceCountVerificationNotApplicable)}`,
+    '',
+    '### Route counts by source',
+    '',
+    '| Source | Name | Authority | Routes | Public | Curation only | Stale | Last verified | Latest sync |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |',
+    ...routeRows.map((row) => `| ${row.join(' | ')} |`),
+    '',
+    '### Stale sources',
+    '',
+    '| Source | Name | Stale routes | Last checked | Last verified |',
+    '| --- | --- | ---: | --- | --- |',
+    ...staleRows.map((row) => `| ${row.join(' | ')} |`),
+    '',
+    '### Failed sync areas',
+    '',
+    '| Source | Status | Finished | Error |',
+    '| --- | --- | --- | --- |',
+    ...failedRows.map((row) => `| ${row.join(' | ')} |`),
+  ].join('\n');
+}
+
 function jsonObjectCandidateAt(text, startIndex) {
   let depth = 0;
   let inString = false;
@@ -208,6 +437,8 @@ function formatSummaryMarkdown(summary) {
       formatCount(source.rawFeatureCount),
       formatLatestIngest(source.latestIngestRun),
     ].join(' | ')).map((row) => `| ${row} |`),
+    '',
+    formatOperatorReportMarkdown(summary),
   ].join('\n');
 }
 
@@ -314,7 +545,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildOperatorHealth,
   buildRequestBody,
+  buildOperatorReport,
+  buildWorkflowRunTriggerHealth,
   extractJsonPayloadFromOutput,
   failurePayloadForSummary,
   formatSummaryMarkdown,

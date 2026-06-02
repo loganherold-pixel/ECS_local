@@ -11,6 +11,7 @@ on:
       - Route Catalog Michigan ORV Sync
       - Route Catalog Minnesota OHV Sync
       - Route Catalog Oregon ODF OHV Sync
+      - Route Catalog Colorado CPW Trails Sync
       - Route Catalog USGS Trails Sync
       - Route Catalog NPS Trails Sync
     types:
@@ -38,7 +39,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate summary endpoint configuration
-        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -51,7 +51,6 @@ jobs:
           fi
 
       - name: Run Route Catalog Summary Report
-        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,11 +68,17 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const {
+            buildOperatorHealth,
+            buildWorkflowRunTriggerHealth,
             extractJsonPayloadFromOutput,
             formatWorkflowSummaryMarkdown,
           } = require('./scripts/route-catalog-summary-report.js');
 
           const raw = fs.readFileSync('route-catalog-summary-report.json', 'utf8');
+          const eventPayload = process.env.GITHUB_EVENT_PATH
+            ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
+            : {};
+          const triggerHealth = buildWorkflowRunTriggerHealth(process.env.GITHUB_EVENT_NAME, eventPayload);
           let response;
           try {
             response = extractJsonPayloadFromOutput(raw, 'Route catalog summary output');
@@ -85,4 +90,16 @@ jobs:
             process.env.GITHUB_STEP_SUMMARY,
             `${formatWorkflowSummaryMarkdown(response)}\n`,
           );
+          if (triggerHealth.status === 'critical') {
+            console.log(`::error::Route catalog trigger workflow health is critical: ${triggerHealth.reasons.join('; ')}`);
+            process.exit(1);
+          }
+          const operatorHealth = buildOperatorHealth(response);
+          if (operatorHealth.status === 'watch') {
+            console.log(`::warning::Route catalog operator health is watch: ${operatorHealth.reasons.join('; ')}`);
+          }
+          if (operatorHealth.status === 'critical') {
+            console.log(`::error::Route catalog operator health is critical: ${operatorHealth.reasons.join('; ')}`);
+            process.exit(1);
+          }
           NODE

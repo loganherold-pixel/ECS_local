@@ -16,6 +16,7 @@ const REQUIRED_SUMMARY_FIELDS = [
   'recommendationStatusCounts',
   'verificationStatusCounts',
   'reviewStatusCounts',
+  'operatorReport',
   'generatedAt',
   'maxRouteRows',
 ];
