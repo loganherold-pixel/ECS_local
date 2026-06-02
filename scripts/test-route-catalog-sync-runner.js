@@ -1,6 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const YAML = require('yaml');
 
 const root = path.join(__dirname, '..');
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-usfs-mvum-sync.yml');
@@ -8,6 +9,17 @@ const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-usfs
 assert(fs.existsSync(workflowPath), 'Route catalog MVUM sync runner workflow should exist');
 
 const workflow = fs.readFileSync(workflowPath, 'utf8');
+const workflowDoc = YAML.parse(workflow);
+
+assert.strictEqual(
+  workflowDoc.name,
+  'Route Catalog USFS MVUM Sync',
+  'Workflow YAML should parse with the expected display name instead of falling back to the file path in GitHub Actions',
+);
+assert(
+  workflowDoc.on?.schedule && workflowDoc.on?.workflow_dispatch,
+  'Workflow YAML should parse the schedule and manual dispatch triggers',
+);
 
 assert(workflow.includes('name: Route Catalog USFS MVUM Sync'), 'Workflow should have a clear route catalog sync name');
 assert(workflow.includes('schedule:') && workflow.includes('cron:'), 'Workflow should run on a durable schedule');

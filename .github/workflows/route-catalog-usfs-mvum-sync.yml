@@ -22,7 +22,7 @@ on:
         required: false
         default: '1'
       limit_per_forest_layer:
-        description: Optional maximum features to request per forest/layer. Leave blank for sync depth default: 150 cautious, 2500 deep.
+        description: 'Optional maximum features to request per forest/layer. Leave blank for sync depth default: 150 cautious, 2500 deep.'
         required: false
         default: ''
       max_allowable_offset:
