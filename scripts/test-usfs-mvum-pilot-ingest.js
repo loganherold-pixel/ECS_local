@@ -125,6 +125,15 @@ const expectedUsfsMvumForestSlugs = [
     'shawnee-national-forest',
     'cleveland-national-forest',
     'green-mountain-finger-lakes-national-forests',
+    'lake-tahoe-basin-management-unit',
+    'wayne-national-forest',
+    'white-mountain-national-forest',
+    'wallowa-whitman-national-forest',
+    'hoosier-national-forest',
+    'columbia-river-gorge-national-scenic-area',
+    'okanogan-wenatchee-national-forest',
+    'six-rivers-national-forest',
+    'tonto-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -220,6 +229,15 @@ const expectedUsfsMvumForestNames = [
   'Shawnee National Forest',
   'Cleveland National Forest',
   'Green Mountain and Finger Lakes National Forests',
+  'Lake Tahoe Basin Management Unit',
+  'Wayne National Forest',
+  'White Mountain National Forest',
+  'Wallowa-Whitman National Forest',
+  'Hoosier National Forest',
+  'Columbia River Gorge National Scenic Area',
+  'Okanogan-Wenatchee National Forest',
+  'Six Rivers National Forest',
+  'Tonto National Forest',
 ];
 
 assert.deepStrictEqual(

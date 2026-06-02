@@ -184,6 +184,15 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'shawnee-national-forest',
   'cleveland-national-forest',
   'green-mountain-finger-lakes-national-forests',
+  'lake-tahoe-basin-management-unit',
+  'wayne-national-forest',
+  'white-mountain-national-forest',
+  'wallowa-whitman-national-forest',
+  'hoosier-national-forest',
+  'columbia-river-gorge-national-scenic-area',
+  'okanogan-wenatchee-national-forest',
+  'six-rivers-national-forest',
+  'tonto-national-forest',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,

@@ -91,6 +91,15 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'shawnee_nf'
   | 'cleveland_nf'
   | 'green_mountain_finger_lakes_nf'
+  | 'lake_tahoe_basin_mgmt_unit'
+  | 'wayne_nf'
+  | 'white_mountain_nf'
+  | 'wallowa_whitman_nf'
+  | 'hoosier_nf'
+  | 'columbia_river_gorge_nsa'
+  | 'okanogan_wenatchee_nf'
+  | 'six_rivers_nf'
+  | 'tonto_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -1070,6 +1079,96 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Green Mountain/Finger Lakes NF',
     latitude: 43.441,
     longitude: -72.974,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'lake_tahoe_basin_mgmt_unit',
+    label: 'Lake Tahoe Basin Management Unit',
+    shortLabel: 'Lake Tahoe Basin',
+    latitude: 39.041,
+    longitude: -120.057,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'wayne_nf',
+    label: 'Wayne National Forest',
+    shortLabel: 'Wayne NF',
+    latitude: 39.1,
+    longitude: -82.458,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'white_mountain_nf',
+    label: 'White Mountain National Forest',
+    shortLabel: 'White Mountain NF',
+    latitude: 44.289,
+    longitude: -71.345,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'wallowa_whitman_nf',
+    label: 'Wallowa-Whitman National Forest',
+    shortLabel: 'Wallowa-Whitman NF',
+    latitude: 45.204,
+    longitude: -116.529,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'hoosier_nf',
+    label: 'Hoosier National Forest',
+    shortLabel: 'Hoosier NF',
+    latitude: 38.537,
+    longitude: -86.543,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'columbia_river_gorge_nsa',
+    label: 'Columbia River Gorge National Scenic Area',
+    shortLabel: 'Columbia River Gorge',
+    latitude: 45.712,
+    longitude: -121.692,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'okanogan_wenatchee_nf',
+    label: 'Okanogan-Wenatchee National Forest',
+    shortLabel: 'Okanogan-Wenatchee NF',
+    latitude: 47.376,
+    longitude: -121.416,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'six_rivers_nf',
+    label: 'Six Rivers National Forest',
+    shortLabel: 'Six Rivers NF',
+    latitude: 40.947,
+    longitude: -123.459,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'tonto_nf',
+    label: 'Tonto National Forest',
+    shortLabel: 'Tonto NF',
+    latitude: 34.4,
+    longitude: -111.622,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],
