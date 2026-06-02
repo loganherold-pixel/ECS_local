@@ -5,6 +5,7 @@ const { loadRouteCatalogEnv } = require('./route-catalog-env.js');
 const DEFAULT_MAX_ROUTE_ROWS = 1000;
 const DEFAULT_MAX_LINK_ROWS = 5000;
 const DEFAULT_MAX_INGEST_RUN_ROWS = 500;
+const DEFAULT_TIMEOUT_MS = 60000;
 
 function usage() {
   return [
@@ -16,6 +17,7 @@ function usage() {
     `  --max-route-rows <n>      Cap route rows read by the Edge Function (default ${DEFAULT_MAX_ROUTE_ROWS})`,
     `  --max-link-rows <n>       Cap route-source link rows read by the Edge Function (default ${DEFAULT_MAX_LINK_ROWS})`,
     `  --max-ingest-run-rows <n> Cap ingest run rows read by the Edge Function (default ${DEFAULT_MAX_INGEST_RUN_ROWS})`,
+    `  --timeout-ms <n>          Abort the summary request after this many ms (default ${DEFAULT_TIMEOUT_MS})`,
     '  --help                    Show this help',
   ].join('\n');
 }
@@ -27,6 +29,7 @@ function parseArgs(argv) {
     maxRouteRows: DEFAULT_MAX_ROUTE_ROWS,
     maxLinkRows: DEFAULT_MAX_LINK_ROWS,
     maxIngestRunRows: DEFAULT_MAX_INGEST_RUN_ROWS,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
     help: false,
   };
 
@@ -38,6 +41,7 @@ function parseArgs(argv) {
     else if (arg === '--max-route-rows') options.maxRouteRows = readPositiveInteger(argv[++index], 'max-route-rows');
     else if (arg === '--max-link-rows') options.maxLinkRows = readPositiveInteger(argv[++index], 'max-link-rows');
     else if (arg === '--max-ingest-run-rows') options.maxIngestRunRows = readPositiveInteger(argv[++index], 'max-ingest-run-rows');
+    else if (arg === '--timeout-ms') options.timeoutMs = readPositiveInteger(argv[++index], 'timeout-ms');
     else throw new Error(`Unknown option: ${arg}\n\n${usage()}`);
   }
 
@@ -76,6 +80,19 @@ function buildRequestBody(options) {
     maxRouteRows: options.maxRouteRows,
     maxLinkRows: options.maxLinkRows,
     maxIngestRunRows: options.maxIngestRunRows,
+  };
+}
+
+function failurePayloadForSummary(error, options, env) {
+  const supabaseUrl = resolveSupabaseUrl(env);
+  const message = error && error.message ? error.message : String(error || 'Unknown route catalog summary error');
+  return {
+    ok: false,
+    generatedAt: new Date().toISOString(),
+    error: message,
+    endpoint: supabaseUrl ? routeCatalogSummaryUrl(supabaseUrl) : '(missing)',
+    limits: buildRequestBody(options),
+    timeoutMs: options.timeoutMs,
   };
 }
 
@@ -200,6 +217,20 @@ function formatWorkflowSummaryMarkdown(summary) {
   const limits = summary && typeof summary.limits === 'object' ? summary.limits : {};
   const truncated = summary && typeof summary.truncated === 'object' ? summary.truncated : {};
 
+  if (summary && summary.ok === false) {
+    return [
+      '## Route Catalog Summary Report',
+      '',
+      'Status: failed',
+      `Error: ${summary.error || 'Unknown route catalog summary error'}`,
+      `Endpoint: ${summary.endpoint || 'unknown'}`,
+      `Timeout: ${formatCount(summary.timeoutMs)} ms`,
+      `Report limits: routes ${formatCount(limits.maxRouteRows)}; route-source links ${formatCount(limits.maxLinkRows)}; ingest runs ${formatCount(limits.maxIngestRunRows)}`,
+      '',
+      'The live route catalog summary endpoint did not return a usable report. No seed or mock routes are shown as verified.',
+    ].join('\n');
+  }
+
   return [
     formatSummaryMarkdown(summary),
     '',
@@ -227,6 +258,7 @@ async function fetchSummary(options, env) {
     method: 'POST',
     headers: headersForSummary(resolveAnonKey(env)),
     body: JSON.stringify(buildRequestBody(options)),
+    signal: AbortSignal.timeout(options.timeoutMs),
   });
   const text = await response.text();
   let body = {};
@@ -261,8 +293,17 @@ async function main() {
     return;
   }
 
-  const summary = await fetchSummary(options, process.env);
-  console.log(options.json ? JSON.stringify(summary, null, 2) : formatSummaryMarkdown(summary));
+  try {
+    const summary = await fetchSummary(options, process.env);
+    console.log(options.json ? JSON.stringify(summary, null, 2) : formatSummaryMarkdown(summary));
+  } catch (error) {
+    if (options.json) {
+      console.log(JSON.stringify(failurePayloadForSummary(error, options, process.env), null, 2));
+    } else {
+      console.error(error && error.message ? error.message : error);
+    }
+    process.exitCode = 1;
+  }
 }
 
 if (require.main === module) {
@@ -275,6 +316,7 @@ if (require.main === module) {
 module.exports = {
   buildRequestBody,
   extractJsonPayloadFromOutput,
+  failurePayloadForSummary,
   formatSummaryMarkdown,
   formatWorkflowSummaryMarkdown,
   parseArgs,

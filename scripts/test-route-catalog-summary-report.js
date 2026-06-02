@@ -106,6 +106,9 @@ for (const required of [
   'route-catalog-summary',
   '--dry-run',
   '--json',
+  '--timeout-ms',
+  'AbortSignal.timeout',
+  'failurePayloadForSummary',
   'sourceSummaries',
   'publicRecommendationCount',
   'curationOnlyCount',
@@ -123,6 +126,7 @@ assert(
 const {
   buildRequestBody,
   extractJsonPayloadFromOutput,
+  failurePayloadForSummary,
   formatSummaryMarkdown,
   formatWorkflowSummaryMarkdown,
   parseArgs,
@@ -142,6 +146,16 @@ assert.deepStrictEqual(
   },
   'Summary script default live report limits should be safe for large catalogs',
 );
+assert.strictEqual(
+  parseArgs([]).timeoutMs,
+  60000,
+  'Summary script should use a bounded default request timeout',
+);
+assert.strictEqual(
+  parseArgs(['--timeout-ms', '15000']).timeoutMs,
+  15000,
+  'Summary script should allow workflow-specific request timeout tuning',
+);
 assert.deepStrictEqual(
   extractJsonPayloadFromOutput('notice {not json}\n{"ok":true,"totals":{"routeCount":3}}\ntrailing log', 'summary report'),
   { ok: true, totals: { routeCount: 3 } },
@@ -151,6 +165,19 @@ assert.throws(
   () => extractJsonPayloadFromOutput('plain text only', 'summary report'),
   /summary report did not contain JSON/,
   'Summary script should report missing JSON clearly',
+);
+const failurePayload = failurePayloadForSummary(
+  new Error('The operation was aborted due to timeout'),
+  parseArgs(['--timeout-ms', '15000', '--max-route-rows', '1', '--max-link-rows', '1', '--max-ingest-run-rows', '1']),
+  { ECS_SUPABASE_URL: 'https://example.supabase.co' },
+);
+assert.strictEqual(failurePayload.ok, false, 'Failure payload should mark summary response as failed');
+assert.strictEqual(failurePayload.timeoutMs, 15000, 'Failure payload should preserve request timeout');
+const failureMarkdown = formatWorkflowSummaryMarkdown(failurePayload);
+assert(failureMarkdown.includes('Status: failed'), 'Workflow summary should render failed summary status');
+assert(
+  failureMarkdown.includes('The operation was aborted due to timeout'),
+  'Workflow summary should render failed summary error detail',
 );
 const markdown = formatSummaryMarkdown({
   generatedAt: '2026-06-01T00:00:00.000Z',
@@ -268,7 +295,7 @@ for (const required of [
   'Route Catalog NPS Trails Sync',
   'ECS_SUPABASE_URL',
   'EXPO_PUBLIC_SUPABASE_ANON_KEY',
-  'node ./scripts/route-catalog-summary-report.js --json --max-route-rows 1000 --max-link-rows 5000 --max-ingest-run-rows 500',
+  'node ./scripts/route-catalog-summary-report.js --json --timeout-ms 60000 --max-route-rows 1000 --max-link-rows 5000 --max-ingest-run-rows 500',
   'Route Catalog Summary Report',
   'extractJsonPayloadFromOutput',
   'formatWorkflowSummaryMarkdown',
