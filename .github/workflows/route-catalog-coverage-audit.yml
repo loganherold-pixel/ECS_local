@@ -39,6 +39,8 @@ jobs:
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
       PROBE_KEYS: ${{ github.event.inputs.probe_keys || 'all' }}
       TRIGGER_WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
+      ROUTE_CATALOG_AUDIT_RETRY_ATTEMPTS: 3
+      ROUTE_CATALOG_AUDIT_RETRY_DELAY_MS: 1000
 
     steps:
       - name: Checkout
@@ -228,8 +230,13 @@ jobs:
           const fs = require('fs');
           const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
           const jsonStart = raw.indexOf('{');
+          if (jsonStart === -1) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Route catalog coverage audit output did not contain JSON.\n');
+            process.exit(0);
+          }
           const response = JSON.parse(raw.slice(jsonStart));
           const results = Array.isArray(response.results) ? response.results : [];
+          const errors = Array.isArray(response.auditErrors) ? response.auditErrors : [];
           const selection = fs.existsSync('route-catalog-coverage-audit-selection.json')
             ? JSON.parse(fs.readFileSync('route-catalog-coverage-audit-selection.json', 'utf8'))
             : {};
@@ -246,6 +253,9 @@ jobs:
             ...results.map((result) =>
               `| ${result.key} | ${result.coverageState} | ${result.observedPosture} | ${result.matchesExpectedPosture ? 'yes' : 'no'} | ${result.count} | ${result.anySourceBackedCandidateCount} |`
             ),
+            '',
+            `Audit errors: ${errors.length}`,
+            ...errors.map((result) => `- ${result.key}: ${result.error || 'Unknown audit error'}`),
             '',
             `Mismatches: ${results.filter((result) => !result.matchesExpectedPosture).length}`,
           ];
@@ -265,8 +275,17 @@ jobs:
           const fs = require('fs');
           const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
           const jsonStart = raw.indexOf('{');
+          if (jsonStart === -1) {
+            console.error('Route catalog coverage audit output did not contain JSON.');
+            process.exit(1);
+          }
           const response = JSON.parse(raw.slice(jsonStart));
           const results = Array.isArray(response.results) ? response.results : [];
+          const errors = Array.isArray(response.auditErrors) ? response.auditErrors : [];
+          if (errors.length > 0) {
+            console.error(`Coverage audit request errors: ${errors.map((result) => `${result.key}: ${result.error || 'Unknown audit error'}`).join('; ')}`);
+            process.exit(1);
+          }
           const mismatches = results.filter((result) => !result.matchesExpectedPosture);
           if (mismatches.length > 0) {
             console.error(`Coverage posture mismatches: ${mismatches.map((result) => result.key).join(', ')}`);

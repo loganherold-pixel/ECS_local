@@ -28,6 +28,8 @@ assert(fs.existsSync(auditPath), 'Route catalog coverage audit script should exi
 const {
   ROUTE_CATALOG_COVERAGE_PROBES,
   buildRouteCatalogCoverageAuditPlan,
+  isRetryableAuditError,
+  summarizeAuditProbeError,
   summarizeSearchResponse,
 } = require(auditPath);
 
@@ -211,6 +213,30 @@ const mismatchSummary = summarizeSearchResponse(curationProbe, {
 assert.strictEqual(mismatchSummary.observedPosture, 'no_verified_routes_expected');
 assert.strictEqual(mismatchSummary.matchesExpectedPosture, false);
 
+const auditFailureSummary = summarizeAuditProbeError(
+  ROUTE_CATALOG_COVERAGE_PROBES[0],
+  new Error('route-catalog-search timeout'),
+);
+assert.strictEqual(
+  auditFailureSummary.observedPosture,
+  'audit_error',
+  'Coverage audit should record live endpoint failures as structured audit errors',
+);
+assert.strictEqual(auditFailureSummary.coverageState, 'audit_error');
+assert.strictEqual(auditFailureSummary.matchesExpectedPosture, false);
+assert.strictEqual(auditFailureSummary.error, 'route-catalog-search timeout');
+assert.strictEqual(auditFailureSummary.sampleRoutes.length, 0);
+assert.strictEqual(
+  isRetryableAuditError(new Error('Verified route catalog is temporarily unavailable.')),
+  true,
+  'Coverage audit should retry transient route-catalog-search availability failures',
+);
+assert.strictEqual(
+  isRetryableAuditError(new Error('Missing ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL')),
+  false,
+  'Coverage audit should not retry local configuration failures',
+);
+
 const supplementalOverlapSummary = summarizeSearchResponse(sierraProbe, {
   count: 10,
   coverageState: { state: 'ready', title: 'Verified routes available' },
@@ -296,6 +322,10 @@ for (const required of [
   '--dry-run',
   '--probe',
   '--all',
+  'summarizeAuditProbeError',
+  'isRetryableAuditError',
+  'ROUTE_CATALOG_AUDIT_RETRY_ATTEMPTS',
+  'auditErrors',
 ]) {
   assert(auditSource.includes(required), `Coverage audit script should include ${required}`);
 }

@@ -1089,6 +1089,7 @@ function usage() {
     'Required for live audit:',
     '  ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL',
     '  EXPO_PUBLIC_SUPABASE_ANON_KEY is optional for route-catalog-search, but sent when present.',
+    '  ROUTE_CATALOG_AUDIT_RETRY_ATTEMPTS and ROUTE_CATALOG_AUDIT_RETRY_DELAY_MS tune transient live-query retries.',
   ].join('\n');
 }
 
@@ -1183,7 +1184,45 @@ function summarizeSearchResponse(probe, body) {
   };
 }
 
-async function auditProbe(probe, env) {
+function summarizeAuditProbeError(probe, error) {
+  return {
+    key: probe.key,
+    label: probe.label,
+    sourceAdapter: probe.sourceAdapter,
+    expectedPosture: probe.expectedPosture,
+    observedPosture: 'audit_error',
+    matchesExpectedPosture: false,
+    count: 0,
+    coverageState: 'audit_error',
+    coverageTitle: 'Coverage audit request failed',
+    radiusMatchedCount: 0,
+    curationCandidateCount: 0,
+    anySourceBackedCandidateCount: 0,
+    error: error && error.message ? error.message : String(error || 'Unknown audit error'),
+    sampleRoutes: [],
+  };
+}
+
+function isRetryableAuditError(error) {
+  const message = error && error.message ? error.message : String(error || '');
+  return /temporarily unavailable|fetch failed|network|timeout|timed out|503|502|504|unable to search verified route catalog|unable to inspect route catalog/i.test(message);
+}
+
+function readRetryAttempts(env) {
+  const attempts = Number(env.ROUTE_CATALOG_AUDIT_RETRY_ATTEMPTS ?? 3);
+  return Number.isFinite(attempts) ? Math.max(1, Math.min(5, Math.round(attempts))) : 3;
+}
+
+function readRetryDelayMs(env) {
+  const delayMs = Number(env.ROUTE_CATALOG_AUDIT_RETRY_DELAY_MS ?? 750);
+  return Number.isFinite(delayMs) ? Math.max(0, Math.min(5000, Math.round(delayMs))) : 750;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function auditProbeOnce(probe, env) {
   const supabaseUrl = resolveSupabaseUrl(env);
   if (!supabaseUrl) throw new Error('Missing ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL');
 
@@ -1200,9 +1239,27 @@ async function auditProbe(probe, env) {
     throw new Error(`${probe.key} returned non-JSON response: ${text.slice(0, 300)}`);
   }
   if (!response.ok || body.ok === false) {
-    throw new Error(`${probe.key} coverage audit failed: ${body.error || response.statusText}`);
+    throw new Error(`${probe.key} coverage audit failed (${response.status}): ${body.error || response.statusText}`);
   }
   return summarizeSearchResponse(probe, body);
+}
+
+async function auditProbe(probe, env) {
+  const attempts = readRetryAttempts(env);
+  const retryDelayMs = readRetryDelayMs(env);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await auditProbeOnce(probe, env);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableAuditError(error)) break;
+      await sleep(retryDelayMs * attempt);
+    }
+  }
+
+  throw lastError;
 }
 
 function printHumanAudit(result) {
@@ -1214,6 +1271,7 @@ function printHumanAudit(result) {
   console.log(`  radius matches: ${result.radiusMatchedCount}`);
   console.log(`  curation candidates: ${result.curationCandidateCount}`);
   console.log(`  source-backed candidates: ${result.anySourceBackedCandidateCount}`);
+  if (result.error) console.log(`  error: ${result.error}`);
 }
 
 async function main() {
@@ -1240,13 +1298,30 @@ async function main() {
   }
 
   const results = [];
+  let stoppedOnAuditError = false;
   for (const probe of plan) {
-    const result = await auditProbe(probe, process.env);
+    let result;
+    try {
+      result = await auditProbe(probe, process.env);
+    } catch (error) {
+      result = summarizeAuditProbeError(probe, error);
+      stoppedOnAuditError = true;
+    }
     results.push(result);
     if (!options.json) printHumanAudit(result);
+    if (stoppedOnAuditError) break;
   }
   const mismatchedProbes = results.filter((result) => !result.matchesExpectedPosture);
-  if (options.json) console.log(JSON.stringify({ mode: 'live-audit', results }, null, 2));
+  const auditErrors = results.filter((result) => result.observedPosture === 'audit_error');
+  if (options.json) console.log(JSON.stringify({ mode: 'live-audit', results, auditErrors }, null, 2));
+  if (auditErrors.length > 0) {
+    console.error(
+      `Route catalog coverage audit failed for ${auditErrors.length} probe(s): ${
+        auditErrors.map((result) => `${result.key}: ${result.error}`).join('; ')
+      }`,
+    );
+    process.exit(1);
+  }
   if (options.failOnMismatch && mismatchedProbes.length > 0) {
     console.error(
       `Route catalog coverage audit found ${mismatchedProbes.length} mismatched probe(s): ${
@@ -1268,6 +1343,8 @@ module.exports = {
   ROUTE_CATALOG_COVERAGE_PROBES,
   auditProbe,
   buildRouteCatalogCoverageAuditPlan,
+  isRetryableAuditError,
   routeCatalogSearchUrl,
+  summarizeAuditProbeError,
   summarizeSearchResponse,
 };
