@@ -113,6 +113,18 @@ const expectedUsfsMvumForestSlugs = [
     'olympic-national-forest',
     'custer-national-forest',
     'bighorn-national-forest',
+    'colville-national-forest',
+    'chattahoochee-oconee-national-forests',
+    'nebraska-national-forest',
+    'shoshone-national-forest',
+    'san-bernardino-national-forest',
+    'los-padres-national-forest',
+    'dakota-prairie-grasslands',
+    'monongahela-national-forest',
+    'land-between-the-lakes-national-recreation-area',
+    'shawnee-national-forest',
+    'cleveland-national-forest',
+    'green-mountain-finger-lakes-national-forests',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -196,6 +208,18 @@ const expectedUsfsMvumForestNames = [
   'Olympic National Forest',
   'Custer National Forest',
   'Bighorn National Forest',
+  'Colville National Forest',
+  'Chattahoochee-Oconee National Forests',
+  'Nebraska National Forest',
+  'Shoshone National Forest',
+  'San Bernardino National Forest',
+  'Los Padres National Forest',
+  'Dakota Prairie Grasslands',
+  'Monongahela National Forest',
+  'Land Between the Lakes National Recreation Area',
+  'Shawnee National Forest',
+  'Cleveland National Forest',
+  'Green Mountain and Finger Lakes National Forests',
 ];
 
 assert.deepStrictEqual(

@@ -79,6 +79,18 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'olympic_nf'
   | 'custer_nf'
   | 'bighorn_nf'
+  | 'colville_nf'
+  | 'chattahoochee_oconee_nf'
+  | 'nebraska_nf'
+  | 'shoshone_nf'
+  | 'san_bernardino_nf'
+  | 'los_padres_nf'
+  | 'dakota_prairie_grasslands'
+  | 'monongahela_nf'
+  | 'land_between_lakes_nra'
+  | 'shawnee_nf'
+  | 'cleveland_nf'
+  | 'green_mountain_finger_lakes_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -938,6 +950,126 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Bighorn NF',
     latitude: 44.526,
     longitude: -107.413,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'colville_nf',
+    label: 'Colville National Forest',
+    shortLabel: 'Colville NF',
+    latitude: 48.603,
+    longitude: -117.967,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'chattahoochee_oconee_nf',
+    label: 'Chattahoochee-Oconee National Forests',
+    shortLabel: 'Chattahoochee-Oconee NF',
+    latitude: 34.027,
+    longitude: -84.226,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'nebraska_nf',
+    label: 'Nebraska National Forest',
+    shortLabel: 'Nebraska NF',
+    latitude: 43.029,
+    longitude: -102.069,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'shoshone_nf',
+    label: 'Shoshone National Forest',
+    shortLabel: 'Shoshone NF',
+    latitude: 43.748,
+    longitude: -109.38,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'san_bernardino_nf',
+    label: 'San Bernardino National Forest',
+    shortLabel: 'San Bernardino NF',
+    latitude: 33.962,
+    longitude: -117.07,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'los_padres_nf',
+    label: 'Los Padres National Forest',
+    shortLabel: 'Los Padres NF',
+    latitude: 35.378,
+    longitude: -120.341,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'dakota_prairie_grasslands',
+    label: 'Dakota Prairie Grasslands',
+    shortLabel: 'Dakota Prairie',
+    latitude: 46.935,
+    longitude: -99.883,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'monongahela_nf',
+    label: 'Monongahela National Forest',
+    shortLabel: 'Monongahela NF',
+    latitude: 38.553,
+    longitude: -79.898,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'land_between_lakes_nra',
+    label: 'Land Between the Lakes National Recreation Area',
+    shortLabel: 'Land Between Lakes',
+    latitude: 36.75,
+    longitude: -88.061,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'shawnee_nf',
+    label: 'Shawnee National Forest',
+    shortLabel: 'Shawnee NF',
+    latitude: 37.511,
+    longitude: -88.876,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'cleveland_nf',
+    label: 'Cleveland National Forest',
+    shortLabel: 'Cleveland NF',
+    latitude: 33.271,
+    longitude: -117.022,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'green_mountain_finger_lakes_nf',
+    label: 'Green Mountain and Finger Lakes National Forests',
+    shortLabel: 'Green Mountain/Finger Lakes NF',
+    latitude: 43.441,
+    longitude: -72.974,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],

@@ -172,6 +172,18 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'olympic-national-forest',
   'custer-national-forest',
   'bighorn-national-forest',
+  'colville-national-forest',
+  'chattahoochee-oconee-national-forests',
+  'nebraska-national-forest',
+  'shoshone-national-forest',
+  'san-bernardino-national-forest',
+  'los-padres-national-forest',
+  'dakota-prairie-grasslands',
+  'monongahela-national-forest',
+  'land-between-the-lakes-national-recreation-area',
+  'shawnee-national-forest',
+  'cleveland-national-forest',
+  'green-mountain-finger-lakes-national-forests',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,
