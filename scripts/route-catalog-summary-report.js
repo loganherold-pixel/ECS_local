@@ -2,6 +2,10 @@
 const { inspect } = require('util');
 const { loadRouteCatalogEnv } = require('./route-catalog-env.js');
 
+const DEFAULT_MAX_ROUTE_ROWS = 1000;
+const DEFAULT_MAX_LINK_ROWS = 5000;
+const DEFAULT_MAX_INGEST_RUN_ROWS = 500;
+
 function usage() {
   return [
     'Usage: node scripts/route-catalog-summary-report.js [options]',
@@ -9,9 +13,9 @@ function usage() {
     'Options:',
     '  --dry-run                 Print endpoint/env/request metadata without calling Supabase',
     '  --json                    Print JSON instead of Markdown',
-    '  --max-route-rows <n>      Cap route rows read by the Edge Function',
-    '  --max-link-rows <n>       Cap route-source link rows read by the Edge Function',
-    '  --max-ingest-run-rows <n> Cap ingest run rows read by the Edge Function',
+    `  --max-route-rows <n>      Cap route rows read by the Edge Function (default ${DEFAULT_MAX_ROUTE_ROWS})`,
+    `  --max-link-rows <n>       Cap route-source link rows read by the Edge Function (default ${DEFAULT_MAX_LINK_ROWS})`,
+    `  --max-ingest-run-rows <n> Cap ingest run rows read by the Edge Function (default ${DEFAULT_MAX_INGEST_RUN_ROWS})`,
     '  --help                    Show this help',
   ].join('\n');
 }
@@ -20,9 +24,9 @@ function parseArgs(argv) {
   const options = {
     dryRun: false,
     json: false,
-    maxRouteRows: 50000,
-    maxLinkRows: 100000,
-    maxIngestRunRows: 5000,
+    maxRouteRows: DEFAULT_MAX_ROUTE_ROWS,
+    maxLinkRows: DEFAULT_MAX_LINK_ROWS,
+    maxIngestRunRows: DEFAULT_MAX_INGEST_RUN_ROWS,
     help: false,
   };
 
@@ -85,6 +89,10 @@ function formatLatestIngest(run) {
   const status = run.status || 'unknown';
   const finishedAt = run.finishedAt || run.finished_at || run.startedAt || run.started_at || '';
   return finishedAt ? `${status} @ ${finishedAt}` : String(status);
+}
+
+function formatBoolean(value) {
+  return value ? 'yes' : 'no';
 }
 
 function jsonObjectCandidateAt(text, startIndex) {
@@ -189,11 +197,15 @@ function formatSummaryMarkdown(summary) {
 function formatWorkflowSummaryMarkdown(summary) {
   const totals = summary && typeof summary.totals === 'object' ? summary.totals : {};
   const sourceSummaries = Array.isArray(summary && summary.sourceSummaries) ? summary.sourceSummaries : [];
+  const limits = summary && typeof summary.limits === 'object' ? summary.limits : {};
+  const truncated = summary && typeof summary.truncated === 'object' ? summary.truncated : {};
 
   return [
     formatSummaryMarkdown(summary),
     '',
     `Sources: ${sourceSummaries.length}`,
+    `Report limits: routes ${formatCount(limits.maxRouteRows)}; route-source links ${formatCount(limits.maxLinkRows)}; ingest runs ${formatCount(limits.maxIngestRunRows)}`,
+    `Truncated: verified routes ${formatBoolean(truncated.verifiedRoutes)}; route-source links ${formatBoolean(truncated.verifiedRouteSources)}; ingest runs ${formatBoolean(truncated.ingestRuns)}`,
     `Public recommendation count: ${formatCount(totals.publicRecommendationCount)}`,
     `Curation only count: ${formatCount(totals.curationOnlyCount)}`,
     `Stale route count: ${formatCount(totals.staleRouteCount)}`,

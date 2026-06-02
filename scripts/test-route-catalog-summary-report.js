@@ -71,6 +71,20 @@ assert(
     !functionSource.includes("maxRouteRows,\n        'updated_at'"),
   'Route catalog summary should page verified_routes by indexed primary key instead of sorting broad catalog reads by updated_at',
 );
+assert(
+  functionSource.includes('fetchRouteSourceLinksForRoutes'),
+  'Route catalog summary should fetch source links only for sampled verified route IDs',
+);
+assert(
+  !functionSource.includes("maxLinkRows,\n        'last_verified_at'"),
+  'Route catalog summary should not sweep verified_route_sources ordered by unindexed freshness columns',
+);
+assert(
+  functionSource.includes('params.maxRouteRows ?? params.max_route_rows, 1000, 100000') &&
+    functionSource.includes('params.maxLinkRows ?? params.max_link_rows, 5000, 200000') &&
+    functionSource.includes('params.maxIngestRunRows ?? params.max_ingest_run_rows, 500, 20000'),
+  'Route catalog summary function default limits should be safe for direct large-catalog invocations',
+);
 
 const supabaseConfig = fs.readFileSync(supabaseConfigPath, 'utf8');
 const configSectionStart = supabaseConfig.indexOf('[functions.route-catalog-summary]');
@@ -107,15 +121,26 @@ assert(
 );
 
 const {
+  buildRequestBody,
   extractJsonPayloadFromOutput,
   formatSummaryMarkdown,
   formatWorkflowSummaryMarkdown,
+  parseArgs,
   routeCatalogSummaryUrl,
 } = require(reportScriptPath);
 assert.strictEqual(
   routeCatalogSummaryUrl('https://example.supabase.co'),
   'https://example.supabase.co/functions/v1/route-catalog-summary',
   'Summary script should build the public Edge Function URL',
+);
+assert.deepStrictEqual(
+  buildRequestBody(parseArgs([])),
+  {
+    maxRouteRows: 1000,
+    maxLinkRows: 5000,
+    maxIngestRunRows: 500,
+  },
+  'Summary script default live report limits should be safe for large catalogs',
 );
 assert.deepStrictEqual(
   extractJsonPayloadFromOutput('notice {not json}\n{"ok":true,"totals":{"routeCount":3}}\ntrailing log', 'summary report'),
@@ -169,6 +194,17 @@ assert(markdown.includes('Public recommendations'), 'Markdown formatter should e
 assert(markdown.includes('| usfs_mvum |'), 'Markdown formatter should include per-source rows');
 const workflowMarkdown = formatWorkflowSummaryMarkdown({
   generatedAt: '2026-06-01T00:00:00.000Z',
+  limits: {
+    maxRouteRows: 1000,
+    maxLinkRows: 5000,
+    maxIngestRunRows: 500,
+  },
+  truncated: {
+    routeSources: false,
+    verifiedRoutes: true,
+    verifiedRouteSources: true,
+    ingestRuns: false,
+  },
   totals: {
     routeCount: 7,
     publicRecommendationCount: 5,
@@ -203,6 +239,14 @@ const workflowMarkdown = formatWorkflowSummaryMarkdown({
   ],
 });
 assert(workflowMarkdown.includes('Sources: 1'), 'Workflow summary should include source count');
+assert(
+  workflowMarkdown.includes('Report limits: routes 1,000; route-source links 5,000; ingest runs 500'),
+  'Workflow summary should expose large-catalog report limits',
+);
+assert(
+  workflowMarkdown.includes('Truncated: verified routes yes; route-source links yes; ingest runs no'),
+  'Workflow summary should expose when sampled rows were truncated',
+);
 assert(workflowMarkdown.includes('Stale route count: 1'), 'Workflow summary should include stale route count');
 assert(workflowMarkdown.includes('### Recommendation statuses'), 'Workflow summary should include recommendation status counts');
 assert(workflowMarkdown.includes('| recommendable | 5 |'), 'Workflow summary should include individual recommendation status rows');
@@ -224,7 +268,7 @@ for (const required of [
   'Route Catalog NPS Trails Sync',
   'ECS_SUPABASE_URL',
   'EXPO_PUBLIC_SUPABASE_ANON_KEY',
-  'node ./scripts/route-catalog-summary-report.js --json',
+  'node ./scripts/route-catalog-summary-report.js --json --max-route-rows 1000 --max-link-rows 5000 --max-ingest-run-rows 500',
   'Route Catalog Summary Report',
   'extractJsonPayloadFromOutput',
   'formatWorkflowSummaryMarkdown',

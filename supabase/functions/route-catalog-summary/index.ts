@@ -10,6 +10,7 @@ const corsHeaders = {
 };
 
 const PAGE_SIZE = 1000;
+const LINK_ROUTE_ID_BATCH_SIZE = 100;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -187,6 +188,38 @@ async function fetchPagedRows<T>(
   return { rows, truncated: true };
 }
 
+async function fetchRouteSourceLinksForRoutes(
+  admin: ReturnType<typeof createAdminClient>,
+  routeIds: string[],
+  maxRows: number,
+): Promise<{ rows: RouteSourceLink[]; truncated: boolean }> {
+  const uniqueRouteIds = Array.from(new Set(routeIds.filter((routeId) => !!routeId)));
+  const rows: RouteSourceLink[] = [];
+
+  for (let batchStart = 0; batchStart < uniqueRouteIds.length; batchStart += LINK_ROUTE_ID_BATCH_SIZE) {
+    const batchRouteIds = uniqueRouteIds.slice(batchStart, batchStart + LINK_ROUTE_ID_BATCH_SIZE);
+
+    for (let offset = 0; rows.length < maxRows; offset += PAGE_SIZE) {
+      const limit = Math.min(PAGE_SIZE, maxRows - rows.length);
+      const { data, error } = await admin
+        .from('verified_route_sources')
+        .select('verified_route_id,route_source_id,source_role,coverage_pct,last_verified_at')
+        .in('verified_route_id', batchRouteIds)
+        .order('verified_route_id', { ascending: false })
+        .range(offset, offset + limit - 1);
+      if (error) throw new Error(`Unable to read verified_route_sources: ${error.message}`);
+
+      const page = (Array.isArray(data) ? data : []) as RouteSourceLink[];
+      rows.push(...page);
+      if (page.length < limit) break;
+    }
+
+    if (rows.length >= maxRows) return { rows, truncated: true };
+  }
+
+  return { rows, truncated: false };
+}
+
 async function countRawSourceFeatures(admin: ReturnType<typeof createAdminClient>): Promise<number | null> {
   const { count, error } = await admin
     .from('route_raw_source_features')
@@ -305,12 +338,12 @@ serve(async (req) => {
 
   try {
     const params = await requestParams(req);
-    const maxRouteRows = readBoundedInteger(params.maxRouteRows ?? params.max_route_rows, 50000, 100000);
-    const maxLinkRows = readBoundedInteger(params.maxLinkRows ?? params.max_link_rows, 100000, 200000);
-    const maxIngestRunRows = readBoundedInteger(params.maxIngestRunRows ?? params.max_ingest_run_rows, 5000, 20000);
+    const maxRouteRows = readBoundedInteger(params.maxRouteRows ?? params.max_route_rows, 1000, 100000);
+    const maxLinkRows = readBoundedInteger(params.maxLinkRows ?? params.max_link_rows, 5000, 200000);
+    const maxIngestRunRows = readBoundedInteger(params.maxIngestRunRows ?? params.max_ingest_run_rows, 500, 20000);
     const admin = createAdminClient();
 
-    const [sourceResult, routeResult, linkResult, ingestResult, rawFeatureCount] = await Promise.all([
+    const [sourceResult, routeResult, ingestResult, rawFeatureCount] = await Promise.all([
       fetchPagedRows<SourceRecord>(
         admin,
         'route_sources',
@@ -325,13 +358,6 @@ serve(async (req) => {
         maxRouteRows,
         'id',
       ),
-      fetchPagedRows<RouteSourceLink>(
-        admin,
-        'verified_route_sources',
-        'verified_route_id,route_source_id,source_role,coverage_pct,last_verified_at',
-        maxLinkRows,
-        'last_verified_at',
-      ),
       fetchPagedRows<IngestRun>(
         admin,
         'route_source_ingest_runs',
@@ -341,6 +367,11 @@ serve(async (req) => {
       ),
       countRawSourceFeatures(admin),
     ]);
+    const linkResult = await fetchRouteSourceLinksForRoutes(
+      admin,
+      routeResult.rows.map((route) => route.id),
+      maxLinkRows,
+    );
 
     return jsonResponse(buildSummary({
       sources: sourceResult.rows,
@@ -351,7 +382,7 @@ serve(async (req) => {
       truncated: {
         routeSources: sourceResult.truncated,
         verifiedRoutes: routeResult.truncated,
-        verifiedRouteSources: linkResult.truncated,
+        verifiedRouteSources: linkResult.truncated || routeResult.truncated,
         ingestRuns: ingestResult.truncated,
       },
       limits: {
