@@ -283,7 +283,7 @@ function checkPrivacyStorageGate(root, paths, privacyApproval) {
   );
 }
 
-function checkProviderSourceGate(root, paths, providerReadiness) {
+function checkProviderSourceGate(root, paths, providerReadiness, riskAcceptance) {
   const provider = readIfExists(paths.docs.provider);
   const recommendations = readIfExists(paths.source.recommendations);
   const checks = [
@@ -308,7 +308,7 @@ function checkProviderSourceGate(root, paths, providerReadiness) {
     boolCheck(
       'provider_source_approved',
       'Provider/source readiness is approved for closed field-test influence or risk-accepted as shadow-only.',
-      providerReadiness.passed,
+      providerReadiness.passed || (riskAcceptance.passed === true && providerReadiness.shadowOnlyAllowed === true),
       ['docs/campops/provider_readiness_*.md'],
     ),
   ];
@@ -384,7 +384,7 @@ export function buildCampOpsLiveReadinessResult(options = {}) {
     checkScoringGate(root, paths),
     checkSafetyCopyGate(root, paths),
     checkPrivacyStorageGate(root, paths, privacyApproval),
-    checkProviderSourceGate(root, paths, providerReadiness),
+    checkProviderSourceGate(root, paths, providerReadiness, riskAcceptance),
     checkAndroidDeviceQaGate(root, paths, androidQa),
   ];
 

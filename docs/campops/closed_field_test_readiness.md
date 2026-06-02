@@ -1,16 +1,28 @@
 # CampOps Closed Field-Test Readiness Gate
 
-Date: 2026-05-17
+Date: 2026-06-02
 
-Latest gate audit: 2026-05-17. `npm run gate:campops-live-readiness` reports **Closed field test ready**. `npm run gate:closed-field-test` reports **risk-accepted restricted field test**. Risk acceptance is accepted for the approved cohort/scope, so guarded closed-field testing may proceed under the restrictions in this document.
+Latest gate audit: 2026-06-02. `npm run gate:campops-live-readiness` reports **Closed field test ready** for the restricted APK field-test scope. `npm run gate:closed-field-test` remains the aggregate restricted-scope evidence gate. Risk acceptance is accepted for the approved cohort/scope, so guarded APK field testing may proceed under the restrictions in this document.
 
 ## Current Decision
 
-Readiness category: **Closed field test ready with restrictions**.
+Readiness category: **APK field-test ready with restrictions**.
 
 Closed field-test status: **ready with restrictions**.
 
-CampOps may move to guarded real-world closed field testing only for the approved cohort, route/region labels, and feature posture recorded in `docs/campops/closed_field_test_risk_acceptance.md`. This does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
+APK field-test status: **signed off for restricted APK field testing**.
+
+CampOps may move to guarded real-world APK field testing only for the approved cohort, route/region labels, and feature posture recorded in `docs/campops/closed_field_test_risk_acceptance.md`. This does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
+
+## APK Field-Test Sign-Off
+
+- Sign-off date: 2026-06-02
+- Sign-off status: accepted for restricted APK field testing
+- Sign-off owner: L. Herold
+- Approved build identifier: 842
+- Approved scope: the tester cohort, route labels, region labels, scenario labels, expiration date, incident contact, and rollback path recorded in `docs/campops/closed_field_test_risk_acceptance.md`
+- Provider/source posture: shadow-only or unknown unless exact category/region provider influence approval is separately recorded
+- Required disabled features: AI assist, telemetry unless separately approved, community publishing, and provider recommendation influence for unapproved categories
 
 ## Post Internal-Beta Flag Evaluation
 
@@ -56,7 +68,7 @@ Completed implementation and smoke evidence:
 | Web export/build | Pass | `npm run build` exported `dist`; Expo logged sandbox `sharp --version` EPERM during shutdown after export. |
 | Full `npm test` | Not available | `package.json` has no generic `test` script; focused custom harnesses are used instead. |
 | Broad custom regression sweep | Incomplete | A larger scripted sweep was intentionally interrupted before completion. Completed checks showed no CampOps-caused regression. |
-| CampOps live-readiness gate | Expected block | `npm run gate:campops-live-readiness` reports internal beta ready but closed field test blocked. |
+| CampOps live-readiness gate | Pass | `npm run gate:campops-live-readiness` reports closed field test ready for the restricted APK field-test scope. |
 
 App-wide release gate status:
 
@@ -64,7 +76,7 @@ App-wide release gate status:
 - No unresolved CampOps-caused app-wide regression is known from completed checks.
 - The full custom regression sweep is not complete evidence because it was interrupted.
 
-Recommended next action: keep CampOps enabled only behind `EXPO_PUBLIC_ENABLE_CAMPOPS_INTERNAL_BETA=true` or the approved closed-field build controls. Proceed only with the restricted field-test cohort and keep AI assist, telemetry, and community publishing disabled unless separately approved.
+Recommended next action: build and distribute only the restricted APK field-test package for the approved cohort and labels. Keep CampOps enabled only behind `EXPO_PUBLIC_ENABLE_CAMPOPS_INTERNAL_BETA=true` or the approved closed-field build controls, and keep AI assist, telemetry, provider influence, and community publishing disabled unless separately approved.
 
 Use `docs/campops/closed_field_test_blocker_burndown.md` to separate code-completable gate scaffolding from human/device/provider/privacy approval work. That burn-down checklist does not change the blocked status.
 
@@ -86,7 +98,7 @@ Primary evidence posture:
 | P0 issues | No unresolved P0 unsafe or privacy-critical issues from `internal_beta_issue_rubric.md`. | No known open P0 from fixtures. | Pass for current evidence, continue monitoring. |
 | P1 recommendation-trust issues | No unresolved P1 recommendation-trust issues, including legal/access overclaiming, stale data shown as current, AI hard-gate override, or legacy contradiction. | No known fixture P1, but real provider/model/mobile evidence is incomplete. | Partial; cannot pass until real evidence exists. |
 | CampOps live readiness gates | Rendering, scoring, safety/copy, privacy/storage, provider/source, and Android/device QA gates pass or are explicitly risk-accepted. | Implementation gates pass for internal beta; Android/device QA and privacy/storage are complete for guarded restricted validation; provider influence remains unapproved. | Blocks provider-influenced field use unless provider readiness is approved; restricted closed-field testing may proceed only inside accepted scope. |
-| Provider readiness | Provider readiness approved for the target region label and category. | Not approved. Region 001 report is fixture-backed and shadow-only. | Blocks closed field test provider influence. |
+| Provider readiness | Provider readiness approved for the target region label and category, or accepted as shadow-only for restricted APK field testing. | Not approved for influence. Region 001 report is fixture-backed/shadow-only, and that posture is signed off for the restricted APK field test. | Pass for restricted APK field test only; blocks provider-influenced recommendations. |
 | Android/device QA | CampOps card and endpoint visual states completed on Android/emulator or physical device, with evidence. | Complete for guarded restricted validation using dev-only QA route, QA-only candidate viewport, popup/action checks, and cramped-screen phone viewport. | Pass with issues; real provider-backed route-line candidate validation remains a rollout follow-up. |
 | Privacy/storage review | Retention, deletion, encryption status, owner decisions, and acceptable data-use posture approved for closed field testers. | Guarded closed-field private/local posture is approved; broad real trip/debrief data owners remain TBD. Local debrief `localStorage` is unencrypted by CampOps. | Blocks broad real-data collection; closed field test remains restricted to controlled tester data. |
 | Community publishing | Community debrief publishing remains disabled. | Off and blocked by policy. | Pass; must remain off. |
@@ -105,7 +117,7 @@ Primary evidence posture:
 | Scoring | Below-threshold candidates are suppressed, route candidates are limited to top 5, nearby candidates are deduped, and production demo fallback camps are blocked. | Conservative thresholds and regression tests exist. | Pass for implementation. |
 | Safety/copy | No overconfident legal/safety claims; `ECS-Inferred` copy and unverified access/legal labels are used. | Safe confidence/verification copy is present. | Pass for implementation; keep scanning copy changes. |
 | Privacy/storage | Saved camp storage and report-unusable data handling are documented, coordinates are not logged unnecessarily, and sensitive persistence has owner approval. | Documented; owner approval remains incomplete. | Blocks closed field test unless risk-accepted. |
-| Provider/source | Source confidence is represented, provider limitations are documented, and region/category readiness is explicit and approved. | Documented; provider influence not approved for target region/category. | Blocks provider influence and closed field test unless risk-accepted as shadow-only. |
+| Provider/source | Source confidence is represented, provider limitations are documented, and region/category readiness is explicit and approved or accepted as shadow-only. | Documented; provider influence not approved for target region/category; shadow-only posture accepted for the restricted APK field test. | Pass for restricted APK field test only; blocks provider influence. |
 | Android/device QA | Device evidence exists for map rendering, pin tap, popup scroll/dismiss, save, navigate, and report flows. | QA packet exists and device execution/evidence is complete for guarded restricted validation with QA-only non-live candidates. | Pass with issues; does not approve provider-backed regional rollout. |
 
 ## Restricted Field-Test Posture
@@ -208,8 +220,8 @@ Use `docs/campops/closed_field_test_evidence_template.md` for future closed fiel
 
 ## Readiness Outcome
 
-Current outcome: **risk-accepted restricted closed field test**.
+Current outcome: **ready with restrictions**.
 
-CampOps may proceed only as a **risk-accepted restricted closed field test** inside the approved cohort/scope, with community publishing off, telemetry off unless approved, AI disabled unless approved, and provider influence disabled or shadow-only for unapproved categories and regions.
+CampOps may proceed as a **restricted APK field test** inside the approved cohort/scope, with community publishing off, telemetry off unless approved, AI disabled unless approved, and provider influence disabled or shadow-only for unapproved categories and regions.
 
 This path preserves the evidence truth: provider readiness remains unapproved for influence, broad real trip/debrief rollout is not approved, AI/telemetry/community publishing remain disabled, and real provider-backed route-line validation is still required before broader regional rollout.

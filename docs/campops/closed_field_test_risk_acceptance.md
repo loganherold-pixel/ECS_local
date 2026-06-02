@@ -1,6 +1,6 @@
 # CampOps Closed Field-Test Risk Acceptance
 
-Date: 2026-05-01
+Date: 2026-06-02
 
 Status: accepted
 
@@ -32,6 +32,15 @@ Risk acceptance mode:
 - Rollback owner: L. Herold
 - Rollback command/path: disable `ENABLE_CAMPOPS_INTERNAL_BETA` and `ECS_CAMPOPS_INTERNAL_BETA`, keep all `DEFAULT_CAMP_OPS_RECOMMENDATION_ROLLOUT_CONFIG` flags false, and verify rollback with `npm run gate:pre-closed-field-test`
 
+## APK Field-Test Readiness Sign-Off
+
+- APK field-test readiness status: accepted
+- APK field-test approval date: 2026-06-02
+- APK field-test approver: L. Herold
+- APK field-test decision: CampOps is signed off for restricted closed-field APK testing under the approved scope above.
+- Provider/source posture: provider output remains shadow-only or unknown unless exact category/region provider influence approval is separately recorded.
+- Non-release posture: this does not approve public release, broad rollout, global provider influence, AI assist, telemetry, or community publishing.
+
 ## Risk-Accepted Incomplete Items
 
 These items are not approved or complete. They are explicitly risk-accepted only if the required sign-offs above are completed.
@@ -62,8 +71,10 @@ These items are not approved or complete. They are explicitly risk-accepted only
 - No vehicle identifiers
 - No private debrief notes in shared evidence
 
+Provider category/region approval remains incomplete for recommendation influence. This incomplete item is accepted only for restricted APK field testing while provider output remains shadow-only or unknown for unapproved categories.
+
 ## Decision
 
 - Status: accepted
-- Decision summary: Guarded closed field-test activation accepted with restrictions. This accepts the listed incomplete evidence and approval risks for the approved tester cohort only; it does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
+- Decision summary: Guarded closed field-test activation accepted with restrictions and signed off for restricted APK field testing. This accepts the listed incomplete evidence and approval risks for the approved tester cohort only; it does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
 - Remaining concerns: CampOps remains restricted to the approved closed-field scope. Android pin/popup/action QA, cramped-screen QA, broader provider coverage, telemetry sinks, community publishing, and public-safe exports remain follow-up work before broad release.

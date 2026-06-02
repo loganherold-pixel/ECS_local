@@ -156,6 +156,9 @@ function writeProviderDocs(root, approved) {
     '# CampOps Provider Readiness Reports',
     'Provider limitations and provider influence are documented.',
     'Each report includes source confidence distribution and region/category readiness.',
+    'CampOps treats legal/access as one combined provider category.',
+    'Access/public-access fields remain combined under the existing `legal/access` provider category.',
+    'Do not approve access influence separately from legal/access.',
     'Keep `campopsProviderAdaptersEnabled` off unless approved.',
   ].join('\n'));
   const rows = providerCategories.map((category) => (
@@ -398,7 +401,7 @@ test('accepted risk acceptance waives missing closed-field evidence without mark
   assert.equal(result.evidence.androidQa.passed, false);
 });
 
-test('risk acceptance note only names evidence gates that remain unresolved', () => {
+test('risk acceptance plus shadow-only provider posture can clear the provider source gate', () => {
   const root = makeTempRepo();
   writeFixture(root, {
     providerApproved: false,
@@ -410,9 +413,12 @@ test('risk acceptance note only names evidence gates that remain unresolved', ()
   const result = buildCampOpsLiveReadinessResult({ rootDir: root, now: fixedNow });
   const riskNote = result.notes.find((note) => note.startsWith('Risk acceptance permits only a restricted closed field test'));
 
-  assert.match(riskNote, /provider\/source approval/);
+  assert.equal(result.closedFieldTestReady, true);
+  assert.equal(result.status, 'closed_field_test_ready');
+  assert.doesNotMatch(riskNote, /provider\/source approval/);
   assert.doesNotMatch(riskNote, /Android\/device QA/);
   assert.doesNotMatch(riskNote, /privacy\/storage approval/);
+  assert.equal(result.evidence.providerReadiness.passed, false);
 });
 
 test('--json emits parseable JSON and writes the live readiness artifact', () => {
