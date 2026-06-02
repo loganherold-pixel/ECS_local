@@ -230,6 +230,22 @@ assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKe
   'atlanta_route',
   'evart_motorcycle_trail',
 ]);
+const michiganStatewideBackfillPayload = byKey.get('michigan_dnr_orv_gpx').deepBackfillPayload;
+assert(
+  michiganStatewideBackfillPayload,
+  'Michigan DNR ORV should expose an explicit statewide backfill payload',
+);
+assert.deepStrictEqual(michiganStatewideBackfillPayload.sourceKeys, [
+  'alcona_orv_trail',
+  'atlanta_route',
+  'evart_motorcycle_trail',
+  'statewide_orv_trail_gpx',
+]);
+assert.strictEqual(
+  michiganStatewideBackfillPayload.syncScope,
+  'statewide',
+  'Michigan DNR ORV should expose an explicit statewide backfill payload instead of making the large GPX default',
+);
 assert.strictEqual(
   byKey.get('michigan_dnr_orv_gpx').publicRecommendationPolicy,
   'official_source_recommendable_with_condition_warnings',

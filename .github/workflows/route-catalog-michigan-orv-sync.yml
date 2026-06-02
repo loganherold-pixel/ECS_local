@@ -3,10 +3,18 @@ name: Route Catalog Michigan ORV Sync
 on:
   workflow_dispatch:
     inputs:
-      source_keys:
-        description: Comma-separated Michigan DNR ORV GPX source keys.
+      sync_scope:
+        description: Use pilot for bounded named GPX sources or statewide to include the large official statewide GPX.
         required: false
-        default: alcona_orv_trail,atlanta_route,evart_motorcycle_trail
+        default: pilot
+        type: choice
+        options:
+          - pilot
+          - statewide
+      source_keys:
+        description: Optional comma-separated Michigan DNR ORV GPX source keys. Overrides sync_scope defaults when provided.
+        required: false
+        default: ''
       min_miles:
         description: Minimum GPX track miles to ingest.
         required: false
@@ -32,7 +40,8 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      SOURCE_KEYS: ${{ inputs.source_keys || 'alcona_orv_trail,atlanta_route,evart_motorcycle_trail' }}
+      SYNC_SCOPE: ${{ inputs.sync_scope || 'pilot' }}
+      SOURCE_KEYS: ${{ inputs.source_keys || '' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '20' }}
 
@@ -57,10 +66,20 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
 
-          const sourceKeys = String(process.env.SOURCE_KEYS || '')
+          const syncScope = String(process.env.SYNC_SCOPE || 'pilot').trim().toLowerCase();
+          if (!['pilot', 'statewide'].includes(syncScope)) {
+            throw new Error('sync_scope must be pilot or statewide.');
+          }
+
+          const requestedSourceKeys = String(process.env.SOURCE_KEYS || '')
             .split(',')
             .map((value) => value.trim())
             .filter(Boolean);
+          const sourceKeys = requestedSourceKeys.length > 0
+            ? requestedSourceKeys
+            : syncScope === 'statewide'
+              ? ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail', 'statewide_orv_trail_gpx']
+              : ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail'];
           const minMiles = Number(process.env.MIN_MILES || 1);
           const maxTracksPerSource = Number(process.env.MAX_TRACKS_PER_SOURCE || 20);
 
@@ -74,6 +93,7 @@ jobs:
             'route-catalog-michigan-orv-sync-payload.json',
             JSON.stringify({
               sourceKeys,
+              syncScope,
               minMiles,
               maxTracksPerSource: Math.min(100, Math.round(maxTracksPerSource)),
             }),
@@ -144,6 +164,7 @@ jobs:
 
           console.log(JSON.stringify({
             source: response.source,
+            syncScope: response.syncScope,
             sourceKeys: response.sourceKeys,
             rawFeatureCount: response.rawFeatureCount,
             normalizedFeatureCount: response.normalizedFeatureCount,
@@ -153,6 +174,8 @@ jobs:
 
           const markdown = [
             '## Route Catalog Michigan DNR ORV Sync',
+            '',
+            `Sync scope: ${response.syncScope || 'unknown'}`,
             '',
             '| Source | Raw Tracks | Normalized Curation Records |',
             '| --- | ---: | ---: |',

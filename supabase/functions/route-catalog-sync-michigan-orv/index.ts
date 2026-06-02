@@ -153,6 +153,13 @@ serve(async (req) => {
     if (sources.length === 0) {
       return jsonResponse({ ok: false, error: 'At least one valid Michigan DNR ORV GPX source key is required' }, 400);
     }
+    const syncScope = String(
+      body.syncScope ??
+        body.sync_scope ??
+        (sources.some((item) => item.key === 'statewide_orv_trail_gpx') ? 'statewide' : 'pilot'),
+    ).trim().toLowerCase() === 'statewide'
+      ? 'statewide'
+      : 'pilot';
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
     const maxTracksPerSource = Math.max(1, Math.min(100, Math.round(readNumber(body.maxTracksPerSource ?? body.max_tracks_per_source, 20))));
     const now = new Date().toISOString();
@@ -173,7 +180,7 @@ serve(async (req) => {
         status: 'running',
         source_uri: MICHIGAN_ORV_SOURCE.sourceUri,
         started_at: now,
-        metadata: { providerId: 'michigan_dnr_orv_gpx', sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource },
+        metadata: { providerId: 'michigan_dnr_orv_gpx', syncScope, sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource },
       })
       .select('id')
       .single();
@@ -232,13 +239,14 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: rawFeatureCount,
         normalized_feature_count: normalizedFeatureCount,
-        metadata: { providerId: 'michigan_dnr_orv_gpx', sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource, sources: sourceSummaries, publicRecommendationCount },
+        metadata: { providerId: 'michigan_dnr_orv_gpx', syncScope, sourceKeys: sources.map((item) => item.key), minMiles, maxTracksPerSource, sources: sourceSummaries, publicRecommendationCount },
       })
       .eq('id', ingestRun.id);
 
     return jsonResponse({
       ok: true,
       source: 'michigan_dnr_orv_gpx',
+      syncScope,
       sourceKeys: sources.map((item) => item.key),
       sources: sourceSummaries,
       rawFeatureCount,

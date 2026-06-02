@@ -206,6 +206,12 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       minMiles: 1,
       maxTracksPerSource: 20,
     },
+    deepBackfillPayload: {
+      sourceKeys: ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail', 'statewide_orv_trail_gpx'],
+      syncScope: 'statewide',
+      minMiles: 1,
+      maxTracksPerSource: 20,
+    },
     expectedMaxPublicRecommendationCount: 100,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
