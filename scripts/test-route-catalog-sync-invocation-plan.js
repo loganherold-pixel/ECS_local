@@ -256,6 +256,21 @@ assert.strictEqual(
   'official_source_recommendable_with_condition_warnings',
   'Minnesota DNR OHV should now allow bounded official-source public recommendations with current-condition warnings',
 );
+const minnesotaStatewideBackfillPayload = byKey.get('minnesota_dnr_ohv_trails').deepBackfillPayload;
+assert(
+  minnesotaStatewideBackfillPayload,
+  'Minnesota DNR OHV should expose an explicit statewide GeoPackage backfill payload',
+);
+assert.strictEqual(
+  minnesotaStatewideBackfillPayload.syncScope,
+  'statewide',
+  'Minnesota DNR OHV statewide backfill payload should be explicit instead of changing the default workflow-preprocess run',
+);
+assert.strictEqual(
+  minnesotaStatewideBackfillPayload.maxFeatures,
+  1000,
+  'Minnesota DNR OHV statewide backfill should remain bounded by the Edge Function max feature cap',
+);
 assert.strictEqual(
   byKey.get('oregon_odf_ohv_gpx').publicRecommendationPolicy,
   'official_source_recommendable_with_condition_warnings',

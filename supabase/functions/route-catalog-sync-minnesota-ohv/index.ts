@@ -150,6 +150,13 @@ serve(async (req) => {
 
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
     const maxFeatures = Math.max(1, Math.min(1000, Math.round(readNumber(body.maxFeatures ?? body.max_features, sourceFeatures.length))));
+    const syncScope = String(
+      body.syncScope ??
+        body.sync_scope ??
+        (maxFeatures >= 1000 ? 'statewide' : 'pilot'),
+    ).trim().toLowerCase() === 'statewide'
+      ? 'statewide'
+      : 'pilot';
     const features = sourceFeatures.slice(0, maxFeatures);
     const now = new Date().toISOString();
     const admin = createAdminClient();
@@ -170,6 +177,7 @@ serve(async (req) => {
         started_at: now,
         metadata: {
           providerId: 'minnesota_dnr_ohv_trails',
+          syncScope,
           officialDownloadUrl: MINNESOTA_OHV_DOWNLOADS.geopackage,
           minMiles,
           maxFeatures,
@@ -216,6 +224,7 @@ serve(async (req) => {
         normalized_feature_count: routeRows.length,
         metadata: {
           providerId: 'minnesota_dnr_ohv_trails',
+          syncScope,
           officialDownloadUrl: MINNESOTA_OHV_DOWNLOADS.geopackage,
           minMiles,
           maxFeatures,
@@ -228,9 +237,11 @@ serve(async (req) => {
     return jsonResponse({
       ok: true,
       source: 'minnesota_dnr_ohv_trails',
+      syncScope,
       rawFeatureCount: features.length,
       normalizedFeatureCount: routeRows.length,
       publicRecommendationCount,
+      maxFeatures,
       officialDownloadUrl: MINNESOTA_OHV_DOWNLOADS.geopackage,
       caveat: 'Minnesota DNR OHV records are official state source-backed public recommendations with visible warnings. Current DNR closures, permits, local rules, seasonal conditions, vehicle fit, and the dataset navigation caveat still require trip-date checks.',
     });

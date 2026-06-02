@@ -171,5 +171,16 @@ assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'Minnesota OHV syn
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('sourceFeatures'), 'Minnesota OHV sync should accept GeoPackage-converted sourceFeatures from the durable workflow');
 assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'Minnesota OHV sync should report promoted public recommendation telemetry');
+assert(syncFunction.includes('syncScope'), 'Minnesota OHV sync should preserve pilot/statewide scope telemetry');
+assert(syncFunction.includes('maxFeatures'), 'Minnesota OHV sync should report bounded maxFeatures telemetry');
+
+const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-minnesota-ohv-sync.yml');
+assert(fs.existsSync(workflowPath), 'Minnesota DNR OHV sync workflow should exist');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+assert(workflow.includes('sync_scope:'), 'Minnesota OHV sync workflow should expose a pilot/statewide sync scope selector');
+assert(workflow.includes('pilot') && workflow.includes('statewide'), 'Minnesota OHV sync workflow should document pilot and statewide scopes');
+assert(workflow.includes('default_max_features = 1000 if sync_scope == "statewide" else 250'), 'Minnesota OHV workflow should keep pilot bounded while allowing explicit statewide backfill');
+assert(workflow.includes('"syncScope": sync_scope'), 'Minnesota OHV workflow payload should preserve selected sync scope');
+assert(workflow.includes('Sync scope:'), 'Minnesota OHV workflow summary should show selected sync scope');
 
 console.log('Minnesota DNR OHV route catalog adapter checks passed');

@@ -227,6 +227,11 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     publicRuntimeCallable: false,
     invocationMode: 'workflow_preprocess_required',
     defaultPayload: null,
+    deepBackfillPayload: {
+      syncScope: 'statewide',
+      minMiles: 1,
+      maxFeatures: 1000,
+    },
     expectedMaxPublicRecommendationCount: 1000,
     preprocessReason: 'Minnesota DNR OHV sync requires the durable GitHub workflow to download and convert the official GeoPackage into bounded GeoJSON sourceFeatures before invoking the Edge Function.',
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],

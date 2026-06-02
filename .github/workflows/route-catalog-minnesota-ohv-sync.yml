@@ -3,14 +3,22 @@ name: Route Catalog Minnesota OHV Sync
 on:
   workflow_dispatch:
     inputs:
+      sync_scope:
+        description: Use pilot for a bounded sample or statewide for the largest bounded official GeoPackage backfill.
+        required: false
+        default: pilot
+        type: choice
+        options:
+          - pilot
+          - statewide
       min_miles:
         description: Minimum Minnesota OHV feature miles to ingest.
         required: false
         default: '1'
       max_features:
-        description: Maximum GeoPackage features to convert and send.
+        description: Optional maximum GeoPackage features to convert and send. Defaults by sync_scope.
         required: false
-        default: '250'
+        default: ''
 
 permissions:
   contents: read
@@ -28,8 +36,9 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      SYNC_SCOPE: ${{ inputs.sync_scope || 'pilot' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
-      MAX_FEATURES: ${{ inputs.max_features || '250' }}
+      MAX_FEATURES: ${{ inputs.max_features || '' }}
       MINNESOTA_OHV_GPKG_URL: https://resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/trans_ohv_trails_mn/gpkg_trans_ohv_trails_mn.zip
 
     steps:
@@ -66,8 +75,14 @@ jobs:
           import sqlite3
           import struct
 
+          sync_scope = os.environ.get("SYNC_SCOPE", "pilot").strip().lower()
+          if sync_scope not in ("pilot", "statewide"):
+              raise ValueError("sync_scope must be pilot or statewide.")
+
           min_miles = float(os.environ.get("MIN_MILES", "1"))
-          max_features = max(1, min(1000, int(float(os.environ.get("MAX_FEATURES", "250")))))
+          default_max_features = 1000 if sync_scope == "statewide" else 250
+          requested_max_features = os.environ.get("MAX_FEATURES") or str(default_max_features)
+          max_features = max(1, min(1000, int(float(requested_max_features))))
           gpkg_path = "trans_ohv_trails_mn.gpkg"
 
           def utm15n_to_lonlat(easting, northing):
@@ -170,6 +185,7 @@ jobs:
 
           with open("route-catalog-minnesota-ohv-sync-payload.json", "w", encoding="utf-8") as handle:
               json.dump({
+                  "syncScope": sync_scope,
                   "minMiles": min_miles,
                   "maxFeatures": max_features,
                   "sourceFeatures": features,
@@ -203,16 +219,22 @@ jobs:
 
           console.log(JSON.stringify({
             source: response.source,
+            syncScope: response.syncScope,
             rawFeatureCount: response.rawFeatureCount,
             normalizedFeatureCount: response.normalizedFeatureCount,
             publicRecommendationCount: response.publicRecommendationCount,
             officialDownloadUrl: response.officialDownloadUrl,
+            maxFeatures: response.maxFeatures,
           }, null, 2));
 
           const markdown = [
             '## Route Catalog Minnesota DNR OHV Sync',
             '',
+            `Sync scope: ${response.syncScope || 'unknown'}`,
+            '',
             `Official download: ${response.officialDownloadUrl}`,
+            '',
+            `Max features: ${response.maxFeatures || 0}`,
             '',
             `Raw converted features: ${response.rawFeatureCount}`,
             '',
