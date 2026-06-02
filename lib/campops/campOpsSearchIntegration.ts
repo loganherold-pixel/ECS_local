@@ -340,13 +340,14 @@ function buildCampOpsInputs(
   result: CampsiteCandidateResult,
   options: CampOpsSearchIntegrationOptions,
   featureState: CampOpsFeatureState,
+  sourceOverride?: Parameters<typeof campOpsCandidateFromGeneratedCandidate>[1],
 ): {
   context: CampSearchContext;
   candidates: CampCandidate[];
   enrichmentsByCandidateId: Record<string, CampCandidateEnrichment>;
 } {
   const context = buildContext(result, options);
-  const source = options.source === 'polygon' ? 'draw_area_candidate' : 'route_endpoint_candidate';
+  const source = sourceOverride ?? (options.source === 'polygon' ? 'draw_area_candidate' : 'route_candidate');
   const candidates = result.candidates.map((candidate) => campOpsCandidateFromGeneratedCandidate(candidate, source));
   const enrichmentsByCandidateId: Record<string, CampCandidateEnrichment> = {};
   candidates.forEach((candidate, index) => {
@@ -425,7 +426,10 @@ export function generateCampOpsSearchPayload(
   const exposedRecommendationSet = featureState.sourceTransparencyEnabled
     ? recommendationSet
     : stripSourceTransparency(recommendationSet);
-  const routeEndpointPlan = options.source === 'route'
+  const routeEndpointInputs = options.source === 'route'
+    ? buildCampOpsInputs(result, options, featureState, 'route_endpoint_candidate')
+    : null;
+  const routeEndpointPlan = routeEndpointInputs
     ? buildCampOpsRouteEndpointPlan({
         routeId: context.routeId ?? result.routeIntelligenceId,
         tripId: context.tripId,
@@ -437,8 +441,8 @@ export function generateCampOpsSearchPayload(
         plannedDays: options.plannedDays ?? null,
         plannedNights: options.plannedNights ?? null,
         generatedAt: context.currentTimeIso ?? result.analyzedAt,
-        candidates,
-        enrichmentsByCandidateId,
+        candidates: routeEndpointInputs.candidates,
+        enrichmentsByCandidateId: routeEndpointInputs.enrichmentsByCandidateId,
         context,
         selectedEndpointIds: options.selectedEndpointIds ?? [],
       })
