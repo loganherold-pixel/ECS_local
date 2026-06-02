@@ -1,3 +1,5 @@
+/* global Buffer */
+
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -631,9 +633,11 @@ const mopekaAdvertEvents = bluetoothUtilitySensorAdvertisementToEcsTelemetryEven
     decodedAt: 1_700_000_060_000,
   },
 });
-assert(mopekaAdvertEvents.some((event) => event.metricKey === 'level_distance_mm' && event.value === 349));
-assert(mopekaAdvertEvents.some((event) => event.metricKey === 'parser_status' && event.value === 'live'));
-assert(mopekaAdvertEvents.every((event) => event.quality === 'live'));
+assert.strictEqual(
+  mopekaAdvertEvents.length,
+  0,
+  'Distance-only Mopeka advertisements must not publish live ECS resource telemetry without a calculated percent.',
+);
 
 const distanceOnlyResourceStates = selectUtilitySensorResourceStates([
   {
@@ -655,8 +659,11 @@ const distanceOnlyResourceStates = selectUtilitySensorResourceStates([
     isStale: false,
   },
 ]);
-assert.strictEqual(distanceOnlyResourceStates.water?.status, 'live');
+assert.strictEqual(distanceOnlyResourceStates.water?.status, 'linked');
+assert.strictEqual(distanceOnlyResourceStates.water?.levelPercent, null);
 assert.strictEqual(distanceOnlyResourceStates.water?.levelDistanceMm, 349);
+assert.strictEqual(distanceOnlyResourceStates.water?.canProvideLiveLevel, false);
+assert.strictEqual(getUtilitySensorCurrentFromCapacity(distanceOnlyResourceStates.water, 20), null);
 
 const advertisementEvidence = getBluestackAdvertisementEvidence({
   serviceUUIDs: [' 180F ', '180f', 'FEAA'],

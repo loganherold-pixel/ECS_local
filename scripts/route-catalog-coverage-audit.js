@@ -940,6 +940,17 @@ const ROUTE_CATALOG_COVERAGE_PROBES = [
     radiusMiles: 90,
   },
   {
+    key: 'colorado_cpw_designated_trails_pilot',
+    label: 'Colorado CPW Designated Trails verified recommendation pilot',
+    sourceAdapter: 'colorado_cpw_designated_trails',
+    expectedPosture: 'verified_public_recommendations',
+    requiresSourceMatch: true,
+    latitude: 40.54,
+    longitude: -105.95,
+    radiusMiles: 90,
+    limit: 25,
+  },
+  {
     key: 'blm_az_gtlf',
     label: 'BLM GTLF Arizona verified aggregate pilot',
     sourceAdapter: 'blm_gtlf',
@@ -1004,12 +1015,14 @@ const ROUTE_CATALOG_COVERAGE_PROBES = [
   },
   {
     key: 'blm_wy_gtlf',
-    label: 'BLM GTLF Wyoming curation pilot',
+    label: 'BLM GTLF Wyoming verified aggregate pilot',
     sourceAdapter: 'blm_gtlf',
-    expectedPosture: 'source_backed_curation_only',
+    expectedPosture: 'verified_public_recommendations',
+    requiresSourceMatch: true,
     latitude: 44.51,
     longitude: -107.94,
     radiusMiles: 160,
+    limit: 50,
   },
   {
     key: 'nps_public_trails_joshua_tree',
@@ -1111,7 +1124,8 @@ function buildRouteCatalogCoverageAuditPlan({ probeKeys = [] } = {}) {
       latitude: probe.latitude,
       longitude: probe.longitude,
       radiusMiles: probe.radiusMiles,
-      limit: 10,
+      limit: probe.limit || 10,
+      ...(probe.requiresSourceMatch ? { sourceAdapter: probe.sourceAdapter } : {}),
       includeGeometry: false,
       includePreviewGeometry: false,
     },
@@ -1135,6 +1149,27 @@ function headersForAudit(anonKey) {
   return headers;
 }
 
+function sourceRecordsForAuditRecord(record) {
+  const sources = record && (record.source_records || record.sourceRecords);
+  return Array.isArray(sources) ? sources : [];
+}
+
+function sourceProviderId(source) {
+  if (!source || typeof source !== 'object') return '';
+  return String(source.provider_id || source.providerId || '').trim();
+}
+
+function sourceMatchesProbe(sourceProvider, sourceAdapter) {
+  if (!sourceAdapter || sourceAdapter === 'none') return false;
+  return sourceProvider === sourceAdapter || sourceProvider.startsWith(`${sourceAdapter}_`);
+}
+
+function recordMatchesProbeSource(record, sourceAdapter) {
+  return sourceRecordsForAuditRecord(record)
+    .map(sourceProviderId)
+    .some((providerId) => sourceMatchesProbe(providerId, sourceAdapter));
+}
+
 function summarizeSearchResponse(probe, body) {
   const meta = body && typeof body.meta === 'object' ? body.meta : {};
   const coverageState = body && typeof body.coverageState === 'object' ? body.coverageState : {};
@@ -1143,7 +1178,13 @@ function summarizeSearchResponse(probe, body) {
   const radiusMatchedCount = Number(meta.radiusMatchedCount || 0);
   const curationCandidateCount = Number(meta.curationCandidateCount || 0);
   const anySourceBackedCandidateCount = Number(meta.anySourceBackedCandidateCount || 0);
-  const observedPosture = count > 0 && coverageState.state === 'ready'
+  const sourceMatchedPublicRecommendationCount = probe.requiresSourceMatch
+    ? records.filter((record) => recordMatchesProbeSource(record, probe.sourceAdapter)).length
+    : count;
+  const verifiedPublicRecommendationCount = probe.requiresSourceMatch
+    ? sourceMatchedPublicRecommendationCount
+    : count;
+  const observedPosture = verifiedPublicRecommendationCount > 0 && coverageState.state === 'ready'
     ? 'verified_public_recommendations'
     : curationCandidateCount > 0 || (count === 0 && anySourceBackedCandidateCount > 0)
       ? 'source_backed_curation_only'
@@ -1170,6 +1211,7 @@ function summarizeSearchResponse(probe, body) {
     observedPosture,
     matchesExpectedPosture,
     count,
+    sourceMatchedPublicRecommendationCount,
     coverageState: coverageState.state || 'unknown',
     coverageTitle: coverageState.title || '',
     radiusMatchedCount,
@@ -1180,6 +1222,7 @@ function summarizeSearchResponse(probe, body) {
       name: record.name || record.title || '',
       confidenceScore: record.confidence_score || record.confidenceScore || null,
       sourceConfidenceLabel: record.source_confidence_label || record.sourceConfidenceLabel || '',
+      sourceProviderIds: sourceRecordsForAuditRecord(record).map(sourceProviderId).filter(Boolean),
     })),
   };
 }

@@ -67,7 +67,14 @@ export function inferUtilitySensorResourceKind(
 
 function resolveSensorStatus(reading: ECSUtilitySensorTelemetryReading): ECSUtilitySensorResourceStatus {
   if (reading.quality === 'error') return 'error';
-  if (hasFinitePercent(reading.levelPercent) || hasFiniteMeasurement(reading.levelDistanceMm)) return 'live';
+  if (hasFinitePercent(reading.levelPercent)) return 'live';
+  if (
+    reading.quality === 'live' &&
+    (reading.linkState === 'connected' || reading.linkState === 'advertising') &&
+    hasFiniteMeasurement(reading.levelDistanceMm)
+  ) {
+    return 'linked';
+  }
   if (reading.linkState === 'connected' && reading.parserStatus === 'parser_pending') return 'parser_pending';
   if (
     reading.linkState === 'connected' &&
@@ -103,7 +110,7 @@ export function toUtilitySensorResourceState(
     signalStrength: reading.signalStrength,
     parserStatus: reading.parserStatus,
     lastUpdated: reading.lastUpdated,
-    canProvideLiveLevel: levelPercent != null || levelDistanceMm != null,
+    canProvideLiveLevel: levelPercent != null,
   };
 }
 

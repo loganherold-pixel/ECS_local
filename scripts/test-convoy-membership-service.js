@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const Module = require('module');
@@ -176,6 +177,15 @@ async function main() {
     'createConvoy should not create a leader member when the convoys table is missing.',
   );
 
+  const serviceSourceBeforeBackendChecks = fs.readFileSync(servicePath, 'utf8');
+  assert.ok(
+    serviceSourceBeforeBackendChecks.includes('isOptionalConvoyMemberIdentityColumnError') &&
+      serviceSourceBeforeBackendChecks.includes('insertLeaderMemberWithoutIdentityColumns') &&
+      serviceSourceBeforeBackendChecks.includes('listConvoyMembersWithoutIdentityColumns') &&
+      serviceSourceBeforeBackendChecks.includes('listActiveMembershipsWithoutIdentityColumns'),
+    'Supabase convoy membership backend should retry against the base convoy member schema when optional identity columns are missing.',
+  );
+
   const validJoinBackend = createMockBackend({
     functionResponses: {
       join_with_invite: {
@@ -350,6 +360,12 @@ async function main() {
       source.includes('expedition_badge_title') &&
       source.includes('sanitizeText(body.expeditionBadgeTitle'),
     'Convoy membership Edge Function should snapshot the submitted Expedition badge title on joined members.',
+  );
+  assert.ok(
+    source.includes('isOptionalConvoyMemberIdentityColumnError') &&
+      source.includes('insertConvoyMemberWithoutIdentityColumns') &&
+      source.includes('updateConvoyMemberWithoutIdentityColumns'),
+    'Convoy membership Edge Function should fall back to the base convoy member schema when optional identity columns are missing.',
   );
 
   const serviceSource = fs.readFileSync(servicePath, 'utf8');

@@ -1,6 +1,7 @@
 import { isSupabaseConfigured, supabase } from '../supabase';
 import {
   classifyConvoyBackendReadinessIssue,
+  convoyBackendErrorText,
   formatConvoyBackendUserMessage,
   getConvoyBackendReadinessGuidance,
 } from './convoyBackendReadiness';
@@ -111,6 +112,8 @@ export type ConvoyRealtimeResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: 'backend_unavailable' | 'validation_error' | 'backend_error'; error: string };
 
+const CONVOY_MEMBER_SELECT_BASE = 'id, convoy_id, user_id, vehicle_id, callsign, role, revoked_at';
+
 function toError(
   code: 'backend_unavailable' | 'validation_error' | 'backend_error',
   error: string,
@@ -118,11 +121,29 @@ function toError(
   return { ok: false, code, error };
 }
 
-function convoyRealtimeBackendError(message: string | null | undefined): string | null {
+function convoyRealtimeBackendError(error: unknown): string | null {
+  const message = typeof error === 'string' ? error : convoyBackendErrorText(error);
   if (!message) return null;
   const readinessMessage = formatConvoyBackendUserMessage(message);
   if (readinessMessage) return readinessMessage;
   return message;
+}
+
+function isOptionalConvoyMemberIdentityColumnError(error: unknown): boolean {
+  const text = convoyBackendErrorText(error).toLowerCase();
+  return (
+    text.includes('column') &&
+    text.includes('does not exist') &&
+    (text.includes('expedition_badge_title') || text.includes('display_name'))
+  );
+}
+
+function withConvoyMemberIdentityFallback(member: ConvoyMemberRow): ConvoyMemberRow {
+  return {
+    display_name: null,
+    expedition_badge_title: null,
+    ...member,
+  };
 }
 
 function normalizeId(value: unknown): string {
@@ -267,6 +288,19 @@ export class ConvoyRealtimeService {
 }
 
 export function createSupabaseConvoyRealtimeBackend(client: any = supabase): ConvoyRealtimeServiceBackend {
+  async function fetchMembersWithoutIdentityColumns(convoyId: string) {
+    const { data, error } = await client
+      .from('convoy_members')
+      .select(CONVOY_MEMBER_SELECT_BASE)
+      .eq('convoy_id', convoyId)
+      .is('revoked_at', null);
+
+    return {
+      data: ((data ?? []) as ConvoyMemberRow[]).map(withConvoyMemberIdentityFallback),
+      error: convoyRealtimeBackendError(error),
+    };
+  }
+
   return {
     isAvailable() {
       return isSupabaseConfigured;
@@ -279,7 +313,11 @@ export function createSupabaseConvoyRealtimeBackend(client: any = supabase): Con
         .eq('convoy_id', convoyId)
         .is('revoked_at', null);
 
-      return { data: (data ?? []) as ConvoyMemberRow[], error: convoyRealtimeBackendError(error?.message) };
+      if (isOptionalConvoyMemberIdentityColumnError(error)) {
+        return fetchMembersWithoutIdentityColumns(convoyId);
+      }
+
+      return { data: (data ?? []) as ConvoyMemberRow[], error: convoyRealtimeBackendError(error) };
     },
 
     async fetchLocations(convoyId) {
@@ -290,7 +328,7 @@ export function createSupabaseConvoyRealtimeBackend(client: any = supabase): Con
         )
         .eq('convoy_id', convoyId);
 
-      return { data: (data ?? []) as ConvoyMemberLocationRow[], error: convoyRealtimeBackendError(error?.message) };
+      return { data: (data ?? []) as ConvoyMemberLocationRow[], error: convoyRealtimeBackendError(error) };
     },
 
     subscribeToLocationChanges(convoyId, handlers) {

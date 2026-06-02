@@ -59,13 +59,17 @@ function readPngDimensions(filePath) {
 
 const loginLogoDimensions = readPngDimensions(loginLogoPath);
 const loginLogoActualAspectRatio = loginLogoDimensions.width / loginLogoDimensions.height;
+const headerIndex = loginSource.indexOf('<LoginHeaderBlock');
+const formIndex = loginSource.indexOf('<View style={[styles.formColumn');
+const statusIndex = loginSource.indexOf('<LoginConnectionStatus');
+const loginCardIndex = loginSource.indexOf('<LoginCard');
+const forgotCardIndex = loginSource.indexOf('<ForgotPasswordCard');
 
 assert.ok(
     loginSource.includes('headerHeight={loginHeaderHeight}') &&
     loginSource.includes('logoWidth={loginLogoWidth}') &&
     loginSource.includes('logoHeight={loginLogoHeight}') &&
     loginSource.includes('frameWidth={isLandscape') &&
-    loginSource.includes('statusInline={loginLayout.statusInline}') &&
     loginSource.includes('headerHeight: number') &&
     loginSource.includes('logoWidth: number') &&
     loginSource.includes('logoHeight: number') &&
@@ -74,8 +78,9 @@ assert.ok(
     loginSource.includes("layoutMode === 'landscape_split'") &&
     loginSource.includes('contentShellLandscape') &&
     loginSource.includes('formColumn') &&
-    loginSource.includes('statusInline') &&
-    loginSource.includes('onlineRowInline') &&
+    loginSource.includes('LoginConnectionStatus') &&
+    loginSource.includes('formStatusSlot') &&
+    loginSource.includes('formStatusSlotLandscape') &&
     loginSource.includes('cardMaxHeight') &&
     loginSource.includes('cardScrollEnabled') &&
     loginSource.includes('cardScrollContent') &&
@@ -83,8 +88,7 @@ assert.ok(
     loginSource.includes('authViewportHeight') &&
     loginSource.includes('aspectRatio: LOGIN_LOGO_ASPECT_RATIO') &&
     loginSource.includes('style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}') &&
-    loginSource.includes("position: 'absolute'") &&
-    loginSource.includes("bottom: 3") &&
+    loginSource.includes('minHeight: LOGIN_STATUS_INDICATOR_HEIGHT') &&
     loginSource.includes('cardCompactLandscape') &&
     loginSource.includes('inputShellCompactLandscape') &&
     loginSource.includes('primaryButtonCompactLandscape') &&
@@ -97,16 +101,29 @@ assert.ok(
 );
 
 assert.ok(
+  headerIndex >= 0 &&
+    formIndex > headerIndex &&
+    statusIndex > formIndex &&
+    loginCardIndex > statusIndex &&
+    forgotCardIndex > statusIndex,
+  'Login online/offline status should be rendered in the form stack above the auth card, not under the logo rail.',
+);
+
+assert.ok(
   loginLayoutSource.includes('LOGIN_LOGO_WIDTH_RATIO = 0.72') &&
     loginLayoutSource.includes('LOGIN_LOGO_MAX_WIDTH = 260') &&
-    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.28') &&
+    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_SCALE = 1.2') &&
+    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.336') &&
+    loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_MAX_WIDTH') &&
     loginLayoutSource.includes('LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22') &&
     loginLayoutSource.includes('LOGIN_STATUS_INDICATOR_HEIGHT = 24') &&
+    loginLayoutSource.includes('LOGIN_STATUS_SLOT_HEIGHT') &&
+    loginLayoutSource.includes('statusSlotHeight: number') &&
     loginLayoutSource.includes('logoHeight: number') &&
     loginLayoutSource.includes("layoutMode: 'landscape_split'") &&
     loginLayoutSource.includes('authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO') &&
+    loginLayoutSource.includes('authViewportHeight - LOGIN_STATUS_SLOT_HEIGHT') &&
     loginLayoutSource.includes('cardScrollEnabled: authViewportHeight < 520') &&
-    loginLayoutSource.includes('formMaxHeight: Math.max(240, authViewportHeight)') &&
     loginLayoutSource.includes('minimumBrandRailWidth'),
   'Login responsive layout helper should own the shared sizing constants and landscape clipping guard.',
 );
@@ -118,16 +135,16 @@ assert.ok(
 
 const portrait = resolveLoginScreenLayout({ width: 390, height: 844, safeAreaTop: 47, safeAreaBottom: 34 });
 assert.equal(portrait.layoutMode, 'portrait_stack');
-assert.equal(portrait.statusInline, false);
-assert.ok(portrait.headerHeight > portrait.logoWidth / LOGIN_LOGO_ASPECT_RATIO + 24);
+assert.ok(portrait.headerHeight > portrait.logoWidth / LOGIN_LOGO_ASPECT_RATIO);
+assert.equal(portrait.statusSlotHeight, 32);
 assert.ok(portrait.formMaxHeight == null);
 
 const landscape = resolveLoginScreenLayout({ width: 844, height: 390, safeAreaTop: 0, safeAreaBottom: 0 });
 assert.equal(landscape.layoutMode, 'landscape_split');
-assert.equal(landscape.statusInline, true);
 assert.equal(landscape.compactLayout, true);
 assert.ok(landscape.headerHeight <= landscape.authViewportHeight);
 assert.ok(landscape.formMaxHeight <= landscape.authViewportHeight);
+assert.ok(landscape.formMaxHeight <= landscape.authViewportHeight - landscape.statusSlotHeight);
 assert.ok(landscape.contentMaxWidth <= 844 - landscape.layoutMetrics.horizontalPadding * 2);
 assert.ok(landscape.logoWidth <= landscape.contentMaxWidth - landscape.formWidth - landscape.contentGap);
 assert.ok(
@@ -139,6 +156,7 @@ const shortLandscape = resolveLoginScreenLayout({ width: 568, height: 320, safeA
 assert.equal(shortLandscape.layoutMode, 'landscape_split');
 assert.equal(shortLandscape.cardScrollEnabled, true);
 assert.ok(shortLandscape.formMaxHeight <= shortLandscape.authViewportHeight);
+assert.ok(shortLandscape.formMaxHeight <= shortLandscape.authViewportHeight - shortLandscape.statusSlotHeight);
 assert.ok(shortLandscape.contentMaxWidth <= 568 - shortLandscape.layoutMetrics.horizontalPadding * 2);
 
 const narrowLandscape = resolveLoginScreenLayout({ width: 430, height: 300, safeAreaTop: 0, safeAreaBottom: 0 });

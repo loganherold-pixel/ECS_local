@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const fs = require('fs');
 const path = require('path');
 
@@ -120,9 +122,11 @@ for (const sunlightField of [
       widgetRenderers.includes('sunPanelContentDetailOnly') &&
       widgetRenderers.includes("return { aspectRatio: 1.55, insetHorizontal: 10, insetVertical: 14 };") &&
       sunlightDetailBlock.includes('formatAttitudeSunGlareDirection(daylight.sunAzimuth)') &&
+      !sunlightDetailBlock.includes('sunlightSourcePill') &&
+      !sunlightDetailBlock.includes('sunlightSourcePillText') &&
       !sunlightDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
       !sunlightDetailBlock.includes('</AttitudeCommandDetailScroll>'),
-    'Sunlight expanded detail must suppress compact widget chrome and fit a fixed non-scrolling metric layout.',
+    'Sunlight expanded detail must suppress compact widget chrome, omit the top-right source pill, and fit a fixed non-scrolling metric layout.',
   );
 }
 
@@ -159,10 +163,12 @@ for (const weatherField of [
       widgetRenderers.includes('weatherForecastCard') &&
       weatherDetailBlock.includes('getAttitudeRouteWeatherForecastRows(routeWeather)') &&
       weatherDetailBlock.includes('routeForecastRows.length > 0 ? (') &&
+      !weatherDetailBlock.includes('weatherSourcePill') &&
+      !weatherDetailBlock.includes('weatherSourcePillText') &&
       !weatherDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('</AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('No active route geometry. ECS is showing current-position weather only.'),
-    'Weather expanded detail must suppress compact metric chrome and fit a fixed non-scrolling forecast layout.',
+    'Weather expanded detail must suppress compact metric chrome, omit the top-right freshness pill, and fit a fixed non-scrolling forecast layout.',
   );
 }
 
@@ -172,7 +178,7 @@ for (const vehicleField of [
   'Engine load',
   'Coolant temperature',
   'Battery voltage',
-  'Water gallons',
+  'Water / fluid',
   'Propane / butane',
   'Fuel gallons',
 ]) {
@@ -184,12 +190,12 @@ for (const vehicleField of [
 
 {
   const commandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
-  const vehicleDetailBlock = widgetRenderers.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction ECSCommandModulePlaceholder/)?.[0] ?? '';
+  const vehicleDetailBlock = widgetRenderers.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction VehicleCommandRollZeroButton/)?.[0] ?? '';
   const vehicleRenderBlock = widgetRenderers.match(/case 'vehicle':[\s\S]*?case 'route':/)?.[0] ?? '';
   assert(
     vehicleRenderBlock.includes('<VehicleCommandExpandedView') &&
-      vehicleRenderBlock.includes('rollDeg={commandStageRollDeg}') &&
-      vehicleRenderBlock.includes('pitchDeg={commandStagePitchDeg}') &&
+      vehicleRenderBlock.includes('rollDeg={commandVehicleRollDeg}') &&
+      vehicleRenderBlock.includes('pitchDeg={commandVehiclePitchDeg}') &&
       vehicleRenderBlock.includes('attitudeLive={commandSensorLive}') &&
       !vehicleRenderBlock.includes('<AttitudeCommandDetailScroll>'),
     'Vehicle detail mode must render its fixed live telemetry surface without a scroll wrapper.',
@@ -266,6 +272,8 @@ assert(
 
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
+    powerCommandPanelBlock.includes('const suppressPowerDetailBackground = suppressCompactPanelChrome && isPowerPanel') &&
+    powerCommandPanelBlock.includes('background={suppressPowerDetailBackground ? null : (') &&
     widgetRenderers.includes('powerPanelContentDetailOnly') &&
     powerRenderBlock.includes('expanded && detailMode ? (') &&
     powerRenderBlock.includes('<AttitudeCommandPowerDeviceDetail') &&

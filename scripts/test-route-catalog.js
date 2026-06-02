@@ -232,6 +232,17 @@ const detailedTrailPack = normalizeRouteCatalogDetailResponse({
     toImproveStatus: ['Attach current closure and fire restriction checks.'],
     confidence: 91,
     activeGuidance: makeRoute().communitySignal.activeGuidance,
+    currentCondition: {
+      status: 'watch',
+      label: 'Current conditions require trip-date review',
+      currentlyOpenStatus: 'requires_review',
+      passabilityStatus: 'requires_review',
+      activeClosureCount: 0,
+      seasonalRestrictionCount: 1,
+      warnings: ['Seasonal restrictions require trip-date review.'],
+      blockers: [],
+      lastEvaluatedAt: freshNow,
+    },
   },
   offlineCache: {
     cacheable: true,
@@ -246,6 +257,17 @@ const detailedTrailPack = normalizeRouteCatalogDetailResponse({
         license: 'public_domain',
       },
     ],
+    currentCondition: {
+      status: 'watch',
+      label: 'Current conditions require trip-date review',
+      currentlyOpenStatus: 'requires_review',
+      passabilityStatus: 'requires_review',
+      activeClosureCount: 0,
+      seasonalRestrictionCount: 1,
+      warnings: ['Seasonal restrictions require trip-date review.'],
+      blockers: [],
+      lastEvaluatedAt: freshNow,
+    },
     freshnessWarnings: ['USFS MVUM source freshness is fresh.'],
   },
 });
@@ -284,6 +306,16 @@ assert.strictEqual(
   'ready',
   'Route catalog detail normalization should carry active-guidance metadata from assessment payloads',
 );
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.currentCondition?.status,
+  'watch',
+  'Route catalog detail normalization should preserve the server current-condition overlay separately from access verification',
+);
+assert.strictEqual(
+  detailedTrailPack?.catalogVerification?.offlineCache?.currentCondition?.currentlyOpenStatus,
+  'requires_review',
+  'Offline cache metadata should preserve the selected route current-condition/open-status overlay',
+);
 
 const offlinePrepInput = trailPackToOfflinePrepCatalogInput({
   ...detailedTrailPack,
@@ -316,6 +348,11 @@ assert.deepStrictEqual(
   offlinePrepInput.route.routeMetadata.routeCatalogFreshnessWarnings,
   ['USFS MVUM source freshness is fresh.'],
   'Trail Pack offline cache handoff should prefer server-provided route catalog freshness warnings',
+);
+assert.strictEqual(
+  offlinePrepInput.route.routeMetadata.routeCatalogCurrentCondition.currentlyOpenStatus,
+  'requires_review',
+  'Trail Pack offline cache handoff should preserve route catalog current-condition overlays',
 );
 assert.strictEqual(
   offlinePrepInput.route.routeMetadata.offlinePrepGeometryPointCount,
@@ -358,9 +395,71 @@ const closure = verifyRouteCatalogRecord(
 );
 assert.strictEqual(closure.status, 'critical');
 assert.strictEqual(closure.publicRecommendation, false);
+assert.strictEqual(
+  closure.sourceLabel,
+  'Official access verified',
+  'Active current-condition closures must not erase the legal-access verification label',
+);
+assert.strictEqual(
+  closure.currentCondition?.status,
+  'blocked',
+  'Active current-condition closures should surface a separate blocked current-condition overlay',
+);
+assert.strictEqual(
+  closure.currentCondition?.currentlyOpenStatus,
+  'closed',
+  'Current-condition overlays should separate current open/closed posture from verified access posture',
+);
+assert.strictEqual(
+  closure.currentCondition?.passabilityStatus,
+  'not_assessed',
+  'Closure overlays should not invent passability even when official access is verified',
+);
 assert(
   closure.blockers.includes('Route intersects an active official closure'),
   'Active official closures should hard-block public recommendation',
+);
+
+const tripDateReview = verifyRouteCatalogRecord(
+  makeRoute({
+    id: 'trip-date-review-route',
+    seasonalRestrictionCount: 1,
+    communitySignal: {
+      ...makeRoute().communitySignal,
+      currentConditions: {
+        sourceCount: 1,
+        activeClosureCount: 0,
+        watchClosureCount: 1,
+        checkedAt: ['2026-05-31T00:00:00.000Z'],
+        caveat: 'Official current-condition overlays can block recommendation but do not prove open access, passability, or safety.',
+      },
+    },
+  }),
+  { now: freshNow },
+);
+assert.strictEqual(
+  tripDateReview.sourceLabel,
+  'Official access verified',
+  'Verified access should stay visible when current-condition review is required',
+);
+assert.strictEqual(
+  tripDateReview.publicRecommendation,
+  true,
+  'Non-blocking current-condition warnings should not erase source-backed recommendation eligibility',
+);
+assert.strictEqual(
+  tripDateReview.currentCondition?.status,
+  'watch',
+  'Non-blocking current-condition notices should create a watch overlay',
+);
+assert.strictEqual(
+  tripDateReview.currentCondition?.currentlyOpenStatus,
+  'requires_review',
+  'Trip-date seasonal/current-condition caveats should not be labeled open',
+);
+assert(
+  tripDateReview.currentCondition?.warnings.some((warning) => /trip-date|seasonal|current-condition/i.test(warning)),
+  'Current-condition watch overlays should carry trip-date review warnings',
 );
 
 const stale = verifyRouteCatalogRecord(

@@ -1,6 +1,7 @@
 /* eslint-disable import/no-unresolved */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { buildRouteCatalogCurrentConditionOverlay } from '../_shared/routeCatalogCurrentConditionOverlay.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -63,6 +64,7 @@ async function requestId(req: Request): Promise<string | null> {
 function buildAssessment(record: Record<string, unknown>) {
   const blockers = Array.isArray(record.blocker_reasons) ? record.blocker_reasons : [];
   const warnings = Array.isArray(record.warning_reasons) ? record.warning_reasons : [];
+  const currentCondition = buildRouteCatalogCurrentConditionOverlay(record);
   const communitySignal = readRecord(record.community_signal);
   const activeGuidance = readRecord(communitySignal?.activeGuidance);
   const activeGuidanceWarning =
@@ -72,8 +74,13 @@ function buildAssessment(record: Record<string, unknown>) {
   return {
     status: blockers.length > 0 ? 'critical' : warnings.length > 0 ? 'watch' : 'normal',
     why: Array.isArray(record.confidence_reasons) ? record.confidence_reasons : [],
-    whatToWatch: [...warnings, ...(activeGuidanceWarning ? [activeGuidanceWarning] : [])],
-    recommendedAction: blockers.length > 0
+    whatToWatch: [
+      ...warnings,
+      ...currentCondition.warnings,
+      ...currentCondition.blockers,
+      ...(activeGuidanceWarning ? [activeGuidanceWarning] : []),
+    ],
+    recommendedAction: blockers.length > 0 || currentCondition.status === 'blocked'
       ? 'Do not recommend this route until blockers are cleared by official source review.'
       : 'Verify current local conditions before departure and cache the route for offline use.',
     toImproveStatus: blockers.length > 0
@@ -81,6 +88,7 @@ function buildAssessment(record: Record<string, unknown>) {
       : ['Refresh official source checks', 'Confirm seasonal restrictions for the trip date'],
     confidence: record.confidence_score ?? 0,
     activeGuidance,
+    currentCondition,
     dataUsed: record.source_records ?? [],
   };
 }
@@ -167,7 +175,11 @@ serve(async (req) => {
     if (error) throw new Error('Unable to read verified route detail.');
     if (!data) return jsonResponse({ ok: false, error: 'Verified route not found' }, 404);
 
-    const record = data as Record<string, unknown>;
+    const currentCondition = buildRouteCatalogCurrentConditionOverlay(data as Record<string, unknown>);
+    const record = {
+      ...(data as Record<string, unknown>),
+      current_condition: currentCondition,
+    };
     return jsonResponse({
       ok: true,
       record,
@@ -178,6 +190,7 @@ serve(async (req) => {
         staleAt: record.stale_at ?? null,
         sourceTimestamps: sourceTimestamps(record),
         sourceAttribution: sourceAttribution(record),
+        currentCondition,
         freshnessWarnings: freshnessWarnings(record),
       },
     });

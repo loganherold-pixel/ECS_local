@@ -241,6 +241,7 @@ import {
 
 import type {
   CameraCommand as MapSurfaceCameraCommand,
+  CampOpsCampEndpointMapMarkerPayload,
   CampScoutMapMarkerPayload,
   PinMarker,
   RouteBuilderSegmentData,
@@ -455,7 +456,7 @@ import {
 } from '../../lib/campScout';
 import { buildDispersedCampingCampScoutCandidates } from '../../lib/campops/campCandidateScoring';
 import {
-  buildCampOpsCampScoutMapPins,
+  buildCampOpsCampEndpointMapPins,
   isCampOpsMapPinPayload,
 } from '../../lib/campops/campOpsMapPins';
 import { buildCampOpsCampIntelViewModel } from '../../lib/campops/campOpsCampIntelViewModel';
@@ -613,6 +614,9 @@ const navigatePreferenceStorage = createMigratingNonSecureStorage('ecs_navigate_
 });
 const CAMPOPS_ROUTE_PINS_ENABLED = isCampOpsRoutePinsFeatureEnabled();
 const CAMPOPS_ROUTE_PINS_ROLLOUT_CONFIG = getCampOpsRoutePinsRolloutConfig();
+const CAMPOPS_MANUAL_AREA_REVIEW_ENABLED =
+  typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMPOPS_MANUAL_AREA_REVIEW === '1';
+const campopsManualAreaReviewEnabled = CAMPOPS_MANUAL_AREA_REVIEW_ENABLED;
 const CAMPOPS_ROUTE_RESULT_CACHE_LIMIT = 6;
 const NAV_AI_ASSIST_FADE_IN_MS = 180;
 const NAV_AI_ASSIST_FADE_OUT_MS = 220;
@@ -812,7 +816,7 @@ function describeCampScoutZeroResult(input: {
       reason: 'map_rendering_empty',
       title: 'PIN RENDER CHECK',
       message:
-        'Candidate campsites were found, but the map pin layer is empty. Refresh the map or reopen Camp Scout.',
+        'Candidate endpoints were found, but the map pin layer is empty. Refresh the map or reopen Camp Endpoints.',
     };
   }
 
@@ -983,7 +987,7 @@ function toCampScoutCandidate(
     .slice(0, 4);
   const cautions = [
     accessConfidence < 65 ? 'Access confidence is limited; inspect the approach before relying on this pin.' : null,
-    candidate.confidence === 'LOW' ? 'Camp Scout confidence is low; treat this as a scouting lead only.' : null,
+    candidate.confidence === 'LOW' ? 'Camp Endpoint confidence is low; treat this as a scouting lead only.' : null,
     'Potential campsite: verify local rules, permits, closures, and land ownership.',
   ].filter((caution): caution is string => !!caution);
   const metadataWarnings = Array.isArray(metadata.warnings)
@@ -998,12 +1002,12 @@ function toCampScoutCandidate(
   return {
     id: `camp-scout-${candidate.segmentRange ?? candidate.segmentIndex ?? index}`,
     coordinate: { latitude, longitude },
-    title: 'Camp Scout Area Potential',
+    title: 'Camp Endpoint Area Potential',
     sourceType: 'ecs_inferred',
     confidenceScore: score,
     confidenceGrade,
     scoreBreakdown: emptyCampScoutBreakdown(score),
-    reasons: reasons.length > 0 ? reasons : ['Candidate ranked highly within the selected Camp Scout area.'],
+    reasons: reasons.length > 0 ? reasons : ['Candidate endpoint ranked highly within the selected manual review area.'],
     cautions: [...cautions, ...metadataWarnings].filter((warning, warningIndex, list) => list.indexOf(warning) === warningIndex),
     distanceFromUserMiles: candidate.distanceMiles,
     slopeEstimate: Number.isFinite(slope) ? slope : undefined,
@@ -1131,8 +1135,8 @@ function toMappedCampScoutCandidate(site: PublicCampSite, index: number): CampSc
     scoreBreakdown: emptyCampScoutBreakdown(trustScore),
     reasons: [
       officialMapped
-        ? 'Mapped campsite source is inside the selected Camp Scout area.'
-        : 'Community-suggested campsite is inside the selected Camp Scout area.',
+        ? 'Mapped campsite source is inside the selected Camp Endpoints review area.'
+        : 'Community-suggested campsite is inside the selected Camp Endpoints review area.',
       `${site.confirmation_count} confirmation${site.confirmation_count === 1 ? '' : 's'} and ${site.flag_count} flag${site.flag_count === 1 ? '' : 's'} are attached.`,
     ],
     cautions: site.flag_count > 0 ? ['Review community flags before relying on this pin.'] : [],
@@ -5285,7 +5289,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     selectedScopedCampsite,
   ]);
   const drawAreaKnownCampsiteMarkers = useMemo<CampMapMarker[]>(() => {
-    // Camp Scout absorbs mapped/community sources into ranked candidate pins.
+    // Camp Endpoints manual review absorbs mapped/community sources into ranked candidate pins.
     return [];
   }, []);
   const exploreRouteCampMarkers = useMemo<CampMapMarker[]>(
@@ -5526,21 +5530,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     if (campScoutLimitedDataMode) {
       setCampsitePolygonLocateState('limited');
       setCampsitePolygonLocateMessage(
-        `Offline/limited data mode: ${campScoutCandidatesShown.length} Camp Scout pin${campScoutCandidatesShown.length === 1 ? '' : 's'} ranked from cached/local signals. Verify rules, access, and conditions.`,
+        `Offline/limited data mode: ${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} ranked from cached/local signals. Verify rules, access, and conditions.`,
       );
       return;
     }
     if (campScoutPartialDataMode) {
       setCampsitePolygonLocateState('partial');
       setCampsitePolygonLocateMessage(
-        `Partial results: ${campScoutCandidatesShown.length} Camp Scout pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area from available signals. Verify rules and access.`,
+        `Partial results: ${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area from available signals. Verify rules and access.`,
       );
       return;
     }
 
     setCampsitePolygonLocateState('ready');
     setCampsitePolygonLocateMessage(
-      `${campScoutCandidatesShown.length} Camp Scout pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area for ${filterLabel}.`,
+      `${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area for ${filterLabel}.`,
     );
   }, [
     campScoutAreaMode,
@@ -5552,7 +5556,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   ]);
   const campScoutIntroStatusMessage =
     campsitePolygonLocateMessage ??
-    'No area selected. Draw an area or use current map view to start a focused Camp Scout scan.';
+    'No area selected. Draw an area or use current map view to start an internal Camp Endpoints review.';
   const campScoutIntroStatusTitle = campsitePolygonLocateMessage
     ? campsitePolygonLocateState === 'empty'
       ? campScoutZeroResultSummary.title
@@ -5643,9 +5647,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       accessibilityLabel: `ECS-Inferred Camp Candidate. Candidate scouting location. Verify locally before camping.`,
     }));
   }, [dispersedCampingCampScoutCandidates, selectedCampScoutCandidateId]);
-  const campOpsMapMarkers = useMemo<CampScoutMapMarkerPayload[]>(
+  const campOpsMapMarkers = useMemo<CampOpsCampEndpointMapMarkerPayload[]>(
     () =>
-      buildCampOpsCampScoutMapPins(campOpsRecommendationSet, {
+      buildCampOpsCampEndpointMapPins(campOpsRecommendationSet, {
         selectedCampOpsCandidateId: selectedCampOpsEndpointId,
       }),
     [campOpsRecommendationSet, selectedCampOpsEndpointId],
@@ -7761,7 +7765,7 @@ const handleQuickPinDrop = useCallback(() => {
         {
           id: `camp-scout-${selectedCampScoutCandidate.id}`,
           title: selectedCampScoutCandidate.title,
-          subtitle: `Camp Scout ${selectedCampScoutCandidate.confidenceGrade} - ${selectedCampScoutCandidate.confidenceScore}/100`,
+          subtitle: `Camp Endpoint ${selectedCampScoutCandidate.confidenceGrade} - ${selectedCampScoutCandidate.confidenceScore}/100`,
           coordinate,
           sourceType: 'manual_selection',
           raw: { campScoutCandidateId: selectedCampScoutCandidate.id },
@@ -7790,7 +7794,7 @@ const handleQuickPinDrop = useCallback(() => {
       lng: selectedCampScoutCandidate.coordinate.longitude,
       title: selectedCampScoutCandidate.title,
       notes: [
-        `Camp Scout ${selectedCampScoutCandidate.confidenceGrade} candidate`,
+        `Camp Endpoint ${selectedCampScoutCandidate.confidenceGrade} candidate`,
         `Source: ${selectedCampScoutCandidate.sourceType}`,
         `Access: ${selectedCampScoutCandidate.accessConfidence}/100`,
         `Remoteness: ${selectedCampScoutCandidate.remotenessScore}/100`,
@@ -7799,14 +7803,14 @@ const handleQuickPinDrop = useCallback(() => {
       created_by: user?.email || 'local',
     });
     loadPins();
-    showToast(`CAMP SCOUT CANDIDATE SAVED: ${savedPin.title}`);
+    showToast(`CAMP ENDPOINT CANDIDATE SAVED: ${savedPin.title}`);
   }, [activeExpeditionId, loadPins, selectedCampScoutCandidate, showToast, user]);
 
   const handleCampScoutReportNotViable = useCallback(() => {
     if (!selectedCampScoutCandidate) return;
     hapticCommand();
     setSelectedCampScoutCandidateId(null);
-    showToast('CAMP SCOUT FEEDBACK RECORDED');
+    showToast('CAMP ENDPOINT FEEDBACK RECORDED');
   }, [selectedCampScoutCandidate, showToast]);
 
   const handleCampOpsDismiss = useCallback(() => {
@@ -8293,10 +8297,10 @@ const locateCampsitesForCompletedPolygon = useCallback(
       setCampsitePolygonLocateState(validation.status === 'too_large' ? 'too_large' : 'error');
       setCampsitePolygonLocateMessage(
         validation.status === 'too_large'
-          ? 'Area too large for a focused Camp Scout scan. Tighten the area and scan again.'
+          ? 'Area too large for a focused Camp Endpoints review. Tighten the area and scan again.'
           : validation.message,
       );
-      showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP SCOUT AREA' : 'ADJUST CAMP SCOUT AREA');
+      showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP ENDPOINTS AREA' : 'ADJUST CAMP ENDPOINTS AREA');
       return;
     }
 
@@ -8310,7 +8314,7 @@ const locateCampsitesForCompletedPolygon = useCallback(
     campsitePolygonLocateRequestRef.current = requestToken;
     setCampScoutAreaMode('scanning');
     setCampsitePolygonLocateState('locating');
-    setCampsitePolygonLocateMessage('Scanning: Camp Scout is ranking terrain, access, source, and confidence signals.');
+    setCampsitePolygonLocateMessage('Scanning: Camp Endpoints is ranking terrain, access, source, and confidence signals.');
     setSelectedCampIntelId(null);
     setSelectedCampScoutCandidateId(null);
     setSelectedCampOpsEndpointId(null);
@@ -8324,7 +8328,7 @@ const locateCampsitesForCompletedPolygon = useCallback(
           remotenessSnapshot: getCampsiteRemotenessSnapshot(),
           vehicleProfile: navigateVehicleContext,
           polygonId,
-          routeName: 'Camp Scout Area',
+          routeName: 'Camp Endpoints Area',
           campopsRecommendationsEnabled: CAMPOPS_ROUTE_PINS_ENABLED,
           campOps: CAMPOPS_ROUTE_PINS_ENABLED
             ? {
@@ -8343,10 +8347,10 @@ const locateCampsitesForCompletedPolygon = useCallback(
           setCampsitePolygonLocateState(countValidation.status === 'too_large' ? 'too_large' : 'error');
           setCampsitePolygonLocateMessage(
             countValidation.status === 'too_large'
-              ? 'Area too large for a focused Camp Scout scan. Tighten the area to reduce candidate volume.'
+              ? 'Area too large for a focused Camp Endpoints review. Tighten the area to reduce candidate volume.'
               : countValidation.message,
           );
-          showToast('TIGHTEN CAMP SCOUT AREA');
+          showToast('TIGHTEN CAMP ENDPOINTS AREA');
           return;
         }
 
@@ -8381,13 +8385,13 @@ const locateCampsitesForCompletedPolygon = useCallback(
                   : 'viable';
         setCampScoutAreaMode('results');
         setCampsitePolygonLocateState('ready');
-        setCampsitePolygonLocateMessage(`${cappedCount} ${confidenceLabel} Camp Scout pin${cappedCount === 1 ? '' : 's'} shown in or near the drawn area.`);
+        setCampsitePolygonLocateMessage(`${cappedCount} ${confidenceLabel} Camp Endpoint pin${cappedCount === 1 ? '' : 's'} shown in or near the drawn area.`);
       } catch (error) {
         console.warn('[Navigate] Polygon campsite locating failed:', error);
         setCampScoutAreaMode('error');
         setCampsitePolygonLocateState('error');
-        setCampsitePolygonLocateMessage('Camp Scout scan failed. Area kept for retry.');
-        showToast('CAMP SCOUT UNAVAILABLE');
+        setCampsitePolygonLocateMessage('Camp Endpoints review failed. Area kept for retry.');
+        showToast('CAMP ENDPOINTS UNAVAILABLE');
       }
     }, 0);
   },
@@ -10118,7 +10122,7 @@ const handleCreateRun = useCallback(() => {
         },
         {
           coord: selectedCampScoutCandidate?.coordinate,
-          label: selectedCampScoutCandidate?.title ?? 'Camp Scout candidate',
+          label: selectedCampScoutCandidate?.title ?? 'Camp Endpoint candidate',
         },
         {
           coord: selectedCampOpsIntel,
@@ -11239,7 +11243,7 @@ const handleCreateRun = useCallback(() => {
   const routeArrivedVisualMode = navigationOverlayMode === 'arrived';
   const routeSearchVisualMode = navigationOverlayMode === 'error';
   const activeGuidanceLandscapeWidth = navigateLandscapeExpanded
-    ? Math.min(300, Math.max(248, Math.round(adaptive.windowWidth * 0.31)))
+    ? Math.min(260, Math.max(228, Math.round(adaptive.windowWidth * 0.26)))
     : undefined;
   const topRouteSurfaceVisible =
     routePreviewVisualMode || routeActiveVisualMode || routeArrivedVisualMode;
@@ -14059,13 +14063,13 @@ const clearCampsiteDrawing = useCallback(() => {
   setCampsitePolygonLocateMessage(null);
   resetDrawAreaKnownCampsiteSources();
   clearOwnedCampsiteCandidates('user_cleared_drawing', { clearPolygon: true });
-  showToast('CAMP SCOUT AREA CLEARED');
+  showToast('CAMP ENDPOINTS AREA CLEARED');
 }, [clearOwnedCampsiteCandidates, resetDrawAreaKnownCampsiteSources, showToast]);
 
 const finishCampsiteDrawing = useCallback(() => {
   hapticCommand();
   if (campsiteDrawingClosed) {
-    showToast('CAMP SCOUT AREA ALREADY CLOSED');
+    showToast('CAMP ENDPOINTS AREA ALREADY CLOSED');
     return;
   }
   const validation = validateCampScoutArea(campsiteDrawingPoints);
@@ -14074,10 +14078,10 @@ const finishCampsiteDrawing = useCallback(() => {
     setCampsitePolygonLocateState(validation.status === 'too_large' ? 'too_large' : 'error');
     setCampsitePolygonLocateMessage(
       validation.status === 'too_large'
-        ? 'Area too large for a focused Camp Scout scan. Tighten the area and scan again.'
+        ? 'Area too large for a focused Camp Endpoints review. Tighten the area and scan again.'
         : validation.message,
     );
-    showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP SCOUT AREA' : 'ADJUST CAMP SCOUT AREA');
+    showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP ENDPOINTS AREA' : 'ADJUST CAMP ENDPOINTS AREA');
     return;
   }
 
@@ -14089,7 +14093,7 @@ const finishCampsiteDrawing = useCallback(() => {
   setCampsitePolygonLocateMessage(validation.message + ' Tap Scan Area to place pins.');
   clearOwnedCampsiteCandidates('polygon_area_redefined_pending_scan', { clearPolygon: true });
   resetDrawAreaKnownCampsiteSources();
-  showToast('CAMP SCOUT AREA READY');
+  showToast('CAMP ENDPOINTS AREA READY');
 }, [
   clearOwnedCampsiteCandidates,
   campsiteDrawingClosed,
@@ -14128,7 +14132,7 @@ const scanCampsiteDrawing = useCallback(() => {
   }
 
   if (!campsiteDrawingClosed || campsiteDrawingPoints.length < 3) {
-    showToast('FINISH CAMP SCOUT AREA FIRST');
+    showToast('FINISH CAMP ENDPOINTS AREA FIRST');
     return;
   }
 
@@ -14174,7 +14178,7 @@ const startCampScoutDrawing = useCallback(() => {
   closeNavigateDetailSurfaces();
   setToolsMenuOpen(false);
   setActiveTopPopup(null);
-  showToast('DRAW CAMP SCOUT AREA');
+    showToast('DRAW CAMP ENDPOINTS AREA');
 }, [
   clearOwnedCampsiteCandidates,
   closeNavigateDetailSurfaces,
@@ -14204,10 +14208,10 @@ const handleCampScoutUseCurrentMapView = useCallback(() => {
     setCampsitePolygonLocateState(validation.status === 'too_large' ? 'too_large' : 'error');
     setCampsitePolygonLocateMessage(
       validation.status === 'too_large'
-        ? 'Area too large for a focused Camp Scout scan. Zoom in or pan to a smaller map view.'
+    ? 'Area too large for a focused Camp Endpoints review. Zoom in or pan to a smaller map view.'
         : validation.message,
     );
-    showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP SCOUT AREA' : 'ADJUST CAMP SCOUT AREA');
+    showToast(validation.status === 'too_large' ? 'TIGHTEN CAMP ENDPOINTS AREA' : 'ADJUST CAMP ENDPOINTS AREA');
     return;
   }
 
@@ -14325,7 +14329,7 @@ const toggleCampsiteDrawMode = useCallback(() => {
     setCampsitePolygonLocateMessage(null);
     resetDrawAreaKnownCampsiteSources();
     clearOwnedCampsiteCandidates('polygon_drawing_exited', { clearPolygon: true });
-    showToast('CAMP SCOUT CLOSED');
+    showToast('CAMP ENDPOINTS CLOSED');
     return;
   }
   startCampScoutDrawing();
@@ -15985,6 +15989,7 @@ const stableMapSurface = useMemo(() => {
         onSegmentTap={handleExploreRouteSegmentTap}
         onCampIntelTap={handleCampIntelTap}
         onCampScoutTap={handleCampScoutTap}
+        onCampEndpointTap={handleCampScoutTap}
         onMapTap={handleDirectMapTapForPin}
         onDispersedCampingRegionTap={handleDispersedCampingRegionTap}
         dispersedRouteBuild={dispersedRouteBuildState}
@@ -16013,7 +16018,7 @@ const stableMapSurface = useMemo(() => {
         onReadyStateChange={setMapSurfaceReady}
         onRetry={handleMapRetry}
         campIntelMarkers={combinedCampMarkers}
-        campScoutMarkers={sharedCampPinMapMarkers}
+        campEndpointMarkers={sharedCampPinMapMarkers}
         tiltAlertMarkers={mapTiltAlertMarkers}
         cameraMode={mapCameraMode}
         cameraCommand={mapCameraCommand}
@@ -16699,7 +16704,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!campsiteDrawingCanUndo}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Undo Camp Scout area point"
+                accessibilityLabel="Undo Camp Endpoints area point"
               >
                 <Text
                   style={[
@@ -16743,7 +16748,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!campsiteDrawingCanScan}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Scan Camp Scout area"
+                accessibilityLabel="Scan Camp Endpoints area"
               >
                 <Text
                   style={[
@@ -18478,30 +18483,32 @@ const stableMapSurface = useMemo(() => {
                   </TouchableOpacity>
                 ) : null}
 
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionButton,
-                    campScoutAreaMode !== 'idle' && styles.quickActionButtonActive,
-                  ]}
-                  onPress={() => runToolsAction(handleOpenCampScoutIntro)}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  accessibilityLabel="Draw camp potential area"
-                >
-                  <Ionicons
-                    name="shapes-outline"
-                    size={15}
-                    color={campScoutAreaMode !== 'idle' ? '#091014' : TACTICAL.amber}
-                  />
-                  <Text
+                {campopsManualAreaReviewEnabled ? (
+                  <TouchableOpacity
                     style={[
-                      styles.quickActionButtonText,
-                      campScoutAreaMode !== 'idle' && styles.quickActionButtonTextActive,
+                      styles.quickActionButton,
+                      campScoutAreaMode !== 'idle' && styles.quickActionButtonActive,
                     ]}
+                    onPress={() => runToolsAction(handleOpenCampScoutIntro)}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Manual CampOps area review"
                   >
-                    DRAW CAMP POTENTIAL AREA
-                  </Text>
-                </TouchableOpacity>
+                    <Ionicons
+                      name="shapes-outline"
+                      size={15}
+                      color={campScoutAreaMode !== 'idle' ? '#091014' : TACTICAL.amber}
+                    />
+                    <Text
+                      style={[
+                        styles.quickActionButtonText,
+                        campScoutAreaMode !== 'idle' && styles.quickActionButtonTextActive,
+                      ]}
+                    >
+                      MANUAL CAMP AREA REVIEW
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </View>
 
@@ -18595,9 +18602,9 @@ const stableMapSurface = useMemo(() => {
     { placement: 'center', backdropTint: 'transparent', fullBody: true }
   )}
 
-  {renderMapPopup(
+  {campopsManualAreaReviewEnabled ? renderMapPopup(
     campScoutIntroVisible,
-    'CAMP SCOUT',
+    'CAMP ENDPOINTS',
     'shapes-outline',
     closeToolsPopup,
     <ScrollView
@@ -18608,13 +18615,13 @@ const stableMapSurface = useMemo(() => {
     >
       <View style={styles.mapPopupSimpleStack}>
         <View style={styles.stitchHeroCard}>
-          <Text style={styles.stitchHeroEyebrow}>AREA SCAN</Text>
-          <Text style={styles.stitchHeroTitle}>Find high-confidence remote camp candidates</Text>
+          <Text style={styles.stitchHeroEyebrow}>INTERNAL AREA REVIEW</Text>
+          <Text style={styles.stitchHeroTitle}>Review Camp Endpoints outside route planning</Text>
           <Text style={styles.stitchHeroText}>
-            Draw an area and ECS will return a small set of high-confidence camp candidates.
+            Route geometry is the primary Camp Endpoints flow. This manual review is an internal fallback for candidate endpoint checks.
           </Text>
           <Text style={styles.stitchHeroText}>
-            Results may include ECS-inferred, official mapped, and community-suggested locations.
+            Results may include ECS-inferred, official mapped, and community-suggested locations with visible source confidence.
           </Text>
           <Text style={styles.stitchHeroText}>
             Always verify local rules and posted restrictions.
@@ -18651,7 +18658,7 @@ const stableMapSurface = useMemo(() => {
                   }}
                   activeOpacity={0.85}
                   accessibilityRole="button"
-                  accessibilityLabel={`Camp Scout ${option.label.toLowerCase()} filter`}
+                  accessibilityLabel={`Camp Endpoints ${option.label.toLowerCase()} filter`}
                 >
                   <Text
                     style={[
@@ -18681,7 +18688,7 @@ const stableMapSurface = useMemo(() => {
               checked: campScoutFilterMode !== 'official_only' && campScoutIncludeCommunity,
               disabled: campScoutFilterMode === 'official_only',
             }}
-            accessibilityLabel="Include Camp Scout community suggestions"
+            accessibilityLabel="Include Camp Endpoints community suggestions"
           >
             <Ionicons
               name={
@@ -18695,7 +18702,7 @@ const stableMapSurface = useMemo(() => {
             <View style={styles.savedRoutesCommandTextWrap}>
               <Text style={styles.toolsSuggestionTitle}>Include Community Suggestions</Text>
               <Text style={styles.toolsSuggestionSubtitle}>
-                Community pins still need to pass Camp Scout confidence ranking.
+                Community pins still need to pass Camp Endpoints confidence ranking.
               </Text>
             </View>
           </TouchableOpacity>
@@ -18706,7 +18713,7 @@ const stableMapSurface = useMemo(() => {
           onPress={startCampScoutDrawing}
           activeOpacity={0.86}
           accessibilityRole="button"
-          accessibilityLabel="Draw Camp Scout area"
+          accessibilityLabel="Draw Camp Endpoints area"
         >
           <Ionicons name="create-outline" size={17} color={TACTICAL.amber} />
           <View style={styles.savedRoutesCommandTextWrap}>
@@ -18722,13 +18729,13 @@ const stableMapSurface = useMemo(() => {
           onPress={handleCampScoutUseCurrentMapView}
           activeOpacity={0.86}
           accessibilityRole="button"
-          accessibilityLabel="Use current map view for Camp Scout scan"
+          accessibilityLabel="Use current map view for Camp Endpoints review"
         >
           <Ionicons name="scan-outline" size={17} color={TACTICAL.amber} />
           <View style={styles.savedRoutesCommandTextWrap}>
             <Text style={styles.toolsSuggestionTitle}>Use Current Map View</Text>
             <Text style={styles.toolsSuggestionSubtitle}>
-              Scan the visible bounds only when they fit Camp Scout area limits.
+              Scan the visible bounds only when they fit Camp Endpoints area limits.
             </Text>
           </View>
         </TouchableOpacity>
@@ -18741,7 +18748,7 @@ const stableMapSurface = useMemo(() => {
           }}
           activeOpacity={0.86}
           accessibilityRole="button"
-          accessibilityLabel="Cancel Camp Scout"
+          accessibilityLabel="Cancel Camp Endpoints"
         >
           <Text style={styles.secondaryButtonText}>CANCEL</Text>
         </TouchableOpacity>
@@ -18749,7 +18756,7 @@ const stableMapSurface = useMemo(() => {
     </ScrollView>,
     MAP_POPUP_WIDTH,
     { fullBody: true, showBackdrop: false }
-  )}
+  ) : null}
 
   {renderMapPopup(
     recommendCampsiteModalVisible,

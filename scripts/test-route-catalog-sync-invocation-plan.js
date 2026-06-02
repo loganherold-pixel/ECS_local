@@ -277,6 +277,21 @@ assert.strictEqual(
   'Oregon ODF OHV should now allow bounded official-source public recommendations with current-condition warnings',
 );
 assert.strictEqual(
+  byKey.get('colorado_cpw_designated_trails').publicRecommendationPolicy,
+  'official_source_recommendable_with_condition_warnings',
+  'Colorado CPW Designated Trails should allow bounded official-source public recommendations with current-condition warnings',
+);
+assert.strictEqual(
+  byKey.get('colorado_cpw_designated_trails').defaultPayload.maxFeatures,
+  150,
+  'Colorado CPW default sync should stay bounded for the first official state-source pass',
+);
+assert.strictEqual(
+  byKey.get('colorado_cpw_designated_trails').deepBackfillPayload.maxFeatures,
+  500,
+  'Colorado CPW backfill should expose a larger but still bounded FeatureServer pull',
+);
+assert.strictEqual(
   byKey.get('nps_public_trails').publicRecommendationPolicy,
   'official_source_recommendable_with_condition_warnings',
   'NPS public trails should now allow bounded official-source public recommendations with park-unit/current-alert warnings',

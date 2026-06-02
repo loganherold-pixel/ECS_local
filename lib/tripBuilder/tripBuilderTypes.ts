@@ -1,4 +1,5 @@
 import type { ExploreRouteReadinessSummary } from '../readiness/exploreRouteReadiness';
+import type { CampOpsRouteCampEndpointPlan } from '../campops/campOpsTypes';
 
 export type TripType =
   | 'day_trip'
@@ -455,6 +456,7 @@ export type TripBuilderRouteContextInput = {
     }[];
     providerMetadata?: Record<string, unknown> | null;
   }[] | null;
+  campEndpointPlan?: CampOpsRouteCampEndpointPlan | null;
   bailoutCandidates?: {
     id: string;
     label?: string | null;

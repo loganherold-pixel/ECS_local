@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const Module = require('module');
@@ -70,6 +71,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const readiness = require(path.join(root, 'lib', 'readiness'));
 const smokeChecks = require(path.join(root, 'lib', 'ai', 'runtimeSmokeChecks.ts'));
 const aiGuardrails = require(path.join(root, 'lib', 'ai', 'readinessExplanationGuardrails.ts'));
+const readinessStoreSource = fs.readFileSync(path.join(root, 'lib', 'readiness', 'expeditionReadinessStore.ts'), 'utf8');
 
 const expectedCategories = [
   'vehicle_fit',
@@ -287,6 +289,132 @@ const remoteNoPower = readiness.buildExpeditionReadiness({
 const remotePowerCategory = remoteNoPower.categories.find((category) => category.id === 'power_runtime');
 assert.strictEqual(remotePowerCategory.status, 'caution', 'Remote/overnight missing power should be caution, not false-ready.');
 assert.ok(remotePowerCategory.missingInputs.includes('Power runtime remaining') || remotePowerCategory.warnings?.length !== 0);
+
+const stalePowerIntelligenceWithFreshPrimary = readiness.buildPowerReadinessInput({
+  sourceInput: {
+    route: { distanceMiles: 62, difficulty: 'moderate', riskLevel: 'high' },
+    offline: { isRemoteRoute: true },
+    campCandidates: [],
+  },
+  primaryDevice: {
+    id: 'primary-house-power',
+    provider: 'EcoFlow',
+    providerDeviceId: 'delta-live',
+    connectionMethod: 'ble',
+    originalName: 'EcoFlow Delta',
+    customName: 'House Power',
+    model: 'Delta',
+    role: 'primary_house',
+    vehicleId: null,
+    isPrimary: true,
+    connectionState: 'connected',
+    lastSocPct: 100,
+    lastWattsIn: 320,
+    lastWattsOut: 44,
+    rssi: -41,
+    connectedAt: '2026-05-13T18:00:00.000Z',
+    lastSeenAt: '2026-05-13T18:00:30.000Z',
+    removed: false,
+  },
+  intelligence: {
+    available: true,
+    connectedDeviceCount: 1,
+    reportingDeviceCount: 1,
+    batteryPercent: 100,
+    inputWatts: 320,
+    outputWatts: 44,
+    solarInputWatts: 0,
+    netWatts: 276,
+    powerDirection: 'charging',
+    runtimeHoursRemaining: 28,
+    runtimeSource: 'provider',
+    projectedDepletionAt: null,
+    projectedThreshold50At: null,
+    projectedThreshold20At: null,
+    solarOffsetRatio: 0,
+    inputOffsetRatio: 1.5,
+    drainRateTrend: 'stable',
+    chargeRateTrend: 'stable',
+    abnormalDrawDetected: false,
+    sustainabilityRating: 'recovering',
+    advisoryCategory: 'charging_recovering',
+    advisoryHeadline: 'Battery recovery is positive; current charge input exceeds usage.',
+    advisoryDetail: null,
+    confidenceLevel: 'medium',
+    dataFreshness: 'stale',
+    isLive: false,
+    lastUpdatedAt: Date.parse('2026-05-13T17:30:00.000Z'),
+    freshnessText: 'Stale',
+    providerLabel: 'EcoFlow',
+    deviceLabel: 'House Power',
+  },
+  updatedAt: '2026-05-13T18:00:30.000Z',
+});
+assert.strictEqual(
+  stalePowerIntelligenceWithFreshPrimary?.dataFreshness,
+  'live',
+  'A connected primary power source with a current SOC/flow sample should override stale power intelligence freshness.',
+);
+assert.strictEqual(stalePowerIntelligenceWithFreshPrimary?.isStale, false);
+
+const healthyPowerWithStaleAuthorityAssessment = readiness.buildExpeditionReadiness({
+  ...readiness.completeReadyReadinessFixture,
+  capturedAt: '2026-05-13T18:00:45.000Z',
+  power: stalePowerIntelligenceWithFreshPrimary,
+});
+assert.strictEqual(
+  healthyPowerWithStaleAuthorityAssessment.sourceFreshness.power.isStale,
+  false,
+  'Command Brief freshness should not stay stale when connected power is actively reporting current data.',
+);
+assert.ok(
+  !healthyPowerWithStaleAuthorityAssessment.warnings.some((warning) => warning.id === 'power-data-stale'),
+  'Fresh connected power should not emit the stale power warning.',
+);
+
+const missingManualFuelReminder = readiness.buildExpeditionReadiness({
+  ...readiness.completeReadyReadinessFixture,
+  fuel: {
+    fuelPercent: 0,
+    source: 'manual',
+    updatedAt: null,
+  },
+});
+const missingManualFuelCategory = missingManualFuelReminder.categories.find((category) => category.id === 'fuel_range_margin');
+assert.ok(
+  missingManualFuelCategory.score >= 82,
+  'Manual/default 0% fuel should be treated as a reminder-only missing input rather than a scoring penalty.',
+);
+assert.ok(
+  missingManualFuelCategory.factors.some((item) => /not reporting/i.test(item.detail)),
+  'Manual/default 0% fuel should explain that live fuel is not reporting.',
+);
+
+const lowLiveFuelAssessment = readiness.buildExpeditionReadiness({
+  ...readiness.completeReadyReadinessFixture,
+  fuel: {
+    fuelPercent: 38,
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+});
+const lowLiveFuelCategory = lowLiveFuelAssessment.categories.find((category) => category.id === 'fuel_range_margin');
+assert.ok(
+  lowLiveFuelCategory.score < missingManualFuelCategory.score,
+  'Live fuel below 40% should be the fuel state that reduces readiness.',
+);
+assert.ok(
+  lowLiveFuelAssessment.warnings.some((warning) => warning.id === 'fuel-live-low-reserve'),
+  'Live fuel below 40% should publish a clear fuel reserve warning.',
+);
+assert.ok(
+  readinessStoreSource.includes('vehicleTelemetryStore?.getECSVehicleTelemetryState?.()'),
+  'Readiness store should inspect live vehicle telemetry before using saved Fleet fuel defaults.',
+);
+assert.ok(
+  readinessStoreSource.includes("source: liveFuelPercent != null ? 'live' as const : 'manual' as const"),
+  'Readiness store should mark live fuel telemetry as live and saved Fleet fuel as manual reminder data.',
+);
 
 readiness.expeditionReadinessStore.clearReadiness();
 const storeAssessment = readiness.expeditionReadinessStore.setReadinessInputPatch(readiness.completeReadyReadinessFixture);

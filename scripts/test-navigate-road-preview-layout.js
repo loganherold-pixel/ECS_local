@@ -154,12 +154,24 @@ assertNavigateIncludes(
 );
 
 assertNavigateIncludes(
-  "accessibilityLabel=\"Draw camp potential area\"",
-  'Draw area control should have a clear campsite-search accessibility label.',
+  'CAMPOPS_MANUAL_AREA_REVIEW_ENABLED',
+  'Manual CampOps area review should remain behind an explicit feature flag.',
 );
 assertNavigateIncludes(
+  "accessibilityLabel=\"Manual CampOps area review\"",
+  'Manual area review control should have a clear internal CampOps accessibility label.',
+);
+assertNavigateIncludes(
+  'MANUAL CAMP AREA REVIEW',
+  'Manual area review control should use clear visible internal review copy.',
+);
+assertNavigateNotIncludes(
+  "accessibilityLabel=\"Draw camp potential area\"",
+  'Public Navigate tools should no longer expose the old Draw Camp Potential Area control.',
+);
+assertNavigateNotIncludes(
   'DRAW CAMP POTENTIAL AREA',
-  'Draw area control should use a clear visible label.',
+  'Public Navigate tools should no longer expose old Draw Camp Potential Area copy.',
 );
 assertNavigateIncludes(
   "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
@@ -171,11 +183,11 @@ assertNavigateIncludes(
 );
 assertNavigateIncludes(
   "quickActionButton: {\n  width: '48%',",
-  'Draw and Build Route controls should use stable half-width text cards on phone and tablet.',
+  'Manual review and Build Route controls should use stable half-width text cards on phone and tablet.',
 );
 assertNavigateIncludes(
   'minHeight: 54',
-  'Draw and Build Route controls should keep a usable touch target height.',
+  'Manual review and Build Route controls should keep a usable touch target height.',
 );
 assertNavigateNotIncludes(
   "name={routeBuilderActive ? 'close' : 'git-branch-outline'}",

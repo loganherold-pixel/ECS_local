@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -166,6 +168,29 @@ assert(
     widgetRenderersSource.includes('onPress={() => setSelectedReferenceEvent(null)}') &&
     sideProfileSource.includes('terrainRiskReferenceButton'),
   'Terrain Risk expanded mode should make reference markers tappable and open a tap-to-dismiss ECS Intelligence brief in detail mode.',
+);
+assert(
+  sideProfileSource.includes('selectedReferenceEvent?: TerrainRiskReferenceEvent | null') &&
+    sideProfileSource.includes('selectedReferenceEvent = null') &&
+    sideProfileSource.includes('referenceEvent?.id === selectedReferenceEvent?.id') &&
+    !sideProfileSource.includes('Why this point was referenced') &&
+    !sideProfileSource.includes('getReferenceCalloutLayout') &&
+    !sideProfileSource.includes('formatTerrainReferenceDetail'),
+  'TerrainRiskSideProfile should let the ECS Intelligence brief own selected pressure-point explanations without rendering a duplicate chart callout.',
+);
+assert(
+  sideProfileSource.includes('getTerrainRiskReferenceAnchor') &&
+    widgetRenderersSource.includes('getTerrainRiskReferenceAnchor') &&
+    widgetRenderersSource.includes('selectedReferenceAnchor') &&
+    widgetRenderersSource.includes('referenceBriefPlacement') &&
+    widgetRenderersSource.includes('<TerrainRiskReferenceConnector') &&
+    widgetRenderersSource.includes('placement={referenceBriefPlacement}') &&
+    widgetRenderersSource.includes('selectedReferenceEvent={selectedReferenceEvent}') &&
+    widgetRenderersSource.includes('terrainRiskReferenceConnectorLayer') &&
+    widgetRenderersSource.includes('terrainRiskReferenceBriefButtonTop') &&
+    widgetRenderersSource.includes('terrainRiskReferenceBriefButtonBottom') &&
+    widgetRenderersSource.includes('strokeDasharray="2.2 2.8"'),
+  'Expanded Terrain Risk brief should draw a dotted connector from the selected pressure point and move the brief away from lower pressure points.',
 );
 assert(
   dashboardSource.includes('selectUpcomingTerrainRiskBannerEvent') &&

@@ -54,6 +54,7 @@ const SOURCE_RANK: Record<CampOpsDataSource, number> = {
   gpx: 4,
   manual: 4,
   route_candidate: 3,
+  route_endpoint_candidate: 3,
   draw_area_candidate: 3,
   offline_dataset: 2,
   inferred: 1,

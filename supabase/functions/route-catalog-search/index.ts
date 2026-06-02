@@ -1,6 +1,7 @@
 /* eslint-disable import/no-unresolved */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { attachCurrentConditionOverlays } from '../_shared/routeCatalogCurrentConditionOverlay.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -80,6 +81,11 @@ function cleanDifficulty(value: unknown): string {
     return text;
   }
   return '';
+}
+
+function cleanSourceAdapter(value: unknown): string {
+  const text = cleanText(value).toLowerCase();
+  return /^[a-z0-9_]+$/.test(text) ? text : '';
 }
 
 async function requestParams(req: Request): Promise<Record<string, unknown>> {
@@ -466,6 +472,25 @@ function sourceRecordFromLink(link: Record<string, unknown>, fallbackVerifiedAt:
   };
 }
 
+function sourceMatchesSearchAdapter(sourceProviderId: unknown, sourceAdapter: string): boolean {
+  const providerId = String(sourceProviderId || '').trim();
+  return !!sourceAdapter && (providerId === sourceAdapter || providerId.startsWith(`${sourceAdapter}_`));
+}
+
+function recordMatchesSearchSourceAdapter(record: Record<string, unknown>, sourceAdapter: string): boolean {
+  const sourceRecords = Array.isArray(record.source_records) ? record.source_records : [];
+  return sourceRecords.some((source) =>
+    source &&
+    typeof source === 'object' &&
+    sourceMatchesSearchAdapter((source as Record<string, unknown>).provider_id || (source as Record<string, unknown>).providerId, sourceAdapter),
+  );
+}
+
+function filterRecordsBySourceAdapter(records: Record<string, unknown>[], sourceAdapter: string): Record<string, unknown>[] {
+  if (!sourceAdapter) return records;
+  return records.filter((record) => recordMatchesSearchSourceAdapter(record, sourceAdapter));
+}
+
 async function attachSourceRecords(
   admin: ReturnType<typeof createAdminClient>,
   records: Record<string, unknown>[],
@@ -539,6 +564,7 @@ serve(async (req) => {
     const routeType = cleanRouteType(params.routeType ?? params.route_type);
     const difficulty = cleanDifficulty(params.difficulty);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
+    const sourceAdapter = cleanSourceAdapter(params.sourceAdapter ?? params.source_adapter);
     const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
     const queryLimit = candidateLimit(limit, hasRadiusCriteria);
 
@@ -586,7 +612,16 @@ serve(async (req) => {
     if (error) throw new Error('Unable to search verified route catalog.');
     const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
     const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
-    const limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
+    let limitedRecords: Record<string, unknown>[];
+    let sourceMatchedCount: number | null = null;
+    if (sourceAdapter) {
+      const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
+      const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
+      sourceMatchedCount = sourceMatchedRecords.length;
+      limitedRecords = sourceMatchedRecords.slice(0, limit);
+    } else {
+      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
+    }
     const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
       latitude,
       longitude,
@@ -608,11 +643,11 @@ serve(async (req) => {
     });
     const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
 
-    const records = shapeSearchRecords(
+    const records = attachCurrentConditionOverlays(shapeSearchRecords(
       limitedRecords,
       includeGeometry,
       includePreviewGeometry,
-    );
+    ));
     return jsonResponse({
       ok: true,
       records,
@@ -626,6 +661,9 @@ serve(async (req) => {
         candidateLimit: queryLimit,
         candidateCount: candidates.length,
         radiusMatchedCount: radiusFiltered.radiusMatchedCount,
+        sourceAdapter: sourceAdapter || null,
+        sourceFilterApplied: !!sourceAdapter,
+        sourceMatchedCount,
         curationCandidateCount: curationCoverage.curationCandidateCount,
         anySourceBackedCandidateCount,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',

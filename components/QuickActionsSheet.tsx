@@ -36,6 +36,7 @@ import { routeStore, type ImportedRoute } from '../lib/routeStore';
 import type { EcsExpedition } from '../lib/expeditionTypes';
 import { hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
+import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
 import type { IncidentCoordinate } from '../lib/types/incidentRecovery';
 import {
@@ -683,16 +684,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
   const tileItems: readonly QuickActionTile[] = [
     {
-      key: 'intel',
-      label: 'Weather',
-      subtitle: 'Current weather and trail conditions',
-      icon: 'cloud-outline',
-      color: '#FFB300',
-      onPress: () => openFieldUtilityAction('intel'),
-      disabled: false,
-      availabilityLabel: 'AVAILABLE',
-    },
-    {
       key: 'note',
       label: 'Quick Note',
       subtitle: 'Capture a fast field note',
@@ -721,16 +712,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       onPress: () => openFieldUtilityAction('recoveryProtocols'),
       disabled: false,
       availabilityLabel: 'AVAILABLE',
-    },
-    {
-      key: 'team',
-      label: 'Team Ping',
-      subtitle: hasTeam ? 'Send a rapid dispatch update' : 'Trip team required',
-      icon: 'people-outline',
-      color: '#42A5F5',
-      onPress: () => openFieldUtilityAction('team'),
-      disabled: !hasTeam,
-      availabilityLabel: hasTeam ? 'AVAILABLE' : 'TEAM REQUIRED',
     },
     {
       key: 'permits-access',
@@ -775,7 +756,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     availabilityLabel: 'AVAILABLE',
   };
 
-  const fieldUtilityActionColumns = [tileItems.slice(0, 4), tileItems.slice(4, 8)];
+  const fieldUtilityActionColumns = [tileItems.slice(0, 3), tileItems.slice(3, 6)];
 
   const renderQuickActionTile = (item: QuickActionTile) => (
     <TouchableOpacity
@@ -783,7 +764,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       style={[
         styles.tile,
         styles.quickActionTile,
-        fieldUtilityContainerSurface(item.color),
+        item.key !== 'protocols' && item.key !== 'recovery-protocol' && styles.fleetGoldUtilityTile,
         item.key === 'protocols' && styles.emergencyProtocolTile,
         item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
         item.disabled && styles.tileDisabled,
@@ -1552,13 +1533,17 @@ const styles = StyleSheet.create({
   tileDisabled: {
     opacity: 0.6,
   },
+  fleetGoldUtilityTile: {
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
+  },
   emergencyProtocolTile: {
     borderColor: 'rgba(239,83,80,0.24)',
     backgroundColor: 'rgba(239,83,80,0.055)',
   },
   recoveryProtocolTile: {
-    borderColor: 'rgba(196,138,44,0.24)',
-    backgroundColor: 'rgba(196,138,44,0.06)',
+    borderColor: 'rgba(239,83,80,0.24)',
+    backgroundColor: 'rgba(239,83,80,0.055)',
   },
   documentationTile: {
     width: '100%',
@@ -1627,7 +1612,7 @@ const styles = StyleSheet.create({
   },
   incidentRecoveryUtilitySlot: {
     width: '100%',
-    height: 220,
+    height: 260,
     flexGrow: 0,
     flexShrink: 0,
     minWidth: 0,

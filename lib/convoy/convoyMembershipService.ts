@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import { isEdgeFunctionUnavailableError, isSupabaseConfigured, supabase } from '../supabase';
 import {
+  convoyBackendErrorText,
   formatConvoyBackendOperatorDetails,
   formatConvoyBackendUserMessage,
   getConvoyBackendReadinessGuidance,
@@ -13,6 +14,10 @@ const CONVOY_MEMBERS_TABLE = 'convoy_members';
 const CONVOY_INVITES_TABLE = 'convoy_invites';
 const CONVOY_MEMBER_LOCATIONS_TABLE = 'convoy_member_locations';
 const CONVOY_MEMBERSHIP_FUNCTION = 'convoy-membership';
+const CONVOY_MEMBER_SELECT_WITH_IDENTITY =
+  'id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at';
+const CONVOY_MEMBER_SELECT_BASE =
+  'id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at';
 const ACTIVE_CONVOY_CACHE_KEY = 'active';
 const MAX_CONVOY_NAME_LENGTH = 80;
 const MAX_CALLSIGN_LENGTH = 40;
@@ -231,6 +236,27 @@ function mapBackendError(error: unknown, fallback: string): ConvoyMembershipServ
   const userMessage = formatConvoyBackendUserMessage(error);
   if (userMessage) return toError('backend_unavailable', userMessage, formatConvoyBackendOperatorDetails(error) ?? undefined);
   return toError(maybe?.code ?? 'backend_error', maybe?.message ?? fallback);
+}
+
+function isOptionalConvoyMemberIdentityColumnError(error: unknown): boolean {
+  const text = convoyBackendErrorText(error).toLowerCase();
+  return (
+    text.includes('column') &&
+    text.includes('does not exist') &&
+    (text.includes('expedition_badge_title') || text.includes('display_name'))
+  );
+}
+
+function withConvoyMemberIdentityFallback(member: ConvoyMemberRecord): ConvoyMemberRecord {
+  return {
+    display_name: null,
+    expedition_badge_title: null,
+    ...member,
+  };
+}
+
+function withConvoyMemberIdentityFallbacks(members: ConvoyMemberRecord[]): ConvoyMemberRecord[] {
+  return members.map(withConvoyMemberIdentityFallback);
 }
 
 async function requireUser(
@@ -497,6 +523,67 @@ export class ConvoyMembershipService {
 }
 
 function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase): ConvoyMembershipBackend {
+  async function insertLeaderMemberWithoutIdentityColumns(row: {
+    convoy_id: string;
+    user_id: string;
+    vehicle_id: string | null;
+    callsign: string;
+    expedition_badge_title?: string | null;
+    role: ConvoyRole;
+  }): Promise<ConvoyMembershipServiceResult<ConvoyMemberRecord>> {
+    const { expedition_badge_title: _expeditionBadgeTitle, ...baseRow } = row;
+    const { data, error } = await client
+      .from(CONVOY_MEMBERS_TABLE)
+      .insert(baseRow)
+      .select(CONVOY_MEMBER_SELECT_BASE)
+      .single();
+
+    if (error || !data) return mapBackendError(error, 'Unable to create convoy leader membership.');
+    return { ok: true, data: withConvoyMemberIdentityFallback(data as ConvoyMemberRecord) };
+  }
+
+  async function listActiveMembershipsWithoutIdentityColumns(userId: string): Promise<ConvoyMembershipServiceResult<ConvoyListItem[]>> {
+    const { data: memberships, error: membershipError } = await client
+      .from(CONVOY_MEMBERS_TABLE)
+      .select(CONVOY_MEMBER_SELECT_BASE)
+      .eq('user_id', userId)
+      .is('revoked_at', null)
+      .order('joined_at', { ascending: false });
+
+    if (membershipError || !memberships) return mapBackendError(membershipError, 'Unable to load active convoy memberships.');
+    if (memberships.length === 0) return { ok: true, data: [] };
+
+    const convoyIds = Array.from(new Set(memberships.map((row) => row.convoy_id).filter(Boolean)));
+    const { data: convoys, error: convoyError } = await client
+      .from(CONVOYS_TABLE)
+      .select('*')
+      .in('id', convoyIds)
+      .in('status', ['planned', 'active', 'paused'])
+      .order('created_at', { ascending: false });
+
+    if (convoyError || !convoys) return mapBackendError(convoyError, 'Unable to load active convoys.');
+
+    const convoyById = new Map((convoys as ConvoyRecord[]).map((convoy) => [convoy.id, convoy]));
+    const items = withConvoyMemberIdentityFallbacks(memberships as ConvoyMemberRecord[]).flatMap((membership) => {
+      const convoy = convoyById.get(membership.convoy_id);
+      return convoy ? [{ convoy, membership }] : [];
+    });
+
+    return { ok: true, data: items };
+  }
+
+  async function listConvoyMembersWithoutIdentityColumns(convoyId: string): Promise<ConvoyMembershipServiceResult<ConvoyMemberRecord[]>> {
+    const { data, error } = await client
+      .from(CONVOY_MEMBERS_TABLE)
+      .select(CONVOY_MEMBER_SELECT_BASE)
+      .eq('convoy_id', convoyId)
+      .is('revoked_at', null)
+      .order('joined_at', { ascending: true });
+
+    if (error || !data) return mapBackendError(error, 'Unable to load convoy roster.');
+    return { ok: true, data: withConvoyMemberIdentityFallbacks(data as ConvoyMemberRecord[]) };
+  }
+
   return {
     isAvailable() {
       return isSupabaseConfigured;
@@ -515,7 +602,14 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
     },
 
     async insertLeaderMember(row) {
-      const { data, error } = await client.from(CONVOY_MEMBERS_TABLE).insert(row).select('*').single();
+      const { data, error } = await client
+        .from(CONVOY_MEMBERS_TABLE)
+        .insert(row)
+        .select(CONVOY_MEMBER_SELECT_WITH_IDENTITY)
+        .single();
+      if (isOptionalConvoyMemberIdentityColumnError(error)) {
+        return insertLeaderMemberWithoutIdentityColumns(row);
+      }
       if (error || !data) return mapBackendError(error, 'Unable to create convoy leader membership.');
       return { ok: true, data: data as ConvoyMemberRecord };
     },
@@ -523,11 +617,14 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
     async listActiveMemberships(userId) {
       const { data: memberships, error: membershipError } = await client
         .from(CONVOY_MEMBERS_TABLE)
-        .select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at')
+        .select(CONVOY_MEMBER_SELECT_WITH_IDENTITY)
         .eq('user_id', userId)
         .is('revoked_at', null)
         .order('joined_at', { ascending: false });
 
+      if (isOptionalConvoyMemberIdentityColumnError(membershipError)) {
+        return listActiveMembershipsWithoutIdentityColumns(userId);
+      }
       if (membershipError || !memberships) return mapBackendError(membershipError, 'Unable to load active convoy memberships.');
       if (memberships.length === 0) return { ok: true, data: [] };
 
@@ -553,11 +650,14 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
     async listConvoyMembers(convoyId) {
       const { data, error } = await client
         .from(CONVOY_MEMBERS_TABLE)
-        .select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at')
+        .select(CONVOY_MEMBER_SELECT_WITH_IDENTITY)
         .eq('convoy_id', convoyId)
         .is('revoked_at', null)
         .order('joined_at', { ascending: true });
 
+      if (isOptionalConvoyMemberIdentityColumnError(error)) {
+        return listConvoyMembersWithoutIdentityColumns(convoyId);
+      }
       if (error || !data) return mapBackendError(error, 'Unable to load convoy roster.');
       return { ok: true, data: data as ConvoyMemberRecord[] };
     },

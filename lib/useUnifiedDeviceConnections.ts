@@ -2100,6 +2100,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   const scanInFlightRef = useRef(false);
   const lastScanRequestAtRef = useRef(0);
   const activeScanSessionRef = useRef(0);
+  const latestBleScanCountsRef = useRef({ raw: 0, accepted: 0 });
   const connectInFlightRef = useRef<Set<string>>(new Set());
   const disconnectInFlightRef = useRef<Set<string>>(new Set());
   const diagnosedScannerDeviceIdsRef = useRef<Set<string>>(new Set());
@@ -2431,6 +2432,10 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     obdScanDiagnostics.acceptedDevicesCount,
     discoveredTelemetryDevices.length,
   );
+  latestBleScanCountsRef.current = {
+    raw: bleRawDevicesSeenCount,
+    accepted: bleAcceptedDeviceCount,
+  };
   const missingPermissionSignature = obdScanDiagnostics.missingPermissions.join('|');
   const bluetoothDiagnostics = useMemo<OBD2ScanDiagnostics>(() => ({
     ...obdScanDiagnostics,
@@ -2606,6 +2611,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     try {
       const nativeBluetoothUnsupported = Platform.OS === 'web';
       const unsupportedMessage = `${NATIVE_BLUETOOTH_RUNTIME_MESSAGE} Cloud/API devices remain available.`;
+      let nativeBleScanStarted = false;
 
       const bleScan = nativeBluetoothUnsupported
         ? Promise.resolve().then(() => {
@@ -2664,6 +2670,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         : startScan(UNIFIED_BLUETOOTH_SCAN_DURATION_MS)
           .then(() => {
             if (!isCurrentScanSession()) return;
+            nativeBleScanStarted = true;
             recordBluetoothDiagnosticEvent({
               type: 'permission_result',
               source: 'permission',
@@ -3026,6 +3033,30 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               ));
             }
           });
+      const nativeBleScanWindow = bleScan.then(async () => {
+        if (nativeBluetoothUnsupported || !nativeBleScanStarted) return;
+        await sleep(UNIFIED_BLUETOOTH_SCAN_DURATION_MS);
+        if (!isCurrentScanSession()) return;
+        await stopScan('unified_scan_window_complete');
+        if (!isCurrentScanSession()) return;
+        const latestCounts = latestBleScanCountsRef.current;
+        recordUnifiedScanCounts(latestCounts.raw, latestCounts.accepted);
+        setSourceStatuses((current) => updateDiscoverySourceStatus(
+          current,
+          'ble',
+          'success',
+          latestCounts.accepted,
+          latestCounts.raw > 0
+            ? 'BLE discovery completed with nearby device callbacks.'
+            : 'BLE scan completed with no raw devices reported.',
+          {
+            rawCount: latestCounts.raw,
+            normalizedCount: latestCounts.accepted,
+            addedCount: latestCounts.accepted,
+          },
+        ));
+        setScannerClock(Date.now());
+      });
       const classicDiscovery = nativeBluetoothUnsupported
         ? Promise.resolve({
             source: 'classic_bluetooth' as const,
@@ -3039,7 +3070,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             devices: [],
             reason: 'classic_bluetooth_source_error',
           }));
-      const [, , , classicResult] = await Promise.allSettled([bleScan, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery]);
+      const [, , , classicResult] = await Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery]);
 
       if (isCurrentScanSession()) {
         if (
@@ -3111,7 +3142,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       }
     }
 
-  }, [batchBusy, bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, startScan]);
+  }, [batchBusy, bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, startScan, stopScan]);
 
   useEffect(() => {
     if (manualScanStatus === 'idle') return;

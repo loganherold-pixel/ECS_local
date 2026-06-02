@@ -284,6 +284,7 @@ export function routeContextToTripBuilderItineraryContext(
       .length,
     supplyCandidates: routeContextSupplyCandidatesForItinerary(context, mode ?? context.selectedSupplyMode),
     campCandidates: routeContextCampCandidatesForItinerary(context),
+    campEndpointPlan: context.campEndpointPlan ?? null,
     bailoutCandidates: routeContextBailoutCandidatesForItinerary(context),
   };
 }

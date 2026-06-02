@@ -94,6 +94,39 @@ const readyContext = {
     corridor: null,
     segments: [],
   },
+  campEndpointPlan: {
+    routeId: 'context-route',
+    tripId: 'trip-1',
+    generatedAt: '2026-06-02T18:00:00.000Z',
+    windows: [],
+    endpointCandidates: [{
+      candidate: {
+        id: 'context-endpoint-1',
+        name: 'Context Camp Endpoint',
+        location: { latitude: 38.05, longitude: -109.95 },
+        source: 'route_endpoint_candidate',
+        sourceConfidence: 'high',
+        score: 82,
+      },
+      enrichment: {
+        candidateId: 'context-endpoint-1',
+        dataConfidence: 'high',
+        dataLimitations: [],
+      },
+      routeEndpoint: {
+        windowId: 'context-route:camp-endpoint-window-1',
+        routeSide: 'right',
+        routeMileMarker: 10,
+        nearestSegmentIndex: 1,
+        distanceFromRouteMiles: 0.2,
+        exactness: 'area_candidate',
+      },
+      role: 'primary',
+    }],
+    recommendationsByWindow: {},
+    selectedEndpointIds: ['context-endpoint-1'],
+    warnings: [],
+  },
   campCandidates: [],
   bailoutCandidates: [],
   confidence: { value: 0.86, reasons: ['Ready fixture.'] },
@@ -103,6 +136,11 @@ const readyContext = {
 };
 
 const readyInput = routeContextToTripBuilderItineraryContext(readyContext, 'gas_and_grocery');
+assert.strictEqual(
+  readyInput.campEndpointPlan.endpointCandidates[0].routeEndpoint.routeSide,
+  'right',
+  'RouteContext adapter should preserve Camp Endpoint plans for Trip Builder itinerary insertion.',
+);
 const readyPlan = buildTripPlan({
   route: sparseRoute,
   input: baseInput,

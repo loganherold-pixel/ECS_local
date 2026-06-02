@@ -71,6 +71,21 @@ export type ECSTrailPackCatalogDataUsed = {
   license?: string;
 };
 
+export type ECSTrailPackCurrentConditionOverlay = {
+  status: 'clear' | 'watch' | 'blocked' | 'not_assessed';
+  label: string;
+  currentlyOpenStatus: 'no_known_closure' | 'requires_review' | 'closed' | 'unknown';
+  passabilityStatus: 'not_assessed' | 'requires_review' | 'unknown';
+  activeClosureCount: number;
+  seasonalRestrictionCount: number;
+  warnings: string[];
+  blockers: string[];
+  closureSummaries?: string[];
+  sourceCheckedAt?: string[];
+  staleAt?: string[];
+  lastEvaluatedAt: string;
+};
+
 export type ECSTrailPackDetailAssessment = {
   status: 'normal' | 'watch' | 'caution' | 'critical';
   why: string[];
@@ -79,6 +94,7 @@ export type ECSTrailPackDetailAssessment = {
   toImproveStatus: string[];
   confidence: number;
   activeGuidance?: ECSTrailPackActiveGuidance;
+  currentCondition?: ECSTrailPackCurrentConditionOverlay;
   dataUsed?: ECSTrailPackCatalogDataUsed[];
 };
 
@@ -93,6 +109,7 @@ export type ECSTrailPackOfflineCacheMetadata = {
     attribution?: string;
     license?: string;
   }>;
+  currentCondition?: ECSTrailPackCurrentConditionOverlay;
   freshnessWarnings?: string[];
 };
 
@@ -112,6 +129,7 @@ export type ECSTrailPackCatalogVerification = {
   warnings: string[];
   blockers: string[];
   activeGuidance?: ECSTrailPackActiveGuidance;
+  currentCondition?: ECSTrailPackCurrentConditionOverlay;
   dataUsed: ECSTrailPackCatalogDataUsed[];
   lastEvaluatedAt: string;
   detailAssessment?: ECSTrailPackDetailAssessment;

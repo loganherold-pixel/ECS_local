@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const fs = require('fs');
 const path = require('path');
 
@@ -100,10 +102,14 @@ lacks(screen, 'Pipeline Diagnostics', 'Device Connections production UI');
 has(fleetScreen, '<TopoBackground>', 'Fleet visual shell reference');
 for (const fragment of [
   "import TopoBackground from '../../components/TopoBackground'",
+  "import ShellBodyBackground from '../../components/ShellBodyBackground'",
   "import TopBannerBackground from '../../components/TopBannerBackground'",
   "import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens'",
   "import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme'",
   '<TopoBackground>',
+  '<ShellBodyBackground',
+  'topInset={0}',
+  'bottomInset={0}',
   'styles.safeContainer',
   "backgroundColor: 'transparent'",
   'styles.surfaceTint',
@@ -117,6 +123,11 @@ for (const fragment of [
 ]) {
   has(screen, fragment, 'Bluestack scanner Fleet visual continuity');
 }
+assert(
+  screen.indexOf('<ShellBodyBackground') > screen.indexOf('<TopoBackground>') &&
+    screen.indexOf('<ShellBodyBackground') < screen.indexOf('<View style={styles.safeContainer}>'),
+  'Bluestack scanner must place the Fleet body texture behind the scanner surface before page content renders.',
+);
 lacks(screen, "style={[styles.container, { backgroundColor: colors.bg }]}", 'Bluestack scanner Fleet visual continuity');
 const surfaceTintStyle = readStyleBlock(screen, 'surfaceTint');
 assert(

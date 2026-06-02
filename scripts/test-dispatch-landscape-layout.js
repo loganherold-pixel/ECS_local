@@ -36,6 +36,10 @@ const feedHeaderStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('feedHeader:'),
   commandCenterSource.indexOf('feedHeaderLandscape:'),
 );
+const summaryCommandSummaryStyle = panelSource.slice(
+  panelSource.indexOf('summaryCommandSummary:'),
+  panelSource.indexOf('legendHeaderRow:'),
+);
 
 assert.ok(
   dispatchTabSource.includes('const isLandscape = width > height') &&
@@ -169,11 +173,10 @@ assert.ok(
 );
 
 assert.ok(
-  commandCenterSource.includes('const commandSurfaceStatusLabel = activeConvoyControl') &&
-    commandCenterSource.includes("? 'convoy active'") &&
-    commandCenterSource.includes(": 'standby'") &&
+  !commandCenterSource.includes('commandSurfaceStatusLabel') &&
+    !commandCenterSource.includes('<Text style={styles.feedCount}>') &&
     !commandCenterSource.includes("getSourceStateLabel(sourceState).toLowerCase()}</Text>"),
-  'Dispatch command surface header should replace generic unavailable copy with convoy-aware status labels.',
+  'Dispatch command surface header should not render a redundant top-right standby/status word.',
 );
 
 assert.ok(
@@ -196,11 +199,31 @@ assert.ok(
 );
 
 assert.ok(
-  feedPanelStyle.includes('borderColor: ECS_SURFACE.border.selected') &&
-    feedPanelStyle.includes('backgroundColor: ECS_SURFACE.background.selected') &&
-    feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.selected') &&
-    feedHeaderStyle.includes('backgroundColor: ECS_SURFACE.background.selected'),
-  'Dispatch bottom Convoy Command container should use the Fleet vehicle-card selected gold surface.',
+  feedPanelStyle.includes('borderColor: ECS_SURFACE.border.default') &&
+    feedPanelStyle.includes("backgroundColor: 'transparent'") &&
+    !feedPanelStyle.includes('borderColor: ECS_SURFACE.border.selected') &&
+    !feedPanelStyle.includes('backgroundColor: ECS_SURFACE.background.selected') &&
+    feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.quiet') &&
+    feedHeaderStyle.includes("backgroundColor: 'transparent'") &&
+    !feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.selected'),
+  'Dispatch bottom Convoy Command map surface should keep the command surface background transparent instead of gold.',
+);
+
+assert.ok(
+  panelSource.includes('const showCommandFooterFacts = !summaryCompact') &&
+    panelSource.includes('const showSummaryConvoySignals = isSummaryOnlyPresentation && panelViewModel.isUsingLiveData && panelViewModel.members.length > 0') &&
+    panelSource.includes('{showCommandFooterFacts ? (') &&
+    panelSource.includes('!isFeedPresentation && (!isSummaryOnlyPresentation || showSummaryConvoySignals)') &&
+    panelSource.includes('isSummaryOnlyPresentation ? styles.summaryMetricGrid : null') &&
+    panelSource.includes('showSummaryConvoySignals ? styles.summaryMetricGridWithSignals : null') &&
+    panelSource.includes('expanded={isSummaryOnlyPresentation}'),
+  'Dispatch compact Convoy Command summary should remove Team/Link/Updated footer rows, keep metrics at the base, and reserve member signals only when live members exist.',
+);
+
+assert.ok(
+  summaryCommandSummaryStyle.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    summaryCommandSummaryStyle.includes('backgroundColor: `${TACTICAL.amber}12`'),
+  'Dispatch landscape Convoy Command summary should retain the same translucent ECS gold wash as portrait.',
 );
 
 assert.ok(

@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -63,6 +64,19 @@ function loadTypeScriptModule(relativePath) {
   mod._compile(output.outputText, fullPath);
   return mod.exports;
 }
+
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+};
 
 const {
   POWER_LIVE_MAX_AGE_MS,

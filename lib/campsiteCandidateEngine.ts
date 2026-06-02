@@ -60,7 +60,10 @@
 import { Platform } from 'react-native';
 import type { RouteAnalysisSegment, RouteIntelligence } from './routeAnalysisEngine';
 import type { TerrainIntelligence } from './terrainAnalysisEngine';
-import type { CampRecommendationSet } from './campops/campOpsTypes';
+import type {
+  CampOpsRouteCampEndpointPlan,
+  CampRecommendationSet,
+} from './campops/campOpsTypes';
 import {
   CAMPSITE_ACCEPTABLE_MIN_RESULTS as CAMPSITE_MINIMUM_ACCEPTABLE_THRESHOLD,
   CAMPSITE_HEALTHY_MIN_RESULTS as CAMPSITE_HEALTHY_THRESHOLD,
@@ -303,6 +306,7 @@ export interface CampsiteCandidateResult {
   campOps?: {
     enabled: boolean;
     recommendationSet: CampRecommendationSet | null;
+    routeEndpointPlan?: CampOpsRouteCampEndpointPlan | null;
   };
 }
 

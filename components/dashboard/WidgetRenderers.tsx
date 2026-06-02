@@ -38,7 +38,7 @@
 
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState, ScrollView, type GestureResponderEvent } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -192,7 +192,11 @@ import VehicleProfileRollAttitudeStrip from './VehicleProfileRollAttitudeStrip';
 // Phase 10: Terrain Risk Prediction Widget
 // Phase 10: Terrain Risk Prediction Widget
 import { TerrainRiskCompact, TerrainRiskCard, TerrainRiskDetailView } from './TerrainRiskWidget';
-import TerrainRiskSideProfile, { getTerrainCommandRiskColor } from './TerrainRiskSideProfile';
+import TerrainRiskSideProfile, {
+  getTerrainCommandRiskColor,
+  getTerrainRiskReferenceAnchor,
+  type TerrainRiskReferenceAnchor,
+} from './TerrainRiskSideProfile';
 import {
   buildTerrainRiskCommandRoute,
   formatDistance,
@@ -731,25 +735,13 @@ function formatAlternateFluidValue(consumables: ConsumablesState): string | null
   return `${label} ${current.toFixed(1)} ${unit}`;
 }
 
-function formatUtilitySensorDepth(state: ECSUtilitySensorResourceState | null, label: string): string | null {
-  if (!state || typeof state.levelDistanceMm !== 'number' || !Number.isFinite(state.levelDistanceMm)) return null;
-  return `${label} depth ${(state.levelDistanceMm / 10).toFixed(1)} cm`;
-}
-
 function formatAlternateFluidSensorValue(
   consumables: ConsumablesState,
   state: ECSUtilitySensorResourceState | null,
 ): string | null {
   const label = consumables.alternate_fluid_label?.trim() || 'Propane';
-  if (!state) return null;
-  if (state.levelPercent == null) return formatUtilitySensorDepth(state, label);
-  const unit = consumables.alternate_fluid_unit?.trim() || '%';
-  const capacity = consumables.alternate_fluid_capacity;
-  if (unit === '%' || capacity == null || !Number.isFinite(capacity) || capacity <= 0) {
-    return `${label} ${Math.round(state.levelPercent)}%`;
-  }
-  const current = capacity * (state.levelPercent / 100);
-  return `${label} ${current.toFixed(1)} / ${capacity.toFixed(1)} ${unit}`;
+  if (!state || state.levelPercent == null) return null;
+  return `${label} ${Math.round(state.levelPercent)}%`;
 }
 
 function formatAlternateFluidLabel(consumables: ConsumablesState): string {
@@ -2411,6 +2403,12 @@ type CommandTerrainRiskVisualData = {
   weatherSnapshot: ECSWeatherSnapshot | null;
 };
 
+type TerrainRiskReferenceBriefPlacement = 'top' | 'bottom';
+
+const TERRAIN_RISK_REFERENCE_BRIEF_COLLISION_Y_PERCENT = 56;
+const TERRAIN_RISK_REFERENCE_BRIEF_TOP_CENTER_Y_PERCENT = 18;
+const TERRAIN_RISK_REFERENCE_BRIEF_BOTTOM_CENTER_Y_PERCENT = 80;
+
 type CommandPowerVisualData = {
   live: boolean;
   canDisplayTelemetryValues: boolean;
@@ -3919,6 +3917,7 @@ function AttitudeCommandPanel({
           ? { label: 'ALERT', tone }
           : null;
   const suppressCompactPanelChrome = expanded && detailMode;
+  const suppressPowerDetailBackground = suppressCompactPanelChrome && isPowerPanel;
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -3989,7 +3988,7 @@ function AttitudeCommandPanel({
       innerTexture={false}
       style={[attitudeCommandS.panelFrame, expanded && attitudeCommandS.expandedPanelFrame]}
       contentStyle={[attitudeCommandS.panelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
-      background={(
+      background={suppressPowerDetailBackground ? null : (
         <AttitudeCommandPanelVisual
           icon={icon}
           color={color}
@@ -4192,14 +4191,6 @@ function formatAttitudeSunGlareDirection(sunAzimuth: string): string {
   return `From ${direction} (${Math.round(degrees)} deg)`;
 }
 
-function formatAttitudeCommandSourceState(isAvailable: boolean, freshness: string): string {
-  if (!isAvailable) return 'Missing';
-  if (/stale/i.test(freshness)) return 'Stale';
-  if (/cache/i.test(freshness)) return 'Cache';
-  if (/manual/i.test(freshness)) return 'Manual';
-  return freshness;
-}
-
 function AttitudeCommandSunlightDetail({
   daylight,
   snapshot,
@@ -4210,7 +4201,6 @@ function AttitudeCommandSunlightDetail({
   weatherAvailable: boolean;
 }) {
   const freshness = formatAttitudeCommandWeatherFreshness(snapshot);
-  const sourceState = formatAttitudeCommandSourceState(daylight.daylightTone !== 'unavailable', freshness);
   const glareDirection = formatAttitudeSunGlareDirection(daylight.sunAzimuth);
   const totalDaylight = formatAttitudeCommandTotalDaylight(snapshot);
   return (
@@ -4225,11 +4215,6 @@ function AttitudeCommandSunlightDetail({
           </Text>
           <Text style={attitudeCommandS.sunlightDetailTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
             Sunlight Remaining
-          </Text>
-        </View>
-        <View style={[attitudeCommandS.sunlightSourcePill, { borderColor: getWidgetToneColor(weatherAvailable ? 'good' : 'attention') }]}>
-          <Text style={attitudeCommandS.sunlightSourcePillText} numberOfLines={1}>
-            {sourceState}
           </Text>
         </View>
       </View>
@@ -4431,11 +4416,6 @@ function AttitudeCommandWeatherDetail({
             {conditionLine}
           </Text>
         </View>
-        <View style={[attitudeCommandS.weatherSourcePill, { borderColor: getWidgetToneColor(weatherAvailable ? 'good' : 'attention') }]}>
-          <Text style={attitudeCommandS.weatherSourcePillText} numberOfLines={1}>
-            {freshness}
-          </Text>
-        </View>
       </View>
 
       <View style={attitudeCommandS.weatherCurrentMetricsBand}>
@@ -4631,18 +4611,11 @@ function VehicleCommandExpandedView({
   const snapshot = vehicleTelemetry.snapshot;
   const utilitySensorResources = selectUtilitySensorResourceStates(useECSUtilitySensorTelemetryReadings());
   const liveObd = isLiveVehicleCommandTelemetry(snapshot);
-  const waterCapacity = activeVehicleContext.resourceProfile.waterCapacityGal ?? null;
-  const liveWaterGallons = utilitySensorResources.water?.status === 'live'
-    ? getUtilitySensorCurrentFromCapacity(utilitySensorResources.water, waterCapacity)
+  const liveWaterPercent = utilitySensorResources.water?.status === 'live'
+    ? utilitySensorResources.water.levelPercent
     : null;
   const livePropanePercent = utilitySensorResources.propane?.status === 'live'
     ? utilitySensorResources.propane.levelPercent
-    : null;
-  const liveWaterDepth = utilitySensorResources.water?.status === 'live'
-    ? formatUtilitySensorDepth(utilitySensorResources.water, 'Water')
-    : null;
-  const livePropaneDepth = utilitySensorResources.propane?.status === 'live'
-    ? formatUtilitySensorDepth(utilitySensorResources.propane, 'Propane / butane')
     : null;
   const liveFuelGallons = resolveVehicleCommandLiveFuelGallons(activeVehicleContext, vehicleTelemetry);
   const liveEngineLoad = snapshot.engineLoadPct ?? snapshot.engineLoadPercent ?? null;
@@ -4678,32 +4651,20 @@ function VehicleCommandExpandedView({
       ]
     : [];
   const liveLiquidMetrics = [
-    liveWaterGallons != null
+    liveWaterPercent != null
       ? {
-          label: 'Water gallons',
-          value: `${liveWaterGallons.toFixed(1)} gal`,
+          label: 'Water / fluid',
+          value: `${Math.round(liveWaterPercent)}%`,
           tone: 'live' as WidgetTone,
         }
-      : liveWaterDepth != null
-        ? {
-            label: 'Water sensor',
-            value: liveWaterDepth.replace(/^Water\s+/, ''),
-            tone: 'live' as WidgetTone,
-          }
-        : null,
+      : null,
     livePropanePercent != null
       ? {
           label: 'Propane / butane',
           value: `${Math.round(livePropanePercent)}%`,
           tone: 'live' as WidgetTone,
         }
-      : livePropaneDepth != null
-        ? {
-            label: 'Propane / butane',
-            value: livePropaneDepth.replace(/^Propane \/ butane\s+/, ''),
-            tone: 'live' as WidgetTone,
-          }
-        : null,
+      : null,
     liveFuelGallons != null
       ? {
           label: 'Fuel gallons',
@@ -4727,11 +4688,6 @@ function VehicleCommandExpandedView({
           </Text>
           <Text style={attitudeCommandS.vehicleLiveTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
             Vehicle Profile
-          </Text>
-        </View>
-        <View style={[attitudeCommandS.vehicleLiveSourcePill, { borderColor: getWidgetToneColor('live') }]}>
-          <Text style={attitudeCommandS.vehicleLiveSourcePillText} numberOfLines={1}>
-            LIVE
           </Text>
         </View>
       </View>
@@ -4785,6 +4741,45 @@ function VehicleCommandExpandedView({
         </View>
       ) : null}
     </View>
+  );
+}
+
+function VehicleCommandRollZeroButton({
+  expanded = false,
+  disabled = false,
+  onPress,
+}: {
+  expanded?: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  const handlePress = useCallback((event: GestureResponderEvent) => {
+    event.stopPropagation();
+    event.preventDefault?.();
+    if (disabled) return;
+    onPress();
+  }, [disabled, onPress]);
+
+  return (
+    <TouchableOpacity
+      style={[
+        attitudeCommandS.vehicleRollZeroButton,
+        expanded ? attitudeCommandS.vehicleRollZeroButtonExpanded : attitudeCommandS.vehicleRollZeroButtonCompact,
+        disabled && attitudeCommandS.vehicleRollZeroButtonDisabled,
+      ]}
+      onPress={handlePress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel="Zero vehicle roll indicator"
+      accessibilityHint="Sets the current roll angle as zero without changing pitch."
+      accessibilityState={{ disabled }}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      testID={expanded ? 'vehicle-roll-zero-expanded' : 'vehicle-roll-zero-compact'}
+    >
+      <Text style={attitudeCommandS.vehicleRollZeroButtonText} numberOfLines={1}>
+        0°
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -6081,6 +6076,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const [activePanel, setActivePanel] = useState<AttitudeCommandActivePanel | null>(null);
   const [selectedCommandModule, setSelectedCommandModule] = useState<ECSCommandModuleId>(() => ecsCommandModuleStore.selectedModule);
   const [environmentalRevision, setEnvironmentalRevision] = useState(0);
+  const [vehicleRollZeroOffsetDeg, setVehicleRollZeroOffsetDeg] = useState(0);
   const moduleTransitionOpacity = useStableAnimatedValue(1);
   const reduceCommandModuleMotion = useReducedMotion();
   const rollDeg = options?.rollDeg ?? null;
@@ -6118,6 +6114,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const commandSensorLive = attitudeTelemetry.isLive && displayState.liveMotion;
   const commandStageRollDeg = commandSensorLive ? commandDisplayRollDeg : 0;
   const commandStagePitchDeg = commandSensorLive ? commandDisplayPitchDeg : 0;
+  const commandVehicleRollDeg = commandStageRollDeg - vehicleRollZeroOffsetDeg;
+  const commandVehiclePitchDeg = commandStagePitchDeg;
   const openFocusPanel = useCallback((panel: AttitudeCommandFocusPanel, mode: AttitudeCommandFocusMode = 'detail') => {
     void hapticMicro();
     setActivePanel({ panel, mode });
@@ -6126,9 +6124,18 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     void hapticMicro();
     setActivePanel(null);
   }, []);
+  const handleZeroVehicleRoll = useCallback(() => {
+    void hapticMicro();
+    setVehicleRollZeroOffsetDeg(commandStageRollDeg);
+  }, [commandStageRollDeg]);
   const handleSelectCommandCenterMode = useCallback((mode: CommandCenterMode) => {
     ecsCommandModuleStore.setSelectedModule(centerModeToCommandModule(mode));
   }, []);
+
+  useEffect(() => {
+    if (commandSensorLive) return;
+    setVehicleRollZeroOffsetDeg(0);
+  }, [commandSensorLive]);
 
   useEffect(() => {
     return ecsCommandModuleStore.subscribe((moduleId) => {
@@ -6740,15 +6747,19 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               <VehicleCommandExpandedView
                 activeVehicleContext={activeVehicleContext}
                 vehicleTelemetry={vehicleTelemetry}
-                rollDeg={commandStageRollDeg}
-                pitchDeg={commandStagePitchDeg}
+                rollDeg={commandVehicleRollDeg}
+                pitchDeg={commandVehiclePitchDeg}
                 attitudeLive={commandSensorLive}
               />
             ) : (
               <>
+                <VehicleCommandRollZeroButton
+                  disabled={!commandSensorLive}
+                  onPress={handleZeroVehicleRoll}
+                />
                 <VehicleProfileRollAttitudeStrip
-                  rollDeg={commandStageRollDeg}
-                  pitchDeg={commandStagePitchDeg}
+                  rollDeg={commandVehicleRollDeg}
+                  pitchDeg={commandVehiclePitchDeg}
                   live={commandSensorLive}
                   maxRollDeg={45}
                   expanded={expanded}
@@ -6984,6 +6995,13 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 ]}
               >
                 {renderCommandPanel(activePanel.panel, true, expandedPanelMode)}
+                {activePanel?.panel === 'vehicle' ? (
+                  <VehicleCommandRollZeroButton
+                    expanded
+                    disabled={!commandSensorLive}
+                    onPress={handleZeroVehicleRoll}
+                  />
+                ) : null}
                 <TouchableOpacity
                   style={attitudeCommandS.expandedPanelCloseButton}
                   onPress={closeFocusPanel}
@@ -7188,6 +7206,45 @@ const attitudeCommandS = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
+  },
+  vehicleRollZeroButton: {
+    position: 'absolute',
+    zIndex: 13,
+    elevation: 13,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(247, 201, 104, 0.58)',
+    backgroundColor: 'rgba(3, 7, 10, 0.86)',
+    shadowColor: 'rgba(0,0,0,0.65)',
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  vehicleRollZeroButtonCompact: {
+    top: 0,
+    left: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+  },
+  vehicleRollZeroButtonExpanded: {
+    top: 8,
+    right: 40,
+  },
+  vehicleRollZeroButtonDisabled: {
+    opacity: 0.45,
+  },
+  vehicleRollZeroButtonText: {
+    color: TACTICAL.text,
+    fontSize: 8.4,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    includeFontPadding: false,
   },
   moduleHost: {
     flex: 1,
@@ -8302,8 +8359,8 @@ const attitudeCommandS = StyleSheet.create({
   },
   vehicleCommandCoolantCorner: {
     top: 0,
-    left: 0,
-    maxWidth: '36%',
+    left: 28,
+    maxWidth: '30%',
     textAlign: 'left',
   },
   vehicleCommandRangeCorner: {
@@ -8347,25 +8404,6 @@ const attitudeCommandS = StyleSheet.create({
     fontSize: 12.8,
     lineHeight: 15,
     fontWeight: '900',
-  },
-  vehicleLiveSourcePill: {
-    flexShrink: 0,
-    maxWidth: 68,
-    minHeight: 19,
-    borderRadius: 10,
-    borderWidth: 1,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 7,
-  },
-  vehicleLiveSourcePillText: {
-    color: 'rgba(230, 237, 243, 0.78)',
-    fontSize: 6.7,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.45,
-    textAlign: 'center',
-    textTransform: 'uppercase',
   },
   vehicleLiveTelemetryBody: {
     flex: 1,
@@ -8588,8 +8626,17 @@ const attitudeCommandS = StyleSheet.create({
     position: 'absolute',
     left: 8,
     right: 8,
-    bottom: 7,
     zIndex: 6,
+  },
+  terrainRiskReferenceBriefButtonTop: {
+    top: 7,
+  },
+  terrainRiskReferenceBriefButtonBottom: {
+    bottom: 7,
+  },
+  terrainRiskReferenceConnectorLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5,
   },
   terrainRiskReferenceReadout: {
     borderRadius: 9,
@@ -8959,25 +9006,6 @@ const attitudeCommandS = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '900',
   },
-  sunlightSourcePill: {
-    flexShrink: 0,
-    maxWidth: 86,
-    minHeight: 20,
-    borderRadius: 10,
-    borderWidth: 1,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 7,
-  },
-  sunlightSourcePillText: {
-    color: 'rgba(230, 237, 243, 0.76)',
-    fontSize: 7,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    textAlign: 'center',
-    textTransform: 'uppercase',
-  },
   sunlightPrimaryMetric: {
     minHeight: 46,
     borderWidth: 1,
@@ -9091,25 +9119,6 @@ const attitudeCommandS = StyleSheet.create({
     fontSize: 13.2,
     lineHeight: 15,
     fontWeight: '900',
-  },
-  weatherSourcePill: {
-    flexShrink: 0,
-    maxWidth: 82,
-    minHeight: 20,
-    borderRadius: 10,
-    borderWidth: 1,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 7,
-  },
-  weatherSourcePillText: {
-    color: 'rgba(230, 237, 243, 0.76)',
-    fontSize: 6.8,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.45,
-    textAlign: 'center',
-    textTransform: 'uppercase',
   },
   weatherCurrentMetricsBand: {
     minHeight: 52,
@@ -13160,6 +13169,63 @@ function resolveAttitudeCommandExpansionGeometry(
   }
 }
 
+function resolveTerrainRiskReferenceBriefPlacement(
+  anchor: TerrainRiskReferenceAnchor | null,
+): TerrainRiskReferenceBriefPlacement {
+  return anchor && anchor.yPercent > TERRAIN_RISK_REFERENCE_BRIEF_COLLISION_Y_PERCENT ? 'top' : 'bottom';
+}
+
+function TerrainRiskReferenceConnector({
+  anchor,
+  placement,
+}: {
+  anchor: TerrainRiskReferenceAnchor;
+  placement: TerrainRiskReferenceBriefPlacement;
+}) {
+  const anchorX = Math.max(4, Math.min(96, anchor.xPercent));
+  const anchorY = Math.max(6, Math.min(94, anchor.yPercent));
+  const briefCenterX = 50;
+  const briefCenterY = placement === 'top'
+    ? TERRAIN_RISK_REFERENCE_BRIEF_TOP_CENTER_Y_PERCENT
+    : TERRAIN_RISK_REFERENCE_BRIEF_BOTTOM_CENTER_Y_PERCENT;
+  const connectorPath = [
+    `M ${anchorX.toFixed(1)} ${anchorY.toFixed(1)}`,
+    `L ${briefCenterX.toFixed(1)} ${anchorY.toFixed(1)}`,
+    `L ${briefCenterX.toFixed(1)} ${briefCenterY.toFixed(1)}`,
+  ].join(' ');
+
+  return (
+    <Svg
+      pointerEvents="none"
+      style={attitudeCommandS.terrainRiskReferenceConnectorLayer}
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+    >
+      <Path
+        d={connectorPath}
+        fill="none"
+        stroke="rgba(242, 194, 77, 0.70)"
+        strokeWidth={0.62}
+        strokeDasharray="2.2 2.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle
+        cx={anchorX}
+        cy={anchorY}
+        r={1.2}
+        fill="rgba(245, 210, 124, 0.92)"
+      />
+      <Circle
+        cx={briefCenterX}
+        cy={briefCenterY}
+        r={0.9}
+        fill="rgba(245, 210, 124, 0.58)"
+      />
+    </Svg>
+  );
+}
+
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
   expanded = false,
@@ -13188,6 +13254,13 @@ function AttitudeCommandTerrainRiskPreview({
     () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 1 }),
     [referenceEvents],
   );
+  const selectedReferenceAnchor = useMemo(
+    () => route
+      ? getTerrainRiskReferenceAnchor(route.profile, route.totalDistanceMiles, selectedReferenceEvent)
+      : null,
+    [route, selectedReferenceEvent],
+  );
+  const referenceBriefPlacement = resolveTerrainRiskReferenceBriefPlacement(selectedReferenceAnchor);
 
   useEffect(() => {
     onTerrainRiskReferenceEvent?.(upcomingReferenceEvent);
@@ -13227,16 +13300,28 @@ function AttitudeCommandTerrainRiskPreview({
               transparentBackground
               interactive={markersInteractive}
               referenceEvents={referenceEvents}
+              selectedReferenceEvent={selectedReferenceEvent}
               onReferencePointPress={handleReferencePointPress}
             />
           </View>
+          {expanded && detailMode && selectedReferenceEvent && selectedReferenceAnchor ? (
+            <TerrainRiskReferenceConnector
+              anchor={selectedReferenceAnchor}
+              placement={referenceBriefPlacement}
+            />
+          ) : null}
           {expanded && detailMode && selectedReferenceEvent ? (
             <TouchableOpacity
               activeOpacity={0.96}
               accessibilityRole="button"
               accessibilityLabel={`Close terrain intelligence brief. ${selectedReferenceEvent.banner.title}.`}
               onPress={() => setSelectedReferenceEvent(null)}
-              style={attitudeCommandS.terrainRiskReferenceBriefButton}
+              style={[
+                attitudeCommandS.terrainRiskReferenceBriefButton,
+                referenceBriefPlacement === 'top'
+                  ? attitudeCommandS.terrainRiskReferenceBriefButtonTop
+                  : attitudeCommandS.terrainRiskReferenceBriefButtonBottom,
+              ]}
             >
               <View style={attitudeCommandS.terrainRiskReferenceReadout}>
                 <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>

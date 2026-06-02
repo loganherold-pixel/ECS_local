@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const Module = require('module');
@@ -240,6 +241,12 @@ async function main() {
   assert.ok(
     source.includes(".select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, revoked_at')"),
     'Supabase convoy member fetch should include display name and expedition badge title identity fields.',
+  );
+  assert.ok(
+    source.includes('isOptionalConvoyMemberIdentityColumnError') &&
+      source.includes('fetchMembersWithoutIdentityColumns') &&
+      source.includes("'id, convoy_id, user_id, vehicle_id, callsign, role, revoked_at'"),
+    'Supabase convoy member fetch should fall back to the base convoy member schema when optional identity columns are missing.',
   );
   assert.ok(source.includes("'postgres_changes'"), 'service should subscribe with Supabase Postgres Changes.');
   assert.ok(source.includes("table: 'convoy_member_locations'"), 'service should target convoy_member_locations.');

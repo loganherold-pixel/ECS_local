@@ -138,6 +138,7 @@ const requiredProbeKeys = [
   'michigan_dnr_orv_pilot',
   'minnesota_dnr_ohv_pilot',
   'oregon_odf_ohv_pilot',
+  'colorado_cpw_designated_trails_pilot',
   'blm_az_gtlf',
   'blm_ca_nv_pilot',
   'blm_co_gtlf',
@@ -188,23 +189,124 @@ assert.strictEqual(verifiedSummary.matchesExpectedPosture, true);
 const michiganProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_pilot');
 const minnesotaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_pilot');
 const oregonProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_ohv_pilot');
+const coloradoCpwProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_designated_trails_pilot');
 const npsProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_joshua_tree');
 assert.strictEqual(michiganProbe.expectedPosture, 'verified_public_recommendations');
 assert.strictEqual(minnesotaProbe.expectedPosture, 'verified_public_recommendations');
 assert.strictEqual(oregonProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoCpwProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoCpwProbe.requiresSourceMatch, true, 'Colorado CPW audit should require CPW-sourced public routes');
 assert.strictEqual(npsProbe.expectedPosture, 'verified_public_recommendations');
 
-const curationProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
-const curationSummary = summarizeSearchResponse(curationProbe, {
+const coloradoCpwPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_designated_trails_pilot'] })[0];
+assert.strictEqual(
+  coloradoCpwPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW audit should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoCpwPlanProbe.requestBody.limit, 25, 'Colorado CPW audit should use a bounded source-filtered result window');
+
+const coloradoCpwOverlappedBlmSummary = summarizeSearchResponse(coloradoCpwProbe, {
+  count: 10,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 10, curationCandidateCount: 0, anySourceBackedCandidateCount: 10 },
+  records: [
+    {
+      public_id: 'blm-co-overlap-1',
+      name: 'Nearby BLM Colorado Route',
+      confidence_score: 84,
+      source_records: [{ provider_id: 'blm_gtlf' }],
+    },
+  ],
+});
+assert.strictEqual(coloradoCpwOverlappedBlmSummary.observedPosture, 'no_verified_routes_expected');
+assert.strictEqual(
+  coloradoCpwOverlappedBlmSummary.matchesExpectedPosture,
+  false,
+  'Colorado CPW should not pass from overlapping BLM verified routes alone.',
+);
+assert.strictEqual(coloradoCpwOverlappedBlmSummary.sourceMatchedPublicRecommendationCount, 0);
+
+const coloradoCpwSourceMatchedSummary = summarizeSearchResponse(coloradoCpwProbe, {
+  count: 4,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 4, curationCandidateCount: 0, anySourceBackedCandidateCount: 4 },
+  records: [
+    {
+      public_id: 'colorado-cpw-designated-trail-bull-mountain-road-feature-83',
+      name: 'Colorado CPW Designated Trail Bull Mountain Road',
+      confidence_score: 83,
+      source_records: [{ provider_id: 'colorado_cpw_designated_trails' }],
+    },
+  ],
+});
+assert.strictEqual(coloradoCpwSourceMatchedSummary.observedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoCpwSourceMatchedSummary.matchesExpectedPosture, true);
+assert.strictEqual(coloradoCpwSourceMatchedSummary.sourceMatchedPublicRecommendationCount, 1);
+
+const blmWyProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
+const blmWyPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['blm_wy_gtlf'] })[0];
+assert.strictEqual(
+  blmWyProbe.expectedPosture,
+  'verified_public_recommendations',
+  'BLM Wyoming should audit public aggregate recommendations after sync',
+);
+assert.strictEqual(blmWyProbe.requiresSourceMatch, true, 'BLM Wyoming audit should require BLM-sourced public routes');
+assert.strictEqual(blmWyPlanProbe.requestBody.sourceAdapter, 'blm_gtlf', 'BLM Wyoming audit should ask search for BLM-sourced public routes');
+assert.strictEqual(blmWyPlanProbe.requestBody.limit, 50, 'BLM Wyoming audit should use a bounded source-filtered result window');
+
+const blmWyOverlappedUsfsSummary = summarizeSearchResponse(blmWyProbe, {
+  count: 10,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 225, curationCandidateCount: 250, anySourceBackedCandidateCount: 475 },
+  records: [
+    {
+      public_id: 'usfs-overlap-1',
+      name: 'Nearby USFS Route',
+      confidence_score: 92,
+      source_records: [{ provider_id: 'usfs_mvum_bighorn_nf' }],
+    },
+  ],
+});
+assert.strictEqual(blmWyOverlappedUsfsSummary.observedPosture, 'source_backed_curation_only');
+assert.strictEqual(
+  blmWyOverlappedUsfsSummary.matchesExpectedPosture,
+  false,
+  'BLM Wyoming should not pass from overlapping USFS verified routes alone.',
+);
+assert.strictEqual(blmWyOverlappedUsfsSummary.sourceMatchedPublicRecommendationCount, 0);
+
+const blmWySourceMatchedSummary = summarizeSearchResponse(blmWyProbe, {
+  count: 10,
+  coverageState: { state: 'ready', title: 'Verified routes available' },
+  meta: { radiusMatchedCount: 225, curationCandidateCount: 250, anySourceBackedCandidateCount: 475 },
+  records: [
+    {
+      public_id: 'blm-gtlf-wy-road-segment-77001',
+      name: 'BLM Road GTLF Segment',
+      confidence_score: 84,
+      source_records: [{ provider_id: 'blm_gtlf' }],
+    },
+  ],
+});
+assert.strictEqual(blmWySourceMatchedSummary.observedPosture, 'verified_public_recommendations');
+assert.strictEqual(blmWySourceMatchedSummary.matchesExpectedPosture, true);
+assert.strictEqual(blmWySourceMatchedSummary.sourceMatchedPublicRecommendationCount, 1);
+
+const blmWyCurationOnlySummary = summarizeSearchResponse(blmWyProbe, {
   count: 0,
   coverageState: { state: 'lower_confidence_nearby', title: 'Source-backed routes in curation' },
   meta: { radiusMatchedCount: 0, curationCandidateCount: 7, anySourceBackedCandidateCount: 7 },
   records: [],
 });
-assert.strictEqual(curationSummary.observedPosture, 'source_backed_curation_only');
-assert.strictEqual(curationSummary.matchesExpectedPosture, true);
+assert.strictEqual(blmWyCurationOnlySummary.observedPosture, 'source_backed_curation_only');
+assert.strictEqual(
+  blmWyCurationOnlySummary.matchesExpectedPosture,
+  false,
+  'BLM Wyoming should no longer pass the audit as curation-only.',
+);
 
-const mismatchSummary = summarizeSearchResponse(curationProbe, {
+const mismatchSummary = summarizeSearchResponse(blmWyProbe, {
   count: 0,
   coverageState: { state: 'no_verified_routes', title: 'No verified routes yet in this area' },
   meta: { radiusMatchedCount: 0, curationCandidateCount: 0, anySourceBackedCandidateCount: 0 },
@@ -300,13 +402,6 @@ assert.strictEqual(
   blmProbe.expectedPosture,
   'verified_public_recommendations',
   'BLM CA/NV pilot should audit public aggregate recommendations after sync',
-);
-
-const blmWyProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
-assert.strictEqual(
-  blmWyProbe.expectedPosture,
-  'source_backed_curation_only',
-  'BLM Wyoming should audit as source-backed curation until deterministic aggregate recommendations exist.',
 );
 
 const auditSource = fs.readFileSync(auditPath, 'utf8');

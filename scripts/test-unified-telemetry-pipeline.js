@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -76,6 +78,21 @@ has(adapters, "sourceType: 'utility_sensor'", 'utility sensor adapter bridge');
 has(adapters, "metricKey: 'parser_status'", 'utility sensor parser-pending state');
 has(adapters, "metricKey: 'profile_id'", 'utility sensor profile identity');
 has(adapters, "'level_percent'", 'utility sensor live level bridge');
+has(adapters, 'return finiteNumber(telemetry?.levelPercent) != null;', 'utility sensor live bridge must require percent');
+assert(
+  !adapters.includes('finiteNumber(telemetry?.levelDistanceMm) != null'),
+  'Utility sensor depth-only readings must not promote ECS live liquid telemetry.',
+);
+assert(
+  !adapters.includes("'level_distance_mm'"),
+  'Utility sensor adapter must not publish liquid depth as the ECS live liquid value.',
+);
+has(utilitySelectors, "if (hasFinitePercent(reading.levelPercent)) return 'live';", 'utility sensor live status must require percent');
+has(utilitySelectors, 'canProvideLiveLevel: levelPercent != null', 'utility sensor resource state must advertise live level only when percent exists');
+assert(
+  !utilitySelectors.includes('hasFinitePercent(reading.levelPercent) || hasFiniteMeasurement(reading.levelDistanceMm)'),
+  'Utility sensor selector must not mark depth-only readings live.',
+);
 has(accessoryManager, 'decodeUtilitySensorLiveTelemetry', 'utility sensor native BLE decoder bridge');
 has(accessoryManager, 'readReadableCharacteristicSnapshots', 'utility sensor characteristic sampling');
 has(accessoryManager, 'startUtilitySensorTelemetryPolling', 'utility sensor live refresh polling');

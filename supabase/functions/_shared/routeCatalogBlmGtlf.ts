@@ -30,6 +30,8 @@ export type BlmGtlfAggregateRouteUpsert = {
   segmentProviderFeatureIds: string[];
 };
 
+type BlmGtlfAggregationKind = 'blm_gtlf_route_identity' | 'blm_gtlf_source_feature';
+
 export const BLM_GTLF_SOURCE = {
   providerId: 'blm_gtlf',
   name: 'BLM National Ground Transportation Linear Features Public Display',
@@ -280,13 +282,27 @@ function aggregationIdentity(layer: BlmGtlfLayer, attributes: Record<string, unk
   const rawName = cleanString(attributes.ROUTE_PRMRY_NM);
   const name = rawName ? toTitleCase(rawName) : '';
   const keyParts = [adminState, layer.kind, planId, name].filter(Boolean);
-  if (!adminState || keyParts.length <= 2) return null;
+  if (!adminState) return null;
+  if (keyParts.length > 2) {
+    return {
+      key: slugify(keyParts.join(' ')),
+      publicIdParts: ['blm-gtlf', adminState, layer.kind, planId, name].filter(Boolean),
+      adminState,
+      planId,
+      name,
+      aggregation: 'blm_gtlf_route_identity' as BlmGtlfAggregationKind,
+    };
+  }
+
+  const featureKey = sourceFeatureKey(attributes);
+  if (!featureKey || featureKey === '0') return null;
   return {
-    key: slugify(keyParts.join(' ')),
-    publicIdParts: ['blm-gtlf', adminState, layer.kind, planId, name].filter(Boolean),
+    key: slugify([adminState, layer.kind, 'segment', featureKey].join(' ')),
+    publicIdParts: ['blm-gtlf', adminState, layer.kind, 'segment', featureKey],
     adminState,
-    planId,
-    name,
+    planId: '',
+    name: '',
+    aggregation: 'blm_gtlf_source_feature' as BlmGtlfAggregationKind,
   };
 }
 
@@ -567,6 +583,8 @@ export function aggregateBlmGtlfRouteFeatures(
       Array.isArray(segment.verifiedRoute.vehicle_fit) ? segment.verifiedRoute.vehicle_fit.map(String) : [],
     ));
     const firstAttributes = sourceAttributes(segments[0]);
+    const aggregationKind = identity.aggregation;
+    const aggregationLabel = aggregationKind === 'blm_gtlf_route_identity' ? 'route identity' : 'source feature';
     const districtTags = uniqueStrings(segments.flatMap((segment) =>
       Array.isArray(segment.verifiedRoute.tags) ? segment.verifiedRoute.tags.map(String) : [],
     ).filter((tag) => tag !== 'BLM GTLF' && tag !== context.layer.kind && tag !== 'public motorized use'));
@@ -579,7 +597,7 @@ export function aggregateBlmGtlfRouteFeatures(
       verifiedRoute: {
         public_id: publicId,
         name: routeName(context.layer, firstAttributes),
-        description: `${context.layer.sourceLayer} aggregate built from ${sourceFeatureCount} official BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'}. ECS treats this as official public motorized-access geometry that still requires current local checks.`,
+        description: `${context.layer.sourceLayer} ${aggregationLabel} aggregate built from ${sourceFeatureCount} official BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'}. ECS treats this as official public motorized-access geometry that still requires current local checks.`,
         route_type: 'point_to_point',
         center_latitude: center?.latitude ?? Number(segments[0].verifiedRoute.center_latitude),
         center_longitude: center?.longitude ?? Number(segments[0].verifiedRoute.center_longitude),
@@ -599,7 +617,7 @@ export function aggregateBlmGtlfRouteFeatures(
             estimatedDurationMinutes,
           }),
           sourceFeatureCount,
-          aggregation: 'blm_gtlf_route_identity',
+          aggregation: aggregationKind,
         },
         official_access_coverage_pct: 90,
         unknown_access_coverage_pct: 10,
@@ -613,8 +631,10 @@ export function aggregateBlmGtlfRouteFeatures(
         review_status: 'approved',
         confidence_score: sourceFeatureCount > 1 ? 86 : 84,
         confidence_reasons: [
-          `BLM GTLF lists this ${context.layer.kind} identity in a public motorized-use layer.`,
-          `Combined ${sourceFeatureCount} BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'} with matching route identity.`,
+          `BLM GTLF lists this ${context.layer.kind} ${aggregationLabel} in a public motorized-use layer.`,
+          aggregationKind === 'blm_gtlf_route_identity'
+            ? `Combined ${sourceFeatureCount} BLM GTLF source segment${sourceFeatureCount === 1 ? '' : 's'} with matching route identity.`
+            : 'Promoted a single official BLM GTLF source feature because the feed lacks a route plan/name identity.',
           'All aggregated source segments are open public motorized records without encoded seasonal or limitation text.',
         ],
         warning_reasons: [
@@ -624,7 +644,7 @@ export function aggregateBlmGtlfRouteFeatures(
         blocker_reasons: [],
         closure_summaries: [],
         community_signal: {
-          aggregation: 'blm_gtlf_route_identity',
+          aggregation: aggregationKind,
           sourceFeatureCount,
           segmentPublicIds,
           providerFeatureIds: segmentProviderFeatureIds,
@@ -654,7 +674,7 @@ export function aggregateBlmGtlfRouteFeatures(
           sourceLayerId: context.layer.id,
           adminState: identity.adminState.toUpperCase(),
           routePlanId: identity.planId || null,
-          aggregation: 'blm_gtlf_route_identity',
+          aggregation: aggregationKind,
           caveat: BLM_GTLF_CAVEAT,
         },
       },

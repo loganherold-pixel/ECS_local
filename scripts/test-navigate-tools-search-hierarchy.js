@@ -92,9 +92,10 @@ assert(
 
 assert(
   toolsPopupSource.includes('STITCH ROUTES') &&
-    toolsPopupSource.includes('DRAW CAMP POTENTIAL AREA') &&
-    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('DRAW CAMP POTENTIAL AREA'),
-  'Stitch routes should replace the old Draw Area position, with Draw Camp Potential Area moved lower.',
+    toolsPopupSource.includes('MANUAL CAMP AREA REVIEW') &&
+    !toolsPopupSource.includes('DRAW CAMP POTENTIAL AREA') &&
+    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('MANUAL CAMP AREA REVIEW'),
+  'Stitch routes should stay in Route utilities while internal manual CampOps area review remains lower in Explore.',
 );
 
 assert(
@@ -106,11 +107,11 @@ assert(
     toolsPopupSource.includes('>FIELD OPS</Text>') &&
     toolsPopupSource.indexOf('>ROUTE</Text>') < toolsPopupSource.indexOf('BUILD ROUTE PLAN') &&
     toolsPopupSource.indexOf('BUILD ROUTE PLAN') < toolsPopupSource.indexOf('STITCH ROUTES') &&
-    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('DRAW ROUTE') &&
-    toolsPopupSource.indexOf('DRAW ROUTE') < toolsPopupSource.indexOf('IMPORT') &&
+    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf("accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}") &&
+    toolsPopupSource.indexOf("accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}") < toolsPopupSource.indexOf('IMPORT') &&
     !toolsPopupSource.includes('EXPLORE ROUTES') &&
     toolsPopupSource.indexOf('>EXPLORE</Text>') < toolsPopupSource.indexOf('Recommend Campsite') &&
-    toolsPopupSource.indexOf('Recommend Campsite') < toolsPopupSource.indexOf('DRAW CAMP POTENTIAL AREA') &&
+    toolsPopupSource.indexOf('Recommend Campsite') < toolsPopupSource.indexOf('MANUAL CAMP AREA REVIEW') &&
     toolsPopupSource.indexOf('>FIELD OPS</Text>') < toolsPopupSource.indexOf('RECORD TRAIL') &&
     toolsPopupSource.indexOf('RECORD TRAIL') < toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') &&
     toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') < toolsPopupSource.indexOf('DROP PIN') &&

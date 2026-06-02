@@ -496,6 +496,8 @@ export default function DispatchConvoyCommandPanel({
     sharingState?.lastStopReason ??
     sharingState?.lastError ??
     (hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId ? trackingSnapshot.error : null);
+  const showCommandFooterFacts = !summaryCompact;
+  const showSummaryConvoySignals = isSummaryOnlyPresentation && panelViewModel.isUsingLiveData && panelViewModel.members.length > 0;
 
   const refreshLiveSharingControls = useCallback(async () => {
     const [context, state] = await Promise.all([
@@ -749,26 +751,45 @@ export default function DispatchConvoyCommandPanel({
           </Text>
         ) : null}
 
-        <View style={[styles.legendMetricGrid, summaryCompact ? styles.legendMetricGridCompact : null]}>
-          <LegendMetric label={summaryCompact ? 'Veh' : 'Vehicles'} value={formatVehicleCount(panelViewModel.vehicleCount)} compact={summaryCompact} />
+        <View
+          style={[
+            styles.legendMetricGrid,
+            summaryCompact ? styles.legendMetricGridCompact : null,
+            isSummaryOnlyPresentation ? styles.summaryMetricGrid : null,
+            showSummaryConvoySignals ? styles.summaryMetricGridWithSignals : null,
+          ]}
+        >
+          <LegendMetric
+            label={summaryCompact ? 'Veh' : 'Vehicles'}
+            value={formatVehicleCount(panelViewModel.vehicleCount)}
+            compact={summaryCompact}
+            expanded={isSummaryOnlyPresentation}
+          />
           <LegendMetric
             label={summaryCompact ? 'Rpt' : 'Reporting'}
             value={`${panelViewModel.reportingCount}/${Math.max(panelViewModel.vehicleCount, panelViewModel.members.length)}`}
             compact={summaryCompact}
+            expanded={isSummaryOnlyPresentation}
           />
-          <LegendMetric label={summaryCompact ? 'Gap' : 'Widest gap'} value={widestGapLabel} compact={summaryCompact} />
+          <LegendMetric
+            label={summaryCompact ? 'Gap' : 'Widest gap'}
+            value={widestGapLabel}
+            compact={summaryCompact}
+            expanded={isSummaryOnlyPresentation}
+          />
           <LegendMetric
             label="Regroup"
             value={panelViewModel.regroupSuggested ? 'Advised' : 'Standby'}
             compact={summaryCompact}
+            expanded={isSummaryOnlyPresentation}
             caution={panelViewModel.regroupSuggested}
           />
         </View>
 
-        {!isFeedPresentation ? (
-          <View style={styles.legendMemberStack}>
+        {!isFeedPresentation && (!isSummaryOnlyPresentation || showSummaryConvoySignals) ? (
+          <View style={[styles.legendMemberStack, showSummaryConvoySignals ? styles.summaryMemberStack : null]}>
             <Text style={[styles.memberTitle, summaryCompact ? styles.memberTitleCompact : null]}>CONVOY SIGNALS</Text>
-            {(panelViewModel.members.length > 0 ? panelViewModel.members.slice(0, isFeedPresentation ? 2 : 4) : [
+            {(panelViewModel.members.length > 0 ? panelViewModel.members.slice(0, isSummaryOnlyPresentation ? 2 : 4) : [
               { id: 'empty', displayName: 'No live convoy members', isReporting: false, isLostSignal: false, isStale: true },
             ]).map((member) => {
               const tone = member.isLostSignal ? TACTICAL.danger : member.isReporting ? TACTICAL.text : TACTICAL.amber;
@@ -791,11 +812,13 @@ export default function DispatchConvoyCommandPanel({
           </View>
         ) : null}
 
-        <View style={[styles.legendFactRow, isFeedPresentation ? styles.legendFactRowFeed : null]}>
-          <LegendFact label="Team" value={hasActiveTeam ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}` : 'Inactive'} />
-          <LegendFact label="Link" value={`${connectionLabel} / ${teamStatusLabel}`} />
-          <LegendFact label="Updated" value={formatUpdatedAt(panelViewModel.updatedAt)} />
-        </View>
+        {showCommandFooterFacts ? (
+          <View style={[styles.legendFactRow, isFeedPresentation ? styles.legendFactRowFeed : null]}>
+            <LegendFact label="Team" value={hasActiveTeam ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}` : 'Inactive'} />
+            <LegendFact label="Link" value={`${connectionLabel} / ${teamStatusLabel}`} />
+            <LegendFact label="Updated" value={formatUpdatedAt(panelViewModel.updatedAt)} />
+          </View>
+        ) : null}
 
         {shouldShowEmergencyOverlay ? (
           <View style={styles.legendEmergencyRow}>
@@ -963,14 +986,16 @@ function LegendMetric({
   value,
   compact,
   caution = false,
+  expanded = false,
 }: {
   label: string;
   value: string;
   compact: boolean;
   caution?: boolean;
+  expanded?: boolean;
 }) {
   return (
-    <View style={[styles.legendMetric, compact ? styles.legendMetricCompact : null]}>
+    <View style={[styles.legendMetric, compact ? styles.legendMetricCompact : null, expanded ? styles.legendMetricExpanded : null]}>
       <Text style={[styles.metricLabel, compact ? styles.metricLabelCompact : null]}>{label}</Text>
       <Text
         style={[
@@ -1192,7 +1217,9 @@ const styles = StyleSheet.create({
   summaryCommandSummary: {
     flex: 1,
     minHeight: 0,
-    justifyContent: 'space-between',
+    borderColor: `${TACTICAL.amber}2E`,
+    backgroundColor: `${TACTICAL.amber}12`,
+    justifyContent: 'flex-start',
     paddingHorizontal: 7,
     paddingVertical: 6,
     gap: 4,
@@ -1216,6 +1243,16 @@ const styles = StyleSheet.create({
     flexWrap: 'nowrap',
     gap: 4,
   },
+  summaryMetricGrid: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: 'stretch',
+    marginTop: 2,
+  },
+  summaryMetricGridWithSignals: {
+    flex: 0,
+    flexGrow: 0,
+  },
   legendMetric: {
     flexGrow: 1,
     flexBasis: '44%',
@@ -1237,8 +1274,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 3,
   },
+  legendMetricExpanded: {
+    minHeight: 0,
+  },
   legendMemberStack: {
     gap: 4,
+  },
+  summaryMemberStack: {
+    gap: 3,
+    marginTop: 1,
   },
   legendFactRow: {
     flexDirection: 'row',

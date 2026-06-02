@@ -4,7 +4,9 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const overlayPath = path.join(root, 'components', 'navigate', 'RoadNavigationOverlay.tsx');
+const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 const source = fs.readFileSync(overlayPath, 'utf8').replace(/\r\n/g, '\n');
+const navigateSource = fs.readFileSync(navigatePath, 'utf8').replace(/\r\n/g, '\n');
 
 function extractStyleBlock(styleName) {
   const marker = `${styleName}: {`;
@@ -25,6 +27,10 @@ assert.ok(
   activeCardBlock.includes('| \'onPrepareOffline\'') &&
     source.includes('onPrepareOffline={props.onPrepareOffline}'),
   'Active Guidance should receive the offline preparation handler.',
+);
+assert.ok(
+  source.includes('activeGuidanceWidth={props.activeGuidanceWidth}'),
+  'Active Guidance should receive the computed landscape compact width from the Navigate screen.',
 );
 assert.ok(
   activeCardBlock.includes('styles.activeGuidanceProtectedActionGroup'),
@@ -60,13 +66,18 @@ assert.ok(
 
 const basePill = extractStyleBlock('activeGuidanceTopActionPill');
 assert.ok(
-  /minHeight:\s*24/.test(basePill) && /minWidth:\s*58/.test(basePill),
+  /minHeight:\s*24/.test(basePill) && /minWidth:\s*64/.test(basePill),
   'Active Guidance action pills should keep a stable minimum tap and label area.',
 );
 
 const minimize = extractStyleBlock('activeGuidanceMinimizeButton');
 const offline = extractStyleBlock('activeGuidanceOfflineButton');
-assert.ok(/minWidth:\s*84/.test(minimize), 'Minimize pill should reserve enough width for the full label.');
-assert.ok(/minWidth:\s*76/.test(offline), 'Offline pill should reserve enough width for the full label.');
+assert.ok(/minWidth:\s*96/.test(minimize), 'Minimize pill should reserve enough width for the full label.');
+assert.ok(/minWidth:\s*84/.test(offline), 'Offline pill should reserve enough width for the full label.');
+
+assert.ok(
+  navigateSource.includes('Math.min(260, Math.max(228, Math.round(adaptive.windowWidth * 0.26)))'),
+  'Landscape active guidance should compact to the top-left portion of the map instead of spanning too much width.',
+);
 
 console.log('Active Guidance pill label fit checks passed.');

@@ -530,20 +530,31 @@ entrypoint = "./functions/route-catalog-sync-nps-trails/index.ts"
 [functions.route-catalog-sync-michigan-orv]
 enabled = true
 # Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
-# writes and stores Michigan DNR ORV GPX records as state curation inputs only.
+# writes and stores Michigan DNR ORV GPX records as official state recommendations
+# with visible current-condition warnings.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-michigan-orv/index.ts"
 
 [functions.route-catalog-sync-minnesota-ohv]
 enabled = true
 # Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
-# writes and stores Minnesota DNR OHV GeoPackage records as curation inputs only.
+# writes and stores Minnesota DNR OHV GeoPackage records as official state
+# recommendations with visible current-condition and navigation caveat warnings.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-minnesota-ohv/index.ts"
 
 [functions.route-catalog-sync-oregon-odf-ohv]
 enabled = true
 # Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
-# writes and stores Oregon ODF OHV GPX records as state curation inputs only.
+# writes and stores Oregon ODF OHV GPX records as official state recommendations
+# with visible current-condition warnings.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-oregon-odf-ohv/index.ts"
+
+[functions.route-catalog-sync-colorado-cpw-trails]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes and stores Colorado CPW motorized designated-trail records as official
+# state recommendations with visible current-condition warnings.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-colorado-cpw-trails/index.ts"

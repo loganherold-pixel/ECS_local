@@ -1,0 +1,144 @@
+name: Route Catalog Colorado CPW Trails Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_miles:
+        description: Minimum CPW designated trail miles to ingest.
+        required: false
+        default: '0.25'
+      max_features:
+        description: Maximum motorized-permitted CPW trail features to normalize.
+        required: false
+        default: '150'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-data-plane-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Colorado CPW designated trail records
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      MIN_MILES: ${{ inputs.min_miles || '0.25' }}
+      MAX_FEATURES: ${{ inputs.max_features || '150' }}
+
+    steps:
+      - name: Validate sync secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build bounded sync payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const minMiles = Number(process.env.MIN_MILES || 0.25);
+          const maxFeatures = Number(process.env.MAX_FEATURES || 150);
+
+          if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
+          if (!Number.isFinite(maxFeatures) || maxFeatures <= 0) throw new Error('max_features must be positive.');
+
+          fs.writeFileSync(
+            'route-catalog-colorado-cpw-trails-sync-payload.json',
+            JSON.stringify({
+              minMiles,
+              maxFeatures: Math.min(500, Math.round(maxFeatures)),
+            }),
+          );
+          NODE
+
+      - name: Invoke Colorado CPW route catalog sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl_exit=0
+          http_code=$(curl --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-colorado-cpw-trails-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-colorado-cpw-trails" \
+            --output route-catalog-colorado-cpw-trails-sync-response.json \
+            --write-out "%{http_code}") || curl_exit=$?
+
+          if [[ "${curl_exit}" -ne 0 || ! "${http_code}" =~ ^[0-9]+$ || "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+            echo "::error::Colorado CPW route catalog sync failed with HTTP ${http_code:-unknown}"
+            node <<'NODE'
+          const fs = require('fs');
+          const responsePath = 'route-catalog-colorado-cpw-trails-sync-response.json';
+          if (!fs.existsSync(responsePath)) {
+            console.error('No response body was written by the sync request.');
+            process.exit(0);
+          }
+          const raw = fs.readFileSync(responsePath, 'utf8').trim();
+          if (!raw) {
+            console.error('Sync response body was empty.');
+            process.exit(0);
+          }
+          try {
+            const response = JSON.parse(raw);
+            console.error(JSON.stringify({
+              ok: response.ok,
+              source: response.source,
+              error: response.error,
+            }, null, 2));
+          } catch {
+            console.error(raw.slice(0, 1200));
+          }
+          NODE
+            exit 1
+          fi
+
+      - name: Summarize sync result
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('route-catalog-colorado-cpw-trails-sync-response.json', 'utf8'));
+
+          if (!response.ok) {
+            throw new Error(response.error || 'Colorado CPW route catalog sync failed.');
+          }
+
+          console.log(JSON.stringify({
+            source: response.source,
+            rawFeatureCount: response.rawFeatureCount,
+            normalizedFeatureCount: response.normalizedFeatureCount,
+            publicRecommendationCount: response.publicRecommendationCount,
+            maxFeatures: response.maxFeatures,
+            minMiles: response.minMiles,
+          }, null, 2));
+
+          const markdown = [
+            '## Route Catalog Colorado CPW Trails Sync',
+            '',
+            '| Source | Raw Features | Normalized Records | Public Recommendations |',
+            '| --- | ---: | ---: | ---: |',
+            `| Colorado CPW Designated Trails | ${response.rawFeatureCount || 0} | ${response.normalizedFeatureCount || 0} | ${response.publicRecommendationCount || 0} |`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE

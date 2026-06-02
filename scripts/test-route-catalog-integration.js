@@ -88,6 +88,7 @@ for (const functionName of [
   'route-catalog-sync-michigan-orv',
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
+  'route-catalog-sync-colorado-cpw-trails',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);
@@ -107,8 +108,13 @@ for (const functionName of [
 }
 const detailFunction = read(path.join('supabase', 'functions', 'route-catalog-detail', 'index.ts'));
 const searchFunction = read(path.join('supabase', 'functions', 'route-catalog-search', 'index.ts'));
+const currentConditionOverlayHelper = read(path.join('supabase', 'functions', '_shared', 'routeCatalogCurrentConditionOverlay.ts'));
 assert(
   detailFunction.includes('activeGuidance') &&
+    detailFunction.includes('buildRouteCatalogCurrentConditionOverlay') &&
+    detailFunction.includes('currentCondition') &&
+    currentConditionOverlayHelper.includes('currentlyOpenStatus') &&
+    currentConditionOverlayHelper.includes('passabilityStatus') &&
     detailFunction.includes('community_signal') &&
     detailFunction.includes('whatToWatch') &&
     detailFunction.includes('sourceTimestamps') &&
@@ -118,6 +124,8 @@ assert(
 );
 assert(
   searchFunction.includes('minDistanceMiles') &&
+    searchFunction.includes('attachCurrentConditionOverlays') &&
+    currentConditionOverlayHelper.includes('current_condition') &&
     searchFunction.includes('maxDistanceMiles') &&
     searchFunction.includes('minDurationMinutes') &&
     searchFunction.includes('maxDurationMinutes') &&
@@ -141,6 +149,10 @@ assert(
     !searchFunction.includes(".from('route_catalog_public')") &&
     searchFunction.includes('curationCandidateCount') &&
     searchFunction.includes('anySourceBackedCandidateCount') &&
+    searchFunction.includes('cleanSourceAdapter') &&
+    searchFunction.includes('filterRecordsBySourceAdapter') &&
+    searchFunction.includes('sourceFilterApplied') &&
+    searchFunction.includes('sourceMatchedCount') &&
     searchFunction.includes('lower_confidence_nearby') &&
     searchFunction.includes('search_distance_miles') &&
     searchFunction.includes('radiusMatchedCount') &&
@@ -222,6 +234,12 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('route-catalog-sync-oregon-odf-ohv') &&
     read(path.join('.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml')).includes('publicRecommendationCount'),
   'Oregon ODF OHV route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml')).includes('route-catalog-sync-colorado-cpw-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml')).includes('publicRecommendationCount'),
+  'Colorado CPW Designated Trails route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&

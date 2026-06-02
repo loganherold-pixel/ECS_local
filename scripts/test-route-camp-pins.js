@@ -66,8 +66,15 @@ function compileTypescript(module, filename) {
 require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
-const { buildCampOpsCampScoutMapPins, isCampOpsMapPinPayload } = require(campOpsMapPinsPath);
-const { normalizeRenderedCampScoutMarkers } = require(mapRendererPath);
+const {
+  buildCampOpsCampEndpointMapPins,
+  buildCampOpsCampScoutMapPins,
+  isCampOpsMapPinPayload,
+} = require(campOpsMapPinsPath);
+const {
+  normalizeRenderedCampEndpointMarkers,
+  normalizeRenderedCampScoutMarkers,
+} = require(mapRendererPath);
 
 function camp(id, score, index, overrides = {}) {
   return {
@@ -110,7 +117,13 @@ function recommendationSet(rankedCandidates, overrides = {}) {
 }
 
 const ranked = [92, 88, 84, 79, 73, 71].map((score, index) => camp(`route-camp-${index + 1}`, score, index + 1));
-const routePins = buildCampOpsCampScoutMapPins(recommendationSet(ranked), {
+assert.strictEqual(
+  buildCampOpsCampEndpointMapPins,
+  buildCampOpsCampScoutMapPins,
+  'Legacy CampScout map-pin callers should remain shimmed to Camp Endpoint pins for one release.',
+);
+
+const routePins = buildCampOpsCampEndpointMapPins(recommendationSet(ranked), {
   selectedCampOpsCandidateId: 'route-camp-3',
 });
 
@@ -128,8 +141,13 @@ assert.deepStrictEqual(
 assert(routePins.every(isCampOpsMapPinPayload), 'Route camp pins should keep the CampOps behavior tag.');
 assert.strictEqual(routePins[2].selected, true, 'Selected route camp pin should preserve selected state.');
 
-const renderedPins = normalizeRenderedCampScoutMarkers(routePins);
-assert.strictEqual(renderedPins.length, 5, 'Route CampOps pins should pass through the shared camp scout renderer.');
+assert.strictEqual(
+  normalizeRenderedCampEndpointMarkers,
+  normalizeRenderedCampScoutMarkers,
+  'Legacy CampScout renderer callers should remain shimmed to Camp Endpoint rendering for one release.',
+);
+const renderedPins = normalizeRenderedCampEndpointMarkers(routePins);
+assert.strictEqual(renderedPins.length, 5, 'Route CampOps pins should pass through the shared Camp Endpoint renderer.');
 assert.strictEqual(renderedPins[0].pinFamily, 'campops', 'Renderer should preserve route camp behavior metadata.');
 assert.strictEqual(renderedPins[0].campOpsRoleLabel, 'Camp 1', 'Renderer should preserve camp role labels.');
 
@@ -139,18 +157,18 @@ const noRankedCandidates = {
   recommendedCamp: camp('fallback-role-camp', 94, 1),
 };
 assert.strictEqual(
-  buildCampOpsCampScoutMapPins(noRankedCandidates).length,
+  buildCampOpsCampEndpointMapPins(noRankedCandidates).length,
   0,
   'Route camp rendering should not force fallback role pins when no ranked candidates qualify.',
 );
 
 assert.strictEqual(
-  buildCampOpsCampScoutMapPins(recommendationSet([camp('below-threshold', 69, 1)])).length,
+  buildCampOpsCampEndpointMapPins(recommendationSet([camp('below-threshold', 69, 1)])).length,
   0,
   'Route camp rendering should suppress candidates below the high-confidence pin threshold.',
 );
 
-const duplicatePins = buildCampOpsCampScoutMapPins(
+const duplicatePins = buildCampOpsCampEndpointMapPins(
   recommendationSet([ranked[0], ranked[0], ranked[1], ranked[1], ranked[2]]),
 );
 assert.deepStrictEqual(
@@ -159,7 +177,7 @@ assert.deepStrictEqual(
   'Route camp rendering should dedupe repeated CampOps candidate ids before render.',
 );
 
-const structureBufferedPins = buildCampOpsCampScoutMapPins(
+const structureBufferedPins = buildCampOpsCampEndpointMapPins(
   recommendationSet([
     camp('inside-structure-buffer', 96, 1, { nearestResidentialStructureDistanceMiles: 0.9 }),
     camp('outside-structure-buffer', 92, 2, { nearestResidentialStructureDistanceMiles: 1.15 }),
@@ -195,7 +213,7 @@ assert.deepStrictEqual(
     },
   ]).map((pin) => pin.id),
   ['camp-scout-renderer-clear-buffer'],
-  'Shared renderer should keep a final one-mile structure-buffer safety net for all ECS camp pins.',
+  'Shared Camp Endpoint renderer should keep a final one-mile structure-buffer safety net for all ECS camp pins.',
 );
 
 const mapRendererSource = fs.readFileSync(mapRendererPath, 'utf8');
@@ -215,10 +233,11 @@ assert(
 
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 assert(
-  navigateSource.includes('buildCampOpsCampScoutMapPins(campOpsRecommendationSet') &&
-    navigateSource.includes('campScoutMarkers={sharedCampPinMapMarkers}') &&
+  navigateSource.includes('buildCampOpsCampEndpointMapPins(campOpsRecommendationSet') &&
+    navigateSource.includes('campEndpointMarkers={sharedCampPinMapMarkers}') &&
+    navigateSource.includes('onCampEndpointTap={handleCampScoutTap}') &&
     navigateSource.includes('onCampScoutTap={handleCampScoutTap}'),
-  'Navigate should feed route CampOps pins into MapRenderer through the shared camp scout marker prop.',
+  'Navigate should feed route CampOps pins into MapRenderer through the Camp Endpoint marker prop while retaining legacy CampScout taps.',
 );
 assert(
   navigateSource.includes('isCampOpsMapPinPayload(payload)') &&

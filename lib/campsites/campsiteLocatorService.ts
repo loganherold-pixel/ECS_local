@@ -1494,12 +1494,17 @@ function withOptionalCampOpsPayload(
   RouteCampsiteLocatorInput | PolygonCampsiteLocatorInput,
     'campopsRecommendationsEnabled' | 'campOps' | 'vehicleProfile'
   >,
+  routeEndpointOptions: Pick<
+    CampOpsSearchIntegrationOptions,
+    'routeCoordinates' | 'routeDistanceMiles'
+  > = {},
 ): CampsiteCandidateResult {
   const campOpsOptions = input.campOps ?? {};
   return withCampOpsSearchPayload(result, {
     source,
     vehicleProfile: input.vehicleProfile,
     ...campOpsOptions,
+    ...routeEndpointOptions,
     rolloutConfig: {
       ...(campOpsOptions.rolloutConfig ?? {}),
       campopsRecommendationsEnabled:
@@ -1600,6 +1605,10 @@ export function locateCampsiteResultForRoute(
       : cappedResult,
     'route',
     input,
+    {
+      routeCoordinates,
+      routeDistanceMiles: cappedResult.totalDistanceMiles,
+    },
   );
 
   logRouteCampsiteLocatorSummary({

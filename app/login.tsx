@@ -539,15 +539,17 @@ export default function LoginScreen() {
               ]}
             >
               <LoginHeaderBlock
-                isOnline={isOnline}
                 headerHeight={loginHeaderHeight}
                 logoWidth={loginLogoWidth}
                 logoHeight={loginLogoHeight}
                 frameWidth={isLandscape ? Math.max(0, loginLayout.contentMaxWidth - loginLayout.formWidth - loginLayout.contentGap) : undefined}
-                statusInline={loginLayout.statusInline}
               />
               {mode === 'login' ? (
                 <View style={[styles.formColumn, { width: loginLayout.formWidth }]}>
+                  <LoginConnectionStatus
+                    isOnline={isOnline}
+                    compactLayout={loginLayout.compactLayout}
+                  />
                   <LoginCard
                     email={email}
                     emailError={emailError}
@@ -587,6 +589,10 @@ export default function LoginScreen() {
                 </View>
               ) : (
                 <View style={[styles.formColumn, { width: loginLayout.formWidth }]}>
+                  <LoginConnectionStatus
+                    isOnline={isOnline}
+                    compactLayout={loginLayout.compactLayout}
+                  />
                   <ForgotPasswordCard
                     resetEmail={resetEmail}
                     resetEmailError={resetEmailError}
@@ -644,14 +650,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   formColumn: { width: '100%', alignItems: 'stretch', justifyContent: 'center' },
+  formStatusSlot: {
+    minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
+    marginBottom: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  formStatusSlotLandscape: {
+    marginBottom: 6,
+  },
   logoFrame: {
     width: '100%',
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingBottom: LOGIN_STATUS_INDICATOR_HEIGHT + 12,
-  },
-  logoFrameLandscape: {
     paddingBottom: 0,
   },
   logoImage: {
@@ -659,18 +672,8 @@ const styles = StyleSheet.create({
     aspectRatio: LOGIN_LOGO_ASPECT_RATIO,
   },
   onlineRow: {
-    position: 'absolute',
-    bottom: 3,
     alignSelf: 'center',
     minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  onlineRowInline: {
-    minHeight: LOGIN_STATUS_INDICATOR_HEIGHT,
-    marginTop: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -764,25 +767,20 @@ const styles = StyleSheet.create({
 });
 
 const LoginHeaderBlock = memo(function LoginHeaderBlock({
-  isOnline,
   headerHeight,
   logoWidth,
   logoHeight,
   frameWidth,
-  statusInline,
 }: {
-  isOnline: boolean;
   headerHeight: number;
   logoWidth: number;
   logoHeight: number;
   frameWidth?: number;
-  statusInline: boolean;
 }) {
   return (
     <View
       style={[
         styles.logoFrame,
-        statusInline ? styles.logoFrameLandscape : null,
         { height: headerHeight },
         frameWidth != null ? { width: frameWidth } : null,
       ]}
@@ -792,7 +790,20 @@ const LoginHeaderBlock = memo(function LoginHeaderBlock({
         resizeMode="contain"
         style={[styles.logoImage, { width: logoWidth, height: logoHeight }]}
       />
-      <View style={statusInline ? styles.onlineRowInline : styles.onlineRow}>
+    </View>
+  );
+});
+
+const LoginConnectionStatus = memo(function LoginConnectionStatus({
+  isOnline,
+  compactLayout,
+}: {
+  isOnline: boolean;
+  compactLayout: boolean;
+}) {
+  return (
+    <View style={[styles.formStatusSlot, compactLayout ? styles.formStatusSlotLandscape : null]}>
+      <View style={styles.onlineRow}>
         <Ionicons
           name={isOnline ? 'wifi' : 'cloud-offline-outline'}
           size={12}

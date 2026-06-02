@@ -54,6 +54,34 @@ function rounded(value: number | null | undefined): number | null {
   return Math.round(value * 10) / 10;
 }
 
+const PRIMARY_POWER_LIVE_MAX_AGE_MS = 2 * 60_000;
+const PRIMARY_POWER_AGING_MAX_AGE_MS = 5 * 60_000;
+
+function parseTimestampMs(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function connectedPrimaryFreshness(
+  primaryDevice: ManagedPowerDevice | null,
+  referenceMs: number,
+): ExpeditionPowerDataFreshness | null {
+  if (!primaryDevice || primaryDevice.connectionState !== 'connected') return null;
+  const hasPrimaryTelemetry =
+    primaryDevice.lastSocPct != null ||
+    primaryDevice.lastWattsIn != null ||
+    primaryDevice.lastWattsOut != null;
+  if (!hasPrimaryTelemetry) return null;
+  const lastSeenMs = parseTimestampMs(primaryDevice.lastSeenAt);
+  if (lastSeenMs == null) return null;
+  const ageMs = Math.max(0, referenceMs - lastSeenMs);
+  if (ageMs <= PRIMARY_POWER_LIVE_MAX_AGE_MS) return 'live';
+  if (ageMs <= PRIMARY_POWER_AGING_MAX_AGE_MS) return 'aging';
+  return null;
+}
+
 export function buildPowerReadinessInput(args: {
   sourceInput: Pick<ExpeditionReadinessInput, 'route' | 'offline' | 'campCandidates' | 'plannedDepartureAt' | 'daylight'>;
   primaryDevice?: ManagedPowerDevice | null;
@@ -104,9 +132,17 @@ export function buildPowerReadinessInput(args: {
   const inputWatts = rounded(intelligence?.inputWatts ?? primaryDevice?.lastWattsIn ?? null);
   const outputWatts = rounded(intelligence?.outputWatts ?? primaryDevice?.lastWattsOut ?? null);
   const solarInputWatts = rounded(intelligence?.solarInputWatts ?? null);
-  const dataFreshness = normalizeFreshness(intelligence?.dataFreshness);
+  const intelligenceFreshness = normalizeFreshness(intelligence?.dataFreshness);
+  const referenceMs =
+    parseTimestampMs(args.updatedAt)
+    ?? parseTimestampMs(primaryDevice?.lastSeenAt)
+    ?? Date.now();
+  const primaryFreshness = connectedPrimaryFreshness(primaryDevice, referenceMs);
+  const dataFreshness = primaryFreshness ?? intelligenceFreshness;
+  const primaryUpdatedAt = primaryFreshness ? primaryDevice?.lastSeenAt ?? null : null;
+  const intelligenceUpdatedAt = intelligence?.lastUpdatedAt != null ? new Date(intelligence.lastUpdatedAt).toISOString() : null;
   const source =
-    intelligence?.isLive || primaryDevice?.connectionState === 'connected'
+    dataFreshness === 'live' || dataFreshness === 'aging' || primaryDevice?.connectionState === 'connected'
       ? 'live'
       : primaryDevice?.connectionMethod === 'manual'
         ? 'manual'
@@ -136,10 +172,7 @@ export function buildPowerReadinessInput(args: {
       ?? (powerRelevantForTrip ? 'Add a power runtime estimate before departure.' : 'Connect or update power only if this trip depends on powered loads.'),
     hasManualFallback: primaryDevice?.connectionMethod === 'manual' || hasTelemetry,
     source,
-    updatedAt:
-      intelligence?.lastUpdatedAt != null
-        ? new Date(intelligence.lastUpdatedAt).toISOString()
-        : primaryDevice?.lastSeenAt ?? args.updatedAt ?? null,
+    updatedAt: primaryUpdatedAt ?? intelligenceUpdatedAt ?? primaryDevice?.lastSeenAt ?? args.updatedAt ?? null,
     isStale: stale,
   };
 }

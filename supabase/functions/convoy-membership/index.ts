@@ -47,6 +47,7 @@ const corsHeaders = {
 
 const INVITE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const VALID_ROLES = new Set<ConvoyRole>(['lead', 'sweep', 'member', 'support']);
+const CONVOY_MEMBER_SELECT_BASE = 'id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at';
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -66,6 +67,23 @@ function backendErrorText(error: unknown): string {
     .filter((part) => part != null)
     .map(String)
     .join(' ');
+}
+
+function isOptionalConvoyMemberIdentityColumnError(error: unknown): boolean {
+  const text = backendErrorText(error).toLowerCase();
+  return (
+    text.includes('column') &&
+    text.includes('does not exist') &&
+    (text.includes('expedition_badge_title') || text.includes('display_name'))
+  );
+}
+
+function withConvoyMemberIdentityFallback(member: Record<string, unknown>) {
+  return {
+    display_name: null,
+    expedition_badge_title: null,
+    ...member,
+  };
 }
 
 function backendReadinessFailure(error: unknown): Response | null {
@@ -258,6 +276,38 @@ async function requireLeader(admin: ReturnType<typeof createAdminClient>, convoy
   return { ok: true as const, convoy: data };
 }
 
+async function insertConvoyMemberWithoutIdentityColumns(
+  admin: ReturnType<typeof createAdminClient>,
+  row: Record<string, unknown>,
+) {
+  const { expedition_badge_title: _expeditionBadgeTitle, ...baseRow } = row;
+  const { data, error } = await admin
+    .from('convoy_members')
+    .insert(baseRow)
+    .select(CONVOY_MEMBER_SELECT_BASE)
+    .single();
+
+  if (error || !data) return { ok: false as const, response: failBackend(error, 'Unable to join convoy.') };
+  return { ok: true as const, member: withConvoyMemberIdentityFallback(data) };
+}
+
+async function updateConvoyMemberWithoutIdentityColumns(
+  admin: ReturnType<typeof createAdminClient>,
+  memberId: string,
+  row: Record<string, unknown>,
+) {
+  const { expedition_badge_title: _expeditionBadgeTitle, ...baseRow } = row;
+  const { data, error } = await admin
+    .from('convoy_members')
+    .update(baseRow)
+    .eq('id', memberId)
+    .select(CONVOY_MEMBER_SELECT_BASE)
+    .single();
+
+  if (error || !data) return { ok: false as const, response: failBackend(error, 'Unable to reactivate convoy membership.') };
+  return { ok: true as const, member: withConvoyMemberIdentityFallback(data) };
+}
+
 async function createInvite(admin: ReturnType<typeof createAdminClient>, body: ActionBody, user: AuthenticatedUser) {
   const convoyId = sanitizeText(body.convoyId, 80);
   const role = VALID_ROLES.has(body.role as ConvoyRole) ? (body.role as ConvoyRole) : 'member';
@@ -339,36 +389,48 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
   if (!claimedInvite) return fail('invite_maxed', 'Invite is no longer available.', 409);
 
   if (existing) {
-    const { data: member, error: updateError } = await admin
-      .from('convoy_members')
-      .update({
-        callsign,
-        vehicle_id: vehicleId,
-        expedition_badge_title: expeditionBadgeTitle,
-        role: invite.role,
-        revoked_at: null,
-        joined_at: new Date().toISOString(),
-      })
-      .eq('id', existing.id)
-      .select('*')
-      .single();
-    if (updateError || !member) return failBackend(updateError, 'Unable to reactivate convoy membership.');
-    return ok({ convoy, member });
-  }
-
-  const { data: member, error: memberError } = await admin
-    .from('convoy_members')
-    .insert({
-      convoy_id: invite.convoy_id,
-      user_id: user.id,
+    const updatePayload = {
       callsign,
       vehicle_id: vehicleId,
       expedition_badge_title: expeditionBadgeTitle,
       role: invite.role,
-    })
+      revoked_at: null,
+      joined_at: new Date().toISOString(),
+    };
+    const { data: member, error: updateError } = await admin
+      .from('convoy_members')
+      .update(updatePayload)
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+    if (isOptionalConvoyMemberIdentityColumnError(updateError)) {
+      const fallback = await updateConvoyMemberWithoutIdentityColumns(admin, existing.id, updatePayload);
+      if (!fallback.ok) return fallback.response;
+      return ok({ convoy, member: fallback.member });
+    }
+    if (updateError || !member) return failBackend(updateError, 'Unable to reactivate convoy membership.');
+    return ok({ convoy, member });
+  }
+
+  const insertPayload = {
+    convoy_id: invite.convoy_id,
+    user_id: user.id,
+    callsign,
+    vehicle_id: vehicleId,
+    expedition_badge_title: expeditionBadgeTitle,
+    role: invite.role,
+  };
+  const { data: member, error: memberError } = await admin
+    .from('convoy_members')
+    .insert(insertPayload)
     .select('*')
     .single();
 
+  if (isOptionalConvoyMemberIdentityColumnError(memberError)) {
+    const fallback = await insertConvoyMemberWithoutIdentityColumns(admin, insertPayload);
+    if (!fallback.ok) return fallback.response;
+    return ok({ convoy, member: fallback.member });
+  }
   if (memberError || !member) return failBackend(memberError, 'Unable to join convoy.');
   return ok({ convoy, member });
 }

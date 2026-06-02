@@ -1,3 +1,5 @@
+import type { CampOpsRouteCampEndpointPlan } from '../campops/campOpsTypes';
+
 export type RouteContextStatus =
   | 'idle'
   | 'queued'
@@ -265,6 +267,7 @@ export type RouteContext = {
   selectedSupplyPlan?: SupplyPlan | null;
   routeGeometry: RouteGeometry | null;
   campCandidates: CampCandidate[];
+  campEndpointPlan?: CampOpsRouteCampEndpointPlan | null;
   bailoutCandidates: BailoutCandidate[];
   confidence: Confidence;
   status: RouteContextStatus;

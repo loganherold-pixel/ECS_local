@@ -5,6 +5,7 @@ export type CampOpsConfidence = (typeof CAMP_OPS_CONFIDENCE_LEVELS)[number];
 
 export const CAMP_OPS_DATA_SOURCES = [
   'route_candidate',
+  'route_endpoint_candidate',
   'draw_area_candidate',
   'community',
   'private',
@@ -646,6 +647,46 @@ export type CampRecommendationSet = {
   enrichmentsByCandidateId?: Record<string, CampCandidateEnrichment>;
   explanations?: CampRecommendationExplanations;
   decisionPoint?: CampOpsDecisionPoint | null;
+};
+
+export type CampOpsRouteSide = 'left' | 'right' | 'unknown';
+export type CampOpsRouteEndpointRole = 'primary' | 'backup' | 'emergency' | 'verify';
+export type CampOpsEndpointExactness = 'known_site' | 'area_candidate' | 'planning_window';
+
+export type CampOpsRouteEndpointWindow = {
+  id: string;
+  plannedDay: number;
+  nightIndex: number;
+  targetRouteMile: number | null;
+  targetEtaIso?: string | null;
+  latestArrivalIso?: string | null;
+  searchCorridorMiles: number;
+};
+
+export type CampOpsRouteEndpointMetadata = {
+  windowId: string;
+  routeSide: CampOpsRouteSide;
+  routeMileMarker: number | null;
+  nearestSegmentIndex: number | null;
+  distanceFromRouteMiles: number | null;
+  detourMiles?: number | null;
+  exactness: CampOpsEndpointExactness;
+};
+
+export type CampOpsRouteCampEndpointPlan = {
+  routeId: string;
+  tripId?: string | null;
+  generatedAt: string;
+  windows: CampOpsRouteEndpointWindow[];
+  endpointCandidates: Array<{
+    candidate: CampCandidate;
+    enrichment: CampCandidateEnrichment;
+    routeEndpoint: CampOpsRouteEndpointMetadata;
+    role: CampOpsRouteEndpointRole;
+  }>;
+  recommendationsByWindow: Record<string, CampRecommendationSet>;
+  selectedEndpointIds: string[];
+  warnings: string[];
 };
 
 export const EMPTY_CAMP_SUITABILITY_SCORES: CampSuitabilityScores = {

@@ -17,6 +17,7 @@ on:
       - Route Catalog Minnesota OHV Sync
       - Route Catalog NPS Trails Sync
       - Route Catalog Oregon ODF OHV Sync
+      - Route Catalog Colorado CPW Trails Sync
       - Route Catalog USGS Trails Sync
     types:
       - completed
@@ -187,6 +188,7 @@ jobs:
             'Route Catalog Minnesota OHV Sync': ['minnesota_dnr_ohv_pilot'],
             'Route Catalog NPS Trails Sync': ['nps_public_trails_joshua_tree'],
             'Route Catalog Oregon ODF OHV Sync': ['oregon_odf_ohv_pilot'],
+            'Route Catalog Colorado CPW Trails Sync': ['colorado_cpw_designated_trails_pilot'],
             'Route Catalog USGS Trails Sync': ['usgs_nps_sierra_context'],
           };
 

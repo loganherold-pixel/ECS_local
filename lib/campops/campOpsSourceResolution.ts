@@ -93,6 +93,7 @@ const SOURCE_DEFAULT_TIERS: Partial<Record<CampOpsDataSource, CampOpsSourceWeigh
   offline_dataset: 'app_owned_data',
   inferred: 'app_owned_data',
   route_candidate: 'app_owned_data',
+  route_endpoint_candidate: 'app_owned_data',
   draw_area_candidate: 'app_owned_data',
   community: 'recent_user_debrief_data',
   group: 'recent_user_debrief_data',

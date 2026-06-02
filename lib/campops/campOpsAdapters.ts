@@ -37,7 +37,7 @@ function normalizeAccessDifficulty(value: string | null | undefined): CampAccess
 
 export function campOpsCandidateFromGeneratedCandidate(
   candidate: GeneratedCampsiteCandidate,
-  source: Extract<CampOpsDataSource, 'route_candidate' | 'draw_area_candidate'> = 'route_candidate',
+  source: Extract<CampOpsDataSource, 'route_candidate' | 'route_endpoint_candidate' | 'draw_area_candidate'> = 'route_candidate',
 ): CampCandidate {
   const score = normalizeCampOpsScore(candidate.score ?? candidate.qualityScore);
   return {

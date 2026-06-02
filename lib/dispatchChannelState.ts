@@ -57,6 +57,8 @@ type DispatchChannelContext = {
   syncStatus?: string;
   isOnline: boolean;
   offlineMode: boolean;
+  gpsAltitudeFt?: number | null;
+  gpsHasFix?: boolean;
 };
 
 const CHANNEL_ACTION: Record<DispatchChannelId, string> = {
@@ -201,6 +203,11 @@ function formatMiles(value: number | null | undefined): string | null {
   return `${value.toFixed(value >= 10 ? 0 : 1)} mi`;
 }
 
+function getDispatchGpsAltitudeFeet(context?: DispatchChannelContext | null): number | null {
+  if (context?.gpsHasFix === false) return null;
+  return isFiniteNumber(context?.gpsAltitudeFt) ? context.gpsAltitudeFt : null;
+}
+
 function routeSessionLifecycleLabel(lifecycle: NavigateRouteSessionSnapshot['lifecycle']): string {
   switch (lifecycle) {
     case 'active':
@@ -222,7 +229,7 @@ function getRouteSessionDistanceMiles(snapshot: NavigateRouteSessionSnapshot): n
   return computePointDistanceMiles(snapshot.routePoints);
 }
 
-function computePointDistanceMiles(points: Array<{ lat?: number | null; lng?: number | null; lon?: number | null }>): number | null {
+function computePointDistanceMiles(points: { lat?: number | null; lng?: number | null; lon?: number | null }[]): number | null {
   if (!Array.isArray(points) || points.length < 2) return null;
   let distanceMiles = 0;
   for (let index = 1; index < points.length; index += 1) {
@@ -352,7 +359,8 @@ type TerrainRiskFallback = {
   updatedAt: string | null;
 };
 
-function buildTerrainRiskFromRouteFallback(): TerrainRiskFallback | null {
+function buildTerrainRiskFromRouteFallback(context?: DispatchChannelContext | null): TerrainRiskFallback | null {
+  const currentElevationFeet = getDispatchGpsAltitudeFeet(context);
   const sessionRoute = getRouteSessionFallback();
   if (sessionRoute && sessionRoute.routePoints.length >= 2) {
     const route = buildTerrainRiskCommandRoute({
@@ -362,7 +370,7 @@ function buildTerrainRiskFromRouteFallback(): TerrainRiskFallback | null {
       totalDistanceMiles: sessionRoute.distanceMiles,
       sourceLabel: 'Live guidance elevation profile',
       routePoints: sessionRoute.routePoints,
-      currentElevationFeet: null,
+      currentElevationFeet,
     });
     return route ? { route, updatedAt: sessionRoute.updatedAt } : null;
   }
@@ -376,7 +384,7 @@ function buildTerrainRiskFromRouteFallback(): TerrainRiskFallback | null {
       totalDistanceMiles: localRoute.distanceMiles,
       sourceLabel: 'Local active route elevation profile',
       routeSegments: localRoute.routeSegments,
-      currentElevationFeet: null,
+      currentElevationFeet,
     });
     return route ? { route, updatedAt: localRoute.updatedAt } : null;
   }
@@ -482,10 +490,10 @@ function buildRouteChannel(): DispatchChannelSnapshot {
   };
 }
 
-function buildTerrainChannel(): DispatchChannelSnapshot {
+function buildTerrainChannel(context: DispatchChannelContext): DispatchChannelSnapshot {
   const terrain = terrainAnalysisEngine.getCurrent();
   if (!terrain) {
-    const terrainRiskFallback = buildTerrainRiskFromRouteFallback();
+    const terrainRiskFallback = buildTerrainRiskFromRouteFallback(context);
     if (terrainRiskFallback) {
       const routeTerrainRisk = terrainRiskFallback.route;
       const riskLabel = terrainRiskToLegacyRiskLabel(routeTerrainRisk.overallRiskLabel);
@@ -645,7 +653,7 @@ export function getDispatchChannelSnapshots(context: DispatchChannelContext): Di
   return [
     buildWeatherChannel(),
     buildRouteChannel(),
-    buildTerrainChannel(),
+    buildTerrainChannel(context),
     buildResourcesChannel(),
     buildVehicleChannel(),
     buildSyncChannel(context),
@@ -658,7 +666,7 @@ export function getLiveDispatchEventInput(
 ): LiveDispatchEventInput {
   const weatherState = getDispatchWeatherStateFromShared();
   const activeRouteState = routeAnalysisEngine.getCurrent() ?? getLiveRouteStateFromFallback();
-  const terrainRiskState = terrainAnalysisEngine.getCurrent() ?? getLiveTerrainStateFromFallback();
+  const terrainRiskState = terrainAnalysisEngine.getCurrent() ?? getLiveTerrainStateFromFallback(context);
   return {
     weatherState,
     activeRouteState,
@@ -693,8 +701,8 @@ function getLiveRouteStateFromFallback(): LiveDispatchEventInput['activeRouteSta
   };
 }
 
-function getLiveTerrainStateFromFallback(): LiveDispatchEventInput['terrainRiskState'] {
-  const terrainRiskFallback = buildTerrainRiskFromRouteFallback();
+function getLiveTerrainStateFromFallback(context: DispatchChannelContext): LiveDispatchEventInput['terrainRiskState'] {
+  const terrainRiskFallback = buildTerrainRiskFromRouteFallback(context);
   if (!terrainRiskFallback) return null;
   const routeTerrainRisk = terrainRiskFallback.route;
   const overallRisk = terrainRiskToLegacyRiskLabel(routeTerrainRisk.overallRiskLabel);

@@ -201,6 +201,8 @@ export type CampScoutMapMarkerPayload = {
   accessibilityLabel?: string;
 };
 
+export type CampOpsCampEndpointMapMarkerPayload = CampScoutMapMarkerPayload;
+
 type TrailSegment = {
   id?: string | number;
   coordinates?: [number, number][] | { latitude: number; longitude: number }[];
@@ -333,6 +335,8 @@ export type MapRendererProps = {
   campsiteMarkers?: MarkerLike[];
   campIntelMarkers?: CampIntelMarkerPayload[];
   onCampIntelTap?: (camp: any) => void;
+  campEndpointMarkers?: CampOpsCampEndpointMapMarkerPayload[];
+  onCampEndpointTap?: (camp: any) => void;
   campScoutMarkers?: CampScoutMapMarkerPayload[];
   onCampScoutTap?: (camp: any) => void;
   tiltAlertMarkers?: MarkerLike[];
@@ -966,7 +970,7 @@ export function normalizeRenderedCampScoutMarkers(
       id: toMarkerId('camp-scout', marker.id, index),
       latitude: marker.latitude,
       longitude: marker.longitude,
-      title: marker.title || 'Camp Scout candidate',
+      title: marker.title || 'Camp Endpoint candidate',
       sourceType: marker.sourceType || 'unknown',
       confidenceGrade: /^[ABCD]$/.test(marker.confidenceGrade) ? marker.confidenceGrade : 'D',
       confidenceScore:
@@ -1048,6 +1052,9 @@ export function buildCampScoutPinFeatureCollection(
     })),
   };
 }
+
+export const normalizeRenderedCampEndpointMarkers = normalizeRenderedCampScoutMarkers;
+export const buildCampEndpointPinFeatureCollection = buildCampScoutPinFeatureCollection;
 
 export function buildMapOverlayPayloadHash(payload: WebMapPayload) {
   const {
@@ -1357,7 +1364,10 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
     styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE),
     cameraMode: props.cameraMode ?? null,
     campsites: normalizeRenderedCampsiteMarkers(pickCampsiteMarkerInput(props)),
-    campScoutPins: normalizeRenderedCampScoutMarkers(props.campScoutMarkers ?? []),
+    campScoutPins: normalizeRenderedCampEndpointMarkers([
+      ...(props.campEndpointMarkers ?? []),
+      ...(props.campScoutMarkers ?? []),
+    ]),
     tiltAlerts: tiltAlertInput
       .filter((m) => {
         const lat =
@@ -4392,7 +4402,7 @@ function makeMapHtml(
         root.setAttribute('tabindex', '0');
         root.setAttribute(
           'aria-label',
-          String(item.accessibilityLabel || ((item.campOpsRoleLabel || 'Camp Scout pin') + ': ' + (item.title || 'camp candidate')))
+          String(item.accessibilityLabel || ((item.campOpsRoleLabel || 'Camp Endpoint pin') + ': ' + (item.title || 'camp candidate')))
         );
         return root;
       }
@@ -6022,6 +6032,8 @@ const MapRenderer = React.memo(function MapRenderer({
   campsiteMarkers = [],
   campIntelMarkers = [],
   onCampIntelTap,
+  campEndpointMarkers = [],
+  onCampEndpointTap,
   campScoutMarkers = [],
   onCampScoutTap,
   tiltAlertMarkers = [],
@@ -6203,6 +6215,7 @@ const MapRenderer = React.memo(function MapRenderer({
         tiltAlerts,
         campsiteMarkers,
         campIntelMarkers,
+        campEndpointMarkers,
         campScoutMarkers,
         tiltAlertMarkers,
         routeBuilderActive,
@@ -6236,6 +6249,7 @@ const MapRenderer = React.memo(function MapRenderer({
       tiltAlerts,
       campsiteMarkers,
       campIntelMarkers,
+      campEndpointMarkers,
       campScoutMarkers,
       tiltAlertMarkers,
       routeBuilderActive,
@@ -6820,7 +6834,11 @@ const MapRenderer = React.memo(function MapRenderer({
           return;
         }
         if (payload?.kind === 'campScout') {
-          onCampScoutTap?.(payload);
+          if (payload?.pinFamily === 'campops' && onCampEndpointTap) {
+            onCampEndpointTap(payload);
+          } else {
+            onCampScoutTap?.(payload);
+          }
           return;
         }
         onPinTap?.(payload);
@@ -6871,6 +6889,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onMapBoundsReply,
     onTiltAlertTap,
     onCampIntelTap,
+    onCampEndpointTap,
     onCampScoutTap,
     onUserDrag,
     onRouteBuilderUpdate,
@@ -6989,7 +7008,7 @@ const MapRenderer = React.memo(function MapRenderer({
           userLocation={dynamicPayload.userLocation}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
-          statusLabel={shouldLoadMap ? 'ECS map' : 'Offline map'}
+          statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}
         />
       ) : null}
 

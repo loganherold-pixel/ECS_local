@@ -18,6 +18,7 @@ const expectedFunctionNames = [
   'route-catalog-sync-michigan-orv',
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
+  'route-catalog-sync-colorado-cpw-trails',
 ];
 
 assert.deepStrictEqual(

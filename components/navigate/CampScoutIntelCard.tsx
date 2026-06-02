@@ -64,7 +64,7 @@ function sourceDescription(sourceType: CampScoutSourceType): string {
     case 'community_suggested':
       return 'This location was suggested by the community and passed ECS confidence filters. Verify conditions before relying on it.';
     case 'imported_route_context':
-      return 'This location came from imported route context and passed Camp Scout confidence filters. Verify current rules and access.';
+      return 'This location came from imported route context and passed Camp Endpoints confidence filters. Verify current rules and access.';
     default:
       return 'Source coverage is limited for this candidate. Verify local rules, access, and conditions.';
   }
@@ -73,7 +73,7 @@ function sourceDescription(sourceType: CampScoutSourceType): string {
 const ECS_INFERRED_VERIFICATION_WARNING =
   'This is an ECS-inferred projection only, not a confirmed legal campsite. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
 const CAMP_SCOUT_AREA_POTENTIAL_NOTE =
-  'This pin is not an exact campsite location. ECS is marking an area with high potential for viable campsites; verify the exact site on foot and avoid water, private land, buildings, roads, and unsafe terrain.';
+  'This candidate endpoint is not an exact campsite location. ECS is marking an area with potential for viable camping; verify the exact site on foot and avoid water, private land, buildings, roads, and unsafe terrain.';
 
 function gradeColor(grade: CampScoutCandidate['confidenceGrade']): string {
   switch (grade) {
@@ -203,7 +203,7 @@ export default function CampScoutIntelCard({
         <View style={styles.card} pointerEvents="auto">
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.eyebrow}>{isCampOps ? 'CAMP INTEL' : 'CAMP SCOUT'}</Text>
+              <Text style={styles.eyebrow}>CAMP ENDPOINTS</Text>
               <Text
                 style={styles.title}
                 numberOfLines={2}
@@ -230,7 +230,7 @@ export default function CampScoutIntelCard({
               onPress={onDismiss}
               activeOpacity={0.78}
               accessibilityRole="button"
-              accessibilityLabel={isCampOps ? 'Dismiss Camp Intel popup' : 'Dismiss Camp Scout candidate'}
+              accessibilityLabel={isCampOps ? 'Dismiss Camp Endpoints popup' : 'Dismiss Camp Endpoints candidate'}
             >
               <Ionicons name="close" size={16} color={TACTICAL.textMuted} />
             </TouchableOpacity>
@@ -249,7 +249,7 @@ export default function CampScoutIntelCard({
                   ? `${activeCampOpsDetail.sourceConfidence}. ${activeCampOpsDetail.rationale}`
                   : activeCandidate
                     ? sourceDescription(activeCandidate.sourceType)
-                    : 'Needs verification before relying on this camp candidate.'}
+                    : 'Needs verification before relying on this candidate endpoint.'}
               </Text>
               {badges.length > 0 ? (
                 <View style={styles.badgeRow}>
@@ -395,7 +395,7 @@ export default function CampScoutIntelCard({
               disabled={!navigateSafe}
               activeOpacity={0.82}
               accessibilityRole="button"
-              accessibilityLabel={isCampOps ? 'Navigate to CampOps camp candidate' : 'Navigate to Camp Scout candidate'}
+              accessibilityLabel={isCampOps ? 'Navigate to CampOps candidate endpoint' : 'Navigate to Camp Endpoints candidate'}
             >
               <Text style={styles.primaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
                 NAVIGATE HERE
@@ -407,7 +407,7 @@ export default function CampScoutIntelCard({
                 onPress={onSaveCandidate}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel={isCampOps ? 'Save CampOps camp candidate' : 'Save Camp Scout candidate'}
+                accessibilityLabel={isCampOps ? 'Save CampOps candidate endpoint' : 'Save Camp Endpoints candidate'}
               >
                 <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76}>
                   SAVE CAMP
@@ -421,7 +421,7 @@ export default function CampScoutIntelCard({
                   onPress={onCompareNearby}
                   activeOpacity={0.82}
                   accessibilityRole="button"
-                  accessibilityLabel="Compare nearby CampOps candidates"
+                  accessibilityLabel="Compare nearby CampOps candidate endpoints"
                 >
                   <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                     COMPARE NEARBY
@@ -432,7 +432,7 @@ export default function CampScoutIntelCard({
                   onPress={onMarkUsed}
                   activeOpacity={0.82}
                   accessibilityRole="button"
-                  accessibilityLabel="Mark CampOps camp candidate used"
+                  accessibilityLabel="Mark CampOps candidate endpoint used"
                 >
                   <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76}>
                     MARK USED
@@ -446,7 +446,7 @@ export default function CampScoutIntelCard({
                 onPress={onReportNotViable}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel={isCampOps ? 'Report CampOps camp candidate unusable' : 'Report Camp Scout candidate issue'}
+                accessibilityLabel={isCampOps ? 'Report CampOps candidate endpoint unusable' : 'Report Camp Endpoints candidate issue'}
               >
                 <Text style={styles.secondaryActionText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                   {isCampOps ? 'REPORT UNUSABLE' : 'NOT VIABLE'}

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import Svg, {
   Circle,
@@ -82,6 +82,13 @@ type ElevationTick = {
   label: string;
 };
 
+export type TerrainRiskReferenceAnchor = {
+  x: number;
+  y: number;
+  xPercent: number;
+  yPercent: number;
+};
+
 type Props = {
   profile: TerrainProfilePoint[];
   totalDistanceMiles: number;
@@ -90,6 +97,7 @@ type Props = {
   transparentBackground?: boolean;
   interactive?: boolean;
   referenceEvents?: TerrainRiskReferenceEvent[];
+  selectedReferenceEvent?: TerrainRiskReferenceEvent | null;
   onReferencePointPress?: (event: TerrainRiskReferenceEvent) => void;
 };
 
@@ -152,10 +160,6 @@ function formatElevationLabel(value: number): string {
   return Math.abs(rounded) >= 1000 ? `${(rounded / 1000).toFixed(1)}k` : String(rounded);
 }
 
-function formatFullElevationLabel(value: number): string {
-  return `${Math.round(value).toLocaleString()} ft`;
-}
-
 function formatTerrainHazardKind(kind: NonNullable<TerrainProfilePoint['hazardKinds']>[number]): string {
   switch (kind) {
     case 'washout_watch':
@@ -189,21 +193,6 @@ function formatTerrainReferenceReason(point: TerrainProfilePoint): string {
   return 'Terrain risk change';
 }
 
-function formatTerrainReferenceDetail(point: TerrainProfilePoint, unit: DistanceUnit): string {
-  const grade = Number.isFinite(point.gradePercent)
-    ? ` | grade ${Math.round(point.gradePercent ?? 0)}%`
-    : '';
-  return `${formatDistance(point.distanceMiles, unit).toUpperCase()} | ${formatFullElevationLabel(point.elevationFeet).toUpperCase()}${grade}`;
-}
-
-function getReferenceCalloutLayout(point: ChartPoint): { x: number; y: number; width: number; height: number } {
-  const width = 154;
-  const height = 45;
-  const x = clampNumber(point.x > VIEWBOX_WIDTH - width - 10 ? point.x - width - 8 : point.x + 8, 4, VIEWBOX_WIDTH - width - 4);
-  const y = clampNumber(point.y < height + 8 ? point.y + 10 : point.y - height - 8, 4, VIEWBOX_HEIGHT - height - 18);
-  return { x, y, width, height };
-}
-
 function buildElevationBounds(profile: TerrainProfilePoint[]): ElevationBounds {
   const elevations = profile.map((point) => point.elevationFeet);
   const rawMinElevation = Math.min(...elevations);
@@ -213,6 +202,30 @@ function buildElevationBounds(profile: TerrainProfilePoint[]): ElevationBounds {
   return {
     minElevationFeet: rawMinElevation - padding,
     maxElevationFeet: rawMaxElevation + padding,
+  };
+}
+
+export function getTerrainRiskReferenceAnchor(
+  profile: TerrainProfilePoint[],
+  totalDistanceMiles: number,
+  referenceEvent: TerrainRiskReferenceEvent | null,
+): TerrainRiskReferenceAnchor | null {
+  if (!referenceEvent || profile.length < 2 || totalDistanceMiles <= 0) return null;
+  const matchedPoint = profile.find((point) =>
+    Math.abs(point.distanceMiles - referenceEvent.distanceMiles) <= 0.05);
+  const distanceMiles = matchedPoint?.distanceMiles ?? referenceEvent.distanceMiles;
+  const elevationFeet = matchedPoint?.elevationFeet ?? referenceEvent.elevationFeet;
+  if (!Number.isFinite(distanceMiles) || !Number.isFinite(elevationFeet)) return null;
+
+  const bounds = buildElevationBounds(profile);
+  const x = scaleTerrainDistanceToX(distanceMiles, totalDistanceMiles);
+  const y = scaleTerrainElevationToY(elevationFeet, bounds);
+
+  return {
+    x,
+    y,
+    xPercent: (x / VIEWBOX_WIDTH) * 100,
+    yPercent: (y / VIEWBOX_HEIGHT) * 100,
   };
 }
 
@@ -370,9 +383,9 @@ export default function TerrainRiskSideProfile({
   transparentBackground = false,
   interactive = false,
   referenceEvents = [],
+  selectedReferenceEvent = null,
   onReferencePointPress,
 }: Props) {
-  const [selectedReferencePointId, setSelectedReferencePointId] = useState<string | null>(null);
   const chart = useMemo(() => {
     if (profile.length < 2 || totalDistanceMiles <= 0) return null;
 
@@ -412,16 +425,10 @@ export default function TerrainRiskSideProfile({
     return <View style={styles.emptyChart} />;
   }
 
-  const selectedReferencePoint =
-    chart.referencePoints.find((point) => point.id === selectedReferencePointId) ?? null;
-  const selectedReferenceLayout = selectedReferencePoint
-    ? getReferenceCalloutLayout(selectedReferencePoint)
-    : null;
   const getReferenceEventForPoint = (point: ChartPoint): TerrainRiskReferenceEvent | null =>
     referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05) ?? null;
   const handleReferenceMarkerPress = (point: ChartPoint) => {
     const referenceEvent = getReferenceEventForPoint(point);
-    setSelectedReferencePointId((current) => current === point.id ? null : point.id);
     if (referenceEvent) {
       onReferencePointPress?.(referenceEvent);
     }
@@ -598,9 +605,9 @@ export default function TerrainRiskSideProfile({
 
         {chart.referencePoints.map((point) => {
           const color = getTerrainCommandRiskColor(point.riskLevel);
-          const selected = selectedReferencePointId === point.id;
           const referenceEvent =
             referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05) ?? null;
+          const selected = referenceEvent?.id === selectedReferenceEvent?.id;
           return (
             <G key={`terrain-risk-reference-${point.id}`}>
               <Circle
@@ -715,48 +722,6 @@ export default function TerrainRiskSideProfile({
         >
           FT
         </SvgText>
-        {selectedReferencePoint && selectedReferenceLayout ? (
-          <G>
-            <Rect
-              x={selectedReferenceLayout.x}
-              y={selectedReferenceLayout.y}
-              width={selectedReferenceLayout.width}
-              height={selectedReferenceLayout.height}
-              rx={6}
-              fill="rgba(6, 10, 13, 0.94)"
-              stroke={getTerrainCommandRiskColor(selectedReferencePoint.riskLevel)}
-              strokeWidth={1}
-              opacity={0.98}
-            />
-            <SvgText
-              x={selectedReferenceLayout.x + 8}
-              y={selectedReferenceLayout.y + 12}
-              fill={TACTICAL.amber}
-              fontSize="6.5"
-              fontWeight="900"
-            >
-              Why this point was referenced
-            </SvgText>
-            <SvgText
-              x={selectedReferenceLayout.x + 8}
-              y={selectedReferenceLayout.y + 26}
-              fill={getTerrainCommandRiskColor(selectedReferencePoint.riskLevel)}
-              fontSize="8"
-              fontWeight="900"
-            >
-              {formatTerrainReferenceReason(selectedReferencePoint)}
-            </SvgText>
-            <SvgText
-              x={selectedReferenceLayout.x + 8}
-              y={selectedReferenceLayout.y + 38}
-              fill={TACTICAL.textMuted}
-              fontSize="6.6"
-              fontWeight="700"
-            >
-              {formatTerrainReferenceDetail(selectedReferencePoint, unit)}
-            </SvgText>
-          </G>
-        ) : null}
       </Svg>
       {interactive ? chart.referencePoints.map((point) => {
         const referenceEvent = getReferenceEventForPoint(point);

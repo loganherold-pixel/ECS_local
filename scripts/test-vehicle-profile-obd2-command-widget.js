@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -50,8 +52,8 @@ includes('vehicleCommandLoadCorner', 'Bottom-right compact engine-load corner mu
 includes('vehicleCommandRangeCorner', 'Bottom-left compact range/fuel corner must exist.');
 includes("import VehicleProfileRollAttitudeStrip from './VehicleProfileRollAttitudeStrip';", 'Vehicle Profile must import the centered roll attitude strip.');
 includes('<VehicleProfileRollAttitudeStrip', 'Vehicle Profile must render the centered roll attitude strip.');
-includes('rollDeg={commandStageRollDeg}', 'Vehicle Profile roll strip must use the command-stage roll value.');
-includes('pitchDeg={commandStagePitchDeg}', 'Vehicle Profile roll strip must use command-stage pitch as background campsite-level input.');
+includes('rollDeg={commandVehicleRollDeg}', 'Vehicle Profile roll strip must use the roll-zero-adjusted vehicle roll value.');
+includes('pitchDeg={commandVehiclePitchDeg}', 'Vehicle Profile roll strip must use unchanged command-stage pitch as background campsite-level input.');
 includes('maxRollDeg={45}', 'Vehicle Profile roll strip must clamp visual travel to +/-45 degrees.');
 notIncludes('VEHICLE_PROFILE_BRIGHTNESS_WASH', 'Vehicle Profile should not apply the removed bright image wash.');
 notIncludes('vehicleProfileBrightnessWash', 'Vehicle Profile should not render a dedicated brightness wash above the image.');
@@ -71,6 +73,17 @@ includes("accessibilityLabel={expanded ? 'Vehicle profile expanded' : 'Expand ve
 includes('setActivePanel({ panel, mode });', 'Vehicle Profile must use the shared explicit expanded focus panel state.');
 includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)', 'Vehicle Profile must expand by rendering the selected command panel inline over the map.');
 includes('expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded', 'Vehicle Profile expanded mode must scale the live roll surface inside the enlarged widget.');
+includes('vehicleRollZeroOffsetDeg', 'Vehicle Profile must keep a roll-only zero offset for the compact and expanded roll monitor.');
+includes('const commandVehicleRollDeg = commandStageRollDeg - vehicleRollZeroOffsetDeg;', 'Vehicle Profile must apply the zero offset to roll only.');
+includes('const commandVehiclePitchDeg = commandStagePitchDeg;', 'Vehicle Profile zero control must leave pitch untouched.');
+includes('handleZeroVehicleRoll', 'Vehicle Profile must expose a zero-roll handler.');
+includes('setVehicleRollZeroOffsetDeg(commandStageRollDeg);', 'Vehicle Profile zero control must capture the current roll as the new zero.');
+includes('VehicleCommandRollZeroButton', 'Vehicle Profile must render a reusable zero-roll button.');
+includes('vehicleRollZeroButtonCompact', 'Regular Vehicle Profile widget must position the zero button in the top-left corner.');
+includes('vehicleRollZeroButtonExpanded', 'Expanded Vehicle Profile widget must place the zero button beside the close control.');
+includes("accessibilityLabel=\"Zero vehicle roll indicator\"", 'Vehicle Profile zero button must be accessible.');
+includes('event.stopPropagation();', 'Vehicle Profile zero button must stop the compact card press from opening expanded detail.');
+includes('activePanel?.panel === \'vehicle\'', 'Expanded zero button must only show for the Vehicle Profile panel.');
 
 for (const rowLabel of [
   'RPM',
@@ -78,7 +91,7 @@ for (const rowLabel of [
   'Engine load',
   'Coolant temperature',
   'Battery voltage',
-  'Water gallons',
+  'Water / fluid',
   'Propane / butane',
   'Fuel gallons',
 ]) {
@@ -96,6 +109,8 @@ assert.ok(vehicleDetailBlock, 'VehicleCommandExpandedView block should be discov
   'isLiveVehicleCommandTelemetry(snapshot)',
   'utilitySensorResources.water?.status === \'live\'',
   'utilitySensorResources.propane?.status === \'live\'',
+  'liveWaterPercent',
+  'Math.round(liveWaterPercent)',
   'hasLiveVehicleCommandData',
   '<VehicleProfileRollAttitudeStrip',
   'rollDeg={rollDeg}',
@@ -104,6 +119,19 @@ assert.ok(vehicleDetailBlock, 'VehicleCommandExpandedView block should be discov
   'docked',
 ].forEach((fragment) => {
   assert.ok(vehicleDetailBlock.includes(fragment), `Vehicle expanded live surface must include ${fragment}.`);
+});
+
+assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePill'), 'Vehicle expanded live surface must not render the old LIVE source pill behind the close button.');
+assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePillText'), 'Vehicle expanded live surface must not render the old LIVE source pill text behind the close button.');
+
+[
+  'formatUtilitySensorDepth',
+  'liveWaterDepth',
+  'livePropaneDepth',
+  'levelDistanceMm / 10',
+  'depth ${(state.levelDistanceMm / 10).toFixed(1)} cm',
+].forEach((fragment) => {
+  assert.ok(!vehicleDetailBlock.includes(fragment), `Vehicle expanded live surface must not display utility depth fallback ${fragment}.`);
 });
 
 [

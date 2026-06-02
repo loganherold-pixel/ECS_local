@@ -72,6 +72,7 @@ export function trailPackToOfflinePrepCatalogInput(
     routeCatalogFreshnessWarnings: offlineCache?.freshnessWarnings?.length
       ? offlineCache.freshnessWarnings
       : catalogFreshnessWarnings(dataUsed, verification?.warnings ?? []),
+    routeCatalogCurrentCondition: offlineCache?.currentCondition ?? verification?.currentCondition ?? null,
     offlinePrepGeometrySource: verification?.detailFetchedAt
       ? 'route_catalog_detail_geometry'
       : 'route_catalog_summary_geometry',

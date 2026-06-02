@@ -983,18 +983,6 @@ function canOpenThreatDrilldown(event: DispatchEvent): boolean {
   return !!getThreatMapGeometry(event).center;
 }
 
-function getLiveSourceState(events: DispatchEvent[]): DispatchLiveSourceState {
-  if (events.some((event) => event.source !== 'cache')) {
-    return 'live_systems';
-  }
-
-  if (events.length > 0) {
-    return 'cached_last_known';
-  }
-
-  return 'unavailable';
-}
-
 function getEventUiMeta(uiMetaById: Record<string, EventUiMeta>, event: DispatchEvent, queued: boolean): EventUiMeta {
   return uiMetaById[event.id] ?? {
     state: queued ? 'queued' : 'active',
@@ -2193,6 +2181,8 @@ export default function DispatchCadCommandCenter() {
     syncStatus,
     isOnline,
     offlineMode,
+    gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null,
+    gpsHasFix: dispatchGps.hasFix,
   });
   const dispatchChannelSignatureRef = useRef<string | null>(null);
 
@@ -2254,8 +2244,18 @@ export default function DispatchCadCommandCenter() {
       syncStatus,
       isOnline,
       offlineMode,
+      gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null,
+      gpsHasFix: dispatchGps.hasFix,
     };
-  }, [dirtyCount, isOnline, offlineMode, queuedCount, syncStatus]);
+  }, [
+    dirtyCount,
+    dispatchGps.hasFix,
+    dispatchGps.position?.altitudeFt,
+    isOnline,
+    offlineMode,
+    queuedCount,
+    syncStatus,
+  ]);
 
   useEffect(() => dispatchEventStore.subscribe(setEvents), []);
 
@@ -2607,7 +2607,14 @@ export default function DispatchCadCommandCenter() {
 
   useEffect(() => {
     const liveEvents = buildLiveDispatchEvents(getLiveDispatchEventInput(
-      { queuedCount, syncStatus, isOnline, offlineMode },
+      {
+        queuedCount,
+        syncStatus,
+        isOnline,
+        offlineMode,
+        gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null,
+        gpsHasFix: dispatchGps.hasFix,
+      },
       teamPositionSharingEnabled || externalDispatchIntegrationEnabled
         ? teamSnapshotRef.current
         : null,
@@ -2617,6 +2624,8 @@ export default function DispatchCadCommandCenter() {
     activeTeamId,
     channelRevision,
     dirtyCount,
+    dispatchGps.hasFix,
+    dispatchGps.position?.altitudeFt,
     isOnline,
     offlineMode,
     queuedCount,
@@ -2687,23 +2696,30 @@ export default function DispatchCadCommandCenter() {
     snapshot: teamSnapshot,
   });
   const teamStatusLabel = teamSyncState.label;
-  const sourceState = getLiveSourceState(visibleEvents);
-  const commandSurfaceStatusLabel = activeConvoyControl
-    ? 'convoy active'
-    : sourceState === 'live_systems'
-      ? 'live inputs'
-      : sourceState === 'cached_last_known'
-        ? 'recent data'
-        : 'standby';
   const channelSnapshots = useMemo(
     () => {
       if (channelRevision < 0) {
         return [];
       }
 
-      return getDispatchChannelSnapshots({ queuedCount, syncStatus, isOnline, offlineMode });
+      return getDispatchChannelSnapshots({
+        queuedCount,
+        syncStatus,
+        isOnline,
+        offlineMode,
+        gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null,
+        gpsHasFix: dispatchGps.hasFix,
+      });
     },
-    [channelRevision, isOnline, offlineMode, queuedCount, syncStatus],
+    [
+      channelRevision,
+      dispatchGps.hasFix,
+      dispatchGps.position?.altitudeFt,
+      isOnline,
+      offlineMode,
+      queuedCount,
+      syncStatus,
+    ],
   );
   const advisory = useMemo(() => {
     const topEvent = getTopDispatchAdvisory(visibleEvents);
@@ -3810,9 +3826,6 @@ export default function DispatchCadCommandCenter() {
             <Text style={[styles.feedTitle, isLandscapeDispatch ? styles.feedTitleLandscape : null]}>Convoy Command</Text>
             <Text style={[styles.feedSource, isLandscapeDispatch ? styles.feedSourceLandscape : null]}>COMMAND SURFACE</Text>
           </View>
-          {!isLandscapeDispatch ? (
-            <Text style={styles.feedCount}>{commandSurfaceStatusLabel}</Text>
-          ) : null}
         </View>
         <DispatchConvoyCommandPanel
           connectionLabel={connectionState.label}
@@ -6730,8 +6743,8 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     borderWidth: 1,
-    borderColor: ECS_SURFACE.border.selected,
-    backgroundColor: ECS_SURFACE.background.selected,
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: 'transparent',
     borderRadius: 9,
     overflow: 'hidden',
   },
@@ -6749,8 +6762,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: 1,
-    borderBottomColor: ECS_SURFACE.border.selected,
-    backgroundColor: ECS_SURFACE.background.selected,
+    borderBottomColor: ECS_SURFACE.border.quiet,
+    backgroundColor: 'transparent',
   },
   feedHeaderLandscape: {
     minHeight: 24,
@@ -6778,11 +6791,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  feedCount: {
-    color: TACTICAL.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
   },
   clearCadButton: {
     minHeight: 26,

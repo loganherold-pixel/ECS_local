@@ -133,6 +133,7 @@ assert(
   previewPanel.includes('getTrailPackGuidanceReadiness') &&
     previewPanel.includes('GUIDANCE STATUS') &&
     previewPanel.includes('ROUTE ASSESSMENT') &&
+    previewPanel.includes('CURRENT CONDITION') &&
     previewPanel.includes('WHAT TO WATCH') &&
     previewPanel.includes('RECOMMENDED ACTION') &&
     previewPanel.includes('OFFLINE CACHE') &&
@@ -140,7 +141,7 @@ assert(
     previewPanel.includes('detailError') &&
     previewPanel.includes('guidanceReadiness.label') &&
     previewPanel.includes('guidanceReadiness.description'),
-  'Trail Pack preview details should expose active-guidance readiness, route assessment, offline cache metadata, and preview-only reasons',
+  'Trail Pack preview details should expose active-guidance readiness, route assessment, current-condition overlays, offline cache metadata, and preview-only reasons',
 );
 assert(
   previewPanel.includes('detailDataUsed') &&
@@ -157,10 +158,13 @@ assert(
     offlinePrepPack.includes('routeCatalogAttributionRows') &&
     offlinePrepPack.includes('routeCatalogFreshnessWarnings') &&
     offlinePrepPack.includes('routeCatalogOfflineCache') &&
+    offlinePrepPack.includes('routeCatalogCurrentCondition') &&
     offlinePrepPack.includes('Route Catalog Source Check') &&
+    offlinePrepPack.includes('CURRENT CONDITION') &&
     offlinePrepPack.includes('testID="offline-prep-route-catalog-source-check"') &&
+    offlinePrepPack.includes('testID="offline-prep-route-catalog-current-condition"') &&
     offlinePrepPack.includes('testID="offline-prep-route-catalog-freshness-warning"'),
-  'Offline Prep Pack should show route-catalog cacheability, source timestamps, attribution, and freshness warnings before preparing a pack',
+  'Offline Prep Pack should show route-catalog cacheability, source timestamps, attribution, current-condition posture, and freshness warnings before preparing a pack',
 );
 assert(
   feedbackPanel.includes('COMPLETED') &&

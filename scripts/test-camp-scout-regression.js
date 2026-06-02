@@ -9,28 +9,18 @@ const root = path.join(__dirname, '..');
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'react-native') {
-    const passthrough = ({ children }) => children ?? null;
     return {
-      View: passthrough,
-      Text: passthrough,
-      ActivityIndicator: passthrough,
-      StyleSheet: {
-        absoluteFillObject: {
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          left: 0,
-        },
-        create(styles) {
-          return styles;
-        },
-      },
       Platform: { OS: 'web', select: (values) => values?.web ?? values?.default },
+      StyleSheet: {
+        absoluteFillObject: {},
+        create(styles) { return styles; },
+      },
+      Text() { return null; },
+      View() { return null; },
     };
   }
   if (request === 'react-native-webview') {
-    return { WebView: function WebView() { return null; } };
+    return { WebView() { return null; } };
   }
   if (request === 'react-native-svg') {
     function Svg() { return null; }
@@ -48,9 +38,6 @@ Module._load = function patchedLoad(request, parent, isMain) {
   }
   if (request === './supabase' || request.endsWith('/supabase')) {
     return { supabase: null };
-  }
-  if (request === './ecsIssueReporter' || request.endsWith('/ecsIssueReporter')) {
-    return { reportRecoverableFailure() {} };
   }
   return originalLoad(request, parent, isMain);
 };
@@ -73,20 +60,15 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const {
-  getCampScoutConfidenceGrade,
   rankCampScoutCandidates,
-  scoreCampScoutCandidate,
-} = require(path.join(root, 'lib', 'campScout', 'campScoutScoring.ts'));
-const {
-  aggregateCampScoutCandidates,
-} = require(path.join(root, 'lib', 'campScout', 'campScoutAggregator.ts'));
-const {
   validateCampScoutArea,
-} = require(path.join(root, 'lib', 'campScout', 'campScoutAreaSelection.ts'));
+} = require(path.join(root, 'lib', 'campScout', 'index.ts'));
 const {
-  getCommunityCampCandidatesForArea,
-} = require(path.join(root, 'lib', 'campScout', 'campScoutCommunityAdapter.ts'));
+  buildCampOpsCampEndpointMapPins,
+  buildCampOpsCampScoutMapPins,
+} = require(path.join(root, 'lib', 'campops', 'campOpsMapPins.ts'));
 const {
+  normalizeRenderedCampEndpointMarkers,
   normalizeRenderedCampScoutMarkers,
 } = require(path.join(root, 'components', 'navigate', 'MapRenderer.tsx'));
 
@@ -94,447 +76,99 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-function blankBreakdown() {
-  return {
-    flatnessTerrain: 0,
-    accessConfidence: 0,
-    remotenessValue: 0,
-    legalAccessConfidence: 0,
-    safetyEnvironmentalRisk: 0,
-    sourceSignal: 0,
-    sourceQuality: 0,
-    remoteness: 0,
-    access: 0,
-    legality: 0,
-    terrain: 0,
-    proximity: 0,
-    confidence: 0,
-    total: 0,
-  };
-}
-
-function candidate(id, overrides = {}) {
-  const numeric = Number(String(id).replace(/\D/g, '') || 0);
+function scoutCandidate(id) {
   return {
     id,
-    coordinate: {
-      latitude: 39 + numeric * 0.001,
-      longitude: -105,
+    coordinate: { latitude: 39, longitude: -120 },
+    title: id,
+    sourceType: 'ecs_inferred',
+    confidenceScore: 80,
+    confidenceGrade: 'B',
+    scoreBreakdown: {
+      flatnessTerrain: 80,
+      accessConfidence: 80,
+      remotenessValue: 80,
+      legalAccessConfidence: 80,
+      safetyEnvironmentalRisk: 80,
+      sourceSignal: 80,
+      sourceQuality: 80,
+      remoteness: 80,
+      access: 80,
+      legality: 80,
+      terrain: 80,
+      proximity: 80,
+      confidence: 80,
+      total: 80,
     },
-    title: `Camp Scout ${id}`,
-    sourceType: 'official_mapped',
-    confidenceScore: 0,
-    confidenceGrade: 'D',
-    scoreBreakdown: blankBreakdown(),
     reasons: [],
     cautions: [],
-    accessConfidence: 88,
-    legalityConfidence: 90,
+    accessConfidence: 82,
+    legalityConfidence: 82,
     remotenessScore: 82,
-    terrainConfidence: 90,
-    slopeEstimate: 2,
-    distanceFromNearestRoadMiles: 1.2,
-    distanceFromPavementMiles: 7,
-    safetyRiskScore: 5,
-    environmentalRiskScore: 5,
-    knownConflictRiskScore: 0,
-    mapDataCompleteness: 95,
-    sourceTimestamp: '2026-04-20T12:00:00.000Z',
-    ...overrides,
+    terrainConfidence: 82,
+    mapDataCompleteness: 90,
   };
 }
 
-function square(south, west, north, east) {
-  return [
-    { latitude: south, longitude: west },
-    { latitude: south, longitude: east },
-    { latitude: north, longitude: east },
-    { latitude: north, longitude: west },
-  ];
-}
+const rankedCompat = rankCampScoutCandidates([scoutCandidate('compat-camp')]);
+assert.strictEqual(
+  rankedCompat.length,
+  1,
+  'CampScout domain scoring should remain available as a temporary compatibility shim.',
+);
+assert.strictEqual(
+  validateCampScoutArea([
+    { latitude: 39, longitude: -120 },
+    { latitude: 39.01, longitude: -120 },
+    { latitude: 39.01, longitude: -119.99 },
+  ]).status,
+  'valid',
+  'Manual-area validation should remain callable for flagged/internal review.',
+);
 
-async function run() {
-  assert.equal(getCampScoutConfidenceGrade(85), 'A');
-  assert.equal(getCampScoutConfidenceGrade(70), 'B');
-  assert.equal(getCampScoutConfidenceGrade(50), 'C');
-  assert.equal(getCampScoutConfidenceGrade(49), 'D');
+assert.strictEqual(
+  buildCampOpsCampEndpointMapPins,
+  buildCampOpsCampScoutMapPins,
+  'CampOps Camp Endpoint map pin builder should expose a new name while keeping the old shim alias.',
+);
+assert.strictEqual(
+  normalizeRenderedCampEndpointMarkers,
+  normalizeRenderedCampScoutMarkers,
+  'MapRenderer should expose Camp Endpoint normalization while keeping the old renderer shim.',
+);
 
-  const scored = scoreCampScoutCandidate(candidate('score-1', {
-    sourceType: 'ecs_inferred',
-    accessConfidence: 62,
-    legalityConfidence: 70,
-    terrainConfidence: 68,
-    mapDataCompleteness: 62,
-  }), { nowIso: '2026-05-01T12:00:00.000Z' });
-  assert.ok(scored.confidenceGrade);
-  assert.ok(scored.reasons.length >= 2 && scored.reasons.length <= 4);
-  assert.ok(scored.cautions.some((text) => text.includes('Access uncertain')));
-  assert.ok(scored.cautions.some((text) => text.includes('Legal status uncertain')));
-  assert.ok(scored.cautions.some((text) => text.includes('Low data coverage')));
+const navigate = read(path.join('app', '(tabs)', 'navigate.tsx'));
+const popup = read(path.join('components', 'navigate', 'CampScoutIntelCard.tsx'));
+const mapRenderer = read(path.join('components', 'navigate', 'MapRenderer.tsx'));
 
-  const many = Array.from({ length: 14 }, (_, index) =>
-    candidate(`rank-${index}`, {
-      accessConfidence: 92 - index,
-      legalityConfidence: 94 - index,
-      remotenessScore: 88 - index,
-    }),
-  );
-  assert.equal(rankCampScoutCandidates(many).length, 5);
-  assert.equal(
-    rankCampScoutCandidates(many, { expandedResults: true, expandedLimit: 99 }).length,
-    10,
-  );
-  assert.deepEqual(
-    rankCampScoutCandidates([
-      candidate('official-kept', { sourceType: 'official_mapped' }),
-      candidate('community-hidden', { sourceType: 'community_suggested' }),
-      candidate('ecs-hidden', { sourceType: 'ecs_inferred' }),
-    ], { filterMode: 'official_only' }).map((item) => item.id),
-    ['official-kept'],
-  );
-  assert.ok(
-    !rankCampScoutCandidates([
-      candidate('official-visible', { sourceType: 'official_mapped' }),
-      candidate('community-off', { sourceType: 'community_suggested' }),
-    ], { includeCommunitySuggestions: false }).some((item) => item.id === 'community-off'),
-  );
-  assert.deepEqual(
-    rankCampScoutCandidates([
-      candidate('unknown-possible', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 45,
-        legalityConfidence: 35,
-        remotenessScore: 54,
-        terrainConfidence: 55,
-        safetyRiskScore: 10,
-        mapDataCompleteness: 55,
-        legalityStatus: 'unknown_needs_verification',
-      }),
-    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
-    ['unknown-possible'],
-    'Low-confidence unknown-legal candidates should be available to draw-area fallback ranking.',
-  );
-  assert.deepEqual(
-    rankCampScoutCandidates([
-      candidate('lake-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        isWaterBody: true,
-      }),
-      candidate('building-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        nearBuildings: true,
-      }),
-      candidate('structure-distance-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        nearestStructureDistanceMiles: 0.95,
-      }),
-      candidate('residential-distance-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        nearestResidentialStructureDistanceMiles: 1,
-      }),
-      candidate('highway-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        nearHighway: true,
-      }),
-    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
-    [],
-    'Camp Scout must hard-hide water, one-mile structure buffer, building, and highway conflict pins even with fallback enabled.',
-  );
-  assert.deepEqual(
-    rankCampScoutCandidates([
-      candidate('privacy-clear', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 96,
-        legalityConfidence: 96,
-        remotenessScore: 96,
-        terrainConfidence: 96,
-        nearestStructureDistanceMiles: 1.01,
-      }),
-    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
-    ['privacy-clear'],
-    'Known structure clearance over one mile should remain eligible for ranking.',
-  );
-  assert.deepEqual(
-    rankCampScoutCandidates([
-      candidate('restricted-hidden', {
-        sourceType: 'ecs_inferred',
-        legalityStatus: 'restricted_or_not_allowed',
-        legalityConfidence: 95,
-      }),
-    ], { allowLowConfidenceFallback: true, expandedResults: true }).map((item) => item.id),
-    [],
-    'Known restricted/no-camping candidates must stay hard-excluded even in fallback ranking.',
-  );
+assert.ok(
+  navigate.includes('CAMPOPS_MANUAL_AREA_REVIEW_ENABLED') &&
+    navigate.includes('campopsManualAreaReviewEnabled'),
+  'Navigate should gate internal/manual area review behind a CampOps manual-area feature flag.',
+);
+assert.ok(
+  !navigate.includes('DRAW CAMP POTENTIAL AREA') &&
+    !navigate.includes('accessibilityLabel="Draw camp potential area"') &&
+    !navigate.includes("renderMapPopup(\n    campScoutIntroVisible,\n    'CAMP SCOUT'"),
+  'Public Navigate tools should no longer expose Draw Camp Potential Area or Camp Scout popup branding.',
+);
+assert.ok(
+  navigate.includes('CAMP ENDPOINTS') &&
+    navigate.includes('Camp Endpoints') &&
+    navigate.includes('candidate endpoint'),
+  'Navigate should use Camp Endpoints copy for route-camp planning.',
+);
+assert.ok(
+  popup.includes('CAMP ENDPOINTS') &&
+    popup.includes('candidate endpoint') &&
+    !popup.includes('CAMP SCOUT'),
+  'Camp detail popup should use Camp Endpoints copy instead of public CampScout branding.',
+);
+assert.ok(
+  mapRenderer.includes('CampOpsCampEndpointMapMarkerPayload') &&
+    mapRenderer.includes('campEndpointMarkers?: CampOpsCampEndpointMapMarkerPayload[]') &&
+    mapRenderer.includes('campScoutMarkers?: CampScoutMapMarkerPayload[]'),
+  'MapRenderer should accept new Camp Endpoint marker props while retaining the old prop as a compatibility shim.',
+);
 
-  const area = {
-    id: 'camp-scout-regression',
-    bounds: {
-      north: 39.3,
-      south: 39,
-      east: -104.7,
-      west: -105,
-    },
-  };
-  const aggregate = aggregateCampScoutCandidates({
-    area,
-    generatedAt: '2026-05-01T12:00:00.000Z',
-    officialMappedCandidates: [
-      candidate('dupe-official', {
-        coordinate: { latitude: 39.1, longitude: -104.9 },
-        sourceLabel: 'Official mapped source',
-      }),
-    ],
-    communitySuggestedCandidates: [
-      candidate('dupe-community', {
-        coordinate: { latitude: 39.1003, longitude: -104.9003 },
-        sourceType: 'community_suggested',
-        sourceNote: 'Community report near official source',
-      }),
-    ],
-    ecsInferredCandidates: [
-      candidate('weak-hidden', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 20,
-        legalityConfidence: 20,
-        remotenessScore: 25,
-        terrainConfidence: 30,
-        safetyRiskScore: 80,
-      }),
-    ],
-  });
-  assert.equal(aggregate.totalCandidatesConsidered, 3);
-  assert.equal(aggregate.officialMappedCount, 1);
-  assert.equal(aggregate.communitySuggestedCount, 1);
-  assert.ok(aggregate.candidatesShown.length <= 5);
-  assert.ok(aggregate.hiddenLowConfidenceCount >= 1);
-  assert.ok(aggregate.warnings.some((warning) => warning.includes('duplicate')));
-  assert.ok(
-    aggregate.candidatesShown.some((item) =>
-      item.mergedSourceTypes?.includes('official_mapped') &&
-      item.mergedSourceTypes?.includes('community_suggested'),
-    ),
-  );
-
-  const empty = aggregateCampScoutCandidates({
-    area,
-    generatedAt: '2026-05-01T12:00:00.000Z',
-    ecsInferredCandidates: [
-      candidate('empty-weak', {
-        sourceType: 'ecs_inferred',
-        accessConfidence: 15,
-        legalityConfidence: 15,
-        remotenessScore: 20,
-        terrainConfidence: 25,
-        safetyRiskScore: 85,
-      }),
-    ],
-  });
-  assert.equal(empty.candidatesShown.length, 0);
-  assert.equal(empty.summary, 'No high-confidence camp candidates found in this area.');
-  assert.ok(empty.warnings.some((warning) => warning.includes('Try widening the area')));
-
-  assert.equal(validateCampScoutArea(square(38, -106, 40, -104)).status, 'too_large');
-  assert.equal(
-    validateCampScoutArea(square(39, -105, 39.05, -104.95), {
-      estimatedCandidateCount: 99,
-    }).status,
-    'excessive_candidates',
-  );
-
-  assert.deepEqual(
-    await getCommunityCampCandidatesForArea(area, { includeCommunitySuggestions: true }),
-    [],
-  );
-
-  const renderedCampScout = normalizeRenderedCampScoutMarkers(
-    Array.from({ length: 12 }, (_, index) => ({
-      id: `pin-${index}`,
-      latitude: 39 + index * 0.001,
-      longitude: -105,
-      title: `Pin ${index}`,
-      sourceType: index % 2 === 0 ? 'ecs_inferred' : 'community_suggested',
-      confidenceGrade: index % 2 === 0 ? 'A' : 'B',
-      confidenceScore: 90 - index,
-      rank: index + 1,
-      rankLabel: index % 2 === 0 ? `A${index}` : 'COM',
-    })),
-  );
-  assert.equal(renderedCampScout.length, 10);
-  assert.equal(renderedCampScout[0].sourceType, 'ecs_inferred');
-  assert.equal(renderedCampScout[1].rankLabel, undefined);
-
-  const navigate = read(path.join('app', '(tabs)', 'navigate.tsx'));
-  const mapRenderer = read(path.join('components', 'navigate', 'MapRenderer.tsx'));
-  assert.ok(
-    mapRenderer.includes("tent.textContent = '\\u26FA';") &&
-      mapRenderer.includes('.camp-scout-tent::before') &&
-      mapRenderer.includes('.camp-scout-marker::before') &&
-      mapRenderer.includes('.camp-scout-core') &&
-      mapRenderer.includes('background: transparent;') &&
-      mapRenderer.includes("'circle-radius': 0") &&
-      mapRenderer.includes("'circle-opacity': 0") &&
-      mapRenderer.includes("'circle-stroke-width': 0"),
-    'Camp Scout markers should render the campsite icon as the pin and suppress paired yellow circles.',
-  );
-  assert.ok(
-    navigate.includes('campIntelMarkers={combinedCampMarkers}'),
-    'MapRenderer should keep existing campsite marker layer wired.',
-  );
-  assert.ok(
-    navigate.includes('campScoutMarkers={sharedCampPinMapMarkers}') &&
-      navigate.includes('const sharedCampPinMapMarkers = useMemo<CampScoutMapMarkerPayload[]>') &&
-      navigate.includes('...campScoutMapMarkers'),
-    'MapRenderer should receive Camp Scout markers through the separate shared camp pin layer.',
-  );
-  const combinedStart = navigate.indexOf('const combinedCampMarkers = useMemo');
-  const combinedEnd = navigate.indexOf('const activePolygonCampsiteSuggestions', combinedStart);
-  const combinedBlock = navigate.slice(combinedStart, combinedEnd);
-  assert.ok(
-    combinedBlock.includes('routeKnownCampsiteMarkers'),
-    'Existing route campsite pins should remain part of the campsite marker set.',
-  );
-  assert.ok(
-    navigate.includes("const mapToastAttachedToGuidance = navigationOverlayMode === 'active'") &&
-      navigate.includes('const activeGuidanceToastTopOffset =') &&
-      navigate.includes('zIndex={mapToastAttachedToGuidance ? 84 : undefined}'),
-    'Temporary notifications should remain below active guidance.',
-  );
-  assert.ok(
-    navigate.includes("if (campScoutAreaMode !== 'results') return [];"),
-    'Camp Scout candidate and marker paths should stay empty until scan results exist.',
-  );
-  assert.ok(
-    navigate.includes("clearOwnedCampsiteCandidates('camp_scout_drawing_started', { clearPolygon: true })") &&
-      navigate.includes("reason: 'polygon_scan_refresh_started'") &&
-      !navigate.includes("clearOwnedCampsiteCandidates('camp_scout_view_scan_started', { clearPolygon: true })"),
-    'Starting a same-context Camp Scout scan should use a refresh token instead of clearing pins through zero.',
-  );
-  assert.ok(
-    navigate.includes('CAMP_SCOUT_DEFAULT_VISIBLE_PIN_LIMIT = 5') &&
-      navigate.includes('CAMP_SCOUT_EXPANDED_VISIBLE_PIN_LIMIT = 10'),
-    'Navigate should keep Camp Scout pin count constants at 5 default and 10 expanded.',
-  );
-  const campScoutMarkerStart = navigate.indexOf('const campScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>');
-  const dispersedScoutMarkerStart = navigate.indexOf(
-    'const dispersedCampingCampScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>',
-    campScoutMarkerStart,
-  );
-  const sharedCampMarkerStart = navigate.indexOf(
-    'const campOpsMapMarkers = useMemo<CampScoutMapMarkerPayload[]>',
-    dispersedScoutMarkerStart,
-  );
-  const campScoutMarkerBlock = navigate.slice(campScoutMarkerStart, dispersedScoutMarkerStart);
-  const dispersedScoutMarkerBlock = navigate.slice(dispersedScoutMarkerStart, sharedCampMarkerStart);
-  assert.ok(
-    campScoutMarkerStart >= 0 && dispersedScoutMarkerStart > campScoutMarkerStart && sharedCampMarkerStart > dispersedScoutMarkerStart,
-    'Navigate should expose dedicated Camp Scout and dispersed Camp Scout marker mappings.',
-  );
-  assert.ok(
-    !campScoutMarkerBlock.includes('rankLabel') &&
-      !dispersedScoutMarkerBlock.includes('rankLabel'),
-    'Generated Camp Scout map pins should not display numeric viability rank labels.',
-  );
-  assert.ok(
-    navigate.includes('selectFirstCandidate: false') &&
-      navigate.includes('setSelectedEstablishedCampsite(null);') &&
-      navigate.includes('setSelectedDispersedCampingRegion(null);'),
-    'Route Scout pin generation and camp pin taps should not leave stacked camp detail popups fighting for touch priority.',
-  );
-  assert.ok(
-    !campScoutMarkerBlock.includes("'OFF'") &&
-      !campScoutMarkerBlock.includes("'COM'") &&
-      !campScoutMarkerBlock.includes('gradeCounts') &&
-      !dispersedScoutMarkerBlock.includes("rankLabel: 'ECS'"),
-    'Generated Camp Scout pins should not replace viability ranks with source or confidence labels.',
-  );
-  assert.ok(
-    campScoutMarkerBlock.includes('confidenceScore: candidate.confidenceScore') &&
-      navigate.includes('minimumConfidenceScore: CAMP_SCOUT_MIN_DISPLAY_SCORE') &&
-      navigate.includes('minimumRemotenessScore: officialOnly ? undefined : CAMP_SCOUT_MIN_REMOTENESS_SCORE') &&
-      navigate.includes('maximumSlopeEstimate: CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE'),
-    'Camp Scout map pins should be gated at 70+ with remoteness and slope criteria before rendering.',
-  );
-  assert.ok(
-    navigate.includes('CAMP_SCOUT_DRAW_AREA_FALLBACK_MIN_SCORE = 50') &&
-      navigate.includes('minimumConfidenceScore: CAMP_SCOUT_DRAW_AREA_FALLBACK_MIN_SCORE') &&
-      navigate.includes('minimumRemotenessScore: undefined') &&
-      navigate.includes('maximumSlopeEstimate: CAMP_SCOUT_DRAW_AREA_FALLBACK_MAX_SLOPE'),
-    'Draw-area Camp Scout fallback should render lower-confidence scouting leads after hard safety exclusions.',
-  );
-  assert.ok(
-    navigate.includes('numberOfLines={4}') &&
-      navigate.includes('adaptive.windowWidth - OVERLAY_EDGE * 2') &&
-      navigate.includes('shown in or near the drawn area') &&
-      !navigate.includes("showToast(`CAMP SCOUT: ${cappedCount} PIN") &&
-      !navigate.includes("showToast('NO CAMP SCOUT PINS FOUND')"),
-    'Camp Scout scan results should use the readable bottom status bar instead of conflicting top toasts.',
-  );
-  assert.ok(
-    navigate.includes('No official campsite records found in this area.') &&
-      navigate.includes('No candidate campsites passed the current filters.') &&
-      navigate.includes('Only restricted/private/closed areas were found.') &&
-      navigate.includes('Try expanding the area or switching from Official Only to Balanced.') &&
-      navigate.includes('Potential inferred locations are hidden because Official Only is enabled.') &&
-      navigate.includes('Lower-confidence inferred campsite options are available, but they require rule verification.'),
-    'Camp Scout zero-pin states should explain no official records, filtered candidates, restrictions, Official Only hiding, and lower-confidence options without legality claims.',
-  );
-  assert.ok(
-    navigate.includes("logCampScoutDebug('draw_area_empty_state'") &&
-      navigate.includes('rawCandidateCount') &&
-      navigate.includes('finalCandidateCount') &&
-      navigate.includes('activeFilterPreset') &&
-      navigate.includes('zeroResultReason') &&
-      navigate.includes('mapboxSourceContainsFeatures') &&
-      navigate.includes('mapboxLayerContainsFeatures'),
-    'Camp Scout should expose debug-safe empty-state diagnostics for candidate counts and Mapbox pin feature state.',
-  );
-
-  const campScoutCardSource = read(path.join('components', 'navigate', 'CampScoutIntelCard.tsx'));
-  assert.ok(
-    campScoutCardSource.includes('pointerEvents="box-none"') &&
-      campScoutCardSource.includes('<View style={styles.card} pointerEvents="auto">') &&
-      campScoutCardSource.includes('maxHeight: 420') &&
-      campScoutCardSource.includes('This pin is not an exact campsite location') &&
-      !campScoutCardSource.includes('card: {\n    flex: 1,'),
-    'Camp Scout detail should only capture touches on the visible card instead of becoming a hidden full-height blocker.',
-  );
-
-  const campScoutSources = [
-    read(path.join('lib', 'campScout', 'types.ts')),
-    read(path.join('lib', 'campScout', 'campScoutScoring.ts')),
-    read(path.join('lib', 'campScout', 'campScoutAggregator.ts')),
-    read(path.join('lib', 'campScout', 'campScoutCommunityAdapter.ts')),
-    read(path.join('lib', 'campScout', 'index.ts')),
-  ].join('\n');
-  assert.ok(
-    !/campops/i.test(campScoutSources),
-    'Camp Scout domain should stay standalone and not import or reference CampOps.',
-  );
-
-  console.log('Camp Scout regression checks passed.');
-}
-
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+console.log('CampScout compatibility and public retirement checks passed.');

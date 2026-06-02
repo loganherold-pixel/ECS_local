@@ -247,6 +247,10 @@ export default function TrailPackPreviewModal({
   const sourceLabel = trailPack ? trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source) : '';
   const detailAssessment = trailPack?.catalogVerification?.detailAssessment;
   const offlineCache = trailPack?.catalogVerification?.offlineCache;
+  const currentCondition =
+    detailAssessment?.currentCondition ??
+    offlineCache?.currentCondition ??
+    trailPack?.catalogVerification?.currentCondition;
   const effectiveOfflineCacheAvailable = offlineCacheAvailable || Boolean(offlineCache?.cacheable);
   const detailDataUsed = detailAssessment?.dataUsed?.length
     ? detailAssessment.dataUsed
@@ -434,6 +438,27 @@ export default function TrailPackPreviewModal({
                 STATUS | {detailAssessment.status.toUpperCase()} | Confidence {Math.round(detailAssessment.confidence)}%
               </Text>
             </View>
+            {currentCondition ? (
+              <>
+                <View style={s.reasonRow}>
+                  <View style={[
+                    s.reasonDot,
+                    currentCondition.status === 'blocked' || currentCondition.status === 'watch'
+                      ? { backgroundColor: '#E6A23C' }
+                      : null,
+                  ]} />
+                  <Text style={s.reasonText}>
+                    CURRENT CONDITION | {currentCondition.label} | Open {currentCondition.currentlyOpenStatus.replace(/_/g, ' ')} | Passability {currentCondition.passabilityStatus.replace(/_/g, ' ')}
+                  </Text>
+                </View>
+                {[...(currentCondition.blockers ?? []), ...(currentCondition.warnings ?? [])].slice(0, 3).map((warning) => (
+                  <View key={`current-condition-${warning}`} style={s.reasonRow}>
+                    <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
+                    <Text style={s.reasonText}>CURRENT CONDITION | {warning}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
             {detailAssessment.why.slice(0, 3).map((reason) => (
               <View key={`why-${reason}`} style={s.reasonRow}>
                 <View style={s.reasonDot} />

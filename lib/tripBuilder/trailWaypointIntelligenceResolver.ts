@@ -271,6 +271,87 @@ function routeHasTrailGeometry(trailRoute?: ItineraryRoute | null): boolean {
   return (trailRoute?.geometry?.length ?? 0) >= 2 || (trailRoute?.segments?.some((segment) => (segment.geometry?.length ?? 0) >= 2) ?? false);
 }
 
+function routeContextCampEndpointRecords(
+  routeContext: TripBuilderRouteContextInput,
+): Array<{ record: Record<string, unknown>; sourceKind: string }> {
+  const plan = routeContext.campEndpointPlan;
+  if (!plan || !Array.isArray(plan.endpointCandidates)) return [];
+  const selectedIds = new Set((plan.selectedEndpointIds ?? []).filter(Boolean));
+  const hasSelection = selectedIds.size > 0;
+  return plan.endpointCandidates
+    .filter((item) => {
+      const candidateId = item.candidate?.id;
+      if (!candidateId) return false;
+      if (hasSelection) return selectedIds.has(candidateId);
+      return item.role === 'primary' || item.role === 'backup' || item.role === 'emergency';
+    })
+    .map((item) => {
+      const candidate = item.candidate;
+      const enrichment = item.enrichment;
+      const routeEndpoint = item.routeEndpoint;
+      const score = confidenceNumber(candidate.score ?? enrichment?.dataConfidence);
+      const warnings = [
+        ...(plan.warnings ?? []),
+        ...(enrichment?.dataLimitations ?? []),
+      ].filter(Boolean);
+      return {
+        record: {
+          id: candidate.id,
+          type: 'route_context_camp',
+          title: candidate.name ?? 'Camp Endpoint candidate',
+          description: candidate.description ?? 'CampOps candidate endpoint; verify exact overnight occupancy before use.',
+          coordinate: candidate.location,
+          routeMileMarker: routeEndpoint.routeMileMarker,
+          source: source('campops_route_endpoint_plan', 'cached', {
+            source: candidate.source ?? 'route_endpoint_candidate',
+            confidence: score,
+          }),
+          score,
+          confidence: score == null
+            ? {
+                value: null,
+                reasons: ['CampOps route endpoint confidence was unavailable.'],
+              }
+            : {
+                value: score,
+                reasons: [
+                  `CampOps endpoint role: ${item.role}.`,
+                  `Route side: ${routeEndpoint.routeSide}.`,
+                ],
+              },
+          isEcsSuggested: true,
+          warnings,
+          metadata: {
+            campEndpointRole: item.role,
+            routeSide: routeEndpoint.routeSide,
+            routeMileMarker: routeEndpoint.routeMileMarker,
+            distanceFromRouteMiles: routeEndpoint.distanceFromRouteMiles,
+            detourMiles: routeEndpoint.detourMiles,
+            exactness: routeEndpoint.exactness,
+            windowId: routeEndpoint.windowId,
+            nearestSegmentIndex: routeEndpoint.nearestSegmentIndex,
+            selectedByCampOps: hasSelection ? selectedIds.has(candidate.id) : item.role !== 'verify',
+            dataUsed: {
+              source: candidate.source,
+              sourceConfidence: candidate.sourceConfidence,
+              legalStatus: enrichment?.legalStatus,
+              legalConfidence: enrichment?.legalConfidence,
+              dataConfidence: enrichment?.dataConfidence,
+              dataLimitations: enrichment?.dataLimitations ?? [],
+            },
+          },
+          providerMetadata: {
+            providerId: 'campops_route_endpoint_plan',
+            category: 'camp_endpoint',
+            role: item.role,
+            routeSide: routeEndpoint.routeSide,
+          },
+        } as Record<string, unknown>,
+        sourceKind: 'campops_route_endpoint_candidate',
+      };
+    });
+}
+
 function routeContextRecords(routeContext?: TripBuilderRouteContextInput | null): Array<{ record: Record<string, unknown>; sourceKind: string }> {
   if (!routeContext) return [];
   const direct = Array.isArray(routeContext.trailWaypoints)
@@ -287,6 +368,7 @@ function routeContextRecords(routeContext?: TripBuilderRouteContextInput | null)
     } as Record<string, unknown>,
     sourceKind: 'route_context_camp_candidate',
   }));
+  const campEndpoints = routeContextCampEndpointRecords(routeContext);
   const bailouts = (routeContext.bailoutCandidates ?? []).map((candidate) => ({
     record: {
       ...candidate,
@@ -296,7 +378,7 @@ function routeContextRecords(routeContext?: TripBuilderRouteContextInput | null)
     } as Record<string, unknown>,
     sourceKind: 'route_context_bailout_candidate',
   }));
-  return [...direct, ...camps, ...bailouts];
+  return [...direct, ...camps, ...campEndpoints, ...bailouts];
 }
 
 function explicitRecords(records?: ResolveTrailWaypointsArgs['waypointRecords']): Array<{ record: Record<string, unknown>; sourceKind: string }> {

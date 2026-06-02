@@ -3,6 +3,7 @@ import type {
   ECSTrailPackActiveGuidance,
   ECSTrailPackCatalogDataUsed,
   ECSTrailPackCoordinate,
+  ECSTrailPackCurrentConditionOverlay,
   ECSTrailPackDetailAssessment,
   ECSTrailPackDifficulty,
   ECSTrailPackOfflineCacheMetadata,
@@ -32,6 +33,7 @@ export type RouteCatalogVerificationStatus =
   | 'not_recommended';
 
 export type RouteCatalogOperationalStatus = 'normal' | 'watch' | 'caution' | 'critical';
+export type RouteCatalogCurrentConditionOverlay = ECSTrailPackCurrentConditionOverlay;
 
 export type RouteCatalogSourceRecord = {
   providerId: string;
@@ -75,12 +77,14 @@ export type RouteCatalogRecord = {
   recommendationStatus?: 'recommendable' | 'not_recommended' | 'needs_review';
   sourceRecords: RouteCatalogSourceRecord[];
   closureSummaries?: string[];
+  currentCondition?: RouteCatalogCurrentConditionOverlay;
   communitySignal?: {
     positiveReports?: number;
     negativeReports?: number;
     completions?: number;
     independentConfirmations?: number;
     activeGuidance?: ECSTrailPackActiveGuidance;
+    currentConditions?: Record<string, unknown>;
   };
   tags?: string[];
   createdAt: string;
@@ -110,6 +114,7 @@ export type RouteCatalogVerification = {
   warnings: string[];
   blockers: string[];
   activeGuidance?: ECSTrailPackActiveGuidance;
+  currentCondition?: RouteCatalogCurrentConditionOverlay;
   dataUsed: RouteCatalogDataUsed[];
   lastEvaluatedAt: string;
 };
@@ -400,6 +405,146 @@ function normalizeCommunitySignal(value: unknown): RouteCatalogRecord['community
   return signal;
 }
 
+function normalizeCurrentConditionStatus(value: unknown): RouteCatalogCurrentConditionOverlay['status'] | null {
+  const status = String(value ?? '').trim();
+  if (status === 'clear' || status === 'watch' || status === 'blocked' || status === 'not_assessed') {
+    return status;
+  }
+  return null;
+}
+
+function normalizeCurrentOpenStatus(value: unknown): RouteCatalogCurrentConditionOverlay['currentlyOpenStatus'] | null {
+  const status = String(value ?? '').trim();
+  if (status === 'no_known_closure' || status === 'requires_review' || status === 'closed' || status === 'unknown') {
+    return status;
+  }
+  return null;
+}
+
+function normalizePassabilityStatus(value: unknown): RouteCatalogCurrentConditionOverlay['passabilityStatus'] | null {
+  const status = String(value ?? '').trim();
+  if (status === 'not_assessed' || status === 'requires_review' || status === 'unknown') {
+    return status;
+  }
+  return null;
+}
+
+function conditionStringArray(record: Record<string, unknown> | null, ...keys: string[]): string[] {
+  if (!record) return [];
+  for (const key of keys) {
+    const values = readStringArray(record[key]);
+    if (values) return values;
+  }
+  return [];
+}
+
+function buildCurrentConditionOverlay(
+  route: RouteCatalogRecord,
+  lastEvaluatedAt: string,
+): RouteCatalogCurrentConditionOverlay {
+  const explicit = readRecord(route.currentCondition);
+  const rawCommunitySignal = readRecord(route.communitySignal);
+  const signal = readRecord(rawCommunitySignal?.currentConditions ?? rawCommunitySignal?.current_conditions);
+  const sourceCount = Math.max(
+    readNumber(explicit ?? {}, 'sourceCount', 'source_count') ?? 0,
+    readNumber(signal ?? {}, 'sourceCount', 'source_count') ?? 0,
+  );
+  const activeClosureCount = Math.max(
+    route.activeClosureCount,
+    readNumber(explicit ?? {}, 'activeClosureCount', 'active_closure_count') ?? 0,
+    readNumber(signal ?? {}, 'activeClosureCount', 'active_closure_count') ?? 0,
+  );
+  const watchClosureCount = Math.max(
+    readNumber(explicit ?? {}, 'watchClosureCount', 'watch_closure_count') ?? 0,
+    readNumber(signal ?? {}, 'watchClosureCount', 'watch_closure_count') ?? 0,
+  );
+  const seasonalRestrictionCount = route.seasonalRestrictionCount ?? 0;
+  const closureSummaries = unique([
+    ...(route.closureSummaries ?? []),
+    ...conditionStringArray(explicit, 'closureSummaries', 'closure_summaries'),
+    ...conditionStringArray(signal, 'closureSummaries', 'closure_summaries'),
+  ], 8);
+  const sourceCheckedAt = unique([
+    ...conditionStringArray(explicit, 'sourceCheckedAt', 'source_checked_at', 'checkedAt', 'checked_at'),
+    ...conditionStringArray(signal, 'sourceCheckedAt', 'source_checked_at', 'checkedAt', 'checked_at'),
+  ], 8);
+  const staleAt = unique([
+    ...conditionStringArray(explicit, 'staleAt', 'stale_at'),
+    ...conditionStringArray(signal, 'staleAt', 'stale_at'),
+  ], 8);
+
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  if (activeClosureCount > 0) {
+    blockers.push('Current-condition overlay reports an active official closure.');
+  }
+  if (watchClosureCount > 0) {
+    warnings.push('Current-condition notice requires trip-date review.');
+  }
+  if (seasonalRestrictionCount > 0) {
+    warnings.push('Seasonal restrictions require trip-date review.');
+  }
+  if (sourceCount === 0 && sourceCheckedAt.length === 0) {
+    warnings.push('No current-condition/closure overlay has verified this route as currently open or passable.');
+  }
+
+  const explicitWarnings = [
+    ...conditionStringArray(explicit, 'warnings', 'warningReasons', 'warning_reasons'),
+    ...conditionStringArray(signal, 'warnings', 'warningReasons', 'warning_reasons'),
+  ];
+  const explicitBlockers = [
+    ...conditionStringArray(explicit, 'blockers', 'blockerReasons', 'blocker_reasons'),
+    ...conditionStringArray(signal, 'blockers', 'blockerReasons', 'blocker_reasons'),
+  ];
+
+  let status: RouteCatalogCurrentConditionOverlay['status'] =
+    activeClosureCount > 0 || explicitBlockers.length > 0
+      ? 'blocked'
+      : watchClosureCount > 0 || seasonalRestrictionCount > 0 || explicitWarnings.length > 0
+        ? 'watch'
+        : sourceCount > 0 || sourceCheckedAt.length > 0
+          ? 'clear'
+          : 'not_assessed';
+  status = normalizeCurrentConditionStatus(explicit?.status ?? signal?.status) ?? status;
+
+  const currentlyOpenStatus = normalizeCurrentOpenStatus(explicit?.currentlyOpenStatus ?? explicit?.currently_open_status) ??
+    normalizeCurrentOpenStatus(signal?.currentlyOpenStatus ?? signal?.currently_open_status) ??
+    (status === 'blocked'
+      ? 'closed'
+      : status === 'clear'
+        ? 'no_known_closure'
+        : status === 'watch'
+          ? 'requires_review'
+          : 'unknown');
+  const passabilityStatus = normalizePassabilityStatus(explicit?.passabilityStatus ?? explicit?.passability_status) ??
+    normalizePassabilityStatus(signal?.passabilityStatus ?? signal?.passability_status) ??
+    (status === 'watch' ? 'requires_review' : status === 'clear' ? 'unknown' : 'not_assessed');
+  const label = readString(explicit ?? {}, 'label') ??
+    readString(signal ?? {}, 'label') ??
+    (status === 'blocked'
+      ? 'Current-condition closure conflict'
+      : status === 'watch'
+        ? 'Current conditions require trip-date review'
+        : status === 'clear'
+          ? 'No active current-condition closure known'
+          : 'Current conditions not assessed');
+
+  return {
+    status,
+    label,
+    currentlyOpenStatus,
+    passabilityStatus,
+    activeClosureCount,
+    seasonalRestrictionCount,
+    warnings: unique([...warnings, ...explicitWarnings], 10),
+    blockers: unique([...blockers, ...explicitBlockers], 8),
+    closureSummaries: closureSummaries.length > 0 ? closureSummaries : undefined,
+    sourceCheckedAt: sourceCheckedAt.length > 0 ? sourceCheckedAt : undefined,
+    staleAt: staleAt.length > 0 ? staleAt : undefined,
+    lastEvaluatedAt,
+  };
+}
+
 function normalizeOperationalStatus(value: unknown, fallback: RouteCatalogOperationalStatus): RouteCatalogOperationalStatus {
   const status = String(value ?? '').trim();
   if (status === 'normal' || status === 'watch' || status === 'caution' || status === 'critical') {
@@ -470,11 +615,39 @@ function normalizeRouteCatalogDetailAssessment(
   const activeGuidance = record
     ? normalizeActiveGuidance(record.activeGuidance ?? record.active_guidance) ?? verification.activeGuidance
     : verification.activeGuidance;
+  const currentCondition = record
+    ? buildCurrentConditionOverlay(
+        {
+          id: 'detail-current-condition',
+          name: 'Detail current condition',
+          routeType: 'unknown',
+          centerCoordinate: { latitude: 0, longitude: 0 },
+          officialAccessCoveragePct: 0,
+          unknownAccessCoveragePct: 100,
+          restrictedAccessCoveragePct: 0,
+          activeClosureCount: verification.currentCondition?.activeClosureCount ?? 0,
+          seasonalRestrictionCount: verification.currentCondition?.seasonalRestrictionCount ?? 0,
+          verificationStatus: 'not_recommended',
+          reviewStatus: 'needs_more_data',
+          sourceRecords: [],
+          closureSummaries: verification.currentCondition?.closureSummaries,
+          currentCondition: (readRecord(record.currentCondition ?? record.current_condition) as RouteCatalogCurrentConditionOverlay | null) ??
+            verification.currentCondition,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        verification.currentCondition?.lastEvaluatedAt ?? verification.lastEvaluatedAt,
+      )
+    : verification.currentCondition;
 
   return {
     status: normalizeOperationalStatus(record?.status, verification.status),
     why: unique(why.length > 0 ? why : verification.reasons, 8),
-    whatToWatch: unique(whatToWatch.length > 0 ? whatToWatch : verification.warnings, 8),
+    whatToWatch: unique(whatToWatch.length > 0 ? whatToWatch : [
+      ...verification.warnings,
+      ...(verification.currentCondition?.warnings ?? []),
+      ...(verification.currentCondition?.blockers ?? []),
+    ], 8),
     recommendedAction: recommendedAction ?? (verification.publicRecommendation
       ? 'Verify current local conditions before departure and cache the route for offline use.'
       : 'Do not recommend this route until blockers are cleared by official source review.'),
@@ -488,6 +661,7 @@ function normalizeRouteCatalogDetailAssessment(
     ),
     confidence: clampScore(record ? readNumber(record, 'confidence') ?? verification.confidenceScore : verification.confidenceScore),
     activeGuidance,
+    currentCondition,
     dataUsed: normalizeDetailDataUsed(record?.dataUsed ?? record?.data_used, verification.dataUsed),
   };
 }
@@ -522,6 +696,30 @@ function normalizeRouteCatalogOfflineCache(
         })
         .filter((item): item is OfflineSourceAttribution => !!item)
     : undefined;
+  const currentConditionPayload = record?.currentCondition ?? record?.current_condition;
+  const currentCondition = currentConditionPayload
+    ? buildCurrentConditionOverlay(
+        {
+          id: 'offline-current-condition',
+          name: 'Offline current condition',
+          routeType: 'unknown',
+          centerCoordinate: { latitude: 0, longitude: 0 },
+          officialAccessCoveragePct: 0,
+          unknownAccessCoveragePct: 100,
+          restrictedAccessCoveragePct: 0,
+          activeClosureCount: verification.currentCondition?.activeClosureCount ?? 0,
+          seasonalRestrictionCount: verification.currentCondition?.seasonalRestrictionCount ?? 0,
+          verificationStatus: 'not_recommended',
+          reviewStatus: 'needs_more_data',
+          sourceRecords: [],
+          closureSummaries: verification.currentCondition?.closureSummaries,
+          currentCondition: readRecord(currentConditionPayload) as RouteCatalogCurrentConditionOverlay | undefined,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        verification.currentCondition?.lastEvaluatedAt ?? verification.lastEvaluatedAt,
+      )
+    : verification.currentCondition;
   return {
     cacheable: record
       ? readBoolean(record, 'cacheable', 'available') ?? Boolean(trailPack.routeGeometry && verification.publicRecommendation)
@@ -532,6 +730,7 @@ function normalizeRouteCatalogOfflineCache(
     staleAt: record ? readString(record, 'staleAt', 'stale_at') ?? null : null,
     sourceTimestamps,
     sourceAttribution: sourceAttribution && sourceAttribution.length > 0 ? sourceAttribution : undefined,
+    currentCondition,
     freshnessWarnings,
   };
 }
@@ -683,6 +882,7 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
     recommendationStatus: readString(record, 'recommendation_status', 'recommendationStatus') as RouteCatalogRecord['recommendationStatus'],
     sourceRecords,
     closureSummaries: readStringArray(record.closure_summaries ?? record.closureSummaries),
+    currentCondition: readRecord(record.current_condition ?? record.currentCondition) as RouteCatalogCurrentConditionOverlay | undefined,
     communitySignal: normalizeCommunitySignal(record.community_signal ?? record.communitySignal),
     tags: readStringArray(record.tags),
     createdAt: readString(record, 'created_at', 'createdAt') ?? new Date(0).toISOString(),
@@ -715,6 +915,7 @@ export function verifyRouteCatalogRecord(
     (source) => source.sourceType === 'partner_restricted' && source.usePermission !== 'granted',
   );
   const activeGuidance = route.communitySignal?.activeGuidance;
+  const currentCondition = buildCurrentConditionOverlay(route, lastEvaluatedAt);
   const dataUsed: RouteCatalogDataUsed[] = route.sourceRecords.map((source) => ({
     providerId: source.providerId,
     label: source.label,
@@ -735,6 +936,7 @@ export function verifyRouteCatalogRecord(
   if (points.length < 2) blockers.push('Route geometry is incomplete');
   if (!geometryIsPreview && hasImpossibleJump(points)) blockers.push('Route geometry contains impossible jumps');
   if (route.activeClosureCount > 0) blockers.push('Route intersects an active official closure');
+  currentCondition.blockers.forEach((blocker) => blockers.push(blocker));
   if (route.restrictedAccessCoveragePct > 0) blockers.push('Route includes restricted or prohibited access');
   if (route.vehicleMismatch) blockers.push('Route vehicle fit conflicts with selected criteria');
   route.sourceRecords
@@ -788,7 +990,7 @@ export function verifyRouteCatalogRecord(
   let sourceLabel = 'Geometry only, not recommended';
   if (officialSourceStale && hasOfficialSource) {
     sourceLabel = 'Source stale';
-  } else if (publicRecommendation) {
+  } else if (hasOfficialSource && route.officialAccessCoveragePct >= OFFICIAL_ACCESS_RECOMMENDATION_THRESHOLD) {
     sourceLabel = 'Official access verified';
   } else if (hasCommunitySource || route.verificationStatus === 'partially_verified') {
     sourceLabel = 'Community suggested, partially verified';
@@ -814,6 +1016,7 @@ export function verifyRouteCatalogRecord(
     warnings: unique(warnings, 10),
     blockers: unique(blockers, 8),
     activeGuidance,
+    currentCondition,
     dataUsed,
     lastEvaluatedAt,
   };
@@ -876,6 +1079,7 @@ export function catalogRouteToTrailPack(
       warnings: verification.warnings,
       blockers: verification.blockers,
       activeGuidance: verification.activeGuidance,
+      currentCondition: verification.currentCondition,
       dataUsed: verification.dataUsed,
       lastEvaluatedAt: verification.lastEvaluatedAt,
       operationalCriteria,
@@ -914,6 +1118,7 @@ export function normalizeRouteCatalogDetailResponse(
           warnings: fallbackTrailPack.catalogVerification.warnings,
           blockers: fallbackTrailPack.catalogVerification.blockers,
           activeGuidance: fallbackTrailPack.catalogVerification.activeGuidance,
+          currentCondition: fallbackTrailPack.catalogVerification.currentCondition,
           dataUsed: fallbackTrailPack.catalogVerification.dataUsed,
           lastEvaluatedAt: fallbackTrailPack.catalogVerification.lastEvaluatedAt,
         }
@@ -943,6 +1148,7 @@ export function normalizeRouteCatalogDetailResponse(
     warnings: verification.warnings,
     blockers: verification.blockers,
     activeGuidance: verification.activeGuidance,
+    currentCondition: verification.currentCondition,
     dataUsed: verification.dataUsed,
     lastEvaluatedAt: verification.lastEvaluatedAt,
   };
@@ -957,6 +1163,7 @@ export function normalizeRouteCatalogDetailResponse(
       ...(fallbackTrailPack?.catalogVerification ?? {}),
       ...baseCatalogVerification,
       activeGuidance: detailAssessment.activeGuidance ?? baseCatalogVerification.activeGuidance,
+      currentCondition: detailAssessment.currentCondition ?? baseCatalogVerification.currentCondition,
       detailAssessment,
       offlineCache,
       detailFetchedAt: new Date().toISOString(),

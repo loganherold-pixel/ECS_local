@@ -134,6 +134,7 @@ function hasRouteCatalogMetadata(metadata: Record<string, unknown> | null | unde
   const record = readRecord(metadata);
   return Boolean(
     record?.routeCatalogOfflineCache ||
+      record?.routeCatalogCurrentCondition ||
       record?.routeCatalogSourceTimestamps ||
       record?.routeCatalogAttribution ||
       record?.routeCatalogFreshnessWarnings ||
@@ -176,6 +177,7 @@ function readRouteCatalogOfflineCache(metadata: Record<string, unknown> | null |
   cacheable: boolean | null;
   lastVerifiedAt: string | null;
   staleAt: string | null;
+  currentCondition?: Record<string, unknown> | null;
 } | null {
   const cache = readRecord(readRecord(metadata)?.routeCatalogOfflineCache);
   if (!cache) return null;
@@ -183,6 +185,32 @@ function readRouteCatalogOfflineCache(metadata: Record<string, unknown> | null |
     cacheable: readBoolean(cache.cacheable),
     lastVerifiedAt: readString(cache.lastVerifiedAt) ?? readString(cache.last_verified_at),
     staleAt: readString(cache.staleAt) ?? readString(cache.stale_at),
+    currentCondition: readRecord(cache.currentCondition ?? cache.current_condition),
+  };
+}
+
+function readRouteCatalogCurrentCondition(metadata: Record<string, unknown> | null | undefined): {
+  label: string;
+  status: string;
+  currentlyOpenStatus: string;
+  passabilityStatus: string;
+  warnings: string[];
+  blockers: string[];
+} | null {
+  const record = readRecord(metadata);
+  const cache = readRecord(record?.routeCatalogOfflineCache);
+  const catalogVerification = readRecord(record?.catalogVerification);
+  const condition = readRecord(record?.routeCatalogCurrentCondition) ??
+    readRecord(cache?.currentCondition ?? cache?.current_condition) ??
+    readRecord(catalogVerification?.currentCondition ?? catalogVerification?.current_condition);
+  if (!condition) return null;
+  return {
+    label: readString(condition.label) ?? 'Current conditions not assessed',
+    status: readString(condition.status) ?? 'not_assessed',
+    currentlyOpenStatus: readString(condition.currentlyOpenStatus) ?? readString(condition.currently_open_status) ?? 'unknown',
+    passabilityStatus: readString(condition.passabilityStatus) ?? readString(condition.passability_status) ?? 'not_assessed',
+    warnings: readStringArray(condition.warnings).slice(0, 3),
+    blockers: readStringArray(condition.blockers).slice(0, 3),
   };
 }
 
@@ -573,6 +601,7 @@ function buildOfflinePrepRouteIntent(
       routeCatalogAttribution: routeMetadata?.routeCatalogAttribution ?? null,
       routeCatalogFreshnessWarnings: routeMetadata?.routeCatalogFreshnessWarnings ?? null,
       routeCatalogOfflineCache: routeMetadata?.routeCatalogOfflineCache ?? null,
+      routeCatalogCurrentCondition: routeMetadata?.routeCatalogCurrentCondition ?? null,
       catalogVerification: routeMetadata?.catalogVerification ?? null,
       tripPlan: input.tripPlan ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,
@@ -1003,10 +1032,15 @@ export default function ExploreOfflinePrepPackScreen() {
     () => readRouteCatalogOfflineCache(selectedRouteCatalogMetadata),
     [selectedRouteCatalogMetadata],
   );
+  const routeCatalogCurrentCondition = useMemo(
+    () => readRouteCatalogCurrentCondition(selectedRouteCatalogMetadata),
+    [selectedRouteCatalogMetadata],
+  );
   const showRouteCatalogSourceCheck =
     routeCatalogSourceRows.length > 0 ||
     routeCatalogAttributionRows.length > 0 ||
     routeCatalogFreshnessWarnings.length > 0 ||
+    routeCatalogCurrentCondition != null ||
     routeCatalogOfflineCache != null;
 
   const handleSelectOfflinePrepRoute = useCallback((route: TripBuilderRouteInput) => {
@@ -1590,6 +1624,33 @@ export default function ExploreOfflinePrepPackScreen() {
                           <Text style={styles.sourceCheckText}>{row}</Text>
                         </View>
                       ))}
+                      {routeCatalogCurrentCondition ? (
+                        <>
+                          <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-current-condition">
+                            <View
+                              style={[
+                                styles.sourceCheckDot,
+                                routeCatalogCurrentCondition.status === 'blocked' || routeCatalogCurrentCondition.status === 'watch'
+                                  ? styles.sourceCheckWarningDot
+                                  : null,
+                              ]}
+                            />
+                            <Text style={styles.sourceCheckText}>
+                              CURRENT CONDITION | {routeCatalogCurrentCondition.label} | Open {routeCatalogCurrentCondition.currentlyOpenStatus.replace(/_/g, ' ')} | Passability {routeCatalogCurrentCondition.passabilityStatus.replace(/_/g, ' ')}
+                            </Text>
+                          </View>
+                          {[...routeCatalogCurrentCondition.blockers, ...routeCatalogCurrentCondition.warnings].slice(0, 3).map((warning) => (
+                            <View
+                              key={`route-catalog-current-condition-warning-${warning}`}
+                              style={styles.sourceCheckRow}
+                              testID="offline-prep-route-catalog-current-condition"
+                            >
+                              <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
+                              <Text style={styles.sourceCheckText}>CURRENT CONDITION | {warning}</Text>
+                            </View>
+                          ))}
+                        </>
+                      ) : null}
                       {routeCatalogFreshnessWarnings.length > 0 ? (
                         routeCatalogFreshnessWarnings.map((warning) => (
                           <View

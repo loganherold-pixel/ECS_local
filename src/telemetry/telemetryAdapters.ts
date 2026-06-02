@@ -234,8 +234,7 @@ function accessoryQuality(record: BluetoothAccessoryRecord): ECSTelemetryQuality
 }
 
 function hasLiveUtilitySensorTelemetry(telemetry: UtilitySensorLiveTelemetry | null | undefined): boolean {
-  return finiteNumber(telemetry?.levelPercent) != null ||
-    finiteNumber(telemetry?.levelDistanceMm) != null;
+  return finiteNumber(telemetry?.levelPercent) != null;
 }
 
 function pushUtilitySensorTelemetryMetrics(
@@ -244,7 +243,6 @@ function pushUtilitySensorTelemetryMetrics(
   telemetry: UtilitySensorLiveTelemetry | null | undefined,
 ): void {
   pushNumberMetric(events, base, 'level_percent', 'Tank Level', telemetry?.levelPercent, '%');
-  pushNumberMetric(events, base, 'level_distance_mm', 'Liquid Depth', telemetry?.levelDistanceMm, 'mm');
   pushNumberMetric(events, base, 'temperature_celsius', 'Sensor Temperature', telemetry?.temperatureCelsius, 'C');
   pushNumberMetric(events, base, 'battery_percent', 'Sensor Battery', telemetry?.batteryPercent, '%');
   pushNumberMetric(events, base, 'read_quality', 'Read Quality', telemetry?.readQuality, null);

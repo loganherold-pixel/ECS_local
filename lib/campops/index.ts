@@ -17,6 +17,7 @@ export * from './campOpsFireRestrictionProvider';
 export * from './campOpsWeatherProvider';
 export * from './campOpsServiceProvider';
 export * from './campOpsSearchIntegration';
+export * from './campOpsRouteEndpoints';
 export * from './campOpsAiAssist';
 export * from './campOpsSafeEndpoint';
 export * from './campOpsDebrief';

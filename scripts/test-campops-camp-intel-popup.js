@@ -154,7 +154,8 @@ const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 const combinedSource = `${popupSource}\n${navigateSource}`;
 
 for (const text of [
-  'CAMP INTEL',
+  'CAMP ENDPOINTS',
+  'candidate endpoint',
   'Overall suitability score',
   'Known uncertainty / verification note',
   'DISMISS',

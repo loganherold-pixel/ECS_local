@@ -166,6 +166,53 @@ assert(
 );
 assert.strictEqual(publicBlmAggregates[0].verifiedRoute.blocker_reasons.length, 0);
 
+const anonymousWyPublicRoad = {
+  attributes: {
+    OBJECTID: 77001,
+    ADMIN_ST: 'WY',
+    PLAN_ROUTE_DSGNTN_AUTH: 'BLM',
+    PLAN_ASSET_CLASS: 'TRANSPORTATION SYSTEM - PRIMITIVE ROAD',
+    PLAN_OHV_ROUTE_DSGNTN: 'Open',
+    PLAN_MODE_TRNSPRT: 'MOTORIZED',
+    PLAN_ALLOW_MODE_TRNSPRT: 'TECH_VEH_SHARED',
+    PLAN_ACCESS_RSTRCT: 'UNKNOWN',
+    GIS_MILES: 2.1,
+    BLM_MILES: 2.08,
+    OBSRVE_SRFCE_TYPE: 'NATURAL',
+    GlobalID: '{WY770010-219D-4F3C-9762-77780E574612}',
+  },
+  geometry: {
+    paths: [
+      [
+        [-108.91, 42.11],
+        [-108.92, 42.12],
+        [-108.94, 42.13],
+      ],
+    ],
+  },
+};
+
+const anonymousWyAggregates = aggregateBlmGtlfRouteFeatures(
+  [anonymousWyPublicRoad],
+  {
+    layer: BLM_GTLF_LAYERS.find((layer) => layer.id === 0),
+    sourceId: '00000000-0000-0000-0000-000000000010',
+    sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+    minMiles: 1,
+  },
+);
+assert.strictEqual(
+  anonymousWyAggregates.length,
+  1,
+  'Open BLM GTLF source features without a named route identity should still promote through strict source-feature aggregation',
+);
+assert.strictEqual(anonymousWyAggregates[0].verifiedRoute.public_id, 'blm-gtlf-wy-road-segment-77001');
+assert.strictEqual(anonymousWyAggregates[0].verifiedRoute.recommendation_status, 'recommendable');
+assert.strictEqual(anonymousWyAggregates[0].verifiedRoute.verification_status, 'official_verified');
+assert.strictEqual(anonymousWyAggregates[0].verifiedRoute.route_intelligence.aggregation, 'blm_gtlf_source_feature');
+assert.deepStrictEqual(anonymousWyAggregates[0].segmentPublicIds, ['blm-gtlf-wy-road-feature-77001']);
+assert.strictEqual(anonymousWyAggregates[0].verifiedRoute.blocker_reasons.length, 0);
+
 const limitedTrail = arcGisFeatureToBlmGtlfRouteUpsert(
   {
     attributes: {

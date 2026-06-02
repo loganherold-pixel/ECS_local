@@ -119,6 +119,15 @@ function getPowerIntelligenceSnapshotSafe() {
   }
 }
 
+function getVehicleTelemetrySnapshotSafe() {
+  try {
+    const vehicleTelemetryStore = require('../../src/vehicle-telemetry/VehicleTelemetryStore').vehicleTelemetryStore;
+    return vehicleTelemetryStore?.getECSVehicleTelemetryState?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function subscribePowerIntelligenceSafe(listener: () => void): () => void {
   try {
     const authority = require('../powerIntelligence').ecsPowerIntelligence;
@@ -259,18 +268,31 @@ function buildVehicleInput() {
 function buildFuelInput() {
   const vehicleState = getActiveVehicleState();
   if (!vehicleState.identity.hasVehicle) return null;
-  const avgMpg = typeof vehicleState.vehicle?.avg_mpg === 'number' ? vehicleState.vehicle.avg_mpg : null;
-  const rangeRemainingMiles =
-    avgMpg != null && avgMpg > 0 && vehicleState.capability.currentFuelGallons > 0
-      ? Math.round(vehicleState.capability.currentFuelGallons * avgMpg)
+  const vehicleTelemetry = getVehicleTelemetrySnapshotSafe();
+  const telemetryFuelPercent = vehicleTelemetry?.fuelLevelPct ?? vehicleTelemetry?.fuelPercent;
+  const liveFuelPercent =
+    vehicleTelemetry?.isLive === true &&
+    typeof telemetryFuelPercent === 'number' &&
+    Number.isFinite(telemetryFuelPercent)
+      ? Math.max(0, Math.min(100, telemetryFuelPercent))
       : null;
-  if (rangeRemainingMiles == null && vehicleState.capability.currentFuelPercent == null) return null;
+  const fuelPercent = liveFuelPercent ?? vehicleState.capability.currentFuelPercent;
+  const avgMpg = typeof vehicleState.vehicle?.avg_mpg === 'number' ? vehicleState.vehicle.avg_mpg : null;
+  const fuelGallons =
+    liveFuelPercent != null && typeof vehicleState.capability.fuelTankCapacityGal === 'number' && vehicleState.capability.fuelTankCapacityGal > 0
+      ? vehicleState.capability.fuelTankCapacityGal * (liveFuelPercent / 100)
+      : vehicleState.capability.currentFuelGallons;
+  const rangeRemainingMiles =
+    avgMpg != null && avgMpg > 0 && fuelGallons > 0
+      ? Math.round(fuelGallons * avgMpg)
+      : null;
+  if (rangeRemainingMiles == null && fuelPercent == null) return null;
   return {
     rangeRemainingMiles,
     routeDistanceRemainingMiles: routeDistanceMilesFromSession(navigateRouteSessionStore.getSnapshot()) ?? routeStore.getActive()?.total_distance_miles ?? null,
-    fuelPercent: vehicleState.capability.currentFuelPercent,
-    source: 'manual' as const,
-    updatedAt: vehicleState.updatedAt,
+    fuelPercent,
+    source: liveFuelPercent != null ? 'live' as const : 'manual' as const,
+    updatedAt: liveFuelPercent != null ? vehicleTelemetry?.updatedAt ?? vehicleState.updatedAt : vehicleState.updatedAt,
   };
 }
 

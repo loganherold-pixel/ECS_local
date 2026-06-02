@@ -103,7 +103,7 @@ export default function MapFallbackSurface({
   progressRouteCoords,
   routeCoords,
   segments,
-  statusLabel = 'Route map',
+  statusLabel = 'Fallback map',
   transparentBackground = false,
   userLocation,
 }: MapFallbackSurfaceProps) {

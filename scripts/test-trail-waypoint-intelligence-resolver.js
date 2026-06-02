@@ -195,6 +195,47 @@ const routeContextWaypoints = resolveTrailWaypoints({
       confidence: { value: 0.61, reasons: ['camp candidate provider result'] },
       warnings: [{ code: 'verify_legality', message: 'Verify legal access before use.' }],
     }],
+    campEndpointPlan: {
+      routeId: 'route-context-route',
+      tripId: 'trip-1',
+      generatedAt: '2026-06-02T18:00:00.000Z',
+      windows: [{
+        id: 'route-context-route:camp-endpoint-window-1',
+        plannedDay: 1,
+        nightIndex: 0,
+        targetRouteMile: 4.1,
+        targetEtaIso: null,
+        latestArrivalIso: null,
+        searchCorridorMiles: 3,
+      }],
+      endpointCandidates: [{
+        candidate: {
+          id: 'camp-endpoint-primary',
+          name: 'Confirmed left endpoint',
+          location: { latitude: 38.052, longitude: -109.978 },
+          source: 'route_endpoint_candidate',
+          sourceConfidence: 'high',
+          score: 88,
+        },
+        enrichment: {
+          candidateId: 'camp-endpoint-primary',
+          dataConfidence: 'high',
+          dataLimitations: ['Candidate endpoint; verify exact overnight occupancy before use.'],
+        },
+        routeEndpoint: {
+          windowId: 'route-context-route:camp-endpoint-window-1',
+          routeSide: 'left',
+          routeMileMarker: 4.2,
+          nearestSegmentIndex: 0,
+          distanceFromRouteMiles: 0.2,
+          exactness: 'area_candidate',
+        },
+        role: 'primary',
+      }],
+      recommendationsByWindow: {},
+      selectedEndpointIds: ['camp-endpoint-primary'],
+      warnings: ['Camp endpoint data came from cached source records.'],
+    },
     bailoutCandidates: [{
       id: 'route-context-bailout-1',
       label: 'Road access bailout',
@@ -208,13 +249,23 @@ const routeContextWaypoints = resolveTrailWaypoints({
   },
 });
 
-assert.strictEqual(routeContextWaypoints.trailWaypoints.length, 2);
-assert.strictEqual(routeContextWaypoints.trailWaypoints[0].type, 'camp_potential');
-assert.strictEqual(routeContextWaypoints.trailWaypoints[0].isEcsSuggested, true);
-assert.strictEqual(routeContextWaypoints.trailWaypoints[0].metadata.waypointSourceKind, 'route_context_camp_candidate');
-assert.strictEqual(routeContextWaypoints.trailWaypoints[1].type, 'bailout');
-assert.strictEqual(routeContextWaypoints.trailWaypoints[1].isEcsSuggested, true);
-assert.strictEqual(routeContextWaypoints.trailWaypoints[1].metadata.waypointSourceKind, 'route_context_bailout_candidate');
+assert.strictEqual(routeContextWaypoints.trailWaypoints.length, 3);
+const routeContextCampWaypoint = routeContextWaypoints.trailWaypoints.find((waypoint) => waypoint.id === 'route-context-camp-1');
+assert.strictEqual(routeContextCampWaypoint.type, 'camp_potential');
+assert.strictEqual(routeContextCampWaypoint.isEcsSuggested, true);
+assert.strictEqual(routeContextCampWaypoint.metadata.waypointSourceKind, 'route_context_camp_candidate');
+const endpointWaypoint = routeContextWaypoints.trailWaypoints.find((waypoint) => waypoint.id === 'camp-endpoint-primary');
+assert.strictEqual(endpointWaypoint.type, 'camp_potential');
+assert.strictEqual(endpointWaypoint.title, 'Confirmed left endpoint');
+assert.strictEqual(endpointWaypoint.routeMileMarker, 4.2);
+assert.strictEqual(endpointWaypoint.metadata.campEndpointRole, 'primary');
+assert.strictEqual(endpointWaypoint.metadata.routeSide, 'left');
+assert.strictEqual(endpointWaypoint.metadata.exactness, 'area_candidate');
+assert.strictEqual(endpointWaypoint.metadata.waypointSourceKind, 'campops_route_endpoint_candidate');
+const routeContextBailoutWaypoint = routeContextWaypoints.trailWaypoints.find((waypoint) => waypoint.id === 'route-context-bailout-1');
+assert.strictEqual(routeContextBailoutWaypoint.type, 'bailout');
+assert.strictEqual(routeContextBailoutWaypoint.isEcsSuggested, true);
+assert.strictEqual(routeContextBailoutWaypoint.metadata.waypointSourceKind, 'route_context_bailout_candidate');
 
 const builtWithRealWaypoints = buildTripItineraryFromSuggestedRoute({
   suggestedRoute: {

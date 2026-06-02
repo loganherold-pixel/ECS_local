@@ -88,6 +88,7 @@ export function campOpsSourceToSharedCampPinSource(
     case 'user_saved':
       return 'imported_route_context';
     case 'route_candidate':
+    case 'route_endpoint_candidate':
     case 'draw_area_candidate':
     case 'inferred':
     case 'offline_dataset':
@@ -228,3 +229,5 @@ export function buildCampOpsCampScoutMapPins(
 
   return pins;
 }
+
+export const buildCampOpsCampEndpointMapPins = buildCampOpsCampScoutMapPins;

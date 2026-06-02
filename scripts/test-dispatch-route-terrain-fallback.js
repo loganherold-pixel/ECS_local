@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -5,6 +6,7 @@ const Module = require('module');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+const commandCenterSource = fs.readFileSync(path.join(root, 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
 
 function compileTypeScript(mod, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -189,6 +191,52 @@ assert(liveInput.activeRouteState, 'Live dispatch events should receive route fa
 assert.strictEqual(liveInput.activeRouteState.routeName, 'Alpine Shelf Road');
 assert(liveInput.terrainRiskState, 'Live dispatch events should receive terrain fallback state.');
 assert.strictEqual(liveInput.terrainRiskState.routeName, 'Alpine Shelf Road');
+
+routeSessionSnapshot = {
+  ...routeSessionSnapshot,
+  lifecycle: 'active',
+  routeId: 'road-no-elevation',
+  routeTitle: 'Road Guidance Without Elevation',
+  statusLabel: 'Road guidance active',
+  remainingDistanceM: 19312,
+  routePoints: [
+    { lat: 39, lng: -120 },
+    { lat: 39.04, lng: -120.02 },
+    { lat: 39.1, lng: -120.06 },
+    { lat: 39.16, lng: -120.1 },
+  ],
+};
+
+const gpsAltitudeContext = { ...context, gpsAltitudeFt: 4260, gpsHasFix: true };
+channels = getDispatchChannelSnapshots(gpsAltitudeContext);
+routeChannel = channels.find((channel) => channel.id === 'route');
+terrainChannel = channels.find((channel) => channel.id === 'terrain');
+assert.strictEqual(routeChannel.statusLabel, 'GUIDANCE ACTIVE');
+assert(terrainChannel, 'Terrain channel should be present for active route geometry with GPS altitude.');
+assert.notStrictEqual(
+  terrainChannel.statusLabel,
+  'NO LIVE DATA',
+  'Dispatch Terrain should use the same active-route + GPS-altitude estimate shown by the Terrain Risk widget.',
+);
+assert.strictEqual(terrainChannel.sourceLabel, 'Route Terrain Risk');
+assert.strictEqual(terrainChannel.sourceState, 'cached_last_known');
+assert(terrainChannel.detail.includes('GPS altitude estimate'), 'Terrain channel should label GPS-altitude route estimates.');
+
+const gpsAltitudeLiveInput = getLiveDispatchEventInput(gpsAltitudeContext, null);
+assert(
+  gpsAltitudeLiveInput.terrainRiskState,
+  'Live dispatch events should receive GPS-altitude terrain fallback state.',
+);
+assert.strictEqual(gpsAltitudeLiveInput.terrainRiskState.routeName, 'Road Guidance Without Elevation');
+
+assert(
+  commandCenterSource.includes('gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null'),
+  'Dispatch command center should pipe throttled GPS altitude into channel snapshots.',
+);
+assert(
+  commandCenterSource.includes('gpsHasFix: dispatchGps.hasFix'),
+  'Dispatch command center should pipe GPS fix state into channel snapshots.',
+);
 
 const unsubscribe = subscribeDispatchChannels(() => {});
 unsubscribe();

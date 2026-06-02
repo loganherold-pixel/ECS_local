@@ -255,6 +255,29 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     expectedMaxPublicRecommendationCount: 200,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
+  {
+    key: 'colorado_cpw_designated_trails',
+    providerId: 'colorado_cpw_designated_trails',
+    functionName: 'route-catalog-sync-colorado-cpw-trails',
+    functionPath: path.join('supabase', 'functions', 'route-catalog-sync-colorado-cpw-trails', 'index.ts'),
+    workflowPath: path.join('.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml'),
+    adapterTestScript: 'test:colorado-cpw-route-catalog-adapter',
+    sourceAuthority: 'official_access',
+    publicRecommendationPolicy: 'official_source_recommendable_with_condition_warnings',
+    publicRuntimeCallable: false,
+    invocationMode: 'direct_edge_function',
+    defaultPayload: {
+      minMiles: 0.25,
+      maxFeatures: 150,
+    },
+    deepBackfillPayload: {
+      syncScope: 'statewide',
+      minMiles: 0.25,
+      maxFeatures: 500,
+    },
+    expectedMaxPublicRecommendationCount: 500,
+    requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
+  },
 ];
 
 function routeCatalogSyncFunctionNames() {

@@ -19,6 +19,7 @@ import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ecsLog } from '../../lib/ecsLogger';
 import TopoBackground from '../../components/TopoBackground';
+import ShellBodyBackground from '../../components/ShellBodyBackground';
 import TopBannerBackground from '../../components/TopBannerBackground';
 import {
   ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS,
@@ -992,6 +993,7 @@ export default function BluPowerSourcesScreen() {
 
   return (
     <TopoBackground>
+      <ShellBodyBackground topInset={0} bottomInset={0} />
       <View style={styles.safeContainer}>
         <View style={styles.surfaceTint} pointerEvents="none" />
         <View style={[styles.header, { borderColor: palette.border }]}>

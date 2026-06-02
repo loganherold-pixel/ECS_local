@@ -1066,6 +1066,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           onEndNavigation={props.onEndNavigation}
           onReroute={props.onReroute}
           activeGuidanceMinimized={props.activeGuidanceMinimized}
+          activeGuidanceWidth={props.activeGuidanceWidth}
           onToggleActiveGuidanceMinimized={props.onToggleActiveGuidanceMinimized}
           onActiveGuidanceLayout={props.onActiveGuidanceLayout}
           onPrepareOffline={props.onPrepareOffline}
@@ -1448,7 +1449,7 @@ const styles = StyleSheet.create({
   },
   activeGuidanceTopActionPill: {
     minHeight: 24,
-    minWidth: 58,
+    minWidth: 64,
     paddingHorizontal: 7,
     borderRadius: 999,
     flexDirection: 'row',
@@ -1458,7 +1459,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   activeGuidanceMinimizeButton: {
-    minWidth: 84,
+    minWidth: 96,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },
@@ -1473,7 +1474,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
   },
   activeGuidanceOfflineButton: {
-    minWidth: 76,
+    minWidth: 84,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },

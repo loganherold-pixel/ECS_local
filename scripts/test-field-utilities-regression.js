@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -137,11 +138,9 @@ assertIncludes(
 );
 const fieldUtilityActionTileBlock = blockBetween(quickActionsSource, 'const tileItems: readonly QuickActionTile[] = [', '\n  ] as const;');
 const fieldUtilityActionOrder = [
-  "key: 'intel'",
   "key: 'note'",
   "key: 'comms'",
   "key: 'recovery-protocol'",
-  "key: 'team'",
   "key: 'permits-access'",
   "key: 'trip-summaries'",
   "key: 'protocols'",
@@ -151,6 +150,16 @@ fieldUtilityActionOrder.reduce((previousIndex, keyFragment) => {
   assert.ok(nextIndex > previousIndex, `Field Utilities action grid should keep ${keyFragment} in the requested two-row order.`);
   return nextIndex;
 }, -1);
+assertNotIncludes(
+  fieldUtilityActionTileBlock,
+  "key: 'intel'",
+  'Field Utilities main action grid should not render the Weather tile.',
+);
+assertNotIncludes(
+  fieldUtilityActionTileBlock,
+  "key: 'team'",
+  'Field Utilities main action grid should not render the Team Ping tile.',
+);
 
 // Protocol image restoration.
 assert.strictEqual(
@@ -519,8 +528,8 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  'const fieldUtilityActionColumns = [tileItems.slice(0, 4), tileItems.slice(4, 8)];',
-  'Available Actions should be split into two fixed columns with four actions per column.',
+  'const fieldUtilityActionColumns = [tileItems.slice(0, 3), tileItems.slice(3, 6)];',
+  'Available Actions should be split into two fixed columns with three actions per column.',
 );
 assertIncludes(
   quickActionsSource,
@@ -559,8 +568,33 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  'fieldUtilityContainerSurface(item.color)',
-  'Weather, Team Ping, Quick Note, Permits & Access, Comms, and Trip Summaries should use the same low-opacity container treatment as the protocol tiles.',
+  "import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';",
+  'Field Utilities should reuse the shared ECS fleet surface tokens for gold action containers.',
+);
+assertIncludes(
+  quickActionsSource,
+  "item.key !== 'protocols' && item.key !== 'recovery-protocol' && styles.fleetGoldUtilityTile",
+  'Quick Note, Comms, Permits & Access, and Trip Summaries should use the Fleet vehicle card gold surface.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'fleetGoldUtilityTile'),
+  'borderColor: ECS_SURFACE.border.selected',
+  'Field Utilities gold action tiles should reuse the Fleet vehicle card border token.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'fleetGoldUtilityTile'),
+  'backgroundColor: ECS_SURFACE.background.selected',
+  'Field Utilities gold action tiles should reuse the Fleet vehicle card background token.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'emergencyProtocolTile'),
+  "backgroundColor: 'rgba(239,83,80,0.055)'",
+  'Emergency Protocol should keep the critical transparent red surface.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'recoveryProtocolTile'),
+  "backgroundColor: 'rgba(239,83,80,0.055)'",
+  'Recovery Protocol should match the Emergency Protocol critical transparent red surface.',
 );
 assertIncludes(
   quickActionsSource,
@@ -584,8 +618,8 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
-  'height: 220',
-  'Incident & Recovery should reserve enough height for its compact live controls.',
+  'height: 260',
+  'Incident & Recovery should reserve expanded height for its compact live controls.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
@@ -770,8 +804,6 @@ assertNotIncludes(quickActionsSource, 'setActivePanel', 'Field Utilities should 
 [
   "openFieldUtilityAction('quickNote')",
   "openFieldUtilityAction('emergencyComms')",
-  "openFieldUtilityAction('intel')",
-  "openFieldUtilityAction('team')",
   "openFieldUtilityAction('protocols')",
   "openFieldUtilityAction('recoveryProtocols')",
 ].forEach((transition) => {

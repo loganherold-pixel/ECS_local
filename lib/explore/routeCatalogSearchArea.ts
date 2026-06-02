@@ -103,6 +103,7 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
+  | 'colorado_cpw_trails'
   | 'blm_az_gtlf'
   | 'blm_ca_nv_gtlf'
   | 'blm_co_gtlf'
@@ -1204,6 +1205,16 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['oregon_odf_ohv_gpx'],
   },
   {
+    key: 'colorado_cpw_trails',
+    label: 'Colorado CPW Designated Trails',
+    shortLabel: 'Colorado CPW',
+    latitude: 40.54,
+    longitude: -105.95,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
     key: 'blm_az_gtlf',
     label: 'BLM GTLF Arizona',
     shortLabel: 'BLM AZ',
@@ -1279,8 +1290,8 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'BLM WY',
     latitude: 44.51,
     longitude: -107.94,
-    coveragePosture: 'official_curation',
-    publicRecommendation: false,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
     sourceAdapters: ['blm_gtlf'],
   },
   {

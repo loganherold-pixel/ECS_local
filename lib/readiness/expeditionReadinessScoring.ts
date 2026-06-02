@@ -943,12 +943,31 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
   const range = fuel?.rangeRemainingMiles ?? null;
   const remaining = fuel?.routeDistanceRemainingMiles ?? input.route?.distanceMiles ?? null;
   const reserve = fuel?.reserveMiles ?? (range != null && remaining != null ? range - remaining : null);
+  const fuelPercent = typeof fuel?.fuelPercent === 'number' && Number.isFinite(fuel.fuelPercent)
+    ? Math.max(0, Math.min(100, fuel.fuelPercent))
+    : null;
+  const liveFuelPercent = fuel?.source === 'live' ? fuelPercent : null;
+  const liveFuelLow = liveFuelPercent != null && liveFuelPercent < 40;
+  const fuelPercentReminderOnly = range == null && fuelPercent != null && liveFuelPercent == null;
 
   if (!fuel || (range == null && fuel.fuelPercent == null)) {
     missingInputs.push('Fuel range remaining');
     score = 56;
-  } else if (range == null && fuel.fuelPercent != null) {
-    score = 84;
+  } else if (range == null && fuelPercent != null) {
+    if (fuelPercentReminderOnly) {
+      score = 88;
+    } else if (liveFuelLow) {
+      score = liveFuelPercent <= 15 ? 58 : 76;
+      warnings.push(issue(
+        'fuel_range_margin',
+        'warning',
+        'fuel-live-low-reserve',
+        'Live fuel reserve low',
+        `Live fuel telemetry is ${Math.round(liveFuelPercent)}%, below the 40% reserve marker.`,
+      ));
+    } else {
+      score = 88;
+    }
   } else if (reserve != null) {
     if (reserve < 0) {
       score = 35;
@@ -968,18 +987,26 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
     id: 'fuel_range_margin',
     label: CATEGORY_LABELS.fuel_range_margin,
     score,
-    confidence: missingInputs.length ? 'low' : flags.source === 'manual' ? 'medium' : 'high',
-    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (range == null && fuel?.fuelPercent != null ? 'Fuel level is available from manual or live vehicle input.' : 'Fuel range margin is usable.'),
+    confidence: missingInputs.length ? 'low' : range == null && flags.source === 'manual' ? 'high' : flags.source === 'manual' ? 'medium' : 'high',
+    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (
+      fuelPercentReminderOnly
+        ? 'Fuel telemetry is not reporting live; saved Fleet fuel is reminder-only for readiness scoring.'
+        : range == null && liveFuelPercent != null
+          ? 'Live fuel telemetry is available.'
+          : 'Fuel range margin is usable.'
+    ),
     factors: fuel
       ? [factor(
           'fuel-range',
           'Fuel range',
           range != null
             ? `${range} miles remaining${reserve == null ? '' : `, ${Math.round(reserve)} miles reserve`}.`
-            : `${Math.round(fuel.fuelPercent ?? 0)}% fuel level available; range estimate depends on MPG or live range data.`,
-          score < 82 ? 'warning' : 'positive',
+            : fuelPercentReminderOnly
+              ? 'Live fuel level is not reporting; saved Fleet fuel is shown as a reminder and does not reduce readiness.'
+              : `${Math.round(fuelPercent ?? 0)}% live fuel level available; readiness changes only below the 40% reserve marker.`,
+          score < 82 ? 'warning' : fuelPercentReminderOnly ? 'neutral' : 'positive',
           flags.source,
-          'medium',
+          fuelPercentReminderOnly ? 'high' : 'medium',
           flags,
         )]
       : [factor('fuel-missing', 'Fuel range', 'Fuel range input is missing.', 'missing', 'missing', 'low')],

@@ -32,6 +32,10 @@ import {
   getCampOpsFeatureState,
 } from './campOpsRecommendationConfig';
 import { generateCampRecommendationSet } from './campOpsRecommendations';
+import {
+  buildCampOpsRouteEndpointPlan,
+  type CampOpsRouteEndpointTripType,
+} from './campOpsRouteEndpoints';
 import type { CampOpsResourceDebtConfig } from './campOpsResourceDebtConfig';
 import { attachCampResourceDebt } from './campOpsResourceDebt';
 import {
@@ -60,6 +64,14 @@ export type CampOpsSearchIntegrationOptions = {
   sourceSignalsByCandidateId?: Record<string, CampOpsExternalSourceSignal[] | undefined> | null;
   sourceProviderBundle?: CampOpsSourceProviderBundle | null;
   vehicleProfile?: unknown;
+  routeCoordinates?: Array<{ latitude: number; longitude: number } | { lat?: number | null; lng?: number | null; lon?: number | null } | [number, number]> | null;
+  routeDistanceMiles?: number | null;
+  tripType?: CampOpsRouteEndpointTripType | null;
+  priorities?: string[] | null;
+  campPlanningEnabled?: boolean | null;
+  plannedDays?: number | null;
+  plannedNights?: number | null;
+  selectedEndpointIds?: string[] | null;
 };
 
 type CampOpsSearchPayload = NonNullable<CampsiteCandidateResult['campOps']>;
@@ -334,7 +346,7 @@ function buildCampOpsInputs(
   enrichmentsByCandidateId: Record<string, CampCandidateEnrichment>;
 } {
   const context = buildContext(result, options);
-  const source = options.source === 'polygon' ? 'draw_area_candidate' : 'route_candidate';
+  const source = options.source === 'polygon' ? 'draw_area_candidate' : 'route_endpoint_candidate';
   const candidates = result.candidates.map((candidate) => campOpsCandidateFromGeneratedCandidate(candidate, source));
   const enrichmentsByCandidateId: Record<string, CampCandidateEnrichment> = {};
   candidates.forEach((candidate, index) => {
@@ -413,6 +425,24 @@ export function generateCampOpsSearchPayload(
   const exposedRecommendationSet = featureState.sourceTransparencyEnabled
     ? recommendationSet
     : stripSourceTransparency(recommendationSet);
+  const routeEndpointPlan = options.source === 'route'
+    ? buildCampOpsRouteEndpointPlan({
+        routeId: context.routeId ?? result.routeIntelligenceId,
+        tripId: context.tripId,
+        tripType: options.tripType ?? null,
+        priorities: options.priorities ?? null,
+        campPlanningEnabled: options.campPlanningEnabled ?? null,
+        routeCoordinates: options.routeCoordinates ?? [],
+        routeDistanceMiles: options.routeDistanceMiles ?? result.totalDistanceMiles,
+        plannedDays: options.plannedDays ?? null,
+        plannedNights: options.plannedNights ?? null,
+        generatedAt: context.currentTimeIso ?? result.analyzedAt,
+        candidates,
+        enrichmentsByCandidateId,
+        context,
+        selectedEndpointIds: options.selectedEndpointIds ?? [],
+      })
+    : null;
   return {
     enabled: true,
     recommendationSet: {
@@ -427,6 +457,7 @@ export function generateCampOpsSearchPayload(
         ...(featureState.providerAdaptersEnabled && options.sourceProviderBundle ? ['CampOps source provider outputs were normalized before scoring.'] : []),
       ])),
     },
+    routeEndpointPlan,
   };
 }
 

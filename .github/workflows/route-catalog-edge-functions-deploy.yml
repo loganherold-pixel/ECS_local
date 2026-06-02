@@ -68,6 +68,7 @@ jobs:
           supabase functions deploy "route-catalog-sync-michigan-orv" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-sync-minnesota-ohv" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
           supabase functions deploy "route-catalog-sync-oregon-odf-ohv" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
+          supabase functions deploy "route-catalog-sync-colorado-cpw-trails" --project-ref "${ECS_SUPABASE_PROJECT_REF}"
 
       - name: Summarize deployment
         shell: bash
@@ -89,6 +90,7 @@ jobs:
           | route-catalog-sync-michigan-orv | Protected state OHV recommendation sync |
           | route-catalog-sync-minnesota-ohv | Protected state OHV recommendation sync |
           | route-catalog-sync-oregon-odf-ohv | Protected state OHV recommendation sync |
+          | route-catalog-sync-colorado-cpw-trails | Protected state OHV recommendation sync |
 
           Deploys only the Edge Function code. Source ingestion remains token-protected and is invoked by the dedicated sync workflows.
           MARKDOWN
