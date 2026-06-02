@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: route-catalog-oregon-odf-ohv-sync
+  group: route-catalog-data-plane-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
