@@ -28,9 +28,21 @@ assert(
   workflow.includes('ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}'),
   'Workflow should read the Supabase URL from GitHub secrets',
 );
+const longestWorkflowLine = Math.max(...workflow.split(/\r?\n/).map((line) => line.length));
 assert(
-  workflow.includes('tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest,caribou-targhee-national-forest,klamath-national-forest,willamette-national-forest,boise-national-forest,lolo-national-forest,salmon-challis-national-forest,stanislaus-national-forest,dixie-national-forest,bitterroot-national-forest,mt-hood-national-forest,coronado-national-forest,sierra-national-forest'),
-  'Workflow defaults should sync the current MVUM public recommendation coverage forests',
+  longestWorkflowLine < 500,
+  'Workflow dispatch UI should stay readable by avoiding giant inline forest default lines',
+);
+assert(
+  workflow.includes('actions/checkout@v4') &&
+    workflow.includes("require('./scripts/route-catalog-sync-inventory.js')") &&
+    workflow.includes('defaultPayload.forests'),
+  'Workflow should load the configured MVUM default forest list from the repo inventory instead of embedding it in the GitHub input form',
+);
+assert(
+  workflow.includes('Leave blank to sync the configured MVUM forest list') &&
+    workflow.includes("FORESTS: ${{ inputs.forests || '' }}"),
+  'Workflow dispatch should keep the forest input blank by default while still allowing explicit forest overrides',
 );
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');
 assert(
