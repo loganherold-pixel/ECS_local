@@ -66,6 +66,11 @@ assert(
   !functionSource.includes('route_geometry'),
   'Route catalog summary function must not select or expose route geometry',
 );
+assert(
+  functionSource.includes("maxRouteRows,\n        'id'") &&
+    !functionSource.includes("maxRouteRows,\n        'updated_at'"),
+  'Route catalog summary should page verified_routes by indexed primary key instead of sorting broad catalog reads by updated_at',
+);
 
 const supabaseConfig = fs.readFileSync(supabaseConfigPath, 'utf8');
 const configSectionStart = supabaseConfig.indexOf('[functions.route-catalog-summary]');
@@ -101,11 +106,26 @@ assert(
   'Route catalog summary script should not load sync or service-role secrets',
 );
 
-const { routeCatalogSummaryUrl, formatSummaryMarkdown } = require(reportScriptPath);
+const {
+  extractJsonPayloadFromOutput,
+  formatSummaryMarkdown,
+  formatWorkflowSummaryMarkdown,
+  routeCatalogSummaryUrl,
+} = require(reportScriptPath);
 assert.strictEqual(
   routeCatalogSummaryUrl('https://example.supabase.co'),
   'https://example.supabase.co/functions/v1/route-catalog-summary',
   'Summary script should build the public Edge Function URL',
+);
+assert.deepStrictEqual(
+  extractJsonPayloadFromOutput('notice {not json}\n{"ok":true,"totals":{"routeCount":3}}\ntrailing log', 'summary report'),
+  { ok: true, totals: { routeCount: 3 } },
+  'Summary script should extract the first valid JSON object from noisy workflow output',
+);
+assert.throws(
+  () => extractJsonPayloadFromOutput('plain text only', 'summary report'),
+  /summary report did not contain JSON/,
+  'Summary script should report missing JSON clearly',
 );
 const markdown = formatSummaryMarkdown({
   generatedAt: '2026-06-01T00:00:00.000Z',
@@ -116,6 +136,18 @@ const markdown = formatSummaryMarkdown({
     staleRouteCount: 1,
     activeClosureRouteCount: 0,
     rawFeatureCount: 11,
+  },
+  recommendationStatusCounts: {
+    recommendable: 5,
+    source_backed_curation_only: 2,
+  },
+  verificationStatusCounts: {
+    verified: 5,
+    needs_review: 2,
+  },
+  reviewStatusCounts: {
+    approved: 5,
+    pending_review: 2,
   },
   sourceSummaries: [
     {
@@ -135,6 +167,47 @@ const markdown = formatSummaryMarkdown({
 assert(markdown.includes('Route Catalog Summary Report'), 'Markdown formatter should title the report');
 assert(markdown.includes('Public recommendations'), 'Markdown formatter should expose public recommendation totals');
 assert(markdown.includes('| usfs_mvum |'), 'Markdown formatter should include per-source rows');
+const workflowMarkdown = formatWorkflowSummaryMarkdown({
+  generatedAt: '2026-06-01T00:00:00.000Z',
+  totals: {
+    routeCount: 7,
+    publicRecommendationCount: 5,
+    curationOnlyCount: 2,
+    staleRouteCount: 1,
+    activeClosureRouteCount: 0,
+    rawFeatureCount: 11,
+  },
+  recommendationStatusCounts: {
+    recommendable: 5,
+    source_backed_curation_only: 2,
+  },
+  verificationStatusCounts: {
+    verified: 5,
+    needs_review: 2,
+  },
+  reviewStatusCounts: {
+    approved: 5,
+    pending_review: 2,
+  },
+  sourceSummaries: [
+    {
+      providerId: 'usfs_mvum',
+      authority: 'official_access',
+      routeCount: 7,
+      publicRecommendationCount: 5,
+      curationOnlyCount: 2,
+      staleRouteCount: 1,
+      activeClosureRouteCount: 0,
+      rawFeatureCount: 11,
+    },
+  ],
+});
+assert(workflowMarkdown.includes('Sources: 1'), 'Workflow summary should include source count');
+assert(workflowMarkdown.includes('Stale route count: 1'), 'Workflow summary should include stale route count');
+assert(workflowMarkdown.includes('### Recommendation statuses'), 'Workflow summary should include recommendation status counts');
+assert(workflowMarkdown.includes('| recommendable | 5 |'), 'Workflow summary should include individual recommendation status rows');
+assert(workflowMarkdown.includes('### Verification statuses'), 'Workflow summary should include verification status counts');
+assert(workflowMarkdown.includes('### Review statuses'), 'Workflow summary should include review status counts');
 
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 for (const required of [
@@ -153,9 +226,8 @@ for (const required of [
   'EXPO_PUBLIC_SUPABASE_ANON_KEY',
   'node ./scripts/route-catalog-summary-report.js --json',
   'Route Catalog Summary Report',
-  'sourceSummaries',
-  'publicRecommendationCount',
-  'curationOnlyCount',
+  'extractJsonPayloadFromOutput',
+  'formatWorkflowSummaryMarkdown',
   'concurrency:',
 ]) {
   assert(workflow.includes(required), `Route catalog summary workflow should include ${required}`);

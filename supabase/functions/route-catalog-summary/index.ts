@@ -323,7 +323,7 @@ serve(async (req) => {
         'verified_routes',
         'id,recommendation_status,verification_status,review_status,confidence_score,active_closure_count,stale_at,updated_at,last_verified_at',
         maxRouteRows,
-        'updated_at',
+        'id',
       ),
       fetchPagedRows<RouteSourceLink>(
         admin,

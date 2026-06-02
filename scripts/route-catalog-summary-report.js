@@ -87,6 +87,70 @@ function formatLatestIngest(run) {
   return finishedAt ? `${status} @ ${finishedAt}` : String(status);
 }
 
+function jsonObjectCandidateAt(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(startIndex, index + 1);
+    }
+  }
+
+  return null;
+}
+
+function extractJsonPayloadFromOutput(raw, label = 'route catalog output') {
+  const text = String(raw || '');
+  let lastError = null;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '{') continue;
+    const candidate = jsonObjectCandidateAt(text, index);
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!text.includes('{')) throw new Error(`${label} did not contain JSON`);
+  const detail = lastError && lastError.message ? `: ${lastError.message}` : '';
+  throw new Error(`${label} contained malformed JSON${detail}`);
+}
+
+function formatStatusCountsMarkdown(title, counts) {
+  const entries = Object.entries(counts && typeof counts === 'object' ? counts : {})
+    .map(([status, count]) => [status, Number(count || 0)])
+    .filter(([status]) => status)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  if (entries.length === 0) {
+    return [`### ${title}`, '', 'none'].join('\n');
+  }
+
+  return [
+    `### ${title}`,
+    '',
+    '| Status | Count |',
+    '| --- | ---: |',
+    ...entries.map(([status, count]) => `| ${status} | ${formatCount(count)} |`),
+  ].join('\n');
+}
+
 function formatSummaryMarkdown(summary) {
   const totals = summary && typeof summary.totals === 'object' ? summary.totals : {};
   const sourceSummaries = Array.isArray(summary && summary.sourceSummaries) ? summary.sourceSummaries : [];
@@ -119,6 +183,27 @@ function formatSummaryMarkdown(summary) {
       formatCount(source.rawFeatureCount),
       formatLatestIngest(source.latestIngestRun),
     ].join(' | ')).map((row) => `| ${row} |`),
+  ].join('\n');
+}
+
+function formatWorkflowSummaryMarkdown(summary) {
+  const totals = summary && typeof summary.totals === 'object' ? summary.totals : {};
+  const sourceSummaries = Array.isArray(summary && summary.sourceSummaries) ? summary.sourceSummaries : [];
+
+  return [
+    formatSummaryMarkdown(summary),
+    '',
+    `Sources: ${sourceSummaries.length}`,
+    `Public recommendation count: ${formatCount(totals.publicRecommendationCount)}`,
+    `Curation only count: ${formatCount(totals.curationOnlyCount)}`,
+    `Stale route count: ${formatCount(totals.staleRouteCount)}`,
+    `Active closure affected count: ${formatCount(totals.activeClosureRouteCount)}`,
+    '',
+    formatStatusCountsMarkdown('Recommendation statuses', summary && summary.recommendationStatusCounts),
+    '',
+    formatStatusCountsMarkdown('Verification statuses', summary && summary.verificationStatusCounts),
+    '',
+    formatStatusCountsMarkdown('Review statuses', summary && summary.reviewStatusCounts),
   ].join('\n');
 }
 
@@ -177,7 +262,9 @@ if (require.main === module) {
 
 module.exports = {
   buildRequestBody,
+  extractJsonPayloadFromOutput,
   formatSummaryMarkdown,
+  formatWorkflowSummaryMarkdown,
   parseArgs,
   resolveAnonKey,
   resolveSupabaseUrl,

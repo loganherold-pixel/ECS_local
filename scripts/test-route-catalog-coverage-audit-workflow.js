@@ -18,6 +18,75 @@ assert(
 assert(fs.existsSync(workflowPath), 'Route catalog coverage audit GitHub workflow should exist');
 
 const workflow = fs.readFileSync(workflowPath, 'utf8');
+const {
+  assertCoverageAuditExpectedPosture,
+  formatCoverageAuditWorkflowMarkdown,
+} = require(auditScriptPath);
+
+const coverageMarkdown = formatCoverageAuditWorkflowMarkdown(
+  {
+    results: [
+      {
+        key: 'tahoe_national_forest',
+        coverageState: 'ready',
+        observedPosture: 'verified_public_recommendations',
+        matchesExpectedPosture: true,
+        count: 10,
+        anySourceBackedCandidateCount: 407,
+      },
+      {
+        key: 'oregon_odf_ohv_pilot',
+        coverageState: 'ready',
+        observedPosture: 'verified_public_recommendations',
+        expectedPosture: 'source_backed_curation_only',
+        matchesExpectedPosture: false,
+        count: 4,
+        anySourceBackedCandidateCount: 47,
+      },
+    ],
+    auditErrors: [
+      { key: 'nps_public_trails_joshua_tree', error: 'HTTP 503' },
+    ],
+  },
+  {
+    triggerWorkflowName: 'Route Catalog Oregon ODF OHV Sync',
+    selectedProbeKeys: ['oregon_odf_ohv_pilot'],
+    auditsAllProbes: false,
+  },
+);
+assert(coverageMarkdown.includes('Trigger workflow: Route Catalog Oregon ODF OHV Sync'), 'Coverage summary should show trigger workflow');
+assert(coverageMarkdown.includes('Selected probes: oregon_odf_ohv_pilot'), 'Coverage summary should show selected probes');
+assert(coverageMarkdown.includes('| oregon_odf_ohv_pilot | ready | verified_public_recommendations | no | 4 | 47 |'), 'Coverage summary should include probe rows');
+assert(coverageMarkdown.includes('Audit errors: 1'), 'Coverage summary should include audit error count');
+assert(coverageMarkdown.includes('- nps_public_trails_joshua_tree: HTTP 503'), 'Coverage summary should list audit errors');
+assert(coverageMarkdown.includes('Mismatches: 1'), 'Coverage summary should include mismatch count');
+assert(
+  coverageMarkdown.includes('- oregon_odf_ohv_pilot: expected source_backed_curation_only; observed verified_public_recommendations'),
+  'Coverage summary should list mismatched probes with expected and observed posture',
+);
+const sparseCoverageMarkdown = formatCoverageAuditWorkflowMarkdown(
+  { results: [{ key: 'sparse_probe' }], auditErrors: [] },
+  { auditsAllProbes: true },
+);
+assert(
+  sparseCoverageMarkdown.includes('| sparse_probe | unknown | unknown | no | 0 | 0 |'),
+  'Coverage summary should render missing result fields with explicit unknown/zero defaults',
+);
+assert.doesNotThrow(
+  () => assertCoverageAuditExpectedPosture({ results: [{ key: 'ok_probe', matchesExpectedPosture: true }], auditErrors: [] }),
+  'Coverage posture check should allow clean audit output',
+);
+assert.throws(
+  () => assertCoverageAuditExpectedPosture({ results: [], auditErrors: [{ key: 'bad_probe', error: 'HTTP 500' }] }),
+  /Coverage audit request errors: bad_probe: HTTP 500/,
+  'Coverage posture check should fail on audit request errors',
+);
+assert.throws(
+  () => assertCoverageAuditExpectedPosture({ results: [{ key: 'mismatch_probe', matchesExpectedPosture: false }], auditErrors: [] }),
+  /Coverage posture mismatches: mismatch_probe/,
+  'Coverage posture check should fail on mismatched expected posture',
+);
+
 for (const required of [
   'name: Route Catalog Coverage Audit',
   'workflow_dispatch:',
@@ -39,11 +108,9 @@ for (const required of [
   'ROUTE_CATALOG_AUDIT_ARGS',
   'node ./scripts/route-catalog-coverage-audit.js ${ROUTE_CATALOG_AUDIT_ARGS} --json --fail-on-mismatch',
   'Route Catalog Coverage Audit',
-  'Audit errors:',
-  'response.auditErrors',
-  'Coverage audit request errors',
-  'Route catalog coverage audit output did not contain JSON',
-  'matchesExpectedPosture',
+  'formatCoverageAuditWorkflowMarkdown',
+  'assertCoverageAuditExpectedPosture',
+  "extractJsonPayloadFromOutput(raw, 'Route catalog coverage audit output')",
   'concurrency:',
 ]) {
   assert(workflow.includes(required), `Coverage audit workflow should include ${required}`);

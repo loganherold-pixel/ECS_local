@@ -68,6 +68,14 @@ assert(
     operationalCriteriaMigration.includes('verified_routes_operational_criteria_idx'),
   'Route catalog should add schema-backed operational criteria for remoteness, campability, fuel range, and water margins',
 );
+const largeCatalogHardeningMigration = read(path.join('supabase', 'migrations', '031_route_catalog_large_catalog_query_hardening.sql'));
+assert(
+  largeCatalogHardeningMigration.includes('verified_routes_public_recommendation_bbox_idx') &&
+    largeCatalogHardeningMigration.includes('verified_routes_curation_bbox_idx') &&
+    largeCatalogHardeningMigration.includes('verified_routes_summary_id_idx') &&
+    largeCatalogHardeningMigration.includes('verified_route_sources_route_lookup_idx'),
+  'Route catalog should add large-catalog indexes for public bbox search, curation coverage, summary paging, and route-source attribution lookup',
+);
 
 for (const functionName of [
   'route-catalog-search',
@@ -128,7 +136,9 @@ assert(
     searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
     searchFunction.includes('filterRecordsWithinSearchRadius') &&
     searchFunction.includes('countRouteCatalogCurationCandidates') &&
+    searchFunction.includes('attachSourceRecords') &&
     searchFunction.includes(".from('verified_routes')") &&
+    !searchFunction.includes(".from('route_catalog_public')") &&
     searchFunction.includes('curationCandidateCount') &&
     searchFunction.includes('anySourceBackedCandidateCount') &&
     searchFunction.includes('lower_confidence_nearby') &&

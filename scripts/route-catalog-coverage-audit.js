@@ -1274,6 +1274,58 @@ function printHumanAudit(result) {
   if (result.error) console.log(`  error: ${result.error}`);
 }
 
+function formatAuditSummaryText(value, fallback = 'unknown') {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
+function formatAuditSummaryCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function formatCoverageAuditWorkflowMarkdown(response, selection = {}) {
+  const results = Array.isArray(response && response.results) ? response.results : [];
+  const errors = Array.isArray(response && response.auditErrors) ? response.auditErrors : [];
+  const mismatches = results.filter((result) => !result.matchesExpectedPosture);
+  const selectedProbeKeys = Array.isArray(selection.selectedProbeKeys) ? selection.selectedProbeKeys : [];
+
+  return [
+    '## Route Catalog Coverage Audit',
+    '',
+    `Trigger workflow: ${selection.triggerWorkflowName || 'manual/scheduled'}`,
+    '',
+    `Selected probes: ${selection.auditsAllProbes ? 'all' : selectedProbeKeys.join(', ')}`,
+    '',
+    '| Probe | State | Observed posture | Matches expected | Count | Source-backed |',
+    '| --- | --- | --- | --- | ---: | ---: |',
+    ...results.map((result) =>
+      `| ${formatAuditSummaryText(result.key)} | ${formatAuditSummaryText(result.coverageState)} | ${formatAuditSummaryText(result.observedPosture)} | ${result.matchesExpectedPosture ? 'yes' : 'no'} | ${formatAuditSummaryCount(result.count)} | ${formatAuditSummaryCount(result.anySourceBackedCandidateCount)} |`
+    ),
+    '',
+    `Audit errors: ${errors.length}`,
+    ...errors.map((result) => `- ${result.key}: ${result.error || 'Unknown audit error'}`),
+    '',
+    `Mismatches: ${mismatches.length}`,
+    ...mismatches.map((result) =>
+      `- ${result.key}: expected ${result.expectedPosture || 'unknown'}; observed ${result.observedPosture || 'unknown'}`
+    ),
+  ].join('\n');
+}
+
+function assertCoverageAuditExpectedPosture(response) {
+  const results = Array.isArray(response && response.results) ? response.results : [];
+  const errors = Array.isArray(response && response.auditErrors) ? response.auditErrors : [];
+  if (errors.length > 0) {
+    throw new Error(`Coverage audit request errors: ${errors.map((result) => `${result.key}: ${result.error || 'Unknown audit error'}`).join('; ')}`);
+  }
+
+  const mismatches = results.filter((result) => !result.matchesExpectedPosture);
+  if (mismatches.length > 0) {
+    throw new Error(`Coverage posture mismatches: ${mismatches.map((result) => result.key).join(', ')}`);
+  }
+}
+
 async function main() {
   loadRouteCatalogEnv();
   const options = parseArgs(process.argv.slice(2));
@@ -1341,8 +1393,10 @@ if (require.main === module) {
 
 module.exports = {
   ROUTE_CATALOG_COVERAGE_PROBES,
+  assertCoverageAuditExpectedPosture,
   auditProbe,
   buildRouteCatalogCoverageAuditPlan,
+  formatCoverageAuditWorkflowMarkdown,
   isRetryableAuditError,
   routeCatalogSearchUrl,
   summarizeAuditProbeError,

@@ -68,20 +68,21 @@ jobs:
           fi
           node <<'NODE'
           const fs = require('fs');
-          const { formatSummaryMarkdown } = require('./scripts/route-catalog-summary-report.js');
+          const {
+            extractJsonPayloadFromOutput,
+            formatWorkflowSummaryMarkdown,
+          } = require('./scripts/route-catalog-summary-report.js');
 
           const raw = fs.readFileSync('route-catalog-summary-report.json', 'utf8');
-          const jsonStart = raw.indexOf('{');
-          if (jsonStart === -1) {
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Route catalog summary output did not contain JSON.\n');
+          let response;
+          try {
+            response = extractJsonPayloadFromOutput(raw, 'Route catalog summary output');
+          } catch (error) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${error.message}\n`);
             process.exit(0);
           }
-          const response = JSON.parse(raw.slice(jsonStart));
-          const sourceSummaries = Array.isArray(response.sourceSummaries) ? response.sourceSummaries : [];
-          const publicRecommendationCount = response.totals && response.totals.publicRecommendationCount;
-          const curationOnlyCount = response.totals && response.totals.curationOnlyCount;
           fs.appendFileSync(
             process.env.GITHUB_STEP_SUMMARY,
-            `${formatSummaryMarkdown(response)}\n\nSources: ${sourceSummaries.length}\nPublic recommendation count: ${publicRecommendationCount || 0}\nCuration only count: ${curationOnlyCount || 0}\n`,
+            `${formatWorkflowSummaryMarkdown(response)}\n`,
           );
           NODE

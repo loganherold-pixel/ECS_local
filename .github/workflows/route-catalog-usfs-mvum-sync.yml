@@ -9,6 +9,20 @@ on:
         description: Leave blank to sync the configured MVUM forest list, or enter comma-separated USFS MVUM forest slugs.
         required: false
         default: ''
+      forest_batch:
+        description: Configured USFS MVUM batch to sync when forests is blank.
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - california_nevada
+          - southwest
+          - central_rockies
+          - northern_rockies
+          - pacific_northwest
+          - midwest_northeast
+          - south_southeast
       sync_depth:
         description: Cautious keeps the scheduled 150-feature slice; deep raises the bounded per-forest/layer cap for official-source backfill.
         required: false
@@ -51,6 +65,7 @@ jobs:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
       FORESTS: ${{ inputs.forests || '' }}
+      FOREST_BATCH: ${{ inputs.forest_batch || 'all' }}
       SYNC_DEPTH: ${{ inputs.sync_depth || 'cautious' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '' }}
@@ -80,16 +95,21 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs = require('fs');
-          const { ROUTE_CATALOG_SYNC_INVENTORY } = require('./scripts/route-catalog-sync-inventory.js');
+          const {
+            resolveUsfsMvumForestSelection,
+            validateUsfsMvumForestBatches,
+          } = require('./scripts/route-catalog-usfs-mvum-batches.js');
 
-          const usfsInventory = ROUTE_CATALOG_SYNC_INVENTORY.find((entry) => entry.key === 'usfs_mvum');
-          const defaultForests = usfsInventory.defaultPayload.forests;
+          const batchValidation = validateUsfsMvumForestBatches();
+          if (!batchValidation.ok) {
+            throw new Error(`USFS MVUM forest batch configuration is invalid: ${batchValidation.errors.join('; ')}`);
+          }
 
-          const requestedForests = String(process.env.FORESTS || '')
-            .split(',')
-            .map((forest) => forest.trim())
-            .filter(Boolean);
-          const forests = requestedForests.length > 0 ? requestedForests : defaultForests;
+          const selection = resolveUsfsMvumForestSelection({
+            requestedForests: process.env.FORESTS,
+            forestBatch: process.env.FOREST_BATCH,
+          });
+          const forests = selection.forests;
           const syncDepth = String(process.env.SYNC_DEPTH || 'cautious').trim().toLowerCase();
           const minMiles = Number(process.env.MIN_MILES || 1);
           const limitOverride = String(process.env.LIMIT_PER_FOREST_LAYER || '').trim();
@@ -141,6 +161,15 @@ jobs:
           fs.writeFileSync(
             'route-catalog-usfs-mvum-sync-payloads.json',
             JSON.stringify(payloads, null, 2),
+          );
+          fs.writeFileSync(
+            'route-catalog-usfs-mvum-sync-selection.json',
+            JSON.stringify({
+              mode: selection.mode,
+              batchKey: selection.batchKey,
+              forestCount: forests.length,
+              forests,
+            }, null, 2),
           );
           NODE
 
@@ -288,6 +317,9 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const response = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-response.json', 'utf8'));
+          const selection = fs.existsSync('route-catalog-usfs-mvum-sync-selection.json')
+            ? JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-selection.json', 'utf8'))
+            : {};
 
           const forests = Array.isArray(response.forests) ? response.forests : [];
           const failedForests = Array.isArray(response.failedForests) ? response.failedForests : [];
@@ -307,6 +339,8 @@ jobs:
 
           const markdown = [
             '## Route Catalog USFS MVUM Sync',
+            '',
+            `Selection: ${selection.batchKey || 'unknown'} (${selection.forestCount || 0} forests)`,
             '',
             '| Forest | Sync Depth | Limit/Layer | Raw Features | Normalized Features | Aggregate Routes | Public Recommendations | Current Closures | Blocked Routes |',
             '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',

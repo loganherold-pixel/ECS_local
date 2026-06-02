@@ -151,7 +151,6 @@ const ROUTE_CATALOG_SEARCH_COLUMNS = [
   'stale_at',
   'created_at',
   'updated_at',
-  'source_records',
   'remoteness_score',
   'campability_score',
   'minimum_fuel_range_miles',
@@ -429,6 +428,87 @@ function shapeSearchRecords(
   });
 }
 
+function sourceRoleRank(role: unknown): number {
+  if (role === 'primary') return 0;
+  if (role === 'corroborating') return 1;
+  if (role === 'supplemental') return 2;
+  return 3;
+}
+
+function embeddedRouteSource(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) return readRecord(value[0]);
+  return readRecord(value);
+}
+
+function sourceRecordFromLink(link: Record<string, unknown>, fallbackVerifiedAt: unknown): Record<string, unknown> | null {
+  const source = embeddedRouteSource(link.route_sources);
+  if (!source) return null;
+  const sourceType = String(source.source_type || '');
+  const lastVerifiedAt = link.last_verified_at || fallbackVerifiedAt || null;
+
+  return {
+    providerId: source.provider_id || '',
+    provider_id: source.provider_id || '',
+    sourceRole: link.source_role || '',
+    source_role: link.source_role || '',
+    sourceType,
+    source_type: sourceType,
+    label: source.name || '',
+    authority: source.authority || '',
+    sourceUrl: source.source_uri || null,
+    source_url: source.source_uri || null,
+    attribution: source.attribution || null,
+    license: source.license || null,
+    lastVerifiedAt,
+    last_verified_at: lastVerifiedAt,
+    usePermission: sourceType === 'partner_restricted' ? 'not_granted' : 'granted',
+    use_permission: sourceType === 'partner_restricted' ? 'not_granted' : 'granted',
+  };
+}
+
+async function attachSourceRecords(
+  admin: ReturnType<typeof createAdminClient>,
+  records: Record<string, unknown>[],
+): Promise<Record<string, unknown>[]> {
+  const routeIds = records
+    .map((record) => (typeof record.id === 'string' ? record.id : ''))
+    .filter(Boolean);
+  if (routeIds.length === 0) return records.map((record) => ({ ...record, source_records: [] }));
+
+  const { data, error } = await admin
+    .from('verified_route_sources')
+    .select('verified_route_id,source_role,last_verified_at,route_sources(provider_id,source_type,name,authority,source_uri,attribution,license)')
+    .in('verified_route_id', routeIds);
+  if (error) throw new Error('Unable to attach route source attribution.');
+
+  const recordById = new Map(records.map((record) => [String(record.id), record]));
+  const sourcesByRouteId = new Map<string, Record<string, unknown>[]>();
+  const links = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+  for (const link of links) {
+    const routeId = typeof link.verified_route_id === 'string' ? link.verified_route_id : '';
+    const route = recordById.get(routeId);
+    if (!route) continue;
+    const sourceRecord = sourceRecordFromLink(link, route.last_verified_at);
+    if (!sourceRecord) continue;
+    const bucket = sourcesByRouteId.get(routeId) || [];
+    bucket.push(sourceRecord);
+    sourcesByRouteId.set(routeId, bucket);
+  }
+
+  return records.map((record) => {
+    const routeId = String(record.id || '');
+    const sourceRecords = sourcesByRouteId.get(routeId) || [];
+    sourceRecords.sort((left, right) =>
+      sourceRoleRank(left.source_role) - sourceRoleRank(right.source_role) ||
+      String(left.providerId || left.provider_id || '').localeCompare(String(right.providerId || right.provider_id || '')),
+    );
+    return {
+      ...record,
+      source_records: sourceRecords,
+    };
+  });
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
@@ -464,7 +544,7 @@ serve(async (req) => {
 
     const admin = createAdminClient();
     let query = admin
-      .from('route_catalog_public')
+      .from('verified_routes')
       .select(searchSelect(includeGeometry, includePreviewGeometry))
       .eq('review_status', 'approved')
       .eq('recommendation_status', 'recommendable')
@@ -506,7 +586,7 @@ serve(async (req) => {
     if (error) throw new Error('Unable to search verified route catalog.');
     const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
     const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
-    const limitedRecords = radiusFiltered.records.slice(0, limit);
+    const limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
     const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
       latitude,
       longitude,
@@ -539,7 +619,7 @@ serve(async (req) => {
       count: records.length,
       coverageState: coverageState(records, curationCoverage),
       meta: {
-        source: 'route_catalog_public',
+        source: 'verified_routes',
         recommendationOnly: true,
         bboxFilterApplied: hasRadiusCriteria,
         radiusFilterApplied: radiusFiltered.radiusFilterApplied,

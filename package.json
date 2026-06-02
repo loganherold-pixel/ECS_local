@@ -154,6 +154,7 @@
     "test:route-catalog-coverage-audit-workflow": "node ./scripts/test-route-catalog-coverage-audit-workflow.js",
     "test:route-catalog-summary-report": "node ./scripts/test-route-catalog-summary-report.js",
     "test:route-catalog-sync-runner": "node ./scripts/test-route-catalog-sync-runner.js",
+    "test:route-catalog-usfs-mvum-batches": "node ./scripts/test-route-catalog-usfs-mvum-batches.js",
     "test:route-catalog-sync-inventory": "node ./scripts/test-route-catalog-sync-inventory.js",
     "test:route-catalog-sync-invocation-plan": "node ./scripts/test-route-catalog-sync-invocation-plan.js",
     "route-catalog:sync:dry-run": "node ./scripts/route-catalog-sync-invoke.js --dry-run --all-direct",

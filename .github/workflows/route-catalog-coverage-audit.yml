@@ -228,39 +228,22 @@ jobs:
           fi
           node <<'NODE'
           const fs = require('fs');
+          const { extractJsonPayloadFromOutput } = require('./scripts/route-catalog-summary-report.js');
+          const { formatCoverageAuditWorkflowMarkdown } = require('./scripts/route-catalog-coverage-audit.js');
+
           const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
-          const jsonStart = raw.indexOf('{');
-          if (jsonStart === -1) {
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Route catalog coverage audit output did not contain JSON.\n');
+          let response;
+          try {
+            response = extractJsonPayloadFromOutput(raw, 'Route catalog coverage audit output');
+          } catch (error) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${error.message}\n`);
             process.exit(0);
           }
-          const response = JSON.parse(raw.slice(jsonStart));
-          const results = Array.isArray(response.results) ? response.results : [];
-          const errors = Array.isArray(response.auditErrors) ? response.auditErrors : [];
           const selection = fs.existsSync('route-catalog-coverage-audit-selection.json')
             ? JSON.parse(fs.readFileSync('route-catalog-coverage-audit-selection.json', 'utf8'))
             : {};
 
-          const lines = [
-            '## Route Catalog Coverage Audit',
-            '',
-            `Trigger workflow: ${selection.triggerWorkflowName || 'manual/scheduled'}`,
-            '',
-            `Selected probes: ${selection.auditsAllProbes ? 'all' : (selection.selectedProbeKeys || []).join(', ')}`,
-            '',
-            '| Probe | State | Observed posture | Matches expected | Count | Source-backed |',
-            '| --- | --- | --- | --- | ---: | ---: |',
-            ...results.map((result) =>
-              `| ${result.key} | ${result.coverageState} | ${result.observedPosture} | ${result.matchesExpectedPosture ? 'yes' : 'no'} | ${result.count} | ${result.anySourceBackedCandidateCount} |`
-            ),
-            '',
-            `Audit errors: ${errors.length}`,
-            ...errors.map((result) => `- ${result.key}: ${result.error || 'Unknown audit error'}`),
-            '',
-            `Mismatches: ${results.filter((result) => !result.matchesExpectedPosture).length}`,
-          ];
-
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${formatCoverageAuditWorkflowMarkdown(response, selection)}\n`);
           NODE
 
       - name: Check expected coverage posture
@@ -273,22 +256,21 @@ jobs:
           fi
           node <<'NODE'
           const fs = require('fs');
+          const { extractJsonPayloadFromOutput } = require('./scripts/route-catalog-summary-report.js');
+          const { assertCoverageAuditExpectedPosture } = require('./scripts/route-catalog-coverage-audit.js');
+
           const raw = fs.readFileSync('route-catalog-coverage-audit.json', 'utf8');
-          const jsonStart = raw.indexOf('{');
-          if (jsonStart === -1) {
-            console.error('Route catalog coverage audit output did not contain JSON.');
+          let response;
+          try {
+            response = extractJsonPayloadFromOutput(raw, 'Route catalog coverage audit output');
+          } catch (error) {
+            console.error(error.message);
             process.exit(1);
           }
-          const response = JSON.parse(raw.slice(jsonStart));
-          const results = Array.isArray(response.results) ? response.results : [];
-          const errors = Array.isArray(response.auditErrors) ? response.auditErrors : [];
-          if (errors.length > 0) {
-            console.error(`Coverage audit request errors: ${errors.map((result) => `${result.key}: ${result.error || 'Unknown audit error'}`).join('; ')}`);
-            process.exit(1);
-          }
-          const mismatches = results.filter((result) => !result.matchesExpectedPosture);
-          if (mismatches.length > 0) {
-            console.error(`Coverage posture mismatches: ${mismatches.map((result) => result.key).join(', ')}`);
+          try {
+            assertCoverageAuditExpectedPosture(response);
+          } catch (error) {
+            console.error(error.message);
             process.exit(1);
           }
           NODE

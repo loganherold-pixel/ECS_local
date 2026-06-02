@@ -47,9 +47,9 @@ assert(
 );
 assert(
   workflow.includes('actions/checkout@v4') &&
-    workflow.includes("require('./scripts/route-catalog-sync-inventory.js')") &&
-    workflow.includes('defaultPayload.forests'),
-  'Workflow should load the configured MVUM default forest list from the repo inventory instead of embedding it in the GitHub input form',
+    workflow.includes("require('./scripts/route-catalog-usfs-mvum-batches.js')") &&
+    workflow.includes('resolveUsfsMvumForestSelection'),
+  'Workflow should load the configured MVUM forest selection from the shared batch helper instead of embedding it in the GitHub input form',
 );
 assert(
   workflow.includes('Leave blank to sync the configured MVUM forest list') &&
