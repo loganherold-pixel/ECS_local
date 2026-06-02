@@ -258,7 +258,7 @@ assert(!/setGroupType\(option\.value\);\s*setPlan\(null\);/.test(screen), 'Group
 assertIncludes(discover, 'stageTripBuilderItineraryHandoff(route);', 'Explore selected route handoff');
 assertIncludes(discover, 'userLocation: tripBuilderHandoffUserLocation', 'Explore selected route GPS itinerary handoff');
 assertIncludes(discover, "pathname: '/explore-trip-builder'", 'Explore selected route navigation');
-assertIncludes(discover, 'params: { routeId: route.id }', 'Explore route preselection');
+assertIncludes(discover, 'params: { routeId: routeForHandoff.id }', 'Explore route preselection');
 assertIncludes(discover, "case 'trip_builder':", 'Explore Trip Builder tab option');
 assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level Trip Builder reset');
 assertIncludes(discover, "router.push('/explore-trip-builder')", 'Explore Trip Builder tab should open the real Trip Builder route picker directly.');

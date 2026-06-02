@@ -111,8 +111,8 @@ function checkRenderingGate(root, paths) {
   const checks = [
     boolCheck(
       'navigate_mapbox_receives_campops_pins',
-      'Navigate passes CampOps pins into the shared Camp Scout marker prop.',
-      hasAll(navigate, [/buildCampOpsCampScoutMapPins/, /campScoutMarkers=\{sharedCampPinMapMarkers\}/]),
+      'Navigate passes CampOps pins into the shared Camp Endpoint marker prop.',
+      hasAll(navigate, [/buildCampOpsCampEndpointMapPins/, /campEndpointMarkers=\{sharedCampPinMapMarkers\}/]),
       [rel(root, paths.source.navigateScreen)],
     ),
     boolCheck(
@@ -145,6 +145,7 @@ function checkRenderingGate(root, paths) {
       'CampOps pin payload can open and dismiss the Camp Intel popup.',
       hasAll(navigate, [
         /onCampScoutTap=\{handleCampScoutTap\}/,
+        /onCampEndpointTap=\{handleCampScoutTap\}/,
         /isCampOpsMapPinPayload/,
         /setSelectedCampOps(?:Intel|EndpointId)/,
         /selectedCampOpsIntel/,

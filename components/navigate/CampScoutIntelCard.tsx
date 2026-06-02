@@ -71,7 +71,7 @@ function sourceDescription(sourceType: CampScoutSourceType): string {
 }
 
 const ECS_INFERRED_VERIFICATION_WARNING =
-  'This is an ECS-inferred projection only, not a confirmed legal campsite. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
+  'This is an ECS-inferred projection only, not a confirmed permitted overnight location. It exists because available eligibility, access, remoteness, route proximity, and terrain signals passed ECS filters. Verify local rules, closures, fire restrictions, permits, road access, posted signs, and exact site conditions before camping.';
 const CAMP_SCOUT_AREA_POTENTIAL_NOTE =
   'This candidate endpoint is not an exact campsite location. ECS is marking an area with potential for viable camping; verify the exact site on foot and avoid water, private land, buildings, roads, and unsafe terrain.';
 

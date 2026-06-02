@@ -68,12 +68,16 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const {
+  buildCampOpsCampEndpointMapPins,
   buildCampOpsCampScoutMapPins,
   campOpsSourceToSharedCampPinSource,
   getCampOpsMapPinRoleLabel,
   isCampOpsMapPinPayload,
 } = require(adapterPath);
-const { normalizeRenderedCampScoutMarkers } = require(mapRendererPath);
+const {
+  normalizeRenderedCampEndpointMarkers,
+  normalizeRenderedCampScoutMarkers,
+} = require(mapRendererPath);
 
 function makeCamp(id, name, source, sourceConfidence, latitude, longitude, score, overrides = {}) {
   return {
@@ -120,7 +124,18 @@ const recommendationSet = {
   },
 };
 
-const pins = buildCampOpsCampScoutMapPins(recommendationSet, {
+assert.strictEqual(
+  buildCampOpsCampEndpointMapPins,
+  buildCampOpsCampScoutMapPins,
+  'Legacy CampScout map-pin builder should remain a one-release Camp Endpoint shim.',
+);
+assert.strictEqual(
+  normalizeRenderedCampEndpointMarkers,
+  normalizeRenderedCampScoutMarkers,
+  'Legacy CampScout marker renderer should remain a one-release Camp Endpoint shim.',
+);
+
+const pins = buildCampOpsCampEndpointMapPins(recommendationSet, {
   selectedCampOpsCandidateId: 'rec-1',
 });
 
@@ -157,12 +172,12 @@ for (const role of ['recommended', 'backup', 'emergency']) {
 }
 
 assert.strictEqual(
-  buildCampOpsCampScoutMapPins(null).length,
+  buildCampOpsCampEndpointMapPins(null).length,
   0,
   'Feature-off or missing CampOps payloads should add no endpoint pins.',
 );
 assert.strictEqual(
-  buildCampOpsCampScoutMapPins({ ...recommendationSet, rankedCandidates: [] }).length,
+  buildCampOpsCampEndpointMapPins({ ...recommendationSet, rankedCandidates: [] }).length,
   0,
   'An explicit empty ranked candidate list should not fall back to role pins.',
 );
@@ -177,7 +192,7 @@ assert.strictEqual(
   'Manual or imported CampOps endpoints should reuse the imported route context source style.',
 );
 
-const duplicatePins = buildCampOpsCampScoutMapPins({
+const duplicatePins = buildCampOpsCampEndpointMapPins({
   ...recommendationSet,
   rankedCandidates: [
     recommendationSet.rankedCandidates[0],
@@ -191,12 +206,12 @@ assert.strictEqual(
   'Duplicate ranked CampOps route candidates for the same camp should not create duplicate pins.',
 );
 assert.strictEqual(
-  buildCampOpsCampScoutMapPins({ ...recommendationSet, rankedCandidates: [recommendationSet.rankedCandidates[5]] }).length,
+  buildCampOpsCampEndpointMapPins({ ...recommendationSet, rankedCandidates: [recommendationSet.rankedCandidates[5]] }).length,
   0,
   'Low-confidence ranked candidates should not create route camp pins.',
 );
 
-const structureBufferPins = buildCampOpsCampScoutMapPins({
+const structureBufferPins = buildCampOpsCampEndpointMapPins({
   ...recommendationSet,
   rankedCandidates: [
     makeCamp('near-structure', 'Too Close To Structure', 'route_candidate', 'high', 39.7, -120.7, 95, {
@@ -217,8 +232,8 @@ assert.deepStrictEqual(
   'CampOps route pins must suppress candidates inside the one-mile structure privacy buffer.',
 );
 
-const renderedPins = normalizeRenderedCampScoutMarkers(pins);
-assert.strictEqual(renderedPins.length, 5, 'Shared renderer should accept CampOps pins through campScoutMarkers.');
+const renderedPins = normalizeRenderedCampEndpointMarkers(pins);
+assert.strictEqual(renderedPins.length, 5, 'Shared renderer should accept CampOps pins through campEndpointMarkers.');
 assert.strictEqual(renderedPins[0].pinFamily, 'campops', 'Renderer payload should preserve CampOps behavior tag.');
 assert.strictEqual(
   renderedPins[0].campOpsCandidateId,
@@ -261,9 +276,10 @@ assert(
 assert(
   navigateSource.includes('CAMPOPS_ROUTE_PINS_ENABLED') &&
     navigateSource.includes('getCampOpsRoutePinsRolloutConfig') &&
-    navigateSource.includes('buildCampOpsCampScoutMapPins(campOpsRecommendationSet') &&
-    navigateSource.includes('campScoutMarkers={sharedCampPinMapMarkers}'),
-  'Navigate should gate and feed CampOps route candidates through the shared Camp Scout marker prop.',
+    navigateSource.includes('buildCampOpsCampEndpointMapPins(campOpsRecommendationSet') &&
+    navigateSource.includes('campEndpointMarkers={sharedCampPinMapMarkers}') &&
+    navigateSource.includes('onCampEndpointTap={handleCampScoutTap}'),
+  'Navigate should gate and feed CampOps route candidates through the shared Camp Endpoint marker prop.',
 );
 assert(
   navigateSource.includes('campsiteCandidates?.campOps?.enabled') &&
