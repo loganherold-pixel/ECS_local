@@ -9,6 +9,7 @@ const reportScriptPath = path.join(root, 'scripts', 'route-catalog-summary-repor
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-summary-report.yml');
 const supabaseConfigPath = path.join(root, 'supabase', 'config.toml');
 const deployWorkflowPath = path.join(root, '.github', 'workflows', 'route-catalog-edge-functions-deploy.yml');
+const summaryRpcMigrationPath = path.join(root, 'supabase', 'migrations', '032_route_catalog_summary_rpc.sql');
 
 const {
   routeCatalogPublicFunctionNames,
@@ -31,14 +32,48 @@ assert(
 assert(fs.existsSync(functionPath), 'Route catalog summary Edge Function should exist');
 assert(fs.existsSync(reportScriptPath), 'Route catalog summary report script should exist');
 assert(fs.existsSync(workflowPath), 'Route catalog summary report workflow should exist');
+assert(fs.existsSync(summaryRpcMigrationPath), 'Route catalog summary RPC migration should exist');
 
-const functionSource = fs.readFileSync(functionPath, 'utf8');
+const summaryRpcMigration = fs.readFileSync(summaryRpcMigrationPath, 'utf8');
 for (const required of [
+  'create or replace function public.route_catalog_summary_report',
+  'p_max_route_rows',
+  'p_max_link_rows',
+  'p_max_ingest_run_rows',
+  'jsonb_build_object',
+  'sourceSummaries',
+  'recommendationStatusCounts',
+  'verificationStatusCounts',
+  'reviewStatusCounts',
+  'publicRecommendationCount',
+  'curationOnlyCount',
+  'staleRouteCount',
+  'activeClosureRouteCount',
+  'rawFeatureCount',
+  'latestIngestRun',
+  'generatedAt',
+  'maxRouteRows',
   'route_sources',
   'route_source_ingest_runs',
   'route_raw_source_features',
   'verified_routes',
   'verified_route_sources',
+]) {
+  assert(summaryRpcMigration.includes(required), `Route catalog summary RPC migration should include ${required}`);
+}
+assert(
+  summaryRpcMigration.includes('security definer'),
+  'Route catalog summary RPC should run as a controlled database-side aggregate',
+);
+assert(
+  !summaryRpcMigration.includes('route_geometry'),
+  'Route catalog summary RPC must not select or expose route geometry',
+);
+
+const functionSource = fs.readFileSync(functionPath, 'utf8');
+for (const required of [
+  'route_catalog_summary_report',
+  '.rpc(',
   'sourceSummaries',
   'recommendationStatusCounts',
   'verificationStatusCounts',
@@ -67,17 +102,20 @@ assert(
   'Route catalog summary function must not select or expose route geometry',
 );
 assert(
-  functionSource.includes("maxRouteRows,\n        'id'") &&
-    !functionSource.includes("maxRouteRows,\n        'updated_at'"),
-  'Route catalog summary should page verified_routes by indexed primary key instead of sorting broad catalog reads by updated_at',
+  !functionSource.includes('fetchPagedRows') &&
+    !functionSource.includes("from('verified_routes')") &&
+    !functionSource.includes("from('verified_route_sources')"),
+  'Route catalog summary Edge Function should not page broad route catalog tables directly',
 );
 assert(
-  functionSource.includes('fetchRouteSourceLinksForRoutes'),
-  'Route catalog summary should fetch source links only for sampled verified route IDs',
+  summaryRpcMigration.includes('sampled_routes') &&
+    summaryRpcMigration.includes('limited_route_links') &&
+    summaryRpcMigration.includes('l.verified_route_id = r.id'),
+  'Route catalog summary RPC should fetch source links only for sampled verified route IDs',
 );
 assert(
-  !functionSource.includes("maxLinkRows,\n        'last_verified_at'"),
-  'Route catalog summary should not sweep verified_route_sources ordered by unindexed freshness columns',
+  !summaryRpcMigration.includes('order by last_verified_at'),
+  'Route catalog summary RPC should not sweep verified_route_sources ordered by unindexed freshness columns',
 );
 assert(
   functionSource.includes('params.maxRouteRows ?? params.max_route_rows, 1000, 100000') &&
